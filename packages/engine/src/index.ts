@@ -8,6 +8,11 @@ export { print, printWithRewrites } from "./ast/printer";
 export { astSubtreeHash } from "./ast/hash";
 export { canonicalize } from "./ast/canonicalization";
 export type { CanonicalForm } from "./ast/canonicalization";
+export {
+  findEnclosingStatement,
+  findEnclosingProcedure,
+  findEnclosingCodeBlock,
+} from "./ast/tree-walks";
 
 // Semantic
 export type {

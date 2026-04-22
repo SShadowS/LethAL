@@ -14,7 +14,13 @@ export type {
   AstNodeId,
 } from "@lethal/engine";
 
-export { astSubtreeHash, visit } from "@lethal/engine";
+export {
+  astSubtreeHash,
+  visit,
+  findEnclosingStatement,
+  findEnclosingProcedure,
+  findEnclosingCodeBlock,
+} from "@lethal/engine";
 
 // SDK-owned surface
 export { build } from "./build";
