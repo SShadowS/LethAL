@@ -3,7 +3,6 @@
 // internals may evolve without breaking registered operators.
 export type {
   ALSyntaxNode,
-  ALNodeKind,
   MutationOperator,
   MutationSpec,
   ConformanceCase,
@@ -15,6 +14,7 @@ export type {
 } from "@lethal/engine";
 
 export {
+  ALNodeKind,
   astSubtreeHash,
   visit,
   findEnclosingStatement,
