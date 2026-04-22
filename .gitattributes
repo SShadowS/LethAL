@@ -1,2 +1,4 @@
 * text=auto eol=lf
 *.al text eol=lf
+*.wasm binary
+*.app binary
