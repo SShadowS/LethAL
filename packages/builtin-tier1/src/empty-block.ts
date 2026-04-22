@@ -63,7 +63,7 @@ export const emptyBlock: MutationOperator = {
       expectedSpecs: [
         {
           parentContext: "statement-position",
-          beforeText: "begin\n        DoThing();\n    end",
+          beforeText: "begin DoThing(); end;",
           afterText: "begin end",
         },
       ],
