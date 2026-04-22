@@ -26,7 +26,9 @@ export interface CanonicalForm {
 }
 
 const COMMUTATIVE: ReadonlySet<string> = new Set([
-  "+",
+  // `+` is deliberately excluded: AL's `+` overloads on Text (concatenation,
+  // NOT commutative). Numeric `+` commutativity can be restored in Layer 2
+  // once canonicalize() has access to TypeTable and can check operand types.
   "*",
   "=",
   "<>",

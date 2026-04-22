@@ -44,9 +44,15 @@ describe("canonicalize", () => {
   });
 
   it("treats commutative operators in canonical operand order", () => {
-    const a = canon("1 + x");
-    const b = canon("x + 1");
+    const a = canon("1 * x");
+    const b = canon("x * 1");
     expect(a.form).toBe(b.form);
+  });
+
+  it("does NOT reorder operands of `+` (unsound for Text concat)", () => {
+    const a = canon("'a' + 'b'");
+    const b = canon("'b' + 'a'");
+    expect(a.form).not.toBe(b.form);
   });
 
   it("does NOT equate non-equivalent expressions", () => {
