@@ -31,4 +31,39 @@ describe("buildCallerIndex", () => {
     const callers = buildCallerIndex([{ path: "u.al", root }], symbols);
     expect(callers.callersOf("U", "Unused")).toEqual([]);
   });
+
+  it("does not misattribute argument identifiers as call targets", async () => {
+    const src = `codeunit 50110 "QC" {
+    procedure Target(): Integer begin exit(0); end;
+    procedure Caller(): Integer
+    var
+        Rec: Record "Foo Table";
+    begin
+        Rec.Find(Target);
+        exit(0);
+    end;
+  }`;
+    const root = wrapRoot(parseAL(src));
+    const symbols = buildSymbolTable([{ path: "qc.al", root }]);
+    const callers = buildCallerIndex([{ path: "qc.al", root }], symbols);
+    // Target should have no callers because Rec.Find(Target) is a qualified call
+    // whose argument `Target` is not itself an invocation.
+    expect(callers.callersOf("QC", "Target")).toEqual([]);
+  });
+
+  it("does not double-count callers when multiple files parse through", async () => {
+    const src = `codeunit 50108 "Callers" {
+    procedure Helper(): Integer begin exit(1); end;
+    procedure Direct(): Integer begin exit(Helper()); end;
+  }`;
+    const root = wrapRoot(parseAL(src));
+    const symbols = buildSymbolTable([{ path: "c.al", root }]);
+    // Same root passed as two file entries — simulating a multi-file project
+    // where the caller index must not duplicate per-file.
+    const callers = buildCallerIndex(
+      [{ path: "c.al", root }, { path: "c2.al", root }],
+      symbols,
+    );
+    expect(callers.callersOf("Callers", "Helper")).toHaveLength(1);
+  });
 });

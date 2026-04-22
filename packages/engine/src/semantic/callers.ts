@@ -29,30 +29,30 @@ export interface CallSite {
 }
 
 export function buildCallerIndex(
-  files: readonly SourceFile[],
+  // TODO(Layer 6): `_files` is unused in Layer 1's intra-codeunit scope but is
+  // retained in the signature for Layer 6's cross-codeunit expansion, where the
+  // index may need to be sharded or incrementally rebuilt per file.
+  _files: readonly SourceFile[],
   symbols: SymbolTable,
 ): CallerIndex {
   const index = new Map<string, CallSite[]>();
 
-  for (const file of files) {
-    for (const obj of symbols.objects) {
-      if (!file.root.text.includes(obj.name)) continue;
-      const calls = findAll(obj.node, ALNodeKind.procedure_call);
-      for (const call of calls) {
-        const target = resolveCallTarget(call, obj.name, symbols);
-        if (target === null) continue;
-        const enclosing = enclosingProcedureName(call);
-        if (enclosing === null) continue;
-        const key = siteKey(target.owner, target.procedure);
-        const site: CallSite = {
-          fromOwner: obj.name,
-          fromProcedure: enclosing,
-          node: call,
-        };
-        const list = index.get(key);
-        if (list === undefined) index.set(key, [site]);
-        else list.push(site);
-      }
+  for (const obj of symbols.objects) {
+    const calls = findAll(obj.node, ALNodeKind.procedure_call);
+    for (const call of calls) {
+      const target = resolveCallTarget(call, obj.name, symbols);
+      if (target === null) continue;
+      const enclosing = enclosingProcedureName(call);
+      if (enclosing === null) continue;
+      const key = siteKey(target.owner, target.procedure);
+      const site: CallSite = {
+        fromOwner: obj.name,
+        fromProcedure: enclosing,
+        node: call,
+      };
+      const list = index.get(key);
+      if (list === undefined) index.set(key, [site]);
+      else list.push(site);
     }
   }
 
@@ -73,18 +73,10 @@ function resolveCallTarget(
   symbols: SymbolTable,
 ): { owner: string; procedure: string } | null {
   const fn = call.childForFieldName("function");
-  let procName: string | null = null;
-  if (fn !== null && fn.kind === ALNodeKind.identifier) {
-    procName = fn.text;
-  } else {
-    for (const c of call.namedChildren) {
-      if (c.kind === ALNodeKind.identifier) {
-        procName = c.text;
-        break;
-      }
-    }
-  }
-  if (procName === null) return null;
+  // Layer 1 handles only unqualified calls (bare identifier target).
+  // Qualified calls (member_expression) are deferred to Layer 6.
+  if (fn === null || fn.kind !== ALNodeKind.identifier) return null;
+  const procName = fn.text;
   if (symbols.resolveProcedure(fallbackOwner, procName) === null) return null;
   return { owner: fallbackOwner, procedure: procName };
 }
