@@ -3,6 +3,7 @@
   "references": [
     { "path": "./packages/engine" },
     { "path": "./packages/operator-sdk" },
-    { "path": "./packages/schemata" }
+    { "path": "./packages/schemata" },
+    { "path": "./packages/builtin-tier1" }
   ]
 }
