@@ -1,5 +1,10 @@
 import { describe, it, expect } from "bun:test";
-import { ALNodeKind, isALNodeKind } from "../../src/ast/node-kinds";
+import {
+  ALNodeKind,
+  BINARY_EXPRESSION_KINDS,
+  isALNodeKind,
+  isBinaryExpressionKind,
+} from "../../src/ast/node-kinds";
 
 describe("ALNodeKind", () => {
   it("includes core kinds referenced by the design spec", () => {
@@ -13,12 +18,21 @@ describe("ALNodeKind", () => {
     expect(ALNodeKind.codeunit).toBe("codeunit_declaration");
   });
 
+  it("exposes the four precedence-class binary expression kinds", () => {
+    expect(ALNodeKind.additive_expression).toBe("additive_expression");
+    expect(ALNodeKind.multiplicative_expression).toBe("multiplicative_expression");
+    expect(ALNodeKind.comparison_expression).toBe("comparison_expression");
+    expect(ALNodeKind.logical_expression).toBe("logical_expression");
+    expect(BINARY_EXPRESSION_KINDS.length).toBe(4);
+  });
+
   it("recognizes valid kinds via isALNodeKind", () => {
     expect(isALNodeKind("if_statement")).toBe(true);
     expect(isALNodeKind("source_file")).toBe(true);
     expect(isALNodeKind("codeunit_declaration")).toBe(true);
     expect(isALNodeKind("call_expression")).toBe(true);
     expect(isALNodeKind("member_expression")).toBe(true);
+    expect(isALNodeKind("additive_expression")).toBe(true);
   });
 
   it("rejects unknown kinds", () => {
@@ -28,5 +42,12 @@ describe("ALNodeKind", () => {
     expect(isALNodeKind("binary_expression")).toBe(false);
     expect(isALNodeKind("expression_statement")).toBe(false);
     expect(isALNodeKind("method_call")).toBe(false);
+  });
+
+  it("isBinaryExpressionKind identifies only the four precedence classes", () => {
+    expect(isBinaryExpressionKind("additive_expression")).toBe(true);
+    expect(isBinaryExpressionKind("comparison_expression")).toBe(true);
+    expect(isBinaryExpressionKind("unary_expression")).toBe(false);
+    expect(isBinaryExpressionKind("if_statement")).toBe(false);
   });
 });

@@ -40,12 +40,12 @@ export const ALNodeKind = {
   // expression_statement: "expression_statement",
 
   // --- Expressions ---------------------------------------------------------
-  // TODO: grammar does not have this kind yet
-  //   The grammar splits binary expressions by precedence class
-  //   (`additive_expression`, `multiplicative_expression`,
-  //   `comparison_expression`, `logical_expression`). Callers that want
-  //   "any binary expression" will need a helper over these four kinds.
-  // binary_expression: "binary_expression",
+  // The grammar splits binary expressions by precedence class. Callers that
+  // want "any binary expression" should use `isBinaryExpressionKind()` below.
+  additive_expression: "additive_expression",
+  multiplicative_expression: "multiplicative_expression",
+  comparison_expression: "comparison_expression",
+  logical_expression: "logical_expression",
   unary_expression: "unary_expression",
   parenthesized_expression: "parenthesized_expression",
   identifier: "identifier",
@@ -79,4 +79,21 @@ const VALID_KINDS: ReadonlySet<string> = new Set(Object.values(ALNodeKind));
 
 export function isALNodeKind(value: unknown): value is ALNodeKind {
   return typeof value === "string" && VALID_KINDS.has(value);
+}
+
+/**
+ * The four AL precedence-class binary expression kinds. Useful when downstream
+ * code wants to treat "any binary expression" uniformly.
+ */
+export const BINARY_EXPRESSION_KINDS = [
+  ALNodeKind.additive_expression,
+  ALNodeKind.multiplicative_expression,
+  ALNodeKind.comparison_expression,
+  ALNodeKind.logical_expression,
+] as const;
+
+const BINARY_EXPRESSION_SET: ReadonlySet<string> = new Set(BINARY_EXPRESSION_KINDS);
+
+export function isBinaryExpressionKind(value: unknown): value is ALNodeKind {
+  return typeof value === "string" && BINARY_EXPRESSION_SET.has(value);
 }
