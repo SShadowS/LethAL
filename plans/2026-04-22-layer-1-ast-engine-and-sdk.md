@@ -19,7 +19,7 @@ Monorepo rooted at repo root. Bun workspaces, TypeScript project references, Bio
 ```
 LethAL/
 ├── package.json                          # workspace root, Bun workspaces
-├── bun.lockb
+├── bun.lock
 ├── biome.json                            # formatter/lint config
 ├── tsconfig.base.json                    # shared compiler options
 ├── packages/
@@ -219,12 +219,12 @@ Create `U:/Git/LethAL/biome.json`:
 - [ ] **Step 7: Install dev deps**
 
 Run: `cd U:/Git/LethAL && bun install`
-Expected: creates `bun.lockb` and `node_modules/`. No errors.
+Expected: creates `bun.lock` and `node_modules/`. No errors.
 
 - [ ] **Step 8: Commit**
 
 ```bash
-git add .gitignore .gitattributes package.json tsconfig.base.json biome.json bun.lockb
+git add .gitignore .gitattributes package.json tsconfig.base.json biome.json bun.lock
 git commit -m "chore(repo): initialize bun workspace, typescript base, biome"
 ```
 
@@ -401,7 +401,7 @@ git add packages/engine/package.json packages/engine/tsconfig.json \
         packages/engine/tests/fixtures/al/simple-codeunit.al \
         packages/engine/vendor/tree-sitter-al.wasm \
         packages/engine/vendor/README.md \
-        bun.lockb
+        bun.lock
 git commit -m "feat(engine): tree-sitter-al adapter with init + parse"
 ```
 
@@ -2754,7 +2754,7 @@ Run: `cd U:/Git/LethAL && bun install`
 git add packages/operator-sdk/package.json \
         packages/operator-sdk/tsconfig.json \
         packages/operator-sdk/src/index.ts \
-        bun.lockb
+        bun.lock
 git commit -m "chore(operator-sdk): package scaffold linked to engine"
 ```
 
