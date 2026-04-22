@@ -12,6 +12,16 @@ const STATEMENT_KINDS: ReadonlySet<string> = new Set([
   ALNodeKind.assignment_statement,
 ]);
 
+const BRANCH_PARENT_KINDS: ReadonlySet<string> = new Set([
+  ALNodeKind.procedure,
+  ALNodeKind.trigger,
+  ALNodeKind.if_statement,
+  ALNodeKind.while_statement,
+  ALNodeKind.for_statement,
+  ALNodeKind.repeat_statement,
+  ALNodeKind.case_statement,
+]);
+
 /**
  * Narrowest ancestor that the grammar treats as a statement.
  *
@@ -37,13 +47,7 @@ export function findEnclosingStatement(node: ALSyntaxNode): ALSyntaxNode | null 
     if (
       current.kind === ALNodeKind.block &&
       current.parent !== null &&
-      (current.parent.kind === ALNodeKind.procedure ||
-        current.parent.kind === ALNodeKind.trigger ||
-        current.parent.kind === ALNodeKind.if_statement ||
-        current.parent.kind === ALNodeKind.while_statement ||
-        current.parent.kind === ALNodeKind.for_statement ||
-        current.parent.kind === ALNodeKind.repeat_statement ||
-        current.parent.kind === ALNodeKind.case_statement)
+      BRANCH_PARENT_KINDS.has(current.parent.kind)
     ) {
       return current;
     }
