@@ -1,0 +1,9 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.DS_Store
+.bun-cache/
+coverage/
+*.log
+.env
+.env.local
