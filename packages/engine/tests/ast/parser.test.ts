@@ -24,4 +24,11 @@ describe("parser", () => {
     expect(proc).toBeDefined();
     expect(proc!.text).toContain("DoubleIt");
   });
+
+  it("is safe to initParser twice (concurrent and sequential)", async () => {
+    await Promise.all([initParser(), initParser()]);
+    await initParser();
+    const tree = parseAL("codeunit 50999 \"X\" { }");
+    expect(tree.rootNode.type).toBe("source_file");
+  });
 });
