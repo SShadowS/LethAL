@@ -2,6 +2,7 @@
   "files": [],
   "references": [
     { "path": "./packages/engine" },
-    { "path": "./packages/operator-sdk" }
+    { "path": "./packages/operator-sdk" },
+    { "path": "./packages/schemata" }
   ]
 }

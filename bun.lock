@@ -26,6 +26,13 @@
         "@lethal/engine": "workspace:*",
       },
     },
+    "packages/schemata": {
+      "name": "@lethal/schemata",
+      "version": "0.0.0",
+      "dependencies": {
+        "@lethal/engine": "workspace:*",
+      },
+    },
   },
   "packages": {
     "@biomejs/biome": ["@biomejs/biome@1.9.4", "", { "optionalDependencies": { "@biomejs/cli-darwin-arm64": "1.9.4", "@biomejs/cli-darwin-x64": "1.9.4", "@biomejs/cli-linux-arm64": "1.9.4", "@biomejs/cli-linux-arm64-musl": "1.9.4", "@biomejs/cli-linux-x64": "1.9.4", "@biomejs/cli-linux-x64-musl": "1.9.4", "@biomejs/cli-win32-arm64": "1.9.4", "@biomejs/cli-win32-x64": "1.9.4" }, "bin": { "biome": "bin/biome" } }, "sha512-1rkd7G70+o9KkTn5KLmDYXihGoTaIGO9PIIN2ZB7UJxFrWw04CZHPYiMRjYsaDvVV7hP1dYNRLxSANLaBFGpog=="],
@@ -49,6 +56,8 @@
     "@lethal/engine": ["@lethal/engine@workspace:packages/engine"],
 
     "@lethal/operator-sdk": ["@lethal/operator-sdk@workspace:packages/operator-sdk"],
+
+    "@lethal/schemata": ["@lethal/schemata@workspace:packages/schemata"],
 
     "@noble/hashes": ["@noble/hashes@1.8.0", "", {}, "sha512-jCs9ldd7NwzpgXDIf6P3+NrHh9/sD6CQdxHyjQI+h/6rDNo88ypBxxz45UDuZHz9r3tNz7N/VInSVoVdtXEI4A=="],
 
