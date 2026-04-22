@@ -1,0 +1,15 @@
+{
+  "name": "@lethal/engine",
+  "version": "0.0.0",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "web-tree-sitter": "^0.25.0",
+    "zod": "^3.23.8",
+    "@noble/hashes": "^1.5.0"
+  }
+}
