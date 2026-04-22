@@ -252,14 +252,14 @@ git commit -m "chore(repo): initialize bun workspace, typescript base, biome"
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "web-tree-sitter": "^0.24.3",
+    "web-tree-sitter": "^0.25.0",
     "zod": "^3.23.8",
     "@noble/hashes": "^1.5.0"
   }
 }
 ```
 
-`web-tree-sitter` is the WASM binding for tree-sitter that works in Bun and browsers. `@noble/hashes` provides blake3 in pure JS — no native build requirement, which keeps the toolchain simple across Windows/Linux/macOS.
+`web-tree-sitter` is the WASM binding for tree-sitter that works in Bun and browsers. Version `^0.25.0` is required to support tree-sitter ABI 15 emitted by the current AL grammar release. `@noble/hashes` provides blake3 in pure JS — no native build requirement, which keeps the toolchain simple across Windows/Linux/macOS.
 
 - [ ] **Step 2: Create `packages/engine/tsconfig.json`**
 
@@ -267,12 +267,13 @@ git commit -m "chore(repo): initialize bun workspace, typescript base, biome"
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "rootDir": "src",
     "outDir": "dist"
   },
   "include": ["src/**/*", "tests/**/*"]
 }
 ```
+
+`rootDir` is intentionally omitted. Setting `rootDir: src` with tests in `include` produces `error TS6059: File '…/tests/…' is not under 'rootDir'`. TypeScript infers `rootDir` from the longest common prefix of included files, which gives us `packages/engine/`. Emit lands under `dist/src/…` and `dist/tests/…` — fine because `dist` is gitignored and never published.
 
 - [ ] **Step 3: Install engine deps**
 
@@ -372,20 +373,22 @@ The WASM binary is loaded from `packages/engine/vendor/tree-sitter-al.wasm`. The
 
 - [ ] **Step 8: Vendor the tree-sitter-al WASM**
 
-Download or build `tree-sitter-al.wasm` from https://github.com/StefanMaron/tree-sitter-al (the community AL grammar). Place at `packages/engine/vendor/tree-sitter-al.wasm`.
+Download or build `tree-sitter-al.wasm` from https://github.com/SShadowS/tree-sitter-al (active community AL grammar, MIT, publishes prebuilt WASM in Releases). Place at `packages/engine/vendor/tree-sitter-al.wasm`.
 
 Run (from repo root):
 ```bash
 mkdir -p packages/engine/vendor
-# Option A: download a prebuilt wasm from a pinned release
-# curl -L -o packages/engine/vendor/tree-sitter-al.wasm <pinned-release-url>
-# Option B: build locally
-#   git clone https://github.com/StefanMaron/tree-sitter-al /tmp/tsa
-#   cd /tmp/tsa && npx tree-sitter generate && npx tree-sitter build --wasm
+# Option A (preferred): download a prebuilt wasm from a pinned release
+curl -L -o packages/engine/vendor/tree-sitter-al.wasm \
+  https://github.com/SShadowS/tree-sitter-al/releases/download/v2.5.0/tree-sitter-al.wasm
+# Option B: build locally (requires Emscripten or Docker)
+#   git clone https://github.com/SShadowS/tree-sitter-al /tmp/tsa
+#   cd /tmp/tsa && git checkout v2.5.0
+#   npx tree-sitter generate && npx tree-sitter build --wasm
 #   cp tree-sitter-al.wasm U:/Git/LethAL/packages/engine/vendor/
 ```
 
-If the exact grammar repo or prebuilt artifact is unavailable, document the source URL and commit hash in `packages/engine/vendor/README.md`. The rest of this plan assumes node types match the StefanMaron grammar; if a different grammar is used, Task 3's `ALNodeKind` enum must be regenerated from its `node-types.json`.
+Document the release tag and commit hash in `packages/engine/vendor/README.md`. The rest of this plan assumes node types match this grammar's `node-types.json`; if a different grammar is used, Task 3's `ALNodeKind` enum must be regenerated from its `node-types.json`.
 
 - [ ] **Step 9: Run test, confirm pass**
 
@@ -2728,13 +2731,14 @@ Create `packages/operator-sdk/package.json`:
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "rootDir": "src",
     "outDir": "dist"
   },
   "include": ["src/**/*", "tests/**/*"],
   "references": [{ "path": "../engine" }]
 }
 ```
+
+Same `rootDir` omission as the engine package; see Task 2 Step 2 for rationale.
 
 - [ ] **Step 3: Create initial stub `src/index.ts`**
 
