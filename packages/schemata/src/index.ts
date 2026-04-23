@@ -16,3 +16,5 @@ export type {
   MutantManifest,
   MutantManifestEntry,
 } from "./project";
+export { resolveSite } from "./enclosing";
+export type { ResolvedSite } from "./enclosing";
