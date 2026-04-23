@@ -80,9 +80,75 @@ describe("compileSchemataForFile", () => {
         astNodeId: `${exit.startIndex}`,
         before: exit,
         after: exit,
+        parentContext: "short-circuit-operand",
+      },
+    ];
+    expect(() => compileSchemataForFile(src, root, specs)).toThrow(/requires Task 13/);
+  });
+
+  it("composes a lift: var_section + conditional-assign + expression replacement", async () => {
+    const src = `codeunit 51820 "L"
+{
+    procedure Compute(A: Integer): Integer
+    var
+        Result: Integer;
+    begin
+        Result := F(A * 2) + G(A);
+        exit(Result);
+    end;
+}`;
+    const root = wrapRoot(parseAL(src));
+    const mul = findFirst(root, ALNodeKind.multiplicative_expression);
+    if (mul === null) throw new Error("no multiplicative");
+    const specs: MutationSpec[] = [
+      {
+        operatorName: "op.lift",
+        operatorVersion: "1.0.0",
+        astNodeId: `${mul.startIndex}`,
+        before: mul,
+        after: { ...mul, text: "0" } as never,
         parentContext: "expression-position",
       },
     ];
-    expect(() => compileSchemataForFile(src, root, specs)).toThrow(/requires Task 12\/13/);
+    const output = compileSchemataForFile(src, root, specs);
+    // var_section got an _m0001
+    expect(output).toMatch(/_m0001:\s*Integer;/);
+    // conditional-assign in the enclosing code_block
+    expect(output).toContain("MutationSelector.Active('M0001')");
+    expect(output).toContain("_m0001 := 0");
+    expect(output).toContain("_m0001 := A * 2");
+    // expression replaced with local reference
+    expect(output).toContain("Result := F(_m0001) + G(A);");
+    // conditional-assign precedes the assignment
+    const condIdx = output.indexOf("_m0001 := 0");
+    const useIdx = output.indexOf("Result := F(_m0001)");
+    expect(condIdx).toBeGreaterThan(-1);
+    expect(useIdx).toBeGreaterThan(condIdx);
+  });
+
+  it("creates a var_section when the enclosing procedure has none", async () => {
+    const src = `codeunit 51821 "L"
+{
+    procedure Compute(A: Integer): Integer
+    begin
+        exit(F(A * 2));
+    end;
+}`;
+    const root = wrapRoot(parseAL(src));
+    const mul = findFirst(root, ALNodeKind.multiplicative_expression);
+    if (mul === null) throw new Error("no multiplicative");
+    const specs: MutationSpec[] = [
+      {
+        operatorName: "op.lift",
+        operatorVersion: "1.0.0",
+        astNodeId: `${mul.startIndex}`,
+        before: mul,
+        after: { ...mul, text: "0" } as never,
+        parentContext: "expression-position",
+      },
+    ];
+    const output = compileSchemataForFile(src, root, specs);
+    // a var block must now appear before the procedure's begin
+    expect(output).toMatch(/var\s+_m0001:\s*Integer;\s+begin/s);
   });
 });
