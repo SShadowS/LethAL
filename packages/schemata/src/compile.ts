@@ -6,6 +6,7 @@ import {
   findEnclosingProcedure,
   printWithRewrites,
 } from "@lethal/engine";
+import { duplicateEnclosing } from "./duplicate";
 import { resolveSite } from "./enclosing";
 import { assignMutantIds, type IdedSpec } from "./ids";
 import { liftExpression } from "./lift";
@@ -52,9 +53,12 @@ function dispatch(
     applyLift(mutantId, spec, ctx, codeBlockInserts, procedureInjects, blockExprRewrites);
     return;
   }
+  if (spec.parentContext === "short-circuit-operand") {
+    applyDuplicate(mutantId, spec, rewrites);
+    return;
+  }
   throw new Error(
-    `compileSchemataForFile: parentContext "${spec.parentContext}" requires Task 13. ` +
-      "Call is still coming.",
+    `compileSchemataForFile: unknown parentContext "${spec.parentContext}"`,
   );
 }
 
@@ -106,6 +110,22 @@ function applyLift(
   pushExprRewrite(blockExprRewrites, enclosingBlock, spec.before, artifacts.replacementReference);
   pushMulti(codeBlockInserts, enclosingBlock, artifacts.conditionalAssign);
   pushMulti(procedureInjects, enclosingProc, artifacts.varDeclaration);
+}
+
+function applyDuplicate(
+  mutantId: string,
+  spec: MutationSpec,
+  rewrites: Map<ALSyntaxNode, string>,
+): void {
+  const afterText = (spec.after as unknown as { text?: string }).text ?? "";
+  const site = resolveSite(spec.before, afterText);
+  assertNoDuplicateRewrite(rewrites, site.statement);
+  const duplicated = duplicateEnclosing({
+    mutantId,
+    enclosingStatement: site.statement,
+    mutatedStatement: site.mutatedText,
+  });
+  rewrites.set(site.statement, duplicated);
 }
 
 function pushMulti<K>(m: Map<K, string[]>, k: K, v: string): void {

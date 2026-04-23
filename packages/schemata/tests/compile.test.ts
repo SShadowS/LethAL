@@ -80,10 +80,10 @@ describe("compileSchemataForFile", () => {
         astNodeId: `${exit.startIndex}`,
         before: exit,
         after: exit,
-        parentContext: "short-circuit-operand",
+        parentContext: "bogus" as never,
       },
     ];
-    expect(() => compileSchemataForFile(src, root, specs)).toThrow(/requires Task 13/);
+    expect(() => compileSchemataForFile(src, root, specs)).toThrow(/unknown parentContext/);
   });
 
   it("composes a lift: var_section + conditional-assign + expression replacement", async () => {
@@ -150,5 +150,27 @@ describe("compileSchemataForFile", () => {
     const output = compileSchemataForFile(src, root, specs);
     // a var block must now appear before the procedure's begin
     expect(output).toMatch(/var\s+_m0001:\s*Integer;\s+begin/s);
+  });
+
+  it("composes a duplicate for short-circuit-operand", async () => {
+    const src = `codeunit 51830 "D" { procedure P(A: Boolean; B: Boolean) begin if A and B then DoThing(); end; }`;
+    const root = wrapRoot(parseAL(src));
+    const logical = findFirst(root, ALNodeKind.logical_expression);
+    if (logical === null) throw new Error("no logical");
+    const specs: MutationSpec[] = [
+      {
+        operatorName: "op.neg",
+        operatorVersion: "1.0.0",
+        astNodeId: `${logical.startIndex}`,
+        before: logical,
+        after: { ...logical, text: "A or B" } as never,
+        parentContext: "short-circuit-operand",
+      },
+    ];
+    const output = compileSchemataForFile(src, root, specs);
+    expect(output).toContain("if MutationSelector.Active('M0001') then begin");
+    expect(output).toContain("if A or B then DoThing()");
+    expect(output).toContain("end else begin");
+    expect(output).toContain("if A and B then DoThing()");
   });
 });
