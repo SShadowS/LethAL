@@ -1,4 +1,5 @@
 import type { MutantManifestEntry } from "@lethal/schemata";
+import type { CoverageMap, TestMethodRef } from "./backend";
 
 export interface IdentityKey {
   readonly astHash: string;
@@ -67,4 +68,55 @@ export function batchByOverlap<T extends OverlapSite>(mutants: readonly T[]): T[
     if (!placed) batches.push([m]);
   }
   return batches;
+}
+
+export type CoverageIndex = ReadonlyMap<string, ReadonlySet<string>>;
+
+export interface CoverageSplit {
+  readonly covered: ReadonlyMap<string, readonly TestMethodRef[]>;
+  readonly uncovered: MutantManifestEntry[];
+}
+
+export function testKeyOf(ref: TestMethodRef): string {
+  return `${ref.codeunitId}::${ref.method}`;
+}
+
+export function buildCoverageIndex(
+  baseline: ReadonlyArray<{ ref: TestMethodRef; coverage?: CoverageMap }>,
+): CoverageIndex {
+  const index = new Map<string, Set<string>>();
+  for (const b of baseline) {
+    for (const e of b.coverage?.entries ?? []) {
+      const key = `${e.objectId}::${e.procedure.toLowerCase()}`;
+      let set = index.get(key);
+      if (!set) {
+        set = new Set();
+        index.set(key, set);
+      }
+      set.add(testKeyOf(b.ref));
+    }
+  }
+  return index;
+}
+
+export function coverageFilter(
+  mutants: readonly MutantManifestEntry[],
+  index: CoverageIndex,
+  allTests: readonly TestMethodRef[],
+): CoverageSplit {
+  const byKey = new Map(allTests.map((t) => [testKeyOf(t), t]));
+  const covered = new Map<string, TestMethodRef[]>();
+  const uncovered: MutantManifestEntry[] = [];
+  for (const m of mutants) {
+    const testKeys = index.get(`${m.codeunitId}::${m.procedureName.toLowerCase()}`);
+    if (!testKeys || testKeys.size === 0) {
+      uncovered.push(m);
+      continue;
+    }
+    covered.set(
+      m.mutantId,
+      [...testKeys].flatMap((k) => byKey.get(k) ?? []),
+    );
+  }
+  return { covered, uncovered };
 }

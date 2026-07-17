@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { batchByOverlap, filterHistory, identityKeyOf, serializeKey } from "../src/selection";
+import {
+  batchByOverlap,
+  buildCoverageIndex,
+  coverageFilter,
+  filterHistory,
+  identityKeyOf,
+  serializeKey,
+  testKeyOf,
+} from "../src/selection";
 
 function entry(over: Partial<Record<string, unknown>> = {}) {
   return {
@@ -63,5 +71,43 @@ describe("batchByOverlap", () => {
     const a = entry({ mutantId: "M0001" });
     const b = entry({ mutantId: "M0002", file: "Other.Codeunit.al" });
     expect(batchByOverlap([a, b]).length).toBe(1);
+  });
+});
+
+const t1 = { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "PostingUpdatesTotal" };
+const t2 = { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "DiscountCapped" };
+
+describe("coverage", () => {
+  const baseline = [
+    {
+      ref: t1,
+      coverage: {
+        granularity: "procedure" as const,
+        entries: [{ objectType: "Codeunit", objectId: 70000, procedure: "Post" }],
+      },
+    },
+    { ref: t2, coverage: { granularity: "procedure" as const, entries: [] } },
+  ];
+
+  test("mutant in covered procedure maps to its covering tests", () => {
+    const index = buildCoverageIndex(baseline);
+    const m = entry({ procedureName: "Post" });
+    const split = coverageFilter([m], index, [t1, t2]);
+    expect(split.covered.get("M0001")).toEqual([t1]);
+    expect(split.uncovered.length).toBe(0);
+  });
+
+  test("mutant in uncovered procedure lands in uncovered", () => {
+    const index = buildCoverageIndex(baseline);
+    const m = entry({ procedureName: "Untested" });
+    const split = coverageFilter([m], index, [t1, t2]);
+    expect(split.covered.size).toBe(0);
+    expect(split.uncovered.length).toBe(1);
+  });
+
+  test("procedure match is case-insensitive", () => {
+    const index = buildCoverageIndex(baseline);
+    const m = entry({ procedureName: "POST" });
+    expect(coverageFilter([m], index, [t1, t2]).covered.get("M0001")).toEqual([t1]);
   });
 });
