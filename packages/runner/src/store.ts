@@ -1,0 +1,159 @@
+import { Database } from "bun:sqlite";
+import type { TestMethodRef, TestOutcome } from "./backend";
+
+export type MutantVerdict =
+  | "killed"
+  | "survived"
+  | "no-coverage"
+  | "timeout-killed"
+  | "known-survivor"
+  | "error";
+
+export interface MutantRow {
+  readonly mutantCode: string;
+  readonly astHash: string;
+  readonly codeunitName: string;
+  readonly operatorName: string;
+  readonly operatorMajor: number;
+  readonly file: string;
+  readonly line: number;
+  readonly verdict: MutantVerdict;
+  readonly killingTest?: string;
+  readonly durationMs: number;
+}
+
+const SCHEMA = `
+CREATE TABLE IF NOT EXISTS runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  started_at TEXT NOT NULL DEFAULT (datetime('now')),
+  finished_at TEXT,
+  project_path TEXT NOT NULL,
+  backend TEXT NOT NULL,
+  app_version TEXT NOT NULL,
+  batch_count INTEGER,
+  baseline_green INTEGER
+);
+CREATE TABLE IF NOT EXISTS mutants (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id INTEGER NOT NULL REFERENCES runs(id),
+  mutant_code TEXT NOT NULL,
+  ast_hash TEXT NOT NULL,
+  codeunit_name TEXT NOT NULL,
+  operator_name TEXT NOT NULL,
+  operator_major INTEGER NOT NULL,
+  file TEXT NOT NULL,
+  line INTEGER NOT NULL,
+  verdict TEXT NOT NULL,
+  killing_test TEXT,
+  duration_ms INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_mutants_identity
+  ON mutants(ast_hash, codeunit_name, operator_name, operator_major);
+CREATE TABLE IF NOT EXISTS test_results (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id INTEGER NOT NULL REFERENCES runs(id),
+  mutant_code TEXT,
+  codeunit_id INTEGER NOT NULL,
+  method TEXT NOT NULL,
+  outcome TEXT NOT NULL,
+  duration_ms INTEGER NOT NULL,
+  failure_message TEXT
+);
+`;
+
+export class ResultsStore {
+  private readonly db: Database;
+
+  constructor(dbPath: string) {
+    this.db = new Database(dbPath, { create: true });
+    this.db.exec("PRAGMA journal_mode = WAL;");
+    this.db.exec(SCHEMA);
+  }
+
+  createRun(info: { projectPath: string; backend: string; appVersion: string }): number {
+    const r = this.db
+      .query("INSERT INTO runs (project_path, backend, app_version) VALUES (?, ?, ?) RETURNING id")
+      .get(info.projectPath, info.backend, info.appVersion) as { id: number };
+    return r.id;
+  }
+
+  finishRun(runId: number, info: { batchCount: number; baselineGreen: boolean }): void {
+    this.db
+      .query(
+        "UPDATE runs SET finished_at = datetime('now'), batch_count = ?, baseline_green = ? WHERE id = ?",
+      )
+      .run(info.batchCount, info.baselineGreen ? 1 : 0, runId);
+  }
+
+  recordMutant(runId: number, row: MutantRow): void {
+    this.db
+      .query(
+        `INSERT INTO mutants (run_id, mutant_code, ast_hash, codeunit_name, operator_name,
+         operator_major, file, line, verdict, killing_test, duration_ms)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        runId,
+        row.mutantCode,
+        row.astHash,
+        row.codeunitName,
+        row.operatorName,
+        row.operatorMajor,
+        row.file,
+        row.line,
+        row.verdict,
+        row.killingTest ?? null,
+        row.durationMs,
+      );
+  }
+
+  recordTestResult(
+    runId: number,
+    mutantCode: string | null,
+    ref: TestMethodRef,
+    outcome: TestOutcome,
+    durationMs: number,
+    failureMessage?: string,
+  ): void {
+    this.db
+      .query(
+        `INSERT INTO test_results (run_id, mutant_code, codeunit_id, method, outcome, duration_ms, failure_message)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        runId,
+        mutantCode,
+        ref.codeunitId,
+        ref.method,
+        outcome,
+        durationMs,
+        failureMessage ?? null,
+      );
+  }
+
+  priorSurvivorKeys(projectPath: string): Set<string> {
+    const run = this.db
+      .query(
+        "SELECT id FROM runs WHERE project_path = ? AND finished_at IS NOT NULL ORDER BY id DESC LIMIT 1",
+      )
+      .get(projectPath) as { id: number } | null;
+    if (!run) return new Set();
+    const rows = this.db
+      .query(
+        "SELECT ast_hash, codeunit_name, operator_name, operator_major FROM mutants WHERE run_id = ? AND verdict = 'survived'",
+      )
+      .all(run.id) as Array<{
+      ast_hash: string;
+      codeunit_name: string;
+      operator_name: string;
+      operator_major: number;
+    }>;
+    return new Set(
+      rows.map((r) => `${r.ast_hash}|${r.codeunit_name}|${r.operator_name}|${r.operator_major}`),
+    );
+  }
+
+  close(): void {
+    this.db.close();
+  }
+}
