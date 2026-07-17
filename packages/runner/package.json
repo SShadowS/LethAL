@@ -1,0 +1,13 @@
+{
+  "name": "@lethal/runner",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "dependencies": {
+    "@lethal/engine": "workspace:*",
+    "@lethal/schemata": "workspace:*",
+    "@lethal/builtin-tier1": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.12.0"
+  }
+}
