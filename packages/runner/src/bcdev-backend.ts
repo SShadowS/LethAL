@@ -1,6 +1,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import type { MutationControlClient } from "./activation";
 import type {
   BackendCapabilities,
   BackendStatus,
@@ -43,6 +44,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
     private readonly cfg: BcDevConfig,
     private readonly transportFactory?: () => Transport,
     private readonly publisher?: Publisher,
+    private readonly activation?: MutationControlClient,
   ) {}
 
   capabilities(): BackendCapabilities {
@@ -104,8 +106,10 @@ export class BcDevMcpBackend implements ExecutionBackend {
     await this.publisher.publish(appPath);
   }
 
-  async activate(_mutantId: string | null): Promise<void> {
-    throw new Error("BcDevMcpBackend.activate wired in Task 9");
+  async activate(mutantId: string | null): Promise<void> {
+    if (!this.activation) throw new Error("BcDevMcpBackend: no activation client configured");
+    if (mutantId === null) await this.activation.clearActive();
+    else await this.activation.setActive(mutantId);
   }
 
   async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {

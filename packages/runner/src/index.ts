@@ -1,3 +1,4 @@
+export * from "./activation";
 export * from "./backend";
 export * from "./bcdev-backend";
 export * from "./discovery";

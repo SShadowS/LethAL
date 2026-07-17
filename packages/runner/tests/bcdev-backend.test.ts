@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { MutationControlClient } from "../src/activation";
 import { BcDevMcpBackend } from "../src/bcdev-backend";
 import { Publisher } from "../src/publisher";
 
@@ -164,5 +165,68 @@ describe("BcDevMcpBackend.deploy", () => {
     expect(calls[0]?.[0]).toBe("C:/alc.exe");
     expect(calls[1]?.[0]).toBe("C:/altool.exe");
     expect(calls[1]?.[1]).toBe("publishapp");
+  });
+});
+
+describe("BcDevMcpBackend.activate", () => {
+  test("activate with mutantId hits SetActive", async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const fakeFetch = (async (url: unknown, init?: RequestInit) => {
+      calls.push({ url: String(url), init: init ?? {} });
+      return new Response(JSON.stringify({ value: "M0002" }), { status: 200 });
+    }) as typeof fetch;
+    const client = new MutationControlClient(
+      {
+        baseUrl: "http://bc:7048/BC",
+        company: "CRONUS",
+        username: "u",
+        password: "p",
+      },
+      fakeFetch,
+    );
+    const backend = new BcDevMcpBackend(
+      { mcpCommand: ["unused"], project: "/al", server: "http://bc", serverInstance: "BC" },
+      undefined,
+      undefined,
+      client,
+    );
+    await backend.activate("M0002");
+    expect(calls[0]?.url).toContain("MutationControl_SetActive");
+  });
+
+  test("activate with null hits ClearActive", async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const fakeFetch = (async (url: unknown, init?: RequestInit) => {
+      calls.push({ url: String(url), init: init ?? {} });
+      return new Response(JSON.stringify({}), { status: 200 });
+    }) as typeof fetch;
+    const client = new MutationControlClient(
+      {
+        baseUrl: "http://bc:7048/BC",
+        company: "CRONUS",
+        username: "u",
+        password: "p",
+      },
+      fakeFetch,
+    );
+    const backend = new BcDevMcpBackend(
+      { mcpCommand: ["unused"], project: "/al", server: "http://bc", serverInstance: "BC" },
+      undefined,
+      undefined,
+      client,
+    );
+    await backend.activate(null);
+    expect(calls[0]?.url).toContain("MutationControl_ClearActive");
+  });
+
+  test("activate without client throws", async () => {
+    const backend = new BcDevMcpBackend(
+      { mcpCommand: ["unused"], project: "/al", server: "http://bc", serverInstance: "BC" },
+      undefined,
+      undefined,
+    );
+    await expect(backend.activate("M0002")).rejects.toThrow(
+      "BcDevMcpBackend: no activation client configured",
+    );
   });
 });
