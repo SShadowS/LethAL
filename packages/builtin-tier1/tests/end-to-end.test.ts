@@ -61,7 +61,7 @@ describe("end-to-end Layer 3", () => {
       await writeInstrumentedProject({
         targetDir: dir,
         files: [{ path: "mixed.al", source: src, root, specs: kept }],
-        selectorObjectId: 60000,
+        selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
       });
       const written = await readFile(join(dir, "mixed.al"), "utf8");
       expect(written).toBe(compiled);
@@ -69,7 +69,11 @@ describe("end-to-end Layer 3", () => {
         await readFile(join(dir, "mutant-manifest.json"), "utf8"),
       );
       expect(manifest.mutants.length).toBe(kept.length);
-      expect(manifest.selectorObjectId).toBe(60000);
+      expect(manifest.selectorIds).toEqual({
+        selectorId: 60000,
+        controlId: 60001,
+        tableId: 60002,
+      });
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

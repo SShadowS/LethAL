@@ -29,7 +29,7 @@ describe("writeInstrumentedProject", () => {
       await writeInstrumentedProject({
         targetDir: dir,
         files: [{ path: "P.Codeunit.al", source: src, root, specs }],
-        selectorObjectId: 60000,
+        selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
       });
 
       const entries = (await readdir(dir)).sort();
@@ -55,6 +55,44 @@ describe("writeInstrumentedProject", () => {
 
       const rewritten = await readFile(join(dir, "P.Codeunit.al"), "utf8");
       expect(rewritten).toContain("MutationSelector.Active('M0001')");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("manifest entries carry identity and coverage-lookup fields", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-"));
+    try {
+      const src = `codeunit 51040 "P" { procedure P() begin X := 1; end; }`;
+      const root = wrapRoot(parseAL(src));
+      const assign = findFirst(root, ALNodeKind.assignment_statement);
+      if (assign === null) throw new Error("no assignment");
+      const specs: MutationSpec[] = [
+        {
+          operatorName: "op.flip",
+          operatorVersion: "1.0.0",
+          astNodeId: `${assign.startIndex}`,
+          before: assign,
+          after: { ...assign, text: "X := 2;" } as never,
+          parentContext: "statement-position",
+        },
+      ];
+      await writeInstrumentedProject({
+        targetDir: dir,
+        files: [{ path: "P.Codeunit.al", source: src, root, specs }],
+        selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
+      });
+
+      const manifest = JSON.parse(
+        await readFile(join(dir, "mutant-manifest.json"), "utf8"),
+      );
+      expect(manifest.selectorIds).toEqual({ selectorId: 60000, controlId: 60001, tableId: 60002 });
+      const entry = manifest.mutants[0];
+      expect(entry.astHash).toMatch(/^[0-9a-f]{8,}$/);
+      expect(entry.codeunitId).toBe(51040);
+      expect(entry.codeunitName).toBe("P");
+      expect(entry.procedureName).not.toBe("");
+      expect(entry.startLine).toBeGreaterThan(0);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

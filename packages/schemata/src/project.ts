@@ -1,9 +1,15 @@
-import type { ALSyntaxNode, MutationSpec } from "@lethal/engine";
+import {
+  type ALSyntaxNode,
+  type MutationSpec,
+  astSubtreeHash,
+  findEnclosingProcedure,
+} from "@lethal/engine";
 import { mkdir, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { compileSchemataForFile } from "./compile";
 import { assignMutantIds } from "./ids";
 import {
+  type SelectorConfig,
   emitMutationSelector,
   emitMutationActiveTable,
   emitMutationControl,
@@ -20,7 +26,7 @@ export interface InstrumentedFile {
 export interface WriteInput {
   readonly targetDir: string;
   readonly files: readonly InstrumentedFile[];
-  readonly selectorObjectId: number;
+  readonly selectorIds: SelectorConfig;
 }
 
 export interface MutantManifestEntry {
@@ -28,13 +34,42 @@ export interface MutantManifestEntry {
   readonly file: string;
   readonly startIndex: number;
   readonly endIndex: number;
+  readonly startLine: number;
   readonly operatorName: string;
   readonly operatorVersion: string;
+  readonly astHash: string;
+  readonly codeunitId: number;
+  readonly codeunitName: string;
+  readonly procedureName: string;
 }
 
 export interface MutantManifest {
-  readonly selectorObjectId: number;
+  readonly selectorIds: SelectorConfig;
   readonly mutants: readonly MutantManifestEntry[];
+}
+
+function lineOfIndex(source: string, index: number): number {
+  let line = 1;
+  for (let i = 0; i < index && i < source.length; i++) {
+    if (source[i] === "\n") line++;
+  }
+  return line;
+}
+
+const OBJECT_HEADER =
+  /^\s*(codeunit|table|page|report|query|xmlport|enum)\s+(\d+)\s+("([^"]+)"|(\w+))/im;
+
+function objectHeaderOf(source: string): { id: number; name: string } {
+  const m = OBJECT_HEADER.exec(source);
+  if (!m) throw new Error("instrumented file has no AL object header");
+  return { id: Number(m[2]), name: m[4] ?? m[5] ?? "" };
+}
+
+function procedureNameOf(spec: MutationSpec): string {
+  const proc = findEnclosingProcedure(spec.before);
+  if (proc === null) return "";
+  const nameNode = proc.childForFieldName("name");
+  return nameNode === null ? "" : nameNode.text;
 }
 
 export async function writeInstrumentedProject(input: WriteInput): Promise<void> {
@@ -48,46 +83,47 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
   for (const f of input.files) {
     const compiled = compileSchemataForFile(f.source, f.root, f.specs);
     await writeFile(join(input.targetDir, basename(f.path)), compiled, "utf8");
+    const header = objectHeaderOf(f.source);
     for (const { mutantId, spec } of idedByFile.get(f.path) ?? []) {
       manifest.push({
         mutantId,
         file: f.path,
         startIndex: spec.before.startIndex,
         endIndex: spec.before.endIndex,
+        startLine: lineOfIndex(f.source, spec.before.startIndex),
         operatorName: spec.operatorName,
         operatorVersion: spec.operatorVersion,
+        astHash: astSubtreeHash(spec.before),
+        codeunitId: header.id,
+        codeunitName: header.name,
+        procedureName: procedureNameOf(spec),
       });
     }
   }
 
-  const selectorCfg = {
-    selectorId: input.selectorObjectId,
-    controlId: input.selectorObjectId + 1,
-    tableId: input.selectorObjectId + 2,
-  };
   await writeFile(
     join(input.targetDir, "MutationSelector.Codeunit.al"),
-    emitMutationSelector(selectorCfg),
+    emitMutationSelector(input.selectorIds),
     "utf8",
   );
   await writeFile(
     join(input.targetDir, "MutationActive.Table.al"),
-    emitMutationActiveTable(selectorCfg),
+    emitMutationActiveTable(input.selectorIds),
     "utf8",
   );
   await writeFile(
     join(input.targetDir, "MutationControl.Codeunit.al"),
-    emitMutationControl(selectorCfg),
+    emitMutationControl(input.selectorIds),
     "utf8",
   );
   await writeFile(
     join(input.targetDir, "webservices.xml"),
-    emitWebServicesXml(selectorCfg),
+    emitWebServicesXml(input.selectorIds),
     "utf8",
   );
 
   const manifestJson: MutantManifest = {
-    selectorObjectId: input.selectorObjectId,
+    selectorIds: input.selectorIds,
     mutants: manifest,
   };
   await writeFile(
