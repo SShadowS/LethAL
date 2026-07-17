@@ -65,11 +65,18 @@ function objectHeaderOf(source: string): { id: number; name: string } {
   return { id: Number(m[2]), name: m[4] ?? m[5] ?? "" };
 }
 
+function stripQuotes(s: string): string {
+  if (s.length >= 2 && s.startsWith('"') && s.endsWith('"')) {
+    return s.slice(1, -1);
+  }
+  return s;
+}
+
 function procedureNameOf(spec: MutationSpec): string {
   const proc = findEnclosingProcedure(spec.before);
   if (proc === null) return "";
   const nameNode = proc.childForFieldName("name");
-  return nameNode === null ? "" : nameNode.text;
+  return nameNode === null ? "" : stripQuotes(nameNode.text);
 }
 
 export async function writeInstrumentedProject(input: WriteInput): Promise<void> {
