@@ -22,6 +22,11 @@ export interface AlRunnerConfig {
 }
 
 export class AlRunnerBackend implements ExecutionBackend {
+  // Set by deploy(); until then (or if deploy() is never called — existing
+  // callers may drive activate()/run() directly against cfg.instrumentedDir)
+  // activeDir() falls back to the statically configured instrumented dir.
+  private deployedDir: string | undefined;
+
   constructor(
     private readonly cfg: AlRunnerConfig,
     private readonly spawn: SpawnFn = defaultSpawn,
@@ -42,13 +47,19 @@ export class AlRunnerBackend implements ExecutionBackend {
       : { ok: false, details: `al-runner not runnable: ${res.stderr}` };
   }
 
-  async deploy(_instrumentedDir: string): Promise<void> {
-    // no-op: the CLI reads the instrumented source directly
+  async deploy(instrumentedDir: string): Promise<void> {
+    // In-memory backends have no publish step, but they still need to know
+    // which per-batch instrumented dir activate()/run() should target.
+    this.deployedDir = instrumentedDir;
+  }
+
+  private activeDir(): string {
+    return this.deployedDir ?? this.cfg.instrumentedDir;
   }
 
   async activate(mutantId: string | null): Promise<void> {
     await writeFile(
-      join(this.cfg.instrumentedDir, "MutationSelector.Codeunit.al"),
+      join(this.activeDir(), "MutationSelector.Codeunit.al"),
       emitStaticSelector({ objectId: this.cfg.selectorObjectId, activeId: mutantId ?? "" }),
       "utf8",
     );
@@ -62,7 +73,7 @@ export class AlRunnerBackend implements ExecutionBackend {
         this.cfg.alRunnerPath,
         "--run",
         ref.method,
-        this.cfg.instrumentedDir,
+        this.activeDir(),
         this.cfg.testDir,
         "--output-json",
       ];
