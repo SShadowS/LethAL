@@ -27,6 +27,10 @@ const bunSpawn: SpawnFn = async (argv) => {
 
 export const defaultSpawn = bunSpawn;
 
+function toForwardSlashes(p: string): string {
+  return p.replaceAll("\\", "/");
+}
+
 export class Publisher {
   constructor(
     private readonly cfg: PublisherConfig,
@@ -34,17 +38,28 @@ export class Publisher {
   ) {}
 
   async compile(instrumentedDir: string): Promise<string> {
-    const appPath = join(this.cfg.outputDir, "lethal-instrumented.app").replaceAll("\\", "/");
-    const res = await this.spawn([
-      this.cfg.alcPath,
-      `/project:${instrumentedDir}`,
-      `/packagecachepath:${this.cfg.packageCachePath}`,
-      `/out:${appPath}`,
-    ]);
-    if (res.exitCode !== 0) {
-      throw new Error(`alc compile failed (exit ${res.exitCode}):\n${res.stderr || res.stdout}`);
+    const appPath = toForwardSlashes(join(this.cfg.outputDir, "lethal-instrumented.app"));
+    const projectPath = toForwardSlashes(instrumentedDir);
+    const cachePath = toForwardSlashes(this.cfg.packageCachePath);
+    try {
+      const res = await this.spawn([
+        this.cfg.alcPath,
+        `/project:${projectPath}`,
+        `/packagecachepath:${cachePath}`,
+        `/out:${appPath}`,
+      ]);
+      if (res.exitCode !== 0) {
+        throw new Error(`alc compile failed (exit ${res.exitCode}):\n${res.stderr || res.stdout}`);
+      }
+      return appPath;
+    } catch (err) {
+      if (err instanceof Error && err.message.includes("alc compile failed")) {
+        throw err;
+      }
+      throw new Error(
+        `alc compile failed: ${err instanceof Error ? err.message : String(err)} (alcPath: ${this.cfg.alcPath})`,
+      );
     }
-    return appPath;
   }
 
   async publish(appPath: string): Promise<void> {
@@ -60,30 +75,57 @@ export class Publisher {
       "ForceSync",
     ];
     if (this.cfg.tenant) argv.push("--tenant", this.cfg.tenant);
-    const res = await this.spawn(argv);
-    if (res.exitCode !== 0) {
+    try {
+      const res = await this.spawn(argv);
+      if (res.exitCode !== 0) {
+        throw new Error(
+          `altool publishapp failed (exit ${res.exitCode}):\n${res.stderr || res.stdout}`,
+        );
+      }
+    } catch (err) {
+      if (err instanceof Error && err.message.includes("altool publishapp failed")) {
+        throw err;
+      }
       throw new Error(
-        `altool publishapp failed (exit ${res.exitCode}):\n${res.stderr || res.stdout}`,
+        `altool publishapp failed: ${err instanceof Error ? err.message : String(err)} (altoolPath: ${this.cfg.altoolPath})`,
       );
     }
   }
 }
 
-export async function defaultAlToolPaths(): Promise<
-  { alcPath: string; altoolPath: string } | undefined
-> {
-  const extDir = join(homedir(), ".vscode", "extensions");
+function compareVersions(v1: string, v2: string): number {
+  const parts1 = v1.split(".").map((p) => Number.parseInt(p, 10) || 0);
+  const parts2 = v2.split(".").map((p) => Number.parseInt(p, 10) || 0);
+  const maxLen = Math.max(parts1.length, parts2.length);
+
+  for (let i = 0; i < maxLen; i++) {
+    const p1 = parts1[i] ?? 0;
+    const p2 = parts2[i] ?? 0;
+    if (p1 !== p2) return p1 - p2;
+  }
+  return 0;
+}
+
+export async function defaultAlToolPaths(
+  extensionsDir: string = join(homedir(), ".vscode", "extensions"),
+): Promise<{ alcPath: string; altoolPath: string } | undefined> {
   let entries: string[];
   try {
-    entries = await readdir(extDir);
+    entries = await readdir(extensionsDir);
   } catch {
     return undefined;
   }
-  const al = entries
-    .filter((e) => e.startsWith("ms-dynamics-smb.al-"))
-    .sort()
-    .at(-1);
+  const alExtensions = entries.filter((e) => e.startsWith("ms-dynamics-smb.al-"));
+  if (alExtensions.length === 0) return undefined;
+
+  const sorted = alExtensions.sort((a, b) => {
+    const versionA = a.slice("ms-dynamics-smb.al-".length);
+    const versionB = b.slice("ms-dynamics-smb.al-".length);
+    return compareVersions(versionA, versionB);
+  });
+
+  const al = sorted.at(-1);
   if (!al) return undefined;
-  const bin = join(extDir, al, "bin", "win32");
+  const bin = join(extensionsDir, al, "bin", "win32");
   return { alcPath: join(bin, "alc.exe"), altoolPath: join(bin, "altool.exe") };
 }
