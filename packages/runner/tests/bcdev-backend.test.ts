@@ -3,6 +3,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { BcDevMcpBackend } from "../src/bcdev-backend";
+import { Publisher } from "../src/publisher";
 
 const ref = { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "PostingUpdatesTotal" };
 
@@ -132,5 +133,36 @@ describe("BcDevMcpBackend.status", () => {
     const s = await backend.status();
     expect(s.ok).toBe(false);
     expect(s.details).toContain("NST unreachable");
+  });
+});
+
+describe("BcDevMcpBackend.deploy", () => {
+  test("invokes publisher compile then publish in order", async () => {
+    const calls: string[][] = [];
+    const recordingSpawn = async (argv: readonly string[]) => {
+      calls.push([...argv]);
+      return { exitCode: 0, stdout: "", stderr: "" };
+    };
+    const publisher = new Publisher(
+      {
+        alcPath: "C:/alc.exe",
+        altoolPath: "C:/altool.exe",
+        packageCachePath: "C:/.alpackages",
+        outputDir: "C:/out",
+        server: "http://bc",
+        serverInstance: "BC",
+      },
+      recordingSpawn,
+    );
+    const backend = new BcDevMcpBackend(
+      { mcpCommand: ["unused"], project: "/al", server: "http://bc", serverInstance: "BC" },
+      undefined,
+      publisher,
+    );
+    await backend.deploy("C:/instr");
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.[0]).toBe("C:/alc.exe");
+    expect(calls[1]?.[0]).toBe("C:/altool.exe");
+    expect(calls[1]?.[1]).toBe("publishapp");
   });
 });

@@ -10,6 +10,7 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "./backend";
+import type { Publisher } from "./publisher";
 
 export interface BcDevConfig {
   readonly mcpCommand: readonly string[]; // e.g. ["bun", "x", "bc-dev-mcp"] — argv to spawn
@@ -41,6 +42,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
   constructor(
     private readonly cfg: BcDevConfig,
     private readonly transportFactory?: () => Transport,
+    private readonly publisher?: Publisher,
   ) {}
 
   capabilities(): BackendCapabilities {
@@ -96,8 +98,10 @@ export class BcDevMcpBackend implements ExecutionBackend {
     }
   }
 
-  async deploy(_instrumentedDir: string): Promise<void> {
-    throw new Error("BcDevMcpBackend.deploy wired in Task 8");
+  async deploy(instrumentedDir: string): Promise<void> {
+    if (!this.publisher) throw new Error("BcDevMcpBackend: no Publisher configured");
+    const appPath = await this.publisher.compile(instrumentedDir);
+    await this.publisher.publish(appPath);
   }
 
   async activate(_mutantId: string | null): Promise<void> {
