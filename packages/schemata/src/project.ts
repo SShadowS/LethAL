@@ -3,7 +3,12 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { compileSchemataForFile } from "./compile";
 import { assignMutantIds } from "./ids";
-import { emitMutationSelector } from "./selector";
+import {
+  emitMutationSelector,
+  emitMutationActiveTable,
+  emitMutationControl,
+  emitWebServicesXml,
+} from "./selector";
 
 export interface InstrumentedFile {
   readonly path: string;
@@ -55,9 +60,29 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
     }
   }
 
+  const selectorCfg = {
+    selectorId: input.selectorObjectId,
+    controlId: input.selectorObjectId + 1,
+    tableId: input.selectorObjectId + 2,
+  };
   await writeFile(
     join(input.targetDir, "MutationSelector.Codeunit.al"),
-    emitMutationSelector({ objectId: input.selectorObjectId }),
+    emitMutationSelector(selectorCfg),
+    "utf8",
+  );
+  await writeFile(
+    join(input.targetDir, "MutationActive.Table.al"),
+    emitMutationActiveTable(selectorCfg),
+    "utf8",
+  );
+  await writeFile(
+    join(input.targetDir, "MutationControl.Codeunit.al"),
+    emitMutationControl(selectorCfg),
+    "utf8",
+  );
+  await writeFile(
+    join(input.targetDir, "webservices.xml"),
+    emitWebServicesXml(selectorCfg),
     "utf8",
   );
 

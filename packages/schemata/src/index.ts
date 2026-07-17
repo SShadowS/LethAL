@@ -1,6 +1,12 @@
 export { assignMutantIds } from "./ids";
 export type { IdedSpec } from "./ids";
-export { emitMutationSelector } from "./selector";
+export {
+  emitMutationSelector,
+  emitMutationActiveTable,
+  emitMutationControl,
+  emitStaticSelector,
+  emitWebServicesXml,
+} from "./selector";
 export type { SelectorConfig } from "./selector";
 export { wrapStatement } from "./wrap";
 export type { WrapInput } from "./wrap";

@@ -35,6 +35,9 @@ describe("writeInstrumentedProject", () => {
       const entries = (await readdir(dir)).sort();
       expect(entries).toContain("P.Codeunit.al");
       expect(entries).toContain("MutationSelector.Codeunit.al");
+      expect(entries).toContain("MutationActive.Table.al");
+      expect(entries).toContain("MutationControl.Codeunit.al");
+      expect(entries).toContain("webservices.xml");
       expect(entries).toContain("mutant-manifest.json");
 
       const manifest = JSON.parse(
