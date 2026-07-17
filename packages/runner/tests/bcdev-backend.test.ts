@@ -12,16 +12,21 @@ const ref = { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "Posting
 // without the fake server needing to mirror the production request shape.
 const anyArgs = z.object({}).passthrough();
 
-function makeBackend(handler: (args: unknown) => unknown) {
+function makeBackend(
+  runHandler: (args: unknown) => unknown,
+  statusHandler: (args: unknown) => unknown = () => "fake",
+) {
   const server = new McpServer({ name: "fake-bc-dev", version: "0.0.0" });
   // `await` matters here: a handler that returns a never-resolving Promise (the timeout
   // scenario) must keep this tool call pending, not synchronously serialize the Promise
   // object itself (JSON.stringify(new Promise(...)) resolves to "{}" instantly otherwise).
   server.registerTool("bcdev_test_run", { inputSchema: anyArgs }, async (args: unknown) => ({
-    content: [{ type: "text", text: JSON.stringify(await handler(args)) }],
+    content: [{ type: "text", text: JSON.stringify(await runHandler(args)) }],
   }));
-  server.registerTool("bcdev_status", { inputSchema: anyArgs }, async () => ({
-    content: [{ type: "text", text: JSON.stringify({ ok: true, details: "fake" }) }],
+  // status() treats the response's text content as an opaque details string (no JSON
+  // parsing), so the fake tool returns statusHandler's result as plain text.
+  server.registerTool("bcdev_status", { inputSchema: anyArgs }, async (args: unknown) => ({
+    content: [{ type: "text", text: String(await statusHandler(args)) }],
   }));
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   void server.connect(serverTransport);
@@ -103,5 +108,29 @@ describe("BcDevMcpBackend.run", () => {
     const v = await backend.run(ref, { coverage: "none", timeoutMs: 5000 });
     expect(v.outcome).toBe("error");
     expect(v.failureMessage).toContain("NST unreachable");
+  });
+});
+
+describe("BcDevMcpBackend.status", () => {
+  test("maps a healthy status", async () => {
+    const backend = makeBackend(
+      () => ({ results: [] }),
+      () => "NST reachable, 3 tenants",
+    );
+    const s = await backend.status();
+    expect(s.ok).toBe(true);
+    expect(s.details).toBe("NST reachable, 3 tenants");
+  });
+
+  test("tool error yields ok=false, not a false-healthy status", async () => {
+    const backend = makeBackend(
+      () => ({ results: [] }),
+      () => {
+        throw new Error("NST unreachable");
+      },
+    );
+    const s = await backend.status();
+    expect(s.ok).toBe(false);
+    expect(s.details).toContain("NST unreachable");
   });
 });

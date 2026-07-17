@@ -84,6 +84,11 @@ export class BcDevMcpBackend implements ExecutionBackend {
         name: "bcdev_status",
         arguments: this.connectionParams(),
       });
+      // Same protocol quirk as run(): a thrown tool handler surfaces as a normal
+      // (non-rejecting) CallToolResult with isError:true, not a rejected callTool().
+      if (isToolError(res)) {
+        return { ok: false, details: firstText(res) };
+      }
       const text = firstText(res);
       return { ok: true, details: text };
     } catch (err) {
@@ -101,6 +106,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
 
   async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
     const started = Date.now();
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const client = await this.connect();
       const call = client.callTool({
@@ -113,7 +119,9 @@ export class BcDevMcpBackend implements ExecutionBackend {
       });
       const res = await Promise.race([
         call,
-        new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), opts.timeoutMs)),
+        new Promise<"timeout">((resolve) => {
+          timer = setTimeout(() => resolve("timeout"), opts.timeoutMs);
+        }),
       ]);
       if (res === "timeout") {
         call.catch(() => {}); // late result/error deliberately discarded
@@ -155,6 +163,10 @@ export class BcDevMcpBackend implements ExecutionBackend {
         durationMs: Date.now() - started,
         failureMessage: String(err),
       };
+    } finally {
+      // Whichever side of the race settled first, the timer must not keep the event
+      // loop (or the test runner) alive for the remainder of opts.timeoutMs.
+      clearTimeout(timer);
     }
   }
 }
