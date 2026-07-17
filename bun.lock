@@ -43,6 +43,7 @@
         "@lethal/engine": "workspace:*",
         "@lethal/schemata": "workspace:*",
         "@modelcontextprotocol/sdk": "^1.12.0",
+        "zod": "^3.25.76",
       },
     },
     "packages/schemata": {

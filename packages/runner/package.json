@@ -8,6 +8,7 @@
     "@lethal/engine": "workspace:*",
     "@lethal/schemata": "workspace:*",
     "@lethal/builtin-tier1": "workspace:*",
-    "@modelcontextprotocol/sdk": "^1.12.0"
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "zod": "^3.25.76"
   }
 }
