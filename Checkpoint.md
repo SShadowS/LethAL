@@ -1,3 +1,22 @@
+# LethAL Session Checkpoint — Layer 4 Verified Live on BOTH Backends
+
+> **Status 2026-07-18 (final): both integration tests PASS against real infrastructure.**
+> `itest:alrunner` → PASS (396s). `itest:bcdev` → PASS (14s) against BC container
+> **Cronus281**, producing killed 3 / survived 9 / no-coverage 3, score 25.0%, zero errors —
+> exactly the hand-computed table, verdict-identical across two consecutive runs.
+> Cronus28 is unhealthy; Cronus281 is the working server (it is reachable on the
+> `desktop-windows` docker context). 200/200 unit tests, typecheck + lint clean.
+>
+> Live bcdev bring-up found four more real bugs beyond the ones listed below, all fixed:
+> wall-clock vs in-VM test duration (starved every mutant timeout, stranding in-flight
+> server runs — the likely cause of Cronus28's wedged endpoint); non-monotonic app
+> version `1.0.<batch>.<run>` (BC rejects downgrades, so most batches never deployed);
+> the bcdev itest needing a persistent results DB for version monotonicity; and
+> `BcDevMcpBackend` never closing its MCP client, so a *successful* run hung forever.
+> Server-side preconditions (dev-scope publishing, test-app symbols) are in `fixtures/README.md`.
+
+# Superseded detail below (kept for the bug inventory)
+
 # LethAL Session Checkpoint — Layer 4 Verified on al-runner, bcdev Blocked on Server
 
 **Date:** 2026-07-18
