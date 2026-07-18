@@ -878,6 +878,16 @@ export class ServerTransport implements AlRunnerTransport {
     this.io = io ?? defaultServerIo(alRunnerPath);
   }
 
+  // Amended 2026-07-18 (review findings, user-approved). TWO hazards in the code below
+  // as originally written, both fixed in the shipped implementation:
+  //   (a) the handshake `await iter.next()` had NO deadline, so a process that starts but
+  //       never emits {"ready":true} (wrong binary, stalled startup, crash before output)
+  //       hung send() — and the whole run — forever. Race it against req.deadlineMs and
+  //       return { kind: "deadline" } on expiry, tearing the process down.
+  //   (b) send() had no concurrency guard, and this protocol carries NO request/response
+  //       correlation id. Two overlapping calls could double-spawn or cross responses,
+  //       silently attributing one mutant's result to another. Serialize in-flight
+  //       requests through an internal promise chain (covering ensureStarted too).
   private async ensureStarted(): Promise<{ proc: ServerProcess; iter: AsyncIterableIterator<string> }> {
     const existing = this.proc;
     const existingIter = this.iter;

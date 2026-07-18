@@ -159,30 +159,66 @@ export class ServerTransport implements AlRunnerTransport {
   private iter: AsyncIterableIterator<string> | undefined;
   private readonly io: ServerIo;
 
+  /**
+   * The wire protocol carries NO request/response correlation id — al-runner
+   * just emits one JSON line per `runTests`/`shutdown` write, in that order.
+   * Two overlapping `send()` calls on one instance would otherwise race: both
+   * could see `this.proc === undefined` and double-spawn, or call B's write
+   * could land between call A's write and A's response read, silently
+   * attributing one mutant's result to another. Every `send()` — including
+   * the `ensureStarted()` spawn/handshake it may trigger — is threaded
+   * through this promise chain so overlapping callers queue instead of
+   * interleaving. Inert while the orchestrator stays sequential, but Task 6's
+   * parallel workers are exactly the consumer that would otherwise trip it.
+   */
+  private queue: Promise<unknown> = Promise.resolve();
+
   constructor(alRunnerPath: string, io?: ServerIo) {
     this.io = io ?? defaultServerIo(alRunnerPath);
   }
 
-  private async ensureStarted(): Promise<{
-    proc: ServerProcess;
-    iter: AsyncIterableIterator<string>;
-  }> {
+  private async ensureStarted(
+    deadlineMs: number,
+  ): Promise<{ proc: ServerProcess; iter: AsyncIterableIterator<string> } | "deadline"> {
     const existing = this.proc;
     const existingIter = this.iter;
     if (existing !== undefined && existingIter !== undefined)
       return { proc: existing, iter: existingIter };
     const proc = this.io.start();
     const iter = proc.lines();
-    const hello = await iter.next(); // {"ready":true}
+    // Race the handshake read against the SAME client deadline used for the
+    // response below: a process that starts but never emits `{"ready":true}`
+    // (wrong binary, stalled startup, crash before first output) must not
+    // hang send() — and therefore the whole mutation run — forever.
+    const deadline = new Promise<"deadline">((resolve) =>
+      setTimeout(() => resolve("deadline"), deadlineMs),
+    );
+    const hello = await Promise.race([iter.next(), deadline]);
+    if (hello === "deadline") {
+      // Nothing was ever assigned to this.proc/this.iter, so there is no
+      // shared state to unwind — just stop the stalled process directly.
+      proc.kill();
+      return "deadline";
+    }
     if (hello.done) throw new Error("al-runner server closed before the ready handshake");
     this.proc = proc;
     this.iter = iter;
     return { proc, iter };
   }
 
-  async send(req: AlRunnerRequest): Promise<AlRunnerResult> {
+  send(req: AlRunnerRequest): Promise<AlRunnerResult> {
+    const result = this.queue.then(() => this.sendLocked(req));
+    // Keep the chain alive even if this call fails, so a later queued call
+    // isn't blocked forever by an already-reported failure.
+    this.queue = result.catch(() => undefined);
+    return result;
+  }
+
+  private async sendLocked(req: AlRunnerRequest): Promise<AlRunnerResult> {
     try {
-      const { proc, iter } = await this.ensureStarted();
+      const started = await this.ensureStarted(req.deadlineMs);
+      if (started === "deadline") return { kind: "deadline" };
+      const { proc, iter } = started;
       const payload: Record<string, unknown> = {
         command: "runTests",
         sourcePaths: [req.sourceDir, req.testDir],

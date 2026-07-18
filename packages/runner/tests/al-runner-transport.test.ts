@@ -107,6 +107,7 @@ function fakeIo(responses: unknown[]) {
   let resolveNext: ((v: IteratorResult<string>) => void) | null = null;
   const queue: string[] = ['{"ready":true}'];
   let killed = false;
+  let starts = 0;
   const push = (l: string) => {
     if (resolveNext) {
       const r = resolveNext;
@@ -116,6 +117,7 @@ function fakeIo(responses: unknown[]) {
   };
   const io = {
     start() {
+      starts++;
       return {
         write(line: string) {
           written.push(line);
@@ -144,7 +146,7 @@ function fakeIo(responses: unknown[]) {
       };
     },
   };
-  return { io, written, wasKilled: () => killed };
+  return { io, written, wasKilled: () => killed, startCount: () => starts };
 }
 
 describe("ServerTransport", () => {
@@ -186,5 +188,56 @@ describe("ServerTransport", () => {
     await t.send(req);
     await t.close();
     expect(wasKilled()).toBe(true);
+  });
+
+  test("a stalled handshake resolves via the deadline instead of hanging forever", async () => {
+    let killed = false;
+    const io = {
+      start() {
+        return {
+          write() {
+            // Never reached: the deadline fires before a runTests command would be sent.
+          },
+          lines(): AsyncIterableIterator<string> {
+            return {
+              [Symbol.asyncIterator]() {
+                return this;
+              },
+              next(): Promise<IteratorResult<string>> {
+                // Simulates a wrong binary / stalled startup: no `{"ready":true}` ever arrives.
+                return new Promise(() => {});
+              },
+            } as AsyncIterableIterator<string>;
+          },
+          kill() {
+            killed = true;
+          },
+        };
+      },
+    };
+    const t = new ServerTransport("al-runner", io);
+    const res = await t.send({ ...req, deadlineMs: 30 });
+    expect(res.kind).toBe("deadline");
+    expect(killed).toBe(true);
+    await t.close();
+  });
+
+  test("two concurrent sends are serialized: each gets its own response, one process starts", async () => {
+    const { io, written, startCount } = fakeIo([
+      { tests: [{ name: "A", status: "pass" }] },
+      { tests: [{ name: "B", status: "pass" }] },
+    ]);
+    const t = new ServerTransport("al-runner", io);
+    const [a, b] = await Promise.all([
+      t.send({ ...req, method: "A" }),
+      t.send({ ...req, method: "B" }),
+    ]);
+    expect(a.kind).toBe("tests");
+    expect(b.kind).toBe("tests");
+    if (a.kind === "tests") expect(a.tests[0]?.name).toBe("A");
+    if (b.kind === "tests") expect(b.tests[0]?.name).toBe("B");
+    expect(written).toHaveLength(2);
+    expect(startCount()).toBe(1);
+    await t.close();
   });
 });
