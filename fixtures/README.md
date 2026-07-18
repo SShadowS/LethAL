@@ -10,11 +10,23 @@ manual smoke-testing, and the env-gated integration scripts in
 |---|---|---|---|
 | `Sandbox Logic` | 79000 | `sandbox-app` | Mutation target — every Tier 1 operator finds ≥1 site here. |
 | `Sandbox Pricing` | 79001 | `sandbox-app` | Mutation target, deliberately **untested** by any test method. |
-| `Sandbox Tests` | 79100 | `sandbox-tests` | `Subtype = Test` codeunit exercising `Sandbox Logic`. Asserts via `Error()` — no Library Assert dependency. |
+| `Sandbox Tests` | 79100 | `sandbox-tests` | `Subtype = Test` codeunit exercising `Sandbox Logic`. Asserts via `Error()` — no Library Assert dependency. Must NOT carry a `TestIsolation` property — `TestIsolation` is a **TestRunner**-codeunit property in real BC; setting it on a `Subtype = Test` codeunit is rejected by the AL compiler (`AL0223`). Isolation is chosen by whichever TestRunner codeunit invokes the tests and Layer 4 does not verify it — see the note below. |
 
 `sandbox-app/app.json` reserves `idRanges` 79000–79199; `sandbox-tests/app.json` depends on
 `sandbox-app` only (id `df1aa9ff-6539-4c86-a9d0-ad702b61ac9a`) and declares the same
 `idRanges` window for its own codeunit 79100.
+
+## Note: no `TestIsolation` preflight
+
+Layer 4 briefly shipped a preflight (`findMissingTestIsolation`, `packages/runner/src/discovery.ts`)
+that scanned `[Test]` codeunit sources for `TestIsolation = Function;` and aborted session-isolation
+backend runs when it was missing. That check was removed: `TestIsolation` is a **TestRunner**-codeunit
+property, not a `Subtype = Test` one — real BC rejects it on a Test codeunit with `AL0223`
+("The Property 'TestIsolation' can only be used if the property 'Subtype' is set to 'TestRunner'").
+Isolation is therefore chosen by whichever TestRunner codeunit invokes the tests and cannot be
+verified by scanning test-codeunit sources. Layer 4 does not check it — it's an out-of-band concern,
+verified manually against the real backend instead (see `--test-isolation method` in
+`al-runner-backend.ts`'s `run()`, verified against the real al-runner CLI).
 
 ## Expected verdict table (hand-computed)
 

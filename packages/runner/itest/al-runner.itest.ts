@@ -13,12 +13,14 @@
  * Expected verdict table is hand-computed in fixtures/README.md — keep the
  * two in sync if the fixture AL or tests change.
  *
- * Pinned assumption this script verifies against a *real* al-runner install
- * (there is no way to check it without one): the al-runner CLI's argv shape
- * (`--run <method> <instrumentedDir> <testDir> --output-json [--packages
- * <dir>] [--stubs <dir>]`) and its JSON stdout shape
- * (`{ tests: [{ codeunit, method, result, durationMs?, message? }] }`), both
- * assumed in `src/al-runner-backend.ts`.
+ * CLI/JSON contract VERIFIED (2026-07-18) against a real al-runner install:
+ * argv shape `--run <method> <instrumentedDir> <testDir> --output-json
+ * --test-isolation method [--packages <dir>] [--stubs <dir>]`; JSON stdout
+ * envelope `{ tests: [{ name, status, durationMs?, message?, stackTrace?,
+ * alSourceLine?, alSourceColumn? }], passed, failed, errors, total,
+ * exitCode }` — entry fields are `name`/`status`, not `method`/`result`, and
+ * there is no `codeunit` field on an entry. Both confirmed in
+ * `src/al-runner-backend.ts`.
  */
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";

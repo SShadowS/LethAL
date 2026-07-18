@@ -93,7 +93,7 @@ Test discovery is backend-independent: `discovery.ts` scans the test project wit
 Capability-driven orchestrator behavior:
 
 - `coverage: "none"` → coverage filter skipped; all tests run per mutant (acceptable for ms-fast in-memory runs). The `no-coverage` verdict class does not occur in this mode.
-- `isolation: "full-reset"` → `TestIsolation = Function` preflight check skipped; design.md §6.2/§6.5 concerns are void.
+- `isolation: "session" | "full-reset"` describes the backend's execution model for reporting purposes only. Layer 4 does **not** preflight-check a `TestIsolation` property on test-codeunit sources for either value — see the §6.2 correction below.
 - `authoritative: false` → report stamped with the backend and "mock runtime — indicative" label on the mutation score.
 
 Backend selection: `--backend bcdev | al-runner` (config file equivalent supported). One backend per session.
@@ -107,12 +107,44 @@ Backend selection: `--backend bcdev | al-runner` (config file equivalent support
 - **`deploy()`:** `publisher.ts` shells `alc.exe` (path from `alcPath` config, default: newest `ms-dynamics-smb.al-*` under `~/.vscode/extensions`) with the target project's `.alpackages` as symbol cache, then `altool.exe publishapp` with schema sync `ForceSync` (re-batches replace guard sites; Add-only is insufficient). The instrumented app keeps the target app's id and version-bumps per batch (`1.0.<batch>.<run>`) so the test app's dependency stays valid; it replaces any dev-published version — fixture owns this risk, real projects get a docs warning. Compile stderr surfaced verbatim; compile or publish failure aborts the batch.
 - **`activate()`:** `activation.ts` POSTs to the emitted control web service (`/ODataV4/MutationControl_SetActive`, `_ClearActive`) with company from config; Basic auth (NavUserPassword) — `fetch` cannot perform the NTLM handshake; Windows-auth support deferred. `SetActive` returns the id it wrote; response mismatch aborts. Retry once on HTTP failure, then abort the session (verdicts are meaningless without known selector state).
 
+**Correction to design.md §6.2/§6.5:** those sections assume LethAL can enforce `TestIsolation = Function`
+on the project under test by scanning `[Test]` codeunit sources and refusing to run otherwise. That is
+factually wrong — `TestIsolation` is a **TestRunner**-codeunit property in real BC; the AL compiler
+rejects it on a `Subtype = Test` codeunit with `AL0223` ("The Property 'TestIsolation' can only be used
+if the property 'Subtype' is set to 'TestRunner'"). Isolation is chosen by whichever TestRunner codeunit
+invokes the tests, not by the test codeunit itself, so it cannot be verified by scanning test sources.
+Layer 4 shipped this preflight (`findMissingTestIsolation`) and then removed it once verified against a
+real backend — it is not implemented, and TestIsolation verification is deferred as an out-of-band
+concern (whoever configures the TestRunner/backend is responsible for it).
+
 ## 6. AlRunnerBackend (Stefan Maron's BusinessCentral.AL.Runner)
 
 AL.Runner transpiles AL to C# via the BC compiler API, mocks runtime types, compiles with Roslyn, and executes tests in-process. No NST, no publish; in-memory tables reset between tests; `Commit()`/`Rollback()` are no-ops; dependency code in `.app` packages is auto-stubbed.
 
 - **`deploy()`:** no-op — the CLI is pointed at the instrumented source directory each run.
-- **`run()`:** spawns `al-runner --run <testName> <instrumentedSrc> <testDir> --output-json` (plus `--packages` for symbol resolution, and `--stubs` where the target app's own dependencies need hand-written stubs), parses the JSON output. `--run` selection is qualified by codeunit where the CLI allows; exact matching semantics are verified during implementation. Exit-code mapping: 0/1 → verdicts from JSON; 2 (runner limitation) → `outcome: "skip"`; 3 (compilation error) → `outcome: "error"`, abort batch (instrumented output must compile — a failure is a schemata bug or stub gap). Timeout: process kill → `outcome: "timeout"`.
+- **`run()`:** spawns `al-runner --run <testName> <instrumentedSrc> <testDir> --output-json --test-isolation method` (plus `--packages` for symbol resolution, and `--stubs` where the target app's own dependencies need hand-written stubs), parses the JSON output.
+
+  **CLI/JSON contract — VERIFIED (2026-07-18) against a real al-runner install** (`al-runner
+  [options] <src-dir> [test-dir]`; not merely a pinned assumption anymore):
+  - No `--version` flag (errors out); `--help` exits 0, so `status()` uses `--help` as its
+    reachability probe instead of `--version`.
+  - With `--output-json`, stdout is pure JSON (the human "Timing:" summary goes to stderr) — so
+    `JSON.parse(stdout)` is safe.
+  - Envelope: `{ tests: [...], passed, failed, errors, total, exitCode }`.
+  - Test entry fields are **`name`** (not `method`) and **`status`** (not `result`); there is no
+    `codeunit` field on an entry. A failing entry additionally carries `message`, `stackTrace`,
+    `alSourceLine`, `alSourceColumn`.
+  - Exit codes: 0 = all pass, 1 = test failures, 3 = compile/transpile error. 2 is a runner-limitation
+    code (`--strict` turns limitations into exit 1 instead).
+  - `--test-isolation method` resets tables before every test method; the CLI's own default is
+    `codeunit` (state shared within a codeunit) — LethAL always passes `method` explicitly so the
+    advertised `isolation: "full-reset"` capability holds in practice, not just in name.
+  - `--run <procedure>` filters to a single procedure — verified working.
+
+  Exit-code mapping in the adapter: 0/1 → verdicts from JSON (`status: "pass"` → pass, else fail;
+  `message` → `failureMessage`, matched via `name === ref.method`); 2 → `outcome: "skip"`; 3 →
+  `outcome: "error"`, abort batch (instrumented output must compile — a failure is a schemata bug or
+  stub gap). Timeout: process kill via `AbortSignal` → `outcome: "timeout"`.
 - **`activate()`:** selector-rewrite activation. `--stubs` only covers *dependency* codeunits, and `MutationSelector` is project source — so instead, LethAL rewrites the emitted `MutationSelector.Codeunit.al` inside the instrumented directory (LethAL-owned scratch output) before each mutant: the table-backed body is replaced with one hardcoding `ActiveId := '<mutantId>'` (`''` for baseline). AL.Runner recompiles per invocation in milliseconds, so the per-mutant rewrite is effectively free. Guard call sites (`MutationSelector.Active('Mxxxx')`) are identical across backends.
 - **Capabilities:** `coverage: "none"`, `deploy: "none"`, `isolation: "full-reset"`, `authoritative: false`.
 - CI-friendly: needs no server, so the AL.Runner fixture e2e joins CI.
@@ -162,8 +194,9 @@ test_results(id, run_id, mutant_id /*NULL = baseline*/, codeunit_id, method, out
 Sequential state machine, single public `runSession(config): Promise<SessionReport>`:
 
 ```
-preflight:  backend.status() green; when isolation = "session": TestIsolation = Function
-            verified in test app source (missing/weaker → abort, design.md §6.2)
+preflight:  backend.status() green. (No TestIsolation check: `TestIsolation` is a TestRunner-codeunit
+            property, not a `Subtype = Test` one — real BC rejects it on a Test codeunit with AL0223 —
+            so it cannot be verified by scanning test sources. Deferred, out-of-band; see §6 correction.)
 discover:   engine-AST scan → test set
 mutate:     Layer 3 ops → mutation set → history filter → overlap batches
 per batch:
@@ -202,7 +235,7 @@ Short-circuit on first kill trades the full kill-matrix for wall-clock — the r
 **Fixture** (`fixtures/sandbox-app/`, `fixtures/sandbox-tests/`):
 
 - Target app: 2–3 codeunits with mutable material (comparisons, boolean operators, void calls, returns, blocks) so every tier-1 operator hits ≥1 site. Object ids in the 79000 range.
-- Test app: `TestIsolation = Function`; tests that kill some mutants and deliberately miss others, so a fixture run produces real killed, survived, and no-coverage verdicts.
+- Test app: `Subtype = Test` codeunit that must NOT carry a `TestIsolation` property (BC rejects it with AL0223 on anything but a TestRunner codeunit); tests that kill some mutants and deliberately miss others, so a fixture run produces real killed, survived, and no-coverage verdicts.
 - `launch.json` committed with placeholders; sensitive server details go in a gitignored `launch.local.json`-style override.
 
 **Testing per module:**
