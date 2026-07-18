@@ -549,6 +549,12 @@ async function runMutantsOnBackend(args: {
         if (confirm.outcome === "pass") {
           verdict = "killed";
           killingTest = ref.method;
+        } else if (confirm.outcome === "deadline-exceeded") {
+          // Our timer, not the runner's, fired during confirmation — infrastructure,
+          // not evidence the test is flaky. Must not inflate counts.unstable.
+          verdict = "error";
+          failureNote = `deadline exceeded confirming ${ref.method} (infrastructure, not a kill)`;
+          cause = "deadline-exceeded";
         } else {
           verdict = "error";
           failureNote = `unstable test ${ref.method}: fails at baseline confirmation`;

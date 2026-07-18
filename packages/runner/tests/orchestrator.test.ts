@@ -377,6 +377,37 @@ describe("runSession — deadline vs runner-confirmed timeout", () => {
     expect(report.mutationScore).toBeNull();
     store.close();
   });
+
+  // I1: a client deadline during KILL CONFIRMATION (the re-run of a mutant's
+  // failing test against baseline) is the same kind of infrastructure noise as
+  // a deadline during the initial mutant run above — not evidence the test is
+  // flaky. Before the fix, the `fail` branch's confirmation handling treated
+  // every non-"pass" confirm.outcome (including "deadline-exceeded") as
+  // cause: "unstable", inflating counts.unstable and under-reporting
+  // counts.deadlineExceeded for exactly the event this layer built that
+  // counter for.
+  test("deadline exceeded confirming a mutant's fail is deadlineExceeded, not unstable", async () => {
+    const dirs = await makeProject();
+    // Fixture has exactly 1 test: inactive run #1 is the baseline (must pass
+    // for the session to proceed to mutants), inactive run #2 is the
+    // confirmation re-run triggered by the active-mutant run's "fail" below.
+    let inactiveRuns = 0;
+    const backend = new StubBackend(
+      CAPS_NST,
+      (mutant) => {
+        if (mutant !== null) return "fail";
+        inactiveRuns++;
+        return inactiveRuns === 1 ? "pass" : "deadline-exceeded";
+      },
+      ["IsOverBudget"],
+    );
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({ backend, store, ...dirs, selectorIds });
+    expect(report.counts.deadlineExceeded).toBeGreaterThan(0);
+    expect(report.counts.unstable).toBe(0);
+    expect(report.counts.killed).toBe(0);
+    store.close();
+  });
 });
 
 describe("runSession — I7 second consecutive transport error aborts the session", () => {
