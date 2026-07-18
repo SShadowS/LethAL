@@ -1,5 +1,6 @@
+import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
@@ -33,6 +34,43 @@ const TEST_AL = `codeunit 79100 "Sandbox Tests"
     end;
 }
 `;
+
+const TEST_AL_NO_ISOLATION = `codeunit 79100 "Sandbox Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure OverBudgetDetected()
+    begin
+    end;
+}
+`;
+
+// A file with zero mutable sites — no comparisons, no exit(), no calls, no
+// non-empty blocks — so generateMutationSet never includes it in any batch's
+// `files`. Used to prove the orchestrator still copies it into the batch dir
+// verbatim (C3), since alc needs the FULL project to compile, not just the
+// mutated subset.
+const NO_MUTANTS_AL = `codeunit 79002 "Sandbox NoOp"
+{
+    procedure NoOp()
+    begin
+    end;
+}
+`;
+
+const APP_ID = "11111111-1111-1111-1111-111111111111";
+const APP_JSON = JSON.stringify(
+  {
+    id: APP_ID,
+    name: "Sandbox Orchestrator Fixture",
+    publisher: "LethAL",
+    version: "1.0.0.0",
+    idRanges: [{ from: 79000, to: 79199 }],
+  },
+  null,
+  2,
+);
 
 class StubBackend implements ExecutionBackend {
   activations: Array<string | null> = [];
@@ -78,13 +116,14 @@ class StubBackend implements ExecutionBackend {
   }
 }
 
-async function makeProject() {
+async function makeProject(testAl: string = TEST_AL) {
   const root = await mkdtemp(join(tmpdir(), "lethal-orch-"));
   const projectDir = join(root, "app");
   const testDir = join(root, "tests");
   const instrumentedDir = join(root, "instr");
   await Bun.write(join(projectDir, "SandboxLogic.Codeunit.al"), TARGET_AL);
-  await Bun.write(join(testDir, "SandboxTests.Codeunit.al"), TEST_AL);
+  await Bun.write(join(projectDir, "app.json"), APP_JSON);
+  await Bun.write(join(testDir, "SandboxTests.Codeunit.al"), testAl);
   return { projectDir, testDir, instrumentedDir };
 }
 
@@ -195,5 +234,82 @@ describe("runSession", () => {
     expect(report.baselineGreen).toBe(false);
     // single-test fixture: every test red → batch aborted → zero executed mutants
     expect(report.counts.killed + report.counts.survived).toBe(0);
+  });
+});
+
+describe("runSession — C3 batch app.json + full source copy", () => {
+  test("batch dir gets app.json with bumped version + no-mutant files copied verbatim", async () => {
+    const dirs = await makeProject();
+    await Bun.write(join(dirs.projectDir, "SandboxNoOp.Codeunit.al"), NO_MUTANTS_AL);
+    const backend = new StubBackend(CAPS_NST, () => "pass", ["IsOverBudget"]);
+    const store = new ResultsStore(":memory:");
+    await runSession({ backend, store, ...dirs, selectorIds });
+
+    const batchDir = join(dirs.instrumentedDir, "batch-0");
+    const appJson = JSON.parse(await readFile(join(batchDir, "app.json"), "utf8")) as {
+      id: string;
+      version: string;
+    };
+    expect(appJson.id).toBe(APP_ID); // target app id preserved (spec §5)
+    expect(appJson.version).toMatch(/^1\.0\.0\.\d+$/); // 1.0.<batchIdx>.<runId>
+
+    const copied = await readFile(join(batchDir, "SandboxNoOp.Codeunit.al"), "utf8");
+    expect(copied).toBe(NO_MUTANTS_AL); // writeInstrumentedProject never wrote this file
+  });
+
+  test("missing app.json aborts with a clear error before deploy", async () => {
+    const dirs = await makeProject();
+    await rm(join(dirs.projectDir, "app.json"));
+    const backend = new StubBackend(CAPS_NST, () => "pass", ["IsOverBudget"]);
+    const store = new ResultsStore(":memory:");
+    await expect(runSession({ backend, store, ...dirs, selectorIds })).rejects.toThrow(/app\.json/);
+    expect(backend.deploys.length).toBe(0); // aborted before ever calling deploy()
+  });
+});
+
+describe("runSession — I6 TestIsolation preflight", () => {
+  test("missing TestIsolation aborts for a session-isolation backend", async () => {
+    const dirs = await makeProject(TEST_AL_NO_ISOLATION);
+    const backend = new StubBackend(CAPS_NST, () => "pass", ["IsOverBudget"]);
+    const store = new ResultsStore(":memory:");
+    await expect(runSession({ backend, store, ...dirs, selectorIds })).rejects.toThrow(
+      /TestIsolation/,
+    );
+  });
+
+  test("missing TestIsolation does not abort a full-reset backend", async () => {
+    const dirs = await makeProject(TEST_AL_NO_ISOLATION);
+    const backend = new StubBackend(
+      { coverage: "none", deploy: "none", isolation: "full-reset", authoritative: false },
+      () => "pass",
+    );
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({ backend, store, ...dirs, selectorIds });
+    expect(report.baselineGreen).toBe(true);
+  });
+});
+
+describe("runSession — I7 second consecutive transport error aborts the session", () => {
+  test("stub backend erroring on every active-mutant run throws, persists partial results", async () => {
+    const root = await mkdtemp(join(tmpdir(), "lethal-orch-i7-"));
+    const dbPath = join(root, "results.sqlite");
+    const dirs = await makeProject();
+    const backend = new StubBackend(CAPS_NST, (mutant) => (mutant === null ? "pass" : "error"), [
+      "IsOverBudget",
+    ]);
+    const store = new ResultsStore(dbPath);
+    await expect(runSession({ backend, store, ...dirs, selectorIds })).rejects.toThrow(
+      /transport error/i,
+    );
+    expect(backend.activations.at(-1)).toBeNull(); // finally: still deactivated
+
+    // Reopen the same on-disk (WAL-mode) db from a second connection to
+    // confirm the errored mutant's row was persisted before the throw —
+    // recordMutant auto-commits per statement, so it survives the abort.
+    const raw = new Database(dbPath, { readonly: true });
+    const rows = raw.query("SELECT verdict FROM mutants").all() as Array<{ verdict: string }>;
+    raw.close();
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.some((r) => r.verdict === "error")).toBe(true);
   });
 });

@@ -22,7 +22,7 @@ describe("ResultsStore", () => {
   test("round-trips a run with mutants and test results", () => {
     const store = new ResultsStore(":memory:");
     const runId = store.createRun({ projectPath: "/p", backend: "bcdev", appVersion: "1.0.1.1" });
-    store.recordTestResult(runId, null, ref, "pass", 30);
+    store.recordTestResult(runId, null, null, ref, "pass", 30);
     store.recordMutant(runId, mutantRow("killed", { killingTest: "PostingUpdatesTotal" }));
     store.recordMutant(runId, mutantRow("survived", { mutantCode: "M0002", astHash: "def456" }));
     store.finishRun(runId, { batchCount: 1, baselineGreen: true });
@@ -42,5 +42,63 @@ describe("ResultsStore", () => {
     store.finishRun(r2, { batchCount: 1, baselineGreen: true });
     expect(store.priorSurvivorKeys("/p").size).toBe(0);
     store.close();
+  });
+
+  // I4: --skip-known-survivors demotes a survivor to "known-survivor" on the
+  // run that skips re-testing it (see filterHistory in selection.ts). That
+  // demoted verdict must keep counting as a prior survivor in every run
+  // after that, not just the one where it was still "survived".
+  test("known-survivor verdicts count as prior survivors just like survived (I4)", () => {
+    const store = new ResultsStore(":memory:");
+    const key = "abc123|Sample|conditional-boundary|1";
+
+    const r1 = store.createRun({ projectPath: "/p", backend: "bcdev", appVersion: "1" });
+    store.recordMutant(r1, mutantRow("survived"));
+    store.finishRun(r1, { batchCount: 1, baselineGreen: true });
+    expect(store.priorSurvivorKeys("/p")).toEqual(new Set([key]));
+
+    // Run 2 skips re-testing it (skip-known-survivors) and records it as
+    // "known-survivor" instead of re-deriving "survived".
+    const r2 = store.createRun({ projectPath: "/p", backend: "bcdev", appVersion: "2" });
+    store.recordMutant(r2, mutantRow("known-survivor"));
+    store.finishRun(r2, { batchCount: 1, baselineGreen: true });
+
+    // Run 3 starts (mid-flight, not yet finished) and must still see the key
+    // via run 2's now-latest-finished results.
+    store.createRun({ projectPath: "/p", backend: "bcdev", appVersion: "3" });
+    expect(store.priorSurvivorKeys("/p")).toEqual(new Set([key]));
+    store.close();
+  });
+
+  // I5: mutant_code alone is ambiguous across batches (assignMutantIds
+  // restarts numbering per batch), so recordMutant must hand back the
+  // mutants.id row id, and recordTestResult must be able to carry it.
+  describe("mutant_row_id threading (I5)", () => {
+    test("recordMutant returns the inserted row id", () => {
+      const store = new ResultsStore(":memory:");
+      const runId = store.createRun({ projectPath: "/p", backend: "bcdev", appVersion: "1" });
+      const id1 = store.recordMutant(runId, mutantRow("killed"));
+      const id2 = store.recordMutant(runId, mutantRow("survived", { mutantCode: "M0002" }));
+      expect(typeof id1).toBe("number");
+      expect(id2).toBeGreaterThan(id1);
+      store.close();
+    });
+
+    test("recordTestResult accepts a mutant_row_id distinct from mutant_code", () => {
+      const store = new ResultsStore(":memory:");
+      const runId = store.createRun({ projectPath: "/p", backend: "bcdev", appVersion: "1" });
+      const mutantRowId = store.recordMutant(runId, mutantRow("killed"));
+      // Baseline result: no mutant involved — mutant_row_id and mutant_code both NULL.
+      store.recordTestResult(runId, null, null, ref, "pass", 10);
+      // Per-mutant result: mutant_row_id ties it to the specific mutant row,
+      // independent of mutant_code (which repeats across batches).
+      store.recordTestResult(runId, mutantRowId, "M0001", ref, "fail", 12);
+      store.finishRun(runId, { batchCount: 1, baselineGreen: true });
+      // No public read API beyond priorSurvivorKeys — this test's job is
+      // simply to prove the new signature compiles and executes without
+      // throwing (schema round-trip); orchestrator.test.ts exercises the
+      // end-to-end wiring.
+      store.close();
+    });
   });
 });

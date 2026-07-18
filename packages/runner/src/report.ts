@@ -9,6 +9,7 @@ import type { MutantVerdict } from "./store";
 export interface SessionOutcome {
   readonly mutant: MutantManifestEntry;
   readonly verdict: MutantVerdict;
+  readonly batchIndex: number;
   readonly killingTest?: string;
   readonly failureNote?: string;
 }
@@ -37,6 +38,7 @@ export interface MutantOutcome {
   readonly line: number;
   readonly operatorName: string;
   readonly verdict: MutantVerdict;
+  readonly batchIndex: number;
   readonly killingTest?: string;
 }
 
@@ -89,6 +91,7 @@ export function buildReport(input: BuildReportInput): SessionReport {
       line: o.mutant.startLine,
       operatorName: o.mutant.operatorName,
       verdict: o.verdict,
+      batchIndex: o.batchIndex,
       ...(o.killingTest !== undefined ? { killingTest: o.killingTest } : {}),
     });
   }

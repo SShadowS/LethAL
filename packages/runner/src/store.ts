@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
 import type { TestMethodRef, TestOutcome } from "./backend";
+import { type IdentityKey, serializeKey } from "./selection";
 
 export type MutantVerdict =
   | "killed"
@@ -52,6 +53,7 @@ CREATE INDEX IF NOT EXISTS idx_mutants_identity
 CREATE TABLE IF NOT EXISTS test_results (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   run_id INTEGER NOT NULL REFERENCES runs(id),
+  mutant_row_id INTEGER REFERENCES mutants(id),
   mutant_code TEXT,
   codeunit_id INTEGER NOT NULL,
   method TEXT NOT NULL,
@@ -85,14 +87,17 @@ export class ResultsStore {
       .run(info.batchCount, info.baselineGreen ? 1 : 0, runId);
   }
 
-  recordMutant(runId: number, row: MutantRow): void {
-    this.db
+  /** Returns the `mutants.id` row id SQLite assigned this insert (see I5: `mutant_code` alone
+   *  is only unique within a batch, so callers need this to disambiguate test_results rows
+   *  across batches). */
+  recordMutant(runId: number, row: MutantRow): number {
+    const r = this.db
       .query(
         `INSERT INTO mutants (run_id, mutant_code, ast_hash, codeunit_name, operator_name,
          operator_major, file, line, verdict, killing_test, duration_ms)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
       )
-      .run(
+      .get(
         runId,
         row.mutantCode,
         row.astHash,
@@ -104,11 +109,13 @@ export class ResultsStore {
         row.verdict,
         row.killingTest ?? null,
         row.durationMs,
-      );
+      ) as { id: number };
+    return r.id;
   }
 
   recordTestResult(
     runId: number,
+    mutantRowId: number | null,
     mutantCode: string | null,
     ref: TestMethodRef,
     outcome: TestOutcome,
@@ -117,11 +124,12 @@ export class ResultsStore {
   ): void {
     this.db
       .query(
-        `INSERT INTO test_results (run_id, mutant_code, codeunit_id, method, outcome, duration_ms, failure_message)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO test_results (run_id, mutant_row_id, mutant_code, codeunit_id, method, outcome, duration_ms, failure_message)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         runId,
+        mutantRowId,
         mutantCode,
         ref.codeunitId,
         ref.method,
@@ -131,6 +139,9 @@ export class ResultsStore {
       );
   }
 
+  /** A prior "known-survivor" verdict counts exactly like "survived" here (I4) — it means the
+   *  identity key was skipped rather than re-tested, so it must remain skippable/filterable in
+   *  the run after that, not silently fall out of history after one `--skip-known-survivors` pass. */
   priorSurvivorKeys(projectPath: string): Set<string> {
     const run = this.db
       .query(
@@ -140,7 +151,8 @@ export class ResultsStore {
     if (!run) return new Set();
     const rows = this.db
       .query(
-        "SELECT ast_hash, codeunit_name, operator_name, operator_major FROM mutants WHERE run_id = ? AND verdict = 'survived'",
+        "SELECT ast_hash, codeunit_name, operator_name, operator_major FROM mutants " +
+          "WHERE run_id = ? AND verdict IN ('survived', 'known-survivor')",
       )
       .all(run.id) as Array<{
       ast_hash: string;
@@ -149,7 +161,14 @@ export class ResultsStore {
       operator_major: number;
     }>;
     return new Set(
-      rows.map((r) => `${r.ast_hash}|${r.codeunit_name}|${r.operator_name}|${r.operator_major}`),
+      rows.map((r) =>
+        serializeKey({
+          astHash: r.ast_hash,
+          codeunitName: r.codeunit_name,
+          operatorName: r.operator_name,
+          operatorMajor: r.operator_major,
+        } satisfies IdentityKey),
+      ),
     );
   }
 
