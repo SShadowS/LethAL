@@ -227,10 +227,24 @@ bun packages/runner/src/cli.ts run \
 
 `lethal run` accepts `--workers <n>` (default 1) and `--compile-concurrency <n>` (default
 `min(workers, 4)`), wired straight through to `SessionConfig.workers`/`compileConcurrency` —
-see `packages/runner/src/cli.ts`'s `parseCliConfig`/`buildBackend`/`runFromCli`. Each worker
-gets its own scratch directory (`<scratchRoot>/worker-<i>`), so an al-runner worker's private
-copy of the batch's instrumented sources (`AlRunnerBackend.deploy`) and a bcdev worker's
-`Publisher.outputDir` never collide with another worker's.
+see `packages/runner/src/cli.ts`'s `parseCliConfig`/`buildBackend`/`runFromCli`. Each al-runner
+worker gets its own scratch directory (`<scratchRoot>/worker-<i>`), so its private copy of the
+batch's instrumented sources (`AlRunnerBackend.deploy`) never collides with another worker's.
+
+**`--backend bcdev --workers > 1` is rejected outright**, not given per-worker isolation: mutant
+activation against a real BC server is a single server-side record (`MutationControl_SetActive`),
+shared by every worker's `BcDevMcpBackend` instance — concurrent workers would call `setActive()`
+against that same record, so worker B's activation can clobber worker A's while A's test is still
+in flight, silently attributing a result to the wrong mutant. The echo check `setActive()` does on
+its own response can't catch this, since it only validates against what THAT call wrote, not a
+later overwrite by another worker. Real parallelism against the authoritative backend needs
+per-container isolation (deferred to the container-pool layer); `parseCliConfig` throws before
+`runFromCli` ever starts a session:
+
+> `--workers > 1 is not supported with --backend bcdev: mutant activation is a single server-side
+> record shared by all workers, so concurrent workers would overwrite each other's active mutant.
+> Parallel execution on a real BC server needs per-container isolation (deferred to the
+> container-pool layer).`
 
 ```bash
 bun packages/runner/src/cli.ts run \
@@ -240,9 +254,11 @@ bun packages/runner/src/cli.ts run \
 ```
 
 Verified live against the real al-runner binary (2026-07-19), running the full fixture at
-`--workers 1`, `2`, and `4` in turn. **Verdicts were identical at every worker count** — the
-exact known-good table (killed 3, survived 13, no-coverage 0, score 18.8%) — confirming the
-per-worker sharding (`shardEvenly`) and isolation are correct, not just plausible:
+`--workers 1`, `2`, and `4` in turn **with `"serverMode": true` in `lethal.config.local.json`**
+(the warm-process transport, `ServerTransport` — see `al-runner-transport.ts`). **Verdicts were
+identical at every worker count** — the exact known-good table (killed 3, survived 13,
+no-coverage 0, score 18.8%) — confirming the per-worker sharding (`shardEvenly`) and isolation
+are correct, not just plausible:
 
 | Workers | Wall clock | killed | survived | no-coverage | score |
 |---|---|---|---|---|---|
@@ -250,22 +266,46 @@ per-worker sharding (`shardEvenly`) and isolation are correct, not just plausibl
 | 2 | 1m13.6s | 3 | 13 | 0 | 18.8% |
 | 4 | 0m59.0s | 3 | 13 | 0 | 18.8% |
 
-Honest reading of the timings: on this 16-mutant-site fixture, parallelism's payoff is modest
-and noisy, not a clean win. `--workers 2` was not measurably faster than `--workers 1` in this
-run (73.6s vs 70.2s — within the noise of a live external process); `--workers 4` was the only
-count that showed a real improvement, about 16% faster than `--workers 1`. A one-time baseline
-(both fixture tests, run once per batch before fan-out) plus per-worker al-runner server
-startup/handshake cost is fixed overhead that doesn't shrink with more workers, and only ~13
-mutants' worth of test invocations are actually left to shard across them — too small a
-workload, and too much fixed overhead relative to it, to show the kind of scaling a larger
-target app would. One `--workers 1` run during this verification produced a genuinely wrong
-verdict (score 20.0% instead of 18.8%, one mutant misreported as `error`/`deadline-exceeded`
-instead of `survived`) — **not real-infra timing noise**: it was a real bug in an earlier build of
-`AlRunnerBackend.deploy()`, which copied a batch's compiled source directly into
-`cfg.instrumentedDir` instead of a private `active` subdirectory. That collided when
-`cfg.instrumentedDir` was itself an ancestor of the batch directory being copied from (the exact
-construction `al-runner.itest.ts` uses), corrupting the copy. Fixed by copying into
-`<cfg.instrumentedDir>/active` instead (see the comment on `AlRunnerBackend.deploy`), with a
+**A reader reproducing these numbers with `serverMode` absent (or `false`) — the CLI's own
+default transport — will see roughly 3x slower wall clocks; that is expected, not a
+discrepancy.** `serverMode: true` keeps one al-runner process warm across every test in the
+session; the default one-shot transport (`OneShotTransport`) pays a fresh process spawn plus a
+full recompile on every single test invocation. Verified live (2026-07-19) at the same three
+worker counts, one-shot transport, `serverMode` explicitly `false`:
+
+| Workers | Wall clock | killed | survived | no-coverage | score |
+|---|---|---|---|---|---|
+| 1 | 3m37.4s | 3 | 13 | 0 | 18.8% |
+| 2 | 2m44.0s | 3 | 13 | 0 | 18.8% |
+| 4 | 2m01.0s | 3 | 13 | 0 | 18.8% |
+
+(The `--workers 1` one-shot figure is the Step 6 live gate's baseline run, `real 3m37.381s` — see
+`.superpowers/sdd/task-4-report.md` — not re-measured here; `--workers 2` and `4` were run for
+this hardening pass specifically to close the gap the original table left, since it verified
+only the server-mode transport at every worker count and only the sequential, `--workers 1`
+one-shot transport.) Verdicts were identical to the server-mode table at every worker count here
+too. One-shot parallelism's payoff is much clearer than server mode's on this fixture — each
+worker pays its own process-spawn-plus-recompile cost per test regardless of transport, so
+splitting that fixed cost across workers actually shrinks wall clock materially (3m37.4s down to
+2m01.0s at `--workers 4`, a ~44% reduction) instead of being swamped by a single shared warm
+process's one-time startup cost the way server mode is.
+
+Honest reading of the **server-mode** timings: on this 16-mutant-site fixture, parallelism's
+payoff is modest and noisy, not a clean win. `--workers 2` was not measurably faster than
+`--workers 1` in this run (73.6s vs 70.2s — within the noise of a live external process);
+`--workers 4` was the only count that showed a real improvement, about 16% faster than
+`--workers 1`. A one-time baseline (both fixture tests, run once per batch before fan-out) plus
+per-worker al-runner server startup/handshake cost is fixed overhead that doesn't shrink with
+more workers, and only ~13 mutants' worth of test invocations are actually left to shard across
+them — too small a workload, and too much fixed overhead relative to it, to show the kind of
+scaling a larger target app would. One `--workers 1` run during this verification produced a
+genuinely wrong verdict (score 20.0% instead of 18.8%, one mutant misreported as
+`error`/`deadline-exceeded` instead of `survived`) — **not real-infra timing noise**: it was a
+real bug in an earlier build of `AlRunnerBackend.deploy()`, which copied a batch's compiled
+source directly into `cfg.instrumentedDir` instead of a private `active` subdirectory. That
+collided when `cfg.instrumentedDir` was itself an ancestor of the batch directory being copied
+from (the exact construction `al-runner.itest.ts` uses), corrupting the copy. Fixed by copying
+into `<cfg.instrumentedDir>/active` instead (see the comment on `AlRunnerBackend.deploy`), with a
 dedicated regression test (`tests/al-runner-backend.test.ts`) driving the real `deploy()`/
 `activate()` code. After the fix, `--workers 1` was re-run twice more and reproduced the correct
 table both times; it did not recur at any worker count, and the fix does not change the
