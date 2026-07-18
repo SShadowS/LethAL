@@ -25,8 +25,8 @@ const cfg = {
   outputDir: "C:/out",
   server: "http://bcserver",
   serverInstance: "BC",
-  username: "sshadows",
-  password: "1234",
+  username: "testuser",
+  password: "testpass",
 };
 
 describe("Publisher.compile", () => {
@@ -97,9 +97,9 @@ describe("Publisher.publish", () => {
   test("passes credentials as BC_SERVER_USERNAME/BC_SERVER_PASSWORD env vars, not CLI flags", async () => {
     const { calls, envs, spawn } = recordingSpawn();
     await new Publisher(cfg, spawn).publish("C:/out/x.app");
-    expect(envs[0]).toEqual({ BC_SERVER_USERNAME: "sshadows", BC_SERVER_PASSWORD: "1234" });
-    expect(calls[0]).not.toContain("sshadows");
-    expect(calls[0]).not.toContain("1234");
+    expect(envs[0]).toEqual({ BC_SERVER_USERNAME: "testuser", BC_SERVER_PASSWORD: "testpass" });
+    expect(calls[0]).not.toContain("testuser");
+    expect(calls[0]).not.toContain("testpass");
   });
 
   test("spawn rejection includes altoolPath context", async () => {

@@ -266,7 +266,7 @@ describe("BcDevMcpBackend env passthrough", () => {
         project: "/al",
         server: "http://bc",
         serverInstance: "BC",
-        env: { BC_DEV_USER: "sshadows", BC_DEV_PASSWORD: "1234" },
+        env: { BC_DEV_USER: "testuser", BC_DEV_PASSWORD: "testpass" },
       },
       (env) => {
         capturedEnv = env;
@@ -276,8 +276,8 @@ describe("BcDevMcpBackend env passthrough", () => {
     await backend.status();
     expect(capturedEnv).toEqual({
       ...getDefaultEnvironment(),
-      BC_DEV_USER: "sshadows",
-      BC_DEV_PASSWORD: "1234",
+      BC_DEV_USER: "testuser",
+      BC_DEV_PASSWORD: "testpass",
     });
   });
 });
