@@ -174,6 +174,30 @@ describe("AlRunnerBackend.run", () => {
     const v = await backend.run(ref, { coverage: "none", timeoutMs: 50 });
     expect(v.outcome).toBe("deadline-exceeded");
   });
+
+  // Regression guard for the timeout-margin bug: the backend's own derivation
+  // of --test-timeout (from opts.timeoutMs) must leave al-runner's internal
+  // timeout comfortably BELOW our client deadline, never >= it. Otherwise our
+  // AbortController always wins the Promise.race and the runner-confirmed
+  // `outcome: "timeout"` path exercised above becomes unreachable in real
+  // execution — every genuine mutant-induced hang would be misclassified as
+  // deadline-exceeded (infrastructure noise). This drives the real
+  // backend.run() path (not a re-implementation of the formula) so a
+  // regression in the derivation itself fails this test.
+  test("--test-timeout leaves real margin below the client deadline", async () => {
+    for (const timeoutMs of [5000, 14000, 120000]) {
+      const { calls, spawn } = okSpawn({
+        tests: [{ name: "PostingUpdatesTotal", status: "pass" }],
+      });
+      const { backend } = await makeBackend(spawn);
+      await backend.run(ref, { coverage: "none", timeoutMs });
+      const argv = calls[0] ?? [];
+      const idx = argv.indexOf("--test-timeout");
+      expect(idx).toBeGreaterThanOrEqual(0);
+      const seconds = Number(argv[idx + 1]);
+      expect(seconds * 1000).toBeLessThan(timeoutMs);
+    }
+  });
 });
 
 describe("AlRunnerBackend.status", () => {
