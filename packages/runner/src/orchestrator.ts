@@ -166,13 +166,31 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
 
   const outcomes: SessionOutcome[] = []; // internal accumulation for the report
   let baselineGreenOverall = true;
-  const workers = Math.max(1, cfg.workers ?? 1);
+  // Math.floor: a fractional workers value (e.g. 2.5) would otherwise reach
+  // shardEvenly's `Array.from({ length: n }, ...)`, which silently truncates
+  // to a shorter array than `i % n` can index into — mutants landing on the
+  // missing fractional index are dropped with no error (shardEvenly's own
+  // `if (target !== undefined)` guard swallows them).
+  const workers = Math.max(1, Math.floor(cfg.workers ?? 1));
   // Bounds compile-heavy deploy() calls independently of worker count: alc is
   // CPU-bound, so worker count (mutant concurrency) must not silently become
   // compile concurrency.
   const compileLimit = new Semaphore(cfg.compileConcurrency ?? Math.min(workers, 4));
+  // Built ONCE for the whole session, never per batch: each worker owns one
+  // backend instance (its own instrumented dir and, for al-runner, its own
+  // server process) that is reused across every batch and disposed exactly
+  // once in the `finally` below. Constructing a fresh set per batch would
+  // leak batches × workers instances/processes instead of `workers`.
+  let workerBackends: readonly ExecutionBackend[] = [];
 
   try {
+    if (workers > 1) {
+      const factory = cfg.backendFactory;
+      if (factory === undefined) {
+        throw new Error("runSession: workers > 1 requires backendFactory");
+      }
+      workerBackends = Array.from({ length: workers }, (_, i) => factory(i));
+    }
     for (const [batchIdx, batchSpecs] of specBatches.entries()) {
       // 1. write instrumented project for THIS batch's specs only
       const byFile = new Map<
@@ -317,19 +335,33 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           outcomes,
         });
       } else {
-        const factory = cfg.backendFactory;
-        if (factory === undefined) {
-          throw new Error("runSession: workers > 1 requires backendFactory");
-        }
         const shards = shardEvenly(execute, workers);
-        await Promise.all(
+        // allSettled, not all: if one shard throws (e.g. the I7 two-
+        // consecutive-transport-errors abort), `Promise.all` would reject
+        // immediately and return control to the caller WHILE sibling shards
+        // are still mid-flight — they'd keep calling record()/
+        // recordTestResult() on a store the caller may already have closed.
+        // Waiting for every shard to settle first means the store is
+        // quiescent before the failure is ever rethrown below.
+        const settled = await Promise.allSettled(
           shards.map(async (shard, i) => {
             if (shard.length === 0) return;
-            const backend = factory(i);
-            // Each worker deploys its own copy of the batch: deploy is the
-            // compile-heavy step, so it is what the semaphore bounds — not
-            // the test runs (worker count must not become compile concurrency).
-            await compileLimit.run(() => backend.deploy(batchDir));
+            const backend = workerBackends[i];
+            if (backend === undefined) return; // defensive: shards.length === workerBackends.length
+            // Mirror the sequential deploy try/catch above (step 3)
+            // exactly: a deploy failure — on a worker's OWN backend/outputDir
+            // just as much as on cfg.backend — records every mutant in THIS
+            // shard as an error and moves on, rather than rejecting the
+            // whole fan-out and aborting the session. The same failure must
+            // not have a different outcome purely because it happened on a
+            // worker backend instead of cfg.backend.
+            try {
+              await compileLimit.run(() => backend.deploy(batchDir));
+            } catch (err) {
+              for (const m of shard)
+                record(cfg.store, runId, m, "error", outcomes, batchIdx, undefined, String(err));
+              return;
+            }
             await runMutantsOnBackend({
               backend,
               mutants: shard,
@@ -343,14 +375,22 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
             });
           }),
         );
+        const firstRejection = settled.find(
+          (r): r is PromiseRejectedResult => r.status === "rejected",
+        );
+        if (firstRejection !== undefined) throw firstRejection.reason;
       }
     }
   } finally {
     // Best-effort cleanup: deliberately swallow errors here (unlike the
-    // retrying activation calls above) since this only runs to leave the
+    // retrying activation calls above) since this only runs to leave every
     // backend deactivated on exit, and a failure here must not mask/replace
     // whatever real error is already propagating.
     await cfg.backend.activate(null).catch(() => {});
+    for (const backend of workerBackends) {
+      await backend.activate(null).catch(() => {});
+      await closeIfSupported(backend).catch(() => {});
+    }
   }
 
   cfg.store.finishRun(runId, {
@@ -370,6 +410,23 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     batches: specBatches.length,
     outcomes,
   });
+}
+
+/**
+ * Worker backends are constructed by `backendFactory` inside `runSession`
+ * (unlike `cfg.backend`, which the CALLER constructs and is responsible for
+ * — see `cli.ts`'s `instanceof BcDevMcpBackend`/`AlRunnerBackend` close
+ * calls), so `runSession` itself owns disposing them. `ExecutionBackend`
+ * doesn't declare a `close()` method (not every backend needs one — the
+ * in-memory ones don't), so this duck-types rather than importing concrete
+ * backend classes, keeping the orchestrator decoupled from any specific
+ * backend implementation.
+ */
+async function closeIfSupported(backend: ExecutionBackend): Promise<void> {
+  const maybeCloseable = backend as { close?: () => Promise<void> };
+  if (typeof maybeCloseable.close === "function") {
+    await maybeCloseable.close();
+  }
 }
 
 /**

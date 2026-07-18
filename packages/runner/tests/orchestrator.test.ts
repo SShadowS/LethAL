@@ -71,6 +71,33 @@ const TWO_PROC_AL = `codeunit 79000 "Sandbox Logic"
 }
 `;
 
+// Three independent, non-nested procedures — for the fractional-workers
+// test below specifically, which needs a batch with >=3 shardable mutants.
+// With TWO_PROC_AL (2 per batch), `shardEvenly(items, 2.5)` never actually
+// drops anything: `Array.from({length: 2.5}, ...)` truncates to a length-2
+// shard array, but with only 2 items, `i % 2.5` for i=0,1 is just 0 and 1 —
+// both land inside the truncated array. The bug only surfaces once an index
+// >=2 is reached (`2 % 2.5 === 2`, out of the truncated array's bounds), so
+// a third independent procedure is needed to prove the fix actually matters.
+const THREE_PROC_AL = `codeunit 79000 "Sandbox Logic"
+{
+    procedure IsOverBudget(Amount: Decimal; Budget: Decimal): Boolean
+    begin
+        exit(Amount > Budget);
+    end;
+
+    procedure IsUnderBudget(Amount: Decimal; Budget: Decimal): Boolean
+    begin
+        exit(Amount < Budget);
+    end;
+
+    procedure IsEqualBudget(Amount: Decimal; Budget: Decimal): Boolean
+    begin
+        exit(Amount = Budget);
+    end;
+}
+`;
+
 const APP_ID = "11111111-1111-1111-1111-111111111111";
 const APP_JSON = JSON.stringify(
   {
@@ -381,8 +408,17 @@ describe("runSession — parallel workers", () => {
   test("verdicts are identical at 1, 2 and 4 workers", async () => {
     const shape = (r: Awaited<ReturnType<typeof runSession>>) =>
       [...r.mutants].map((m) => `${m.file}:${m.line}:${m.operatorName}:${m.verdict}`).sort();
+    // Unsorted report order: `shape()` above ends in `.sort()`, so it would
+    // still pass even if runSession's internal `outcomes.sort(...)` were
+    // deleted (report ordering would then depend on scheduling, but the
+    // multiset would be unaffected). This captures `report.mutants` in
+    // whatever order runSession actually produced it, unsorted, so a
+    // regression that drops the internal sort has something to break against.
+    const order = (r: Awaited<ReturnType<typeof runSession>>) =>
+      r.mutants.map((m) => `${m.file}:${m.line}:${m.operatorName}`);
 
     const results: string[][] = [];
+    const orders: string[][] = [];
     for (const workers of [1, 2, 4]) {
       const dirs = await makeProject();
       const store = new ResultsStore(":memory:");
@@ -400,10 +436,13 @@ describe("runSession — parallel workers", () => {
         workers,
       });
       results.push(shape(report));
+      orders.push(order(report));
       store.close();
     }
     expect(results[1]).toEqual(results[0]);
     expect(results[2]).toEqual(results[0]);
+    expect(orders[1]).toEqual(orders[0]);
+    expect(orders[2]).toEqual(orders[0]);
   });
 
   // The test above reuses the standard single-comparison fixture, which
@@ -416,6 +455,8 @@ describe("runSession — parallel workers", () => {
   test("verdicts are identical at 1, 2 and 4 workers when a batch has multiple shardable mutants", async () => {
     const shape = (r: Awaited<ReturnType<typeof runSession>>) =>
       [...r.mutants].map((m) => `${m.file}:${m.line}:${m.operatorName}:${m.verdict}`).sort();
+    const order = (r: Awaited<ReturnType<typeof runSession>>) =>
+      r.mutants.map((m) => `${m.file}:${m.line}:${m.operatorName}`);
     const caps: BackendCapabilities = {
       coverage: "none",
       deploy: "none",
@@ -424,13 +465,33 @@ describe("runSession — parallel workers", () => {
     };
 
     const results: string[][] = [];
+    const orders: string[][] = [];
     for (const workers of [1, 2, 4]) {
       const dirs = await makeProject();
       await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
       const store = new ResultsStore(":memory:");
-      const make = () => new StubBackend(caps, (mutant) => (mutant === null ? "pass" : "fail"));
+      // Worker 0 (shardEvenly's round-robin always gives it the LOWER-
+      // startIndex mutant, IsOverBudget) is made artificially slower than
+      // worker 1 (the later-position IsUnderBudget mutant). Without
+      // runSession's outcomes.sort(), worker 1 would finish and call
+      // record() first, so the raw accumulation order would come out
+      // file-position-reversed relative to the workers=1 baseline — the sort
+      // is what makes this test's order assertion pass regardless of which
+      // worker happens to finish first.
+      const make = (workerIndex: number) =>
+        new StubBackend(
+          caps,
+          (mutant) => (mutant === null ? "pass" : "fail"),
+          [],
+          undefined,
+          workerIndex === 0
+            ? async () => {
+                await new Promise((r) => setTimeout(r, 15));
+              }
+            : undefined,
+        );
       const report = await runSession({
-        backend: make(),
+        backend: make(-1),
         backendFactory: make,
         store,
         ...dirs,
@@ -438,10 +499,13 @@ describe("runSession — parallel workers", () => {
         workers,
       });
       results.push(shape(report));
+      orders.push(order(report));
       store.close();
     }
     expect(results[1]).toEqual(results[0]);
     expect(results[2]).toEqual(results[0]);
+    expect(orders[1]).toEqual(orders[0]);
+    expect(orders[2]).toEqual(orders[0]);
   });
 
   test("more than one worker actually runs concurrently", async () => {
@@ -477,6 +541,179 @@ describe("runSession — parallel workers", () => {
       workers: 3,
     });
     expect(peak).toBeGreaterThan(1);
+    store.close();
+  });
+
+  test("a worker's own deploy failure records that shard's mutants as errors, other shards still run", async () => {
+    const dirs = await makeProject();
+    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
+    const store = new ResultsStore(":memory:");
+    const caps: BackendCapabilities = {
+      coverage: "none",
+      deploy: "none",
+      isolation: "full-reset",
+      authoritative: false,
+    };
+    // shardEvenly's round-robin always sends the lower-startIndex mutant
+    // (IsOverBudget) to worker 0 and the other (IsUnderBudget) to worker 1.
+    // Worker 0's backend always fails to deploy; worker 1's succeeds and
+    // kills its mutant normally. Mirrors the sequential per-batch deploy
+    // try/catch (step 3 in orchestrator.ts): a deploy failure must record
+    // every mutant in the affected shard as "error" and let the session
+    // continue, not reject the whole `runSession` call.
+    const make = (workerIndex: number) =>
+      new StubBackend(
+        caps,
+        (mutant) => (mutant === null ? "pass" : "fail"),
+        [],
+        workerIndex === 0 ? "boom: worker 0 could not deploy" : undefined,
+      );
+    const report = await runSession({
+      backend: make(-1),
+      backendFactory: make,
+      store,
+      ...dirs,
+      selectorIds,
+      workers: 2,
+    });
+    // 3 batches: worker 0's mutant errors every time, worker 1's is killed
+    // every time — the deploy failure never propagates past its own shard.
+    expect(report.counts.errors).toBe(3);
+    expect(report.counts.killed).toBe(3);
+    expect(report.counts.survived).toBe(0);
+    store.close();
+  });
+
+  test("a shard's transport-error abort drains sibling shards before rethrowing", async () => {
+    const root = await mkdtemp(join(tmpdir(), "lethal-orch-parallel-i7-"));
+    const dbPath = join(root, "results.sqlite");
+    const dirs = await makeProject();
+    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
+    const store = new ResultsStore(dbPath);
+    const caps: BackendCapabilities = {
+      coverage: "none",
+      deploy: "none",
+      isolation: "full-reset",
+      authoritative: false,
+    };
+    // Worker 0 (the lower-startIndex IsOverBudget mutant) is slow — 30ms per
+    // run(). Worker 1 (IsUnderBudget) errors on every active-mutant run,
+    // tripping the I7 "two consecutive transport errors" abort almost
+    // immediately. If runSession rethrew as soon as worker 1's shard
+    // rejected (plain `Promise.all` semantics) instead of waiting for every
+    // shard to settle (`Promise.allSettled`), worker 0 could still be
+    // mid-flight — and, worse, a caller reacting to the rejection by closing
+    // the store could race a still-running worker 0's write to it.
+    const make = (workerIndex: number) =>
+      new StubBackend(
+        caps,
+        (mutant) => (mutant === null ? "pass" : workerIndex === 1 ? "error" : "fail"),
+        [],
+        undefined,
+        workerIndex === 0
+          ? async () => {
+              await new Promise((r) => setTimeout(r, 30));
+            }
+          : undefined,
+      );
+    await expect(
+      runSession({
+        backend: make(-1),
+        backendFactory: make,
+        store,
+        ...dirs,
+        selectorIds,
+        workers: 2,
+      }),
+    ).rejects.toThrow(/transport error/i);
+
+    // Reopen the same on-disk DB from a second connection immediately after
+    // the rejection (no sleep, no retry): worker 0's mutant row must already
+    // be there, proving allSettled actually waited for it rather than the
+    // throw racing ahead of a still-writing sibling.
+    const raw = new Database(dbPath, { readonly: true });
+    const rows = raw.query("SELECT verdict FROM mutants").all() as Array<{ verdict: string }>;
+    raw.close();
+    expect(rows.some((r) => r.verdict === "error")).toBe(true); // worker 1's abort
+    expect(rows.length).toBeGreaterThanOrEqual(2); // worker 0's mutant landed too
+    store.close();
+  });
+
+  test("worker backends are built once per session and disposed exactly once, not once per batch", async () => {
+    const dirs = await makeProject();
+    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
+    const store = new ResultsStore(":memory:");
+    const caps: BackendCapabilities = {
+      coverage: "none",
+      deploy: "none",
+      isolation: "full-reset",
+      authoritative: false,
+    };
+    let factoryCalls = 0;
+    const closeCallCounts: number[] = [];
+    // Duck-typed close(), same as real backends (BcDevMcpBackend,
+    // AlRunnerBackend) that StubBackend itself doesn't model.
+    const make = () => {
+      factoryCalls++;
+      let closed = 0;
+      const backend = new StubBackend(caps, (mutant) => (mutant === null ? "pass" : "fail"), []);
+      return Object.assign(backend, {
+        async close() {
+          closed++;
+          closeCallCounts.push(closed);
+        },
+      });
+    };
+    await runSession({
+      backend: make(),
+      backendFactory: make,
+      store,
+      ...dirs,
+      selectorIds,
+      workers: 2,
+    });
+    // TWO_PROC_AL yields 3 batches. If worker backends were rebuilt every
+    // batch (the bug), the factory would run 1 (cfg.backend) + 3 batches * 2
+    // workers = 7 times; built once per session it's 1 + 2 = 3.
+    expect(factoryCalls).toBe(3);
+    // Exactly the 2 worker backends close, each exactly once — cfg.backend
+    // is caller-owned (see cli.ts) and is never closed by runSession itself.
+    expect(closeCallCounts).toEqual([1, 1]);
+    store.close();
+  });
+
+  test("a fractional workers count is floored, not silently dropping mutants", async () => {
+    const dirs = await makeProject();
+    // THREE_PROC_AL, not TWO_PROC_AL: with only 2 shardable mutants per
+    // batch, `i % 2.5` for i=0,1 never lands outside shardEvenly's
+    // (length-truncated) 2-element shard array, so the drop bug needs a
+    // batch with >=3 items to actually manifest — see THREE_PROC_AL's
+    // comment.
+    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), THREE_PROC_AL);
+    const store = new ResultsStore(":memory:");
+    const caps: BackendCapabilities = {
+      coverage: "none",
+      deploy: "none",
+      isolation: "full-reset",
+      authoritative: false,
+    };
+    const make = () => new StubBackend(caps, (mutant) => (mutant === null ? "pass" : "fail"), []);
+    const report = await runSession({
+      backend: make(),
+      backendFactory: make,
+      store,
+      ...dirs,
+      selectorIds,
+      workers: 2.5,
+    });
+    // 3 batches * 3 mutants each = 9. Before flooring, shardEvenly(execute, 2.5)
+    // built a length-2 shard array (Array.from truncates a fractional
+    // `length`) while still computing target indices via `i % 2.5`, so the
+    // 3rd item each batch (index 2, `2 % 2.5 === 2`, outside the truncated
+    // array) was silently dropped by shardEvenly's `if (target !== undefined)`
+    // guard — no error, just fewer mutants in the report than were generated.
+    expect(report.mutants.length).toBe(9);
+    expect(report.counts.killed).toBe(9);
     store.close();
   });
 });
