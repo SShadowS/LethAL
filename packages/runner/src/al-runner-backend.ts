@@ -7,10 +7,14 @@ import type {
   ExecutionBackend,
   RunOpts,
   TestMethodRef,
+  TestOutcome,
   TestVerdict,
 } from "./backend";
 import { defaultSpawn } from "./publisher";
 import type { SpawnFn } from "./publisher";
+
+/** al-runner's own per-test timeout message (verified against v1.0.31). */
+const RUNNER_TIMEOUT_MESSAGE = /Test exceeded \d+s timeout/;
 
 export interface AlRunnerConfig {
   readonly alRunnerPath: string; // path to the al-runner executable
@@ -101,7 +105,7 @@ export class AlRunnerBackend implements ExecutionBackend {
         }),
       ]);
       const durationMs = Date.now() - started;
-      if (res === "timeout") return { ref, outcome: "timeout", durationMs };
+      if (res === "timeout") return { ref, outcome: "deadline-exceeded", durationMs };
       if (res.exitCode === 2)
         return { ref, outcome: "skip", durationMs, failureMessage: res.stdout || res.stderr };
       if (res.exitCode === 3 || res.exitCode < 0) {
@@ -116,9 +120,13 @@ export class AlRunnerBackend implements ExecutionBackend {
           durationMs,
           failureMessage: "al-runner output missing the requested test",
         };
+      const runnerTimedOut =
+        t.status === "fail" && t.message !== undefined && RUNNER_TIMEOUT_MESSAGE.test(t.message);
+      const outcome: TestOutcome =
+        t.status === "pass" ? "pass" : runnerTimedOut ? "timeout" : "fail";
       return {
         ref,
-        outcome: t.status === "pass" ? "pass" : "fail",
+        outcome,
         // Wall-clock `durationMs` (process spawn -> exit), NOT `t.durationMs`
         // (al-runner's in-VM test-body timing, e.g. ~30ms). Verified against
         // a real install: al-runner re-transpiles + recompiles the WHOLE

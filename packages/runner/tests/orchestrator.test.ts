@@ -258,6 +258,38 @@ describe("runSession — C3 batch app.json + full source copy", () => {
   });
 });
 
+describe("runSession — deadline vs runner-confirmed timeout", () => {
+  test("runner-confirmed timeout under a mutant is timeout-killed", async () => {
+    const dirs = await makeProject();
+    const backend = new StubBackend(CAPS_NST, (mutant) => (mutant === null ? "pass" : "timeout"), [
+      "IsOverBudget",
+    ]);
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({ backend, store, ...dirs, selectorIds });
+    expect(report.counts.timeoutKilled).toBeGreaterThan(0);
+    expect(report.counts.deadlineExceeded).toBe(0);
+    store.close();
+  });
+
+  test("a client deadline is infrastructure: verdict error, never a kill", async () => {
+    const dirs = await makeProject();
+    const backend = new StubBackend(
+      CAPS_NST,
+      (mutant) => (mutant === null ? "pass" : "deadline-exceeded"),
+      ["IsOverBudget"],
+    );
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({ backend, store, ...dirs, selectorIds });
+    expect(report.counts.timeoutKilled).toBe(0);
+    expect(report.counts.killed).toBe(0);
+    expect(report.counts.deadlineExceeded).toBeGreaterThan(0);
+    expect(report.counts.errors).toBeGreaterThan(0);
+    // excluded from the score denominator
+    expect(report.mutationScore).toBeNull();
+    store.close();
+  });
+});
+
 describe("runSession — I7 second consecutive transport error aborts the session", () => {
   test("stub backend erroring on every active-mutant run throws, persists partial results", async () => {
     const root = await mkdtemp(join(tmpdir(), "lethal-orch-i7-"));

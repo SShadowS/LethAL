@@ -202,8 +202,11 @@ export class BcDevMcpBackend implements ExecutionBackend {
         }),
       ]);
       if (res === "timeout") {
-        call.catch(() => {}); // late result/error deliberately discarded
-        return { ref, outcome: "timeout", durationMs: Date.now() - started };
+        call.catch(() => {}); // late result deliberately discarded
+        // bc-dev exposes no server-confirmed test-timeout signal, so we cannot
+        // tell "the mutant hung" from "our timer fired / the endpoint wedged".
+        // Fail safe: report infrastructure, never fabricate a kill.
+        return { ref, outcome: "deadline-exceeded", durationMs: Date.now() - started };
       }
       // A thrown tool handler doesn't reject callTool() — the MCP protocol reports it as a
       // normal CallToolResult with isError:true and the message as plain (non-JSON) text.

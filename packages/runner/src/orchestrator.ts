@@ -329,6 +329,12 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
             failureMessage: v.failureMessage,
           });
           spent += v.durationMs;
+          if (v.outcome === "deadline-exceeded") {
+            // Our timer, not the runner's: says nothing about the mutant.
+            verdict = "error";
+            failureNote = `deadline exceeded running ${ref.method} (infrastructure, not a kill)`;
+            break;
+          }
           if (v.outcome === "timeout") {
             verdict = "timeout-killed";
             killingTest = ref.method;

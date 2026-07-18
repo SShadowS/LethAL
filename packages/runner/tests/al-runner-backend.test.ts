@@ -111,7 +111,9 @@ describe("AlRunnerBackend.run", () => {
 
   // I8: a timed-out run must not leak the spawned child — the backend aborts
   // an AbortSignal it hands to spawn() so the caller can kill the process.
-  test("timeout aborts the spawned child via AbortSignal", async () => {
+  // This is OUR timer firing on a hung child (no runner-confirmed result), so
+  // the outcome is "deadline-exceeded", not the runner-confirmed "timeout".
+  test("client deadline aborts the spawned child via AbortSignal", async () => {
     let capturedSignal: AbortSignal | undefined;
     const hangingSpawn = (
       _argv: readonly string[],
@@ -122,9 +124,55 @@ describe("AlRunnerBackend.run", () => {
     };
     const { backend } = await makeBackend(hangingSpawn);
     const v = await backend.run(ref, { coverage: "none", timeoutMs: 20 });
-    expect(v.outcome).toBe("timeout");
+    expect(v.outcome).toBe("deadline-exceeded");
     expect(capturedSignal).toBeDefined();
     expect(capturedSignal?.aborted).toBe(true);
+  });
+
+  test("a runner-confirmed test timeout is outcome=timeout", async () => {
+    const { spawn } = okSpawn(
+      {
+        tests: [
+          {
+            name: "PostingUpdatesTotal",
+            status: "fail",
+            durationMs: 0,
+            message:
+              "Test exceeded 3s timeout. Use --test-timeout 0 to disable timeout, or increase with --test-timeout <seconds>.",
+          },
+        ],
+      },
+      1,
+    );
+    const { backend } = await makeBackend(spawn);
+    const v = await backend.run(ref, { coverage: "none", timeoutMs: 5000 });
+    expect(v.outcome).toBe("timeout");
+  });
+
+  test("an ordinary assertion failure is still outcome=fail", async () => {
+    const { spawn } = okSpawn(
+      {
+        tests: [
+          {
+            name: "PostingUpdatesTotal",
+            status: "fail",
+            durationMs: 3,
+            message: "expected 2, got 1",
+          },
+        ],
+      },
+      1,
+    );
+    const { backend } = await makeBackend(spawn);
+    const v = await backend.run(ref, { coverage: "none", timeoutMs: 5000 });
+    expect(v.outcome).toBe("fail");
+  });
+
+  test("our own deadline is outcome=deadline-exceeded, not timeout", async () => {
+    const spawn = async () => new Promise<never>(() => {}) as never;
+    const { backend } = await makeBackend(spawn as never);
+    const v = await backend.run(ref, { coverage: "none", timeoutMs: 50 });
+    expect(v.outcome).toBe("deadline-exceeded");
   });
 });
 

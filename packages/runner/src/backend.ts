@@ -4,7 +4,13 @@ export interface TestMethodRef {
   readonly method: string;
 }
 
-export type TestOutcome = "pass" | "fail" | "skip" | "timeout" | "error";
+/**
+ * `timeout` means the TEST RUNNER confirmed the test did not terminate — real
+ * evidence about the mutant (design.md §6.7).
+ * `deadline-exceeded` means OUR client timer fired and we know nothing about
+ * what the server did — infrastructure noise, never evidence about the mutant.
+ */
+export type TestOutcome = "pass" | "fail" | "skip" | "timeout" | "deadline-exceeded" | "error";
 
 export interface CoverageEntry {
   readonly objectType: string;

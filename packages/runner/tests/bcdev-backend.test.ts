@@ -235,10 +235,10 @@ describe("BcDevMcpBackend.run", () => {
     expect(v.failureMessage).toBe("expected 2, got 1");
   });
 
-  test("timeout yields outcome=timeout", async () => {
+  test("bcdev has no runner-confirmed timeout, so its deadline is deadline-exceeded", async () => {
     const backend = makeBackend(() => new Promise(() => {}) as never);
     const v = await backend.run(ref, { coverage: "none", timeoutMs: 50 });
-    expect(v.outcome).toBe("timeout");
+    expect(v.outcome).toBe("deadline-exceeded");
   });
 
   test("transport error yields outcome=error", async () => {

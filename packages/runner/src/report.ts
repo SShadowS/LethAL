@@ -27,6 +27,7 @@ export interface SessionReport {
     knownSurvivors: number;
     unstable: number;
     errors: number;
+    deadlineExceeded: number;
   };
   readonly mutationScore: number | null; // killed / (killed + survived); null when denominator 0
   readonly mutants: readonly MutantOutcome[];
@@ -50,6 +51,7 @@ export interface BuildReportInput {
 }
 
 const UNSTABLE_PREFIX = "unstable test";
+const DEADLINE_PREFIX = "deadline exceeded";
 
 export function buildReport(input: BuildReportInput): SessionReport {
   const counts = {
@@ -60,6 +62,7 @@ export function buildReport(input: BuildReportInput): SessionReport {
     knownSurvivors: 0,
     unstable: 0,
     errors: 0,
+    deadlineExceeded: 0,
   };
   const mutants: MutantOutcome[] = [];
 
@@ -83,6 +86,7 @@ export function buildReport(input: BuildReportInput): SessionReport {
       case "error":
         counts.errors++;
         if (o.failureNote?.startsWith(UNSTABLE_PREFIX)) counts.unstable++;
+        if (o.failureNote?.startsWith(DEADLINE_PREFIX)) counts.deadlineExceeded++;
         break;
     }
     mutants.push({
@@ -129,6 +133,7 @@ export function renderConsole(r: SessionReport): string {
   lines.push(
     `score: ${scoreText}  ` +
       `(killed ${r.counts.killed}, survived ${r.counts.survived}, no-coverage ${r.counts.noCoverage}, ` +
+      `deadline-exceeded ${r.counts.deadlineExceeded}, ` +
       `timeout-killed ${r.counts.timeoutKilled}, known-survivor ${r.counts.knownSurvivors}, ` +
       `error ${r.counts.errors} [unstable ${r.counts.unstable}])`,
   );
