@@ -1137,6 +1137,8 @@ git commit -m "feat(runner): deterministic sharding + a compile-bounding semapho
   - `SessionConfig.compileConcurrency?: number` — default `min(workers, 4)`.
   - `SessionConfig.backendFactory?: (workerIndex: number) => ExecutionBackend` — required when `workers > 1`; each worker needs its own backend instance (its own instrumented dir and, for al-runner, its own server process).
 
+**Artifact isolation (added 2026-07-18 after the Task 2 review).** `ExecutionBackend.deploy(instrumentedDir)` carries no artifact name, and `BcDevMcpBackend.deploy` calls `publisher.compile(instrumentedDir)` with one argument — so Task 2's `artifactName` parameter has no production caller and, on its own, does NOT stop two workers writing the same `<outputDir>/lethal-instrumented.app`. Do NOT widen the `deploy` signature to fix this. Instead the **backendFactory must give each worker its own `Publisher.outputDir`** (e.g. `<scratchRoot>/worker-<i>/publish`), which satisfies the spec's "concurrent workers must not share an artifact output path" without an interface change. Task 7 wires this for the CLI; any test that runs `workers > 1` against a publishing backend must do the same.
+
 **Design note for the implementer.** Do NOT fork a second session implementation. Refactor the existing per-batch body of `runSession` into an internal `runBatchOnBackend(backend, batchDir, mutants, ...)` that returns outcomes. Sequential is then `workers = 1` running one shard — the exact path that is already verified live, so it stays exercised.
 
 - [ ] **Step 1: Write the failing test**
