@@ -47,6 +47,30 @@ const NO_MUTANTS_AL = `codeunit 79002 "Sandbox NoOp"
 }
 `;
 
+// Two independent, non-nested procedures for the parallel-workers concurrency
+// probe below. The standard `TARGET_AL` fixture's single comparison produces
+// exactly 3 mutants (empty-block on the procedure body, return-value on the
+// exit statement, conditional-boundary on the comparison) that are ALL nested
+// inside one another — `batchByOverlap` (packages/runner/src/selection.ts)
+// forbids any overlap within a batch, so those 3 mutants always land in 3
+// separate batches of exactly 1, and a batch of 1 mutant can never be
+// sharded across >1 worker no matter how correct the fan-out is. Two disjoint
+// procedure bodies never overlap, so each of the 3 batches instead gets one
+// mutant from each procedure (2 per batch) — enough to actually shard.
+const TWO_PROC_AL = `codeunit 79000 "Sandbox Logic"
+{
+    procedure IsOverBudget(Amount: Decimal; Budget: Decimal): Boolean
+    begin
+        exit(Amount > Budget);
+    end;
+
+    procedure IsUnderBudget(Amount: Decimal; Budget: Decimal): Boolean
+    begin
+        exit(Amount < Budget);
+    end;
+}
+`;
+
 const APP_ID = "11111111-1111-1111-1111-111111111111";
 const APP_JSON = JSON.stringify(
   {
@@ -71,6 +95,10 @@ class StubBackend implements ExecutionBackend {
     // simulate a batch-deploy failure (e.g. to prove the failure text alone
     // can't be miscounted as a different verdict cause).
     private readonly deployError?: unknown,
+    // When set, awaited at the top of run() — lets tests probe how many
+    // concurrent run() calls are in flight at once (the parallel-workers
+    // concurrency proof).
+    private readonly onRun?: () => Promise<void>,
   ) {}
   capabilities() {
     return this.caps;
@@ -86,6 +114,7 @@ class StubBackend implements ExecutionBackend {
     this.activations.push(id);
   }
   async run(ref: TestMethodRef, _opts: RunOpts): Promise<TestVerdict> {
+    await this.onRun?.();
     const active = this.activations.at(-1) ?? null;
     const outcome = this.script(active, ref);
     const hasCoverage = active === null && this.caps.coverage === "procedure";
@@ -345,5 +374,109 @@ describe("runSession — I7 second consecutive transport error aborts the sessio
     raw.close();
     expect(rows.length).toBeGreaterThan(0);
     expect(rows.some((r) => r.verdict === "error")).toBe(true);
+  });
+});
+
+describe("runSession — parallel workers", () => {
+  test("verdicts are identical at 1, 2 and 4 workers", async () => {
+    const shape = (r: Awaited<ReturnType<typeof runSession>>) =>
+      [...r.mutants].map((m) => `${m.file}:${m.line}:${m.operatorName}:${m.verdict}`).sort();
+
+    const results: string[][] = [];
+    for (const workers of [1, 2, 4]) {
+      const dirs = await makeProject();
+      const store = new ResultsStore(":memory:");
+      const report = await runSession({
+        backend: new StubBackend(CAPS_NST, (mutant) => (mutant === null ? "pass" : "fail"), [
+          "IsOverBudget",
+        ]),
+        backendFactory: () =>
+          new StubBackend(CAPS_NST, (mutant) => (mutant === null ? "pass" : "fail"), [
+            "IsOverBudget",
+          ]),
+        store,
+        ...dirs,
+        selectorIds,
+        workers,
+      });
+      results.push(shape(report));
+      store.close();
+    }
+    expect(results[1]).toEqual(results[0]);
+    expect(results[2]).toEqual(results[0]);
+  });
+
+  // The test above reuses the standard single-comparison fixture, which
+  // (see TWO_PROC_AL comment) always produces exactly 1 mutant per batch —
+  // shardEvenly then has only one non-empty shard no matter the worker
+  // count, so that test alone never actually exercises >1 concurrently
+  // executing shard whose verdicts must agree. This test uses TWO_PROC_AL so
+  // every batch really does contain 2 shardable mutants, genuinely stressing
+  // cross-shard determinism.
+  test("verdicts are identical at 1, 2 and 4 workers when a batch has multiple shardable mutants", async () => {
+    const shape = (r: Awaited<ReturnType<typeof runSession>>) =>
+      [...r.mutants].map((m) => `${m.file}:${m.line}:${m.operatorName}:${m.verdict}`).sort();
+    const caps: BackendCapabilities = {
+      coverage: "none",
+      deploy: "none",
+      isolation: "full-reset",
+      authoritative: false,
+    };
+
+    const results: string[][] = [];
+    for (const workers of [1, 2, 4]) {
+      const dirs = await makeProject();
+      await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
+      const store = new ResultsStore(":memory:");
+      const make = () => new StubBackend(caps, (mutant) => (mutant === null ? "pass" : "fail"));
+      const report = await runSession({
+        backend: make(),
+        backendFactory: make,
+        store,
+        ...dirs,
+        selectorIds,
+        workers,
+      });
+      results.push(shape(report));
+      store.close();
+    }
+    expect(results[1]).toEqual(results[0]);
+    expect(results[2]).toEqual(results[0]);
+  });
+
+  test("more than one worker actually runs concurrently", async () => {
+    const dirs = await makeProject();
+    // Overwrite the single-comparison fixture with two independent
+    // procedures (see TWO_PROC_AL comment) so a batch actually contains more
+    // than one shardable mutant. coverage:"none" means every mutant is
+    // covered by every green test regardless of which procedure it targets,
+    // so no per-procedure coverage bookkeeping is needed here.
+    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
+    const store = new ResultsStore(":memory:");
+    let concurrent = 0;
+    let peak = 0;
+    const make = () =>
+      new StubBackend(
+        { coverage: "none", deploy: "none", isolation: "full-reset", authoritative: false },
+        (mutant) => (mutant === null ? "pass" : "fail"),
+        [],
+        undefined,
+        async () => {
+          concurrent++;
+          peak = Math.max(peak, concurrent);
+          await new Promise((r) => setTimeout(r, 5));
+          concurrent--;
+        },
+      );
+    await runSession({
+      backend: make(),
+      backendFactory: make,
+      store,
+      ...dirs,
+      selectorIds,
+      workers: 3,
+    });
+    expect(peak).toBeGreaterThan(1);
+    store.close();
   });
 });

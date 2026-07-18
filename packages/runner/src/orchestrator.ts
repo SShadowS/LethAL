@@ -20,6 +20,7 @@ import {
 } from "@lethal/schemata";
 import type { ExecutionBackend, TestMethodRef, TestVerdict } from "./backend";
 import { discoverTests } from "./discovery";
+import { Semaphore, shardEvenly } from "./pool";
 import { buildReport } from "./report";
 import type { SessionOutcome, SessionReport } from "./report";
 import {
@@ -79,6 +80,10 @@ export interface SessionConfig {
   readonly baselineTimeoutMs?: number; // default 120000
   readonly skipKnownSurvivors?: boolean;
   readonly appVersion?: string; // stamped into runs; default "0.0.0.0"
+  readonly workers?: number; // default 1 — a pool of one IS the sequential path
+  readonly compileConcurrency?: number; // default min(workers, 4)
+  /** Required when workers > 1: each worker needs its own backend instance. */
+  readonly backendFactory?: (workerIndex: number) => ExecutionBackend;
 }
 
 /** Alias kept for readability at call sites within this module. */
@@ -161,6 +166,11 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
 
   const outcomes: SessionOutcome[] = []; // internal accumulation for the report
   let baselineGreenOverall = true;
+  const workers = Math.max(1, cfg.workers ?? 1);
+  // Bounds compile-heavy deploy() calls independently of worker count: alc is
+  // CPU-bound, so worker count (mutant concurrency) must not silently become
+  // compile concurrency.
+  const compileLimit = new Semaphore(cfg.compileConcurrency ?? Math.min(workers, 4));
 
   try {
     for (const [batchIdx, batchSpecs] of specBatches.entries()) {
@@ -285,127 +295,54 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       }
       for (const m of uncovered) record(cfg.store, runId, m, "no-coverage", outcomes, batchIdx);
 
-      // 6. per-mutant loop
-      for (const m of execute) {
-        const covering = perMutantTests.get(m.mutantId);
-        if (covering === undefined) continue; // uncovered, already recorded above
-        if (covering.length === 0) {
-          // Defensive: the covering-test list resolved to zero refs (e.g. a
-          // coverage index key whose tests no longer exist in `greenTests`).
-          // Treat it the same as "no coverage" rather than silently
-          // reporting "survived" for a mutant nothing actually ran against.
-          record(cfg.store, runId, m, "no-coverage", outcomes, batchIdx);
-          continue;
-        }
-        await activateWithRetry(cfg.backend, m.mutantId);
-        let verdict: SessionVerdict = "survived";
-        let killingTest: string | undefined;
-        let failureNote: string | undefined;
-        let cause: "deadline-exceeded" | "unstable" | undefined;
-        let spent = 0;
-        // mutant_row_id isn't known until recordMutant() runs below (the
-        // verdict — and thus the recordMutant call — only lands AFTER this
-        // loop finishes), so buffer this mutant's test-result rows here and
-        // flush them once record() returns the row id.
-        const testResultBuffer: Array<{
-          mutantCode: string | null;
-          ref: TestMethodRef;
-          outcome: TestVerdict["outcome"];
-          durationMs: number;
-          failureMessage: string | undefined;
-        }> = [];
-        let transportErrorRef: TestMethodRef | undefined;
-        for (const ref of covering) {
-          const budget =
-            2 *
-            (baselineDuration.get(testKeyOf(ref)) ??
-              cfg.baselineTimeoutMs ??
-              BASELINE_TIMEOUT_DEFAULT);
-          const v = await runWithRetry(cfg.backend, ref, { coverage: "none", timeoutMs: budget });
-          testResultBuffer.push({
-            mutantCode: m.mutantId,
-            ref,
-            outcome: v.outcome,
-            durationMs: v.durationMs,
-            failureMessage: v.failureMessage,
-          });
-          spent += v.durationMs;
-          if (v.outcome === "deadline-exceeded") {
-            // Our timer, not the runner's: says nothing about the mutant.
-            verdict = "error";
-            failureNote = `deadline exceeded running ${ref.method} (infrastructure, not a kill)`;
-            cause = "deadline-exceeded";
-            break;
-          }
-          if (v.outcome === "timeout") {
-            verdict = "timeout-killed";
-            killingTest = ref.method;
-            break;
-          }
-          if (v.outcome === "error") {
-            // runWithRetry already retried once internally — reaching "error"
-            // here means the backend failed transport for this test TWICE in
-            // a row. Spec §11: that aborts the whole session, not just this
-            // mutant (unlike the "unstable test" error path below, which is a
-            // legitimate flakiness finding, not a transport failure).
-            verdict = "error";
-            failureNote = v.failureMessage;
-            transportErrorRef = ref;
-            break;
-          }
-          if (v.outcome === "fail") {
-            await activateWithRetry(cfg.backend, null);
-            const confirm = await runWithRetry(cfg.backend, ref, {
-              coverage: "none",
-              timeoutMs: budget,
-            });
-            testResultBuffer.push({
-              mutantCode: null,
-              ref,
-              outcome: confirm.outcome,
-              durationMs: confirm.durationMs,
-              failureMessage: confirm.failureMessage,
-            });
-            if (confirm.outcome === "pass") {
-              verdict = "killed";
-              killingTest = ref.method;
-            } else {
-              verdict = "error";
-              failureNote = `unstable test ${ref.method}: fails at baseline confirmation`;
-              cause = "unstable";
-            }
-            break;
-          }
-        }
-        const mutantRowId = record(
-          cfg.store,
+      // 6. per-mutant loop — sharded across workers when workers > 1. The
+      // baseline/coverage discovery above always runs once against
+      // cfg.backend; only the kill-detection phase below fans out, since
+      // that's the part that's actually per-mutant work.
+      const fallbackTimeoutMs = cfg.baselineTimeoutMs ?? BASELINE_TIMEOUT_DEFAULT;
+      if (workers === 1) {
+        // Sequential IS the parallel path with a pool of one: this is the
+        // exact same runMutantsOnBackend call the fan-out branch below makes
+        // per shard, just with all of `execute` as a single "shard" on the
+        // one backend already deployed in step 3.
+        await runMutantsOnBackend({
+          backend: cfg.backend,
+          mutants: execute,
+          perMutantTests,
+          baselineDuration,
+          fallbackTimeoutMs,
+          store: cfg.store,
           runId,
-          m,
-          verdict,
+          batchIndex: batchIdx,
           outcomes,
-          batchIdx,
-          killingTest,
-          failureNote,
-          cause,
-          spent,
+        });
+      } else {
+        const factory = cfg.backendFactory;
+        if (factory === undefined) {
+          throw new Error("runSession: workers > 1 requires backendFactory");
+        }
+        const shards = shardEvenly(execute, workers);
+        await Promise.all(
+          shards.map(async (shard, i) => {
+            if (shard.length === 0) return;
+            const backend = factory(i);
+            // Each worker deploys its own copy of the batch: deploy is the
+            // compile-heavy step, so it is what the semaphore bounds — not
+            // the test runs (worker count must not become compile concurrency).
+            await compileLimit.run(() => backend.deploy(batchDir));
+            await runMutantsOnBackend({
+              backend,
+              mutants: shard,
+              perMutantTests,
+              baselineDuration,
+              fallbackTimeoutMs,
+              store: cfg.store,
+              runId,
+              batchIndex: batchIdx,
+              outcomes,
+            });
+          }),
         );
-        for (const t of testResultBuffer) {
-          cfg.store.recordTestResult(
-            runId,
-            mutantRowId,
-            t.mutantCode,
-            t.ref,
-            t.outcome,
-            t.durationMs,
-            t.failureMessage,
-          );
-        }
-        if (transportErrorRef !== undefined) {
-          throw new Error(
-            `backend transport error: two consecutive run() failures for mutant ${m.mutantId} ` +
-              `(test ${transportErrorRef.method}) — aborting session per spec §11: ${failureNote ?? ""}`,
-          );
-        }
       }
     }
   } finally {
@@ -420,12 +357,162 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     batchCount: specBatches.length,
     baselineGreen: baselineGreenOverall,
   });
+  // Sort accumulated outcomes so report ordering never depends on which
+  // worker finished first — determinism must not hinge on scheduling.
+  outcomes.sort((a, b) =>
+    `${a.mutant.file}:${a.mutant.startIndex}`.localeCompare(
+      `${b.mutant.file}:${b.mutant.startIndex}`,
+    ),
+  );
   return buildReport({
     caps,
     baselineGreen: baselineGreenOverall,
     batches: specBatches.length,
     outcomes,
   });
+}
+
+/**
+ * The per-mutant kill-detection loop, extracted so that `workers = 1` (one
+ * shard containing every mutant, run on `cfg.backend`) and `workers > 1`
+ * (N shards, each on its own backend from `backendFactory`) are the exact
+ * same code path — there is one session implementation, not two that can
+ * drift out of sync with each other.
+ *
+ * `outcomes` and `store` are shared across concurrent invocations when
+ * `workers > 1`; that's safe because `Array.push` and the `bun:sqlite` calls
+ * inside `record`/`recordTestResult` are all synchronous within this single
+ * process, so interleaving different mutants' async awaits never races on
+ * them.
+ */
+async function runMutantsOnBackend(args: {
+  readonly backend: ExecutionBackend;
+  readonly mutants: readonly MutantManifestEntry[];
+  readonly perMutantTests: ReadonlyMap<string, readonly TestMethodRef[]>;
+  readonly baselineDuration: ReadonlyMap<string, number>;
+  readonly fallbackTimeoutMs: number;
+  readonly store: ResultsStore;
+  readonly runId: number;
+  readonly batchIndex: number;
+  readonly outcomes: SessionOutcome[];
+}): Promise<void> {
+  for (const m of args.mutants) {
+    const covering = args.perMutantTests.get(m.mutantId);
+    if (covering === undefined) continue; // uncovered, already recorded above
+    if (covering.length === 0) {
+      // Defensive: the covering-test list resolved to zero refs (e.g. a
+      // coverage index key whose tests no longer exist in `greenTests`).
+      // Treat it the same as "no coverage" rather than silently
+      // reporting "survived" for a mutant nothing actually ran against.
+      record(args.store, args.runId, m, "no-coverage", args.outcomes, args.batchIndex);
+      continue;
+    }
+    await activateWithRetry(args.backend, m.mutantId);
+    let verdict: SessionVerdict = "survived";
+    let killingTest: string | undefined;
+    let failureNote: string | undefined;
+    let cause: "deadline-exceeded" | "unstable" | undefined;
+    let spent = 0;
+    // mutant_row_id isn't known until recordMutant() runs below (the
+    // verdict — and thus the recordMutant call — only lands AFTER this
+    // loop finishes), so buffer this mutant's test-result rows here and
+    // flush them once record() returns the row id.
+    const testResultBuffer: Array<{
+      mutantCode: string | null;
+      ref: TestMethodRef;
+      outcome: TestVerdict["outcome"];
+      durationMs: number;
+      failureMessage: string | undefined;
+    }> = [];
+    let transportErrorRef: TestMethodRef | undefined;
+    for (const ref of covering) {
+      const budget = 2 * (args.baselineDuration.get(testKeyOf(ref)) ?? args.fallbackTimeoutMs);
+      const v = await runWithRetry(args.backend, ref, { coverage: "none", timeoutMs: budget });
+      testResultBuffer.push({
+        mutantCode: m.mutantId,
+        ref,
+        outcome: v.outcome,
+        durationMs: v.durationMs,
+        failureMessage: v.failureMessage,
+      });
+      spent += v.durationMs;
+      if (v.outcome === "deadline-exceeded") {
+        // Our timer, not the runner's: says nothing about the mutant.
+        verdict = "error";
+        failureNote = `deadline exceeded running ${ref.method} (infrastructure, not a kill)`;
+        cause = "deadline-exceeded";
+        break;
+      }
+      if (v.outcome === "timeout") {
+        verdict = "timeout-killed";
+        killingTest = ref.method;
+        break;
+      }
+      if (v.outcome === "error") {
+        // runWithRetry already retried once internally — reaching "error"
+        // here means the backend failed transport for this test TWICE in
+        // a row. Spec §11: that aborts the whole session, not just this
+        // mutant (unlike the "unstable test" error path below, which is a
+        // legitimate flakiness finding, not a transport failure).
+        verdict = "error";
+        failureNote = v.failureMessage;
+        transportErrorRef = ref;
+        break;
+      }
+      if (v.outcome === "fail") {
+        await activateWithRetry(args.backend, null);
+        const confirm = await runWithRetry(args.backend, ref, {
+          coverage: "none",
+          timeoutMs: budget,
+        });
+        testResultBuffer.push({
+          mutantCode: null,
+          ref,
+          outcome: confirm.outcome,
+          durationMs: confirm.durationMs,
+          failureMessage: confirm.failureMessage,
+        });
+        if (confirm.outcome === "pass") {
+          verdict = "killed";
+          killingTest = ref.method;
+        } else {
+          verdict = "error";
+          failureNote = `unstable test ${ref.method}: fails at baseline confirmation`;
+          cause = "unstable";
+        }
+        break;
+      }
+    }
+    const mutantRowId = record(
+      args.store,
+      args.runId,
+      m,
+      verdict,
+      args.outcomes,
+      args.batchIndex,
+      killingTest,
+      failureNote,
+      cause,
+      spent,
+    );
+    for (const t of testResultBuffer) {
+      args.store.recordTestResult(
+        args.runId,
+        mutantRowId,
+        t.mutantCode,
+        t.ref,
+        t.outcome,
+        t.durationMs,
+        t.failureMessage,
+      );
+    }
+    if (transportErrorRef !== undefined) {
+      throw new Error(
+        `backend transport error: two consecutive run() failures for mutant ${m.mutantId} ` +
+          `(test ${transportErrorRef.method}) — aborting session per spec §11: ${failureNote ?? ""}`,
+      );
+    }
+  }
 }
 
 async function pathExists(p: string): Promise<boolean> {
