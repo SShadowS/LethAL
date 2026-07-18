@@ -54,8 +54,13 @@ export class Publisher {
     private readonly spawn: SpawnFn = bunSpawn,
   ) {}
 
-  async compile(instrumentedDir: string): Promise<string> {
-    const appPath = toForwardSlashes(join(this.cfg.outputDir, "lethal-instrumented.app"));
+  /**
+   * `artifactName` must be unique per concurrent compile: a fixed filename in a
+   * shared outputDir means two workers overwrite each other's .app and one
+   * publishes the other's code.
+   */
+  async compile(instrumentedDir: string, artifactName = "lethal-instrumented"): Promise<string> {
+    const appPath = toForwardSlashes(join(this.cfg.outputDir, `${artifactName}.app`));
     const projectPath = toForwardSlashes(instrumentedDir);
     const cachePath = toForwardSlashes(this.cfg.packageCachePath);
     try {

@@ -185,7 +185,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         root: v.root,
         specs: v.specs,
       }));
-      const batchDir = join(cfg.instrumentedDir, `batch-${batchIdx}`);
+      const batchDir = join(cfg.instrumentedDir, `run-${runId}-batch-${batchIdx}`);
       await writeInstrumentedProject({
         targetDir: batchDir,
         files: batchFiles,

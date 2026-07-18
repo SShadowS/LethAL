@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
@@ -238,7 +238,13 @@ describe("runSession — C3 batch app.json + full source copy", () => {
     const store = new ResultsStore(":memory:");
     await runSession({ backend, store, ...dirs, selectorIds });
 
-    const batchDir = join(dirs.instrumentedDir, "batch-0");
+    // Batch dirs are named run-<runId>-batch-<batchIdx>, find the one created
+    const entries = await readdir(dirs.instrumentedDir);
+    const batchDirs = entries.filter((e) => e.match(/^run-\d+-batch-0$/));
+    expect(batchDirs.length).toBe(1);
+    const batchDirName = batchDirs.at(0);
+    expect(batchDirName).toBeDefined();
+    const batchDir = join(dirs.instrumentedDir, batchDirName as string);
     const appJson = JSON.parse(await readFile(join(batchDir, "app.json"), "utf8")) as {
       id: string;
       version: string;

@@ -112,6 +112,26 @@ describe("Publisher.publish", () => {
   });
 });
 
+describe("Publisher artifact identity", () => {
+  test("distinct artifact names never collide in one outputDir", async () => {
+    const { calls, spawn } = recordingSpawn();
+    const p = new Publisher(cfg, spawn);
+    const a = await p.compile("C:/instr/batch-0", "run7-batch0");
+    const b = await p.compile("C:/instr/batch-1", "run7-batch1");
+    expect(a).not.toBe(b);
+    expect(a).toContain("run7-batch0");
+    expect(b).toContain("run7-batch1");
+    expect(calls[0]).toContain(`/out:${a}`);
+    expect(calls[1]).toContain(`/out:${b}`);
+  });
+
+  test("omitting the name keeps the existing single-artifact behavior", async () => {
+    const { spawn } = recordingSpawn();
+    const out = await new Publisher(cfg, spawn).compile("C:/instr");
+    expect(out).toContain("lethal-instrumented.app");
+  });
+});
+
 describe("defaultAlToolPaths", () => {
   test("returns undefined when extensions dir does not exist", async () => {
     const result = await defaultAlToolPaths("/nonexistent/path/that/does/not/exist");
