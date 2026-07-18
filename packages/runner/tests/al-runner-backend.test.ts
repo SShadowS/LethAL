@@ -48,9 +48,12 @@ describe("AlRunnerBackend.activate", () => {
 describe("AlRunnerBackend.run", () => {
   test("spawns al-runner with --run and parses a pass", async () => {
     const { calls, spawn } = okSpawn({
-      tests: [
-        { codeunit: "Sandbox Tests", method: "PostingUpdatesTotal", result: "pass", durationMs: 3 },
-      ],
+      tests: [{ name: "PostingUpdatesTotal", status: "pass", durationMs: 3 }],
+      passed: 1,
+      failed: 0,
+      errors: 0,
+      total: 1,
+      exitCode: 0,
     });
     const { backend } = await makeBackend(spawn);
     const v = await backend.run(ref, { coverage: "none", timeoutMs: 5000 });
@@ -58,6 +61,13 @@ describe("AlRunnerBackend.run", () => {
     expect(calls[0]).toContain("--run");
     expect(calls[0]).toContain("PostingUpdatesTotal");
     expect(calls[0]).toContain("--output-json");
+    // D3: al-runner defaults to `codeunit` isolation — LethAL must force
+    // `method` isolation so behavior matches the advertised `full-reset`
+    // capability.
+    const argv = calls[0] ?? [];
+    const flagIdx = argv.indexOf("--test-isolation");
+    expect(flagIdx).toBeGreaterThanOrEqual(0);
+    expect(argv[flagIdx + 1]).toBe("method");
   });
 
   test("exit 1 with fail result maps to fail", async () => {
@@ -65,13 +75,20 @@ describe("AlRunnerBackend.run", () => {
       {
         tests: [
           {
-            codeunit: "Sandbox Tests",
-            method: "PostingUpdatesTotal",
-            result: "fail",
+            name: "PostingUpdatesTotal",
+            status: "fail",
             durationMs: 3,
             message: "boom",
+            stackTrace: "at PostingUpdatesTotal",
+            alSourceLine: 8,
+            alSourceColumn: 37,
           },
         ],
+        passed: 0,
+        failed: 1,
+        errors: 0,
+        total: 1,
+        exitCode: 1,
       },
       1,
     );
@@ -108,6 +125,23 @@ describe("AlRunnerBackend.run", () => {
     expect(v.outcome).toBe("timeout");
     expect(capturedSignal).toBeDefined();
     expect(capturedSignal?.aborted).toBe(true);
+  });
+});
+
+describe("AlRunnerBackend.status", () => {
+  // D2: al-runner has no --version flag (it errors out); --help is the
+  // verified reachability probe (exits 0).
+  test("probes with --help, not --version", async () => {
+    const calls: string[][] = [];
+    const spawn = async (argv: readonly string[]) => {
+      calls.push([...argv]);
+      return { exitCode: 0, stdout: "usage: al-runner ...", stderr: "" };
+    };
+    const { backend } = await makeBackend(spawn);
+    const status = await backend.status();
+    expect(status.ok).toBe(true);
+    expect(calls[0]).toContain("--help");
+    expect(calls[0]).not.toContain("--version");
   });
 });
 
