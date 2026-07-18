@@ -84,7 +84,16 @@ export class AlRunnerBackend implements ExecutionBackend {
       method: ref.method,
       ...(this.cfg.packagesDir !== undefined ? { packagesDir: this.cfg.packagesDir } : {}),
       ...(this.cfg.stubsDir !== undefined ? { stubsDir: this.cfg.stubsDir } : {}),
-      testTimeoutSeconds: Math.max(1, Math.ceil(opts.timeoutMs / 1000)),
+      // Deliberately well below `deadlineMs`, never equal: `--test-timeout` bounds
+      // only the test body inside al-runner, while `deadlineMs` bounds the WHOLE
+      // invocation (al-runner recompiles the project from scratch every call, which
+      // alone can take several seconds). If the two were equal or close, our client
+      // AbortController would always win the race, the runner-confirmed
+      // `outcome: "timeout"` path would be unreachable, and every genuine hang would
+      // be misclassified as infrastructure noise (`deadline-exceeded`) instead of a
+      // real mutant-induced timeout. Halving the budget (min 1s) gives the runner's
+      // own timer real margin to fire first.
+      testTimeoutSeconds: Math.max(1, Math.floor(opts.timeoutMs / 2000)),
       deadlineMs: opts.timeoutMs,
     });
     const durationMs = Date.now() - started;
