@@ -6,7 +6,7 @@ import {
   type ParentContextHint,
   type SemanticContext,
 } from "@lethal/operator-sdk";
-import { synthesizeAfter } from "./mutate-helpers";
+import { findOperatorToken, replaceOperatorToken, synthesizeAfter } from "./mutate-helpers";
 
 const COMPARISON_FLIP: ReadonlyMap<string, string> = new Map([
   ["=", "<>"],
@@ -99,27 +99,5 @@ export const negateConditional: MutationOperator = {
 };
 
 function findOperator(node: ALSyntaxNode): string | null {
-  const field = node.childForFieldName("operator");
-  if (field !== null) return field.text;
-  for (const c of node.namedChildren) {
-    if (c.kind.endsWith("_operator")) return c.text;
-  }
-  return null;
-}
-
-function replaceOperatorToken(
-  node: ALSyntaxNode,
-  oldOp: string,
-  newOp: string,
-): string | null {
-  const opNode =
-    node.childForFieldName("operator") ??
-    node.namedChildren.find((c) => c.kind.endsWith("_operator")) ??
-    null;
-  if (opNode === null) return null;
-  const opStart = opNode.startIndex - node.startIndex;
-  const opEnd = opNode.endIndex - node.startIndex;
-  const nodeText = node.text;
-  if (nodeText.slice(opStart, opEnd) !== oldOp) return null;
-  return `${nodeText.slice(0, opStart)}${newOp}${nodeText.slice(opEnd)}`;
+  return findOperatorToken(node)?.text ?? null;
 }

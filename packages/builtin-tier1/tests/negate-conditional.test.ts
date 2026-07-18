@@ -54,4 +54,38 @@ describe("negateConditional", () => {
     });
     expect(specs).toHaveLength(0);
   });
+
+  // Regression: tree-sitter-al surfaces childForFieldName("operator") from a
+  // DESCENDANT when both operands are parenthesized — for `(V < 0) or (V > 100)`
+  // it returns the nested `<`, not the top-level `or`, and `or` is an anonymous
+  // token so the `_operator` namedChildren fallback misses it too. The operator
+  // was therefore read as `<`, LOGICAL_FLIP had no entry, and no mutant was
+  // generated. Found by running the sandbox fixture end to end: 15 sites, not 16.
+  it("flips or/and when both operands are parenthesized", () => {
+    const src = `codeunit 79000 "T" { procedure P(V: Integer): Boolean begin if (V < 0) or (V > 100) then exit(true); exit(false); end; }`;
+    const root = wrapRoot(parseAL(src));
+    const ctx = buildSemanticContext([{ path: "fixture.al", root }]);
+
+    const specs = findAll(root, ALNodeKind.logical_expression)
+      .filter((n) => negateConditional.targets(n, ctx))
+      .flatMap((n) => negateConditional.generate(n, ctx));
+
+    expect(specs).toHaveLength(1);
+    expect(specs[0]?.before.text).toBe("(V < 0) or (V > 100)");
+    expect(specs[0]?.after.text).toBe("(V < 0) and (V > 100)");
+    expect(specs[0]?.parentContext).toBe("short-circuit-operand");
+  });
+
+  it("flips a comparison whose operands are parenthesized", () => {
+    const src = `codeunit 79001 "T" { procedure P(A: Integer; B: Integer): Boolean begin exit((A) = (B)); end; }`;
+    const root = wrapRoot(parseAL(src));
+    const ctx = buildSemanticContext([{ path: "fixture.al", root }]);
+
+    const specs = findAll(root, ALNodeKind.comparison_expression)
+      .filter((n) => negateConditional.targets(n, ctx))
+      .flatMap((n) => negateConditional.generate(n, ctx));
+
+    expect(specs).toHaveLength(1);
+    expect(specs[0]?.after.text).toBe("(A) <> (B)");
+  });
 });

@@ -5,7 +5,7 @@ import {
   type MutationSpec,
   type SemanticContext,
 } from "@lethal/operator-sdk";
-import { synthesizeAfter } from "./mutate-helpers";
+import { findOperatorToken, replaceOperatorToken, synthesizeAfter } from "./mutate-helpers";
 
 const BOUNDARY_FLIP: ReadonlyMap<string, string> = new Map([
   [">", ">="],
@@ -74,35 +74,5 @@ export const conditionalBoundary: MutationOperator = {
 };
 
 function findOperator(node: ALSyntaxNode): string | null {
-  const field = node.childForFieldName("operator");
-  if (field !== null) return field.text;
-  for (const c of node.namedChildren) {
-    if (c.kind.endsWith("_operator")) return c.text;
-  }
-  return null;
-}
-
-/**
- * Build the mutated comparison text by replacing only the operator token's
- * slice of `node.text`. Avoids re-rendering operands (preserves whitespace,
- * comments within operands, and any other formatting).
- */
-function replaceOperatorToken(
-  node: ALSyntaxNode,
-  oldOp: string,
-  newOp: string,
-): string | null {
-  const opNode =
-    node.childForFieldName("operator") ??
-    node.namedChildren.find((c) => c.kind.endsWith("_operator")) ??
-    null;
-  if (opNode === null) return null;
-  const opStart = opNode.startIndex - node.startIndex;
-  const opEnd = opNode.endIndex - node.startIndex;
-  const nodeText = node.text;
-  const before = nodeText.slice(0, opStart);
-  const after = nodeText.slice(opEnd);
-  // Sanity check: the slice we're replacing must match the reported token.
-  if (nodeText.slice(opStart, opEnd) !== oldOp) return null;
-  return `${before}${newOp}${after}`;
+  return findOperatorToken(node)?.text ?? null;
 }

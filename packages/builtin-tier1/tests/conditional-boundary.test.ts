@@ -58,4 +58,20 @@ describe("conditionalBoundary", () => {
       .flatMap((n) => conditionalBoundary.generate(n, ctx));
     expect(specs).toHaveLength(0);
   });
+
+  // Same descendant-operator grammar quirk as negate-conditional: with both
+  // operands parenthesized, childForFieldName("operator") returns a nested
+  // operator instead of this node's own, so no mutant was produced.
+  it("flips > to >= when both operands are parenthesized", () => {
+    const src = `codeunit 79002 "T" { procedure P(A: Integer; B: Integer): Boolean begin exit((A) > (B)); end; }`;
+    const root = wrapRoot(parseAL(src));
+    const ctx = buildSemanticContext([{ path: "fixture.al", root }]);
+
+    const specs = findAll(root, ALNodeKind.comparison_expression)
+      .filter((n) => conditionalBoundary.targets(n, ctx))
+      .flatMap((n) => conditionalBoundary.generate(n, ctx));
+
+    expect(specs).toHaveLength(1);
+    expect(specs[0]?.after.text).toBe("(A) >= (B)");
+  });
 });
