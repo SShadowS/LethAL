@@ -11,3 +11,9 @@ launch.local.json
 lethal.sqlite
 lethal.config.local.json
 *.app
+
+# Local MCP server config — contains credentials
+.mcp.json
+
+# AL symbol packages (large, machine-local)
+.alpackages/

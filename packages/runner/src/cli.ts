@@ -22,10 +22,18 @@ import { ResultsStore } from "./store";
  * file into the already-tested library calls and renders the result.
  */
 
+// Verified against a real BC server (2026-07-18): the real `alc.exe` enforces app.json's
+// `idRanges` (AL0297) for every object it compiles, including the injected Mutation
+// Selector/Control/Active objects — unlike al-runner's compiler, which tolerated
+// out-of-idRange ids without complaint. 50000/50001/50002 fall outside the fixture's
+// 79000-79199 idRange and failed real compilation; these must live inside whatever
+// idRange the target app declares. There is no general solution for arbitrary target
+// apps yet (no CLI flag to override), so this default only holds for apps whose idRange
+// covers 79197-79199 (e.g. the fixture) — a real target app may need its own ids.
 const DEFAULT_SELECTOR_IDS: SelectorConfig = {
-  selectorId: 50000,
-  controlId: 50001,
-  tableId: 50002,
+  selectorId: 79199,
+  controlId: 79198,
+  tableId: 79197,
 };
 
 export interface DryRunCliConfig {
@@ -131,6 +139,9 @@ export interface BcDevConfigSection {
   readonly username: string;
   readonly password: string;
   readonly packageCachePath: string;
+  // Extra env vars for the spawned bc-dev-mcp server process, e.g.
+  // { "BC_DEV_USER": "...", "BC_DEV_PASSWORD": "..." } — see BcDevConfig.env.
+  readonly env?: Record<string, string>;
 }
 
 export interface AlRunnerConfigSection {
@@ -203,9 +214,19 @@ async function loadLethalConfigFile(path: string): Promise<LethalConfigFile> {
   }
 }
 
-/** bc-dev's OData base URL isn't a separate config field — it's server + serverInstance. */
-function odataBaseUrl(server: string, serverInstance: string): string {
-  return `${server.replace(/\/+$/, "")}/${serverInstance}`;
+/**
+ * bc-dev's OData base URL isn't a separate config field — it's server + serverInstance, with
+ * port 7048 injected. Verified against a real BC server (2026-07-18): `server` (e.g.
+ * "http://Cronus28", used unqualified by bc-dev-mcp's own dev-service protocol) has no port,
+ * which resolves to 80 for a plain HTTP request — but BC's OData/web-service endpoint listens
+ * on 7048, not 80 (confirmed: port 80 returns 404, port 7048 serves OData correctly). Mirrors
+ * bc-mcp's `deriveODataUrl` (a separately verified, already-working reference for this exact
+ * container), which unconditionally forces port 7048 unless it's already exactly that.
+ */
+export function odataBaseUrl(server: string, serverInstance: string): string {
+  const url = new URL(server);
+  if (url.port !== "7048") url.port = "7048";
+  return `${url.toString().replace(/\/+$/, "")}/${serverInstance}`;
 }
 
 async function buildBackend(
@@ -245,6 +266,8 @@ async function buildBackend(
       outputDir,
       server: c.server,
       serverInstance: c.serverInstance,
+      username: c.username,
+      password: c.password,
       ...(c.tenant !== undefined ? { tenant: c.tenant } : {}),
     },
     defaultSpawn,
@@ -254,6 +277,7 @@ async function buildBackend(
     company: c.company,
     username: c.username,
     password: c.password,
+    ...(c.tenant !== undefined ? { tenant: c.tenant } : {}),
   });
   return new BcDevMcpBackend(
     {
@@ -263,6 +287,7 @@ async function buildBackend(
       serverInstance: c.serverInstance,
       company: c.company,
       ...(c.tenant !== undefined ? { tenant: c.tenant } : {}),
+      ...(c.env !== undefined ? { env: c.env } : {}),
     },
     undefined,
     publisher,

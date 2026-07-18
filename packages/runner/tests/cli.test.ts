@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { parseCliConfig, validateAlRunnerConfig, validateBcDevConfig } from "../src/cli";
+import {
+  odataBaseUrl,
+  parseCliConfig,
+  validateAlRunnerConfig,
+  validateBcDevConfig,
+} from "../src/cli";
 
 describe("parseCliConfig", () => {
   test("missing --project throws a clear error", () => {
@@ -126,6 +131,23 @@ describe("validateBcDevConfig", () => {
 
   test("empty mcpCommand array counts as missing", () => {
     expect(() => validateBcDevConfig({ ...full, mcpCommand: [] })).toThrow(/mcpCommand/);
+  });
+});
+
+describe("odataBaseUrl", () => {
+  // Verified against a real BC server (2026-07-18): the OData/web-service endpoint listens on
+  // port 7048, not whatever port (or none, i.e. 80) `server` carries — 80 returns 404, 7048
+  // serves OData. Mirrors bc-mcp's already-working `deriveODataUrl`.
+  test("injects port 7048 when the server URL has none", () => {
+    expect(odataBaseUrl("http://Cronus28", "BC")).toBe("http://cronus28:7048/BC");
+  });
+
+  test("replaces an explicit non-7048 port", () => {
+    expect(odataBaseUrl("http://Cronus28:80", "BC")).toBe("http://cronus28:7048/BC");
+  });
+
+  test("leaves an already-correct port 7048 alone", () => {
+    expect(odataBaseUrl("http://Cronus28:7048", "BC")).toBe("http://cronus28:7048/BC");
   });
 });
 

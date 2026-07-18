@@ -53,7 +53,10 @@ const REPO_ROOT = join(HERE, "..", "..", "..");
 const PROJECT_DIR = join(REPO_ROOT, "fixtures", "sandbox-app");
 const TEST_DIR = join(REPO_ROOT, "fixtures", "sandbox-tests");
 
-const SELECTOR_IDS = { selectorId: 50000, controlId: 50001, tableId: 50002 };
+// Kept consistent with bcdev.itest.ts's SELECTOR_IDS: must live inside the fixture's declared
+// idRanges (79000-79199) — the real alc.exe used by the bcdev backend enforces app.json
+// idRanges (AL0297), even though al-runner's own compiler tolerated out-of-range ids.
+const SELECTOR_IDS = { selectorId: 79199, controlId: 79198, tableId: 79197 };
 
 // Hand-computed against fixtures/sandbox-app/src (see fixtures/README.md §Expected verdict table).
 // al-runner reports coverage:"none", so the orchestrator never emits a "no-coverage" verdict —

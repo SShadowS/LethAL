@@ -16,6 +16,14 @@ manual smoke-testing, and the env-gated integration scripts in
 `sandbox-app` only (id `df1aa9ff-6539-4c86-a9d0-ad702b61ac9a`) and declares the same
 `idRanges` window for its own codeunit 79100.
 
+The injected Mutation Selector/Control/Active object ids (`79197`–`79199`, see
+`DEFAULT_SELECTOR_IDS` in `packages/runner/src/cli.ts`) must also fall inside this window.
+They didn't always: the original ids (`50000`–`50002`) compiled fine against al-runner but
+fail real `alc.exe` with `AL0297` ("object identifier is not valid ... allowed ranges") —
+verified against a real BC server 2026-07-18. al-runner's compiler simply doesn't enforce
+`idRanges` the way the real Microsoft AL compiler does, so this went undetected until the
+first live bcdev compile.
+
 ## Note: no `TestIsolation` preflight
 
 Layer 4 briefly shipped a preflight (`findMissingTestIsolation`, `packages/runner/src/discovery.ts`)
@@ -117,7 +125,16 @@ CLI flags:
     "company": "CRONUS",
     "username": "REPLACE_ME",
     "password": "REPLACE_ME",
-    "packageCachePath": "C:/path/to/.alpackages"
+    "packageCachePath": "C:/path/to/.alpackages",
+    // Optional: extra env vars for the spawned bc-dev-mcp server process. bc-dev-mcp reads
+    // credentials from BC_DEV_USER/BC_DEV_PASSWORD env vars, not tool params — and the MCP
+    // SDK's StdioClientTransport only inherits a fixed OS-level allowlist by default (PATH,
+    // USERPROFILE, ...), silently dropping anything else. Without this, bc-dev-mcp fails
+    // preflight with "Missing connection settings: username (BC_DEV_USER env var or tool param)".
+    "env": {
+      "BC_DEV_USER": "REPLACE_ME",
+      "BC_DEV_PASSWORD": "REPLACE_ME"
+    }
   },
   "alRunner": {
     "alRunnerPath": "al-runner",
@@ -128,8 +145,14 @@ CLI flags:
 
 `alcPath`/`altoolPath` are deliberately not config fields — the CLI locates the newest
 `ms-dynamics-smb.al-*` VS Code extension under `~/.vscode/extensions` automatically
-(`defaultAlToolPaths()`); the bc-dev OData base URL is derived from `server` +
-`serverInstance` rather than being its own field.
+(`defaultAlToolPaths()`); the bc-dev OData base URL is derived from `server` + `serverInstance`
+rather than being its own field, with port **7048** injected regardless of what (if any) port
+`server` carries (`odataBaseUrl()`, `packages/runner/src/cli.ts`) — verified against a real BC
+server 2026-07-18: `server`/`serverInstance` are also used unqualified for bc-dev-mcp's own
+dev-service protocol (port 7049 by default), but the OData/web-service endpoint
+`MutationControlClient` talks to lives on 7048, not 7049 or 80. `tenant`, when present, is also
+forwarded to every OData call as `?tenant=...` — without it, Basic auth fails outright (401)
+even with a correct username/password, on this container's single "default" tenant included.
 
 For real credentials, create a gitignored `lethal.config.local.json` next to `app.json` with
 the same shape and point `--config` at it. `packages/runner/itest/bcdev.itest.ts` reads this
@@ -170,9 +193,35 @@ affect a plain `bun test` or CI run that hasn't opted in.
 server to check against get verified against real infra, and fixed in one commit each if
 wrong:
 
-- `bcdev_test_run` MCP payload shape (Task 7, `bcdev-backend.ts`)
-- `altool` flag spellings (Task 8, `publisher.ts`)
-- OData `MutationControl_*` action parameter/return shape (Task 9, `activation.ts`)
+- `bcdev_test_run` MCP payload shape (Task 7, `bcdev-backend.ts`) — **wrong**, fixed. The real
+  payload nests `status` (`"passed"|"failed"|"skipped"`) and `output` per result, not `outcome`
+  (`"pass"|"fail"|"skip"`)/`failureMessage`; coverage is a separate top-level array keyed by
+  `testObjectId`/`testMethodId`, listing `{objectType, objectId, methodId, file?}` per covered
+  procedure — numeric `methodId` only, never a name. Those ids turned out to be exactly the
+  `Id` the AL compiler assigns each method in the compiled app's own `SymbolReference.json`
+  (see `packages/runner/src/app-package.ts`) — resolvable locally, no extra server round-trip,
+  *except* for `local`/private procedures, which are never listed there; unresolvable ids fall
+  back to crediting every local procedure declared in that object (safe over-approximation:
+  it can only turn a coverage-skip into an actual run, never hide a real kill).
+- `altool` flag spellings (Task 8, `publisher.ts`) — **wrong**, fixed. Flags are all-lowercase
+  (`--serverinstance`, `--schemaupdatemode`, not the camelCase originally guessed), and
+  `--authentication` defaults to AAD — on-prem `UserPassword` auth must be selected explicitly.
+  altool has no `--username`/`--password` flags at all: on-prem Basic-auth credentials go
+  through `BC_SERVER_USERNAME`/`BC_SERVER_PASSWORD` env vars on the altool process (verified
+  against the `Microsoft.Dynamics.Nav.Deployment.dll` strings shipped with the AL extension).
+- OData `MutationControl_*` action parameter/return shape (Task 9, `activation.ts`) — **wrong
+  in more ways than the parameter shape**: (1) every OData call needs `?tenant=...` or Basic
+  auth fails outright with a generic 401, even with correct credentials; (2) the OData
+  endpoint lives on port **7048**, not whatever port `server` carries (`odataBaseUrl()` now
+  injects it); (3) `emitWebServicesXml` (`packages/schemata/src/selector.ts`) emitted
+  `<ObjectType>Codeunit</ObjectType>` — the compiler's own embedded schema
+  (`TenantWebServicesV1.xsd` in `Microsoft.Dynamics.Nav.CodeAnalysis.dll`) and the AL
+  extension's own snippet both require exactly `CodeUnit` (capital U); the lowercase version
+  silently fails validation and `alc` drops the file from the package entirely (confirmed:
+  absent from a real compiled `.app`'s file listing). Fixed, and confirmed working after the
+  fix: the file is now bundled (`serv/file0_webservices.xml` inside the `.app`) and the action
+  becomes reachable (`BadRequest_NotFound` → a real parameter-validation error). See the
+  bcdev-integration-fixes report for the exact request/response shape once fully re-verified.
 
 ### CI status: both itests are manual (not wired into CI)
 

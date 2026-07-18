@@ -25,7 +25,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { MutationControlClient } from "../src/activation";
 import { BcDevMcpBackend } from "../src/bcdev-backend";
-import { validateBcDevConfig } from "../src/cli";
+import { odataBaseUrl, validateBcDevConfig } from "../src/cli";
 import type { LethalConfigFile } from "../src/cli";
 import { generateMutationSet, runSession } from "../src/orchestrator";
 import { Publisher, defaultAlToolPaths, defaultSpawn } from "../src/publisher";
@@ -47,7 +47,10 @@ const TEST_DIR = join(REPO_ROOT, "fixtures", "sandbox-tests");
 const LAUNCH_LOCAL_PATH = join(PROJECT_DIR, ".vscode", "launch.local.json");
 const CONFIG_LOCAL_PATH = join(PROJECT_DIR, "lethal.config.local.json");
 
-const SELECTOR_IDS = { selectorId: 50000, controlId: 50001, tableId: 50002 };
+// Must live inside the fixture's declared idRanges (79000-79199, see fixtures/README.md) —
+// the real alc.exe enforces app.json idRanges (AL0297) for every compiled object, including
+// these injected ones; verified against a real BC server 2026-07-18.
+const SELECTOR_IDS = { selectorId: 79199, controlId: 79198, tableId: 79197 };
 
 // Hand-computed against fixtures/sandbox-app/src (see fixtures/README.md §Expected verdict table).
 // bcdev reports procedure-level coverage, so DiscountedPrice (never called by any test) is
@@ -116,15 +119,18 @@ async function runOnce(scratchRoot: string): Promise<SessionReport> {
       outputDir,
       server: bcdev.server,
       serverInstance: bcdev.serverInstance,
+      username: bcdev.username,
+      password: bcdev.password,
       ...(bcdev.tenant !== undefined ? { tenant: bcdev.tenant } : {}),
     },
     defaultSpawn,
   );
   const activation = new MutationControlClient({
-    baseUrl: `${bcdev.server.replace(/\/+$/, "")}/${bcdev.serverInstance}`,
+    baseUrl: odataBaseUrl(bcdev.server, bcdev.serverInstance),
     company: bcdev.company,
     username: bcdev.username,
     password: bcdev.password,
+    ...(bcdev.tenant !== undefined ? { tenant: bcdev.tenant } : {}),
   });
   const backend = new BcDevMcpBackend(
     {
@@ -140,6 +146,7 @@ async function runOnce(scratchRoot: string): Promise<SessionReport> {
       ...(launchCfg.environmentName !== undefined
         ? { environmentName: launchCfg.environmentName }
         : {}),
+      ...(bcdev.env !== undefined ? { env: bcdev.env } : {}),
     },
     undefined,
     publisher,
