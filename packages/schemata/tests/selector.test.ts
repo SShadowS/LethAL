@@ -57,7 +57,10 @@ describe("emitStaticSelector", () => {
 describe("emitWebServicesXml", () => {
   test("exposes Mutation Control as a web service", () => {
     const xml = emitWebServicesXml(cfg);
-    expect(xml).toContain("<ObjectType>Codeunit</ObjectType>");
+    // "CodeUnit" (capital U) — verified against the AL compiler's embedded
+    // TenantWebServicesV1.xsd and the AL extension's own "twebservices" snippet; the
+    // lowercase "Codeunit" this used to assert doesn't validate and gets silently dropped.
+    expect(xml).toContain("<ObjectType>CodeUnit</ObjectType>");
     expect(xml).toContain("<ObjectID>50001</ObjectID>");
     expect(xml).toContain("<ServiceName>MutationControl</ServiceName>");
     expect(xml).toContain("<Published>true</Published>");

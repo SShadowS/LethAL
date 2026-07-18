@@ -97,11 +97,18 @@ ${body}
 }
 
 export function emitWebServicesXml(cfg: SelectorConfig): string {
+  // ObjectType must be exactly "CodeUnit" (capital U) — verified against both the AL
+  // compiler's embedded TenantWebServicesV1(Runtime6).xsd (Microsoft.Dynamics.Nav.CodeAnalysis.dll,
+  // enum "Page"|"CodeUnit"|"Query") and the AL extension's own "twebservices" snippet
+  // (snippets/xml.json). The lowercase "Codeunit" this used to emit doesn't validate, so alc
+  // silently drops the file — it never appears in the compiled .app's package listing
+  // (confirmed 2026-07-18: absent from a real compiled fixture .app; the "MutationControl"
+  // service was never reachable at /ODataV4/ afterwards).
   return `<?xml version="1.0" encoding="utf-8"?>
 <ExportedData>
   <TenantWebServiceCollection>
     <TenantWebService>
-      <ObjectType>Codeunit</ObjectType>
+      <ObjectType>CodeUnit</ObjectType>
       <ObjectID>${cfg.controlId}</ObjectID>
       <ServiceName>MutationControl</ServiceName>
       <Published>true</Published>
