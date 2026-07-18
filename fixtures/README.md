@@ -54,7 +54,7 @@ nested `if`/`while` blocks (confirmed by `packages/builtin-tier1/tests/empty-blo
 | `IsOverBudget` | return-value | `exit(Amount>Budget)` → `exit(not(...))` | **killed** | **killed** | Negates every case; the 101-vs-100 assertion catches it. |
 | `IsOverBudget` | empty-block (body) | body → `begin end` | **killed** | **killed** | No `exit` call ⇒ always returns `false`; the 101-vs-100 assertion catches it. |
 | `ClampPercent` | conditional-boundary ×2 | `<`→`<=`, `>`→`>=` | survived | survived | `ClampPercentRuns` calls `ClampPercent(50)` but asserts nothing on the result. |
-| `ClampPercent` | ~~negate-conditional~~ | ~~`or`→`and`~~ | **not generated** | **not generated** | Known Layer 3 bug — see below. `(Value < 0) or (Value > 100)` is a parenthesized-operand logical expression; negate-conditional never targets it. |
+| `ClampPercent` | negate-conditional | `or`→`and` | survived | survived | `ClampPercentRuns` asserts nothing, and its input (50) satisfies neither operand, so `or` vs `and` is unobservable there regardless. |
 | `ClampPercent` | return-value | `exit(Value)`→`exit(0)` | survived | survived | Same — no assertion on the return value. |
 | `ClampPercent` | empty-block (body) | body → `begin end` | survived | survived | Same. |
 | `ApplyAudit` | void-method-call | removes `LogAudit(Amount)` call | survived | survived | `LogAudit` has no observable effect regardless of whether it runs. |
@@ -66,38 +66,43 @@ nested `if`/`while` blocks (confirmed by `packages/builtin-tier1/tests/empty-blo
 | `DiscountedPrice` | return-value | formula → `exit(0.0)` | **no-coverage** | survived | Same. |
 | `DiscountedPrice` | empty-block (body) | body → `begin end` | **no-coverage** | survived | Same. |
 
-**Totals (15 mutant sites):**
+**Totals (16 mutant sites):**
 
 | Backend | killed | survived | no-coverage | mutation score |
 |---|---|---|---|---|
-| bcdev (`coverage:"procedure"`) | 3 | 9 | 3 | 3/12 = 25% |
-| al-runner (`coverage:"none"`) | 3 | 12 | 0 | 3/15 = 20% |
+| bcdev (`coverage:"procedure"`) | 3 | 10 | 3 | 3/13 = 23.1% |
+| al-runner (`coverage:"none"`) | 3 | 13 | 0 | 3/16 = 18.75% |
 
 Both backends must reproduce this table exactly, and two consecutive runs against the same
 backend must be 100% verdict-identical (the determinism exit criterion — design.md §13).
 
 Verify with `bun packages/runner/src/cli.ts run --project fixtures/sandbox-app --tests
-fixtures/sandbox-tests --backend al-runner --dry-run` — it prints `15 mutant site(s)` and, per
-file/line, exactly one `lethal.negate-conditional` site (`SandboxLogic.Codeunit.al:22`, inside
-`LogAudit`), never two.
+fixtures/sandbox-tests --backend al-runner --dry-run` — it prints `16 mutant site(s)` and, per
+file/line, exactly two `lethal.negate-conditional` sites (`SandboxLogic.Codeunit.al:10` in
+`ClampPercent` and `:22` inside `LogAudit`).
 
-### Known Layer 3 bug: negate-conditional misses parenthesized-operand logical expressions
+### Fixed: parenthesized-operand logical expressions were silently skipped
 
-`packages/builtin-tier1/src/negate-conditional.ts`'s `findOperator()` looks up the logical
-operator via `node.childForFieldName("operator")` first, falling back to scanning
-`namedChildren` for an `*_operator`-kinded node. For a **parenthesized-operand** logical
-expression — `(Value < 0) or (Value > 100)`, as opposed to `Value < 0 or Value > 100` without
-the parens — the tree-sitter-al grammar surfaces a descendant comparison operator (`<` or `>`,
-from inside one of the parenthesized comparison_expressions) via that same `"operator"` field
-lookup on the outer `logical_expression` node, instead of returning `null` so the fallback scan
-can find the real `or`/`and` token. `targets()` then checks that wrong operator against
-`LOGICAL_FLIP` (which only has `"and"`/`"or"`), gets no match, and returns `false` — so the site
-is silently skipped rather than mutated. This is why `ClampPercent`'s
-`(Value < 0) or (Value > 100)` condition never produces a negate-conditional mutant (see the
-table above), and why the fixture has 15 mutant sites instead of the naively-expected 16.
+Until 2026-07-18 the fixture produced 15 sites, not 16, because `negate-conditional` never
+targeted `ClampPercent`'s `(Value < 0) or (Value > 100)`.
 
-Decision: **not fixed on the Layer 4 execution-runtime branch** — this is a Layer 3 operator bug,
-out of scope for Layer 4's execution runtime. Deferred to Layer 4.1/Layer 5.
+Root cause: both `negate-conditional` and `conditional-boundary` located their operator via
+`node.childForFieldName("operator")`, and tree-sitter-al surfaces that field from a
+**descendant** when the operands are parenthesized — for `(V < 0) or (V > 100)` it returns the
+nested `<`, not the top-level `or`. The `namedChildren` fallback missed it too, because the two
+node kinds disagree about what is "named":
+
+- `comparison_expression` `A = 0` → named `[identifier, comparison_operator, integer]`
+- `logical_expression` `A and B` → named `[identifier, identifier]` (`and` is **anonymous**)
+
+`targets()` then tested `<` against `LOGICAL_FLIP` (only `and`/`or`), found nothing, and skipped
+the site silently.
+
+Fix: `findOperatorToken` in `packages/builtin-tier1/src/mutate-helpers.ts`, shared by both
+operators. It reads `node.children` — which includes anonymous tokens, making both kinds
+uniformly `[left, operator, right]` — and takes the middle child, so it can only ever return the
+node's own operator, never a descendant's. Regression tests live in
+`tests/negate-conditional.test.ts` and `tests/conditional-boundary.test.ts`.
 
 ## Server preconditions for the bcdev backend (verified live 2026-07-18)
 

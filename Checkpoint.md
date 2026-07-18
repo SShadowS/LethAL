@@ -14,6 +14,16 @@
 > the bcdev itest needing a persistent results DB for version monotonicity; and
 > `BcDevMcpBackend` never closing its MCP client, so a *successful* run hung forever.
 > Server-side preconditions (dev-scope publishing, test-app symbols) are in `fixtures/README.md`.
+>
+> **Layer 4.1 (2026-07-18): the deferred Layer 3 operator bug is FIXED.** `negate-conditional`
+> and `conditional-boundary` read their operator via `childForFieldName("operator")`, which
+> tree-sitter-al surfaces from a *descendant* when operands are parenthesized — `(V < 0) or
+> (V > 100)` returned the nested `<`, so the site was skipped silently. Both now share
+> `findOperatorToken` in `packages/builtin-tier1/src/mutate-helpers.ts`, which reads
+> `node.children` (anonymous tokens included, so both node kinds are uniformly
+> `[left, operator, right]`) and takes the middle child. The fixture now yields **16** mutant
+> sites, not 15. Updated expected tables: **bcdev 3 killed / 10 survived / 3 no-coverage
+> (23.1%)**, **al-runner 3 / 13 / 0 (18.75%)**.
 
 # Superseded detail below (kept for the bug inventory)
 

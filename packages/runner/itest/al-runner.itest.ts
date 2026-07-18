@@ -62,14 +62,13 @@ const SELECTOR_IDS = { selectorId: 79199, controlId: 79198, tableId: 79197 };
 // al-runner reports coverage:"none", so the orchestrator never emits a "no-coverage" verdict —
 // the 3 DiscountedPrice mutants (uncovered by any test) join the rest as "survived".
 //
-// 15, not 16: a pre-existing Layer 3 bug (negate-conditional misses parenthesized-operand
-// logical expressions — see packages/builtin-tier1/src/negate-conditional.ts and the "Known
-// Layer 3 bug" note in fixtures/README.md) means ClampPercent's `(Value < 0) or (Value > 100)`
-// never generates a negate-conditional mutant. Deferred to Layer 4.1/Layer 5 — not fixed here.
+// 16 since the parenthesized-operand operator bug was fixed (findOperatorToken in
+// packages/builtin-tier1/src/mutate-helpers.ts): ClampPercent's `(Value < 0) or
+// (Value > 100)` now yields its negate-conditional mutant, which survives.
 const EXPECTED = {
-  totalMutantSites: 15,
+  totalMutantSites: 16,
   killed: 3,
-  survived: 12,
+  survived: 13,
   noCoverage: 0,
 };
 

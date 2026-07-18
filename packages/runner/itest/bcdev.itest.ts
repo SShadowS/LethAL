@@ -56,14 +56,15 @@ const SELECTOR_IDS = { selectorId: 79199, controlId: 79198, tableId: 79197 };
 // bcdev reports procedure-level coverage, so DiscountedPrice (never called by any test) is
 // reported as "no-coverage" rather than "survived".
 //
-// 15, not 16: a pre-existing Layer 3 bug (negate-conditional misses parenthesized-operand
-// logical expressions — see packages/builtin-tier1/src/negate-conditional.ts and the "Known
-// Layer 3 bug" note in fixtures/README.md) means ClampPercent's `(Value < 0) or (Value > 100)`
-// never generates a negate-conditional mutant. Deferred to Layer 4.1/Layer 5 — not fixed here.
+// 16 since the parenthesized-operand operator bug was fixed (findOperatorToken in
+// packages/builtin-tier1/src/mutate-helpers.ts): ClampPercent's `(Value < 0) or
+// (Value > 100)` now yields its negate-conditional mutant. It survives — ClampPercentRuns
+// calls ClampPercent(50) and asserts nothing, and 50 satisfies neither operand, so or/and
+// is not observable there anyway.
 const EXPECTED = {
-  totalMutantSites: 15,
+  totalMutantSites: 16,
   killed: 3,
-  survived: 9,
+  survived: 10,
   noCoverage: 3,
 };
 
