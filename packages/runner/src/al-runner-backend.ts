@@ -1,6 +1,8 @@
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { emitStaticSelector } from "@lethal/schemata";
+import { OneShotTransport } from "./al-runner-transport";
+import type { AlRunnerTransport } from "./al-runner-transport";
 import type {
   BackendCapabilities,
   BackendStatus,
@@ -30,11 +32,14 @@ export class AlRunnerBackend implements ExecutionBackend {
   // callers may drive activate()/run() directly against cfg.instrumentedDir)
   // activeDir() falls back to the statically configured instrumented dir.
   private deployedDir: string | undefined;
+  private readonly transport: AlRunnerTransport;
 
   constructor(
     private readonly cfg: AlRunnerConfig,
     private readonly spawn: SpawnFn = defaultSpawn,
-  ) {}
+  ) {
+    this.transport = new OneShotTransport(cfg.alRunnerPath, spawn);
+  }
 
   capabilities(): BackendCapabilities {
     return { coverage: "none", deploy: "none", isolation: "full-reset", authoritative: false };
@@ -73,110 +78,43 @@ export class AlRunnerBackend implements ExecutionBackend {
 
   async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
     const started = Date.now();
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    // Aborted on timeout so the losing side of the race below doesn't leak
-    // a still-running al-runner child process (see I8).
-    const controller = new AbortController();
-    try {
-      const argv = [
-        this.cfg.alRunnerPath,
-        "--run",
-        ref.method,
-        this.activeDir(),
-        this.cfg.testDir,
-        "--output-json",
-        // al-runner defaults to `codeunit` isolation (state shared within a
-        // codeunit across its test methods); force `method` so the actual
-        // behavior matches the `isolation: "full-reset"` capability this
-        // backend advertises below.
-        "--test-isolation",
-        "method",
-      ];
-      if (this.cfg.packagesDir) argv.push("--packages", this.cfg.packagesDir);
-      if (this.cfg.stubsDir) argv.push("--stubs", this.cfg.stubsDir);
-
-      const res = await Promise.race([
-        this.spawn(argv, { signal: controller.signal }),
-        new Promise<"timeout">((resolve) => {
-          timer = setTimeout(() => {
-            controller.abort();
-            resolve("timeout");
-          }, opts.timeoutMs);
-        }),
-      ]);
-      const durationMs = Date.now() - started;
-      if (res === "timeout") return { ref, outcome: "deadline-exceeded", durationMs };
-      if (res.exitCode === 2)
-        return { ref, outcome: "skip", durationMs, failureMessage: res.stdout || res.stderr };
-      if (res.exitCode === 3 || res.exitCode < 0) {
-        return { ref, outcome: "error", durationMs, failureMessage: res.stderr || res.stdout };
-      }
-      const parsed = parseAlRunnerOutput(res.stdout);
-      const t = parsed.find((x) => x.name === ref.method);
-      if (!t)
-        return {
-          ref,
-          outcome: "error",
-          durationMs,
-          failureMessage: "al-runner output missing the requested test",
-        };
-      const runnerTimedOut =
-        t.status === "fail" && t.message !== undefined && RUNNER_TIMEOUT_MESSAGE.test(t.message);
-      const outcome: TestOutcome =
-        t.status === "pass" ? "pass" : runnerTimedOut ? "timeout" : "fail";
-      return {
-        ref,
-        outcome,
-        // Wall-clock `durationMs` (process spawn -> exit), NOT `t.durationMs`
-        // (al-runner's in-VM test-body timing, e.g. ~30ms). Verified against
-        // a real install: al-runner re-transpiles + recompiles the WHOLE
-        // instrumented project from scratch on every invocation (~1.2s even
-        // for this tiny fixture), so the orchestrator's per-mutant timeout
-        // budget (`2 * this test's baseline durationMs`, see orchestrator.ts)
-        // must reflect that full round-trip cost. Using the in-VM figure
-        // instead produced a ~50ms budget against a ~1.2s real call — every
-        // mutant run then hit the Promise.race timeout before al-runner's
-        // process could even finish compiling, so nothing was ever actually
-        // killed.
-        durationMs,
-        ...(t.message !== undefined ? { failureMessage: t.message } : {}),
-      };
-    } catch (err) {
+    const res = await this.transport.send({
+      sourceDir: this.activeDir(),
+      testDir: this.cfg.testDir,
+      method: ref.method,
+      ...(this.cfg.packagesDir !== undefined ? { packagesDir: this.cfg.packagesDir } : {}),
+      ...(this.cfg.stubsDir !== undefined ? { stubsDir: this.cfg.stubsDir } : {}),
+      testTimeoutSeconds: Math.max(1, Math.ceil(opts.timeoutMs / 1000)),
+      deadlineMs: opts.timeoutMs,
+    });
+    const durationMs = Date.now() - started;
+    if (res.kind === "deadline") return { ref, outcome: "deadline-exceeded", durationMs };
+    if (res.kind === "skip")
+      return { ref, outcome: "skip", durationMs, failureMessage: res.detail };
+    if (res.kind === "error")
+      return { ref, outcome: "error", durationMs, failureMessage: res.detail };
+    const t = res.tests.find((x) => x.name === ref.method);
+    if (!t)
       return {
         ref,
         outcome: "error",
-        durationMs: Date.now() - started,
-        failureMessage: String(err),
+        durationMs,
+        failureMessage: "al-runner output missing the requested test",
       };
-    } finally {
-      clearTimeout(timer);
-    }
+    const runnerTimedOut =
+      t.status === "fail" && t.message !== undefined && RUNNER_TIMEOUT_MESSAGE.test(t.message);
+    const outcome: TestOutcome = t.status === "pass" ? "pass" : runnerTimedOut ? "timeout" : "fail";
+    return {
+      ref,
+      outcome,
+      // Wall-clock, NOT the runner's in-VM figure: the orchestrator derives each
+      // mutant's timeout budget from this and must include round-trip cost.
+      durationMs,
+      ...(t.message !== undefined ? { failureMessage: t.message } : {}),
+    };
   }
-}
 
-// Verified against a real al-runner install (2026-07-18): stdout with
-// --output-json is this envelope; there is no `codeunit` field on an entry,
-// and field names are `name`/`status` (not `method`/`result`).
-interface AlRunnerEnvelope {
-  tests?: AlRunnerTest[];
-  passed?: number;
-  failed?: number;
-  errors?: number;
-  total?: number;
-  exitCode?: number;
-}
-
-interface AlRunnerTest {
-  name: string;
-  status: string;
-  durationMs?: number;
-  message?: string;
-  stackTrace?: string;
-  alSourceLine?: number;
-  alSourceColumn?: number;
-}
-
-function parseAlRunnerOutput(stdout: string): AlRunnerTest[] {
-  const parsed = JSON.parse(stdout) as AlRunnerEnvelope;
-  return parsed.tests ?? [];
+  async close(): Promise<void> {
+    await this.transport.close();
+  }
 }
