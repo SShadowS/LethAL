@@ -5,6 +5,7 @@ export * from "./bcdev-backend";
 export * from "./discovery";
 export * from "./ms-inmemory-backend";
 export * from "./orchestrator";
+export * from "./pool";
 export * from "./publisher";
 export * from "./report";
 export * from "./selection";
