@@ -623,7 +623,15 @@ In `packages/runner/src/al-runner-backend.ts`: construct a `OneShotTransport` in
       method: ref.method,
       ...(this.cfg.packagesDir !== undefined ? { packagesDir: this.cfg.packagesDir } : {}),
       ...(this.cfg.stubsDir !== undefined ? { stubsDir: this.cfg.stubsDir } : {}),
-      testTimeoutSeconds: Math.max(1, Math.ceil(opts.timeoutMs / 1000)),
+      // Amended 2026-07-18 (review finding, user-approved). These two timers measure
+      // DIFFERENT things and must never be equal: deadlineMs bounds the whole invocation
+      // (al-runner recompiles the project on every call — seconds), while --test-timeout
+      // bounds only the test body. The original `Math.ceil(timeoutMs / 1000)` made the
+      // runner's timeout ALWAYS >= our deadline, so our timer always won the race and the
+      // runner-confirmed `timeout` outcome was unreachable — every mutant-induced hang
+      // would have been misfiled as infrastructure noise. Half the budget gives real margin.
+      // Budgets under ~2000ms clamp to 1s and the client may still win; acceptable.
+      testTimeoutSeconds: Math.max(1, Math.floor(opts.timeoutMs / 2000)),
       deadlineMs: opts.timeoutMs,
     });
     const durationMs = Date.now() - started;
