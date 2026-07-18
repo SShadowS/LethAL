@@ -91,6 +91,24 @@ describe("AlRunnerBackend.run", () => {
       expect(v.outcome).toBe(outcome);
     }
   });
+
+  // I8: a timed-out run must not leak the spawned child — the backend aborts
+  // an AbortSignal it hands to spawn() so the caller can kill the process.
+  test("timeout aborts the spawned child via AbortSignal", async () => {
+    let capturedSignal: AbortSignal | undefined;
+    const hangingSpawn = (
+      _argv: readonly string[],
+      opts?: { signal?: AbortSignal },
+    ): Promise<{ exitCode: number; stdout: string; stderr: string }> => {
+      capturedSignal = opts?.signal;
+      return new Promise(() => {}); // never resolves — simulates a hung child
+    };
+    const { backend } = await makeBackend(hangingSpawn);
+    const v = await backend.run(ref, { coverage: "none", timeoutMs: 20 });
+    expect(v.outcome).toBe("timeout");
+    expect(capturedSignal).toBeDefined();
+    expect(capturedSignal?.aborted).toBe(true);
+  });
 });
 
 describe("AlRunnerBackend capabilities", () => {

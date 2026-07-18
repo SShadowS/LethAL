@@ -68,6 +68,9 @@ export class AlRunnerBackend implements ExecutionBackend {
   async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
     const started = Date.now();
     let timer: ReturnType<typeof setTimeout> | undefined;
+    // Aborted on timeout so the losing side of the race below doesn't leak
+    // a still-running al-runner child process (see I8).
+    const controller = new AbortController();
     try {
       const argv = [
         this.cfg.alRunnerPath,
@@ -81,9 +84,12 @@ export class AlRunnerBackend implements ExecutionBackend {
       if (this.cfg.stubsDir) argv.push("--stubs", this.cfg.stubsDir);
 
       const res = await Promise.race([
-        this.spawn(argv),
+        this.spawn(argv, { signal: controller.signal }),
         new Promise<"timeout">((resolve) => {
-          timer = setTimeout(() => resolve("timeout"), opts.timeoutMs);
+          timer = setTimeout(() => {
+            controller.abort();
+            resolve("timeout");
+          }, opts.timeoutMs);
         }),
       ]);
       const durationMs = Date.now() - started;

@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 export type SpawnFn = (
   argv: readonly string[],
+  opts?: { signal?: AbortSignal },
 ) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
 
 export interface PublisherConfig {
@@ -16,8 +17,14 @@ export interface PublisherConfig {
   readonly tenant?: string;
 }
 
-const bunSpawn: SpawnFn = async (argv) => {
-  const proc = Bun.spawn([...argv], { stdout: "pipe", stderr: "pipe" });
+const bunSpawn: SpawnFn = async (argv, opts) => {
+  // Bun.spawn supports `signal` natively (kills the child with SIGTERM when
+  // the AbortSignal fires) — no manual proc.kill() wiring needed.
+  const proc = Bun.spawn([...argv], {
+    stdout: "pipe",
+    stderr: "pipe",
+    ...(opts?.signal !== undefined ? { signal: opts.signal } : {}),
+  });
   const [stdout, stderr] = await Promise.all([
     new Response(proc.stdout).text(),
     new Response(proc.stderr).text(),
