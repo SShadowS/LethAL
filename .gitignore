@@ -7,3 +7,7 @@ coverage/
 *.log
 .env
 .env.local
+launch.local.json
+lethal.sqlite
+lethal.config.local.json
+*.app

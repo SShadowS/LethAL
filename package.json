@@ -9,7 +9,9 @@
   "scripts": {
     "test": "bun test",
     "typecheck": "tsc --build --force",
-    "lint": "biome check ."
+    "lint": "biome check .",
+    "itest:alrunner": "bun packages/runner/itest/al-runner.itest.ts",
+    "itest:bcdev": "bun packages/runner/itest/bcdev.itest.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",

@@ -1,6 +1,6 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": { "outDir": "dist" },
-  "include": ["src/**/*", "tests/**/*"],
+  "include": ["src/**/*", "tests/**/*", "itest/**/*"],
   "references": [{ "path": "../engine" }, { "path": "../schemata" }, { "path": "../builtin-tier1" }]
 }

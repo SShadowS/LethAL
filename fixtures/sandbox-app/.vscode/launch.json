@@ -1,0 +1,21 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "LethAL Sandbox (placeholder — copy to launch.local.json and fill in real values)",
+      "type": "al",
+      "request": "launch",
+      "environmentType": "OnPrem",
+      "server": "http://REPLACE_ME",
+      "serverInstance": "REPLACE_ME",
+      "port": 7049,
+      "tenant": "default",
+      "authentication": "UserPassword",
+      "startupObjectId": 22,
+      "startupObjectType": "Page",
+      "schemaUpdateMode": "ForceSync",
+      "breakOnError": true,
+      "breakOnRecordWrite": "None"
+    }
+  ]
+}

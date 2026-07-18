@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "main": "src/index.ts",
+  "bin": {
+    "lethal": "src/cli.ts"
+  },
   "dependencies": {
     "@lethal/engine": "workspace:*",
     "@lethal/schemata": "workspace:*",
