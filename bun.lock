@@ -38,11 +38,16 @@
     "packages/runner": {
       "name": "@lethal/runner",
       "version": "0.0.0",
+      "bin": {
+        "lethal": "src/cli.ts",
+      },
       "dependencies": {
         "@lethal/builtin-tier1": "workspace:*",
         "@lethal/engine": "workspace:*",
         "@lethal/schemata": "workspace:*",
         "@modelcontextprotocol/sdk": "^1.12.0",
+      },
+      "devDependencies": {
         "zod": "^3.25.76",
       },
     },
