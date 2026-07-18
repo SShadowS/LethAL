@@ -5,6 +5,7 @@ import {
   type ALSyntaxNode,
   type MutationSpec,
   buildSemanticContext,
+  findEnclosingStatement,
   initParser,
   parseAL,
   visit,
@@ -18,7 +19,7 @@ import {
   writeInstrumentedProject,
 } from "@lethal/schemata";
 import type { ExecutionBackend, TestMethodRef, TestVerdict } from "./backend";
-import { discoverTests, findMissingTestIsolation } from "./discovery";
+import { discoverTests } from "./discovery";
 import { buildReport } from "./report";
 import type { SessionOutcome, SessionReport } from "./report";
 import {
@@ -88,24 +89,51 @@ interface SiteEntry extends OverlapSite {
   readonly sourceFile: InstrumentedFile;
 }
 
+/**
+ * The range `batchByOverlap` must treat as "claimed" by this spec — NOT
+ * always `spec.before`'s own range.
+ *
+ * `schemata`'s compiler (`compile.ts`'s `applyWrap`/`applyDuplicate`, used
+ * for `statement-position`/`short-circuit-operand` specs) doesn't rewrite
+ * `spec.before` directly: it walks up to the narrowest *enclosing statement*
+ * (`findEnclosingStatement`) and replaces that whole statement. Two specs
+ * whose `before` nodes are disjoint sub-expressions of the SAME statement
+ * (e.g. `conditional-boundary` firing on both sides of
+ * `(Value < 0) or (Value > 100)`) therefore don't overlap by `before`
+ * range, but collide at compile time on the same statement node
+ * (`compileSchemataForFile`'s "two specs resolved to the same AST node"
+ * throw) if the naive `before`-range overlap check lets them share a batch.
+ * Widening the overlap range to the resolved statement here makes
+ * `batchByOverlap` split them into separate batches instead.
+ *
+ * `expression-position` (lift) specs are unaffected: they never go through
+ * `findEnclosingStatement` — multiple lifts landing in the same code block
+ * are coordinated into one merged rewrite by
+ * `compile.ts`'s `commitLiftRewrites`, not a collision.
+ */
+function overlapRangeOf(spec: MutationSpec): { startIndex: number; endIndex: number } {
+  if (spec.parentContext === "expression-position") {
+    return { startIndex: spec.before.startIndex, endIndex: spec.before.endIndex };
+  }
+  const statement = findEnclosingStatement(spec.before);
+  return statement
+    ? { startIndex: statement.startIndex, endIndex: statement.endIndex }
+    : { startIndex: spec.before.startIndex, endIndex: spec.before.endIndex };
+}
+
 export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   const caps = cfg.backend.capabilities();
   const status = await cfg.backend.status();
   if (!status.ok) throw new Error(`backend not ready: ${status.details}`);
 
-  // Session-isolation backends activate/deactivate a mutant per test method
-  // within one long-lived session; without `TestIsolation = Function;` on
-  // every [Test] codeunit, BC does not isolate that swap per test and a
-  // mutant's activation state can leak across test methods. full-reset
-  // backends (a fresh process per run) have no such leak, so skip entirely.
-  if (caps.isolation === "session") {
-    const missingIsolation = await findMissingTestIsolation(cfg.testDir);
-    if (missingIsolation.length > 0) {
-      throw new Error(
-        `backend requires TestIsolation = Function; on every [Test] codeunit (session-isolation backend activates mutants per test method) — missing on: ${missingIsolation.join(", ")}`,
-      );
-    }
-  }
+  // NOTE: a prior preflight here scanned [Test] codeunit sources for
+  // `TestIsolation = Function;` and aborted session-isolation backends when
+  // it was missing. That was factually wrong: `TestIsolation` is a
+  // TestRunner-codeunit property in real BC (AL0223 if set on a
+  // `Subtype = Test` codeunit) and cannot be verified by scanning test
+  // sources — it's chosen by whichever TestRunner codeunit invokes the
+  // tests. Removed; isolation is a TestRunner-side concern verified out of
+  // band, not something Layer 4 checks.
 
   const tests = await discoverTests(cfg.testDir);
   if (tests.length === 0) throw new Error("no tests discovered");
@@ -118,13 +146,16 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
 
   const allFiles = await generateMutationSet(cfg.projectDir);
   const allSpecs: SiteEntry[] = allFiles.flatMap((f) =>
-    f.specs.map((spec) => ({
-      file: f.path,
-      startIndex: spec.before.startIndex,
-      endIndex: spec.before.endIndex,
-      spec,
-      sourceFile: f,
-    })),
+    f.specs.map((spec) => {
+      const site = overlapRangeOf(spec);
+      return {
+        file: f.path,
+        startIndex: site.startIndex,
+        endIndex: site.endIndex,
+        spec,
+        sourceFile: f,
+      };
+    }),
   );
   const specBatches = batchByOverlap(allSpecs);
 

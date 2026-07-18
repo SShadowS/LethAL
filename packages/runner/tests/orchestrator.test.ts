@@ -26,18 +26,6 @@ const TARGET_AL = `codeunit 79000 "Sandbox Logic"
 const TEST_AL = `codeunit 79100 "Sandbox Tests"
 {
     Subtype = Test;
-    TestIsolation = Function;
-
-    [Test]
-    procedure OverBudgetDetected()
-    begin
-    end;
-}
-`;
-
-const TEST_AL_NO_ISOLATION = `codeunit 79100 "Sandbox Tests"
-{
-    Subtype = Test;
 
     [Test]
     procedure OverBudgetDetected()
@@ -264,28 +252,6 @@ describe("runSession — C3 batch app.json + full source copy", () => {
     const store = new ResultsStore(":memory:");
     await expect(runSession({ backend, store, ...dirs, selectorIds })).rejects.toThrow(/app\.json/);
     expect(backend.deploys.length).toBe(0); // aborted before ever calling deploy()
-  });
-});
-
-describe("runSession — I6 TestIsolation preflight", () => {
-  test("missing TestIsolation aborts for a session-isolation backend", async () => {
-    const dirs = await makeProject(TEST_AL_NO_ISOLATION);
-    const backend = new StubBackend(CAPS_NST, () => "pass", ["IsOverBudget"]);
-    const store = new ResultsStore(":memory:");
-    await expect(runSession({ backend, store, ...dirs, selectorIds })).rejects.toThrow(
-      /TestIsolation/,
-    );
-  });
-
-  test("missing TestIsolation does not abort a full-reset backend", async () => {
-    const dirs = await makeProject(TEST_AL_NO_ISOLATION);
-    const backend = new StubBackend(
-      { coverage: "none", deploy: "none", isolation: "full-reset", authoritative: false },
-      () => "pass",
-    );
-    const store = new ResultsStore(":memory:");
-    const report = await runSession({ backend, store, ...dirs, selectorIds });
-    expect(report.baselineGreen).toBe(true);
   });
 });
 

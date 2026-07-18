@@ -1,7 +1,6 @@
 codeunit 79100 "Sandbox Tests"
 {
     Subtype = Test;
-    TestIsolation = Function;
 
     [Test]
     procedure PostingUpdatesTotal()
