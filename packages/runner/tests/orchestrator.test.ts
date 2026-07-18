@@ -239,7 +239,10 @@ describe("runSession — C3 batch app.json + full source copy", () => {
       version: string;
     };
     expect(appJson.id).toBe(APP_ID); // target app id preserved (spec §5)
-    expect(appJson.version).toMatch(/^1\.0\.0\.\d+$/); // 1.0.<batchIdx>.<runId>
+    // 1.0.<runId>.<batchIdx> — run BEFORE batch, so versions increase across runs.
+    // BC rejects publishing a version lower than the installed one, which the
+    // original 1.0.<batch>.<run> order violated on every run after the first.
+    expect(appJson.version).toMatch(/^1\.0\.\d+\.0$/);
 
     const copied = await readFile(join(batchDir, "SandboxNoOp.Codeunit.al"), "utf8");
     expect(copied).toBe(NO_MUTANTS_AL); // writeInstrumentedProject never wrote this file

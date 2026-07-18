@@ -17,3 +17,5 @@ lethal.config.local.json
 
 # AL symbol packages (large, machine-local)
 .alpackages/
+lethal.sqlite-shm
+lethal.sqlite-wal

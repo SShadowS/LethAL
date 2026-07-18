@@ -118,7 +118,10 @@ describe("BcDevMcpBackend.run", () => {
     try {
       const v = await backend.run(ref, { coverage: "procedure", timeoutMs: 5000 });
       expect(v.outcome).toBe("pass");
-      expect(v.durationMs).toBe(42);
+      // Wall-clock, not the payload's in-VM 42ms: the orchestrator derives each
+      // mutant's timeout budget from this, so it must include round-trip overhead.
+      expect(v.durationMs).not.toBe(42);
+      expect(v.durationMs).toBeGreaterThanOrEqual(0);
       expect(v.coverage?.entries[0]?.procedure).toBe("Post");
       expect(v.coverage?.entries[0]?.objectType).toBe("Codeunit");
     } finally {

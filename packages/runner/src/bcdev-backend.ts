@@ -216,7 +216,16 @@ export class BcDevMcpBackend implements ExecutionBackend {
       return {
         ref,
         outcome,
-        durationMs: r.durationMs,
+        // Wall-clock (MCP call dispatch -> result), NOT `r.durationMs`, which is
+        // BC's in-VM test-body time only (tens of ms) and excludes the publish/
+        // session/round-trip overhead that dominates a real invocation (seconds).
+        // The orchestrator derives each mutant run's timeout budget from the
+        // baseline `durationMs` (`2 * baseline`, see orchestrator.ts), so reporting
+        // in-VM time starves every mutant run into a client-side timeout — and each
+        // abandoned timeout leaves a test run in flight server-side, so the next
+        // call fails with "A test run is already running". Same bug and same fix as
+        // AlRunnerBackend.run().
+        durationMs: Date.now() - started,
         ...(outcome === "fail" && r.output ? { failureMessage: r.output } : {}),
         ...(coverage !== undefined ? { coverage } : {}),
       };

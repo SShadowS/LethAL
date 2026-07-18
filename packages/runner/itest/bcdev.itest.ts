@@ -153,7 +153,13 @@ async function runOnce(scratchRoot: string): Promise<SessionReport> {
     activation,
   );
 
-  const store = new ResultsStore(":memory:");
+  // Persistent, NOT `:memory:` — deliberately. The instrumented app's version is
+  // `1.0.<runId>.<batchIdx>` and BC refuses to publish a version lower than the one
+  // already installed. `runId` comes from this DB, so an in-memory store restarts it
+  // at 1 on every invocation and republishes a version below whatever the previous
+  // run left on the server, failing every deploy. An on-disk DB keeps runId strictly
+  // increasing across invocations. See fixtures/README.md "App version monotonicity".
+  const store = new ResultsStore(join(PROJECT_DIR, "lethal.sqlite"));
   try {
     return await runSession({
       backend,

@@ -429,9 +429,19 @@ async function pathExists(p: string): Promise<boolean> {
 
 /**
  * Spec §5: the instrumented app must keep the target app's id and
- * version-bump per batch (`1.0.<batchIdx>.<runId>`), and must contain every
+ * version-bump per batch (`1.0.<runId>.<batchIdx>`), and must contain every
  * project source file so `alc` can actually compile it — not just the
  * files `writeInstrumentedProject` wrote for this batch's mutants.
+ *
+ * Version ordering is `run` THEN `batch`, and that order is load-bearing:
+ * BC refuses to publish an app version lower than the one already installed
+ * ("Cannot install the extension ... because a newer version N was already
+ * installed" — verified live). The original spec scheme `1.0.<batch>.<run>`
+ * is non-monotonic ACROSS runs: run 5's batch 0 (1.0.0.5) is lower than run
+ * 4's batch 2 (1.0.2.4), so every run after the first failed to deploy any
+ * batch below the previous run's highest batch index. `runId` comes from the
+ * results DB and strictly increases, so `1.0.<runId>.<batchIdx>` increases
+ * both within a run and across runs.
  *
  * Throws (aborting the whole session, uncaught by the per-batch deploy
  * try/catch below) if the target project has no `app.json` — there's no
@@ -462,7 +472,7 @@ async function prepareBatchProject(
         `${err instanceof Error ? err.message : String(err)}`,
     );
   }
-  manifest.version = `1.0.${batchIdx}.${runId}`;
+  manifest.version = `1.0.${runId}.${batchIdx}`;
   await writeFile(join(batchDir, "app.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
 
   // writeInstrumentedProject only wrote files with >=1 mutant spec in this
