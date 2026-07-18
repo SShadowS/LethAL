@@ -259,19 +259,27 @@ Apply the same treatment in the baseline loop: a baseline test returning `deadli
 
 - [ ] **Step 7: Count it distinctly in the report**
 
-In `packages/runner/src/report.ts`, add `deadlineExceeded: number` to the `counts` interface, initialise it to `0` in the counts object, and add a module constant plus a branch in the `error` case:
+In `packages/runner/src/report.ts`, add `deadlineExceeded: number` to the `counts` interface and initialise it to `0`.
+
+**Amended 2026-07-18 (review finding, user-approved deviation from the original step).** Do NOT count by string-matching `failureNote`. `failureNote` is not owned by one code path — the batch-deploy-failure handler at `orchestrator.ts:217-222` sets it from arbitrary backend text (`String(err)`) for every mutant in the batch, and those outcomes reach `buildReport()`. Counting on that text lets unrelated errors corrupt the diagnostic.
+
+Instead add an explicit discriminator to the internal `SessionOutcome` record:
 
 ```ts
-const DEADLINE_PREFIX = "deadline exceeded";
+  readonly cause?: "deadline-exceeded" | "unstable";
 ```
 
-In the `case "error":` arm, alongside the existing unstable check:
+Set it at the two orchestrator sites that own those meanings (the `deadline-exceeded` branch added in Step 6, and the unstable-test confirmation branch), and count structurally:
 
 ```ts
         counts.errors++;
-        if (o.failureNote?.startsWith(UNSTABLE_PREFIX)) counts.unstable++;
-        if (o.failureNote?.startsWith(DEADLINE_PREFIX)) counts.deadlineExceeded++;
+        if (o.cause === "unstable") counts.unstable++;
+        if (o.cause === "deadline-exceeded") counts.deadlineExceeded++;
 ```
+
+Remove BOTH `UNSTABLE_PREFIX` and any `DEADLINE_PREFIX` string matching — `counts.unstable` has the identical weakness and moves to the same mechanism. `failureNote` remains the human-readable message; only the counting changes.
+
+Add a test proving it: a batch deploy failure whose thrown value stringifies to text starting with `"deadline exceeded"` must NOT increment `counts.deadlineExceeded`, while still counting as an error.
 
 In `renderConsole`, extend the summary line so the number is visible:
 
