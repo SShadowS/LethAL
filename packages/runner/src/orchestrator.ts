@@ -181,7 +181,16 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // server process) that is reused across every batch and disposed exactly
   // once in the `finally` below. Constructing a fresh set per batch would
   // leak batches × workers instances/processes instead of `workers`.
-  let workerBackends: readonly ExecutionBackend[] = [];
+  //
+  // Pushed one at a time rather than built via `Array.from` in one
+  // expression: a real factory (Task 7's) does directory/process setup that
+  // can throw partway through — e.g. factory(2) fails after factory(0) and
+  // factory(1) already spun up. Array.from would discard everything built so
+  // far along with the throw, leaking those already-constructed instances
+  // since the `finally` below only ever sees whatever `workerBackends` was
+  // last assigned. Pushing into a pre-declared array means the ones built
+  // before the failure are still visible to (and disposed by) the `finally`.
+  const workerBackends: ExecutionBackend[] = [];
 
   try {
     if (workers > 1) {
@@ -189,7 +198,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       if (factory === undefined) {
         throw new Error("runSession: workers > 1 requires backendFactory");
       }
-      workerBackends = Array.from({ length: workers }, (_, i) => factory(i));
+      for (let i = 0; i < workers; i++) {
+        workerBackends.push(factory(i));
+      }
     }
     for (const [batchIdx, batchSpecs] of specBatches.entries()) {
       // 1. write instrumented project for THIS batch's specs only
@@ -348,18 +359,24 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
             if (shard.length === 0) return;
             const backend = workerBackends[i];
             if (backend === undefined) return; // defensive: shards.length === workerBackends.length
-            // Mirror the sequential deploy try/catch above (step 3)
-            // exactly: a deploy failure — on a worker's OWN backend/outputDir
-            // just as much as on cfg.backend — records every mutant in THIS
-            // shard as an error and moves on, rather than rejecting the
-            // whole fan-out and aborting the session. The same failure must
-            // not have a different outcome purely because it happened on a
-            // worker backend instead of cfg.backend.
+            // Mirror the sequential deploy try/catch above (step 3), but NOT
+            // verbatim: step 3 runs BEFORE step 5's coverage filter, so
+            // iterating all of `execute` there is correct — nothing has been
+            // recorded yet. This catch runs AFTER step 5, and `shard` (a
+            // slice of `execute`) still includes mutants step 5 already
+            // recorded as `no-coverage`. Skipping those here (same
+            // `perMutantTests.get(...) === undefined` guard
+            // `runMutantsOnBackend` uses) avoids double-recording an
+            // uncovered mutant as `error` too — `mutants` has no unique
+            // constraint on (run_id, mutant_code), so a duplicate INSERT
+            // would corrupt the report silently rather than fail loudly.
             try {
               await compileLimit.run(() => backend.deploy(batchDir));
             } catch (err) {
-              for (const m of shard)
+              for (const m of shard) {
+                if (perMutantTests.get(m.mutantId) === undefined) continue; // already recorded no-coverage
                 record(cfg.store, runId, m, "error", outcomes, batchIdx, undefined, String(err));
+              }
               return;
             }
             await runMutantsOnBackend({

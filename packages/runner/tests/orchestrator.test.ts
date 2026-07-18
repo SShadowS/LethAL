@@ -584,6 +584,53 @@ describe("runSession — parallel workers", () => {
     store.close();
   });
 
+  test("a worker deploy failure does not double-record a mutant step 5 already marked no-coverage", async () => {
+    const dirs = await makeProject();
+    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
+    const store = new ResultsStore(":memory:");
+    // Procedure-level coverage (CAPS_NST), covering ONLY IsOverBudget's
+    // procedure — IsUnderBudget's mutant is therefore uncovered and already
+    // recorded "no-coverage" by step 5, before the per-mutant fan-out ever
+    // runs. shardEvenly's round-robin sends IsOverBudget's mutant (lower
+    // startIndex) to worker 0 and IsUnderBudget's (the uncovered one) to
+    // worker 1. Worker 1's backend always fails to deploy: without the
+    // `perMutantTests.get(...) === undefined` skip in the deploy-failure
+    // catch, the uncovered IsUnderBudget mutant would be recorded a SECOND
+    // time as "error" — `mutants` has no unique constraint on (run_id,
+    // mutant_code), so `recordMutant`'s plain INSERT would silently
+    // duplicate the row rather than fail loudly.
+    const make = (workerIndex: number) =>
+      new StubBackend(
+        CAPS_NST,
+        (mutant) => (mutant === null ? "pass" : "fail"),
+        ["IsOverBudget"],
+        workerIndex === 1 ? "boom: worker 1 could not deploy" : undefined,
+      );
+    const report = await runSession({
+      backend: make(-1),
+      backendFactory: make,
+      store,
+      ...dirs,
+      selectorIds,
+      workers: 2,
+    });
+    // 3 batches, 2 mutants each = 6 total — never 9 (which would mean
+    // IsUnderBudget's mutant landed under both no-coverage and error).
+    expect(report.mutants.length).toBe(6);
+    expect(report.counts.noCoverage).toBe(3); // IsUnderBudget's mutant, once per batch
+    expect(report.counts.errors).toBe(0); // never re-recorded via worker 1's deploy failure
+    expect(report.counts.killed).toBe(3); // IsOverBudget's mutant, worker 0 deploys fine
+    // Belt-and-suspenders: no single mutant identity appears under both verdicts.
+    const noCoverageKeys = new Set(
+      report.mutants.filter((m) => m.verdict === "no-coverage").map((m) => `${m.file}:${m.line}`),
+    );
+    const errorKeys = new Set(
+      report.mutants.filter((m) => m.verdict === "error").map((m) => `${m.file}:${m.line}`),
+    );
+    for (const k of noCoverageKeys) expect(errorKeys.has(k)).toBe(false);
+    store.close();
+  });
+
   test("a shard's transport-error abort drains sibling shards before rethrowing", async () => {
     const root = await mkdtemp(join(tmpdir(), "lethal-orch-parallel-i7-"));
     const dbPath = join(root, "results.sqlite");
