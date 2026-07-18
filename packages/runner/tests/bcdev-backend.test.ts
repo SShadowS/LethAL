@@ -1,10 +1,15 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { MutationControlClient } from "../src/activation";
 import { BcDevMcpBackend } from "../src/bcdev-backend";
 import { Publisher } from "../src/publisher";
+import { buildFakeApp } from "./helpers/fake-app";
 
 const ref = { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "PostingUpdatesTotal" };
 
@@ -38,26 +43,150 @@ function makeBackend(
   );
 }
 
+/**
+ * Like `makeBackend`, but also wires a `Publisher` whose fake "alc.exe" spawn writes a real
+ * (hand-built) `.app` zip to the expected output path and calls `backend.deploy()` — needed
+ * because `run()`'s coverage resolution reads the compiled app's own `SymbolReference.json`
+ * (see app-package.ts), populated only by `deploy()`. Returns the backend plus a cleanup
+ * function the caller must run (removes the temp dir the fake compile wrote into).
+ */
+async function makeBackendWithDeploy(
+  runHandler: (args: unknown) => unknown,
+  symbolReference: unknown,
+  instrumentedDir?: string,
+): Promise<{ backend: BcDevMcpBackend; cleanup: () => Promise<void> }> {
+  const server = new McpServer({ name: "fake-bc-dev", version: "0.0.0" });
+  server.registerTool("bcdev_test_run", { inputSchema: anyArgs }, async (args: unknown) => ({
+    content: [{ type: "text", text: JSON.stringify(await runHandler(args)) }],
+  }));
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  void server.connect(serverTransport);
+
+  const outputDir = await mkdtemp(join(tmpdir(), "lethal-bcdev-backend-test-"));
+  const appPath = join(outputDir, "lethal-instrumented.app");
+  const fakeSpawn = async (argv: readonly string[]) => {
+    if (argv.some((a) => a.includes("alc.exe"))) {
+      await Bun.write(appPath, buildFakeApp(symbolReference));
+    }
+    return { exitCode: 0, stdout: "", stderr: "" };
+  };
+  const publisher = new Publisher(
+    {
+      alcPath: "C:/fake/alc.exe",
+      altoolPath: "C:/fake/altool.exe",
+      packageCachePath: "C:/fake/.alpackages",
+      outputDir,
+      server: "http://bc",
+      serverInstance: "BC",
+      username: "u",
+      password: "p",
+    },
+    fakeSpawn,
+  );
+  const backend = new BcDevMcpBackend(
+    { mcpCommand: ["unused"], project: "/al", server: "http://bc", serverInstance: "BC" },
+    () => clientTransport,
+    publisher,
+  );
+  await backend.deploy(instrumentedDir ?? outputDir);
+  return { backend, cleanup: () => rm(outputDir, { recursive: true, force: true }) };
+}
+
 describe("BcDevMcpBackend.run", () => {
-  test("maps a passing result with coverage", async () => {
-    const backend = makeBackend(() => ({
-      results: [
-        {
-          codeunitId: 79100,
-          method: "PostingUpdatesTotal",
-          outcome: "pass",
-          durationMs: 42,
-          coverage: {
-            granularity: "procedure",
-            entries: [{ objectType: "Codeunit", objectId: 70000, procedure: "Post" }],
+  test("maps a passing result and resolves procedure coverage from the compiled app", async () => {
+    const { backend, cleanup } = await makeBackendWithDeploy(
+      () => ({
+        results: [
+          {
+            codeunitId: 79100,
+            method: "PostingUpdatesTotal",
+            status: "passed",
+            durationMs: 42,
+            output: "",
           },
-        },
-      ],
-    }));
-    const v = await backend.run(ref, { coverage: "procedure", timeoutMs: 5000 });
-    expect(v.outcome).toBe("pass");
-    expect(v.durationMs).toBe(42);
-    expect(v.coverage?.entries[0]?.procedure).toBe("Post");
+        ],
+        coverage: [
+          {
+            testObjectId: 79100,
+            testMethodId: 111,
+            coveredProcedures: [{ objectType: 5, objectId: 70000, methodId: 222 }],
+          },
+        ],
+      }),
+      { Codeunits: [{ Id: 70000, Name: "Some Codeunit", Methods: [{ Id: 222, Name: "Post" }] }] },
+    );
+    try {
+      const v = await backend.run(ref, { coverage: "procedure", timeoutMs: 5000 });
+      expect(v.outcome).toBe("pass");
+      expect(v.durationMs).toBe(42);
+      expect(v.coverage?.entries[0]?.procedure).toBe("Post");
+      expect(v.coverage?.entries[0]?.objectType).toBe("Codeunit");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("falls back to crediting local procedures when a methodId can't be resolved by name", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-bcdev-backend-local-"));
+    await Bun.write(
+      join(dir, "SandboxLogic.Codeunit.al"),
+      [
+        'codeunit 79000 "Sandbox Logic"',
+        "{",
+        "    procedure ApplyAudit(Amount: Decimal)",
+        "    begin",
+        "        LogAudit(Amount);",
+        "    end;",
+        "",
+        "    local procedure LogAudit(Amount: Decimal)",
+        "    begin",
+        "    end;",
+        "}",
+        "",
+      ].join("\n"),
+    );
+    const { backend, cleanup } = await makeBackendWithDeploy(
+      () => ({
+        results: [
+          {
+            codeunitId: 79100,
+            method: "ClampPercentRuns",
+            status: "passed",
+            durationMs: 1,
+            output: "",
+          },
+        ],
+        coverage: [
+          {
+            testObjectId: 79100,
+            testMethodId: 111,
+            // methodId 999 belongs to LogAudit but is absent from SymbolReference.json (it's
+            // `local`) — only ApplyAudit's own methodId (333) resolves directly.
+            coveredProcedures: [
+              { objectType: 5, objectId: 79000, methodId: 333 },
+              { objectType: 5, objectId: 79000, methodId: 999 },
+            ],
+          },
+        ],
+      }),
+      {
+        Codeunits: [
+          { Id: 79000, Name: "Sandbox Logic", Methods: [{ Id: 333, Name: "ApplyAudit" }] },
+        ],
+      },
+      dir,
+    );
+    try {
+      const v = await backend.run(
+        { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "ClampPercentRuns" },
+        { coverage: "procedure", timeoutMs: 5000 },
+      );
+      const procedures = v.coverage?.entries.map((e) => e.procedure).sort();
+      expect(procedures).toEqual(["ApplyAudit", "LogAudit"]);
+    } finally {
+      await cleanup();
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   test("forwards codeunit/method restriction and connection params", async () => {
@@ -66,7 +195,13 @@ describe("BcDevMcpBackend.run", () => {
       seen = args;
       return {
         results: [
-          { codeunitId: 79100, method: "PostingUpdatesTotal", outcome: "pass", durationMs: 1 },
+          {
+            codeunitId: 79100,
+            method: "PostingUpdatesTotal",
+            status: "passed",
+            durationMs: 1,
+            output: "",
+          },
         ],
       };
     });
@@ -86,9 +221,9 @@ describe("BcDevMcpBackend.run", () => {
         {
           codeunitId: 79100,
           method: "PostingUpdatesTotal",
-          outcome: "fail",
+          status: "failed",
           durationMs: 7,
-          failureMessage: "expected 2, got 1",
+          output: "expected 2, got 1",
         },
       ],
     }));
@@ -110,6 +245,40 @@ describe("BcDevMcpBackend.run", () => {
     const v = await backend.run(ref, { coverage: "none", timeoutMs: 5000 });
     expect(v.outcome).toBe("error");
     expect(v.failureMessage).toContain("NST unreachable");
+  });
+});
+
+describe("BcDevMcpBackend env passthrough", () => {
+  // StdioClientTransport's spawn only inherits a fixed OS allowlist (getDefaultEnvironment())
+  // unless an explicit `env` is passed — cfg.env (e.g. BC_DEV_USER/BC_DEV_PASSWORD) must reach
+  // whatever builds the transport, merged over that default rather than replacing it.
+  test("cfg.env reaches the transport factory, merged over the default environment", async () => {
+    let capturedEnv: Record<string, string> | undefined;
+    const server = new McpServer({ name: "fake-bc-dev", version: "0.0.0" });
+    server.registerTool("bcdev_status", { inputSchema: anyArgs }, async () => ({
+      content: [{ type: "text", text: "ok" }],
+    }));
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    void server.connect(serverTransport);
+    const backend = new BcDevMcpBackend(
+      {
+        mcpCommand: ["unused"],
+        project: "/al",
+        server: "http://bc",
+        serverInstance: "BC",
+        env: { BC_DEV_USER: "sshadows", BC_DEV_PASSWORD: "1234" },
+      },
+      (env) => {
+        capturedEnv = env;
+        return clientTransport;
+      },
+    );
+    await backend.status();
+    expect(capturedEnv).toEqual({
+      ...getDefaultEnvironment(),
+      BC_DEV_USER: "sshadows",
+      BC_DEV_PASSWORD: "1234",
+    });
   });
 });
 
@@ -139,32 +308,43 @@ describe("BcDevMcpBackend.status", () => {
 
 describe("BcDevMcpBackend.deploy", () => {
   test("invokes publisher compile then publish in order", async () => {
-    const calls: string[][] = [];
-    const recordingSpawn = async (argv: readonly string[]) => {
-      calls.push([...argv]);
-      return { exitCode: 0, stdout: "", stderr: "" };
-    };
-    const publisher = new Publisher(
-      {
-        alcPath: "C:/alc.exe",
-        altoolPath: "C:/altool.exe",
-        packageCachePath: "C:/.alpackages",
-        outputDir: "C:/out",
-        server: "http://bc",
-        serverInstance: "BC",
-      },
-      recordingSpawn,
-    );
-    const backend = new BcDevMcpBackend(
-      { mcpCommand: ["unused"], project: "/al", server: "http://bc", serverInstance: "BC" },
-      undefined,
-      publisher,
-    );
-    await backend.deploy("C:/instr");
-    expect(calls).toHaveLength(2);
-    expect(calls[0]?.[0]).toBe("C:/alc.exe");
-    expect(calls[1]?.[0]).toBe("C:/altool.exe");
-    expect(calls[1]?.[1]).toBe("publishapp");
+    const dir = await mkdtemp(join(tmpdir(), "lethal-bcdev-deploy-test-"));
+    try {
+      const calls: string[][] = [];
+      const appPath = join(dir, "lethal-instrumented.app");
+      const recordingSpawn = async (argv: readonly string[]) => {
+        calls.push([...argv]);
+        // deploy() reads the compiled app's own SymbolReference.json right after compile()
+        // returns — the fake alc.exe call must actually produce one, same as a real compile.
+        if (argv[0] === "C:/alc.exe") await Bun.write(appPath, buildFakeApp({ Codeunits: [] }));
+        return { exitCode: 0, stdout: "", stderr: "" };
+      };
+      const publisher = new Publisher(
+        {
+          alcPath: "C:/alc.exe",
+          altoolPath: "C:/altool.exe",
+          packageCachePath: "C:/.alpackages",
+          outputDir: dir,
+          server: "http://bc",
+          serverInstance: "BC",
+          username: "u",
+          password: "p",
+        },
+        recordingSpawn,
+      );
+      const backend = new BcDevMcpBackend(
+        { mcpCommand: ["unused"], project: "/al", server: "http://bc", serverInstance: "BC" },
+        undefined,
+        publisher,
+      );
+      await backend.deploy(dir);
+      expect(calls).toHaveLength(2);
+      expect(calls[0]?.[0]).toBe("C:/alc.exe");
+      expect(calls[1]?.[0]).toBe("C:/altool.exe");
+      expect(calls[1]?.[1]).toBe("publishapp");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
 
