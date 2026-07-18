@@ -67,6 +67,10 @@ class StubBackend implements ExecutionBackend {
     private readonly caps: BackendCapabilities,
     private readonly script: (mutant: string | null, ref: TestMethodRef) => TestVerdict["outcome"],
     private readonly coverageProcedures: string[] = [],
+    // When set, deploy() throws this value instead of succeeding — lets tests
+    // simulate a batch-deploy failure (e.g. to prove the failure text alone
+    // can't be miscounted as a different verdict cause).
+    private readonly deployError?: unknown,
   ) {}
   capabilities() {
     return this.caps;
@@ -75,6 +79,7 @@ class StubBackend implements ExecutionBackend {
     return { ok: true, details: "stub" };
   }
   async deploy(dir: string) {
+    if (this.deployError !== undefined) throw this.deployError;
     this.deploys.push(dir);
   }
   async activate(id: string | null) {
@@ -255,6 +260,28 @@ describe("runSession — C3 batch app.json + full source copy", () => {
     const store = new ResultsStore(":memory:");
     await expect(runSession({ backend, store, ...dirs, selectorIds })).rejects.toThrow(/app\.json/);
     expect(backend.deploys.length).toBe(0); // aborted before ever calling deploy()
+  });
+
+  // Hardening: counts.deadlineExceeded must be derived structurally (an
+  // explicit `cause` set only at the two orchestrator sites that know it),
+  // never by sniffing failureNote text. The batch-deploy-failure handler
+  // stores `String(err)` verbatim as failureNote for every mutant in the
+  // batch — a thrown bare string (not an Error, which would stringify to
+  // "Error: ...") that happens to start with "deadline exceeded" must still
+  // land as a plain error, not get miscounted as a client deadline.
+  test("batch deploy failure whose message starts with 'deadline exceeded' is still just an error", async () => {
+    const dirs = await makeProject();
+    const backend = new StubBackend(
+      CAPS_NST,
+      () => "pass",
+      ["IsOverBudget"],
+      "deadline exceeded talking to NST", // thrown bare string, not an Error
+    );
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({ backend, store, ...dirs, selectorIds });
+    expect(report.counts.errors).toBeGreaterThan(0);
+    expect(report.counts.deadlineExceeded).toBe(0);
+    store.close();
   });
 });
 

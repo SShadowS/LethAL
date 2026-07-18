@@ -301,6 +301,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         let verdict: SessionVerdict = "survived";
         let killingTest: string | undefined;
         let failureNote: string | undefined;
+        let cause: "deadline-exceeded" | "unstable" | undefined;
         let spent = 0;
         // mutant_row_id isn't known until recordMutant() runs below (the
         // verdict — and thus the recordMutant call — only lands AFTER this
@@ -333,6 +334,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
             // Our timer, not the runner's: says nothing about the mutant.
             verdict = "error";
             failureNote = `deadline exceeded running ${ref.method} (infrastructure, not a kill)`;
+            cause = "deadline-exceeded";
             break;
           }
           if (v.outcome === "timeout") {
@@ -370,6 +372,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
             } else {
               verdict = "error";
               failureNote = `unstable test ${ref.method}: fails at baseline confirmation`;
+              cause = "unstable";
             }
             break;
           }
@@ -383,6 +386,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           batchIdx,
           killingTest,
           failureNote,
+          cause,
           spent,
         );
         for (const t of testResultBuffer) {
@@ -538,6 +542,7 @@ function record(
   batchIndex: number,
   killingTest?: string,
   failureNote?: string,
+  cause?: "deadline-exceeded" | "unstable",
   durationMs = 0,
 ): number {
   const key = identityKeyOf(m);
@@ -559,6 +564,7 @@ function record(
     batchIndex,
     ...(killingTest !== undefined ? { killingTest } : {}),
     ...(failureNote !== undefined ? { failureNote } : {}),
+    ...(cause !== undefined ? { cause } : {}),
   });
   return mutantRowId;
 }

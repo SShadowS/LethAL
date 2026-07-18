@@ -12,6 +12,14 @@ export interface SessionOutcome {
   readonly batchIndex: number;
   readonly killingTest?: string;
   readonly failureNote?: string;
+  /**
+   * Structural reason for an "error" verdict, set only at the two call
+   * sites in orchestrator.ts that actually know it. Deliberately NOT
+   * derived from `failureNote` text: `failureNote` also carries arbitrary
+   * backend-thrown text (e.g. the batch-deploy-failure handler's
+   * `String(err)`), which could otherwise collide with a prefix match.
+   */
+  readonly cause?: "deadline-exceeded" | "unstable";
 }
 
 export interface SessionReport {
@@ -50,9 +58,6 @@ export interface BuildReportInput {
   readonly outcomes: readonly SessionOutcome[];
 }
 
-const UNSTABLE_PREFIX = "unstable test";
-const DEADLINE_PREFIX = "deadline exceeded";
-
 export function buildReport(input: BuildReportInput): SessionReport {
   const counts = {
     killed: 0,
@@ -85,8 +90,8 @@ export function buildReport(input: BuildReportInput): SessionReport {
         break;
       case "error":
         counts.errors++;
-        if (o.failureNote?.startsWith(UNSTABLE_PREFIX)) counts.unstable++;
-        if (o.failureNote?.startsWith(DEADLINE_PREFIX)) counts.deadlineExceeded++;
+        if (o.cause === "unstable") counts.unstable++;
+        if (o.cause === "deadline-exceeded") counts.deadlineExceeded++;
         break;
     }
     mutants.push({
