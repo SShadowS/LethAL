@@ -1272,20 +1272,36 @@ Move the loop verbatim — activation, covering-test iteration, short-circuit, k
       if (workers === 1) {
         await runMutantsOnBackend({ backend: cfg.backend, mutants: execute, /* …rest… */ });
       } else {
+        // Amended 2026-07-18 (review findings, user-approved). THREE corrections to the
+        // shape originally sketched here:
+        //   (a) Worker backends must be created ONCE PER SESSION, not per batch. Calling
+        //       factory(i) inside the batch loop builds batches×workers instances and
+        //       leaks one al-runner server process each. Hoist them above the batch loop
+        //       and dispose in the finally (activate(null) best-effort, then close()).
+        //   (b) The shard body needs the SAME try/catch as the sequential deploy path
+        //       (record every mutant in the batch as `error`, continue). Without it a
+        //       worker deploy failure aborts the whole session with no report at all,
+        //       while the identical failure sequentially just errors that batch — the
+        //       exact one-code-path divergence this design exists to prevent.
+        //   (c) Promise.all returns control while sibling shards are still writing to a
+        //       store the caller may already have closed. Use Promise.allSettled and
+        //       rethrow the first rejection: siblings drain first, no cancellation needed.
         const factory = cfg.backendFactory;
         if (factory === undefined)
           throw new Error("runSession: workers > 1 requires backendFactory");
         const shards = shardEvenly(execute, workers);
-        await Promise.all(
+        const settled = await Promise.allSettled(
           shards.map(async (shard, i) => {
             if (shard.length === 0) return;
-            const backend = factory(i);
-            // Each worker deploys its own copy: deploy is the compile-heavy
-            // step, so it is what the semaphore bounds — not the test runs.
+            const backend = workerBackends[i]; // hoisted, session-scoped
+            // deploy is the compile-heavy step, so it is what the semaphore bounds
+            // — not the test runs.
             await compileLimit.run(() => backend.deploy(batchDir));
             await runMutantsOnBackend({ backend, mutants: shard, /* …rest… */ });
           }),
         );
+        const failed = settled.find((s) => s.status === "rejected");
+        if (failed !== undefined && failed.status === "rejected") throw failed.reason;
       }
 ```
 
