@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 export type SpawnFn = (
   argv: readonly string[],
-  opts?: { signal?: AbortSignal },
+  opts?: { signal?: AbortSignal; env?: Record<string, string> },
 ) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
 
 export interface PublisherConfig {
@@ -15,6 +15,12 @@ export interface PublisherConfig {
   readonly server: string;
   readonly serverInstance: string;
   readonly tenant?: string;
+  // altool publishapp defaults --authentication to AAD; on-prem UserPassword auth (verified
+  // against real altool.exe --help plus the BC_SERVER_USERNAME/BC_SERVER_PASSWORD strings in
+  // Microsoft.Dynamics.Nav.Deployment.dll) needs these passed as env vars to the altool
+  // process, not as CLI flags — altool has no --username/--password option.
+  readonly username: string;
+  readonly password: string;
 }
 
 const bunSpawn: SpawnFn = async (argv, opts) => {
@@ -24,6 +30,10 @@ const bunSpawn: SpawnFn = async (argv, opts) => {
     stdout: "pipe",
     stderr: "pipe",
     ...(opts?.signal !== undefined ? { signal: opts.signal } : {}),
+    // Bun.spawn's `env`, when given, REPLACES the child's environment rather than merging
+    // with process.env (unlike leaving it unset, which fully inherits) — merge explicitly so
+    // adding credentials for altool doesn't drop PATH/SystemRoot/etc. that alc/altool need.
+    ...(opts?.env !== undefined ? { env: { ...process.env, ...opts.env } } : {}),
   });
   const [stdout, stderr] = await Promise.all([
     new Response(proc.stdout).text(),
@@ -70,20 +80,31 @@ export class Publisher {
   }
 
   async publish(appPath: string): Promise<void> {
+    // Flag names verified against `altool publishapp --help` (all lowercase,
+    // no camelCase): --server, --serverinstance, --schemaupdatemode, --tenant,
+    // --authentication, --environmenttype. Default --authentication is AAD,
+    // which would try interactive/device-code login against our UserPassword
+    // on-prem server — must be overridden explicitly.
     const argv = [
       this.cfg.altoolPath,
       "publishapp",
       appPath,
       "--server",
       this.cfg.server,
-      "--serverInstance",
+      "--serverinstance",
       this.cfg.serverInstance,
-      "--schemaSyncMode",
+      "--environmenttype",
+      "OnPrem",
+      "--authentication",
+      "UserPassword",
+      "--schemaupdatemode",
       "ForceSync",
     ];
     if (this.cfg.tenant) argv.push("--tenant", this.cfg.tenant);
     try {
-      const res = await this.spawn(argv);
+      const res = await this.spawn(argv, {
+        env: { BC_SERVER_USERNAME: this.cfg.username, BC_SERVER_PASSWORD: this.cfg.password },
+      });
       if (res.exitCode !== 0) {
         throw new Error(
           `altool publishapp failed (exit ${res.exitCode}):\n${res.stderr || res.stdout}`,

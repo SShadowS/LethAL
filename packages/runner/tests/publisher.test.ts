@@ -6,11 +6,16 @@ import { Publisher, defaultAlToolPaths } from "../src/publisher";
 
 function recordingSpawn(result = { exitCode: 0, stdout: "", stderr: "" }) {
   const calls: string[][] = [];
-  const spawn = async (argv: readonly string[]) => {
+  const envs: Array<Record<string, string> | undefined> = [];
+  const spawn = async (
+    argv: readonly string[],
+    opts?: { signal?: AbortSignal; env?: Record<string, string> },
+  ) => {
     calls.push([...argv]);
+    envs.push(opts?.env);
     return result;
   };
-  return { calls, spawn };
+  return { calls, envs, spawn };
 }
 
 const cfg = {
@@ -20,6 +25,8 @@ const cfg = {
   outputDir: "C:/out",
   server: "http://bcserver",
   serverInstance: "BC",
+  username: "sshadows",
+  password: "1234",
 };
 
 describe("Publisher.compile", () => {
@@ -66,6 +73,33 @@ describe("Publisher.publish", () => {
     expect(calls[0]?.slice(0, 2)).toEqual(["C:/ext/bin/altool.exe", "publishapp"]);
     expect(calls[0]).toContain("C:/out/x.app");
     expect(calls[0]?.join(" ")).toContain("ForceSync");
+  });
+
+  // altool publishapp --help: flags are all-lowercase (--serverinstance, --schemaupdatemode,
+  // not the camelCase originally guessed), and --authentication defaults to AAD — on-prem
+  // UserPassword auth must be selected explicitly or altool tries interactive/device-code login.
+  test("uses the verified altool flag spellings and explicit UserPassword auth", async () => {
+    const { calls, spawn } = recordingSpawn();
+    await new Publisher(cfg, spawn).publish("C:/out/x.app");
+    const argv = calls[0] ?? [];
+    expect(argv).toContain("--serverinstance");
+    expect(argv).not.toContain("--serverInstance");
+    expect(argv).toContain("--schemaupdatemode");
+    expect(argv).not.toContain("--schemaSyncMode");
+    expect(argv).toContain("--authentication");
+    expect(argv[argv.indexOf("--authentication") + 1]).toBe("UserPassword");
+    expect(argv).toContain("--environmenttype");
+  });
+
+  // altool has no --username/--password flags: credentials for UserPassword auth are read
+  // from BC_SERVER_USERNAME/BC_SERVER_PASSWORD env vars (verified against the
+  // Microsoft.Dynamics.Nav.Deployment.dll strings shipped with the AL extension).
+  test("passes credentials as BC_SERVER_USERNAME/BC_SERVER_PASSWORD env vars, not CLI flags", async () => {
+    const { calls, envs, spawn } = recordingSpawn();
+    await new Publisher(cfg, spawn).publish("C:/out/x.app");
+    expect(envs[0]).toEqual({ BC_SERVER_USERNAME: "sshadows", BC_SERVER_PASSWORD: "1234" });
+    expect(calls[0]).not.toContain("sshadows");
+    expect(calls[0]).not.toContain("1234");
   });
 
   test("spawn rejection includes altoolPath context", async () => {
