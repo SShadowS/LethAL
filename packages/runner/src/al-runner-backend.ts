@@ -1,7 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { emitStaticSelector } from "@lethal/schemata";
-import { OneShotTransport } from "./al-runner-transport";
+import { OneShotTransport, ServerTransport } from "./al-runner-transport";
 import type { AlRunnerTransport } from "./al-runner-transport";
 import type {
   BackendCapabilities,
@@ -25,6 +25,10 @@ export interface AlRunnerConfig {
   readonly packagesDir?: string; // --packages symbol resolution
   readonly stubsDir?: string; // --stubs for target-app dependencies
   readonly selectorObjectId: number; // id used when rewriting MutationSelector.Codeunit.al
+  // Opt-in: keep one al-runner process warm (server mode) instead of spawning one
+  // per test. Off by default until proven verdict-equivalent against a real binary
+  // (see the Task 4 live-gate note in the Layer 4.2 plan). Default false.
+  readonly serverMode?: boolean;
 }
 
 export class AlRunnerBackend implements ExecutionBackend {
@@ -38,7 +42,9 @@ export class AlRunnerBackend implements ExecutionBackend {
     private readonly cfg: AlRunnerConfig,
     private readonly spawn: SpawnFn = defaultSpawn,
   ) {
-    this.transport = new OneShotTransport(cfg.alRunnerPath, spawn);
+    this.transport = cfg.serverMode
+      ? new ServerTransport(cfg.alRunnerPath)
+      : new OneShotTransport(cfg.alRunnerPath, spawn);
   }
 
   capabilities(): BackendCapabilities {

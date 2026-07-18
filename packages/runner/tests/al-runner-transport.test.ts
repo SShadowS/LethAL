@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { OneShotTransport, parseAlRunnerPayload } from "../src/al-runner-transport";
+import {
+  OneShotTransport,
+  ServerTransport,
+  parseAlRunnerPayload,
+} from "../src/al-runner-transport";
 
 const req = {
   sourceDir: "/instr",
@@ -94,5 +98,93 @@ describe("OneShotTransport", () => {
       // the threshold, only for the representative set above where real margin exists.
       expect(seconds * 1000).toBeLessThan(deadlineMs);
     }
+  });
+});
+
+/** Scripted stand-in for the al-runner server process. */
+function fakeIo(responses: unknown[]) {
+  const written: string[] = [];
+  let resolveNext: ((v: IteratorResult<string>) => void) | null = null;
+  const queue: string[] = ['{"ready":true}'];
+  let killed = false;
+  const push = (l: string) => {
+    if (resolveNext) {
+      const r = resolveNext;
+      resolveNext = null;
+      r({ value: l, done: false });
+    } else queue.push(l);
+  };
+  const io = {
+    start() {
+      return {
+        write(line: string) {
+          written.push(line);
+          const req = JSON.parse(line) as { command: string };
+          if (req.command === "shutdown") return push('{"status":"shutting down"}');
+          const next = responses.shift() ?? { tests: [] };
+          push(JSON.stringify(next));
+        },
+        lines(): AsyncIterableIterator<string> {
+          return {
+            [Symbol.asyncIterator]() {
+              return this;
+            },
+            next(): Promise<IteratorResult<string>> {
+              const q = queue.shift();
+              if (q !== undefined) return Promise.resolve({ value: q, done: false });
+              return new Promise((res) => {
+                resolveNext = res;
+              });
+            },
+          } as AsyncIterableIterator<string>;
+        },
+        kill() {
+          killed = true;
+        },
+      };
+    },
+  };
+  return { io, written, wasKilled: () => killed };
+}
+
+describe("ServerTransport", () => {
+  test("consumes the handshake and sends a runTests command with both source dirs", async () => {
+    const { io, written } = fakeIo([{ tests: [{ name: "A", status: "pass", durationMs: 2 }] }]);
+    const t = new ServerTransport("al-runner", io);
+    const res = await t.send({ ...req, method: "A" });
+    expect(res.kind).toBe("tests");
+    const sent = JSON.parse(written[0] ?? "{}") as { command: string; sourcePaths: string[] };
+    expect(sent.command).toBe("runTests");
+    expect(sent.sourcePaths).toEqual(["/instr", "/tests"]);
+    await t.close();
+  });
+
+  test("reuses one process across requests (handshake read once)", async () => {
+    const { io, written } = fakeIo([
+      { tests: [{ name: "A", status: "pass" }] },
+      { tests: [{ name: "A", status: "pass" }] },
+    ]);
+    const t = new ServerTransport("al-runner", io);
+    await t.send({ ...req, method: "A" });
+    await t.send({ ...req, method: "A" });
+    expect(written).toHaveLength(2);
+    await t.close();
+  });
+
+  test("an {error} response becomes kind=error", async () => {
+    const { io } = fakeIo([{ error: "sourcePaths is required" }]);
+    const t = new ServerTransport("al-runner", io);
+    const res = await t.send(req);
+    expect(res.kind).toBe("error");
+    if (res.kind === "error") expect(res.detail).toContain("sourcePaths is required");
+    await t.close();
+  });
+
+  test("close shuts the process down", async () => {
+    const { io, wasKilled } = fakeIo([]);
+    const t = new ServerTransport("al-runner", io);
+    await t.send(req);
+    await t.close();
+    expect(wasKilled()).toBe(true);
   });
 });

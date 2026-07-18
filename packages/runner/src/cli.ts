@@ -148,6 +148,9 @@ export interface AlRunnerConfigSection {
   readonly alRunnerPath: string;
   readonly packagesDir?: string;
   readonly stubsDir?: string;
+  // Opt-in server-mode transport (Task 4): keeps one al-runner process warm
+  // instead of spawning one per test. Off by default.
+  readonly serverMode?: boolean;
 }
 
 export interface LethalConfigFile {
@@ -245,6 +248,7 @@ async function buildBackend(
       ...(c.packagesDir !== undefined ? { packagesDir: c.packagesDir } : {}),
       ...(c.stubsDir !== undefined ? { stubsDir: c.stubsDir } : {}),
       selectorObjectId: DEFAULT_SELECTOR_IDS.selectorId,
+      ...(c.serverMode !== undefined ? { serverMode: c.serverMode } : {}),
     });
   }
 
@@ -350,10 +354,13 @@ async function runFromCli(parsed: RunCliConfig): Promise<SessionReport> {
     });
   } finally {
     store.close();
-    // Release the spawned bc-dev MCP child. The `process.exit(0)` below would
-    // paper over a leak here, but only for this entry point — anything else
-    // embedding the backend would hang instead.
+    // Release whatever the backend is holding open: the spawned bc-dev MCP
+    // child, or (server mode) the one warm al-runner process. The
+    // `process.exit(0)` below would paper over a leak here, but only for this
+    // entry point — anything else embedding the backend would hang or leak a
+    // process instead.
     if (backend instanceof BcDevMcpBackend) await backend.close();
+    if (backend instanceof AlRunnerBackend) await backend.close();
   }
 }
 

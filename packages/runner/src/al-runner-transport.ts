@@ -86,3 +86,139 @@ export class OneShotTransport implements AlRunnerTransport {
     // nothing retained between requests
   }
 }
+
+export interface ServerProcess {
+  write(line: string): void;
+  lines(): AsyncIterableIterator<string>;
+  kill(): void;
+}
+export interface ServerIo {
+  start(): ServerProcess;
+}
+
+const defaultServerIo = (alRunnerPath: string): ServerIo => ({
+  start(): ServerProcess {
+    const proc = Bun.spawn([alRunnerPath, "--server"], {
+      stdin: "pipe",
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const reader = proc.stdout.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    return {
+      write(line) {
+        proc.stdin.write(`${line}\n`);
+        proc.stdin.flush();
+      },
+      lines(): AsyncIterableIterator<string> {
+        return {
+          [Symbol.asyncIterator]() {
+            return this;
+          },
+          async next(): Promise<IteratorResult<string>> {
+            while (true) {
+              const nl = buf.indexOf("\n");
+              if (nl >= 0) {
+                const l = buf.slice(0, nl).trim();
+                buf = buf.slice(nl + 1);
+                if (l.length > 0) return { value: l, done: false };
+                continue;
+              }
+              const { value, done } = await reader.read();
+              if (done) return { value: undefined as never, done: true };
+              buf += dec.decode(value, { stream: true });
+            }
+          },
+        } as AsyncIterableIterator<string>;
+      },
+      kill() {
+        proc.kill();
+      },
+    };
+  },
+});
+
+/**
+ * Keeps ONE al-runner process warm. It caches compiled assemblies under a
+ * SHA256 fingerprint of source CONTENTS (8-entry LRU), so a mutant that
+ * rewrites MutationSelector.Codeunit.al still pays a recompile — but every test
+ * for that mutant afterwards is near-free.
+ *
+ * `runTests` has no per-procedure field, so the whole suite runs each time and
+ * the requested method is picked out of the results. That is acceptable here:
+ * this backend reports coverage:"none", so the orchestrator already runs every
+ * test per mutant.
+ *
+ * NEVER move the selector into `--stubs` to dodge recompiles: stubPaths are
+ * excluded from the cache fingerprint, so that yields a cache HIT serving a
+ * stale assembly — fast, silent, wrong verdicts.
+ */
+export class ServerTransport implements AlRunnerTransport {
+  private proc: ServerProcess | undefined;
+  private iter: AsyncIterableIterator<string> | undefined;
+  private readonly io: ServerIo;
+
+  constructor(alRunnerPath: string, io?: ServerIo) {
+    this.io = io ?? defaultServerIo(alRunnerPath);
+  }
+
+  private async ensureStarted(): Promise<{
+    proc: ServerProcess;
+    iter: AsyncIterableIterator<string>;
+  }> {
+    const existing = this.proc;
+    const existingIter = this.iter;
+    if (existing !== undefined && existingIter !== undefined)
+      return { proc: existing, iter: existingIter };
+    const proc = this.io.start();
+    const iter = proc.lines();
+    const hello = await iter.next(); // {"ready":true}
+    if (hello.done) throw new Error("al-runner server closed before the ready handshake");
+    this.proc = proc;
+    this.iter = iter;
+    return { proc, iter };
+  }
+
+  async send(req: AlRunnerRequest): Promise<AlRunnerResult> {
+    try {
+      const { proc, iter } = await this.ensureStarted();
+      const payload: Record<string, unknown> = {
+        command: "runTests",
+        sourcePaths: [req.sourceDir, req.testDir],
+      };
+      if (req.packagesDir) payload.packagePaths = [req.packagesDir];
+      if (req.stubsDir) payload.stubPaths = [req.stubsDir];
+      proc.write(JSON.stringify(payload));
+
+      const deadline = new Promise<"deadline">((resolve) =>
+        setTimeout(() => resolve("deadline"), req.deadlineMs),
+      );
+      const line = await Promise.race([iter.next(), deadline]);
+      if (line === "deadline") {
+        // The process is now out of step with our request stream; drop it.
+        await this.close();
+        return { kind: "deadline" };
+      }
+      if (line.done) return { kind: "error", detail: "al-runner server closed unexpectedly" };
+      const parsed = JSON.parse(line.value) as { error?: string; tests?: AlRunnerRawTest[] };
+      if (parsed.error !== undefined) return { kind: "error", detail: parsed.error };
+      return { kind: "tests", tests: parsed.tests ?? [] };
+    } catch (err) {
+      return { kind: "error", detail: String(err) };
+    }
+  }
+
+  async close(): Promise<void> {
+    const proc = this.proc;
+    if (proc === undefined) return;
+    this.proc = undefined;
+    this.iter = undefined;
+    try {
+      proc.write(JSON.stringify({ command: "shutdown" }));
+    } catch {
+      // process may already be gone
+    }
+    proc.kill();
+  }
+}
