@@ -223,6 +223,46 @@ bun packages/runner/src/cli.ts run \
   --backend bcdev --config fixtures/sandbox-app/lethal.config.local.json
 ```
 
+## Parallel execution
+
+`lethal run` accepts `--workers <n>` (default 1) and `--compile-concurrency <n>` (default
+`min(workers, 4)`), wired straight through to `SessionConfig.workers`/`compileConcurrency` —
+see `packages/runner/src/cli.ts`'s `parseCliConfig`/`buildBackend`/`runFromCli`. Each worker
+gets its own scratch directory (`<scratchRoot>/worker-<i>`), so an al-runner worker's private
+copy of the batch's instrumented sources (`AlRunnerBackend.deploy`) and a bcdev worker's
+`Publisher.outputDir` never collide with another worker's.
+
+```bash
+bun packages/runner/src/cli.ts run \
+  --project fixtures/sandbox-app --tests fixtures/sandbox-tests \
+  --backend al-runner --config fixtures/sandbox-app/lethal.config.local.json \
+  --workers 4 --compile-concurrency 2
+```
+
+Verified live against the real al-runner binary (2026-07-19), running the full fixture at
+`--workers 1`, `2`, and `4` in turn. **Verdicts were identical at every worker count** — the
+exact known-good table (killed 3, survived 13, no-coverage 0, score 18.8%) — confirming the
+per-worker sharding (`shardEvenly`) and isolation are correct, not just plausible:
+
+| Workers | Wall clock | killed | survived | no-coverage | score |
+|---|---|---|---|---|---|
+| 1 | 1m10.2s | 3 | 13 | 0 | 18.8% |
+| 2 | 1m13.6s | 3 | 13 | 0 | 18.8% |
+| 4 | 0m59.0s | 3 | 13 | 0 | 18.8% |
+
+Honest reading of the timings: on this 16-mutant-site fixture, parallelism's payoff is modest
+and noisy, not a clean win. `--workers 2` was not measurably faster than `--workers 1` in this
+run (73.6s vs 70.2s — within the noise of a live external process); `--workers 4` was the only
+count that showed a real improvement, about 16% faster than `--workers 1`. A one-time baseline
+(both fixture tests, run once per batch before fan-out) plus per-worker al-runner server
+startup/handshake cost is fixed overhead that doesn't shrink with more workers, and only ~13
+mutants' worth of test invocations are actually left to shard across them — too small a
+workload, and too much fixed overhead relative to it, to show the kind of scaling a larger
+target app would. One `--workers 1` run during this verification also hit a single transient
+`deadline-exceeded` result (real-infra timing noise, not a wrong verdict — see
+`SessionOutcome.cause`) and reproduced the correct table cleanly on retry; it did not recur at
+any worker count and does not change the determinism conclusion above.
+
 ## Integration scripts (`packages/runner/itest/`)
 
 `al-runner.itest.ts` and `bcdev.itest.ts` are standalone Bun scripts (not `bun:test` files —

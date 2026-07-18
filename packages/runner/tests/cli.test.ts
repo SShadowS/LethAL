@@ -55,6 +55,7 @@ describe("parseCliConfig", () => {
       dbPath: join("proj", "lethal.sqlite"),
       configPath: join("proj", "lethal.config.json"),
       skipKnownSurvivors: false,
+      workers: 1,
     });
   });
 
@@ -84,6 +85,7 @@ describe("parseCliConfig", () => {
       configPath: "custom.config.json",
       skipKnownSurvivors: true,
       outPath: "report.json",
+      workers: 1,
     });
   });
 
@@ -148,6 +150,49 @@ describe("odataBaseUrl", () => {
 
   test("leaves an already-correct port 7048 alone", () => {
     expect(odataBaseUrl("http://Cronus28:7048", "BC")).toBe("http://cronus28:7048/BC");
+  });
+});
+
+describe("parseCliConfig — worker flags", () => {
+  test("defaults to a single worker", () => {
+    const p = parseCliConfig(["run", "--project", "p", "--tests", "t", "--backend", "al-runner"]);
+    if (p.mode === "dry-run") throw new Error("expected a run config");
+    expect(p.workers).toBe(1);
+  });
+
+  test("accepts --workers and --compile-concurrency", () => {
+    const p = parseCliConfig([
+      "run",
+      "--project",
+      "p",
+      "--tests",
+      "t",
+      "--backend",
+      "al-runner",
+      "--workers",
+      "4",
+      "--compile-concurrency",
+      "2",
+    ]);
+    if (p.mode === "dry-run") throw new Error("expected a run config");
+    expect(p.workers).toBe(4);
+    expect(p.compileConcurrency).toBe(2);
+  });
+
+  test("rejects a non-positive worker count with a clear message", () => {
+    expect(() =>
+      parseCliConfig([
+        "run",
+        "--project",
+        "p",
+        "--tests",
+        "t",
+        "--backend",
+        "al-runner",
+        "--workers",
+        "0",
+      ]),
+    ).toThrow(/--workers must be a positive integer/);
   });
 });
 

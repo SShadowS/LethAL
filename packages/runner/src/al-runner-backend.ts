@@ -1,4 +1,4 @@
-import { writeFile } from "node:fs/promises";
+import { cp, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { emitStaticSelector } from "@lethal/schemata";
 import { OneShotTransport, ServerTransport } from "./al-runner-transport";
@@ -67,7 +67,37 @@ export class AlRunnerBackend implements ExecutionBackend {
   async deploy(instrumentedDir: string): Promise<void> {
     // In-memory backends have no publish step, but they still need to know
     // which per-batch instrumented dir activate()/run() should target.
-    this.deployedDir = instrumentedDir;
+    //
+    // Task 7 (parallel workers): the orchestrator calls deploy() with the
+    // SAME shared per-batch instrumented dir on every worker's backend
+    // instance — the batch's compiled source is identical for all of them
+    // (see runSession's shard fan-out in orchestrator.ts, which passes one
+    // `batchDir` to every worker). `activate()` below is a plain,
+    // unsynchronized `writeFile` into whatever `activeDir()` resolves to; if
+    // every worker's `deployedDir` pointed straight at that shared directory,
+    // two workers running concurrently could overwrite each other's
+    // MutationSelector.Codeunit.al mid-compile — al-runner recompiles from
+    // this directory on every invocation — silently attributing a test
+    // result to the wrong mutant. Copying the shared, read-only batch
+    // content into a private subdirectory of this backend's own
+    // `cfg.instrumentedDir` (unique per worker — see cli.ts's `buildBackend`)
+    // means every subsequent activate()/run() call only ever touches a
+    // directory this instance alone writes to. Harmless for the sequential
+    // (workers=1) path too: one backend, one copy, same observable result.
+    //
+    // Deliberately a SUBDIRECTORY of `cfg.instrumentedDir`, not
+    // `cfg.instrumentedDir` itself: some callers (e.g. `al-runner.itest.ts`)
+    // construct this backend with `cfg.instrumentedDir` set to the SAME path
+    // `SessionConfig.instrumentedDir` uses for the orchestrator's own batch
+    // dirs, making the given `instrumentedDir` argument a CHILD of
+    // `cfg.instrumentedDir` — `cp(child, parent)` landed the copy incomplete
+    // (verified: broke the itest's baseline-green assertion). Copying into a
+    // fixed, uniquely-named child (`active`) of `cfg.instrumentedDir` instead
+    // is never an ancestor of whatever batch dir the argument names, however
+    // the caller happened to lay out its scratch directories.
+    const activeDir = join(this.cfg.instrumentedDir, "active");
+    await cp(instrumentedDir, activeDir, { recursive: true });
+    this.deployedDir = activeDir;
   }
 
   private activeDir(): string {

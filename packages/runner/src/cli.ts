@@ -50,6 +50,8 @@ export interface RunCliConfig {
   readonly configPath: string;
   readonly skipKnownSurvivors: boolean;
   readonly outPath?: string;
+  readonly workers: number;
+  readonly compileConcurrency?: number;
 }
 
 export type CliConfig = DryRunCliConfig | RunCliConfig;
@@ -91,6 +93,8 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
       config: { type: "string" },
       "skip-known-survivors": { type: "boolean", default: false },
       "dry-run": { type: "boolean", default: false },
+      workers: { type: "string" },
+      "compile-concurrency": { type: "string" },
     },
   });
 
@@ -118,6 +122,17 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     throw new Error(`unknown --backend "${backendArg}" (expected "bcdev" or "al-runner")`);
   }
 
+  const workers = values.workers === undefined ? 1 : Number(values.workers);
+  if (!Number.isInteger(workers) || workers < 1)
+    throw new Error("--workers must be a positive integer");
+  const compileConcurrency =
+    values["compile-concurrency"] === undefined ? undefined : Number(values["compile-concurrency"]);
+  if (
+    compileConcurrency !== undefined &&
+    (!Number.isInteger(compileConcurrency) || compileConcurrency < 1)
+  )
+    throw new Error("--compile-concurrency must be a positive integer");
+
   return {
     mode: "run",
     projectDir,
@@ -126,7 +141,9 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     dbPath: values.db ?? join(projectDir, "lethal.sqlite"),
     configPath: values.config ?? join(projectDir, "lethal.config.json"),
     skipKnownSurvivors: values["skip-known-survivors"] ?? false,
+    workers,
     ...(values.out !== undefined ? { outPath: values.out } : {}),
+    ...(compileConcurrency !== undefined ? { compileConcurrency } : {}),
   };
 }
 
@@ -232,19 +249,33 @@ export function odataBaseUrl(server: string, serverInstance: string): string {
   return `${url.toString().replace(/\/+$/, "")}/${serverInstance}`;
 }
 
+/**
+ * Builds one backend instance targeting `scratchDir` for all of its own scratch
+ * output. Called once for the session's main backend (baseline/coverage), and —
+ * when `--workers > 1` — once more per worker with a distinct `scratchDir`
+ * (`cli.ts`'s `runFromCli`), so that:
+ *   - each al-runner worker gets its own `instrumentedDir` — `AlRunnerBackend`
+ *     copies each batch's compiled source into a private subdirectory of it on
+ *     every `deploy()` call (see the comment there), so a distinct
+ *     `instrumentedDir` per worker is what makes those copies land in
+ *     genuinely separate directories instead of racing on the same one, and
+ *   - each bcdev worker gets its own `Publisher.outputDir` — required per the
+ *     Layer 4.2 plan's Task 2 review note: `BcDevMcpBackend.deploy` calls
+ *     `publisher.compile(instrumentedDir)` with a single argument, so nothing
+ *     stops two workers compiling to the same `<outputDir>/lethal-instrumented.app`
+ *     and one publishing over the other's code UNLESS `outputDir` itself differs.
+ */
 async function buildBackend(
-  kind: "bcdev" | "al-runner",
+  parsed: RunCliConfig,
   configFile: LethalConfigFile,
-  projectDir: string,
-  testDir: string,
-  scratchRoot: string,
+  scratchDir: string,
 ): Promise<ExecutionBackend> {
-  if (kind === "al-runner") {
+  if (parsed.backendKind === "al-runner") {
     const c = validateAlRunnerConfig(configFile.alRunner);
     return new AlRunnerBackend({
       alRunnerPath: c.alRunnerPath,
-      instrumentedDir: join(scratchRoot, "instrumented"),
-      testDir,
+      instrumentedDir: join(scratchDir, "al-runner-active"),
+      testDir: parsed.testDir,
       ...(c.packagesDir !== undefined ? { packagesDir: c.packagesDir } : {}),
       ...(c.stubsDir !== undefined ? { stubsDir: c.stubsDir } : {}),
       selectorObjectId: DEFAULT_SELECTOR_IDS.selectorId,
@@ -260,7 +291,7 @@ async function buildBackend(
         "(~/.vscode/extensions/ms-dynamics-smb.al-*); install the extension, or run with --backend al-runner",
     );
   }
-  const outputDir = join(scratchRoot, "publish");
+  const outputDir = join(scratchDir, "publish");
   await mkdir(outputDir, { recursive: true });
   const publisher = new Publisher(
     {
@@ -286,7 +317,7 @@ async function buildBackend(
   return new BcDevMcpBackend(
     {
       mcpCommand: c.mcpCommand,
-      project: projectDir,
+      project: parsed.projectDir,
       server: c.server,
       serverInstance: c.serverInstance,
       company: c.company,
@@ -334,13 +365,21 @@ async function printDryRun(projectDir: string): Promise<void> {
 async function runFromCli(parsed: RunCliConfig): Promise<SessionReport> {
   const configFile = await loadLethalConfigFile(parsed.configPath);
   const scratchRoot = await mkdtemp(join(tmpdir(), "lethal-"));
-  const backend = await buildBackend(
-    parsed.backendKind,
-    configFile,
-    parsed.projectDir,
-    parsed.testDir,
-    scratchRoot,
-  );
+  const backend = await buildBackend(parsed, configFile, scratchRoot);
+  // `SessionConfig.backendFactory` is synchronous (`runSession` calls it
+  // without awaiting — see orchestrator.ts), but building a worker's backend
+  // is async (bcdev needs `defaultAlToolPaths()` + `mkdir`). So every worker
+  // backend is constructed here, up front, each with its own
+  // `<scratchRoot>/worker-<i>` scratch dir; the factory below just hands back
+  // the already-built instance for that index. `runSession` still owns
+  // disposing them (see `closeIfSupported` in orchestrator.ts) — it just
+  // doesn't own constructing them.
+  const workerBackends: ExecutionBackend[] = [];
+  if (parsed.workers > 1) {
+    for (let i = 0; i < parsed.workers; i++) {
+      workerBackends.push(await buildBackend(parsed, configFile, join(scratchRoot, `worker-${i}`)));
+    }
+  }
   const store = new ResultsStore(parsed.dbPath);
   try {
     return await runSession({
@@ -351,6 +390,21 @@ async function runFromCli(parsed: RunCliConfig): Promise<SessionReport> {
       instrumentedDir: join(scratchRoot, "instrumented"),
       selectorIds: DEFAULT_SELECTOR_IDS,
       skipKnownSurvivors: parsed.skipKnownSurvivors,
+      workers: parsed.workers,
+      ...(parsed.compileConcurrency !== undefined
+        ? { compileConcurrency: parsed.compileConcurrency }
+        : {}),
+      ...(parsed.workers > 1
+        ? {
+            backendFactory: (i: number) => {
+              const b = workerBackends[i];
+              if (b === undefined) {
+                throw new Error(`runFromCli: no worker backend pre-built for index ${i}`);
+              }
+              return b;
+            },
+          }
+        : {}),
     });
   } finally {
     store.close();
