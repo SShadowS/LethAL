@@ -171,6 +171,9 @@ async function runOnce(scratchRoot: string): Promise<SessionReport> {
     });
   } finally {
     store.close();
+    // Without this the spawned bc-dev MCP child keeps the event loop alive and
+    // this script never exits, even on a fully successful run.
+    await backend.close();
   }
 }
 

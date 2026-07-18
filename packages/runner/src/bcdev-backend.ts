@@ -112,6 +112,25 @@ export class BcDevMcpBackend implements ExecutionBackend {
     return client;
   }
 
+  /**
+   * Shut down the MCP client and the bc-dev server child process it spawned.
+   *
+   * Required, not optional hygiene: `connect()` keeps a long-lived
+   * `StdioClientTransport`, and its child process holds the event loop open, so
+   * a caller that finishes a session without calling this never exits. That is
+   * exactly how the bcdev itest came to hang for 20 minutes after its
+   * assertions had already passed — `cli.ts` only appeared unaffected because
+   * it calls `process.exit()`, which masks the leak rather than fixing it.
+   *
+   * Safe to call more than once, and safe to call when never connected.
+   */
+  async close(): Promise<void> {
+    const client = this.client;
+    if (!client) return;
+    this.client = undefined;
+    await client.close();
+  }
+
   private connectionParams(): Record<string, unknown> {
     const { project, server, serverInstance, tenant, environmentType, environmentName, company } =
       this.cfg;

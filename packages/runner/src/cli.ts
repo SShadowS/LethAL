@@ -350,6 +350,10 @@ async function runFromCli(parsed: RunCliConfig): Promise<SessionReport> {
     });
   } finally {
     store.close();
+    // Release the spawned bc-dev MCP child. The `process.exit(0)` below would
+    // paper over a leak here, but only for this entry point — anything else
+    // embedding the backend would hang instead.
+    if (backend instanceof BcDevMcpBackend) await backend.close();
   }
 }
 
