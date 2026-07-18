@@ -1,4 +1,4 @@
-import { cp, writeFile } from "node:fs/promises";
+import { cp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { emitStaticSelector } from "@lethal/schemata";
 import { OneShotTransport, ServerTransport } from "./al-runner-transport";
@@ -95,7 +95,17 @@ export class AlRunnerBackend implements ExecutionBackend {
     // fixed, uniquely-named child (`active`) of `cfg.instrumentedDir` instead
     // is never an ancestor of whatever batch dir the argument names, however
     // the caller happened to lay out its scratch directories.
+    // `cp` MERGES into an existing destination rather than replacing it —
+    // stale files from a previous batch's deploy() would otherwise survive
+    // into this one. Harmless today only because `prepareBatchProject`
+    // copies the full project source set every batch, so the file-name set
+    // happens to stay stable across batches — nothing enforces that, and if
+    // it ever didn't, the symptom would be a wrong verdict (a stale mutant's
+    // instrumentation silently still active), not a visible error. Clearing
+    // first removes that dependency on an invariant this method has no way
+    // to verify.
     const activeDir = join(this.cfg.instrumentedDir, "active");
+    await rm(activeDir, { recursive: true, force: true });
     await cp(instrumentedDir, activeDir, { recursive: true });
     this.deployedDir = activeDir;
   }

@@ -133,6 +133,27 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
   )
     throw new Error("--compile-concurrency must be a positive integer");
 
+  // bcdev mutant activation (MutationControlClient.setActive) is a single
+  // server-side record shared by every worker — server + serverInstance +
+  // company, one row. Per-worker Publisher.outputDir isolates each worker's
+  // COMPILED ARTIFACT, but not this: two workers running concurrently would
+  // both call setActive() against the SAME server record, so worker B's
+  // activation can clobber worker A's while A's test is still in flight,
+  // silently attributing a result to the wrong mutant. The setActive echo
+  // check does not catch this — it validates its own response, not a later
+  // overwrite by another worker. Every worker would also publish the same
+  // app id to the same server instance. Real parallelism against the
+  // authoritative backend needs per-container isolation (deferred to the
+  // container-pool layer) — reject rather than silently corrupt results.
+  if (backendArg === "bcdev" && workers > 1) {
+    throw new Error(
+      "--workers > 1 is not supported with --backend bcdev: mutant activation is a single " +
+        "server-side record shared by all workers, so concurrent workers would overwrite each " +
+        "other's active mutant. Parallel execution on a real BC server needs per-container " +
+        "isolation (deferred to the container-pool layer).",
+    );
+  }
+
   return {
     mode: "run",
     projectDir,

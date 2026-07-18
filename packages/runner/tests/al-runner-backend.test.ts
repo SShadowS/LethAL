@@ -33,6 +33,72 @@ async function makeBackend(spawn: ReturnType<typeof okSpawn>["spawn"]) {
   };
 }
 
+describe("AlRunnerBackend.deploy", () => {
+  // Task 7 (parallel workers) regression coverage: the pre-fix deploy() just
+  // did `this.deployedDir = instrumentedDir`, so activate()'s writes landed
+  // straight in whatever shared batch dir the orchestrator passed in — the
+  // exact bug that produced a wrong verdict (20.0% vs the known-good 18.8%)
+  // during live verification. This drives the REAL deploy()/activate(), not
+  // a re-implementation, so a regression here fails this test.
+  test("copies the given source dir into <instrumentedDir>/active, isolated from the source and from cfg.instrumentedDir itself", async () => {
+    const { dir, backend } = await makeBackend(okSpawn({ tests: [] }).spawn);
+    // A separate directory standing in for the orchestrator's shared
+    // per-batch `batchDir` — deploy() must not write into this, or into
+    // `dir` itself, only into a private copy.
+    const sourceDir = await mkdtemp(join(tmpdir(), "lethal-alrunner-batch-"));
+    await writeFile(join(sourceDir, "MutationSelector.Codeunit.al"), "source placeholder", "utf8");
+    await writeFile(join(sourceDir, "Other.Codeunit.al"), "some AL source", "utf8");
+
+    await backend.deploy(sourceDir);
+
+    const activeDir = join(dir, "active");
+    expect(await readFile(join(activeDir, "MutationSelector.Codeunit.al"), "utf8")).toBe(
+      "source placeholder",
+    );
+    expect(await readFile(join(activeDir, "Other.Codeunit.al"), "utf8")).toBe("some AL source");
+    // cfg.instrumentedDir's OWN top-level file (written by makeBackend(), see
+    // above) must be untouched — proves the copy landed in the `active`
+    // subdirectory, not directly in cfg.instrumentedDir.
+    expect(await readFile(join(dir, "MutationSelector.Codeunit.al"), "utf8")).toBe("placeholder");
+
+    // activate() must write into the private copy...
+    await backend.activate("M0042");
+    expect(await readFile(join(activeDir, "MutationSelector.Codeunit.al"), "utf8")).toContain(
+      "exit(MutantId = 'M0042');",
+    );
+    // ...and NEVER into the directory that was passed to deploy() — this is
+    // the exact race: two workers both given `sourceDir` (the orchestrator's
+    // shared batchDir) must not have their activate() calls collide there.
+    expect(await readFile(join(sourceDir, "MutationSelector.Codeunit.al"), "utf8")).toBe(
+      "source placeholder",
+    );
+  });
+
+  test("clears stale files from a previous deploy() before copying the next batch", async () => {
+    const { dir, backend } = await makeBackend(okSpawn({ tests: [] }).spawn);
+    const activeDir = join(dir, "active");
+
+    const batch1 = await mkdtemp(join(tmpdir(), "lethal-alrunner-batch1-"));
+    await writeFile(join(batch1, "MutationSelector.Codeunit.al"), "batch1 selector", "utf8");
+    await writeFile(join(batch1, "StaleOnly.Codeunit.al"), "only in batch 1", "utf8");
+    await backend.deploy(batch1);
+    expect(await readFile(join(activeDir, "StaleOnly.Codeunit.al"), "utf8")).toBe("only in batch 1");
+
+    // batch2 deliberately does NOT include StaleOnly.Codeunit.al — if deploy()
+    // merged instead of replacing, it would silently survive into batch 2's
+    // compile (a wrong verdict, not a visible error — see the comment on
+    // deploy() in al-runner-backend.ts).
+    const batch2 = await mkdtemp(join(tmpdir(), "lethal-alrunner-batch2-"));
+    await writeFile(join(batch2, "MutationSelector.Codeunit.al"), "batch2 selector", "utf8");
+    await backend.deploy(batch2);
+
+    expect(await readFile(join(activeDir, "MutationSelector.Codeunit.al"), "utf8")).toBe(
+      "batch2 selector",
+    );
+    await expect(readFile(join(activeDir, "StaleOnly.Codeunit.al"), "utf8")).rejects.toThrow();
+  });
+});
+
 describe("AlRunnerBackend.activate", () => {
   test("rewrites MutationSelector.Codeunit.al with the hardcoded id", async () => {
     const { dir, backend } = await makeBackend(okSpawn({ tests: [] }).spawn);

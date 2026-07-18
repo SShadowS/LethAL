@@ -194,6 +194,44 @@ describe("parseCliConfig — worker flags", () => {
       ]),
     ).toThrow(/--workers must be a positive integer/);
   });
+
+  test("rejects --backend bcdev with --workers > 1", () => {
+    expect(() =>
+      parseCliConfig([
+        "run",
+        "--project",
+        "p",
+        "--tests",
+        "t",
+        "--backend",
+        "bcdev",
+        "--workers",
+        "2",
+      ]),
+    ).toThrow(/--workers > 1 is not supported with --backend bcdev/);
+  });
+
+  test("accepts --backend bcdev with --workers 1 (default)", () => {
+    const p = parseCliConfig(["run", "--project", "p", "--tests", "t", "--backend", "bcdev"]);
+    if (p.mode === "dry-run") throw new Error("expected a run config");
+    expect(p.workers).toBe(1);
+  });
+
+  test("accepts --backend bcdev with an explicit --workers 1", () => {
+    const p = parseCliConfig([
+      "run",
+      "--project",
+      "p",
+      "--tests",
+      "t",
+      "--backend",
+      "bcdev",
+      "--workers",
+      "1",
+    ]);
+    if (p.mode === "dry-run") throw new Error("expected a run config");
+    expect(p.workers).toBe(1);
+  });
 });
 
 describe("validateAlRunnerConfig", () => {

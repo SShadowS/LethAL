@@ -119,6 +119,8 @@ This keeps compiles near-minimal while letting every worker stay busy — the pr
 
 **Determinism.** Verdicts must be independent of shard assignment and worker count. The exit criteria pin this.
 
+**Parallelism is al-runner-only (added 2026-07-19, review finding).** `--workers > 1` must be REJECTED for `--backend bcdev`. Per-worker `Publisher.outputDir` isolates compiled artifacts, but bcdev activation is a **single server-side record**: every worker's `MutationControlClient` targets the same server/instance/company, so one worker's `setActive` overwrites another's active mutant mid-test and results are attributed to the wrong mutant, silently. The `setActive` echo check does not help — it validates its own response, not a later overwrite. All workers would also publish the same app id to one instance. This is exactly the constraint that makes a container pool with per-container activation the design for parallelism on the authoritative backend — it belongs to that later spec, not this one.
+
 ## 7. Explicitly out of scope
 
 Each becomes its own spec, in this order:

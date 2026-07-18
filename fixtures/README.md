@@ -258,10 +258,18 @@ count that showed a real improvement, about 16% faster than `--workers 1`. A one
 startup/handshake cost is fixed overhead that doesn't shrink with more workers, and only ~13
 mutants' worth of test invocations are actually left to shard across them — too small a
 workload, and too much fixed overhead relative to it, to show the kind of scaling a larger
-target app would. One `--workers 1` run during this verification also hit a single transient
-`deadline-exceeded` result (real-infra timing noise, not a wrong verdict — see
-`SessionOutcome.cause`) and reproduced the correct table cleanly on retry; it did not recur at
-any worker count and does not change the determinism conclusion above.
+target app would. One `--workers 1` run during this verification produced a genuinely wrong
+verdict (score 20.0% instead of 18.8%, one mutant misreported as `error`/`deadline-exceeded`
+instead of `survived`) — **not real-infra timing noise**: it was a real bug in an earlier build of
+`AlRunnerBackend.deploy()`, which copied a batch's compiled source directly into
+`cfg.instrumentedDir` instead of a private `active` subdirectory. That collided when
+`cfg.instrumentedDir` was itself an ancestor of the batch directory being copied from (the exact
+construction `al-runner.itest.ts` uses), corrupting the copy. Fixed by copying into
+`<cfg.instrumentedDir>/active` instead (see the comment on `AlRunnerBackend.deploy`), with a
+dedicated regression test (`tests/al-runner-backend.test.ts`) driving the real `deploy()`/
+`activate()` code. After the fix, `--workers 1` was re-run twice more and reproduced the correct
+table both times; it did not recur at any worker count, and the fix does not change the
+determinism conclusion above.
 
 ## Integration scripts (`packages/runner/itest/`)
 
