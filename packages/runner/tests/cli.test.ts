@@ -4,36 +4,44 @@ import { parseCliConfig, validateAlRunnerConfig, validateBcDevConfig } from "../
 
 describe("parseCliConfig", () => {
   test("missing --project throws a clear error", () => {
-    expect(() => parseCliConfig(["--tests", "t", "--backend", "al-runner"])).toThrow(
+    expect(() => parseCliConfig(["run", "--tests", "t", "--backend", "al-runner"])).toThrow(
       "missing required --project",
     );
   });
 
   test("--dry-run only requires --project (no --tests/--backend)", () => {
-    const parsed = parseCliConfig(["--project", "proj", "--dry-run"]);
+    const parsed = parseCliConfig(["run", "--project", "proj", "--dry-run"]);
     expect(parsed).toEqual({ mode: "dry-run", projectDir: "proj" });
   });
 
   test("missing --tests (non-dry-run) throws a clear error", () => {
-    expect(() => parseCliConfig(["--project", "proj", "--backend", "al-runner"])).toThrow(
+    expect(() => parseCliConfig(["run", "--project", "proj", "--backend", "al-runner"])).toThrow(
       "missing required --tests",
     );
   });
 
   test("missing --backend (non-dry-run) throws a clear error", () => {
-    expect(() => parseCliConfig(["--project", "proj", "--tests", "t"])).toThrow(
+    expect(() => parseCliConfig(["run", "--project", "proj", "--tests", "t"])).toThrow(
       "missing required --backend",
     );
   });
 
   test("unknown --backend value throws a clear error", () => {
     expect(() =>
-      parseCliConfig(["--project", "proj", "--tests", "t", "--backend", "nope"]),
+      parseCliConfig(["run", "--project", "proj", "--tests", "t", "--backend", "nope"]),
     ).toThrow('unknown --backend "nope"');
   });
 
   test("valid al-runner args fill in defaults for db/config/skip-known-survivors", () => {
-    const parsed = parseCliConfig(["--project", "proj", "--tests", "t", "--backend", "al-runner"]);
+    const parsed = parseCliConfig([
+      "run",
+      "--project",
+      "proj",
+      "--tests",
+      "t",
+      "--backend",
+      "al-runner",
+    ]);
     expect(parsed).toEqual({
       mode: "run",
       projectDir: "proj",
@@ -47,6 +55,7 @@ describe("parseCliConfig", () => {
 
   test("explicit --db/--out/--config/--skip-known-survivors are honored", () => {
     const parsed = parseCliConfig([
+      "run",
       "--project",
       "proj",
       "--tests",
@@ -71,6 +80,23 @@ describe("parseCliConfig", () => {
       skipKnownSurvivors: true,
       outPath: "report.json",
     });
+  });
+
+  test("run subcommand is accepted (C1)", () => {
+    const parsed = parseCliConfig(["run", "--project", "proj", "--dry-run"]);
+    expect(parsed.mode).toBe("dry-run");
+  });
+
+  test("unknown subcommand is rejected with a clear error (C1)", () => {
+    expect(() => parseCliConfig(["frobnicate", "--project", "proj", "--dry-run"])).toThrow(
+      /unknown subcommand: got "frobnicate", expected one of: run/,
+    );
+  });
+
+  test("missing subcommand is rejected with a clear error (C1)", () => {
+    expect(() => parseCliConfig(["--project", "proj", "--dry-run"])).toThrow(
+      /unknown subcommand: got none, expected one of: run/,
+    );
   });
 });
 

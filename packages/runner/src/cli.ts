@@ -46,14 +46,34 @@ export interface RunCliConfig {
 
 export type CliConfig = DryRunCliConfig | RunCliConfig;
 
+const VALID_SUBCOMMANDS = ["run"] as const;
+
+/**
+ * `lethal` only has one subcommand today (`run`), but the CLI is invoked as
+ * `lethal run --project ...` (see fixtures/README.md) rather than bare flags
+ * — require and validate it explicitly so an unknown/missing subcommand
+ * fails with a clear message instead of silently ignoring it.
+ */
+function requireRunSubcommand(positionals: readonly string[]): void {
+  const [subcommand] = positionals;
+  if (subcommand !== undefined && (VALID_SUBCOMMANDS as readonly string[]).includes(subcommand)) {
+    return;
+  }
+  const got = subcommand === undefined ? "none" : `"${subcommand}"`;
+  throw new Error(
+    `unknown subcommand: got ${got}, expected one of: ${VALID_SUBCOMMANDS.join(", ")}`,
+  );
+}
+
 /**
  * Pure argument parsing/validation — no file or network I/O. Kept separate
  * from `main()` so arg-validation errors (missing --project, unknown
  * --backend, ...) are directly unit-testable without spawning a process.
  */
 export function parseCliConfig(argv: readonly string[]): CliConfig {
-  const { values } = parseArgs({
+  const { values, positionals } = parseArgs({
     args: [...argv],
+    allowPositionals: true,
     options: {
       project: { type: "string" },
       tests: { type: "string" },
@@ -65,6 +85,8 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
       "dry-run": { type: "boolean", default: false },
     },
   });
+
+  requireRunSubcommand(positionals);
 
   const projectDir = values.project;
   if (projectDir === undefined || projectDir === "") {
@@ -323,7 +345,7 @@ if (import.meta.main) {
       process.exit(0);
     })
     .catch((err: unknown) => {
-      console.error(err instanceof Error ? err.message : String(err));
+      console.error(err instanceof Error ? (err.stack ?? String(err)) : String(err));
       process.exit(1);
     });
 }
