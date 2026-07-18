@@ -22,14 +22,27 @@ export class Semaphore {
   private active = 0;
   private readonly waiting: Array<() => void> = [];
 
-  constructor(private readonly permits: number) {}
+  constructor(private readonly permits: number) {
+    if (permits < 1) {
+      throw new Error(`Semaphore requires permits >= 1, got ${permits}`);
+    }
+  }
 
   get inFlight(): number {
     return this.active;
   }
 
   async run<T>(fn: () => Promise<T>): Promise<T> {
-    if (this.active >= this.permits) {
+    // `while`, not `if`: a release can wake a waiter (via `next()` in the
+    // `finally` below) and resolve its promise, but that waiter doesn't
+    // actually run again until the next microtask tick. If a fresh caller's
+    // `run()` arrives synchronously in between — sees the same
+    // `active >= permits` snapshot the released slot was meant for — an
+    // `if` would let BOTH the woken waiter and the fresh caller proceed past
+    // the gate, pushing `active` one over `permits`. Re-checking in a loop
+    // means a caller that wakes up always re-validates against the current
+    // `active` count before incrementing it.
+    while (this.active >= this.permits) {
       await new Promise<void>((resolve) => this.waiting.push(resolve));
     }
     this.active++;

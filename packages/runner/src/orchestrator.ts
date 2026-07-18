@@ -416,10 +416,13 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   });
   // Sort accumulated outcomes so report ordering never depends on which
   // worker finished first — determinism must not hinge on scheduling.
-  outcomes.sort((a, b) =>
-    `${a.mutant.file}:${a.mutant.startIndex}`.localeCompare(
-      `${b.mutant.file}:${b.mutant.startIndex}`,
-    ),
+  // Compare (file, startIndex) as (string, number), not a colon-joined
+  // string: localeCompare on "file:1000" vs "file:99" sorted ":1000" before
+  // ":99" (lexical compare of the numeric suffix), scrambling report order
+  // for any file with 100+ mutable start offsets.
+  outcomes.sort(
+    (a, b) =>
+      a.mutant.file.localeCompare(b.mutant.file) || a.mutant.startIndex - b.mutant.startIndex,
   );
   return buildReport({
     caps,

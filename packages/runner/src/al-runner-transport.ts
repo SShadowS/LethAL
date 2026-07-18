@@ -190,20 +190,29 @@ export class ServerTransport implements AlRunnerTransport {
     // response below: a process that starts but never emits `{"ready":true}`
     // (wrong binary, stalled startup, crash before first output) must not
     // hang send() — and therefore the whole mutation run — forever.
-    const deadline = new Promise<"deadline">((resolve) =>
-      setTimeout(() => resolve("deadline"), deadlineMs),
-    );
-    const hello = await Promise.race([iter.next(), deadline]);
-    if (hello === "deadline") {
-      // Nothing was ever assigned to this.proc/this.iter, so there is no
-      // shared state to unwind — just stop the stalled process directly.
-      proc.kill();
-      return "deadline";
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const deadline = new Promise<"deadline">((resolve) => {
+        timer = setTimeout(() => resolve("deadline"), deadlineMs);
+      });
+      const hello = await Promise.race([iter.next(), deadline]);
+      if (hello === "deadline") {
+        // Nothing was ever assigned to this.proc/this.iter, so there is no
+        // shared state to unwind — just stop the stalled process directly.
+        proc.kill();
+        return "deadline";
+      }
+      if (hello.done) throw new Error("al-runner server closed before the ready handshake");
+      this.proc = proc;
+      this.iter = iter;
+      return { proc, iter };
+    } finally {
+      // Otherwise a timer stays armed for up to `deadlineMs` (120s on
+      // baseline runs) after every fast handshake, keeping an embedder's
+      // event loop alive for no reason — OneShotTransport already clears its
+      // equivalent timer this way.
+      clearTimeout(timer);
     }
-    if (hello.done) throw new Error("al-runner server closed before the ready handshake");
-    this.proc = proc;
-    this.iter = iter;
-    return { proc, iter };
   }
 
   send(req: AlRunnerRequest): Promise<AlRunnerResult> {
@@ -215,6 +224,7 @@ export class ServerTransport implements AlRunnerTransport {
   }
 
   private async sendLocked(req: AlRunnerRequest): Promise<AlRunnerResult> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const started = await this.ensureStarted(req.deadlineMs);
       if (started === "deadline") return { kind: "deadline" };
@@ -227,9 +237,9 @@ export class ServerTransport implements AlRunnerTransport {
       if (req.stubsDir) payload.stubPaths = [req.stubsDir];
       proc.write(JSON.stringify(payload));
 
-      const deadline = new Promise<"deadline">((resolve) =>
-        setTimeout(() => resolve("deadline"), req.deadlineMs),
-      );
+      const deadline = new Promise<"deadline">((resolve) => {
+        timer = setTimeout(() => resolve("deadline"), req.deadlineMs);
+      });
       const line = await Promise.race([iter.next(), deadline]);
       if (line === "deadline") {
         // The process is now out of step with our request stream; drop it.
@@ -242,6 +252,11 @@ export class ServerTransport implements AlRunnerTransport {
       return { kind: "tests", tests: parsed.tests ?? [] };
     } catch (err) {
       return { kind: "error", detail: String(err) };
+    } finally {
+      // Otherwise a timer stays armed for up to `deadlineMs` (120s on
+      // baseline runs) after every fast response, keeping an embedder's event
+      // loop alive — OneShotTransport already clears its equivalent timer.
+      clearTimeout(timer);
     }
   }
 

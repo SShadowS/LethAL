@@ -98,6 +98,35 @@ const THREE_PROC_AL = `codeunit 79000 "Sandbox Logic"
 }
 `;
 
+// M4 regression: two independent, non-nested procedures whose mutation sites'
+// character offsets (`startIndex`) are chosen so a leading-digit comparison
+// disagrees with the numeric one — IsOverBudget's sites land in the 200s
+// (leading digit "2"), IsUnderBudget's land in the 1800s (leading digit "1"),
+// after the padding comment block. `outcomes.sort()` in orchestrator.ts must
+// order these ascending by NUMERIC startIndex (207 < 1830); sorting the
+// colon-joined string "file:startIndex" via localeCompare instead compares
+// "207" against "1830" character-by-character and finds '2' > '1' at the
+// first position, putting the LARGER offset first — exactly the ":1000
+// sorts before :99" bug this fixture is built to catch. (Verified against
+// the real parser: without WIDE_GAP_LEAD_PAD, both procedures' offsets
+// happen to share a leading "1" digit and the bug doesn't manifest.)
+const WIDE_GAP_LEAD_PAD = "// L\n".repeat(20);
+const WIDE_GAP_MID_PAD = "    // padding\n".repeat(100);
+const WIDE_GAP_AL = `${WIDE_GAP_LEAD_PAD}codeunit 79000 "Sandbox Logic"
+{
+    procedure IsOverBudget(Amount: Decimal; Budget: Decimal): Boolean
+    begin
+        exit(Amount > Budget);
+    end;
+
+${WIDE_GAP_MID_PAD}
+    procedure IsUnderBudget(Amount: Decimal; Budget: Decimal): Boolean
+    begin
+        exit(Amount < Budget);
+    end;
+}
+`;
+
 const APP_ID = "11111111-1111-1111-1111-111111111111";
 const APP_JSON = JSON.stringify(
   {
@@ -792,6 +821,36 @@ describe("runSession — parallel workers", () => {
     // guard — no error, just fewer mutants in the report than were generated.
     expect(report.mutants.length).toBe(9);
     expect(report.counts.killed).toBe(9);
+    store.close();
+  });
+});
+
+describe("runSession — M4 outcome ordering", () => {
+  test("report order is numeric by startIndex, not lexicographic on the colon-joined string", async () => {
+    const dirs = await makeProject();
+    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), WIDE_GAP_AL);
+    const store = new ResultsStore(":memory:");
+    const caps: BackendCapabilities = {
+      coverage: "none",
+      deploy: "none",
+      isolation: "full-reset",
+      authoritative: false,
+    };
+    const backend = new StubBackend(caps, (mutant) => (mutant === null ? "pass" : "fail"), []);
+    const report = await runSession({ backend, store, ...dirs, selectorIds, workers: 1 });
+    // IsOverBudget's mutants sit on lines ~21-26 (startIndex in the 200s);
+    // IsUnderBudget's sit past the 100-line padding block, well past line 100
+    // (startIndex in the 1800s). Numeric ascending order must list every
+    // IsOverBudget mutant before every IsUnderBudget one; the buggy string
+    // sort inverted this (see WIDE_GAP_AL's comment).
+    const overBudgetIndices = report.mutants
+      .map((m, i) => (m.line <= 50 ? i : -1))
+      .filter((i) => i >= 0);
+    const lastOverBudgetIdx = overBudgetIndices.at(-1) ?? -1;
+    const firstUnderBudgetIdx = report.mutants.findIndex((m) => m.line > 50);
+    expect(lastOverBudgetIdx).toBeGreaterThanOrEqual(0);
+    expect(firstUnderBudgetIdx).toBeGreaterThanOrEqual(0);
+    expect(lastOverBudgetIdx).toBeLessThan(firstUnderBudgetIdx);
     store.close();
   });
 });

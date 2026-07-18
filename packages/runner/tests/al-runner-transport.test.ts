@@ -240,4 +240,40 @@ describe("ServerTransport", () => {
     expect(startCount()).toBe(1);
     await t.close();
   });
+
+  // M2: both the handshake deadline (ensureStarted) and the per-response
+  // deadline (sendLocked) must be cleared once the real response wins the
+  // race — otherwise a timer stays armed for up to `deadlineMs` (120s on
+  // baseline runs) after every fast response, keeping an embedder's event
+  // loop alive for no reason. OneShotTransport already gets this right (its
+  // own `finally { clearTimeout(timer) }`); this proves ServerTransport now
+  // matches it, by spying on the real global timer functions rather than
+  // re-deriving the count from the transport's own state.
+  test("clears its handshake and response deadline timers after a fast round trip", async () => {
+    const { io } = fakeIo([{ tests: [{ name: "A", status: "pass" }] }]);
+    const originalSetTimeout = global.setTimeout;
+    const originalClearTimeout = global.clearTimeout;
+    const armed = new Set<unknown>();
+    global.setTimeout = ((fn: (...a: unknown[]) => void, ms?: number, ...args: unknown[]) => {
+      const handle = originalSetTimeout(fn as never, ms, ...args);
+      armed.add(handle);
+      return handle;
+    }) as typeof setTimeout;
+    global.clearTimeout = ((handle?: Parameters<typeof clearTimeout>[0]) => {
+      armed.delete(handle);
+      return originalClearTimeout(handle);
+    }) as typeof clearTimeout;
+    try {
+      const t = new ServerTransport("al-runner", io);
+      const res = await t.send({ ...req, method: "A" });
+      expect(res.kind).toBe("tests");
+      // Both the handshake timer and the response timer must be gone — a
+      // regression that only fixes one of the two sites would leave this at 1.
+      expect(armed.size).toBe(0);
+      await t.close();
+    } finally {
+      global.setTimeout = originalSetTimeout;
+      global.clearTimeout = originalClearTimeout;
+    }
+  });
 });

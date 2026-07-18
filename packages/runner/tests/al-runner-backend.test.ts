@@ -82,7 +82,9 @@ describe("AlRunnerBackend.deploy", () => {
     await writeFile(join(batch1, "MutationSelector.Codeunit.al"), "batch1 selector", "utf8");
     await writeFile(join(batch1, "StaleOnly.Codeunit.al"), "only in batch 1", "utf8");
     await backend.deploy(batch1);
-    expect(await readFile(join(activeDir, "StaleOnly.Codeunit.al"), "utf8")).toBe("only in batch 1");
+    expect(await readFile(join(activeDir, "StaleOnly.Codeunit.al"), "utf8")).toBe(
+      "only in batch 1",
+    );
 
     // batch2 deliberately does NOT include StaleOnly.Codeunit.al — if deploy()
     // merged instead of replacing, it would silently survive into batch 2's

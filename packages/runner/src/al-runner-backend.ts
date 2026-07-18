@@ -105,7 +105,11 @@ export class AlRunnerBackend implements ExecutionBackend {
     // first removes that dependency on an invariant this method has no way
     // to verify.
     const activeDir = join(this.cfg.instrumentedDir, "active");
-    await rm(activeDir, { recursive: true, force: true });
+    // maxRetries/retryDelay: fs.rm defaults to 0 retries. On Windows,
+    // deleting a directory a warm al-runner process, an indexer, or an AV
+    // scanner still holds open is a known EBUSY/EPERM flake — a few quick
+    // retries ride out that window instead of failing the whole deploy.
+    await rm(activeDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     await cp(instrumentedDir, activeDir, { recursive: true });
     this.deployedDir = activeDir;
   }
