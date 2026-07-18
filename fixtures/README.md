@@ -99,6 +99,48 @@ table above), and why the fixture has 15 mutant sites instead of the naively-exp
 Decision: **not fixed on the Layer 4 execution-runtime branch** — this is a Layer 3 operator bug,
 out of scope for Layer 4's execution runtime. Deferred to Layer 4.1/Layer 5.
 
+## Server preconditions for the bcdev backend (verified live 2026-07-18)
+
+Running LethAL against a real BC server has operational preconditions that unit tests
+cannot express. All four below were discovered by actually running `itest:bcdev`, each
+confirmed by an error message from BC itself.
+
+**1. The target app must NOT be published Global or PerTenant.**
+`altool publishapp` posts to `/BC/dev/apps`, i.e. the *Development* scope. If a copy of
+the same app id is already published Global, BC refuses outright:
+
+> The extension could not be deployed because it is already deployed as a global
+> application or a per tenant application.
+
+Unpublish any Global copy first (`UnPublish-BcContainerApp -name "<app>" -unInstall -force`).
+
+**2. The test app must already be on the server, and it needs the target app's symbols
+to compile.** LethAL deploys only the instrumented *target* app; publishing the test app
+is the user's own workflow, not LethAL's job. Server-side compilation of the test app
+cannot see a dev-scoped dependency's symbols, so publish both from local builds instead:
+
+```powershell
+# compile the target, drop its .app into the test project's symbol cache
+alc /project:<target> /packagecachepath:<target>\.alpackages /out:<tests>\.alpackages\<app>.app
+alc /project:<tests>  /packagecachepath:<tests>\.alpackages  /out:<tmp>\tests.app
+# then dev-publish BOTH via altool (same scope, so they resolve each other)
+altool publishapp <tests>\.alpackages\<app>.app --server ... --authentication UserPassword
+altool publishapp <tmp>\tests.app              --server ... --authentication UserPassword
+```
+
+**3. App version monotonicity.** The instrumented app is published as
+`1.0.<runId>.<batchIdx>`. BC rejects any version lower than the one installed:
+
+> Cannot install the extension ... because a newer version 1.0.2.2 was already installed.
+
+`runId` comes from the results DB, so **the bcdev itest uses a persistent
+`lethal.sqlite`, not `:memory:`** — an in-memory store restarts `runId` at 1 every
+invocation and republishes below the previous run's high-water mark, failing every
+deploy. Known limitation: a fresh results DB pointed at a server that already carries a
+higher version will fail the same way; drop the stale app or start from a higher runId.
+
+**4. Test codeunits must not carry `TestIsolation`** — see the section above (AL0223).
+
 ## `launch.local.json` convention
 
 `fixtures/sandbox-app/.vscode/launch.json` is committed with placeholder server details —
