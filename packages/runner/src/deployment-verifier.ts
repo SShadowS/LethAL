@@ -20,9 +20,22 @@ function isValidArtifactId(id: string): boolean {
   return ARTIFACT_ID_PATTERN.test(id);
 }
 
+// Cap on how much of a malformed/hostile reported value gets quoted back into a `detail`
+// string — a server (or a MITM) returning megabytes of garbage must not be able to flood a log.
+const MAX_REPORTED_VALUE_DETAIL_LENGTH = 200;
+
+function describeReportedValue(value: string): string {
+  if (value.length === 0) return "(empty string)";
+  const truncated =
+    value.length > MAX_REPORTED_VALUE_DETAIL_LENGTH
+      ? `${value.slice(0, MAX_REPORTED_VALUE_DETAIL_LENGTH)}… [truncated, ${value.length} chars total]`
+      : value;
+  return JSON.stringify(truncated);
+}
+
 export type DeploymentVerification =
   | { readonly status: "accepted" }
-  | { readonly status: "mismatch"; readonly reported: string | null }
+  | { readonly status: "mismatch"; readonly reported: string }
   | { readonly status: "unavailable"; readonly detail: string };
 
 export type PublishOutcome = "accepted" | "indeterminate" | "anomalous" | "failed";
@@ -76,13 +89,20 @@ export class DeploymentVerifier {
     const rawValue = (payload as { value?: unknown } | null | undefined)?.value;
     const reported = typeof rawValue === "string" ? rawValue : null;
 
-    // An empty or malformed reported id is unconditionally NOT a match — it must never reach the
-    // `===` check below. In particular, an empty reported id must never compare equal to an empty
-    // expected id: this specific silent-wrong-answer shape is exactly what this guard exists to
-    // rule out (the expected id is already validated non-empty above, but the guard here does not
-    // rely on that — it refuses ANY invalid reported value on its own terms).
+    // A malformed, empty, or absent reported id means we could not determine what the server is
+    // actually running — that's diagnostically different from a well-formed id that genuinely
+    // differs from what we expected, so it must not collapse into `mismatch`. This guard is what
+    // makes that distinction real: without it, a malformed `reported` would fall through to the
+    // `===` comparison below, which can never be true (the expected id was already validated as
+    // 32-hex above), so it would silently degrade into `mismatch` — losing the "we couldn't tell
+    // what's running" signal that callers need in order to tell "wrong deployment" apart from
+    // "no idea what's deployed".
     if (reported === null || !isValidArtifactId(reported)) {
-      return { status: "mismatch", reported };
+      const detail =
+        reported === null
+          ? "server did not report an artifact id (missing or non-string `value`)"
+          : `server reported ${describeReportedValue(reported)}, which does not match ${ARTIFACT_ID_PATTERN.source}`;
+      return { status: "unavailable", detail };
     }
 
     if (reported === expected.artifactId) {

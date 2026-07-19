@@ -24,7 +24,7 @@ describe("decidePublishOutcome", () => {
   });
 
   it("treats a failed publish with mismatched identity as a publication failure", () => {
-    expect(decidePublishOutcome(false, { status: "mismatch", reported: null })).toBe("failed");
+    expect(decidePublishOutcome(false, { status: "mismatch", reported: "other" })).toBe("failed");
   });
 });
 
@@ -36,7 +36,7 @@ const CFG = {
 };
 
 const VALID_ID = "0123456789abcdef0123456789abcdef";
-const OTHER_VALID_ID = "fedcba9876543210fedcba9876543210".slice(0, 32);
+const OTHER_VALID_ID = "fedcba9876543210fedcba9876543210";
 
 function fakeArtifact(overrides: Partial<CompiledArtifact> = {}): CompiledArtifact {
   return {
@@ -95,23 +95,37 @@ describe("DeploymentVerifier.verify", () => {
     expect(result).toEqual({ status: "mismatch", reported: OTHER_VALID_ID });
   });
 
-  it("rejects a malformed reported id as a mismatch instead of comparing it", async () => {
+  it("treats a malformed reported id as unavailable instead of comparing it", async () => {
     const { fetchFn } = fakeFetch(200, { value: "not-a-valid-artifact-id!!" });
     const result = await new DeploymentVerifier(CFG, fetchFn).verify(fakeArtifact());
-    expect(result).toEqual({ status: "mismatch", reported: "not-a-valid-artifact-id!!" });
+    expect(result.status).toBe("unavailable");
+    expect((result as { detail: string }).detail).toContain("not-a-valid-artifact-id!!");
   });
 
   it("never treats an empty reported id as a match, even against a valid expected id", async () => {
     const { fetchFn } = fakeFetch(200, { value: "" });
     const result = await new DeploymentVerifier(CFG, fetchFn).verify(fakeArtifact());
     expect(result.status).not.toBe("accepted");
-    expect(result).toEqual({ status: "mismatch", reported: "" });
+    expect(result.status).toBe("unavailable");
   });
 
-  it("treats a missing `value` field as no reported id, not a match", async () => {
+  it("treats a missing `value` field as unavailable, not a mismatch", async () => {
     const { fetchFn } = fakeFetch(200, {});
     const result = await new DeploymentVerifier(CFG, fetchFn).verify(fakeArtifact());
-    expect(result).toEqual({ status: "mismatch", reported: null });
+    expect(result).toEqual({
+      status: "unavailable",
+      detail: "server did not report an artifact id (missing or non-string `value`)",
+    });
+  });
+
+  it("truncates a huge/hostile reported value in the unavailable detail rather than logging it whole", async () => {
+    const hostileValue = "x".repeat(10_000);
+    const { fetchFn } = fakeFetch(200, { value: hostileValue });
+    const result = await new DeploymentVerifier(CFG, fetchFn).verify(fakeArtifact());
+    expect(result.status).toBe("unavailable");
+    const detail = (result as { detail: string }).detail;
+    expect(detail.length).toBeLessThan(hostileValue.length);
+    expect(detail).toContain("truncated");
   });
 
   it("returns unavailable with the status on an HTTP error", async () => {
