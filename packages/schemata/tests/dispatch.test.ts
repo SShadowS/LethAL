@@ -61,3 +61,64 @@ describe("emitDispatch", () => {
     expect(out).toContain("exit(V);");
   });
 });
+
+describe("emitDispatch — member splice reproduces the consumed terminator (C1)", () => {
+  // The discriminator is what the consumed span's TEXT actually ends with,
+  // never the node's kind — inferring from kind regressed emission in both
+  // directions once already (Task 3). These two tests pin both directions
+  // with exact strings.
+
+  it("re-appends a consumed trailing ';' so a sibling statement stays separated", () => {
+    // Inner if-branch block followed by a sibling statement: the grammar
+    // includes the trailing ';' in the block node (verified against the real
+    // parser), so the consumed span ends in ';' and `begin end` does not.
+    const rootText =
+      "begin\n    if A <> 0 then begin\n        A := A;\n    end;\n    A := 2;\nend;";
+    const innerText = "begin\n        A := A;\n    end;";
+    const rootStart = 100;
+    const innerStart = rootStart + rootText.indexOf(innerText);
+    const out = emitDispatch({
+      root: node(rootText, rootStart),
+      members: [member("M0001", innerText, innerStart, "begin end")],
+    } as never);
+    const mutatedBranch = out.slice(0, out.indexOf("end else begin"));
+    // Exact string: the splice must reproduce the ';' the consumed span had,
+    // or the branch reads `... begin end\n    A := 2;` — invalid AL.
+    expect(mutatedBranch).toContain("if A <> 0 then begin end;\n    A := 2;");
+    expect(mutatedBranch).not.toContain("begin end\n    A := 2;");
+  });
+
+  it("does not add a ';' when the consumed span had none (an else follows)", () => {
+    // Inner if-branch block directly followed by `else`: the grammar gives
+    // the block node NO trailing ';' (verified against the real parser), and
+    // inserting one would orphan the else inside this branch (AL0110).
+    const rootText =
+      "begin\n    if X then begin\n        Y := 1;\n    end\n    else\n        Y := 2;\nend;";
+    const innerText = "begin\n        Y := 1;\n    end";
+    const rootStart = 200;
+    const innerStart = rootStart + rootText.indexOf(innerText);
+    const out = emitDispatch({
+      root: node(rootText, rootStart),
+      members: [member("M0001", innerText, innerStart, "begin end")],
+    } as never);
+    const mutatedBranch = out.slice(0, out.indexOf("end else begin"));
+    expect(mutatedBranch).toContain("if X then begin end\n    else\n        Y := 2;");
+    expect(mutatedBranch).not.toContain("begin end;");
+  });
+
+  it("does not double a ';' when the replacement text already ends in one", () => {
+    // Statement-for-statement replacement: consumed span AND afterText both
+    // end in ';' — the splice must not stack a second one.
+    const rootText = "begin\n    exit(A > B);\nend;";
+    const innerText = "exit(A > B);";
+    const rootStart = 300;
+    const innerStart = rootStart + rootText.indexOf(innerText);
+    const out = emitDispatch({
+      root: node(rootText, rootStart),
+      members: [member("M0001", innerText, innerStart, "exit(false);")],
+    } as never);
+    const mutatedBranch = out.slice(0, out.indexOf("end else begin"));
+    expect(mutatedBranch).toContain("exit(false);");
+    expect(mutatedBranch).not.toContain("exit(false);;");
+  });
+});

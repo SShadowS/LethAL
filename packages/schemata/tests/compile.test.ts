@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from "bun:test";
-import { ALNodeKind, findAll, findFirst, initParser, parseAL, wrapRoot } from "@lethal/engine";
+import { ALNodeKind, findAll, findFirst, initParser, parseAL, visit, wrapRoot } from "@lethal/engine";
 import type { ALSyntaxNode, MutationSpec } from "@lethal/engine";
 import { compileSchemataForFile } from "../src/compile";
 
@@ -364,5 +364,138 @@ describe("compileSchemataForFile — bare branch positions keep the enclosing el
     // because the consumed `innerIf.text` had one.
     expect(out).toMatch(/while X do\s*begin\b/);
     expect(out).toMatch(/end;\s*W := 2;/);
+  });
+});
+
+describe("compileSchemataForFile — member splice reproduces a consumed terminator (C1)", () => {
+  /**
+   * Re-parse emitted AL and count tree-sitter ERROR nodes — 0 means it still
+   * parses. CAVEAT (verified against the real parser): tree-sitter-al
+   * false-positives an ERROR on any bare nested block (`begin begin ... end
+   * end`), a shape the real AL compiler accepts and that every block-ROOTED
+   * dispatch chain contains (each branch's text is itself `begin ... end`).
+   * So this oracle is only used on emissions whose component root is NOT a
+   * block — the exact-string assertions carry the block-rooted cases.
+   */
+  function countErrorNodes(source: string): number {
+    const r = wrapRoot(parseAL(source));
+    let n = 0;
+    visit(r, (node) => {
+      if (node.rawKind === "ERROR") n++;
+    });
+    return n;
+  }
+
+  it("an inner-block member followed by a sibling statement keeps its ';' (reviewer probe shape)", async () => {
+    await initParser();
+    // The shape the sandbox fixture structurally lacks: an inner block that
+    // is NOT body-final — a sibling statement follows it. The body-level
+    // empty-block spec roots the component, making the inner block a MEMBER,
+    // so its edit goes through `spliceIntoRoot`, not the root wrap.
+    const src = `codeunit 51903 "T3"
+{
+    procedure P(A: Integer)
+    begin
+        if A <> 0 then begin
+            A := A;
+        end;
+        A := 2;
+    end;
+}
+`;
+    const root = wrapRoot(parseAL(src));
+    const blocks = findAll(root, ALNodeKind.block);
+    const body = blocks[0];
+    const inner = blocks[1];
+    if (body === undefined || inner === undefined) throw new Error("fixture drift");
+
+    const out = compileSchemataForFile(src, root, [
+      spec(body, "begin end", "lethal.empty-block"),
+      spec(inner, "begin end", "lethal.empty-block"),
+    ]);
+
+    // Exact strings, not toContain-on-fragments: the inner mutant's branch
+    // must read `... begin end;` before the sibling `A := 2;` — the consumed
+    // span (`begin ... end;`, ';' included per the grammar) ended in ';' and
+    // `begin end` does not, so the splice has to reproduce it. Without it the
+    // branch reads `... begin end\n        A := 2;` — invalid AL.
+    expect(out).toContain("if A <> 0 then begin end;\n        A := 2;");
+    expect(out).not.toMatch(/begin end\s*\n\s*A := 2;/);
+  });
+
+  it("emits a fully re-parseable file when the component root is a statement (0 ERROR nodes)", async () => {
+    await initParser();
+    // Same C1 shape (inner-block member with consumed ';' + sibling), but
+    // the component root is the OUTER if_statement (via a condition mutant),
+    // not a block — no branch contains a bare nested block, so tree-sitter's
+    // ERROR count is a sound parse oracle here: this is the probe that
+    // caught C1 (0 ERROR nodes before instrumentation, 5 after).
+    const src = `codeunit 51905 "T5"
+{
+    procedure P(A: Integer)
+    begin
+        if A > 0 then begin
+            if A <> 0 then begin
+                A := A;
+            end;
+            A := 2;
+        end;
+    end;
+}
+`;
+    const root = wrapRoot(parseAL(src));
+    const cmp = findFirst(root, ALNodeKind.comparison_expression);
+    const inner = findAll(root, ALNodeKind.block)[2];
+    if (cmp === null || inner === undefined || !inner.text.startsWith("begin\n                A := A;")) {
+      throw new Error("fixture drift");
+    }
+
+    const out = compileSchemataForFile(src, root, [
+      spec(cmp, "A >= 0", "lethal.conditional-boundary"),
+      spec(inner, "begin end", "lethal.empty-block"),
+    ]);
+
+    expect(out).toContain("if A <> 0 then begin end;\n            A := 2;");
+    expect(out).not.toMatch(/begin end\s*\n\s*A := 2;/);
+    expect(countErrorNodes(src)).toBe(0);
+    expect(countErrorNodes(out)).toBe(0);
+  });
+
+  it("an inner-block member directly followed by 'else' gains no ';'", async () => {
+    await initParser();
+    // Same splice path, opposite direction: the consumed block text has NO
+    // trailing ';' (an `else` follows), and appending one inside the branch
+    // would orphan that else (AL0110). The discriminator must be the
+    // consumed TEXT, not the node kind — the member here is the same
+    // `code_block` kind as the case above, only its text differs.
+    const src = `codeunit 51904 "T4"
+{
+    procedure P(X: Integer)
+    var
+        Y: Integer;
+    begin
+        if X > 0 then begin
+            Y := 1;
+        end
+        else
+            Y := 2;
+    end;
+}
+`;
+    const root = wrapRoot(parseAL(src));
+    const cmp = findFirst(root, ALNodeKind.comparison_expression);
+    const inner = findAll(root, ALNodeKind.block)[1];
+    if (cmp === null || inner === undefined || !inner.text.startsWith("begin\n            Y := 1;")) {
+      throw new Error("fixture drift");
+    }
+
+    const out = compileSchemataForFile(src, root, [
+      spec(cmp, "X >= 0", "lethal.conditional-boundary"),
+      spec(inner, "begin end", "lethal.empty-block"),
+    ]);
+
+    expect(out).toContain("if X > 0 then begin end\n        else\n            Y := 2;");
+    expect(out).not.toMatch(/begin end;\s*else/);
+    expect(countErrorNodes(out)).toBe(0);
   });
 });

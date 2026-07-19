@@ -38,5 +38,18 @@ function spliceIntoRoot(root: Component["root"], m: ComponentMember): string {
         `is not contained in component root ${root.startIndex}..${root.endIndex}`,
     );
   }
-  return text.slice(0, relStart) + m.afterText + text.slice(relEnd);
+  // Mirror `wrapIfSingleStatementSlot` (compile.ts)'s consumed-terminator
+  // rule at the MEMBER-splice level: if the consumed span's text ended in a
+  // `;` the replacement does not reproduce, re-append it — otherwise a
+  // following sibling statement loses its separator (`... begin end
+  // A := 2;` — invalid AL). The discriminator is what the consumed TEXT
+  // actually ends with, never the node's kind: `empty-block`'s span includes
+  // the block's trailing `;` when a sibling follows, but the SAME block kind
+  // as a bare `if`-branch directly followed by `else` has none — and adding
+  // one there would orphan the else (AL0110). Inferring from kind regressed
+  // emission in both directions once already (Task 3).
+  const consumed = text.slice(relStart, relEnd);
+  const needsTerminator =
+    consumed.trimEnd().endsWith(";") && !m.afterText.trimEnd().endsWith(";");
+  return text.slice(0, relStart) + m.afterText + (needsTerminator ? ";" : "") + text.slice(relEnd);
 }
