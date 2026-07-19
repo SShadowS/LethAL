@@ -84,8 +84,12 @@ describe("ArtifactCompiler", () => {
 
   it("throws ArtifactPrepareError when the manifest artifactId does not match the requested id", async () => {
     const bytes = new Uint8Array([9, 9, 9]);
+    let spawnCallCount = 0;
     const compiler = new ArtifactCompiler(CFG, {
-      spawn: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+      spawn: async () => {
+        spawnCallCount++;
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
       readArtifact: async () => bytes,
       writeArtifact: async () => {},
     });
@@ -99,6 +103,9 @@ describe("ArtifactCompiler", () => {
         },
       }),
     ).rejects.toBeInstanceOf(ArtifactPrepareError);
+    // Fail-fast: the manifest-consistency check runs BEFORE alc is ever spawned (see
+    // ArtifactCompiler.compile), same pattern as ContainerDeployer's digest-mismatch test above.
+    expect(spawnCallCount).toBe(0);
   });
 
   it("passes /project, /packagecachepath and /out to alc with forward slashes", async () => {
