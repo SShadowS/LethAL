@@ -1,4 +1,42 @@
-# LethAL Session Checkpoint — Layer 4 Verified Live on BOTH Backends
+# LethAL Session Checkpoint — Layer 4.2 Merged (hardening + parallel POC)
+
+> **Status 2026-07-19: Layer 4.2 merged to master.** 22 commits, 7 tasks, each individually
+> reviewed, plus a whole-branch review. 256 tests pass, typecheck + lint clean.
+>
+> **What it delivers.** (1) *Execution hardening:* `timeout` now means the RUNNER confirmed a
+> test didn't terminate; our own client deadline is a separate `deadline-exceeded` mapping to
+> verdict `error`. Previously a client deadline was reported as `timeout-killed` — an MCP hang
+> or wedged endpoint manufactured fake kills and inflated the score. bcdev has no
+> server-confirmed timeout signal, so it treats every timeout as a deadline: under-report kills
+> rather than fabricate them. (2) *Parallel POC:* opt-in al-runner server-mode transport
+> (~3.4× — one-shot 3m37s vs 1m4.7s, verdict-identical) and N-worker parallel execution, where
+> `workers = 1` is literally the same code path as the verified sequential one.
+>
+> **Live verification (real al-runner, all verdict-identical at 3 killed / 13 survived /
+> 0 no-coverage, 18.8%):** server-mode 1m10.2s / 1m13.6s / 59.0s and one-shot 3m37s / 164s /
+> 121s at workers 1/2/4. `itest:bcdev` still PASS. Parallelism's payoff is modest on a
+> 16-mutant fixture — reported honestly, not spun.
+>
+> **`--workers > 1` is rejected for `--backend bcdev`** and this is the important constraint:
+> bcdev activation is a SINGLE server-side record shared by all workers, so concurrent workers
+> would overwrite each other's active mutant and silently misattribute verdicts. Parallelism on
+> the authoritative backend needs per-container activation — that is the container-pool layer.
+>
+> **Scoring change:** `timeout-killed` now counts toward the mutation score
+> (`(killed + timeout-killed) / (killed + timeout-killed + survived)`), resolving a
+> contradiction with design.md §6.7 that only became reachable once runner-confirmed timeouts
+> became real evidence.
+>
+> Docs: spec `docs/superpowers/specs/2026-07-18-layer-4-2-hardening-and-parallel-poc-design.md`,
+> plan `docs/superpowers/plans/2026-07-18-layer-4-2-hardening-and-parallel-poc.md` (carries
+> amendment notes where review findings corrected the plan's own code).
+>
+> **Next:** schemata overlap coalescing (Layer 3 debt — one artifact per session, removes
+> batching entirely and restores design.md §3.1's "one compile with all mutations embedded"),
+> then the container pool with leasing/fencing. A line-level-coverage validation spike remains
+> separate and unstarted.
+
+# Superseded: Layer 4 Verified Live on BOTH Backends
 
 > **Status 2026-07-18 (final): both integration tests PASS against real infrastructure.**
 > `itest:alrunner` → PASS (396s). `itest:bcdev` → PASS (14s) against BC container
