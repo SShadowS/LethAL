@@ -154,13 +154,18 @@ const DEPLOY_CFG = {
 describe("ContainerDeployer.publish", () => {
   it("re-hashes the artifact bytes and refuses to publish on a digest mismatch", async () => {
     const artifact = fakeArtifact();
+    let spawnCallCount = 0;
     const deployer = new ContainerDeployer(DEPLOY_CFG, {
-      spawn: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+      spawn: async () => {
+        spawnCallCount++;
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
       // Bytes on disk hash to something other than artifact.sha256 — simulates the file
       // having changed after compilation.
       readArtifact: async () => new Uint8Array([9, 9, 9, 9]),
     });
     await expect(deployer.publish(artifact)).rejects.toThrow(/digest/);
+    expect(spawnCallCount).toBe(0);
   });
 
   it("invokes altool publishapp with server params and ForceSync when the digest matches", async () => {

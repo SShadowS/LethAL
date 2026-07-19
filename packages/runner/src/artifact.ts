@@ -8,7 +8,7 @@ import type { SpawnFn } from "./publisher";
  */
 export class AlcCompileError extends Error {}
 
-/** Any failure that is not a compiler verdict: spawn, I/O, hashing, manifest inconsistency. */
+/** Any failure that is not a compiler verdict: spawn, I/O, manifest inconsistency. */
 export class ArtifactPrepareError extends Error {}
 
 export interface ArtifactCoverageMetadata {
