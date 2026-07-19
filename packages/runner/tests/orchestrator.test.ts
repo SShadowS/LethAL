@@ -1,8 +1,11 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { ALSyntaxNode, MutationSpec } from "@lethal/engine";
+import type { InstrumentedFile, MutantManifestEntry } from "@lethal/schemata";
 import type {
   BackendCapabilities,
   BackendStatus,
@@ -11,7 +14,7 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "../src/backend";
-import { runSession } from "../src/orchestrator";
+import { narrowFilesToSubset, runSession } from "../src/orchestrator";
 import { ResultsStore } from "../src/store";
 
 const TARGET_AL = `codeunit 79000 "Sandbox Logic"
@@ -160,6 +163,12 @@ class StubBackend implements ExecutionBackend {
     // concurrent run() calls are in flight at once (the parallel-workers
     // concurrency proof).
     private readonly onRun?: () => Promise<void>,
+    // When set, called on every deploy() with the artifact dir; returning an
+    // Error throws it instead of succeeding, returning undefined succeeds.
+    // Unlike `deployError` (a fixed always-throw), this lets a test fail
+    // deploy conditionally — e.g. only while a specific mutant's spec is
+    // still present in the artifact — to exercise bisection.
+    private readonly deployGuard?: (dir: string) => Error | undefined,
   ) {}
   capabilities() {
     return this.caps;
@@ -169,6 +178,8 @@ class StubBackend implements ExecutionBackend {
   }
   async deploy(dir: string) {
     if (this.deployError !== undefined) throw this.deployError;
+    const guardErr = this.deployGuard?.(dir);
+    if (guardErr !== undefined) throw guardErr;
     this.deploys.push(dir);
   }
   async activate(id: string | null) {
@@ -1127,6 +1138,151 @@ describe("runSession — single artifact", () => {
     expect(backend.deploys).toHaveLength(0);
     expect(report.batches).toBe(0);
     expect(report.mutants.length).toBe(0);
+    store.close();
+  });
+});
+
+describe("narrowFilesToSubset", () => {
+  // Minimal fakes: `narrowFilesToSubset` only ever reads `spec.before.{start,end}Index`,
+  // `spec.operatorName`, and `file.{path,specs}` — every other field on `ALSyntaxNode` /
+  // `MutationSpec` is irrelevant to the regrouping logic under test, so the fakes only
+  // populate what's actually read rather than constructing a real parsed tree.
+  function fakeNode(startIndex: number, endIndex: number): ALSyntaxNode {
+    return { startIndex, endIndex } as unknown as ALSyntaxNode;
+  }
+  function fakeSpec(operatorName: string, startIndex: number, endIndex: number): MutationSpec {
+    return {
+      operatorName,
+      operatorVersion: "1.0.0",
+      astNodeId: `${operatorName}@${startIndex}`,
+      before: fakeNode(startIndex, endIndex),
+      after: fakeNode(startIndex, endIndex),
+      parentContext: "statement",
+    } as unknown as MutationSpec;
+  }
+  function fakeEntry(
+    file: string,
+    startIndex: number,
+    endIndex: number,
+    operatorName: string,
+  ): MutantManifestEntry {
+    return {
+      mutantId: "M0000",
+      file,
+      startIndex,
+      endIndex,
+      startLine: 1,
+      operatorName,
+      operatorVersion: "1.0.0",
+      astHash: "h",
+      codeunitId: 1,
+      codeunitName: "C",
+      procedureName: "P",
+    };
+  }
+
+  test("keeps only the specs matching the subset, by (file, span, operator)", () => {
+    const specA = fakeSpec("lethal.empty-block", 0, 10);
+    const specB = fakeSpec("lethal.conditional-boundary", 20, 30);
+    const files: InstrumentedFile[] = [
+      { path: "a.al", source: "", root: fakeNode(0, 100), specs: [specA, specB] },
+    ];
+    const narrowed = narrowFilesToSubset(files, [
+      fakeEntry("a.al", 20, 30, "lethal.conditional-boundary"),
+    ]);
+    expect(narrowed).toHaveLength(1);
+    expect(narrowed[0]?.specs).toEqual([specB]);
+  });
+
+  test("drops a file entirely when none of its specs are in the subset", () => {
+    const specA = fakeSpec("lethal.empty-block", 0, 10);
+    const files: InstrumentedFile[] = [
+      { path: "a.al", source: "", root: fakeNode(0, 100), specs: [specA] },
+    ];
+    expect(narrowFilesToSubset(files, [])).toHaveLength(0);
+  });
+
+  test("a file untouched by the subset is dropped, a matching file across many is kept", () => {
+    const specA = fakeSpec("lethal.empty-block", 0, 10);
+    const specB = fakeSpec("lethal.return-value", 5, 8);
+    const files: InstrumentedFile[] = [
+      { path: "a.al", source: "srcA", root: fakeNode(0, 100), specs: [specA] },
+      { path: "b.al", source: "srcB", root: fakeNode(0, 100), specs: [specB] },
+    ];
+    const narrowed = narrowFilesToSubset(files, [fakeEntry("b.al", 5, 8, "lethal.return-value")]);
+    expect(narrowed).toHaveLength(1);
+    expect(narrowed[0]?.path).toBe("b.al");
+  });
+});
+
+describe("runSession — bisection on compile failure", () => {
+  // Brief's literal test, adapted: `deployGuard` is a `StubBackend` constructor
+  // parameter (matching how `deployError`/`onRun` already extend it) rather than a
+  // property assigned after construction. The guard fails only the very first deploy
+  // (the whole-artifact one), then succeeds on everything bisection tries afterward —
+  // a minimal smoke test that the new catch-block wiring doesn't crash or hang, and
+  // that the batch still ends up correctly recorded as errored.
+  test("a mutant that breaks compilation is named, not blamed on the whole run", async () => {
+    const dirs = await makeProject();
+    let seenSubsets = 0;
+    const backend = new StubBackend(
+      CAPS_NST,
+      () => "pass",
+      ["IsOverBudget"],
+      undefined,
+      undefined,
+      (_dir: string) => {
+        seenSubsets++;
+        return seenSubsets === 1 ? new Error("alc: AL0001") : undefined;
+      },
+    );
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({ backend, store, ...dirs, selectorIds });
+    expect(report.counts.errors).toBeGreaterThan(0);
+    const noted = report.mutants.find((m) => m.verdict === "error");
+    expect(noted).toBeDefined();
+    store.close();
+  });
+
+  // Stronger than the smoke test above: `report.mutants`/`SessionReport` don't
+  // surface the bisected culprit's name today (`failureNote` is computed but only
+  // ever reaches the in-memory `outcomes` array — see the concern noted in the task
+  // report), so this proves correctness a different way: `deployGuard` fails
+  // whenever the ACTUAL manifest written for whatever subset `prepareArtifact` just
+  // built still contains the `lethal.conditional-boundary` mutant (TARGET_AL's 3
+  // nested mutants — empty-block/return-value/conditional-boundary — all share one
+  // containment component, exactly the "one bad spec in one file" shape bisection
+  // exists for). If `narrowFilesToSubset` were a no-op (e.g. always re-writing the
+  // full, unnarrowed spec set regardless of `subset`), every attempt would keep
+  // seeing the boundary mutant and keep failing — `attempts` would never see `false`.
+  test("bisection's compile predicate sees the actual narrowed subset, not the full artifact every time", async () => {
+    const dirs = await makeProject();
+    const attempts: boolean[] = []; // true = this attempt's manifest still had the boundary mutant
+    const backend = new StubBackend(
+      CAPS_NST,
+      () => "pass",
+      ["IsOverBudget"],
+      undefined,
+      undefined,
+      (dir: string) => {
+        const manifest = JSON.parse(readFileSync(join(dir, "mutant-manifest.json"), "utf8")) as {
+          mutants: Array<{ operatorName: string }>;
+        };
+        const hasBoundary = manifest.mutants.some(
+          (m) => m.operatorName === "lethal.conditional-boundary",
+        );
+        attempts.push(hasBoundary);
+        return hasBoundary ? new Error("alc: AL0001 malformed operator replacement") : undefined;
+      },
+    );
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({ backend, store, ...dirs, selectorIds });
+    expect(report.counts.errors).toBeGreaterThan(0);
+    // More than the one always-failing whole-artifact deploy — bisection genuinely ran.
+    expect(attempts.length).toBeGreaterThan(1);
+    // At least one narrowed attempt excluded the boundary mutant and compiled clean —
+    // proof the artifact `prepareArtifact` wrote actually reflected that subset.
+    expect(attempts.some((hasBoundary) => !hasBoundary)).toBe(true);
     store.close();
   });
 });
