@@ -228,6 +228,9 @@ describe("compileSchemataForFile — overlapping specs coalesce", () => {
 
     // Both mutants present, exactly one guard each, no nesting.
     expect(out.match(/MutationSelector\.Active/g)).toHaveLength(2);
+    // Proves the chain is actually FLAT (siblings in one if/else-if chain) —
+    // a count of 2 alone would pass equally for a nested emission.
+    expect(out).toContain("end else if MutationSelector.Active");
     expect(out).toContain("exit(false);");
     // `exit_statement.text` (packages/engine) excludes its own terminating
     // `;` — verified against the parser: the grammar treats it as a sibling
@@ -239,5 +242,49 @@ describe("compileSchemataForFile — overlapping specs coalesce", () => {
     // `;` is a no-op empty statement).
     expect(out).toContain("exit(A >= B)");
     expect(out).toContain("exit(A > B)");
+  });
+});
+
+describe("compileSchemataForFile — bare branch positions keep the enclosing else attached", () => {
+  it("wraps a mutated then-branch in begin/end so a following else still binds to the outer if", async () => {
+    await initParser();
+    const src = `codeunit 51900 "E"
+{
+    procedure P(X: Boolean)
+    var
+        Y: Integer;
+    begin
+        if X then
+            Y := 1
+        else
+            Y := 2;
+    end;
+}
+`;
+    const root = wrapRoot(parseAL(src));
+    const assign = findFirst(root, ALNodeKind.assignment_statement);
+    if (assign === null) throw new Error("no assignment");
+
+    const out = compileSchemataForFile(src, root, [
+      spec(assign, "Y := 3;", "lethal.some-operator"),
+    ]);
+
+    // `assign` (`Y := 1`) is the bare then-branch of the outer `if X then
+    // ... else ...` — its parent is the `if_statement`, not a `code_block`.
+    // Splicing the flat chain in unwrapped would embed a complete nested
+    // if/else-if/else construct (itself ending in its own `;`) directly as
+    // the outer if's then-branch: the inner `;` closes the OUTER if before
+    // its `else` is reached (AL0110 "Orphaned ELSE statement" — the exact
+    // failure wrap.ts already defends against one level down), and even
+    // without a following `else`, an unwrapped chain is itself an `if`,
+    // creating a dangling-else ambiguity regardless. The fix wraps the
+    // whole chain in `begin ... end` so it reads as a single statement.
+    expect(out).toMatch(/if X then\s*begin\b/);
+    // No `;` immediately precedes the outer `else` — that stray `;` is
+    // exactly what orphans it.
+    expect(out).not.toMatch(/end;\s*else/);
+    expect(out).toMatch(/end\s*else/);
+    // The untouched else-branch is unaffected.
+    expect(out).toContain("Y := 2;");
   });
 });
