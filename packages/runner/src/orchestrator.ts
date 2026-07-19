@@ -19,7 +19,7 @@ import {
   writeInstrumentedProject,
 } from "@lethal/schemata";
 import { nextAbove, parseVersionConflict, reserveAppVersion } from "./app-version";
-import { DeploymentError } from "./artifact";
+import { AlcCompileError } from "./artifact";
 import type { CompiledArtifact } from "./artifact";
 import type { ExecutionBackend, TestMethodRef, TestVerdict } from "./backend";
 import { bisectFailingMutant } from "./bisect";
@@ -308,7 +308,14 @@ async function bisectAndNote(args: {
       try {
         await args.deploy(args.scratchDir);
         return true;
-      } catch {
+      } catch (err) {
+        // Only a deterministic alc rejection may be read as "this subset does not compile".
+        // A publish/verification failure (DeploymentError), an fs/spawn problem
+        // (ArtifactPrepareError), or anything else propagating out of `deploy` here is NOT a
+        // compile answer — resolving `false` for it would send the search halving the mutant
+        // set chasing a problem that has nothing to do with any mutant, and could converge on
+        // (and name) an innocent one. Let it abort the search instead.
+        if (!(err instanceof AlcCompileError)) throw err;
         return false;
       }
     });
@@ -504,24 +511,36 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         }
       }
       if (!deployed) {
-        // 3b. a deployment whose outcome is indeterminate/anomalous/failed-verification is
-        // NOT a compile verdict: never bisect it, and never run tests against a deployment
-        // we cannot explain — abort the session instead (design §5).
-        if (deployErr instanceof DeploymentError) throw deployErr;
+        // 3b. A publish/verification failure is environmental: catalog conflict, schema sync,
+        // dependency mismatch, license, transport, NST limits. Attributing it to a mutant would
+        // be unsound, and republishing subset artifacts to diagnose it can leave a narrowed
+        // candidate installed. Only a deterministic alc rejection (AlcCompileError) is
+        // bisectable — everything else (DeploymentError, ArtifactPrepareError, a bare
+        // string/Error from some other failure) aborts the session instead of being fed into
+        // bisection (design §5; §6 restricts bisection to compile verdicts specifically).
+        // `DeploymentError` and `ArtifactPrepareError` both extend `Error` directly, not
+        // `AlcCompileError` — `instanceof` cannot cross-match them, so this guard alone is
+        // sufficient to exclude both.
+        if (!(deployErr instanceof AlcCompileError)) throw deployErr;
         // 3c. Layer 4.3 put every mutant in one artifact (design spec §6): one
         // malformed spec now fails this ONE compile and would otherwise turn
         // every mutant `execute` holds into an equally uninformative "error"
         // with nothing pointing at the actual cause. Bisect before giving
         // up, via the same `prepareArtifactDir`/`bisectAndNote` helpers the
         // per-worker shard catch below reuses: `bisectFailingMutant` halves
-        // `execute` against re-instrumented, re-deployed scratch subsets
-        // until a single offending mutant is isolated, or the narrowing
-        // stops reproducing the failure (e.g. the culprit was a
-        // known-survivor mutant excluded from `execute` above), in which
-        // case there's nothing more specific to report than the original
-        // error.
+        // `manifest.mutants` — the FULL set this batch's artifact was
+        // compiled from, not `execute` — against re-instrumented,
+        // re-deployed scratch subsets until a single offending mutant is
+        // isolated, or the narrowing stops reproducing the failure, in
+        // which case there's nothing more specific to report than the
+        // original error. `execute` (post-history-filter) would be wrong
+        // here: known survivors are excluded from `execute` but are STILL
+        // compiled into the artifact, so a malformed known-survivor mutant
+        // would break this compile while being provably unfindable by a
+        // search restricted to `execute`. History filtering is an
+        // execution decision, not a compilation decision.
         const note = await bisectAndNote({
-          subsetMutants: execute,
+          subsetMutants: manifest.mutants,
           scratchDir: join(cfg.instrumentedDir, `run-${runId}-batch-${batchIdx}-bisect`),
           batchFiles,
           selectorIds: cfg.selectorIds,
@@ -661,20 +680,28 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
             try {
               await compileLimit.run(() => backend.deploy(batchDir));
             } catch (err) {
-              // Same session-abort rule as the sequential path (3b): a DeploymentError is
-              // never a compile verdict, so it must not be bisected or downgraded to
-              // per-mutant errors here either.
-              if (err instanceof DeploymentError) throw err;
+              // Same session-abort rule as the sequential path (3b): only a deterministic alc
+              // rejection (AlcCompileError) is bisectable. A DeploymentError, an
+              // ArtifactPrepareError, or anything else is never a compile verdict, so it must
+              // not be bisected or downgraded to per-mutant errors here either — it aborts the
+              // whole session.
+              if (!(err instanceof AlcCompileError)) throw err;
               // Same "one bad mutant, uninformative errors" problem as the
               // sequential path above applies here identically — bisect
-              // this worker's own deploy failure the same way, scoped to
-              // just `shard` (the natural subset: this worker only ever
-              // deploys/runs `shard`, so a compile failure tied to one of
-              // its specs is isolated against `shard` alone). Each worker
+              // this worker's own deploy failure the same way. Searches the
+              // FULL manifest, not just `shard`: every worker deploys the
+              // SAME `batchDir` (the whole artifact, every mutant, not a
+              // shard-scoped subset — sharding only decides which worker
+              // EXECUTES which mutant's tests), so a compile failure any
+              // worker observes here is a property of the whole artifact,
+              // and the true culprit need not be one of THIS worker's own
+              // shard's mutants. Recording below still stays scoped to
+              // `shard` (this worker's own mutants) — only the SEARCH scope
+              // widened, not which mutants get marked "error". Each worker
               // gets its own scratch dir (suffixed by `i`) so concurrently
               // bisecting shards never race on the same directory.
               const note = await bisectAndNote({
-                subsetMutants: shard,
+                subsetMutants: manifest.mutants,
                 scratchDir: join(
                   cfg.instrumentedDir,
                   `run-${runId}-batch-${batchIdx}-bisect-worker-${i}`,

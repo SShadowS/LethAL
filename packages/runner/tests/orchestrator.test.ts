@@ -6,7 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ALSyntaxNode, MutationSpec } from "@lethal/engine";
 import type { InstrumentedFile, MutantManifestEntry } from "@lethal/schemata";
-import { DeploymentError } from "../src/artifact";
+import { writeInstrumentedProject } from "@lethal/schemata";
+import { AlcCompileError, ArtifactPrepareError, DeploymentError } from "../src/artifact";
 import type { CompiledArtifact } from "../src/artifact";
 import type {
   BackendCapabilities,
@@ -17,7 +18,7 @@ import type {
   TestVerdict,
 } from "../src/backend";
 import { DeploymentVerifier, decidePublishOutcome } from "../src/deployment-verifier";
-import { narrowFilesToSubset, runSession } from "../src/orchestrator";
+import { generateMutationSet, narrowFilesToSubset, runSession } from "../src/orchestrator";
 import { ResultsStore } from "../src/store";
 
 const TARGET_AL = `codeunit 79000 "Sandbox Logic"
@@ -375,25 +376,27 @@ describe("runSession — C3 batch app.json + full source copy", () => {
     expect(backend.deploys.length).toBe(0); // aborted before ever calling deploy()
   });
 
-  // Hardening: counts.deadlineExceeded must be derived structurally (an
-  // explicit `cause` set only at the two orchestrator sites that know it),
-  // never by sniffing failureNote text. The batch-deploy-failure handler
-  // stores `String(err)` verbatim as failureNote for every mutant in the
-  // batch — a thrown bare string (not an Error, which would stringify to
-  // "Error: ...") that happens to start with "deadline exceeded" must still
-  // land as a plain error, not get miscounted as a client deadline.
-  test("batch deploy failure whose message starts with 'deadline exceeded' is still just an error", async () => {
+  // Was: "counts.deadlineExceeded must be derived structurally, never by sniffing
+  // failureNote text" — proven via a batch-deploy failure whose bare-string message happened
+  // to start with "deadline exceeded", downgraded to a per-mutant "error" note. Task 7 changed
+  // what a batch-deploy failure like this one even DOES: a bare string/plain Error thrown from
+  // deploy() is not a typed `AlcCompileError`, so it is no longer a bisectable compile
+  // verdict — it now aborts the whole session before any note is ever written, rather than
+  // being downgraded into a per-mutant error. (The original hardening property — that
+  // `counts.deadlineExceeded` is never derived from note text — still holds and is still
+  // covered structurally by the "client deadline" tests above, which set `cause` directly.)
+  test("batch deploy failure that is not a typed AlcCompileError aborts the session, not just this batch", async () => {
     const dirs = await makeProject();
     const backend = new StubBackend(
       CAPS_NST,
       () => "pass",
       ["IsOverBudget"],
-      "deadline exceeded talking to NST", // thrown bare string, not an Error
+      "deadline exceeded talking to NST", // thrown bare string, not an Error, not AlcCompileError
     );
     const store = new ResultsStore(":memory:");
-    const report = await runSession({ backend, store, ...dirs, selectorIds });
-    expect(report.counts.errors).toBeGreaterThan(0);
-    expect(report.counts.deadlineExceeded).toBe(0);
+    await expect(runSession({ backend, store, ...dirs, selectorIds })).rejects.toThrow(
+      /deadline exceeded talking to NST/,
+    );
     store.close();
   });
 });
@@ -654,7 +657,10 @@ describe("runSession — parallel workers", () => {
         caps,
         (mutant) => (mutant === null ? "pass" : "fail"),
         [],
-        workerIndex === 0 ? "boom: worker 0 could not deploy" : undefined,
+        // A typed AlcCompileError — the only shape a per-shard deploy failure may take and
+        // still be bisected/downgraded to per-mutant errors (Task 7); anything else now aborts
+        // the whole session (see the DeploymentError/ArtifactPrepareError abort tests below).
+        workerIndex === 0 ? new AlcCompileError("boom: worker 0 could not deploy") : undefined,
       );
     const report = await runSession({
       backend: make(-1),
@@ -703,7 +709,9 @@ describe("runSession — parallel workers", () => {
         CAPS_NST,
         (mutant) => (mutant === null ? "pass" : "fail"),
         ["IsOverBudget"],
-        workerIndex === 1 ? "boom: worker 1 could not deploy" : undefined,
+        // Typed AlcCompileError — see the sibling test above for why (Task 7 no longer
+        // bisects/downgrades an untyped deploy failure).
+        workerIndex === 1 ? new AlcCompileError("boom: worker 1 could not deploy") : undefined,
       );
     const report = await runSession({
       backend: make(-1),
@@ -1484,7 +1492,7 @@ describe("runSession — bisection on compile failure", () => {
       undefined,
       (_dir: string) => {
         seenSubsets++;
-        return seenSubsets === 1 ? new Error("alc: AL0001") : undefined;
+        return seenSubsets === 1 ? new AlcCompileError("alc: AL0001") : undefined;
       },
     );
     const store = new ResultsStore(":memory:");
@@ -1531,7 +1539,9 @@ describe("runSession — bisection on compile failure", () => {
           (m) => m.operatorName === "lethal.conditional-boundary",
         );
         attempts.push(hasBoundary);
-        return hasBoundary ? new Error("alc: AL0001 malformed operator replacement") : undefined;
+        return hasBoundary
+          ? new AlcCompileError("alc: AL0001 malformed operator replacement")
+          : undefined;
       },
     );
     const store = new ResultsStore(":memory:");
@@ -1554,14 +1564,18 @@ describe("runSession — bisection on compile failure", () => {
   });
 
   // I3: a deploy failure that reproduces regardless of which mutants are in
-  // the artifact (transport, licence — observed live, see fixtures/README.md)
-  // must NOT be pinned on a mutant. The unconfirmed search used to converge
-  // on candidates[0] and blame it with full confidence; the confirmation step
-  // (complement still fails without the candidate) now classifies it as
-  // environmental instead. (This fixture used to fail with a version-conflict
-  // message; since Task 6 that specific shape is handled UPSTREAM of
-  // bisection — re-stamp + one retry, then a loud session abort, see the test
-  // below — so a licence failure stands in as the environmental example.)
+  // the artifact (observed live with BC app-version monotonicity, see
+  // fixtures/README.md) must NOT be pinned on a mutant. The unconfirmed search used to
+  // converge on candidates[0] and blame it with full confidence; the confirmation step
+  // (complement still fails without the candidate) now classifies it as environmental
+  // instead. (This fixture used to fail with a version-conflict message; since Task 6 that
+  // specific shape is handled UPSTREAM of bisection — re-stamp + one retry, then a loud
+  // session abort, see the test below.) Typed as `AlcCompileError`, not a bare licence-style
+  // message: since Task 7, only a deterministic alc rejection ever reaches bisection at all —
+  // a real licence failure surfaces as `DeploymentError` and aborts upstream of this path (see
+  // the DeploymentError/ArtifactPrepareError abort tests below) — so this fixture stands in
+  // for something alc itself can genuinely fail on regardless of mutant content (e.g. a
+  // resource limit), not a publish-time licence check.
   test("an environment-caused deploy failure is reported as such, not blamed on a mutant", async () => {
     const dirs = await makeProject();
     const backend = new StubBackend(
@@ -1572,7 +1586,7 @@ describe("runSession — bisection on compile failure", () => {
       undefined,
       // Every deploy fails identically, whatever the manifest contains —
       // the environmental shape.
-      () => new Error("The extension could not be deployed: licence check failed"),
+      () => new AlcCompileError("alc: internal compiler error (resource limit exceeded)"),
     );
     const store = new ResultsStore(":memory:");
     const report = await runSession({ backend, store, ...dirs, selectorIds });
@@ -1580,7 +1594,7 @@ describe("runSession — bisection on compile failure", () => {
     const noted = report.mutants.find((m) => m.verdict === "error");
     expect(noted).toBeDefined();
     expect(noted?.failureNote).toContain("not attributable to any mutant");
-    expect(noted?.failureNote).toContain("licence check failed");
+    expect(noted?.failureNote).toContain("resource limit exceeded");
     expect(noted?.failureNote).not.toContain("bisected to mutant");
     store.close();
   });
@@ -1593,6 +1607,15 @@ describe("runSession — bisection on compile failure", () => {
   // tests' `workerIndex === 0` convention); worker 1 has no guard and always
   // succeeds, so its shard's mutants must resolve normally (killed/survived), never
   // "error" — proving the bisected failure stayed scoped to worker 0's shard.
+  //
+  // The guard is scoped to IsOverBudget's conditional-boundary specifically (operatorName
+  // AND procedureName), not just operatorName: TWO_PROC_AL carries a conditional-boundary
+  // mutant in EACH procedure, so an operatorName-only check would make two mutants equally
+  // "guilty" — bisectFailingMutant assumes exactly one culprit, and confirmation against a
+  // manifest search that (correctly, post-Task-7) spans every procedure would then find the
+  // complement still fails (the OTHER procedure's conditional-boundary is still present) and
+  // report "environmental" instead of naming either one. Scoping to one procedure keeps this
+  // fixture a genuine single-culprit case.
   test("a worker's deploy failure is bisected to a named mutant, not blamed on its whole shard", async () => {
     const dirs = await makeProject();
     await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
@@ -1614,12 +1637,14 @@ describe("runSession — bisection on compile failure", () => {
           ? (dir: string) => {
               const manifest = JSON.parse(
                 readFileSync(join(dir, "mutant-manifest.json"), "utf8"),
-              ) as { mutants: Array<{ operatorName: string }> };
+              ) as { mutants: Array<{ operatorName: string; procedureName: string }> };
               const hasBoundary = manifest.mutants.some(
-                (m) => m.operatorName === "lethal.conditional-boundary",
+                (m) =>
+                  m.operatorName === "lethal.conditional-boundary" &&
+                  m.procedureName === "IsOverBudget",
               );
               return hasBoundary
-                ? new Error("alc: AL0001 malformed operator replacement")
+                ? new AlcCompileError("alc: AL0001 malformed operator replacement")
                 : undefined;
             }
           : undefined,
@@ -1643,13 +1668,14 @@ describe("runSession — bisection on compile failure", () => {
     store.close();
   });
 
-  // The `workers > 1` twin of the sequential DeploymentError-abort guard (step 3b, covered
+  // The `workers > 1` twin of the sequential AlcCompileError-guard abort (step 3b, covered
   // above by the "reportedIdentity" tests using a single `backend`): a DeploymentError is
-  // NOT a compile verdict — orchestrator.ts:667's `if (err instanceof DeploymentError) throw
-  // err` must reject the whole session before `bisectAndNote` ever runs, exactly like the
-  // sequential path. Without that guard, a worker's publish/verify failure would fall through
-  // into the same bisection machinery the previous test exercises for a plain compile error,
-  // and get silently downgraded into a per-mutant "error" note instead of aborting the run.
+  // NOT a compile verdict — the per-shard catch's `if (!(err instanceof AlcCompileError))
+  // throw err` must reject the whole session before `bisectAndNote` ever runs, exactly like
+  // the sequential path. Without that guard, a worker's publish/verify failure would fall
+  // through into the same bisection machinery the previous test exercises for a plain compile
+  // error, and get silently downgraded into a per-mutant "error" note instead of aborting the
+  // run.
   test("a worker's DeploymentError aborts the whole session instead of being bisected", async () => {
     const root = await mkdtemp(join(tmpdir(), "lethal-orch-parallel-deployerr-"));
     const dbPath = join(root, "results.sqlite");
@@ -1695,6 +1721,356 @@ describe("runSession — bisection on compile failure", () => {
     }>;
     raw.close();
     expect(rows.every((r) => !r.failure_note?.includes("bisected"))).toBe(true);
+    store.close();
+  });
+});
+
+// ————————————————————————————————————————————————————————————————————————
+// Task 7: bisect the full manifest (not the history-filtered `execute` set),
+// and never let a non-compiler failure reach — or survive inside — bisection.
+// ————————————————————————————————————————————————————————————————————————
+
+/**
+ * Writes `projectDir`'s full (unfiltered) mutation set to a throwaway scratch dir and returns
+ * its manifest entries — used only to read a REAL mutant's identity fields ahead of a real run,
+ * so a seeded "prior survivor" (see `seedPriorSurvivor` below) structurally matches a mutant
+ * `runSession` will itself generate for the same project. `generateMutationSet` +
+ * `writeInstrumentedProject` are pure functions of the project's source (same file list, same
+ * AST traversal order, same `astSubtreeHash`), so calling this once here and letting
+ * `runSession` regenerate the same project again independently yields identical identity
+ * fields for the same mutant — this is exactly what `narrowFilesToSubset`'s own (file, span,
+ * operator) matching and every existing `deployGuard`-reads-the-manifest test above already
+ * lean on.
+ */
+async function manifestMutants(
+  projectDir: string,
+  scratchDir: string,
+): Promise<readonly MutantManifestEntry[]> {
+  const files = await generateMutationSet(projectDir);
+  await writeInstrumentedProject({
+    targetDir: scratchDir,
+    files,
+    selectorIds,
+    artifactId: "seed00000000000000000000000000",
+  });
+  const manifest = JSON.parse(await readFile(join(scratchDir, "mutant-manifest.json"), "utf8")) as {
+    mutants: MutantManifestEntry[];
+  };
+  await rm(scratchDir, { recursive: true, force: true });
+  return manifest.mutants;
+}
+
+/**
+ * Seeds `store` with a single prior "survived" mutant whose identity matches `target`'s exactly
+ * on the four fields `identityKeyOf`/`priorSurvivorKeys` (selection.ts/store.ts) key on —
+ * astHash, codeunitName, operatorName, and operatorMajor (operatorVersion's leading component)
+ * — NEVER the per-batch `mutantId` label, which `assignMutantIds` renumbers fresh per batch and
+ * so cannot identify a mutant across two independent generations of the same project. Finishes
+ * the run so a subsequent `runSession({ store, skipKnownSurvivors: true })` against the SAME
+ * `projectPath` sees it via `priorSurvivorKeys` and excludes it from `execute` — while it stays
+ * compiled into the artifact regardless, exactly the shipped defect this file's first new test
+ * below exists to catch.
+ */
+function seedPriorSurvivor(
+  store: ResultsStore,
+  projectPath: string,
+  target: MutantManifestEntry,
+): void {
+  const runId = store.createRun({ projectPath, backend: "bcdev", appVersion: "0.0.0.1" });
+  store.recordMutant(runId, {
+    mutantCode: "SEED",
+    astHash: target.astHash,
+    codeunitName: target.codeunitName,
+    operatorName: target.operatorName,
+    operatorMajor: Number(target.operatorVersion.split(".")[0] ?? "0"),
+    file: target.file,
+    line: target.startLine,
+    verdict: "survived",
+    durationMs: 0,
+  });
+  store.finishRun(runId, { batchCount: 1, baselineGreen: true });
+}
+
+describe("runSession — Task 7: bisects the full manifest, not the history-filtered execute set", () => {
+  // Defect 1 (sequential path): `execute` (post `filterHistory`) omits known survivors, but
+  // `writeInstrumentedProject` still compiled them into the artifact — they were only excluded
+  // from EXECUTION, not from COMPILATION. Bisecting `execute` (the shipped bug) can therefore
+  // never find a malformed known-survivor: `compiles(execute)` never re-includes it in any
+  // candidate subset, so the very first check trivially "compiles" and bisection reports
+  // "no-repro" — an admitted, but previously unexplained, dead end. Bisecting
+  // `manifest.mutants` (every mutant the artifact actually contains) finds it like any other.
+  test("bisects the FULL embedded manifest, so a malformed known-survivor is findable", async () => {
+    const dirs = await makeProject();
+    const scratchDir = join(dirs.instrumentedDir, "seed-scratch");
+    const mutants = await manifestMutants(dirs.projectDir, scratchDir);
+    const boundary = mutants.find((m) => m.operatorName === "lethal.conditional-boundary");
+    expect(boundary).toBeDefined();
+    if (boundary === undefined) throw new Error("unreachable: asserted above");
+
+    const store = new ResultsStore(":memory:");
+    seedPriorSurvivor(store, dirs.projectDir, boundary);
+
+    // The whole-artifact deploy fails as long as the conditional-boundary spec is present.
+    // `execute` (skipKnownSurvivors: true) excludes it, but the compiled artifact — what this
+    // guard actually inspects — does not; the failure is deterministic on every attempt that
+    // still contains it.
+    const backend = new StubBackend(
+      CAPS_NST,
+      () => "pass",
+      ["IsOverBudget"],
+      undefined,
+      undefined,
+      (dir: string) => {
+        const manifest = JSON.parse(readFileSync(join(dir, "mutant-manifest.json"), "utf8")) as {
+          mutants: Array<{ operatorName: string }>;
+        };
+        const hasBoundary = manifest.mutants.some(
+          (m) => m.operatorName === "lethal.conditional-boundary",
+        );
+        return hasBoundary
+          ? new AlcCompileError("alc: AL0001 malformed operator replacement")
+          : undefined;
+      },
+    );
+    const report = await runSession({
+      backend,
+      store,
+      ...dirs,
+      selectorIds,
+      skipKnownSurvivors: true,
+    });
+    expect(report.counts.errors).toBeGreaterThan(0);
+    // The known survivor itself is recorded separately (verdict "known-survivor", no note); the
+    // culprit's identity lands on `execute`'s error-recorded mutants' shared note instead.
+    const knownSurvivor = report.mutants.find((m) => m.verdict === "known-survivor");
+    expect(knownSurvivor).toBeDefined();
+    const noted = report.mutants.find((m) => m.failureNote !== undefined);
+    expect(noted).toBeDefined();
+    expect(noted?.failureNote).toContain("bisected to mutant");
+    expect(noted?.failureNote).toContain("lethal.conditional-boundary");
+    store.close();
+  });
+
+  // Defect 1 (per-shard worker path): every worker deploys the SAME `batchDir` — the whole
+  // artifact, every mutant, not a shard-scoped subset (sharding only decides which worker
+  // EXECUTES which mutant's tests). Bisecting `shard` (the shipped bug) can therefore miss a
+  // culprit that happens to be assigned to a DIFFERENT worker's shard: that worker's own search
+  // never re-includes it in any candidate, so it "compiles" trivially and falls back to
+  // "no-repro" — exactly the sequential path's bug, reproduced per-shard. Guarding both workers
+  // identically (they see the same artifact) and searching `manifest.mutants` for both finds
+  // the true culprit regardless of which shard it landed in.
+  test("a worker's shard-scoped bisection can miss a culprit outside its own shard; the full manifest finds it", async () => {
+    const dirs = await makeProject();
+    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
+    const store = new ResultsStore(":memory:");
+    const caps: BackendCapabilities = {
+      coverage: "none",
+      deploy: "none",
+      isolation: "full-reset",
+      authoritative: false,
+    };
+    // Scoped to one specific mutant (operatorName AND procedureName) so there is exactly one
+    // culprit — TWO_PROC_AL carries a conditional-boundary mutant in EACH procedure, and an
+    // operatorName-only guard would make two mutants equally "guilty", which bisection can't
+    // resolve to a single confirmed name (see the comment on the sibling test above).
+    const guard = (dir: string) => {
+      const manifest = JSON.parse(readFileSync(join(dir, "mutant-manifest.json"), "utf8")) as {
+        mutants: Array<{ operatorName: string; procedureName: string }>;
+      };
+      const hasCulprit = manifest.mutants.some(
+        (m) =>
+          m.operatorName === "lethal.conditional-boundary" && m.procedureName === "IsUnderBudget",
+      );
+      return hasCulprit
+        ? new AlcCompileError("alc: AL0001 malformed operator replacement")
+        : undefined;
+    };
+    // Both REAL workers (0 and 1) guarded identically: they deploy the same full batchDir, so
+    // both observe the same failure regardless of which one's own shard happens to contain the
+    // culprit. `cfg.backend` (workerIndex -1, the session's initial/step-3 deploy) is NOT
+    // guarded — matching the existing per-worker-failure tests' convention — so the batch's
+    // own whole-artifact deploy at step 3 succeeds and execution actually reaches the per-shard
+    // fan-out this test means to exercise, rather than the sequential catch handling it first.
+    const make = (workerIndex: number) =>
+      new StubBackend(
+        caps,
+        (mutant) => (mutant === null ? "pass" : "fail"),
+        [],
+        undefined,
+        undefined,
+        workerIndex === -1 ? undefined : guard,
+      );
+    const report = await runSession({
+      backend: make(-1),
+      backendFactory: make,
+      store,
+      ...dirs,
+      selectorIds,
+      workers: 2,
+    });
+    const errorMutants = report.mutants.filter((m) => m.verdict === "error");
+    expect(errorMutants.length).toBeGreaterThan(0);
+    // Every errored mutant — from EITHER worker's shard — must be attributed to the actual
+    // culprit, never a shard-scoped "no-repro" fallback for whichever worker's own shard
+    // doesn't happen to contain it.
+    for (const m of errorMutants) {
+      expect(m.failureNote).toContain("bisected to mutant");
+      expect(m.failureNote).toContain("lethal.conditional-boundary");
+    }
+    store.close();
+  });
+});
+
+describe("runSession — Task 7: only a typed AlcCompileError may be bisected", () => {
+  // Brief's literal test 3: a subset-preparation failure that is NOT a compiler verdict
+  // (filesystem, not alc) must abort the search rather than be read as "this subset doesn't
+  // compile". `ArtifactPrepareError` and `DeploymentError` both extend `Error` directly, not
+  // `AlcCompileError` — `instanceof` cannot cross-match them — so guarding on `AlcCompileError`
+  // specifically excludes ArtifactPrepareError too, not just DeploymentError (the shipped
+  // guard's actual gap).
+  test("aborts immediately on a non-compiler ArtifactPrepareError, without a single bisection compile", async () => {
+    const dirs = await makeProject();
+    let calls = 0;
+    const backend = new StubBackend(
+      CAPS_NST,
+      () => "pass",
+      ["IsOverBudget"],
+      undefined,
+      undefined,
+      (_dir: string) => {
+        calls++;
+        return new ArtifactPrepareError("disk full");
+      },
+    );
+    const store = new ResultsStore(":memory:");
+    await expect(runSession({ backend, store, ...dirs, selectorIds })).rejects.toThrow(/disk full/);
+    // Exactly the one production deploy — the guard aborted before bisection ever called
+    // deploy() again.
+    expect(calls).toBe(1);
+    store.close();
+  });
+
+  // Brief's literal test 2, adapted to a bare (untyped) publish-style failure rather than
+  // `DeploymentError` specifically: the shipped guard (`instanceof DeploymentError`) already
+  // excluded `DeploymentError` itself pre-Task-7, so it alone would not distinguish old from
+  // new behaviour here. An untyped `Error` — standing in for any publish/transport failure that
+  // isn't perfectly wrapped — is exactly what the old, too-narrow guard let slip through.
+  test("never bisects a publish-style failure that is not a typed AlcCompileError", async () => {
+    const dirs = await makeProject();
+    let calls = 0;
+    const backend = new StubBackend(
+      CAPS_NST,
+      () => "pass",
+      ["IsOverBudget"],
+      undefined,
+      undefined,
+      (_dir: string) => {
+        calls++;
+        return new Error("NST unavailable");
+      },
+    );
+    const store = new ResultsStore(":memory:");
+    await expect(runSession({ backend, store, ...dirs, selectorIds })).rejects.toThrow(
+      /NST unavailable/,
+    );
+    expect(calls).toBe(1);
+    store.close();
+  });
+
+  // Same guard, worker path: mirrors the existing "a worker's DeploymentError aborts" test
+  // above, swapped to ArtifactPrepareError — the shape the shipped guard (`instanceof
+  // DeploymentError`) did NOT exclude, and would have bisected/downgraded to a per-shard error.
+  // Uses `deployGuard` (not the fixed `deployError`) so `calls` can prove the OUTER guard
+  // specifically: `subsetMutants` already searches the full manifest (Task 7's other fix), and
+  // the inner `compiles` callback already propagates a non-AlcCompileError too, so an always-
+  // failing deploy would eventually abort with the right error via the INNER guard alone even
+  // if this outer one were missing — `calls === 1` is what only the outer guard delivers (zero
+  // wasted bisection compiles, not merely "eventually aborts correctly").
+  test("a worker's ArtifactPrepareError aborts the whole session instead of being bisected", async () => {
+    const root = await mkdtemp(join(tmpdir(), "lethal-orch-parallel-prepareerr-"));
+    const dbPath = join(root, "results.sqlite");
+    const dirs = await makeProject();
+    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
+    const store = new ResultsStore(dbPath);
+    const caps: BackendCapabilities = {
+      coverage: "none",
+      deploy: "none",
+      isolation: "full-reset",
+      authoritative: false,
+    };
+    const deployErr = new ArtifactPrepareError("boom: worker 0 disk full");
+    let worker0Calls = 0;
+    const make = (workerIndex: number) =>
+      new StubBackend(
+        caps,
+        (mutant) => (mutant === null ? "pass" : "fail"),
+        [],
+        undefined,
+        undefined,
+        workerIndex === 0
+          ? () => {
+              worker0Calls++;
+              return deployErr;
+            }
+          : undefined,
+      );
+    await expect(
+      runSession({
+        backend: make(-1),
+        backendFactory: make,
+        store,
+        ...dirs,
+        selectorIds,
+        workers: 2,
+      }),
+    ).rejects.toBe(deployErr);
+    // Exactly the one production deploy on worker 0's shard — the guard aborted before
+    // bisection ever called deploy() again.
+    expect(worker0Calls).toBe(1);
+
+    const raw = new Database(dbPath, { readonly: true });
+    const rows = raw.query("SELECT failure_note FROM mutants").all() as Array<{
+      failure_note: string | null;
+    }>;
+    raw.close();
+    expect(rows.every((r) => !r.failure_note?.includes("bisected"))).toBe(true);
+    store.close();
+  });
+
+  // The DEEPER half of the guard: not just "don't bisect a non-compile failure", but "don't
+  // let one masquerade as a compile answer FROM WITHIN an already-legitimate bisection search".
+  // The first deploy fails with a genuine AlcCompileError (entering bisection legitimately,
+  // same as the existing "bisection identifies the culprit" test), but the very first candidate
+  // `bisectAndNote` tries then fails for an unrelated, non-compiler reason (simulating a disk
+  // failure mid-search). That must abort the whole search immediately, not be read as `false`
+  // ("this subset doesn't compile") and keep halving toward an innocent mutant.
+  test("a non-compiler failure mid-bisection aborts the search instead of being read as a compile answer", async () => {
+    const dirs = await makeProject();
+    let calls = 0;
+    const backend = new StubBackend(
+      CAPS_NST,
+      () => "pass",
+      ["IsOverBudget"],
+      undefined,
+      undefined,
+      (_dir: string) => {
+        calls++;
+        // Call 1: the initial whole-artifact deploy — a genuine compiler rejection, legitimately
+        // entering bisection. Every call after that (bisection's own candidate deploys):
+        // unrelated infrastructure failure, never a compile answer.
+        if (calls === 1) return new AlcCompileError("alc: AL0001 malformed operator replacement");
+        return new ArtifactPrepareError("disk full mid-search");
+      },
+    );
+    const store = new ResultsStore(":memory:");
+    await expect(runSession({ backend, store, ...dirs, selectorIds })).rejects.toThrow(
+      /disk full mid-search/,
+    );
+    // Exactly 2 deploy calls: the initial production compile, and the ONE bisection attempt
+    // whose non-compiler failure aborted the search immediately — proof the search did not
+    // misread it as "false" and keep going (which would have driven `calls` well past 2, per
+    // `bisectFailingMutant`'s halving + confirmation steps).
+    expect(calls).toBe(2);
     store.close();
   });
 });
