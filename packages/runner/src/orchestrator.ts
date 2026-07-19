@@ -105,6 +105,27 @@ export interface SessionConfig {
 /** Alias kept for readability at call sites within this module. */
 type SessionVerdict = MutantVerdict;
 
+/**
+ * Splits the full set of instrumented files into compile artifacts. Layer
+ * 4.3 collapsed overlap batching, so today this is trivial — one artifact
+ * holding everything, since overlapping mutants coalesce into flat dispatch
+ * chains at compile time instead of needing separate compiles. Kept as a
+ * single named seam (rather than inlined at each call site) so a future
+ * size-budget / compile-failure-bisection split (Task 6, design spec §6) has
+ * exactly one place to change, and so `cli.ts`'s dry-run batch count can
+ * never drift from what `runSession` actually deploys.
+ *
+ * Zero files (no mutable sites anywhere in the project) yields zero
+ * artifacts, not one empty artifact — there is nothing to compile or deploy,
+ * so `runSession`'s artifact loop must never execute in that case (no
+ * pointless deploy, no baseline run, no app.json requirement).
+ */
+export function planArtifacts(
+  files: readonly InstrumentedFile[],
+): readonly (readonly InstrumentedFile[])[] {
+  return files.length === 0 ? [] : [files];
+}
+
 export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   const caps = cfg.backend.capabilities();
   const status = await cfg.backend.status();
@@ -129,12 +150,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   });
 
   const allFiles = await generateMutationSet(cfg.projectDir);
-  // One artifact: overlapping mutants now coalesce into flat dispatch chains
-  // (Layer 4.3), so there is nothing left for overlap batching to separate.
-  // The artifact-splitting SEAM is deliberately retained for size budget and
-  // compile-failure bisection (design spec §6) — hence batchIdx/batchCount stay.
-  const batchIdx = 0;
-  const artifacts = [allFiles];
+  const artifacts = planArtifacts(allFiles);
 
   const outcomes: SessionOutcome[] = []; // internal accumulation for the report
   let baselineGreenOverall = true;
@@ -174,11 +190,15 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         workerBackends.push(factory(i));
       }
     }
-    for (const batchFiles of artifacts) {
+    for (const [batchIdx, batchFiles] of artifacts.entries()) {
       // 1. write the instrumented project for this artifact — currently
       // always every file `generateMutationSet` found (single artifact); a
       // future bisection split (Task 6) would make `artifacts` hold more
-      // than one element here.
+      // than one element here. `batchIdx` MUST come from `.entries()`, not a
+      // hoisted constant: `batchDir`'s naming, `app.json`'s version stamp,
+      // and every `MutantOutcome.batchIndex` all key off it, and a hoisted
+      // `0` would silently collide/mis-attribute the moment `artifacts` ever
+      // holds more than one element.
       const batchDir = join(cfg.instrumentedDir, `run-${runId}-batch-${batchIdx}`);
       await writeInstrumentedProject({
         targetDir: batchDir,

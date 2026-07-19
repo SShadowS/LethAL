@@ -1109,4 +1109,24 @@ describe("runSession — single artifact", () => {
     expect(report.batches).toBe(1);
     store.close();
   });
+
+  // `planArtifacts` returns zero artifacts for zero instrumented files (see its
+  // doc comment) — mirroring `batchByOverlap([])`'s old `[]` result — so a
+  // project with no mutable sites anywhere must never reach deploy() at all,
+  // not deploy one pointless empty artifact. Overwriting the target logic
+  // file with NO_MUTANTS_AL (no comparisons, no exit(), no calls, no
+  // non-empty blocks) makes `generateMutationSet` return zero files for the
+  // whole project, so this is a genuine zero-mutant project, not just a
+  // zero-mutant file alongside other mutable ones.
+  test("a project with no mutable sites deploys nothing", async () => {
+    const dirs = await makeProject();
+    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), NO_MUTANTS_AL);
+    const backend = new StubBackend(CAPS_NST, () => "pass", ["IsOverBudget"]);
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({ backend, store, ...dirs, selectorIds });
+    expect(backend.deploys).toHaveLength(0);
+    expect(report.batches).toBe(0);
+    expect(report.mutants.length).toBe(0);
+    store.close();
+  });
 });
