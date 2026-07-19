@@ -45,14 +45,24 @@ async function writeDeployInputs(dir: string): Promise<void> {
  * The real ArtifactCompiler + ContainerDeployer + DeploymentVerifier composition with only
  * the process/network edges faked: `spawn` writes a real (hand-built) .app zip wherever alc's
  * `/out:` argument points, and the verifier's fetch reports `reportedIdentity`
- * (default: the fixture artifact id, i.e. a verified deploy).
+ * (default: the fixture artifact id, i.e. a verified deploy) — but ONLY once a publish has
+ * actually been observed (an altool `publishapp` spawn call). Before that, it reports a
+ * different, well-formed artifact id, exactly like `PhaseBackend` in orchestrator.test.ts
+ * models a failed publish. This is deliberate, not incidental: if `BcDevMcpBackend.deploy()`
+ * ever called `verify()` before `publish()`, this fake would report the pre-publish id and
+ * the deploy would fail on an identity mismatch — without the statefulness, verify() would
+ * report a match unconditionally and a publish/verify reordering would sail through silently.
  */
 function makeDeployment(
   outputDir: string,
   symbolReference: unknown,
   opts: { spawn?: SpawnFn; reportedIdentity?: string } = {},
 ): BcDevDeployment {
-  const spawn: SpawnFn =
+  // Tracks whether ContainerDeployer.publish() has actually invoked altool. Wraps whichever
+  // spawn ends up running (default or a test's own `opts.spawn` override) so the tracking
+  // stays accurate regardless of which one produced the .app.
+  let published = false;
+  const baseSpawn: SpawnFn =
     opts.spawn ??
     (async (argv) => {
       const out = argv.find((a) => a.startsWith("/out:"))?.slice("/out:".length);
@@ -61,6 +71,11 @@ function makeDeployment(
       }
       return { exitCode: 0, stdout: "", stderr: "" };
     });
+  const spawn: SpawnFn = async (argv, spawnOpts) => {
+    const res = await baseSpawn(argv, spawnOpts);
+    if (argv[1] === "publishapp") published = true;
+    return res;
+  };
   const compiler = new ArtifactCompiler(
     { alcPath: "C:/fake/alc.exe", packageCachePath: "C:/fake/.alpackages", outputDir },
     { ...defaultArtifactIo, spawn },
@@ -76,9 +91,12 @@ function makeDeployment(
     { ...defaultArtifactIo, spawn },
   );
   const fetchFn = (async (_url: unknown, _init?: RequestInit) =>
-    new Response(JSON.stringify({ value: opts.reportedIdentity ?? TEST_ARTIFACT_ID }), {
-      status: 200,
-    })) as typeof fetch;
+    new Response(
+      JSON.stringify({
+        value: opts.reportedIdentity ?? (published ? TEST_ARTIFACT_ID : "f".repeat(32)),
+      }),
+      { status: 200 },
+    )) as typeof fetch;
   const verifier = new DeploymentVerifier(
     { baseUrl: "http://bc:7048/BC", company: "CRONUS", username: "u", password: "p" },
     fetchFn,
