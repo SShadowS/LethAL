@@ -80,6 +80,23 @@ export class ResultsStore {
     this.db = new Database(dbPath, { create: true });
     this.db.exec("PRAGMA journal_mode = WAL;");
     this.db.exec(SCHEMA);
+    this.migrate();
+  }
+
+  /**
+   * Guarded, idempotent migrations for persistent databases created before a
+   * column existed. `SCHEMA` is `CREATE TABLE IF NOT EXISTS` only — it never
+   * reconciles an EXISTING table's columns — and persistent result DBs are a
+   * supported workflow (`priorSurvivorKeys` history, runId monotonicity for
+   * BC app-version stamping), so a `lethal.sqlite` created before Layer 4.3
+   * has a `mutants` table without `failure_note`, against which every
+   * `recordMutant` INSERT would throw mid-run.
+   */
+  private migrate(): void {
+    const cols = this.db.query("PRAGMA table_info(mutants)").all() as Array<{ name: string }>;
+    if (!cols.some((c) => c.name === "failure_note")) {
+      this.db.exec("ALTER TABLE mutants ADD COLUMN failure_note TEXT");
+    }
   }
 
   createRun(info: { projectPath: string; backend: string; appVersion: string }): number {
