@@ -1,4 +1,60 @@
-# LethAL Session Checkpoint — Layer 4.2 Merged (hardening + parallel POC)
+# LethAL Session Checkpoint — Layer 4.3 Merged (schemata overlap coalescing)
+
+> **Status 2026-07-19: Layer 4.3 merged to master (`3ef194a`).** 19 commits, 7 tasks, each
+> individually reviewed, plus a whole-branch review and a fix wave. 297 tests pass, typecheck
+> clean.
+>
+> **What it delivers.** Overlapping mutation sites no longer force separate compiles. Nested
+> mutation guards are replaced by a **flat `if/else if/else` dispatch chain per containment
+> component**: because only one mutant is ever active, N mutants in a component emit N+1
+> complete statement variants rather than 2^N. Every branch is the original statement with
+> exactly one mutation applied, so evaluation order inside each branch is the original's —
+> nothing is hoisted, and there are no temporaries.
+>
+> **The sandbox fixture now compiles to 1 artifact, down from 3**, restoring design.md §3.1's
+> "instrument once, compile once, activate one at a time." Overlap-driven batching is gone;
+> artifact splitting survives only as a capacity and failure-isolation fallback, now with
+> compile-failure bisection that names the offending mutant instead of erroring the session.
+>
+> **Verdicts unchanged, verified live on both backends after the emission change:** al-runner
+> `3 killed / 13 survived / 0 no-coverage` (18.8%), `itest:bcdev` PASS, `itest:alrunner` PASS.
+> Coalescing was required to be a pure compile-shape change with zero behavioural effect, and
+> it is.
+>
+> **Measured growth: 3.59× source size, ~155 marginal bytes per mutant** on the 16-mutant
+> fixture (`bun run itest:growth`). Read this honestly — it is one data point. It rules out
+> per-mutant copying and exponential blowup; it does **not** prove asymptotic linearity. That
+> claim rests on the structural N+1 argument, not on this measurement.
+>
+> **The Critical the process nearly shipped.** Seven task reviews and a full live run all
+> passed while `spliceIntoRoot` did raw span replacement without mirroring the
+> consumed-terminator rule `compile.ts` already applied to the outer wrap. An `empty-block`
+> mutation on an inner block followed by a sibling statement emitted AL with a missing `;` —
+> invalid (0 → 5 tree-sitter ERROR nodes). The fixture is structurally blind to it: its only
+> inner block is body-final, so no sibling ever follows. Caught by the whole-branch review,
+> fixed in `5c652d9`, red-check independently reproduced. **The discriminator must be the
+> consumed span's text, never the node's kind** — inferring from kind regressed this exact rule
+> once already in Task 3, in both directions.
+>
+> **Known limitation (recorded, not fixed — scope decision):** al-runner's `deploy` never
+> compiles, so bisection can only trigger on bcdev. The blast-radius bound in the spec's §6
+> therefore holds on bcdev only; on al-runner a bad mutant still degrades to "no green baseline
+> tests" for everything. Documented in `fixtures/README.md`.
+>
+> **Follow-ups worth doing, none blocking:** an `alc` compile smoke test (tree-sitter-al
+> false-positives ERROR nodes on bare nested blocks, which limits the 0-ERROR oracle to
+> statement-rooted emissions); bcdev same-version-republish semantics during bisection are still
+> unverified (risk direction is missed diagnosis, not wrong verdicts); `ALNodeKind` still has no
+> `ternary_expression`, so LethAL silently under-mutates runtime 14.0+ projects; design.md §3.5
+> still justifies the `duplicate` composition by a "short-circuit signal" that AL does not have.
+>
+> Docs: spec `docs/superpowers/specs/2026-07-19-layer-4-3-schemata-coalescing-design.md`,
+> plan `docs/superpowers/plans/2026-07-19-layer-4-3-schemata-coalescing.md`.
+>
+> **Next:** container pool with leasing and fencing (unblocks parallelism on the authoritative
+> backend). The line-level-coverage validation spike remains separate and unstarted.
+
+# Superseded: Layer 4.2 Merged (hardening + parallel POC)
 
 > **Status 2026-07-19: Layer 4.2 merged to master.** 22 commits, 7 tasks, each individually
 > reviewed, plus a whole-branch review. 256 tests pass, typecheck + lint clean.
@@ -34,7 +90,7 @@
 > **Next:** schemata overlap coalescing (Layer 3 debt — one artifact per session, removes
 > batching entirely and restores design.md §3.1's "one compile with all mutations embedded"),
 > then the container pool with leasing/fencing. A line-level-coverage validation spike remains
-> separate and unstarted.
+> separate and unstarted. *(Coalescing is done — see Layer 4.3 above.)*
 
 # Superseded: Layer 4 Verified Live on BOTH Backends
 
