@@ -14,7 +14,7 @@
 
 - Test outcome vocabulary becomes `pass | fail | skip | timeout | deadline-exceeded | error`. `timeout` means **runner-confirmed**; `deadline-exceeded` means our own timer fired.
 - Mutant verdict vocabulary is unchanged: `killed | survived | no-coverage | timeout-killed | known-survivor | error`.
-- `deadline-exceeded` MUST map to mutant verdict `error`, never `timeout-killed`. Mutants with verdict `error` are excluded from the mutation-score denominator (`killed / (killed + survived)` is unchanged; `error` was already outside it).
+- `deadline-exceeded` MUST map to mutant verdict `error`, never `timeout-killed`. Mutants with verdict `error` are excluded from the mutation-score denominator (`(killed + timeout-killed) / (killed + timeout-killed + survived)`; `error` was already outside it).
 - al-runner runner-confirmed timeout is detected by `status === "fail"` with a message matching `/Test exceeded \d+s timeout/`.
 - bcdev has NO known server-confirmed timeout signal. Every timeout it observes is `deadline-exceeded` until proven otherwise. Fail safe: under-report kills, never fabricate them.
 - Never place `MutationSelector.Codeunit.al` in a `--stubs` directory: `stubPaths` are excluded from al-runner's cache fingerprint, so this yields cache hits serving a stale assembly (fast, silent, wrong verdicts).

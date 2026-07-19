@@ -37,7 +37,14 @@ export interface SessionReport {
     errors: number;
     deadlineExceeded: number;
   };
-  readonly mutationScore: number | null; // killed / (killed + survived); null when denominator 0
+  /**
+   * Mutation score: (killed + timeoutKilled) / (killed + timeoutKilled + survived).
+   * Null when denominator is 0.
+   * Both killed and timeout-killed count as observable misbehavior (design.md §6.7:
+   * "Timeout counts as killed (mutation caused observable misbehavior, including
+   * potential nontermination)").
+   */
+  readonly mutationScore: number | null;
   readonly mutants: readonly MutantOutcome[];
 }
 
@@ -105,14 +112,14 @@ export function buildReport(input: BuildReportInput): SessionReport {
     });
   }
 
-  const denom = counts.killed + counts.survived;
+  const denom = counts.killed + counts.timeoutKilled + counts.survived;
   return {
     backend: input.caps.authoritative ? "bcdev" : "al-runner",
     authoritative: input.caps.authoritative,
     baselineGreen: input.baselineGreen,
     batches: input.batches,
     counts,
-    mutationScore: denom === 0 ? null : counts.killed / denom,
+    mutationScore: denom === 0 ? null : (counts.killed + counts.timeoutKilled) / denom,
     mutants,
   };
 }

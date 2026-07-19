@@ -218,7 +218,7 @@ per batch:
     record, next mutant
 finally:    activate(null) always, including on abort — never leave a mutant active
 report:     JSON file + console summary (killed / survived / no-coverage / unstable counts,
-            mutation score = killed / (killed + survived), backend + authoritative label)
+            mutation score = (killed + timeout-killed) / (killed + timeout-killed + survived), backend + authoritative label)
 ```
 
 Error handling:
