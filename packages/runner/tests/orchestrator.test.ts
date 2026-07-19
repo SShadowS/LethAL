@@ -1330,6 +1330,35 @@ describe("runSession — bisection on compile failure", () => {
     store.close();
   });
 
+  // I3: a deploy failure that reproduces regardless of which mutants are in
+  // the artifact (version monotonicity, transport, licence — observed live,
+  // see fixtures/README.md) must NOT be pinned on a mutant. The unconfirmed
+  // search used to converge on candidates[0] and blame it with full
+  // confidence; the confirmation step (complement still fails without the
+  // candidate) now classifies it as environmental instead.
+  test("an environment-caused deploy failure is reported as such, not blamed on a mutant", async () => {
+    const dirs = await makeProject();
+    const backend = new StubBackend(
+      CAPS_NST,
+      () => "pass",
+      ["IsOverBudget"],
+      undefined,
+      undefined,
+      // Every deploy fails identically, whatever the manifest contains —
+      // the environmental shape.
+      () => new Error("Cannot install the extension because a newer version 1.0.27.3 was already installed"),
+    );
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({ backend, store, ...dirs, selectorIds });
+    expect(report.counts.errors).toBeGreaterThan(0);
+    const noted = report.mutants.find((m) => m.verdict === "error");
+    expect(noted).toBeDefined();
+    expect(noted?.failureNote).toContain("not attributable to any mutant");
+    expect(noted?.failureNote).toContain("newer version 1.0.27.3");
+    expect(noted?.failureNote).not.toContain("bisected to mutant");
+    store.close();
+  });
+
   // Same problem, `workers > 1` path: a worker's own deploy of the shared artifact
   // can fail while other workers succeed (existing "worker's own deploy failure"
   // tests already cover that split), and until now that failure was never bisected —

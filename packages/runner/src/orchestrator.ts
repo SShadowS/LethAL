@@ -236,6 +236,20 @@ async function prepareArtifactDir(args: {
  * `scratchDir` is removed once bisection finishes, win or lose — a failed
  * batch must not leave a scratch artifact behind on disk indefinitely.
  */
+/**
+ * Distinguishes "preparing the candidate artifact failed" (a filesystem/
+ * instrumentation problem on OUR side) from "the candidate artifact failed
+ * to compile" — only the latter may steer the bisection search. Without
+ * this, an fs error inside `prepareArtifactDir` is indistinguishable from
+ * a compile failure and silently corrupts the narrowing.
+ */
+class BisectPrepareError extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause));
+    this.name = "BisectPrepareError";
+  }
+}
+
 async function bisectAndNote(args: {
   readonly subsetMutants: readonly MutantManifestEntry[];
   readonly scratchDir: string;
@@ -247,28 +261,57 @@ async function bisectAndNote(args: {
   readonly deploy: (dir: string) => Promise<void>;
   readonly originalErr: unknown;
 }): Promise<string> {
-  const culprit = await bisectFailingMutant(args.subsetMutants, async (subset) => {
-    try {
-      await prepareArtifactDir({
-        targetDir: args.scratchDir,
-        files: args.batchFiles,
-        subset,
-        selectorIds: args.selectorIds,
-        projectDir: args.projectDir,
-        batchIdx: args.batchIdx,
-        runId: args.runId,
-      });
-      await args.deploy(args.scratchDir);
-      return true;
-    } catch {
-      return false;
+  try {
+    const outcome = await bisectFailingMutant(args.subsetMutants, async (subset) => {
+      try {
+        await prepareArtifactDir({
+          targetDir: args.scratchDir,
+          files: args.batchFiles,
+          subset,
+          selectorIds: args.selectorIds,
+          projectDir: args.projectDir,
+          batchIdx: args.batchIdx,
+          runId: args.runId,
+        });
+      } catch (err) {
+        // NOT a compile answer — abort the search rather than feeding it a
+        // false "this subset doesn't compile".
+        throw new BisectPrepareError(err);
+      }
+      try {
+        await args.deploy(args.scratchDir);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    switch (outcome.kind) {
+      case "no-repro":
+        return String(args.originalErr);
+      case "environmental":
+        return (
+          `deploy failed for a reason that is not attributable to any mutant ` +
+          `(${outcome.detail}) — likely environmental (e.g. app-version monotonicity, ` +
+          `transport, licence): ${String(args.originalErr)}`
+        );
+      case "culprit":
+        return (
+          `compile failed; bisected to mutant ${outcome.culprit.mutantId} ` +
+          `(${outcome.culprit.file}:${outcome.culprit.startLine} ${outcome.culprit.operatorName})` +
+          `, confirmed: fails alone, complement compiles`
+        );
     }
-  });
-  await rm(args.scratchDir, { recursive: true, force: true }).catch(() => {});
-  return culprit === null
-    ? String(args.originalErr)
-    : `compile failed; bisected to mutant ${culprit.mutantId} ` +
-        `(${culprit.file}:${culprit.startLine} ${culprit.operatorName})`;
+  } catch (err) {
+    if (err instanceof BisectPrepareError) {
+      return (
+        `${String(args.originalErr)} (bisection aborted: preparing a candidate ` +
+        `artifact failed — ${err.message})`
+      );
+    }
+    throw err;
+  } finally {
+    await rm(args.scratchDir, { recursive: true, force: true }).catch(() => {});
+  }
 }
 
 export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
