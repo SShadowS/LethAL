@@ -22,19 +22,49 @@ const RUNNER_TIMEOUT_MESSAGE = /Test exceeded \d+s timeout/;
  * `mutant-manifest.json` is written by `writeInstrumentedProject` for every
  * real batch, but some fixtures (e.g. `al-runner-backend.test.ts`'s synthetic
  * source dirs) hand-build a directory with only `MutationSelector.Codeunit.al`
- * and no manifest at all. Falling back to "" instead of throwing keeps
- * `deploy()` usable against those — an empty `ArtifactId()` is a harmless
- * no-identity default; nothing keys off it except `MutationControl_Identity`,
- * added in this same task.
+ * and no manifest at all. A missing manifest (Node's `ENOENT`) is the ONLY
+ * thing tolerated here — it falls back to "", a harmless no-identity default
+ * since nothing keys off it except `MutationControl_Identity`, added in this
+ * same task.
+ *
+ * Everything else — corrupt JSON, a manifest with a missing/wrong-typed
+ * `artifactId`, or a read failure that ISN'T "file doesn't exist" (e.g. the
+ * EBUSY/EPERM Windows lock hazard `deploy()` already retries around, see its
+ * comment below) — must fail loudly. Swallowing those would let a broken
+ * manifest produce a *successful* deploy with `exit('')` baked into every
+ * activation and `MutationControl_Identity` silently returning "" — exactly
+ * the silent-wrong-verdict shape this project keeps guarding against, once a
+ * later task starts comparing that value against something.
  */
 async function readArtifactId(dir: string): Promise<string> {
+  const manifestPath = join(dir, "mutant-manifest.json");
+  let raw: string;
   try {
-    const raw = await readFile(join(dir, "mutant-manifest.json"), "utf8");
-    const parsed = JSON.parse(raw) as { artifactId?: unknown };
-    return typeof parsed.artifactId === "string" ? parsed.artifactId : "";
-  } catch {
-    return "";
+    raw = await readFile(manifestPath, "utf8");
+  } catch (err) {
+    if (err instanceof Error && (err as NodeJS.ErrnoException).code === "ENOENT") return "";
+    throw new Error(
+      `readArtifactId: could not read ${manifestPath}: ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(
+      `readArtifactId: ${manifestPath} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  const artifactId =
+    typeof parsed === "object" && parsed !== null
+      ? (parsed as { artifactId?: unknown }).artifactId
+      : undefined;
+  if (typeof artifactId !== "string") {
+    throw new Error(
+      `readArtifactId: ${manifestPath} has no string "artifactId" field (got ${JSON.stringify(artifactId)})`,
+    );
+  }
+  return artifactId;
 }
 
 export interface AlRunnerConfig {
