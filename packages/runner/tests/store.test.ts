@@ -1,4 +1,8 @@
+import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { type MutantVerdict, ResultsStore } from "../src/store";
 
 const ref = { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "PostingUpdatesTotal" };
@@ -99,6 +103,117 @@ describe("ResultsStore", () => {
       // throwing (schema round-trip); orchestrator.test.ts exercises the
       // end-to-end wiring.
       store.close();
+    });
+  });
+
+  // I2: SCHEMA is `CREATE TABLE IF NOT EXISTS` only, which never reconciles
+  // an existing table's columns. Persistent DBs are a supported workflow
+  // (priorSurvivorKeys history, runId monotonicity for BC app versioning),
+  // so opening a pre-4.3 lethal.sqlite must not leave recordMutant throwing
+  // "table mutants has no column named failure_note" mid-run.
+  describe("failure_note migration (I2)", () => {
+    /** The mutants/runs schema exactly as it stood before Layer 4.3 added failure_note. */
+    const PRE_43_SCHEMA = `
+CREATE TABLE IF NOT EXISTS runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  started_at TEXT NOT NULL DEFAULT (datetime('now')),
+  finished_at TEXT,
+  project_path TEXT NOT NULL,
+  backend TEXT NOT NULL,
+  app_version TEXT NOT NULL,
+  batch_count INTEGER,
+  baseline_green INTEGER
+);
+CREATE TABLE IF NOT EXISTS mutants (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id INTEGER NOT NULL REFERENCES runs(id),
+  mutant_code TEXT NOT NULL,
+  ast_hash TEXT NOT NULL,
+  codeunit_name TEXT NOT NULL,
+  operator_name TEXT NOT NULL,
+  operator_major INTEGER NOT NULL,
+  file TEXT NOT NULL,
+  line INTEGER NOT NULL,
+  verdict TEXT NOT NULL,
+  killing_test TEXT,
+  duration_ms INTEGER NOT NULL
+);
+`;
+
+    test("a pre-4.3 database is migrated on open and then accepts a failure_note write", () => {
+      const dir = mkdtempSync(join(tmpdir(), "lethal-store-"));
+      const dbPath = join(dir, "lethal.sqlite");
+      try {
+        // Create the database as a pre-4.3 LethAL would have left it.
+        const old = new Database(dbPath, { create: true });
+        old.exec(PRE_43_SCHEMA);
+        old.close();
+
+        // Opening with the current ResultsStore must add the column…
+        const store = new ResultsStore(dbPath);
+        const runId = store.createRun({ projectPath: "/p", backend: "bcdev", appVersion: "1" });
+        // …so a write carrying failureNote no longer throws.
+        const rowId = store.recordMutant(
+          runId,
+          mutantRow("error", { failureNote: "compile failed; bisected to mutant M0001" }),
+        );
+        store.close();
+
+        const check = new Database(dbPath);
+        const row = check.query("SELECT failure_note FROM mutants WHERE id = ?").get(rowId) as {
+          failure_note: string | null;
+        };
+        check.close();
+        expect(row.failure_note).toBe("compile failed; bisected to mutant M0001");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    test("recordMutant persists failure_note at the column level, NULL when absent", () => {
+      // Direct column-level coverage (Task 6 Minor): read the value back out
+      // of the column itself, not just through the absence of a throw.
+      const dir = mkdtempSync(join(tmpdir(), "lethal-store-"));
+      const dbPath = join(dir, "lethal.sqlite");
+      try {
+        const store = new ResultsStore(dbPath);
+        const runId = store.createRun({ projectPath: "/p", backend: "bcdev", appVersion: "1" });
+        const withNote = store.recordMutant(
+          runId,
+          mutantRow("error", { failureNote: "unstable test X: fails at baseline confirmation" }),
+        );
+        const withoutNote = store.recordMutant(
+          runId,
+          mutantRow("survived", { mutantCode: "M0002" }),
+        );
+        store.close();
+
+        const check = new Database(dbPath);
+        const rows = check
+          .query("SELECT id, failure_note FROM mutants ORDER BY id")
+          .all() as Array<{ id: number; failure_note: string | null }>;
+        check.close();
+        expect(rows).toEqual([
+          { id: withNote, failure_note: "unstable test X: fails at baseline confirmation" },
+          { id: withoutNote, failure_note: null },
+        ]);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    test("opening an already-migrated database is a no-op (idempotent)", () => {
+      const dir = mkdtempSync(join(tmpdir(), "lethal-store-"));
+      const dbPath = join(dir, "lethal.sqlite");
+      try {
+        new ResultsStore(dbPath).close();
+        const store = new ResultsStore(dbPath); // second open must not throw on ALTER
+        const runId = store.createRun({ projectPath: "/p", backend: "bcdev", appVersion: "1" });
+        store.recordMutant(runId, mutantRow("killed"));
+        store.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
     });
   });
 });

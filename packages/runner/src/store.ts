@@ -20,6 +20,15 @@ export interface MutantRow {
   readonly line: number;
   readonly verdict: MutantVerdict;
   readonly killingTest?: string;
+  /**
+   * Human-readable diagnostic for an `error`-verdict row: a bisected compile
+   * failure's culprit note (file/line/operator), a deadline/unstable
+   * confirmation message, or the raw backend error text — whatever
+   * `orchestrator.ts`'s `record()` was given as `failureNote`. Persisted so a
+   * post-hoc query (or a future CLI surface) can find the culprit without
+   * re-running the session; not just held in memory for the one report.
+   */
+  readonly failureNote?: string;
   readonly durationMs: number;
 }
 
@@ -46,6 +55,7 @@ CREATE TABLE IF NOT EXISTS mutants (
   line INTEGER NOT NULL,
   verdict TEXT NOT NULL,
   killing_test TEXT,
+  failure_note TEXT,
   duration_ms INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_mutants_identity
@@ -70,6 +80,23 @@ export class ResultsStore {
     this.db = new Database(dbPath, { create: true });
     this.db.exec("PRAGMA journal_mode = WAL;");
     this.db.exec(SCHEMA);
+    this.migrate();
+  }
+
+  /**
+   * Guarded, idempotent migrations for persistent databases created before a
+   * column existed. `SCHEMA` is `CREATE TABLE IF NOT EXISTS` only — it never
+   * reconciles an EXISTING table's columns — and persistent result DBs are a
+   * supported workflow (`priorSurvivorKeys` history, runId monotonicity for
+   * BC app-version stamping), so a `lethal.sqlite` created before Layer 4.3
+   * has a `mutants` table without `failure_note`, against which every
+   * `recordMutant` INSERT would throw mid-run.
+   */
+  private migrate(): void {
+    const cols = this.db.query("PRAGMA table_info(mutants)").all() as Array<{ name: string }>;
+    if (!cols.some((c) => c.name === "failure_note")) {
+      this.db.exec("ALTER TABLE mutants ADD COLUMN failure_note TEXT");
+    }
   }
 
   createRun(info: { projectPath: string; backend: string; appVersion: string }): number {
@@ -94,8 +121,8 @@ export class ResultsStore {
     const r = this.db
       .query(
         `INSERT INTO mutants (run_id, mutant_code, ast_hash, codeunit_name, operator_name,
-         operator_major, file, line, verdict, killing_test, duration_ms)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+         operator_major, file, line, verdict, killing_test, failure_note, duration_ms)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
       )
       .get(
         runId,
@@ -108,6 +135,7 @@ export class ResultsStore {
         row.line,
         row.verdict,
         row.killingTest ?? null,
+        row.failureNote ?? null,
         row.durationMs,
       ) as { id: number };
     return r.id;

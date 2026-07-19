@@ -1,13 +1,13 @@
-import { access, copyFile, readFile, readdir, writeFile } from "node:fs/promises";
+import { access, copyFile, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { tier1Operators } from "@lethal/builtin-tier1";
 import {
-  type ALSyntaxNode,
   type MutationSpec,
   buildSemanticContext,
-  findEnclosingStatement,
+  buildSpanIndex,
   initParser,
   parseAL,
+  validateSpec,
   visit,
   wrapRoot,
 } from "@lethal/engine";
@@ -19,13 +19,12 @@ import {
   writeInstrumentedProject,
 } from "@lethal/schemata";
 import type { ExecutionBackend, TestMethodRef, TestVerdict } from "./backend";
+import { bisectFailingMutant } from "./bisect";
 import { discoverTests } from "./discovery";
 import { Semaphore, shardEvenly } from "./pool";
 import { buildReport } from "./report";
 import type { SessionOutcome, SessionReport } from "./report";
 import {
-  type OverlapSite,
-  batchByOverlap,
   buildCoverageIndex,
   coverageFilter,
   filterHistory,
@@ -43,9 +42,10 @@ const BASELINE_TIMEOUT_DEFAULT = 120_000;
  * ops -> compile -> write pipeline exercised by
  * `packages/builtin-tier1/tests/end-to-end.test.ts`: build a per-file
  * semantic context, walk the tree, and collect every spec each operator
- * targets. Overlap resolution is deliberately NOT done here — that is
- * `batchByOverlap`'s job downstream, since overlapping mutants still need to
- * run, just in separate batches.
+ * targets. Overlap resolution isn't needed here (or anywhere downstream
+ * post-Layer-4.3): overlapping mutants coalesce into one flat dispatch chain
+ * at compile time (`compileSchemataForFile`), so every spec this returns runs
+ * behind its own guard in the same single instrumented artifact.
  */
 export async function generateMutationSet(projectDir: string): Promise<InstrumentedFile[]> {
   await initParser();
@@ -57,11 +57,28 @@ export async function generateMutationSet(projectDir: string): Promise<Instrumen
     const source = await readFile(join(projectDir, rel), "utf8");
     const root = wrapRoot(parseAL(source));
     const ctx = buildSemanticContext([{ path: rel, root }]);
+    // Built once per file (not per spec): a per-spec tree walk here would be
+    // O(specs x nodes) on a file with many mutation sites. See
+    // `buildSpanIndex`'s doc comment in @lethal/engine.
+    const spanIndex = buildSpanIndex(root);
     const specs: MutationSpec[] = [];
     visit(root, (node) => {
       for (const op of tier1Operators) {
         if (op.targets(node, ctx)) {
-          for (const spec of op.generate(node, ctx)) specs.push(spec);
+          for (const spec of op.generate(node, ctx)) {
+            // Reject specs whose `before` isn't a real node in this file's
+            // tree — coalescing (Layer 4.3) relies on mutation sites being
+            // laminar, which a synthetic multi-node span could violate.
+            const validation = validateSpec(spec, root, spanIndex);
+            if (validation.ok) {
+              specs.push(spec);
+            } else {
+              console.warn(
+                `[lethal] rejected mutation spec from operator "${spec.operatorName}" ` +
+                  `(before span ${spec.before.startIndex}..${spec.before.endIndex}): ${validation.error}`,
+              );
+            }
+          }
         }
       }
     });
@@ -89,41 +106,198 @@ export interface SessionConfig {
 /** Alias kept for readability at call sites within this module. */
 type SessionVerdict = MutantVerdict;
 
-interface SiteEntry extends OverlapSite {
-  readonly spec: MutationSpec;
-  readonly sourceFile: InstrumentedFile;
+/**
+ * Splits the full set of instrumented files into compile artifacts. Layer
+ * 4.3 collapsed overlap batching, so today this is trivial — one artifact
+ * holding everything, since overlapping mutants coalesce into flat dispatch
+ * chains at compile time instead of needing separate compiles. Kept as a
+ * single named seam (rather than inlined at each call site) so a future
+ * size-budget split has exactly one place to change, and so `cli.ts`'s
+ * dry-run batch count can never drift from what `runSession` actually
+ * deploys.
+ *
+ * Compile-failure bisection (Task 6, design spec §6) did NOT end up needing
+ * this to return more than one artifact: a bad spec is narrowed down WITHIN
+ * a single artifact's deploy-failure handler (see `narrowFilesToSubset` and
+ * the `bisectFailingMutant` call in `runSession`'s deploy catch), by
+ * re-instrumenting a scratch directory holding a subset of that artifact's
+ * specs, not by asking `planArtifacts` to pre-split anything.
+ *
+ * Zero files (no mutable sites anywhere in the project) yields zero
+ * artifacts, not one empty artifact — there is nothing to compile or deploy,
+ * so `runSession`'s artifact loop must never execute in that case (no
+ * pointless deploy, no baseline run, no app.json requirement).
+ */
+export function planArtifacts(
+  files: readonly InstrumentedFile[],
+): readonly (readonly InstrumentedFile[])[] {
+  return files.length === 0 ? [] : [files];
 }
 
 /**
- * The range `batchByOverlap` must treat as "claimed" by this spec — NOT
- * always `spec.before`'s own range.
+ * Rebuilds an artifact's `InstrumentedFile[]` restricted to a subset of
+ * manifest entries. `planArtifacts` only ever splits at FILE granularity —
+ * every mutant in an artifact shares one `InstrumentedFile[]` — but a compile
+ * failure is usually one bad spec in one file, so `bisectFailingMutant`
+ * (halving `MutantManifestEntry[]`) needs to halve a single file's *specs*,
+ * not whole files. This is that regrouping: it does not derive from
+ * `assignMutantIds` (which would renumber ids for a narrower set and drift
+ * from the ids `subset` actually names), it matches each entry back to its
+ * originating `MutationSpec` structurally, via (file, before span, operator)
+ * — the same triple `writeInstrumentedProject` used to produce `subset`'s
+ * entries in the first place, so a match is unambiguous within one artifact.
  *
- * `schemata`'s compiler (`compile.ts`'s `applyWrap`/`applyDuplicate`, used
- * for `statement-position`/`short-circuit-operand` specs) doesn't rewrite
- * `spec.before` directly: it walks up to the narrowest *enclosing statement*
- * (`findEnclosingStatement`) and replaces that whole statement. Two specs
- * whose `before` nodes are disjoint sub-expressions of the SAME statement
- * (e.g. `conditional-boundary` firing on both sides of
- * `(Value < 0) or (Value > 100)`) therefore don't overlap by `before`
- * range, but collide at compile time on the same statement node
- * (`compileSchemataForFile`'s "two specs resolved to the same AST node"
- * throw) if the naive `before`-range overlap check lets them share a batch.
- * Widening the overlap range to the resolved statement here makes
- * `batchByOverlap` split them into separate batches instead.
+ * A file whose specs all fall outside `subset` is dropped from the result
+ * entirely (matching `writeInstrumentedProject`'s own "only write files with
+ * >=1 spec" behavior) — `prepareBatchProject` still copies it into the
+ * artifact dir verbatim, uninstrumented, same as any other no-mutant file.
  *
- * `expression-position` (lift) specs are unaffected: they never go through
- * `findEnclosingStatement` — multiple lifts landing in the same code block
- * are coordinated into one merged rewrite by
- * `compile.ts`'s `commitLiftRewrites`, not a collision.
+ * The (file, span, operator) key has no STRUCTURAL uniqueness guarantee — it
+ * holds today only because every Tier 1 operator emits at most one spec per
+ * node. If an operator ever emits two variants for the same node, the two
+ * specs collide on this key and a subset entry meant to name ONE of them
+ * silently matches both, coarsening bisection. Assert loudly instead.
  */
-function overlapRangeOf(spec: MutationSpec): { startIndex: number; endIndex: number } {
-  if (spec.parentContext === "expression-position") {
-    return { startIndex: spec.before.startIndex, endIndex: spec.before.endIndex };
+export function narrowFilesToSubset(
+  files: readonly InstrumentedFile[],
+  subset: readonly MutantManifestEntry[],
+): InstrumentedFile[] {
+  const specKey = (file: string, spec: MutationSpec) =>
+    `${file}\0${spec.before.startIndex}\0${spec.before.endIndex}\0${spec.operatorName}`;
+  const wanted = new Set(
+    subset.map((m) => `${m.file}\0${m.startIndex}\0${m.endIndex}\0${m.operatorName}`),
+  );
+  const seen = new Set<string>();
+  const out: InstrumentedFile[] = [];
+  for (const f of files) {
+    for (const spec of f.specs) {
+      const key = specKey(f.path, spec);
+      if (seen.has(key)) {
+        throw new Error(
+          `narrowFilesToSubset: duplicate spec key — two specs collide on (${f.path}, ${spec.before.startIndex}..${spec.before.endIndex}, ${spec.operatorName}); the (file, span, operator) triple can no longer identify a single mutant, so bisection narrowing would silently include both`,
+        );
+      }
+      seen.add(key);
+    }
+    const specs = f.specs.filter((spec) => wanted.has(specKey(f.path, spec)));
+    if (specs.length > 0) out.push({ ...f, specs });
   }
-  const statement = findEnclosingStatement(spec.before);
-  return statement
-    ? { startIndex: statement.startIndex, endIndex: statement.endIndex }
-    : { startIndex: spec.before.startIndex, endIndex: spec.before.endIndex };
+  return out;
+}
+
+/**
+ * Writes one instrumented artifact into `targetDir`. Shared by the initial
+ * per-artifact write (step 1 below) and by every bisection attempt
+ * (sequential and per-shard) — one artifact-preparation sequence, not
+ * several that can drift apart.
+ *
+ * Always `rm`s `targetDir` first: bisection reuses the SAME scratch
+ * directory across many candidate subsets, and a file that dropped out of a
+ * narrower subset would otherwise leave its previous, more-instrumented
+ * write behind — a stale compile input the next `compiles()` check never
+ * actually asked for. Harmless for the initial write too, since `targetDir`
+ * there is always a fresh `run-<runId>-batch-<batchIdx>` path.
+ *
+ * `subset` omitted means "every spec in `files`" (the artifact's initial,
+ * unnarrowed write); given, `files` is regrouped down to just those specs
+ * via `narrowFilesToSubset` before writing.
+ */
+async function prepareArtifactDir(args: {
+  readonly targetDir: string;
+  readonly files: readonly InstrumentedFile[];
+  readonly subset?: readonly MutantManifestEntry[];
+  readonly selectorIds: SelectorConfig;
+  readonly projectDir: string;
+  readonly batchIdx: number;
+  readonly runId: number;
+}): Promise<void> {
+  await rm(args.targetDir, { recursive: true, force: true });
+  const files =
+    args.subset === undefined ? args.files : narrowFilesToSubset(args.files, args.subset);
+  await writeInstrumentedProject({
+    targetDir: args.targetDir,
+    files,
+    selectorIds: args.selectorIds,
+  });
+  await prepareBatchProject(args.projectDir, args.targetDir, args.batchIdx, args.runId);
+}
+
+/**
+ * Distinguishes "preparing the candidate artifact failed" (a filesystem/
+ * instrumentation problem on OUR side) from "the candidate artifact failed
+ * to compile" — only the latter may steer the bisection search. Without
+ * this, an fs error inside `prepareArtifactDir` is indistinguishable from
+ * a compile failure and silently corrupts the narrowing.
+ */
+class BisectPrepareError extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause));
+    this.name = "BisectPrepareError";
+  }
+}
+
+/**
+ * Bisects `subsetMutants` against a `deploy`-shaped compile check, reusing
+ * `scratchDir` for every candidate via `prepareArtifactDir`. Shared by the
+ * sequential deploy-failure path (step 3) and every worker shard's own
+ * deploy-failure path (`workers > 1`, step 6) — same algorithm and the same
+ * artifact-preparation helper, just a different mutant subset and a
+ * different backend/compile-limit to deploy through.
+ *
+ * `scratchDir` is removed once bisection finishes, win or lose — a failed
+ * batch must not leave a scratch artifact behind on disk indefinitely.
+ */
+async function bisectAndNote(args: {
+  readonly subsetMutants: readonly MutantManifestEntry[];
+  readonly scratchDir: string;
+  readonly batchFiles: readonly InstrumentedFile[];
+  readonly selectorIds: SelectorConfig;
+  readonly projectDir: string;
+  readonly batchIdx: number;
+  readonly runId: number;
+  readonly deploy: (dir: string) => Promise<void>;
+  readonly originalErr: unknown;
+}): Promise<string> {
+  try {
+    const outcome = await bisectFailingMutant(args.subsetMutants, async (subset) => {
+      try {
+        await prepareArtifactDir({
+          targetDir: args.scratchDir,
+          files: args.batchFiles,
+          subset,
+          selectorIds: args.selectorIds,
+          projectDir: args.projectDir,
+          batchIdx: args.batchIdx,
+          runId: args.runId,
+        });
+      } catch (err) {
+        // NOT a compile answer — abort the search rather than feeding it a
+        // false "this subset doesn't compile".
+        throw new BisectPrepareError(err);
+      }
+      try {
+        await args.deploy(args.scratchDir);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    switch (outcome.kind) {
+      case "no-repro":
+        return String(args.originalErr);
+      case "environmental":
+        return `deploy failed for a reason that is not attributable to any mutant (${outcome.detail}) — likely environmental (e.g. app-version monotonicity, transport, licence): ${String(args.originalErr)}`;
+      case "culprit":
+        return `compile failed; bisected to mutant ${outcome.culprit.mutantId} (${outcome.culprit.file}:${outcome.culprit.startLine} ${outcome.culprit.operatorName}), confirmed: fails alone, complement compiles`;
+    }
+  } catch (err) {
+    if (err instanceof BisectPrepareError) {
+      return `${String(args.originalErr)} (bisection aborted: preparing a candidate artifact failed — ${err.message})`;
+    }
+    throw err;
+  } finally {
+    await rm(args.scratchDir, { recursive: true, force: true }).catch(() => {});
+  }
 }
 
 export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
@@ -150,19 +324,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   });
 
   const allFiles = await generateMutationSet(cfg.projectDir);
-  const allSpecs: SiteEntry[] = allFiles.flatMap((f) =>
-    f.specs.map((spec) => {
-      const site = overlapRangeOf(spec);
-      return {
-        file: f.path,
-        startIndex: site.startIndex,
-        endIndex: site.endIndex,
-        spec,
-        sourceFile: f,
-      };
-    }),
-  );
-  const specBatches = batchByOverlap(allSpecs);
+  const artifacts = planArtifacts(allFiles);
 
   const outcomes: SessionOutcome[] = []; // internal accumulation for the report
   let baselineGreenOverall = true;
@@ -202,44 +364,32 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         workerBackends.push(factory(i));
       }
     }
-    for (const [batchIdx, batchSpecs] of specBatches.entries()) {
-      // 1. write instrumented project for THIS batch's specs only
-      const byFile = new Map<
-        string,
-        { source: string; root: ALSyntaxNode; specs: MutationSpec[] }
-      >();
-      for (const s of batchSpecs) {
-        const existing = byFile.get(s.file);
-        if (existing) existing.specs.push(s.spec);
-        else
-          byFile.set(s.file, {
-            source: s.sourceFile.source,
-            root: s.sourceFile.root,
-            specs: [s.spec],
-          });
-      }
-      const batchFiles: InstrumentedFile[] = [...byFile.entries()].map(([path, v]) => ({
-        path,
-        source: v.source,
-        root: v.root,
-        specs: v.specs,
-      }));
+    for (const [batchIdx, batchFiles] of artifacts.entries()) {
+      // 1. write the instrumented project for this artifact — currently
+      // always every file `generateMutationSet` found (single artifact).
+      // `batchIdx` MUST come from `.entries()`, not a hoisted constant:
+      // `batchDir`'s naming, `app.json`'s version stamp, and every
+      // `MutantOutcome.batchIndex` all key off it, and a hoisted `0` would
+      // silently collide/mis-attribute the moment `artifacts` ever holds
+      // more than one element (e.g. a future size-budget split).
       const batchDir = join(cfg.instrumentedDir, `run-${runId}-batch-${batchIdx}`);
-      await writeInstrumentedProject({
+      // 1b (app.json + full source set) is folded into `prepareArtifactDir`:
+      // even in-memory backends may need a project manifest, and
+      // `writeInstrumentedProject` only writes files that have >=1 mutant
+      // spec in THIS artifact (see packages/schemata/src/project.ts), so alc
+      // would fail to compile the batch dir without the rest of the
+      // project's `.al` files.
+      await prepareArtifactDir({
         targetDir: batchDir,
         files: batchFiles,
         selectorIds: cfg.selectorIds,
+        projectDir: cfg.projectDir,
+        batchIdx,
+        runId,
       });
       const manifest = JSON.parse(
         await readFile(join(batchDir, "mutant-manifest.json"), "utf8"),
       ) as MutantManifest;
-
-      // 1b. app.json + full source set — unconditionally, since even
-      // in-memory backends may need a project manifest. writeInstrumentedProject
-      // only wrote files that had >=1 mutant spec in THIS batch (see
-      // packages/schemata/src/project.ts), so alc would fail to compile the
-      // batch dir without the rest of the project's `.al` files.
-      await prepareBatchProject(cfg.projectDir, batchDir, batchIdx, runId);
 
       // 2. history filter
       const prior = cfg.store.priorSurvivorKeys(cfg.projectDir);
@@ -256,8 +406,31 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       try {
         await cfg.backend.deploy(batchDir);
       } catch (err) {
+        // Layer 4.3 put every mutant in one artifact (design spec §6): one
+        // malformed spec now fails this ONE compile and would otherwise turn
+        // every mutant `execute` holds into an equally uninformative "error"
+        // with nothing pointing at the actual cause. Bisect before giving
+        // up, via the same `prepareArtifactDir`/`bisectAndNote` helpers the
+        // per-worker shard catch below reuses: `bisectFailingMutant` halves
+        // `execute` against re-instrumented, re-deployed scratch subsets
+        // until a single offending mutant is isolated, or the narrowing
+        // stops reproducing the failure (e.g. the culprit was a
+        // known-survivor mutant excluded from `execute` above), in which
+        // case there's nothing more specific to report than the original
+        // error.
+        const note = await bisectAndNote({
+          subsetMutants: execute,
+          scratchDir: join(cfg.instrumentedDir, `run-${runId}-batch-${batchIdx}-bisect`),
+          batchFiles,
+          selectorIds: cfg.selectorIds,
+          projectDir: cfg.projectDir,
+          batchIdx,
+          runId,
+          deploy: (dir) => cfg.backend.deploy(dir),
+          originalErr: err,
+        });
         for (const m of execute)
-          record(cfg.store, runId, m, "error", outcomes, batchIdx, undefined, String(err));
+          record(cfg.store, runId, m, "error", outcomes, batchIdx, undefined, note);
         continue; // batch aborted, next batch still attempted
       }
 
@@ -373,9 +546,31 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
             try {
               await compileLimit.run(() => backend.deploy(batchDir));
             } catch (err) {
+              // Same "one bad mutant, uninformative errors" problem as the
+              // sequential path above applies here identically — bisect
+              // this worker's own deploy failure the same way, scoped to
+              // just `shard` (the natural subset: this worker only ever
+              // deploys/runs `shard`, so a compile failure tied to one of
+              // its specs is isolated against `shard` alone). Each worker
+              // gets its own scratch dir (suffixed by `i`) so concurrently
+              // bisecting shards never race on the same directory.
+              const note = await bisectAndNote({
+                subsetMutants: shard,
+                scratchDir: join(
+                  cfg.instrumentedDir,
+                  `run-${runId}-batch-${batchIdx}-bisect-worker-${i}`,
+                ),
+                batchFiles,
+                selectorIds: cfg.selectorIds,
+                projectDir: cfg.projectDir,
+                batchIdx,
+                runId,
+                deploy: (dir) => compileLimit.run(() => backend.deploy(dir)),
+                originalErr: err,
+              });
               for (const m of shard) {
                 if (perMutantTests.get(m.mutantId) === undefined) continue; // already recorded no-coverage
-                record(cfg.store, runId, m, "error", outcomes, batchIdx, undefined, String(err));
+                record(cfg.store, runId, m, "error", outcomes, batchIdx, undefined, note);
               }
               return;
             }
@@ -411,7 +606,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   }
 
   cfg.store.finishRun(runId, {
-    batchCount: specBatches.length,
+    batchCount: artifacts.length,
     baselineGreen: baselineGreenOverall,
   });
   // Sort accumulated outcomes so report ordering never depends on which
@@ -427,7 +622,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   return buildReport({
     caps,
     baselineGreen: baselineGreenOverall,
-    batches: specBatches.length,
+    batches: artifacts.length,
     outcomes,
   });
 }
@@ -727,6 +922,7 @@ function record(
     verdict,
     durationMs,
     ...(killingTest !== undefined ? { killingTest } : {}),
+    ...(failureNote !== undefined ? { failureNote } : {}),
   });
   outcomes.push({
     mutant: m,

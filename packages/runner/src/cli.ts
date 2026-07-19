@@ -3,16 +3,15 @@ import { mkdir, mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
-import type { SelectorConfig } from "@lethal/schemata";
+import type { InstrumentedFile, SelectorConfig } from "@lethal/schemata";
 import { MutationControlClient } from "./activation";
 import { AlRunnerBackend } from "./al-runner-backend";
 import type { ExecutionBackend } from "./backend";
 import { BcDevMcpBackend } from "./bcdev-backend";
-import { generateMutationSet, runSession } from "./orchestrator";
+import { generateMutationSet, planArtifacts, runSession } from "./orchestrator";
 import { Publisher, defaultAlToolPaths, defaultSpawn } from "./publisher";
 import { renderConsole, writeJsonReport } from "./report";
 import type { SessionReport } from "./report";
-import { batchByOverlap } from "./selection";
 import { ResultsStore } from "./store";
 
 /**
@@ -359,25 +358,33 @@ function lineOfIndex(source: string, index: number): number {
   return line;
 }
 
-async function printDryRun(projectDir: string): Promise<void> {
-  const files = await generateMutationSet(projectDir);
-  const sites = files.flatMap((f) =>
+function sitesOf(files: readonly InstrumentedFile[]) {
+  return files.flatMap((f) =>
     f.specs.map((spec) => ({
       file: f.path,
-      startIndex: spec.before.startIndex,
-      endIndex: spec.before.endIndex,
       operatorName: spec.operatorName,
       line: lineOfIndex(f.source, spec.before.startIndex),
     })),
   );
-  const batches = batchByOverlap(sites);
+}
+
+/**
+ * Batch count here is derived from `planArtifacts` — the exact same seam
+ * `runSession` uses to decide how many artifacts to compile and deploy — so
+ * this can never report a number `runSession` wouldn't actually produce.
+ */
+async function printDryRun(projectDir: string): Promise<void> {
+  const files = await generateMutationSet(projectDir);
+  const sites = sitesOf(files);
+  const artifacts = planArtifacts(files);
 
   console.log(
-    `dry run: ${files.length} file(s), ${sites.length} mutant site(s), ${batches.length} batch(es)`,
+    `dry run: ${files.length} file(s), ${sites.length} mutant site(s), ${artifacts.length} batch(es)`,
   );
-  for (const [i, batch] of batches.entries()) {
-    console.log(`\nbatch ${i} (${batch.length} mutant site(s)):`);
-    for (const s of batch) {
+  for (const [i, artifact] of artifacts.entries()) {
+    const artifactSites = sitesOf(artifact);
+    console.log(`\nbatch ${i} (${artifactSites.length} mutant site(s)):`);
+    for (const s of artifactSites) {
       console.log(`  ${s.file}:${s.line}  ${s.operatorName}`);
     }
   }

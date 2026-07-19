@@ -2,6 +2,7 @@ export * from "./activation";
 export * from "./al-runner-backend";
 export * from "./backend";
 export * from "./bcdev-backend";
+export * from "./bisect";
 export * from "./discovery";
 export * from "./ms-inmemory-backend";
 export * from "./orchestrator";
