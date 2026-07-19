@@ -66,17 +66,54 @@ describe("buildComponents", () => {
     expect(comps).toHaveLength(2);
   });
 
-  it("is deterministic — same input, same components and order", () => {
+  it("is deterministic — same components and member order regardless of input order", () => {
     const root = wrapRoot(parseAL(SRC));
     const cmp = findAll(root, ALNodeKind.comparison_expression)[0];
     const firstExit = findAll(root, ALNodeKind.exit_statement)[0];
     if (cmp === undefined || firstExit === undefined) throw new Error("fixture drift");
-    const input = [
+
+    const cmpEntry = { mutantId: "M0001", spec: synth(cmp as never, "A >= B", "boundary") };
+    const exitEntry = {
+      mutantId: "M0002",
+      spec: synth(firstExit as never, "exit(false);", "return-value"),
+    };
+
+    const shape = (
+      comps: readonly { root: { startIndex: number }; members: readonly { mutantId: string }[] }[],
+    ) => comps.map((c) => ({ root: c.root.startIndex, members: c.members.map((m) => m.mutantId) }));
+
+    // Same two specs, fed in both orders — the sort must impose a total order,
+    // not just preserve whatever order they were handed in.
+    const forward = shape(buildComponents([cmpEntry, exitEntry]));
+    const reversed = shape(buildComponents([exitEntry, cmpEntry]));
+
+    expect(reversed).toEqual(forward);
+    expect(forward).toEqual([{ root: firstExit.startIndex, members: ["M0002", "M0001"] }]);
+  });
+
+  it("groups a 3-level containment chain (block ⊃ exit_statement ⊃ comparison) into ONE component, outermost first", () => {
+    const root = wrapRoot(parseAL(SRC));
+    const block = findAll(root, ALNodeKind.block)[0];
+    const firstExit = findAll(root, ALNodeKind.exit_statement)[0];
+    const cmp = findAll(root, ALNodeKind.comparison_expression)[0];
+    if (block === undefined || firstExit === undefined || cmp === undefined) {
+      throw new Error("fixture drift");
+    }
+
+    const comps = buildComponents([
       { mutantId: "M0001", spec: synth(cmp as never, "A >= B", "boundary") },
-      { mutantId: "M0002", spec: synth(firstExit as never, "exit(false);", "return-value") },
-    ];
-    const a = buildComponents(input).map((c) => c.members.map((m) => m.mutantId));
-    const b = buildComponents(input).map((c) => c.members.map((m) => m.mutantId));
-    expect(a).toEqual(b);
+      {
+        mutantId: "M0002",
+        spec: synth(block as never, "begin\n        exit(true);\n    end;", "block-replace"),
+      },
+      { mutantId: "M0003", spec: synth(firstExit as never, "exit(false);", "return-value") },
+    ]);
+
+    expect(comps).toHaveLength(1);
+    const c = comps[0];
+    if (c === undefined) throw new Error("no component");
+    expect(c.root.startIndex).toBe(block.startIndex);
+    // outermost first: block, then exit_statement, then the innermost comparison
+    expect(c.members.map((m) => m.mutantId)).toEqual(["M0002", "M0003", "M0001"]);
   });
 });
