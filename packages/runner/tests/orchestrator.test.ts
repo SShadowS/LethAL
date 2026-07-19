@@ -1642,4 +1642,59 @@ describe("runSession — bisection on compile failure", () => {
     expect(report.counts.killed).toBeGreaterThan(0);
     store.close();
   });
+
+  // The `workers > 1` twin of the sequential DeploymentError-abort guard (step 3b, covered
+  // above by the "reportedIdentity" tests using a single `backend`): a DeploymentError is
+  // NOT a compile verdict — orchestrator.ts:667's `if (err instanceof DeploymentError) throw
+  // err` must reject the whole session before `bisectAndNote` ever runs, exactly like the
+  // sequential path. Without that guard, a worker's publish/verify failure would fall through
+  // into the same bisection machinery the previous test exercises for a plain compile error,
+  // and get silently downgraded into a per-mutant "error" note instead of aborting the run.
+  test("a worker's DeploymentError aborts the whole session instead of being bisected", async () => {
+    const root = await mkdtemp(join(tmpdir(), "lethal-orch-parallel-deployerr-"));
+    const dbPath = join(root, "results.sqlite");
+    const dirs = await makeProject();
+    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
+    const store = new ResultsStore(dbPath);
+    const caps: BackendCapabilities = {
+      coverage: "none",
+      deploy: "none",
+      isolation: "full-reset",
+      authoritative: false,
+    };
+    // The exact object worker 0's deploy() throws — asserted below by reference (`.toBe`),
+    // so the rethrow at orchestrator.ts:667 is proven to propagate it untouched, never
+    // wrapped in a "bisected to mutant ..." note the way a plain compile failure would be.
+    const deployErr = new DeploymentError("failed", "boom: worker 0 could not deploy", {
+      status: "unavailable",
+      detail: "no response",
+    });
+    const make = (workerIndex: number) =>
+      new StubBackend(
+        caps,
+        (mutant) => (mutant === null ? "pass" : "fail"),
+        [],
+        workerIndex === 0 ? deployErr : undefined,
+      );
+    await expect(
+      runSession({
+        backend: make(-1),
+        backendFactory: make,
+        store,
+        ...dirs,
+        selectorIds,
+        workers: 2,
+      }),
+    ).rejects.toBe(deployErr);
+
+    // Reopen the on-disk DB: no mutant anywhere carries a "bisected" note — proof the
+    // DeploymentError never reached bisectAndNote, on worker 0's shard or anywhere else.
+    const raw = new Database(dbPath, { readonly: true });
+    const rows = raw.query("SELECT failure_note FROM mutants").all() as Array<{
+      failure_note: string | null;
+    }>;
+    raw.close();
+    expect(rows.every((r) => !r.failure_note?.includes("bisected"))).toBe(true);
+    store.close();
+  });
 });
