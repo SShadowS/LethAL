@@ -187,7 +187,12 @@ export class AlRunnerBackend implements ExecutionBackend {
         // Read lazily from the directory this activation actually rewrites (see deploy()):
         // a fixed instance field captured at deploy time baked "" over the real id whenever
         // activate() ran without a prior deploy() — the exact no-deploy path the class
-        // comment above promises to support.
+        // comment above promises to support. Behavior change from that fixed-field version:
+        // a corrupt/malformed manifest in the no-deploy path now makes activate() itself
+        // throw (readArtifactId's loud-failure contract, see its doc comment) instead of
+        // silently baking in "". That's an improvement — the earlier version's whole point
+        // was never surfacing this — but it means activate() can now reject where it never
+        // used to for this specific (no prior deploy(), bad manifest) combination.
         artifactId: await readArtifactId(dir),
       }),
       "utf8",

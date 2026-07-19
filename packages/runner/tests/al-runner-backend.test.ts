@@ -138,6 +138,37 @@ describe("AlRunnerBackend artifact identity", () => {
 
     await expect(backend.deploy(sourceDir)).rejects.toThrow(/mutant-manifest\.json/);
   });
+
+  // The no-deploy path the class comment on deploy() promises to support: some callers
+  // (e.g. al-runner.itest.ts) drive activate()/run() straight against cfg.instrumentedDir,
+  // never calling deploy() first. activate() reads the artifact id LAZILY (see its comment)
+  // specifically so this path bakes the real id from cfg.instrumentedDir's own
+  // mutant-manifest.json, not a stale "" a deploy()-cached field would have left behind.
+  test("activate() without a prior deploy() bakes the real artifact id from cfg.instrumentedDir", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-alrunner-lazyid-"));
+    await writeFile(join(dir, "MutationSelector.Codeunit.al"), "placeholder", "utf8");
+    await writeFile(
+      join(dir, "mutant-manifest.json"),
+      JSON.stringify({ artifactId: "cafebabecafebabecafebabecafebabe", mutants: [] }),
+      "utf8",
+    );
+    const backend = new AlRunnerBackend(
+      {
+        alRunnerPath: "al-runner",
+        instrumentedDir: dir,
+        testDir: "/tests",
+        selectorObjectId: 50000,
+      },
+      okSpawn({ tests: [] }).spawn,
+    );
+
+    // No backend.deploy(...) call — activate() is driven directly, as deploy()'s own
+    // "existing callers may drive activate()/run() directly" comment describes.
+    await backend.activate("M0007");
+
+    const selector = await readFile(join(dir, "MutationSelector.Codeunit.al"), "utf8");
+    expect(selector).toContain("cafebabecafebabecafebabecafebabe");
+  });
 });
 
 describe("AlRunnerBackend.activate", () => {
