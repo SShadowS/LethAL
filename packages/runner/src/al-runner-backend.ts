@@ -1,4 +1,4 @@
-import { cp, rm, writeFile } from "node:fs/promises";
+import { cp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { emitStaticSelector } from "@lethal/schemata";
 import { OneShotTransport, ServerTransport } from "./al-runner-transport";
@@ -18,6 +18,25 @@ import type { SpawnFn } from "./publisher";
 /** al-runner's own per-test timeout message (verified against v1.0.31). */
 const RUNNER_TIMEOUT_MESSAGE = /Test exceeded \d+s timeout/;
 
+/**
+ * `mutant-manifest.json` is written by `writeInstrumentedProject` for every
+ * real batch, but some fixtures (e.g. `al-runner-backend.test.ts`'s synthetic
+ * source dirs) hand-build a directory with only `MutationSelector.Codeunit.al`
+ * and no manifest at all. Falling back to "" instead of throwing keeps
+ * `deploy()` usable against those — an empty `ArtifactId()` is a harmless
+ * no-identity default; nothing keys off it except `MutationControl_Identity`,
+ * added in this same task.
+ */
+async function readArtifactId(dir: string): Promise<string> {
+  try {
+    const raw = await readFile(join(dir, "mutant-manifest.json"), "utf8");
+    const parsed = JSON.parse(raw) as { artifactId?: unknown };
+    return typeof parsed.artifactId === "string" ? parsed.artifactId : "";
+  } catch {
+    return "";
+  }
+}
+
 export interface AlRunnerConfig {
   readonly alRunnerPath: string; // path to the al-runner executable
   readonly instrumentedDir: string; // schemata output (LethAL-owned scratch)
@@ -36,6 +55,12 @@ export class AlRunnerBackend implements ExecutionBackend {
   // callers may drive activate()/run() directly against cfg.instrumentedDir)
   // activeDir() falls back to the statically configured instrumented dir.
   private deployedDir: string | undefined;
+  // Set by deploy() from the deployed batch's mutant-manifest.json; "" until
+  // deploy() runs (or if the deployed batch carries no manifest — see
+  // readArtifactId). activate() bakes this into every emitStaticSelector()
+  // call, since it overwrites the WHOLE generated selector on every
+  // activation.
+  private artifactId = "";
   private readonly transport: AlRunnerTransport;
 
   constructor(
@@ -112,6 +137,7 @@ export class AlRunnerBackend implements ExecutionBackend {
     await rm(activeDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     await cp(instrumentedDir, activeDir, { recursive: true });
     this.deployedDir = activeDir;
+    this.artifactId = await readArtifactId(activeDir);
   }
 
   private activeDir(): string {
@@ -121,7 +147,11 @@ export class AlRunnerBackend implements ExecutionBackend {
   async activate(mutantId: string | null): Promise<void> {
     await writeFile(
       join(this.activeDir(), "MutationSelector.Codeunit.al"),
-      emitStaticSelector({ objectId: this.cfg.selectorObjectId, activeId: mutantId ?? "" }),
+      emitStaticSelector({
+        objectId: this.cfg.selectorObjectId,
+        activeId: mutantId ?? "",
+        artifactId: this.artifactId,
+      }),
       "utf8",
     );
   }

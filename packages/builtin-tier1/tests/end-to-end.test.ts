@@ -62,6 +62,7 @@ describe("end-to-end Layer 3", () => {
         targetDir: dir,
         files: [{ path: "mixed.al", source: src, root, specs: kept }],
         selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
+        artifactId: "0123456789abcdef0123456789abcdef",
       });
       const written = await readFile(join(dir, "mixed.al"), "utf8");
       expect(written).toBe(compiled);

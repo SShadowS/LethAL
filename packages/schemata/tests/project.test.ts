@@ -1,13 +1,15 @@
-import { describe, it, expect, beforeAll } from "bun:test";
+import { beforeAll, describe, expect, it } from "bun:test";
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
-import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { ALNodeKind, findFirst, initParser, parseAL, wrapRoot } from "@lethal/engine";
 import type { ALSyntaxNode, MutationSpec } from "@lethal/engine";
 import { writeInstrumentedProject } from "../src/project";
 
 describe("writeInstrumentedProject", () => {
-  beforeAll(async () => { await initParser(); });
+  beforeAll(async () => {
+    await initParser();
+  });
 
   it("writes rewritten sources + selector + manifest", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lethal-"));
@@ -30,6 +32,7 @@ describe("writeInstrumentedProject", () => {
         targetDir: dir,
         files: [{ path: "P.Codeunit.al", source: src, root, specs }],
         selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
+        artifactId: "0123456789abcdef0123456789abcdef",
       });
 
       const entries = (await readdir(dir)).sort();
@@ -40,17 +43,12 @@ describe("writeInstrumentedProject", () => {
       expect(entries).toContain("webservices.xml");
       expect(entries).toContain("mutant-manifest.json");
 
-      const manifest = JSON.parse(
-        await readFile(join(dir, "mutant-manifest.json"), "utf8"),
-      );
+      const manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8"));
       expect(manifest.mutants).toHaveLength(1);
       expect(manifest.mutants[0].mutantId).toBe("M0001");
       expect(manifest.mutants[0].operatorName).toBe("op.flip");
 
-      const selector = await readFile(
-        join(dir, "MutationSelector.Codeunit.al"),
-        "utf8",
-      );
+      const selector = await readFile(join(dir, "MutationSelector.Codeunit.al"), "utf8");
       expect(selector).toContain("codeunit 60000");
 
       const rewritten = await readFile(join(dir, "P.Codeunit.al"), "utf8");
@@ -86,11 +84,10 @@ describe("writeInstrumentedProject", () => {
         targetDir: dir,
         files: [{ path: "P.Codeunit.al", source: src1, root: root1, specs: specs1 }],
         selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
+        artifactId: "0123456789abcdef0123456789abcdef",
       });
 
-      let manifest = JSON.parse(
-        await readFile(join(dir, "mutant-manifest.json"), "utf8"),
-      );
+      let manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8"));
       expect(manifest.selectorIds).toEqual({ selectorId: 60000, controlId: 60001, tableId: 60002 });
       let entry = manifest.mutants[0];
       expect(entry.astHash).toMatch(/^[0-9a-f]{8,}$/);
@@ -124,11 +121,10 @@ describe("writeInstrumentedProject", () => {
         targetDir: dir,
         files: [{ path: "MyCodeunit.Codeunit.al", source: src2, root: root2, specs: specs2 }],
         selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
+        artifactId: "0123456789abcdef0123456789abcdef",
       });
 
-      manifest = JSON.parse(
-        await readFile(join(dir, "mutant-manifest.json"), "utf8"),
-      );
+      manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8"));
       entry = manifest.mutants[0];
       expect(entry.codeunitId).toBe(51041);
       expect(entry.codeunitName).toBe("MyCodeunit");
@@ -160,11 +156,10 @@ describe("writeInstrumentedProject", () => {
         targetDir: dir,
         files: [{ path: "Plain.Codeunit.al", source: src3, root: root3, specs: specs3 }],
         selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
+        artifactId: "0123456789abcdef0123456789abcdef",
       });
 
-      manifest = JSON.parse(
-        await readFile(join(dir, "mutant-manifest.json"), "utf8"),
-      );
+      manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8"));
       entry = manifest.mutants[0];
       expect(entry.codeunitId).toBe(51042);
       expect(entry.codeunitName).toBe("Plain");
@@ -238,11 +233,10 @@ describe("writeInstrumentedProject", () => {
           { path: "B.Codeunit.al", source: srcB, root: rootB, specs: specsB },
         ],
         selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
+        artifactId: "0123456789abcdef0123456789abcdef",
       });
 
-      const manifest = JSON.parse(
-        await readFile(join(dir, "mutant-manifest.json"), "utf8"),
-      );
+      const manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8"));
       expect(manifest.mutants).toHaveLength(3);
 
       const rewrittenA = await readFile(join(dir, "A.Codeunit.al"), "utf8");
@@ -331,11 +325,10 @@ describe("writeInstrumentedProject", () => {
           { path: "B.Codeunit.al", source: srcB, root: rootB, specs: specsB },
         ],
         selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
+        artifactId: "0123456789abcdef0123456789abcdef",
       });
 
-      const manifest = JSON.parse(
-        await readFile(join(dir, "mutant-manifest.json"), "utf8"),
-      );
+      const manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8"));
       const bEntry = (manifest.mutants as Array<{ mutantId: string; file: string }>).find(
         (m) => m.file === "B.Codeunit.al",
       );
@@ -346,5 +339,22 @@ describe("writeInstrumentedProject", () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+
+  it("writes the artifact id into the manifest and the generated selector", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-artifactid-"));
+    await writeInstrumentedProject({
+      targetDir: dir,
+      files: [],
+      selectorIds: { selectorId: 79000, controlId: 79001, tableId: 79002 },
+      artifactId: "0123456789abcdef0123456789abcdef",
+    });
+    const manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8")) as {
+      artifactId: string;
+    };
+    expect(manifest.artifactId).toBe("0123456789abcdef0123456789abcdef");
+    const selector = await readFile(join(dir, "MutationSelector.Codeunit.al"), "utf8");
+    expect(selector).toContain("0123456789abcdef0123456789abcdef");
+    await rm(dir, { recursive: true, force: true });
   });
 });

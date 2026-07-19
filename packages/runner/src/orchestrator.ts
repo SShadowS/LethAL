@@ -186,6 +186,19 @@ export function narrowFilesToSubset(
 }
 
 /**
+ * Placeholder only — Task 6 (design §5,
+ * docs/superpowers/specs/2026-07-19-layer-5a-deployment-identity-design.md)
+ * generates the real per-artifact id (128 cryptographically random bits,
+ * baked into generated AL and recorded via `store.recordArtifact`) and wires
+ * it through `SessionConfig`. Task 3 only had to make `writeInstrumentedProject`
+ * accept a required `artifactId`; this keeps every caller here compiling
+ * without pretending to satisfy that later randomness/uniqueness contract.
+ */
+function placeholderArtifactId(runId: number, batchIdx: number): string {
+  return `pending-task6-${runId}-${batchIdx}`;
+}
+
+/**
  * Writes one instrumented artifact into `targetDir`. Shared by the initial
  * per-artifact write (step 1 below) and by every bisection attempt
  * (sequential and per-shard) — one artifact-preparation sequence, not
@@ -210,6 +223,7 @@ async function prepareArtifactDir(args: {
   readonly projectDir: string;
   readonly batchIdx: number;
   readonly runId: number;
+  readonly artifactId: string;
 }): Promise<void> {
   await rm(args.targetDir, { recursive: true, force: true });
   const files =
@@ -218,6 +232,7 @@ async function prepareArtifactDir(args: {
     targetDir: args.targetDir,
     files,
     selectorIds: args.selectorIds,
+    artifactId: args.artifactId,
   });
   await prepareBatchProject(args.projectDir, args.targetDir, args.batchIdx, args.runId);
 }
@@ -255,6 +270,7 @@ async function bisectAndNote(args: {
   readonly projectDir: string;
   readonly batchIdx: number;
   readonly runId: number;
+  readonly artifactId: string;
   readonly deploy: (dir: string) => Promise<void>;
   readonly originalErr: unknown;
 }): Promise<string> {
@@ -269,6 +285,7 @@ async function bisectAndNote(args: {
           projectDir: args.projectDir,
           batchIdx: args.batchIdx,
           runId: args.runId,
+          artifactId: args.artifactId,
         });
       } catch (err) {
         // NOT a compile answer — abort the search rather than feeding it a
@@ -386,6 +403,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         projectDir: cfg.projectDir,
         batchIdx,
         runId,
+        artifactId: placeholderArtifactId(runId, batchIdx),
       });
       const manifest = JSON.parse(
         await readFile(join(batchDir, "mutant-manifest.json"), "utf8"),
@@ -426,6 +444,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           projectDir: cfg.projectDir,
           batchIdx,
           runId,
+          artifactId: placeholderArtifactId(runId, batchIdx),
           deploy: (dir) => cfg.backend.deploy(dir),
           originalErr: err,
         });
@@ -565,6 +584,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
                 projectDir: cfg.projectDir,
                 batchIdx,
                 runId,
+                artifactId: placeholderArtifactId(runId, batchIdx),
                 deploy: (dir) => compileLimit.run(() => backend.deploy(dir)),
                 originalErr: err,
               });
