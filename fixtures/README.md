@@ -94,21 +94,42 @@ needing separate compiles to keep them from interfering.
 server, no env gate, exercises only the schemata compiler against this fixture):
 
 ```
-mutants:          16
-original source:  957 bytes
-instrumented:     4958 bytes
-growth:           5.18x  (310 bytes/mutant)
-LINEAR-ish: growth is below one full copy per mutant
+mutants:              16
+original source:      957 bytes
+instrumented source:  3440 bytes
+fixed scaffolding:    1524 bytes (Mutation* files — constant per artifact, excluded from growth)
+total emitted:        4964 bytes (5.19x incl. scaffolding)
+source growth:        3.59x  (~155 marginal bytes/mutant)
+LINEAR-ish: source growth is below one full copy per mutant
 ```
+
+The measurement separates **fixed scaffolding** (`MutationSelector.Codeunit.al`,
+`MutationControl.Codeunit.al`, `MutationActive.Table.al` — written once per artifact,
+byte-identical regardless of mutant count) from **instrumented source**, which is what
+actually grows with mutants. An earlier version of this itest summed both and reported
+5.18x / 310 bytes-per-mutant; 31% of those bytes were the constant scaffolding, so the
+"per-mutant" figure was not a marginal cost and would have distorted any future
+cross-fixture growth curve. True source growth on this fixture is **3.59x**, at **~155
+marginal bytes per mutant** (`(instrumented source − original) / mutants`).
 
 Honest reading: this is **one data point on one small fixture**, not a growth curve. A single
 measurement cannot by itself distinguish "linear in mutant count" from "some other sub-2^depth
 curve" — that needs multiple fixtures at varying mutant counts/nesting depths plotted against
 each other, which this task does not attempt. What it *does* show concretely: 16 mutants
-produced 5.18x growth, not 16x (one full source copy per mutant) and nowhere near the
-`2^depth` blowup the old nested-guard scheme would have produced once two or more mutants
-shared a containing block — coalescing is emitting one dispatch chain per component, not one
-duplicated copy of the file per mutant.
+produced 3.59x source growth (5.19x counting the fixed scaffolding), not 16x (one full source
+copy per mutant) and nowhere near the `2^depth` blowup the old nested-guard scheme would have
+produced once two or more mutants shared a containing block — coalescing is emitting one
+dispatch chain per component, not one duplicated copy of the file per mutant.
+
+**Known limitation (final review I4, recorded, deliberately not fixed on this branch):
+compile-failure bisection can never trigger on the al-runner backend.** `AlRunnerBackend.
+deploy()` only copies the instrumented directory — al-runner compiles per `run()` call — so a
+bad emitted branch (a broken custom operator, say) never fails at deploy time there. It
+surfaces instead as every baseline test erroring, `greenTests.length === 0`, and every mutant
+recorded `error` with note "no green baseline tests": no bisection, no named culprit. The
+design spec §6 blast-radius bound therefore holds only for compile-at-deploy backends
+(bcdev). Whether to bisect the baseline-red path too, add a compile probe to al-runner's
+deploy, or accept the limitation permanently is a scope decision deferred to the maintainer.
 
 **Verdicts unchanged, verified live (2026-07-19)** against both backends, using the real
 `al-runner.exe` binary and a real BC dev server — exactly the known-good tables from before
@@ -128,7 +149,9 @@ three, same mutants, same kills, same survivors.
 **Environmental hiccup during this verification, not a coalescing bug:** the first live bcdev
 attempt failed every mutant with `error` (bisected to a single mutant every time — an artifact
 of `bisectFailingMutant` always narrowing to index 0 when the same failure reproduces
-regardless of subset, not evidence of a real per-mutant compile defect). Root cause: this
+regardless of subset, not evidence of a real per-mutant compile defect; since the final-review
+I3 fix, bisection confirms the candidate before naming it — it must fail alone AND the
+complement must compile without it — and reports this shape as environmental instead). Root cause: this
 task's `lethal.sqlite` had been reset, restarting `runId` at 1, while the dev server already
 had `1.0.27.3` installed from earlier live verification — every republish attempt at a lower
 version was rejected by BC (`Cannot install the extension ... because a newer version 1.0.27.3

@@ -11,7 +11,7 @@
  */
 import { mkdtemp, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { writeInstrumentedProject } from "@lethal/schemata";
 import { generateMutationSet } from "../src/orchestrator";
 
@@ -28,23 +28,38 @@ try {
     selectorIds: { selectorId: 79199, controlId: 79198, tableId: 79197 },
   });
 
-  let emitted = 0;
+  // The Mutation* files (Selector/Control/Active) are fixed scaffolding —
+  // written once per artifact, byte-identical no matter how many mutants the
+  // artifact holds. Counting them as "growth" inflated the headline (they
+  // were 31% of the reported instrumented bytes) and, worse, would dominate
+  // and distort any future cross-fixture growth CURVE, which is the whole
+  // point of measuring bytes-per-mutant. Report them as their own line.
+  let instrumentedSource = 0;
+  let fixedScaffolding = 0;
   for (const entry of await readdir(dir)) {
     if (!entry.endsWith(".al")) continue;
-    emitted += (await stat(join(dir, entry))).size;
+    const size = (await stat(join(dir, entry))).size;
+    if (basename(entry).startsWith("Mutation")) fixedScaffolding += size;
+    else instrumentedSource += size;
   }
 
-  const ratio = emitted / originalBytes;
-  console.log(`mutants:          ${mutantCount}`);
-  console.log(`original source:  ${originalBytes} bytes`);
-  console.log(`instrumented:     ${emitted} bytes`);
+  const sourceRatio = instrumentedSource / originalBytes;
+  const totalRatio = (instrumentedSource + fixedScaffolding) / originalBytes;
+  const marginalPerMutant = (instrumentedSource - originalBytes) / mutantCount;
+  console.log(`mutants:              ${mutantCount}`);
+  console.log(`original source:      ${originalBytes} bytes`);
+  console.log(`instrumented source:  ${instrumentedSource} bytes`);
   console.log(
-    `growth:           ${ratio.toFixed(2)}x  (${(emitted / mutantCount).toFixed(0)} bytes/mutant)`,
+    `fixed scaffolding:    ${fixedScaffolding} bytes (Mutation* files — constant per artifact, excluded from growth)`,
+  );
+  console.log(`total emitted:        ${instrumentedSource + fixedScaffolding} bytes (${totalRatio.toFixed(2)}x incl. scaffolding)`);
+  console.log(
+    `source growth:        ${sourceRatio.toFixed(2)}x  (~${marginalPerMutant.toFixed(0)} marginal bytes/mutant)`,
   );
   console.log(
-    ratio < mutantCount
-      ? "LINEAR-ish: growth is below one full copy per mutant"
-      : "WARNING: growth exceeds one copy per mutant — investigate",
+    sourceRatio < mutantCount
+      ? "LINEAR-ish: source growth is below one full copy per mutant"
+      : "WARNING: source growth exceeds one copy per mutant — investigate",
   );
 } finally {
   await rm(dir, { recursive: true, force: true });
