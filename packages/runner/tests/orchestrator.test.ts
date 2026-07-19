@@ -1221,7 +1221,10 @@ describe("runSession — bisection on compile failure", () => {
   // property assigned after construction. The guard fails only the very first deploy
   // (the whole-artifact one), then succeeds on everything bisection tries afterward —
   // a minimal smoke test that the new catch-block wiring doesn't crash or hang, and
-  // that the batch still ends up correctly recorded as errored.
+  // that the batch still ends up correctly recorded as errored. Since this scenario's
+  // culprit search comes up empty (the guard stops failing before any subset is
+  // proven guilty), the note falls back to the raw error text — asserted here too,
+  // now that `failureNote` reaches `SessionReport`.
   test("a mutant that breaks compilation is named, not blamed on the whole run", async () => {
     const dirs = await makeProject();
     let seenSubsets = 0;
@@ -1241,21 +1244,29 @@ describe("runSession — bisection on compile failure", () => {
     expect(report.counts.errors).toBeGreaterThan(0);
     const noted = report.mutants.find((m) => m.verdict === "error");
     expect(noted).toBeDefined();
+    expect(noted?.failureNote).toContain("AL0001");
     store.close();
   });
 
-  // Stronger than the smoke test above: `report.mutants`/`SessionReport` don't
-  // surface the bisected culprit's name today (`failureNote` is computed but only
-  // ever reaches the in-memory `outcomes` array — see the concern noted in the task
-  // report), so this proves correctness a different way: `deployGuard` fails
-  // whenever the ACTUAL manifest written for whatever subset `prepareArtifact` just
-  // built still contains the `lethal.conditional-boundary` mutant (TARGET_AL's 3
-  // nested mutants — empty-block/return-value/conditional-boundary — all share one
-  // containment component, exactly the "one bad spec in one file" shape bisection
-  // exists for). If `narrowFilesToSubset` were a no-op (e.g. always re-writing the
-  // full, unnarrowed spec set regardless of `subset`), every attempt would keep
-  // seeing the boundary mutant and keep failing — `attempts` would never see `false`.
-  test("bisection's compile predicate sees the actual narrowed subset, not the full artifact every time", async () => {
+  // Stronger: `deployGuard` fails whenever the ACTUAL manifest written for whatever
+  // subset `prepareArtifactDir` just built still contains the
+  // `lethal.conditional-boundary` mutant (TARGET_AL's 3 nested mutants —
+  // empty-block/return-value/conditional-boundary — all share one containment
+  // component, exactly the "one bad spec in one file" shape bisection exists for).
+  // If `narrowFilesToSubset` were a no-op (e.g. always re-writing the full,
+  // unnarrowed spec set regardless of `subset`), every attempt would keep seeing the
+  // boundary mutant and keep failing — `attempts` would never see `false`.
+  //
+  // Critically, the identity this test cares about is asserted on `report.mutants`
+  // itself, not inferred from re-reading the scratch artifact's manifest — reading
+  // the manifest inside `deployGuard` only simulates a realistic backend (one whose
+  // failure genuinely depends on which spec is present), it is not how the test
+  // proves the name reached the user. Verified by temporarily deleting the
+  // `...(o.failureNote !== undefined ? { failureNote: o.failureNote } : {})` line in
+  // `buildReport` (report.ts) and re-running: `noted?.failureNote` came back
+  // `undefined` and both `toContain` assertions failed — restoring the line turned it
+  // green again, confirming this test actually depends on that wiring end to end.
+  test("bisection identifies the culprit in the SessionReport, not just via a manifest side channel", async () => {
     const dirs = await makeProject();
     const attempts: boolean[] = []; // true = this attempt's manifest still had the boundary mutant
     const backend = new StubBackend(
@@ -1281,8 +1292,74 @@ describe("runSession — bisection on compile failure", () => {
     // More than the one always-failing whole-artifact deploy — bisection genuinely ran.
     expect(attempts.length).toBeGreaterThan(1);
     // At least one narrowed attempt excluded the boundary mutant and compiled clean —
-    // proof the artifact `prepareArtifact` wrote actually reflected that subset.
+    // proof the artifact `prepareArtifactDir` wrote actually reflected that subset.
     expect(attempts.some((hasBoundary) => !hasBoundary)).toBe(true);
+
+    // The actual assertion this test exists for: the culprit's identity must reach
+    // the public SessionReport.
+    const noted = report.mutants.find((m) => m.verdict === "error");
+    expect(noted).toBeDefined();
+    expect(noted?.failureNote).toBeDefined();
+    expect(noted?.failureNote).toContain("bisected to mutant");
+    expect(noted?.failureNote).toContain("lethal.conditional-boundary");
+    store.close();
+  });
+
+  // Same problem, `workers > 1` path: a worker's own deploy of the shared artifact
+  // can fail while other workers succeed (existing "worker's own deploy failure"
+  // tests already cover that split), and until now that failure was never bisected —
+  // every mutant in the failing shard was blamed with a flat `String(err)`. Only
+  // worker 0's backend is guarded here (mirroring the existing per-worker-failure
+  // tests' `workerIndex === 0` convention); worker 1 has no guard and always
+  // succeeds, so its shard's mutants must resolve normally (killed/survived), never
+  // "error" — proving the bisected failure stayed scoped to worker 0's shard.
+  test("a worker's deploy failure is bisected to a named mutant, not blamed on its whole shard", async () => {
+    const dirs = await makeProject();
+    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
+    const store = new ResultsStore(":memory:");
+    const caps: BackendCapabilities = {
+      coverage: "none",
+      deploy: "none",
+      isolation: "full-reset",
+      authoritative: false,
+    };
+    const make = (workerIndex: number) =>
+      new StubBackend(
+        caps,
+        (mutant) => (mutant === null ? "pass" : "fail"),
+        [],
+        undefined,
+        undefined,
+        workerIndex === 0
+          ? (dir: string) => {
+              const manifest = JSON.parse(
+                readFileSync(join(dir, "mutant-manifest.json"), "utf8"),
+              ) as { mutants: Array<{ operatorName: string }> };
+              const hasBoundary = manifest.mutants.some(
+                (m) => m.operatorName === "lethal.conditional-boundary",
+              );
+              return hasBoundary
+                ? new Error("alc: AL0001 malformed operator replacement")
+                : undefined;
+            }
+          : undefined,
+      );
+    const report = await runSession({
+      backend: make(-1),
+      backendFactory: make,
+      store,
+      ...dirs,
+      selectorIds,
+      workers: 2,
+    });
+    expect(report.counts.errors).toBeGreaterThan(0);
+    const noted = report.mutants.find((m) => m.verdict === "error");
+    expect(noted).toBeDefined();
+    expect(noted?.failureNote).toContain("bisected to mutant");
+    expect(noted?.failureNote).toContain("lethal.conditional-boundary");
+    // Worker 1's shard (no guard, always succeeds) still produced real verdicts —
+    // the bisected failure never spread past worker 0's own shard.
+    expect(report.counts.killed).toBeGreaterThan(0);
     store.close();
   });
 });

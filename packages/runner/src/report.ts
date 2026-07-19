@@ -56,6 +56,16 @@ export interface MutantOutcome {
   readonly verdict: MutantVerdict;
   readonly batchIndex: number;
   readonly killingTest?: string;
+  /**
+   * Carried through verbatim from `SessionOutcome.failureNote` — for a
+   * bisected compile failure (Task 6, design spec §6) this is the culprit's
+   * own identity ("bisected to mutant M000x (file:line operator)"); for other
+   * `error` verdicts it's whatever diagnostic `record()` was given (deadline/
+   * unstable text, the raw backend error). Without this field the note was
+   * computed but reached nothing outside `orchestrator.ts` — every mutant in
+   * a failed batch read as a bare, indistinguishable "error".
+   */
+  readonly failureNote?: string;
 }
 
 export interface BuildReportInput {
@@ -109,6 +119,7 @@ export function buildReport(input: BuildReportInput): SessionReport {
       verdict: o.verdict,
       batchIndex: o.batchIndex,
       ...(o.killingTest !== undefined ? { killingTest: o.killingTest } : {}),
+      ...(o.failureNote !== undefined ? { failureNote: o.failureNote } : {}),
     });
   }
 
@@ -140,6 +151,13 @@ export function renderConsole(r: SessionReport): string {
     lines.push(
       `${pad(m.mutantCode, 8)} ${pad(`${m.file}:${m.line}`, 34)} ${pad(m.operatorName, 28)} ${pad(m.verdict, 16)} ${m.killingTest ?? ""}`,
     );
+    // A short indented line beneath the row rather than a suffix on it: the
+    // note (a bisected culprit's identity, a deadline/unstable diagnostic, or
+    // a raw backend error) is often much longer than the fixed-width columns
+    // above and would blow out the table's alignment if appended inline.
+    if (m.verdict === "error" && m.failureNote !== undefined) {
+      lines.push(`         ${m.failureNote}`);
+    }
   }
   const scoreText = r.mutationScore === null ? "n/a" : `${(r.mutationScore * 100).toFixed(1)}%`;
   lines.push(
