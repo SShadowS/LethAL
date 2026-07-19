@@ -107,9 +107,17 @@ export class ContainerDeployer {
         env: { BC_SERVER_USERNAME: this.cfg.username, BC_SERVER_PASSWORD: this.cfg.password },
       });
       if (res.exitCode !== 0) {
-        throw new Error(
-          `altool publishapp failed (exit ${res.exitCode}):\n${res.stderr || res.stdout}`,
-        );
+        // BOTH streams, not `res.stderr || res.stdout` — verified live against Cronus281
+        // (2026-07-20, Task 8's stale-publish probe): on a version-downgrade rejection, altool
+        // prints only a generic one-line wrapper ("Publish failed: Publish operation failed.
+        // Check the output for details.") to stderr, while the actual, machine-parseable BC
+        // rejection ("Cannot install the extension ... because a newer version X.Y.Z.W was
+        // already installed.") — the exact text `parseVersionConflict` (app-version.ts) needs —
+        // is on STDOUT. `res.stderr || res.stdout` discarded stdout whenever stderr was
+        // non-empty, silently losing that detail and breaking the version-conflict retry path
+        // (orchestrator.ts) for every real publish failure, not just an edge case.
+        const detail = [res.stdout, res.stderr].filter((s) => s.trim().length > 0).join("\n");
+        throw new Error(`altool publishapp failed (exit ${res.exitCode}):\n${detail}`);
       }
     } catch (err) {
       if (err instanceof Error && err.message.includes("altool publishapp failed")) {

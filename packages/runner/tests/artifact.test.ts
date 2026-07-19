@@ -242,4 +242,31 @@ describe("ContainerDeployer.publish", () => {
     });
     await expect(deployer.publish(artifact)).rejects.toThrow("publish rejected");
   });
+
+  // Regression (Task 8, verified live against Cronus281 2026-07-20): on a real version-conflict
+  // rejection, altool prints only a generic wrapper to stderr ("Publish failed: Publish
+  // operation failed. Check the output for details.") while BC's actual, machine-parseable
+  // rejection text ("Cannot install the extension ... because a newer version X was already
+  // installed.") — the exact text `parseVersionConflict` needs — lands on STDOUT. The original
+  // `res.stderr || res.stdout` silently discarded stdout whenever stderr was non-empty, which
+  // broke the version-conflict retry path (orchestrator.ts) for every real publish failure.
+  it("includes BOTH stdout and stderr in the thrown error, not just whichever is non-empty first", async () => {
+    const bytes = new Uint8Array([1, 2, 3]);
+    const artifact = fakeArtifact({ sha256: Bun.SHA256.hash(bytes, "hex") });
+    const deployer = new ContainerDeployer(DEPLOY_CFG, {
+      spawn: async () => ({
+        exitCode: 1,
+        stdout:
+          "Cannot install the extension LethAL Sandbox App by LethAL 1.0.1.1 because a newer " +
+          "version 1.0.106.0 was already installed.",
+        stderr: "Publish failed: Publish operation failed. Check the output for details.",
+      }),
+      readArtifact: async () => bytes,
+    });
+    const err = await deployer.publish(artifact).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    const message = (err as Error).message;
+    expect(message).toContain("newer version 1.0.106.0 was already installed");
+    expect(message).toContain("Publish operation failed");
+  });
 });

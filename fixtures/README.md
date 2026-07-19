@@ -228,6 +228,115 @@ higher version will fail the same way; drop the stale app or start from a higher
 
 **4. Test codeunits must not carry `TestIsolation`** — see the section above (AL0223).
 
+## Deployment identity (Layer 5A)
+
+Layer 5A made deployment an object with an identity: compile once to an immutable,
+content-addressed artifact carrying a random `artifactId` and a monotonic `appVersion`, publish
+as a separate step, and verify what actually landed via a `MutationControl_Identity` web-service
+action — instead of trusting `altool`'s exit code alone. See
+`docs/superpowers/specs/2026-07-19-layer-5a-deployment-identity-design.md` for the full design
+and `packages/runner/itest/stale-publish.itest.ts` for the two live probes below
+(`LETHAL_ITEST_BCDEV=1 bun run itest:stale-publish`).
+
+### Version scheme
+
+`<sourceMajor>.<sourceMinor>.<daysSinceUnixEpoch>.<secondsOfDay ÷ 2>` (`app-version.ts`).
+Major/minor come from the target project's own `app.json`; the last two components are
+clock-derived and monotonic by construction — there is no stored counter to lose or reset. A
+session-scoped `lastIssued` value guarantees strict increase even when the 2-second clock
+resolution doesn't advance between two artifacts, or steps backwards.
+
+**The original bug is fixed:** the pre-5A scheme stamped `1.0.<runId>.<batchIdx>`, where `runId`
+came from the project-local `lethal.sqlite`; deleting that file reset `runId` to 1 and broke
+publishing against any container already holding a higher version (see "Server preconditions"
+item 3 above). Verified live 2026-07-20: deleted `fixtures/sandbox-app/lethal.sqlite`,
+re-ran `LETHAL_ITEST_BCDEV=1 bun run itest:bcdev` immediately afterward, and publishing
+succeeded with no version conflict — `bcdev itest: PASS`, verdict table unchanged:
+
+| Backend | killed | survived | no-coverage | score |
+|---|---|---|---|---|
+| bcdev | 3 | 10 | 3 | 23.1% |
+| al-runner | 3 | 13 | 0 | 18.8% |
+
+Clock-derived versions have no stored counter, so there is nothing left for deleting the results
+DB to reset.
+
+### Stale-publication probes (design spec §9) — live results, 2026-07-20
+
+**Probe A — deterministic stale dispatch: PASS.** Reserved and compiled artifact A at version
+`V` without publishing it; reserved, compiled, published and verified artifact B at `V+1`; then
+published A. Observed: A's `altool publishapp` failed, and BC's own rejection named B's version
+verbatim (`Cannot install the extension LethAL Sandbox App by LethAL <V> because a newer version
+<V+1> was already installed.`) — `parseVersionConflict` correctly extracted `V+1`, matching B's
+compiled version exactly. `MutationControl_Identity` continued to report B's artifact id
+afterward, and a **fresh live test run** (baseline `OverBudgetDetected` pass with no mutant
+active → activate B's own `IsOverBudget` return-value mutant → same test fails → clear → passes
+again) confirmed the server was genuinely running B's code throughout, not just that one OData
+call returned a particular string.
+
+**Probe B — concurrent race: FAILED (Layer 5A's hard-stop condition).** Compiled A at `V` and B
+at `V+1`, then started both publications concurrently (two independent, real `altool.exe`
+processes racing the actual server, not simulated). Round 1 of the planned 3:
+
+- Both `altool publishapp` calls returned. B: `exitCode 0` (apparent success). A: `exitCode 1`,
+  with BC's own message revealing what actually happened server-side —
+  `Publishing failed due to 'Cannot install the extension LethAL Sandbox App by LethAL <V>
+  because a newer version <V+1> was already installed.'. The original extensions could not be
+  restored due to Cannot install the extension LethAL Sandbox App by LethAL <V_prev> because a
+  newer version <V+1> was already installed.. Extensions that were previously installed but
+  could not be reinstalled. These extensions should be manually reinstalled. ... LethAL Sandbox
+  App by LethAL / LethAL Sandbox Tests by LethAL`.
+- Post-hoc, `MutationControl_Identity` returned **HTTP 404** — confirmed non-transient by
+  re-checking 3 times over ~10 seconds. A raw test-run probe against whatever was actually
+  running returned `outcome: "skip"` for both fixture tests. **Both the target app AND its
+  dependent test app ended up completely uninstalled** — not "A became final instead of B," a
+  strictly worse outcome neither app installed at all.
+
+**Root cause:** `altool publishapp --schemaupdatemode ForceSync`'s own replace protocol appears
+to be uninstall-old-then-install-new, with a fallback to reinstall the original on failure. Under
+a genuine concurrent race, A's publish lost the version check, and its own fallback attempt to
+*restore the app it had just uninstalled* ALSO lost the version check (a newer version — B — had
+landed in the interim) — leaving nothing installed. LethAL's monotonic versioning worked exactly
+as designed at the level BC exposes to it (`Identity()` never once reported A as final; the
+downgrade rejection fired correctly both times); the hazard is a race INSIDE BC's own
+replace/rollback machinery that LethAL's client-side version scheme cannot see or prevent,
+because it happens across two independent OS processes with no shared lock. This is exactly why
+spec §9 requires Probe B (a real concurrent race) separately from Probe A (sequential) — this
+failure mode is invisible to any test that serializes the two publishes.
+
+Per spec §9 / the task's explicit instruction, subsequent rounds (2 and 3 of the planned 3) were
+**not** attempted after round 1 reproduced the hard-stop condition — re-running a known-destructive
+race against shared, live infrastructure would not change the verdict and risks compounding
+damage. **Conclusion: monotonic versioning alone is not a sufficient deployment-order barrier
+for this toolchain under concurrent publishes.** Per design spec §9, Layer 5A's live exit
+criteria are not met as currently scoped; closing this gap needs either client-side serialization
+of publishes to the same target (a mutex around `ContainerDeployer.publish()` per app/container —
+plausibly a 5C/5D concern, since it's adjacent to the fencing work already deferred there) or a
+different, non-racy publish strategy that doesn't depend on BC's own replace-atomicity.
+
+**Recovery procedure exercised live:** the target app self-heals on the next normal (sequential,
+non-racing) `lethal` publish — no manual step needed. The dependent test app does **not**
+self-heal (LethAL never publishes it — see "Server preconditions" item 2 above) and needed a
+manual `alc`/`altool` republish following that same section's recipe. After recovery,
+`LETHAL_ITEST_BCDEV=1 bun run itest:bcdev` passed cleanly with the unchanged verdict table.
+
+### A second, independent bug this task's live run found and fixed
+
+While diagnosing Probe A's first failed attempt, a genuine defect surfaced in
+`ContainerDeployer.publish()` (`packages/runner/src/publisher.ts`): on a real `altool` failure,
+BC's machine-parseable rejection text (the exact string `parseVersionConflict` looks for) lands
+on **stdout**, while `altool` prints only a generic one-line wrapper
+(`Publish failed: Publish operation failed. Check the output for details.`) to **stderr**. The
+original code built its error message from `res.stderr || res.stdout` — since stderr is
+non-empty on every real failure, stdout (carrying the actual detail) was silently discarded.
+This meant `orchestrator.ts`'s version-conflict retry-once path (Task 6) could never actually
+trigger against a real server: `parseVersionConflict` never saw the text it needed. Confirmed
+live 2026-07-20 by spawning `altool` directly and capturing both streams separately. None of the
+existing unit tests caught this because they construct the fake backend's error string already
+containing the right text, never exercising the real stdout/stderr split. Fixed by including
+both streams in the thrown error; regression test added
+(`packages/runner/tests/artifact.test.ts`).
+
 ## `launch.local.json` convention
 
 `fixtures/sandbox-app/.vscode/launch.json` is committed with placeholder server details —
