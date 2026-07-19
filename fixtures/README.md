@@ -81,6 +81,65 @@ fixtures/sandbox-tests --backend al-runner --dry-run` — it prints `16 mutant s
 file/line, exactly two `lethal.negate-conditional` sites (`SandboxLogic.Codeunit.al:10` in
 `ClampPercent` and `:22` inside `LogAudit`).
 
+## Coalescing (Layer 4.3)
+
+Layer 4.3 replaced nested mutation guards (which grew `2^depth`) with a flat `if/else
+if/else` dispatch chain per containment component, and collapsed session compilation from up
+to 3 batched artifacts down to **one**: `planArtifacts` (`packages/runner/src/orchestrator.ts`)
+now always returns a single artifact holding every mutant, since overlapping mutation sites
+coalesce into one flat dispatch chain at compile time (`compileSchemataForFile`) instead of
+needing separate compiles to keep them from interfering.
+
+**Measured growth** (`bun run itest:growth`, `packages/runner/itest/growth.itest.ts` — no
+server, no env gate, exercises only the schemata compiler against this fixture):
+
+```
+mutants:          16
+original source:  957 bytes
+instrumented:     4958 bytes
+growth:           5.18x  (310 bytes/mutant)
+LINEAR-ish: growth is below one full copy per mutant
+```
+
+Honest reading: this is **one data point on one small fixture**, not a growth curve. A single
+measurement cannot by itself distinguish "linear in mutant count" from "some other sub-2^depth
+curve" — that needs multiple fixtures at varying mutant counts/nesting depths plotted against
+each other, which this task does not attempt. What it *does* show concretely: 16 mutants
+produced 5.18x growth, not 16x (one full source copy per mutant) and nowhere near the
+`2^depth` blowup the old nested-guard scheme would have produced once two or more mutants
+shared a containing block — coalescing is emitting one dispatch chain per component, not one
+duplicated copy of the file per mutant.
+
+**Verdicts unchanged, verified live (2026-07-19)** against both backends, using the real
+`al-runner.exe` binary and a real BC dev server — exactly the known-good tables from before
+this layer:
+
+| Backend | killed | survived | no-coverage | score |
+|---|---|---|---|---|
+| al-runner | 3 | 13 | 0 | 18.8% |
+| bcdev | 3 | 10 | 3 | 23.1% |
+
+`LETHAL_ITEST_ALRUNNER=1 bun run itest:alrunner` and `LETHAL_ITEST_BCDEV=1 bun run
+itest:bcdev` both print their respective `... itest: PASS` (each runs the session twice and
+asserts the two runs are verdict-identical, the determinism exit criterion, in addition to
+matching the table above). Coalescing is a pure compile-shape change: one artifact instead of
+three, same mutants, same kills, same survivors.
+
+**Environmental hiccup during this verification, not a coalescing bug:** the first live bcdev
+attempt failed every mutant with `error` (bisected to a single mutant every time — an artifact
+of `bisectFailingMutant` always narrowing to index 0 when the same failure reproduces
+regardless of subset, not evidence of a real per-mutant compile defect). Root cause: this
+task's `lethal.sqlite` had been reset, restarting `runId` at 1, while the dev server already
+had `1.0.27.3` installed from earlier live verification — every republish attempt at a lower
+version was rejected by BC (`Cannot install the extension ... because a newer version 1.0.27.3
+was already installed`), exactly the known limitation documented above under "App version
+monotonicity". Confirmed via a manual `alc.exe` compile of the exact instrumented directory
+(succeeded, exit 0, valid `.app`) and a manual `altool publishapp` of that same `.app` (failed
+with the version message above) — the compiler and the coalesced emission were never at fault.
+Fixed by bumping the results DB's `runs` autoincrement sequence past the server's installed
+run, per the documented remedy ("start from a higher runId"); both live checks above are from
+after that fix.
+
 ### Fixed: parenthesized-operand logical expressions were silently skipped
 
 Until 2026-07-18 the fixture produced 15 sites, not 16, because `negate-conditional` never
