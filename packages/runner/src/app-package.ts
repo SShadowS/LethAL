@@ -126,7 +126,7 @@ interface SymbolObject {
  * fields the AL compiler assigns each method in the package's own
  * `SymbolReference.json` (confirmed byte-for-byte against a real compiled
  * fixture .app) — a stable identifier baked in at compile time, extractable
- * locally from the same .app `Publisher.compile()` just produced, with no
+ * locally from the same .app `ArtifactCompiler.compile()` just produced, with no
  * extra server round-trip.
  */
 export class AppMethodIndex {
@@ -188,7 +188,7 @@ const LOCAL_PROCEDURE = /^\s*local\s+procedure\s+(?:"([^"]+)"|(\w+))\s*\(/gim;
  * even though `IsOverBudget`/`ClampPercent`/`ApplyAudit` — all public — are
  * present) — there is no compiled-artifact way to resolve a local
  * procedure's coverage `methodId` to its name. This scans the same AL
- * source `Publisher.compile()` just built from for each object's declared
+ * source `ArtifactCompiler.compile()` just built from for each object's declared
  * local procedure names, so `bcdev-backend.ts` can fall back to "some local
  * procedure in this object was covered" when a coverage methodId doesn't
  * resolve via `AppMethodIndex` — see the fallback's doc comment there for

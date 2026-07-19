@@ -136,7 +136,7 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
 
   // bcdev mutant activation (MutationControlClient.setActive) is a single
   // server-side record shared by every worker — server + serverInstance +
-  // company, one row. Per-worker Publisher.outputDir isolates each worker's
+  // company, one row. Per-worker ArtifactCompiler.outputDir isolates each worker's
   // COMPILED ARTIFACT, but not this: two workers running concurrently would
   // both call setActive() against the SAME server record, so worker B's
   // activation can clobber worker A's while A's test is still in flight,
