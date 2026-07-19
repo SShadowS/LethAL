@@ -1,10 +1,24 @@
-import { describe, it, expect, beforeAll } from "bun:test";
-import { ALNodeKind, findFirst, initParser, parseAL, wrapRoot } from "@lethal/engine";
-import type { MutationSpec } from "@lethal/engine";
+import { beforeAll, describe, expect, it } from "bun:test";
+import { ALNodeKind, findAll, findFirst, initParser, parseAL, wrapRoot } from "@lethal/engine";
+import type { ALSyntaxNode, MutationSpec } from "@lethal/engine";
 import { compileSchemataForFile } from "../src/compile";
 
+/** Builds a MutationSpec matching the shape the existing tests construct by hand. */
+function spec(before: ALSyntaxNode, afterText: string, operatorName: string): MutationSpec {
+  return {
+    operatorName,
+    operatorVersion: "1.0.0",
+    astNodeId: `${before.startIndex}-${before.endIndex}`,
+    before,
+    after: { ...before, text: afterText } as never,
+    parentContext: "statement-position",
+  };
+}
+
 describe("compileSchemataForFile", () => {
-  beforeAll(async () => { await initParser(); });
+  beforeAll(async () => {
+    await initParser();
+  });
 
   it("wraps a single statement-position mutation", () => {
     const src = `codeunit 51030 "C" { procedure P() begin X := 1; end; }`;
@@ -64,11 +78,27 @@ describe("compileSchemataForFile", () => {
       },
     ];
     const output = compileSchemataForFile(src, root, specs);
-    expect(output).toContain("if not MutationSelector.Active('M0001') then");
+    // Flat dispatch has no single-mutant "if not ... then" inversion — every
+    // component (regardless of member count) is the same uniform
+    // if/else-if/else chain, so a lone deletion mutant still gets its own
+    // guarded branch rather than the old wrap's negated-condition shortcut.
+    expect(output).toContain("if MutationSelector.Active('M0001') then begin");
+    expect(output).toContain("end else begin");
     expect(output).toContain("DoThing()");
+    // The mutated (deleted) branch itself must not contain the call.
+    const mutatedBranch = output.slice(
+      output.indexOf("then begin"),
+      output.indexOf("end else begin"),
+    );
+    expect(mutatedBranch).not.toContain("DoThing()");
   });
 
-  it("throws on unsupported parentContext", () => {
+  it("parentContext no longer gates compile-time routing", () => {
+    // `dispatch`'s per-parentContext switch (and its throw on an unknown
+    // value) is gone: compileSchemataForFile now routes every spec through
+    // `buildComponents`/`resolveSite`, which only look at `spec.before`'s
+    // position in the tree. `parentContext` is no longer read during
+    // compilation at all, so a bogus value no longer causes a throw here.
     const src = `codeunit 51031 "C" { procedure P(): Integer begin exit(1); end; }`;
     const root = wrapRoot(parseAL(src));
     const exit = findFirst(root, ALNodeKind.exit_statement);
@@ -79,14 +109,16 @@ describe("compileSchemataForFile", () => {
         operatorVersion: "1.0.0",
         astNodeId: `${exit.startIndex}`,
         before: exit,
-        after: exit,
+        after: { ...exit, text: "exit(0);" } as never,
         parentContext: "bogus" as never,
       },
     ];
-    expect(() => compileSchemataForFile(src, root, specs)).toThrow(/unknown parentContext/);
+    const output = compileSchemataForFile(src, root, specs);
+    expect(output).toContain("if MutationSelector.Active('M0001') then begin");
+    expect(output).toContain("exit(0);");
   });
 
-  it("composes a lift: var_section + conditional-assign + expression replacement", async () => {
+  it("compiles an expression-position mutation as a flat dispatch chain (lift is no longer routed to)", async () => {
     const src = `codeunit 51820 "L"
 {
     procedure Compute(A: Integer): Integer
@@ -111,22 +143,16 @@ describe("compileSchemataForFile", () => {
       },
     ];
     const output = compileSchemataForFile(src, root, specs);
-    // var_section got an _m0001
-    expect(output).toMatch(/_m0001:\s*Integer;/);
-    // conditional-assign in the enclosing code_block
-    expect(output).toContain("MutationSelector.Active('M0001')");
-    expect(output).toContain("_m0001 := 0");
-    expect(output).toContain("_m0001 := A * 2");
-    // expression replaced with local reference
-    expect(output).toContain("Result := F(_m0001) + G(A);");
-    // conditional-assign precedes the assignment
-    const condIdx = output.indexOf("_m0001 := 0");
-    const useIdx = output.indexOf("Result := F(_m0001)");
-    expect(condIdx).toBeGreaterThan(-1);
-    expect(useIdx).toBeGreaterThan(condIdx);
+    // No lift artifacts: no hoisted temp, no separate conditional-assign.
+    expect(output).not.toContain("_m0001");
+    // The enclosing assignment statement is the dispatch root: one guard,
+    // mutated and original variants of the WHOLE statement as siblings.
+    expect(output).toContain("if MutationSelector.Active('M0001') then begin");
+    expect(output).toContain("Result := F(0) + G(A)");
+    expect(output).toContain("Result := F(A * 2) + G(A)");
   });
 
-  it("creates a var_section when the enclosing procedure has none", async () => {
+  it("an expression-position mutation does not create a var_section (lift is no longer routed to)", async () => {
     const src = `codeunit 51821 "L"
 {
     procedure Compute(A: Integer): Integer
@@ -148,8 +174,12 @@ describe("compileSchemataForFile", () => {
       },
     ];
     const output = compileSchemataForFile(src, root, specs);
-    // a var block must now appear before the procedure's begin
-    expect(output).toMatch(/var\s+_m0001:\s*Integer;\s+begin/s);
+    // No var_section is created for the procedure — the procedure body
+    // itself becomes the dispatch chain instead of gaining a hoisted local.
+    expect(output).not.toMatch(/var\s+_m0001/);
+    expect(output).toContain("if MutationSelector.Active('M0001') then begin");
+    expect(output).toContain("exit(F(0))");
+    expect(output).toContain("exit(F(A * 2))");
   });
 
   it("composes a duplicate for short-circuit-operand", async () => {
@@ -172,5 +202,42 @@ describe("compileSchemataForFile", () => {
     expect(output).toContain("if A or B then DoThing()");
     expect(output).toContain("end else begin");
     expect(output).toContain("if A and B then DoThing()");
+  });
+});
+
+describe("compileSchemataForFile — overlapping specs coalesce", () => {
+  it("compiles two nested mutants into one flat chain instead of throwing", async () => {
+    await initParser();
+    const src = `codeunit 79000 "T"
+{
+    procedure IsOver(A: Integer; B: Integer): Boolean
+    begin
+        exit(A > B);
+    end;
+}
+`;
+    const root = wrapRoot(parseAL(src));
+    const cmp = findAll(root, ALNodeKind.comparison_expression)[0];
+    const ex = findAll(root, ALNodeKind.exit_statement)[0];
+    if (cmp === undefined || ex === undefined) throw new Error("fixture drift");
+
+    const out = compileSchemataForFile(src, root, [
+      spec(cmp, "A >= B", "lethal.conditional-boundary"),
+      spec(ex, "exit(false);", "lethal.return-value"),
+    ]);
+
+    // Both mutants present, exactly one guard each, no nesting.
+    expect(out.match(/MutationSelector\.Active/g)).toHaveLength(2);
+    expect(out).toContain("exit(false);");
+    // `exit_statement.text` (packages/engine) excludes its own terminating
+    // `;` — verified against the parser: the grammar treats it as a sibling
+    // token in the block's statement list, not part of the statement node.
+    // Both the inner splice (replacing just the comparison) and the
+    // untouched original branch are built from that text, so neither reads
+    // with a trailing `;` here — the leftover source `;` lands after the
+    // whole chain's closing `end;` instead (still valid AL: an extra bare
+    // `;` is a no-op empty statement).
+    expect(out).toContain("exit(A >= B)");
+    expect(out).toContain("exit(A > B)");
   });
 });
