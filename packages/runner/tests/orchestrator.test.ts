@@ -6,6 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ALSyntaxNode, MutationSpec } from "@lethal/engine";
 import type { InstrumentedFile, MutantManifestEntry } from "@lethal/schemata";
+import { DeploymentError } from "../src/artifact";
+import type { CompiledArtifact } from "../src/artifact";
 import type {
   BackendCapabilities,
   BackendStatus,
@@ -14,6 +16,7 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "../src/backend";
+import { DeploymentVerifier, decidePublishOutcome } from "../src/deployment-verifier";
 import { narrowFilesToSubset, runSession } from "../src/orchestrator";
 import { ResultsStore } from "../src/store";
 
@@ -176,11 +179,12 @@ class StubBackend implements ExecutionBackend {
   async status(): Promise<BackendStatus> {
     return { ok: true, details: "stub" };
   }
-  async deploy(dir: string) {
+  async deploy(dir: string): Promise<CompiledArtifact | null> {
     if (this.deployError !== undefined) throw this.deployError;
     const guardErr = this.deployGuard?.(dir);
     if (guardErr !== undefined) throw guardErr;
     this.deploys.push(dir);
+    return null; // in-memory stub: nothing compiled, no artifact to describe
   }
   async activate(id: string | null) {
     this.activations.push(id);
@@ -351,10 +355,12 @@ describe("runSession — C3 batch app.json + full source copy", () => {
       version: string;
     };
     expect(appJson.id).toBe(APP_ID); // target app id preserved (spec §5)
-    // 1.0.<runId>.<batchIdx> — run BEFORE batch, so versions increase across runs.
-    // BC rejects publishing a version lower than the installed one, which the
-    // original 1.0.<batch>.<run> order violated on every run after the first.
-    expect(appJson.version).toMatch(/^1\.0\.\d+\.0$/);
+    // 1.0.<daysSinceEpoch>.<halfSeconds> — major.minor from the fixture's own app.json
+    // (1.0.0.0), build/revision clock-derived via reserveAppVersion (app-version.ts). BC
+    // rejects publishing a version lower than the installed one; the clock components
+    // increase across runs with no dependence on a persistent results DB.
+    expect(appJson.version).toMatch(/^1\.0\.\d+\.\d+$/);
+    expect(appJson.version).not.toBe("1.0.0.0"); // actually re-stamped, not the source version
 
     const copied = await readFile(join(batchDir, "SandboxNoOp.Codeunit.al"), "utf8");
     expect(copied).toBe(NO_MUTANTS_AL); // writeInstrumentedProject never wrote this file
@@ -1142,6 +1148,223 @@ describe("runSession — single artifact", () => {
   });
 });
 
+// ————————————————————————————————————————————————————————————————————————
+// Layer 5A (Task 6): deployment identity — compile/publish/verify phases,
+// version reservation, artifact provenance, version-conflict retry.
+// ————————————————————————————————————————————————————————————————————————
+
+const PHASE_CAPS: BackendCapabilities = {
+  coverage: "none",
+  deploy: "publish",
+  isolation: "session",
+  authoritative: true,
+};
+
+const PHASE_VERIFIER_CFG = {
+  baseUrl: "http://bc:7048/BC",
+  company: "CRONUS",
+  username: "u",
+  password: "p",
+};
+
+/**
+ * Mirrors `BcDevMcpBackend.deploy()`'s three-phase composition (compile -> publish -> verify),
+ * faking the compile (it reads the batch dir's app.json + mutant-manifest.json, exactly like
+ * the real prepare step) and the publish, while running the REAL `DeploymentVerifier`,
+ * `decidePublishOutcome` and `DeploymentError`. Using the real verifier is deliberate: its
+ * malformed-id tripwire THROWS on anything that isn't 32 lowercase hex, so a placeholder
+ * artifact id surviving anywhere in the orchestrator fails every one of these tests loudly.
+ */
+class PhaseBackend implements ExecutionBackend {
+  readonly calls: string[] = [];
+  lastCompiledVersion: string | undefined;
+  constructor(
+    private readonly opts: {
+      /** Called once per publish phase (1-based attempt); throwing simulates altool failing. */
+      readonly onPublish?: (attempt: number) => void;
+      /** What MutationControl_Identity reports; defaults to echoing the compiled artifact. */
+      readonly reportedIdentity?: string;
+    } = {},
+  ) {}
+  private publishAttempts = 0;
+  capabilities() {
+    return PHASE_CAPS;
+  }
+  async status(): Promise<BackendStatus> {
+    return { ok: true, details: "phase" };
+  }
+  async deploy(dir: string): Promise<CompiledArtifact | null> {
+    this.calls.push("compile");
+    const appManifest = JSON.parse(await readFile(join(dir, "app.json"), "utf8")) as {
+      id: string;
+      version: string;
+    };
+    const mutantManifest = JSON.parse(
+      await readFile(join(dir, "mutant-manifest.json"), "utf8"),
+    ) as CompiledArtifact["mutantManifest"];
+    this.lastCompiledVersion = appManifest.version;
+    const artifact: CompiledArtifact = {
+      artifactId: mutantManifest.artifactId,
+      appId: appManifest.id,
+      appVersion: appManifest.version,
+      appPath: join(dir, "phase-fake.app"),
+      sha256: Bun.SHA256.hash(new Uint8Array([1, 2, 3]), "hex"),
+      mutantManifest,
+      appManifest: appManifest as unknown as Record<string, unknown>,
+    };
+    this.calls.push("publish");
+    this.publishAttempts++;
+    let publishOk = true;
+    let publishError: string | undefined;
+    try {
+      this.opts.onPublish?.(this.publishAttempts);
+    } catch (err) {
+      publishOk = false;
+      publishError = err instanceof Error ? err.message : String(err);
+    }
+    this.calls.push("verify");
+    // A failed publish leaves the PREVIOUS artifact running server-side, so identity then
+    // reports some other (well-formed) id, never the one this deploy just tried to publish.
+    const reported =
+      this.opts.reportedIdentity ?? (publishOk ? artifact.artifactId : "f".repeat(32));
+    const fetchFn = (async (_url: unknown, _init?: RequestInit) =>
+      new Response(JSON.stringify({ value: reported }), { status: 200 })) as typeof fetch;
+    const verification = await new DeploymentVerifier(PHASE_VERIFIER_CFG, fetchFn).verify(artifact);
+    const outcome = decidePublishOutcome(publishOk, verification);
+    if (outcome !== "accepted") throw new DeploymentError(outcome, publishError, verification);
+    return artifact;
+  }
+  async activate(mutantId: string | null): Promise<void> {
+    // runSession's cleanup `finally` always deactivates (activate(null)); only a real mutant
+    // activation counts as "the orchestrator started testing against this deployment".
+    if (mutantId !== null) this.calls.push("activate");
+  }
+  async run(ref: TestMethodRef, _opts: RunOpts): Promise<TestVerdict> {
+    this.calls.push("run");
+    return { ref, outcome: "pass", durationMs: 5 };
+  }
+}
+
+describe("runSession — Layer 5A deployment identity", () => {
+  test("calls compile once, then publish, then verify — in that order, before any test runs", async () => {
+    const dirs = await makeProject();
+    const backend = new PhaseBackend();
+    const store = new ResultsStore(":memory:");
+    await runSession({ backend, store, ...dirs, selectorIds });
+    const calls = backend.calls;
+    const firstRun = calls.indexOf("run");
+    expect(firstRun).toBeGreaterThan(-1);
+    expect(calls.filter((c) => c === "compile")).toHaveLength(1);
+    expect(calls.indexOf("compile")).toBeLessThan(calls.indexOf("publish"));
+    expect(calls.indexOf("publish")).toBeLessThan(calls.indexOf("verify"));
+    expect(calls.indexOf("verify")).toBeLessThan(firstRun);
+    store.close();
+  });
+
+  test("records the version actually compiled, not the createRun placeholder", async () => {
+    const dirs = await makeProject();
+    const store = new ResultsStore(":memory:");
+    await runSession({ backend: new PhaseBackend(), store, ...dirs, selectorIds });
+    const row = store.db
+      .query("SELECT app_version, app_id, artifact_id, artifact_sha256 FROM runs LIMIT 1")
+      .get() as {
+      app_version: string;
+      app_id: string;
+      artifact_id: string;
+      artifact_sha256: string;
+    };
+    expect(row.app_version).not.toBe("0.0.0.0");
+    expect(row.app_version).toMatch(/^\d+\.\d+\.\d+\.\d+$/);
+    // Major.minor come from the fixture's own app.json (1.0.0.0), never hardcoded elsewhere.
+    expect(row.app_version.startsWith("1.0.")).toBe(true);
+    expect(row.app_id).toBe(APP_ID);
+    expect(row.artifact_id).toMatch(/^[0-9a-f]{32}$/);
+    expect(row.artifact_sha256).toMatch(/^[0-9a-f]{64}$/);
+    store.close();
+  });
+
+  test("re-stamps above the version BC names and retries exactly once on conflict", async () => {
+    const dirs = await makeProject();
+    let attempts = 0;
+    const backend = new PhaseBackend({
+      onPublish: () => {
+        attempts++;
+        if (attempts === 1) {
+          throw new Error(
+            "Cannot install the extension X by Y 1.0.1.1 because a newer version 9.9.9.9 was already installed.",
+          );
+        }
+      },
+    });
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({ backend, store, ...dirs, selectorIds });
+    expect(attempts).toBe(2);
+    expect(backend.lastCompiledVersion).toBe("9.9.9.10");
+    expect(report.counts.errors).toBe(0);
+    store.close();
+  });
+
+  test("fails loudly on a SECOND version conflict rather than retrying forever", async () => {
+    const dirs = await makeProject();
+    const backend = new PhaseBackend({
+      onPublish: () => {
+        throw new Error(
+          "Cannot install the extension X by Y 1.0.1.1 because a newer version 9.9.9.9 was already installed.",
+        );
+      },
+    });
+    const store = new ResultsStore(":memory:");
+    await expect(runSession({ backend, store, ...dirs, selectorIds })).rejects.toThrow(
+      /version conflict/i,
+    );
+    store.close();
+  });
+
+  test("runs no tests when identity does not match the published artifact", async () => {
+    const dirs = await makeProject();
+    const backend = new PhaseBackend({ reportedIdentity: "some-other-artifact-id" });
+    const store = new ResultsStore(":memory:");
+    await expect(runSession({ backend, store, ...dirs, selectorIds })).rejects.toThrow(
+      /indeterminate/i,
+    );
+    expect(backend.calls).not.toContain("run");
+    expect(backend.calls).not.toContain("activate");
+    store.close();
+  });
+
+  test("an app.json version component above 65535 aborts the session before any compile", async () => {
+    const dirs = await makeProject();
+    const manifest = JSON.parse(APP_JSON) as Record<string, unknown>;
+    await Bun.write(
+      join(dirs.projectDir, "app.json"),
+      JSON.stringify({ ...manifest, version: "70000.0.0.0" }),
+    );
+    const backend = new PhaseBackend();
+    const store = new ResultsStore(":memory:");
+    await expect(runSession({ backend, store, ...dirs, selectorIds })).rejects.toThrow(
+      /app\.json version/,
+    );
+    expect(backend.calls).not.toContain("compile");
+    store.close();
+  });
+
+  test("a malformed app.json version aborts the session before any compile", async () => {
+    const dirs = await makeProject();
+    const manifest = JSON.parse(APP_JSON) as Record<string, unknown>;
+    await Bun.write(
+      join(dirs.projectDir, "app.json"),
+      JSON.stringify({ ...manifest, version: "1.0" }),
+    );
+    const backend = new PhaseBackend();
+    const store = new ResultsStore(":memory:");
+    await expect(runSession({ backend, store, ...dirs, selectorIds })).rejects.toThrow(
+      /app\.json version/,
+    );
+    expect(backend.calls).not.toContain("compile");
+    store.close();
+  });
+});
+
 describe("narrowFilesToSubset", () => {
   // Minimal fakes: `narrowFilesToSubset` only ever reads `spec.before.{start,end}Index`,
   // `spec.operatorName`, and `file.{path,specs}` — every other field on `ALSyntaxNode` /
@@ -1331,11 +1554,14 @@ describe("runSession — bisection on compile failure", () => {
   });
 
   // I3: a deploy failure that reproduces regardless of which mutants are in
-  // the artifact (version monotonicity, transport, licence — observed live,
-  // see fixtures/README.md) must NOT be pinned on a mutant. The unconfirmed
-  // search used to converge on candidates[0] and blame it with full
-  // confidence; the confirmation step (complement still fails without the
-  // candidate) now classifies it as environmental instead.
+  // the artifact (transport, licence — observed live, see fixtures/README.md)
+  // must NOT be pinned on a mutant. The unconfirmed search used to converge
+  // on candidates[0] and blame it with full confidence; the confirmation step
+  // (complement still fails without the candidate) now classifies it as
+  // environmental instead. (This fixture used to fail with a version-conflict
+  // message; since Task 6 that specific shape is handled UPSTREAM of
+  // bisection — re-stamp + one retry, then a loud session abort, see the test
+  // below — so a licence failure stands in as the environmental example.)
   test("an environment-caused deploy failure is reported as such, not blamed on a mutant", async () => {
     const dirs = await makeProject();
     const backend = new StubBackend(
@@ -1346,10 +1572,7 @@ describe("runSession — bisection on compile failure", () => {
       undefined,
       // Every deploy fails identically, whatever the manifest contains —
       // the environmental shape.
-      () =>
-        new Error(
-          "Cannot install the extension because a newer version 1.0.27.3 was already installed",
-        ),
+      () => new Error("The extension could not be deployed: licence check failed"),
     );
     const store = new ResultsStore(":memory:");
     const report = await runSession({ backend, store, ...dirs, selectorIds });
@@ -1357,7 +1580,7 @@ describe("runSession — bisection on compile failure", () => {
     const noted = report.mutants.find((m) => m.verdict === "error");
     expect(noted).toBeDefined();
     expect(noted?.failureNote).toContain("not attributable to any mutant");
-    expect(noted?.failureNote).toContain("newer version 1.0.27.3");
+    expect(noted?.failureNote).toContain("licence check failed");
     expect(noted?.failureNote).not.toContain("bisected to mutant");
     store.close();
   });

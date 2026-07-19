@@ -1,3 +1,6 @@
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+import type { MutantManifest } from "@lethal/schemata";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import {
   StdioClientTransport,
@@ -6,6 +9,8 @@ import {
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { MutationControlClient } from "./activation";
 import { AppMethodIndex, findLocalProcedureNames, objectTypeName } from "./app-package";
+import { ArtifactPrepareError, DeploymentError } from "./artifact";
+import type { ArtifactCompiler, CompileInput, CompiledArtifact } from "./artifact";
 import type {
   BackendCapabilities,
   BackendStatus,
@@ -16,7 +21,9 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "./backend";
-import type { Publisher } from "./publisher";
+import { decidePublishOutcome } from "./deployment-verifier";
+import type { DeploymentVerifier } from "./deployment-verifier";
+import type { ContainerDeployer } from "./publisher";
 
 export interface BcDevConfig {
   readonly mcpCommand: readonly string[]; // e.g. ["bun", "x", "bc-dev-mcp"] — argv to spawn
@@ -74,6 +81,18 @@ const WIRE_STATUS_TO_OUTCOME = {
   skipped: "skip",
 } as const;
 
+/**
+ * Everything `deploy()` needs to turn an instrumented dir into a verified deployment. All
+ * three are required together: identity verification is mandatory ADDITIONAL evidence (see
+ * deployment-verifier.ts) — a backend that could compile and publish but not verify would
+ * make every deploy `indeterminate` by construction, so the type forbids configuring one.
+ */
+export interface BcDevDeployment {
+  readonly compiler: ArtifactCompiler;
+  readonly deployer: ContainerDeployer;
+  readonly verifier: DeploymentVerifier;
+}
+
 export class BcDevMcpBackend implements ExecutionBackend {
   private client: Client | undefined;
   // Populated by deploy() from the just-compiled .app so run() can resolve coverage
@@ -85,7 +104,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
   constructor(
     private readonly cfg: BcDevConfig,
     private readonly transportFactory?: (env: Record<string, string>) => Transport,
-    private readonly publisher?: Publisher,
+    private readonly deployment?: BcDevDeployment,
     private readonly activation?: MutationControlClient,
   ) {}
 
@@ -166,14 +185,80 @@ export class BcDevMcpBackend implements ExecutionBackend {
     }
   }
 
-  async deploy(instrumentedDir: string): Promise<void> {
-    if (!this.publisher) throw new Error("BcDevMcpBackend: no Publisher configured");
-    const appPath = await this.publisher.compile(instrumentedDir);
+  /**
+   * Reads the compile inputs `prepareArtifactDir`/`prepareBatchProject` (orchestrator.ts)
+   * wrote into the instrumented dir: app.json supplies appId/appVersion/appManifest, and
+   * mutant-manifest.json supplies the mutant manifest plus the artifact's identity. Anything
+   * missing or malformed is an `ArtifactPrepareError` — never a compile verdict.
+   */
+  private async prepareCompileInput(instrumentedDir: string): Promise<CompileInput> {
+    const appJsonPath = join(instrumentedDir, "app.json");
+    let appManifest: Record<string, unknown>;
+    try {
+      appManifest = JSON.parse(await readFile(appJsonPath, "utf8")) as Record<string, unknown>;
+    } catch (err) {
+      throw new ArtifactPrepareError(
+        `cannot read ${appJsonPath}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    const appId = appManifest.id;
+    const appVersion = appManifest.version;
+    if (typeof appId !== "string" || typeof appVersion !== "string") {
+      throw new ArtifactPrepareError(
+        `${appJsonPath} must carry string "id" and "version" fields ` +
+          `(got id=${JSON.stringify(appId)}, version=${JSON.stringify(appVersion)})`,
+      );
+    }
+    const manifestPath = join(instrumentedDir, "mutant-manifest.json");
+    let mutantManifest: MutantManifest;
+    try {
+      mutantManifest = JSON.parse(await readFile(manifestPath, "utf8")) as MutantManifest;
+    } catch (err) {
+      throw new ArtifactPrepareError(
+        `cannot read ${manifestPath}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    if (typeof mutantManifest.artifactId !== "string") {
+      throw new ArtifactPrepareError(`${manifestPath} has no string "artifactId" field`);
+    }
+    return {
+      projectDir: instrumentedDir,
+      artifactId: mutantManifest.artifactId,
+      appId,
+      appVersion,
+      mutantManifest,
+      appManifest,
+    };
+  }
+
+  async deploy(instrumentedDir: string): Promise<CompiledArtifact> {
+    const deployment = this.deployment;
+    if (!deployment) throw new Error("BcDevMcpBackend: no compiler/deployer/verifier configured");
+    const artifact = await deployment.compiler.compile(
+      await this.prepareCompileInput(instrumentedDir),
+    );
     // Must happen before publish(): resolves this batch's coverage methodIds ahead of any
     // run() call, from the exact artifact/source that produced them.
-    this.methodIndex = await AppMethodIndex.fromAppFile(appPath);
+    this.methodIndex = await AppMethodIndex.fromAppFile(artifact.appPath);
     this.localProcedures = await findLocalProcedureNames(instrumentedDir);
-    await this.publisher.publish(appPath);
+
+    let publishOk = true;
+    let publishError: string | undefined;
+    try {
+      await deployment.deployer.publish(artifact);
+    } catch (err) {
+      publishOk = false;
+      publishError = err instanceof Error ? err.message : String(err);
+    }
+    // Verification runs whether or not publish succeeded: decidePublishOutcome needs it to
+    // tell a plain `failed` publish apart from an `anomalous` one (publish failed yet the
+    // server claims to run our artifact — a deployment we cannot explain).
+    const verification = await deployment.verifier.verify(artifact);
+    const outcome = decidePublishOutcome(publishOk, verification);
+    if (outcome !== "accepted") {
+      throw new DeploymentError(outcome, publishError, verification);
+    }
+    return artifact;
   }
 
   async activate(mutantId: string | null): Promise<void> {

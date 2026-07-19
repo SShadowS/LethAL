@@ -2,135 +2,14 @@ import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readdir, rmdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Publisher, defaultAlToolPaths } from "../src/publisher";
+import { defaultAlToolPaths } from "../src/publisher";
 
-function recordingSpawn(result = { exitCode: 0, stdout: "", stderr: "" }) {
-  const calls: string[][] = [];
-  const envs: Array<Record<string, string> | undefined> = [];
-  const spawn = async (
-    argv: readonly string[],
-    opts?: { signal?: AbortSignal; env?: Record<string, string> },
-  ) => {
-    calls.push([...argv]);
-    envs.push(opts?.env);
-    return result;
-  };
-  return { calls, envs, spawn };
-}
-
-const cfg = {
-  alcPath: "C:/ext/bin/alc.exe",
-  altoolPath: "C:/ext/bin/altool.exe",
-  packageCachePath: "C:/proj/.alpackages",
-  outputDir: "C:/out",
-  server: "http://bcserver",
-  serverInstance: "BC",
-  username: "testuser",
-  password: "testpass",
-};
-
-describe("Publisher.compile", () => {
-  test("invokes alc with project, packagecache, out", async () => {
-    const { calls, spawn } = recordingSpawn();
-    const appPath = await new Publisher(cfg, spawn).compile("C:/instr");
-    expect(calls[0]?.[0]).toBe("C:/ext/bin/alc.exe");
-    expect(calls[0]).toContain("/project:C:/instr");
-    expect(calls[0]).toContain("/packagecachepath:C:/proj/.alpackages");
-    expect(appPath.startsWith("C:/out")).toBe(true);
-  });
-
-  test("failure surfaces stderr verbatim", async () => {
-    const { spawn } = recordingSpawn({ exitCode: 1, stdout: "", stderr: "AL0132: nope" });
-    await expect(new Publisher(cfg, spawn).compile("C:/instr")).rejects.toThrow("AL0132: nope");
-  });
-
-  test("spawn rejection includes alcPath context", async () => {
-    const spawn = async () => {
-      throw new Error("ENOENT: no such file or directory");
-    };
-    await expect(new Publisher(cfg, spawn).compile("C:/instr")).rejects.toThrow(
-      "alc compile failed: ENOENT: no such file or directory (alcPath: C:/ext/bin/alc.exe)",
-    );
-  });
-
-  test("normalizes all paths to forward slashes", async () => {
-    const { calls, spawn } = recordingSpawn();
-    const cfgWithBackslashes = {
-      ...cfg,
-      packageCachePath: "C:\\proj\\.alpackages",
-      outputDir: "C:\\out",
-    };
-    await new Publisher(cfgWithBackslashes, spawn).compile("C:\\instr");
-    expect(calls[0]).toContain("/project:C:/instr");
-    expect(calls[0]).toContain("/packagecachepath:C:/proj/.alpackages");
-  });
-});
-
-describe("Publisher.publish", () => {
-  test("invokes altool publishapp with server params and ForceSync", async () => {
-    const { calls, spawn } = recordingSpawn();
-    await new Publisher(cfg, spawn).publish("C:/out/x.app");
-    expect(calls[0]?.slice(0, 2)).toEqual(["C:/ext/bin/altool.exe", "publishapp"]);
-    expect(calls[0]).toContain("C:/out/x.app");
-    expect(calls[0]?.join(" ")).toContain("ForceSync");
-  });
-
-  // altool publishapp --help: flags are all-lowercase (--serverinstance, --schemaupdatemode,
-  // not the camelCase originally guessed), and --authentication defaults to AAD — on-prem
-  // UserPassword auth must be selected explicitly or altool tries interactive/device-code login.
-  test("uses the verified altool flag spellings and explicit UserPassword auth", async () => {
-    const { calls, spawn } = recordingSpawn();
-    await new Publisher(cfg, spawn).publish("C:/out/x.app");
-    const argv = calls[0] ?? [];
-    expect(argv).toContain("--serverinstance");
-    expect(argv).not.toContain("--serverInstance");
-    expect(argv).toContain("--schemaupdatemode");
-    expect(argv).not.toContain("--schemaSyncMode");
-    expect(argv).toContain("--authentication");
-    expect(argv[argv.indexOf("--authentication") + 1]).toBe("UserPassword");
-    expect(argv).toContain("--environmenttype");
-  });
-
-  // altool has no --username/--password flags: credentials for UserPassword auth are read
-  // from BC_SERVER_USERNAME/BC_SERVER_PASSWORD env vars (verified against the
-  // Microsoft.Dynamics.Nav.Deployment.dll strings shipped with the AL extension).
-  test("passes credentials as BC_SERVER_USERNAME/BC_SERVER_PASSWORD env vars, not CLI flags", async () => {
-    const { calls, envs, spawn } = recordingSpawn();
-    await new Publisher(cfg, spawn).publish("C:/out/x.app");
-    expect(envs[0]).toEqual({ BC_SERVER_USERNAME: "testuser", BC_SERVER_PASSWORD: "testpass" });
-    expect(calls[0]).not.toContain("testuser");
-    expect(calls[0]).not.toContain("testpass");
-  });
-
-  test("spawn rejection includes altoolPath context", async () => {
-    const spawn = async () => {
-      throw new Error("ENOENT: no such file or directory");
-    };
-    await expect(new Publisher(cfg, spawn).publish("C:/out/x.app")).rejects.toThrow(
-      "altool publishapp failed: ENOENT: no such file or directory (altoolPath: C:/ext/bin/altool.exe)",
-    );
-  });
-});
-
-describe("Publisher artifact identity", () => {
-  test("distinct artifact names never collide in one outputDir", async () => {
-    const { calls, spawn } = recordingSpawn();
-    const p = new Publisher(cfg, spawn);
-    const a = await p.compile("C:/instr/batch-0", "run7-batch0");
-    const b = await p.compile("C:/instr/batch-1", "run7-batch1");
-    expect(a).not.toBe(b);
-    expect(a).toContain("run7-batch0");
-    expect(b).toContain("run7-batch1");
-    expect(calls[0]).toContain(`/out:${a}`);
-    expect(calls[1]).toContain(`/out:${b}`);
-  });
-
-  test("omitting the name keeps the existing single-artifact behavior", async () => {
-    const { spawn } = recordingSpawn();
-    const out = await new Publisher(cfg, spawn).compile("C:/instr");
-    expect(out).toContain("lethal-instrumented.app");
-  });
-});
+// NOTE (Task 6): the old `Publisher` class (compile + publish bundled, fixed
+// `lethal-instrumented.app` filename) is gone. Its compile half lives in
+// `ArtifactCompiler` (artifact.ts, tested in artifact.test.ts) and its publish half in
+// `ContainerDeployer` (publisher.ts, tested in artifact.test.ts's ContainerDeployer
+// describes, including the verified altool flag spellings and the
+// BC_SERVER_USERNAME/BC_SERVER_PASSWORD env handling).
 
 describe("defaultAlToolPaths", () => {
   test("returns undefined when extensions dir does not exist", async () => {

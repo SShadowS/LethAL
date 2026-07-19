@@ -1,4 +1,4 @@
-import { readdir } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { CompiledArtifact } from "./artifact";
@@ -7,22 +7,6 @@ export type SpawnFn = (
   argv: readonly string[],
   opts?: { signal?: AbortSignal; env?: Record<string, string> },
 ) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
-
-export interface PublisherConfig {
-  readonly alcPath: string;
-  readonly altoolPath: string;
-  readonly packageCachePath: string; // target project's .alpackages
-  readonly outputDir: string; // where the .app lands
-  readonly server: string;
-  readonly serverInstance: string;
-  readonly tenant?: string;
-  // altool publishapp defaults --authentication to AAD; on-prem UserPassword auth (verified
-  // against real altool.exe --help plus the BC_SERVER_USERNAME/BC_SERVER_PASSWORD strings in
-  // Microsoft.Dynamics.Nav.Deployment.dll) needs these passed as env vars to the altool
-  // process, not as CLI flags — altool has no --username/--password option.
-  readonly username: string;
-  readonly password: string;
-}
 
 const bunSpawn: SpawnFn = async (argv, opts) => {
   // Bun.spawn supports `signal` natively (kills the child with SIGTERM when
@@ -45,93 +29,11 @@ const bunSpawn: SpawnFn = async (argv, opts) => {
 
 export const defaultSpawn = bunSpawn;
 
-function toForwardSlashes(p: string): string {
-  return p.replaceAll("\\", "/");
-}
-
-export class Publisher {
-  constructor(
-    private readonly cfg: PublisherConfig,
-    private readonly spawn: SpawnFn = bunSpawn,
-  ) {}
-
-  /**
-   * `artifactName` must be unique per concurrent compile: a fixed filename in a
-   * shared outputDir means two workers overwrite each other's .app and one
-   * publishes the other's code.
-   */
-  async compile(instrumentedDir: string, artifactName = "lethal-instrumented"): Promise<string> {
-    const appPath = toForwardSlashes(join(this.cfg.outputDir, `${artifactName}.app`));
-    const projectPath = toForwardSlashes(instrumentedDir);
-    const cachePath = toForwardSlashes(this.cfg.packageCachePath);
-    try {
-      const res = await this.spawn([
-        this.cfg.alcPath,
-        `/project:${projectPath}`,
-        `/packagecachepath:${cachePath}`,
-        `/out:${appPath}`,
-      ]);
-      if (res.exitCode !== 0) {
-        throw new Error(`alc compile failed (exit ${res.exitCode}):\n${res.stderr || res.stdout}`);
-      }
-      return appPath;
-    } catch (err) {
-      if (err instanceof Error && err.message.includes("alc compile failed")) {
-        throw err;
-      }
-      throw new Error(
-        `alc compile failed: ${err instanceof Error ? err.message : String(err)} (alcPath: ${this.cfg.alcPath})`,
-      );
-    }
-  }
-
-  async publish(appPath: string): Promise<void> {
-    // Flag names verified against `altool publishapp --help` (all lowercase,
-    // no camelCase): --server, --serverinstance, --schemaupdatemode, --tenant,
-    // --authentication, --environmenttype. Default --authentication is AAD,
-    // which would try interactive/device-code login against our UserPassword
-    // on-prem server — must be overridden explicitly.
-    const argv = [
-      this.cfg.altoolPath,
-      "publishapp",
-      appPath,
-      "--server",
-      this.cfg.server,
-      "--serverinstance",
-      this.cfg.serverInstance,
-      "--environmenttype",
-      "OnPrem",
-      "--authentication",
-      "UserPassword",
-      "--schemaupdatemode",
-      "ForceSync",
-    ];
-    if (this.cfg.tenant) argv.push("--tenant", this.cfg.tenant);
-    try {
-      const res = await this.spawn(argv, {
-        env: { BC_SERVER_USERNAME: this.cfg.username, BC_SERVER_PASSWORD: this.cfg.password },
-      });
-      if (res.exitCode !== 0) {
-        throw new Error(
-          `altool publishapp failed (exit ${res.exitCode}):\n${res.stderr || res.stdout}`,
-        );
-      }
-    } catch (err) {
-      if (err instanceof Error && err.message.includes("altool publishapp failed")) {
-        throw err;
-      }
-      throw new Error(
-        `altool publishapp failed: ${err instanceof Error ? err.message : String(err)} (altoolPath: ${this.cfg.altoolPath})`,
-      );
-    }
-  }
-}
-
 /**
- * Config for `ContainerDeployer.publish()` — the subset of the fields `Publisher` bundled
- * together that concern shipping an already-compiled artifact to a BC server. Split out from
- * `PublisherConfig` (see `ArtifactCompilerConfig` in artifact.ts for the compile-side half) so
- * a publish-only caller doesn't need to know about alc/packageCachePath/outputDir.
+ * Config for `ContainerDeployer.publish()` — only the fields that concern shipping an
+ * already-compiled artifact to a BC server (see `ArtifactCompilerConfig` in artifact.ts for
+ * the compile-side half), so a publish-only caller doesn't need to know about
+ * alc/packageCachePath/outputDir.
  */
 export interface ContainerDeployerConfig {
   readonly altoolPath: string;
@@ -150,6 +52,12 @@ export interface ContainerDeployerIo {
   readonly spawn: SpawnFn;
   readonly readArtifact: (path: string) => Promise<Uint8Array>;
 }
+
+/** Real-filesystem `ContainerDeployerIo`: spawn the actual altool, read the actual bytes. */
+export const defaultDeployerIo: ContainerDeployerIo = {
+  spawn: defaultSpawn,
+  readArtifact: async (path) => new Uint8Array(await readFile(path)),
+};
 
 /**
  * Publishes an immutable, content-addressed `CompiledArtifact` (see artifact.ts) to a BC

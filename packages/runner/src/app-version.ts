@@ -22,6 +22,15 @@ function parse(version: string): [number, number, number, number] {
     if (!Number.isInteger(n) || n < 0 || String(n) !== p) {
       throw new Error(`app version component "${p}" is not a non-negative integer ("${version}")`);
     }
+    // Range-checked HERE, not only on reserveAppVersion's assembled candidate: parse() is the
+    // boundary where untrusted input (a target project's own app.json, Task 6) first enters,
+    // and every caller — reserve, nextAbove, lastIssued comparison — must fail loudly on a
+    // component BC's 16-bit version fields cannot represent, never emit it downstream.
+    if (n > MAX_COMPONENT) {
+      throw new VersionOverflowError(
+        `app version component ${n} exceeds ${MAX_COMPONENT} ("${version}")`,
+      );
+    }
     return n;
   });
   const [a, b, c, d] = nums;

@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { emitStaticSelector } from "@lethal/schemata";
 import { OneShotTransport, ServerTransport } from "./al-runner-transport";
 import type { AlRunnerTransport } from "./al-runner-transport";
+import type { CompiledArtifact } from "./artifact";
 import type {
   BackendCapabilities,
   BackendStatus,
@@ -85,12 +86,6 @@ export class AlRunnerBackend implements ExecutionBackend {
   // callers may drive activate()/run() directly against cfg.instrumentedDir)
   // activeDir() falls back to the statically configured instrumented dir.
   private deployedDir: string | undefined;
-  // Set by deploy() from the deployed batch's mutant-manifest.json; "" until
-  // deploy() runs (or if the deployed batch carries no manifest — see
-  // readArtifactId). activate() bakes this into every emitStaticSelector()
-  // call, since it overwrites the WHOLE generated selector on every
-  // activation.
-  private artifactId = "";
   private readonly transport: AlRunnerTransport;
 
   constructor(
@@ -119,7 +114,7 @@ export class AlRunnerBackend implements ExecutionBackend {
       : { ok: false, details: `al-runner not runnable: ${res.stderr}` };
   }
 
-  async deploy(instrumentedDir: string): Promise<void> {
+  async deploy(instrumentedDir: string): Promise<CompiledArtifact | null> {
     // In-memory backends have no publish step, but they still need to know
     // which per-batch instrumented dir activate()/run() should target.
     //
@@ -167,7 +162,15 @@ export class AlRunnerBackend implements ExecutionBackend {
     await rm(activeDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     await cp(instrumentedDir, activeDir, { recursive: true });
     this.deployedDir = activeDir;
-    this.artifactId = await readArtifactId(activeDir);
+    // Early, LOUD validation of the batch just deployed: a corrupt manifest must fail
+    // deploy() itself, not surface only when a later activate() happens to read it. The
+    // value is deliberately not cached — activate() re-reads from activeDir() so the
+    // no-deploy path (activate()/run() driven straight against cfg.instrumentedDir) bakes
+    // that directory's REAL artifact id instead of a stale empty default.
+    await readArtifactId(activeDir);
+    // In-memory backend: nothing is compiled or published, so there is no artifact to
+    // describe — the orchestrator records provenance only for publishing backends.
+    return null;
   }
 
   private activeDir(): string {
@@ -175,12 +178,17 @@ export class AlRunnerBackend implements ExecutionBackend {
   }
 
   async activate(mutantId: string | null): Promise<void> {
+    const dir = this.activeDir();
     await writeFile(
-      join(this.activeDir(), "MutationSelector.Codeunit.al"),
+      join(dir, "MutationSelector.Codeunit.al"),
       emitStaticSelector({
         objectId: this.cfg.selectorObjectId,
         activeId: mutantId ?? "",
-        artifactId: this.artifactId,
+        // Read lazily from the directory this activation actually rewrites (see deploy()):
+        // a fixed instance field captured at deploy time baked "" over the real id whenever
+        // activate() ran without a prior deploy() — the exact no-deploy path the class
+        // comment above promises to support.
+        artifactId: await readArtifactId(dir),
       }),
       "utf8",
     );

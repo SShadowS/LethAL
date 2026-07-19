@@ -7,11 +7,84 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { MutationControlClient } from "../src/activation";
+import { ArtifactCompiler, DeploymentError, defaultArtifactIo } from "../src/artifact";
 import { BcDevMcpBackend } from "../src/bcdev-backend";
-import { Publisher } from "../src/publisher";
+import type { BcDevDeployment } from "../src/bcdev-backend";
+import { DeploymentVerifier } from "../src/deployment-verifier";
+import { ContainerDeployer } from "../src/publisher";
+import type { SpawnFn } from "../src/publisher";
 import { buildFakeApp } from "./helpers/fake-app";
 
 const ref = { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "PostingUpdatesTotal" };
+
+const TEST_ARTIFACT_ID = "0123456789abcdef0123456789abcdef";
+const TEST_APP_ID = "11111111-1111-1111-1111-111111111111";
+
+/** Writes the compile inputs deploy()'s prepare step reads from an instrumented dir. */
+async function writeDeployInputs(dir: string): Promise<void> {
+  await Bun.write(
+    join(dir, "app.json"),
+    JSON.stringify({
+      id: TEST_APP_ID,
+      name: "Fixture",
+      publisher: "LethAL",
+      version: "1.0.20653.100",
+    }),
+  );
+  await Bun.write(
+    join(dir, "mutant-manifest.json"),
+    JSON.stringify({
+      selectorIds: { selectorId: 1, controlId: 2, tableId: 3 },
+      artifactId: TEST_ARTIFACT_ID,
+      mutants: [],
+    }),
+  );
+}
+
+/**
+ * The real ArtifactCompiler + ContainerDeployer + DeploymentVerifier composition with only
+ * the process/network edges faked: `spawn` writes a real (hand-built) .app zip wherever alc's
+ * `/out:` argument points, and the verifier's fetch reports `reportedIdentity`
+ * (default: the fixture artifact id, i.e. a verified deploy).
+ */
+function makeDeployment(
+  outputDir: string,
+  symbolReference: unknown,
+  opts: { spawn?: SpawnFn; reportedIdentity?: string } = {},
+): BcDevDeployment {
+  const spawn: SpawnFn =
+    opts.spawn ??
+    (async (argv) => {
+      const out = argv.find((a) => a.startsWith("/out:"))?.slice("/out:".length);
+      if (argv[0]?.includes("alc") && out !== undefined) {
+        await Bun.write(out, buildFakeApp(symbolReference));
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
+    });
+  const compiler = new ArtifactCompiler(
+    { alcPath: "C:/fake/alc.exe", packageCachePath: "C:/fake/.alpackages", outputDir },
+    { ...defaultArtifactIo, spawn },
+  );
+  const deployer = new ContainerDeployer(
+    {
+      altoolPath: "C:/fake/altool.exe",
+      server: "http://bc",
+      serverInstance: "BC",
+      username: "u",
+      password: "p",
+    },
+    { ...defaultArtifactIo, spawn },
+  );
+  const fetchFn = (async (_url: unknown, _init?: RequestInit) =>
+    new Response(JSON.stringify({ value: opts.reportedIdentity ?? TEST_ARTIFACT_ID }), {
+      status: 200,
+    })) as typeof fetch;
+  const verifier = new DeploymentVerifier(
+    { baseUrl: "http://bc:7048/BC", company: "CRONUS", username: "u", password: "p" },
+    fetchFn,
+  );
+  return { compiler, deployer, verifier };
+}
 
 // SDK 1.29.0's McpServer.tool()/registerTool() validates arguments through a Zod schema
 // (see node_modules/@modelcontextprotocol/sdk/dist/esm/server/zod-compat.js). A permissive
@@ -44,11 +117,11 @@ function makeBackend(
 }
 
 /**
- * Like `makeBackend`, but also wires a `Publisher` whose fake "alc.exe" spawn writes a real
- * (hand-built) `.app` zip to the expected output path and calls `backend.deploy()` — needed
- * because `run()`'s coverage resolution reads the compiled app's own `SymbolReference.json`
- * (see app-package.ts), populated only by `deploy()`. Returns the backend plus a cleanup
- * function the caller must run (removes the temp dir the fake compile wrote into).
+ * Like `makeBackend`, but also wires the real compile/publish/verify composition (see
+ * `makeDeployment`) and calls `backend.deploy()` — needed because `run()`'s coverage
+ * resolution reads the compiled app's own `SymbolReference.json` (see app-package.ts),
+ * populated only by `deploy()`. Returns the backend plus a cleanup function the caller must
+ * run (removes the temp dir the fake compile wrote into).
  */
 async function makeBackendWithDeploy(
   runHandler: (args: unknown) => unknown,
@@ -63,32 +136,14 @@ async function makeBackendWithDeploy(
   void server.connect(serverTransport);
 
   const outputDir = await mkdtemp(join(tmpdir(), "lethal-bcdev-backend-test-"));
-  const appPath = join(outputDir, "lethal-instrumented.app");
-  const fakeSpawn = async (argv: readonly string[]) => {
-    if (argv.some((a) => a.includes("alc.exe"))) {
-      await Bun.write(appPath, buildFakeApp(symbolReference));
-    }
-    return { exitCode: 0, stdout: "", stderr: "" };
-  };
-  const publisher = new Publisher(
-    {
-      alcPath: "C:/fake/alc.exe",
-      altoolPath: "C:/fake/altool.exe",
-      packageCachePath: "C:/fake/.alpackages",
-      outputDir,
-      server: "http://bc",
-      serverInstance: "BC",
-      username: "u",
-      password: "p",
-    },
-    fakeSpawn,
-  );
+  const deployDir = instrumentedDir ?? outputDir;
+  await writeDeployInputs(deployDir);
   const backend = new BcDevMcpBackend(
     { mcpCommand: ["unused"], project: "/al", server: "http://bc", serverInstance: "BC" },
     () => clientTransport,
-    publisher,
+    makeDeployment(outputDir, symbolReference),
   );
-  await backend.deploy(instrumentedDir ?? outputDir);
+  await backend.deploy(deployDir);
   return { backend, cleanup: () => rm(outputDir, { recursive: true, force: true }) };
 }
 
@@ -310,41 +365,55 @@ describe("BcDevMcpBackend.status", () => {
 });
 
 describe("BcDevMcpBackend.deploy", () => {
-  test("invokes publisher compile then publish in order", async () => {
+  test("invokes compiler then deployer in order and returns the verified CompiledArtifact", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lethal-bcdev-deploy-test-"));
     try {
+      await writeDeployInputs(dir);
       const calls: string[][] = [];
-      const appPath = join(dir, "lethal-instrumented.app");
-      const recordingSpawn = async (argv: readonly string[]) => {
+      const recordingSpawn: SpawnFn = async (argv) => {
         calls.push([...argv]);
         // deploy() reads the compiled app's own SymbolReference.json right after compile()
         // returns — the fake alc.exe call must actually produce one, same as a real compile.
-        if (argv[0] === "C:/alc.exe") await Bun.write(appPath, buildFakeApp({ Codeunits: [] }));
+        const out = argv.find((a) => a.startsWith("/out:"))?.slice("/out:".length);
+        if (argv[0]?.includes("alc") && out !== undefined) {
+          await Bun.write(out, buildFakeApp({ Codeunits: [] }));
+        }
         return { exitCode: 0, stdout: "", stderr: "" };
       };
-      const publisher = new Publisher(
-        {
-          alcPath: "C:/alc.exe",
-          altoolPath: "C:/altool.exe",
-          packageCachePath: "C:/.alpackages",
-          outputDir: dir,
-          server: "http://bc",
-          serverInstance: "BC",
-          username: "u",
-          password: "p",
-        },
-        recordingSpawn,
-      );
       const backend = new BcDevMcpBackend(
         { mcpCommand: ["unused"], project: "/al", server: "http://bc", serverInstance: "BC" },
         undefined,
-        publisher,
+        makeDeployment(dir, { Codeunits: [] }, { spawn: recordingSpawn }),
       );
-      await backend.deploy(dir);
+      const artifact = await backend.deploy(dir);
       expect(calls).toHaveLength(2);
-      expect(calls[0]?.[0]).toBe("C:/alc.exe");
-      expect(calls[1]?.[0]).toBe("C:/altool.exe");
+      expect(calls[0]?.[0]).toBe("C:/fake/alc.exe");
+      expect(calls[1]?.[0]).toBe("C:/fake/altool.exe");
       expect(calls[1]?.[1]).toBe("publishapp");
+      expect(artifact.artifactId).toBe(TEST_ARTIFACT_ID);
+      expect(artifact.appId).toBe(TEST_APP_ID);
+      expect(artifact.appVersion).toBe("1.0.20653.100");
+      // No fixed filename anywhere: the .app path is content-addressed per artifact.
+      expect(artifact.appPath).not.toContain("lethal-instrumented");
+      expect(artifact.appPath).toContain(TEST_ARTIFACT_ID);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("throws a typed DeploymentError when identity reports a different artifact", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-bcdev-deploy-mismatch-"));
+    try {
+      await writeDeployInputs(dir);
+      const backend = new BcDevMcpBackend(
+        { mcpCommand: ["unused"], project: "/al", server: "http://bc", serverInstance: "BC" },
+        undefined,
+        makeDeployment(dir, { Codeunits: [] }, { reportedIdentity: "f".repeat(32) }),
+      );
+      const err = await backend.deploy(dir).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(DeploymentError);
+      expect((err as DeploymentError).outcome).toBe("indeterminate");
+      expect(String(err)).toMatch(/identity mismatch/);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

@@ -6,10 +6,12 @@ import type { CompiledArtifact } from "./artifact";
  * The only shape a generated artifact id, or an id `MutationControl_Identity` reports back, is
  * ever allowed to take: 128 random bits as 32 lowercase hex characters. Enforced on BOTH the
  * expected id and the reported id — see `DeploymentVerifier.verify` — for two independent
- * reasons: (1) the orchestrator still has call sites that hand out non-random placeholder ids
- * like `pending-task6-<runId>-<batchIdx>`; if one of those ever reached `verify()` unchecked, an
- * identical placeholder baked into the artifact would "cheerfully verify against itself" and
- * report a false accept. (2) artifact ids are interpolated into a single-quoted AL string
+ * reasons: (1) the orchestrator once handed out non-random placeholder ids (Task 6 replaced
+ * `pending-task6-<runId>-<batchIdx>` with `newArtifactId()` in orchestrator.ts); if such a
+ * value ever reappears and reaches `verify()` unchecked, an identical placeholder baked into
+ * the artifact would "cheerfully verify against itself" and report a false accept — this guard
+ * is the tripwire that makes that loud instead. (2) artifact ids are interpolated into a
+ * single-quoted AL string
  * literal when generating `Mutation Selector` (`emitMutationSelector` in
  * `@lethal/schemata`/selector.ts); a value containing a quote would produce uncompilable AL, so
  * anything that doesn't match this pattern was never validly generated in the first place.
