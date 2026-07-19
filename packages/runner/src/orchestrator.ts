@@ -8,6 +8,7 @@ import {
   findEnclosingStatement,
   initParser,
   parseAL,
+  validateSpec,
   visit,
   wrapRoot,
 } from "@lethal/engine";
@@ -61,7 +62,12 @@ export async function generateMutationSet(projectDir: string): Promise<Instrumen
     visit(root, (node) => {
       for (const op of tier1Operators) {
         if (op.targets(node, ctx)) {
-          for (const spec of op.generate(node, ctx)) specs.push(spec);
+          for (const spec of op.generate(node, ctx)) {
+            // Reject specs whose `before` isn't a real node in this file's
+            // tree — coalescing (Layer 4.3) relies on mutation sites being
+            // laminar, which a synthetic multi-node span could violate.
+            if (validateSpec(spec, root).ok) specs.push(spec);
+          }
         }
       }
     });
