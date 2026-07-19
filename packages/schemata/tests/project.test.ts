@@ -343,18 +343,21 @@ describe("writeInstrumentedProject", () => {
 
   it("writes the artifact id into the manifest and the generated selector", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lethal-artifactid-"));
-    await writeInstrumentedProject({
-      targetDir: dir,
-      files: [],
-      selectorIds: { selectorId: 79000, controlId: 79001, tableId: 79002 },
-      artifactId: "0123456789abcdef0123456789abcdef",
-    });
-    const manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8")) as {
-      artifactId: string;
-    };
-    expect(manifest.artifactId).toBe("0123456789abcdef0123456789abcdef");
-    const selector = await readFile(join(dir, "MutationSelector.Codeunit.al"), "utf8");
-    expect(selector).toContain("0123456789abcdef0123456789abcdef");
-    await rm(dir, { recursive: true, force: true });
+    try {
+      await writeInstrumentedProject({
+        targetDir: dir,
+        files: [],
+        selectorIds: { selectorId: 79000, controlId: 79001, tableId: 79002 },
+        artifactId: "0123456789abcdef0123456789abcdef",
+      });
+      const manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8")) as {
+        artifactId: string;
+      };
+      expect(manifest.artifactId).toBe("0123456789abcdef0123456789abcdef");
+      const selector = await readFile(join(dir, "MutationSelector.Codeunit.al"), "utf8");
+      expect(selector).toContain("0123456789abcdef0123456789abcdef");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
