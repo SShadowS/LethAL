@@ -1213,6 +1213,31 @@ describe("narrowFilesToSubset", () => {
     expect(narrowed).toHaveLength(1);
     expect(narrowed[0]?.path).toBe("b.al");
   });
+
+  test("throws loudly when two specs collide on the (file, span, operator) key", () => {
+    // The key's uniqueness holds today only because every Tier 1 operator
+    // emits at most one spec per node. The day an operator emits two variants
+    // for the same node, matching a manifest entry back to "its" spec becomes
+    // ambiguous — that must fail loudly, not silently coarsen bisection.
+    const specA = fakeSpec("lethal.two-variant", 0, 10);
+    const specB = fakeSpec("lethal.two-variant", 0, 10); // same node, same operator
+    const files: InstrumentedFile[] = [
+      { path: "a.al", source: "", root: fakeNode(0, 100), specs: [specA, specB] },
+    ];
+    expect(() =>
+      narrowFilesToSubset(files, [fakeEntry("a.al", 0, 10, "lethal.two-variant")]),
+    ).toThrow(/duplicate spec key/);
+    // Same-operator specs on DIFFERENT spans stay legal.
+    const okFiles: InstrumentedFile[] = [
+      {
+        path: "a.al",
+        source: "",
+        root: fakeNode(0, 100),
+        specs: [fakeSpec("lethal.two-variant", 0, 10), fakeSpec("lethal.two-variant", 20, 30)],
+      },
+    ];
+    expect(() => narrowFilesToSubset(okFiles, [])).not.toThrow();
+  });
 });
 
 describe("runSession — bisection on compile failure", () => {
