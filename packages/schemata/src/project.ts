@@ -88,10 +88,11 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
 
   const manifest: MutantManifestEntry[] = [];
   for (const f of input.files) {
-    const compiled = compileSchemataForFile(f.source, f.root, f.specs);
+    const ided = idedByFile.get(f.path) ?? [];
+    const compiled = compileSchemataForFile(f.source, f.root, f.specs, ided);
     await writeFile(join(input.targetDir, basename(f.path)), compiled, "utf8");
     const header = objectHeaderOf(f.source);
-    for (const { mutantId, spec } of idedByFile.get(f.path) ?? []) {
+    for (const { mutantId, spec } of ided) {
       manifest.push({
         mutantId,
         file: f.path,

@@ -17,18 +17,24 @@ export function compileSchemataForFile(
   source: string,
   root: ALSyntaxNode,
   specs: readonly MutationSpec[],
+  ided?: readonly IdedSpec[],
 ): string {
   // Semantic context is built lazily for type inference in lift. When no lift
   // is present it's unused and costs one empty-symbol-table build.
   const ctx = buildSemanticContext([{ path: "<file>", root }]);
-  const ided = assignMutantIds(new Map([["<file>", specs]])).get("<file>") ?? [];
+  // Mutant ids must be allocated exactly once, artifact-wide (see
+  // `writeInstrumentedProject`), so multi-file callers pass their
+  // pre-assigned ids in verbatim. Only single-file callers (tests, or
+  // callers that genuinely have just one file) fall back to allocating
+  // ids locally here.
+  const resolvedIded = ided ?? assignMutantIds(new Map([["<file>", specs]])).get("<file>") ?? [];
 
   const rewrites = new Map<ALSyntaxNode, string>();
   const codeBlockInserts = new Map<ALSyntaxNode, string[]>();
   const procedureInjects = new Map<ALSyntaxNode, string[]>();
   const blockExprRewrites = new Map<ALSyntaxNode, Array<{ node: ALSyntaxNode; text: string }>>();
 
-  for (const entry of ided) {
+  for (const entry of resolvedIded) {
     dispatch(entry, ctx, rewrites, codeBlockInserts, procedureInjects, blockExprRewrites);
   }
 

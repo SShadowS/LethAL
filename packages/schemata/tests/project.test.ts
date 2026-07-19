@@ -3,7 +3,7 @@ import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { ALNodeKind, findFirst, initParser, parseAL, wrapRoot } from "@lethal/engine";
-import type { MutationSpec } from "@lethal/engine";
+import type { ALSyntaxNode, MutationSpec } from "@lethal/engine";
 import { writeInstrumentedProject } from "../src/project";
 
 describe("writeInstrumentedProject", () => {
@@ -170,6 +170,179 @@ describe("writeInstrumentedProject", () => {
       expect(entry.codeunitName).toBe("Plain");
       expect(entry.procedureName).toBe("MyProc");
       expect(entry.startLine).toBe(3);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("allocates mutant ids once, artifact-wide, so manifest ids match emitted guards across multiple files", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-"));
+    try {
+      // File A: two non-overlapping statement-position mutants (separate
+      // statements, so writeInstrumentedProject's overlap check is unaffected).
+      const srcA = `codeunit 51050 "A" { procedure P() begin X := 1; Y := 2; end; }`;
+      const rootA = wrapRoot(parseAL(srcA));
+      const assignsA: ALSyntaxNode[] = [];
+      // findFirst only returns the first match; walk manually to collect both.
+      const collectAssignments = (node: ALSyntaxNode, out: ALSyntaxNode[]): void => {
+        if (node.kind === ALNodeKind.assignment_statement) out.push(node);
+        for (const child of node.namedChildren) collectAssignments(child, out);
+      };
+      collectAssignments(rootA, assignsA);
+      if (assignsA.length !== 2) {
+        throw new Error(`expected 2 assignments in file A, found ${assignsA.length}`);
+      }
+      const [assignA1, assignA2] = assignsA;
+      if (assignA1 === undefined || assignA2 === undefined) {
+        throw new Error("missing assignment nodes in file A");
+      }
+      const specsA: MutationSpec[] = [
+        {
+          operatorName: "op.flip",
+          operatorVersion: "1.0.0",
+          astNodeId: `${assignA1.startIndex}`,
+          before: assignA1,
+          after: { ...assignA1, text: "X := 99;" } as never,
+          parentContext: "statement-position",
+        },
+        {
+          operatorName: "op.flip",
+          operatorVersion: "1.0.0",
+          astNodeId: `${assignA2.startIndex}`,
+          before: assignA2,
+          after: { ...assignA2, text: "Y := 99;" } as never,
+          parentContext: "statement-position",
+        },
+      ];
+
+      // File B: one statement-position mutant.
+      const srcB = `codeunit 51051 "B" { procedure Q() begin Z := 3; end; }`;
+      const rootB = wrapRoot(parseAL(srcB));
+      const assignB = findFirst(rootB, ALNodeKind.assignment_statement);
+      if (assignB === null) throw new Error("no assignment in file B");
+      const specsB: MutationSpec[] = [
+        {
+          operatorName: "op.flip",
+          operatorVersion: "1.0.0",
+          astNodeId: `${assignB.startIndex}`,
+          before: assignB,
+          after: { ...assignB, text: "Z := 99;" } as never,
+          parentContext: "statement-position",
+        },
+      ];
+
+      await writeInstrumentedProject({
+        targetDir: dir,
+        files: [
+          { path: "A.Codeunit.al", source: srcA, root: rootA, specs: specsA },
+          { path: "B.Codeunit.al", source: srcB, root: rootB, specs: specsB },
+        ],
+        selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
+      });
+
+      const manifest = JSON.parse(
+        await readFile(join(dir, "mutant-manifest.json"), "utf8"),
+      );
+      expect(manifest.mutants).toHaveLength(3);
+
+      const rewrittenA = await readFile(join(dir, "A.Codeunit.al"), "utf8");
+      const rewrittenB = await readFile(join(dir, "B.Codeunit.al"), "utf8");
+      const guardsByFile: Record<string, string> = {
+        "A.Codeunit.al": rewrittenA,
+        "B.Codeunit.al": rewrittenB,
+      };
+
+      // Regression: every manifest id must appear as an emitted guard in its
+      // own file, and in no other file.
+      for (const entry of manifest.mutants as Array<{ mutantId: string; file: string }>) {
+        const guard = `MutationSelector.Active('${entry.mutantId}')`;
+        const ownFileText = guardsByFile[entry.file];
+        expect(ownFileText).toBeDefined();
+        expect(ownFileText).toContain(guard);
+
+        for (const [otherFile, otherText] of Object.entries(guardsByFile)) {
+          if (otherFile === entry.file) continue;
+          expect(otherText).not.toContain(guard);
+        }
+      }
+
+      // The manifest's own ids must be unique (sanity check for the assertion
+      // above — if two entries share an id, the "own file" check is vacuous).
+      const ids = (manifest.mutants as Array<{ mutantId: string }>).map((m) => m.mutantId);
+      expect(new Set(ids).size).toBe(ids.length);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("continues the id counter across files instead of restarting per file", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-"));
+    try {
+      const srcA = `codeunit 51060 "A" { procedure P() begin X := 1; Y := 2; end; }`;
+      const rootA = wrapRoot(parseAL(srcA));
+      const assignsA: ALSyntaxNode[] = [];
+      const collectAssignments = (node: ALSyntaxNode, out: ALSyntaxNode[]): void => {
+        if (node.kind === ALNodeKind.assignment_statement) out.push(node);
+        for (const child of node.namedChildren) collectAssignments(child, out);
+      };
+      collectAssignments(rootA, assignsA);
+      const [assignA1, assignA2] = assignsA;
+      if (assignA1 === undefined || assignA2 === undefined) {
+        throw new Error("expected 2 assignments in file A");
+      }
+      const specsA: MutationSpec[] = [
+        {
+          operatorName: "op.flip",
+          operatorVersion: "1.0.0",
+          astNodeId: `${assignA1.startIndex}`,
+          before: assignA1,
+          after: { ...assignA1, text: "X := 99;" } as never,
+          parentContext: "statement-position",
+        },
+        {
+          operatorName: "op.flip",
+          operatorVersion: "1.0.0",
+          astNodeId: `${assignA2.startIndex}`,
+          before: assignA2,
+          after: { ...assignA2, text: "Y := 99;" } as never,
+          parentContext: "statement-position",
+        },
+      ];
+
+      const srcB = `codeunit 51061 "B" { procedure Q() begin Z := 3; end; }`;
+      const rootB = wrapRoot(parseAL(srcB));
+      const assignB = findFirst(rootB, ALNodeKind.assignment_statement);
+      if (assignB === null) throw new Error("no assignment in file B");
+      const specsB: MutationSpec[] = [
+        {
+          operatorName: "op.flip",
+          operatorVersion: "1.0.0",
+          astNodeId: `${assignB.startIndex}`,
+          before: assignB,
+          after: { ...assignB, text: "Z := 99;" } as never,
+          parentContext: "statement-position",
+        },
+      ];
+
+      await writeInstrumentedProject({
+        targetDir: dir,
+        files: [
+          { path: "A.Codeunit.al", source: srcA, root: rootA, specs: specsA },
+          { path: "B.Codeunit.al", source: srcB, root: rootB, specs: specsB },
+        ],
+        selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
+      });
+
+      const manifest = JSON.parse(
+        await readFile(join(dir, "mutant-manifest.json"), "utf8"),
+      );
+      const bEntry = (manifest.mutants as Array<{ mutantId: string; file: string }>).find(
+        (m) => m.file === "B.Codeunit.al",
+      );
+      expect(bEntry?.mutantId).toBe("M0003");
+
+      const rewrittenB = await readFile(join(dir, "B.Codeunit.al"), "utf8");
+      expect(rewrittenB).toContain("MutationSelector.Active('M0003')");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
