@@ -45,9 +45,18 @@ describe("reserveAppVersion", () => {
   it("fails loudly on revision overflow instead of wrapping", () => {
     expect(() =>
       reserveAppVersion({
-        sourceVersion: "65535.65535.0.0",
+        sourceVersion: "1.0.0.0",
         nowMs: T0,
         lastIssued: "65535.65535.65535.65535",
+      }),
+    ).toThrow(VersionOverflowError);
+  });
+
+  it("rejects oversized source version components that would exceed the 16-bit limit", () => {
+    expect(() =>
+      reserveAppVersion({
+        sourceVersion: "70000.0.0.0",
+        nowMs: T0,
       }),
     ).toThrow(VersionOverflowError);
   });
