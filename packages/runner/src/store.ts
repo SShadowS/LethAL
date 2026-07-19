@@ -41,7 +41,10 @@ CREATE TABLE IF NOT EXISTS runs (
   backend TEXT NOT NULL,
   app_version TEXT NOT NULL,
   batch_count INTEGER,
-  baseline_green INTEGER
+  baseline_green INTEGER,
+  app_id TEXT,
+  artifact_id TEXT,
+  artifact_sha256 TEXT
 );
 CREATE TABLE IF NOT EXISTS mutants (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -74,7 +77,7 @@ CREATE TABLE IF NOT EXISTS test_results (
 `;
 
 export class ResultsStore {
-  private readonly db: Database;
+  readonly db: Database;
 
   constructor(dbPath: string) {
     this.db = new Database(dbPath, { create: true });
@@ -97,6 +100,14 @@ export class ResultsStore {
     if (!cols.some((c) => c.name === "failure_note")) {
       this.db.exec("ALTER TABLE mutants ADD COLUMN failure_note TEXT");
     }
+    // Layer 5A: runs gained deployment provenance. A pre-5A lethal.sqlite has a runs table
+    // without these, against which recordArtifact's UPDATE would throw mid-run.
+    const runCols = this.db.query("PRAGMA table_info(runs)").all() as Array<{ name: string }>;
+    for (const col of ["app_id", "artifact_id", "artifact_sha256"]) {
+      if (!runCols.some((c) => c.name === col)) {
+        this.db.exec(`ALTER TABLE runs ADD COLUMN ${col} TEXT`);
+      }
+    }
   }
 
   createRun(info: { projectPath: string; backend: string; appVersion: string }): number {
@@ -112,6 +123,23 @@ export class ResultsStore {
         "UPDATE runs SET finished_at = datetime('now'), batch_count = ?, baseline_green = ? WHERE id = ?",
       )
       .run(info.batchCount, info.baselineGreen ? 1 : 0, runId);
+  }
+
+  /**
+   * Corrects the run row after compilation. `createRun` runs before the version is derived, so
+   * it can only write a placeholder; leaving it there made runs.app_version wrong for every run
+   * ever recorded. 5C needs this provenance, and retrofitting it after pooled runs exist would
+   * make historical diagnostics ambiguous.
+   */
+  recordArtifact(
+    runId: number,
+    info: { appVersion: string; appId: string; artifactId: string; sha256: string },
+  ): void {
+    this.db
+      .query(
+        "UPDATE runs SET app_version = ?, app_id = ?, artifact_id = ?, artifact_sha256 = ? WHERE id = ?",
+      )
+      .run(info.appVersion, info.appId, info.artifactId, info.sha256, runId);
   }
 
   /** Returns the `mutants.id` row id SQLite assigned this insert (see I5: `mutant_code` alone

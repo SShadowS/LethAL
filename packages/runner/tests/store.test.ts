@@ -106,6 +106,57 @@ describe("ResultsStore", () => {
     });
   });
 
+  test("records real deployment provenance over the createRun placeholder", () => {
+    const store = new ResultsStore(":memory:");
+    const runId = store.createRun({ projectPath: "P", backend: "bcdev", appVersion: "0.0.0.0" });
+    store.recordArtifact(runId, {
+      appVersion: "1.0.20653.1800",
+      appId: "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",
+      artifactId: "0123456789abcdef0123456789abcdef",
+      sha256: "a".repeat(64),
+    });
+    const row = store.db
+      .query("SELECT app_version, app_id, artifact_id, artifact_sha256 FROM runs WHERE id = ?")
+      .get(runId) as Record<string, string>;
+    expect(row.app_version).toBe("1.0.20653.1800");
+    expect(row.app_id).toBe("df1aa9ff-6539-4c86-a9d0-ad702b61ac9a");
+    expect(row.artifact_id).toBe("0123456789abcdef0123456789abcdef");
+    expect(row.artifact_sha256).toBe("a".repeat(64));
+    store.close();
+  });
+
+  test("migrates a pre-5A runs table that lacks the provenance columns", () => {
+    const path = join(tmpdir(), `lethal-store-5a-${Date.now()}.sqlite`);
+    const legacy = new Database(path);
+    legacy.exec(`CREATE TABLE runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at TEXT NOT NULL DEFAULT (datetime('now')),
+    finished_at TEXT,
+    project_path TEXT NOT NULL,
+    backend TEXT NOT NULL,
+    app_version TEXT NOT NULL,
+    batch_count INTEGER,
+    baseline_green INTEGER
+  );`);
+    legacy.exec(
+      "INSERT INTO runs (project_path, backend, app_version) VALUES ('P','bcdev','0.0.0.0')",
+    );
+    legacy.close();
+
+    const store = new ResultsStore(path);
+    const runId = store.createRun({ projectPath: "P", backend: "bcdev", appVersion: "0.0.0.0" });
+    expect(() =>
+      store.recordArtifact(runId, {
+        appVersion: "1.0.1.1",
+        appId: "x",
+        artifactId: "y",
+        sha256: "z",
+      }),
+    ).not.toThrow();
+    store.close();
+    rmSync(path, { force: true });
+  });
+
   // I2: SCHEMA is `CREATE TABLE IF NOT EXISTS` only, which never reconciles
   // an existing table's columns. Persistent DBs are a supported workflow
   // (priorSurvivorKeys history, runId monotonicity for BC app versioning),
