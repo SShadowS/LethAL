@@ -281,10 +281,88 @@ describe("compileSchemataForFile — bare branch positions keep the enclosing el
     // whole chain in `begin ... end` so it reads as a single statement.
     expect(out).toMatch(/if X then\s*begin\b/);
     // No `;` immediately precedes the outer `else` — that stray `;` is
-    // exactly what orphans it.
+    // exactly what orphans it. (A bare `/end\s*else/` alone would be inert:
+    // it also matches the chain's own internal `end else begin`, which is
+    // present regardless of whether the outer wrap bug is fixed — anchoring
+    // on the untouched else-branch's own text makes this actually
+    // discriminate the outer transition from the internal one.)
     expect(out).not.toMatch(/end;\s*else/);
-    expect(out).toMatch(/end\s*else/);
-    // The untouched else-branch is unaffected.
-    expect(out).toContain("Y := 2;");
+    expect(out).toMatch(/end\s*else\s*Y := 2;/);
+  });
+
+  it("wraps a mutated empty-block if-branch without adding a terminator when an else follows", async () => {
+    await initParser();
+    const src = `codeunit 51901 "E2"
+{
+    procedure P(X: Boolean)
+    var
+        Y: Integer;
+    begin
+        if X then
+        begin
+            Y := 1;
+        end
+        else
+            Y := 2;
+    end;
+}
+`;
+    const root = wrapRoot(parseAL(src));
+    // The SECOND block in pre-order is the inner if-branch's own block (the
+    // first is the whole procedure body, which contains it).
+    const inner = findAll(root, ALNodeKind.block)[1];
+    if (inner === undefined) throw new Error("no inner block");
+
+    const out = compileSchemataForFile(src, root, [spec(inner, "begin end", "lethal.empty-block")]);
+
+    // `inner` (the `begin Y := 1; end` if-branch) is a `code_block` whose
+    // parent is the `if_statement` — `packages/builtin-tier1`'s
+    // `empty-block` operator targets exactly this shape, not just whole
+    // procedure/trigger bodies. Because an `else` follows directly in
+    // source, `inner.text` does NOT include a trailing `;` (unlike a
+    // procedure body's `begin ... end;`), so the wrap must not add one
+    // either — a `kind === block` special case that unconditionally
+    // appended `;` would reopen the exact orphaned-else bug this fix set
+    // out to close, just through the other branch of the same function.
+    expect(out).toMatch(/if X then\s*begin\b/);
+    expect(out).not.toMatch(/end;\s*else/);
+    expect(out).toMatch(/end\s*else\s*Y := 2;/);
+  });
+
+  it("preserves a nested if's own terminator when it is a bare while-body branch", async () => {
+    await initParser();
+    const src = `codeunit 51902 "W2"
+{
+    procedure P(X: Boolean; Y: Boolean)
+    var
+        Z: Integer;
+        W: Integer;
+    begin
+        while X do
+            if Y then
+                Z := 1;
+        W := 2;
+    end;
+}
+`;
+    const root = wrapRoot(parseAL(src));
+    const innerIf = findFirst(root, ALNodeKind.if_statement);
+    if (innerIf === null) throw new Error("no if");
+
+    const out = compileSchemataForFile(src, root, [
+      spec(innerIf, "if not Y then\n                Z := 1;", "lethal.some-operator"),
+    ]);
+
+    // `innerIf` (`if Y then Z := 1;`) is the bare body of the `while` —
+    // its parent is `while_statement`, not a `code_block` — but UNLIKE a
+    // bare `assignment_statement`/`exit_statement`, a nested `if_statement`
+    // already includes its own trailing `;` in `.text`. Before this fix,
+    // the wrap unconditionally omitted a trailing `;` for any non-block
+    // bare branch, which here drops the terminator the following
+    // `W := 2;` statement needs — a new regression this fix must not
+    // reintroduce. The wrap's own closing `end` must reproduce a `;`
+    // because the consumed `innerIf.text` had one.
+    expect(out).toMatch(/while X do\s*begin\b/);
+    expect(out).toMatch(/end;\s*W := 2;/);
   });
 });

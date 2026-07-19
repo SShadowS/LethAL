@@ -105,62 +105,68 @@ function injectMutationSelectorVar(root: ALSyntaxNode, rewrites: Map<ALSyntaxNod
 }
 
 /**
- * Two independent reasons a component's dispatch chain must be wrapped in
- * `begin ... end` rather than spliced in as bare text — both because
- * `emitDispatch`'s chain is shaped like a complete, self-terminating
- * `if ... then ... else ...;` (nested if-statements include their own
- * trailing `;` in `.text`), and a bare `if` substituted directly into
- * certain positions is unsafe:
+ * A component's dispatch chain must be wrapped in `begin ... end` whenever
+ * `statement` is not already a plain member of an existing `begin ... end`
+ * — `emitDispatch`'s chain is itself shaped like a complete, self-terminating
+ * `if ... then ... else ...;`, and splicing that in unwrapped is unsafe in
+ * two positions:
  *
- * 1. **`statement.kind === ALNodeKind.block`** — `findEnclosingStatement`
- *    (packages/engine) treats a `code_block` whose parent is a
- *    procedure/trigger/branch as itself the "enclosing statement" — this is
- *    the only way a containment component's `root` can come back as an
- *    `ALNodeKind.block` (only `empty-block` ever resolves a spec's `before`
- *    to a block node), and that block is always the WHOLE procedure/trigger
- *    body. A **procedure or trigger body** must literally be a `code_block`
- *    (`begin ... end`) — verified against the real AL compiler, which
- *    rejects a bare `if` as a procedure body with AL0104/AL0198. The
- *    `block` node's own range includes its trailing `;` (verified:
- *    `block.text` for `begin ... end;` ends in `"end;"`, not `"end"` — the
- *    `;` is not a sibling token of the enclosing procedure/trigger). Since
- *    the printer replaces exactly `[statement.startIndex,
- *    statement.endIndex)`, the replacement must reproduce that trailing `;`
- *    itself — hence `begin ... end;` (WITH the semicolon).
+ * - **`statement.kind === ALNodeKind.block`** — `findEnclosingStatement`
+ *   (packages/engine) treats a `code_block` whose parent is a
+ *   procedure/trigger/branch as itself the "enclosing statement". That
+ *   parent isn't always a procedure/trigger: `packages/builtin-tier1`'s
+ *   `empty-block` operator also targets a block that is the bare body of an
+ *   `if`/`while`/`for`/`repeat`/`case` branch (no separate begin/end of its
+ *   own containing THIS block — the block itself IS that branch's body). A
+ *   procedure/trigger body must literally be a `code_block` — verified
+ *   against the real AL compiler, which rejects a bare `if` as a procedure
+ *   body with AL0104/AL0198 — so this case always needs the wrap.
  *
- * 2. **`statement.parent` is not a `code_block`** — the component root sits
- *    in a bare BRANCH position instead: the single then/else statement of an
- *    `if`, or the single body of a `while`/`for`/`repeat`/`case`, with no
- *    surrounding `begin ... end` of its own (e.g. `if X then Y := 1 else
- *    Y := 2;` — `Y := 1`'s parent is the `if_statement`, not a block).
- *    Splicing the chain in unwrapped embeds a complete nested
- *    `if ... then ... else ...;` directly as that branch: its own trailing
- *    `;` closes the OUTER `if` before the outer `else` is reached — AL0110
- *    "Orphaned ELSE statement" (the exact failure the `begin...end` wrap
- *    around EVERY branch inside `emitDispatch`/`wrapStatement` already
- *    defends against one level down) — and even with no following `else`,
- *    an unwrapped chain is itself an `if`, so a dangling-else ambiguity
- *    exists regardless of what follows. This bug pre-dates flat-dispatch
- *    coalescing: the old `applyWrap` path had the identical exposure for
- *    statement-position specs; only `applyLift`'s hoist-in-place approach
- *    (never replacing the enclosing statement) shielded expression-position
- *    specs from it, and lift is no longer routed to (see above).
+ * - **`statement.parent` is not a `code_block`** — the root sits in a bare
+ *   BRANCH position instead: the single then/else statement of an `if`, or
+ *   the single body of a `while`/`for`/`repeat`/`case`, with no surrounding
+ *   `begin ... end` of its own (e.g. `if X then Y := 1 else Y := 2;` —
+ *   `Y := 1`'s parent is the `if_statement`, not a block).
  *
- *    Here the wrap must NOT add its own trailing `;` — unlike the block
- *    case, nothing was consumed from the source: whatever naturally follows
- *    the original bare statement (an `else`, another branch, or — for
- *    terminator-excluding kinds like `exit_statement`/`assignment_statement`
- *    — the source's own leftover `;` immediately after) is untouched by
- *    this rewrite and continues to terminate/continue the construct exactly
- *    as it did before, so the outer `else` still binds to the outer `if`.
+ * In BOTH cases, splicing the chain in unwrapped embeds a complete nested
+ * `if ... then ... else ...;` directly as that branch: if its own trailing
+ * `;` survives, it closes the OUTER `if` before the outer `else` is reached
+ * — AL0110 "Orphaned ELSE statement" (the exact failure the `begin...end`
+ * wrap around EVERY branch inside `emitDispatch`/`wrapStatement` already
+ * defends against one level down) — and even with no following `else`, an
+ * unwrapped chain is itself an `if`, so a dangling-else ambiguity exists
+ * regardless of what follows. This bug pre-dates flat-dispatch coalescing:
+ * the old `applyWrap` path had the identical exposure for statement-position
+ * specs; only `applyLift`'s hoist-in-place approach (never replacing the
+ * enclosing statement) shielded expression-position specs from it, and lift
+ * is no longer routed to (see above).
+ *
+ * **Whether the wrap's own closing needs a trailing `;` is answered by what
+ * was actually consumed, not by `kind`.** `printWithRewrites` replaces
+ * exactly `[statement.startIndex, statement.endIndex)`, so the replacement
+ * must reproduce a `;` if and only if `statement.text` itself already ended
+ * in one — that's true or false independently of `kind`/parent: a
+ * procedure-body block conventionally does (`begin ... end;`), but the SAME
+ * block kind used as a bare `if`-branch does NOT when an `else` follows
+ * directly in source (`if X then begin ... end else ...` — no `;` before
+ * `else`, exactly as for any other bare branch); conversely a nested
+ * `if_statement` used as a bare `while`/`for` body DOES already include its
+ * own trailing `;` in `.text` (unlike `exit_statement`/`assignment_statement`
+ * bare statements, which never do). In valid AL a trailing `;` and a
+ * following `else` are mutually exclusive (a `;` right before `else` is
+ * AL0110 in the ORIGINAL source too), so reproducing exactly what was
+ * consumed can neither orphan an `else` nor drop a terminator the next
+ * statement needs.
  *
  * Only a genuine `code_block` member (root is one of possibly several
  * statements inside an existing `begin ... end`) needs no wrap at all — the
  * next token there can never be a misattributed `else`.
  */
 function wrapIfSingleStatementSlot(statement: ALSyntaxNode, text: string): string {
-  if (statement.kind === ALNodeKind.block) return `begin\n${text}\nend;`;
-  const isBareBranch = statement.parent !== null && statement.parent.kind !== ALNodeKind.block;
-  if (!isBareBranch) return text;
-  return `begin\n${text}\nend`;
+  const needsWrap =
+    statement.kind === ALNodeKind.block ||
+    (statement.parent !== null && statement.parent.kind !== ALNodeKind.block);
+  if (!needsWrap) return text;
+  const consumedTerminator = statement.text.trimEnd().endsWith(";");
+  return `begin\n${text}\nend${consumedTerminator ? ";" : ""}`;
 }

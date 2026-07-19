@@ -1,5 +1,11 @@
 import type { ALSyntaxNode } from "@lethal/engine";
 
+export interface WrapInput {
+  readonly mutantId: string;
+  readonly original: ALSyntaxNode;
+  readonly replacement: string | null;
+}
+
 /**
  * Retained but no longer routed to. Layer 4.3 (`compile.ts`) replaced the
  * per-spec statement-position/expression-position/short-circuit-operand
@@ -11,12 +17,6 @@ import type { ALSyntaxNode } from "@lethal/engine";
  * remaining caller is its own test (`tests/wrap.test.ts`). Kept in the
  * package for possible narrow future use.
  */
-export interface WrapInput {
-  readonly mutantId: string;
-  readonly original: ALSyntaxNode;
-  readonly replacement: string | null;
-}
-
 export function wrapStatement(input: WrapInput): string {
   const originalText = input.original.text;
   // Both branches are wrapped in `begin...end`, mirroring `duplicateEnclosing`
