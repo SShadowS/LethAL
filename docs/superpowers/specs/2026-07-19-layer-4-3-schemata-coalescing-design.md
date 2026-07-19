@@ -1,153 +1,118 @@
 # Layer 4.3 · Schemata Overlap Coalescing — Design
 
-**Date:** 2026-07-19
-**Status:** Drafted after section-by-section approval; awaiting spec review
+**Date:** 2026-07-19 (rev 2 — first draft substantially wrong, see §9)
+**Status:** Revised after adversarial review; awaiting spec review
 **Pays down:** the Layer 3 deferral ("multi-mutation-per-statement deconfliction — current compile throws on overlap"), restoring design.md §3.1
 
 ## 1. Goal
 
-Emit **one instrumented artifact per session**, containing every mutant, compiled once.
+Emit **one instrumented artifact per session** in the normal case, containing every mutant, compiled once.
 
-Today `compileSchemataForFile` throws when two specs resolve to the same AST node, and `printWithRewrites` throws on overlapping edits. The orchestrator works around this by splitting overlapping mutants into separate batches, each with its own schemata write, `alc` compile and publish. The sandbox fixture needs **3 compiles for 16 mutants**.
+Today `compileSchemataForFile` throws when two specs resolve to the same AST node and `printWithRewrites` throws on overlapping edits, so the orchestrator splits overlapping mutants into separate batches — each with its own schemata write, `alc` compile and publish. The sandbox fixture needs **3 compiles for 16 mutants**. design.md §3.1 chose mutant schemata precisely so N mutants cost *one* compile; batching reintroduces the N-compiles cost the architecture exists to avoid.
 
-This is a workaround for a compiler limitation, not a design. design.md §3.1 chose mutant schemata precisely so that N mutants cost **one** compile; batching reintroduces the N-compiles cost the architecture exists to avoid.
+## 2. Overlap is a containment tree
 
-## 2. Why overlap is a containment tree (verified, not assumed)
+Coalescing is tractable only if overlapping sites nest. Measured across `fixtures/sandbox-app` and `packages/builtin-tier1/tests/fixtures/al`: **53 overlapping pairs, 53 containment, 0 partial.**
 
-Coalescing is only tractable if overlapping sites nest. Measured across `fixtures/sandbox-app` and `packages/builtin-tier1/tests/fixtures/al`:
+The structural reason: spec targets are AST nodes, whose ranges are laminar, and mapping a node to an enclosing statement cannot create partial overlap.
 
-```
-overlapping pairs: 53
-  containment:     53
-  PARTIAL:          0
-```
+**But LethAL does not currently enforce the premise.** `spec-validation.ts` accepts any `before` object carrying a `kind`; it never checks that the node belongs to the parsed tree or that its range matches a real node. A custom operator could synthesise a multi-node span — say "argument plus separator" for an argument-swap operator — and produce genuinely partial overlap. So this design adds an explicit invariant check rather than resting on two fixture counts:
 
-This is structural, not luck: mutation specs target AST nodes, and two nodes in a tree are either disjoint or nested. Sites that resolve to enclosing statements inherit the same property, since enclosing statements of nested nodes are themselves nested or equal.
+> Every `spec.before` must correspond to a node in the current root, matched by exact range. Synthetic or multi-node spans are rejected at validation time.
 
-So coalescing is a **containment tree**, not a general interval-overlap problem.
+## 3. Emission: flat dispatch, not nested wraps
 
-## 3. The growth problem, and why it is a routing choice
+**The exponential blowup comes from *nesting* wraps, not from wrapping.** `wrapStatement` keeps both branches, so nesting depth `d` reproduces the innermost statement `2^d` times.
 
-`wrapStatement` emits both branches of the enclosing statement:
+Because **only one mutant is ever active** (`MutationSelector` holds a single id), nesting is unnecessary. A containment component compiles to one flat chain with one complete statement variant per mutant:
 
 ```al
-if MutationSelector.Active('M0001') then begin
-  <statement, mutated>
+if MutationSelector.Active('M0002') then begin
+    <statement with the OUTER mutation applied>
+end else if MutationSelector.Active('M0001') then begin
+    <statement with the INNER mutation applied>
 end else begin
-  <statement, original>
+    <original statement>
 end;
 ```
 
-Each nesting level therefore **doubles** the emitted text. Depth 4 — `empty-block` (body) ⊃ `empty-block` (inner if) ⊃ `return-value` ⊃ `conditional-boundary` — reproduces the innermost statement ~16 times.
+Properties, all of which the rejected alternative lacked:
 
-That doubling is not inherent. `liftExpression` already emits the original **once**:
+- **Linear:** N mutants in a component produce N+1 statement copies, not 2^N.
+- **Evaluation order is exactly the original's** in every branch — nothing is hoisted, reordered, or moved across a sibling.
+- **No temporaries**, so no type inference, no assignability question, no name-collision allocator, no `var`-parameter aliasing break, no Record/BigText copy semantics.
+- **Deletion mutants fall out naturally** — their branch simply omits the statement.
+- **An outer mutation that doesn't need the inner value never evaluates it**, because branches are independent rather than layered.
 
-```al
-_m1: Boolean;
-if MutationSelector.Active('M0001') then
-  _m1 := A >= B
-else
-  _m1 := A > B;
-exit(_m1);
-```
+Each branch is the original statement with exactly one mutation applied, so per-branch semantics are whatever the original was — the property that makes this reviewable.
 
-`compile.ts` currently routes only `short-circuit-operand` to lift; everything statement-positioned goes to wrap. Making lift the primary strategy for expression-level mutations makes growth **linear in mutant count** rather than exponential in nesting depth.
+## 4. Why not lift (investigated and rejected as the primary mechanism)
 
-Note the deletion-style operators never duplicated: `void-method-call` emits `if not Active(...) then <original>` (one copy) and `empty-block`'s mutated branch is empty. Only mutations whose replacement is a *modified copy* of the original duplicate — and those are exactly the ones lift handles.
+The first draft proposed routing expression mutations through `liftExpression` (hoist into a typed temp) for linear growth. Adversarial review plus direct probing killed it. Recorded so it is not re-proposed:
 
-## 4. Lift safety — provable, not heuristic
+- **Evaluation order.** Even an always-evaluated expression cannot be moved to the front. In `Consume(Bump('first'), Bump('second') > 0)`, lifting the comparison runs `second` before `first`. Record navigation, `Get`, `Modify`, number-series allocation and events all make that observable.
+- **Earlier siblings may fail first.** In `Consume(FailNow(), 10 / D)`, hoisting the division replaces the original failure with a divide-by-zero.
+- **AL has a ternary — verified.** `alc` rejects `D <> 0 ? 100 / D : 0` at runtime 13.0 with `AL0666: 'Support for the conditional operator (?:).' is not available in runtime version '13.0'. The supported runtime versions are: '14.0' or greater`, and compiles it cleanly at 14.0. So modern AL *does* conditionally evaluate sub-expressions, and hoisting out of a ternary arm introduces a division the original never reaches.
+- **Type inference is far short of sufficient.** `types.ts` handles literals, identifiers from project-local symbols, parenthesised/unary and four binary classes. It infers nothing for call returns, member/field access, `Rec` fields, base-app symbols, enums, dates, collections, or interfaces; `Record "Sales Header"` degrades to `Record`, `List of [Text]` to `List`. And a known type is not a legal assignment — `BigText` requires its own methods.
+- **`var` parameters and Record values.** Substituting a temp for an lvalue passed by `var` redirects mutations away from the original; copying a Record duplicates filters/keys/marks rather than preserving the receiver.
+- **Triggers.** `findEnclosingProcedure` recognises only `procedure`; `applyLift` throws without one, and AL mutations occur heavily in triggers.
 
-Lift hoists a prelude above the statement, so the expression is evaluated unconditionally. That is only sound under three conditions, all checkable:
+Lift remains viable **later** as a narrow optimisation for expressions proven pure, contextually independent, assignable, and inserted at their exact evaluation point. It is not the mechanism this layer builds on.
 
-**4.1 Unconditional evaluation — AL is EAGER (verified on real BC).**
+## 5. Composition
 
-An earlier draft of this spec assumed AL short-circuits `and`/`or` and specified an AST walk to avoid hoisting past a short-circuit. **That premise is false.** Probed against the live Cronus281 BC server (BC 28, AL runtime 17.0):
+Group mutants into **containment components** — maximal sets connected by containment — then emit one flat chain per component, ordered outermost-mutation-first so the most enclosing variant is tested before narrower ones. Disjoint components are independent edits and compose as today.
 
-```al
-Probe.Reset();
-R := false and Probe.Bump();     // right operand STILL RAN
-Probe.Reset();
-R := true or Probe.Bump();       // right operand STILL RAN
-```
+Mutants targeting the same node are simply sibling branches in the chain; the current `assertNoDuplicateRewrite` throw disappears.
 
-Both reported `right operand ran 1 time(s)`. The same probe against al-runner — an independent AL implementation — agrees. **AL evaluates both operands of `and`/`or` unconditionally.**
+## 6. Batching: retained as a capacity and failure-isolation fallback
 
-Scope of verification: the assignment form was tested directly on real BC. The `if <expr> then` form was not separately published; AL evaluates a condition through the same expression machinery and there is no language-level reason for context-dependent laziness, but the implementation plan should confirm it rather than inherit the inference.
+The first draft proposed deleting batching outright. **Reversed** — this is flagged for the reader because it contradicts an earlier decision in this design's own discussion:
 
-Consequently there is no in-statement conditional-evaluation construct to defend against: no short-circuit, no ternary. The evaluation-safety precondition collapses to a **placement** rule rather than an analysis:
+- **One bad mutant would kill the whole session.** Every guarded branch must compile even when inactive. One custom operator emitting an invalid replacement, or one unsupported construct, fails the single artifact and turns *all* mutants into errors. Batching bounds that blast radius.
+- **No size budget exists.** Flat dispatch is linear, but a component with many mutants still multiplies its statement, and there is no generated-source, per-object, compile-time or memory budget defined anywhere.
 
-> The prelude must be inserted into the same conditional context as its statement.
+So: **one artifact is the target, not an invariant.** Overlap-driven batching is removed — that is the point of the layer — but the artifact-splitting mechanism stays, driven by (a) a configurable size budget and (b) automatic bisection after a failed all-mutant compile, so a compile error identifies the offending mutant instead of invalidating the run.
 
-Inserting immediately before the statement in its own block satisfies this by construction: if the statement doesn't execute, neither does the prelude. The only care needed is a bare branch — `if X then Y := A / B;` has no block to hold a prelude, so the branch is wrapped: `if X then begin _m := A / B; Y := _m; end;`. That preserves the conditionality exactly.
+Consequently `MutantOutcome.batchIndex`, `runs.batch_count` and per-artifact versioning all stay. (Note: the store has no per-mutant batch column — the first draft claimed otherwise without checking.)
 
-This removes the AST walk entirely and, more importantly, removes the largest expected source of lift-fallbacks — which is what makes the linear-growth claim in §3 actually attainable rather than theoretical.
+## 7. Mutant id allocation — already fixed
 
-**4.2 Known type.** `typeOf(E)` must return non-null. The current `?? "Variant"` fallback is unsound — `Variant` does not accept every AL type — and is removed as a lift precondition.
+Review surfaced that ids were allocated twice: globally in `writeInstrumentedProject` (into the manifest) and again per-file in `compileSchemataForFile` (into the emitted guards), so for any multi-file project the manifest and the guards disagreed. Verified on the fixture: manifest `M0005` for `SandboxPricing`, emitted guard `M0001` — an id with no matching guard (never activates, reported survived) and an id emitted in two files (co-activates both).
 
-**4.3 Insertable prelude.** The statement must sit where a preceding statement can be inserted. A bare `if X then S;` requires wrapping the branch in `begin…end` to take a prelude.
+Fixed and merged in `4ec2095` ahead of this layer, since it affected shipped verdicts. Coalescing depends on ids being artifact-global, so this was a prerequisite regardless.
 
-**When any condition fails**, the mutant falls back to `wrapStatement` and the reason is **recorded** — per-mutant in the manifest, aggregated in the report. Never silent, never dropped: a rising fallback rate is a visible signal to widen the analysis, and a mutant is never skipped merely because it is hard to lift (that would understate what the suite failed to catch).
+## 8. Known gap: LethAL is blind to ternaries
 
-## 5. Composition: innermost-first with temp substitution
+The grammar parses `ternary_expression` cleanly (verified: 0 error nodes), but `ALNodeKind` has no entry for it. So no operator can target a ternary and no analysis can recognise one. On runtime 14.0+ projects LethAL silently under-mutates.
 
-This is the core algorithm and it is forced by correctness.
+Out of scope here, but it must be recorded: any future lift work depends on recognising ternaries, and mutation coverage of modern AL does too.
 
-For `exit(A > B)` carrying a boundary mutant on `A > B` and a return-value mutant on the whole `exit(...)`:
+## 9. What the first draft got wrong
 
-```al
-_m1: Boolean; _m2: Boolean;
-if Active('M0001') then _m1 := A >= B else _m1 := A > B;   // inner first
-if Active('M0002') then _m2 := not _m1 else _m2 := _m1;    // outer references _m1
-exit(_m2);
-```
+Kept deliberately. This design's first revision claimed lift made growth linear and that lift safety was provable by checking only right operands of `logical_expression`. Both were wrong:
 
-The outer mutant's **original** branch must reference `_m1`, not the source text `A > B`. Otherwise activating `M0002` silently discards `M0001`'s rewrite and the two mutants interfere — one would mask the other, producing wrong verdicts rather than a compile error.
+- The rule's premise — that short-circuit `and`/`or` is the only in-statement conditional evaluation — was false twice over. AL doesn't short-circuit at all (probed on the live BC server: `false and Bump()` still ran `Bump()`), and AL *does* have a ternary, which the rule didn't know about.
+- Even a perfect conditional-evaluation check wouldn't have made hoisting safe, because evaluation *order* relative to siblings breaks independently.
 
-So compilation walks the containment tree **innermost-first**, and each level substitutes any already-lifted child with its temp reference. N nested mutants yield N preludes.
+The correction came from an external adversarial review plus direct probes against real infrastructure — not from re-reading the design.
 
-Only one mutant is ever active (`MutationSelector` holds a single id), so nested guards need no combinatorial reasoning — inactive levels pass their input through unchanged.
+**Consequence for design.md §3.5.** Rule 3 justifies the `duplicate` composition as preserving "the short-circuit signal the mutation is meant to test." AL has no short-circuit signal, so that rationale is void, and the `short-circuit-operand` context exists to serve it. This design does not change it — flat dispatch subsumes `duplicate` anyway — but §3.5 should be corrected so the false premise stops propagating.
 
-## 6. Removing batching
+## 10. Out of scope
 
-With one artifact per session, the batch concept is vestigial and is **removed entirely** rather than left as a length-one loop:
+- Container pool, leasing and fencing.
+- Line-level coverage validation.
+- Lift as a narrow optimisation (§4).
+- Ternary support in `ALNodeKind` and the operators (§8).
+- Retiring `short-circuit-operand` from design.md §3.5 and the Tier 1 operators.
 
-- `batchByOverlap` and `OverlapSite` deleted from `selection.ts`, with their tests.
-- The orchestrator's batch loop collapses to a single prepare → deploy → run.
-- `prepareBatchProject` becomes a single project preparation.
-- `MutantOutcome.batchIndex` and the store's batch column are dropped.
-- The app version simplifies to `1.0.<runId>.0`, preserving cross-run monotonicity (BC rejects a version below the installed one).
-- Mutant ids become file-scoped rather than batch-scoped. Cross-run identity is unaffected — it keys on `(astHash, codeunitName, operatorName, operatorMajor)`, never the mutant code.
+## 11. Exit criteria
 
-The parallel worker fan-out from Layer 4.2 is unaffected: workers shard *mutants*, and they now all share one artifact, which is strictly simpler than the per-worker-per-batch deploy they do today.
-
-## 7. Surfaced: design.md §3.5 rule 3 rests on the same false premise
-
-Not a Layer 4.3 decision, but this spec's probe invalidates a foundational rule and it must not be discovered again later.
-
-`design.md` §3.5 states:
-
-> **3. Duplicate (short-circuit-sensitive operand mutation)** · when the mutation changes an operator whose evaluation semantics include short-circuit behavior (e.g., `and` ↔ `or`), lifting loses the short-circuit signal the mutation is meant to test.
-
-AL has no short-circuit behaviour, so "the short-circuit signal the mutation is meant to test" does not exist. That rationale is void. Downstream of it:
-
-- The `short-circuit-operand` parent context (`design.md` §4 operator interface) exists to route to `duplicate`.
-- `negate-conditional` declares it for `logical_expression` targets (`packages/builtin-tier1/src/negate-conditional.ts`).
-- `compile.ts` dispatches it to `duplicateEnclosing`.
-
-Nothing is *broken*: duplicating where lifting would do is conservative, costing emitted size rather than correctness — which is precisely the cost Layer 4.3 exists to remove. But it means the `duplicate` composition may have no remaining justification, and `and`↔`or` mutants may be liftable like any other expression.
-
-**This spec does not change that.** It records the contradiction and proposes the question be settled deliberately: either amend §3.5 and retire `short-circuit-operand`, or identify a different reason `duplicate` must stay. Layer 4.3 treats `short-circuit-operand` exactly as it does today; retiring it is a separate decision with its own blast radius across Layers 2 and 3.
-
-## 8. Out of scope
-
-- Container pool, leasing and fencing (the next layer).
-- Line-level coverage validation (separate spike, still unstarted).
-- Widening lift to conditionally-evaluated expressions via guarded preludes — the fallback covers those correctly, just less compactly. Revisit if measurement shows the fallback rate matters.
-
-## 9. Exit criteria
-
-- The sandbox fixture compiles to **one artifact**, down from 3 batches.
-- **Verdicts are unchanged on both backends**, verified live: al-runner `3 killed / 13 survived / 0 no-coverage` (18.8%), bcdev `3 killed / 10 survived / 3 no-coverage` (23.1%). This is the criterion that matters — coalescing must be a pure compile-shape change with zero behavioural effect.
-- Generated source growth is **measured and reported** on the fixture (before vs after), together with the lift-fallback rate.
-- A test proves nested mutants do not interfere: with the outer mutant active, the inner mutation must not apply, and vice versa.
-- `bun test`, `bun run typecheck`, `bunx biome check packages/runner` green; `itest:alrunner` and `itest:bcdev` pass.
+- The sandbox fixture compiles to **one artifact**, down from 3.
+- **Verdicts unchanged on both backends**, verified live: al-runner `3 killed / 13 survived / 0 no-coverage` (18.8%), bcdev `3 killed / 10 survived / 3 no-coverage` (23.1%). Coalescing must be a pure compile-shape change with zero behavioural effect.
+- A test proves mutants in one component do not interfere: with the outer mutant active the inner mutation must not apply, and vice versa.
+- Generated source growth measured and reported (fixture, before vs after), demonstrating linearity rather than asserting it.
+- Every `spec.before` is validated against a real tree node (§2).
+- A deliberately-broken mutant triggers bisection and names itself, rather than failing the session (§6).
+- `bun test`, `bun run typecheck`, `bunx biome check` green; `itest:alrunner` and `itest:bcdev` pass.
