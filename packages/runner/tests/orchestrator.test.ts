@@ -187,6 +187,14 @@ class StubBackend implements ExecutionBackend {
     this.deploys.push(dir);
     return null; // in-memory stub: nothing compiled, no artifact to describe
   }
+  // This stub never modeled a separate publish/verify phase (that split is what
+  // CompilePublishVerifyBackend below exists to test), so its compile-only seam is just its
+  // existing deploy(): same guard, same error typing, same `deploys` bookkeeping. Every
+  // bisection test below that exercises `deployGuard`/`deploys` keeps working unchanged —
+  // bisection now calls this instead of deploy(), not some new, separately-behaving path.
+  async compileCheck(dir: string): Promise<void> {
+    await this.deploy(dir);
+  }
   async activate(id: string | null) {
     this.activations.push(id);
   }
@@ -1201,7 +1209,9 @@ class PhaseBackend implements ExecutionBackend {
   async status(): Promise<BackendStatus> {
     return { ok: true, details: "phase" };
   }
-  async deploy(dir: string): Promise<CompiledArtifact | null> {
+  /** Shared compile-only step: reads the batch dir's inputs, builds the fake artifact. Used by
+   *  both deploy() (compile -> publish -> verify) and compileCheck() (compile, stop). */
+  private async compileArtifact(dir: string): Promise<CompiledArtifact> {
     this.calls.push("compile");
     const appManifest = JSON.parse(await readFile(join(dir, "app.json"), "utf8")) as {
       id: string;
@@ -1211,7 +1221,7 @@ class PhaseBackend implements ExecutionBackend {
       await readFile(join(dir, "mutant-manifest.json"), "utf8"),
     ) as CompiledArtifact["mutantManifest"];
     this.lastCompiledVersion = appManifest.version;
-    const artifact: CompiledArtifact = {
+    return {
       artifactId: mutantManifest.artifactId,
       appId: appManifest.id,
       appVersion: appManifest.version,
@@ -1220,6 +1230,13 @@ class PhaseBackend implements ExecutionBackend {
       mutantManifest,
       appManifest: appManifest as unknown as Record<string, unknown>,
     };
+  }
+  /** Compile-only seam: no "publish"/"verify" entries in `calls`, ever. */
+  async compileCheck(dir: string): Promise<void> {
+    await this.compileArtifact(dir);
+  }
+  async deploy(dir: string): Promise<CompiledArtifact | null> {
+    const artifact = await this.compileArtifact(dir);
     this.calls.push("publish");
     this.publishAttempts++;
     let publishOk = true;
@@ -2071,6 +2088,174 @@ describe("runSession — Task 7: only a typed AlcCompileError may be bisected", 
     // misread it as "false" and keep going (which would have driven `calls` well past 2, per
     // `bisectFailingMutant`'s halving + confirmation steps).
     expect(calls).toBe(2);
+    store.close();
+  });
+});
+
+// ————————————————————————————————————————————————————————————————————————
+// Task 7b: bisection's compile-only seam. Spec §8 forbids publishing a bisection
+// candidate; spec §10's operational test is a call-count gate on a compiler failure:
+// publisher and verifier call counts stay ZERO, bisection makes compiler calls only, and the
+// culprit is still named. Asserted with call counters on an instrumented fake — never timing.
+// ————————————————————————————————————————————————————————————————————————
+
+/**
+ * Like `PhaseBackend`, but with compile/publish/verify tracked as SEPARATE counters (not one
+ * shared `calls` log) so a test can assert "publisher/verifier called zero times" directly,
+ * and with `compileViaDeployCalls`/`compileViaCheckCalls` split so "the production deploy
+ * compiled exactly once, everything after that was compileCheck" is a call-count fact, not an
+ * inference from the note text. `compileGuard` decides per-candidate whether the compile phase
+ * throws `AlcCompileError`, reading the actual mutant-manifest.json each candidate write
+ * produced — same technique as `StubBackend.deployGuard` — so the guard genuinely depends on
+ * which mutant a given subset still carries, not on call order alone.
+ */
+class CompilePublishVerifyBackend implements ExecutionBackend {
+  compileViaDeployCalls = 0;
+  compileViaCheckCalls = 0;
+  publisherCalls = 0;
+  verifierCalls = 0;
+  // Mirrors BcDevMcpBackend.deploy() setting `this.methodIndex`/`this.localProcedures` right
+  // after a successful compile, before publish — only a real deploy() may touch this.
+  methodIndexAssignments = 0;
+
+  constructor(private readonly compileGuard: (dir: string) => Error | undefined) {}
+
+  capabilities(): BackendCapabilities {
+    return PHASE_CAPS;
+  }
+  async status(): Promise<BackendStatus> {
+    return { ok: true, details: "counting-phase" };
+  }
+
+  private async compile(dir: string): Promise<CompiledArtifact> {
+    const guardErr = this.compileGuard(dir);
+    if (guardErr !== undefined) throw guardErr;
+    const appManifest = JSON.parse(await readFile(join(dir, "app.json"), "utf8")) as {
+      id: string;
+      version: string;
+    };
+    const mutantManifest = JSON.parse(
+      await readFile(join(dir, "mutant-manifest.json"), "utf8"),
+    ) as CompiledArtifact["mutantManifest"];
+    return {
+      artifactId: mutantManifest.artifactId,
+      appId: appManifest.id,
+      appVersion: appManifest.version,
+      appPath: join(dir, "counting-fake.app"),
+      sha256: Bun.SHA256.hash(new Uint8Array([1, 2, 3]), "hex"),
+      mutantManifest,
+      appManifest: appManifest as unknown as Record<string, unknown>,
+    };
+  }
+
+  async deploy(dir: string): Promise<CompiledArtifact | null> {
+    this.compileViaDeployCalls++;
+    const artifact = await this.compile(dir); // throws BEFORE publish/verify on a bad candidate
+    this.methodIndexAssignments++;
+    this.publisherCalls++;
+    this.verifierCalls++;
+    return artifact;
+  }
+
+  /** The seam under test: compile only, never touches publish/verify/methodIndex. */
+  async compileCheck(dir: string): Promise<void> {
+    this.compileViaCheckCalls++;
+    await this.compile(dir);
+  }
+
+  async activate(): Promise<void> {}
+  async run(ref: TestMethodRef, _opts: RunOpts): Promise<TestVerdict> {
+    return { ref, outcome: "pass", durationMs: 5 };
+  }
+}
+
+/** True while `dir`'s just-written manifest still carries TARGET_AL's
+ *  conditional-boundary mutant — the shared "one bad spec" fixture bisection narrows to. */
+function manifestHasConditionalBoundary(dir: string): boolean {
+  const manifest = JSON.parse(readFileSync(join(dir, "mutant-manifest.json"), "utf8")) as {
+    mutants: Array<{ operatorName: string }>;
+  };
+  return manifest.mutants.some((m) => m.operatorName === "lethal.conditional-boundary");
+}
+
+describe("runSession — Task 7b: bisection's compile-only seam (spec §10 counters)", () => {
+  test("sequential: compiler failure leaves publisher/verifier at zero while bisection names the culprit", async () => {
+    const dirs = await makeProject();
+    const backend = new CompilePublishVerifyBackend((dir) =>
+      manifestHasConditionalBoundary(dir)
+        ? new AlcCompileError("alc: AL0001 malformed operator replacement")
+        : undefined,
+    );
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({ backend, store, ...dirs, selectorIds });
+
+    // The gate: publisher/verifier never ran at all, for this batch or for bisection.
+    expect(backend.publisherCalls).toBe(0);
+    expect(backend.verifierCalls).toBe(0);
+    expect(backend.methodIndexAssignments).toBe(0);
+    // Exactly one production compile (the whole-artifact deploy that failed); everything
+    // bisection did after that went through compileCheck, never deploy() again.
+    expect(backend.compileViaDeployCalls).toBe(1);
+    expect(backend.compileViaCheckCalls).toBeGreaterThan(1);
+
+    const noted = report.mutants.find((m) => m.verdict === "error");
+    expect(noted?.failureNote).toContain("bisected to mutant");
+    expect(noted?.failureNote).toContain("lethal.conditional-boundary");
+    store.close();
+  });
+
+  test("worker path: the failing shard's publisher/verifier stay at zero while bisection names the culprit", async () => {
+    const dirs = await makeProject();
+    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
+    const store = new ResultsStore(":memory:");
+    const backends = new Map<number, CompilePublishVerifyBackend>();
+    const make = (workerIndex: number) => {
+      const backend = new CompilePublishVerifyBackend(
+        workerIndex === 0
+          ? (dir) => {
+              const manifest = JSON.parse(
+                readFileSync(join(dir, "mutant-manifest.json"), "utf8"),
+              ) as { mutants: Array<{ operatorName: string; procedureName: string }> };
+              const hasBoundary = manifest.mutants.some(
+                (m) =>
+                  m.operatorName === "lethal.conditional-boundary" &&
+                  m.procedureName === "IsOverBudget",
+              );
+              return hasBoundary
+                ? new AlcCompileError("alc: AL0001 malformed operator replacement")
+                : undefined;
+            }
+          : () => undefined, // worker 1 and cfg.backend (-1) always compile fine
+      );
+      backends.set(workerIndex, backend);
+      return backend;
+    };
+    const report = await runSession({
+      backend: make(-1),
+      backendFactory: make,
+      store,
+      ...dirs,
+      selectorIds,
+      workers: 2,
+    });
+
+    const worker0 = backends.get(0);
+    expect(worker0).toBeDefined();
+    if (worker0 === undefined) throw new Error("unreachable");
+    // The gate, scoped to the shard that actually hit a compiler failure: its ONE fan-out
+    // deploy() attempt failed before ever reaching publish/verify, and every bisection
+    // candidate after that went through compileCheck — publisher/verifier stayed at zero for
+    // this worker's whole search.
+    expect(worker0.publisherCalls).toBe(0);
+    expect(worker0.verifierCalls).toBe(0);
+    expect(worker0.methodIndexAssignments).toBe(0);
+    expect(worker0.compileViaDeployCalls).toBe(1);
+    expect(worker0.compileViaCheckCalls).toBeGreaterThan(1);
+
+    const noted = report.mutants.find((m) => m.verdict === "error");
+    expect(noted).toBeDefined();
+    expect(noted?.failureNote).toContain("bisected to mutant");
+    expect(noted?.failureNote).toContain("lethal.conditional-boundary");
     store.close();
   });
 });

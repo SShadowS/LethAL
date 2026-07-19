@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -7,7 +7,12 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { MutationControlClient } from "../src/activation";
-import { ArtifactCompiler, DeploymentError, defaultArtifactIo } from "../src/artifact";
+import {
+  AlcCompileError,
+  ArtifactCompiler,
+  DeploymentError,
+  defaultArtifactIo,
+} from "../src/artifact";
 import { BcDevMcpBackend } from "../src/bcdev-backend";
 import type { BcDevDeployment } from "../src/bcdev-backend";
 import { DeploymentVerifier } from "../src/deployment-verifier";
@@ -434,6 +439,191 @@ describe("BcDevMcpBackend.deploy", () => {
       expect(String(err)).toMatch(/identity mismatch/);
     } finally {
       await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("BcDevMcpBackend.compileCheck", () => {
+  test("compiles without ever spawning altool (no publish, no verify)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-bcdev-compilecheck-test-"));
+    try {
+      await writeDeployInputs(dir);
+      const calls: string[][] = [];
+      const recordingSpawn: SpawnFn = async (argv) => {
+        calls.push([...argv]);
+        const out = argv.find((a) => a.startsWith("/out:"))?.slice("/out:".length);
+        if (argv[0]?.includes("alc") && out !== undefined) {
+          await Bun.write(out, buildFakeApp({ Codeunits: [] }));
+        }
+        return { exitCode: 0, stdout: "", stderr: "" };
+      };
+      const backend = new BcDevMcpBackend(
+        { mcpCommand: ["unused"], project: "/al", server: "http://bc", serverInstance: "BC" },
+        undefined,
+        makeDeployment(dir, { Codeunits: [] }, { spawn: recordingSpawn }),
+      );
+      await backend.compileCheck(dir);
+      // Exactly the one alc invocation — never altool, unlike deploy()'s 2 calls (see the
+      // sibling "invokes compiler then deployer" test above).
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.[0]).toBe("C:/fake/alc.exe");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("throws AlcCompileError on a compiler rejection, without ever spawning altool", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-bcdev-compilecheck-fail-"));
+    try {
+      await writeDeployInputs(dir);
+      const calls: string[][] = [];
+      const failSpawn: SpawnFn = async (argv) => {
+        calls.push([...argv]);
+        if (argv[0]?.includes("alc")) return { exitCode: 1, stdout: "", stderr: "AL0001: boom" };
+        return { exitCode: 0, stdout: "", stderr: "" };
+      };
+      const backend = new BcDevMcpBackend(
+        { mcpCommand: ["unused"], project: "/al", server: "http://bc", serverInstance: "BC" },
+        undefined,
+        makeDeployment(dir, { Codeunits: [] }, { spawn: failSpawn }),
+      );
+      const err = await backend.compileCheck(dir).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(AlcCompileError);
+      expect(calls.some((c) => c[0]?.includes("altool"))).toBe(false);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("deletes the candidate .app it wrote — bisection candidates must not accumulate in outputDir", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-bcdev-compilecheck-cleanup-"));
+    try {
+      await writeDeployInputs(dir);
+      const backend = new BcDevMcpBackend(
+        { mcpCommand: ["unused"], project: "/al", server: "http://bc", serverInstance: "BC" },
+        undefined,
+        makeDeployment(dir, { Codeunits: [] }),
+      );
+      await backend.compileCheck(dir);
+      const appsAfter = (await readdir(dir)).filter((f) => f.endsWith(".app"));
+      expect(appsAfter).toHaveLength(0);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  // The specific clobber the brief warns about: `deploy()` sets `this.methodIndex`/
+  // `this.localProcedures` from whatever it just compiled, so `run()`'s coverage resolution can
+  // map a wire methodId back to a procedure name. A bisection candidate compiled through
+  // compileCheck() must NEVER replace those — they describe the REAL artifact `run()` is about
+  // to execute tests against, not a narrowed, possibly-different candidate subset.
+  //
+  // Proven end to end (not by inspecting private fields): deploy(dirA) establishes the real
+  // coverage indexes from a source tree whose local procedure is named "LogAudit". compileCheck
+  // (dirB) then compiles a DIFFERENT source tree — same codeunit id, but its local procedure is
+  // named "OtherHelper" instead. If compileCheck ever reassigned localProcedures, the
+  // methodId-999 fallback below would report "OtherHelper"; it must still report dirA's
+  // "LogAudit".
+  test("a candidate compile does not overwrite the coverage indexes deploy() established", async () => {
+    const dirA = await mkdtemp(join(tmpdir(), "lethal-bcdev-compilecheck-clobber-a-"));
+    const dirB = await mkdtemp(join(tmpdir(), "lethal-bcdev-compilecheck-clobber-b-"));
+    const outputDir = await mkdtemp(join(tmpdir(), "lethal-bcdev-compilecheck-clobber-out-"));
+    try {
+      await writeDeployInputs(dirA);
+      await writeDeployInputs(dirB);
+      await Bun.write(
+        join(dirA, "SandboxLogic.Codeunit.al"),
+        [
+          'codeunit 79000 "Sandbox Logic"',
+          "{",
+          "    procedure ApplyAudit(Amount: Decimal)",
+          "    begin",
+          "        LogAudit(Amount);",
+          "    end;",
+          "",
+          "    local procedure LogAudit(Amount: Decimal)",
+          "    begin",
+          "    end;",
+          "}",
+          "",
+        ].join("\n"),
+      );
+      await Bun.write(
+        join(dirB, "SandboxLogic.Codeunit.al"),
+        [
+          'codeunit 79000 "Sandbox Logic"',
+          "{",
+          "    procedure ApplyAudit(Amount: Decimal)",
+          "    begin",
+          "        OtherHelper(Amount);",
+          "    end;",
+          "",
+          "    local procedure OtherHelper(Amount: Decimal)",
+          "    begin",
+          "    end;",
+          "}",
+          "",
+        ].join("\n"),
+      );
+      const symbolReference = {
+        Codeunits: [
+          { Id: 79000, Name: "Sandbox Logic", Methods: [{ Id: 333, Name: "ApplyAudit" }] },
+        ],
+      };
+      const deployment = makeDeployment(outputDir, symbolReference);
+      const server = new McpServer({ name: "fake-bc-dev", version: "0.0.0" });
+      server.registerTool("bcdev_test_run", { inputSchema: anyArgs }, async () => ({
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              results: [
+                {
+                  codeunitId: 79100,
+                  method: "ClampPercentRuns",
+                  status: "passed",
+                  durationMs: 1,
+                  output: "",
+                },
+              ],
+              coverage: [
+                {
+                  testObjectId: 79100,
+                  testMethodId: 111,
+                  // methodId 333 resolves by name (ApplyAudit); methodId 999 does not (it's
+                  // `local`) and must fall back to crediting whichever local procedures
+                  // `localProcedures` currently lists for codeunit 79000.
+                  coveredProcedures: [
+                    { objectType: 5, objectId: 79000, methodId: 333 },
+                    { objectType: 5, objectId: 79000, methodId: 999 },
+                  ],
+                },
+              ],
+            }),
+          },
+        ],
+      }));
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      void server.connect(serverTransport);
+      const backend = new BcDevMcpBackend(
+        { mcpCommand: ["unused"], project: "/al", server: "http://bc", serverInstance: "BC" },
+        () => clientTransport,
+        deployment,
+      );
+
+      await backend.deploy(dirA);
+      await backend.compileCheck(dirB); // a bisection candidate against a DIFFERENT source tree
+
+      const v = await backend.run(
+        { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "ClampPercentRuns" },
+        { coverage: "procedure", timeoutMs: 5000 },
+      );
+      const procedures = v.coverage?.entries.map((e) => e.procedure).sort();
+      expect(procedures).toEqual(["ApplyAudit", "LogAudit"]);
+    } finally {
+      await rm(dirA, { recursive: true, force: true });
+      await rm(dirB, { recursive: true, force: true });
+      await rm(outputDir, { recursive: true, force: true });
     }
   });
 });

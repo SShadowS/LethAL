@@ -282,9 +282,12 @@ async function bisectAndNote(args: {
   readonly projectManifest: Readonly<Record<string, unknown>>;
   readonly appVersion: string;
   readonly artifactId: string;
-  // Promise<unknown>: bisection only cares whether the deploy THREW, never about the
-  // CompiledArtifact a publishing backend would resolve with.
-  readonly deploy: (dir: string) => Promise<unknown>;
+  // Compile-only (Task 7b, spec §8): bisection's only question is whether alc accepts a
+  // source subset. Must never publish — candidates share one appVersion/artifactId across a
+  // whole search (see prepareArtifactDir's `args.artifactId`/`args.appVersion` above), so a
+  // publishing backend would reject every candidate after the first as a version conflict, and
+  // publishing a narrowed candidate to a live server violates spec §8 regardless.
+  readonly compileCheck: (dir: string) => Promise<void>;
   readonly originalErr: unknown;
 }): Promise<string> {
   try {
@@ -306,13 +309,13 @@ async function bisectAndNote(args: {
         throw new BisectPrepareError(err);
       }
       try {
-        await args.deploy(args.scratchDir);
+        await args.compileCheck(args.scratchDir);
         return true;
       } catch (err) {
         // Only a deterministic alc rejection may be read as "this subset does not compile".
         // A publish/verification failure (DeploymentError), an fs/spawn problem
-        // (ArtifactPrepareError), or anything else propagating out of `deploy` here is NOT a
-        // compile answer — resolving `false` for it would send the search halving the mutant
+        // (ArtifactPrepareError), or anything else propagating out of `compileCheck` here is NOT
+        // a compile answer — resolving `false` for it would send the search halving the mutant
         // set chasing a problem that has nothing to do with any mutant, and could converge on
         // (and name) an innocent one. Let it abort the search instead.
         if (!(err instanceof AlcCompileError)) throw err;
@@ -493,6 +496,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         if (installed !== null) {
           const bumped = nextAbove(installed);
           lastIssuedVersion = bumped;
+          appVersion = bumped;
           await writeStampedAppJson(batchDir, projectManifest, bumped);
           try {
             compiled = await cfg.backend.deploy(batchDir);
@@ -548,7 +552,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           projectManifest,
           appVersion,
           artifactId: newArtifactId(),
-          deploy: (dir) => cfg.backend.deploy(dir),
+          compileCheck: (dir) => cfg.backend.compileCheck(dir),
           originalErr: deployErr,
         });
         for (const m of execute)
@@ -712,7 +716,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
                 projectManifest,
                 appVersion,
                 artifactId: newArtifactId(),
-                deploy: (dir) => compileLimit.run(() => backend.deploy(dir)),
+                // Keep the compileLimit wrapper: it bounds concurrent alc processes, which is
+                // exactly what bisection candidates are — compileCheck doesn't change that.
+                compileCheck: (dir) => compileLimit.run(() => backend.compileCheck(dir)),
                 originalErr: err,
               });
               for (const m of shard) {

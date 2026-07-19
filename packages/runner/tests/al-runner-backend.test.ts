@@ -171,6 +171,31 @@ describe("AlRunnerBackend artifact identity", () => {
   });
 });
 
+describe("AlRunnerBackend.compileCheck", () => {
+  // al-runner has no publish step of its own — deploy() is already just a local file copy, and
+  // the actual `alc` invocation happens lazily inside run(), per test. So bisection's
+  // compile-only seam has nothing to withhold here: compileCheck() delegating straight to the
+  // existing deploy() IS the compile-only behaviour for this backend. Proven by driving the
+  // real compileCheck() (not a re-implementation) and observing the exact same file-copy
+  // side effect deploy() itself produces.
+  test("delegates to deploy(): copies the candidate dir into <instrumentedDir>/active", async () => {
+    const { dir, backend } = await makeBackend(okSpawn({ tests: [] }).spawn);
+    const sourceDir = await mkdtemp(join(tmpdir(), "lethal-alrunner-candidate-"));
+    await writeFile(
+      join(sourceDir, "MutationSelector.Codeunit.al"),
+      "candidate placeholder",
+      "utf8",
+    );
+
+    await backend.compileCheck(sourceDir);
+
+    const activeDir = join(dir, "active");
+    expect(await readFile(join(activeDir, "MutationSelector.Codeunit.al"), "utf8")).toBe(
+      "candidate placeholder",
+    );
+  });
+});
+
 describe("AlRunnerBackend.activate", () => {
   test("rewrites MutationSelector.Codeunit.al with the hardcoded id", async () => {
     const { dir, backend } = await makeBackend(okSpawn({ tests: [] }).spawn);
@@ -371,5 +396,10 @@ describe("MsInMemoryBackend", () => {
   test("throws with a pointer to the spec", () => {
     const b = new MsInMemoryBackend();
     expect(() => b.capabilities()).toThrow(/2026-07-17-layer-4/);
+  });
+
+  test("compileCheck also throws with a pointer to the spec", () => {
+    const b = new MsInMemoryBackend();
+    expect(() => b.compileCheck()).toThrow(/2026-07-17-layer-4/);
   });
 });

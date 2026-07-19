@@ -173,6 +173,16 @@ export class AlRunnerBackend implements ExecutionBackend {
     return null;
   }
 
+  /**
+   * al-runner has no separate publish step — `deploy()` is a local file copy, and the actual
+   * `alc` invocation happens lazily inside `run()`, per test. So there is nothing bisection's
+   * compile-only seam needs to withhold here: delegating to the existing `deploy()` is the
+   * compile-only behaviour for this backend, not a stand-in for it.
+   */
+  async compileCheck(instrumentedDir: string): Promise<void> {
+    await this.deploy(instrumentedDir);
+  }
+
   private activeDir(): string {
     return this.deployedDir ?? this.cfg.instrumentedDir;
   }

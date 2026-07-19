@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { MutantManifest } from "@lethal/schemata";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -259,6 +259,29 @@ export class BcDevMcpBackend implements ExecutionBackend {
       throw new DeploymentError(outcome, publishError, verification);
     }
     return artifact;
+  }
+
+  /**
+   * Bisection's compile-only seam (Task 7b, spec §8/§10): compile the candidate and throw on a
+   * compiler rejection, exactly like `deploy()`'s prepare+compile phase — but stop there. No
+   * publish, no verify, no `recordArtifact`, and critically no `this.methodIndex` /
+   * `this.localProcedures` assignment: those describe the REAL artifact's coverage indexes, and
+   * a bisection candidate (a narrowed, possibly-malformed subset) must never clobber them out
+   * from under an in-flight `run()`.
+   *
+   * The compiled `.app` this writes is never published or consumed by anything — deleted
+   * immediately so repeated candidate compiles across a bisection search don't accumulate
+   * unboundedly in the compiler's `outputDir` (spec: candidate artifacts must not pile up across
+   * a session). `force: true` because a compile that never reached the write step (e.g. rejected
+   * before `alc` produced output) leaves nothing to delete.
+   */
+  async compileCheck(instrumentedDir: string): Promise<void> {
+    const deployment = this.deployment;
+    if (!deployment) throw new Error("BcDevMcpBackend: no compiler/deployer/verifier configured");
+    const artifact = await deployment.compiler.compile(
+      await this.prepareCompileInput(instrumentedDir),
+    );
+    await rm(artifact.appPath, { force: true });
   }
 
   async activate(mutantId: string | null): Promise<void> {
