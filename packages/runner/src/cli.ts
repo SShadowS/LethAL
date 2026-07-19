@@ -12,7 +12,6 @@ import { generateMutationSet, runSession } from "./orchestrator";
 import { Publisher, defaultAlToolPaths, defaultSpawn } from "./publisher";
 import { renderConsole, writeJsonReport } from "./report";
 import type { SessionReport } from "./report";
-import { batchByOverlap } from "./selection";
 import { ResultsStore } from "./store";
 
 /**
@@ -359,27 +358,25 @@ function lineOfIndex(source: string, index: number): number {
   return line;
 }
 
+/**
+ * One artifact per session (Layer 4.3): overlapping mutants coalesce into a
+ * flat dispatch chain at compile time, so every site generated for the
+ * project lands in a single batch — there's nothing left to split by overlap.
+ */
 async function printDryRun(projectDir: string): Promise<void> {
   const files = await generateMutationSet(projectDir);
   const sites = files.flatMap((f) =>
     f.specs.map((spec) => ({
       file: f.path,
-      startIndex: spec.before.startIndex,
-      endIndex: spec.before.endIndex,
       operatorName: spec.operatorName,
       line: lineOfIndex(f.source, spec.before.startIndex),
     })),
   );
-  const batches = batchByOverlap(sites);
 
-  console.log(
-    `dry run: ${files.length} file(s), ${sites.length} mutant site(s), ${batches.length} batch(es)`,
-  );
-  for (const [i, batch] of batches.entries()) {
-    console.log(`\nbatch ${i} (${batch.length} mutant site(s)):`);
-    for (const s of batch) {
-      console.log(`  ${s.file}:${s.line}  ${s.operatorName}`);
-    }
+  console.log(`dry run: ${files.length} file(s), ${sites.length} mutant site(s), 1 batch(es)`);
+  console.log(`\nbatch 0 (${sites.length} mutant site(s)):`);
+  for (const s of sites) {
+    console.log(`  ${s.file}:${s.line}  ${s.operatorName}`);
   }
 }
 

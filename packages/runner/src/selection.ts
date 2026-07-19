@@ -41,35 +41,6 @@ export function filterHistory(
   return { execute, knownSurvivors };
 }
 
-export interface OverlapSite {
-  readonly file: string;
-  readonly startIndex: number;
-  readonly endIndex: number;
-}
-
-function overlaps<T extends OverlapSite>(a: T, b: T): boolean {
-  return a.file === b.file && a.startIndex < b.endIndex && b.startIndex < a.endIndex;
-}
-
-export function batchByOverlap<T extends OverlapSite>(mutants: readonly T[]): T[][] {
-  const sorted = [...mutants].sort(
-    (a, b) => a.file.localeCompare(b.file) || a.startIndex - b.startIndex,
-  );
-  const batches: T[][] = [];
-  for (const m of sorted) {
-    let placed = false;
-    for (const batch of batches) {
-      if (!batch.some((x) => overlaps(x, m))) {
-        batch.push(m);
-        placed = true;
-        break;
-      }
-    }
-    if (!placed) batches.push([m]);
-  }
-  return batches;
-}
-
 export type CoverageIndex = ReadonlyMap<string, ReadonlySet<string>>;
 
 export interface CoverageSplit {

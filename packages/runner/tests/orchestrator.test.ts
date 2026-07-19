@@ -47,16 +47,18 @@ const NO_MUTANTS_AL = `codeunit 79002 "Sandbox NoOp"
 }
 `;
 
-// Two independent, non-nested procedures for the parallel-workers concurrency
-// probe below. The standard `TARGET_AL` fixture's single comparison produces
-// exactly 3 mutants (empty-block on the procedure body, return-value on the
-// exit statement, conditional-boundary on the comparison) that are ALL nested
-// inside one another — `batchByOverlap` (packages/runner/src/selection.ts)
-// forbids any overlap within a batch, so those 3 mutants always land in 3
-// separate batches of exactly 1, and a batch of 1 mutant can never be
-// sharded across >1 worker no matter how correct the fan-out is. Two disjoint
-// procedure bodies never overlap, so each of the 3 batches instead gets one
-// mutant from each procedure (2 per batch) — enough to actually shard.
+// Two independent, non-nested procedures. Used below for worker-sharding
+// tests and for coverage-filter tests that need mutants split across two
+// distinctly-identifiable procedures (e.g. "only IsOverBudget's procedure is
+// covered"). Historically this fixture existed because `batchByOverlap`
+// forbade any overlap within a batch, so `TARGET_AL`'s 3 nested mutants
+// (empty-block on the procedure body, return-value on the exit statement,
+// conditional-boundary on the comparison) always landed in 3 separate
+// batches of exactly 1, and a batch of 1 mutant could never be sharded
+// across >1 worker no matter how correct the fan-out was. Layer 4.3 removed
+// overlap batching (every mutant compiles into the same single artifact
+// regardless of overlap), so that constraint is gone — `TARGET_AL`'s 3
+// mutants shard across workers directly now too.
 const TWO_PROC_AL = `codeunit 79000 "Sandbox Logic"
 {
     procedure IsOverBudget(Amount: Decimal; Budget: Decimal): Boolean
@@ -71,14 +73,17 @@ const TWO_PROC_AL = `codeunit 79000 "Sandbox Logic"
 }
 `;
 
-// Three independent, non-nested procedures — for the fractional-workers
-// test below specifically, which needs a batch with >=3 shardable mutants.
-// With TWO_PROC_AL (2 per batch), `shardEvenly(items, 2.5)` never actually
-// drops anything: `Array.from({length: 2.5}, ...)` truncates to a length-2
-// shard array, but with only 2 items, `i % 2.5` for i=0,1 is just 0 and 1 —
-// both land inside the truncated array. The bug only surfaces once an index
-// >=2 is reached (`2 % 2.5 === 2`, out of the truncated array's bounds), so
-// a third independent procedure is needed to prove the fix actually matters.
+// Three independent, non-nested procedures — used by the fractional-workers
+// test below, which needs several shardable mutants to prove the flooring
+// fix matters. Historically (pre-Layer-4.3, when `shardEvenly` ran once per
+// batch) TWO_PROC_AL's exactly-2-mutants-per-batch made `i % 2.5` for i=0,1
+// land safely inside `Array.from({length: 2.5}, ...)`'s truncated 2-element
+// shard array — the drop bug only surfaces once an index >=2 is reached
+// (`2 % 2.5 === 2`, out of the truncated array's bounds), so a third
+// procedure was needed to reach it. With overlap batching removed,
+// `shardEvenly` now runs once over every mutant in the single artifact, so
+// this fixture is no longer uniquely load-bearing for that — THREE_PROC_AL's
+// 9 mutants still comfortably exercise the fix.
 const THREE_PROC_AL = `codeunit 79000 "Sandbox Logic"
 {
     procedure IsOverBudget(Amount: Decimal; Budget: Decimal): Boolean
@@ -505,13 +510,12 @@ describe("runSession — parallel workers", () => {
     expect(orders[2]).toEqual(orders[0]);
   });
 
-  // The test above reuses the standard single-comparison fixture, which
-  // (see TWO_PROC_AL comment) always produces exactly 1 mutant per batch —
-  // shardEvenly then has only one non-empty shard no matter the worker
-  // count, so that test alone never actually exercises >1 concurrently
-  // executing shard whose verdicts must agree. This test uses TWO_PROC_AL so
-  // every batch really does contain 2 shardable mutants, genuinely stressing
-  // cross-shard determinism.
+  // The test above reuses the standard single-comparison fixture; since
+  // Layer 4.3 (see TWO_PROC_AL comment) it too now shards its 3 mutants
+  // across workers, so it already exercises >1 concurrently executing
+  // shard. This test additionally uses TWO_PROC_AL so the cross-shard
+  // determinism check is stressed with mutants spanning two independent
+  // procedures, not just three sites within one.
   test("verdicts are identical at 1, 2 and 4 workers when a batch has multiple shardable mutants", async () => {
     const shape = (r: Awaited<ReturnType<typeof runSession>>) =>
       [...r.mutants].map((m) => `${m.file}:${m.line}:${m.operatorName}:${m.verdict}`).sort();
@@ -530,14 +534,16 @@ describe("runSession — parallel workers", () => {
       const dirs = await makeProject();
       await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
       const store = new ResultsStore(":memory:");
-      // Worker 0 (shardEvenly's round-robin always gives it the LOWER-
-      // startIndex mutant, IsOverBudget) is made artificially slower than
-      // worker 1 (the later-position IsUnderBudget mutant). Without
-      // runSession's outcomes.sort(), worker 1 would finish and call
-      // record() first, so the raw accumulation order would come out
-      // file-position-reversed relative to the workers=1 baseline — the sort
-      // is what makes this test's order assertion pass regardless of which
-      // worker happens to finish first.
+      // Worker 0 is made artificially slower than worker 1. (shardEvenly's
+      // round-robin no longer aligns worker assignment with procedure
+      // identity post-Layer-4.3 — both workers get a mix of IsOverBudget's
+      // and IsUnderBudget's mutants — so this no longer cleanly slows "the
+      // IsOverBudget worker"; it doesn't need to.) Without runSession's
+      // outcomes.sort(), whichever worker finishes first would call
+      // record() first, so the raw accumulation order could come out
+      // different from the workers=1 baseline depending on scheduling — the
+      // sort is what makes this test's order assertion pass regardless of
+      // which worker happens to finish first.
       const make = (workerIndex: number) =>
         new StubBackend(
           caps,
@@ -614,13 +620,18 @@ describe("runSession — parallel workers", () => {
       isolation: "full-reset",
       authoritative: false,
     };
-    // shardEvenly's round-robin always sends the lower-startIndex mutant
-    // (IsOverBudget) to worker 0 and the other (IsUnderBudget) to worker 1.
-    // Worker 0's backend always fails to deploy; worker 1's succeeds and
-    // kills its mutant normally. Mirrors the sequential per-batch deploy
-    // try/catch (step 3 in orchestrator.ts): a deploy failure must record
-    // every mutant in the affected shard as "error" and let the session
-    // continue, not reject the whole `runSession` call.
+    // Layer 4.3 collapsed overlap batching to a single artifact, so
+    // shardEvenly's round-robin (index % workers) no longer aligns with
+    // procedure boundaries — worker 0 and worker 1 each get a mix of
+    // IsOverBudget's and IsUnderBudget's mutants, 3 of TWO_PROC_AL's 6 total
+    // apiece. That mix doesn't matter here (unlike the coverage-scoped test
+    // below): every mutant behaves identically regardless of procedure, so
+    // worker 0's shard (deploy always fails) records 3 errors and worker 1's
+    // shard (deploy always succeeds) kills its 3, whichever specific mutants
+    // land where. Mirrors the sequential per-artifact deploy try/catch (step
+    // 3 in orchestrator.ts): a deploy failure must record every mutant in
+    // the affected shard as "error" and let the session continue, not
+    // reject the whole `runSession` call.
     const make = (workerIndex: number) =>
       new StubBackend(
         caps,
@@ -636,8 +647,9 @@ describe("runSession — parallel workers", () => {
       selectorIds,
       workers: 2,
     });
-    // 3 batches: worker 0's mutant errors every time, worker 1's is killed
-    // every time — the deploy failure never propagates past its own shard.
+    // 6 total mutants split 3/3 across the two workers: worker 0's 3 error,
+    // worker 1's 3 are killed — the deploy failure never propagates past its
+    // own shard.
     expect(report.counts.errors).toBe(3);
     expect(report.counts.killed).toBe(3);
     expect(report.counts.survived).toBe(0);
@@ -649,16 +661,26 @@ describe("runSession — parallel workers", () => {
     await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
     const store = new ResultsStore(":memory:");
     // Procedure-level coverage (CAPS_NST), covering ONLY IsOverBudget's
-    // procedure — IsUnderBudget's mutant is therefore uncovered and already
-    // recorded "no-coverage" by step 5, before the per-mutant fan-out ever
-    // runs. shardEvenly's round-robin sends IsOverBudget's mutant (lower
-    // startIndex) to worker 0 and IsUnderBudget's (the uncovered one) to
-    // worker 1. Worker 1's backend always fails to deploy: without the
+    // procedure — all 3 of IsUnderBudget's mutants are therefore uncovered
+    // and already recorded "no-coverage" by step 5, ONCE EACH (Layer 4.3:
+    // one artifact means step 5's coverage filter runs once over every
+    // mutant, not once per batch), before the per-mutant fan-out ever runs.
+    //
+    // TWO_PROC_AL's 6 mutants sort (by file, startIndex) as IsOverBudget's 3
+    // then IsUnderBudget's 3 (indices 0-2, 3-5). Since there's only one
+    // artifact now, shardEvenly's round-robin (index % workers) no longer
+    // has a per-batch boundary to align on, so it interleaves the two
+    // procedures instead of cleanly separating them: worker 0 gets indices
+    // 0, 2, 4 (IsOverBudget's 1st + 3rd mutants, plus IsUnderBudget's 2nd);
+    // worker 1 gets indices 1, 3, 5 (IsOverBudget's 2nd, plus IsUnderBudget's
+    // 1st + 3rd). Worker 1's backend always fails to deploy: without the
     // `perMutantTests.get(...) === undefined` skip in the deploy-failure
-    // catch, the uncovered IsUnderBudget mutant would be recorded a SECOND
-    // time as "error" — `mutants` has no unique constraint on (run_id,
-    // mutant_code), so `recordMutant`'s plain INSERT would silently
-    // duplicate the row rather than fail loudly.
+    // catch, its two already-no-coverage IsUnderBudget mutants would be
+    // recorded a SECOND time as "error" — `mutants` has no unique constraint
+    // on (run_id, mutant_code), so `recordMutant`'s plain INSERT would
+    // silently duplicate the row rather than fail loudly. Its one covered
+    // mutant (IsOverBudget's 2nd) has nothing recorded yet, so the deploy
+    // failure legitimately records it as "error".
     const make = (workerIndex: number) =>
       new StubBackend(
         CAPS_NST,
@@ -674,12 +696,12 @@ describe("runSession — parallel workers", () => {
       selectorIds,
       workers: 2,
     });
-    // 3 batches, 2 mutants each = 6 total — never 9 (which would mean
-    // IsUnderBudget's mutant landed under both no-coverage and error).
+    // 6 total — never 9 (which would mean an IsUnderBudget mutant landed
+    // under both no-coverage and error).
     expect(report.mutants.length).toBe(6);
-    expect(report.counts.noCoverage).toBe(3); // IsUnderBudget's mutant, once per batch
-    expect(report.counts.errors).toBe(0); // never re-recorded via worker 1's deploy failure
-    expect(report.counts.killed).toBe(3); // IsOverBudget's mutant, worker 0 deploys fine
+    expect(report.counts.noCoverage).toBe(3); // IsUnderBudget's 3 mutants, recorded once each
+    expect(report.counts.errors).toBe(1); // IsOverBudget's mutant on worker 1's shard
+    expect(report.counts.killed).toBe(2); // IsOverBudget's other 2 mutants, on worker 0's shard
     // Belt-and-suspenders: no single mutant identity appears under both verdicts.
     const noCoverageKeys = new Set(
       report.mutants.filter((m) => m.verdict === "no-coverage").map((m) => `${m.file}:${m.line}`),
@@ -703,14 +725,17 @@ describe("runSession — parallel workers", () => {
       isolation: "full-reset",
       authoritative: false,
     };
-    // Worker 0 (the lower-startIndex IsOverBudget mutant) is slow — 30ms per
-    // run(). Worker 1 (IsUnderBudget) errors on every active-mutant run,
-    // tripping the I7 "two consecutive transport errors" abort almost
-    // immediately. If runSession rethrew as soon as worker 1's shard
-    // rejected (plain `Promise.all` semantics) instead of waiting for every
-    // shard to settle (`Promise.allSettled`), worker 0 could still be
-    // mid-flight — and, worse, a caller reacting to the rejection by closing
-    // the store could race a still-running worker 0's write to it.
+    // Worker 0 is slow — 30ms per run(). Worker 1 errors on every
+    // active-mutant run, tripping the I7 "two consecutive transport errors"
+    // abort almost immediately. (Both behaviors key on workerIndex, not on
+    // which specific mutants land in a shard — shardEvenly's round-robin no
+    // longer aligns shard composition with procedure identity post-Layer-4.3,
+    // so each shard now holds a mix of IsOverBudget's and IsUnderBudget's
+    // mutants.) If runSession rethrew as soon as worker 1's shard rejected
+    // (plain `Promise.all` semantics) instead of waiting for every shard to
+    // settle (`Promise.allSettled`), worker 0 could still be mid-flight —
+    // and, worse, a caller reacting to the rejection by closing the store
+    // could race a still-running worker 0's write to it.
     const make = (workerIndex: number) =>
       new StubBackend(
         caps,
@@ -779,9 +804,15 @@ describe("runSession — parallel workers", () => {
       selectorIds,
       workers: 2,
     });
-    // TWO_PROC_AL yields 3 batches. If worker backends were rebuilt every
-    // batch (the bug), the factory would run 1 (cfg.backend) + 3 batches * 2
-    // workers = 7 times; built once per session it's 1 + 2 = 3.
+    // TWO_PROC_AL yields exactly 1 artifact (Layer 4.3 collapsed overlap
+    // batching), so this can no longer observationally distinguish "built
+    // once per session" from "built once per artifact" the way it could
+    // when TWO_PROC_AL yielded 3 batches (the bug would have run the
+    // factory 1 (cfg.backend) + 3 batches * 2 workers = 7 times, vs. 1 + 2 =
+    // 3 once fixed). The invariant this asserts — workerBackends are built
+    // once, outside the artifacts loop, and reused across it — still holds
+    // structurally; Task 6's multi-artifact bisection will make it
+    // observable here again.
     expect(factoryCalls).toBe(3);
     // Exactly the 2 worker backends close, each exactly once — cfg.backend
     // is caller-owned (see cli.ts) and is never closed by runSession itself.
@@ -791,11 +822,10 @@ describe("runSession — parallel workers", () => {
 
   test("a fractional workers count is floored, not silently dropping mutants", async () => {
     const dirs = await makeProject();
-    // THREE_PROC_AL, not TWO_PROC_AL: with only 2 shardable mutants per
-    // batch, `i % 2.5` for i=0,1 never lands outside shardEvenly's
-    // (length-truncated) 2-element shard array, so the drop bug needs a
-    // batch with >=3 items to actually manifest — see THREE_PROC_AL's
-    // comment.
+    // THREE_PROC_AL, not TWO_PROC_AL: needs >=3 shardable mutants in a
+    // single sharding call for the drop bug to manifest (`i % 2.5` for
+    // i=0,1 never lands outside shardEvenly's length-truncated 2-element
+    // shard array) — see THREE_PROC_AL's comment.
     await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), THREE_PROC_AL);
     const store = new ResultsStore(":memory:");
     const caps: BackendCapabilities = {
@@ -813,12 +843,13 @@ describe("runSession — parallel workers", () => {
       selectorIds,
       workers: 2.5,
     });
-    // 3 batches * 3 mutants each = 9. Before flooring, shardEvenly(execute, 2.5)
-    // built a length-2 shard array (Array.from truncates a fractional
-    // `length`) while still computing target indices via `i % 2.5`, so the
-    // 3rd item each batch (index 2, `2 % 2.5 === 2`, outside the truncated
-    // array) was silently dropped by shardEvenly's `if (target !== undefined)`
-    // guard — no error, just fewer mutants in the report than were generated.
+    // 9 total (3 procedures * 3 mutants each, all in the single Layer-4.3
+    // artifact). Before flooring, shardEvenly(execute, 2.5) built a
+    // length-2 shard array (Array.from truncates a fractional `length`)
+    // while still computing target indices via `i % 2.5`, so an item whose
+    // index (e.g. 2, `2 % 2.5 === 2`) fell outside the truncated array was
+    // silently dropped by shardEvenly's `if (target !== undefined)` guard —
+    // no error, just fewer mutants in the report than were generated.
     expect(report.mutants.length).toBe(9);
     expect(report.counts.killed).toBe(9);
     store.close();
@@ -1063,5 +1094,19 @@ describe("mutation score — timeout-killed contribution", () => {
     });
     // No killed, timeout-killed, or survived mutants
     expect(report.mutationScore).toBeNull();
+  });
+});
+
+describe("runSession — single artifact", () => {
+  test("a project whose mutants overlap still deploys exactly once", async () => {
+    const dirs = await makeProject();
+    const backend = new StubBackend(CAPS_NST, (mutant) => (mutant === null ? "pass" : "fail"), [
+      "IsOverBudget",
+    ]);
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({ backend, store, ...dirs, selectorIds });
+    expect(backend.deploys).toHaveLength(1);
+    expect(report.batches).toBe(1);
+    store.close();
   });
 });

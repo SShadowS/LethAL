@@ -2,11 +2,9 @@ import { access, copyFile, readFile, readdir, writeFile } from "node:fs/promises
 import { basename, join } from "node:path";
 import { tier1Operators } from "@lethal/builtin-tier1";
 import {
-  type ALSyntaxNode,
   type MutationSpec,
   buildSemanticContext,
   buildSpanIndex,
-  findEnclosingStatement,
   initParser,
   parseAL,
   validateSpec,
@@ -26,8 +24,6 @@ import { Semaphore, shardEvenly } from "./pool";
 import { buildReport } from "./report";
 import type { SessionOutcome, SessionReport } from "./report";
 import {
-  type OverlapSite,
-  batchByOverlap,
   buildCoverageIndex,
   coverageFilter,
   filterHistory,
@@ -45,9 +41,10 @@ const BASELINE_TIMEOUT_DEFAULT = 120_000;
  * ops -> compile -> write pipeline exercised by
  * `packages/builtin-tier1/tests/end-to-end.test.ts`: build a per-file
  * semantic context, walk the tree, and collect every spec each operator
- * targets. Overlap resolution is deliberately NOT done here — that is
- * `batchByOverlap`'s job downstream, since overlapping mutants still need to
- * run, just in separate batches.
+ * targets. Overlap resolution isn't needed here (or anywhere downstream
+ * post-Layer-4.3): overlapping mutants coalesce into one flat dispatch chain
+ * at compile time (`compileSchemataForFile`), so every spec this returns runs
+ * behind its own guard in the same single instrumented artifact.
  */
 export async function generateMutationSet(projectDir: string): Promise<InstrumentedFile[]> {
   await initParser();
@@ -108,43 +105,6 @@ export interface SessionConfig {
 /** Alias kept for readability at call sites within this module. */
 type SessionVerdict = MutantVerdict;
 
-interface SiteEntry extends OverlapSite {
-  readonly spec: MutationSpec;
-  readonly sourceFile: InstrumentedFile;
-}
-
-/**
- * The range `batchByOverlap` must treat as "claimed" by this spec — NOT
- * always `spec.before`'s own range.
- *
- * `schemata`'s compiler (`compile.ts`'s `applyWrap`/`applyDuplicate`, used
- * for `statement-position`/`short-circuit-operand` specs) doesn't rewrite
- * `spec.before` directly: it walks up to the narrowest *enclosing statement*
- * (`findEnclosingStatement`) and replaces that whole statement. Two specs
- * whose `before` nodes are disjoint sub-expressions of the SAME statement
- * (e.g. `conditional-boundary` firing on both sides of
- * `(Value < 0) or (Value > 100)`) therefore don't overlap by `before`
- * range, but collide at compile time on the same statement node
- * (`compileSchemataForFile`'s "two specs resolved to the same AST node"
- * throw) if the naive `before`-range overlap check lets them share a batch.
- * Widening the overlap range to the resolved statement here makes
- * `batchByOverlap` split them into separate batches instead.
- *
- * `expression-position` (lift) specs are unaffected: they never go through
- * `findEnclosingStatement` — multiple lifts landing in the same code block
- * are coordinated into one merged rewrite by
- * `compile.ts`'s `commitLiftRewrites`, not a collision.
- */
-function overlapRangeOf(spec: MutationSpec): { startIndex: number; endIndex: number } {
-  if (spec.parentContext === "expression-position") {
-    return { startIndex: spec.before.startIndex, endIndex: spec.before.endIndex };
-  }
-  const statement = findEnclosingStatement(spec.before);
-  return statement
-    ? { startIndex: statement.startIndex, endIndex: statement.endIndex }
-    : { startIndex: spec.before.startIndex, endIndex: spec.before.endIndex };
-}
-
 export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   const caps = cfg.backend.capabilities();
   const status = await cfg.backend.status();
@@ -169,19 +129,12 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   });
 
   const allFiles = await generateMutationSet(cfg.projectDir);
-  const allSpecs: SiteEntry[] = allFiles.flatMap((f) =>
-    f.specs.map((spec) => {
-      const site = overlapRangeOf(spec);
-      return {
-        file: f.path,
-        startIndex: site.startIndex,
-        endIndex: site.endIndex,
-        spec,
-        sourceFile: f,
-      };
-    }),
-  );
-  const specBatches = batchByOverlap(allSpecs);
+  // One artifact: overlapping mutants now coalesce into flat dispatch chains
+  // (Layer 4.3), so there is nothing left for overlap batching to separate.
+  // The artifact-splitting SEAM is deliberately retained for size budget and
+  // compile-failure bisection (design spec §6) — hence batchIdx/batchCount stay.
+  const batchIdx = 0;
+  const artifacts = [allFiles];
 
   const outcomes: SessionOutcome[] = []; // internal accumulation for the report
   let baselineGreenOverall = true;
@@ -221,28 +174,11 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         workerBackends.push(factory(i));
       }
     }
-    for (const [batchIdx, batchSpecs] of specBatches.entries()) {
-      // 1. write instrumented project for THIS batch's specs only
-      const byFile = new Map<
-        string,
-        { source: string; root: ALSyntaxNode; specs: MutationSpec[] }
-      >();
-      for (const s of batchSpecs) {
-        const existing = byFile.get(s.file);
-        if (existing) existing.specs.push(s.spec);
-        else
-          byFile.set(s.file, {
-            source: s.sourceFile.source,
-            root: s.sourceFile.root,
-            specs: [s.spec],
-          });
-      }
-      const batchFiles: InstrumentedFile[] = [...byFile.entries()].map(([path, v]) => ({
-        path,
-        source: v.source,
-        root: v.root,
-        specs: v.specs,
-      }));
+    for (const batchFiles of artifacts) {
+      // 1. write the instrumented project for this artifact — currently
+      // always every file `generateMutationSet` found (single artifact); a
+      // future bisection split (Task 6) would make `artifacts` hold more
+      // than one element here.
       const batchDir = join(cfg.instrumentedDir, `run-${runId}-batch-${batchIdx}`);
       await writeInstrumentedProject({
         targetDir: batchDir,
@@ -430,7 +366,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   }
 
   cfg.store.finishRun(runId, {
-    batchCount: specBatches.length,
+    batchCount: artifacts.length,
     baselineGreen: baselineGreenOverall,
   });
   // Sort accumulated outcomes so report ordering never depends on which
@@ -446,7 +382,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   return buildReport({
     caps,
     baselineGreen: baselineGreenOverall,
-    batches: specBatches.length,
+    batches: artifacts.length,
     outcomes,
   });
 }
