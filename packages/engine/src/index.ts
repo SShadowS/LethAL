@@ -42,7 +42,7 @@ export type {
   SemanticCapability,
   AstNodeId,
 } from "./operator/interface";
-export { validateSpec } from "./operator/spec-validation";
+export { buildSpanIndex, validateSpec } from "./operator/spec-validation";
 export type { ValidationResult } from "./operator/spec-validation";
 export { createRegistry } from "./operator/registry";
 export type { Registry } from "./operator/registry";

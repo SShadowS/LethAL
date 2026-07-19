@@ -5,6 +5,7 @@ import {
   type ALSyntaxNode,
   type MutationSpec,
   buildSemanticContext,
+  buildSpanIndex,
   findEnclosingStatement,
   initParser,
   parseAL,
@@ -58,6 +59,10 @@ export async function generateMutationSet(projectDir: string): Promise<Instrumen
     const source = await readFile(join(projectDir, rel), "utf8");
     const root = wrapRoot(parseAL(source));
     const ctx = buildSemanticContext([{ path: rel, root }]);
+    // Built once per file (not per spec): a per-spec tree walk here would be
+    // O(specs x nodes) on a file with many mutation sites. See
+    // `buildSpanIndex`'s doc comment in @lethal/engine.
+    const spanIndex = buildSpanIndex(root);
     const specs: MutationSpec[] = [];
     visit(root, (node) => {
       for (const op of tier1Operators) {
@@ -66,7 +71,15 @@ export async function generateMutationSet(projectDir: string): Promise<Instrumen
             // Reject specs whose `before` isn't a real node in this file's
             // tree — coalescing (Layer 4.3) relies on mutation sites being
             // laminar, which a synthetic multi-node span could violate.
-            if (validateSpec(spec, root).ok) specs.push(spec);
+            const validation = validateSpec(spec, root, spanIndex);
+            if (validation.ok) {
+              specs.push(spec);
+            } else {
+              console.warn(
+                `[lethal] rejected mutation spec from operator "${spec.operatorName}" ` +
+                  `(before span ${spec.before.startIndex}..${spec.before.endIndex}): ${validation.error}`,
+              );
+            }
           }
         }
       }
