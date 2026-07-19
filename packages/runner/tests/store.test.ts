@@ -160,9 +160,9 @@ CREATE TABLE IF NOT EXISTS mutants (
         store.close();
 
         const check = new Database(dbPath);
-        const row = check
-          .query("SELECT failure_note FROM mutants WHERE id = ?")
-          .get(rowId) as { failure_note: string | null };
+        const row = check.query("SELECT failure_note FROM mutants WHERE id = ?").get(rowId) as {
+          failure_note: string | null;
+        };
         check.close();
         expect(row.failure_note).toBe("compile failed; bisected to mutant M0001");
       } finally {

@@ -174,10 +174,7 @@ export function narrowFilesToSubset(
       const key = specKey(f.path, spec);
       if (seen.has(key)) {
         throw new Error(
-          `narrowFilesToSubset: duplicate spec key — two specs collide on ` +
-            `(${f.path}, ${spec.before.startIndex}..${spec.before.endIndex}, ${spec.operatorName}); ` +
-            `the (file, span, operator) triple can no longer identify a single mutant, ` +
-            `so bisection narrowing would silently include both`,
+          `narrowFilesToSubset: duplicate spec key — two specs collide on (${f.path}, ${spec.before.startIndex}..${spec.before.endIndex}, ${spec.operatorName}); the (file, span, operator) triple can no longer identify a single mutant, so bisection narrowing would silently include both`,
         );
       }
       seen.add(key);
@@ -226,17 +223,6 @@ async function prepareArtifactDir(args: {
 }
 
 /**
- * Bisects `subsetMutants` against a `deploy`-shaped compile check, reusing
- * `scratchDir` for every candidate via `prepareArtifactDir`. Shared by the
- * sequential deploy-failure path (step 3) and every worker shard's own
- * deploy-failure path (`workers > 1`, step 6) — same algorithm and the same
- * artifact-preparation helper, just a different mutant subset and a
- * different backend/compile-limit to deploy through.
- *
- * `scratchDir` is removed once bisection finishes, win or lose — a failed
- * batch must not leave a scratch artifact behind on disk indefinitely.
- */
-/**
  * Distinguishes "preparing the candidate artifact failed" (a filesystem/
  * instrumentation problem on OUR side) from "the candidate artifact failed
  * to compile" — only the latter may steer the bisection search. Without
@@ -250,6 +236,17 @@ class BisectPrepareError extends Error {
   }
 }
 
+/**
+ * Bisects `subsetMutants` against a `deploy`-shaped compile check, reusing
+ * `scratchDir` for every candidate via `prepareArtifactDir`. Shared by the
+ * sequential deploy-failure path (step 3) and every worker shard's own
+ * deploy-failure path (`workers > 1`, step 6) — same algorithm and the same
+ * artifact-preparation helper, just a different mutant subset and a
+ * different backend/compile-limit to deploy through.
+ *
+ * `scratchDir` is removed once bisection finishes, win or lose — a failed
+ * batch must not leave a scratch artifact behind on disk indefinitely.
+ */
 async function bisectAndNote(args: {
   readonly subsetMutants: readonly MutantManifestEntry[];
   readonly scratchDir: string;
@@ -289,24 +286,13 @@ async function bisectAndNote(args: {
       case "no-repro":
         return String(args.originalErr);
       case "environmental":
-        return (
-          `deploy failed for a reason that is not attributable to any mutant ` +
-          `(${outcome.detail}) — likely environmental (e.g. app-version monotonicity, ` +
-          `transport, licence): ${String(args.originalErr)}`
-        );
+        return `deploy failed for a reason that is not attributable to any mutant (${outcome.detail}) — likely environmental (e.g. app-version monotonicity, transport, licence): ${String(args.originalErr)}`;
       case "culprit":
-        return (
-          `compile failed; bisected to mutant ${outcome.culprit.mutantId} ` +
-          `(${outcome.culprit.file}:${outcome.culprit.startLine} ${outcome.culprit.operatorName})` +
-          `, confirmed: fails alone, complement compiles`
-        );
+        return `compile failed; bisected to mutant ${outcome.culprit.mutantId} (${outcome.culprit.file}:${outcome.culprit.startLine} ${outcome.culprit.operatorName}), confirmed: fails alone, complement compiles`;
     }
   } catch (err) {
     if (err instanceof BisectPrepareError) {
-      return (
-        `${String(args.originalErr)} (bisection aborted: preparing a candidate ` +
-        `artifact failed — ${err.message})`
-      );
+      return `${String(args.originalErr)} (bisection aborted: preparing a candidate artifact failed — ${err.message})`;
     }
     throw err;
   } finally {

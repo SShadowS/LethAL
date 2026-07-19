@@ -1,5 +1,13 @@
 import { beforeAll, describe, expect, it } from "bun:test";
-import { ALNodeKind, findAll, findFirst, initParser, parseAL, visit, wrapRoot } from "@lethal/engine";
+import {
+  ALNodeKind,
+  findAll,
+  findFirst,
+  initParser,
+  parseAL,
+  visit,
+  wrapRoot,
+} from "@lethal/engine";
 import type { ALSyntaxNode, MutationSpec } from "@lethal/engine";
 import { compileSchemataForFile } from "../src/compile";
 
@@ -446,7 +454,11 @@ describe("compileSchemataForFile — member splice reproduces a consumed termina
     const root = wrapRoot(parseAL(src));
     const cmp = findFirst(root, ALNodeKind.comparison_expression);
     const inner = findAll(root, ALNodeKind.block)[2];
-    if (cmp === null || inner === undefined || !inner.text.startsWith("begin\n                A := A;")) {
+    if (
+      cmp === null ||
+      inner === undefined ||
+      !inner.text.startsWith("begin\n                A := A;")
+    ) {
       throw new Error("fixture drift");
     }
 
@@ -485,7 +497,11 @@ describe("compileSchemataForFile — member splice reproduces a consumed termina
     const root = wrapRoot(parseAL(src));
     const cmp = findFirst(root, ALNodeKind.comparison_expression);
     const inner = findAll(root, ALNodeKind.block)[1];
-    if (cmp === null || inner === undefined || !inner.text.startsWith("begin\n            Y := 1;")) {
+    if (
+      cmp === null ||
+      inner === undefined ||
+      !inner.text.startsWith("begin\n            Y := 1;")
+    ) {
       throw new Error("fixture drift");
     }
 

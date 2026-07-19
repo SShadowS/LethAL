@@ -52,7 +52,9 @@ try {
   console.log(
     `fixed scaffolding:    ${fixedScaffolding} bytes (Mutation* files — constant per artifact, excluded from growth)`,
   );
-  console.log(`total emitted:        ${instrumentedSource + fixedScaffolding} bytes (${totalRatio.toFixed(2)}x incl. scaffolding)`);
+  console.log(
+    `total emitted:        ${instrumentedSource + fixedScaffolding} bytes (${totalRatio.toFixed(2)}x incl. scaffolding)`,
+  );
   console.log(
     `source growth:        ${sourceRatio.toFixed(2)}x  (~${marginalPerMutant.toFixed(0)} marginal bytes/mutant)`,
   );

@@ -1346,7 +1346,10 @@ describe("runSession — bisection on compile failure", () => {
       undefined,
       // Every deploy fails identically, whatever the manifest contains —
       // the environmental shape.
-      () => new Error("Cannot install the extension because a newer version 1.0.27.3 was already installed"),
+      () =>
+        new Error(
+          "Cannot install the extension because a newer version 1.0.27.3 was already installed",
+        ),
     );
     const store = new ResultsStore(":memory:");
     const report = await runSession({ backend, store, ...dirs, selectorIds });

@@ -49,7 +49,6 @@ function spliceIntoRoot(root: Component["root"], m: ComponentMember): string {
   // one there would orphan the else (AL0110). Inferring from kind regressed
   // emission in both directions once already (Task 3).
   const consumed = text.slice(relStart, relEnd);
-  const needsTerminator =
-    consumed.trimEnd().endsWith(";") && !m.afterText.trimEnd().endsWith(";");
+  const needsTerminator = consumed.trimEnd().endsWith(";") && !m.afterText.trimEnd().endsWith(";");
   return text.slice(0, relStart) + m.afterText + (needsTerminator ? ";" : "") + text.slice(relEnd);
 }
