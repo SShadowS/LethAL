@@ -63,6 +63,7 @@ import { DeploymentVerifier } from "../src/deployment-verifier";
 import { discoverTests } from "../src/discovery";
 import { generateMutationSet } from "../src/orchestrator";
 import { ContainerDeployer, defaultAlToolPaths, defaultDeployerIo } from "../src/publisher";
+import type { ContainerDeployerIo, SpawnFn } from "../src/publisher";
 
 if (!process.env.LETHAL_ITEST_BCDEV) {
   console.log(
@@ -130,6 +131,40 @@ function newArtifactId(): string {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+/**
+ * Wraps a real `ContainerDeployerIo` with an in-flight counter around `spawn` — the actual
+ * `altool.exe` OS process launch, i.e. the exact operation Task 8b's serializer (`publish-
+ * serializer.ts`) must never let overlap for two publishes to the same container. Same
+ * technique the unit tests use (`publish-serializer.test.ts`): increment on entry, record the
+ * max seen, decrement on exit — never wall-clock timing. `reset()` clears the max between Probe
+ * B rounds so each round's assertion is about that round only, not a residual high-water mark
+ * from an earlier one.
+ */
+function instrumentedDeployerIo(base: ContainerDeployerIo): {
+  readonly io: ContainerDeployerIo;
+  readonly maxInFlight: () => number;
+  readonly reset: () => void;
+} {
+  let current = 0;
+  let max = 0;
+  const spawn: SpawnFn = async (argv, opts) => {
+    current++;
+    max = Math.max(max, current);
+    try {
+      return await base.spawn(argv, opts);
+    } finally {
+      current--;
+    }
+  };
+  return {
+    io: { ...base, spawn },
+    maxInFlight: () => max,
+    reset: () => {
+      max = 0;
+    },
+  };
+}
+
 /** Threads the last version this script issued into the next reservation, mirroring
  * `runSession`'s session-scoped `lastIssuedVersion` — keeps every artifact this whole script
  * compiles (both probes, all rounds) strictly increasing, so Probe B's later rounds can never
@@ -160,6 +195,9 @@ interface Ctx {
   readonly versions: VersionState;
   readonly overBudgetRef: TestMethodRef;
   readonly scratchRoot: string;
+  /** Task 8b: proves the serializer, not just BC's final state, actually held the two
+   * concurrent Probe B publishes to one-at-a-time — see `instrumentedDeployerIo`. */
+  readonly publishTracker: { readonly maxInFlight: () => number; readonly reset: () => void };
 }
 
 /**
@@ -399,6 +437,14 @@ async function probeA(ctx: Ctx): Promise<void> {
  * rejects, or in what order (see the comment above `settled` below) — only the post-hoc,
  * server-observed final state matters, exactly as the design intends ("never on altool output
  * alone").
+ *
+ * Task 8b: dispatch stays genuinely concurrent (both `publish()` calls fired without awaiting
+ * between them) — the fix under test is that `ContainerDeployer.publish()` now serializes
+ * per-container internally (`publish-serializer.ts`), so BC itself never sees two overlapping
+ * `altool` processes even though this script still dispatches them at once. Each round asserts
+ * BOTH that the serializer actually held them one-at-a-time (`publishTracker.maxInFlight()`,
+ * the in-flight counter around the real `altool.exe` spawn) and that B ended up final
+ * (`assertBFinal`) — the first proves the mechanism, the second proves the outcome.
  */
 async function probeB(ctx: Ctx): Promise<void> {
   console.log(`\n=== Probe B: concurrent race (${PROBE_B_ROUNDS} rounds) ===`);
@@ -425,12 +471,16 @@ async function probeB(ctx: Ctx): Promise<void> {
         `B=${artifactB.appVersion}/${artifactB.artifactId}, publishing concurrently...`,
     );
 
+    ctx.publishTracker.reset();
+
     // Two genuinely concurrent OS processes (Bun.spawn under ContainerDeployer.publish) hitting
     // the same server — NOT awaited sequentially. `allSettled`, not `all`: either publish may
     // legitimately succeed OR fail depending on server-side interleaving (e.g. A can land
     // harmlessly if the server happens to apply it before B, since B > A is still accepted
     // afterward) — this script must not assume a specific outcome shape, only check the FINAL
-    // state below.
+    // state below. Safe to re-run every round now (Task 8b): the serializer means BC never
+    // actually sees these two `altool` processes overlap, regardless of how this script
+    // dispatches them.
     const settled = await Promise.allSettled([
       ctx.deployer.publish(artifactA).then(
         () => ({ who: "A" as const, ok: true as const }),
@@ -445,6 +495,13 @@ async function probeB(ctx: Ctx): Promise<void> {
       s.status === "fulfilled" ? s.value : { err: messageOf(s.reason) },
     );
     console.log(`    publish results: ${JSON.stringify(summary)}`);
+
+    const maxInFlight = ctx.publishTracker.maxInFlight();
+    assert.ok(
+      maxInFlight <= 1,
+      `Probe B round ${round}: the serializer failed to hold the two concurrent publishes one-at-a-time — observed ${maxInFlight} altool.exe processes in flight simultaneously against this container. This is exactly the intra-process race Task 8b closes; if this fires, publish-serializer.ts is not actually gating ContainerDeployer.publish().`,
+    );
+    console.log(`    serializer held publishes one-at-a-time (max in-flight: ${maxInFlight})`);
 
     await assertBFinal(ctx, artifactA, artifactB, `Probe B round ${round}`);
     console.log(`  round ${round}: PASS — B is final, A never was, fresh behaviour confirms B`);
@@ -478,6 +535,10 @@ async function main(): Promise<void> {
     { alcPath: toolPaths.alcPath, packageCachePath: bcdev.packageCachePath, outputDir },
     defaultArtifactIo,
   );
+  // Task 8b: instrument the real deployer IO so Probe B can prove the serializer actually held
+  // the two concurrent publishes one-at-a-time, not just that BC's final state happened to be
+  // B (see `instrumentedDeployerIo`'s doc comment above).
+  const deployerIoTracker = instrumentedDeployerIo(defaultDeployerIo);
   const deployer = new ContainerDeployer(
     {
       altoolPath: toolPaths.altoolPath,
@@ -487,7 +548,7 @@ async function main(): Promise<void> {
       password: bcdev.password,
       ...(bcdev.tenant !== undefined ? { tenant: bcdev.tenant } : {}),
     },
-    defaultDeployerIo,
+    deployerIoTracker.io,
   );
   const odataCfg = {
     baseUrl: odataBaseUrl(bcdev.server, bcdev.serverInstance),
@@ -550,6 +611,10 @@ async function main(): Promise<void> {
     versions: new VersionState(sourceVersion),
     overBudgetRef,
     scratchRoot,
+    publishTracker: {
+      maxInFlight: deployerIoTracker.maxInFlight,
+      reset: deployerIoTracker.reset,
+    },
   };
 
   try {
