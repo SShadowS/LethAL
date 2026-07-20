@@ -2,6 +2,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { CompiledArtifact } from "./artifact";
+import { canonicalContainerKey, serializePublish } from "./publish-serializer";
 
 export type SpawnFn = (
   argv: readonly string[],
@@ -73,60 +74,68 @@ export class ContainerDeployer {
   ) {}
 
   async publish(artifact: CompiledArtifact): Promise<void> {
-    const bytes = await this.io.readArtifact(artifact.appPath);
-    const actual = Bun.SHA256.hash(bytes, "hex");
-    if (actual !== artifact.sha256) {
-      throw new Error(
-        `refusing to publish ${artifact.appPath}: digest ${actual} does not match the compiled ` +
-          `artifact's ${artifact.sha256} — the file changed after compilation`,
-      );
-    }
-    // Flag names verified against `altool publishapp --help` (all lowercase,
-    // no camelCase): --server, --serverinstance, --schemaupdatemode, --tenant,
-    // --authentication, --environmenttype. Default --authentication is AAD,
-    // which would try interactive/device-code login against our UserPassword
-    // on-prem server — must be overridden explicitly.
-    const argv = [
-      this.cfg.altoolPath,
-      "publishapp",
-      artifact.appPath,
-      "--server",
-      this.cfg.server,
-      "--serverinstance",
-      this.cfg.serverInstance,
-      "--environmenttype",
-      "OnPrem",
-      "--authentication",
-      "UserPassword",
-      "--schemaupdatemode",
-      "ForceSync",
-    ];
-    if (this.cfg.tenant) argv.push("--tenant", this.cfg.tenant);
-    try {
-      const res = await this.io.spawn(argv, {
-        env: { BC_SERVER_USERNAME: this.cfg.username, BC_SERVER_PASSWORD: this.cfg.password },
-      });
-      if (res.exitCode !== 0) {
-        // BOTH streams, not `res.stderr || res.stdout` — verified live against Cronus281
-        // (2026-07-20, Task 8's stale-publish probe): on a version-downgrade rejection, altool
-        // prints only a generic one-line wrapper ("Publish failed: Publish operation failed.
-        // Check the output for details.") to stderr, while the actual, machine-parseable BC
-        // rejection ("Cannot install the extension ... because a newer version X.Y.Z.W was
-        // already installed.") — the exact text `parseVersionConflict` (app-version.ts) needs —
-        // is on STDOUT. `res.stderr || res.stdout` discarded stdout whenever stderr was
-        // non-empty, silently losing that detail and breaking the version-conflict retry path
-        // (orchestrator.ts) for every real publish failure, not just an edge case.
-        const detail = [res.stdout, res.stderr].filter((s) => s.trim().length > 0).join("\n");
-        throw new Error(`altool publishapp failed (exit ${res.exitCode}):\n${detail}`);
+    // Everything below is serialized per physical container (see publish-serializer.ts): BC's
+    // altool replace protocol races itself under genuine concurrent publishes to one container
+    // (verified live, fixtures/README.md's "Deployment identity (Layer 5A)" section, Probe B,
+    // 2026-07-20). This is an in-process guarantee only — it does not, and cannot, coordinate
+    // two separate LethAL processes publishing to the same container; that is Layer 5C's
+    // machine-global lease. Nothing inside this callback changed to add the wrap.
+    await serializePublish(canonicalContainerKey(this.cfg), async () => {
+      const bytes = await this.io.readArtifact(artifact.appPath);
+      const actual = Bun.SHA256.hash(bytes, "hex");
+      if (actual !== artifact.sha256) {
+        throw new Error(
+          `refusing to publish ${artifact.appPath}: digest ${actual} does not match the compiled ` +
+            `artifact's ${artifact.sha256} — the file changed after compilation`,
+        );
       }
-    } catch (err) {
-      if (err instanceof Error && err.message.includes("altool publishapp failed")) {
-        throw err;
+      // Flag names verified against `altool publishapp --help` (all lowercase,
+      // no camelCase): --server, --serverinstance, --schemaupdatemode, --tenant,
+      // --authentication, --environmenttype. Default --authentication is AAD,
+      // which would try interactive/device-code login against our UserPassword
+      // on-prem server — must be overridden explicitly.
+      const argv = [
+        this.cfg.altoolPath,
+        "publishapp",
+        artifact.appPath,
+        "--server",
+        this.cfg.server,
+        "--serverinstance",
+        this.cfg.serverInstance,
+        "--environmenttype",
+        "OnPrem",
+        "--authentication",
+        "UserPassword",
+        "--schemaupdatemode",
+        "ForceSync",
+      ];
+      if (this.cfg.tenant) argv.push("--tenant", this.cfg.tenant);
+      try {
+        const res = await this.io.spawn(argv, {
+          env: { BC_SERVER_USERNAME: this.cfg.username, BC_SERVER_PASSWORD: this.cfg.password },
+        });
+        if (res.exitCode !== 0) {
+          // BOTH streams, not `res.stderr || res.stdout` — verified live against Cronus281
+          // (2026-07-20, Task 8's stale-publish probe): on a version-downgrade rejection, altool
+          // prints only a generic one-line wrapper ("Publish failed: Publish operation failed.
+          // Check the output for details.") to stderr, while the actual, machine-parseable BC
+          // rejection ("Cannot install the extension ... because a newer version X.Y.Z.W was
+          // already installed.") — the exact text `parseVersionConflict` (app-version.ts) needs —
+          // is on STDOUT. `res.stderr || res.stdout` discarded stdout whenever stderr was
+          // non-empty, silently losing that detail and breaking the version-conflict retry path
+          // (orchestrator.ts) for every real publish failure, not just an edge case.
+          const detail = [res.stdout, res.stderr].filter((s) => s.trim().length > 0).join("\n");
+          throw new Error(`altool publishapp failed (exit ${res.exitCode}):\n${detail}`);
+        }
+      } catch (err) {
+        if (err instanceof Error && err.message.includes("altool publishapp failed")) {
+          throw err;
+        }
+        throw new Error(
+          `altool publishapp failed: ${err instanceof Error ? err.message : String(err)} (altoolPath: ${this.cfg.altoolPath})`,
+        );
       }
-      throw new Error(
-        `altool publishapp failed: ${err instanceof Error ? err.message : String(err)} (altoolPath: ${this.cfg.altoolPath})`,
-      );
-    }
+    });
   }
 }
 
