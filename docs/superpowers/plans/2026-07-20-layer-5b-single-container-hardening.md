@@ -950,6 +950,109 @@ git commit -m "feat(runner): bcdev run() classifies pre-dispatch vs in-flight-un
 
 ---
 
+## Task 8A: al-runner `run()` — set `operation` (classification parity)
+
+> **Inserted after review of Task 7.** The plan's Task 7 Files section and spec §6/§11 require al-runner to participate in dispatch/effect classification, but no numbered task wired it — Task 8 is bcdev-only. Without this, once Task 10's `runOnce` gates retry on `TestVerdict.operation`, al-runner error outcomes (today retried once by `runWithRetry`) would silently never retry. This task closes that gap. Mirrors Layer 5A's Task 7b carve-out.
+
+**Files:**
+- Modify: `packages/runner/src/al-runner-backend.ts:211-256` (the `run()` method)
+- Test: `packages/runner/src/al-runner-backend.test.ts` (add cases against the existing fake-transport harness)
+
+**Interfaces:**
+- Consumes: `OperationOutcome` (Task 1), `TestVerdict.operation` (Task 7).
+- Produces: al-runner `run()` sets `operation: "pre-dispatch-rejected"` on its `error` outcomes (so `runOnce` still retries them once — preserving today's behavior, and safe because al-runner recompiles fresh each call and strands no shared server); leaves `operation` UNSET on `deadline` (so Task 12's plain deadline branch handles it as a non-latching infrastructure error — al-runner has no shared tier to quarantine).
+
+**Rationale — local-child kill is already handled, do not re-add it:** the "kill the local child on ambiguity" requirement (spec §6/§11) is ALREADY satisfied by the transport: `OneShotTransport` aborts the spawned al-runner process via its `AbortController` on deadline (`al-runner-transport.ts:61-73`), and `ServerTransport` calls `close()` (which `proc.kill()`s and forces a re-spawn next call) on deadline (`al-runner-transport.ts:244-247,263-274`). This task must NOT add a second kill path — it only sets the `operation` field on the verdict.
+
+- [ ] **Step 1: Write the failing tests**
+
+```typescript
+// add to packages/runner/src/al-runner-backend.test.ts
+import { requiresUnsafeLatch } from "./operation-outcome";
+
+test("al-runner run() marks a transport error pre-dispatch-rejected (retry-safe; no shared strand)", async () => {
+  const backend = makeAlRunnerBackendWithTransport({
+    send: async () => ({ kind: "error", detail: "al-runner exited 1" }),
+    close: async () => {},
+  });
+  const v = await backend.run(
+    { codeunitId: 50000, codeunitName: "T", method: "t1" },
+    { coverage: "none", timeoutMs: 1000 },
+  );
+  expect(v.outcome).toBe("error");
+  expect(v.operation).toBe("pre-dispatch-rejected");
+});
+
+test("al-runner run() deadline does NOT set an unsafe-latching operation (child already killed by transport)", async () => {
+  const backend = makeAlRunnerBackendWithTransport({
+    send: async () => ({ kind: "deadline" }),
+    close: async () => {},
+  });
+  const v = await backend.run(
+    { codeunitId: 50000, codeunitName: "T", method: "t1" },
+    { coverage: "none", timeoutMs: 1000 },
+  );
+  expect(v.outcome).toBe("deadline-exceeded");
+  expect(v.operation).toBeUndefined();
+  expect(requiresUnsafeLatch(v.operation ?? "completed-accepted")).toBe(false);
+});
+```
+
+> Implementer note: `makeAlRunnerBackendWithTransport` — reuse or extend this file's existing fake-transport construction (the tests already inject a fake `AlRunnerTransport`). The fake's `send` returns an `AlRunnerResult` (`{ kind: "deadline" } | { kind: "skip"|"error", detail } | { kind: "tests"/ok, tests }` — match the real union in `al-runner-transport.ts`).
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `cd U:/Git/LethAL && rm -rf packages/*/dist && bun test packages/runner/src/al-runner-backend.test.ts`
+Expected: FAIL — `operation` is undefined on the error verdict.
+
+- [ ] **Step 3: Set `operation` on the two `error` returns**
+
+In `al-runner-backend.ts` `run()`, add `operation: "pre-dispatch-rejected"` to BOTH `error` returns (the `res.kind === "error"` return and the missing-test `error` return). Do NOT touch the `deadline`, `skip`, `pass`, `fail`, or `timeout` returns:
+
+```typescript
+    if (res.kind === "error")
+      return {
+        ref,
+        outcome: "error",
+        durationMs,
+        failureMessage: res.detail,
+        operation: "pre-dispatch-rejected",
+      };
+    const t = res.tests.find((x) => x.name === ref.method);
+    if (!t)
+      return {
+        ref,
+        outcome: "error",
+        durationMs,
+        failureMessage: "al-runner output missing the requested test",
+        operation: "pre-dispatch-rejected",
+      };
+```
+
+Add the import if `OperationOutcome` type is needed (the literal string is enough — no import required unless you annotate).
+
+- [ ] **Step 4: Run tests to verify they pass; full suite green**
+
+Run: `cd U:/Git/LethAL && rm -rf packages/*/dist && bun test packages/runner`
+Expected: PASS — new cases pass; existing al-runner tests unaffected (they omit `operation`, still valid).
+
+- [ ] **Step 5: Mutation-check the retry-safety classification**
+
+Temporarily change the `res.kind === "error"` return's `operation` to `"in-flight-unknown"`. Run the tests.
+Expected: "marks a transport error pre-dispatch-rejected" goes RED. Restore, confirm GREEN. Record both outputs. (This pins that al-runner errors stay retry-safe rather than latching the session unsafe.)
+
+- [ ] **Step 6: Typecheck, clear dist, commit**
+
+```bash
+cd U:/Git/LethAL && bun run typecheck && rm -rf packages/*/dist
+bun test packages/runner
+bunx biome check packages/runner/src/al-runner-backend.ts packages/runner/src/al-runner-backend.test.ts
+git add packages/runner/src/al-runner-backend.ts packages/runner/src/al-runner-backend.test.ts
+git commit -m "feat(runner): al-runner run() sets operation (retry-safe errors, non-latching deadline)"
+```
+
+---
+
 ## Task 9: Activation — classify echo-mismatch-after-2xx; add `readActive`
 
 **Files:**
