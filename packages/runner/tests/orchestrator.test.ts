@@ -2613,3 +2613,101 @@ describe("runSession — Task 12 quarantine on in-flight-unknown deadline", () =
     expect(report.counts.errors).toBeGreaterThan(0);
   });
 });
+
+// ————————————————————————————————————————————————————————————————————————
+// Layer 5B (Task 12 follow-up): Task 12 only wired the mutant-loop's covering-test run — two
+// other `runOnce` sites also consume a `TestVerdict` and inspect `.outcome` without ever
+// looking at `.operation`: the BASELINE test loop (runs before any mutant is even scheduled)
+// and the kill-CONFIRMATION rerun (the baseline-re-run triggered by a mutant's covering test
+// failing). Both now share the same `quarantineInFlight` helper the mutant-loop's main branch
+// was refactored to call.
+// ————————————————————————————————————————————————————————————————————————
+
+describe("runSession — latch+quarantine on in-flight-unknown at baseline and kill-confirm too", () => {
+  test("a BASELINE test returning in-flight-unknown records a durable quarantine and quarantines the session before any mutant is scheduled", async () => {
+    const dir = freshTmpDir();
+    // THREE_PROC_AL's discovered test suite (from TEST_AL, via runSessionForTest) has exactly
+    // one baseline test method — so it's simultaneously the FIRST and only baseline test, and
+    // every `run()` call in this fixture is answered identically: there is no mutant-loop call
+    // to distinguish from the baseline one, because the session must never reach the mutant
+    // loop at all once the baseline itself comes back in-flight-unknown.
+    const backend = fakeBackend({
+      capabilities: () => ({
+        coverage: "none",
+        deploy: "publish",
+        isolation: "session",
+        authoritative: true, // required for the Task 11 quarantine consult/record path to engage
+      }),
+      run: async (ref) => ({
+        ref,
+        outcome: "deadline-exceeded",
+        durationMs: 1,
+        operation: "in-flight-unknown",
+      }),
+    });
+    const report = await runSessionForTest(backend, {
+      quarantineDir: dir,
+      nowIso: () => "2026-07-20T12:00:00.000Z",
+    }).catch((e) => e);
+    const store = new QuarantineStore(dir);
+    const rec = await store.read("http://cronus281|BC");
+    expect(rec).not.toBeNull();
+    expect(rec?.opKind).toBe("test-run");
+    expect(rec?.recordedAtIso).toBe("2026-07-20T12:00:00.000Z");
+    // Resolves (doesn't reject) with a quarantined report — same "stop cleanly" contract as
+    // Task 12's mutant-loop branch, not a thrown SessionUnsafeError.
+    expect(report).not.toBeInstanceOf(Error);
+    const sessionReport = report as Awaited<ReturnType<typeof runSession>>;
+    expect(sessionReport.quarantined?.reason).toContain("in-flight-unknown");
+    // No mutant scheduling: the baseline latch must stop the session before step 5/6 ever run,
+    // so nothing at all lands in `report.mutants` (not even "no green baseline tests" errors).
+    expect(sessionReport.mutants).toHaveLength(0);
+  });
+
+  test("a kill-confirmation rerun returning in-flight-unknown records a durable quarantine and latches the session unsafe", async () => {
+    const dir = freshTmpDir();
+    // Stateful fake (same pattern as the Task 12 "finally teardown"/"in-flight-unknown deadline"
+    // tests above): `activeMutant` tracks the most recent activate() call so `run()` can answer
+    // differently for the baseline/confirm (null-activation) runs vs. a mutant-active run, and
+    // `nullRuns` distinguishes the FIRST null-activation run (the baseline, which must pass so
+    // the session reaches the mutant loop) from the SECOND (the kill-confirmation rerun
+    // triggered by the first mutant's covering test failing below).
+    let activeMutant: string | null = null;
+    let nullRuns = 0;
+    const backend = fakeBackend({
+      capabilities: () => ({
+        coverage: "none", // every mutant covered by baseline's one passing test — no coverage index needed
+        deploy: "publish",
+        isolation: "session",
+        authoritative: true,
+      }),
+      activate: async (id) => {
+        activeMutant = id;
+      },
+      run: async (ref) => {
+        if (activeMutant !== null) return { ref, outcome: "fail", durationMs: 1 };
+        nullRuns++;
+        return nullRuns === 1
+          ? { ref, outcome: "pass", durationMs: 1 }
+          : { ref, outcome: "deadline-exceeded", durationMs: 1, operation: "in-flight-unknown" };
+      },
+    });
+    const report = await runSessionForTest(backend, {
+      quarantineDir: dir,
+      nowIso: () => "2026-07-20T13:00:00.000Z",
+    }).catch((e) => e);
+    const store = new QuarantineStore(dir);
+    const rec = await store.read("http://cronus281|BC");
+    expect(rec).not.toBeNull();
+    expect(rec?.opKind).toBe("test-run");
+    expect(rec?.recordedAtIso).toBe("2026-07-20T13:00:00.000Z");
+    expect(report).not.toBeInstanceOf(Error);
+    const sessionReport = report as Awaited<ReturnType<typeof runSession>>;
+    expect(sessionReport.quarantined?.reason).toContain("in-flight-unknown");
+    // Stops scheduling further mutants after the one whose confirm run tripped the latch: only
+    // that single mutant (M0001, the first one activated) reaches `report.mutants`.
+    expect(sessionReport.mutants).toHaveLength(1);
+    expect(sessionReport.mutants[0]?.verdict).toBe("error");
+    expect(sessionReport.mutants[0]?.cause).toBe("deadline-exceeded");
+  });
+});

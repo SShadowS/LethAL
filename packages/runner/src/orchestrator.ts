@@ -374,6 +374,34 @@ function defaultQuarantineDir(): string {
   return join(homedir(), ".lethal", "quarantine");
 }
 
+/**
+ * Latch the session unsafe and durably quarantine the tier when a run's server-side fate is
+ * unknown (spec §8/§12). Shared by every call site that inspects a `TestVerdict`/confirm
+ * result's `.operation` — the baseline loop, the mutant-loop covering-test run, and the
+ * kill-confirmation rerun — so the latch+record semantics live in exactly one place. Records
+ * only when the store+key exist (al-runner has no tier, and an authoritative caller that
+ * omitted `resourceServer`/`resourceServerInstance` is tolerated the same way — see
+ * `runSession`'s `resourceKey`/`quarantineStore` doc comment); the latch itself always trips
+ * regardless.
+ */
+async function quarantineInFlight(args: {
+  readonly safety: SessionSafety;
+  readonly quarantineStore: QuarantineStore | undefined;
+  readonly resourceKey: string | undefined;
+  readonly nowIso: () => string;
+  readonly detail: string;
+}): Promise<void> {
+  args.safety.latchUnsafe(args.detail);
+  if (args.quarantineStore !== undefined && args.resourceKey !== undefined) {
+    await args.quarantineStore.record({
+      resourceKey: args.resourceKey,
+      opKind: "test-run",
+      detail: args.detail,
+      recordedAtIso: args.nowIso(),
+    });
+  }
+}
+
 export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // Constructed once for the whole session and threaded to every activateOnce call site
   // (baseline activation below, and the per-mutant loop in runMutantsOnBackend) — the latch is
@@ -663,8 +691,24 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           v.durationMs,
           v.failureMessage,
         );
+        if (v.operation !== undefined && requiresUnsafeLatch(v.operation)) {
+          // The server may still be executing this baseline test. Latch unsafe, record a
+          // durable tier quarantine, and stop collecting baseline results — no further
+          // work-plane call (spec §8, §12). A stranded baseline test leaves nothing safe to
+          // do with `greenTests`/mutant scheduling either way, so there's nothing left but to
+          // stop (checked via `safety.isUnsafe` right below, same as the post-batch guard).
+          await quarantineInFlight({
+            safety,
+            quarantineStore,
+            resourceKey,
+            nowIso,
+            detail: `baseline test in-flight-unknown running ${ref.method}`,
+          });
+          break;
+        }
         baseline.push({ ref, verdict: v });
       }
+      if (safety.isUnsafe) break; // stop the whole session — no mutant scheduling, no next batch
       const greenTests = baseline.filter((b) => b.verdict.outcome === "pass");
       if (greenTests.length < baseline.length) baselineGreenOverall = false;
       if (greenTests.length === 0) {
@@ -972,17 +1016,13 @@ async function runMutantsOnBackend(args: {
       if (v.operation !== undefined && requiresUnsafeLatch(v.operation)) {
         // The server may still be executing this test. Latch unsafe, record a durable tier
         // quarantine, and stop — no further work-plane call (spec §8, §12).
-        args.safety.latchUnsafe(
-          `test in-flight-unknown running ${ref.method} (mutant ${m.mutantId})`,
-        );
-        if (args.quarantineStore !== undefined && args.resourceKey !== undefined) {
-          await args.quarantineStore.record({
-            resourceKey: args.resourceKey,
-            opKind: "test-run",
-            detail: `deadline exceeded running ${ref.method} (mutant ${m.mutantId}); server op may be in flight`,
-            recordedAtIso: args.nowIso(),
-          });
-        }
+        await quarantineInFlight({
+          safety: args.safety,
+          quarantineStore: args.quarantineStore,
+          resourceKey: args.resourceKey,
+          nowIso: args.nowIso,
+          detail: `test in-flight-unknown running ${ref.method} (mutant ${m.mutantId})`,
+        });
         verdict = "error";
         failureNote = `quarantined: ${ref.method} timed out, container may be stranded`;
         cause = "deadline-exceeded";
@@ -1024,7 +1064,22 @@ async function runMutantsOnBackend(args: {
           durationMs: confirm.durationMs,
           failureMessage: confirm.failureMessage,
         });
-        if (confirm.outcome === "pass") {
+        if (confirm.operation !== undefined && requiresUnsafeLatch(confirm.operation)) {
+          // The server may still be executing this confirmation run. Latch unsafe, record a
+          // durable tier quarantine, and stop — same in-flight-unknown handling as the
+          // covering-test run above (spec §8, §12); the post-loop `safety.isUnsafe` check
+          // (below) stops scheduling further mutants.
+          await quarantineInFlight({
+            safety: args.safety,
+            quarantineStore: args.quarantineStore,
+            resourceKey: args.resourceKey,
+            nowIso: args.nowIso,
+            detail: `test in-flight-unknown confirming ${ref.method} (mutant ${m.mutantId})`,
+          });
+          verdict = "error";
+          failureNote = `quarantined: ${ref.method} confirm timed out, container may be stranded`;
+          cause = "deadline-exceeded";
+        } else if (confirm.outcome === "pass") {
           verdict = "killed";
           killingTest = ref.method;
         } else if (confirm.outcome === "deadline-exceeded") {
