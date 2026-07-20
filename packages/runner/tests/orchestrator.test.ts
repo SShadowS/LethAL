@@ -18,7 +18,15 @@ import type {
   TestVerdict,
 } from "../src/backend";
 import { DeploymentVerifier, decidePublishOutcome } from "../src/deployment-verifier";
-import { generateMutationSet, narrowFilesToSubset, runSession } from "../src/orchestrator";
+import { ActivationFailure } from "../src/failure-classes";
+import {
+  activateOnce,
+  generateMutationSet,
+  narrowFilesToSubset,
+  runOnce,
+  runSession,
+} from "../src/orchestrator";
+import { SessionSafety } from "../src/session-safety";
 import { ResultsStore } from "../src/store";
 
 const TARGET_AL = `codeunit 79000 "Sandbox Logic"
@@ -2257,5 +2265,88 @@ describe("runSession — Task 7b: bisection's compile-only seam (spec §10 count
     expect(noted?.failureNote).toContain("bisected to mutant");
     expect(noted?.failureNote).toContain("lethal.conditional-boundary");
     store.close();
+  });
+});
+
+// ————————————————————————————————————————————————————————————————————————
+// Layer 5B (Task 10): activateOnce/runOnce — retry ONLY provably-undispatched
+// failures. A minimal ExecutionBackend fake (not the fuller StubBackend
+// above, which models a whole session's worth of scripted deploy/run
+// behavior) is enough here: these tests exercise the two helpers directly,
+// not a full runSession.
+// ————————————————————————————————————————————————————————————————————————
+
+function fakeBackend(overrides: Partial<ExecutionBackend> = {}): ExecutionBackend {
+  return {
+    capabilities: () => CAPS_NST,
+    status: async () => ({ ok: true, details: "fake" }),
+    deploy: async () => null,
+    compileCheck: async () => {},
+    activate: async () => {},
+    run: async (ref) => ({ ref, outcome: "pass", durationMs: 1 }),
+    ...overrides,
+  };
+}
+
+function aRef(): TestMethodRef {
+  return { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "OverBudgetDetected" };
+}
+
+describe("activateOnce / runOnce — retry only pre-dispatch failures", () => {
+  test("activateOnce retries a pre-dispatch-rejected activation exactly once", async () => {
+    let calls = 0;
+    const backend = fakeBackend({
+      activate: async () => {
+        calls++;
+        if (calls === 1) throw new ActivationFailure("boom", "pre-dispatch-rejected");
+        // second call succeeds
+      },
+    });
+    const safety = new SessionSafety();
+    await activateOnce(backend, safety, "M0007");
+    expect(calls).toBe(2);
+    expect(safety.isUnsafe).toBe(false);
+  });
+
+  test("activateOnce does NOT retry an in-flight-unknown activation; latches unsafe and rethrows", async () => {
+    let calls = 0;
+    const backend = fakeBackend({
+      activate: async () => {
+        calls++;
+        throw new ActivationFailure("timed out", "in-flight-unknown");
+      },
+    });
+    const safety = new SessionSafety();
+    await expect(activateOnce(backend, safety, "M0007")).rejects.toBeInstanceOf(ActivationFailure);
+    expect(calls).toBe(1); // never retried
+    expect(safety.isUnsafe).toBe(true);
+  });
+
+  test("runOnce retries only a pre-dispatch-rejected run", async () => {
+    let calls = 0;
+    const backend = fakeBackend({
+      run: async (ref) => {
+        calls++;
+        if (calls === 1)
+          return { ref, outcome: "error", durationMs: 1, operation: "pre-dispatch-rejected" };
+        return { ref, outcome: "pass", durationMs: 1 };
+      },
+    });
+    const v = await runOnce(backend, aRef(), { coverage: "none", timeoutMs: 100 });
+    expect(calls).toBe(2);
+    expect(v.outcome).toBe("pass");
+  });
+
+  test("runOnce does NOT retry an in-flight-unknown run", async () => {
+    let calls = 0;
+    const backend = fakeBackend({
+      run: async (ref) => {
+        calls++;
+        return { ref, outcome: "error", durationMs: 1, operation: "in-flight-unknown" };
+      },
+    });
+    const v = await runOnce(backend, aRef(), { coverage: "none", timeoutMs: 100 });
+    expect(calls).toBe(1);
+    expect(v.operation).toBe("in-flight-unknown");
   });
 });

@@ -24,6 +24,8 @@ import type { CompiledArtifact } from "./artifact";
 import type { ExecutionBackend, TestMethodRef, TestVerdict } from "./backend";
 import { bisectFailingMutant } from "./bisect";
 import { discoverTests } from "./discovery";
+import { ActivationFailure } from "./failure-classes";
+import { isRetrySafe, requiresUnsafeLatch } from "./operation-outcome";
 import { Semaphore, shardEvenly } from "./pool";
 import { buildReport } from "./report";
 import type { SessionOutcome, SessionReport } from "./report";
@@ -34,6 +36,7 @@ import {
   identityKeyOf,
   testKeyOf,
 } from "./selection";
+import { SessionSafety } from "./session-safety";
 import type { ResultsStore } from "./store";
 import type { MutantVerdict } from "./store";
 
@@ -341,6 +344,13 @@ async function bisectAndNote(args: {
 }
 
 export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
+  // Constructed once for the whole session and threaded to every activateOnce call site
+  // (baseline activation below, and the per-mutant loop in runMutantsOnBackend) — the latch is
+  // per-SESSION (spec §8), not per-call, so every activation attempt must consult and be able
+  // to trip the same one. Full gating (finally-block, quarantine-consult-before-status,
+  // assertSafe guards at every work-plane call site) is Task 11; this task only needs the
+  // instance to exist and be threaded so activateOnce can latch it.
+  const safety = new SessionSafety();
   const caps = cfg.backend.capabilities();
   const status = await cfg.backend.status();
   if (!status.ok) throw new Error(`backend not ready: ${status.details}`);
@@ -573,10 +583,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       }
 
       // 4. baseline
-      await activateWithRetry(cfg.backend, null);
+      await activateOnce(cfg.backend, safety, null);
       const baseline: Array<{ ref: TestMethodRef; verdict: TestVerdict }> = [];
       for (const ref of tests) {
-        const v = await runWithRetry(cfg.backend, ref, {
+        const v = await runOnce(cfg.backend, ref, {
           coverage: caps.coverage,
           timeoutMs: cfg.baselineTimeoutMs ?? BASELINE_TIMEOUT_DEFAULT,
         });
@@ -647,6 +657,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         // one backend already deployed in step 3.
         await runMutantsOnBackend({
           backend: cfg.backend,
+          safety,
           mutants: execute,
           perMutantTests,
           baselineDuration,
@@ -729,6 +740,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
             }
             await runMutantsOnBackend({
               backend,
+              safety,
               mutants: shard,
               perMutantTests,
               baselineDuration,
@@ -812,6 +824,7 @@ async function closeIfSupported(backend: ExecutionBackend): Promise<void> {
  */
 async function runMutantsOnBackend(args: {
   readonly backend: ExecutionBackend;
+  readonly safety: SessionSafety;
   readonly mutants: readonly MutantManifestEntry[];
   readonly perMutantTests: ReadonlyMap<string, readonly TestMethodRef[]>;
   readonly baselineDuration: ReadonlyMap<string, number>;
@@ -832,7 +845,7 @@ async function runMutantsOnBackend(args: {
       record(args.store, args.runId, m, "no-coverage", args.outcomes, args.batchIndex);
       continue;
     }
-    await activateWithRetry(args.backend, m.mutantId);
+    await activateOnce(args.backend, args.safety, m.mutantId);
     let verdict: SessionVerdict = "survived";
     let killingTest: string | undefined;
     let failureNote: string | undefined;
@@ -852,7 +865,7 @@ async function runMutantsOnBackend(args: {
     let transportErrorRef: TestMethodRef | undefined;
     for (const ref of covering) {
       const budget = 2 * (args.baselineDuration.get(testKeyOf(ref)) ?? args.fallbackTimeoutMs);
-      const v = await runWithRetry(args.backend, ref, { coverage: "none", timeoutMs: budget });
+      const v = await runOnce(args.backend, ref, { coverage: "none", timeoutMs: budget });
       testResultBuffer.push({
         mutantCode: m.mutantId,
         ref,
@@ -874,19 +887,19 @@ async function runMutantsOnBackend(args: {
         break;
       }
       if (v.outcome === "error") {
-        // runWithRetry already retried once internally — reaching "error"
-        // here means the backend failed transport for this test TWICE in
-        // a row. Spec §11: that aborts the whole session, not just this
-        // mutant (unlike the "unstable test" error path below, which is a
-        // legitimate flakiness finding, not a transport failure).
+        // runOnce already retried a pre-dispatch-rejected run internally — reaching "error"
+        // here means either that retry also failed, or the first failure wasn't retry-safe
+        // (e.g. in-flight-unknown) and was rethrown as-is without a second attempt. Spec §11:
+        // that aborts the whole session, not just this mutant (unlike the "unstable test" error
+        // path below, which is a legitimate flakiness finding, not a transport failure).
         verdict = "error";
         failureNote = v.failureMessage;
         transportErrorRef = ref;
         break;
       }
       if (v.outcome === "fail") {
-        await activateWithRetry(args.backend, null);
-        const confirm = await runWithRetry(args.backend, ref, {
+        await activateOnce(args.backend, args.safety, null);
+        const confirm = await runOnce(args.backend, ref, {
           coverage: "none",
           timeoutMs: budget,
         });
@@ -1031,30 +1044,49 @@ async function prepareBatchProject(
 }
 
 /**
- * One retry on activation failure; if the retry also fails, the error
- * propagates and aborts the session (the `finally` in `runSession` still
- * attempts a best-effort deactivation, and results recorded so far remain
- * persisted in the store since they're written incrementally).
+ * One activation attempt. Retries ONLY a `pre-dispatch-rejected` failure (provably never reached
+ * the server). An `in-flight-unknown` failure latches the session unsafe and rethrows — retrying
+ * an activation that may still be executing is the death-spiral trigger (spec §12). A
+ * `completed-effect-unknown` failure is NOT retried either — it is rethrown for the mutant loop to
+ * record the affected mutant as an untrustworthy `error` (reconciliation-by-read is deferred to 5C).
  */
-async function activateWithRetry(
+export async function activateOnce(
   backend: ExecutionBackend,
+  safety: SessionSafety,
   mutantId: string | null,
 ): Promise<void> {
+  safety.assertSafe(`activate(${mutantId ?? "null"})`);
   try {
     await backend.activate(mutantId);
-  } catch {
-    await backend.activate(mutantId);
+  } catch (err) {
+    if (err instanceof ActivationFailure) {
+      if (isRetrySafe(err.outcome)) {
+        await backend.activate(mutantId); // one retry: nothing was dispatched the first time
+        return;
+      }
+      if (requiresUnsafeLatch(err.outcome)) {
+        safety.latchUnsafe(`activation in-flight-unknown: ${err.message}`);
+      }
+    }
+    throw err;
   }
 }
 
-async function runWithRetry(
+/**
+ * One test run. Retries ONLY a `pre-dispatch-rejected` run (the connect never dispatched a test).
+ * An `in-flight-unknown` run is never retried — the first run may still be executing server-side.
+ */
+export async function runOnce(
   backend: ExecutionBackend,
   ref: TestMethodRef,
   opts: { coverage: "none" | "procedure" | "line"; timeoutMs: number },
 ): Promise<TestVerdict> {
   const first = await backend.run(ref, opts);
   if (first.outcome !== "error") return first;
-  return backend.run(ref, opts); // one retry on transport error, then the error stands
+  if (first.operation !== undefined && isRetrySafe(first.operation)) {
+    return backend.run(ref, opts);
+  }
+  return first;
 }
 
 /**
