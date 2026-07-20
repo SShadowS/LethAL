@@ -72,3 +72,40 @@ describe("QuarantineStore write/read", () => {
     expect((read?.generation ?? 0) >= 1).toBe(true);
   });
 });
+
+describe("QuarantineStore clear (generation-checked)", () => {
+  test("clear with the current generation removes the record", async () => {
+    const store = new QuarantineStore(dir);
+    const rec = await store.record({
+      resourceKey: "http://a|BC",
+      opKind: "test-run",
+      detail: "x",
+      recordedAtIso: "2026-07-20T10:00:00.000Z",
+    });
+    expect(await store.clear("http://a|BC", rec.generation)).toBe("cleared");
+    expect(await store.read("http://a|BC")).toBeNull();
+  });
+
+  test("a stale clear (older generation) does NOT erase a newer record", async () => {
+    const store = new QuarantineStore(dir);
+    const first = await store.record({
+      resourceKey: "http://a|BC",
+      opKind: "test-run",
+      detail: "x",
+      recordedAtIso: "2026-07-20T10:00:00.000Z",
+    });
+    await store.record({
+      resourceKey: "http://a|BC",
+      opKind: "activation",
+      detail: "y",
+      recordedAtIso: "2026-07-20T10:05:00.000Z",
+    }); // gen 2
+    expect(await store.clear("http://a|BC", first.generation)).toBe("stale"); // holding gen 1
+    expect(await store.read("http://a|BC")).not.toBeNull(); // gen 2 survives
+  });
+
+  test("clear of an already-absent record is 'cleared' (idempotent)", async () => {
+    const store = new QuarantineStore(dir);
+    expect(await store.clear("http://a|BC", 1)).toBe("cleared");
+  });
+});

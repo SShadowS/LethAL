@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 export interface QuarantineRecord {
@@ -49,5 +49,19 @@ export class QuarantineStore {
     await writeFile(tmp, JSON.stringify(next), "utf8");
     await rename(tmp, target); // atomic same-dir rename
     return next;
+  }
+
+  /**
+   * Remove the tier's quarantine ONLY if the caller holds the current generation. A clear
+   * computed against an older generation (another session wrote a newer quarantine in between)
+   * returns "stale" and leaves the newer record intact — a stale clear must never erase a newer
+   * strand. Clearing an already-absent record is idempotent "cleared".
+   */
+  async clear(resourceKey: string, expectedGeneration: number): Promise<"cleared" | "stale"> {
+    const current = await this.read(resourceKey);
+    if (current === null) return "cleared";
+    if (current.generation !== expectedGeneration) return "stale";
+    await rm(this.fileFor(resourceKey), { force: true });
+    return "cleared";
   }
 }
