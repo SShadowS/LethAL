@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -26,6 +26,8 @@ import {
   runOnce,
   runSession,
 } from "../src/orchestrator";
+import type { SessionConfig } from "../src/orchestrator";
+import { QuarantineStore } from "../src/quarantine-store";
 import { SessionSafety } from "../src/session-safety";
 import { ResultsStore } from "../src/store";
 
@@ -2348,5 +2350,185 @@ describe("activateOnce / runOnce — retry only pre-dispatch failures", () => {
     const v = await runOnce(backend, aRef(), { coverage: "none", timeoutMs: 100 });
     expect(calls).toBe(1);
     expect(v.operation).toBe("in-flight-unknown");
+  });
+
+  // Task 10 review Minor-3 (folded into Task 11, see .superpowers/sdd/5b-task-11-brief.md):
+  // two activateOnce branches the original suite never exercised.
+  test("activateOnce rethrows a completed-effect-unknown failure WITHOUT retry or latch", async () => {
+    let calls = 0;
+    const backend = fakeBackend({
+      activate: async () => {
+        calls++;
+        throw new ActivationFailure("malformed 2xx body", "completed-effect-unknown");
+      },
+    });
+    const safety = new SessionSafety();
+    await expect(activateOnce(backend, safety, "M0007")).rejects.toBeInstanceOf(ActivationFailure);
+    expect(calls).toBe(1); // never retried — completed-effect-unknown is not retry-safe
+    expect(safety.isUnsafe).toBe(false); // only in-flight-unknown latches
+  });
+
+  test("activateOnce lets a raw non-ActivationFailure Error fall through un-retried, un-latched", async () => {
+    let calls = 0;
+    const backend = fakeBackend({
+      activate: async () => {
+        calls++;
+        throw new Error("ECONNRESET");
+      },
+    });
+    const safety = new SessionSafety();
+    await expect(activateOnce(backend, safety, "M0007")).rejects.toThrow("ECONNRESET");
+    expect(calls).toBe(1); // not an ActivationFailure — no retry/latch branch can even inspect it
+    expect(safety.isUnsafe).toBe(false);
+  });
+
+  // Task 10 review Minor-1 (folded into Task 11): the RETRY of a retry-safe failure is a fresh
+  // dispatch attempt — if IT resolves in-flight-unknown, the latch invariant must still trip.
+  test("activateOnce latches unsafe when the retry of a retry-safe failure itself is in-flight-unknown", async () => {
+    let calls = 0;
+    const backend = fakeBackend({
+      activate: async () => {
+        calls++;
+        if (calls === 1) throw new ActivationFailure("boom", "pre-dispatch-rejected");
+        throw new ActivationFailure("timed out on retry", "in-flight-unknown");
+      },
+    });
+    const safety = new SessionSafety();
+    await expect(activateOnce(backend, safety, "M0007")).rejects.toBeInstanceOf(ActivationFailure);
+    expect(calls).toBe(2); // the retry-safe first failure DID earn its one retry
+    expect(safety.isUnsafe).toBe(true); // ...but the retry itself came back ambiguous
+  });
+});
+
+// ————————————————————————————————————————————————————————————————————————
+// Layer 5B (Task 11): gate all work-plane calls on SessionSafety — quarantine consult BEFORE
+// status(), and a latch-gated finally teardown (no mutating activate(null) once unsafe).
+// ————————————————————————————————————————————————————————————————————————
+
+/** Synchronous sibling of `mkdtemp` for inline use in test literals (e.g.
+ *  `runSessionForTest(backend, { quarantineDir: freshTmpDir() })`), where an `await` isn't
+ *  available. Each call gets its own directory, so tests never share (or race on) quarantine
+ *  state. */
+function freshTmpDir(): string {
+  return mkdtempSync(join(tmpdir(), "lethal-orch-quarantine-"));
+}
+
+/**
+ * Thin wrapper building a full `SessionConfig` around a caller-supplied fake backend: a fresh
+ * `makeProject()` fixture (overwritten with THREE_PROC_AL — 9 mutants, M0001..M0009 — so tests
+ * that need to reach a specific mutant id like "M0007" have one to reach), an in-memory store,
+ * and the tier resource key the brief's tests assert against: `resourceServer` +
+ * `resourceServerInstance` normalize (resource-key.ts) to exactly `http://cronus281|BC`.
+ * `overrides` lets a test inject `quarantineDir` (always required in tests — production alone
+ * defaults to `~/.lethal/quarantine`) or replace any other field, e.g. `nowIso` for Task 12.
+ */
+async function runSessionForTest(
+  backend: ExecutionBackend,
+  overrides: Partial<SessionConfig> = {},
+) {
+  const dirs = await makeProject();
+  await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), THREE_PROC_AL);
+  const store = new ResultsStore(":memory:");
+  return runSession({
+    backend,
+    store,
+    ...dirs,
+    selectorIds,
+    resourceServer: "http://cronus281",
+    resourceServerInstance: "BC",
+    ...overrides,
+  });
+}
+
+describe("runSession — Task 11 quarantine consult + latch-gated finally", () => {
+  test("a pre-quarantined tier refuses to run before status() is ever called", async () => {
+    const dir = freshTmpDir();
+    const store = new QuarantineStore(dir);
+    await store.record({
+      resourceKey: "http://cronus281|BC",
+      opKind: "test-run",
+      detail: "prior strand",
+      recordedAtIso: "2026-07-20T10:00:00.000Z",
+    });
+    let statusCalled = false;
+    const backend = fakeBackend({
+      status: async () => {
+        statusCalled = true;
+        return { ok: true, details: "" };
+      },
+    });
+    await expect(runSessionForTest(backend, { quarantineDir: dir })).rejects.toThrow(
+      /quarantined/i,
+    );
+    expect(statusCalled).toBe(false);
+  });
+
+  test("an unquarantined tier proceeds past the consult and reaches status()", async () => {
+    let statusCalled = false;
+    const backend = fakeBackend({
+      capabilities: () => ({
+        coverage: "none",
+        deploy: "publish",
+        isolation: "session",
+        authoritative: true,
+      }),
+      status: async () => {
+        statusCalled = true;
+        return { ok: true, details: "" };
+      },
+    });
+    await runSessionForTest(backend, { quarantineDir: freshTmpDir() });
+    expect(statusCalled).toBe(true);
+  });
+
+  test("finally teardown does NOT call activate(null) once the session is unsafe", async () => {
+    // Reaches the unsafe latch via the mutant loop's OWN activateOnce call (already latch-wired
+    // since Task 10) rather than a run()-side in-flight-unknown: recording a durable quarantine
+    // on a run()-side ambiguity is Task 12's job (deadline-branch), not this task's — this test
+    // only needs SOME real path to `safety.isUnsafe === true` reached from inside `runSession`,
+    // and activate()-throws-in-flight-unknown is already fully wired end to end.
+    const activateCalls: Array<string | null> = [];
+    const backend = fakeBackend({
+      // coverage:"none" so every mutant is covered by the (always-passing) baseline test —
+      // THREE_PROC_AL's 9 mutants would otherwise all resolve "no-coverage" against a fake
+      // backend that never reports real procedure coverage, and the mutant loop (and M0007)
+      // would never be reached at all.
+      capabilities: () => ({
+        coverage: "none",
+        deploy: "publish",
+        isolation: "session",
+        authoritative: true,
+      }),
+      activate: async (id) => {
+        activateCalls.push(id);
+        if (id === "M0007") throw new ActivationFailure("timed out", "in-flight-unknown");
+      },
+    });
+    await runSessionForTest(backend, { quarantineDir: freshTmpDir() }).catch(() => {});
+    // M0001..M0006 activate and run clean (every run() call defaults to "pass" — see
+    // fakeBackend); M0007's activation is where the latch trips and the session aborts. NO
+    // activate(null) may appear after it — that would be the finally block's deactivating
+    // ClearActive, a mutating call on a tier that may still be stranded (spec §8).
+    const afterUnsafe = activateCalls.slice(activateCalls.indexOf("M0007") + 1);
+    expect(afterUnsafe).not.toContain(null);
+    // Sanity: the latch path was actually exercised, not vacuously true because M0007 never ran.
+    expect(activateCalls).toContain("M0007");
+  });
+
+  test("finally DOES call activate(null) on the ordinary (safe) path", async () => {
+    const activateCalls: Array<string | null> = [];
+    const backend = fakeBackend({
+      capabilities: () => ({
+        coverage: "none",
+        deploy: "publish",
+        isolation: "session",
+        authoritative: true,
+      }),
+      activate: async (id) => {
+        activateCalls.push(id);
+      },
+    });
+    await runSessionForTest(backend, { quarantineDir: freshTmpDir() });
+    expect(activateCalls.at(-1)).toBeNull();
   });
 });

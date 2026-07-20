@@ -1,4 +1,5 @@
 import { access, copyFile, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { tier1Operators } from "@lethal/builtin-tier1";
 import {
@@ -27,8 +28,10 @@ import { discoverTests } from "./discovery";
 import { ActivationFailure } from "./failure-classes";
 import { isRetrySafe, requiresUnsafeLatch } from "./operation-outcome";
 import { Semaphore, shardEvenly } from "./pool";
+import { QuarantineStore } from "./quarantine-store";
 import { buildReport } from "./report";
 import type { SessionOutcome, SessionReport } from "./report";
+import { quarantineResourceKey } from "./resource-key";
 import {
   buildCoverageIndex,
   coverageFilter,
@@ -109,6 +112,22 @@ export interface SessionConfig {
   readonly compileConcurrency?: number; // default min(workers, 4)
   /** Required when workers > 1: each worker needs its own backend instance. */
   readonly backendFactory?: (workerIndex: number) => ExecutionBackend;
+  /** Machine-local durable-quarantine base directory (spec §9). Defaults to
+   *  `~/.lethal/quarantine` via `defaultQuarantineDir()` when omitted; tests inject a scratch dir
+   *  so quarantine state never leaks across test runs or into the real user's home directory. */
+  readonly quarantineDir?: string;
+  /**
+   * Physical BC service-tier identity for the quarantine consult (spec §9) — the server + server
+   * instance the AUTHORITATIVE (bcdev) backend targets, sourced from the bcdev config section
+   * (tenant deliberately excluded — see `quarantineResourceKey`, which scopes quarantine to the
+   * shared tier, not any one tenant on it). The consult only runs when the backend reports
+   * `capabilities().authoritative` AND both fields are present: al-runner (non-authoritative) has
+   * no shared server-side tier to strand and legitimately omits them, and an authoritative caller
+   * that omits them (e.g. a unit test exercising an in-memory stub) silently skips the consult
+   * rather than crashing on an incomplete tier identity.
+   */
+  readonly resourceServer?: string;
+  readonly resourceServerInstance?: string;
 }
 
 /** Alias kept for readability at call sites within this module. */
@@ -343,15 +362,44 @@ async function bisectAndNote(args: {
   }
 }
 
+/** Production default for `SessionConfig.quarantineDir` (spec §9). Kept as a named helper (rather
+ *  than inlined `?? ...`) so tests can assert against it and so there is exactly one place that
+ *  decides what "no quarantineDir configured" means. */
+function defaultQuarantineDir(): string {
+  return join(homedir(), ".lethal", "quarantine");
+}
+
 export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // Constructed once for the whole session and threaded to every activateOnce call site
   // (baseline activation below, and the per-mutant loop in runMutantsOnBackend) — the latch is
   // per-SESSION (spec §8), not per-call, so every activation attempt must consult and be able
-  // to trip the same one. Full gating (finally-block, quarantine-consult-before-status,
-  // assertSafe guards at every work-plane call site) is Task 11; this task only needs the
-  // instance to exist and be threaded so activateOnce can latch it.
+  // to trip the same one. The quarantine consult immediately below runs BEFORE status() so an
+  // already-stranded tier refuses even a readiness probe; the `finally` teardown at the bottom of
+  // this function is latch-gated so no mutating ClearActive ever runs once unsafe.
   const safety = new SessionSafety();
   const caps = cfg.backend.capabilities();
+  // Quarantine consult (spec §8/§9): a tier a PRIOR session marked stranded must refuse this
+  // session outright, before even a non-mutating status() probe. Only meaningful for an
+  // authoritative backend with a known tier identity — see SessionConfig.resourceServer's doc
+  // comment for why an authoritative caller missing the identity fields is tolerated (skip, not
+  // throw) rather than treated as a configuration error here.
+  if (
+    caps.authoritative &&
+    cfg.resourceServer !== undefined &&
+    cfg.resourceServerInstance !== undefined
+  ) {
+    const resourceKey = quarantineResourceKey({
+      server: cfg.resourceServer,
+      serverInstance: cfg.resourceServerInstance,
+    });
+    const quarantineStore = new QuarantineStore(cfg.quarantineDir ?? defaultQuarantineDir());
+    const existing = await quarantineStore.read(resourceKey);
+    if (existing !== null) {
+      throw new Error(
+        `tier ${resourceKey} is quarantined (${existing.opKind}: ${existing.detail}, recorded ${existing.recordedAtIso}, generation ${existing.generation}). Recycle the tier and run 'lethal clear-quarantine' to clear it.`,
+      );
+    }
+  }
   const status = await cfg.backend.status();
   if (!status.ok) throw new Error(`backend not ready: ${status.details}`);
 
@@ -763,10 +811,21 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     // retrying activation calls above) since this only runs to leave every
     // backend deactivated on exit, and a failure here must not mask/replace
     // whatever real error is already propagating.
-    await cfg.backend.activate(null).catch(() => {});
-    for (const backend of workerBackends) {
-      await backend.activate(null).catch(() => {});
-      await closeIfSupported(backend).catch(() => {});
+    //
+    // After an unsafe latch, NO work-plane call — not even the deactivating ClearActive, which is
+    // itself a mutating op on the stranded tier (spec §8). Only local teardown runs.
+    if (!safety.isUnsafe) {
+      await cfg.backend.activate(null).catch(() => {});
+      for (const backend of workerBackends) {
+        await backend.activate(null).catch(() => {});
+        await closeIfSupported(backend).catch(() => {});
+      }
+    } else {
+      // local teardown only: close transports/children, never activate.
+      await closeIfSupported(cfg.backend).catch(() => {});
+      for (const backend of workerBackends) {
+        await closeIfSupported(backend).catch(() => {});
+      }
     }
   }
 
@@ -1061,8 +1120,19 @@ export async function activateOnce(
   } catch (err) {
     if (err instanceof ActivationFailure) {
       if (isRetrySafe(err.outcome)) {
-        await backend.activate(mutantId); // one retry: nothing was dispatched the first time
-        return;
+        try {
+          await backend.activate(mutantId); // one retry: nothing was dispatched the first time
+          return;
+        } catch (retryErr) {
+          // The retry itself is a fresh dispatch — if IT resolves in-flight-unknown, the latch
+          // invariant must still trip here, not just on the first attempt's outcome. Without
+          // this, a retry-safe-then-ambiguous sequence would rethrow without ever latching
+          // `safety`, leaving later work-plane calls (finally's ClearActive included) unguarded.
+          if (retryErr instanceof ActivationFailure && requiresUnsafeLatch(retryErr.outcome)) {
+            safety.latchUnsafe(`activation retry in-flight-unknown: ${retryErr.message}`);
+          }
+          throw retryErr;
+        }
       }
       if (requiresUnsafeLatch(err.outcome)) {
         safety.latchUnsafe(`activation in-flight-unknown: ${err.message}`);
