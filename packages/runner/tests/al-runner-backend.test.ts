@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AlRunnerBackend } from "../src/al-runner-backend";
 import { MsInMemoryBackend } from "../src/ms-inmemory-backend";
+import { requiresUnsafeLatch } from "../src/operation-outcome";
 
 const ref = { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "PostingUpdatesTotal" };
 
@@ -360,6 +361,33 @@ describe("AlRunnerBackend.run", () => {
       const seconds = Number(argv[idx + 1]);
       expect(seconds * 1000).toBeLessThan(timeoutMs);
     }
+  });
+
+  // Task 8A (classification parity): al-runner recompiles fresh on every call and
+  // strands no shared server, so a transport-level error provably never dispatched
+  // anything a retry could collide with — retry-safe. Drives the REAL run() (via the
+  // exitCode:3 -> kind:"error" mapping already proven by the "exit 2/3" test above),
+  // not a re-implementation, so a regression in the operation assignment fails this.
+  test("marks a transport error pre-dispatch-rejected (retry-safe; no shared strand)", async () => {
+    const { backend } = await makeBackend(okSpawn({ tests: [] }, 3).spawn);
+    const v = await backend.run(ref, { coverage: "none", timeoutMs: 5000 });
+    expect(v.outcome).toBe("error");
+    expect(v.operation).toBe("pre-dispatch-rejected");
+  });
+
+  // Companion to the above: our OWN client deadline must stay non-latching. Unlike
+  // bcdev (a shared MCP server that may still be executing after our timer fires),
+  // al-runner has no shared tier to quarantine, and the transport already kills the
+  // local child on this exact deadline (OneShotTransport's AbortController, proven by
+  // "client deadline aborts the spawned child via AbortSignal" above) — so `run()`
+  // must NOT add a second kill path or an unsafe-latching operation here.
+  test("deadline does NOT set an unsafe-latching operation (child already killed by transport)", async () => {
+    const spawn = async () => new Promise<never>(() => {}) as never;
+    const { backend } = await makeBackend(spawn as never);
+    const v = await backend.run(ref, { coverage: "none", timeoutMs: 50 });
+    expect(v.outcome).toBe("deadline-exceeded");
+    expect(v.operation).toBeUndefined();
+    expect(requiresUnsafeLatch(v.operation ?? "completed-accepted")).toBe(false);
   });
 });
 
