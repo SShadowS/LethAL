@@ -17,6 +17,7 @@ import {
 import { BcDevMcpBackend } from "../src/bcdev-backend";
 import type { BcDevDeployment } from "../src/bcdev-backend";
 import { DeploymentVerifier } from "../src/deployment-verifier";
+import { ActivationFailure } from "../src/failure-classes";
 import { requiresUnsafeLatch } from "../src/operation-outcome";
 import { ContainerDeployer } from "../src/publisher";
 import type { SpawnFn } from "../src/publisher";
@@ -722,7 +723,40 @@ describe("BcDevMcpBackend.compileCheck", () => {
   });
 });
 
+/**
+ * A `BcDevMcpBackend` wired to a real `MutationControlClient` (same injection point as the
+ * "activate with mutantId hits SetActive" test below) whose fetch fake answers with a 2xx body
+ * that does NOT echo the sent mutantId — the exact `setActive` echo-mismatch case that
+ * `postOData`/`setActive` now classify as `completed-effect-unknown` (see activation.ts).
+ */
+function makeBackendWhoseActivationEchoMismatches(): BcDevMcpBackend {
+  const mismatchingFetch = (async (_url: unknown, _init?: RequestInit) =>
+    new Response(JSON.stringify({ value: "SOME-OTHER-ID" }), { status: 200 })) as typeof fetch;
+  const client = new MutationControlClient(
+    { baseUrl: "http://bc:7048/BC", company: "CRONUS", username: "u", password: "p" },
+    mismatchingFetch,
+  );
+  return new BcDevMcpBackend(
+    { mcpCommand: ["unused"], project: "/al", server: "http://bc", serverInstance: "BC" },
+    undefined,
+    undefined,
+    client,
+  );
+}
+
 describe("BcDevMcpBackend.activate", () => {
+  test("activate() surfaces ActivationFailure with a classified outcome", async () => {
+    const backend = makeBackendWhoseActivationEchoMismatches();
+    let caught: unknown;
+    try {
+      await backend.activate("M0007");
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(ActivationFailure);
+    expect((caught as ActivationFailure).outcome).toBe("completed-effect-unknown");
+  });
+
   test("activate with mutantId hits SetActive", async () => {
     const calls: Array<{ url: string; init: RequestInit }> = [];
     const fakeFetch = (async (url: unknown, init?: RequestInit) => {

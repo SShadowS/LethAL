@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { MutationControlClient } from "../src/activation";
+import { ActivationFailure } from "../src/failure-classes";
 
 const cfg = {
   baseUrl: "http://bc:7048/BC",
@@ -55,6 +56,39 @@ describe("MutationControlClient.setActive", () => {
   test("HTTP failure throws with status", async () => {
     const { fetchFn } = fakeFetch(401, {});
     await expect(new MutationControlClient(cfg, fetchFn).setActive("M0007")).rejects.toThrow("401");
+  });
+
+  test("echo mismatch after a 2xx is completed-effect-unknown (no blind retry)", async () => {
+    // fetch resolves 200 but with an empty/wrong body → postOData returns {} → echo mismatch
+    const fetchFn = (async () =>
+      new Response("{}", {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })) as unknown as typeof fetch;
+    const client = new MutationControlClient(cfg, fetchFn);
+    let caught: unknown;
+    try {
+      await client.setActive("M0007");
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(ActivationFailure);
+    expect((caught as ActivationFailure).outcome).toBe("completed-effect-unknown");
+  });
+
+  test("a pre-dispatch fetch throw is pre-dispatch-rejected", async () => {
+    const fetchFn = (async () => {
+      throw Object.assign(new Error("getaddrinfo ENOTFOUND"), { code: "ENOTFOUND" });
+    }) as unknown as typeof fetch;
+    const client = new MutationControlClient(cfg, fetchFn);
+    let caught: unknown;
+    try {
+      await client.setActive("M0007");
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(ActivationFailure);
+    expect((caught as ActivationFailure).outcome).toBe("pre-dispatch-rejected");
   });
 
   // Observed directly against a real BC server (2026-07-18): the OData pipeline can wedge and
