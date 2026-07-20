@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -45,7 +45,7 @@ export class QuarantineStore {
     const prior = await this.read(rec.resourceKey);
     const next: QuarantineRecord = { ...rec, generation: (prior?.generation ?? 0) + 1 };
     const target = this.fileFor(rec.resourceKey);
-    const tmp = `${target}.tmp-${next.generation}`;
+    const tmp = `${target}.tmp-${randomUUID()}`;
     await writeFile(tmp, JSON.stringify(next), "utf8");
     await rename(tmp, target); // atomic same-dir rename
     return next;

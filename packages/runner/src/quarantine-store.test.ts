@@ -49,4 +49,26 @@ describe("QuarantineStore write/read", () => {
     const s2 = new QuarantineStore(dir); // fresh instance = "next session"
     expect(await s2.read("http://a|BC")).toEqual(second);
   });
+
+  test("concurrent record() writes for one key never corrupt the file", async () => {
+    const store = new QuarantineStore(dir);
+    await Promise.all([
+      store.record({
+        resourceKey: "http://a|BC",
+        opKind: "test-run",
+        detail: "x",
+        recordedAtIso: "2026-07-20T10:00:00.000Z",
+      }),
+      store.record({
+        resourceKey: "http://a|BC",
+        opKind: "activation",
+        detail: "y",
+        recordedAtIso: "2026-07-20T10:00:01.000Z",
+      }),
+    ]);
+    const read = await store.read("http://a|BC"); // must not throw (no corrupt/partial JSON)
+    expect(read).not.toBeNull();
+    expect(typeof read?.generation).toBe("number");
+    expect((read?.generation ?? 0) >= 1).toBe(true);
+  });
 });
