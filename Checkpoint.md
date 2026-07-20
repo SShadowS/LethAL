@@ -1,4 +1,66 @@
-# LethAL Session Checkpoint — Layer 4.3 Merged (schemata overlap coalescing)
+# LethAL Session Checkpoint — Layer 5A Merged (deployment identity)
+
+> **Status 2026-07-20: Layer 5A merged to master (`8d504cd`).** 9 tasks (1, 2, 3, 4, 5, 6, 7,
+> 7b, 8, 8b), 23 commits, each task individually reviewed with fixes verified by mutation, plus
+> a whole-branch review returning no Critical or Important findings. 378 tests pass, typecheck
+> clean.
+>
+> **What it delivers.** Deployment is now an object with an identity. The monolithic `deploy()`
+> splits into `ArtifactCompiler` → `ContainerDeployer` → `DeploymentVerifier` over an immutable
+> content-addressed `CompiledArtifact`. Each artifact carries a random 32-hex id baked into its
+> generated AL and exposed via a `MutationControl_Identity` web service, so a publish is verified
+> by what actually landed rather than by `altool`'s exit code. App versions are clock-derived and
+> monotonic (`<sourceMajor>.<sourceMinor>.<daysSinceEpoch>.<secondsOfDay/2>`), sourced from the
+> project's own `app.json` not a project-local `runId` — deleting `lethal.sqlite` no longer breaks
+> publishing. Compile-failure bisection now runs locally over the full embedded manifest and never
+> publishes candidates (a new `compileCheck()` seam). Publishes serialize per canonical container
+> key, since BC's `altool` replace protocol is not concurrency-safe.
+>
+> **This is the first of four sub-layers toward container-pool parallelism.** The single-layer
+> container-pool draft was withdrawn after adversarial review found it fatally conflated
+> per-container lease generations with a compile-once artifact and built a post-hoc detector it
+> called a fence. Split into: **5A** (this — deployment identity), **5B** (single-container runtime
+> hardening: cancellable ops, durable cross-session quarantine, failure classification), **5C**
+> (real server-side fencing via a stable control extension the target app's publication cannot
+> replace — lease epoch, lease token, artifact id, attempt id, rejecting stale writes), **5D**
+> (pool qualification and scheduling). Neither 5C's fence nor 5D's pool is claimed by 5A.
+>
+> **Two defects in shipped code fixed here.** `runs.app_version` recorded `0.0.0.0` for every
+> publishing run while a different version was deployed. And Layer 4.3's bisection searched the
+> post-history-filter set, so a malformed known-survivor mutation — still instrumented into the
+> artifact — was provably unfindable.
+>
+> **Live verification (verdicts unchanged):** bcdev 3 killed / 10 survived / 3 no-coverage (23.1%),
+> al-runner 3/13/0 (18.8%), reconfirmed 3×. Stale-publication probe A (deterministic) passes: a
+> stale artifact cannot overwrite a newer one. Probe B (concurrent) tripped the layer's hard stop —
+> two concurrent publishes race inside BC's own uninstall-then-reinstall replace machinery and can
+> leave both apps uninstalled; LethAL's version scheme behaved correctly (never reported the stale
+> artifact as final). Closed by the per-container publish serializer (Task 8b); probe B now passes
+> all rounds with in-flight count pinned at 1. Deleting `lethal.sqlite` then re-running `itest:bcdev`
+> confirms the publishing bug is fixed.
+>
+> **The defining lesson of this layer.** Four of the six original tasks shipped a test that asserted
+> the right thing while passing for the wrong reason — an overflow test that couldn't overflow, a
+> digest test that never checked the tool wasn't called, an inert format guard, a phase-ordering
+> test asserting a fake against its own hardcoded sequence. Every one was caught by mutation, none
+> by reading. Reviews on this branch mutation-tested load-bearing properties as standard practice.
+>
+> **Deferred (8 Minors, none blocking; recorded in `.superpowers/sdd/progress.md`):** `deploy:"none"`
+> (al-runner) runs still record `app_version = 0.0.0.0` — the fix applies only to publishing runs;
+> the per-mutant equality gate (`normalizeForComparison`/`diffMutants`) is unit-tested but has **no
+> live consumer** — wire it into an itest before 5C relies on it; the version-conflict retry
+> recompiles under the same artifact id (latent trap for 5C); `compileCheck`'s cleanup `rm` throws a
+> raw fs error (safe direction — loud abort). The known cross-process hazard: two separate LethAL
+> sessions on one container are NOT made safe by the in-process serializer — that is 5C's
+> machine-global lease.
+>
+> Docs: spec `docs/superpowers/specs/2026-07-19-layer-5a-deployment-identity-design.md`, plan
+> `docs/superpowers/plans/2026-07-19-layer-5a-deployment-identity.md`. Serena project memories were
+> written this session (`mem:core` root).
+>
+> **Next:** Layer 5B — single-container runtime hardening. Then 5C (fence), 5D (pool).
+
+# Superseded: Layer 4.3 Merged (schemata overlap coalescing)
 
 > **Status 2026-07-19: Layer 4.3 merged to master (`3ef194a`).** 19 commits, 7 tasks, each
 > individually reviewed, plus a whole-branch review and a fix wave. 297 tests pass, typecheck
