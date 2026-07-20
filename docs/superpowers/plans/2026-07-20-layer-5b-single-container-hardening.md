@@ -34,7 +34,7 @@
 
 **Modified (`packages/runner/src/`):**
 - `backend.ts` — `TestVerdict` gains `operation?: OperationOutcome`.
-- `activation.ts` — classify SetActive echo-mismatch-after-2xx as `completed-effect-unknown`; add `readActive()`.
+- `activation.ts` — classify SetActive echo-mismatch-after-2xx as `completed-effect-unknown` and `postOData` failures by dispatch state. (No `readActive`/`GetActive` — trimmed, see Task 9.)
 - `bcdev-backend.ts` — `run()` sets `operation`; `activate()` throws `ActivationFailure`.
 - `al-runner-backend.ts` — set `operation` on run(); local-child kill on ambiguity.
 - `orchestrator.ts` — remove blind retries; `SessionSafety` gating; quarantine consult before `status()`; latch-gated `finally`; quarantine on `in-flight-unknown`; deploy:none app_version fix; compileCheck rm swallow.
@@ -1053,19 +1053,29 @@ git commit -m "feat(runner): al-runner run() sets operation (retry-safe errors, 
 
 ---
 
-## Task 9: Activation — classify echo-mismatch-after-2xx; add `readActive`
+## Task 9: Activation — classify echo-mismatch-after-2xx and dispatch state
+
+> **Scope trim (controller decision, after Task 8A).** `readActive()` and the `GetActive` OData
+> read action are **removed from 5B**. The selector exposes no read-of-current-active-id today, so
+> building one means adding a `GetActive` web-service action to BOTH selector emitters (parity),
+> the web-services XML (`ObjectType` exactly `CodeUnit`), and schemata tests — scope creep into
+> schemata the conservative-honest 5B does not need. Spec §7 explicitly allows the conservative
+> branch ("else treat as unsafe") instead of reconciling; a genuinely-stranded activation lock
+> surfaces as `in-flight-unknown` on the NEXT call anyway; and Task 13's readiness OData read uses
+> `Identity()` (via `DeploymentVerifier`, spec §10), not `readActive`. Reconciliation-by-read is
+> deferred to 5C. This task is classification-only.
 
 **Files:**
-- Modify: `packages/runner/src/activation.ts` (`postOData`, `MutationControlClient.setActive`, add `readActive`)
-- Modify: `packages/runner/src/bcdev-backend.ts` (`activate()` throws `ActivationFailure` carrying outcome)
-- Test: `packages/runner/src/activation.test.ts` (add cases)
+- Modify: `packages/runner/src/activation.ts` (`postOData`, `MutationControlClient.setActive`)
+- Modify: `packages/runner/src/bcdev-backend.ts` (`activate()` surfaces `ActivationFailure` carrying outcome)
+- Test: `packages/runner/src/activation.test.ts`, `packages/runner/src/bcdev-backend.test.ts` (add cases)
 
 **Interfaces:**
 - Consumes: `OperationOutcome`, `ActivationFailure`.
 - Produces:
-  - `MutationControlClient.setActive` throws `ActivationFailure` with `outcome: "completed-effect-unknown"` on echo mismatch after a 2xx (the codeunit may have committed), and `"pre-dispatch-rejected"` when the request never dispatched (connect/DNS/pre-send).
-  - `MutationControlClient.readActive(): Promise<string | null>` — a non-mutating read of the current active mutant id (for reconciliation).
-  - `BcDevMcpBackend.activate()` throws `ActivationFailure` (never a raw `Error`).
+  - `postOData` throws `ActivationFailure` classified by dispatch state: `"pre-dispatch-rejected"` when the request never dispatched (pre-response network throw); `"in-flight-unknown"` when our own timeout aborted it (the request may have reached the server); `"completed-effect-unknown"` on a non-2xx HTTP status (dispatched, codeunit may have committed before the error).
+  - `MutationControlClient.setActive` throws `ActivationFailure` with `outcome: "completed-effect-unknown"` on echo mismatch after a 2xx (the codeunit may have committed).
+  - `BcDevMcpBackend.activate()` surfaces `ActivationFailure` (never a raw `Error`).
 
 **Rationale (spec §6, §7):** `SetActive` can reach the codeunit, `Insert`/`Commit`, then return a 2xx whose body `postOData` swallows → `setActive` throws an echo mismatch. That is `completed-effect-unknown`, NOT a clean rejection — retrying can conflict with an already-committed activation.
 
@@ -1104,21 +1114,14 @@ test("setActive: a pre-dispatch fetch throw is pre-dispatch-rejected", async () 
   expect(caught).toBeInstanceOf(ActivationFailure);
   expect((caught as ActivationFailure).outcome).toBe("pre-dispatch-rejected");
 });
-
-test("readActive returns the current active id from the OData read", async () => {
-  const fetchFn = (async () =>
-    new Response(JSON.stringify({ value: "M0007" }), { status: 200, headers: { "content-type": "application/json" } })) as unknown as typeof fetch;
-  const client = new MutationControlClient(cfg(), fetchFn);
-  expect(await client.readActive()).toBe("M0007");
-});
 ```
 
-> Implementer note: `cfg()` is a small helper returning a valid `ActivationConfig`; reuse or add one at the top of the test file. The `readActive` OData action name is assumed `GetActive` — verify the actual `MutationControl_*` read action exposed by the generated selector AL (`packages/schemata/src/selector.ts`) and use the real name; if none exists, this task also adds a read action to the emitter (see Step 3b).
+> Implementer note: `cfg()` is a small helper returning a valid `ActivationConfig`; reuse or add one at the top of the test file (the real file is `packages/runner/tests/activation.test.ts` — confirm the path). Do NOT add `readActive` or any `GetActive` action — see the scope-trim note above.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd U:/Git/LethAL && rm -rf packages/*/dist && bun test packages/runner/src/activation.test.ts`
-Expected: FAIL — `setActive` throws a plain `Error`, no `readActive`.
+Run: `cd U:/Git/LethAL && rm -rf packages/*/dist && bun test packages/runner/tests/activation.test.ts`
+Expected: FAIL — `setActive` throws a plain `Error`, not a classified `ActivationFailure`.
 
 - [ ] **Step 3: Classify in `setActive`; distinguish dispatch in `postOData`**
 
@@ -1178,21 +1181,7 @@ Change `setActive` so the echo mismatch (2xx body did not confirm) is `completed
   }
 ```
 
-Add `readActive` (non-mutating reconciliation read):
-
-```typescript
-  /** Non-mutating read of the current active mutant id (spec §7 reconciliation). Returns null
-   *  when nothing is active. Used to decide, after a completed-effect-unknown activation, whether
-   *  the effect actually landed — never a retry. */
-  async readActive(): Promise<string | null> {
-    const payload = (await this.post("GetActive")) as { value?: string | null };
-    return typeof payload.value === "string" && payload.value !== "" ? payload.value : null;
-  }
-```
-
-- [ ] **Step 3b (conditional): add the `GetActive` read action to the selector emitter**
-
-If `packages/schemata/src/selector.ts` does not already emit a `MutationControl_GetActive` unbound OData function returning the active id, add it (mirroring the existing `SetActive`/`ClearActive` shape, `ObjectType` exactly `CodeUnit`), and add it to BOTH `emitMutationSelector` and `emitStaticSelector` (they must expose the same procedure set — see `mem:conventions`). Add a schemata unit test asserting the emitted AL contains the `GetActive` action. This is only needed if no read surface exists.
+(Do NOT add a `readActive` method or a `GetActive` action — see the scope-trim note at the top of this task. Reconciliation-by-read is deferred to 5C.)
 
 - [ ] **Step 4: Make `BcDevMcpBackend.activate()` throw `ActivationFailure`**
 
@@ -1231,8 +1220,8 @@ Expected: "echo mismatch after a 2xx is completed-effect-unknown" goes RED. Rest
 cd U:/Git/LethAL && bun run typecheck && rm -rf packages/*/dist
 bun test packages/runner
 bunx biome check packages/runner/src/activation.ts packages/runner/src/activation.test.ts packages/runner/src/bcdev-backend.ts packages/runner/src/bcdev-backend.test.ts
-git add packages/runner/src/activation.ts packages/runner/src/activation.test.ts packages/runner/src/bcdev-backend.ts packages/runner/src/bcdev-backend.test.ts
-git commit -m "feat(runner): classify SetActive echo-mismatch as completed-effect-unknown; add readActive"
+git add packages/runner/src/activation.ts packages/runner/tests/activation.test.ts packages/runner/src/bcdev-backend.ts packages/runner/tests/bcdev-backend.test.ts
+git commit -m "feat(runner): classify activation failures by dispatch/effect state"
 ```
 
 ---
@@ -1332,7 +1321,8 @@ Replace lines 1039-1058 with:
  * One activation attempt. Retries ONLY a `pre-dispatch-rejected` failure (provably never reached
  * the server). An `in-flight-unknown` failure latches the session unsafe and rethrows — retrying
  * an activation that may still be executing is the death-spiral trigger (spec §12). A
- * `completed-effect-unknown` failure is NOT retried either — the caller reconciles via readActive.
+ * `completed-effect-unknown` failure is NOT retried either — it is rethrown for the mutant loop to
+ * record the affected mutant as an untrustworthy `error` (reconciliation-by-read is deferred to 5C).
  */
 async function activateOnce(
   backend: ExecutionBackend,
@@ -1625,7 +1615,7 @@ git commit -m "feat(runner): record durable quarantine and stop on in-flight-unk
 - Test: `packages/runner/src/readiness-probe.test.ts`, `packages/runner/src/cli.test.ts` (if present; else a focused unit test on the clear path)
 
 **Interfaces:**
-- Consumes: `QuarantineStore`, `MutationControlClient.readActive` (non-mutating), a read-only test-plane handshake.
+- Consumes: `QuarantineStore`; a non-mutating OData read (inject the existing `DeploymentVerifier`'s `Identity` read, spec §10 — NOT `readActive`, which was trimmed in Task 9); a read-only test-plane handshake.
 - Produces:
   - `class ReadinessProbe { constructor(deps); probe(): Promise<{ ok: boolean; detail: string }> }` — both-plane NON-mutating reads; never `ClearActive`.
   - CLI `clear-quarantine`: reads the current record's generation and calls `store.clear(key, gen)` (operator-proven clearing, spec §10). Prints `cleared` / `stale` / `not-quarantined`.
@@ -1671,8 +1661,8 @@ Expected: FAIL — module not found.
 ```typescript
 // packages/runner/src/readiness-probe.ts
 
-/** Dependencies are NON-mutating reads only. `odataRead` MUST be a read (e.g. Identity or
- *  GetActive), never ClearActive — ClearActive mutates the very table observed stranded (spec §10). */
+/** Dependencies are NON-mutating reads only. `odataRead` MUST be a read (the `DeploymentVerifier`
+ *  `Identity` read), never ClearActive — ClearActive mutates the very table observed stranded (spec §10). */
 export interface ReadinessProbeDeps {
   odataRead: () => Promise<unknown>;
   testPlaneHandshake: () => Promise<unknown>;
@@ -1870,8 +1860,8 @@ git commit -m "test(runner): per-seam fault-injection oracles + healthy-path gua
 - §14 fault-injection oracles + live gate → Task 15 (+ per-task mutation checks).
 - §17 review disposition → structurally enforced by the above (no confirmable-cancel, no active recovery, tier key, gated re-pokes).
 
-**Placeholder scan:** the two conditional/judgement steps (Task 9 Step 3b `GetActive` emitter, Task 11 Step 5 verifier gating, Task 14 Step 3 app_version source) name the exact file and the exact condition under which to act; they are decisions the implementer resolves against the real file, not vague TODOs. Test helper wrappers (`make…`, `fakeBackend`, `runSessionForTest`) are explicitly delegated to the existing per-file fakes with a note on what each must do.
+**Placeholder scan:** the conditional/judgement steps (Task 11 Step 5 verifier gating, Task 14 Step 3 app_version source) name the exact file and the exact condition under which to act; they are decisions the implementer resolves against the real file, not vague TODOs. (Task 9's `GetActive`/`readActive` step was removed by the scope trim.) Test helper wrappers (`make…`, `fakeBackend`, `runSessionForTest`) are explicitly delegated to the existing per-file fakes with a note on what each must do.
 
 **Type consistency:** `OperationOutcome` string literals identical across Tasks 1/7/8/9/10/12. `SessionSafety` API (`latchUnsafe`/`isUnsafe`/`assertSafe`) identical across Tasks 3/10/11/12. `QuarantineStore` (`read`/`record`/`clear`) + `QuarantineRecord` (`generation`) identical across Tasks 5/6/11/12/13. `quarantineResourceKey` signature identical across Tasks 4/11/12/13.
 
-**Open dependencies flagged for execution:** Task 9 Step 3b (schemata `GetActive` action) and Task 13's `testPlaneHandshake` source depend on live capability — resolve against the real emitter/bc-dev at execution; if unavailable, fall back per spec §10/§16 (operator-confirmed, `in-flight-unknown` default) and record the fallback.
+**Open dependencies flagged for execution:** Task 13's `testPlaneHandshake` source depends on live capability — resolve against the real bc-dev at execution; if no cheap read-only test-plane handshake exists, fall back per spec §10/§16 (operator-confirmed clearing, `in-flight-unknown` default) and record the fallback. Task 9's schemata `GetActive` dependency was removed by the scope trim.
