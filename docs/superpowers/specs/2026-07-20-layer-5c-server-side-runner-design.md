@@ -71,6 +71,15 @@ State and surface it owns:
   mutantId)` tuple, moved out of the instrumented target. Held both as a persistent row
   (`DataPerCompany = false`) and a SingleInstance cache the guard reads (§I1). Set/cleared only by
   `RunMutant` (§5) — never persistently active between calls.
+- **`InherentPermissions` on the control tables + the state codeunit (`P1` from the live spike).**
+  The OData runner session runs under the **calling user**, not an elevated test context. The spike
+  proved a guard that reads the control state under a plain user session fails with "the current
+  permissions prevented the action" — the current hub-based path only works because bc-dev's session
+  grants the app's permissions, masking this. The control extension MUST declare
+  `InherentPermissions = X` on its state tables and the state codeunit so the guard's read/write
+  succeeds under any web-service session regardless of the user's assigned permission sets. (The
+  in-target selector had no such declaration; moving control into the extension is the natural place
+  to fix it.)
 - **Target-artifact registry** (`DataPerCompany = false` table): `targetAppId → artifactId`. Written
   by the target's install/upgrade via `RegisterArtifact` (§6). This is how `LethAL Control` knows the
   deployed artifact id **without depending on the target** (the dependency runs target→control only —
@@ -310,9 +319,27 @@ Pass 1 (design) findings C1–C3, I1–I9, M1–M2 and pass 2 (written-spec) fin
 | **P2 I5** | `attemptId` echoed but absent from result | Result echoes full identity tuple; client validates (§5) |
 | **P2 I6** | 5C-B is a protocol revision | Reserved `leaseEpoch`/`leaseToken` params now; 5C-B = protocol v2 reusing `RunMutantCore` (§2, §3, §5) |
 
-## 15. Evidence appendix (filled during implementation)
+## 15. Evidence appendix
 
-- OData-action-runs-tests live-probe transcript (or SOAP fallback record).
+**Task-1 live spike — DONE (2026-07-21, Cronus281). Result: OData path confirmed; one new
+requirement surfaced.** A throwaway `LC Spike Runner` extension (own id-range 90000–90009, MS `Test
+Runner` dependency) was compiled with `alc` against BC28 symbols and published to Cronus281 via
+`altool publishapp` (no version rejection). Its `RunOne(testCodeunitId, testMethod)` codeunit,
+registered as a web service, was invoked over **OData V4** at
+`http://Cronus281:7048/BC/ODataV4/LCSpikeRunner_RunOne` for fixture test codeunit 79100:
+- **OData V4 runs tests headlessly** — the action executed the AL Test Suite framework and returned
+  structured per-method JSON. SOAP fallback is **not** needed; `RunMutant` uses OData (§4).
+- **Single-method selection works** — with `Run=false` on all lines then `Run=true` on the one
+  matching method, `testResults` contained **only** `OverBudgetDetected` (the sibling `ClampPercentRuns`
+  absent). Confirms §5's Run-flag selection.
+- **Codeunit isolation confirmed** — the stack ran through `Test Runner - Isol. Codeunit (130450)` via
+  `Test Suite Mgt (130456).RunAllTests`.
+- **New requirement (P1):** the test failed on `"the current permissions prevented the action.
+  (TableData 79197 Mutation Active Read)"` — the OData session runs as the calling user without the
+  target app's table permissions. Fixed by `InherentPermissions` on the control extension's state
+  (§4). The current hub itest masks this via bc-dev's session context.
+
+Remaining to fill during implementation:
 - Single-method-selection (order-matters) probe transcript.
 - Run-scoped-clear probe: container unmutated after `RunMutant`.
 - Artifact-registry mismatch probe transcript.
