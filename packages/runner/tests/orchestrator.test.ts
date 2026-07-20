@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
-import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { describe, expect, spyOn, test } from "bun:test";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -18,7 +18,17 @@ import type {
   TestVerdict,
 } from "../src/backend";
 import { DeploymentVerifier, decidePublishOutcome } from "../src/deployment-verifier";
-import { generateMutationSet, narrowFilesToSubset, runSession } from "../src/orchestrator";
+import { ActivationFailure } from "../src/failure-classes";
+import {
+  activateOnce,
+  generateMutationSet,
+  narrowFilesToSubset,
+  runOnce,
+  runSession,
+} from "../src/orchestrator";
+import type { SessionConfig } from "../src/orchestrator";
+import { QuarantineStore } from "../src/quarantine-store";
+import { SessionSafety } from "../src/session-safety";
 import { ResultsStore } from "../src/store";
 
 const TARGET_AL = `codeunit 79000 "Sandbox Logic"
@@ -1390,6 +1400,89 @@ describe("runSession — Layer 5A deployment identity", () => {
   });
 });
 
+// ————————————————————————————————————————————————————————————————————————
+// Task 14 (Layer 5B fold-in): a deploy:"none" (al-runner) run's `createRun` placeholder is what
+// durably lands in `runs.app_version` — al-runner's deploy() always returns null, so the
+// Layer 5A `recordArtifact` correction (3d, see "records the version actually compiled" above)
+// never fires for it. Must read the project's own app.json version instead of the meaningless
+// "0.0.0.0" default.
+// ————————————————————————————————————————————————————————————————————————
+
+describe("runSession — deploy:none (al-runner) app_version", () => {
+  const AL_RUNNER_CAPS: BackendCapabilities = {
+    coverage: "none",
+    deploy: "none",
+    isolation: "full-reset",
+    authoritative: false,
+  };
+
+  test("records the project's own app.json version, not the 0.0.0.0 placeholder", async () => {
+    const dirs = await makeProject();
+    const manifest = JSON.parse(APP_JSON) as Record<string, unknown>;
+    await Bun.write(
+      join(dirs.projectDir, "app.json"),
+      JSON.stringify({ ...manifest, version: "1.2.3.4" }),
+    );
+    const backend = new StubBackend(AL_RUNNER_CAPS, (mutant) =>
+      mutant === null ? "pass" : "fail",
+    );
+    const store = new ResultsStore(":memory:");
+    await runSession({ backend, store, ...dirs, selectorIds });
+    const row = store.db.query("SELECT app_version FROM runs LIMIT 1").get() as {
+      app_version: string;
+    };
+    expect(row.app_version).toBe("1.2.3.4");
+    expect(row.app_version).not.toBe("0.0.0.0");
+    store.close();
+  });
+
+  test("an explicit cfg.appVersion still wins over app.json for a deploy:none backend", async () => {
+    const dirs = await makeProject();
+    const manifest = JSON.parse(APP_JSON) as Record<string, unknown>;
+    await Bun.write(
+      join(dirs.projectDir, "app.json"),
+      JSON.stringify({ ...manifest, version: "1.2.3.4" }),
+    );
+    const backend = new StubBackend(AL_RUNNER_CAPS, (mutant) =>
+      mutant === null ? "pass" : "fail",
+    );
+    const store = new ResultsStore(":memory:");
+    await runSession({ backend, store, ...dirs, selectorIds, appVersion: "9.9.9.9" });
+    const row = store.db.query("SELECT app_version FROM runs LIMIT 1").get() as {
+      app_version: string;
+    };
+    expect(row.app_version).toBe("9.9.9.9");
+    store.close();
+  });
+
+  test("does not change mutant verdicts — recorded-metadata fix only", async () => {
+    const dirs = await makeProject();
+    const manifest = JSON.parse(APP_JSON) as Record<string, unknown>;
+    await Bun.write(
+      join(dirs.projectDir, "app.json"),
+      JSON.stringify({ ...manifest, version: "1.2.3.4" }),
+    );
+    const shape = (r: Awaited<ReturnType<typeof runSession>>) =>
+      [...r.mutants].map((m) => `${m.file}:${m.line}:${m.operatorName}:${m.verdict}`).sort();
+    const store = new ResultsStore(":memory:");
+    const backend = new StubBackend(AL_RUNNER_CAPS, (mutant) =>
+      mutant === null ? "pass" : "fail",
+    );
+    const report = await runSession({ backend, store, ...dirs, selectorIds });
+    store.close();
+
+    const dirs2 = await makeProject(); // app.json still the default 1.0.0.0 here
+    const store2 = new ResultsStore(":memory:");
+    const backend2 = new StubBackend(AL_RUNNER_CAPS, (mutant) =>
+      mutant === null ? "pass" : "fail",
+    );
+    const report2 = await runSession({ backend: backend2, store: store2, ...dirs2, selectorIds });
+    store2.close();
+
+    expect(shape(report)).toEqual(shape(report2));
+  });
+});
+
 describe("narrowFilesToSubset", () => {
   // Minimal fakes: `narrowFilesToSubset` only ever reads `spec.before.{start,end}Index`,
   // `spec.operatorName`, and `file.{path,specs}` — every other field on `ALSyntaxNode` /
@@ -2257,5 +2350,526 @@ describe("runSession — Task 7b: bisection's compile-only seam (spec §10 count
     expect(noted?.failureNote).toContain("bisected to mutant");
     expect(noted?.failureNote).toContain("lethal.conditional-boundary");
     store.close();
+  });
+});
+
+// ————————————————————————————————————————————————————————————————————————
+// Layer 5B (Task 10): activateOnce/runOnce — retry ONLY provably-undispatched
+// failures. A minimal ExecutionBackend fake (not the fuller StubBackend
+// above, which models a whole session's worth of scripted deploy/run
+// behavior) is enough here: these tests exercise the two helpers directly,
+// not a full runSession.
+// ————————————————————————————————————————————————————————————————————————
+
+function fakeBackend(overrides: Partial<ExecutionBackend> = {}): ExecutionBackend {
+  return {
+    capabilities: () => CAPS_NST,
+    status: async () => ({ ok: true, details: "fake" }),
+    deploy: async () => null,
+    compileCheck: async () => {},
+    activate: async () => {},
+    run: async (ref) => ({ ref, outcome: "pass", durationMs: 1 }),
+    ...overrides,
+  };
+}
+
+function aRef(): TestMethodRef {
+  return { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "OverBudgetDetected" };
+}
+
+describe("activateOnce / runOnce — retry only pre-dispatch failures", () => {
+  test("activateOnce retries a pre-dispatch-rejected activation exactly once", async () => {
+    let calls = 0;
+    const backend = fakeBackend({
+      activate: async () => {
+        calls++;
+        if (calls === 1) throw new ActivationFailure("boom", "pre-dispatch-rejected");
+        // second call succeeds
+      },
+    });
+    const safety = new SessionSafety();
+    await activateOnce(backend, safety, "M0007");
+    expect(calls).toBe(2);
+    expect(safety.isUnsafe).toBe(false);
+  });
+
+  test("activateOnce does NOT retry an in-flight-unknown activation; latches unsafe and rethrows", async () => {
+    let calls = 0;
+    const backend = fakeBackend({
+      activate: async () => {
+        calls++;
+        throw new ActivationFailure("timed out", "in-flight-unknown");
+      },
+    });
+    const safety = new SessionSafety();
+    await expect(activateOnce(backend, safety, "M0007")).rejects.toBeInstanceOf(ActivationFailure);
+    expect(calls).toBe(1); // never retried
+    expect(safety.isUnsafe).toBe(true);
+  });
+
+  test("runOnce retries only a pre-dispatch-rejected run", async () => {
+    let calls = 0;
+    const backend = fakeBackend({
+      run: async (ref) => {
+        calls++;
+        if (calls === 1)
+          return { ref, outcome: "error", durationMs: 1, operation: "pre-dispatch-rejected" };
+        return { ref, outcome: "pass", durationMs: 1 };
+      },
+    });
+    const v = await runOnce(backend, aRef(), { coverage: "none", timeoutMs: 100 });
+    expect(calls).toBe(2);
+    expect(v.outcome).toBe("pass");
+  });
+
+  test("runOnce does NOT retry an in-flight-unknown run", async () => {
+    let calls = 0;
+    const backend = fakeBackend({
+      run: async (ref) => {
+        calls++;
+        return { ref, outcome: "error", durationMs: 1, operation: "in-flight-unknown" };
+      },
+    });
+    const v = await runOnce(backend, aRef(), { coverage: "none", timeoutMs: 100 });
+    expect(calls).toBe(1);
+    expect(v.operation).toBe("in-flight-unknown");
+  });
+
+  // Task 10 review Minor-3 (folded into Task 11, see .superpowers/sdd/5b-task-11-brief.md):
+  // two activateOnce branches the original suite never exercised.
+  test("activateOnce rethrows a completed-effect-unknown failure WITHOUT retry or latch", async () => {
+    let calls = 0;
+    const backend = fakeBackend({
+      activate: async () => {
+        calls++;
+        throw new ActivationFailure("malformed 2xx body", "completed-effect-unknown");
+      },
+    });
+    const safety = new SessionSafety();
+    await expect(activateOnce(backend, safety, "M0007")).rejects.toBeInstanceOf(ActivationFailure);
+    expect(calls).toBe(1); // never retried — completed-effect-unknown is not retry-safe
+    expect(safety.isUnsafe).toBe(false); // only in-flight-unknown latches
+  });
+
+  test("activateOnce lets a raw non-ActivationFailure Error fall through un-retried, un-latched", async () => {
+    let calls = 0;
+    const backend = fakeBackend({
+      activate: async () => {
+        calls++;
+        throw new Error("ECONNRESET");
+      },
+    });
+    const safety = new SessionSafety();
+    await expect(activateOnce(backend, safety, "M0007")).rejects.toThrow("ECONNRESET");
+    expect(calls).toBe(1); // not an ActivationFailure — no retry/latch branch can even inspect it
+    expect(safety.isUnsafe).toBe(false);
+  });
+
+  // Task 10 review Minor-1 (folded into Task 11): the RETRY of a retry-safe failure is a fresh
+  // dispatch attempt — if IT resolves in-flight-unknown, the latch invariant must still trip.
+  test("activateOnce latches unsafe when the retry of a retry-safe failure itself is in-flight-unknown", async () => {
+    let calls = 0;
+    const backend = fakeBackend({
+      activate: async () => {
+        calls++;
+        if (calls === 1) throw new ActivationFailure("boom", "pre-dispatch-rejected");
+        throw new ActivationFailure("timed out on retry", "in-flight-unknown");
+      },
+    });
+    const safety = new SessionSafety();
+    await expect(activateOnce(backend, safety, "M0007")).rejects.toBeInstanceOf(ActivationFailure);
+    expect(calls).toBe(2); // the retry-safe first failure DID earn its one retry
+    expect(safety.isUnsafe).toBe(true); // ...but the retry itself came back ambiguous
+  });
+});
+
+// ————————————————————————————————————————————————————————————————————————
+// Layer 5B (Task 11): gate all work-plane calls on SessionSafety — quarantine consult BEFORE
+// status(), and a latch-gated finally teardown (no mutating activate(null) once unsafe).
+// ————————————————————————————————————————————————————————————————————————
+
+/** Synchronous sibling of `mkdtemp` for inline use in test literals (e.g.
+ *  `runSessionForTest(backend, { quarantineDir: freshTmpDir() })`), where an `await` isn't
+ *  available. Each call gets its own directory, so tests never share (or race on) quarantine
+ *  state. */
+function freshTmpDir(): string {
+  return mkdtempSync(join(tmpdir(), "lethal-orch-quarantine-"));
+}
+
+/**
+ * Thin wrapper building a full `SessionConfig` around a caller-supplied fake backend: a fresh
+ * `makeProject()` fixture (overwritten with THREE_PROC_AL — 9 mutants, M0001..M0009 — so tests
+ * that need to reach a specific mutant id like "M0007" have one to reach), an in-memory store,
+ * and the tier resource key the brief's tests assert against: `resourceServer` +
+ * `resourceServerInstance` normalize (resource-key.ts) to exactly `http://cronus281|BC`.
+ * `overrides` lets a test inject `quarantineDir` (always required in tests — production alone
+ * defaults to `~/.lethal/quarantine`) or replace any other field, e.g. `nowIso` for Task 12.
+ */
+async function runSessionForTest(
+  backend: ExecutionBackend,
+  overrides: Partial<SessionConfig> = {},
+) {
+  const dirs = await makeProject();
+  await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), THREE_PROC_AL);
+  const store = new ResultsStore(":memory:");
+  return runSession({
+    backend,
+    store,
+    ...dirs,
+    selectorIds,
+    resourceServer: "http://cronus281",
+    resourceServerInstance: "BC",
+    ...overrides,
+  });
+}
+
+describe("runSession — Task 11 quarantine consult + latch-gated finally", () => {
+  test("a pre-quarantined tier refuses to run before status() is ever called", async () => {
+    const dir = freshTmpDir();
+    const store = new QuarantineStore(dir);
+    await store.record({
+      resourceKey: "http://cronus281|BC",
+      opKind: "test-run",
+      detail: "prior strand",
+      recordedAtIso: "2026-07-20T10:00:00.000Z",
+    });
+    let statusCalled = false;
+    const backend = fakeBackend({
+      status: async () => {
+        statusCalled = true;
+        return { ok: true, details: "" };
+      },
+    });
+    await expect(runSessionForTest(backend, { quarantineDir: dir })).rejects.toThrow(
+      /quarantined/i,
+    );
+    expect(statusCalled).toBe(false);
+  });
+
+  test("an unquarantined tier proceeds past the consult and reaches status()", async () => {
+    let statusCalled = false;
+    const backend = fakeBackend({
+      capabilities: () => ({
+        coverage: "none",
+        deploy: "publish",
+        isolation: "session",
+        authoritative: true,
+      }),
+      status: async () => {
+        statusCalled = true;
+        return { ok: true, details: "" };
+      },
+    });
+    await runSessionForTest(backend, { quarantineDir: freshTmpDir() });
+    expect(statusCalled).toBe(true);
+  });
+
+  test("finally teardown does NOT call activate(null) once the session is unsafe", async () => {
+    // Reaches the unsafe latch via the mutant loop's OWN activateOnce call (already latch-wired
+    // since Task 10) rather than a run()-side in-flight-unknown: recording a durable quarantine
+    // on a run()-side ambiguity is Task 12's job (deadline-branch), not this task's — this test
+    // only needs SOME real path to `safety.isUnsafe === true` reached from inside `runSession`,
+    // and activate()-throws-in-flight-unknown is already fully wired end to end.
+    const activateCalls: Array<string | null> = [];
+    const backend = fakeBackend({
+      // coverage:"none" so every mutant is covered by the (always-passing) baseline test —
+      // THREE_PROC_AL's 9 mutants would otherwise all resolve "no-coverage" against a fake
+      // backend that never reports real procedure coverage, and the mutant loop (and M0007)
+      // would never be reached at all.
+      capabilities: () => ({
+        coverage: "none",
+        deploy: "publish",
+        isolation: "session",
+        authoritative: true,
+      }),
+      activate: async (id) => {
+        activateCalls.push(id);
+        if (id === "M0007") throw new ActivationFailure("timed out", "in-flight-unknown");
+      },
+    });
+    await runSessionForTest(backend, { quarantineDir: freshTmpDir() }).catch(() => {});
+    // M0001..M0006 activate and run clean (every run() call defaults to "pass" — see
+    // fakeBackend); M0007's activation is where the latch trips and the session aborts. NO
+    // activate(null) may appear after it — that would be the finally block's deactivating
+    // ClearActive, a mutating call on a tier that may still be stranded (spec §8).
+    const afterUnsafe = activateCalls.slice(activateCalls.indexOf("M0007") + 1);
+    expect(afterUnsafe).not.toContain(null);
+    // Sanity: the latch path was actually exercised, not vacuously true because M0007 never ran.
+    expect(activateCalls).toContain("M0007");
+  });
+
+  test("finally DOES call activate(null) on the ordinary (safe) path", async () => {
+    const activateCalls: Array<string | null> = [];
+    const backend = fakeBackend({
+      capabilities: () => ({
+        coverage: "none",
+        deploy: "publish",
+        isolation: "session",
+        authoritative: true,
+      }),
+      activate: async (id) => {
+        activateCalls.push(id);
+      },
+    });
+    await runSessionForTest(backend, { quarantineDir: freshTmpDir() });
+    expect(activateCalls.at(-1)).toBeNull();
+  });
+});
+
+// ————————————————————————————————————————————————————————————————————————
+// Task 13 folded fix (Task 11 review, Important-1): the quarantine consult above only fires when
+// BOTH `resourceServer`/`resourceServerInstance` are present — an authoritative caller that omits
+// them is tolerated (skip, not throw), because ~30 pre-existing authoritative-backend unit tests
+// exercise an in-memory stub without ever setting them. Tolerated is not the same as silent: a
+// regression in whatever sources these fields from real config (`cli.ts`'s `resourceIdentityFor`,
+// added this same task) would otherwise leave quarantine permanently — and invisibly — inert
+// against a real BC server. `runSession` must warn every time this happens.
+// ————————————————————————————————————————————————————————————————————————
+describe("runSession — Task 13 folded fix: warn when authoritative but no tier identity", () => {
+  // Authoritative fake backends below explicitly set `coverage: "none"` (rather than relying on
+  // `fakeBackend()`'s CAPS_NST default of `coverage: "procedure"`), mirroring the already-proven
+  // "an unquarantined tier proceeds past the consult" test above — coverage:"none" runs every
+  // test against every mutant without needing the backend to report per-procedure coverage data.
+  const authoritativeNoCoverage = (): ExecutionBackend =>
+    fakeBackend({
+      capabilities: () => ({
+        coverage: "none",
+        deploy: "publish",
+        isolation: "session",
+        authoritative: true,
+      }),
+    });
+
+  test("warns when an authoritative backend omits resourceServer/resourceServerInstance", async () => {
+    const dirs = await makeProject();
+    const store = new ResultsStore(":memory:");
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    let messages: string[] = [];
+    try {
+      // Deliberately the RAW runSession call (not runSessionForTest, which always fills in
+      // resourceServer/resourceServerInstance) — this is exactly the shape of the ~30
+      // pre-existing authoritative tests elsewhere in this file.
+      await runSession({ backend: authoritativeNoCoverage(), store, ...dirs, selectorIds });
+      // Captured INSIDE the try, before `finally`'s mockRestore() — bun:test's mockRestore()
+      // also resets `.mock.calls` (like Jest's), so reading it after restore would always see
+      // zero calls regardless of what actually happened.
+      messages = warnSpy.mock.calls.map((call) => String(call[0]));
+    } finally {
+      warnSpy.mockRestore();
+    }
+    expect(messages.some((m) => m.includes("quarantine consult is DISABLED"))).toBe(true);
+  });
+
+  test("does NOT warn when resourceServer/resourceServerInstance are both set", async () => {
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    let callCount = 0;
+    try {
+      await runSessionForTest(authoritativeNoCoverage(), { quarantineDir: freshTmpDir() });
+      callCount = warnSpy.mock.calls.length; // see note above: read before mockRestore()
+    } finally {
+      warnSpy.mockRestore();
+    }
+    expect(callCount).toBe(0);
+  });
+
+  test("does NOT warn for a non-authoritative (al-runner) backend either", async () => {
+    const dirs = await makeProject();
+    const store = new ResultsStore(":memory:");
+    const backend = fakeBackend({
+      capabilities: () => ({
+        coverage: "none",
+        deploy: "none",
+        isolation: "full-reset",
+        authoritative: false,
+      }),
+    });
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    let callCount = 0;
+    try {
+      await runSession({ backend, store, ...dirs, selectorIds });
+      callCount = warnSpy.mock.calls.length; // see note above: read before mockRestore()
+    } finally {
+      warnSpy.mockRestore();
+    }
+    expect(callCount).toBe(0);
+  });
+});
+
+// ————————————————————————————————————————————————————————————————————————
+// Layer 5B (Task 12): mutant-loop in-flight-unknown deadline records a durable
+// quarantine, latches unsafe, and stops — a plain (non-in-flight-unknown)
+// deadline stays an ordinary error, no quarantine.
+// ————————————————————————————————————————————————————————————————————————
+
+describe("runSession — Task 12 quarantine on in-flight-unknown deadline", () => {
+  test("an in-flight-unknown deadline records a durable quarantine and reports quarantined", async () => {
+    const dir = freshTmpDir();
+    // NOTE on this fixture (deviates from the brief's literal `run: async (ref) => ({ ...
+    // deadline-exceeded/in-flight-unknown }))` one-liner): a `run` override that uniform for
+    // EVERY call also answers the session's BASELINE test (step 4, before the mutant loop —
+    // which has no in-flight-unknown handling of its own, by design/scope). A deadline-exceeded
+    // baseline just fails baseline outright ("no green baseline tests") and the session never
+    // reaches the mutant loop this test means to exercise — confirmed empirically: the literal
+    // brief fixture leaves the quarantine store empty even with Step 3 fully implemented.
+    // Tracking `activeMutant` (same pattern as the "finally teardown" test above) lets baseline
+    // (activation `null`) pass normally and keeps the ambiguous deadline scoped to the
+    // per-mutant covering-test run this task's branch actually guards.
+    let activeMutant: string | null = null;
+    const backend = fakeBackend({
+      capabilities: () => ({
+        coverage: "none", // every mutant covered by baseline's one passing test — no coverage index needed
+        deploy: "publish",
+        isolation: "session",
+        authoritative: true, // required for the Task 11 quarantine consult/record path to engage
+      }),
+      activate: async (id) => {
+        activeMutant = id;
+      },
+      run: async (ref) =>
+        activeMutant === null
+          ? { ref, outcome: "pass", durationMs: 1 }
+          : { ref, outcome: "deadline-exceeded", durationMs: 1, operation: "in-flight-unknown" },
+    });
+    const report = await runSessionForTest(backend, {
+      quarantineDir: dir,
+      nowIso: () => "2026-07-20T12:00:00.000Z",
+    }).catch((e) => e);
+    // session exits quarantined (either a thrown quarantined error or a report flag — assert the store):
+    const store = new QuarantineStore(dir);
+    const rec = await store.read("http://cronus281|BC");
+    expect(rec).not.toBeNull();
+    expect(rec?.opKind).toBe("test-run");
+    expect(rec?.recordedAtIso).toBe("2026-07-20T12:00:00.000Z");
+    // The session resolves (not rejects) with a report naming the stranded op — Step 3's "stop
+    // scheduling further mutants after the mutant loop" wiring, not just the store write.
+    expect(report).not.toBeInstanceOf(Error);
+    expect((report as Awaited<ReturnType<typeof runSession>>).quarantined?.reason).toContain(
+      "in-flight-unknown",
+    );
+  });
+
+  test("a plain deadline-exceeded (no in-flight-unknown operation) stays an ordinary error — no quarantine, session continues", async () => {
+    const dir = freshTmpDir();
+    let activeMutant: string | null = null;
+    const backend = fakeBackend({
+      capabilities: () => ({
+        coverage: "none",
+        deploy: "publish",
+        isolation: "session",
+        authoritative: false, // al-runner shape: no shared tier, mirrors the brief's "no shared tier" case
+      }),
+      activate: async (id) => {
+        activeMutant = id;
+      },
+      run: async (ref) =>
+        activeMutant === null
+          ? { ref, outcome: "pass", durationMs: 1 }
+          : { ref, outcome: "deadline-exceeded", durationMs: 1 }, // no `operation` — al-runner has no seam for it
+    });
+    const report = await runSessionForTest(backend, { quarantineDir: dir });
+    const store = new QuarantineStore(dir);
+    const rec = await store.read("http://cronus281|BC");
+    expect(rec).toBeNull(); // no quarantine recorded
+    expect(report.quarantined).toBeUndefined();
+    expect(report.counts.deadlineExceeded).toBeGreaterThan(0);
+    expect(report.counts.errors).toBeGreaterThan(0);
+  });
+});
+
+// ————————————————————————————————————————————————————————————————————————
+// Layer 5B (Task 12 follow-up): Task 12 only wired the mutant-loop's covering-test run — two
+// other `runOnce` sites also consume a `TestVerdict` and inspect `.outcome` without ever
+// looking at `.operation`: the BASELINE test loop (runs before any mutant is even scheduled)
+// and the kill-CONFIRMATION rerun (the baseline-re-run triggered by a mutant's covering test
+// failing). Both now share the same `quarantineInFlight` helper the mutant-loop's main branch
+// was refactored to call.
+// ————————————————————————————————————————————————————————————————————————
+
+describe("runSession — latch+quarantine on in-flight-unknown at baseline and kill-confirm too", () => {
+  test("a BASELINE test returning in-flight-unknown records a durable quarantine and quarantines the session before any mutant is scheduled", async () => {
+    const dir = freshTmpDir();
+    // THREE_PROC_AL's discovered test suite (from TEST_AL, via runSessionForTest) has exactly
+    // one baseline test method — so it's simultaneously the FIRST and only baseline test, and
+    // every `run()` call in this fixture is answered identically: there is no mutant-loop call
+    // to distinguish from the baseline one, because the session must never reach the mutant
+    // loop at all once the baseline itself comes back in-flight-unknown.
+    const backend = fakeBackend({
+      capabilities: () => ({
+        coverage: "none",
+        deploy: "publish",
+        isolation: "session",
+        authoritative: true, // required for the Task 11 quarantine consult/record path to engage
+      }),
+      run: async (ref) => ({
+        ref,
+        outcome: "deadline-exceeded",
+        durationMs: 1,
+        operation: "in-flight-unknown",
+      }),
+    });
+    const report = await runSessionForTest(backend, {
+      quarantineDir: dir,
+      nowIso: () => "2026-07-20T12:00:00.000Z",
+    }).catch((e) => e);
+    const store = new QuarantineStore(dir);
+    const rec = await store.read("http://cronus281|BC");
+    expect(rec).not.toBeNull();
+    expect(rec?.opKind).toBe("test-run");
+    expect(rec?.recordedAtIso).toBe("2026-07-20T12:00:00.000Z");
+    // Resolves (doesn't reject) with a quarantined report — same "stop cleanly" contract as
+    // Task 12's mutant-loop branch, not a thrown SessionUnsafeError.
+    expect(report).not.toBeInstanceOf(Error);
+    const sessionReport = report as Awaited<ReturnType<typeof runSession>>;
+    expect(sessionReport.quarantined?.reason).toContain("in-flight-unknown");
+    // No mutant scheduling: the baseline latch must stop the session before step 5/6 ever run,
+    // so nothing at all lands in `report.mutants` (not even "no green baseline tests" errors).
+    expect(sessionReport.mutants).toHaveLength(0);
+  });
+
+  test("a kill-confirmation rerun returning in-flight-unknown records a durable quarantine and latches the session unsafe", async () => {
+    const dir = freshTmpDir();
+    // Stateful fake (same pattern as the Task 12 "finally teardown"/"in-flight-unknown deadline"
+    // tests above): `activeMutant` tracks the most recent activate() call so `run()` can answer
+    // differently for the baseline/confirm (null-activation) runs vs. a mutant-active run, and
+    // `nullRuns` distinguishes the FIRST null-activation run (the baseline, which must pass so
+    // the session reaches the mutant loop) from the SECOND (the kill-confirmation rerun
+    // triggered by the first mutant's covering test failing below).
+    let activeMutant: string | null = null;
+    let nullRuns = 0;
+    const backend = fakeBackend({
+      capabilities: () => ({
+        coverage: "none", // every mutant covered by baseline's one passing test — no coverage index needed
+        deploy: "publish",
+        isolation: "session",
+        authoritative: true,
+      }),
+      activate: async (id) => {
+        activeMutant = id;
+      },
+      run: async (ref) => {
+        if (activeMutant !== null) return { ref, outcome: "fail", durationMs: 1 };
+        nullRuns++;
+        return nullRuns === 1
+          ? { ref, outcome: "pass", durationMs: 1 }
+          : { ref, outcome: "deadline-exceeded", durationMs: 1, operation: "in-flight-unknown" };
+      },
+    });
+    const report = await runSessionForTest(backend, {
+      quarantineDir: dir,
+      nowIso: () => "2026-07-20T13:00:00.000Z",
+    }).catch((e) => e);
+    const store = new QuarantineStore(dir);
+    const rec = await store.read("http://cronus281|BC");
+    expect(rec).not.toBeNull();
+    expect(rec?.opKind).toBe("test-run");
+    expect(rec?.recordedAtIso).toBe("2026-07-20T13:00:00.000Z");
+    expect(report).not.toBeInstanceOf(Error);
+    const sessionReport = report as Awaited<ReturnType<typeof runSession>>;
+    expect(sessionReport.quarantined?.reason).toContain("in-flight-unknown");
+    // Stops scheduling further mutants after the one whose confirm run tripped the latch: only
+    // that single mutant (M0001, the first one activated) reaches `report.mutants`.
+    expect(sessionReport.mutants).toHaveLength(1);
+    expect(sessionReport.mutants[0]?.verdict).toBe("error");
+    expect(sessionReport.mutants[0]?.cause).toBe("deadline-exceeded");
   });
 });

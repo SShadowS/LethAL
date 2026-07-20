@@ -1,4 +1,65 @@
-# LethAL Session Checkpoint — Layer 5A Merged (deployment identity)
+# LethAL Session Checkpoint — Layer 5B Merged (single-container runtime hardening)
+
+> **Status 2026-07-20: Layer 5B merged to master.** 16 tasks (1–7, 8, 8A, 9–15) + committed
+> itest baselines, ~25 commits, each task individually reviewed with load-bearing properties
+> mutation-verified, plus a whole-branch `opus` review returning no Critical/Important and no
+> blocking Minors. 303 unit tests pass, typecheck clean. Live gate PASS on the branch:
+> al-runner **3 killed / 13 survived / 0 no-coverage (18.8%)**, bcdev **3 / 10 / 3 (23.1%)** —
+> frozen tables unchanged.
+>
+> **What it delivers.** Single-container runtime hardening that makes the client **honest about
+> server-side operations it cannot see complete** — the "SQL death spiral" the tool exists to
+> prevent (an op times out host-side but keeps running in the container; a naive retry issues a
+> second concurrent mutating op and wedges the tier; hit live on Cronus28 with OData 7048 wedged
+> while dev 7049 still reported healthy). Backend failures are now classified by **dispatch/effect
+> state** (`OperationOutcome`: pre-dispatch-rejected / completed-accepted / completed-effect-unknown
+> / in-flight-unknown / cancelled-confirmed); **retry survives ONLY for pre-dispatch-rejected**
+> (the old `activateWithRetry`/`runWithRetry` blind retries are gone — the death-spiral trigger).
+> On any **post-dispatch ambiguity** the session latches a one-way `SessionSafety` unsafe and issues
+> **no further work-plane call** — the quarantine consult runs before `status()`, and the `finally`
+> no longer fires a mutating `activate(null)` on a possibly-stranded tier. A durable, **tier-scoped**
+> (`quarantineResourceKey`, tenant excluded — the SQL pool is tier-wide) machine-local quarantine is
+> recorded (atomic temp→rename with Windows EPERM ride-out, generation-checked CAS clear), consulted
+> at session start, and cleared **operator-proven only** via a new `clear-quarantine` CLI command;
+> a quarantined session exits code 3. A non-mutating `ReadinessProbe` (both work planes, never
+> `ClearActive`) is available post-clear.
+>
+> **The layer was reshaped after adversarial rejection.** The v1 spec claimed a confirmable in-band
+> cancel (via bc-dev's debugger `AbortActivity`) and cross-session-safe quarantine. `pi_ask`
+> gpt-5.6-sol REJECTed it: BC exposes no NST session id for a running test and `AbortActivity` is a
+> breakpoint response, not a terminate API; and a machine-local store cannot make two concurrent
+> sessions safe without a lease acquired before the first operation. v2 delivers the honest subset
+> and defers to **5C**: confirmable cancellation, the machine-global lease (true cross-session
+> safety), publication in-flight-unknown classification + `DeploymentVerifier`-after-publish gating,
+> `readActive`/`GetActive` reconciliation of `completed-effect-unknown`, and airtight parallel-worker
+> gating. All four deferrals were verified non-reachable/harmful in 5B as shipped (spec §17).
+>
+> **The defining lesson.** The review process caught what the implementer's own debug output brushed
+> past: the same "in-flight-unknown silently dropped without latching" defect existed at THREE
+> `runOnce` sites; Task 12 fixed one, the review found the other two (a Critical baseline-loop drop —
+> a first baseline test timing out ambiguously continued scheduling against a stranded tier — and an
+> Important kill-confirm-rerun drop). All three now route through one shared `quarantineInFlight`
+> helper. Adversarial external review reshaped the whole layer before a line was written.
+>
+> **Fold-ins from 5A (all four):** `deploy:"none"` app_version no longer records `0.0.0.0`;
+> `compileCheck` cleanup `rm` swallows; the per-mutant equality gate is wired into both live itests
+> as a **healthy-path regression guard** (committed baselines give it teeth); Windows EPERM rename
+> hardening in the quarantine store.
+>
+> **Deferred/Minors (none blocking; in `.superpowers/sdd/progress.md`):** the frozen-verdict bcdev
+> itest builds `SessionConfig` directly so the quarantine consult is disabled during it (hermetic by
+> design; quarantine is covered by unit fault-injection oracles + the `fixtures/README.md`
+> wedged-tier runbook) — it emits the "quarantine DISABLED" warning, which also fires in ~30
+> authoritative-backend unit tests (test-output noise, worth quieting); a pre-quarantined refusal
+> exits 1 not 3; `PublicationFailure` is defined/tested but unused in 5B (5C consumer); Task 8
+> MINOR-1 (a one-line negative assertion pinning the "server-answered ⇒ operation UNSET" branch)
+> recommended. Docs: spec `docs/superpowers/specs/2026-07-20-layer-5b-single-container-hardening-design.md`,
+> plan `docs/superpowers/plans/2026-07-20-layer-5b-single-container-hardening.md`.
+>
+> **Next:** Layer 5C — server-side fencing (stable control extension) + machine-global lease +
+> confirmable cancellation. Then 5D (pool qualification + scheduling).
+
+# Superseded: Layer 5A Merged (deployment identity)
 
 > **Status 2026-07-20: Layer 5A merged to master (`8d504cd`).** 9 tasks (1, 2, 3, 4, 5, 6, 7,
 > 7b, 8, 8b), 23 commits, each task individually reviewed with fixes verified by mutation, plus

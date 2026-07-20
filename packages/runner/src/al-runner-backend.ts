@@ -234,7 +234,13 @@ export class AlRunnerBackend implements ExecutionBackend {
     if (res.kind === "skip")
       return { ref, outcome: "skip", durationMs, failureMessage: res.detail };
     if (res.kind === "error")
-      return { ref, outcome: "error", durationMs, failureMessage: res.detail };
+      return {
+        ref,
+        outcome: "error",
+        durationMs,
+        failureMessage: res.detail,
+        operation: "pre-dispatch-rejected",
+      };
     const t = res.tests.find((x) => x.name === ref.method);
     if (!t)
       return {
@@ -242,6 +248,7 @@ export class AlRunnerBackend implements ExecutionBackend {
         outcome: "error",
         durationMs,
         failureMessage: "al-runner output missing the requested test",
+        operation: "pre-dispatch-rejected",
       };
     const runnerTimedOut =
       t.status === "fail" && t.message !== undefined && RUNNER_TIMEOUT_MESSAGE.test(t.message);

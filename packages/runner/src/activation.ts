@@ -1,3 +1,5 @@
+import { ActivationFailure } from "./failure-classes";
+
 export type FetchFn = typeof fetch;
 
 export interface ActivationConfig {
@@ -16,8 +18,10 @@ export interface ActivationConfig {
   // Observed directly against a real BC server (2026-07-18): the OData/web-service pipeline
   // can wedge and stop answering ANY request (even unrelated ones, like a plain entity read)
   // for an extended period, with no HTTP response ever arriving — `fetch()` has no default
-  // timeout, so without one this call (and activateWithRetry's single retry) would hang the
-  // whole session forever rather than surfacing a retryable/session-aborting error.
+  // timeout, so without one this call (and orchestrator.ts's `activateOnce`, which retries a
+  // `pre-dispatch-rejected` activation exactly once and never retries anything else — the old
+  // `activateWithRetry` this comment used to name was deleted in Task 10) would hang the whole
+  // session forever rather than surfacing a retryable/session-aborting error.
   readonly timeoutMs?: number;
 }
 
@@ -44,8 +48,9 @@ export async function postOData(
   // working the same way) is used instead.
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), cfg.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  let res: Response;
   try {
-    const res = await fetchFn(url, {
+    res = await fetchFn(url, {
       method: "POST",
       headers: {
         authorization: `Basic ${btoa(`${cfg.username}:${cfg.password}`)}`,
@@ -54,11 +59,26 @@ export async function postOData(
       body: body ? JSON.stringify(body) : undefined,
       signal: controller.signal,
     });
-    if (!res.ok) throw new Error(`MutationControl_${action} failed: HTTP ${res.status}`);
-    return await res.json().catch(() => ({}));
+  } catch (err) {
+    // No HTTP response ever arrived. If our own timeout aborted it, the request may have reached
+    // the server → ambiguous. A pre-response network throw (DNS/connect refused) never dispatched.
+    const aborted = controller.signal.aborted;
+    throw new ActivationFailure(
+      `MutationControl_${action} ${aborted ? "timed out" : "failed pre-dispatch"}: ${String(err)}`,
+      aborted ? "in-flight-unknown" : "pre-dispatch-rejected",
+    );
   } finally {
     clearTimeout(timer);
   }
+  if (!res.ok) {
+    // The server answered with a non-2xx. The request was dispatched and the codeunit MAY have
+    // committed before the error surfaced → effect unknown, not a clean pre-dispatch rejection.
+    throw new ActivationFailure(
+      `MutationControl_${action} failed: HTTP ${res.status}`,
+      "completed-effect-unknown",
+    );
+  }
+  return await res.json().catch(() => ({}));
 }
 
 export class MutationControlClient {
@@ -85,7 +105,10 @@ export class MutationControlClient {
   async setActive(mutantId: string): Promise<void> {
     const payload = (await this.post("SetActive", { mutantId })) as { value?: string };
     if (payload.value !== mutantId) {
-      throw new Error(`activation echo mismatch: sent ${mutantId}, got ${String(payload.value)}`);
+      throw new ActivationFailure(
+        `activation echo mismatch: sent ${mutantId}, got ${String(payload.value)}`,
+        "completed-effect-unknown",
+      );
     }
   }
 

@@ -10,10 +10,18 @@ import { ArtifactCompiler, defaultArtifactIo } from "./artifact";
 import type { ExecutionBackend } from "./backend";
 import { BcDevMcpBackend } from "./bcdev-backend";
 import { DeploymentVerifier } from "./deployment-verifier";
-import { generateMutationSet, planArtifacts, runSession } from "./orchestrator";
+import {
+  defaultQuarantineDir,
+  generateMutationSet,
+  planArtifacts,
+  runSession,
+} from "./orchestrator";
+import type { SessionConfig } from "./orchestrator";
 import { ContainerDeployer, defaultAlToolPaths, defaultDeployerIo } from "./publisher";
+import { QuarantineStore } from "./quarantine-store";
 import { renderConsole, writeJsonReport } from "./report";
 import type { SessionReport } from "./report";
+import { quarantineResourceKey } from "./resource-key";
 import { ResultsStore } from "./store";
 
 /**
@@ -55,20 +63,31 @@ export interface RunCliConfig {
   readonly compileConcurrency?: number;
 }
 
-export type CliConfig = DryRunCliConfig | RunCliConfig;
+/**
+ * `lethal clear-quarantine --server <url> --instance <name>` (spec §10): reads the current
+ * quarantine record's generation and calls `store.clear(key, gen)` — an operator-proven clear
+ * after the operator has independently recycled the tier, not a self-service unblock.
+ */
+export interface ClearQuarantineCliConfig {
+  readonly mode: "clear-quarantine";
+  readonly server: string;
+  readonly serverInstance: string;
+}
 
-const VALID_SUBCOMMANDS = ["run"] as const;
+export type CliConfig = DryRunCliConfig | RunCliConfig | ClearQuarantineCliConfig;
+
+const VALID_SUBCOMMANDS = ["run", "clear-quarantine"] as const;
 
 /**
- * `lethal` only has one subcommand today (`run`), but the CLI is invoked as
- * `lethal run --project ...` (see fixtures/README.md) rather than bare flags
- * — require and validate it explicitly so an unknown/missing subcommand
- * fails with a clear message instead of silently ignoring it.
+ * `lethal` is invoked as `lethal run --project ...` or `lethal clear-quarantine --server ...
+ * --instance ...` (see fixtures/README.md) rather than bare flags — require and validate the
+ * subcommand explicitly so an unknown/missing one fails with a clear message instead of silently
+ * ignoring it. Returns the validated subcommand so callers can dispatch on it.
  */
-function requireRunSubcommand(positionals: readonly string[]): void {
+function requireKnownSubcommand(positionals: readonly string[]): string {
   const [subcommand] = positionals;
   if (subcommand !== undefined && (VALID_SUBCOMMANDS as readonly string[]).includes(subcommand)) {
-    return;
+    return subcommand;
   }
   const got = subcommand === undefined ? "none" : `"${subcommand}"`;
   throw new Error(
@@ -96,10 +115,24 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
       "dry-run": { type: "boolean", default: false },
       workers: { type: "string" },
       "compile-concurrency": { type: "string" },
+      server: { type: "string" },
+      instance: { type: "string" },
     },
   });
 
-  requireRunSubcommand(positionals);
+  const subcommand = requireKnownSubcommand(positionals);
+
+  if (subcommand === "clear-quarantine") {
+    const server = values.server;
+    if (server === undefined || server === "") {
+      throw new Error("missing required --server <url>");
+    }
+    const serverInstance = values.instance;
+    if (serverInstance === undefined || serverInstance === "") {
+      throw new Error("missing required --instance <name>");
+    }
+    return { mode: "clear-quarantine", server, serverInstance };
+  }
 
   const projectDir = values.project;
   if (projectDir === undefined || projectDir === "") {
@@ -361,6 +394,29 @@ async function buildBackend(
   );
 }
 
+/**
+ * Maps the loaded config file's `bcdev` section to the `SessionConfig` identity fields
+ * `runSession` needs for the quarantine consult (spec §9/§11) — `resourceServer`/
+ * `resourceServerInstance`, sourced from the SAME `server`/`serverInstance` values
+ * `canonicalContainerKey` (publish-serializer.ts) and `quarantineResourceKey` (resource-key.ts)
+ * already key off. Only a bcdev session has a shared server-side tier to strand — al-runner
+ * omits both fields, which `runSession` treats as "no shared tier to consult", not an error.
+ *
+ * Kept as its own small, directly unit-testable, pure seam (rather than inlined in `runFromCli`)
+ * because this exact gap — `cli.ts` never sourcing these fields, so the quarantine consult wired
+ * in `runSession` was silently inert for every real CLI-driven bcdev session — was flagged by
+ * Task 11's review and folded into Task 13. A test on this one function pins the fix down without
+ * needing to unit-test `main()`/`runFromCli` end to end.
+ */
+export function resourceIdentityFor(
+  parsed: RunCliConfig,
+  configFile: LethalConfigFile,
+): Pick<SessionConfig, "resourceServer" | "resourceServerInstance"> {
+  if (parsed.backendKind !== "bcdev") return {};
+  const c = validateBcDevConfig(configFile.bcdev);
+  return { resourceServer: c.server, resourceServerInstance: c.serverInstance };
+}
+
 function lineOfIndex(source: string, index: number): number {
   let line = 1;
   for (let i = 0; i < index && i < source.length; i++) {
@@ -433,6 +489,7 @@ async function runFromCli(parsed: RunCliConfig): Promise<SessionReport> {
       ...(parsed.compileConcurrency !== undefined
         ? { compileConcurrency: parsed.compileConcurrency }
         : {}),
+      ...resourceIdentityFor(parsed, configFile),
       ...(parsed.workers > 1
         ? {
             backendFactory: (i: number) => {
@@ -457,21 +514,70 @@ async function runFromCli(parsed: RunCliConfig): Promise<SessionReport> {
   }
 }
 
-async function main(): Promise<void> {
+/**
+ * Distinct process exit code for a `quarantined` session result (`SessionReport.quarantined`
+ * set — a run came back in-flight-unknown, latched unsafe, and durably quarantined the tier,
+ * spec §8/§12) — separate from exit 1's "an ordinary uncaught failure/config error". A CI/operator
+ * script can branch on this without parsing the rendered console report: 3 means "the tier may be
+ * stranded, go recycle it and run `lethal clear-quarantine`", not "fix your config and retry".
+ */
+const QUARANTINED_EXIT_CODE = 3;
+
+/**
+ * Operator-proven clear (spec §10): reads the current quarantine record's generation and calls
+ * `store.clear(key, gen)` — never an unconditional delete, so a clear computed against a
+ * generation the store no longer holds (a NEWER strand was recorded on this tier since) comes
+ * back "stale" and leaves that newer record intact rather than erasing it. An absent record is
+ * idempotent "not-quarantined". Takes an already-constructed `QuarantineStore` (rather than
+ * building one from `defaultQuarantineDir()` itself) so this — the actual clear logic — is
+ * directly unit-testable against a scratch store, without a test having to touch the real
+ * operator-facing `~/.lethal/quarantine` directory `clearQuarantineFromCli` below points at.
+ */
+export async function clearQuarantine(
+  store: QuarantineStore,
+  key: string,
+): Promise<"cleared" | "stale" | "not-quarantined"> {
+  const rec = await store.read(key);
+  if (rec === null) return "not-quarantined";
+  return await store.clear(key, rec.generation);
+}
+
+/**
+ * `lethal clear-quarantine --server ... --instance ...` (spec §10). Opens the SAME store
+ * `runSession` durably writes to (`defaultQuarantineDir`) — there is no `--quarantine-dir`
+ * override here because an operator clearing a real tier must hit the real store, not one a
+ * stray flag silently redirected.
+ */
+async function clearQuarantineFromCli(parsed: ClearQuarantineCliConfig): Promise<number> {
+  const key = quarantineResourceKey({
+    server: parsed.server,
+    serverInstance: parsed.serverInstance,
+  });
+  const store = new QuarantineStore(defaultQuarantineDir());
+  const result = await clearQuarantine(store, key);
+  console.log(result); // "cleared" | "stale" | "not-quarantined"
+  return result === "stale" ? 1 : 0;
+}
+
+async function main(): Promise<number> {
   const parsed = parseCliConfig(process.argv.slice(2));
   if (parsed.mode === "dry-run") {
     await printDryRun(parsed.projectDir);
-    return;
+    return 0;
+  }
+  if (parsed.mode === "clear-quarantine") {
+    return await clearQuarantineFromCli(parsed);
   }
   const report = await runFromCli(parsed);
   console.log(renderConsole(report));
   if (parsed.outPath !== undefined) await writeJsonReport(report, parsed.outPath);
+  return report.quarantined !== undefined ? QUARANTINED_EXIT_CODE : 0;
 }
 
 if (import.meta.main) {
   main()
-    .then(() => {
-      process.exit(0);
+    .then((exitCode) => {
+      process.exit(exitCode);
     })
     .catch((err: unknown) => {
       console.error(err instanceof Error ? (err.stack ?? String(err)) : String(err));

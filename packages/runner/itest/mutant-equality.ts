@@ -1,6 +1,12 @@
 /**
- * Per-mutant regression-equality gate (Layer 5A, design spec §11): "Per-mutant regression
- * equality — not aggregate counts, which can match while individual verdicts are swapped."
+ * Per-mutant HEALTHY-PATH regression guard (Layer 5A, design spec §11; renamed and scoped by the
+ * Layer 5B fold-in, design spec §13 item 1): "Per-mutant regression equality — not aggregate
+ * counts, which can match while individual verdicts are swapped."
+ *
+ * ROLE, PRECISELY: this proves the *healthy* path's per-mutant verdicts are unchanged across two
+ * runs — it is NOT "the oracle every task checks." It gives ZERO evidence for failure-path logic
+ * (cancellation, quarantine, retry classification, ...), which never fires on a healthy run by
+ * construction. Each failure seam needs its own fault-injection oracle instead (design spec §14).
  *
  * Aggregate counts (killed 3 / survived 10 / no-coverage 3) are a smoke test only. Two reports
  * can share every aggregate count while two mutants' verdicts have been silently swapped

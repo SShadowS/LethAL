@@ -1,4 +1,5 @@
 import { access, copyFile, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { tier1Operators } from "@lethal/builtin-tier1";
 import {
@@ -24,9 +25,13 @@ import type { CompiledArtifact } from "./artifact";
 import type { ExecutionBackend, TestMethodRef, TestVerdict } from "./backend";
 import { bisectFailingMutant } from "./bisect";
 import { discoverTests } from "./discovery";
+import { ActivationFailure } from "./failure-classes";
+import { isRetrySafe, requiresUnsafeLatch } from "./operation-outcome";
 import { Semaphore, shardEvenly } from "./pool";
+import { QuarantineStore } from "./quarantine-store";
 import { buildReport } from "./report";
 import type { SessionOutcome, SessionReport } from "./report";
+import { quarantineResourceKey } from "./resource-key";
 import {
   buildCoverageIndex,
   coverageFilter,
@@ -34,6 +39,7 @@ import {
   identityKeyOf,
   testKeyOf,
 } from "./selection";
+import { SessionSafety } from "./session-safety";
 import type { ResultsStore } from "./store";
 import type { MutantVerdict } from "./store";
 
@@ -99,13 +105,39 @@ export interface SessionConfig {
   readonly selectorIds: SelectorConfig;
   readonly baselineTimeoutMs?: number; // default 120000
   readonly skipKnownSurvivors?: boolean;
-  // createRun placeholder only (default "0.0.0.0") — after a successful deploy the run row is
-  // corrected via store.recordArtifact with the version actually compiled (reserveAppVersion).
+  // createRun placeholder only. For an authoritative (publishing) backend, a successful deploy
+  // corrects the run row via store.recordArtifact with the version actually compiled
+  // (reserveAppVersion) — this value never survives past that point. For a deploy:"none" backend
+  // (al-runner), deploy() never returns a CompiledArtifact (see AlRunnerBackend.deploy's doc
+  // comment), so recordArtifact never fires and THIS is what durably lands in the row;
+  // runSession falls back to the project's own app.json version for that case when unset (see
+  // readAppVersionBestEffort) rather than the meaningless "0.0.0.0" default.
   readonly appVersion?: string;
   readonly workers?: number; // default 1 — a pool of one IS the sequential path
   readonly compileConcurrency?: number; // default min(workers, 4)
   /** Required when workers > 1: each worker needs its own backend instance. */
   readonly backendFactory?: (workerIndex: number) => ExecutionBackend;
+  /** Machine-local durable-quarantine base directory (spec §9). Defaults to
+   *  `~/.lethal/quarantine` via `defaultQuarantineDir()` when omitted; tests inject a scratch dir
+   *  so quarantine state never leaks across test runs or into the real user's home directory. */
+  readonly quarantineDir?: string;
+  /**
+   * Physical BC service-tier identity for the quarantine consult (spec §9) — the server + server
+   * instance the AUTHORITATIVE (bcdev) backend targets, sourced from the bcdev config section
+   * (tenant deliberately excluded — see `quarantineResourceKey`, which scopes quarantine to the
+   * shared tier, not any one tenant on it). The consult only runs when the backend reports
+   * `capabilities().authoritative` AND both fields are present: al-runner (non-authoritative) has
+   * no shared server-side tier to strand and legitimately omits them, and an authoritative caller
+   * that omits them (e.g. a unit test exercising an in-memory stub) silently skips the consult
+   * rather than crashing on an incomplete tier identity.
+   */
+  readonly resourceServer?: string;
+  readonly resourceServerInstance?: string;
+  /** Injectable ISO-timestamp source for durable quarantine records (Task 12). Production code
+   *  freely uses `Date`/`Date.now()` (only workflow SCRIPTS forbid them — see design notes);
+   *  this exists purely so tests can assert against a fixed, deterministic `recordedAtIso`
+   *  instead of racing the real clock. Defaults to `() => new Date().toISOString()`. */
+  readonly nowIso?: () => string;
 }
 
 /** Alias kept for readability at call sites within this module. */
@@ -340,8 +372,126 @@ async function bisectAndNote(args: {
   }
 }
 
+/** Production default for `SessionConfig.quarantineDir` (spec §9). Kept as a named helper (rather
+ *  than inlined `?? ...`) so tests can assert against it and so there is exactly one place that
+ *  decides what "no quarantineDir configured" means. Exported so `cli.ts`'s `clear-quarantine`
+ *  command opens the SAME store `runSession` durably writes to — a second, drifting default here
+ *  would silently target the wrong directory and never actually clear anything. */
+export function defaultQuarantineDir(): string {
+  return join(homedir(), ".lethal", "quarantine");
+}
+
+/**
+ * Latch the session unsafe and durably quarantine the tier when a run's server-side fate is
+ * unknown (spec §8/§12). Shared by every call site that inspects a `TestVerdict`/confirm
+ * result's `.operation` — the baseline loop, the mutant-loop covering-test run, and the
+ * kill-confirmation rerun — so the latch+record semantics live in exactly one place. Records
+ * only when the store+key exist (al-runner has no tier, and an authoritative caller that
+ * omitted `resourceServer`/`resourceServerInstance` is tolerated the same way — see
+ * `runSession`'s `resourceKey`/`quarantineStore` doc comment); the latch itself always trips
+ * regardless.
+ */
+async function quarantineInFlight(args: {
+  readonly safety: SessionSafety;
+  readonly quarantineStore: QuarantineStore | undefined;
+  readonly resourceKey: string | undefined;
+  readonly nowIso: () => string;
+  readonly detail: string;
+}): Promise<void> {
+  args.safety.latchUnsafe(args.detail);
+  if (args.quarantineStore !== undefined && args.resourceKey !== undefined) {
+    await args.quarantineStore.record({
+      resourceKey: args.resourceKey,
+      opKind: "test-run",
+      detail: args.detail,
+      recordedAtIso: args.nowIso(),
+    });
+  }
+}
+
+/**
+ * Best-effort app.json version lookup for `runSession`'s `createRun` call. Layer 5A already
+ * derives the version a PUBLISHING run's row ends up recording from the project's own app.json
+ * (via `readProjectManifest`/`reserveAppVersion` in the batch loop below, corrected into the run
+ * row by step 3d's `recordArtifact` call) — but a `deploy: "none"` backend's `deploy()` always
+ * returns `null` (nothing compiled, see `AlRunnerBackend.deploy`'s doc comment), so that
+ * correction never fires for it, and `createRun`'s placeholder is whatever durably lands in the
+ * row. Read the SAME source (the project's raw app.json `version` field — not
+ * `reserveAppVersion`'s clock-derived reservation, since al-runner never publishes and so has
+ * nothing to keep monotonic) so a deploy:none run's row records real metadata instead of a
+ * meaningless "0.0.0.0".
+ *
+ * Deliberately tolerant of a missing/malformed app.json (returns `undefined`, letting the caller
+ * fall back to the old placeholder) rather than `readProjectManifest`'s loud-throw contract: this
+ * runs BEFORE `generateMutationSet`/`planArtifacts` decide whether the session has any mutable
+ * sites at all, and a project with none is documented to reach no app.json requirement whatsoever
+ * (see `planArtifacts`'s doc comment) — this lookup must not turn that into a hard requirement.
+ */
+async function readAppVersionBestEffort(projectDir: string): Promise<string | undefined> {
+  try {
+    const raw = await readFile(join(projectDir, "app.json"), "utf8");
+    const parsed = JSON.parse(raw) as { version?: unknown };
+    return typeof parsed.version === "string" ? parsed.version : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
+  // Constructed once for the whole session and threaded to every activateOnce call site
+  // (baseline activation below, and the per-mutant loop in runMutantsOnBackend) — the latch is
+  // per-SESSION (spec §8), not per-call, so every activation attempt must consult and be able
+  // to trip the same one. The quarantine consult immediately below runs BEFORE status() so an
+  // already-stranded tier refuses even a readiness probe; the `finally` teardown at the bottom of
+  // this function is latch-gated so no mutating ClearActive ever runs once unsafe.
+  const safety = new SessionSafety();
   const caps = cfg.backend.capabilities();
+  const nowIso = cfg.nowIso ?? (() => new Date().toISOString());
+  // Quarantine consult (spec §8/§9): a tier a PRIOR session marked stranded must refuse this
+  // session outright, before even a non-mutating status() probe. Only meaningful for an
+  // authoritative backend with a known tier identity — see SessionConfig.resourceServer's doc
+  // comment for why an authoritative caller missing the identity fields is tolerated (skip, not
+  // throw) rather than treated as a configuration error here.
+  //
+  // `resourceKey`/`quarantineStore` are declared at this outer scope (not just inside the `if`
+  // below) so the mutant loop (Task 12) can also record a NEW quarantine when a test run comes
+  // back in-flight-unknown mid-session — they stay `undefined` for exactly the backends that
+  // legitimately have no shared tier to strand (al-runner) or omit identity fields, and the
+  // mutant loop treats "no store" as "latch only, nothing durable to record" (see
+  // `runMutantsOnBackend`'s deadline branch).
+  let resourceKey: string | undefined;
+  let quarantineStore: QuarantineStore | undefined;
+  if (
+    caps.authoritative &&
+    cfg.resourceServer !== undefined &&
+    cfg.resourceServerInstance !== undefined
+  ) {
+    resourceKey = quarantineResourceKey({
+      server: cfg.resourceServer,
+      serverInstance: cfg.resourceServerInstance,
+    });
+    quarantineStore = new QuarantineStore(cfg.quarantineDir ?? defaultQuarantineDir());
+    const existing = await quarantineStore.read(resourceKey);
+    if (existing !== null) {
+      throw new Error(
+        `tier ${resourceKey} is quarantined (${existing.opKind}: ${existing.detail}, recorded ${existing.recordedAtIso}, generation ${existing.generation}). Recycle the tier and run 'lethal clear-quarantine' to clear it.`,
+      );
+    }
+  } else if (caps.authoritative) {
+    // Safety net (Task 13 folded fix): an authoritative backend with NO tier identity means the
+    // quarantine consult above is silently skipped — no prior strand is detected, and no NEW
+    // strand can be durably recorded (see `quarantineInFlight`'s "no store" note). That is
+    // TOLERATED (not thrown — ~30 pre-existing authoritative-backend unit tests exercise an
+    // in-memory stub and never set these fields), but it must never be SILENT: a regression in
+    // whatever wires `resourceServer`/`resourceServerInstance` from config (cli.ts sources them
+    // from the bcdev config section's `server`/`serverInstance`) would otherwise leave quarantine
+    // permanently inert against a real BC server without any signal.
+    console.warn(
+      "runSession: authoritative backend but SessionConfig.resourceServer/resourceServerInstance " +
+        "are not set — the quarantine consult is DISABLED for this session (a prior strand on this " +
+        "tier will not be detected, and this session cannot durably record a new one).",
+    );
+  }
   const status = await cfg.backend.status();
   if (!status.ok) throw new Error(`backend not ready: ${status.details}`);
 
@@ -360,7 +510,15 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   const runId = cfg.store.createRun({
     projectPath: cfg.projectDir,
     backend: caps.authoritative ? "bcdev" : "al-runner",
-    appVersion: cfg.appVersion ?? "0.0.0.0",
+    // Authoritative backends: whatever lands here is corrected below (3d) once the real
+    // compiled version is known, so there's no need to read app.json twice — "0.0.0.0" is a
+    // harmless placeholder there. Non-authoritative (deploy:"none") backends never get that
+    // correction (see readAppVersionBestEffort's doc comment), so fall back to the project's
+    // own app.json version instead of the placeholder when the caller didn't already supply one.
+    appVersion:
+      cfg.appVersion ??
+      (caps.authoritative ? undefined : await readAppVersionBestEffort(cfg.projectDir)) ??
+      "0.0.0.0",
   });
 
   const allFiles = await generateMutationSet(cfg.projectDir);
@@ -573,10 +731,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       }
 
       // 4. baseline
-      await activateWithRetry(cfg.backend, null);
+      await activateOnce(cfg.backend, safety, null);
       const baseline: Array<{ ref: TestMethodRef; verdict: TestVerdict }> = [];
       for (const ref of tests) {
-        const v = await runWithRetry(cfg.backend, ref, {
+        const v = await runOnce(cfg.backend, ref, {
           coverage: caps.coverage,
           timeoutMs: cfg.baselineTimeoutMs ?? BASELINE_TIMEOUT_DEFAULT,
         });
@@ -590,8 +748,24 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           v.durationMs,
           v.failureMessage,
         );
+        if (v.operation !== undefined && requiresUnsafeLatch(v.operation)) {
+          // The server may still be executing this baseline test. Latch unsafe, record a
+          // durable tier quarantine, and stop collecting baseline results — no further
+          // work-plane call (spec §8, §12). A stranded baseline test leaves nothing safe to
+          // do with `greenTests`/mutant scheduling either way, so there's nothing left but to
+          // stop (checked via `safety.isUnsafe` right below, same as the post-batch guard).
+          await quarantineInFlight({
+            safety,
+            quarantineStore,
+            resourceKey,
+            nowIso,
+            detail: `baseline test in-flight-unknown running ${ref.method}`,
+          });
+          break;
+        }
         baseline.push({ ref, verdict: v });
       }
+      if (safety.isUnsafe) break; // stop the whole session — no mutant scheduling, no next batch
       const greenTests = baseline.filter((b) => b.verdict.outcome === "pass");
       if (greenTests.length < baseline.length) baselineGreenOverall = false;
       if (greenTests.length === 0) {
@@ -647,6 +821,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         // one backend already deployed in step 3.
         await runMutantsOnBackend({
           backend: cfg.backend,
+          safety,
           mutants: execute,
           perMutantTests,
           baselineDuration,
@@ -655,6 +830,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           runId,
           batchIndex: batchIdx,
           outcomes,
+          quarantineStore,
+          resourceKey,
+          nowIso,
         });
       } else {
         const shards = shardEvenly(execute, workers);
@@ -729,6 +907,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
             }
             await runMutantsOnBackend({
               backend,
+              safety,
               mutants: shard,
               perMutantTests,
               baselineDuration,
@@ -737,6 +916,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
               runId,
               batchIndex: batchIdx,
               outcomes,
+              quarantineStore,
+              resourceKey,
+              nowIso,
             });
           }),
         );
@@ -745,16 +927,31 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         );
         if (firstRejection !== undefined) throw firstRejection.reason;
       }
+      // Task 12 (spec §8/§12): an in-flight-unknown deadline anywhere in this batch's mutant
+      // loop latches `safety` and records a durable quarantine — no further batch may schedule
+      // any work-plane call (deploy/activate/run) against a tier that may still be stranded.
+      if (safety.isUnsafe) break;
     }
   } finally {
     // Best-effort cleanup: deliberately swallow errors here (unlike the
     // retrying activation calls above) since this only runs to leave every
     // backend deactivated on exit, and a failure here must not mask/replace
     // whatever real error is already propagating.
-    await cfg.backend.activate(null).catch(() => {});
-    for (const backend of workerBackends) {
-      await backend.activate(null).catch(() => {});
-      await closeIfSupported(backend).catch(() => {});
+    //
+    // After an unsafe latch, NO work-plane call — not even the deactivating ClearActive, which is
+    // itself a mutating op on the stranded tier (spec §8). Only local teardown runs.
+    if (!safety.isUnsafe) {
+      await cfg.backend.activate(null).catch(() => {});
+      for (const backend of workerBackends) {
+        await backend.activate(null).catch(() => {});
+        await closeIfSupported(backend).catch(() => {});
+      }
+    } else {
+      // local teardown only: close transports/children, never activate.
+      await closeIfSupported(cfg.backend).catch(() => {});
+      for (const backend of workerBackends) {
+        await closeIfSupported(backend).catch(() => {});
+      }
     }
   }
 
@@ -777,6 +974,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     baselineGreen: baselineGreenOverall,
     batches: artifacts.length,
     outcomes,
+    ...(safety.isUnsafe ? { quarantined: { reason: safety.reason ?? "unknown" } } : {}),
   });
 }
 
@@ -812,6 +1010,7 @@ async function closeIfSupported(backend: ExecutionBackend): Promise<void> {
  */
 async function runMutantsOnBackend(args: {
   readonly backend: ExecutionBackend;
+  readonly safety: SessionSafety;
   readonly mutants: readonly MutantManifestEntry[];
   readonly perMutantTests: ReadonlyMap<string, readonly TestMethodRef[]>;
   readonly baselineDuration: ReadonlyMap<string, number>;
@@ -820,6 +1019,16 @@ async function runMutantsOnBackend(args: {
   readonly runId: number;
   readonly batchIndex: number;
   readonly outcomes: SessionOutcome[];
+  /**
+   * Durable-quarantine sink for an in-flight-unknown deadline (Task 12, spec §9). `undefined`
+   * for exactly the sessions `runSession`'s own consult block already tolerates missing tier
+   * identity for — al-runner (no shared server-side tier to strand) or an authoritative caller
+   * that omitted `resourceServer`/`resourceServerInstance` — the latch still always trips in
+   * that case, there's just nothing durable on disk to record.
+   */
+  readonly quarantineStore?: QuarantineStore | undefined;
+  readonly resourceKey?: string | undefined;
+  readonly nowIso: () => string;
 }): Promise<void> {
   for (const m of args.mutants) {
     const covering = args.perMutantTests.get(m.mutantId);
@@ -832,7 +1041,7 @@ async function runMutantsOnBackend(args: {
       record(args.store, args.runId, m, "no-coverage", args.outcomes, args.batchIndex);
       continue;
     }
-    await activateWithRetry(args.backend, m.mutantId);
+    await activateOnce(args.backend, args.safety, m.mutantId);
     let verdict: SessionVerdict = "survived";
     let killingTest: string | undefined;
     let failureNote: string | undefined;
@@ -852,7 +1061,7 @@ async function runMutantsOnBackend(args: {
     let transportErrorRef: TestMethodRef | undefined;
     for (const ref of covering) {
       const budget = 2 * (args.baselineDuration.get(testKeyOf(ref)) ?? args.fallbackTimeoutMs);
-      const v = await runWithRetry(args.backend, ref, { coverage: "none", timeoutMs: budget });
+      const v = await runOnce(args.backend, ref, { coverage: "none", timeoutMs: budget });
       testResultBuffer.push({
         mutantCode: m.mutantId,
         ref,
@@ -861,6 +1070,21 @@ async function runMutantsOnBackend(args: {
         failureMessage: v.failureMessage,
       });
       spent += v.durationMs;
+      if (v.operation !== undefined && requiresUnsafeLatch(v.operation)) {
+        // The server may still be executing this test. Latch unsafe, record a durable tier
+        // quarantine, and stop — no further work-plane call (spec §8, §12).
+        await quarantineInFlight({
+          safety: args.safety,
+          quarantineStore: args.quarantineStore,
+          resourceKey: args.resourceKey,
+          nowIso: args.nowIso,
+          detail: `test in-flight-unknown running ${ref.method} (mutant ${m.mutantId})`,
+        });
+        verdict = "error";
+        failureNote = `quarantined: ${ref.method} timed out, container may be stranded`;
+        cause = "deadline-exceeded";
+        break;
+      }
       if (v.outcome === "deadline-exceeded") {
         // Our timer, not the runner's: says nothing about the mutant.
         verdict = "error";
@@ -874,19 +1098,19 @@ async function runMutantsOnBackend(args: {
         break;
       }
       if (v.outcome === "error") {
-        // runWithRetry already retried once internally — reaching "error"
-        // here means the backend failed transport for this test TWICE in
-        // a row. Spec §11: that aborts the whole session, not just this
-        // mutant (unlike the "unstable test" error path below, which is a
-        // legitimate flakiness finding, not a transport failure).
+        // runOnce already retried a pre-dispatch-rejected run internally — reaching "error"
+        // here means either that retry also failed, or the first failure wasn't retry-safe
+        // (e.g. in-flight-unknown) and was rethrown as-is without a second attempt. Spec §11:
+        // that aborts the whole session, not just this mutant (unlike the "unstable test" error
+        // path below, which is a legitimate flakiness finding, not a transport failure).
         verdict = "error";
         failureNote = v.failureMessage;
         transportErrorRef = ref;
         break;
       }
       if (v.outcome === "fail") {
-        await activateWithRetry(args.backend, null);
-        const confirm = await runWithRetry(args.backend, ref, {
+        await activateOnce(args.backend, args.safety, null);
+        const confirm = await runOnce(args.backend, ref, {
           coverage: "none",
           timeoutMs: budget,
         });
@@ -897,7 +1121,22 @@ async function runMutantsOnBackend(args: {
           durationMs: confirm.durationMs,
           failureMessage: confirm.failureMessage,
         });
-        if (confirm.outcome === "pass") {
+        if (confirm.operation !== undefined && requiresUnsafeLatch(confirm.operation)) {
+          // The server may still be executing this confirmation run. Latch unsafe, record a
+          // durable tier quarantine, and stop — same in-flight-unknown handling as the
+          // covering-test run above (spec §8, §12); the post-loop `safety.isUnsafe` check
+          // (below) stops scheduling further mutants.
+          await quarantineInFlight({
+            safety: args.safety,
+            quarantineStore: args.quarantineStore,
+            resourceKey: args.resourceKey,
+            nowIso: args.nowIso,
+            detail: `test in-flight-unknown confirming ${ref.method} (mutant ${m.mutantId})`,
+          });
+          verdict = "error";
+          failureNote = `quarantined: ${ref.method} confirm timed out, container may be stranded`;
+          cause = "deadline-exceeded";
+        } else if (confirm.outcome === "pass") {
           verdict = "killed";
           killingTest = ref.method;
         } else if (confirm.outcome === "deadline-exceeded") {
@@ -943,6 +1182,13 @@ async function runMutantsOnBackend(args: {
           `(test ${transportErrorRef.method}) — aborting session per spec §11: ${failureNote ?? ""}`,
       );
     }
+    // Task 12 (spec §8/§12): the in-flight-unknown branch above just latched `safety` — stop
+    // scheduling further mutants in THIS shard rather than letting the next iteration's
+    // `activateOnce` discover the latch by throwing `SessionUnsafeError`. Checked here (after
+    // this mutant's own record/flush completed) rather than relying on that throw so the shard
+    // returns normally and `runSession` can still assemble a `quarantined` report instead of
+    // rejecting.
+    if (args.safety.isUnsafe) break;
   }
 }
 
@@ -1031,30 +1277,60 @@ async function prepareBatchProject(
 }
 
 /**
- * One retry on activation failure; if the retry also fails, the error
- * propagates and aborts the session (the `finally` in `runSession` still
- * attempts a best-effort deactivation, and results recorded so far remain
- * persisted in the store since they're written incrementally).
+ * One activation attempt. Retries ONLY a `pre-dispatch-rejected` failure (provably never reached
+ * the server). An `in-flight-unknown` failure latches the session unsafe and rethrows — retrying
+ * an activation that may still be executing is the death-spiral trigger (spec §12). A
+ * `completed-effect-unknown` failure is NOT retried either — it is rethrown for the mutant loop to
+ * record the affected mutant as an untrustworthy `error` (reconciliation-by-read is deferred to 5C).
  */
-async function activateWithRetry(
+export async function activateOnce(
   backend: ExecutionBackend,
+  safety: SessionSafety,
   mutantId: string | null,
 ): Promise<void> {
+  safety.assertSafe(`activate(${mutantId ?? "null"})`);
   try {
     await backend.activate(mutantId);
-  } catch {
-    await backend.activate(mutantId);
+  } catch (err) {
+    if (err instanceof ActivationFailure) {
+      if (isRetrySafe(err.outcome)) {
+        try {
+          await backend.activate(mutantId); // one retry: nothing was dispatched the first time
+          return;
+        } catch (retryErr) {
+          // The retry itself is a fresh dispatch — if IT resolves in-flight-unknown, the latch
+          // invariant must still trip here, not just on the first attempt's outcome. Without
+          // this, a retry-safe-then-ambiguous sequence would rethrow without ever latching
+          // `safety`, leaving later work-plane calls (finally's ClearActive included) unguarded.
+          if (retryErr instanceof ActivationFailure && requiresUnsafeLatch(retryErr.outcome)) {
+            safety.latchUnsafe(`activation retry in-flight-unknown: ${retryErr.message}`);
+          }
+          throw retryErr;
+        }
+      }
+      if (requiresUnsafeLatch(err.outcome)) {
+        safety.latchUnsafe(`activation in-flight-unknown: ${err.message}`);
+      }
+    }
+    throw err;
   }
 }
 
-async function runWithRetry(
+/**
+ * One test run. Retries ONLY a `pre-dispatch-rejected` run (the connect never dispatched a test).
+ * An `in-flight-unknown` run is never retried — the first run may still be executing server-side.
+ */
+export async function runOnce(
   backend: ExecutionBackend,
   ref: TestMethodRef,
   opts: { coverage: "none" | "procedure" | "line"; timeoutMs: number },
 ): Promise<TestVerdict> {
   const first = await backend.run(ref, opts);
   if (first.outcome !== "error") return first;
-  return backend.run(ref, opts); // one retry on transport error, then the error stands
+  if (first.operation !== undefined && isRetrySafe(first.operation)) {
+    return backend.run(ref, opts);
+  }
+  return first;
 }
 
 /**

@@ -33,6 +33,7 @@ import { generateMutationSet, runSession } from "../src/orchestrator";
 import { ContainerDeployer, defaultAlToolPaths, defaultDeployerIo } from "../src/publisher";
 import type { SessionReport } from "../src/report";
 import { ResultsStore } from "../src/store";
+import { assertMatchesBaseline } from "./baseline-guard";
 
 if (!process.env.LETHAL_ITEST_BCDEV) {
   console.log(
@@ -48,6 +49,10 @@ const PROJECT_DIR = join(REPO_ROOT, "fixtures", "sandbox-app");
 const TEST_DIR = join(REPO_ROOT, "fixtures", "sandbox-tests");
 const LAUNCH_LOCAL_PATH = join(PROJECT_DIR, ".vscode", "launch.local.json");
 const CONFIG_LOCAL_PATH = join(PROJECT_DIR, "lethal.config.local.json");
+// Committed per-mutant healthy-path baseline (Task 15, design spec §14) — see baseline-guard.ts.
+// Aggregate counts (EXPECTED below) are a smoke test; this catches a per-mutant verdict swap
+// that leaves the aggregate counts unchanged.
+const BASELINE_PATH = join(HERE, "bcdev.baseline.json");
 
 // Must live inside the fixture's declared idRanges (79000-79199, see fixtures/README.md) —
 // the real alc.exe enforces app.json idRanges (AL0297) for every compiled object, including
@@ -228,6 +233,10 @@ async function main(): Promise<void> {
   try {
     const first = await runOnce(scratchA);
     assertVerdictTable(first);
+    // Per-mutant regression guard against the committed baseline — in addition to the aggregate
+    // verdict counts assertVerdictTable already checked. A per-mutant difference fails the
+    // itest even when killed/survived/no-coverage totals still match (Task 15, design spec §14).
+    await assertMatchesBaseline(first, BASELINE_PATH, "bcdev itest");
 
     const second = await runOnce(scratchB);
     assertVerdictTable(second);

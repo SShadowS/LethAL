@@ -31,6 +31,7 @@ import { AlRunnerBackend } from "../src/al-runner-backend";
 import { generateMutationSet, runSession } from "../src/orchestrator";
 import type { SessionReport } from "../src/report";
 import { ResultsStore } from "../src/store";
+import { assertMatchesBaseline } from "./baseline-guard";
 
 if (!process.env.LETHAL_ITEST_ALRUNNER) {
   console.log("skipped (set LETHAL_ITEST_ALRUNNER=1 and LETHAL_ALRUNNER_PATH=<path> to run)");
@@ -57,6 +58,11 @@ const TEST_DIR = join(REPO_ROOT, "fixtures", "sandbox-tests");
 // idRanges (79000-79199) — the real alc.exe used by the bcdev backend enforces app.json
 // idRanges (AL0297), even though al-runner's own compiler tolerated out-of-range ids.
 const SELECTOR_IDS = { selectorId: 79199, controlId: 79198, tableId: 79197 };
+
+// Committed per-mutant healthy-path baseline (Task 15, design spec §14) — see baseline-guard.ts.
+// Aggregate counts (EXPECTED below) are a smoke test; this catches a per-mutant verdict swap
+// that leaves the aggregate counts unchanged.
+const BASELINE_PATH = join(HERE, "al-runner.baseline.json");
 
 // Hand-computed against fixtures/sandbox-app/src (see fixtures/README.md §Expected verdict table).
 // al-runner reports coverage:"none", so the orchestrator never emits a "no-coverage" verdict —
@@ -146,6 +152,10 @@ async function main(): Promise<void> {
   try {
     const first = await runOnce(scratchA);
     assertVerdictTable(first);
+    // Per-mutant regression guard against the committed baseline — in addition to the aggregate
+    // verdict counts assertVerdictTable already checked. A per-mutant difference fails the
+    // itest even when killed/survived/no-coverage totals still match (Task 15, design spec §14).
+    await assertMatchesBaseline(first, BASELINE_PATH, "al-runner itest");
 
     const second = await runOnce(scratchB);
     assertVerdictTable(second);

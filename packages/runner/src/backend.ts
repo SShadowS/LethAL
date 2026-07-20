@@ -1,4 +1,5 @@
 import type { CompiledArtifact } from "./artifact";
+import type { OperationOutcome } from "./operation-outcome";
 
 export interface TestMethodRef {
   readonly codeunitId: number;
@@ -32,6 +33,12 @@ export interface TestVerdict {
   readonly durationMs: number;
   readonly failureMessage?: string;
   readonly coverage?: CoverageMap;
+  /**
+   * The dispatch/effect state of this run (spec §7/§11). Absent ⇒ a terminal test outcome
+   * (`completed-accepted`). Set on failure paths to distinguish a retry-safe pre-dispatch
+   * failure from an `in-flight-unknown` one the orchestrator must quarantine.
+   */
+  readonly operation?: OperationOutcome;
 }
 
 export interface BackendCapabilities {

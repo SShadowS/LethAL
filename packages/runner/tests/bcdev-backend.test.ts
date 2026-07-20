@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { z } from "zod";
 import { MutationControlClient } from "../src/activation";
 import {
@@ -13,9 +14,12 @@ import {
   DeploymentError,
   defaultArtifactIo,
 } from "../src/artifact";
+import type { ArtifactIo } from "../src/artifact";
 import { BcDevMcpBackend } from "../src/bcdev-backend";
 import type { BcDevDeployment } from "../src/bcdev-backend";
 import { DeploymentVerifier } from "../src/deployment-verifier";
+import { ActivationFailure } from "../src/failure-classes";
+import { requiresUnsafeLatch } from "../src/operation-outcome";
 import { ContainerDeployer } from "../src/publisher";
 import type { SpawnFn } from "../src/publisher";
 import { buildFakeApp } from "./helpers/fake-app";
@@ -136,6 +140,66 @@ function makeBackend(
   return new BcDevMcpBackend(
     { mcpCommand: ["unused"], project: "/al", server: "http://bc", serverInstance: "BC" },
     () => clientTransport,
+  );
+}
+
+/** `run()` never resolves the deadline race until its timer wins: a callTool that never
+ * settles is exactly the harness `makeBackend` already supports (see the pre-existing
+ * "bcdev has no runner-confirmed timeout" test below) — this is a thin named wrapper over it. */
+function makeBackendWithHangingRun(): BcDevMcpBackend {
+  return makeBackend(() => new Promise(() => {}) as never);
+}
+
+/**
+ * Fails inside `connect()` itself — before any MCP handshake, let alone a `callTool` dispatch
+ * — by throwing straight out of the injected `transportFactory`. `BcDevMcpBackend.connect()`
+ * calls `this.transportFactory(env)` before constructing the `Client` or awaiting
+ * `client.connect(transport)`, so this proves the failure is provably pre-dispatch: no fake
+ * MCP server is ever wired up for this backend.
+ */
+function makeBackendWhoseConnectThrows(message: string): BcDevMcpBackend {
+  return new BcDevMcpBackend(
+    { mcpCommand: ["unused"], project: "/al", server: "http://bc", serverInstance: "BC" },
+    () => {
+      throw new Error(message);
+    },
+  );
+}
+
+/**
+ * Wraps a real, linked `InMemoryTransport` so the initialize handshake (and any other
+ * non-tool-call message) passes through untouched — `client.connect()` completes normally —
+ * but the `tools/call` request that `run()` dispatches rejects instead of reaching the fake
+ * server. This is what distinguishes "rejected after dispatch" from
+ * `makeBackendWhoseConnectThrows`: here `connect()` succeeds first.
+ */
+function makeRejectAfterDispatchTransport(inner: Transport, failMessage: string): Transport {
+  const wrapper: Transport = {
+    start: () => inner.start(),
+    send: (message, options) => {
+      if ((message as { method?: string }).method === "tools/call") {
+        return Promise.reject(new Error(failMessage));
+      }
+      return inner.send(message, options);
+    },
+    close: () => inner.close(),
+  };
+  inner.onmessage = (message, extra) => wrapper.onmessage?.(message, extra);
+  inner.onclose = () => wrapper.onclose?.();
+  inner.onerror = (error) => wrapper.onerror?.(error);
+  return wrapper;
+}
+
+function makeBackendWhoseCallRejectsAfterDispatch(message: string): BcDevMcpBackend {
+  const server = new McpServer({ name: "fake-bc-dev", version: "0.0.0" });
+  server.registerTool("bcdev_test_run", { inputSchema: anyArgs }, async () => ({
+    content: [{ type: "text", text: JSON.stringify({ results: [] }) }],
+  }));
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  void server.connect(serverTransport);
+  return new BcDevMcpBackend(
+    { mcpCommand: ["unused"], project: "/al", server: "http://bc", serverInstance: "BC" },
+    () => makeRejectAfterDispatchTransport(clientTransport, message),
   );
 }
 
@@ -327,6 +391,38 @@ describe("BcDevMcpBackend.run", () => {
     expect(v.outcome).toBe("error");
     expect(v.failureMessage).toContain("NST unreachable");
   });
+
+  test("run() deadline is in-flight-unknown (server may still be executing)", async () => {
+    // Harness: a transportFactory whose callTool never resolves within the budget.
+    const backend = makeBackendWithHangingRun();
+    const v = await backend.run(
+      { codeunitId: 50000, codeunitName: "T", method: "t1" },
+      { coverage: "none", timeoutMs: 20 },
+    );
+    expect(v.outcome).toBe("deadline-exceeded");
+    expect(v.operation).toBe("in-flight-unknown");
+    expect(requiresUnsafeLatch(v.operation ?? "completed-accepted")).toBe(true);
+  });
+
+  test("run() connect failure before dispatch is pre-dispatch-rejected", async () => {
+    const backend = makeBackendWhoseConnectThrows("ECONNREFUSED");
+    const v = await backend.run(
+      { codeunitId: 50000, codeunitName: "T", method: "t1" },
+      { coverage: "none", timeoutMs: 1000 },
+    );
+    expect(v.outcome).toBe("error");
+    expect(v.operation).toBe("pre-dispatch-rejected");
+  });
+
+  test("run() rejection AFTER dispatch is in-flight-unknown", async () => {
+    const backend = makeBackendWhoseCallRejectsAfterDispatch("socket hang up");
+    const v = await backend.run(
+      { codeunitId: 50000, codeunitName: "T", method: "t1" },
+      { coverage: "none", timeoutMs: 1000 },
+    );
+    expect(v.outcome).toBe("error");
+    expect(v.operation).toBe("in-flight-unknown");
+  });
 });
 
 describe("BcDevMcpBackend env passthrough", () => {
@@ -512,6 +608,39 @@ describe("BcDevMcpBackend.compileCheck", () => {
     }
   });
 
+  // Task 14 fold-in: the post-compile cleanup `rm(artifact.appPath, ...)` must be best-effort —
+  // a failed cleanup (e.g. a transient Windows file lock) must never mask an already-decided
+  // compile result behind an unrelated fs error. Provoked without relying on any OS-specific
+  // locking behavior: a fake `writeArtifact` places the "compiled" artifact at a DIRECTORY path
+  // instead of a file, so `rm(appPath, { force: true })` (no `recursive: true`) throws on the
+  // directory regardless of platform — `force` only ignores a MISSING path, never a real fs
+  // error like this one.
+  test("compileCheck swallows a cleanup rm failure (does not mask the compile result)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-bcdev-compilecheck-rmfail-"));
+    try {
+      await writeDeployInputs(dir);
+      const io: ArtifactIo = {
+        spawn: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+        readArtifact: async () => new Uint8Array([1, 2, 3]),
+        writeArtifact: async (_from, to) => {
+          await mkdir(to, { recursive: true }); // appPath now names a directory, not a file
+        },
+      };
+      const compiler = new ArtifactCompiler(
+        { alcPath: "C:/fake/alc.exe", packageCachePath: "C:/fake/.alpackages", outputDir: dir },
+        io,
+      );
+      const backend = new BcDevMcpBackend(
+        { mcpCommand: ["unused"], project: "/al", server: "http://bc", serverInstance: "BC" },
+        undefined,
+        { compiler, deployer: {} as ContainerDeployer, verifier: {} as DeploymentVerifier },
+      );
+      await expect(backend.compileCheck(dir)).resolves.toBeUndefined();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   // The specific clobber the brief warns about: `deploy()` sets `this.methodIndex`/
   // `this.localProcedures` from whatever it just compiled, so `run()`'s coverage resolution can
   // map a wire methodId back to a procedure name. A bisection candidate compiled through
@@ -628,7 +757,40 @@ describe("BcDevMcpBackend.compileCheck", () => {
   });
 });
 
+/**
+ * A `BcDevMcpBackend` wired to a real `MutationControlClient` (same injection point as the
+ * "activate with mutantId hits SetActive" test below) whose fetch fake answers with a 2xx body
+ * that does NOT echo the sent mutantId — the exact `setActive` echo-mismatch case that
+ * `postOData`/`setActive` now classify as `completed-effect-unknown` (see activation.ts).
+ */
+function makeBackendWhoseActivationEchoMismatches(): BcDevMcpBackend {
+  const mismatchingFetch = (async (_url: unknown, _init?: RequestInit) =>
+    new Response(JSON.stringify({ value: "SOME-OTHER-ID" }), { status: 200 })) as typeof fetch;
+  const client = new MutationControlClient(
+    { baseUrl: "http://bc:7048/BC", company: "CRONUS", username: "u", password: "p" },
+    mismatchingFetch,
+  );
+  return new BcDevMcpBackend(
+    { mcpCommand: ["unused"], project: "/al", server: "http://bc", serverInstance: "BC" },
+    undefined,
+    undefined,
+    client,
+  );
+}
+
 describe("BcDevMcpBackend.activate", () => {
+  test("activate() surfaces ActivationFailure with a classified outcome", async () => {
+    const backend = makeBackendWhoseActivationEchoMismatches();
+    let caught: unknown;
+    try {
+      await backend.activate("M0007");
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(ActivationFailure);
+    expect((caught as ActivationFailure).outcome).toBe("completed-effect-unknown");
+  });
+
   test("activate with mutantId hits SetActive", async () => {
     const calls: Array<{ url: string; init: RequestInit }> = [];
     const fakeFetch = (async (url: unknown, init?: RequestInit) => {
