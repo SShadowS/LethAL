@@ -320,6 +320,89 @@ self-heal (LethAL never publishes it — see "Server preconditions" item 2 above
 manual `alc`/`altool` republish following that same section's recipe. After recovery,
 `LETHAL_ITEST_BCDEV=1 bun run itest:bcdev` passed cleanly with the unchanged verdict table.
 
+### Task 8b: per-container publish serialization closes the Probe B hazard
+
+BC's `altool publishapp --schemaupdatemode ForceSync` replace protocol is **not
+concurrency-safe** — the root cause above is a race inside BC's own server-side
+uninstall-then-reinstall machinery, not a LethAL version-scheme defect. Task 8b's fix is
+narrowly client-side: **LethAL now serializes `ContainerDeployer.publish()` calls per canonical
+container key, in-process**, so this process itself never dispatches two overlapping `altool`
+processes at the same container.
+
+`canonicalContainerKey` (`packages/runner/src/publish-serializer.ts`) normalizes
+`server`/`serverInstance`/`tenant` into one identity string (lowercased, trailing-slash-stripped
+server; omitted tenant treated as `"default"`) so two configs naming the same physical container
+collapse to the same lock. `serializePublish` holds a **process-global, module-level**
+`Map<string, Promise<void>>` of queue tails keyed by that identity — deliberately not attached
+to any single `ContainerDeployer` instance, so two deployer instances constructed separately but
+pointed at the same container still serialize against each other, while publishes to
+*different* containers keep running fully concurrently (required for the later container-pool
+layer). `ContainerDeployer.publish()` wraps its existing body (digest re-check + `altool` spawn,
+unchanged) in this serializer; a rejecting publish still releases the lock for the next queued
+call on that key, so one failed publish can never deadlock a later one.
+
+**Scope — stated limitation, not closed here:** this is an in-process mutex. It guarantees no
+two publishes issued by *this* LethAL process ever overlap on one container. It does **not**,
+and structurally cannot, make two separate LethAL *processes* (e.g. two terminal sessions, or
+two CI jobs) racing the same container safe — nothing here is visible outside this process's
+memory. That cross-process case remains **Layer 5C's machine-global lease**, deliberately
+deferred, not addressed by this task.
+
+**Live re-verification, 2026-07-20**, `LETHAL_ITEST_BCDEV=1 bun run itest:stale-publish` against
+the same real container (`http://Cronus281`) that reproduced the hard-stop above — both probes,
+every round, verbatim:
+
+```
+=== Probe A: deterministic stale dispatch ===
+  compiled A: version=1.0.20654.13942 id=c2ac6c852d86d72ef38e4fd15f8f5429 (NOT published yet)
+  compiled B: version=1.0.20654.13943 id=1601a7064002c91a2e92b2a6a02b38d0
+  published + verified B
+  fresh-behaviour probe confirms B (baseline pass -> mutant fail -> clear pass)
+  A's publish rejected as expected: altool publishapp failed (exit 1):
+Probe A: PASS
+
+=== Probe B: concurrent race (3 rounds) ===
+  round 1: A=1.0.20654.13945/9a89d801f66306a02cc60808bbb47c3e B=1.0.20654.13946/1ea794d7deff82a2c665cebfe051df9d, publishing concurrently...
+    publish results: [{"who":"A","ok":true},{"who":"B","ok":true}]
+    serializer held publishes one-at-a-time (max in-flight: 1)
+  round 1: PASS — B is final, A never was, fresh behaviour confirms B
+  round 2: A=1.0.20654.13947/778c79b84a248ae7b4e591ed0ee3fab0 B=1.0.20654.13948/da2323b995eb126c8fc3eb0de1a7c86e, publishing concurrently...
+    publish results: [{"who":"A","ok":true},{"who":"B","ok":true}]
+    serializer held publishes one-at-a-time (max in-flight: 1)
+  round 2: PASS — B is final, A never was, fresh behaviour confirms B
+  round 3: A=1.0.20654.13949/2b732bb575b3286c8ec1a124c8a2ca3c B=1.0.20654.13950/50b76cc98d3df231a6facd3ed57c4d9a, publishing concurrently...
+    publish results: [{"who":"A","ok":true},{"who":"B","ok":true}]
+    serializer held publishes one-at-a-time (max in-flight: 1)
+  round 3: PASS — B is final, A never was, fresh behaviour confirms B
+Probe B: PASS
+
+stale-publish itest: PASS (Probe A + Probe B)
+```
+
+`maxInFlight` (an in-flight counter wrapped directly around the real `altool.exe` OS-process
+spawn — the same counter-based technique the unit tests use, never wall-clock timing) never
+exceeded 1 in any round, proving the mechanism (the serializer actually held the two publishes
+one-at-a-time), not just the outcome (B ending up final). Unlike the original failing run, both
+`publish()` calls in every round now resolve successfully (`ok:true`/`ok:true`) — because the
+two `altool` processes no longer race each other server-side, A installs cleanly first, then B
+installs cleanly as a strictly higher version, with no uninstall/reinstall collision. Immediately
+after, `LETHAL_ITEST_BCDEV=1 bun run itest:bcdev` reproduced the unchanged verdict table:
+
+| Backend | killed | survived | no-coverage | score |
+|---|---|---|---|---|
+| bcdev | 3 | 10 | 3 | 23.1% |
+
+Unit coverage (`packages/runner/tests/publish-serializer.test.ts`) asserts serialization with a
+shared in-flight counter, never timing: N concurrent same-key calls never let the counter exceed
+1; concurrent different-key calls let it reach ≥2 (proving different containers are NOT
+serialized against each other); a throwing `fn` still releases the lock so a later same-key call
+runs, not deadlocked; and `canonicalContainerKey` collapses `http://Cronus281/` + `BC` +
+`"default"` and `http://cronus281` + `BC` + an omitted tenant to the identical key. Mutation
+red-check: temporarily replacing `serializePublish`'s body with a direct `fn()` call (no gating)
+turned the same-key "max in-flight ≤ 1" test red (observed `counter.max` of 5, not 1) before the
+fix was restored — confirming the test actually exercises the serialization, not passing for the
+wrong reason.
+
 ### A second, independent bug this task's live run found and fixed
 
 While diagnosing Probe A's first failed attempt, a genuine defect surfaced in
