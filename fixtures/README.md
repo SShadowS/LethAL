@@ -598,6 +598,41 @@ bun run itest:bcdev      # needs LETHAL_ITEST_BCDEV=1, and the local files above
 Both skip cleanly (print "skipped", exit 0) when their gate env var is unset, so they never
 affect a plain `bun test` or CI run that hasn't opted in.
 
+### Per-mutant healthy-path regression guard (Task 15, design spec §14)
+
+Both itests already ran the session twice per invocation and asserted `shape(first) ===
+shape(second)` — that only proves same-*process* determinism (two runs in this one invocation
+agree with each other); it says nothing about a real regression introduced since the itest last
+ran, because two runs of a silently-broken build can still agree with each other.
+
+`packages/runner/itest/baseline-guard.ts` closes that gap: after `assertVerdictTable(first)`
+(the aggregate killed/survived/no-coverage smoke test), each itest also calls
+`assertMatchesBaseline(first, BASELINE_PATH, label)`, which normalizes the report via
+`mutant-equality.ts`'s `normalizeForComparison` (semantic-identity-keyed —
+astHash/codeunitName/operatorName/operatorMajor, immune to mutant renumbering) and diffs it
+against a **committed baseline file**
+(`packages/runner/itest/bcdev.baseline.json` / `al-runner.baseline.json`) via `diffMutants`. A
+per-mutant difference — e.g. two mutants' verdicts silently swapped while the aggregate counts
+stay identical — fails the itest even though `assertVerdictTable`'s counts alone would not
+catch it. The first run ever recorded a baseline file writes it to disk (and logs that it needs
+to be committed); every run after that compares against it. If the fixture or an operator
+legitimately changes and the diff is expected, delete the baseline file, re-run, review the new
+diff, and commit it.
+
+This mechanism is wired into both live itests but, being inside an env-gated script, is only
+actually exercised when `LETHAL_ITEST_BCDEV=1 bun run itest:bcdev` /
+`LETHAL_ITEST_ALRUNNER=1 bun run itest:alrunner` runs against real infrastructure — see
+`packages/runner/tests/baseline-guard.test.ts` for the offline unit coverage of
+`assertMatchesBaseline` itself (records-on-first-run, matches-on-agreement, throws-on-diff,
+and the "aggregate counts identical, per-mutant swap" case that is this guard's whole reason to
+exist).
+
+Per spec §14, this guard proves nothing about the **failure** path — it only exercises the
+healthy path, where nothing here ever quarantines or latches. Each failure seam needs its own
+fault-injection oracle instead; see `packages/runner/tests/fault-injection.test.ts` and the
+"Wedged-tier reproduction" section below for the live-infra counterpart of the one seam that
+cannot be safely exercised offline.
+
 `bcdev.itest.ts` is also where the assumptions pinned during implementation without a live
 server to check against get verified against real infra, and fixed in one commit each if
 wrong:
@@ -655,3 +690,154 @@ an existing pipeline" — out of scope for "do not spend long on this." Whoever 
 can wire in `itest:alrunner` cheaply using the command above plus
 `LETHAL_ITEST_ALRUNNER=1` / `LETHAL_ALRUNNER_PATH=al-runner` (the tool is on `PATH` after a
 global `dotnet tool install`).
+
+## Wedged-tier reproduction & operator clear (Task 15, design spec §8/§9/§10/§12)
+
+This is the operator runbook for the one failure mode that genuinely needs live infrastructure
+to reproduce end to end: a BC service tier left running a test LethAL can no longer confirm
+finished (an **in-flight-unknown** operation, spec §7) — LethAL is designed to notice this,
+refuse to guess, and lock the tier out of further use until a human proves it is safe again.
+Everything below is accurate to what is actually built: quarantine is a **machine-local**,
+durable, per-tier record (`QuarantineStore`, `packages/runner/src/quarantine-store.ts`, one JSON
+file per tier under `~/.lethal/quarantine` by default, keyed by normalized `server` +
+`serverInstance` — tenant is deliberately excluded, see `quarantineResourceKey`); clearing it is
+`lethal clear-quarantine`, not a self-service unblock; and the process-level signal is exit code
+**3** (`QUARANTINED_EXIT_CODE`, `packages/runner/src/cli.ts`).
+
+Everything in this section requires `LETHAL_ITEST_BCDEV=1`-class live access — a real BC
+container reachable via `bccontainerhelper` on the host running the dev server. There is no
+offline equivalent of *actually* stranding a container; for a fast, safe, CI-runnable proof of
+the same containment invariant (latch + durable quarantine + refuse the next session before
+`status()`), see `packages/runner/tests/fault-injection.test.ts` instead — it drives the exact
+same orchestrator code path (`runSession`) against a stateful fake backend that never resolves,
+with no server involved.
+
+### 1. Deliberately wedge a tier
+
+`BcDevMcpBackend.run()` has no way to cancel a dispatched `bcdev_test_run` call — once dispatched,
+LethAL's own client timer racing the MCP call is the only signal it ever gets (see the comment at
+`packages/runner/src/bcdev-backend.ts`'s `run()`, phase 2). So the cheapest deliberate strand is a
+test method that runs past LethAL's timeout budget while the server keeps executing it — no
+container manipulation needed to produce a *real* in-flight-unknown, only a test that never
+returns in time:
+
+```al
+[Test]
+procedure NeverReturns()
+begin
+    // Deliberately exceeds the baseline timeout (default 120000ms; pass a lower
+    // --baseline-timeout-ms-equivalent via SessionConfig.baselineTimeoutMs when embedding, or
+    // just let a genuinely long-running/looping test exceed the default) so LethAL's client
+    // timer fires while bc-dev-mcp is still executing it server-side.
+    while true do;
+end;
+```
+
+Point `lethal run` at a throwaway copy of `fixtures/sandbox-tests` with this method added, and
+run it against a live dev server:
+
+```bash
+bun packages/runner/src/cli.ts run \
+  --project fixtures/sandbox-app --tests <copy-with-NeverReturns> \
+  --backend bcdev --config fixtures/sandbox-app/lethal.config.local.json
+```
+
+A harder, container-level strand (for proving the tier-restart step below against something more
+realistic than a hung AL loop) is to freeze the whole container mid-test instead of hanging the
+test itself — `docker pause <containerName>` (BC containers are plain Docker containers under
+`bccontainerhelper`) while a `lethal run` is in flight. The dispatched `bcdev_test_run` call
+never returns because the whole container is frozen, not just the one AL procedure — LethAL
+observes exactly the same ambiguity either way.
+
+### 2. Observe LethAL quarantine it and exit `quarantined`
+
+LethAL's own client timer fires at the configured budget; `BcDevMcpBackend.run()` returns
+`{ outcome: "deadline-exceeded", operation: "in-flight-unknown" }` (the server may still be
+running the test — the call was dispatched, so it cannot be retried). `runSession` (via the
+shared `quarantineInFlight` helper, `packages/runner/src/orchestrator.ts`) then:
+
+1. latches `SessionSafety` unsafe (in-memory, one-way, for the rest of this process) — no further
+   deploy/activate/run/verify/status call may execute, not even the deactivating `ClearActive` the
+   `finally` teardown would otherwise send;
+2. durably records a quarantine (`QuarantineStore.record`) under
+   `~/.lethal/quarantine/<sha256(server|serverInstance)>.json`, an atomic temp-file-then-rename
+   write that survives a crash of the LethAL process itself;
+3. stops scheduling further work and returns a `SessionReport` with `quarantined: { reason }`
+   set instead of throwing — this is a **recognized**, reported outcome, not a crash.
+
+`lethal run`'s `main()` renders the console report and exits **`3`** (`QUARANTINED_EXIT_CODE`,
+distinct from exit 1's "ordinary config/uncaught error" so a calling script can branch on it
+without parsing output):
+
+```
+$ lethal run --project ... --tests ... --backend bcdev --config ...
+[report table ...]
+$ echo $?
+3
+```
+
+A second `lethal run` against the same tier — before it is recycled and cleared — is refused
+**before it even calls `status()`** (the quarantine consult runs first, spec §8):
+
+```
+Error: tier http://cronus281|BC is quarantined (test-run: baseline test in-flight-unknown
+running NeverReturns, recorded 2026-07-20T12:00:00.000Z, generation 1). Recycle the tier and
+run 'lethal clear-quarantine' to clear it.
+```
+
+### 3. Restart the tier via `bccontainerhelper` on the host
+
+Quarantine is a **client-side refusal to trust the tier again**, not a fix — the wedged test run
+(or the frozen container) is still there until an operator actually recycles it. On the machine
+hosting the BC container:
+
+```powershell
+# Either is sufficient to prove the strand is gone:
+Restart-BcContainerServiceTier -containerName <name>   # just the NST process — aborts whatever
+                                                          # it was mid-executing, container stays up
+# ...or recycle the whole container:
+Restart-BcContainer -containerName <name>
+# older bccontainerhelper versions: Restart-NavContainer -containerName <name>
+
+# If the container was paused rather than the test left hanging (the "harder" reproduction
+# above), unpause it first:
+# docker unpause <name>; Restart-BcContainerServiceTier -containerName <name>
+```
+
+Confirm the tier answers again before clearing quarantine — e.g. a plain `Get-BcContainerEventLog`
+tail, or just watching the container come back healthy in `docker ps`/`Get-BcContainerServerConfiguration`.
+LethAL has no way to verify this step happened; clearing quarantine is an **operator-proven**
+action (spec §10), not something LethAL re-checks on the operator's behalf.
+
+### 4. Clear the quarantine
+
+```bash
+bun packages/runner/src/cli.ts clear-quarantine --server http://cronus281 --instance BC
+```
+
+This opens the **same** `~/.lethal/quarantine` store `runSession` wrote to (there is deliberately
+no `--quarantine-dir` override on this subcommand — an operator clearing a real tier must hit the
+real store, never one a stray flag silently redirected), reads the record's current `generation`,
+and clears it only if that generation is still current (`QuarantineStore.clear`, generation-checked
+— a clear computed against a stale generation because a *newer* strand landed in between prints
+`stale` and leaves the newer record intact, rather than erasing evidence of it). Prints exactly one
+of:
+
+- `cleared` — exit 0. The tier is usable again.
+- `not-quarantined` — exit 0. Idempotent: nothing to do (already clear, or never quarantined).
+- `stale` — exit 1. A newer quarantine was recorded since whatever the operator was looking at;
+  re-run `clear-quarantine` again after investigating the newer record (do not assume it is safe
+  to ignore — it means something quarantined this tier again after the first strand).
+
+### 5. Confirm the next session runs
+
+```bash
+bun packages/runner/src/cli.ts run \
+  --project fixtures/sandbox-app --tests fixtures/sandbox-tests \
+  --backend bcdev --config fixtures/sandbox-app/lethal.config.local.json
+```
+
+`QuarantineStore.read` now returns `null` for this tier's key, so the consult at the top of
+`runSession` passes straight through to `status()` and the session proceeds normally — no special
+"post-quarantine" state persists once cleared; the guard is purely "does a record currently exist
+for this key," and it doesn't.
