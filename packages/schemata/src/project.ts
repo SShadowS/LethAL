@@ -1,18 +1,18 @@
+import { mkdir, writeFile } from "node:fs/promises";
+import { basename, join } from "node:path";
 import {
   type ALSyntaxNode,
   type MutationSpec,
   astSubtreeHash,
   findEnclosingProcedure,
 } from "@lethal/engine";
-import { mkdir, writeFile } from "node:fs/promises";
-import { basename, join } from "node:path";
 import { compileSchemataForFile } from "./compile";
 import { assignMutantIds } from "./ids";
 import {
   type SelectorConfig,
-  emitMutationSelector,
   emitMutationActiveTable,
   emitMutationControl,
+  emitMutationSelector,
   emitWebServicesXml,
 } from "./selector";
 
@@ -27,6 +27,7 @@ export interface WriteInput {
   readonly targetDir: string;
   readonly files: readonly InstrumentedFile[];
   readonly selectorIds: SelectorConfig;
+  readonly artifactId: string;
 }
 
 export interface MutantManifestEntry {
@@ -45,6 +46,7 @@ export interface MutantManifestEntry {
 
 export interface MutantManifest {
   readonly selectorIds: SelectorConfig;
+  readonly artifactId: string;
   readonly mutants: readonly MutantManifestEntry[];
 }
 
@@ -111,7 +113,7 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
 
   await writeFile(
     join(input.targetDir, "MutationSelector.Codeunit.al"),
-    emitMutationSelector(input.selectorIds),
+    emitMutationSelector({ ...input.selectorIds, artifactId: input.artifactId }),
     "utf8",
   );
   await writeFile(
@@ -132,6 +134,7 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
 
   const manifestJson: MutantManifest = {
     selectorIds: input.selectorIds,
+    artifactId: input.artifactId,
     mutants: manifest,
   };
   await writeFile(

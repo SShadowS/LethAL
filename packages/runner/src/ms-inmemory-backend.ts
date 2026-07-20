@@ -14,6 +14,9 @@ export class MsInMemoryBackend implements ExecutionBackend {
   deploy(): never {
     throw new Error(MSG);
   }
+  compileCheck(): never {
+    throw new Error(MSG);
+  }
   activate(): never {
     throw new Error(MSG);
   }

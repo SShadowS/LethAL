@@ -18,6 +18,9 @@ import {
   type SelectorConfig,
   writeInstrumentedProject,
 } from "@lethal/schemata";
+import { nextAbove, parseVersionConflict, reserveAppVersion } from "./app-version";
+import { AlcCompileError } from "./artifact";
+import type { CompiledArtifact } from "./artifact";
 import type { ExecutionBackend, TestMethodRef, TestVerdict } from "./backend";
 import { bisectFailingMutant } from "./bisect";
 import { discoverTests } from "./discovery";
@@ -96,7 +99,9 @@ export interface SessionConfig {
   readonly selectorIds: SelectorConfig;
   readonly baselineTimeoutMs?: number; // default 120000
   readonly skipKnownSurvivors?: boolean;
-  readonly appVersion?: string; // stamped into runs; default "0.0.0.0"
+  // createRun placeholder only (default "0.0.0.0") — after a successful deploy the run row is
+  // corrected via store.recordArtifact with the version actually compiled (reserveAppVersion).
+  readonly appVersion?: string;
   readonly workers?: number; // default 1 — a pool of one IS the sequential path
   readonly compileConcurrency?: number; // default min(workers, 4)
   /** Required when workers > 1: each worker needs its own backend instance. */
@@ -186,6 +191,25 @@ export function narrowFilesToSubset(
 }
 
 /**
+ * 128 cryptographically random bits as 32 lowercase hex characters — the ONLY id shape
+ * `DeploymentVerifier.verify` accepts (it throws on anything else, by design). Generated fresh
+ * per artifact write, never derived from `runId` or any other session state, never reused: two
+ * artifacts sharing an id would make identity verification unable to tell them apart, which is
+ * the entire failure mode Layer 5A exists to close.
+ */
+function newArtifactId(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** Uniform error-message extraction: `parseVersionConflict` must see BC's text whether the
+ *  backend threw a `DeploymentError` (whose message embeds the publish error verbatim), a
+ *  plain `Error`, or a bare string. */
+function messageOf(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/**
  * Writes one instrumented artifact into `targetDir`. Shared by the initial
  * per-artifact write (step 1 below) and by every bisection attempt
  * (sequential and per-shard) — one artifact-preparation sequence, not
@@ -208,8 +232,9 @@ async function prepareArtifactDir(args: {
   readonly subset?: readonly MutantManifestEntry[];
   readonly selectorIds: SelectorConfig;
   readonly projectDir: string;
-  readonly batchIdx: number;
-  readonly runId: number;
+  readonly projectManifest: Readonly<Record<string, unknown>>;
+  readonly appVersion: string;
+  readonly artifactId: string;
 }): Promise<void> {
   await rm(args.targetDir, { recursive: true, force: true });
   const files =
@@ -218,8 +243,9 @@ async function prepareArtifactDir(args: {
     targetDir: args.targetDir,
     files,
     selectorIds: args.selectorIds,
+    artifactId: args.artifactId,
   });
-  await prepareBatchProject(args.projectDir, args.targetDir, args.batchIdx, args.runId);
+  await prepareBatchProject(args.projectDir, args.targetDir, args.projectManifest, args.appVersion);
 }
 
 /**
@@ -253,9 +279,15 @@ async function bisectAndNote(args: {
   readonly batchFiles: readonly InstrumentedFile[];
   readonly selectorIds: SelectorConfig;
   readonly projectDir: string;
-  readonly batchIdx: number;
-  readonly runId: number;
-  readonly deploy: (dir: string) => Promise<void>;
+  readonly projectManifest: Readonly<Record<string, unknown>>;
+  readonly appVersion: string;
+  readonly artifactId: string;
+  // Compile-only (Task 7b, spec §8): bisection's only question is whether alc accepts a
+  // source subset. Must never publish — candidates share one appVersion/artifactId across a
+  // whole search (see prepareArtifactDir's `args.artifactId`/`args.appVersion` above), so a
+  // publishing backend would reject every candidate after the first as a version conflict, and
+  // publishing a narrowed candidate to a live server violates spec §8 regardless.
+  readonly compileCheck: (dir: string) => Promise<void>;
   readonly originalErr: unknown;
 }): Promise<string> {
   try {
@@ -267,8 +299,9 @@ async function bisectAndNote(args: {
           subset,
           selectorIds: args.selectorIds,
           projectDir: args.projectDir,
-          batchIdx: args.batchIdx,
-          runId: args.runId,
+          projectManifest: args.projectManifest,
+          appVersion: args.appVersion,
+          artifactId: args.artifactId,
         });
       } catch (err) {
         // NOT a compile answer — abort the search rather than feeding it a
@@ -276,9 +309,16 @@ async function bisectAndNote(args: {
         throw new BisectPrepareError(err);
       }
       try {
-        await args.deploy(args.scratchDir);
+        await args.compileCheck(args.scratchDir);
         return true;
-      } catch {
+      } catch (err) {
+        // Only a deterministic alc rejection may be read as "this subset does not compile".
+        // A publish/verification failure (DeploymentError), an fs/spawn problem
+        // (ArtifactPrepareError), or anything else propagating out of `compileCheck` here is NOT
+        // a compile answer — resolving `false` for it would send the search halving the mutant
+        // set chasing a problem that has nothing to do with any mutant, and could converge on
+        // (and name) an innocent one. Let it abort the search instead.
+        if (!(err instanceof AlcCompileError)) throw err;
         return false;
       }
     });
@@ -353,6 +393,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // last assigned. Pushing into a pre-declared array means the ones built
   // before the failure are still visible to (and disposed by) the `finally`.
   const workerBackends: ExecutionBackend[] = [];
+  // Session-scoped: threads each reserved app version into the next reservation so versions
+  // stay strictly increasing within one session even when the clock doesn't advance (or a
+  // conflict retry re-stamped above something newer than the clock would produce).
+  let lastIssuedVersion: string | undefined;
 
   try {
     if (workers > 1) {
@@ -373,6 +417,36 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       // silently collide/mis-attribute the moment `artifacts` ever holds
       // more than one element (e.g. a future size-budget split).
       const batchDir = join(cfg.instrumentedDir, `run-${runId}-batch-${batchIdx}`);
+      // 1a. reserve this artifact's app version. Major/minor come from the target project's
+      // OWN app.json (never hardcoded — a 2.x project must not be forced under a 1.0
+      // ceiling); build/revision are clock-derived (see app-version.ts). The reservation is
+      // wrapped so an out-of-range or malformed app.json version aborts the session with an
+      // error naming the actual input, before anything is written or compiled.
+      const projectManifest = await readProjectManifest(cfg.projectDir, batchIdx);
+      const sourceVersion = projectManifest.version;
+      if (typeof sourceVersion !== "string") {
+        throw new Error(
+          `cannot deploy batch ${batchIdx}: app.json version must be a string, got ` +
+            `${JSON.stringify(sourceVersion)}`,
+        );
+      }
+      let appVersion: string;
+      try {
+        appVersion = reserveAppVersion({
+          sourceVersion,
+          nowMs: Date.now(),
+          ...(lastIssuedVersion !== undefined ? { lastIssued: lastIssuedVersion } : {}),
+        });
+      } catch (err) {
+        throw new Error(
+          `cannot deploy batch ${batchIdx}: app.json version "${sourceVersion}" cannot seed a ` +
+            `valid BC app version — ${messageOf(err)}`,
+        );
+      }
+      lastIssuedVersion = appVersion;
+      // Per ARTIFACT, not per session: planArtifacts retains the ability to split, and two
+      // artifacts must never share an identity (see newArtifactId).
+      const artifactId = newArtifactId();
       // 1b (app.json + full source set) is folded into `prepareArtifactDir`:
       // even in-memory backends may need a project manifest, and
       // `writeInstrumentedProject` only writes files that have >=1 mutant
@@ -384,8 +458,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         files: batchFiles,
         selectorIds: cfg.selectorIds,
         projectDir: cfg.projectDir,
-        batchIdx,
-        runId,
+        projectManifest,
+        appVersion,
+        artifactId,
       });
       const manifest = JSON.parse(
         await readFile(join(batchDir, "mutant-manifest.json"), "utf8"),
@@ -403,35 +478,98 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       // per-batch instrumented dir just as much as a publishing backend
       // needs the compiled app. `capabilities().deploy` still describes
       // publish cost for callers, it just no longer gates this call.
+      let compiled: CompiledArtifact | null = null;
+      let deployed = false;
+      let deployErr: unknown;
       try {
-        await cfg.backend.deploy(batchDir);
+        compiled = await cfg.backend.deploy(batchDir);
+        deployed = true;
       } catch (err) {
-        // Layer 4.3 put every mutant in one artifact (design spec §6): one
+        deployErr = err;
+      }
+      if (!deployed) {
+        // 3a. version conflict: BC's downgrade rejection is machine-parseable and names the
+        // installed version verbatim. Re-stamp strictly above it, recompile, and retry
+        // EXACTLY once — a second conflict means the server's installed version is moving
+        // underneath us, and that must fail the session loudly, not loop.
+        const installed = parseVersionConflict(messageOf(deployErr));
+        if (installed !== null) {
+          const bumped = nextAbove(installed);
+          lastIssuedVersion = bumped;
+          appVersion = bumped;
+          await writeStampedAppJson(batchDir, projectManifest, bumped);
+          try {
+            compiled = await cfg.backend.deploy(batchDir);
+            deployed = true;
+          } catch (retryErr) {
+            const stillInstalled = parseVersionConflict(messageOf(retryErr));
+            if (stillInstalled !== null) {
+              throw new Error(
+                `version conflict persisted after retry: re-stamped to ${bumped} above BC's ` +
+                  `reported ${installed}, but publish was rejected again naming ` +
+                  `${stillInstalled} — ${messageOf(retryErr)}`,
+              );
+            }
+            deployErr = retryErr;
+          }
+        }
+      }
+      if (!deployed) {
+        // 3b. A publish/verification failure is environmental: catalog conflict, schema sync,
+        // dependency mismatch, license, transport, NST limits. Attributing it to a mutant would
+        // be unsound, and republishing subset artifacts to diagnose it can leave a narrowed
+        // candidate installed. Only a deterministic alc rejection (AlcCompileError) is
+        // bisectable — everything else (DeploymentError, ArtifactPrepareError, a bare
+        // string/Error from some other failure) aborts the session instead of being fed into
+        // bisection (design §5; §6 restricts bisection to compile verdicts specifically).
+        // `DeploymentError` and `ArtifactPrepareError` both extend `Error` directly, not
+        // `AlcCompileError` — `instanceof` cannot cross-match them, so this guard alone is
+        // sufficient to exclude both.
+        if (!(deployErr instanceof AlcCompileError)) throw deployErr;
+        // 3c. Layer 4.3 put every mutant in one artifact (design spec §6): one
         // malformed spec now fails this ONE compile and would otherwise turn
         // every mutant `execute` holds into an equally uninformative "error"
         // with nothing pointing at the actual cause. Bisect before giving
         // up, via the same `prepareArtifactDir`/`bisectAndNote` helpers the
         // per-worker shard catch below reuses: `bisectFailingMutant` halves
-        // `execute` against re-instrumented, re-deployed scratch subsets
-        // until a single offending mutant is isolated, or the narrowing
-        // stops reproducing the failure (e.g. the culprit was a
-        // known-survivor mutant excluded from `execute` above), in which
-        // case there's nothing more specific to report than the original
-        // error.
+        // `manifest.mutants` — the FULL set this batch's artifact was
+        // compiled from, not `execute` — against re-instrumented,
+        // re-deployed scratch subsets until a single offending mutant is
+        // isolated, or the narrowing stops reproducing the failure, in
+        // which case there's nothing more specific to report than the
+        // original error. `execute` (post-history-filter) would be wrong
+        // here: known survivors are excluded from `execute` but are STILL
+        // compiled into the artifact, so a malformed known-survivor mutant
+        // would break this compile while being provably unfindable by a
+        // search restricted to `execute`. History filtering is an
+        // execution decision, not a compilation decision.
         const note = await bisectAndNote({
-          subsetMutants: execute,
+          subsetMutants: manifest.mutants,
           scratchDir: join(cfg.instrumentedDir, `run-${runId}-batch-${batchIdx}-bisect`),
           batchFiles,
           selectorIds: cfg.selectorIds,
           projectDir: cfg.projectDir,
-          batchIdx,
-          runId,
-          deploy: (dir) => cfg.backend.deploy(dir),
-          originalErr: err,
+          projectManifest,
+          appVersion,
+          artifactId: newArtifactId(),
+          compileCheck: (dir) => cfg.backend.compileCheck(dir),
+          originalErr: deployErr,
         });
         for (const m of execute)
           record(cfg.store, runId, m, "error", outcomes, batchIdx, undefined, note);
         continue; // batch aborted, next batch still attempted
+      }
+      // 3d. provenance: correct the run row with what was ACTUALLY compiled and deployed —
+      // createRun could only write a placeholder. Backends with no compiled artifact
+      // (deploy: "none") have no artifact provenance to record; their run row keeps the
+      // caller-supplied appVersion.
+      if (compiled !== null) {
+        cfg.store.recordArtifact(runId, {
+          appVersion: compiled.appVersion,
+          appId: compiled.appId,
+          artifactId: compiled.artifactId,
+          sha256: compiled.sha256,
+        });
       }
 
       // 4. baseline
@@ -546,16 +684,28 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
             try {
               await compileLimit.run(() => backend.deploy(batchDir));
             } catch (err) {
+              // Same session-abort rule as the sequential path (3b): only a deterministic alc
+              // rejection (AlcCompileError) is bisectable. A DeploymentError, an
+              // ArtifactPrepareError, or anything else is never a compile verdict, so it must
+              // not be bisected or downgraded to per-mutant errors here either — it aborts the
+              // whole session.
+              if (!(err instanceof AlcCompileError)) throw err;
               // Same "one bad mutant, uninformative errors" problem as the
               // sequential path above applies here identically — bisect
-              // this worker's own deploy failure the same way, scoped to
-              // just `shard` (the natural subset: this worker only ever
-              // deploys/runs `shard`, so a compile failure tied to one of
-              // its specs is isolated against `shard` alone). Each worker
+              // this worker's own deploy failure the same way. Searches the
+              // FULL manifest, not just `shard`: every worker deploys the
+              // SAME `batchDir` (the whole artifact, every mutant, not a
+              // shard-scoped subset — sharding only decides which worker
+              // EXECUTES which mutant's tests), so a compile failure any
+              // worker observes here is a property of the whole artifact,
+              // and the true culprit need not be one of THIS worker's own
+              // shard's mutants. Recording below still stays scoped to
+              // `shard` (this worker's own mutants) — only the SEARCH scope
+              // widened, not which mutants get marked "error". Each worker
               // gets its own scratch dir (suffixed by `i`) so concurrently
               // bisecting shards never race on the same directory.
               const note = await bisectAndNote({
-                subsetMutants: shard,
+                subsetMutants: manifest.mutants,
                 scratchDir: join(
                   cfg.instrumentedDir,
                   `run-${runId}-batch-${batchIdx}-bisect-worker-${i}`,
@@ -563,9 +713,12 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
                 batchFiles,
                 selectorIds: cfg.selectorIds,
                 projectDir: cfg.projectDir,
-                batchIdx,
-                runId,
-                deploy: (dir) => compileLimit.run(() => backend.deploy(dir)),
+                projectManifest,
+                appVersion,
+                artifactId: newArtifactId(),
+                // Keep the compileLimit wrapper: it bounds concurrent alc processes, which is
+                // exactly what bisection candidates are — compileCheck doesn't change that.
+                compileCheck: (dir) => compileLimit.run(() => backend.compileCheck(dir)),
                 originalErr: err,
               });
               for (const m of shard) {
@@ -803,31 +956,15 @@ async function pathExists(p: string): Promise<boolean> {
 }
 
 /**
- * Spec §5: the instrumented app must keep the target app's id and
- * version-bump per batch (`1.0.<runId>.<batchIdx>`), and must contain every
- * project source file so `alc` can actually compile it — not just the
- * files `writeInstrumentedProject` wrote for this batch's mutants.
- *
- * Version ordering is `run` THEN `batch`, and that order is load-bearing:
- * BC refuses to publish an app version lower than the one already installed
- * ("Cannot install the extension ... because a newer version N was already
- * installed" — verified live). The original spec scheme `1.0.<batch>.<run>`
- * is non-monotonic ACROSS runs: run 5's batch 0 (1.0.0.5) is lower than run
- * 4's batch 2 (1.0.2.4), so every run after the first failed to deploy any
- * batch below the previous run's highest batch index. `runId` comes from the
- * results DB and strictly increases, so `1.0.<runId>.<batchIdx>` increases
- * both within a run and across runs.
- *
- * Throws (aborting the whole session, uncaught by the per-batch deploy
- * try/catch below) if the target project has no `app.json` — there's no
- * sane per-batch fallback for a structurally uncompilable target.
+ * Reads and parses the target project's `app.json`. Throws (aborting the
+ * whole session, uncaught by the per-batch deploy try/catch) if it is
+ * missing or malformed — there's no sane per-batch fallback for a
+ * structurally uncompilable target.
  */
-async function prepareBatchProject(
+async function readProjectManifest(
   projectDir: string,
-  batchDir: string,
   batchIdx: number,
-  runId: number,
-): Promise<void> {
+): Promise<Record<string, unknown>> {
   const appJsonPath = join(projectDir, "app.json");
   let raw: string;
   try {
@@ -835,20 +972,49 @@ async function prepareBatchProject(
   } catch (err) {
     throw new Error(
       `cannot deploy batch ${batchIdx}: target project has no app.json at ${appJsonPath} ` +
-        `(required for alc to compile the instrumented app) — ${err instanceof Error ? err.message : String(err)}`,
+        `(required for alc to compile the instrumented app) — ${messageOf(err)}`,
     );
   }
-  let manifest: Record<string, unknown>;
   try {
-    manifest = JSON.parse(raw) as Record<string, unknown>;
+    return JSON.parse(raw) as Record<string, unknown>;
   } catch (err) {
     throw new Error(
-      `cannot deploy batch ${batchIdx}: ${appJsonPath} is not valid JSON — ` +
-        `${err instanceof Error ? err.message : String(err)}`,
+      `cannot deploy batch ${batchIdx}: ${appJsonPath} is not valid JSON — ${messageOf(err)}`,
     );
   }
-  manifest.version = `1.0.${runId}.${batchIdx}`;
+}
+
+/**
+ * Stamps the batch dir's `app.json` as the target manifest with `version` replaced. Shared by
+ * `prepareBatchProject` (initial stamp with the reserved version) and the version-conflict
+ * retry in `runSession` (re-stamp above the installed version BC named) so the two writes
+ * can never drift in shape.
+ */
+async function writeStampedAppJson(
+  batchDir: string,
+  projectManifest: Readonly<Record<string, unknown>>,
+  version: string,
+): Promise<void> {
+  const manifest = { ...projectManifest, version };
   await writeFile(join(batchDir, "app.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+}
+
+/**
+ * Spec §5: the instrumented app must keep the target app's id, carry the
+ * per-artifact version reserved via `reserveAppVersion` (app-version.ts —
+ * clock-derived, monotonic across runs with no stored counter; the old
+ * `1.0.<runId>.<batchIdx>` scheme died with its dependence on a persistent
+ * results DB), and must contain every project source file so `alc` can
+ * actually compile it — not just the files `writeInstrumentedProject` wrote
+ * for this batch's mutants.
+ */
+async function prepareBatchProject(
+  projectDir: string,
+  batchDir: string,
+  projectManifest: Readonly<Record<string, unknown>>,
+  appVersion: string,
+): Promise<void> {
+  await writeStampedAppJson(batchDir, projectManifest, appVersion);
 
   // writeInstrumentedProject only wrote files with >=1 mutant spec in this
   // batch; copy every other project source file verbatim (files whose sites

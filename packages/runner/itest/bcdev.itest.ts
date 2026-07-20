@@ -24,11 +24,13 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { MutationControlClient } from "../src/activation";
+import { ArtifactCompiler, defaultArtifactIo } from "../src/artifact";
 import { BcDevMcpBackend } from "../src/bcdev-backend";
 import { odataBaseUrl, validateBcDevConfig } from "../src/cli";
 import type { LethalConfigFile } from "../src/cli";
+import { DeploymentVerifier } from "../src/deployment-verifier";
 import { generateMutationSet, runSession } from "../src/orchestrator";
-import { Publisher, defaultAlToolPaths, defaultSpawn } from "../src/publisher";
+import { ContainerDeployer, defaultAlToolPaths, defaultDeployerIo } from "../src/publisher";
 import type { SessionReport } from "../src/report";
 import { ResultsStore } from "../src/store";
 
@@ -112,27 +114,34 @@ async function runOnce(scratchRoot: string): Promise<SessionReport> {
 
   const outputDir = join(scratchRoot, "publish");
   await mkdir(outputDir, { recursive: true });
-  const publisher = new Publisher(
+  const compiler = new ArtifactCompiler(
     {
       alcPath: toolPaths.alcPath,
-      altoolPath: toolPaths.altoolPath,
       packageCachePath: bcdev.packageCachePath,
       outputDir,
+    },
+    defaultArtifactIo,
+  );
+  const deployer = new ContainerDeployer(
+    {
+      altoolPath: toolPaths.altoolPath,
       server: bcdev.server,
       serverInstance: bcdev.serverInstance,
       username: bcdev.username,
       password: bcdev.password,
       ...(bcdev.tenant !== undefined ? { tenant: bcdev.tenant } : {}),
     },
-    defaultSpawn,
+    defaultDeployerIo,
   );
-  const activation = new MutationControlClient({
+  const odataCfg = {
     baseUrl: odataBaseUrl(bcdev.server, bcdev.serverInstance),
     company: bcdev.company,
     username: bcdev.username,
     password: bcdev.password,
     ...(bcdev.tenant !== undefined ? { tenant: bcdev.tenant } : {}),
-  });
+  };
+  const activation = new MutationControlClient(odataCfg);
+  const verifier = new DeploymentVerifier(odataCfg);
   const backend = new BcDevMcpBackend(
     {
       mcpCommand: bcdev.mcpCommand,
@@ -150,16 +159,14 @@ async function runOnce(scratchRoot: string): Promise<SessionReport> {
       ...(bcdev.env !== undefined ? { env: bcdev.env } : {}),
     },
     undefined,
-    publisher,
+    { compiler, deployer, verifier },
     activation,
   );
 
-  // Persistent, NOT `:memory:` — deliberately. The instrumented app's version is
-  // `1.0.<runId>.<batchIdx>` and BC refuses to publish a version lower than the one
-  // already installed. `runId` comes from this DB, so an in-memory store restarts it
-  // at 1 on every invocation and republishes a version below whatever the previous
-  // run left on the server, failing every deploy. An on-disk DB keeps runId strictly
-  // increasing across invocations. See fixtures/README.md "App version monotonicity".
+  // Persistent, NOT `:memory:` — historical run data (priorSurvivorKeys) is a supported
+  // workflow. NOTE: app-version monotonicity no longer depends on this DB — since Layer 5A
+  // versions are clock-derived via reserveAppVersion (app-version.ts), so deleting
+  // lethal.sqlite can no longer break publishing.
   const store = new ResultsStore(join(PROJECT_DIR, "lethal.sqlite"));
   try {
     return await runSession({

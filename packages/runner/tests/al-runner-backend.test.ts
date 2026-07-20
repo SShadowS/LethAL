@@ -101,6 +101,101 @@ describe("AlRunnerBackend.deploy", () => {
   });
 });
 
+describe("AlRunnerBackend artifact identity", () => {
+  // Glue coverage for the Task 3 parity trap: deploy() reads the deployed
+  // batch's mutant-manifest.json and stores its artifactId; activate() must
+  // bake that stored id into every rewritten MutationSelector.Codeunit.al.
+  // This drives the REAL deploy()/activate() path (not a re-implementation
+  // of readArtifactId), so a regression in either the manifest filename
+  // readArtifactId looks for, or deploy()'s assignment of `this.artifactId`,
+  // fails this test.
+  test("deploy() reads the batch's artifactId and activate() bakes it into the rewritten selector", async () => {
+    const { dir, backend } = await makeBackend(okSpawn({ tests: [] }).spawn);
+    const sourceDir = await mkdtemp(join(tmpdir(), "lethal-alrunner-artifact-"));
+    await writeFile(join(sourceDir, "MutationSelector.Codeunit.al"), "source placeholder", "utf8");
+    await writeFile(
+      join(sourceDir, "mutant-manifest.json"),
+      JSON.stringify({ artifactId: "deadbeefdeadbeefdeadbeefdeadbeef", mutants: [] }),
+      "utf8",
+    );
+
+    await backend.deploy(sourceDir);
+    await backend.activate("M0001");
+
+    const activeDir = join(dir, "active");
+    const selector = await readFile(join(activeDir, "MutationSelector.Codeunit.al"), "utf8");
+    expect(selector).toContain("deadbeefdeadbeefdeadbeefdeadbeef");
+  });
+
+  // Companion to the Important-1 fix in al-runner-backend.ts: a corrupt
+  // manifest must fail deploy() loudly, not silently produce an empty
+  // artifact id that later compares equal to another empty id.
+  test("a corrupt manifest makes deploy() throw instead of silently yielding an empty artifact id", async () => {
+    const { backend } = await makeBackend(okSpawn({ tests: [] }).spawn);
+    const sourceDir = await mkdtemp(join(tmpdir(), "lethal-alrunner-corrupt-"));
+    await writeFile(join(sourceDir, "MutationSelector.Codeunit.al"), "source placeholder", "utf8");
+    await writeFile(join(sourceDir, "mutant-manifest.json"), "{ not valid json", "utf8");
+
+    await expect(backend.deploy(sourceDir)).rejects.toThrow(/mutant-manifest\.json/);
+  });
+
+  // The no-deploy path the class comment on deploy() promises to support: some callers
+  // (e.g. al-runner.itest.ts) drive activate()/run() straight against cfg.instrumentedDir,
+  // never calling deploy() first. activate() reads the artifact id LAZILY (see its comment)
+  // specifically so this path bakes the real id from cfg.instrumentedDir's own
+  // mutant-manifest.json, not a stale "" a deploy()-cached field would have left behind.
+  test("activate() without a prior deploy() bakes the real artifact id from cfg.instrumentedDir", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-alrunner-lazyid-"));
+    await writeFile(join(dir, "MutationSelector.Codeunit.al"), "placeholder", "utf8");
+    await writeFile(
+      join(dir, "mutant-manifest.json"),
+      JSON.stringify({ artifactId: "cafebabecafebabecafebabecafebabe", mutants: [] }),
+      "utf8",
+    );
+    const backend = new AlRunnerBackend(
+      {
+        alRunnerPath: "al-runner",
+        instrumentedDir: dir,
+        testDir: "/tests",
+        selectorObjectId: 50000,
+      },
+      okSpawn({ tests: [] }).spawn,
+    );
+
+    // No backend.deploy(...) call — activate() is driven directly, as deploy()'s own
+    // "existing callers may drive activate()/run() directly" comment describes.
+    await backend.activate("M0007");
+
+    const selector = await readFile(join(dir, "MutationSelector.Codeunit.al"), "utf8");
+    expect(selector).toContain("cafebabecafebabecafebabecafebabe");
+  });
+});
+
+describe("AlRunnerBackend.compileCheck", () => {
+  // al-runner has no publish step of its own — deploy() is already just a local file copy, and
+  // the actual `alc` invocation happens lazily inside run(), per test. So bisection's
+  // compile-only seam has nothing to withhold here: compileCheck() delegating straight to the
+  // existing deploy() IS the compile-only behaviour for this backend. Proven by driving the
+  // real compileCheck() (not a re-implementation) and observing the exact same file-copy
+  // side effect deploy() itself produces.
+  test("delegates to deploy(): copies the candidate dir into <instrumentedDir>/active", async () => {
+    const { dir, backend } = await makeBackend(okSpawn({ tests: [] }).spawn);
+    const sourceDir = await mkdtemp(join(tmpdir(), "lethal-alrunner-candidate-"));
+    await writeFile(
+      join(sourceDir, "MutationSelector.Codeunit.al"),
+      "candidate placeholder",
+      "utf8",
+    );
+
+    await backend.compileCheck(sourceDir);
+
+    const activeDir = join(dir, "active");
+    expect(await readFile(join(activeDir, "MutationSelector.Codeunit.al"), "utf8")).toBe(
+      "candidate placeholder",
+    );
+  });
+});
+
 describe("AlRunnerBackend.activate", () => {
   test("rewrites MutationSelector.Codeunit.al with the hardcoded id", async () => {
     const { dir, backend } = await makeBackend(okSpawn({ tests: [] }).spawn);
@@ -301,5 +396,10 @@ describe("MsInMemoryBackend", () => {
   test("throws with a pointer to the spec", () => {
     const b = new MsInMemoryBackend();
     expect(() => b.capabilities()).toThrow(/2026-07-17-layer-4/);
+  });
+
+  test("compileCheck also throws with a pointer to the spec", () => {
+    const b = new MsInMemoryBackend();
+    expect(() => b.compileCheck()).toThrow(/2026-07-17-layer-4/);
   });
 });

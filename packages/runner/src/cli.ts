@@ -6,10 +6,12 @@ import { parseArgs } from "node:util";
 import type { InstrumentedFile, SelectorConfig } from "@lethal/schemata";
 import { MutationControlClient } from "./activation";
 import { AlRunnerBackend } from "./al-runner-backend";
+import { ArtifactCompiler, defaultArtifactIo } from "./artifact";
 import type { ExecutionBackend } from "./backend";
 import { BcDevMcpBackend } from "./bcdev-backend";
+import { DeploymentVerifier } from "./deployment-verifier";
 import { generateMutationSet, planArtifacts, runSession } from "./orchestrator";
-import { Publisher, defaultAlToolPaths, defaultSpawn } from "./publisher";
+import { ContainerDeployer, defaultAlToolPaths, defaultDeployerIo } from "./publisher";
 import { renderConsole, writeJsonReport } from "./report";
 import type { SessionReport } from "./report";
 import { ResultsStore } from "./store";
@@ -134,7 +136,7 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
 
   // bcdev mutant activation (MutationControlClient.setActive) is a single
   // server-side record shared by every worker — server + serverInstance +
-  // company, one row. Per-worker Publisher.outputDir isolates each worker's
+  // company, one row. Per-worker ArtifactCompiler.outputDir isolates each worker's
   // COMPILED ARTIFACT, but not this: two workers running concurrently would
   // both call setActive() against the SAME server record, so worker B's
   // activation can clobber worker A's while A's test is still in flight,
@@ -279,11 +281,11 @@ export function odataBaseUrl(server: string, serverInstance: string): string {
  *     every `deploy()` call (see the comment there), so a distinct
  *     `instrumentedDir` per worker is what makes those copies land in
  *     genuinely separate directories instead of racing on the same one, and
- *   - each bcdev worker gets its own `Publisher.outputDir` — required per the
- *     Layer 4.2 plan's Task 2 review note: `BcDevMcpBackend.deploy` calls
- *     `publisher.compile(instrumentedDir)` with a single argument, so nothing
- *     stops two workers compiling to the same `<outputDir>/lethal-instrumented.app`
- *     and one publishing over the other's code UNLESS `outputDir` itself differs.
+ *   - each bcdev worker gets its own `ArtifactCompiler.outputDir`. Since Layer
+ *     5A the compiled .app is content-addressed per artifact id (never a fixed
+ *     filename), so collisions are already structurally impossible — a private
+ *     outputDir per worker additionally keeps each worker's scratch/final
+ *     artifacts physically separate and independently disposable.
  */
 async function buildBackend(
   parsed: RunCliConfig,
@@ -313,27 +315,36 @@ async function buildBackend(
   }
   const outputDir = join(scratchDir, "publish");
   await mkdir(outputDir, { recursive: true });
-  const publisher = new Publisher(
+  const compiler = new ArtifactCompiler(
     {
       alcPath: toolPaths.alcPath,
-      altoolPath: toolPaths.altoolPath,
       packageCachePath: c.packageCachePath,
       outputDir,
+    },
+    defaultArtifactIo,
+  );
+  const deployer = new ContainerDeployer(
+    {
+      altoolPath: toolPaths.altoolPath,
       server: c.server,
       serverInstance: c.serverInstance,
       username: c.username,
       password: c.password,
       ...(c.tenant !== undefined ? { tenant: c.tenant } : {}),
     },
-    defaultSpawn,
+    defaultDeployerIo,
   );
-  const activation = new MutationControlClient({
+  // One OData config, three consumers: activation (SetActive/ClearActive) and identity
+  // verification (Identity) talk to the same MutationControl_* web-service endpoints.
+  const odataCfg = {
     baseUrl: odataBaseUrl(c.server, c.serverInstance),
     company: c.company,
     username: c.username,
     password: c.password,
     ...(c.tenant !== undefined ? { tenant: c.tenant } : {}),
-  });
+  };
+  const activation = new MutationControlClient(odataCfg);
+  const verifier = new DeploymentVerifier(odataCfg);
   return new BcDevMcpBackend(
     {
       mcpCommand: c.mcpCommand,
@@ -345,7 +356,7 @@ async function buildBackend(
       ...(c.env !== undefined ? { env: c.env } : {}),
     },
     undefined,
-    publisher,
+    { compiler, deployer, verifier },
     activation,
   );
 }

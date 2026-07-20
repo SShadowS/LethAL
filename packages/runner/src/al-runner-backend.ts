@@ -1,8 +1,9 @@
-import { cp, rm, writeFile } from "node:fs/promises";
+import { cp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { emitStaticSelector } from "@lethal/schemata";
 import { OneShotTransport, ServerTransport } from "./al-runner-transport";
 import type { AlRunnerTransport } from "./al-runner-transport";
+import type { CompiledArtifact } from "./artifact";
 import type {
   BackendCapabilities,
   BackendStatus,
@@ -17,6 +18,55 @@ import type { SpawnFn } from "./publisher";
 
 /** al-runner's own per-test timeout message (verified against v1.0.31). */
 const RUNNER_TIMEOUT_MESSAGE = /Test exceeded \d+s timeout/;
+
+/**
+ * `mutant-manifest.json` is written by `writeInstrumentedProject` for every
+ * real batch, but some fixtures (e.g. `al-runner-backend.test.ts`'s synthetic
+ * source dirs) hand-build a directory with only `MutationSelector.Codeunit.al`
+ * and no manifest at all. A missing manifest (Node's `ENOENT`) is the ONLY
+ * thing tolerated here — it falls back to "", a harmless no-identity default
+ * since nothing keys off it except `MutationControl_Identity`, added in this
+ * same task.
+ *
+ * Everything else — corrupt JSON, a manifest with a missing/wrong-typed
+ * `artifactId`, or a read failure that ISN'T "file doesn't exist" (e.g. the
+ * EBUSY/EPERM Windows lock hazard `deploy()` already retries around, see its
+ * comment below) — must fail loudly. Swallowing those would let a broken
+ * manifest produce a *successful* deploy with `exit('')` baked into every
+ * activation and `MutationControl_Identity` silently returning "" — exactly
+ * the silent-wrong-verdict shape this project keeps guarding against, once a
+ * later task starts comparing that value against something.
+ */
+async function readArtifactId(dir: string): Promise<string> {
+  const manifestPath = join(dir, "mutant-manifest.json");
+  let raw: string;
+  try {
+    raw = await readFile(manifestPath, "utf8");
+  } catch (err) {
+    if (err instanceof Error && (err as NodeJS.ErrnoException).code === "ENOENT") return "";
+    throw new Error(
+      `readArtifactId: could not read ${manifestPath}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(
+      `readArtifactId: ${manifestPath} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  const artifactId =
+    typeof parsed === "object" && parsed !== null
+      ? (parsed as { artifactId?: unknown }).artifactId
+      : undefined;
+  if (typeof artifactId !== "string") {
+    throw new Error(
+      `readArtifactId: ${manifestPath} has no string "artifactId" field (got ${JSON.stringify(artifactId)})`,
+    );
+  }
+  return artifactId;
+}
 
 export interface AlRunnerConfig {
   readonly alRunnerPath: string; // path to the al-runner executable
@@ -64,7 +114,7 @@ export class AlRunnerBackend implements ExecutionBackend {
       : { ok: false, details: `al-runner not runnable: ${res.stderr}` };
   }
 
-  async deploy(instrumentedDir: string): Promise<void> {
+  async deploy(instrumentedDir: string): Promise<CompiledArtifact | null> {
     // In-memory backends have no publish step, but they still need to know
     // which per-batch instrumented dir activate()/run() should target.
     //
@@ -112,6 +162,25 @@ export class AlRunnerBackend implements ExecutionBackend {
     await rm(activeDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     await cp(instrumentedDir, activeDir, { recursive: true });
     this.deployedDir = activeDir;
+    // Early, LOUD validation of the batch just deployed: a corrupt manifest must fail
+    // deploy() itself, not surface only when a later activate() happens to read it. The
+    // value is deliberately not cached — activate() re-reads from activeDir() so the
+    // no-deploy path (activate()/run() driven straight against cfg.instrumentedDir) bakes
+    // that directory's REAL artifact id instead of a stale empty default.
+    await readArtifactId(activeDir);
+    // In-memory backend: nothing is compiled or published, so there is no artifact to
+    // describe — the orchestrator records provenance only for publishing backends.
+    return null;
+  }
+
+  /**
+   * al-runner has no separate publish step — `deploy()` is a local file copy, and the actual
+   * `alc` invocation happens lazily inside `run()`, per test. So there is nothing bisection's
+   * compile-only seam needs to withhold here: delegating to the existing `deploy()` is the
+   * compile-only behaviour for this backend, not a stand-in for it.
+   */
+  async compileCheck(instrumentedDir: string): Promise<void> {
+    await this.deploy(instrumentedDir);
   }
 
   private activeDir(): string {
@@ -119,9 +188,23 @@ export class AlRunnerBackend implements ExecutionBackend {
   }
 
   async activate(mutantId: string | null): Promise<void> {
+    const dir = this.activeDir();
     await writeFile(
-      join(this.activeDir(), "MutationSelector.Codeunit.al"),
-      emitStaticSelector({ objectId: this.cfg.selectorObjectId, activeId: mutantId ?? "" }),
+      join(dir, "MutationSelector.Codeunit.al"),
+      emitStaticSelector({
+        objectId: this.cfg.selectorObjectId,
+        activeId: mutantId ?? "",
+        // Read lazily from the directory this activation actually rewrites (see deploy()):
+        // a fixed instance field captured at deploy time baked "" over the real id whenever
+        // activate() ran without a prior deploy() — the exact no-deploy path the class
+        // comment above promises to support. Behavior change from that fixed-field version:
+        // a corrupt/malformed manifest in the no-deploy path now makes activate() itself
+        // throw (readArtifactId's loud-failure contract, see its doc comment) instead of
+        // silently baking in "". That's an improvement — the earlier version's whole point
+        // was never surfacing this — but it means activate() can now reject where it never
+        // used to for this specific (no prior deploy(), bad manifest) combination.
+        artifactId: await readArtifactId(dir),
+      }),
       "utf8",
     );
   }

@@ -23,7 +23,7 @@ export function emitMutationActiveTable(cfg: SelectorConfig): string {
 `;
 }
 
-export function emitMutationSelector(cfg: SelectorConfig): string {
+export function emitMutationSelector(cfg: SelectorConfig & { artifactId: string }): string {
   return `codeunit ${cfg.selectorId} "Mutation Selector"
 {
     SingleInstance = true;
@@ -44,6 +44,11 @@ export function emitMutationSelector(cfg: SelectorConfig): string {
         if CachedId = '' then
             exit(false);
         exit(CachedId = MutantId);
+    end;
+
+    procedure ArtifactId(): Text
+    begin
+        exit('${cfg.artifactId}');
     end;
 }
 `;
@@ -77,20 +82,37 @@ export function emitMutationControl(cfg: SelectorConfig): string {
             Commit();
         end;
     end;
+
+    procedure Identity(): Text
+    var
+        MutationSelector: Codeunit "Mutation Selector";
+    begin
+        exit(MutationSelector.ArtifactId());
+    end;
 }
 `;
 }
 
-export function emitStaticSelector(cfg: { objectId: number; activeId: string }): string {
+export function emitStaticSelector(cfg: {
+  objectId: number;
+  activeId: string;
+  artifactId: string;
+}): string {
   const body =
-    cfg.activeId === ""
-      ? "        exit(false);"
-      : `        exit(MutantId = '${cfg.activeId}');`;
+    cfg.activeId === "" ? "        exit(false);" : `        exit(MutantId = '${cfg.activeId}');`;
+  // ArtifactId must be present here too: AlRunnerBackend.activate() replaces the entire
+  // generated selector with this output on every activation, so an emitter missing a procedure
+  // MutationControl calls would break the NEXT compile.
   return `codeunit ${cfg.objectId} "Mutation Selector"
 {
     procedure Active(MutantId: Text): Boolean
     begin
 ${body}
+    end;
+
+    procedure ArtifactId(): Text
+    begin
+        exit('${cfg.artifactId}');
     end;
 }
 `;

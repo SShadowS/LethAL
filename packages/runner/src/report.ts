@@ -1,5 +1,6 @@
 import type { MutantManifestEntry } from "@lethal/schemata";
 import type { BackendCapabilities } from "./backend";
+import { identityKeyOf } from "./selection";
 import type { MutantVerdict } from "./store";
 
 /**
@@ -66,6 +67,24 @@ export interface MutantOutcome {
    * a failed batch read as a bare, indistinguishable "error".
    */
   readonly failureNote?: string;
+  /**
+   * Structural reason for an "error" verdict — mirrors `SessionOutcome.cause`. Present only
+   * for the two call sites that actually know it (deadline/unstable); other `error` verdicts
+   * (e.g. a bisected compile failure) leave this undefined.
+   */
+  readonly cause?: "deadline-exceeded" | "unstable";
+  /**
+   * Semantic mutant identity components (Layer 5A, `itest/mutant-equality.ts`) — the SAME
+   * astHash/codeunitName/operatorMajor triple `identityKeyOf`/`serializeKey` (selection.ts)
+   * already use for known-survivor persistence. Unlike `killingTest`/`failureNote`, these are
+   * always known at `record()` time, so they're not optional: a mutant-code- or
+   * file:line-keyed identity would break the moment a mutant is renumbered or a source line
+   * shifts, which is exactly the fragility the per-mutant regression gate (design spec §11)
+   * exists to survive.
+   */
+  readonly astHash: string;
+  readonly codeunitName: string;
+  readonly operatorMajor: number;
 }
 
 export interface BuildReportInput {
@@ -111,6 +130,7 @@ export function buildReport(input: BuildReportInput): SessionReport {
         if (o.cause === "deadline-exceeded") counts.deadlineExceeded++;
         break;
     }
+    const identity = identityKeyOf(o.mutant);
     mutants.push({
       mutantCode: o.mutant.mutantId,
       file: o.mutant.file,
@@ -118,8 +138,12 @@ export function buildReport(input: BuildReportInput): SessionReport {
       operatorName: o.mutant.operatorName,
       verdict: o.verdict,
       batchIndex: o.batchIndex,
+      astHash: identity.astHash,
+      codeunitName: identity.codeunitName,
+      operatorMajor: identity.operatorMajor,
       ...(o.killingTest !== undefined ? { killingTest: o.killingTest } : {}),
       ...(o.failureNote !== undefined ? { failureNote: o.failureNote } : {}),
+      ...(o.cause !== undefined ? { cause: o.cause } : {}),
     });
   }
 

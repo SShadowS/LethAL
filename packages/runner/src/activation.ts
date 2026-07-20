@@ -23,37 +23,52 @@ export interface ActivationConfig {
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 
+/**
+ * Shapes and sends one authenticated OData POST against the `MutationControl_*` unbound
+ * actions/functions on the target BC server — base URL, `company`/`tenant` query params, Basic
+ * auth, and a manual abort-based timeout. Shared by `MutationControlClient` (SetActive/
+ * ClearActive) and `DeploymentVerifier` (Identity) so this request-shaping exists exactly once.
+ */
+export async function postOData(
+  cfg: ActivationConfig,
+  fetchFn: FetchFn,
+  action: string,
+  body?: Record<string, unknown>,
+): Promise<unknown> {
+  const params = new URLSearchParams({ company: cfg.company });
+  if (cfg.tenant !== undefined) params.set("tenant", cfg.tenant);
+  const url = `${cfg.baseUrl}/ODataV4/MutationControl_${action}?${params.toString()}`;
+  // NOTE: AbortSignal.timeout() is unreliable in this Bun/Windows environment — verified
+  // directly (2026-07-18): its "abort" event never fired even 20s after a 50ms timeout, in
+  // isolation, with nothing else running. A manual AbortController + setTimeout (confirmed
+  // working the same way) is used instead.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), cfg.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  try {
+    const res = await fetchFn(url, {
+      method: "POST",
+      headers: {
+        authorization: `Basic ${btoa(`${cfg.username}:${cfg.password}`)}`,
+        "content-type": "application/json",
+      },
+      body: body ? JSON.stringify(body) : undefined,
+      signal: controller.signal,
+    });
+    if (!res.ok) throw new Error(`MutationControl_${action} failed: HTTP ${res.status}`);
+    return await res.json().catch(() => ({}));
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export class MutationControlClient {
   constructor(
     private readonly cfg: ActivationConfig,
     private readonly fetchFn: FetchFn = fetch,
   ) {}
 
-  private async post(action: string, body?: Record<string, unknown>): Promise<unknown> {
-    const params = new URLSearchParams({ company: this.cfg.company });
-    if (this.cfg.tenant !== undefined) params.set("tenant", this.cfg.tenant);
-    const url = `${this.cfg.baseUrl}/ODataV4/MutationControl_${action}?${params.toString()}`;
-    // NOTE: AbortSignal.timeout() is unreliable in this Bun/Windows environment — verified
-    // directly (2026-07-18): its "abort" event never fired even 20s after a 50ms timeout, in
-    // isolation, with nothing else running. A manual AbortController + setTimeout (confirmed
-    // working the same way) is used instead.
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.cfg.timeoutMs ?? DEFAULT_TIMEOUT_MS);
-    try {
-      const res = await this.fetchFn(url, {
-        method: "POST",
-        headers: {
-          authorization: `Basic ${btoa(`${this.cfg.username}:${this.cfg.password}`)}`,
-          "content-type": "application/json",
-        },
-        body: body ? JSON.stringify(body) : undefined,
-        signal: controller.signal,
-      });
-      if (!res.ok) throw new Error(`MutationControl_${action} failed: HTTP ${res.status}`);
-      return await res.json().catch(() => ({}));
-    } finally {
-      clearTimeout(timer);
-    }
+  private post(action: string, body?: Record<string, unknown>): Promise<unknown> {
+    return postOData(this.cfg, this.fetchFn, action, body);
   }
 
   // The `{ mutantId }` body key (camelCase) is CONFIRMED correct against a real BC server

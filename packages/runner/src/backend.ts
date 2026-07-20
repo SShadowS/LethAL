@@ -1,3 +1,5 @@
+import type { CompiledArtifact } from "./artifact";
+
 export interface TestMethodRef {
   readonly codeunitId: number;
   readonly codeunitName: string;
@@ -52,7 +54,21 @@ export interface RunOpts {
 export interface ExecutionBackend {
   capabilities(): BackendCapabilities;
   status(): Promise<BackendStatus>;
-  deploy(instrumentedDir: string): Promise<void>;
+  /**
+   * Compile + publish + verify the instrumented project. Publishing backends return the
+   * immutable `CompiledArtifact` they deployed (so the orchestrator can record provenance);
+   * backends with `deploy: "none"` return null — they still need the per-batch instrumented
+   * dir, they just have no compiled artifact to describe.
+   */
+  deploy(instrumentedDir: string): Promise<CompiledArtifact | null>;
+  /**
+   * Compile the instrumented directory and throw on a compiler rejection, WITHOUT publishing.
+   * Bisection's only question is whether alc accepts a source subset (spec §8); publishing a
+   * candidate would put a narrowed artifact on a live server and, because candidates share one
+   * version and id, would make every candidate after the first fail as a version conflict.
+   * Backends with no publish step may implement this as their existing deploy.
+   */
+  compileCheck(instrumentedDir: string): Promise<void>;
   activate(mutantId: string | null): Promise<void>;
   run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict>;
 }
