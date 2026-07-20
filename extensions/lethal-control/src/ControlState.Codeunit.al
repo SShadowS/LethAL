@@ -19,6 +19,17 @@ codeunit 71002 "LC Control State"
         CachedArtifactId: Text;
         CachedMutantId: Text;
         Loaded: Boolean;
+        SuiteCounter: Integer;
+
+    /// <summary>Control-owned monotonic suite name within Code[10] (spec §5.4). SingleInstance, so
+    /// consecutive runs never collide on one shared suite name. Wraps to stay in 10 chars.</summary>
+    procedure NextSuiteName(): Code[10]
+    begin
+        SuiteCounter += 1;
+        if SuiteCounter > 999999 then
+            SuiteCounter := 1;
+        exit(CopyStr('LC' + Format(SuiteCounter), 1, 10));
+    end;
 
     local procedure EnsureLoaded()
     var
