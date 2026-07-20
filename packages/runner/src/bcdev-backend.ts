@@ -293,8 +293,24 @@ export class BcDevMcpBackend implements ExecutionBackend {
   async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
     const started = Date.now();
     let timer: ReturnType<typeof setTimeout> | undefined;
+
+    // Phase 1 — connect. A failure here provably never dispatched a test run.
+    let client: Client;
     try {
-      const client = await this.connect();
+      client = await this.connect();
+    } catch (err) {
+      return {
+        ref,
+        outcome: "error",
+        durationMs: Date.now() - started,
+        failureMessage: String(err),
+        operation: "pre-dispatch-rejected",
+      };
+    }
+
+    // Phase 2 — dispatch. From the moment callTool is issued, a failure is ambiguous:
+    // the run may already be executing server-side.
+    try {
       const call = client.callTool({
         name: "bcdev_test_run",
         arguments: {
@@ -310,15 +326,23 @@ export class BcDevMcpBackend implements ExecutionBackend {
         }),
       ]);
       if (res === "timeout") {
-        call.catch(() => {}); // late result deliberately discarded
+        call.catch(() => {}); // late result discarded; the SERVER RUN IS NOT CANCELLED
         // bc-dev exposes no server-confirmed test-timeout signal, so we cannot
         // tell "the mutant hung" from "our timer fired / the endpoint wedged".
         // Fail safe: report infrastructure, never fabricate a kill.
-        return { ref, outcome: "deadline-exceeded", durationMs: Date.now() - started };
+        // Our timer fired; the server may still be executing. Ambiguous → in-flight-unknown.
+        return {
+          ref,
+          outcome: "deadline-exceeded",
+          durationMs: Date.now() - started,
+          operation: "in-flight-unknown",
+        };
       }
       // A thrown tool handler doesn't reject callTool() — the MCP protocol reports it as a
       // normal CallToolResult with isError:true and the message as plain (non-JSON) text.
       if (isToolError(res)) {
+        // The server answered (a thrown handler surfaces as a normal isError result), so this
+        // is a completed, well-formed error — not an in-flight ambiguity.
         return {
           ref,
           outcome: "error",
@@ -360,11 +384,14 @@ export class BcDevMcpBackend implements ExecutionBackend {
         ...(coverage !== undefined ? { coverage } : {}),
       };
     } catch (err) {
+      // The call was dispatched and then rejected (transport dropped mid-flight, etc.). The
+      // server may still be running the test → ambiguous.
       return {
         ref,
         outcome: "error",
         durationMs: Date.now() - started,
         failureMessage: String(err),
+        operation: "in-flight-unknown",
       };
     } finally {
       // Whichever side of the race settled first, the timer must not keep the event
