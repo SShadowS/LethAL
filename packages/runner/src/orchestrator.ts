@@ -369,8 +369,10 @@ async function bisectAndNote(args: {
 
 /** Production default for `SessionConfig.quarantineDir` (spec §9). Kept as a named helper (rather
  *  than inlined `?? ...`) so tests can assert against it and so there is exactly one place that
- *  decides what "no quarantineDir configured" means. */
-function defaultQuarantineDir(): string {
+ *  decides what "no quarantineDir configured" means. Exported so `cli.ts`'s `clear-quarantine`
+ *  command opens the SAME store `runSession` durably writes to — a second, drifting default here
+ *  would silently target the wrong directory and never actually clear anything. */
+export function defaultQuarantineDir(): string {
   return join(homedir(), ".lethal", "quarantine");
 }
 
@@ -442,6 +444,20 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         `tier ${resourceKey} is quarantined (${existing.opKind}: ${existing.detail}, recorded ${existing.recordedAtIso}, generation ${existing.generation}). Recycle the tier and run 'lethal clear-quarantine' to clear it.`,
       );
     }
+  } else if (caps.authoritative) {
+    // Safety net (Task 13 folded fix): an authoritative backend with NO tier identity means the
+    // quarantine consult above is silently skipped — no prior strand is detected, and no NEW
+    // strand can be durably recorded (see `quarantineInFlight`'s "no store" note). That is
+    // TOLERATED (not thrown — ~30 pre-existing authoritative-backend unit tests exercise an
+    // in-memory stub and never set these fields), but it must never be SILENT: a regression in
+    // whatever wires `resourceServer`/`resourceServerInstance` from config (cli.ts sources them
+    // from the bcdev config section's `server`/`serverInstance`) would otherwise leave quarantine
+    // permanently inert against a real BC server without any signal.
+    console.warn(
+      "runSession: authoritative backend but SessionConfig.resourceServer/resourceServerInstance " +
+        "are not set — the quarantine consult is DISABLED for this session (a prior strand on this " +
+        "tier will not be detected, and this session cannot durably record a new one).",
+    );
   }
   const status = await cfg.backend.status();
   if (!status.ok) throw new Error(`backend not ready: ${status.details}`);

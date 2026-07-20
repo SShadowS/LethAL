@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -2530,6 +2530,85 @@ describe("runSession — Task 11 quarantine consult + latch-gated finally", () =
     });
     await runSessionForTest(backend, { quarantineDir: freshTmpDir() });
     expect(activateCalls.at(-1)).toBeNull();
+  });
+});
+
+// ————————————————————————————————————————————————————————————————————————
+// Task 13 folded fix (Task 11 review, Important-1): the quarantine consult above only fires when
+// BOTH `resourceServer`/`resourceServerInstance` are present — an authoritative caller that omits
+// them is tolerated (skip, not throw), because ~30 pre-existing authoritative-backend unit tests
+// exercise an in-memory stub without ever setting them. Tolerated is not the same as silent: a
+// regression in whatever sources these fields from real config (`cli.ts`'s `resourceIdentityFor`,
+// added this same task) would otherwise leave quarantine permanently — and invisibly — inert
+// against a real BC server. `runSession` must warn every time this happens.
+// ————————————————————————————————————————————————————————————————————————
+describe("runSession — Task 13 folded fix: warn when authoritative but no tier identity", () => {
+  // Authoritative fake backends below explicitly set `coverage: "none"` (rather than relying on
+  // `fakeBackend()`'s CAPS_NST default of `coverage: "procedure"`), mirroring the already-proven
+  // "an unquarantined tier proceeds past the consult" test above — coverage:"none" runs every
+  // test against every mutant without needing the backend to report per-procedure coverage data.
+  const authoritativeNoCoverage = (): ExecutionBackend =>
+    fakeBackend({
+      capabilities: () => ({
+        coverage: "none",
+        deploy: "publish",
+        isolation: "session",
+        authoritative: true,
+      }),
+    });
+
+  test("warns when an authoritative backend omits resourceServer/resourceServerInstance", async () => {
+    const dirs = await makeProject();
+    const store = new ResultsStore(":memory:");
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    let messages: string[] = [];
+    try {
+      // Deliberately the RAW runSession call (not runSessionForTest, which always fills in
+      // resourceServer/resourceServerInstance) — this is exactly the shape of the ~30
+      // pre-existing authoritative tests elsewhere in this file.
+      await runSession({ backend: authoritativeNoCoverage(), store, ...dirs, selectorIds });
+      // Captured INSIDE the try, before `finally`'s mockRestore() — bun:test's mockRestore()
+      // also resets `.mock.calls` (like Jest's), so reading it after restore would always see
+      // zero calls regardless of what actually happened.
+      messages = warnSpy.mock.calls.map((call) => String(call[0]));
+    } finally {
+      warnSpy.mockRestore();
+    }
+    expect(messages.some((m) => m.includes("quarantine consult is DISABLED"))).toBe(true);
+  });
+
+  test("does NOT warn when resourceServer/resourceServerInstance are both set", async () => {
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    let callCount = 0;
+    try {
+      await runSessionForTest(authoritativeNoCoverage(), { quarantineDir: freshTmpDir() });
+      callCount = warnSpy.mock.calls.length; // see note above: read before mockRestore()
+    } finally {
+      warnSpy.mockRestore();
+    }
+    expect(callCount).toBe(0);
+  });
+
+  test("does NOT warn for a non-authoritative (al-runner) backend either", async () => {
+    const dirs = await makeProject();
+    const store = new ResultsStore(":memory:");
+    const backend = fakeBackend({
+      capabilities: () => ({
+        coverage: "none",
+        deploy: "none",
+        isolation: "full-reset",
+        authoritative: false,
+      }),
+    });
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    let callCount = 0;
+    try {
+      await runSession({ backend, store, ...dirs, selectorIds });
+      callCount = warnSpy.mock.calls.length; // see note above: read before mockRestore()
+    } finally {
+      warnSpy.mockRestore();
+    }
+    expect(callCount).toBe(0);
   });
 });
 
