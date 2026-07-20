@@ -1,0 +1,114 @@
+[
+  {
+    "key": "241fff269e9c9b9a336099e4588ad85b0198a155d98dccc6e48adf1e551f6341|Sandbox Logic|lethal.negate-conditional|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "346fd0a58a51cf923e45387c4c0f5483b1d1edcad7202a1e2d3a5bc96ff17b1a|Sandbox Logic|lethal.empty-block|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "4004a181f8c0dc8bbe0c7c3051d719211b1ca22dadad08ae600b2df9f72fbe82|Sandbox Logic|lethal.return-value|1",
+    "verdict": "killed",
+    "killingTest": "OverBudgetDetected",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "40277aa121cd95030531672f906db4dc1f238ef3179b8c58d7815e6a8fe957f5|Sandbox Logic|lethal.return-value|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "4b61c09033d7c8404656624ea1865b451a890db32d8212d97f8a77e9a5c2634a|Sandbox Pricing|lethal.conditional-boundary|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "58ade303c82ea175e1cabd4e46b8cd818e3a59a66b60578ef4d85077548d40e9|Sandbox Logic|lethal.conditional-boundary|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "5cba655a6ac203ce40d31b0b4974a7b2f308cfec342a35d8e1a4f8d8c09c5c03|Sandbox Logic|lethal.negate-conditional|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "6e62b3f846fccbf0c68709ecf3b27a522c1b6bb8735e2a5ca991fd8193976690|Sandbox Logic|lethal.empty-block|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "6f3d664cc2b021fd203650e64f1f855d436986ad295b86001c04775b93346252|Sandbox Logic|lethal.empty-block|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "7f9598a6e5967d4f80e59cb2e93f397782a77e8b3f13df55547e612cae4b2610|Sandbox Logic|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "82a8a37831dd57841652a34ad1f5567a0c073ca19774f619b2022729a64fb9dc|Sandbox Logic|lethal.conditional-boundary|1",
+    "verdict": "killed",
+    "killingTest": "OverBudgetDetected",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "98656555452a91ccc91c88a8a0bc3f58192db5f5153792b959447d06cff62cf1|Sandbox Pricing|lethal.return-value|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "bdc7ff58e859be34b764eab287242a360199c9cbbd5b6ead399ada03a8ace4bc|Sandbox Pricing|lethal.empty-block|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "d3bd86558b73591064df51d2e4cf2f47c1c84e8b58d5c8ddea5210fe57a5178f|Sandbox Logic|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "OverBudgetDetected",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "db2c5bd64bb1bbe42ddd19f8c872882dba60ccb4478d88d1fe27579a7cceeeb7|Sandbox Logic|lethal.empty-block|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "fc15ec3036dca5e21a2e79675b48f28e5815811f32dff4eb3426e0ff803575bb|Sandbox Logic|lethal.conditional-boundary|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  }
+]
