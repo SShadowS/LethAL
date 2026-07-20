@@ -47,6 +47,18 @@ export interface SessionReport {
    */
   readonly mutationScore: number | null;
   readonly mutants: readonly MutantOutcome[];
+  /**
+   * Set only when the session latched unsafe (spec §8/§12) — a test run came back
+   * in-flight-unknown (the server may still be executing it) and the session recorded a
+   * durable tier quarantine and stopped scheduling further mutants. `reason` is
+   * `SessionSafety.reason` verbatim: it names the stranded op (method + mutant id) that
+   * tripped the latch. Absent on every ordinary session, including one with plain (non-
+   * in-flight-unknown) `deadline-exceeded` errors — those stay `counts.errors`/
+   * `counts.deadlineExceeded` only, no quarantine.
+   */
+  readonly quarantined?: {
+    readonly reason: string;
+  };
 }
 
 export interface MutantOutcome {
@@ -92,6 +104,10 @@ export interface BuildReportInput {
   readonly baselineGreen: boolean;
   readonly batches: number;
   readonly outcomes: readonly SessionOutcome[];
+  /** Threaded straight through from `runSession`'s `SessionSafety` — see `SessionReport.quarantined`. */
+  readonly quarantined?: {
+    readonly reason: string;
+  };
 }
 
 export function buildReport(input: BuildReportInput): SessionReport {
@@ -156,6 +172,7 @@ export function buildReport(input: BuildReportInput): SessionReport {
     counts,
     mutationScore: denom === 0 ? null : (counts.killed + counts.timeoutKilled) / denom,
     mutants,
+    ...(input.quarantined !== undefined ? { quarantined: input.quarantined } : {}),
   };
 }
 

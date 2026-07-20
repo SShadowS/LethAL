@@ -2532,3 +2532,84 @@ describe("runSession — Task 11 quarantine consult + latch-gated finally", () =
     expect(activateCalls.at(-1)).toBeNull();
   });
 });
+
+// ————————————————————————————————————————————————————————————————————————
+// Layer 5B (Task 12): mutant-loop in-flight-unknown deadline records a durable
+// quarantine, latches unsafe, and stops — a plain (non-in-flight-unknown)
+// deadline stays an ordinary error, no quarantine.
+// ————————————————————————————————————————————————————————————————————————
+
+describe("runSession — Task 12 quarantine on in-flight-unknown deadline", () => {
+  test("an in-flight-unknown deadline records a durable quarantine and reports quarantined", async () => {
+    const dir = freshTmpDir();
+    // NOTE on this fixture (deviates from the brief's literal `run: async (ref) => ({ ...
+    // deadline-exceeded/in-flight-unknown }))` one-liner): a `run` override that uniform for
+    // EVERY call also answers the session's BASELINE test (step 4, before the mutant loop —
+    // which has no in-flight-unknown handling of its own, by design/scope). A deadline-exceeded
+    // baseline just fails baseline outright ("no green baseline tests") and the session never
+    // reaches the mutant loop this test means to exercise — confirmed empirically: the literal
+    // brief fixture leaves the quarantine store empty even with Step 3 fully implemented.
+    // Tracking `activeMutant` (same pattern as the "finally teardown" test above) lets baseline
+    // (activation `null`) pass normally and keeps the ambiguous deadline scoped to the
+    // per-mutant covering-test run this task's branch actually guards.
+    let activeMutant: string | null = null;
+    const backend = fakeBackend({
+      capabilities: () => ({
+        coverage: "none", // every mutant covered by baseline's one passing test — no coverage index needed
+        deploy: "publish",
+        isolation: "session",
+        authoritative: true, // required for the Task 11 quarantine consult/record path to engage
+      }),
+      activate: async (id) => {
+        activeMutant = id;
+      },
+      run: async (ref) =>
+        activeMutant === null
+          ? { ref, outcome: "pass", durationMs: 1 }
+          : { ref, outcome: "deadline-exceeded", durationMs: 1, operation: "in-flight-unknown" },
+    });
+    const report = await runSessionForTest(backend, {
+      quarantineDir: dir,
+      nowIso: () => "2026-07-20T12:00:00.000Z",
+    }).catch((e) => e);
+    // session exits quarantined (either a thrown quarantined error or a report flag — assert the store):
+    const store = new QuarantineStore(dir);
+    const rec = await store.read("http://cronus281|BC");
+    expect(rec).not.toBeNull();
+    expect(rec?.opKind).toBe("test-run");
+    expect(rec?.recordedAtIso).toBe("2026-07-20T12:00:00.000Z");
+    // The session resolves (not rejects) with a report naming the stranded op — Step 3's "stop
+    // scheduling further mutants after the mutant loop" wiring, not just the store write.
+    expect(report).not.toBeInstanceOf(Error);
+    expect((report as Awaited<ReturnType<typeof runSession>>).quarantined?.reason).toContain(
+      "in-flight-unknown",
+    );
+  });
+
+  test("a plain deadline-exceeded (no in-flight-unknown operation) stays an ordinary error — no quarantine, session continues", async () => {
+    const dir = freshTmpDir();
+    let activeMutant: string | null = null;
+    const backend = fakeBackend({
+      capabilities: () => ({
+        coverage: "none",
+        deploy: "publish",
+        isolation: "session",
+        authoritative: false, // al-runner shape: no shared tier, mirrors the brief's "no shared tier" case
+      }),
+      activate: async (id) => {
+        activeMutant = id;
+      },
+      run: async (ref) =>
+        activeMutant === null
+          ? { ref, outcome: "pass", durationMs: 1 }
+          : { ref, outcome: "deadline-exceeded", durationMs: 1 }, // no `operation` — al-runner has no seam for it
+    });
+    const report = await runSessionForTest(backend, { quarantineDir: dir });
+    const store = new QuarantineStore(dir);
+    const rec = await store.read("http://cronus281|BC");
+    expect(rec).toBeNull(); // no quarantine recorded
+    expect(report.quarantined).toBeUndefined();
+    expect(report.counts.deadlineExceeded).toBeGreaterThan(0);
+    expect(report.counts.errors).toBeGreaterThan(0);
+  });
+});

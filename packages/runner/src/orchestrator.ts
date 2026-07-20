@@ -128,6 +128,11 @@ export interface SessionConfig {
    */
   readonly resourceServer?: string;
   readonly resourceServerInstance?: string;
+  /** Injectable ISO-timestamp source for durable quarantine records (Task 12). Production code
+   *  freely uses `Date`/`Date.now()` (only workflow SCRIPTS forbid them — see design notes);
+   *  this exists purely so tests can assert against a fixed, deterministic `recordedAtIso`
+   *  instead of racing the real clock. Defaults to `() => new Date().toISOString()`. */
+  readonly nowIso?: () => string;
 }
 
 /** Alias kept for readability at call sites within this module. */
@@ -378,21 +383,31 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // this function is latch-gated so no mutating ClearActive ever runs once unsafe.
   const safety = new SessionSafety();
   const caps = cfg.backend.capabilities();
+  const nowIso = cfg.nowIso ?? (() => new Date().toISOString());
   // Quarantine consult (spec §8/§9): a tier a PRIOR session marked stranded must refuse this
   // session outright, before even a non-mutating status() probe. Only meaningful for an
   // authoritative backend with a known tier identity — see SessionConfig.resourceServer's doc
   // comment for why an authoritative caller missing the identity fields is tolerated (skip, not
   // throw) rather than treated as a configuration error here.
+  //
+  // `resourceKey`/`quarantineStore` are declared at this outer scope (not just inside the `if`
+  // below) so the mutant loop (Task 12) can also record a NEW quarantine when a test run comes
+  // back in-flight-unknown mid-session — they stay `undefined` for exactly the backends that
+  // legitimately have no shared tier to strand (al-runner) or omit identity fields, and the
+  // mutant loop treats "no store" as "latch only, nothing durable to record" (see
+  // `runMutantsOnBackend`'s deadline branch).
+  let resourceKey: string | undefined;
+  let quarantineStore: QuarantineStore | undefined;
   if (
     caps.authoritative &&
     cfg.resourceServer !== undefined &&
     cfg.resourceServerInstance !== undefined
   ) {
-    const resourceKey = quarantineResourceKey({
+    resourceKey = quarantineResourceKey({
       server: cfg.resourceServer,
       serverInstance: cfg.resourceServerInstance,
     });
-    const quarantineStore = new QuarantineStore(cfg.quarantineDir ?? defaultQuarantineDir());
+    quarantineStore = new QuarantineStore(cfg.quarantineDir ?? defaultQuarantineDir());
     const existing = await quarantineStore.read(resourceKey);
     if (existing !== null) {
       throw new Error(
@@ -714,6 +729,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           runId,
           batchIndex: batchIdx,
           outcomes,
+          quarantineStore,
+          resourceKey,
+          nowIso,
         });
       } else {
         const shards = shardEvenly(execute, workers);
@@ -797,6 +815,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
               runId,
               batchIndex: batchIdx,
               outcomes,
+              quarantineStore,
+              resourceKey,
+              nowIso,
             });
           }),
         );
@@ -805,6 +826,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         );
         if (firstRejection !== undefined) throw firstRejection.reason;
       }
+      // Task 12 (spec §8/§12): an in-flight-unknown deadline anywhere in this batch's mutant
+      // loop latches `safety` and records a durable quarantine — no further batch may schedule
+      // any work-plane call (deploy/activate/run) against a tier that may still be stranded.
+      if (safety.isUnsafe) break;
     }
   } finally {
     // Best-effort cleanup: deliberately swallow errors here (unlike the
@@ -848,6 +873,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     baselineGreen: baselineGreenOverall,
     batches: artifacts.length,
     outcomes,
+    ...(safety.isUnsafe ? { quarantined: { reason: safety.reason ?? "unknown" } } : {}),
   });
 }
 
@@ -892,6 +918,16 @@ async function runMutantsOnBackend(args: {
   readonly runId: number;
   readonly batchIndex: number;
   readonly outcomes: SessionOutcome[];
+  /**
+   * Durable-quarantine sink for an in-flight-unknown deadline (Task 12, spec §9). `undefined`
+   * for exactly the sessions `runSession`'s own consult block already tolerates missing tier
+   * identity for — al-runner (no shared server-side tier to strand) or an authoritative caller
+   * that omitted `resourceServer`/`resourceServerInstance` — the latch still always trips in
+   * that case, there's just nothing durable on disk to record.
+   */
+  readonly quarantineStore?: QuarantineStore | undefined;
+  readonly resourceKey?: string | undefined;
+  readonly nowIso: () => string;
 }): Promise<void> {
   for (const m of args.mutants) {
     const covering = args.perMutantTests.get(m.mutantId);
@@ -933,6 +969,25 @@ async function runMutantsOnBackend(args: {
         failureMessage: v.failureMessage,
       });
       spent += v.durationMs;
+      if (v.operation !== undefined && requiresUnsafeLatch(v.operation)) {
+        // The server may still be executing this test. Latch unsafe, record a durable tier
+        // quarantine, and stop — no further work-plane call (spec §8, §12).
+        args.safety.latchUnsafe(
+          `test in-flight-unknown running ${ref.method} (mutant ${m.mutantId})`,
+        );
+        if (args.quarantineStore !== undefined && args.resourceKey !== undefined) {
+          await args.quarantineStore.record({
+            resourceKey: args.resourceKey,
+            opKind: "test-run",
+            detail: `deadline exceeded running ${ref.method} (mutant ${m.mutantId}); server op may be in flight`,
+            recordedAtIso: args.nowIso(),
+          });
+        }
+        verdict = "error";
+        failureNote = `quarantined: ${ref.method} timed out, container may be stranded`;
+        cause = "deadline-exceeded";
+        break;
+      }
       if (v.outcome === "deadline-exceeded") {
         // Our timer, not the runner's: says nothing about the mutant.
         verdict = "error";
@@ -1015,6 +1070,13 @@ async function runMutantsOnBackend(args: {
           `(test ${transportErrorRef.method}) — aborting session per spec §11: ${failureNote ?? ""}`,
       );
     }
+    // Task 12 (spec §8/§12): the in-flight-unknown branch above just latched `safety` — stop
+    // scheduling further mutants in THIS shard rather than letting the next iteration's
+    // `activateOnce` discover the latch by throwing `SessionUnsafeError`. Checked here (after
+    // this mutant's own record/flush completed) rather than relying on that throw so the shard
+    // returns normally and `runSession` can still assemble a `quarantined` report instead of
+    // rejecting.
+    if (args.safety.isUnsafe) break;
   }
 }
 
