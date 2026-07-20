@@ -18,8 +18,10 @@ export interface ActivationConfig {
   // Observed directly against a real BC server (2026-07-18): the OData/web-service pipeline
   // can wedge and stop answering ANY request (even unrelated ones, like a plain entity read)
   // for an extended period, with no HTTP response ever arriving — `fetch()` has no default
-  // timeout, so without one this call (and activateWithRetry's single retry) would hang the
-  // whole session forever rather than surfacing a retryable/session-aborting error.
+  // timeout, so without one this call (and orchestrator.ts's `activateOnce`, which retries a
+  // `pre-dispatch-rejected` activation exactly once and never retries anything else — the old
+  // `activateWithRetry` this comment used to name was deleted in Task 10) would hang the whole
+  // session forever rather than surfacing a retryable/session-aborting error.
   readonly timeoutMs?: number;
 }
 

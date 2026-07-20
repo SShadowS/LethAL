@@ -273,7 +273,11 @@ export class BcDevMcpBackend implements ExecutionBackend {
    * immediately so repeated candidate compiles across a bisection search don't accumulate
    * unboundedly in the compiler's `outputDir` (spec: candidate artifacts must not pile up across
    * a session). `force: true` because a compile that never reached the write step (e.g. rejected
-   * before `alc` produced output) leaves nothing to delete.
+   * before `alc` produced output) leaves nothing to delete. The cleanup itself is best-effort
+   * (`.catch(() => {})`): a compile already succeeded by the time this runs, so a stray cleanup
+   * failure (e.g. a transient Windows file lock) must never mask that real, already-decided
+   * compile result behind an unrelated fs error — worst case a candidate `.app` lingers in
+   * `outputDir` instead of the search itself failing.
    */
   async compileCheck(instrumentedDir: string): Promise<void> {
     const deployment = this.deployment;
@@ -281,7 +285,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
     const artifact = await deployment.compiler.compile(
       await this.prepareCompileInput(instrumentedDir),
     );
-    await rm(artifact.appPath, { force: true });
+    await rm(artifact.appPath, { force: true }).catch(() => {});
   }
 
   async activate(mutantId: string | null): Promise<void> {

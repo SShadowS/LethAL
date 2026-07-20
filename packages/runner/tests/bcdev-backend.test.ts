@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -14,6 +14,7 @@ import {
   DeploymentError,
   defaultArtifactIo,
 } from "../src/artifact";
+import type { ArtifactIo } from "../src/artifact";
 import { BcDevMcpBackend } from "../src/bcdev-backend";
 import type { BcDevDeployment } from "../src/bcdev-backend";
 import { DeploymentVerifier } from "../src/deployment-verifier";
@@ -602,6 +603,39 @@ describe("BcDevMcpBackend.compileCheck", () => {
       await backend.compileCheck(dir);
       const appsAfter = (await readdir(dir)).filter((f) => f.endsWith(".app"));
       expect(appsAfter).toHaveLength(0);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Task 14 fold-in: the post-compile cleanup `rm(artifact.appPath, ...)` must be best-effort —
+  // a failed cleanup (e.g. a transient Windows file lock) must never mask an already-decided
+  // compile result behind an unrelated fs error. Provoked without relying on any OS-specific
+  // locking behavior: a fake `writeArtifact` places the "compiled" artifact at a DIRECTORY path
+  // instead of a file, so `rm(appPath, { force: true })` (no `recursive: true`) throws on the
+  // directory regardless of platform — `force` only ignores a MISSING path, never a real fs
+  // error like this one.
+  test("compileCheck swallows a cleanup rm failure (does not mask the compile result)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-bcdev-compilecheck-rmfail-"));
+    try {
+      await writeDeployInputs(dir);
+      const io: ArtifactIo = {
+        spawn: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+        readArtifact: async () => new Uint8Array([1, 2, 3]),
+        writeArtifact: async (_from, to) => {
+          await mkdir(to, { recursive: true }); // appPath now names a directory, not a file
+        },
+      };
+      const compiler = new ArtifactCompiler(
+        { alcPath: "C:/fake/alc.exe", packageCachePath: "C:/fake/.alpackages", outputDir: dir },
+        io,
+      );
+      const backend = new BcDevMcpBackend(
+        { mcpCommand: ["unused"], project: "/al", server: "http://bc", serverInstance: "BC" },
+        undefined,
+        { compiler, deployer: {} as ContainerDeployer, verifier: {} as DeploymentVerifier },
+      );
+      await expect(backend.compileCheck(dir)).resolves.toBeUndefined();
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

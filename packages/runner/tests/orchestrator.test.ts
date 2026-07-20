@@ -1400,6 +1400,89 @@ describe("runSession — Layer 5A deployment identity", () => {
   });
 });
 
+// ————————————————————————————————————————————————————————————————————————
+// Task 14 (Layer 5B fold-in): a deploy:"none" (al-runner) run's `createRun` placeholder is what
+// durably lands in `runs.app_version` — al-runner's deploy() always returns null, so the
+// Layer 5A `recordArtifact` correction (3d, see "records the version actually compiled" above)
+// never fires for it. Must read the project's own app.json version instead of the meaningless
+// "0.0.0.0" default.
+// ————————————————————————————————————————————————————————————————————————
+
+describe("runSession — deploy:none (al-runner) app_version", () => {
+  const AL_RUNNER_CAPS: BackendCapabilities = {
+    coverage: "none",
+    deploy: "none",
+    isolation: "full-reset",
+    authoritative: false,
+  };
+
+  test("records the project's own app.json version, not the 0.0.0.0 placeholder", async () => {
+    const dirs = await makeProject();
+    const manifest = JSON.parse(APP_JSON) as Record<string, unknown>;
+    await Bun.write(
+      join(dirs.projectDir, "app.json"),
+      JSON.stringify({ ...manifest, version: "1.2.3.4" }),
+    );
+    const backend = new StubBackend(AL_RUNNER_CAPS, (mutant) =>
+      mutant === null ? "pass" : "fail",
+    );
+    const store = new ResultsStore(":memory:");
+    await runSession({ backend, store, ...dirs, selectorIds });
+    const row = store.db.query("SELECT app_version FROM runs LIMIT 1").get() as {
+      app_version: string;
+    };
+    expect(row.app_version).toBe("1.2.3.4");
+    expect(row.app_version).not.toBe("0.0.0.0");
+    store.close();
+  });
+
+  test("an explicit cfg.appVersion still wins over app.json for a deploy:none backend", async () => {
+    const dirs = await makeProject();
+    const manifest = JSON.parse(APP_JSON) as Record<string, unknown>;
+    await Bun.write(
+      join(dirs.projectDir, "app.json"),
+      JSON.stringify({ ...manifest, version: "1.2.3.4" }),
+    );
+    const backend = new StubBackend(AL_RUNNER_CAPS, (mutant) =>
+      mutant === null ? "pass" : "fail",
+    );
+    const store = new ResultsStore(":memory:");
+    await runSession({ backend, store, ...dirs, selectorIds, appVersion: "9.9.9.9" });
+    const row = store.db.query("SELECT app_version FROM runs LIMIT 1").get() as {
+      app_version: string;
+    };
+    expect(row.app_version).toBe("9.9.9.9");
+    store.close();
+  });
+
+  test("does not change mutant verdicts — recorded-metadata fix only", async () => {
+    const dirs = await makeProject();
+    const manifest = JSON.parse(APP_JSON) as Record<string, unknown>;
+    await Bun.write(
+      join(dirs.projectDir, "app.json"),
+      JSON.stringify({ ...manifest, version: "1.2.3.4" }),
+    );
+    const shape = (r: Awaited<ReturnType<typeof runSession>>) =>
+      [...r.mutants].map((m) => `${m.file}:${m.line}:${m.operatorName}:${m.verdict}`).sort();
+    const store = new ResultsStore(":memory:");
+    const backend = new StubBackend(AL_RUNNER_CAPS, (mutant) =>
+      mutant === null ? "pass" : "fail",
+    );
+    const report = await runSession({ backend, store, ...dirs, selectorIds });
+    store.close();
+
+    const dirs2 = await makeProject(); // app.json still the default 1.0.0.0 here
+    const store2 = new ResultsStore(":memory:");
+    const backend2 = new StubBackend(AL_RUNNER_CAPS, (mutant) =>
+      mutant === null ? "pass" : "fail",
+    );
+    const report2 = await runSession({ backend: backend2, store: store2, ...dirs2, selectorIds });
+    store2.close();
+
+    expect(shape(report)).toEqual(shape(report2));
+  });
+});
+
 describe("narrowFilesToSubset", () => {
   // Minimal fakes: `narrowFilesToSubset` only ever reads `spec.before.{start,end}Index`,
   // `spec.operatorName`, and `file.{path,specs}` — every other field on `ALSyntaxNode` /

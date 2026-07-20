@@ -105,8 +105,13 @@ export interface SessionConfig {
   readonly selectorIds: SelectorConfig;
   readonly baselineTimeoutMs?: number; // default 120000
   readonly skipKnownSurvivors?: boolean;
-  // createRun placeholder only (default "0.0.0.0") — after a successful deploy the run row is
-  // corrected via store.recordArtifact with the version actually compiled (reserveAppVersion).
+  // createRun placeholder only. For an authoritative (publishing) backend, a successful deploy
+  // corrects the run row via store.recordArtifact with the version actually compiled
+  // (reserveAppVersion) — this value never survives past that point. For a deploy:"none" backend
+  // (al-runner), deploy() never returns a CompiledArtifact (see AlRunnerBackend.deploy's doc
+  // comment), so recordArtifact never fires and THIS is what durably lands in the row;
+  // runSession falls back to the project's own app.json version for that case when unset (see
+  // readAppVersionBestEffort) rather than the meaningless "0.0.0.0" default.
   readonly appVersion?: string;
   readonly workers?: number; // default 1 — a pool of one IS the sequential path
   readonly compileConcurrency?: number; // default min(workers, 4)
@@ -404,6 +409,34 @@ async function quarantineInFlight(args: {
   }
 }
 
+/**
+ * Best-effort app.json version lookup for `runSession`'s `createRun` call. Layer 5A already
+ * derives the version a PUBLISHING run's row ends up recording from the project's own app.json
+ * (via `readProjectManifest`/`reserveAppVersion` in the batch loop below, corrected into the run
+ * row by step 3d's `recordArtifact` call) — but a `deploy: "none"` backend's `deploy()` always
+ * returns `null` (nothing compiled, see `AlRunnerBackend.deploy`'s doc comment), so that
+ * correction never fires for it, and `createRun`'s placeholder is whatever durably lands in the
+ * row. Read the SAME source (the project's raw app.json `version` field — not
+ * `reserveAppVersion`'s clock-derived reservation, since al-runner never publishes and so has
+ * nothing to keep monotonic) so a deploy:none run's row records real metadata instead of a
+ * meaningless "0.0.0.0".
+ *
+ * Deliberately tolerant of a missing/malformed app.json (returns `undefined`, letting the caller
+ * fall back to the old placeholder) rather than `readProjectManifest`'s loud-throw contract: this
+ * runs BEFORE `generateMutationSet`/`planArtifacts` decide whether the session has any mutable
+ * sites at all, and a project with none is documented to reach no app.json requirement whatsoever
+ * (see `planArtifacts`'s doc comment) — this lookup must not turn that into a hard requirement.
+ */
+async function readAppVersionBestEffort(projectDir: string): Promise<string | undefined> {
+  try {
+    const raw = await readFile(join(projectDir, "app.json"), "utf8");
+    const parsed = JSON.parse(raw) as { version?: unknown };
+    return typeof parsed.version === "string" ? parsed.version : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // Constructed once for the whole session and threaded to every activateOnce call site
   // (baseline activation below, and the per-mutant loop in runMutantsOnBackend) — the latch is
@@ -477,7 +510,15 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   const runId = cfg.store.createRun({
     projectPath: cfg.projectDir,
     backend: caps.authoritative ? "bcdev" : "al-runner",
-    appVersion: cfg.appVersion ?? "0.0.0.0",
+    // Authoritative backends: whatever lands here is corrected below (3d) once the real
+    // compiled version is known, so there's no need to read app.json twice — "0.0.0.0" is a
+    // harmless placeholder there. Non-authoritative (deploy:"none") backends never get that
+    // correction (see readAppVersionBestEffort's doc comment), so fall back to the project's
+    // own app.json version instead of the placeholder when the caller didn't already supply one.
+    appVersion:
+      cfg.appVersion ??
+      (caps.authoritative ? undefined : await readAppVersionBestEffort(cfg.projectDir)) ??
+      "0.0.0.0",
   });
 
   const allFiles = await generateMutationSet(cfg.projectDir);

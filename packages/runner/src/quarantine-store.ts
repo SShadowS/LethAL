@@ -2,6 +2,43 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
+/** Bounded retry budget for `renameWithRetry`'s transient-EPERM ride-out (see its doc comment). */
+const RENAME_MAX_ATTEMPTS = 5;
+const RENAME_RETRY_DELAY_MS = 20;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * `rename()` to a shared destination path, with a small bounded retry on a transient
+ * `EPERM`/`EACCES`. On Windows, two writers racing `rename()` onto the SAME target (e.g. two
+ * concurrent `record()` calls for one tier — see the co-located concurrent-write test) can
+ * intermittently observe the target file briefly held by the other writer's own in-flight
+ * rename, surfacing as `EPERM` (occasionally `EACCES`) rather than succeeding or losing the
+ * race cleanly — a transient contention window, not a real permission failure.
+ *
+ * Atomicity is unaffected: `rename` is still the ONLY write to `target`, and still the single
+ * commit point — this just decides how many times to retry that SAME atomic rename, never
+ * partial-writes or falls back to a non-atomic copy. A fixed retry count and fixed delay (no
+ * `Date.now`/`Math.random` — this file's writes must stay trivially deterministic to reason
+ * about) is enough to ride out the window; anything else, or persistent EPERM/EACCES after every
+ * attempt, rethrows unchanged so the caller's existing "a write that cannot be made durable
+ * throws" contract holds.
+ */
+async function renameWithRetry(from: string, to: string): Promise<void> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await rename(from, to);
+      return;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (attempt >= RENAME_MAX_ATTEMPTS || (code !== "EPERM" && code !== "EACCES")) throw err;
+      await delay(RENAME_RETRY_DELAY_MS);
+    }
+  }
+}
+
 export interface QuarantineRecord {
   readonly resourceKey: string;
   readonly opKind: string;
@@ -47,7 +84,7 @@ export class QuarantineStore {
     const target = this.fileFor(rec.resourceKey);
     const tmp = `${target}.tmp-${randomUUID()}`;
     await writeFile(tmp, JSON.stringify(next), "utf8");
-    await rename(tmp, target); // atomic same-dir rename
+    await renameWithRetry(tmp, target); // atomic same-dir rename, retried on a transient EPERM/EACCES
     return next;
   }
 
