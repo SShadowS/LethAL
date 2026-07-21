@@ -37,9 +37,10 @@ export function emitMutationActiveTable(cfg: SelectorConfig): string {
  * seam is UNCHANGED — guards still emit `MutationSelector.Active('<id>')` and `compile.ts` still
  * injects `var MutationSelector: Codeunit "Mutation Selector";`; only what `Active` DOES changed.
  *
- * `using LethAL.Control;` brings the control extension's namespaced `LC Control State` into
- * scope; the target's `app.json` gains the `LethAL Control` dependency (see `project.ts` /
- * orchestrator) so the reference resolves at compile time.
+ * `LC Control State` resolves by unqualified name across the `LethAL Control` app dependency
+ * (added to the target's `app.json` — see `project.ts` / orchestrator). No `using LethAL.Control;`
+ * directive: the target declares no namespace, so a `using` would be ignored anyway (alc AL0789)
+ * — verified live on Cronus281 that the bare reference resolves without it.
  *
  * al-runner never compiles this: `AlRunnerBackend.activate()` overwrites the whole selector file
  * with `emitStaticSelector` (self-contained, no control dependency) before its lazy `alc` run.
@@ -48,9 +49,7 @@ export function emitMutationActiveTable(cfg: SelectorConfig): string {
 export function emitMutationSelector(
   cfg: SelectorConfig & { artifactId: string; targetAppId: string },
 ): string {
-  return `using LethAL.Control;
-
-codeunit ${cfg.selectorId} "Mutation Selector"
+  return `codeunit ${cfg.selectorId} "Mutation Selector"
 {
     procedure Active(MutantId: Text): Boolean
     var
@@ -80,9 +79,7 @@ export function emitRegisterInstall(cfg: {
   targetAppId: string;
   artifactId: string;
 }): string {
-  return `using LethAL.Control;
-
-codeunit ${cfg.objectId} "Mutation Register"
+  return `codeunit ${cfg.objectId} "Mutation Register"
 {
     Subtype = Install;
 
