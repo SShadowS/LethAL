@@ -20,6 +20,10 @@ codeunit 71002 "LC Control State"
         CachedMutantId: Text;
         Loaded: Boolean;
         SuiteCounter: Integer;
+        ExpectedTargetAppId: Text;
+        ExpectedArtifactId: Text;
+        ObservedAny: Boolean;
+        ObservedIdentityMismatch: Boolean;
 
     /// <summary>Control-owned monotonic suite name within Code[10] (spec §5.4). SingleInstance, so
     /// consecutive runs never collide on one shared suite name. Wraps to stay in 10 chars.</summary>
@@ -49,6 +53,10 @@ codeunit 71002 "LC Control State"
     var
         Active: Record "LC Mutation Active";
     begin
+        ExpectedTargetAppId := TargetAppId;
+        ExpectedArtifactId := ArtifactId;
+        ObservedAny := false;
+        ObservedIdentityMismatch := false;
         if not Active.Get('') then begin
             Active.Init();
             Active."Primary Key" := '';
@@ -80,6 +88,10 @@ codeunit 71002 "LC Control State"
         CachedArtifactId := '';
         CachedMutantId := '';
         Loaded := true;
+        ObservedAny := false;
+        ObservedIdentityMismatch := false;
+        ExpectedTargetAppId := '';
+        ExpectedArtifactId := '';
     end;
 
     /// <summary>The guard predicate the instrumented target calls. True only when the active tuple
@@ -87,6 +99,9 @@ codeunit 71002 "LC Control State"
     /// activates).</summary>
     procedure IsActive(TargetAppId: Text; ArtifactId: Text; MutantId: Text): Boolean
     begin
+        ObservedAny := true;
+        if (TargetAppId <> ExpectedTargetAppId) or (ArtifactId <> ExpectedArtifactId) then
+            ObservedIdentityMismatch := true;
         EnsureLoaded();
         if CachedMutantId = '' then
             exit(false);
@@ -118,5 +133,15 @@ codeunit 71002 "LC Control State"
         if Registry.Get(CopyStr(TargetAppId, 1, MaxStrLen(Registry."Target App Id"))) then
             exit(Registry."Artifact Id");
         exit('');
+    end;
+
+    procedure AttestationObservedAny(): Boolean
+    begin
+        exit(ObservedAny);
+    end;
+
+    procedure AttestationMismatch(): Boolean
+    begin
+        exit(ObservedIdentityMismatch);
     end;
 }

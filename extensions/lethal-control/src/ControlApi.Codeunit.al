@@ -46,14 +46,16 @@ codeunit 71003 "LC Control API"
     var
         State: Codeunit "LC Control State";
         CodeunitResults: Text;
+        ObservedAny: Boolean;
+        IdentityMismatch: Boolean;
     begin
         // 1. Reserved-param guard — the lease belongs to 5C-B.
         if (LeaseEpoch <> '') or (LeaseToken <> '') then
-            exit(BuildStatus('reserved-params', TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, ''));
+            exit(BuildStatus('reserved-params', TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, '', false, false));
 
         // 2. Artifact guard (detector; 5C-B makes it a fence). Registry-based — no target dependency.
         if State.RegisteredArtifact(TargetAppId) <> ArtifactId then
-            exit(BuildStatus('artifact-mismatch', TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, ''));
+            exit(BuildStatus('artifact-mismatch', TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, '', false, false));
 
         // 3. Activate (run-scoped). Empty MutantId = baseline (nothing active).
         State.SetActive(TargetAppId, ArtifactId, MutantId);
@@ -62,11 +64,13 @@ codeunit 71003 "LC Control API"
         //      so control returns here and step 6 always clears. (A catastrophic AL error would escape
         //      to the caller as an OData error -> client classifies in-flight-unknown -> 5B quarantine.)
         CodeunitResults := RunOneMethod(State.NextSuiteName(), TestCodeunitId, TestMethod);
+        ObservedAny := State.AttestationObservedAny();
+        IdentityMismatch := State.AttestationMismatch();
 
         // 6. Clear (run-scoped) — the container is left unmutated after every call.
         State.ClearActive();
 
-        exit(BuildStatus('ran', TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, CodeunitResults));
+        exit(BuildStatus('ran', TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, CodeunitResults, ObservedAny, IdentityMismatch));
     end;
 
     /// <summary>Build a fresh suite, run EXACTLY the one named method (Run flags, since RunAllTests
@@ -121,7 +125,7 @@ codeunit 71003 "LC Control API"
         exit(Mgt.TestResultsToJSON(CodeunitLine));
     end;
 
-    local procedure BuildStatus(Status: Text; TargetAppId: Text; ArtifactId: Text; AttemptId: Text; MutantId: Text; TestCodeunitId: Integer; TestMethod: Text; CodeunitResults: Text): Text
+    local procedure BuildStatus(Status: Text; TargetAppId: Text; ArtifactId: Text; AttemptId: Text; MutantId: Text; TestCodeunitId: Integer; TestMethod: Text; CodeunitResults: Text; ObservedAny: Boolean; IdentityMismatch: Boolean): Text
     var
         Obj: JsonObject;
         Out: Text;
@@ -135,6 +139,8 @@ codeunit 71003 "LC Control API"
         Obj.Add('method', TestMethod);
         if CodeunitResults <> '' then
             Obj.Add('codeunitResults', CodeunitResults);
+        Obj.Add('observedAny', ObservedAny);
+        Obj.Add('identityMismatch', IdentityMismatch);
         Obj.WriteTo(Out);
         exit(Out);
     end;
