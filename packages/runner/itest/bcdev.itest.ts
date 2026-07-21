@@ -23,15 +23,16 @@ import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { MutationControlClient } from "../src/activation";
 import { ArtifactCompiler, defaultArtifactIo } from "../src/artifact";
 import { BcDevMcpBackend } from "../src/bcdev-backend";
 import { odataBaseUrl, validateBcDevConfig } from "../src/cli";
 import type { LethalConfigFile } from "../src/cli";
 import { DeploymentVerifier } from "../src/deployment-verifier";
+import { HarnessVerifier } from "../src/harness";
 import { generateMutationSet, runSession } from "../src/orchestrator";
 import { ContainerDeployer, defaultAlToolPaths, defaultDeployerIo } from "../src/publisher";
 import type { SessionReport } from "../src/report";
+import { RunMutantTransport } from "../src/run-mutant-transport";
 import { ResultsStore } from "../src/store";
 import { assertMatchesBaseline } from "./baseline-guard";
 
@@ -145,8 +146,8 @@ async function runOnce(scratchRoot: string): Promise<SessionReport> {
     password: bcdev.password,
     ...(bcdev.tenant !== undefined ? { tenant: bcdev.tenant } : {}),
   };
-  const activation = new MutationControlClient(odataCfg);
   const verifier = new DeploymentVerifier(odataCfg);
+  const harnessVerifier = new HarnessVerifier(odataCfg);
   const backend = new BcDevMcpBackend(
     {
       mcpCommand: bcdev.mcpCommand,
@@ -165,7 +166,8 @@ async function runOnce(scratchRoot: string): Promise<SessionReport> {
     },
     undefined,
     { compiler, deployer, verifier },
-    activation,
+    (targetAppId, artifactId) => new RunMutantTransport(odataCfg, targetAppId, artifactId),
+    harnessVerifier,
   );
 
   // Persistent, NOT `:memory:` — historical run data (priorSurvivorKeys) is a supported

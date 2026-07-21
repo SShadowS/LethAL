@@ -7,7 +7,6 @@ import {
   getDefaultEnvironment,
 } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import type { MutationControlClient } from "./activation";
 import { AppMethodIndex, findLocalProcedureNames, objectTypeName } from "./app-package";
 import { ArtifactPrepareError, DeploymentError } from "./artifact";
 import type { ArtifactCompiler, CompileInput, CompiledArtifact } from "./artifact";
@@ -23,7 +22,9 @@ import type {
 } from "./backend";
 import { decidePublishOutcome } from "./deployment-verifier";
 import type { DeploymentVerifier } from "./deployment-verifier";
+import type { HarnessVerifier } from "./harness";
 import type { ContainerDeployer } from "./publisher";
+import type { RunMutantTransport } from "./run-mutant-transport";
 
 export interface BcDevConfig {
   readonly mcpCommand: readonly string[]; // e.g. ["bun", "x", "bc-dev-mcp"] — argv to spawn
@@ -100,12 +101,23 @@ export class BcDevMcpBackend implements ExecutionBackend {
   // artifact (and the source tree) rather than being derivable from the wire payload alone.
   private methodIndex: AppMethodIndex | undefined;
   private localProcedures: Map<string, readonly string[]> | undefined;
+  // Layer 5C-A: activate() is bookkeeping — it records the intended mutant here, and run()
+  // (coverage: "none") passes it to a single RunMutant OData call that activates+runs+clears
+  // server-side. The transport is built at deploy() once the target's identity is known.
+  private pendingMutantId: string | null = null;
+  private runMutantTransport: RunMutantTransport | undefined;
+  // Monotonic per-backend attempt id, echoed by RunMutant and validated by the transport (§I5).
+  private attemptSeq = 0;
 
   constructor(
     private readonly cfg: BcDevConfig,
     private readonly transportFactory?: (env: Record<string, string>) => Transport,
     private readonly deployment?: BcDevDeployment,
-    private readonly activation?: MutationControlClient,
+    private readonly runMutantTransportFactory?: (
+      targetAppId: string,
+      artifactId: string,
+    ) => RunMutantTransport,
+    private readonly harnessVerifier?: HarnessVerifier,
   ) {}
 
   capabilities(): BackendCapabilities {
@@ -234,6 +246,11 @@ export class BcDevMcpBackend implements ExecutionBackend {
   async deploy(instrumentedDir: string): Promise<CompiledArtifact> {
     const deployment = this.deployment;
     if (!deployment) throw new Error("BcDevMcpBackend: no compiler/deployer/verifier configured");
+    // Verify the LethAL Control harness (identity + protocol + isolation/test-type compat) BEFORE
+    // compiling or publishing the target — the target depends on it and every RunMutant call routes
+    // through it, so a missing/incompatible harness must fail the session loudly, not surface later
+    // as a corrupt verdict (spec §8). Cheap OData round-trip; harmless to repeat per batch.
+    if (this.harnessVerifier) await this.harnessVerifier.verify();
     const artifact = await deployment.compiler.compile(
       await this.prepareCompileInput(instrumentedDir),
     );
@@ -258,6 +275,10 @@ export class BcDevMcpBackend implements ExecutionBackend {
     if (outcome !== "accepted") {
       throw new DeploymentError(outcome, publishError, verification);
     }
+    // The deployment is confirmed — bind a RunMutant transport to THIS artifact's identity so
+    // run() (coverage: "none") executes each mutant against the exact target/artifact just
+    // published. The transport echoes and validates this identity tuple on every call (§I5).
+    this.runMutantTransport = this.runMutantTransportFactory?.(artifact.appId, artifact.artifactId);
     return artifact;
   }
 
@@ -289,12 +310,43 @@ export class BcDevMcpBackend implements ExecutionBackend {
   }
 
   async activate(mutantId: string | null): Promise<void> {
-    if (!this.activation) throw new Error("BcDevMcpBackend: no activation client configured");
-    if (mutantId === null) await this.activation.clearActive();
-    else await this.activation.setActive(mutantId);
+    // Bookkeeping only (Layer 5C-A): RunMutant folds activate + run-one-method + clear into a
+    // single OData call, so there is NO persistent server-side active state to set here. Record
+    // the intended mutant (null = baseline); run() passes it to RunMutant. Never a network call,
+    // never throws — all failure classification moved to run() (spec §7). The orchestrator's
+    // activate(mutant) -> run -> activate(null) -> confirm dance still works: each activate()
+    // just changes which mutant the NEXT run() sends, and RunMutant clears after itself.
+    this.pendingMutantId = mutantId;
   }
 
+  /**
+   * One test run. `coverage` discovery stays on the bc-dev hub (`bcdev_test_run`, one method per
+   * call — spec §10); a mutant execution (`coverage: "none"`) goes through the self-contained
+   * RunMutant OData call (activate + run one method + clear), which is 5B-classified and
+   * identity-validated by `RunMutantTransport`.
+   */
   async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
+    if (opts.coverage !== "none") return this.runOnHub(ref, opts);
+    return this.runViaTransport(ref, opts);
+  }
+
+  private async runViaTransport(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
+    const transport = this.runMutantTransport;
+    if (!transport) {
+      throw new Error(
+        "BcDevMcpBackend: RunMutant transport not configured — deploy() must run (and succeed) first",
+      );
+    }
+    this.attemptSeq += 1;
+    return transport.run({
+      ref,
+      mutantId: this.pendingMutantId ?? "",
+      attemptId: `a${this.attemptSeq}`,
+      timeoutMs: opts.timeoutMs,
+    });
+  }
+
+  private async runOnHub(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
     const started = Date.now();
     let timer: ReturnType<typeof setTimeout> | undefined;
 

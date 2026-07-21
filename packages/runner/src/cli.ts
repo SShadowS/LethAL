@@ -4,12 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import type { InstrumentedFile, SelectorConfig } from "@lethal/schemata";
-import { MutationControlClient } from "./activation";
 import { AlRunnerBackend } from "./al-runner-backend";
 import { ArtifactCompiler, defaultArtifactIo } from "./artifact";
 import type { ExecutionBackend } from "./backend";
 import { BcDevMcpBackend } from "./bcdev-backend";
 import { DeploymentVerifier } from "./deployment-verifier";
+import { HarnessVerifier } from "./harness";
 import {
   defaultQuarantineDir,
   generateMutationSet,
@@ -22,6 +22,7 @@ import { QuarantineStore } from "./quarantine-store";
 import { renderConsole, writeJsonReport } from "./report";
 import type { SessionReport } from "./report";
 import { quarantineResourceKey } from "./resource-key";
+import { RunMutantTransport } from "./run-mutant-transport";
 import { ResultsStore } from "./store";
 
 /**
@@ -167,18 +168,17 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
   )
     throw new Error("--compile-concurrency must be a positive integer");
 
-  // bcdev mutant activation (MutationControlClient.setActive) is a single
-  // server-side record shared by every worker — server + serverInstance +
-  // company, one row. Per-worker ArtifactCompiler.outputDir isolates each worker's
-  // COMPILED ARTIFACT, but not this: two workers running concurrently would
-  // both call setActive() against the SAME server record, so worker B's
-  // activation can clobber worker A's while A's test is still in flight,
-  // silently attributing a result to the wrong mutant. The setActive echo
-  // check does not catch this — it validates its own response, not a later
-  // overwrite by another worker. Every worker would also publish the same
-  // app id to the same server instance. Real parallelism against the
-  // authoritative backend needs per-container isolation (deferred to the
-  // container-pool layer) — reject rather than silently corrupt results.
+  // bcdev mutant activation is a single server-side record shared by every worker — server +
+  // serverInstance + company, one row (Layer 5C-A: RunMutant's SetActive+run+ClearActive touches
+  // that same `LC Mutation Active` row). Per-worker ArtifactCompiler.outputDir isolates each
+  // worker's COMPILED ARTIFACT, but not this: two workers issuing RunMutant concurrently would
+  // both drive the SAME active row, so worker B's activation can clobber worker A's within A's
+  // run+isolation window, silently attributing a result to the wrong mutant. RunMutant's identity
+  // echo does not catch this — it validates its own tuple, not a concurrent overwrite by another
+  // worker (only 5C-B's machine-global lease does). Every worker would also publish the same app
+  // id to the same server instance. Real parallelism against the authoritative backend needs
+  // per-container isolation (deferred to the container-pool layer) — reject rather than silently
+  // corrupt results.
   if (backendArg === "bcdev" && workers > 1) {
     throw new Error(
       "--workers > 1 is not supported with --backend bcdev: mutant activation is a single " +
@@ -367,8 +367,9 @@ async function buildBackend(
     },
     defaultDeployerIo,
   );
-  // One OData config, three consumers: activation (SetActive/ClearActive) and identity
-  // verification (Identity) talk to the same MutationControl_* web-service endpoints.
+  // One OData config, several consumers on the same LethAL Control / MutationControl web-service
+  // endpoints: the RunMutant execution transport, the HarnessInfo prerequisite check, and the
+  // (Layer-5A) deployment identity verifier.
   const odataCfg = {
     baseUrl: odataBaseUrl(c.server, c.serverInstance),
     company: c.company,
@@ -376,8 +377,8 @@ async function buildBackend(
     password: c.password,
     ...(c.tenant !== undefined ? { tenant: c.tenant } : {}),
   };
-  const activation = new MutationControlClient(odataCfg);
   const verifier = new DeploymentVerifier(odataCfg);
+  const harnessVerifier = new HarnessVerifier(odataCfg);
   return new BcDevMcpBackend(
     {
       mcpCommand: c.mcpCommand,
@@ -390,7 +391,8 @@ async function buildBackend(
     },
     undefined,
     { compiler, deployer, verifier },
-    activation,
+    (targetAppId, artifactId) => new RunMutantTransport(odataCfg, targetAppId, artifactId),
+    harnessVerifier,
   );
 }
 

@@ -578,7 +578,7 @@ async function main(): Promise<void> {
     },
     undefined,
     undefined, // no compiler/deployer/verifier on the backend itself — this script drives them directly
-    activation,
+    undefined, // no RunMutant transport factory — this script exercises activation/verify directly
   );
 
   const appManifestBase = await readJson<Record<string, unknown>>(

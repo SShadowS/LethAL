@@ -7,7 +7,6 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { z } from "zod";
-import { MutationControlClient } from "../src/activation";
 import {
   AlcCompileError,
   ArtifactCompiler,
@@ -18,10 +17,10 @@ import type { ArtifactIo } from "../src/artifact";
 import { BcDevMcpBackend } from "../src/bcdev-backend";
 import type { BcDevDeployment } from "../src/bcdev-backend";
 import { DeploymentVerifier } from "../src/deployment-verifier";
-import { ActivationFailure } from "../src/failure-classes";
 import { requiresUnsafeLatch } from "../src/operation-outcome";
 import { ContainerDeployer } from "../src/publisher";
 import type { SpawnFn } from "../src/publisher";
+import { RunMutantTransport } from "../src/run-mutant-transport";
 import { buildFakeApp } from "./helpers/fake-app";
 
 const ref = { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "PostingUpdatesTotal" };
@@ -214,6 +213,7 @@ async function makeBackendWithDeploy(
   runHandler: (args: unknown) => unknown,
   symbolReference: unknown,
   instrumentedDir?: string,
+  runMutantTransportFactory?: (targetAppId: string, artifactId: string) => RunMutantTransport,
 ): Promise<{ backend: BcDevMcpBackend; cleanup: () => Promise<void> }> {
   const server = new McpServer({ name: "fake-bc-dev", version: "0.0.0" });
   server.registerTool("bcdev_test_run", { inputSchema: anyArgs }, async (args: unknown) => ({
@@ -229,6 +229,7 @@ async function makeBackendWithDeploy(
     { mcpCommand: ["unused"], project: "/al", server: "http://bc", serverInstance: "BC" },
     () => clientTransport,
     makeDeployment(outputDir, symbolReference),
+    runMutantTransportFactory,
   );
   await backend.deploy(deployDir);
   return { backend, cleanup: () => rm(outputDir, { recursive: true, force: true }) };
@@ -350,10 +351,12 @@ describe("BcDevMcpBackend.run", () => {
         ],
       };
     });
-    await backend.run(ref, { coverage: "none", timeoutMs: 5000 });
+    // coverage discovery stays on the hub (bcdev_test_run); mutant execution (coverage:"none")
+    // now routes to RunMutant, so the hub-path assertions run at coverage:"procedure".
+    await backend.run(ref, { coverage: "procedure", timeoutMs: 5000 });
     expect(seen).toMatchObject({
       codeunits: [{ id: 79100, methods: ["PostingUpdatesTotal"] }],
-      coverage: "none",
+      coverage: "procedure",
       project: "/al",
       server: "http://bc",
       serverInstance: "BC",
@@ -372,14 +375,14 @@ describe("BcDevMcpBackend.run", () => {
         },
       ],
     }));
-    const v = await backend.run(ref, { coverage: "none", timeoutMs: 5000 });
+    const v = await backend.run(ref, { coverage: "procedure", timeoutMs: 5000 });
     expect(v.outcome).toBe("fail");
     expect(v.failureMessage).toBe("expected 2, got 1");
   });
 
   test("bcdev has no runner-confirmed timeout, so its deadline is deadline-exceeded", async () => {
     const backend = makeBackend(() => new Promise(() => {}) as never);
-    const v = await backend.run(ref, { coverage: "none", timeoutMs: 50 });
+    const v = await backend.run(ref, { coverage: "procedure", timeoutMs: 50 });
     expect(v.outcome).toBe("deadline-exceeded");
   });
 
@@ -387,7 +390,7 @@ describe("BcDevMcpBackend.run", () => {
     const backend = makeBackend(() => {
       throw new Error("NST unreachable");
     });
-    const v = await backend.run(ref, { coverage: "none", timeoutMs: 5000 });
+    const v = await backend.run(ref, { coverage: "procedure", timeoutMs: 5000 });
     expect(v.outcome).toBe("error");
     expect(v.failureMessage).toContain("NST unreachable");
   });
@@ -397,7 +400,7 @@ describe("BcDevMcpBackend.run", () => {
     const backend = makeBackendWithHangingRun();
     const v = await backend.run(
       { codeunitId: 50000, codeunitName: "T", method: "t1" },
-      { coverage: "none", timeoutMs: 20 },
+      { coverage: "procedure", timeoutMs: 20 },
     );
     expect(v.outcome).toBe("deadline-exceeded");
     expect(v.operation).toBe("in-flight-unknown");
@@ -408,7 +411,7 @@ describe("BcDevMcpBackend.run", () => {
     const backend = makeBackendWhoseConnectThrows("ECONNREFUSED");
     const v = await backend.run(
       { codeunitId: 50000, codeunitName: "T", method: "t1" },
-      { coverage: "none", timeoutMs: 1000 },
+      { coverage: "procedure", timeoutMs: 1000 },
     );
     expect(v.outcome).toBe("error");
     expect(v.operation).toBe("pre-dispatch-rejected");
@@ -418,7 +421,7 @@ describe("BcDevMcpBackend.run", () => {
     const backend = makeBackendWhoseCallRejectsAfterDispatch("socket hang up");
     const v = await backend.run(
       { codeunitId: 50000, codeunitName: "T", method: "t1" },
-      { coverage: "none", timeoutMs: 1000 },
+      { coverage: "procedure", timeoutMs: 1000 },
     );
     expect(v.outcome).toBe("error");
     expect(v.operation).toBe("in-flight-unknown");
@@ -757,98 +760,93 @@ describe("BcDevMcpBackend.compileCheck", () => {
   });
 });
 
-/**
- * A `BcDevMcpBackend` wired to a real `MutationControlClient` (same injection point as the
- * "activate with mutantId hits SetActive" test below) whose fetch fake answers with a 2xx body
- * that does NOT echo the sent mutantId — the exact `setActive` echo-mismatch case that
- * `postOData`/`setActive` now classify as `completed-effect-unknown` (see activation.ts).
- */
-function makeBackendWhoseActivationEchoMismatches(): BcDevMcpBackend {
-  const mismatchingFetch = (async (_url: unknown, _init?: RequestInit) =>
-    new Response(JSON.stringify({ value: "SOME-OTHER-ID" }), { status: 200 })) as typeof fetch;
-  const client = new MutationControlClient(
-    { baseUrl: "http://bc:7048/BC", company: "CRONUS", username: "u", password: "p" },
-    mismatchingFetch,
-  );
-  return new BcDevMcpBackend(
-    { mcpCommand: ["unused"], project: "/al", server: "http://bc", serverInstance: "BC" },
-    undefined,
-    undefined,
-    client,
-  );
+/** A fake RunMutant transport factory backed by a fetch that records each request body and
+ *  echoes an identity-matching `status:ran` / `result:2` (pass) response. */
+function capturingRunMutantFactory(bodies: Array<Record<string, unknown>>) {
+  const captureFetch = (async (_url: unknown, init?: RequestInit) => {
+    const b = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    bodies.push(b);
+    const inner = {
+      status: "ran",
+      targetAppId: b.targetAppId,
+      artifactId: b.artifactId,
+      attemptId: b.attemptId,
+      mutantId: b.mutantId,
+      codeunitId: b.testCodeunitId,
+      method: b.testMethod,
+      codeunitResults: JSON.stringify({ testResults: [{ method: b.testMethod, result: 2 }] }),
+    };
+    return new Response(JSON.stringify({ value: JSON.stringify(inner) }), { status: 200 });
+  }) as typeof fetch;
+  return (targetAppId: string, artifactId: string) =>
+    new RunMutantTransport(
+      {
+        baseUrl: "http://bc:7048/BC",
+        company: "CRONUS",
+        username: "u",
+        password: "p",
+        tenant: "default",
+      },
+      targetAppId,
+      artifactId,
+      captureFetch,
+    );
 }
 
-describe("BcDevMcpBackend.activate", () => {
-  test("activate() surfaces ActivationFailure with a classified outcome", async () => {
-    const backend = makeBackendWhoseActivationEchoMismatches();
-    let caught: unknown;
-    try {
-      await backend.activate("M0007");
-    } catch (e) {
-      caught = e;
-    }
-    expect(caught).toBeInstanceOf(ActivationFailure);
-    expect((caught as ActivationFailure).outcome).toBe("completed-effect-unknown");
-  });
-
-  test("activate with mutantId hits SetActive", async () => {
-    const calls: Array<{ url: string; init: RequestInit }> = [];
-    const fakeFetch = (async (url: unknown, init?: RequestInit) => {
-      calls.push({ url: String(url), init: init ?? {} });
-      return new Response(JSON.stringify({ value: "M0002" }), { status: 200 });
-    }) as typeof fetch;
-    const client = new MutationControlClient(
-      {
-        baseUrl: "http://bc:7048/BC",
-        company: "CRONUS",
-        username: "u",
-        password: "p",
-      },
-      fakeFetch,
-    );
-    const backend = new BcDevMcpBackend(
-      { mcpCommand: ["unused"], project: "/al", server: "http://bc", serverInstance: "BC" },
-      undefined,
-      undefined,
-      client,
-    );
-    await backend.activate("M0002");
-    expect(calls[0]?.url).toContain("MutationControl_SetActive");
-  });
-
-  test("activate with null hits ClearActive", async () => {
-    const calls: Array<{ url: string; init: RequestInit }> = [];
-    const fakeFetch = (async (url: unknown, init?: RequestInit) => {
-      calls.push({ url: String(url), init: init ?? {} });
-      return new Response(JSON.stringify({}), { status: 200 });
-    }) as typeof fetch;
-    const client = new MutationControlClient(
-      {
-        baseUrl: "http://bc:7048/BC",
-        company: "CRONUS",
-        username: "u",
-        password: "p",
-      },
-      fakeFetch,
-    );
-    const backend = new BcDevMcpBackend(
-      { mcpCommand: ["unused"], project: "/al", server: "http://bc", serverInstance: "BC" },
-      undefined,
-      undefined,
-      client,
-    );
+describe("BcDevMcpBackend.activate — bookkeeping (Layer 5C-A)", () => {
+  test("activate() never networks and never throws — no active client needed", async () => {
+    const backend = new BcDevMcpBackend({
+      mcpCommand: ["unused"],
+      project: "/al",
+      server: "http://bc",
+      serverInstance: "BC",
+    });
+    await backend.activate("M0007");
     await backend.activate(null);
-    expect(calls[0]?.url).toContain("MutationControl_ClearActive");
+    // No throw: there is no persistent server-side active state to set anymore.
   });
 
-  test("activate without client throws", async () => {
-    const backend = new BcDevMcpBackend(
-      { mcpCommand: ["unused"], project: "/al", server: "http://bc", serverInstance: "BC" },
-      undefined,
-      undefined,
+  test("run(coverage:none) before a successful deploy throws (transport not yet bound)", async () => {
+    const backend = new BcDevMcpBackend({
+      mcpCommand: ["unused"],
+      project: "/al",
+      server: "http://bc",
+      serverInstance: "BC",
+    });
+    await backend.activate("M0007");
+    await expect(backend.run(ref, { coverage: "none", timeoutMs: 1000 })).rejects.toThrow(
+      /RunMutant transport not configured/,
     );
-    await expect(backend.activate("M0002")).rejects.toThrow(
-      "BcDevMcpBackend: no activation client configured",
+  });
+
+  test("the activated mutant flows into RunMutant; activate(null) sends baseline", async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    const { backend, cleanup } = await makeBackendWithDeploy(
+      () => ({ results: [] }),
+      {},
+      undefined,
+      capturingRunMutantFactory(bodies),
     );
+    try {
+      await backend.activate("M0003");
+      const killed = await backend.run(ref, { coverage: "none", timeoutMs: 5000 });
+      expect(killed.outcome).toBe("pass"); // fake echoes result:2
+
+      await backend.activate(null);
+      await backend.run(ref, { coverage: "none", timeoutMs: 5000 });
+
+      expect(bodies[0]).toMatchObject({
+        mutantId: "M0003",
+        targetAppId: TEST_APP_ID,
+        artifactId: TEST_ARTIFACT_ID,
+        testCodeunitId: ref.codeunitId,
+        testMethod: ref.method,
+        leaseEpoch: "",
+        leaseToken: "",
+      });
+      expect(bodies[1]).toMatchObject({ mutantId: "" });
+    } finally {
+      await cleanup();
+    }
   });
 });
