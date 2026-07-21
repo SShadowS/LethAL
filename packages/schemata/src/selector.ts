@@ -44,7 +44,13 @@ export function emitMutationActiveTable(cfg: SelectorConfig): string {
  *
  * al-runner never compiles this: `AlRunnerBackend.activate()` overwrites the whole selector file
  * with `emitStaticSelector` (self-contained, no control dependency) before its lazy `alc` run.
- * The procedure set here (`Active`, `ArtifactId`) MUST stay identical to `emitStaticSelector`'s.
+ * The procedure set here (`Active`, `ArtifactId`, `TargetAppId`) MUST stay identical to
+ * `emitStaticSelector`'s (parity rule — see that emitter's doc comment for why).
+ *
+ * `TargetAppId()` (Layer 5C-A Task 8) makes this codeunit the SINGLE source of the baked
+ * `(targetAppId, artifactId)` identity tuple: `emitRegisterInstall`/`emitRegisterUpgrade` now
+ * read both values off this selector instead of taking them as separate string args, so
+ * registration can never diverge from the id `Active` presents to the guard.
  */
 export function emitMutationSelector(
   cfg: SelectorConfig & { artifactId: string; targetAppId: string },
@@ -62,32 +68,54 @@ export function emitMutationSelector(
     begin
         exit('${cfg.artifactId}');
     end;
+
+    procedure TargetAppId(): Text
+    begin
+        exit('${cfg.targetAppId}');
+    end;
 }
 `;
 }
 
 /**
- * The instrumented target's install codeunit — registers this target's
- * `(targetAppId -> artifactId)` into the `LethAL Control` extension on install, so `RunMutant`'s
- * artifact guard can read the deployed artifact id WITHOUT the control extension depending on the
- * target (the dependency runs target -> control only). Its object id is the freed `controlId`
- * (the in-target Mutation Control codeunit is gone). Belt-and-suspenders alongside the client's
- * post-publish OData `RegisterArtifact` call.
+ * The instrumented target's install codeunit — registers this target's identity into the
+ * `LethAL Control` extension on a FRESH install (OnInstallAppPerCompany fires only then).
+ * Identity is read from `Mutation Selector` so registration can NEVER diverge from the id
+ * `Active` presents to the guard (design §A). Object id: the freed `controlId`.
  */
-export function emitRegisterInstall(cfg: {
-  objectId: number;
-  targetAppId: string;
-  artifactId: string;
-}): string {
+export function emitRegisterInstall(cfg: { objectId: number }): string {
   return `codeunit ${cfg.objectId} "Mutation Register"
 {
     Subtype = Install;
 
     trigger OnInstallAppPerCompany()
     var
-        ControlState: Codeunit "LC Control State";
+        State: Codeunit "LC Control State";
+        Selector: Codeunit "Mutation Selector";
     begin
-        ControlState.RegisterArtifact('${cfg.targetAppId}', '${cfg.artifactId}');
+        State.RegisterArtifact(Selector.TargetAppId(), Selector.ArtifactId());
+    end;
+}
+`;
+}
+
+/**
+ * The instrumented target's upgrade codeunit — re-registers identity on every republish
+ * (OnUpgradePerCompany fires on a ForceSync republish with an increased version; live-probed
+ * 2026-07-22, mem:runmutant_odata). Same identity-from-selector rule as install. Object id:
+ * the freed `tableId` (the in-target Mutation Active table is gone).
+ */
+export function emitRegisterUpgrade(cfg: { objectId: number }): string {
+  return `codeunit ${cfg.objectId} "Mutation Upgrade"
+{
+    Subtype = Upgrade;
+
+    trigger OnUpgradePerCompany()
+    var
+        State: Codeunit "LC Control State";
+        Selector: Codeunit "Mutation Selector";
+    begin
+        State.RegisterArtifact(Selector.TargetAppId(), Selector.ArtifactId());
     end;
 }
 `;
@@ -136,12 +164,15 @@ export function emitStaticSelector(cfg: {
   objectId: number;
   activeId: string;
   artifactId: string;
+  targetAppId: string;
 }): string {
   const body =
     cfg.activeId === "" ? "        exit(false);" : `        exit(MutantId = '${cfg.activeId}');`;
-  // ArtifactId must be present here too: AlRunnerBackend.activate() replaces the entire
-  // generated selector with this output on every activation, so an emitter missing a procedure
-  // MutationControl calls would break the NEXT compile.
+  // ArtifactId and TargetAppId must be present here too: AlRunnerBackend.activate() replaces
+  // the entire generated selector with this output on every activation, so an emitter missing a
+  // procedure MutationControl (or a future caller) relies on would break the NEXT compile. This
+  // is the parity rule — emitMutationSelector and emitStaticSelector MUST expose the identical
+  // procedure set.
   return `codeunit ${cfg.objectId} "Mutation Selector"
 {
     procedure Active(MutantId: Text): Boolean
@@ -152,6 +183,11 @@ ${body}
     procedure ArtifactId(): Text
     begin
         exit('${cfg.artifactId}');
+    end;
+
+    procedure TargetAppId(): Text
+    begin
+        exit('${cfg.targetAppId}');
     end;
 }
 `;

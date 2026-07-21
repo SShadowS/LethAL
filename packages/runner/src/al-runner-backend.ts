@@ -204,6 +204,13 @@ export class AlRunnerBackend implements ExecutionBackend {
         // was never surfacing this — but it means activate() can now reject where it never
         // used to for this specific (no prior deploy(), bad manifest) combination.
         artifactId: await readArtifactId(dir),
+        // Task 8 added TargetAppId() to the selector for parity with the dynamic emitter (both
+        // MUST expose the identical procedure set — see emitStaticSelector's doc comment). This
+        // backend's own Active() check never reads it — it's the self-contained, no-control-
+        // dependency selector — so "" is harmless here. Nothing currently threads a real
+        // targetAppId into AlRunnerConfig or the manifest this reads from; wire that up if a
+        // future caller ever needs TargetAppId() to return a real value for this backend.
+        targetAppId: "",
       }),
       "utf8",
     );

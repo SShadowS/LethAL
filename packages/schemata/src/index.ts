@@ -3,6 +3,7 @@ export type { IdedSpec } from "./ids";
 export {
   emitMutationSelector,
   emitRegisterInstall,
+  emitRegisterUpgrade,
   emitMutationActiveTable,
   emitMutationControl,
   emitStaticSelector,

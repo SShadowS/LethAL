@@ -68,12 +68,15 @@ describe("writeInstrumentedProject", () => {
         `ControlState.IsActive('${TARGET_APP_ID}', '0123456789abcdef0123456789abcdef', MutantId)`,
       );
 
-      // The register-install codeunit registers (targetAppId -> artifactId) on install.
+      // The register-install codeunit reads identity from the selector (single-sourced) instead
+      // of baking targetAppId/artifactId in as args (Layer 5C-A Task 8).
       const register = await readFile(join(dir, "MutationRegister.Codeunit.al"), "utf8");
       expect(register).toContain("Subtype = Install;");
+      expect(register).toContain('Selector: Codeunit "Mutation Selector"');
       expect(register).toContain(
-        `ControlState.RegisterArtifact('${TARGET_APP_ID}', '0123456789abcdef0123456789abcdef')`,
+        "State.RegisterArtifact(Selector.TargetAppId(), Selector.ArtifactId());",
       );
+      expect(register).not.toContain(TARGET_APP_ID);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

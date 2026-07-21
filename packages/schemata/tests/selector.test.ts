@@ -4,6 +4,7 @@ import {
   emitMutationControl,
   emitMutationSelector,
   emitRegisterInstall,
+  emitRegisterUpgrade,
   emitStaticSelector,
   emitWebServicesXml,
 } from "../src/selector";
@@ -56,20 +57,21 @@ describe("emitMutationSelector", () => {
 });
 
 describe("emitRegisterInstall", () => {
-  test("emits an Install codeunit that registers the target's artifact into the control extension", () => {
+  test("emits an Install codeunit that reads identity from the selector, not from args", () => {
     // The freed controlId (the in-target Mutation Control is gone) becomes this Install
     // codeunit's object id. On install it registers (targetAppId -> artifactId) so
     // RunMutant's artifact guard can read the deployed artifact without depending on the target.
-    const src = emitRegisterInstall({
-      objectId: cfg.controlId,
-      targetAppId: TARGET,
-      artifactId: cfg.artifactId,
-    });
+    // Task 8: identity is read from `Mutation Selector` (single-sourced) instead of being
+    // passed in as separate args, so registration can never diverge from what `Active` uses.
+    const src = emitRegisterInstall({ objectId: cfg.controlId });
     expect(src).toContain('codeunit 50001 "Mutation Register"');
     expect(src).toContain("Subtype = Install;");
     expect(src).toContain("trigger OnInstallAppPerCompany()");
-    expect(src).toContain('ControlState: Codeunit "LC Control State"');
-    expect(src).toContain(`ControlState.RegisterArtifact('${TARGET}', '${cfg.artifactId}');`);
+    expect(src).toContain('State: Codeunit "LC Control State"');
+    expect(src).toContain('Selector: Codeunit "Mutation Selector"');
+    expect(src).toContain("State.RegisterArtifact(Selector.TargetAppId(), Selector.ArtifactId());");
+    expect(src).not.toContain(TARGET);
+    expect(src).not.toContain(cfg.artifactId);
   });
 });
 
@@ -90,12 +92,18 @@ describe("emitStaticSelector", () => {
       objectId: 50000,
       activeId: "M0007",
       artifactId: cfg.artifactId,
+      targetAppId: TARGET,
     });
     expect(src).toContain('codeunit 50000 "Mutation Selector"');
     expect(src).toContain("exit(MutantId = 'M0007');");
   });
   test("empty id means always inactive", () => {
-    const src = emitStaticSelector({ objectId: 50000, activeId: "", artifactId: cfg.artifactId });
+    const src = emitStaticSelector({
+      objectId: 50000,
+      activeId: "",
+      artifactId: cfg.artifactId,
+      targetAppId: TARGET,
+    });
     expect(src).toContain("exit(false);");
   });
 });
@@ -124,7 +132,12 @@ describe("artifact identity parity", () => {
   });
 
   test("the STATIC selector exposes ArtifactId too, or al-runner activation breaks the next compile", () => {
-    const al = emitStaticSelector({ objectId: 79000, activeId: "M0001", artifactId: ARTIFACT });
+    const al = emitStaticSelector({
+      objectId: 79000,
+      activeId: "M0001",
+      artifactId: ARTIFACT,
+      targetAppId: TARGET,
+    });
     expect(al).toContain("procedure ArtifactId(): Text");
     expect(al).toContain(`exit('${ARTIFACT}')`);
   });
@@ -132,7 +145,14 @@ describe("artifact identity parity", () => {
   test("both emitters expose the same procedure set", () => {
     const procs = (al: string) => [...al.matchAll(/procedure (\w+)/g)].map((m) => m[1]).sort();
     expect(
-      procs(emitStaticSelector({ objectId: 79000, activeId: "", artifactId: ARTIFACT })),
+      procs(
+        emitStaticSelector({
+          objectId: 79000,
+          activeId: "",
+          artifactId: ARTIFACT,
+          targetAppId: TARGET,
+        }),
+      ),
     ).toEqual(procs(emitMutationSelector({ ...IDS, artifactId: ARTIFACT, targetAppId: TARGET })));
   });
 
@@ -140,5 +160,48 @@ describe("artifact identity parity", () => {
     const al = emitMutationControl(IDS);
     expect(al).toContain("procedure Identity(): Text");
     expect(al).toContain("MutationSelector.ArtifactId()");
+  });
+});
+
+describe("selector single-sourced identity", () => {
+  const IDS = { selectorId: 79199, controlId: 79198, tableId: 79197 };
+  const APP = "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a";
+  const ART = "0123456789abcdef0123456789abcdef";
+
+  test("dynamic selector exposes Active, ArtifactId, TargetAppId", () => {
+    const al = emitMutationSelector({ ...IDS, artifactId: ART, targetAppId: APP });
+    expect(al).toContain("procedure TargetAppId(): Text");
+    expect(al).toContain(`exit('${APP}')`);
+    expect(al).toContain(`ControlState.IsActive('${APP}', '${ART}', MutantId)`);
+  });
+
+  test("static selector exposes the identical procedure set", () => {
+    const dyn = emitMutationSelector({ ...IDS, artifactId: ART, targetAppId: APP });
+    const stat = emitStaticSelector({
+      objectId: IDS.selectorId,
+      activeId: "",
+      artifactId: ART,
+      targetAppId: APP,
+    });
+    for (const proc of ["procedure Active(", "procedure ArtifactId(", "procedure TargetAppId("]) {
+      expect(dyn).toContain(proc);
+      expect(stat).toContain(proc);
+    }
+  });
+
+  test("install registers identity read from the selector, not from args", () => {
+    const al = emitRegisterInstall({ objectId: IDS.controlId });
+    expect(al).toContain("Subtype = Install");
+    expect(al).toContain('Selector: Codeunit "Mutation Selector"');
+    expect(al).toContain("State.RegisterArtifact(Selector.TargetAppId(), Selector.ArtifactId())");
+    expect(al).not.toContain(APP); // identity is NOT baked here anymore
+  });
+
+  test("upgrade registers the same way on OnUpgradePerCompany, using tableId object id", () => {
+    const al = emitRegisterUpgrade({ objectId: IDS.tableId });
+    expect(al).toContain(`codeunit ${IDS.tableId} "Mutation Upgrade"`);
+    expect(al).toContain("Subtype = Upgrade");
+    expect(al).toContain("trigger OnUpgradePerCompany()");
+    expect(al).toContain("State.RegisterArtifact(Selector.TargetAppId(), Selector.ArtifactId())");
   });
 });

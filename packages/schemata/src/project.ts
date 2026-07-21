@@ -114,6 +114,10 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
   // table, Mutation Control codeunit, and MutationControl web-service XML are NO LONGER emitted —
   // the LethAL Control extension owns all of that now (Layer 5C-A Task 4). The freed controlId
   // becomes the register-install codeunit's object id.
+  //
+  // Task 8: the selector is the single source of the (targetAppId, artifactId) identity tuple —
+  // emitRegisterInstall now reads it off `Mutation Selector` at runtime instead of taking it as
+  // args, so registration can never diverge from what `Active` uses.
   await writeFile(
     join(input.targetDir, "MutationSelector.Codeunit.al"),
     emitMutationSelector({
@@ -125,11 +129,7 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
   );
   await writeFile(
     join(input.targetDir, "MutationRegister.Codeunit.al"),
-    emitRegisterInstall({
-      objectId: input.selectorIds.controlId,
-      targetAppId: input.targetAppId,
-      artifactId: input.artifactId,
-    }),
+    emitRegisterInstall({ objectId: input.selectorIds.controlId }),
     "utf8",
   );
 
