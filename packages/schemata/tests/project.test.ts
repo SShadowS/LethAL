@@ -4,7 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ALNodeKind, findFirst, initParser, parseAL, wrapRoot } from "@lethal/engine";
 import type { ALSyntaxNode, MutationSpec } from "@lethal/engine";
-import { writeInstrumentedProject } from "../src/project";
+import {
+  CONTROL_REGISTER_FILENAME,
+  CONTROL_SELECTOR_FILENAME,
+  CONTROL_UPGRADE_FILENAME,
+  writeInstrumentedProject,
+} from "../src/project";
 
 // The target project's own app.json `id` — threaded into the delegating selector and the
 // register-install codeunit so the control extension keys state on the full identity tuple.
@@ -386,6 +391,32 @@ describe("writeInstrumentedProject", () => {
       expect(manifest.artifactId).toBe("0123456789abcdef0123456789abcdef");
       const selector = await readFile(join(dir, "MutationSelector.Codeunit.al"), "utf8");
       expect(selector).toContain("0123456789abcdef0123456789abcdef");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("emits an Upgrade codeunit registering identity via the selector (Task 8)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-upgrade-"));
+    try {
+      await writeInstrumentedProject({
+        targetDir: dir,
+        files: [],
+        selectorIds: { selectorId: 79199, controlId: 79198, tableId: 79197 },
+        artifactId: "0123456789abcdef0123456789abcdef",
+        targetAppId: TARGET_APP_ID,
+      });
+
+      const entries = await readdir(dir);
+      expect(entries).toContain(CONTROL_SELECTOR_FILENAME);
+      expect(entries).toContain(CONTROL_REGISTER_FILENAME);
+      expect(entries).toContain(CONTROL_UPGRADE_FILENAME);
+
+      const al = await readFile(join(dir, CONTROL_UPGRADE_FILENAME), "utf8");
+      expect(al).toContain("OnUpgradePerCompany");
+      expect(al).toContain("State.RegisterArtifact(Selector.TargetAppId(), Selector.ArtifactId())");
+      // Object id is the freed tableId (the in-target Mutation Active table is gone).
+      expect(al).toContain('codeunit 79197 "Mutation Upgrade"');
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

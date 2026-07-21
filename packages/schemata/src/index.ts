@@ -17,7 +17,12 @@ export type { LiftInput, LiftArtifacts } from "./lift";
 export { duplicateEnclosing } from "./duplicate";
 export type { DuplicateInput } from "./duplicate";
 export { compileSchemataForFile } from "./compile";
-export { writeInstrumentedProject } from "./project";
+export {
+  writeInstrumentedProject,
+  CONTROL_SELECTOR_FILENAME,
+  CONTROL_REGISTER_FILENAME,
+  CONTROL_UPGRADE_FILENAME,
+} from "./project";
 export type {
   InstrumentedFile,
   WriteInput,

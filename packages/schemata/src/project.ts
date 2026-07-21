@@ -8,7 +8,16 @@ import {
 } from "@lethal/engine";
 import { compileSchemataForFile } from "./compile";
 import { assignMutantIds } from "./ids";
-import { type SelectorConfig, emitMutationSelector, emitRegisterInstall } from "./selector";
+import {
+  type SelectorConfig,
+  emitMutationSelector,
+  emitRegisterInstall,
+  emitRegisterUpgrade,
+} from "./selector";
+
+export const CONTROL_SELECTOR_FILENAME = "MutationSelector.Codeunit.al";
+export const CONTROL_REGISTER_FILENAME = "MutationRegister.Codeunit.al";
+export const CONTROL_UPGRADE_FILENAME = "MutationUpgrade.Codeunit.al";
 
 export interface InstrumentedFile {
   readonly path: string;
@@ -116,10 +125,10 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
   // becomes the register-install codeunit's object id.
   //
   // Task 8: the selector is the single source of the (targetAppId, artifactId) identity tuple —
-  // emitRegisterInstall now reads it off `Mutation Selector` at runtime instead of taking it as
-  // args, so registration can never diverge from what `Active` uses.
+  // emitRegisterInstall/emitRegisterUpgrade now read it off `Mutation Selector` at runtime
+  // instead of taking it as args, so registration can never diverge from what `Active` uses.
   await writeFile(
-    join(input.targetDir, "MutationSelector.Codeunit.al"),
+    join(input.targetDir, CONTROL_SELECTOR_FILENAME),
     emitMutationSelector({
       ...input.selectorIds,
       artifactId: input.artifactId,
@@ -128,8 +137,13 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
     "utf8",
   );
   await writeFile(
-    join(input.targetDir, "MutationRegister.Codeunit.al"),
+    join(input.targetDir, CONTROL_REGISTER_FILENAME),
     emitRegisterInstall({ objectId: input.selectorIds.controlId }),
+    "utf8",
+  );
+  await writeFile(
+    join(input.targetDir, CONTROL_UPGRADE_FILENAME),
+    emitRegisterUpgrade({ objectId: input.selectorIds.tableId }),
     "utf8",
   );
 
