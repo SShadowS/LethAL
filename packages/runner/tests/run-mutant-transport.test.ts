@@ -158,6 +158,21 @@ describe("RunMutantTransport.run — 5B dispatch classification", () => {
     expect(v.operation).toBe("in-flight-unknown");
   });
 
+  test("request-construction throw (bad credential char) → error + pre-dispatch-rejected, fetchFn never called", async () => {
+    // U+0100 has a code unit >255 — btoa() throws InvalidCharacterError encoding the auth header,
+    // synchronously and BEFORE fetchFn is invoked (design §H).
+    const badCfg: ActivationConfig = { ...CFG, password: "bĀd" };
+    let called = false;
+    const spyFetch = (async (_url: unknown, _init?: RequestInit) => {
+      called = true;
+      return new Response(JSON.stringify({ value: JSON.stringify(echo()) }), { status: 200 });
+    }) as typeof fetch;
+    const v = await new RunMutantTransport(badCfg, TA, AR, spyFetch).run(REQ);
+    expect(v.outcome).toBe("error");
+    expect(v.operation).toBe("pre-dispatch-rejected");
+    expect(called).toBe(false);
+  });
+
   test("our timeout → deadline-exceeded + in-flight-unknown (clear unconfirmed)", async () => {
     const neverResolving = ((_url: unknown, init?: RequestInit) =>
       new Promise((_resolve, reject) => {

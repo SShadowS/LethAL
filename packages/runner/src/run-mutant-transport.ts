@@ -56,6 +56,35 @@ export class RunMutantTransport {
     if (this.cfg.tenant !== undefined) params.set("tenant", this.cfg.tenant);
     const url = `${this.cfg.baseUrl}/ODataV4/LethALControl_RunMutant?${params.toString()}`;
 
+    // Request construction (auth header encoding, JSON body serialization) is synchronous and
+    // can throw (e.g. `btoa` on a credential char with code unit >255) BEFORE fetchFn is ever
+    // invoked — genuinely pre-dispatch-rejected (retry-safe), per design §H. Hoisted out of the
+    // fetch try/catch below so that catch covers ONLY failures after fetchFn was called.
+    let authHeader: string;
+    let bodyJson: string;
+    try {
+      authHeader = `Basic ${btoa(`${this.cfg.username}:${this.cfg.password}`)}`;
+      bodyJson = JSON.stringify({
+        targetAppId: this.targetAppId,
+        artifactId: this.artifactId,
+        attemptId,
+        mutantId,
+        testCodeunitId: ref.codeunitId,
+        testMethod: ref.method,
+        // Reserved for 5C-B — MUST be empty in 5C-A (the server rejects non-empty).
+        leaseEpoch: "",
+        leaseToken: "",
+      });
+    } catch (err) {
+      return {
+        ref,
+        outcome: "error",
+        durationMs: Date.now() - started,
+        failureMessage: `RunMutant request construction failed: ${String(err)}`,
+        operation: "pre-dispatch-rejected",
+      };
+    }
+
     // AbortSignal.timeout() is unreliable in this Bun/Windows env (see activation.ts) — manual
     // AbortController + setTimeout instead.
     const controller = new AbortController();
@@ -65,20 +94,10 @@ export class RunMutantTransport {
       res = await this.fetchFn(url, {
         method: "POST",
         headers: {
-          authorization: `Basic ${btoa(`${this.cfg.username}:${this.cfg.password}`)}`,
+          authorization: authHeader,
           "content-type": "application/json",
         },
-        body: JSON.stringify({
-          targetAppId: this.targetAppId,
-          artifactId: this.artifactId,
-          attemptId,
-          mutantId,
-          testCodeunitId: ref.codeunitId,
-          testMethod: ref.method,
-          // Reserved for 5C-B — MUST be empty in 5C-A (the server rejects non-empty).
-          leaseEpoch: "",
-          leaseToken: "",
-        }),
+        body: bodyJson,
         signal: controller.signal,
       });
     } catch (err) {
