@@ -544,6 +544,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
 
   const outcomes: SessionOutcome[] = []; // internal accumulation for the report
   let baselineGreenOverall = true;
+  // Task 6 (spec §9): qualified names of baseline tests that did not pass
+  // (fail/error) across all batches — surfaced in the report so an unsupported
+  // test type (or a broken test) is named, never silently dropped.
+  const unsupportedTestNames = new Set<string>();
   // Math.floor: a fractional workers value (e.g. 2.5) would otherwise reach
   // shardEvenly's `Array.from({ length: n }, ...)`, which silently truncates
   // to a shorter array than `i % n` can index into — mutants landing on the
@@ -805,6 +809,16 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         greenTests.map((b) => [testKeyOf(b.ref), b.verdict.durationMs]),
       );
 
+      // Task 6 (spec §9): baseline tests that did not pass (fail/error — NOT
+      // deadline-exceeded/timeout, which are infra/timing) can't run in the
+      // web-service session; a TestPage/unsupported test type surfaces exactly
+      // this way. They still return coverage at baseline (the bc-dev hub
+      // collects it regardless of outcome), so a mutant may be covered ONLY by
+      // one of them. Name every such test in the report; below, distinguish a
+      // mutant covered only by one from a genuinely uncovered mutant.
+      const unsupportedBaseline = baseline.filter((b) => didNotPassAtBaseline(b.verdict.outcome));
+      for (const b of unsupportedBaseline) unsupportedTestNames.add(qualifiedTestName(b.ref));
+
       // 5. coverage filter (capability-gated)
       let perMutantTests: ReadonlyMap<string, readonly TestMethodRef[]>;
       let uncovered: readonly MutantManifestEntry[] = [];
@@ -825,7 +839,42 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         perMutantTests = split.covered;
         uncovered = split.uncovered;
       }
-      for (const m of uncovered) record(cfg.store, runId, m, "no-coverage", outcomes, batchIdx);
+      // A mutant uncovered by any GREEN test but covered by a non-passing
+      // baseline test is `error` (score-excluded) with a named note — never a
+      // silent `no-coverage` false-negative (a real test DOES cover it; it just
+      // couldn't run). `unsupportedCoverage` reuses coverageFilter against the
+      // second index; empty for coverage:"none" (uncovered is empty there too).
+      const unsupportedCoverage =
+        uncovered.length === 0
+          ? new Map<string, readonly TestMethodRef[]>()
+          : coverageFilter(
+              uncovered,
+              buildCoverageIndex(
+                unsupportedBaseline.map((b) => ({
+                  ref: b.ref,
+                  ...(b.verdict.coverage !== undefined ? { coverage: b.verdict.coverage } : {}),
+                })),
+              ),
+              unsupportedBaseline.map((b) => b.ref),
+            ).covered;
+      for (const m of uncovered) {
+        const covering = unsupportedCoverage.get(m.mutantId);
+        if (covering !== undefined && covering.length > 0) {
+          const names = [...new Set(covering.map(qualifiedTestName))].sort().join(", ");
+          record(
+            cfg.store,
+            runId,
+            m,
+            "error",
+            outcomes,
+            batchIdx,
+            undefined,
+            `unsupported test type: mutant covered only by test(s) that did not pass at baseline (${names})`,
+          );
+        } else {
+          record(cfg.store, runId, m, "no-coverage", outcomes, batchIdx);
+        }
+      }
 
       // 6. per-mutant loop — sharded across workers when workers > 1. The
       // baseline/coverage discovery above always runs once against
@@ -992,8 +1041,27 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     baselineGreen: baselineGreenOverall,
     batches: artifacts.length,
     outcomes,
+    unsupportedTests: [...unsupportedTestNames].sort(),
     ...(safety.isUnsafe ? { quarantined: { reason: safety.reason ?? "unknown" } } : {}),
   });
+}
+
+/**
+ * A baseline test outcome that means the test did not pass and the failure is
+ * evidence about the TEST, not the infrastructure (spec §9). `fail`/`error`
+ * only: a web-service session cannot open TestPages, and an unsupported test
+ * type surfaces as one of these. `deadline-exceeded`/`timeout` are our timer /
+ * runner nontermination (infra/timing, not a test-type verdict), and `skip`/
+ * `pass` are legitimate. Deliberately a single predicate so the two call sites
+ * (report naming + the covered-only-by-unsupported exclusion) cannot drift.
+ */
+function didNotPassAtBaseline(o: TestVerdict["outcome"]): boolean {
+  return o === "fail" || o === "error";
+}
+
+/** Human-readable `Codeunit.method` identity for report/notes — unambiguous across codeunits sharing a method name. */
+function qualifiedTestName(ref: TestMethodRef): string {
+  return `${ref.codeunitName}.${ref.method}`;
 }
 
 /**

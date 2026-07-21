@@ -48,6 +48,17 @@ export interface SessionReport {
   readonly mutationScore: number | null;
   readonly mutants: readonly MutantOutcome[];
   /**
+   * Baseline test methods (qualified `Codeunit.method`) that did NOT pass at
+   * baseline — outcome `fail`/`error` (spec §9). A web-service session cannot
+   * open TestPages, and an unsupported test type surfaces exactly this way; a
+   * genuinely broken test is indistinguishable by outcome, so the honest label
+   * is "did not pass at baseline", not a hard "unsupported" claim. Any mutant
+   * covered ONLY by one of these is recorded `error` (score-excluded) with a
+   * named note rather than a silent `no-coverage` false-negative. Always
+   * present; empty when the whole baseline passed. Deduped, sorted.
+   */
+  readonly unsupportedTests: readonly string[];
+  /**
    * Set only when the session latched unsafe (spec §8/§12) — a test run came back
    * in-flight-unknown (the server may still be executing it) and the session recorded a
    * durable tier quarantine and stopped scheduling further mutants. `reason` is
@@ -104,6 +115,8 @@ export interface BuildReportInput {
   readonly baselineGreen: boolean;
   readonly batches: number;
   readonly outcomes: readonly SessionOutcome[];
+  /** Deduped, sorted qualified names of baseline tests that did not pass — see `SessionReport.unsupportedTests`. */
+  readonly unsupportedTests: readonly string[];
   /** Threaded straight through from `runSession`'s `SessionSafety` — see `SessionReport.quarantined`. */
   readonly quarantined?: {
     readonly reason: string;
@@ -172,6 +185,7 @@ export function buildReport(input: BuildReportInput): SessionReport {
     counts,
     mutationScore: denom === 0 ? null : (counts.killed + counts.timeoutKilled) / denom,
     mutants,
+    unsupportedTests: input.unsupportedTests,
     ...(input.quarantined !== undefined ? { quarantined: input.quarantined } : {}),
   };
 }

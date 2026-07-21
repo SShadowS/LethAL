@@ -41,6 +41,7 @@ function report(mutants: readonly MutantOutcome[]): SessionReport {
     counts,
     mutationScore: null,
     mutants,
+    unsupportedTests: [],
   };
 }
 

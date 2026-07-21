@@ -354,6 +354,135 @@ describe("runSession", () => {
   });
 });
 
+// Two baseline test methods with DISTINCT per-method coverage — one green, one
+// "unsupported" (fail/error at baseline, e.g. a TestPage test that can't run in
+// a web-service session, spec §9). The unsupported one still returns coverage
+// at baseline (the bc-dev hub collects it regardless of outcome), so a mutant
+// can be covered ONLY by it.
+const TWO_TEST_AL = `codeunit 79100 "Sandbox Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure GreenTest()
+    begin
+    end;
+
+    [Test]
+    procedure UnsupportedTest()
+    begin
+    end;
+}
+`;
+
+class QualificationBackend implements ExecutionBackend {
+  activations: Array<string | null> = [];
+  deploys: string[] = [];
+  ranActive = 0; // active (mutant !== null) run count — proves a scheduled mutant executed
+  constructor(
+    private readonly baselineFor: (method: string) => {
+      outcome: TestVerdict["outcome"];
+      procedure: string;
+    },
+  ) {}
+  capabilities() {
+    return CAPS_NST;
+  }
+  async status(): Promise<BackendStatus> {
+    return { ok: true, details: "stub" };
+  }
+  async deploy(dir: string): Promise<CompiledArtifact | null> {
+    this.deploys.push(dir);
+    return null;
+  }
+  async compileCheck(dir: string): Promise<void> {
+    await this.deploy(dir);
+  }
+  async activate(id: string | null) {
+    this.activations.push(id);
+  }
+  async run(ref: TestMethodRef, _opts: RunOpts): Promise<TestVerdict> {
+    const active = this.activations.at(-1) ?? null;
+    if (active !== null) {
+      this.ranActive++;
+      return { ref, outcome: "fail", durationMs: 5 }; // mutant-active fail → killed
+    }
+    const b = this.baselineFor(ref.method);
+    return {
+      ref,
+      outcome: b.outcome,
+      durationMs: 5,
+      // Baseline coverage is attached regardless of pass/fail — mirrors bcdev
+      // runOnHub, which builds the coverage map whenever coverage !== "none".
+      coverage: {
+        granularity: "procedure" as const,
+        entries: [{ objectType: "Codeunit", objectId: 79000, procedure: b.procedure }],
+      },
+    };
+  }
+}
+
+describe("runSession — Task 6 unsupported-baseline qualification (spec §9)", () => {
+  // TWO_PROC_AL: IsOverBudget + IsUnderBudget, 3 mutants each. GreenTest covers
+  // IsOverBudget (pass); UnsupportedTest covers IsUnderBudget (fail at baseline).
+  // So IsUnderBudget's mutants are covered ONLY by a test that did not pass at
+  // baseline — the spec §9 case that must be flagged, not silently no-coverage.
+  async function qualProject() {
+    const dirs = await makeProject(TWO_TEST_AL);
+    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
+    return dirs;
+  }
+
+  const baselineFor = (method: string) =>
+    method === "UnsupportedTest"
+      ? { outcome: "error" as const, procedure: "IsUnderBudget" }
+      : { outcome: "pass" as const, procedure: "IsOverBudget" };
+
+  test("mutant covered only by a non-passing baseline test is flagged unsupported, not no-coverage", async () => {
+    const dirs = await qualProject();
+    const backend = new QualificationBackend(baselineFor);
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({ backend, store, ...dirs, selectorIds });
+
+    // IsUnderBudget's 3 mutants are covered only by UnsupportedTest → error
+    // (score-excluded), NEVER silently no-coverage (a real test DOES cover them).
+    expect(report.counts.noCoverage).toBe(0);
+    expect(report.counts.errors).toBe(3);
+
+    // Each such mutant names the offending test in an honest failure note.
+    const unsupportedMutants = report.mutants.filter(
+      (m) => m.verdict === "error" && m.failureNote?.includes("did not pass at baseline"),
+    );
+    expect(unsupportedMutants.length).toBe(3);
+    for (const m of unsupportedMutants) {
+      expect(m.failureNote).toContain("Sandbox Tests.UnsupportedTest");
+    }
+  });
+
+  test("report names the unsupported test(s) and not the green one", async () => {
+    const dirs = await qualProject();
+    const backend = new QualificationBackend(baselineFor);
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({ backend, store, ...dirs, selectorIds });
+
+    expect(report.unsupportedTests).toContain("Sandbox Tests.UnsupportedTest");
+    expect(report.unsupportedTests).not.toContain("Sandbox Tests.GreenTest");
+  });
+
+  test("a mutant covered by a green test still runs (no over-exclusion)", async () => {
+    const dirs = await qualProject();
+    const backend = new QualificationBackend(baselineFor);
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({ backend, store, ...dirs, selectorIds });
+
+    // IsOverBudget's 3 mutants are covered by GreenTest → scheduled + killed.
+    expect(report.counts.killed).toBe(3);
+    // Only those 3 ever ran under activation — the unsupported-covered mutants
+    // were excluded, not executed.
+    expect(backend.ranActive).toBe(3);
+  });
+});
+
 describe("runSession — C3 batch app.json + full source copy", () => {
   test("batch dir gets app.json with bumped version + no-mutant files copied verbatim", async () => {
     const dirs = await makeProject();
@@ -959,6 +1088,7 @@ describe("mutation score — timeout-killed contribution", () => {
       caps: { coverage: "procedure", deploy: "publish", isolation: "session", authoritative: true },
       baselineGreen: true,
       batches: 1,
+      unsupportedTests: [],
       outcomes: [
         {
           mutant: {
@@ -1010,6 +1140,7 @@ describe("mutation score — timeout-killed contribution", () => {
       caps: { coverage: "procedure", deploy: "publish", isolation: "session", authoritative: true },
       baselineGreen: true,
       batches: 1,
+      unsupportedTests: [],
       outcomes: [
         {
           mutant: {
@@ -1097,6 +1228,7 @@ describe("mutation score — timeout-killed contribution", () => {
       caps: { coverage: "procedure", deploy: "publish", isolation: "session", authoritative: true },
       baselineGreen: true,
       batches: 1,
+      unsupportedTests: [],
       outcomes: [
         {
           mutant: {
