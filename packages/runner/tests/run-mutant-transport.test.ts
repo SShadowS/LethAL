@@ -136,13 +136,26 @@ describe("RunMutantTransport.run — request shape", () => {
 });
 
 describe("RunMutantTransport.run — 5B dispatch classification", () => {
-  test("pre-dispatch fetch throw → error + pre-dispatch-rejected (retry-safe)", async () => {
+  // Revision: a throw surfacing from `await this.fetchFn(...)` means fetchFn was already
+  // invoked — the connection may have reached BC before failing, so this is NOT provably
+  // pre-dispatch. Only a throw before fetchFn is ever called would be pre-dispatch-rejected;
+  // this transport has no such code path today (design doc §H / sol6).
+  test("fetch throw after invocation → error + in-flight-unknown (never retry-safe)", async () => {
     const throwing = (async (_url: unknown, _init?: RequestInit) => {
       throw new Error("ECONNREFUSED");
     }) as unknown as typeof fetch;
     const v = await transport(throwing).run(REQ);
     expect(v.outcome).toBe("error");
-    expect(v.operation).toBe("pre-dispatch-rejected");
+    expect(v.operation).toBe("in-flight-unknown");
+  });
+
+  test("post-dispatch connection reset (not our abort) → in-flight-unknown", async () => {
+    const fetchFn = (async (_url: unknown, _init?: RequestInit) => {
+      throw new Error("ECONNRESET");
+    }) as unknown as typeof fetch; // controller.signal NOT aborted
+    const v = await transport(fetchFn).run(REQ);
+    expect(v.outcome).toBe("error");
+    expect(v.operation).toBe("in-flight-unknown");
   });
 
   test("our timeout → deadline-exceeded + in-flight-unknown (clear unconfirmed)", async () => {
@@ -201,5 +214,28 @@ describe("RunMutantTransport.run — guards", () => {
     const v = await transport(okFetch(inner)).run(REQ);
     expect(v.outcome).toBe("error");
     expect(v.failureMessage).toContain("identity mismatch");
+  });
+});
+
+describe("RunMutantTransport.run — per-run attestation (spec §G)", () => {
+  test("identityMismatch=true → error, never a verdict", async () => {
+    const inner = echo({ observedAny: true, identityMismatch: true });
+    const v = await transport(okFetch(inner)).run(REQ);
+    expect(v.outcome).toBe("error");
+    expect(v.failureMessage).toContain("identity");
+  });
+
+  test("clean run surfaces attestation for the session gate", async () => {
+    const inner = echo({ observedAny: true, identityMismatch: false });
+    const v = await transport(okFetch(inner)).run(REQ);
+    expect(v.outcome).toBe("pass");
+    expect(v.attestation).toEqual({ observedAny: true, identityMismatch: false });
+  });
+
+  test("empty attestation (no instrumented site) is allowed", async () => {
+    const inner = echo({ observedAny: false, identityMismatch: false });
+    const v = await transport(okFetch(inner)).run(REQ);
+    expect(v.outcome).toBe("pass");
+    expect(v.attestation).toEqual({ observedAny: false, identityMismatch: false });
   });
 });

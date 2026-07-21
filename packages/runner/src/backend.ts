@@ -39,6 +39,15 @@ export interface TestVerdict {
    * failure from an `in-flight-unknown` one the orchestrator must quarantine.
    */
   readonly operation?: OperationOutcome;
+  /**
+   * Per-run binary-identity attestation (Layer 5C-A Task 8, design §G) — set by
+   * `RunMutantTransport` on the `ran` path. `observedAny` records whether any instrumented
+   * selector executed during this run (false is allowed: coverage over-approximates).
+   * `identityMismatch` is never true on a returned verdict — the transport maps that case to
+   * an `error` outcome instead. Formalized/consumed by the orchestrator's clean-attestation
+   * gate in Task 5/10.
+   */
+  readonly attestation?: { readonly observedAny: boolean; readonly identityMismatch: boolean };
 }
 
 export interface BackendCapabilities {

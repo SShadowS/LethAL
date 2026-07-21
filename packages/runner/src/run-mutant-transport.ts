@@ -32,6 +32,8 @@ interface RunMutantResult {
   readonly codeunitId?: unknown;
   readonly method?: unknown;
   readonly codeunitResults?: unknown;
+  readonly observedAny?: unknown;
+  readonly identityMismatch?: unknown;
 }
 
 /** The BC `Test Method Line.Result` enum ints — confirmed live on Cronus281 (mem:runmutant_odata). */
@@ -82,8 +84,7 @@ export class RunMutantTransport {
     } catch (err) {
       const durationMs = Date.now() - started;
       // Our own timeout aborted it → the call may have reached the server and left a mutant
-      // active (clear unconfirmed): in-flight-unknown, the orchestrator quarantines. A
-      // pre-response network throw (connect refused) never dispatched: retry-safe.
+      // active (clear unconfirmed): in-flight-unknown, the orchestrator quarantines.
       if (controller.signal.aborted) {
         return {
           ref,
@@ -93,12 +94,14 @@ export class RunMutantTransport {
           operation: "in-flight-unknown",
         };
       }
+      // fetchFn was already invoked; a rejection here (e.g. connection reset) may have reached BC
+      // AFTER the request was fully sent and left a mutant active — never retry-safe (parent §7).
       return {
         ref,
         outcome: "error",
         durationMs,
-        failureMessage: `RunMutant failed pre-dispatch: ${String(err)}`,
-        operation: "pre-dispatch-rejected",
+        failureMessage: `RunMutant connection failed after dispatch: ${String(err)}`,
+        operation: "in-flight-unknown",
       };
     } finally {
       clearTimeout(timer);
@@ -226,11 +229,29 @@ export class RunMutantTransport {
         failureMessage: `RunMutant unexpected result enum ${JSON.stringify(line.result)} for ${ref.method}`,
       };
     }
+    // Per-run binary-identity attestation (spec §G): observedAny=false is allowed (no
+    // instrumented site executed this run — coverage over-approximates); identityMismatch=true
+    // means SOME instrumented site during this run presented a non-matching (targetAppId,
+    // artifactId) — a wrong/stale binary is live. Reject it, never map it to a verdict.
+    const attestation = {
+      observedAny: result.observedAny === true,
+      identityMismatch: result.identityMismatch === true,
+    };
+    if (attestation.identityMismatch) {
+      return {
+        ref,
+        outcome: "error",
+        durationMs,
+        failureMessage:
+          "RunMutant attestation identity mismatch: a selector with a non-matching (targetAppId, artifactId) ran — wrong/stale binary",
+      };
+    }
     const failureMessage = this.failureTextOf(line);
     return {
       ref,
       outcome,
       durationMs,
+      attestation,
       ...(outcome === "fail" && failureMessage !== undefined ? { failureMessage } : {}),
     };
   }
