@@ -8,13 +8,7 @@ import {
 } from "@lethal/engine";
 import { compileSchemataForFile } from "./compile";
 import { assignMutantIds } from "./ids";
-import {
-  type SelectorConfig,
-  emitMutationActiveTable,
-  emitMutationControl,
-  emitMutationSelector,
-  emitWebServicesXml,
-} from "./selector";
+import { type SelectorConfig, emitMutationSelector, emitRegisterInstall } from "./selector";
 
 export interface InstrumentedFile {
   readonly path: string;
@@ -28,6 +22,10 @@ export interface WriteInput {
   readonly files: readonly InstrumentedFile[];
   readonly selectorIds: SelectorConfig;
   readonly artifactId: string;
+  /** The target project's own app.json `id` — baked into the delegating selector and the
+   *  register-install codeunit so the LethAL Control extension keys state on the full
+   *  (targetAppId, artifactId, mutantId) tuple (Layer 5C-A). */
+  readonly targetAppId: string;
 }
 
 export interface MutantManifestEntry {
@@ -111,24 +109,27 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
     }
   }
 
+  // The delegating selector (Active -> LC Control State.IsActive) and the register-install
+  // codeunit (registers targetAppId -> artifactId on install). The in-target Mutation Active
+  // table, Mutation Control codeunit, and MutationControl web-service XML are NO LONGER emitted —
+  // the LethAL Control extension owns all of that now (Layer 5C-A Task 4). The freed controlId
+  // becomes the register-install codeunit's object id.
   await writeFile(
     join(input.targetDir, "MutationSelector.Codeunit.al"),
-    emitMutationSelector({ ...input.selectorIds, artifactId: input.artifactId }),
+    emitMutationSelector({
+      ...input.selectorIds,
+      artifactId: input.artifactId,
+      targetAppId: input.targetAppId,
+    }),
     "utf8",
   );
   await writeFile(
-    join(input.targetDir, "MutationActive.Table.al"),
-    emitMutationActiveTable(input.selectorIds),
-    "utf8",
-  );
-  await writeFile(
-    join(input.targetDir, "MutationControl.Codeunit.al"),
-    emitMutationControl(input.selectorIds),
-    "utf8",
-  );
-  await writeFile(
-    join(input.targetDir, "webservices.xml"),
-    emitWebServicesXml(input.selectorIds),
+    join(input.targetDir, "MutationRegister.Codeunit.al"),
+    emitRegisterInstall({
+      objectId: input.selectorIds.controlId,
+      targetAppId: input.targetAppId,
+      artifactId: input.artifactId,
+    }),
     "utf8",
   );
 

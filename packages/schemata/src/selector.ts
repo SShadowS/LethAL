@@ -4,6 +4,12 @@ export interface SelectorConfig {
   readonly tableId: number;
 }
 
+// DEAD since Layer 5C-A Task 4: the active-mutant state moved out of the instrumented target
+// into the `LethAL Control` extension (extensions/lethal-control/). `emitMutationActiveTable`,
+// `emitMutationControl`, and `emitWebServicesXml` below are no longer written by
+// `writeInstrumentedProject` — the control extension owns the table, the SetActive/ClearActive
+// control surface, and the OData web-service registration. Kept exported (and unit-tested) only
+// so the historical shape stays documented; do not re-wire them into emission.
 export function emitMutationActiveTable(cfg: SelectorConfig): string {
   return `table ${cfg.tableId} "Mutation Active"
 {
@@ -23,32 +29,68 @@ export function emitMutationActiveTable(cfg: SelectorConfig): string {
 `;
 }
 
-export function emitMutationSelector(cfg: SelectorConfig & { artifactId: string }): string {
-  return `codeunit ${cfg.selectorId} "Mutation Selector"
+/**
+ * The instrumented target's `Mutation Selector` — since Layer 5C-A Task 4 a thin DELEGATE into
+ * the `LethAL Control` extension. `Active(MutantId)` forwards the full identity tuple
+ * `(targetAppId, artifactId, mutantId)` to `LC Control State.IsActive`, which owns the active
+ * state (the target no longer holds a `Mutation Active` table or caches anything). The dispatch
+ * seam is UNCHANGED — guards still emit `MutationSelector.Active('<id>')` and `compile.ts` still
+ * injects `var MutationSelector: Codeunit "Mutation Selector";`; only what `Active` DOES changed.
+ *
+ * `using LethAL.Control;` brings the control extension's namespaced `LC Control State` into
+ * scope; the target's `app.json` gains the `LethAL Control` dependency (see `project.ts` /
+ * orchestrator) so the reference resolves at compile time.
+ *
+ * al-runner never compiles this: `AlRunnerBackend.activate()` overwrites the whole selector file
+ * with `emitStaticSelector` (self-contained, no control dependency) before its lazy `alc` run.
+ * The procedure set here (`Active`, `ArtifactId`) MUST stay identical to `emitStaticSelector`'s.
+ */
+export function emitMutationSelector(
+  cfg: SelectorConfig & { artifactId: string; targetAppId: string },
+): string {
+  return `using LethAL.Control;
+
+codeunit ${cfg.selectorId} "Mutation Selector"
 {
-    SingleInstance = true;
-
-    var
-        CachedId: Text;
-        Loaded: Boolean;
-
     procedure Active(MutantId: Text): Boolean
     var
-        MutationActive: Record "Mutation Active";
+        ControlState: Codeunit "LC Control State";
     begin
-        if not Loaded then begin
-            if MutationActive.Get('') then
-                CachedId := MutationActive.ActiveId;
-            Loaded := true;
-        end;
-        if CachedId = '' then
-            exit(false);
-        exit(CachedId = MutantId);
+        exit(ControlState.IsActive('${cfg.targetAppId}', '${cfg.artifactId}', MutantId));
     end;
 
     procedure ArtifactId(): Text
     begin
         exit('${cfg.artifactId}');
+    end;
+}
+`;
+}
+
+/**
+ * The instrumented target's install codeunit — registers this target's
+ * `(targetAppId -> artifactId)` into the `LethAL Control` extension on install, so `RunMutant`'s
+ * artifact guard can read the deployed artifact id WITHOUT the control extension depending on the
+ * target (the dependency runs target -> control only). Its object id is the freed `controlId`
+ * (the in-target Mutation Control codeunit is gone). Belt-and-suspenders alongside the client's
+ * post-publish OData `RegisterArtifact` call.
+ */
+export function emitRegisterInstall(cfg: {
+  objectId: number;
+  targetAppId: string;
+  artifactId: string;
+}): string {
+  return `using LethAL.Control;
+
+codeunit ${cfg.objectId} "Mutation Register"
+{
+    Subtype = Install;
+
+    trigger OnInstallAppPerCompany()
+    var
+        ControlState: Codeunit "LC Control State";
+    begin
+        ControlState.RegisterArtifact('${cfg.targetAppId}', '${cfg.artifactId}');
     end;
 }
 `;

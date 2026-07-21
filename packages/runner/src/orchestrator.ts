@@ -258,6 +258,23 @@ function messageOf(err: unknown): string {
  * unnarrowed write); given, `files` is regrouped down to just those specs
  * via `narrowFilesToSubset` before writing.
  */
+/**
+ * The target project's own app.json `id`, used as `targetAppId` — the first element of the
+ * (targetAppId, artifactId, mutantId) tuple the LethAL Control extension keys state on (Layer
+ * 5C-A). A target with no string `id` is structurally uncompilable and cannot register its
+ * artifact, so this fails loudly rather than baking an empty first tuple element into every
+ * guard (an empty-vs-empty match is this project's signature silent-wrong-verdict shape).
+ */
+function targetAppIdOf(projectManifest: Readonly<Record<string, unknown>>): string {
+  const id = projectManifest.id;
+  if (typeof id !== "string" || id === "") {
+    throw new Error(
+      `target app.json has no non-empty string "id" (got ${JSON.stringify(id)}) — required as targetAppId for the LethAL Control registry`,
+    );
+  }
+  return id;
+}
+
 async function prepareArtifactDir(args: {
   readonly targetDir: string;
   readonly files: readonly InstrumentedFile[];
@@ -276,6 +293,7 @@ async function prepareArtifactDir(args: {
     files,
     selectorIds: args.selectorIds,
     artifactId: args.artifactId,
+    targetAppId: targetAppIdOf(args.projectManifest),
   });
   await prepareBatchProject(args.projectDir, args.targetDir, args.projectManifest, args.appVersion);
 }

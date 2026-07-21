@@ -2,6 +2,7 @@ export { assignMutantIds } from "./ids";
 export type { IdedSpec } from "./ids";
 export {
   emitMutationSelector,
+  emitRegisterInstall,
   emitMutationActiveTable,
   emitMutationControl,
   emitStaticSelector,

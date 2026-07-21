@@ -1862,6 +1862,7 @@ async function manifestMutants(
     files,
     selectorIds,
     artifactId: "seed00000000000000000000000000",
+    targetAppId: "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",
   });
   const manifest = JSON.parse(await readFile(join(scratchDir, "mutant-manifest.json"), "utf8")) as {
     mutants: MutantManifestEntry[];

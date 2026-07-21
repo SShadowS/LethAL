@@ -1,28 +1,25 @@
-import { describe, it, expect, beforeAll } from "bun:test";
+import { beforeAll, describe, expect, it } from "bun:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
-import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  type MutationSpec,
   buildSemanticContext,
   initParser,
   parseAL,
   visit,
   wrapRoot,
-  type MutationSpec,
 } from "@lethal/engine";
-import {
-  compileSchemataForFile,
-  writeInstrumentedProject,
-} from "@lethal/schemata";
+import { compileSchemataForFile, writeInstrumentedProject } from "@lethal/schemata";
 import { tier1Operators } from "../src";
 
-const SRC_PATH = fileURLToPath(
-  new URL("./fixtures/al/mixed-operators.al", import.meta.url),
-);
+const SRC_PATH = fileURLToPath(new URL("./fixtures/al/mixed-operators.al", import.meta.url));
 
 describe("end-to-end Layer 3", () => {
-  beforeAll(async () => { await initParser(); });
+  beforeAll(async () => {
+    await initParser();
+  });
 
   it("runs all Tier 1 operators and composes a valid instrumented output", async () => {
     const src = await readFile(SRC_PATH, "utf8");
@@ -63,12 +60,11 @@ describe("end-to-end Layer 3", () => {
         files: [{ path: "mixed.al", source: src, root, specs: kept }],
         selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
         artifactId: "0123456789abcdef0123456789abcdef",
+        targetAppId: "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",
       });
       const written = await readFile(join(dir, "mixed.al"), "utf8");
       expect(written).toBe(compiled);
-      const manifest = JSON.parse(
-        await readFile(join(dir, "mutant-manifest.json"), "utf8"),
-      );
+      const manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8"));
       expect(manifest.mutants.length).toBe(kept.length);
       expect(manifest.selectorIds).toEqual({
         selectorId: 60000,

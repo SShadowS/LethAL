@@ -6,6 +6,10 @@ import { ALNodeKind, findFirst, initParser, parseAL, wrapRoot } from "@lethal/en
 import type { ALSyntaxNode, MutationSpec } from "@lethal/engine";
 import { writeInstrumentedProject } from "../src/project";
 
+// The target project's own app.json `id` — threaded into the delegating selector and the
+// register-install codeunit so the control extension keys state on the full identity tuple.
+const TARGET_APP_ID = "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a";
+
 describe("writeInstrumentedProject", () => {
   beforeAll(async () => {
     await initParser();
@@ -33,26 +37,43 @@ describe("writeInstrumentedProject", () => {
         files: [{ path: "P.Codeunit.al", source: src, root, specs }],
         selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
         artifactId: "0123456789abcdef0123456789abcdef",
+        targetAppId: TARGET_APP_ID,
       });
 
       const entries = (await readdir(dir)).sort();
       expect(entries).toContain("P.Codeunit.al");
       expect(entries).toContain("MutationSelector.Codeunit.al");
-      expect(entries).toContain("MutationActive.Table.al");
-      expect(entries).toContain("MutationControl.Codeunit.al");
-      expect(entries).toContain("webservices.xml");
+      expect(entries).toContain("MutationRegister.Codeunit.al");
       expect(entries).toContain("mutant-manifest.json");
+      // Task 4: the in-target state surface moved to the LethAL Control extension — the target
+      // no longer emits its own Mutation Active table, Mutation Control codeunit, or the
+      // MutationControl web-service registration.
+      expect(entries).not.toContain("MutationActive.Table.al");
+      expect(entries).not.toContain("MutationControl.Codeunit.al");
+      expect(entries).not.toContain("webservices.xml");
 
       const manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8"));
       expect(manifest.mutants).toHaveLength(1);
       expect(manifest.mutants[0].mutantId).toBe("M0001");
       expect(manifest.mutants[0].operatorName).toBe("op.flip");
 
-      const selector = await readFile(join(dir, "MutationSelector.Codeunit.al"), "utf8");
-      expect(selector).toContain("codeunit 60000");
-
+      // The dispatch/var-injection seam is UNCHANGED: guards still call MutationSelector.Active(id).
       const rewritten = await readFile(join(dir, "P.Codeunit.al"), "utf8");
       expect(rewritten).toContain("MutationSelector.Active('M0001')");
+
+      // The selector is now a thin delegate into the control extension over the identity tuple.
+      const selector = await readFile(join(dir, "MutationSelector.Codeunit.al"), "utf8");
+      expect(selector).toContain("codeunit 60000");
+      expect(selector).toContain(
+        `ControlState.IsActive('${TARGET_APP_ID}', '0123456789abcdef0123456789abcdef', MutantId)`,
+      );
+
+      // The register-install codeunit registers (targetAppId -> artifactId) on install.
+      const register = await readFile(join(dir, "MutationRegister.Codeunit.al"), "utf8");
+      expect(register).toContain("Subtype = Install;");
+      expect(register).toContain(
+        `ControlState.RegisterArtifact('${TARGET_APP_ID}', '0123456789abcdef0123456789abcdef')`,
+      );
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -85,6 +106,7 @@ describe("writeInstrumentedProject", () => {
         files: [{ path: "P.Codeunit.al", source: src1, root: root1, specs: specs1 }],
         selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
         artifactId: "0123456789abcdef0123456789abcdef",
+        targetAppId: TARGET_APP_ID,
       });
 
       let manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8"));
@@ -122,6 +144,7 @@ describe("writeInstrumentedProject", () => {
         files: [{ path: "MyCodeunit.Codeunit.al", source: src2, root: root2, specs: specs2 }],
         selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
         artifactId: "0123456789abcdef0123456789abcdef",
+        targetAppId: TARGET_APP_ID,
       });
 
       manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8"));
@@ -157,6 +180,7 @@ describe("writeInstrumentedProject", () => {
         files: [{ path: "Plain.Codeunit.al", source: src3, root: root3, specs: specs3 }],
         selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
         artifactId: "0123456789abcdef0123456789abcdef",
+        targetAppId: TARGET_APP_ID,
       });
 
       manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8"));
@@ -234,6 +258,7 @@ describe("writeInstrumentedProject", () => {
         ],
         selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
         artifactId: "0123456789abcdef0123456789abcdef",
+        targetAppId: TARGET_APP_ID,
       });
 
       const manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8"));
@@ -326,6 +351,7 @@ describe("writeInstrumentedProject", () => {
         ],
         selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
         artifactId: "0123456789abcdef0123456789abcdef",
+        targetAppId: TARGET_APP_ID,
       });
 
       const manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8"));
@@ -349,6 +375,7 @@ describe("writeInstrumentedProject", () => {
         files: [],
         selectorIds: { selectorId: 79000, controlId: 79001, tableId: 79002 },
         artifactId: "0123456789abcdef0123456789abcdef",
+        targetAppId: TARGET_APP_ID,
       });
       const manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8")) as {
         artifactId: string;

@@ -27,9 +27,10 @@ try {
     files,
     selectorIds: { selectorId: 79199, controlId: 79198, tableId: 79197 },
     artifactId: "0123456789abcdef0123456789abcdef",
+    targetAppId: "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",
   });
 
-  // The Mutation* files (Selector/Control/Active) are fixed scaffolding —
+  // The Mutation* files (Selector + Register) are fixed scaffolding —
   // written once per artifact, byte-identical no matter how many mutants the
   // artifact holds. Counting them as "growth" inflated the headline (they
   // were 31% of the reported instrumented bytes) and, worse, would dominate

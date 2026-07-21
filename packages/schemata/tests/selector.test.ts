@@ -3,6 +3,7 @@ import {
   emitMutationActiveTable,
   emitMutationControl,
   emitMutationSelector,
+  emitRegisterInstall,
   emitStaticSelector,
   emitWebServicesXml,
 } from "../src/selector";
@@ -13,6 +14,10 @@ const cfg = {
   tableId: 50002,
   artifactId: "fedcba9876543210fedcba9876543210",
 };
+
+// A target app id (the target project's own app.json `id`) — the first element of the
+// (targetAppId, artifactId, mutantId) tuple the control extension keys its state on.
+const TARGET = "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a";
 
 describe("emitMutationActiveTable", () => {
   test("emits single-row table, cross-company", () => {
@@ -25,14 +30,46 @@ describe("emitMutationActiveTable", () => {
 });
 
 describe("emitMutationSelector", () => {
-  test("reads the table once per session, then caches", () => {
-    const src = emitMutationSelector(cfg);
+  test("delegates the active check to the LethAL Control extension", () => {
+    // Task 4: the active-mutant state moved OUT of the target into the LethAL Control
+    // extension. Active() is now a thin delegate to LC Control State.IsActive over the
+    // full (targetAppId, artifactId, mutantId) tuple — it no longer owns a table, caches
+    // nothing, and is not SingleInstance (the control extension holds all of that).
+    const src = emitMutationSelector({ ...cfg, targetAppId: TARGET });
     expect(src).toContain('codeunit 50000 "Mutation Selector"');
-    expect(src).toContain("SingleInstance = true;");
     expect(src).toContain("procedure Active(MutantId: Text): Boolean");
-    expect(src).toContain("if not Loaded then begin");
-    expect(src).toContain("if MutationActive.Get('') then");
-    expect(src).toContain("CachedId := MutationActive.ActiveId;");
+    expect(src).toContain('ControlState: Codeunit "LC Control State"');
+    expect(src).toContain(
+      `exit(ControlState.IsActive('${TARGET}', '${cfg.artifactId}', MutantId));`,
+    );
+    // The old in-target state surface is gone — the control extension owns it now.
+    expect(src).not.toContain("SingleInstance = true;");
+    expect(src).not.toContain('Record "Mutation Active"');
+    expect(src).not.toContain("CachedId");
+  });
+
+  test("still exposes ArtifactId (the target's baked identity)", () => {
+    const src = emitMutationSelector({ ...cfg, targetAppId: TARGET });
+    expect(src).toContain("procedure ArtifactId(): Text");
+    expect(src).toContain(`exit('${cfg.artifactId}')`);
+  });
+});
+
+describe("emitRegisterInstall", () => {
+  test("emits an Install codeunit that registers the target's artifact into the control extension", () => {
+    // The freed controlId (the in-target Mutation Control is gone) becomes this Install
+    // codeunit's object id. On install it registers (targetAppId -> artifactId) so
+    // RunMutant's artifact guard can read the deployed artifact without depending on the target.
+    const src = emitRegisterInstall({
+      objectId: cfg.controlId,
+      targetAppId: TARGET,
+      artifactId: cfg.artifactId,
+    });
+    expect(src).toContain('codeunit 50001 "Mutation Register"');
+    expect(src).toContain("Subtype = Install;");
+    expect(src).toContain("trigger OnInstallAppPerCompany()");
+    expect(src).toContain('ControlState: Codeunit "LC Control State"');
+    expect(src).toContain(`ControlState.RegisterArtifact('${TARGET}', '${cfg.artifactId}');`);
   });
 });
 
@@ -81,7 +118,7 @@ const ARTIFACT = "0123456789abcdef0123456789abcdef";
 
 describe("artifact identity parity", () => {
   test("the generated selector exposes ArtifactId", () => {
-    const al = emitMutationSelector({ ...IDS, artifactId: ARTIFACT });
+    const al = emitMutationSelector({ ...IDS, artifactId: ARTIFACT, targetAppId: TARGET });
     expect(al).toContain("procedure ArtifactId(): Text");
     expect(al).toContain(`exit('${ARTIFACT}')`);
   });
@@ -96,7 +133,7 @@ describe("artifact identity parity", () => {
     const procs = (al: string) => [...al.matchAll(/procedure (\w+)/g)].map((m) => m[1]).sort();
     expect(
       procs(emitStaticSelector({ objectId: 79000, activeId: "", artifactId: ARTIFACT })),
-    ).toEqual(procs(emitMutationSelector({ ...IDS, artifactId: ARTIFACT })));
+    ).toEqual(procs(emitMutationSelector({ ...IDS, artifactId: ARTIFACT, targetAppId: TARGET })));
   });
 
   test("MutationControl exposes Identity, reachable as MutationControl_Identity", () => {

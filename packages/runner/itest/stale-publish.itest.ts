@@ -220,6 +220,7 @@ async function compileArtifact(
     files: ctx.files,
     selectorIds: SELECTOR_IDS,
     artifactId,
+    targetAppId: ctx.appId,
   });
   const appManifest = { ...ctx.appManifestBase, version: appVersion };
   await writeFile(
