@@ -761,8 +761,13 @@ describe("BcDevMcpBackend.compileCheck", () => {
 });
 
 /** A fake RunMutant transport factory backed by a fetch that records each request body and
- *  echoes an identity-matching `status:ran` / `result:2` (pass) response. */
-function capturingRunMutantFactory(bodies: Array<Record<string, unknown>>) {
+ *  echoes an identity-matching `status:ran` / `result:2` (pass) response. `attestation` lets a
+ *  caller override the echoed `observedAny`/`identityMismatch` wire fields (default: absent,
+ *  i.e. `RunMutantTransport` maps them to `{observedAny:false, identityMismatch:false}`). */
+function capturingRunMutantFactory(
+  bodies: Array<Record<string, unknown>>,
+  attestation: { observedAny?: boolean; identityMismatch?: boolean } = {},
+) {
   const captureFetch = (async (_url: unknown, init?: RequestInit) => {
     const b = JSON.parse(String(init?.body)) as Record<string, unknown>;
     bodies.push(b);
@@ -775,6 +780,7 @@ function capturingRunMutantFactory(bodies: Array<Record<string, unknown>>) {
       codeunitId: b.testCodeunitId,
       method: b.testMethod,
       codeunitResults: JSON.stringify({ testResults: [{ method: b.testMethod, result: 2 }] }),
+      ...attestation,
     };
     return new Response(JSON.stringify({ value: JSON.stringify(inner) }), { status: 200 });
   }) as typeof fetch;
@@ -845,6 +851,25 @@ describe("BcDevMcpBackend.activate — bookkeeping (Layer 5C-A)", () => {
         leaseToken: "",
       });
       expect(bodies[1]).toMatchObject({ mutantId: "" });
+    } finally {
+      await cleanup();
+    }
+  });
+
+  // TestVerdict.attestation (backend.ts, design §G) is set by RunMutantTransport and must
+  // survive BcDevMcpBackend.runViaTransport()'s pass-through unchanged — this is what lets the
+  // orchestrator's clean-attestation gate (Task 5/10) see it from run()'s return value.
+  test("bcdev run() carries transport attestation through", async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    const { backend, cleanup } = await makeBackendWithDeploy(
+      () => ({ results: [] }),
+      {},
+      undefined,
+      capturingRunMutantFactory(bodies, { observedAny: true, identityMismatch: false }),
+    );
+    try {
+      const v = await backend.run(ref, { coverage: "none", timeoutMs: 1000 });
+      expect(v.attestation).toEqual({ observedAny: true, identityMismatch: false });
     } finally {
       await cleanup();
     }

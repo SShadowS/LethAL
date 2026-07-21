@@ -41,11 +41,13 @@ export interface TestVerdict {
   readonly operation?: OperationOutcome;
   /**
    * Per-run binary-identity attestation (Layer 5C-A Task 8, design §G) — set by
-   * `RunMutantTransport` on the `ran` path. `observedAny` records whether any instrumented
-   * selector executed during this run (false is allowed: coverage over-approximates).
-   * `identityMismatch` is never true on a returned verdict — the transport maps that case to
-   * an `error` outcome instead. Formalized/consumed by the orchestrator's clean-attestation
-   * gate in Task 5/10.
+   * `RunMutantTransport` on a bcdev RunMutant `ran` path. `observedAny` records whether any
+   * instrumented selector executed during this run (false is allowed: coverage
+   * over-approximates). `identityMismatch` is never true on a returned verdict — the transport
+   * maps that case to an `error` outcome instead, so it is carried here already-false purely so
+   * the orchestrator can require ≥1 clean observation per deployed artifact (fail-closed gate,
+   * Task 5/10). Absent on al-runner (no such attestation exists) and on bcdev's non-`ran` paths
+   * (hub-routed coverage runs, and any error/timeout verdict).
    */
   readonly attestation?: { readonly observedAny: boolean; readonly identityMismatch: boolean };
 }
