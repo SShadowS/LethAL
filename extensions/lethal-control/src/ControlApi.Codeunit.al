@@ -23,18 +23,14 @@ codeunit 71003 "LC Control API"
         Obj.WriteTo(InfoJson);
     end;
 
-    /// <summary>Called by the target's own install/upgrade (target -> control) to register its
-    /// artifact id. Also OData-exposed so the client can seed/verify. Idempotent upsert.</summary>
-    procedure RegisterArtifact(TargetAppId: Text; ArtifactId: Text) ResultJson: Text
+    /// <summary>Read-only: the artifact id the target registered for TargetAppId (empty if none).
+    /// The DeploymentVerifier reads this as a pre-flight (design §B). No OData WRITE exists — the
+    /// registry is written only in-process by the target's install/upgrade codeunits (design §B2).</summary>
+    procedure RegisteredArtifact(TargetAppId: Text): Text
     var
         State: Codeunit "LC Control State";
-        Obj: JsonObject;
     begin
-        State.RegisterArtifact(TargetAppId, ArtifactId);
-        Obj.Add('registered', true);
-        Obj.Add('targetAppId', TargetAppId);
-        Obj.Add('artifactId', ArtifactId);
-        Obj.WriteTo(ResultJson);
+        exit(State.RegisteredArtifact(TargetAppId));
     end;
 
     /// <summary>
