@@ -1,14 +1,13 @@
 import type { ActivationConfig, FetchFn } from "./activation";
-import { postOData } from "./activation";
 import type { CompiledArtifact } from "./artifact";
 
 /**
- * The only shape a generated artifact id, or an id `MutationControl_Identity` reports back, is
- * ever allowed to take: 128 random bits as 32 lowercase hex characters. Enforced on BOTH the
- * expected id and the reported id — see `DeploymentVerifier.verify` — for two independent
- * reasons: (1) the orchestrator once handed out non-random placeholder ids (Task 6 replaced
- * `pending-task6-<runId>-<batchIdx>` with `newArtifactId()` in orchestrator.ts); if such a
- * value ever reappears and reaches `verify()` unchecked, an identical placeholder baked into
+ * The only shape a generated artifact id, or an id `LethALControl_RegisteredArtifact` reports
+ * back, is ever allowed to take: 128 random bits as 32 lowercase hex characters. Enforced on
+ * BOTH the expected id and the reported id — see `DeploymentVerifier.verify` — for two
+ * independent reasons: (1) the orchestrator once handed out non-random placeholder ids (Task 6
+ * replaced `pending-task6-<runId>-<batchIdx>` with `newArtifactId()` in orchestrator.ts); if such
+ * a value ever reappears and reaches `verify()` unchecked, an identical placeholder baked into
  * the artifact would "cheerfully verify against itself" and report a false accept — this guard
  * is the tripwire that makes that loud instead. (2) artifact ids are interpolated into a
  * single-quoted AL string
@@ -56,11 +55,18 @@ export function decidePublishOutcome(
 }
 
 /**
- * Verifies that a fresh Identity request observed code claiming a given artifact id.
+ * Verifies that the target's own install/upgrade codeunit self-registered the expected artifact
+ * id in the `LC Control State` registry, by reading it back via the `LethALControl_RegisteredArtifact`
+ * OData action.
  *
- * This is NOT a fence. It does not prove continued ownership, that the artifact cannot
- * subsequently be replaced, that a test runner loaded the same code, or that an activation
- * belongs to the caller. Server-side fencing is Layer 5C.
+ * This is a cheap PRE-FLIGHT sanity check, run once before a session's mutants, NOT a fence and
+ * NOT proof that the *running* binary is ours: it proves only that self-registration by our
+ * binary was observed, at the moment of this call. It does not prove continued ownership, that
+ * the artifact cannot subsequently be replaced, that a test runner loaded the same code, or that
+ * any given test run actually executed against it. The binding, per-run proof that the live
+ * binary matches is §G's identity attestation carried on every `RunMutant` call (see
+ * `RunMutantTransport`) — this check is a pre-flight, not a substitute for that. Server-side
+ * fencing is Layer 5C.
  */
 export class DeploymentVerifier {
   constructor(
@@ -78,18 +84,15 @@ export class DeploymentVerifier {
       );
     }
 
-    let payload: unknown;
+    let reported: string | null;
     try {
-      payload = await postOData(this.cfg, this.fetchFn, "Identity");
+      reported = await this.readRegisteredArtifact(expected.appId);
     } catch (err) {
       return {
         status: "unavailable",
         detail: err instanceof Error ? err.message : String(err),
       };
     }
-
-    const rawValue = (payload as { value?: unknown } | null | undefined)?.value;
-    const reported = typeof rawValue === "string" ? rawValue : null;
 
     // A malformed, empty, or absent reported id means we could not determine what the server is
     // actually running — that's diagnostically different from a well-formed id that genuinely
@@ -111,5 +114,47 @@ export class DeploymentVerifier {
       return { status: "accepted" };
     }
     return { status: "mismatch", reported };
+  }
+
+  /**
+   * Shapes and sends the `LethALControl_RegisteredArtifact` POST directly — its OWN request
+   * method, deliberately NOT `postOData` (activation.ts), which hardcodes the dead
+   * `MutationControl_` action prefix. Mirrors `HarnessVerifier.fetchHarnessInfo` (harness.ts).
+   * Returns the raw registry value: `null` when the response is missing/non-2xx/malformed or the
+   * OData `value` isn't a string; otherwise the bare string exactly as reported (including "",
+   * for "no row registered", and any malformed-but-string value) — `verify()` above is
+   * responsible for classifying that value, not this method.
+   */
+  private async readRegisteredArtifact(targetAppId: string): Promise<string | null> {
+    const params = new URLSearchParams({ company: this.cfg.company });
+    if (this.cfg.tenant !== undefined) params.set("tenant", this.cfg.tenant);
+    const url = `${this.cfg.baseUrl}/ODataV4/LethALControl_RegisteredArtifact?${params.toString()}`;
+
+    // AbortSignal.timeout() is unreliable in this Bun/Windows env (see activation.ts) — manual
+    // AbortController + setTimeout instead.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.cfg.timeoutMs ?? 30_000);
+    let res: Response;
+    try {
+      res = await this.fetchFn(url, {
+        method: "POST",
+        headers: {
+          authorization: `Basic ${btoa(`${this.cfg.username}:${this.cfg.password}`)}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ targetAppId }),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!res.ok) {
+      // Surfaced as a thrown error (rather than a quiet `null`) so `verify()`'s catch above can
+      // carry the HTTP status into `detail` — collapsing this to `null` would make an HTTP 500
+      // indistinguishable from "server answered 200 with no `value`".
+      throw new Error(`LethALControl_RegisteredArtifact failed: HTTP ${res.status}`);
+    }
+    const value = ((await res.json().catch(() => ({}))) as { value?: unknown }).value;
+    return typeof value === "string" ? value : null;
   }
 }

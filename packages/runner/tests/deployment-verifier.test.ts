@@ -74,13 +74,17 @@ function throwingFetch(err: Error) {
 }
 
 describe("DeploymentVerifier.verify", () => {
-  it("POSTs to MutationControl_Identity with the same request shape as MutationControlClient", async () => {
+  it("POSTs to LethALControl_RegisteredArtifact with targetAppId in the body", async () => {
     const { calls, fetchFn } = fakeFetch(200, { value: VALID_ID });
-    await new DeploymentVerifier(CFG, fetchFn).verify(fakeArtifact());
+    const artifact = fakeArtifact();
+    await new DeploymentVerifier(CFG, fetchFn).verify(artifact);
     const call = calls[0];
-    expect(call?.url).toBe("http://bc:7048/BC/ODataV4/MutationControl_Identity?company=CRONUS");
+    expect(call?.url).toBe(
+      "http://bc:7048/BC/ODataV4/LethALControl_RegisteredArtifact?company=CRONUS",
+    );
     expect(call?.init.method).toBe("POST");
     expect(new Headers(call?.init.headers).get("authorization")).toBe(`Basic ${btoa("u:p")}`);
+    expect(JSON.parse(String(call?.init.body))).toEqual({ targetAppId: artifact.appId });
   });
 
   it("returns accepted when the reported id matches the expected artifact id", async () => {
@@ -102,7 +106,7 @@ describe("DeploymentVerifier.verify", () => {
     expect((result as { detail: string }).detail).toContain("not-a-valid-artifact-id!!");
   });
 
-  it("never treats an empty reported id as a match, even against a valid expected id", async () => {
+  it("treats an empty registry value (no registration row) as unavailable, never a match", async () => {
     const { fetchFn } = fakeFetch(200, { value: "" });
     const result = await new DeploymentVerifier(CFG, fetchFn).verify(fakeArtifact());
     expect(result.status).not.toBe("accepted");
@@ -162,7 +166,7 @@ describe("DeploymentVerifier.verify", () => {
     const { calls, fetchFn } = fakeFetch(200, { value: VALID_ID });
     await new DeploymentVerifier({ ...CFG, tenant: "default" }, fetchFn).verify(fakeArtifact());
     expect(calls[0]?.url).toBe(
-      "http://bc:7048/BC/ODataV4/MutationControl_Identity?company=CRONUS&tenant=default",
+      "http://bc:7048/BC/ODataV4/LethALControl_RegisteredArtifact?company=CRONUS&tenant=default",
     );
   });
 });
