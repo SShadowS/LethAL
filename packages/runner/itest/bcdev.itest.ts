@@ -172,6 +172,8 @@ async function runOnce(scratchRoot: string): Promise<RunOnceResult> {
       server: bcdev.server,
       serverInstance: bcdev.serverInstance,
       company: bcdev.company,
+      packageCachePath: bcdev.packageCachePath,
+      controlSymbolPath: bcdev.controlSymbolPath,
       ...(bcdev.tenant !== undefined ? { tenant: bcdev.tenant } : {}),
       ...(launchCfg.environmentType !== undefined
         ? { environmentType: launchCfg.environmentType }
@@ -182,9 +184,8 @@ async function runOnce(scratchRoot: string): Promise<RunOnceResult> {
       ...(bcdev.env !== undefined ? { env: bcdev.env } : {}),
     },
     undefined,
-    { compiler, deployer, verifier },
+    { compiler, deployer, verifier, harnessVerifier },
     (targetAppId, artifactId) => new RunMutantTransport(odataCfg, targetAppId, artifactId),
-    harnessVerifier,
   );
 
   // Persistent, NOT `:memory:` — historical run data (priorSurvivorKeys) is a supported

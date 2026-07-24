@@ -1,5 +1,5 @@
-import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
+import { describe, expect, mock, test } from "bun:test";
+import { mkdir, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -13,10 +13,12 @@ import {
   DeploymentError,
   defaultArtifactIo,
 } from "../src/artifact";
-import type { ArtifactIo } from "../src/artifact";
+import type { ArtifactIo, CompileInput } from "../src/artifact";
 import { BcDevMcpBackend } from "../src/bcdev-backend";
-import type { BcDevDeployment } from "../src/bcdev-backend";
+import type { BcDevConfig, BcDevDeployment } from "../src/bcdev-backend";
 import { DeploymentVerifier } from "../src/deployment-verifier";
+import { CONTROL_APP_ID, HarnessVerificationError } from "../src/harness";
+import type { HarnessVerifier } from "../src/harness";
 import { requiresUnsafeLatch } from "../src/operation-outcome";
 import { ContainerDeployer } from "../src/publisher";
 import type { SpawnFn } from "../src/publisher";
@@ -50,6 +52,51 @@ async function writeDeployInputs(dir: string): Promise<void> {
 }
 
 /**
+ * `BcDevConfig.controlSymbolPath`/`packageCachePath` (Task 8): `deploy()`/`compileCheck()` now
+ * unconditionally `cp`/`mkdir` a REAL LethAL Control symbol into `packageCachePath` via
+ * `stageForCompile` — for any test that actually calls one of those, the fields must point at a
+ * real file/dir the test controls, never a fake "C:/fake/..." string (that would try to write
+ * outside the test's own tmp dir on the real filesystem). Both are rooted under `dir` so a
+ * single `rm(dir, { recursive: true })` cleans everything up. The symbol fixture lives in its
+ * own NESTED subdirectory (never a direct child of `dir` named `*.app`) so it can never be
+ * mistaken for a compiled artifact by a test's own `readdir(dir)`-based `.app`-count assertion.
+ */
+async function controlStaging(
+  dir: string,
+): Promise<Pick<BcDevConfig, "controlSymbolPath" | "packageCachePath">> {
+  const fixtureDir = join(dir, "control-fixture");
+  await mkdir(fixtureDir, { recursive: true });
+  const controlSymbolPath = join(fixtureDir, "lethal-control.app");
+  await Bun.write(controlSymbolPath, "fake-lethal-control-app-bytes");
+  return { controlSymbolPath, packageCachePath: join(dir, ".alpackages") };
+}
+
+/**
+ * `BcDevConfig` staging fields for a backend that never calls `deploy()`/`compileCheck()` in a
+ * given test — `stageForCompile` (and hence these two fields) is never read, so the values only
+ * need to satisfy the type, never the filesystem.
+ */
+const UNUSED_STAGING_CFG = {
+  controlSymbolPath: "C:/unused/lethal-control.app",
+  packageCachePath: "C:/unused/.alpackages",
+};
+
+/**
+ * `stageForCompile` (Task 8) creates `${instrumentedDir}-staged` as a SIBLING directory via a
+ * real `cp` — outside whatever tmp dir a test passed to `deploy()`, so it survives that dir's
+ * own cleanup and leaks under the OS tmp root unless removed explicitly. (`compileCheck()`
+ * cleans its own staged copy internally — this helper is only needed after `deploy()`.)
+ */
+async function rmStaged(instrumentedDir: string): Promise<void> {
+  await rm(`${instrumentedDir}-staged`, { recursive: true, force: true });
+}
+
+/** No-op fake `HarnessVerifier` — `verify()` resolves immediately, never throws. */
+function fakeHarnessVerifier(): HarnessVerifier {
+  return { verify: async () => {} } as HarnessVerifier;
+}
+
+/**
  * The real ArtifactCompiler + ContainerDeployer + DeploymentVerifier composition with only
  * the process/network edges faked: `spawn` writes a real (hand-built) .app zip wherever alc's
  * `/out:` argument points, and the verifier's fetch reports `reportedIdentity`
@@ -64,7 +111,7 @@ async function writeDeployInputs(dir: string): Promise<void> {
 function makeDeployment(
   outputDir: string,
   symbolReference: unknown,
-  opts: { spawn?: SpawnFn; reportedIdentity?: string } = {},
+  opts: { spawn?: SpawnFn; reportedIdentity?: string; harnessVerifier?: HarnessVerifier } = {},
 ): BcDevDeployment {
   // Tracks whether ContainerDeployer.publish() has actually invoked altool. Wraps whichever
   // spawn ends up running (default or a test's own `opts.spawn` override) so the tracking
@@ -109,7 +156,12 @@ function makeDeployment(
     { baseUrl: "http://bc:7048/BC", company: "CRONUS", username: "u", password: "p" },
     fetchFn,
   );
-  return { compiler, deployer, verifier };
+  return {
+    compiler,
+    deployer,
+    verifier,
+    harnessVerifier: opts.harnessVerifier ?? fakeHarnessVerifier(),
+  };
 }
 
 // SDK 1.29.0's McpServer.tool()/registerTool() validates arguments through a Zod schema
@@ -137,7 +189,13 @@ function makeBackend(
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   void server.connect(serverTransport);
   return new BcDevMcpBackend(
-    { mcpCommand: ["unused"], project: "/al", server: "http://bc", serverInstance: "BC" },
+    {
+      mcpCommand: ["unused"],
+      project: "/al",
+      server: "http://bc",
+      serverInstance: "BC",
+      ...UNUSED_STAGING_CFG,
+    },
     () => clientTransport,
   );
 }
@@ -158,7 +216,13 @@ function makeBackendWithHangingRun(): BcDevMcpBackend {
  */
 function makeBackendWhoseConnectThrows(message: string): BcDevMcpBackend {
   return new BcDevMcpBackend(
-    { mcpCommand: ["unused"], project: "/al", server: "http://bc", serverInstance: "BC" },
+    {
+      mcpCommand: ["unused"],
+      project: "/al",
+      server: "http://bc",
+      serverInstance: "BC",
+      ...UNUSED_STAGING_CFG,
+    },
     () => {
       throw new Error(message);
     },
@@ -197,7 +261,13 @@ function makeBackendWhoseCallRejectsAfterDispatch(message: string): BcDevMcpBack
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   void server.connect(serverTransport);
   return new BcDevMcpBackend(
-    { mcpCommand: ["unused"], project: "/al", server: "http://bc", serverInstance: "BC" },
+    {
+      mcpCommand: ["unused"],
+      project: "/al",
+      server: "http://bc",
+      serverInstance: "BC",
+      ...UNUSED_STAGING_CFG,
+    },
     () => makeRejectAfterDispatchTransport(clientTransport, message),
   );
 }
@@ -226,13 +296,25 @@ async function makeBackendWithDeploy(
   const deployDir = instrumentedDir ?? outputDir;
   await writeDeployInputs(deployDir);
   const backend = new BcDevMcpBackend(
-    { mcpCommand: ["unused"], project: "/al", server: "http://bc", serverInstance: "BC" },
+    {
+      mcpCommand: ["unused"],
+      project: "/al",
+      server: "http://bc",
+      serverInstance: "BC",
+      ...(await controlStaging(outputDir)),
+    },
     () => clientTransport,
     makeDeployment(outputDir, symbolReference),
     runMutantTransportFactory,
   );
   await backend.deploy(deployDir);
-  return { backend, cleanup: () => rm(outputDir, { recursive: true, force: true }) };
+  return {
+    backend,
+    cleanup: async () => {
+      await rmStaged(deployDir);
+      await rm(outputDir, { recursive: true, force: true });
+    },
+  };
 }
 
 describe("BcDevMcpBackend.run", () => {
@@ -447,6 +529,7 @@ describe("BcDevMcpBackend env passthrough", () => {
         server: "http://bc",
         serverInstance: "BC",
         env: { BC_DEV_USER: "testuser", BC_DEV_PASSWORD: "testpass" },
+        ...UNUSED_STAGING_CFG,
       },
       (env) => {
         capturedEnv = env;
@@ -503,7 +586,13 @@ describe("BcDevMcpBackend.deploy", () => {
         return { exitCode: 0, stdout: "", stderr: "" };
       };
       const backend = new BcDevMcpBackend(
-        { mcpCommand: ["unused"], project: "/al", server: "http://bc", serverInstance: "BC" },
+        {
+          mcpCommand: ["unused"],
+          project: "/al",
+          server: "http://bc",
+          serverInstance: "BC",
+          ...(await controlStaging(dir)),
+        },
         undefined,
         makeDeployment(dir, { Codeunits: [] }, { spawn: recordingSpawn }),
       );
@@ -519,6 +608,7 @@ describe("BcDevMcpBackend.deploy", () => {
       expect(artifact.appPath).not.toContain("lethal-instrumented");
       expect(artifact.appPath).toContain(TEST_ARTIFACT_ID);
     } finally {
+      await rmStaged(dir);
       await rm(dir, { recursive: true, force: true });
     }
   });
@@ -528,7 +618,13 @@ describe("BcDevMcpBackend.deploy", () => {
     try {
       await writeDeployInputs(dir);
       const backend = new BcDevMcpBackend(
-        { mcpCommand: ["unused"], project: "/al", server: "http://bc", serverInstance: "BC" },
+        {
+          mcpCommand: ["unused"],
+          project: "/al",
+          server: "http://bc",
+          serverInstance: "BC",
+          ...(await controlStaging(dir)),
+        },
         undefined,
         makeDeployment(dir, { Codeunits: [] }, { reportedIdentity: "f".repeat(32) }),
       );
@@ -536,6 +632,109 @@ describe("BcDevMcpBackend.deploy", () => {
       expect(err).toBeInstanceOf(DeploymentError);
       expect((err as DeploymentError).outcome).toBe("indeterminate");
       expect(String(err)).toMatch(/identity mismatch/);
+    } finally {
+      await rmStaged(dir);
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("injects the LethAL Control dependency into the staged app.json and stages the symbol, leaving the original untouched", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-bcdev-deploy-stage-"));
+    try {
+      await writeDeployInputs(dir);
+      let capturedProjectDir: string | undefined;
+      const fakeCompiler = {
+        compile: async (input: CompileInput) => {
+          capturedProjectDir = input.projectDir;
+          // deploy() reads the returned appPath's own SymbolReference.json right after compile()
+          // returns (AppMethodIndex.fromAppFile) — must be a real, readable fake .app zip.
+          const appPath = join(dir, "fake.app");
+          await Bun.write(appPath, buildFakeApp({ Codeunits: [] }));
+          return {
+            artifactId: input.artifactId,
+            appId: input.appId,
+            appVersion: input.appVersion,
+            appPath,
+            sha256: "0".repeat(64),
+            mutantManifest: input.mutantManifest,
+            appManifest: input.appManifest,
+          };
+        },
+      } as unknown as ArtifactCompiler;
+      const { controlSymbolPath, packageCachePath } = await controlStaging(dir);
+      const backend = new BcDevMcpBackend(
+        {
+          mcpCommand: ["unused"],
+          project: "/al",
+          server: "http://bc",
+          serverInstance: "BC",
+          controlSymbolPath,
+          packageCachePath,
+        },
+        undefined,
+        {
+          compiler: fakeCompiler,
+          deployer: { publish: async () => {} } as unknown as ContainerDeployer,
+          verifier: {
+            verify: async () => ({ status: "accepted" as const }),
+          } as unknown as DeploymentVerifier,
+          harnessVerifier: fakeHarnessVerifier(),
+        },
+      );
+      await backend.deploy(dir);
+
+      expect(capturedProjectDir).toBeDefined();
+      const stagedAppJson = JSON.parse(
+        await readFile(join(capturedProjectDir as string, "app.json"), "utf8"),
+      ) as { dependencies: Array<{ id: string }> };
+      expect(stagedAppJson.dependencies.some((d) => d.id === CONTROL_APP_ID)).toBe(true);
+
+      // The shared instrumentedDir's own app.json — never mutated. al-runner reads this exact
+      // dir directly, so any dependency leaking into it would break al-runner's dependency-free
+      // compile.
+      const originalAppJson = JSON.parse(await readFile(join(dir, "app.json"), "utf8")) as {
+        dependencies?: unknown[];
+      };
+      expect(originalAppJson.dependencies).toBeUndefined();
+
+      const stagedSymbol = await readFile(join(packageCachePath, "lethal-control.app"));
+      expect(stagedSymbol.length).toBeGreaterThan(0);
+    } finally {
+      await rmStaged(dir);
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("calls harnessVerifier.verify() unconditionally and aborts before compile if it throws", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-bcdev-deploy-harness-abort-"));
+    try {
+      await writeDeployInputs(dir);
+      const compile = mock(async () => {
+        throw new Error("compile must not be called");
+      });
+      const fakeCompiler = { compile } as unknown as ArtifactCompiler;
+      const verify = mock(async () => {
+        throw new HarnessVerificationError("bad harness");
+      });
+      const backend = new BcDevMcpBackend(
+        {
+          mcpCommand: ["unused"],
+          project: "/al",
+          server: "http://bc",
+          serverInstance: "BC",
+          ...(await controlStaging(dir)),
+        },
+        undefined,
+        {
+          compiler: fakeCompiler,
+          deployer: {} as ContainerDeployer,
+          verifier: {} as DeploymentVerifier,
+          harnessVerifier: { verify } as unknown as HarnessVerifier,
+        },
+      );
+      await expect(backend.deploy(dir)).rejects.toBeInstanceOf(HarnessVerificationError);
+      expect(verify).toHaveBeenCalledTimes(1);
+      expect(compile).not.toHaveBeenCalled();
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -557,7 +756,13 @@ describe("BcDevMcpBackend.compileCheck", () => {
         return { exitCode: 0, stdout: "", stderr: "" };
       };
       const backend = new BcDevMcpBackend(
-        { mcpCommand: ["unused"], project: "/al", server: "http://bc", serverInstance: "BC" },
+        {
+          mcpCommand: ["unused"],
+          project: "/al",
+          server: "http://bc",
+          serverInstance: "BC",
+          ...(await controlStaging(dir)),
+        },
         undefined,
         makeDeployment(dir, { Codeunits: [] }, { spawn: recordingSpawn }),
       );
@@ -582,7 +787,13 @@ describe("BcDevMcpBackend.compileCheck", () => {
         return { exitCode: 0, stdout: "", stderr: "" };
       };
       const backend = new BcDevMcpBackend(
-        { mcpCommand: ["unused"], project: "/al", server: "http://bc", serverInstance: "BC" },
+        {
+          mcpCommand: ["unused"],
+          project: "/al",
+          server: "http://bc",
+          serverInstance: "BC",
+          ...(await controlStaging(dir)),
+        },
         undefined,
         makeDeployment(dir, { Codeunits: [] }, { spawn: failSpawn }),
       );
@@ -599,7 +810,13 @@ describe("BcDevMcpBackend.compileCheck", () => {
     try {
       await writeDeployInputs(dir);
       const backend = new BcDevMcpBackend(
-        { mcpCommand: ["unused"], project: "/al", server: "http://bc", serverInstance: "BC" },
+        {
+          mcpCommand: ["unused"],
+          project: "/al",
+          server: "http://bc",
+          serverInstance: "BC",
+          ...(await controlStaging(dir)),
+        },
         undefined,
         makeDeployment(dir, { Codeunits: [] }),
       );
@@ -634,9 +851,20 @@ describe("BcDevMcpBackend.compileCheck", () => {
         io,
       );
       const backend = new BcDevMcpBackend(
-        { mcpCommand: ["unused"], project: "/al", server: "http://bc", serverInstance: "BC" },
+        {
+          mcpCommand: ["unused"],
+          project: "/al",
+          server: "http://bc",
+          serverInstance: "BC",
+          ...(await controlStaging(dir)),
+        },
         undefined,
-        { compiler, deployer: {} as ContainerDeployer, verifier: {} as DeploymentVerifier },
+        {
+          compiler,
+          deployer: {} as ContainerDeployer,
+          verifier: {} as DeploymentVerifier,
+          harnessVerifier: fakeHarnessVerifier(),
+        },
       );
       await expect(backend.compileCheck(dir)).resolves.toBeUndefined();
     } finally {
@@ -738,7 +966,13 @@ describe("BcDevMcpBackend.compileCheck", () => {
       const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
       void server.connect(serverTransport);
       const backend = new BcDevMcpBackend(
-        { mcpCommand: ["unused"], project: "/al", server: "http://bc", serverInstance: "BC" },
+        {
+          mcpCommand: ["unused"],
+          project: "/al",
+          server: "http://bc",
+          serverInstance: "BC",
+          ...(await controlStaging(outputDir)),
+        },
         () => clientTransport,
         deployment,
       );
@@ -753,6 +987,7 @@ describe("BcDevMcpBackend.compileCheck", () => {
       const procedures = v.coverage?.entries.map((e) => e.procedure).sort();
       expect(procedures).toEqual(["ApplyAudit", "LogAudit"]);
     } finally {
+      await rmStaged(dirA); // deploy()'s own staged copy — compileCheck() cleans dirB's internally
       await rm(dirA, { recursive: true, force: true });
       await rm(dirB, { recursive: true, force: true });
       await rm(outputDir, { recursive: true, force: true });
@@ -806,6 +1041,7 @@ describe("BcDevMcpBackend.activate — bookkeeping (Layer 5C-A)", () => {
       project: "/al",
       server: "http://bc",
       serverInstance: "BC",
+      ...UNUSED_STAGING_CFG,
     });
     await backend.activate("M0007");
     await backend.activate(null);
@@ -818,6 +1054,7 @@ describe("BcDevMcpBackend.activate — bookkeeping (Layer 5C-A)", () => {
       project: "/al",
       server: "http://bc",
       serverInstance: "BC",
+      ...UNUSED_STAGING_CFG,
     });
     await backend.activate("M0007");
     await expect(backend.run(ref, { coverage: "none", timeoutMs: 1000 })).rejects.toThrow(

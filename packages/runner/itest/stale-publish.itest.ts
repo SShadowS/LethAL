@@ -567,6 +567,8 @@ async function main(): Promise<void> {
       server: bcdev.server,
       serverInstance: bcdev.serverInstance,
       company: bcdev.company,
+      packageCachePath: bcdev.packageCachePath,
+      controlSymbolPath: bcdev.controlSymbolPath,
       ...(bcdev.tenant !== undefined ? { tenant: bcdev.tenant } : {}),
       ...(launchCfg.environmentType !== undefined
         ? { environmentType: launchCfg.environmentType }

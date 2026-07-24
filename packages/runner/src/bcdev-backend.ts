@@ -1,4 +1,4 @@
-import { readFile, rm } from "node:fs/promises";
+import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { MutantManifest } from "@lethal/schemata";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -22,6 +22,7 @@ import type {
 } from "./backend";
 import { decidePublishOutcome } from "./deployment-verifier";
 import type { DeploymentVerifier } from "./deployment-verifier";
+import { CONTROL_APP_ID } from "./harness";
 import type { HarnessVerifier } from "./harness";
 import type { ContainerDeployer } from "./publisher";
 import type { RunMutantTransport } from "./run-mutant-transport";
@@ -39,6 +40,15 @@ export interface BcDevConfig {
   // StdioClientTransport's underlying spawn only inherits a fixed OS-level allowlist
   // (getDefaultEnvironment()) — anything else, including these, must be passed explicitly.
   readonly env?: Record<string, string>;
+  // Absolute path to the compiled `lethal-control.app` — staged into `packageCachePath` by
+  // `stageForCompile` (Task 8) so a private compile copy of the target can resolve its
+  // delegating selector's `Codeunit "LC Control State"` reference (schemata/selector.ts).
+  readonly controlSymbolPath: string;
+  // The `ArtifactCompiler`'s own package-cache directory (mirrors
+  // `ArtifactCompilerConfig.packageCachePath`, fixed at compiler construction) — `deploy()`/
+  // `compileCheck()` need this SEPARATELY so `stageForCompile` can stage the control symbol
+  // into the exact cache alc reads from via `/packagecachepath:`.
+  readonly packageCachePath: string;
 }
 
 // Verified against a real BC server (2026-07-18) via bc-dev-mcp source
@@ -84,14 +94,19 @@ const WIRE_STATUS_TO_OUTCOME = {
 
 /**
  * Everything `deploy()` needs to turn an instrumented dir into a verified deployment. All
- * three are required together: identity verification is mandatory ADDITIONAL evidence (see
+ * four are required together: identity verification is mandatory ADDITIONAL evidence (see
  * deployment-verifier.ts) — a backend that could compile and publish but not verify would
  * make every deploy `indeterminate` by construction, so the type forbids configuring one.
+ * `harnessVerifier` is scoped here (rather than a trailing constructor param) for the same
+ * reason: it is only ever needed by a session that actually calls `deploy()`, so a backend
+ * built without a `BcDevDeployment` (e.g. a script driving compile/publish/verify directly,
+ * or activation/run only — see stale-publish.itest.ts) needs no harness verifier either.
  */
 export interface BcDevDeployment {
   readonly compiler: ArtifactCompiler;
   readonly deployer: ContainerDeployer;
   readonly verifier: DeploymentVerifier;
+  readonly harnessVerifier: HarnessVerifier;
 }
 
 export class BcDevMcpBackend implements ExecutionBackend {
@@ -117,7 +132,6 @@ export class BcDevMcpBackend implements ExecutionBackend {
       targetAppId: string,
       artifactId: string,
     ) => RunMutantTransport,
-    private readonly harnessVerifier?: HarnessVerifier,
   ) {}
 
   capabilities(): BackendCapabilities {
@@ -243,17 +257,61 @@ export class BcDevMcpBackend implements ExecutionBackend {
     };
   }
 
+  /**
+   * Builds a private, compile-only staging copy of `instrumentedDir` with the LethAL Control
+   * dependency injected into its `app.json` and `lethal-control.app` staged into the compiler's
+   * package cache. The instrumented target's delegating selector always references `Codeunit
+   * "LC Control State"` (schemata/selector.ts) and cannot compile without both — bcdev-ONLY:
+   * `instrumentedDir` itself is NEVER touched. AlRunnerBackend reads that same shared dir
+   * directly (it strips the control-registration codeunits instead) and must stay
+   * dependency-free, so the injection must land only on this throwaway sibling copy.
+   *
+   * Idempotent: re-staging the same `instrumentedDir` wipes and rebuilds the sibling (Windows
+   * retry knobs mirror AlRunnerBackend's own `rm` of `activeDir` — a stale copy can be locked by
+   * an indexer/AV a moment after the previous compile).
+   */
+  private async stageForCompile(instrumentedDir: string): Promise<string> {
+    const staging = `${instrumentedDir}-staged`;
+    await rm(staging, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    await cp(instrumentedDir, staging, { recursive: true });
+    // Inject the dependency into the STAGED app.json only (never the shared instrumented dir).
+    const appJsonPath = join(staging, "app.json");
+    const app = JSON.parse(await readFile(appJsonPath, "utf8")) as Record<string, unknown>;
+    const deps = Array.isArray(app.dependencies)
+      ? (app.dependencies as Array<Record<string, unknown>>)
+      : [];
+    if (!deps.some((d) => d.id === CONTROL_APP_ID)) {
+      deps.push({
+        id: CONTROL_APP_ID,
+        name: "LethAL Control",
+        publisher: "LethAL",
+        version: "1.0.0.0",
+      });
+    }
+    await writeFile(
+      appJsonPath,
+      `${JSON.stringify({ ...app, dependencies: deps }, null, 2)}\n`,
+      "utf8",
+    );
+    // Stage the control symbol into the compiler's package cache (safe to share: al-runner's
+    // compiled source carries no LC Control State reference, so an unused symbol is harmless).
+    await mkdir(this.cfg.packageCachePath, { recursive: true });
+    await cp(this.cfg.controlSymbolPath, join(this.cfg.packageCachePath, "lethal-control.app"));
+    return staging;
+  }
+
   async deploy(instrumentedDir: string): Promise<CompiledArtifact> {
     const deployment = this.deployment;
     if (!deployment) throw new Error("BcDevMcpBackend: no compiler/deployer/verifier configured");
     // Verify the LethAL Control harness (identity + protocol + isolation/test-type compat) BEFORE
     // compiling or publishing the target — the target depends on it and every RunMutant call routes
     // through it, so a missing/incompatible harness must fail the session loudly, not surface later
-    // as a corrupt verdict (spec §8). Cheap OData round-trip; harmless to repeat per batch.
-    if (this.harnessVerifier) await this.harnessVerifier.verify();
-    const artifact = await deployment.compiler.compile(
-      await this.prepareCompileInput(instrumentedDir),
-    );
+    // as a corrupt verdict (spec §8). Cheap OData round-trip; harmless to repeat per batch. Required
+    // and unconditional — a backend configured to deploy() always has a `harnessVerifier` (see
+    // `BcDevDeployment`'s doc comment), so there is no "skip if absent" branch anymore.
+    await deployment.harnessVerifier.verify();
+    const staged = await this.stageForCompile(instrumentedDir);
+    const artifact = await deployment.compiler.compile(await this.prepareCompileInput(staged));
     // Must happen before publish(): resolves this batch's coverage methodIds ahead of any
     // run() call, from the exact artifact/source that produced them.
     this.methodIndex = await AppMethodIndex.fromAppFile(artifact.appPath);
@@ -299,14 +357,25 @@ export class BcDevMcpBackend implements ExecutionBackend {
    * failure (e.g. a transient Windows file lock) must never mask that real, already-decided
    * compile result behind an unrelated fs error — worst case a candidate `.app` lingers in
    * `outputDir` instead of the search itself failing.
+   *
+   * Also stages the LethAL Control dependency+symbol (same `stageForCompile` as `deploy()`):
+   * a bisection candidate is built by the exact same `writeInstrumentedProject`
+   * (schemata/project.ts) as any other instrumented dir, so it carries the identical delegating
+   * selector referencing `Codeunit "LC Control State"` and cannot compile without them either.
+   * The staged sibling copy is removed here too (`finally`, best-effort) — bisection candidates
+   * must not accumulate on disk across a search, and unlike `outputDir`'s `.app` files this
+   * staging copy lives outside any dir the caller already cleans up.
    */
   async compileCheck(instrumentedDir: string): Promise<void> {
     const deployment = this.deployment;
     if (!deployment) throw new Error("BcDevMcpBackend: no compiler/deployer/verifier configured");
-    const artifact = await deployment.compiler.compile(
-      await this.prepareCompileInput(instrumentedDir),
-    );
-    await rm(artifact.appPath, { force: true }).catch(() => {});
+    const staged = await this.stageForCompile(instrumentedDir);
+    try {
+      const artifact = await deployment.compiler.compile(await this.prepareCompileInput(staged));
+      await rm(artifact.appPath, { force: true }).catch(() => {});
+    } finally {
+      await rm(staged, { recursive: true, force: true }).catch(() => {});
+    }
   }
 
   async activate(mutantId: string | null): Promise<void> {

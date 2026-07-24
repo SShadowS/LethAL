@@ -211,6 +211,9 @@ export interface BcDevConfigSection {
   readonly username: string;
   readonly password: string;
   readonly packageCachePath: string;
+  // Absolute path to the compiled `lethal-control.app` — see BcDevConfig.controlSymbolPath
+  // (bcdev-backend.ts) for why deploy()/compileCheck() need it (Task 8).
+  readonly controlSymbolPath: string;
   // Extra env vars for the spawned bc-dev-mcp server process, e.g.
   // { "BC_DEV_USER": "...", "BC_DEV_PASSWORD": "..." } — see BcDevConfig.env.
   readonly env?: Record<string, string>;
@@ -247,6 +250,7 @@ export function validateBcDevConfig(
   if (!raw.username) missing.push("username");
   if (!raw.password) missing.push("password");
   if (!raw.packageCachePath) missing.push("packageCachePath");
+  if (!raw.controlSymbolPath) missing.push("controlSymbolPath");
   if (missing.length > 0) {
     throw new Error(
       `lethal.config.json "bcdev" section is missing required field(s): ${missing.join(", ")}`,
@@ -386,13 +390,14 @@ async function buildBackend(
       server: c.server,
       serverInstance: c.serverInstance,
       company: c.company,
+      packageCachePath: c.packageCachePath,
+      controlSymbolPath: c.controlSymbolPath,
       ...(c.tenant !== undefined ? { tenant: c.tenant } : {}),
       ...(c.env !== undefined ? { env: c.env } : {}),
     },
     undefined,
-    { compiler, deployer, verifier },
+    { compiler, deployer, verifier, harnessVerifier },
     (targetAppId, artifactId) => new RunMutantTransport(odataCfg, targetAppId, artifactId),
-    harnessVerifier,
   );
 }
 

@@ -122,6 +122,7 @@ describe("validateBcDevConfig", () => {
     username: "u",
     password: "p",
     packageCachePath: "C:/.alpackages",
+    controlSymbolPath: "C:/lethal-control.app",
   };
 
   test("passes through a complete section", () => {
@@ -315,6 +316,7 @@ describe("resourceIdentityFor (Task 13 folded fix — cli.ts sources quarantine 
         username: "u",
         password: "p",
         packageCachePath: "C:/.alpackages",
+        controlSymbolPath: "C:/lethal-control.app",
       },
     };
     expect(resourceIdentityFor(bcdevRunConfig, configFile)).toEqual({
