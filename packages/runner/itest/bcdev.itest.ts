@@ -105,6 +105,15 @@ interface ProbeLease {
   readonly lease: Lease;
   /** The next exactly-next `opSeq` for a fenced RunMutant. */
   readonly nextOpSeq: () => number;
+  /**
+   * Task 9 diagnosability fix: the heartbeat used to be `client.renew(...).catch(() => {})` with
+   * `renewed` never inspected — a genuinely lost probe lease then surfaced only as a downstream
+   * protocol-invariant assertion failure with no hint it was actually a lease problem. Returns
+   * `lost:true` once the heartbeat has seen `renewed:false` TWICE in a row (retry-once on a lost
+   * ack before concluding loss, design §6) or a renew call itself throw twice in a row — a single
+   * bad renew is not conclusive, but two are.
+   */
+  readonly leaseLostDiagnosis: () => string | undefined;
   readonly stop: () => Promise<void>;
 }
 
@@ -124,9 +133,28 @@ async function acquireProbeLease(cfg: ActivationConfig): Promise<ProbeLease> {
   }
   const lease = outcome.lease;
   let opSeq = lease.lastCompletedOpSeq;
+  let consecutiveRenewFailures = 0;
+  let lostDiagnosis: string | undefined;
   const heartbeat = setInterval(
     () => {
-      void client.renew(lease, MAX_TTL_SECONDS).catch(() => {});
+      void client
+        .renew(lease, MAX_TTL_SECONDS)
+        .then((r) => {
+          if (r.renewed) {
+            consecutiveRenewFailures = 0;
+            return;
+          }
+          consecutiveRenewFailures++;
+          if (consecutiveRenewFailures >= 2 && lostDiagnosis === undefined) {
+            lostDiagnosis = `probe lease heartbeat: RenewLease returned renewed:false twice in a row (epoch=${lease.epoch}) — the lease is genuinely lost, not a single dropped ack`;
+          }
+        })
+        .catch((err: unknown) => {
+          consecutiveRenewFailures++;
+          if (consecutiveRenewFailures >= 2 && lostDiagnosis === undefined) {
+            lostDiagnosis = `probe lease heartbeat: RenewLease threw twice in a row: ${err instanceof Error ? err.message : String(err)}`;
+          }
+        });
     },
     Math.floor((MAX_TTL_SECONDS * 1000) / 3),
   );
@@ -134,6 +162,7 @@ async function acquireProbeLease(cfg: ActivationConfig): Promise<ProbeLease> {
     client,
     lease,
     nextOpSeq: () => ++opSeq,
+    leaseLostDiagnosis: () => lostDiagnosis,
     stop: async () => {
       clearInterval(heartbeat);
       await client.release(lease).catch(() => {});
@@ -430,6 +459,19 @@ async function runProtocolInvariantProbes(run: RunOnceResult): Promise<void> {
 
     // Invariant 3 — artifact-mismatch (spec §C1). A RunMutant whose artifactId differs from the
     // registered one runs nothing and is a typed error, never a verdict.
+    //
+    // ORDERING HAZARD (Task 9, design §5 phase 1): an artifact-mismatch is refused at phase 1
+    // ("2. Artifact guard") BEFORE the opSeq tombstone check ever runs, so the server's
+    // `Last Completed Op Seq` does NOT advance past it — this call's `fence()`-supplied opSeq is
+    // consumed by our LOCAL bookkeeping (`probe.nextOpSeq()`) but never recorded server-side. That
+    // leaves `probe`'s local opSeq counter one ahead of the server's. This is harmless ONLY because
+    // this is the LAST fenced call under `probe` before the `finally` releases it — a later fenced
+    // call reusing `probe` would send `serverLastCompleted + 2` instead of `+ 1` and be refused as
+    // `lease-invalid` (phase 1's "OpSeq <= Last Completed Op Seq" / "else refuse" branches never see
+    // an exact match). If you add a fenced call AFTER this one, either move this artifact-mismatch
+    // probe to stay last, or resync first via `probe.client.getOperationStatus(...)` and rebuild
+    // `probe`'s opSeq counter from its `lastCompletedOpSeq` — do not just append and assume opSeq
+    // bookkeeping still lines up.
     const bogusTx = new RunMutantTransport(odataCfg, TARGET_APP_ID, "f".repeat(32));
     const mismatch = await bogusTx.run({
       ref: overBudget,
@@ -454,6 +496,19 @@ async function runProtocolInvariantProbes(run: RunOnceResult): Promise<void> {
     // unit-tested in run-mutant-transport.test.ts.
 
     console.log("bcdev itest: protocol-invariant probes PASS");
+  } catch (err) {
+    // Task 9 diagnosability fix (design §9 hazard): a genuinely lost probe lease used to surface
+    // only as a confusing downstream protocol-invariant assertion failure (e.g. an unexpected
+    // "lease-invalid" on some later RunMutant), with no hint the ROOT cause was the heartbeat
+    // losing the renew race, not a bug in the invariant being probed. If the heartbeat itself
+    // observed the loss, prepend that diagnosis so the failure names the actual root cause.
+    const lost = probe.leaseLostDiagnosis();
+    if (lost !== undefined) {
+      throw new Error(
+        `runProtocolInvariantProbes failed, and the probe lease heartbeat independently reported a lease loss — this is very likely a LEASE-LOSS failure, not a bug in the protocol invariant being probed. Heartbeat diagnosis: ${lost}. Original error: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    throw err;
   } finally {
     // Always stop renewing and release, even on a failed assertion: a probe lease left held would
     // block the next gate run (and every other session on this container) until it lapsed.

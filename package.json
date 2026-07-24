@@ -13,6 +13,7 @@
     "itest:alrunner": "bun packages/runner/itest/al-runner.itest.ts",
     "itest:bcdev": "bun packages/runner/itest/bcdev.itest.ts",
     "itest:growth": "bun packages/runner/itest/growth.itest.ts",
+    "itest:lease": "bun packages/runner/itest/lease.itest.ts",
     "itest:stale-publish": "bun packages/runner/itest/stale-publish.itest.ts"
   },
   "devDependencies": {
