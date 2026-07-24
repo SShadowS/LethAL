@@ -644,8 +644,18 @@ async function acquireSessionLease(args: {
     if (outcome.granted) return outcome.lease;
     lastRefusal = describeRefusal(outcome);
     if (outcome.reason === "operation-orphaned") {
-      const marker = `${outcome.opAttemptId ?? ""}|${outcome.opStartedAt ?? ""}`;
-      if (orphanMarker === marker) {
+      // A marker is COMPARABLE only when the server actually named the stranded op. Without a
+      // non-empty `opAttemptId` both looks would synthesise the same `"|"` placeholder, compare
+      // equal, and write a durable, operator-only-recoverable `container-needs-recycle` having
+      // compared NOTHING — this project's signature empty-vs-empty bug, guarding its most
+      // expensive action. Not reachable against today's server (`ControlState.TryAcquire` always
+      // populates `opAttemptId` on this refusal), so an unnamed marker means the contract broke:
+      // keep backing off rather than recording something we cannot substantiate.
+      const marker =
+        outcome.opAttemptId !== undefined && outcome.opAttemptId !== ""
+          ? `${outcome.opAttemptId}|${outcome.opStartedAt ?? ""}`
+          : undefined;
+      if (marker !== undefined && orphanMarker === marker) {
         const detail = `container-needs-recycle: AcquireLease reported operation-orphaned twice with an UNCHANGED marker (opAttemptId ${outcome.opAttemptId ?? "<none>"}, opStartedAt ${outcome.opStartedAt ?? "<none>"}, serverGeneration ${expectedGeneration}) — a prior session's operation is stranded on this tier. Recovery (design §8): restart the NST/container, ForceResetLease, re-probe, then 'lethal clear-quarantine'.`;
         await recordContainerRecycle({
           quarantineStore: args.quarantineStore,
@@ -655,7 +665,9 @@ async function acquireSessionLease(args: {
         });
         throw new LeaseUnavailableError(detail);
       }
-      orphanMarker = marker; // first sighting — re-check exactly once, after a backoff
+      // First sighting of a nameable marker — re-check exactly once, after a backoff. An
+      // unnameable one is not remembered, so it can never become a later look's "unchanged".
+      if (marker !== undefined) orphanMarker = marker;
     } else if (outcome.reason !== "held" && outcome.reason !== "operation-busy") {
       // `generation-changed` (the container was recycled/reset under us) or a reason this client
       // does not know: neither is something waiting can fix. Fail loudly instead of burning the
@@ -773,10 +785,6 @@ class LeaseSession {
       readonly runId: number;
     },
   ) {}
-
-  get lease(): Lease {
-    return this.d.lease;
-  }
 
   /** The batch that was in flight when the lease was lost — `undefined` while the lease is held. */
   get lostBatchIndex(): number | undefined {
@@ -997,6 +1005,29 @@ class LeaseSession {
     return false;
   }
 
+  /**
+   * Can we PROVE the lease row has moved on without us? Only one answer proves it: a `RenewLease`
+   * that came back `renewed:false`, which means the server compared our `(epoch, token,
+   * generation)` against the live row and they no longer match.
+   *
+   * Everything else returns `false` — deliberately. A renew that could not be answered at all
+   * (unreachable, non-2xx, malformed) proves nothing, and design §6 already says only
+   * `renewed:false` is loss; treating "I could not ask" as "not ours" would be exactly the
+   * empty-vs-empty match this codebase keeps getting bitten by, in the direction that SUPPRESSES a
+   * quarantine the tier may genuinely need. Unknown therefore keeps the conservative behaviour.
+   */
+  private async leaseProvablyNotOurs(): Promise<boolean> {
+    try {
+      const outcome = await this.d.client.renew(this.d.lease, this.d.ttlSeconds);
+      return !outcome.renewed;
+    } catch (err) {
+      console.warn(
+        `[lethal] could not confirm lease ownership at session end (${messageOf(err)}) — treating the marker as possibly ours`,
+      );
+      return false;
+    }
+  }
+
   async recordRecycle(detail: string): Promise<void> {
     await recordContainerRecycle({
       quarantineStore: this.d.quarantineStore,
@@ -1011,7 +1042,9 @@ class LeaseSession {
    * A normal session's last `RunMutant` cleared its own marker in phase 3, so the gate passes and
    * the lease is freed immediately for the next session. A marker that is still set means
    * something may still be executing on the tier: releasing there would let another session in on
-   * top of it, so the lease is left to expire and the tier is durably quarantined instead.
+   * top of it, so the lease is left to expire and the tier is durably quarantined instead — but
+   * ONLY once the marker is shown to be ours (`leaseProvablyNotOurs`), because a marker belonging
+   * to the session that took the lease over is a healthy container, not a stranded one.
    *
    * After a lease LOSS there is nothing to release — our credentials are already invalid, and the
    * lease now belongs to whoever holds it.
@@ -1029,6 +1062,19 @@ class LeaseSession {
       return;
     }
     if (status.opKind !== OP_KIND_IDLE) {
+      // The marker is non-idle — but is it OURS? If our lease lapsed (a renew that could not be
+      // answered is deliberately NOT loss, so the heartbeat may not have noticed yet) another
+      // session can have acquired and begun its own op inside that window. Quarantining THEIR
+      // marker would durably block a perfectly healthy container, and design §6 is explicit that
+      // a clean lease loss must NOT write a durable tier quarantine. `RenewLease` is the cheapest
+      // proof of ownership there is: it re-validates the same (epoch, token, generation) tuple the
+      // op marker was claimed under. `renewed:false` proves the row moved on without us.
+      if (await this.leaseProvablyNotOurs()) {
+        console.warn(
+          `[lethal] session ended with a non-idle operation marker (opKind ${status.opKind}, opAttemptId ${status.opAttemptId}, opSeq ${status.opSeq}) that belongs to ANOTHER session — RenewLease answered renewed:false, so our lease had already been taken over and this marker is not ours to quarantine. No durable container-needs-recycle recorded; the container is healthy and the other session owns it.`,
+        );
+        return;
+      }
       await this.recordRecycle(
         `session ended with an unresolved operation marker (opKind ${status.opKind}, opAttemptId ${status.opAttemptId}, opSeq ${status.opSeq}) — the lease was NOT released; recover per design §8 (restart, ForceResetLease, probe, clear-quarantine)`,
       );

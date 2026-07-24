@@ -352,7 +352,12 @@ Quarantine is two-tier. `container-needs-recycle` (durable, tier-keyed, `~/.leth
 written only for an orphaned op or a session ending with an unreconcilable marker, and is cleared by
 an explicit recovery sequence: restart the NST/container → `ForceResetLease` (mints a new generation,
 clears the marker/token/nonce, and clears the committed `LC Mutation Active` row in one transaction)
-→ a post-recovery probe → `lethal clear-quarantine`. `lease-lost` on an otherwise-clean container (an
+→ a post-recovery probe → `lethal clear-quarantine`. Note that "restart first" is **procedural
+discipline the server cannot verify** (spec §14 deviation D1): `Server Generation` is persistent, so
+a pre-restart read of it is byte-identical to a post-restart one and `ForceResetLease`'s generation
+echo therefore buys replay protection only, never NST-incarnation binding.
+
+`lease-lost` on an otherwise-clean container (an
 epoch/generation mismatch, no stranded op) is session-local — latch, abort, invalidate the current
 batch — with NO durable tier quarantine, since the container itself is fine.
 

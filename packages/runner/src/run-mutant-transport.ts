@@ -1,5 +1,6 @@
 import type { ActivationConfig, FetchFn } from "./activation";
 import type { TestMethodRef, TestOutcome, TestVerdict } from "./backend";
+import { assertAttemptId } from "./lease";
 import type { LeaseTuple } from "./lease";
 
 /**
@@ -59,6 +60,12 @@ export class RunMutantTransport {
 
   async run(req: RunMutantRequest): Promise<TestVerdict> {
     const { ref, mutantId, attemptId, timeoutMs, lease } = req;
+    // Layer 5C-B1: the SAME bound every lease action is held to (`lease.ts`), applied here because
+    // `RunMutant` writes the same Text[64] column. Deliberately a THROW, not a `TestVerdict` —
+    // an over-long id is a caller-contract violation, and every verdict-shaped alternative is
+    // worse: phase 1 would store a truncated id that phase 3 could never match, refusing with
+    // `lease-invalid` while leaving `Op Kind = run` set, which quarantines the whole tier.
+    assertAttemptId(attemptId);
     const started = Date.now();
 
     const params = new URLSearchParams({ company: this.cfg.company });

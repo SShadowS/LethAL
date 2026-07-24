@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { ActivationConfig } from "../src/activation";
 import type { TestMethodRef } from "../src/backend";
+import { MAX_ATTEMPT_ID_LENGTH } from "../src/lease";
 import { RunMutantTransport } from "../src/run-mutant-transport";
 
 const CFG: ActivationConfig = {
@@ -238,6 +239,39 @@ describe("RunMutantTransport.run — guards", () => {
     const v = await transport(okFetch(inner)).run(REQ);
     expect(v.outcome).toBe("error");
     expect(v.failureMessage).toContain("identity mismatch");
+  });
+
+  // Layer 5C-B1: the fenced RunMutant carries an attemptId into the server's Text[64] column, so
+  // it is held to the SAME bound every lease action is (lease.ts). Over-length must be refused
+  // BEFORE dispatch: phase 1 stores CopyStr(AttemptId,1,64) while phase 3 compares that truncated
+  // value against the full incoming one, so dispatching would leave `Op Kind = run` set and
+  // quarantine the tier. The zero-call assertion is the load-bearing half — a test that only
+  // asserted "it throws" would still pass if the throw happened after the request went out.
+  test("attemptId over MAX_ATTEMPT_ID_LENGTH throws before any fetch is issued", async () => {
+    let calls = 0;
+    const fetchFn = (async (_url: unknown, _init?: RequestInit) => {
+      calls++;
+      return new Response(JSON.stringify({ value: JSON.stringify(echo()) }), { status: 200 });
+    }) as typeof fetch;
+    const tooLong = "a".repeat(MAX_ATTEMPT_ID_LENGTH + 1);
+    await expect(transport(fetchFn).run({ ...REQ, attemptId: tooLong })).rejects.toThrow(
+      /attemptId/,
+    );
+    expect(calls).toBe(0);
+  });
+
+  test("an attemptId exactly at the bound is dispatched normally", async () => {
+    let calls = 0;
+    const atBound = "a".repeat(MAX_ATTEMPT_ID_LENGTH);
+    const fetchFn = (async (_url: unknown, _init?: RequestInit) => {
+      calls++;
+      return new Response(JSON.stringify({ value: JSON.stringify(echo({ attemptId: atBound })) }), {
+        status: 200,
+      });
+    }) as typeof fetch;
+    const v = await transport(fetchFn).run({ ...REQ, attemptId: atBound });
+    expect(calls).toBe(1);
+    expect(v.outcome).toBe("pass");
   });
 });
 

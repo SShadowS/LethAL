@@ -166,7 +166,16 @@ function optionalBoolean(json: Record<string, unknown>, key: string): boolean | 
   return typeof v === "boolean" ? v : undefined;
 }
 
-function assertAttemptId(attemptId: string): void {
+/**
+ * The one `attemptId` bound for the WHOLE fenced surface — exported because `RunMutant` carries an
+ * `attemptId` too (`run-mutant-transport.ts`) and must be held to the identical bound, not to a
+ * second one that could drift: `ControlState.Codeunit.al:723` stores `CopyStr(AttemptId,1,64)` in
+ * phase 1 but `:777` compares that TRUNCATED stored value against the FULL incoming one in phase 3,
+ * so an over-long id makes phase 3 unmatchable → `lease-invalid` with `Op Kind = run` left set →
+ * a durable `container-needs-recycle` needing the manual operator recovery in `fixtures/README.md`.
+ * Refusing before dispatch is strictly better than any of that.
+ */
+export function assertAttemptId(attemptId: string): void {
   if (attemptId.length > MAX_ATTEMPT_ID_LENGTH) {
     throw new Error(
       `attemptId must be at most ${MAX_ATTEMPT_ID_LENGTH} characters — the server stores it in a Text[64] and compares the stored (truncated) value against the full incoming one, so a longer id could never match its own retry (design §4). Got ${attemptId.length} chars: ${attemptId}`,
@@ -175,6 +184,14 @@ function assertAttemptId(attemptId: string): void {
 }
 
 function assertTtlBound(ttlSeconds: number): void {
+  // Lower bound first: a ttl of 0 or less is a caller-contract violation, not a short lease — it
+  // grants something already expired, and design §6's ttl/3 heartbeat then degenerates to
+  // `Math.max(1, …)` = a 1ms renew loop (orchestrator.ts). Fail loudly rather than accept it.
+  if (!(ttlSeconds > 0)) {
+    throw new Error(
+      `ttlSeconds must be greater than 0 — the server grants a lease expiring ttlSeconds from now, so a non-positive ttl is born expired and its ttl/3 heartbeat degenerates to a 1ms renew loop (design §6). Got ${ttlSeconds}`,
+    );
+  }
   if (ttlSeconds > MAX_TTL_SECONDS) {
     throw new Error(
       `ttlSeconds must be at most ${MAX_TTL_SECONDS}s — the server renews on a ${MAX_TTL_SECONDS}s grace derived from RenewPeriodMs() (ControlState.Codeunit.al), and design §6's ttl/3 heartbeat on a longer ttl would renew less often than that period requires. Got ${ttlSeconds}`,

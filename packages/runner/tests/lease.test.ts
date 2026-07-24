@@ -437,4 +437,30 @@ describe("LeaseClient — caller-contract bounds", () => {
     await expect(client(fetchFn).renew(LEASE, MAX_TTL_SECONDS + 1)).rejects.toThrow(/ttlSeconds/);
     expect(called).toBe(false);
   });
+
+  // The bound has a FLOOR too: a non-positive ttl grants a lease that is already expired, and
+  // design §6's ttl/3 heartbeat then collapses to orchestrator.ts's `Math.max(1, …)` — a 1ms renew
+  // loop against a lease that can never be held. A caller-contract violation, so it throws.
+  test.each([0, -1, -15])(
+    "ttlSeconds %p is refused before dispatch (non-positive)",
+    async (ttl) => {
+      let called = false;
+      const fetchFn = (async (_url: unknown, _init?: RequestInit) => {
+        called = true;
+        return new Response(JSON.stringify({ value: JSON.stringify({ renewed: true }) }));
+      }) as typeof fetch;
+      await expect(client(fetchFn).renew(LEASE, ttl)).rejects.toThrow(
+        new RegExp(`ttlSeconds must be greater than 0[\\s\\S]*Got ${ttl}$`),
+      );
+      await expect(client(fetchFn).acquire("o", ttl, "n", "g")).rejects.toThrow(/greater than 0/);
+      expect(called).toBe(false);
+    },
+  );
+
+  test("the smallest positive ttlSeconds is still accepted", async () => {
+    const outcome = await client(
+      okFetch({ renewed: true, expiresAt: "2026-07-24T12:00:01Z" }),
+    ).renew(LEASE, 1);
+    expect(outcome.renewed).toBe(true);
+  });
 });

@@ -3342,6 +3342,8 @@ class FakeLeaseClient implements LeaseApi {
   endPublishOutcome: EndPublishOutcome = { ended: true };
   recoverOutcome: RecoverOpOutcome = { recovered: true };
   endPublishError: Error | undefined;
+  /** When set, every renew THROWS — a lost ack, which design §6 says is not lease loss. */
+  renewError: Error | undefined;
   /**
    * When set, a status read made WITH an attemptId — the RECONCILIATION read after a lost
    * `EndPublish` ack; every other read passes `""` — answers as if the server's current marker
@@ -3376,6 +3378,7 @@ class FakeLeaseClient implements LeaseApi {
     this.log.push("renew");
     this.renewArgs.push({ lease, ttlSeconds });
     if (this.renewGate !== undefined) await this.renewGate;
+    if (this.renewError !== undefined) throw this.renewError;
     return this.next(this.renewQueue, "renew");
   }
   async release(_lease: LeaseTuple): Promise<ReleaseOutcome> {
@@ -3600,6 +3603,28 @@ describe("runSession — Layer 5C-B1 Task 8: lease acquisition (design §6 step 
     expect(await new QuarantineStore(dir).read("http://cronus281|BC")).toBeNull();
   });
 
+  // The signature bug of this codebase, guarding its most expensive action: if the server ever
+  // answers `operation-orphaned` WITHOUT naming the stranded op, a marker synthesised as
+  // `"<blank>|<blank>"` compares equal to the next equally-blank one, and a durable,
+  // operator-only-recoverable container-needs-recycle gets written having compared NOTHING.
+  test("repeated operation-orphaned with NO opAttemptId writes no durable quarantine (empty-vs-empty)", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    // One entry, so the fake repeats it: every look is an unnamed orphan refusal.
+    client.acquireQueue = [{ granted: false, reason: "operation-orphaned" }];
+    const { lease } = leaseCfg(client, { acquireAttempts: 3 });
+    await expect(
+      runSessionForTest(leaseBackend(), {
+        quarantineDir: dir,
+        lease,
+        nowIso: () => "2026-07-24T12:00:00.000Z",
+      }),
+    ).rejects.toBeInstanceOf(LeaseUnavailableError);
+    expect(await new QuarantineStore(dir).read("http://cronus281|BC")).toBeNull();
+    // Backed off across the whole budget instead of recording after two unnameable looks.
+    expect(client.acquireArgs).toHaveLength(3);
+  });
+
   test("a `generation-changed` refusal aborts immediately — backoff cannot fix a recycled container", async () => {
     const client = new FakeLeaseClient();
     client.acquireQueue = [{ granted: false, reason: "generation-changed" }];
@@ -3664,6 +3689,60 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
       nowIso: () => "2026-07-24T13:00:00.000Z",
     });
     expect(client.releaseCalls).toBe(0);
+    const rec = await new QuarantineStore(dir).read("http://cronus281|BC");
+    expect(rec?.opKind).toBe("container-needs-recycle");
+    expect(rec?.detail).toContain("a9");
+    // The quarantine above is only legitimate because the marker was proven OURS: `finish()`
+    // renews before recording, and this fake answers renewed:true.
+    expect(client.renewArgs.length).toBeGreaterThan(0);
+    expect(client.renewArgs.at(-1)?.lease.token).toBe(aLease().token);
+  });
+
+  // design §6: a clean lease loss must NOT write a durable tier quarantine. If our lease lapsed
+  // and another session acquired and began ITS op before the heartbeat noticed, the marker
+  // `finish()` reads is theirs — recording against it would block a healthy container (and that
+  // other session, and everyone after it) until an operator hand-runs the §8 recovery.
+  test("a non-idle marker belonging to ANOTHER session is NOT durably quarantined", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    client.statusQueue = [
+      { opKind: "none", opAttemptId: "", opSeq: 0, lastCompletedOpSeq: 7, completed: true },
+      // Someone else's op: we lapsed, they acquired, and they are mid-publish right now.
+      {
+        opKind: "publish",
+        opAttemptId: "their-attempt",
+        opSeq: 12,
+        lastCompletedOpSeq: 11,
+        completed: false,
+      },
+    ];
+    client.renewQueue = [{ renewed: false }]; // the row moved on: the lease is provably not ours
+    const { lease } = leaseCfg(client);
+    await runSessionForTest(leaseBackend(), {
+      quarantineDir: dir,
+      lease,
+      nowIso: () => "2026-07-24T13:00:00.000Z",
+    });
+    expect(await new QuarantineStore(dir).read("http://cronus281|BC")).toBeNull();
+    expect(client.releaseCalls).toBe(0); // nothing of ours to release either
+  });
+
+  // A renew that cannot be ANSWERED proves nothing (design §6: only renewed:false is loss), so the
+  // conservative behaviour must survive — "I could not ask" must never be read as "not ours".
+  test("a non-idle marker still quarantines when the ownership renew cannot be answered", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    client.statusQueue = [
+      { opKind: "none", opAttemptId: "", opSeq: 0, lastCompletedOpSeq: 7, completed: true },
+      { opKind: "run", opAttemptId: "a9", opSeq: 9, lastCompletedOpSeq: 8, completed: false },
+    ];
+    client.renewError = new Error("connect ECONNREFUSED");
+    const { lease } = leaseCfg(client);
+    await runSessionForTest(leaseBackend(), {
+      quarantineDir: dir,
+      lease,
+      nowIso: () => "2026-07-24T13:00:00.000Z",
+    });
     const rec = await new QuarantineStore(dir).read("http://cronus281|BC");
     expect(rec?.opKind).toBe("container-needs-recycle");
     expect(rec?.detail).toContain("a9");

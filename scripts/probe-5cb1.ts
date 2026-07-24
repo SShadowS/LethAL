@@ -6,7 +6,8 @@
  *
  *   bun run scripts/probe-5cb1.ts
  *
- * WHY THIS EXISTS (see NEXT-SESSION-LAYER-5C-B1.md / docs/superpowers for the full plan): Tasks 1-5
+ * WHY THIS EXISTS (full design:
+ * docs/superpowers/specs/2026-07-24-layer-5c-b1-lease-fence-design.md): Tasks 1-5
  * added a machine-global lease (table 71006 "LC Lease") and a two-phase RunMutant fence to codeunits
  * 71002 "LC Control State" / 71003 "LC Control API", but the production TypeScript client
  * (packages/runner/src/harness.ts, run-mutant-transport.ts) has NOT been updated yet — Tasks 6-8 do

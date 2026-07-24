@@ -137,6 +137,40 @@ Recovery is one procedure, in order — **a restart alone does NOT clear the com
    transaction it mints a NEW `Server Generation`, clears the marker/token/client-nonce, bumps the
    `Epoch`, and clears the committed `LC Mutation Active` row (so a fresh session can't inherit a
    stale active mutant from before recovery).
+
+   There is **no `lethal force-reset-lease` subcommand yet** (`lethal` ships `run` and
+   `clear-quarantine` only), so this step is two OData calls by hand. Both are `POST`s to
+   `http://<server>:7048/<instance>/ODataV4/LethALControl_<Action>?company=<url-encoded company>&tenant=<tenant>`
+   with Basic auth and `content-type: application/json`. **Each response is an OData scalar
+   `{"value":"<json-string>"}` — the payload is inside `value` as a string, so it must be parsed
+   twice.** (This is exactly what `packages/runner/itest/lease.itest.ts` does in the stale-publish
+   probe; read it if you want a working reference.)
+
+   ```bash
+   BASE='http://cronus281:7048/BC/ODataV4'
+   Q='company=CRONUS%20Danmark%20A%2FS&tenant=default'
+   AUTH='-u admin:<password>'
+
+   # 2a. Read the CURRENT Server Generation (the authorization token for the reset).
+   curl -s $AUTH -H 'content-type: application/json' \
+     -d '{"clientProtocol":2}' "$BASE/LethALControl_HarnessInfo?$Q" \
+     | jq -r .value | jq -r .serverGeneration
+   #    -> e.g. 9f2c...  (32 hex chars; this is what step 2b must echo back)
+
+   # 2b. Reset, echoing that exact generation. Expect {"reset":true,"serverGeneration":<NEW>,...}
+   curl -s $AUTH -H 'content-type: application/json' \
+     -d '{"expectedGeneration":"<the value from 2a>"}' "$BASE/LethALControl_ForceResetLease?$Q" \
+     | jq -r .value | jq
+   ```
+
+   A `reset:false` (or an echoed generation that no longer matches) means the row changed under you —
+   re-read 2a and retry. The `serverGeneration` that comes back is a **new** one, different from the
+   value you echoed; that is the reset landing. Note that the generation echo buys **replay
+   protection only, not proof the NST was restarted** — see deviation D1 in the spec (§14): `Server
+   Generation` is persistent, so the server cannot verify step 1 happened. Doing step 1 first is
+   operator discipline the server will not enforce for you.
+
+   *A `lethal force-reset-lease` subcommand is the better long-term answer — filed for 5C-B2.*
 3. **A post-recovery probe** confirming the container is actually clean (baseline/active-state check).
 4. **`lethal clear-quarantine`** — only after steps 1-3, and only against the real
    `~/.lethal/quarantine` store (see the "Wedged-tier reproduction" section below — there is

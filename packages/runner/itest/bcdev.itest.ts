@@ -295,6 +295,13 @@ async function runOnce(scratchRoot: string): Promise<RunOnceResult> {
       },
       resourceServer: bcdev.server,
       resourceServerInstance: bcdev.serverInstance,
+      // A SCRATCH quarantine dir, deliberately NOT defaultQuarantineDir() (~/.lethal/quarantine —
+      // the REAL store a live `lethal run` writes to), matching lease.itest.ts. Since 5C-B1 this
+      // gate can write durable container-needs-recycle records, and one transient failure landing
+      // in the real store poisons EVERY later gate run until an operator deletes it by hand
+      // (observed live). The code path under test is identical either way — the store is
+      // constructed from this path and nothing else — so do not "simplify" this back out.
+      quarantineDir: join(scratchRoot, "quarantine"),
     });
     return { report, odataCfg, instrumentedDir };
   } finally {
