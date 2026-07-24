@@ -532,7 +532,14 @@ function assertVerdictTable(report: SessionReport): void {
   );
   for (const m of report.mutants) {
     const cause = m.cause !== undefined ? ` cause=${m.cause}` : "";
-    console.log(`    ${m.mutantCode} ${m.verdict}${cause} ${m.file}:${m.line} ${m.operatorName}`);
+    // `failureNote` is the only field that says WHY a mutant errored — without it a live failure
+    // shows `M0008 error` and nothing else, and the lease/lost-ack branches (design §5) are
+    // indistinguishable from a plain transport error in the log. al-runner.itest.ts already
+    // prints it; this line had drifted from that one.
+    const note = m.failureNote !== undefined ? ` note=${m.failureNote}` : "";
+    console.log(
+      `    ${m.mutantCode} ${m.verdict}${cause} ${m.file}:${m.line} ${m.operatorName}${note}`,
+    );
   }
   if (report.quarantined !== undefined) {
     console.log(`  quarantined: ${JSON.stringify(report.quarantined)}`);

@@ -4187,27 +4187,49 @@ describe("runSession — Layer 5C-B2: a lost RunMutant ack is reconciled, not bl
     };
   }
 
-  /** M0001 runs clean and attests cleanly (so design §G's fail-closed gate is NOT what marks it);
-   *  M0002's covering run comes back with an unreadable answer carrying its fence coordinates. */
+  /** The verdict BC's zero-byte 200 produces, as the transport maps it. */
+  const LOST_ANSWER: Partial<TestVerdict> = {
+    outcome: "error",
+    failureMessage: 'RunMutant returned no string `value` (HTTP 200), body: ""',
+    operation: "in-flight-unknown",
+    fencedOp: LOST_OP,
+  };
+
+  /**
+   * M0001 runs clean and attests cleanly (so design §G's fail-closed gate is NOT what marks it);
+   * M0002's covering runs are answered from `answers` IN ORDER, the last entry repeating — so a
+   * test can say "the first attempt's ack was lost, the retry really ran". `dispatches` counts
+   * M0002's runs, which is how the retry budget is asserted by call counter rather than by timing.
+   */
   function lostAckAfterFirstMutant(
-    over: Partial<TestVerdict> = {},
-    fencedOp: { readonly attemptId: string; readonly opSeq: number } | null = LOST_OP,
+    opts: {
+      readonly answers?: readonly Partial<TestVerdict>[];
+      readonly fencedOp?: { readonly attemptId: string; readonly opSeq: number } | null;
+      readonly dispatches?: { count: number };
+    } = {},
   ): ExecutionBackend {
+    const answers = opts.answers ?? [LOST_ANSWER];
     let activeMutant: string | null = null;
+    let issued = 0;
     return leaseBackend({
       activate: async (id) => {
         activeMutant = id;
       },
       run: async (ref) => {
         if (activeMutant === "M0002") {
+          if (opts.dispatches !== undefined) opts.dispatches.count++;
+          const answer = answers[Math.min(issued, answers.length - 1)] ?? LOST_ANSWER;
+          issued++;
+          // `fencedOp: null` strips the coordinates the answer would otherwise carry — the
+          // "nothing to reconcile" case. Omitted, the answer keeps its own.
+          const { fencedOp: own, ...rest } = answer;
+          const fence = opts.fencedOp === undefined ? own : opts.fencedOp;
           return {
             ref,
             outcome: "error" as const,
             durationMs: 1,
-            failureMessage: 'RunMutant returned no string `value` (HTTP 200), body: ""',
-            operation: "in-flight-unknown" as const,
-            ...(fencedOp !== null ? { fencedOp } : {}),
-            ...over,
+            ...rest,
+            ...(fence !== undefined && fence !== null ? { fencedOp: fence } : {}),
           };
         }
         return {
@@ -4342,7 +4364,7 @@ describe("runSession — Layer 5C-B2: a lost RunMutant ack is reconciled, not bl
     const dir = freshTmpDir();
     const client = new FakeLeaseClient();
     const { lease } = leaseCfg(client);
-    const backend = lostAckAfterFirstMutant({}, null);
+    const backend = lostAckAfterFirstMutant({ fencedOp: null });
     const report = await runSessionForTest(backend, { quarantineDir: dir, lease });
     expect((await new QuarantineStore(dir).read(TIER))?.opKind).toBe("test-run");
     expect(report.quarantined).toBeDefined();
@@ -4350,52 +4372,52 @@ describe("runSession — Layer 5C-B2: a lost RunMutant ack is reconciled, not bl
     expect(client.statusArgs.filter((a) => a.attemptId !== "")).toHaveLength(0);
   });
 
-  test("a lost ack on the KILL-CONFIRMATION rerun is reconciled the same way", async () => {
-    // The confirm rerun is a hand-copied sibling of the covering-run branch; a fix applied to only
-    // one of them leaves the other quarantining healthy containers.
-    const dir = freshTmpDir();
-    const client = new FakeLeaseClient();
-    client.reconcileStatus = tombstoned;
-    const { lease } = leaseCfg(client);
+  /**
+   * The confirm-rerun sibling of `lostAckAfterFirstMutant`: M0002's covering run FAILS, so a
+   * kill-confirmation rerun follows, and THOSE are answered from `confirmAnswers` in order (last
+   * entry repeating). The confirm branch is a hand-copied sibling of the covering-run branch, so
+   * every property proven for one has to be proven for the other or the two silently diverge.
+   */
+  function confirmAnswersAfterKill(
+    confirmAnswers: readonly Partial<TestVerdict>[],
+    dispatches?: { count: number },
+  ): ExecutionBackend {
+    const attested = { observedAny: true, identityMismatch: false };
     let activeMutant: string | null = null;
-    let awaitingConfirm = false;
-    const backend = leaseBackend({
+    let coveringFailed = false;
+    let issued = 0;
+    return leaseBackend({
       activate: async (id) => {
         activeMutant = id;
       },
       run: async (ref) => {
-        if (activeMutant === "M0002" && !awaitingConfirm) {
-          awaitingConfirm = true;
-          return {
-            ref,
-            outcome: "fail" as const,
-            durationMs: 1,
-            attestation: { observedAny: true, identityMismatch: false },
-          };
+        if (activeMutant === "M0002" && !coveringFailed) {
+          coveringFailed = true;
+          return { ref, outcome: "fail" as const, durationMs: 1, attestation: attested };
         }
-        if (awaitingConfirm && activeMutant === null) {
-          awaitingConfirm = false;
-          return {
-            ref,
-            outcome: "error" as const,
-            durationMs: 1,
-            failureMessage: 'RunMutant returned no string `value` (HTTP 200), body: ""',
-            operation: "in-flight-unknown" as const,
-            fencedOp: LOST_OP,
-          };
+        if (coveringFailed && activeMutant === null) {
+          if (dispatches !== undefined) dispatches.count++;
+          const answer = confirmAnswers[Math.min(issued, confirmAnswers.length - 1)] ?? LOST_ANSWER;
+          issued++;
+          return { ref, outcome: "error" as const, durationMs: 1, ...answer };
         }
-        return {
-          ref,
-          outcome: "pass" as const,
-          durationMs: 1,
-          attestation: { observedAny: true, identityMismatch: false },
-        };
+        return { ref, outcome: "pass" as const, durationMs: 1, attestation: attested };
       },
     });
+  }
+
+  test("a lost ack on the KILL-CONFIRMATION rerun whose retry is also unreadable stays an error, still unquarantined", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    client.reconcileStatus = tombstoned;
+    const { lease } = leaseCfg(client);
+    const dispatches = { count: 0 };
+    const backend = confirmAnswersAfterKill([LOST_ANSWER], dispatches);
     const report = await runSessionForTest(backend, { quarantineDir: dir, lease });
     expect(await new QuarantineStore(dir).read(TIER)).toBeNull();
     expect(report.quarantined).toBeUndefined();
     expect(client.recoverArgs).toHaveLength(0);
+    expect(dispatches.count).toBe(2); // one lost, exactly one retry — never a loop
     const m2 = report.mutants.find((m) => m.mutantCode === "M0002");
     expect(m2?.verdict).toBe("error"); // the kill could not be confirmed — never "killed"
     expect(m2?.failureNote).toContain("unreadable");
@@ -4413,10 +4435,256 @@ describe("runSession — Layer 5C-B2: a lost RunMutant ack is reconciled, not bl
     client.reconcileStatus = tombstoned;
     const { lease } = leaseCfg(client);
     const backend = lostAckAfterFirstMutant({
-      outcome: "deadline-exceeded" as const,
-      failureMessage: "RunMutant timed out: AbortError",
+      answers: [
+        {
+          ...LOST_ANSWER,
+          outcome: "deadline-exceeded",
+          failureMessage: "RunMutant timed out: AbortError",
+        },
+      ],
     });
     const report = await runSessionForTest(backend, { quarantineDir: dir, lease });
+    expect(await new QuarantineStore(dir).read(TIER)).toBeNull();
+    expect(report.quarantined).toBeUndefined();
+    expect(client.recoverArgs).toHaveLength(0);
+  });
+});
+
+// ————————————————————————————————————————————————————————————————————————
+// Layer 5C-B2 item 1, follow-up — retry ONCE after a CONFIRMED-COMPLETE reconciliation.
+//
+// Reconciling a lost ack contains the intermittency but does not resolve it: the mutant is still
+// recorded `error`, so the live gate still fails on per-mutant equality (survived -> error). Two
+// fresh gate runs both lost M0008 at the same position, so this is temporal/positional, not
+// mutant-specific — a fresh attempt is very likely to succeed.
+//
+// It is safe precisely because reconciliation PROVED phase 3 tombstoned the op and cleared the
+// active tuple: the container is in a known-clean state and a fresh attempt is a NEW op, not a
+// re-dispatch of an active one. design §5 forbids only the latter. The retry is capped at one.
+// ————————————————————————————————————————————————————————————————————————
+describe("runSession — Layer 5C-B2: a proven-complete lost ack earns one fresh attempt (design §5)", () => {
+  const LOST_OP = { attemptId: "a10", opSeq: 304 } as const;
+  const TIER = "http://cronus281|BC";
+  const ATTESTED = { observedAny: true, identityMismatch: false };
+  const LOST_ANSWER: Partial<TestVerdict> = {
+    outcome: "error",
+    failureMessage: 'RunMutant returned no string `value` (HTTP 200), body: ""',
+    operation: "in-flight-unknown",
+    fencedOp: LOST_OP,
+  };
+
+  function tombstoned(attemptId: string, opSeq: number): OperationStatus {
+    return {
+      opKind: "none",
+      opAttemptId: attemptId,
+      opSeq,
+      lastCompletedOpSeq: opSeq,
+      completed: true,
+    };
+  }
+
+  /** M0002's covering runs answered from `answers` in order (last repeating); `dispatches` counts
+   *  them, so the retry budget is asserted by call counter rather than by timing. */
+  function m2Answers(
+    answers: readonly Partial<TestVerdict>[],
+    dispatches: { count: number },
+  ): ExecutionBackend {
+    let activeMutant: string | null = null;
+    let issued = 0;
+    return leaseBackend({
+      activate: async (id) => {
+        activeMutant = id;
+      },
+      run: async (ref) => {
+        if (activeMutant === "M0002") {
+          dispatches.count++;
+          const answer = answers[Math.min(issued, answers.length - 1)] ?? LOST_ANSWER;
+          issued++;
+          return { ref, outcome: "error" as const, durationMs: 1, ...answer };
+        }
+        return { ref, outcome: "pass" as const, durationMs: 1, attestation: ATTESTED };
+      },
+    });
+  }
+
+  test("the retry's REAL verdict is what the report records — the mutant is no longer lost", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    client.reconcileStatus = tombstoned;
+    const { lease } = leaseCfg(client);
+    const dispatches = { count: 0 };
+    const backend = m2Answers(
+      [LOST_ANSWER, { outcome: "pass", attestation: ATTESTED }],
+      dispatches,
+    );
+    const report = await runSessionForTest(backend, { quarantineDir: dir, lease });
+    const m2 = report.mutants.find((m) => m.mutantCode === "M0002");
+    // The whole point: an intermittent lost ack no longer costs the gate a per-mutant equality
+    // (survived -> error). The mutant gets the verdict the retry actually measured.
+    expect(m2?.verdict).toBe("survived");
+    expect(m2?.failureNote).toBeUndefined();
+    expect(dispatches.count).toBe(2); // one lost, exactly one retry
+    expect(await new QuarantineStore(dir).read(TIER)).toBeNull();
+    expect(report.quarantined).toBeUndefined();
+    expect(client.recoverArgs).toHaveLength(0);
+  });
+
+  test("a retry that is ALSO unreadable is an error, never retried again, and still not quarantined", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    client.reconcileStatus = tombstoned;
+    const { lease } = leaseCfg(client);
+    const dispatches = { count: 0 };
+    const report = await runSessionForTest(m2Answers([LOST_ANSWER], dispatches), {
+      quarantineDir: dir,
+      lease,
+    });
+    expect(dispatches.count).toBe(2); // BOUNDED: a loop here would hammer a container forever
+    const m2 = report.mutants.find((m) => m.mutantCode === "M0002");
+    expect(m2?.verdict).toBe("error");
+    expect(m2?.failureNote).toContain("retried once");
+    // The retry's own ack was reconciled too, and it too proved complete — so still no quarantine,
+    // and the session continues to the next mutant.
+    expect(await new QuarantineStore(dir).read(TIER)).toBeNull();
+    expect(report.quarantined).toBeUndefined();
+    expect(report.mutants.find((m) => m.mutantCode === "M0003")).toBeDefined();
+    expect(client.recoverArgs).toHaveLength(0);
+  });
+
+  test("an UNRESOLVED lost ack is NEVER retried — the op may still be executing server-side", async () => {
+    // The safety half of the same change. design §5: re-dispatching over an attempt that could
+    // still be running AL is exactly what must not happen; only a PROVEN-complete op earns a fresh
+    // attempt. Isolated by making the status read itself fail, so nothing is established.
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    client.reconcileStatus = () => {
+      throw new LeaseUnavailableError("GetOperationStatus unreachable");
+    };
+    const { lease } = leaseCfg(client);
+    const dispatches = { count: 0 };
+    const report = await runSessionForTest(m2Answers([LOST_ANSWER], dispatches), {
+      quarantineDir: dir,
+      lease,
+    });
+    expect(dispatches.count).toBe(1); // not proven clean ⇒ no fresh attempt
+    expect((await new QuarantineStore(dir).read(TIER))?.opKind).toBe("test-run");
+    expect(report.quarantined).toBeDefined();
+    expect(client.recoverArgs).toHaveLength(0);
+  });
+
+  test("a still-ACTIVE op that never clears is NEVER retried either — it is polled, then quarantined", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    client.reconcileStatus = (attemptId, opSeq) => ({
+      opKind: "run",
+      opAttemptId: attemptId,
+      opSeq,
+      lastCompletedOpSeq: opSeq - 1,
+      completed: false,
+    });
+    client.statusQueue = [
+      { opKind: "none", opAttemptId: "", opSeq: 0, lastCompletedOpSeq: 7, completed: true },
+      { opKind: "run", opAttemptId: "a10", opSeq: 304, lastCompletedOpSeq: 303, completed: false },
+    ];
+    const { lease } = leaseCfg(client);
+    const dispatches = { count: 0 };
+    const report = await runSessionForTest(m2Answers([LOST_ANSWER], dispatches), {
+      quarantineDir: dir,
+      lease,
+    });
+    expect(dispatches.count).toBe(1);
+    expect((await new QuarantineStore(dir).read(TIER))?.opKind).toBe("test-run");
+    expect(report.quarantined).toBeDefined();
+    expect(client.recoverArgs).toHaveLength(0);
+  });
+
+  test("the retry goes out only AFTER an op-seq resync", async () => {
+    // The backend's counter advanced past the lost call, and the server tombstoned that same seq,
+    // so the two already agree and the resync is a value no-op in the expected case. It is made
+    // anyway, reusing `runOnce`'s existing pre-dispatch-rejected mechanism, because `completed` is
+    // `opSeq <= lastCompletedOpSeq` — the server may legitimately be FURTHER ahead, and a
+    // stale-low/high opSeq is refused as `lease-invalid`, i.e. a FALSE lease loss.
+    const log: string[] = [];
+    const client = new FakeLeaseClient(log);
+    client.reconcileStatus = tombstoned;
+    const { lease } = leaseCfg(client);
+    let activeMutant: string | null = null;
+    let issued = 0;
+    const backend = leaseBackend({
+      activate: async (id) => {
+        activeMutant = id;
+      },
+      run: async (ref) => {
+        if (activeMutant !== "M0002") {
+          return { ref, outcome: "pass" as const, durationMs: 1, attestation: ATTESTED };
+        }
+        issued++;
+        log.push(`m2run${issued}`);
+        if (issued === 1) {
+          return {
+            ref,
+            outcome: "error" as const,
+            durationMs: 1,
+            failureMessage: 'RunMutant returned no string `value` (HTTP 200), body: ""',
+            operation: "in-flight-unknown" as const,
+            fencedOp: LOST_OP,
+          };
+        }
+        return { ref, outcome: "pass" as const, durationMs: 1, attestation: ATTESTED };
+      },
+    });
+    await runSessionForTest(backend, { quarantineDir: freshTmpDir(), lease });
+    const first = log.indexOf("m2run1");
+    const retry = log.indexOf("m2run2");
+    expect(first).toBeGreaterThan(-1);
+    expect(retry).toBeGreaterThan(first);
+    // Ordering by call log, never by clock: exactly TWO lease reads sit between the lost dispatch
+    // and its retry — the reconciliation read that proves the op completed, and the resync read
+    // that reseeds the backend's op-seq counter before a fresh attempt goes out.
+    expect(log.slice(first, retry).filter((e) => e === "status")).toHaveLength(2);
+  });
+
+  test("the KILL-CONFIRMATION rerun earns the same one retry — a real retry confirms the kill", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    client.reconcileStatus = tombstoned;
+    const { lease } = leaseCfg(client);
+    const dispatches = { count: 0 };
+    let activeMutant: string | null = null;
+    let coveringFailed = false;
+    let issued = 0;
+    const backend = leaseBackend({
+      activate: async (id) => {
+        activeMutant = id;
+      },
+      run: async (ref) => {
+        if (activeMutant === "M0002" && !coveringFailed) {
+          coveringFailed = true;
+          return { ref, outcome: "fail" as const, durationMs: 1, attestation: ATTESTED };
+        }
+        if (coveringFailed && activeMutant === null) {
+          dispatches.count++;
+          issued++;
+          if (issued === 1) {
+            return {
+              ref,
+              outcome: "error" as const,
+              durationMs: 1,
+              failureMessage: 'RunMutant returned no string `value` (HTTP 200), body: ""',
+              operation: "in-flight-unknown" as const,
+              fencedOp: LOST_OP,
+            };
+          }
+          return { ref, outcome: "pass" as const, durationMs: 1, attestation: ATTESTED };
+        }
+        return { ref, outcome: "pass" as const, durationMs: 1, attestation: ATTESTED };
+      },
+    });
+    const report = await runSessionForTest(backend, { quarantineDir: dir, lease });
+    // The confirmation rerun passed on the retry, so the mutant IS killed — the lost ack cost
+    // nothing at all.
+    expect(report.mutants.find((m) => m.mutantCode === "M0002")?.verdict).toBe("killed");
+    expect(dispatches.count).toBe(2);
     expect(await new QuarantineStore(dir).read(TIER)).toBeNull();
     expect(report.quarantined).toBeUndefined();
     expect(client.recoverArgs).toHaveLength(0);

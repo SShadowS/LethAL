@@ -759,6 +759,81 @@ async function reconcileFencedLostAck(
   return leaseSession.reconcileLostAck(fencedOp);
 }
 
+/** What one fenced run resolved to, after design §5's lost-ack handling (see `runFenced`). */
+interface FencedRunOutcome {
+  /** The verdict the caller must act on — the RETRY's, whenever a proven-clean retry was made. */
+  readonly verdict: TestVerdict;
+  /**
+   * The reconciliation result for `verdict`'s OWN lost ack, when `verdict` is still ambiguous;
+   * `"none"` when the run resolved to anything else. `"unresolved"` is the caller's cue to
+   * quarantine.
+   */
+  readonly lostAck: LostAckOutcome | "none";
+  /** Whether a proven-clean retry was dispatched — diagnostics only. */
+  readonly retried: boolean;
+}
+
+/**
+ * One fenced test run, with design §5's lost-ack handling folded in so the mutant loop sees a
+ * single verdict — the same shape `runOnce` already uses for its `pre-dispatch-rejected` retry.
+ *
+ * The sequence, and why each step is where it is:
+ *   1. `runOnce`. Anything but an ambiguous answer is returned untouched.
+ *   2. An ambiguous answer is reconciled. `"unresolved"` returns immediately — nothing was
+ *      established, so the caller quarantines and NOTHING is re-dispatched. This is the design's
+ *      hard rule: an attempt that may still be executing AL must never be re-issued.
+ *   3. `"completed"` means the fence provably finished: phase 3 tombstoned the op AND cleared the
+ *      active tuple, so the container is in a known-clean state and a fresh attempt is a NEW op,
+ *      not a re-dispatch of a live one. Exactly ONE such attempt is made.
+ *   4. The retry's answer is taken as-is; if it too is ambiguous it is reconciled ONCE MORE (a
+ *      container that IS stranded must still be caught) but never retried again. The budget is on
+ *      RETRIES, not on reconciliations.
+ *
+ * The op-seq resync before the retry is a value no-op in the expected case — the backend's counter
+ * already sits at `lastCompletedOpSeq + 1` because the lost call consumed exactly the seq the
+ * server then tombstoned. It is made anyway, through the existing mechanism: `completed` is
+ * `opSeq <= lastCompletedOpSeq`, so the server may legitimately be further ahead, and a
+ * counter that disagrees produces a `lease-invalid` refusal indistinguishable from a real lease
+ * loss. One cheap read on a rare path buys that away.
+ *
+ * The fresh `attemptId` needs nothing here: the backend mints one per call (`bcdev-backend.ts`).
+ */
+async function runFenced(
+  backend: ExecutionBackend,
+  safety: SessionSafety,
+  ref: TestMethodRef,
+  opts: { coverage: "none" | "procedure" | "line"; timeoutMs: number },
+  leaseSession: LeaseSession | undefined,
+  resyncOpSeq?: () => Promise<void>,
+): Promise<FencedRunOutcome> {
+  const first = await runOnce(backend, safety, ref, opts, resyncOpSeq);
+  if (!isLostAck(first)) return { verdict: first, lostAck: "none", retried: false };
+  if ((await reconcileFencedLostAck(leaseSession, first)) === "unresolved") {
+    return { verdict: first, lostAck: "unresolved", retried: false };
+  }
+  if (resyncOpSeq !== undefined) await resyncOpSeq();
+  const retry = await runOnce(backend, safety, ref, opts, resyncOpSeq);
+  if (!isLostAck(retry)) return { verdict: retry, lostAck: "none", retried: true };
+  return {
+    verdict: retry,
+    lostAck: await reconcileFencedLostAck(leaseSession, retry),
+    retried: true,
+  };
+}
+
+/**
+ * Is this verdict an UNREADABLE ANSWER — the only thing design §5's lost-ack handling applies to?
+ *
+ * Deliberately `=== "in-flight-unknown"` rather than `requiresUnsafeLatch`, which the two mutant-loop
+ * branches use: those run AFTER `classifyLeaseVerdict` has already broken out on a `lease-lost`
+ * answer, so the coarser predicate is exact there. `runFenced` runs BEFORE that classification, and
+ * a `lease-lost` is a CONFIRMED server refusal — reconciling or retrying it would re-dispatch under
+ * a lease this session cannot prove it holds, which is the opposite of what §6 requires.
+ */
+function isLostAck(v: TestVerdict): boolean {
+  return v.operation === "in-flight-unknown";
+}
+
 /**
  * Records a GENUINE lease loss (design §6) — and refuses to proceed without a lease session.
  *
@@ -2112,11 +2187,20 @@ async function runMutantsOnBackend(args: {
     let transportErrorRef: TestMethodRef | undefined;
     for (const ref of covering) {
       const budget = 2 * (args.baselineDuration.get(testKeyOf(ref)) ?? args.fallbackTimeoutMs);
-      const v = await runOnce(
+      // Layer 5C-B2: `runFenced`, not `runOnce` — a lost ack that reconciliation PROVES completed
+      // earns one fresh attempt, and `v` is then that attempt's verdict. Only the final verdict is
+      // buffered/attested/classified below, exactly as `runOnce`'s own pre-dispatch-rejected retry
+      // already behaves.
+      const {
+        verdict: v,
+        lostAck,
+        retried,
+      } = await runFenced(
         args.backend,
         args.safety,
         ref,
         { coverage: "none", timeoutMs: budget },
+        leaseSession,
         resyncOpSeq,
       );
       testResultBuffer.push({
@@ -2173,17 +2257,15 @@ async function runMutantsOnBackend(args: {
         break;
       }
       if (v.operation !== undefined && requiresUnsafeLatch(v.operation)) {
-        // Layer 5C-B2 (design §5): the server may still be executing this test — or it may have
-        // completed the entire fence and only lost the response on the way back. Ask the lease row
-        // WHICH before condemning the tier; `reconcileFencedLostAck` answers "unresolved" for
-        // anything it cannot establish, so the conservative path below is still the default.
-        const reconciled = await reconcileFencedLostAck(leaseSession, v);
+        // Layer 5C-B2 (design §5): reaching here means `runFenced` could not turn this run into a
+        // readable answer — it already reconciled, and (when the op was proven complete) already
+        // spent its one fresh attempt on it. All that is left is which diagnosis to record.
         verdict = "error";
-        if (reconciled === "completed") {
+        if (lostAck === "completed") {
           // Phase 3 ran: the op is tombstoned and the container is clean. This mutant's RESULT is
           // genuinely lost (so `error`, never a verdict), but there is nothing to recycle, nothing
           // to latch, and the session runs on to the next mutant.
-          failureNote = `lost ack running ${ref.method}: RunMutant's response was unreadable${v.failureMessage !== undefined ? ` (${v.failureMessage})` : ""}, but GetOperationStatus confirms the operation COMPLETED server-side (design §5) — this mutant's result is discarded; the container is not stranded`;
+          failureNote = `lost ack running ${ref.method}: RunMutant's response was unreadable${v.failureMessage !== undefined ? ` (${v.failureMessage})` : ""}, but GetOperationStatus confirms the operation COMPLETED server-side — the run was retried once and that attempt was unreadable too, so this mutant's result is discarded; the container is not stranded (design §5)`;
           break;
         }
         // Unresolved: latch unsafe, record a durable tier quarantine, and stop — no further
@@ -2196,7 +2278,7 @@ async function runMutantsOnBackend(args: {
           // Carry the transport's own failure message into the record. Without it the operator
           // is told to recycle a tier and clear a quarantine with no statement of what actually
           // went wrong — and this record outlives the process that wrote it.
-          detail: `test in-flight-unknown running ${ref.method} (mutant ${m.mutantId})${v.failureMessage !== undefined ? `: ${v.failureMessage}` : ""}`,
+          detail: `test in-flight-unknown running ${ref.method} (mutant ${m.mutantId})${retried ? " — a first, proven-complete attempt had already been retried once" : ""}${v.failureMessage !== undefined ? `: ${v.failureMessage}` : ""}`,
         });
         failureNote = `quarantined: ${ref.method} returned no readable result and its operation could not be confirmed complete — container may be stranded`;
         break;
@@ -2226,11 +2308,19 @@ async function runMutantsOnBackend(args: {
       }
       if (v.outcome === "fail") {
         await activateOnce(args.backend, args.safety, null);
-        const confirm = await runOnce(
+        // Layer 5C-B2: `runFenced` here too — the confirm rerun earns the same single fresh
+        // attempt after a proven-complete lost ack, so an intermittent unreadable answer during
+        // confirmation costs a kill verdict no more than it costs a covering run's.
+        const {
+          verdict: confirm,
+          lostAck: confirmLostAck,
+          retried: confirmRetried,
+        } = await runFenced(
           args.backend,
           args.safety,
           ref,
           { coverage: "none", timeoutMs: budget },
+          leaseSession,
           resyncOpSeq,
         );
         testResultBuffer.push({
@@ -2274,22 +2364,20 @@ async function runMutantsOnBackend(args: {
             }
           }
         } else if (confirm.operation !== undefined && requiresUnsafeLatch(confirm.operation)) {
-          // Layer 5C-B2 (design §5): same lost-ack reconciliation as the covering-test run above —
-          // this branch is its hand-copied sibling, and a fix applied to only one of them would
-          // leave the other quarantining containers that provably finished the op. The kill is
-          // unconfirmable either way (`error`, never `killed`); what differs is whether the tier is
-          // condemned. The post-loop `safety.isUnsafe` check (below) stops scheduling only if it is.
-          const reconciled = await reconcileFencedLostAck(leaseSession, confirm);
+          // Layer 5C-B2 (design §5): `runFenced` already reconciled this answer and, when the op
+          // was proven complete, already spent its one fresh attempt. The kill is unconfirmable
+          // either way (`error`, never `killed`); what differs is whether the tier is condemned.
+          // The post-loop `safety.isUnsafe` check (below) stops scheduling only if it is.
           verdict = "error";
-          if (reconciled === "completed") {
-            failureNote = `lost ack confirming ${ref.method}: RunMutant's response was unreadable${confirm.failureMessage !== undefined ? ` (${confirm.failureMessage})` : ""}, but GetOperationStatus confirms the operation COMPLETED server-side (design §5) — the kill could not be confirmed, but the container is not stranded`;
+          if (confirmLostAck === "completed") {
+            failureNote = `lost ack confirming ${ref.method}: RunMutant's response was unreadable${confirm.failureMessage !== undefined ? ` (${confirm.failureMessage})` : ""}, but GetOperationStatus confirms the operation COMPLETED server-side — the confirmation was retried once and that attempt was unreadable too, so the kill could not be confirmed; the container is not stranded (design §5)`;
           } else {
             await quarantineInFlight({
               safety: args.safety,
               quarantineStore: args.quarantineStore,
               resourceKey: args.resourceKey,
               nowIso: args.nowIso,
-              detail: `test in-flight-unknown confirming ${ref.method} (mutant ${m.mutantId})${confirm.failureMessage !== undefined ? `: ${confirm.failureMessage}` : ""}`,
+              detail: `test in-flight-unknown confirming ${ref.method} (mutant ${m.mutantId})${confirmRetried ? " — a first, proven-complete attempt had already been retried once" : ""}${confirm.failureMessage !== undefined ? `: ${confirm.failureMessage}` : ""}`,
             });
             failureNote = `quarantined: ${ref.method} confirm returned no readable result and its operation could not be confirmed complete — container may be stranded`;
           }
