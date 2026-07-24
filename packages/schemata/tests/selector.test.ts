@@ -1,12 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
-  emitMutationActiveTable,
-  emitMutationControl,
   emitMutationSelector,
   emitRegisterInstall,
   emitRegisterUpgrade,
   emitStaticSelector,
-  emitWebServicesXml,
 } from "../src/selector";
 
 const cfg = {
@@ -19,16 +16,6 @@ const cfg = {
 // A target app id (the target project's own app.json `id`) — the first element of the
 // (targetAppId, artifactId, mutantId) tuple the control extension keys its state on.
 const TARGET = "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a";
-
-describe("emitMutationActiveTable", () => {
-  test("emits single-row table, cross-company", () => {
-    const src = emitMutationActiveTable(cfg);
-    expect(src).toContain('table 50002 "Mutation Active"');
-    expect(src).toContain("DataPerCompany = false;");
-    expect(src).toContain("field(1; PrimaryKey; Code[10])");
-    expect(src).toContain("field(2; ActiveId; Text[64])");
-  });
-});
 
 describe("emitMutationSelector", () => {
   test("delegates the active check to the LethAL Control extension", () => {
@@ -75,17 +62,6 @@ describe("emitRegisterInstall", () => {
   });
 });
 
-describe("emitMutationControl", () => {
-  test("writes the table, commits, echoes the id", () => {
-    const src = emitMutationControl(cfg);
-    expect(src).toContain('codeunit 50001 "Mutation Control"');
-    expect(src).toContain("procedure SetActive(MutantId: Text): Text");
-    expect(src).toContain("procedure ClearActive()");
-    expect(src).toContain("Commit();");
-    expect(src).toContain("exit(MutantId);");
-  });
-});
-
 describe("emitStaticSelector", () => {
   test("hardcodes the active id for in-memory backends", () => {
     const src = emitStaticSelector({
@@ -105,19 +81,6 @@ describe("emitStaticSelector", () => {
       targetAppId: TARGET,
     });
     expect(src).toContain("exit(false);");
-  });
-});
-
-describe("emitWebServicesXml", () => {
-  test("exposes Mutation Control as a web service", () => {
-    const xml = emitWebServicesXml(cfg);
-    // "CodeUnit" (capital U) — verified against the AL compiler's embedded
-    // TenantWebServicesV1.xsd and the AL extension's own "twebservices" snippet; the
-    // lowercase "Codeunit" this used to assert doesn't validate and gets silently dropped.
-    expect(xml).toContain("<ObjectType>CodeUnit</ObjectType>");
-    expect(xml).toContain("<ObjectID>50001</ObjectID>");
-    expect(xml).toContain("<ServiceName>MutationControl</ServiceName>");
-    expect(xml).toContain("<Published>true</Published>");
   });
 });
 
@@ -154,12 +117,6 @@ describe("artifact identity parity", () => {
         }),
       ),
     ).toEqual(procs(emitMutationSelector({ ...IDS, artifactId: ARTIFACT, targetAppId: TARGET })));
-  });
-
-  test("MutationControl exposes Identity, reachable as MutationControl_Identity", () => {
-    const al = emitMutationControl(IDS);
-    expect(al).toContain("procedure Identity(): Text");
-    expect(al).toContain("MutationSelector.ArtifactId()");
   });
 });
 

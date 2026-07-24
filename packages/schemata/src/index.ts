@@ -4,10 +4,7 @@ export {
   emitMutationSelector,
   emitRegisterInstall,
   emitRegisterUpgrade,
-  emitMutationActiveTable,
-  emitMutationControl,
   emitStaticSelector,
-  emitWebServicesXml,
 } from "./selector";
 export type { SelectorConfig } from "./selector";
 export { wrapStatement } from "./wrap";

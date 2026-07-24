@@ -4,30 +4,12 @@ export interface SelectorConfig {
   readonly tableId: number;
 }
 
-// DEAD since Layer 5C-A Task 4: the active-mutant state moved out of the instrumented target
-// into the `LethAL Control` extension (extensions/lethal-control/). `emitMutationActiveTable`,
-// `emitMutationControl`, and `emitWebServicesXml` below are no longer written by
-// `writeInstrumentedProject` — the control extension owns the table, the SetActive/ClearActive
-// control surface, and the OData web-service registration. Kept exported (and unit-tested) only
-// so the historical shape stays documented; do not re-wire them into emission.
-export function emitMutationActiveTable(cfg: SelectorConfig): string {
-  return `table ${cfg.tableId} "Mutation Active"
-{
-    DataPerCompany = false;
-
-    fields
-    {
-        field(1; PrimaryKey; Code[10]) { }
-        field(2; ActiveId; Text[64]) { }
-    }
-
-    keys
-    {
-        key(PK; PrimaryKey) { Clustered = true; }
-    }
-}
-`;
-}
+// Since Layer 5C-A Task 4 the active-mutant state lives in the `LethAL Control` extension
+// (extensions/lethal-control/): it owns the `LC Mutation Active` table, the SetActive/ClearActive
+// control surface, and the OData web service. The instrumented target only emits the delegating
+// `Mutation Selector` + the register-install/upgrade codeunits below. The former in-target
+// `emitMutationActiveTable`/`emitMutationControl`/`emitWebServicesXml` emitters were removed as
+// dead code (Layer 5C-A cleanup) — see git history for the historical shape.
 
 /**
  * The instrumented target's `Mutation Selector` — since Layer 5C-A Task 4 a thin DELEGATE into
@@ -121,45 +103,6 @@ export function emitRegisterUpgrade(cfg: { objectId: number }): string {
 `;
 }
 
-export function emitMutationControl(cfg: SelectorConfig): string {
-  return `codeunit ${cfg.controlId} "Mutation Control"
-{
-    procedure SetActive(MutantId: Text): Text
-    var
-        MutationActive: Record "Mutation Active";
-    begin
-        if not MutationActive.Get('') then begin
-            MutationActive.Init();
-            MutationActive.PrimaryKey := '';
-            MutationActive.Insert();
-        end;
-        MutationActive.ActiveId := CopyStr(MutantId, 1, MaxStrLen(MutationActive.ActiveId));
-        MutationActive.Modify();
-        Commit();
-        exit(MutantId);
-    end;
-
-    procedure ClearActive()
-    var
-        MutationActive: Record "Mutation Active";
-    begin
-        if MutationActive.Get('') then begin
-            MutationActive.ActiveId := '';
-            MutationActive.Modify();
-            Commit();
-        end;
-    end;
-
-    procedure Identity(): Text
-    var
-        MutationSelector: Codeunit "Mutation Selector";
-    begin
-        exit(MutationSelector.ArtifactId());
-    end;
-}
-`;
-}
-
 export function emitStaticSelector(cfg: {
   objectId: number;
   activeId: string;
@@ -170,9 +113,8 @@ export function emitStaticSelector(cfg: {
     cfg.activeId === "" ? "        exit(false);" : `        exit(MutantId = '${cfg.activeId}');`;
   // ArtifactId and TargetAppId must be present here too: AlRunnerBackend.activate() replaces
   // the entire generated selector with this output on every activation, so an emitter missing a
-  // procedure MutationControl (or a future caller) relies on would break the NEXT compile. This
-  // is the parity rule — emitMutationSelector and emitStaticSelector MUST expose the identical
-  // procedure set.
+  // procedure a caller relies on would break the NEXT compile. This is the parity rule —
+  // emitMutationSelector and emitStaticSelector MUST expose the identical procedure set.
   return `codeunit ${cfg.objectId} "Mutation Selector"
 {
     procedure Active(MutantId: Text): Boolean
@@ -190,27 +132,5 @@ ${body}
         exit('${cfg.targetAppId}');
     end;
 }
-`;
-}
-
-export function emitWebServicesXml(cfg: SelectorConfig): string {
-  // ObjectType must be exactly "CodeUnit" (capital U) — verified against both the AL
-  // compiler's embedded TenantWebServicesV1(Runtime6).xsd (Microsoft.Dynamics.Nav.CodeAnalysis.dll,
-  // enum "Page"|"CodeUnit"|"Query") and the AL extension's own "twebservices" snippet
-  // (snippets/xml.json). The lowercase "Codeunit" this used to emit doesn't validate, so alc
-  // silently drops the file — it never appears in the compiled .app's package listing
-  // (confirmed 2026-07-18: absent from a real compiled fixture .app; the "MutationControl"
-  // service was never reachable at /ODataV4/ afterwards).
-  return `<?xml version="1.0" encoding="utf-8"?>
-<ExportedData>
-  <TenantWebServiceCollection>
-    <TenantWebService>
-      <ObjectType>CodeUnit</ObjectType>
-      <ObjectID>${cfg.controlId}</ObjectID>
-      <ServiceName>MutationControl</ServiceName>
-      <Published>true</Published>
-    </TenantWebService>
-  </TenantWebServiceCollection>
-</ExportedData>
 `;
 }
