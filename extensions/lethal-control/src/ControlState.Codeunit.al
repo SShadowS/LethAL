@@ -93,8 +93,14 @@ codeunit 71002 "LC Control State"
     /// prevent.
     ///
     /// NO Commit: phase 3 is ONE transaction with exactly one Commit, which it owns (R2 fix). The
-    /// Commit that 5C-A's ClearActive did has moved there.</summary>
-    procedure ClearActiveIf(TargetAppId: Text; ArtifactId: Text; MutantId: Text)
+    /// Commit that 5C-A's ClearActive did has moved there.
+    ///
+    /// LOCAL by construction (human decision overriding the brief's pseudo-code, which had this public):
+    /// same reasoning as WriteActive — an unfenced public clear of "LC Mutation Active" bypasses the
+    /// ownership proof exactly as much as an unfenced public write would. Its only caller is
+    /// TryFinishRun, in this same codeunit, which has already proven it holds the lease before calling
+    /// it.</summary>
+    local procedure ClearActiveIf(TargetAppId: Text; ArtifactId: Text; MutantId: Text)
     var
         Active: Record "LC Mutation Active";
     begin
