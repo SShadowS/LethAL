@@ -1,13 +1,14 @@
 # Layer 5C-B1 — Machine-Global Lease + Fence (Design)
 
-> Status: **Revision 3** (after two rounds of two-model adversarial review — gpt-5.6-sol +
-> claude-fable-5). R1 (both BLOCK): the one-transaction fence was impossible (BC `Commit` releases
-> locks; a client abort doesn't cancel the server run). R2 reshaped to a two-phase fence + operation
-> marker; both confirmed the core **directionally sound** but found the op-marker *lifecycle* leaks a
-> false quarantine on healthy contention, that a restart doesn't clear the committed marker, and that
-> publish/release/renew edges need idempotent state-machine transitions. R3 closes those. Predecessors
-> 5A/5B/5C-A merged. Successors: 5C-B2 (`RunChunk`), 5C-B3 (cancel/preemption), 5D (pool). Full
-> two-round disposition at the end.
+> Status: **Revision 4** (after THREE rounds of two-model adversarial review — gpt-5.6-sol +
+> claude-fable-5). R1 (both BLOCK): one-transaction fence impossible (BC `Commit` releases locks; a
+> client abort doesn't cancel the server run). R2 → two-phase fence + operation marker (core
+> directionally sound). R3 → op-marker lifecycle (busy/orphaned taxonomy, server generation +
+> recovery, catchable phase 2, publish state machine). Round 3: **both confirmed no remaining
+> false-verdict/overlap sequence under the preconditions** (fable SHIP-WITH-FIXES; sol's residuals are
+> spec-text/mechanism-completeness — `RecoverOp` precision, explicit op-seq, generation-at-acquire,
+> force-reset completeness). R4 folds those. Predecessors 5A/5B/5C-A merged. Successors: 5C-B2
+> (`RunChunk`), 5C-B3 (cancel/preemption), 5D (pool). Full three-round disposition at the end.
 
 ## 1. Goal and honest framing
 
@@ -64,26 +65,45 @@ constant PK. Fields:
 - `Token` (Text[32]) — fresh nonce per acquire; cleared on release.
 - `Expires At` (DateTime) — server-clock deadline. `Held` derived as `Token <> ''`.
 - `Op Kind` (Option `none,publish,run`), `Op Attempt Id` (Text[64]), `Op Started At` (DateTime).
-- `Last Completed Op Seq` (Integer) + `Op Seq` (Integer) — monotonic op sequence: a **tombstone** so
-  a delayed `Begin*`/`End*` for a completed attempt cannot reopen/reclear a later op (sol#4).
+- `Op Seq` (BigInteger) — the CURRENT op's sequence; `Last Completed Op Seq` (BigInteger) — tombstone.
+  **The client supplies `opSeq` explicitly** (R4 — sol#3/fable F4): acquire returns the current
+  `Last Completed Op Seq`; each `Begin*`/`run` sends `opSeq = LastCompleted + 1`. The server, under
+  lock, accepts exactly-next (`opSeq = Last Completed Op Seq + 1`), treats a repeat of the same
+  active `(opSeq, attemptId)` idempotently, and reports `opSeq <= Last Completed Op Seq` as
+  already-completed (a delayed duplicate `Begin*`/`End*` for a tombstoned attempt therefore cannot
+  reopen or reclear a later op). A server-assigned sequence is NOT used (an opaque `attemptId` has no
+  comparable prior seq once tombstoned).
+- `graceMs` — a HARD constant `>= 3 x renewPeriod` (R4 — fable F1), so a single stalled renew never
+  flips a live holder to orphaned.
 
 **Pre-seed.** `LC Control Install` + `LC Control Upgrade` insert the row if absent (empty, `Op Kind =
 none`, a fresh `Server Generation`). They do NOT reset an existing row (recovery is §8's job).
 
-**`AcquireLease(owner, ttlSeconds, clientNonce) →`** under `LockTable`:
+**`AcquireLease(owner, ttlSeconds, clientNonce, expectedGeneration) →`** under `LockTable`. The
+client obtains `expectedGeneration` during harness/status qualification and passes it; if it does not
+equal the row's `Server Generation` → `{granted:false, reason:"generation-changed"}` (the container
+was recovered; requalify) — so a stale acquire that predates a `ForceResetLease` cannot land in the
+new generation (R4 — sol#4). Then:
 - `Op Kind <> none` (an op is marked):
-  - AND lease **not** expired beyond a grace (`CurrentDateTime <= Expires At + graceMs`) → holder
+  - AND lease **not** expired beyond grace (`CurrentDateTime <= Expires At + graceMs`) → holder
     presumed alive → **`{granted:false, reason:"operation-busy", holder, expiresAt}`**. Caller backs
     off (bounded, jittered) — **no durable quarantine** (sol#1).
-  - AND expired beyond grace → holder presumed dead → **`{granted:false, reason:"operation-orphaned"}`**
-    → caller writes durable `container-needs-recycle` (§8).
+  - AND expired beyond grace → holder presumed dead → **`{granted:false, reason:"operation-orphaned",
+    opAttemptId, opStartedAt}`**. The caller does NOT immediately quarantine: it re-checks once after
+    a backoff and writes durable `container-needs-recycle` (§8) ONLY if the marker is unchanged
+    (same `opAttemptId`/`opStartedAt`) across both checks — so a live holder whose renew stalled past
+    grace, then completed, does not leave a false durable quarantine (R4 — sol#2/fable F1). The
+    quarantine record is keyed to `(serverGeneration, epoch, opAttemptId)` and is reconcilable: if
+    that exact marker later clears via a valid phase-3/`EndPublish`, the record is stale and clearable
+    without a recycle.
 - Else free (`Token = ''`) OR expired-and-idle (`Op Kind = none` AND `CurrentDateTime > Expires At`) →
   grant: `Epoch += 1`, new `Token`, set `Owner`/`Expires At`, `Op Kind = none`; store `clientNonce`.
-  Commit; return `{granted:true, epoch, token, serverGeneration, expiresAt}`.
+  Commit; return `{granted:true, epoch, token, serverGeneration, lastCompletedOpSeq, expiresAt}`.
 - Else (held, unexpired, idle) → `{granted:false, reason:"held", holder, expiresAt}`.
-- **Idempotent (sol#7B):** a retried acquire with the SAME `clientNonce` that finds the lease already
-  granted to that nonce returns the same `{epoch, token, serverGeneration}` — a lost acquire-ack never
-  orphans a lease.
+- **Idempotent (sol#7B):** a retried acquire with the SAME `clientNonce` returns the same `{epoch,
+  token, serverGeneration}` ONLY when the row is currently `Held` (`Token <> ''`) AND its stored
+  nonce+generation match — so a nonce from a since-released/reset lease is NOT mistaken for a live
+  grant (R4 — sol#4). `ReleaseLease` and `ForceResetLease` clear the stored `clientNonce`.
 
 **`RenewLease(epoch, token, generation, ttl) →`** under `LockTable`: if `(epoch, token, generation)`
 match the current row → extend `Expires At`, Commit, `renewed:true` — **even if momentarily past
@@ -97,18 +117,22 @@ resurrect a released lease. Keep the pre-seeded row. If `Op Kind <> none` → re
 (`released:false, reason:"op-in-flight"`). Idempotent via the epoch bump (a repeat finds a mismatched
 token → no-op success).
 
-**Publish op state machine (sol#4, fable R2-5):**
-- `BeginPublish(epoch, token, generation, attemptId)` — under `LockTable`: require match + `Op Kind =
-  none` AND `attemptId`'s seq `> Last Completed Op Seq`. Set `Op Kind = publish`, `Op Attempt Id =
-  attemptId`, assign a new `Op Seq`. Idempotent: a repeat with the same live `attemptId` → success.
-- `EndPublish(epoch, token, generation, attemptId, outcome)` — clear only if `Op Kind = publish` AND
-  `Op Attempt Id = attemptId`. Set `Op Kind = none`, `Last Completed Op Seq = Op Seq`. Idempotent: a
-  repeat when the attempt is already tombstoned → `{ended:true, alreadyCompleted:true}` (never
-  reopens/reclears a later op). **Called on every confirmed terminal outcome — success OR a
-  deterministic failure** (a compile/validation/HTTP rejection is server-known-terminal; only a
-  genuinely-unknown publish result leaves the marker — §8).
-- `GetOperationStatus(epoch, token, generation, attemptId) → {opKind, attemptId, completed}` — for
-  lost-ack reconciliation of any op (publish or run).
+**Publish op state machine (sol#4, fable R2-5; opSeq per R4 sol#3/F4):**
+- `BeginPublish(epoch, token, generation, attemptId, opSeq)` — under `LockTable`: require
+  `(epoch, token, generation)` match. Then by `opSeq`: `opSeq = Last Completed Op Seq + 1` AND
+  `Op Kind = none` → set `Op Kind = publish`, `Op Attempt Id = attemptId`, `Op Seq = opSeq`, success;
+  the SAME active `(opSeq, attemptId)` → idempotent success; `opSeq <= Last Completed Op Seq` →
+  `{begun:false, alreadyCompleted:true}` (a delayed duplicate of a tombstoned attempt cannot reopen a
+  later op); a different attempt claiming the active seq → refuse.
+- `EndPublish(epoch, token, generation, attemptId, opSeq, outcome)` — clear only if `Op Kind = publish`
+  AND `Op Attempt Id = attemptId` AND `Op Seq = opSeq`. Set `Op Kind = none`, `Last Completed Op Seq =
+  opSeq`. Idempotent: `opSeq <= Last Completed Op Seq` → `{ended:true, alreadyCompleted:true}` (never
+  reclears a later op). **Called on every confirmed terminal outcome — success OR a deterministic
+  failure** (compile/validation/HTTP rejection is server-known-terminal; only a genuinely-unknown
+  publish result leaves the marker — §8).
+- `GetOperationStatus(epoch, token, generation, attemptId, opSeq) → {opKind, opAttemptId, opSeq,
+  lastCompletedOpSeq, completed}` — lost-ack reconciliation of any op (publish or run). `completed` is
+  `opSeq <= Last Completed Op Seq`.
 
 **Time authority:** server-clock (`CurrentDateTime`). `graceMs` (a few × the renew period) absorbs
 clock jitter so a briefly-late renew never flips a live holder to `orphaned`.
@@ -132,19 +156,31 @@ terminal `error` outcome. Attestation recorded here (5C-A §G).
 **Phase 3 — verify-and-clear (short `LockTable` critical section, ONE transaction, no internal
 `Commit` — sol#8):** `Get('')`. If `(leaseEpoch, leaseToken, serverGeneration)` match AND `Op Kind =
 run` AND `Op Attempt Id = attemptId`: in the SAME transaction, `ClearActiveIf(targetAppId, artifactId,
-mutantId)` (clears `LC Mutation Active` only if it equals this attempt's tuple; **`ClearActiveIf` must
-not call `Commit`** — R2 fix) AND set `Op Kind = none`, `Last Completed Op Seq = Op Seq`; then exactly
-one final `Commit`; return `status: ran` (with the terminal pass/fail/error from phase 2) + result +
+mutantId)` (clears the `LC Mutation Active` **table row** only if it equals this attempt's tuple;
+**must not call `Commit`** — R2 fix) AND set `Op Kind = none`, `Last Completed Op Seq = Op Seq`; then
+exactly one final `Commit`; return `status: ran` (terminal pass/fail/error from phase 2) + result +
 attestation. Else → `status: lease-invalid`, do not touch `LC Mutation Active`, leave the result
-unrecorded.
+unrecorded. **In-memory attestation reset is UNCONDITIONAL (R4 — fable F3):** `ClearActiveIf`, and the
+phase-3 `lease-invalid` path, both reset the SingleInstance `LC Control State` attestation/`Expected*`
+fields regardless of whether the table tuple matched — matching 5C-A `ClearActive`'s in-memory
+behavior — so a stale `ExpectedArtifactId`/`ObservedAny` can never survive into the next call and fake
+a clean attestation for the wrong artifact. Only the table WRITE is conditional.
 
-**Marker never stranded on a server-known outcome.** Because phase 2 is catchable, every terminal
-pass/fail/error reaches phase 3 and clears the marker. The marker persists ONLY when termination is
-genuinely unknown — a true hang, or a connection drop where the client cannot tell if phase 3 ran. For
-the latter, the still-alive owner reconciles via `GetOperationStatus` and, if the server shows the op
-uncleared but the owner knows the call returned, calls **`RecoverOp(epoch, token, generation,
-attemptId)`** (clears only the owner's own marker; token match proves no interleaving) — recovering a
-live container without a recycle. Only an owner that is truly dead leaves an orphaned marker → §8.
+**Marker recovery is server-proof-gated, never a bare-transport guess (R4 — sol#1/fable F2).** Because
+phase 2 is catchable, every server-known terminal (pass/fail/AL-exception) reaches phase 3 and clears
+the marker. The marker persists ONLY on genuinely-unknown termination. Recovery of an
+unknown-terminated own op:
+- `GetOperationStatus` (or a phase-3 response) shows the attempt **completed/tombstoned** → discard the
+  lost result client-side; **no recycle** needed.
+- Status shows the attempt **still active** → the op may still be executing server-side → poll/wait;
+  if it never clears, quarantine (§8). **Do NOT call `RecoverOp` here.**
+- **`RecoverOp(epoch, token, generation, attemptId, opSeq)` is permitted ONLY after a parsed
+  application-level terminal response** — an OData/JSON body the harness itself produced, proving the
+  AL invocation unwound — **never after a bare HTTP status (a proxy 502/504), a connection error, or a
+  client timeout** (those are indistinguishable from a still-running AL op and must fall through to
+  poll/quarantine). This closes the only residual overlap→flaky-verdict path (B acquiring while A's
+  zombie run still executes on shared DB state). `RecoverOp` clears both the marker and this attempt's
+  active tuple in one transaction and tombstones `opSeq`.
 
 ## 6. Client integration (runner)
 
@@ -202,13 +238,22 @@ before any publish. A v2 client vs a v1 server: `protocolVersion: 1 < 2` → fai
   `operation:"lease-lost"` (NOT `in-flight-unknown`, NOT a bare error — avoids the
   two-consecutive-errors abort and the §G diagnosis). `requiresUnsafeLatch("lease-lost")` true.
 - `LeaseUnavailableError` (extends `Error` directly) — acquire `held`/backoff-exhausted. Aborts.
-- **Recovery sequence for `container-needs-recycle`** (R2#2): (1) restart the NST/container — this
-  kills any surviving AL op (SingleInstance + the running session die); (2) `ForceResetLease` — an
-  authenticated operator action that mints a NEW `Server Generation`, sets `Op Kind = none`, clears
-  `Token`, bumps `Epoch`; safe because the restart proved no AL op survives; (3) `clear-quarantine`.
-  A mere restart WITHOUT `ForceResetLease` does NOT clear the committed marker — the two steps are
-  both required and must be documented as one procedure. A stale pre-recovery client (old
+- **Recovery sequence for `container-needs-recycle`** (R2#2): (1) restart the NST/container — kills
+  any surviving AL op (SingleInstance + the running session die); (2) `ForceResetLease` — an
+  authenticated operator action that, in one transaction, mints a NEW `Server Generation`, sets
+  `Op Kind = none`, clears `Token`/`clientNonce`, bumps `Epoch`, **AND clears the committed
+  `LC Mutation Active` tuple** (R4 — sol#5: else a stale active mutant could be executed by a fresh
+  session between restart and its own phase 1, moving shared state and a verdict); (3) a post-recovery
+  baseline/active-state probe confirms the container is clean; (4) `clear-quarantine`. A mere restart
+  WITHOUT `ForceResetLease` does NOT clear the committed marker/active row — the steps are one
+  procedure. `ForceResetLease` MUST bind its authorization to a **newly-observed NST/process
+  incarnation** (R4 — sol#4), not merely operator credentials, so it cannot clear a marker under a
+  still-live old-generation op that a restart did NOT actually kill. A stale pre-recovery client (old
   `Server Generation`) is rejected by every fence after step 2.
+- A `container-needs-recycle` record is **reconcilable** (R4 — sol#2/fable F1): keyed to
+  `(serverGeneration, epoch, opAttemptId)`; if that exact op later clears via a valid phase-3/
+  `EndPublish`/`RecoverOp`, the record is stale and may be cleared WITHOUT a recycle. Only an
+  unchanged, still-active marker requires the restart+reset sequence.
 - First-reason-wins for quarantine records.
 
 ## 9. Testing & the gate (blocking mid-run + lifecycle probes)
@@ -286,3 +331,14 @@ recovery, and busy/orphaned paths are §9's new probes (not yet spiked).
 | fableR2-4 | epoch-monotonicity-across-recycle over-claimed | **§4 cross-recycle safety = server generation + token entropy, not epoch** |
 | fable7 | acquire has no waiter | **§6 bounded backoff-with-jitter is the default** |
 | — | two-phase core, steal-refused-during-op, release-op-gated, v2-by-arg, recycle-mid-run-fails-closed | **Confirmed sound** by both models |
+
+### Round 3 (fable SHIP-WITH-FIXES; sol BLOCK on spec-text only) → R4 — both: no false-verdict/overlap sequence remains under the preconditions
+| # (sol/fable) | Finding | R4 disposition |
+|---|---|---|
+| sol1 / fable F2 | `RecoverOp` after a bare HTTP/timeout can clear a marker while the AL op still runs → B overlaps A on shared DB → flaky false `killed` | **§5 `RecoverOp` gated to a PARSED application-level terminal response or a tombstone; never a bare status/connection/timeout** (those poll/quarantine) |
+| sol2 / fable F1 | a live holder whose renew stalls past grace → B writes a false durable recycle quarantine | **§4/§8 orphaned = re-check-once-before-quarantine + reconcilable record keyed (generation,epoch,attemptId); `graceMs >= 3x renew`** |
+| sol3 / fable F4 | `Op Seq` server-assigned + opaque attemptId is unimplementable (delayed completed Begin reopens) | **§4 client supplies explicit `opSeq = LastCompleted+1`; accept-exactly-next / idempotent-same / already-completed** |
+| sol4 | server generation not threaded at `AcquireLease`; nonce lifecycle; force-reset under a live op | **§4 `expectedGeneration` at acquire + nonce cleared on release/reset + gated idempotency; §8 `ForceResetLease` bound to a new NST incarnation** |
+| sol5 | `ForceResetLease` doesn't clear the committed active-mutant row → stale mutant executes post-recovery | **§8 `ForceResetLease` clears `LC Mutation Active` in the reset txn + post-recovery baseline probe** |
+| fable F3 | `ClearActiveIf` table-conditional would leave stale in-memory attestation → fake clean attestation next call | **§5 in-memory attestation/`Expected*` reset is UNCONDITIONAL (incl. the `lease-invalid` path); only the table write is conditional** |
+| — | current-batch-only invalidation is exactly right (no under-invalidation); phase-1 past-expiry extend can't race a steal; release epoch-bump kills delayed renews; grace boundary has no steal; recycle-mid-run fails closed; ClearActiveIf-no-Commit breaks no 5C-A guarantee | **Confirmed sound** by both models |
