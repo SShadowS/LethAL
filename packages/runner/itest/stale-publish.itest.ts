@@ -18,17 +18,17 @@
  * dispatched at once, repeatedly, so ordering is genuinely up to the server/OS, not this
  * script).
  *
- * **What "fresh behaviour" means here**, beyond `MutationControl_Identity`: this system has
- * exactly ONE per-artifact discriminator baked at compile time — the artifact id `Identity()`
- * reports (see deployment-verifier.ts's own doc comment: it proves only "a fresh Identity
- * request observed code claiming artifact id X at that moment"). Two artifacts built from the
- * same manifest cannot be told apart by test OUTCOME alone. So "fresh behaviour" here is: run
- * the fixture's real baseline test live via the real bc-dev-mcp test runner, activate a real,
- * known mutant from the artifact's own compiled manifest, confirm the SAME test fails, then
- * clear and confirm it passes again — proving the server is genuinely running live, responsive,
- * correctly-wired LethAL-instrumented code end-to-end, not just that one OData action returns a
- * particular string. Combined with Identity() (which DOES discriminate artifact A from B), this
- * satisfies "never on altool output alone."
+ * **What "fresh behaviour" means here**, beyond the registry read: the deployment verifier proves
+ * only "the target self-registered artifact id X" (see deployment-verifier.ts's doc comment) — a
+ * per-artifact discriminator, but not proof the code is live and correctly wired. Two artifacts
+ * built from the same manifest cannot be told apart by test OUTCOME alone. So "fresh behaviour"
+ * here is: run the fixture's real baseline test live through `RunMutant`, activate a real, known
+ * mutant from the artifact's own compiled manifest, confirm the SAME test fails, then confirm a
+ * baseline passes again (RunMutant clears on every path) — proving the server is genuinely running
+ * live, responsive, correctly-wired LethAL-instrumented code end-to-end, not just that one OData
+ * action returns a string. The mutated run's per-run attestation (design §G) additionally proves
+ * the LIVE binary's baked identity is B's, not a stale A's. Combined with the registry read (which
+ * discriminates artifact A from B), this satisfies "never on altool output alone."
  *
  * **The hard stop**: if either probe lets A become the final installed artifact after B,
  * monotonic versioning is not a sufficient deployment-order barrier for this toolchain and, per
@@ -51,19 +51,20 @@ import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { InstrumentedFile, MutantManifest, SelectorConfig } from "@lethal/schemata";
 import { writeInstrumentedProject } from "@lethal/schemata";
-import { MutationControlClient } from "../src/activation";
+import type { ActivationConfig } from "../src/activation";
 import { parseVersionConflict, reserveAppVersion } from "../src/app-version";
 import { ArtifactCompiler, defaultArtifactIo } from "../src/artifact";
 import type { CompiledArtifact } from "../src/artifact";
 import type { TestMethodRef } from "../src/backend";
-import { BcDevMcpBackend } from "../src/bcdev-backend";
 import type { LethalConfigFile } from "../src/cli";
 import { odataBaseUrl, validateBcDevConfig } from "../src/cli";
 import { DeploymentVerifier } from "../src/deployment-verifier";
 import { discoverTests } from "../src/discovery";
+import { CONTROL_APP_ID } from "../src/harness";
 import { generateMutationSet } from "../src/orchestrator";
 import { ContainerDeployer, defaultAlToolPaths, defaultDeployerIo } from "../src/publisher";
 import type { ContainerDeployerIo, SpawnFn } from "../src/publisher";
+import { RunMutantTransport } from "../src/run-mutant-transport";
 
 if (!process.env.LETHAL_ITEST_BCDEV) {
   console.log(
@@ -187,8 +188,8 @@ interface Ctx {
   readonly compiler: ArtifactCompiler;
   readonly deployer: ContainerDeployer;
   readonly verifier: DeploymentVerifier;
-  readonly activation: MutationControlClient;
-  readonly backend: BcDevMcpBackend;
+  /** OData config for building a per-artifact `RunMutantTransport` in the fresh-behaviour probe. */
+  readonly odataCfg: ActivationConfig;
   readonly files: readonly InstrumentedFile[];
   readonly appId: string;
   readonly appManifestBase: Readonly<Record<string, unknown>>;
@@ -222,7 +223,22 @@ async function compileArtifact(
     artifactId,
     targetAppId: ctx.appId,
   });
-  const appManifest = { ...ctx.appManifestBase, version: appVersion };
+  // Layer 5C-A: the instrumented target's selector delegates to `Codeunit "LC Control State"`, so
+  // it cannot compile without the LethAL Control dependency (+ its symbol staged in the package
+  // cache, done once in main()). BcDevMcpBackend.deploy() injects this in a private staging copy;
+  // this script drives ArtifactCompiler directly (to pause between compile and publish), so it
+  // injects the dependency here instead.
+  const baseDeps = Array.isArray(ctx.appManifestBase.dependencies)
+    ? (ctx.appManifestBase.dependencies as ReadonlyArray<Record<string, unknown>>)
+    : [];
+  const appManifest = {
+    ...ctx.appManifestBase,
+    version: appVersion,
+    dependencies: [
+      ...baseDeps,
+      { id: CONTROL_APP_ID, name: "LethAL Control", publisher: "LethAL", version: "1.0.0.0" },
+    ],
+  };
   await writeFile(
     join(scratchDir, "app.json"),
     `${JSON.stringify(appManifest, null, 2)}\n`,
@@ -281,48 +297,69 @@ function findKillerMutantId(manifest: MutantManifest): string {
 }
 
 /**
- * "A fresh behaviour probe still observes B" (spec §9): actually run the live test runner
- * through a full baseline -> mutant-kill -> clear cycle. Not Identity() again — a genuinely
+ * "A fresh behaviour probe still observes B" (spec §9): actually run the live test runner through a
+ * full baseline -> mutant-kill -> clear cycle. Not just the registry read again — a genuinely
  * independent signal that the currently-deployed artifact is alive, responsive, and its
  * mutation-control wiring behaves exactly as the fixture's hand-verified table says it must.
+ *
+ * Layer 5C-A: activate + run-one-method + clear is a single server-side `RunMutant` call, so the
+ * cycle is three `RunMutant` calls against THIS artifact's identity (the target self-registered its
+ * artifactId on publish, so the artifact guard passes). Replaces the removed in-target
+ * `MutationControl_*` OData actions. The mutated run's attestation (design §G) is a second,
+ * stronger "B not A is running" signal: a stale binary would report `identityMismatch`.
  */
 async function assertFreshBehaviour(
   ctx: Ctx,
-  killerMutantId: string,
+  artifact: CompiledArtifact,
   label: string,
 ): Promise<void> {
-  await ctx.activation.clearActive();
-  const baseline = await ctx.backend.run(ctx.overBudgetRef, {
-    coverage: "none",
+  const tx = new RunMutantTransport(ctx.odataCfg, ctx.appId, artifact.artifactId);
+  const killerMutantId = findKillerMutantId(artifact.mutantManifest);
+
+  const baseline = await tx.run({
+    ref: ctx.overBudgetRef,
+    mutantId: "",
+    attemptId: `${label}-baseline`,
     timeoutMs: RUN_TIMEOUT_MS,
   });
   assert.equal(
     baseline.outcome,
     "pass",
-    `${label}: fresh run of OverBudgetDetected with NO mutant active must PASS, got ` +
+    `${label}: fresh baseline RunMutant of OverBudgetDetected (no mutant active) must PASS, got ` +
       `${baseline.outcome}${baseline.failureMessage ? `: ${baseline.failureMessage}` : ""}`,
   );
 
-  await ctx.activation.setActive(killerMutantId);
-  const mutated = await ctx.backend.run(ctx.overBudgetRef, {
-    coverage: "none",
+  const mutated = await tx.run({
+    ref: ctx.overBudgetRef,
+    mutantId: killerMutantId,
+    attemptId: `${label}-mutated`,
     timeoutMs: RUN_TIMEOUT_MS,
   });
   assert.equal(
     mutated.outcome,
     "fail",
-    `${label}: fresh run of OverBudgetDetected with killer mutant ${killerMutantId} active must FAIL (this is the fresh-behaviour evidence that the server is genuinely running THIS artifact's code, not cached/stale state) — got ${mutated.outcome}`,
+    `${label}: RunMutant with killer mutant ${killerMutantId} active must FAIL (evidence the server is genuinely running THIS artifact's code, not cached/stale state) — got ${mutated.outcome}`,
   );
 
-  await ctx.activation.clearActive();
-  const cleared = await ctx.backend.run(ctx.overBudgetRef, {
-    coverage: "none",
+  // RunMutant clears on every terminal path, so a following baseline call proves the container was
+  // left unmutated — the "clear" half of the cycle, now server-enforced rather than a separate call.
+  const cleared = await tx.run({
+    ref: ctx.overBudgetRef,
+    mutantId: "",
+    attemptId: `${label}-cleared`,
     timeoutMs: RUN_TIMEOUT_MS,
   });
   assert.equal(
     cleared.outcome,
     "pass",
-    `${label}: fresh run of OverBudgetDetected after clearActive must PASS again, got ${cleared.outcome}`,
+    `${label}: fresh baseline RunMutant after the killer must PASS again (RunMutant left the container unmutated), got ${cleared.outcome}`,
+  );
+
+  // Attestation (design §G): the mutated run drove the deployed selector, so it must cleanly attest
+  // THIS artifact's baked identity — the live proof that B, not a stale A, is the binary that ran.
+  assert.ok(
+    mutated.attestation?.observedAny === true && mutated.attestation.identityMismatch === false,
+    `${label}: mutated RunMutant must cleanly attest artifact ${artifact.artifactId} (observedAny && !identityMismatch) — a stale binary would mismatch. got ${JSON.stringify(mutated.attestation)}`,
   );
 }
 
@@ -359,7 +396,7 @@ async function assertBFinal(
     );
   }
 
-  await assertFreshBehaviour(ctx, findKillerMutantId(artifactB.mutantManifest), label);
+  await assertFreshBehaviour(ctx, artifactB, label);
 }
 
 /**
@@ -396,11 +433,7 @@ async function probeA(ctx: Ctx): Promise<void> {
     `Probe A: B's own publish must verify as accepted before testing A, got ${JSON.stringify(verifyB)}`,
   );
   console.log("  published + verified B");
-  await assertFreshBehaviour(
-    ctx,
-    findKillerMutantId(artifactB.mutantManifest),
-    "Probe A / after B published",
-  );
+  await assertFreshBehaviour(ctx, artifactB, "Probe A / after B published");
   console.log("  fresh-behaviour probe confirms B (baseline pass -> mutant fail -> clear pass)");
 
   let aPublishError: unknown;
@@ -536,6 +569,10 @@ async function main(): Promise<void> {
     { alcPath: toolPaths.alcPath, packageCachePath: bcdev.packageCachePath, outputDir },
     defaultArtifactIo,
   );
+  // Stage the LethAL Control symbol into the compiler's package cache so the instrumented target's
+  // `LC Control State` reference resolves (mirrors BcDevMcpBackend.deploy()'s staging; the
+  // dependency itself is injected per-artifact in compileArtifact). Once — the cache persists.
+  await copyFile(bcdev.controlSymbolPath, join(bcdev.packageCachePath, "lethal-control.app"));
   // Task 8b: instrument the real deployer IO so Probe B can prove the serializer actually held
   // the two concurrent publishes one-at-a-time, not just that BC's final state happened to be
   // B (see `instrumentedDeployerIo`'s doc comment above).
@@ -559,29 +596,6 @@ async function main(): Promise<void> {
     ...(bcdev.tenant !== undefined ? { tenant: bcdev.tenant } : {}),
   };
   const verifier = new DeploymentVerifier(odataCfg);
-  const activation = new MutationControlClient(odataCfg);
-  const backend = new BcDevMcpBackend(
-    {
-      mcpCommand: bcdev.mcpCommand,
-      project: PROJECT_DIR,
-      server: bcdev.server,
-      serverInstance: bcdev.serverInstance,
-      company: bcdev.company,
-      packageCachePath: bcdev.packageCachePath,
-      controlSymbolPath: bcdev.controlSymbolPath,
-      ...(bcdev.tenant !== undefined ? { tenant: bcdev.tenant } : {}),
-      ...(launchCfg.environmentType !== undefined
-        ? { environmentType: launchCfg.environmentType }
-        : {}),
-      ...(launchCfg.environmentName !== undefined
-        ? { environmentName: launchCfg.environmentName }
-        : {}),
-      ...(bcdev.env !== undefined ? { env: bcdev.env } : {}),
-    },
-    undefined,
-    undefined, // no compiler/deployer/verifier on the backend itself — this script drives them directly
-    undefined, // no RunMutant transport factory — this script exercises activation/verify directly
-  );
 
   const appManifestBase = await readJson<Record<string, unknown>>(
     join(PROJECT_DIR, "app.json"),
@@ -606,8 +620,7 @@ async function main(): Promise<void> {
     compiler,
     deployer,
     verifier,
-    activation,
-    backend,
+    odataCfg,
     files,
     appId,
     appManifestBase,
@@ -625,7 +638,6 @@ async function main(): Promise<void> {
     await probeB(ctx);
     console.log("\nstale-publish itest: PASS (Probe A + Probe B)");
   } finally {
-    await backend.close();
     await rm(scratchRoot, { recursive: true, force: true }).catch(() => {});
   }
 }
