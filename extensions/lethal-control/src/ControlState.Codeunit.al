@@ -349,6 +349,160 @@ codeunit 71002 "LC Control State"
         Released := true;
     end;
 
+    /// <summary>Begins a publish operation under the op-marker state machine (design §4, sol#4/fable
+    /// R2-5; opSeq per R4 sol#3/F4), under a short LockTable critical section. Order is deliberate and
+    /// mirrors the priority already established for AcquireLease:
+    /// 1. blank AttemptId -&gt; fail loud (see BlankAttemptIdErr) — never let a blank value reach the
+    ///    marker, where it could later false-match another blank-AttemptId caller as branch 3 below.
+    /// 2. (Epoch, Token, Generation) mismatch -&gt; refuse (Begun=false, AlreadyCompleted=false) — no
+    ///    reason is reported (the JSON shape has none); mirrors TryRenew's silent-refusal convention.
+    /// 3. opSeq &lt;= Last Completed Op Seq -&gt; tombstoned: {begun:false, alreadyCompleted:true}. A
+    ///    delayed duplicate Begin of an already-completed attempt can never reopen it. Checked BEFORE
+    ///    the same-active check below; by construction (Op Seq is only ever set to
+    ///    Last-Completed-Op-Seq-at-the-time + 1, and Last Completed Op Seq only advances when THAT
+    ///    same op ends) an active marker's Op Seq is always &gt; Last Completed Op Seq, so this branch
+    ///    and the next are mutually exclusive regardless of order — checked first anyway, tombstone
+    ///    priority first, per the design's emphasis on that invariant.
+    /// 4. SAME active (opSeq, attemptId) -&gt; idempotent success (Begun=true) — a retry of the caller's
+    ///    own in-flight Begin, not a fresh acquire of the marker.
+    /// 5. opSeq = Last Completed Op Seq + 1 AND Op Kind = none -&gt; fresh begin: set the marker and
+    ///    stamp "Op Started At" (AcquireLease's orphan classification depends on this timestamp only
+    ///    being set here, never restamped on the idempotent replay in branch 4).
+    /// 6. Else (a different attempt claiming the active seq, or any other non-match) -&gt; refuse
+    ///    (Begun=false, AlreadyCompleted=false).</summary>
+    procedure TryBeginPublish(Epoch: Integer; Token: Text; Generation: Text; AttemptId: Text; OpSeq: BigInteger; var Begun: Boolean; var AlreadyCompleted: Boolean)
+    var
+        Lease: Record "LC Lease";
+    begin
+        Begun := false;
+        AlreadyCompleted := false;
+
+        if AttemptId = '' then
+            Error(BlankAttemptIdErr());
+
+        Lease.LockTable();
+        if not Lease.Get('') then
+            Error(LeaseRowMissingErr());
+
+        // 1. Tuple check.
+        if (Lease.Epoch <> Epoch) or (Lease.Token <> Token) or (Lease."Server Generation" <> Generation) then
+            exit;
+
+        // 2. Tombstone check (priority over same-active/fresh-begin — see doc comment).
+        if OpSeq <= Lease."Last Completed Op Seq" then begin
+            AlreadyCompleted := true;
+            exit;
+        end;
+
+        // 3. Same active (opSeq, attemptId) -> idempotent success. Deliberately does NOT restamp
+        // "Op Started At" — AcquireLease's orphan classification depends on the ORIGINAL start time.
+        if (Lease."Op Kind" = Lease."Op Kind"::publish) and (Lease."Op Seq" = OpSeq) and (Lease."Op Attempt Id" = AttemptId) then begin
+            Begun := true;
+            exit;
+        end;
+
+        // 4. Fresh begin.
+        if (OpSeq = Lease."Last Completed Op Seq" + 1) and (Lease."Op Kind" = Lease."Op Kind"::none) then begin
+            Lease."Op Kind" := Lease."Op Kind"::publish;
+            Lease."Op Attempt Id" := CopyStr(AttemptId, 1, MaxStrLen(Lease."Op Attempt Id"));
+            Lease."Op Seq" := OpSeq;
+            Lease."Op Started At" := CurrentDateTime;
+            Lease.Modify();
+            Commit();
+            Begun := true;
+            exit;
+        end;
+
+        // 5. Different attempt claiming the active seq (or any other non-match) -> refuse.
+    end;
+
+    /// <summary>Ends (tombstones) a publish operation (design §4). Under a short LockTable critical
+    /// section. Clears the marker and advances the tombstone ONLY on an exact match of
+    /// (Epoch, Token, Generation) + Op Kind = publish + Op Attempt Id = attemptId + Op Seq = opSeq —
+    /// never a different attempt's op, and never a kind other than publish. Idempotent:
+    /// opSeq &lt;= Last Completed Op Seq -&gt; {ended:true, alreadyCompleted:true} (note the asymmetry
+    /// with TryBeginPublish's tombstone branch, which reports Begun=FALSE — End's tombstone branch
+    /// reports Ended=TRUE because "already ended" IS the truthful, idempotent answer to "did my End
+    /// take effect", whereas Begin's truthful answer to "did my Begin take effect" is no, it's already
+    /// past that point). Outcome is NOT a parameter here — design §4 does not have it change the
+    /// transition, and the caller (ControlApi.EndPublish) does not invent behavior for it either; the
+    /// state machine itself has no use for it. A delayed End of a tombstoned attempt can never reclear
+    /// a later op, by the same invariant argument as TryBeginPublish (an active marker's Op Seq is
+    /// always &gt; Last Completed Op Seq).</summary>
+    procedure TryEndPublish(Epoch: Integer; Token: Text; Generation: Text; AttemptId: Text; OpSeq: BigInteger; var Ended: Boolean; var AlreadyCompleted: Boolean)
+    var
+        Lease: Record "LC Lease";
+    begin
+        Ended := false;
+        AlreadyCompleted := false;
+
+        if AttemptId = '' then
+            Error(BlankAttemptIdErr());
+
+        Lease.LockTable();
+        if not Lease.Get('') then
+            Error(LeaseRowMissingErr());
+
+        // 1. Tuple check.
+        if (Lease.Epoch <> Epoch) or (Lease.Token <> Token) or (Lease."Server Generation" <> Generation) then
+            exit;
+
+        // 2. Tombstone check (idempotent success — see doc comment on the Begin/End asymmetry).
+        if OpSeq <= Lease."Last Completed Op Seq" then begin
+            Ended := true;
+            AlreadyCompleted := true;
+            exit;
+        end;
+
+        // 3. Exact match -> clear + tombstone.
+        if (Lease."Op Kind" = Lease."Op Kind"::publish) and (Lease."Op Attempt Id" = AttemptId) and (Lease."Op Seq" = OpSeq) then begin
+            Lease."Op Kind" := Lease."Op Kind"::none;
+            Lease."Last Completed Op Seq" := OpSeq;
+            Lease.Modify();
+            Commit();
+            Ended := true;
+            exit;
+        end;
+
+        // 4. A different attempt's op, a non-publish kind, or any other non-match -> refuse.
+    end;
+
+    /// <summary>Lost-ack reconciliation read for any op, publish or run (design §4: "GetOperationStatus
+    /// ... lost-ack reconciliation of any op"). Under a short LockTable critical section, for a
+    /// consistent snapshot alongside the mutating Try* procedures above.
+    ///
+    /// Deliberately does NOT gate the read on (Epoch, Token, Generation) matching the current row —
+    /// unlike TryBeginPublish/TryEndPublish, which are WRITES and must refuse a stale/wrong tuple, this
+    /// is a READ whose entire purpose is to let a caller who has lost an ack (or lost track of its own
+    /// credentials — e.g. after a container recycle changed the Server Generation) learn the truth
+    /// regardless. Gating it the same way the writes are gated would silently defeat exactly the
+    /// scenario reconciliation exists for: the caller most likely to need this call is the one whose
+    /// tuple no longer matches. AttemptId is accepted for interface symmetry with
+    /// TryBeginPublish/TryEndPublish but is NOT used to filter or authorize the read — the design's
+    /// `completed` formula depends only on OpSeq vs "Last Completed Op Seq", and OpKind/OpAttemptId/
+    /// CurrentOpSeq are always the CURRENT marker's fields (whatever op — publish or run — is active
+    /// right now, if any), not necessarily the op the caller is asking about.</summary>
+    procedure TryGetOperationStatus(Epoch: Integer; Token: Text; Generation: Text; AttemptId: Text; OpSeq: BigInteger; var OpKind: Text; var OpAttemptId: Text; var CurrentOpSeq: BigInteger; var LastCompletedOpSeq: BigInteger; var Completed: Boolean)
+    var
+        Lease: Record "LC Lease";
+    begin
+        OpKind := '';
+        OpAttemptId := '';
+        CurrentOpSeq := 0;
+        LastCompletedOpSeq := 0;
+        Completed := false;
+
+        Lease.LockTable();
+        if not Lease.Get('') then
+            Error(LeaseRowMissingErr());
+
+        OpKind := Format(Lease."Op Kind");
+        OpAttemptId := Lease."Op Attempt Id";
+        CurrentOpSeq := Lease."Op Seq";
+        LastCompletedOpSeq := Lease."Last Completed Op Seq";
+        Completed := OpSeq <= Lease."Last Completed Op Seq";
+    end;
+
     local procedure LeaseRowMissingErr(): Text
     begin
         exit('The "LC Lease" pre-seeded row is missing (primary key ''''). Refusing to silently grant a lease without it — reinstall or upgrade "LethAL Control" to re-seed it.');
@@ -361,5 +515,17 @@ codeunit 71002 "LC Control State"
     local procedure BlankClientNonceErr(): Text
     begin
         exit('AcquireLease requires a non-blank clientNonce. Refusing to evaluate the idempotent-nonce replay against a blank value — a blank nonce could false-match an unrelated held lease''s blank "Client Nonce" and leak its credentials.');
+    end;
+
+    /// <summary>AttemptId is a required parameter for both TryBeginPublish and TryEndPublish (design
+    /// §4). A blank value is a caller-contract violation, not a legitimate idempotency key: allowing a
+    /// blank AttemptId to persist into "Op Attempt Id" would let an unrelated later caller who ALSO
+    /// supplies a blank AttemptId false-match the "same active (opSeq, attemptId)" idempotent-replay
+    /// check in TryBeginPublish (or the exact-match clear in TryEndPublish) and be treated as the
+    /// original caller retrying its own op — the same empty-vs-empty false-match hazard already closed
+    /// for ClientNonce in TryAcquire (BlankClientNonceErr).</summary>
+    local procedure BlankAttemptIdErr(): Text
+    begin
+        exit('BeginPublish/EndPublish require a non-blank attemptId. Refusing to evaluate the op-marker state machine against a blank value — a blank attemptId could persist into "Op Attempt Id" and later false-match an unrelated caller''s own blank attemptId as the idempotent retry of the same op.');
     end;
 }

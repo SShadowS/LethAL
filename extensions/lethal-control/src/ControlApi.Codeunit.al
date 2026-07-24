@@ -91,6 +91,67 @@ codeunit 71003 "LC Control API"
         Obj.WriteTo(ResultJson);
     end;
 
+    /// <summary>OData action: begin a publish operation under the op-marker state machine (design §4).
+    /// Thin wrapper over "LC Control State".TryBeginPublish — all decision logic (tuple check /
+    /// tombstone check / same-active idempotent replay / fresh begin / refuse) lives there. JSON:
+    /// {begun, alreadyCompleted?}.</summary>
+    procedure BeginPublish(Epoch: Integer; Token: Text; Generation: Text; AttemptId: Text; OpSeq: BigInteger) ResultJson: Text
+    var
+        State: Codeunit "LC Control State";
+        Begun: Boolean;
+        AlreadyCompleted: Boolean;
+        Obj: JsonObject;
+    begin
+        State.TryBeginPublish(Epoch, Token, Generation, AttemptId, OpSeq, Begun, AlreadyCompleted);
+        Obj.Add('begun', Begun);
+        if AlreadyCompleted then
+            Obj.Add('alreadyCompleted', AlreadyCompleted);
+        Obj.WriteTo(ResultJson);
+    end;
+
+    /// <summary>OData action: end (tombstone) a publish operation (design §4). Outcome is part of the
+    /// interface contract but does NOT change the state transition — EndPublish clears/tombstones the
+    /// marker identically whether the caller reports success or a deterministic failure; only a
+    /// genuinely-unknown publish result should leave the marker set, and deciding/acting on that is a
+    /// later task's recovery concern (§8), not invented here. Thin wrapper over
+    /// "LC Control State".TryEndPublish. JSON: {ended, alreadyCompleted?}.</summary>
+    procedure EndPublish(Epoch: Integer; Token: Text; Generation: Text; AttemptId: Text; OpSeq: BigInteger; Outcome: Text) ResultJson: Text
+    var
+        State: Codeunit "LC Control State";
+        Ended: Boolean;
+        AlreadyCompleted: Boolean;
+        Obj: JsonObject;
+    begin
+        State.TryEndPublish(Epoch, Token, Generation, AttemptId, OpSeq, Ended, AlreadyCompleted);
+        Obj.Add('ended', Ended);
+        if AlreadyCompleted then
+            Obj.Add('alreadyCompleted', AlreadyCompleted);
+        Obj.WriteTo(ResultJson);
+    end;
+
+    /// <summary>OData action: lost-ack reconciliation read for any op, publish or run (design §4).
+    /// Deliberately does NOT gate on (epoch, token, generation) matching the current row — see
+    /// "LC Control State".TryGetOperationStatus's doc comment for why. Thin wrapper. JSON: {opKind,
+    /// opAttemptId, opSeq, lastCompletedOpSeq, completed}.</summary>
+    procedure GetOperationStatus(Epoch: Integer; Token: Text; Generation: Text; AttemptId: Text; OpSeq: BigInteger) ResultJson: Text
+    var
+        State: Codeunit "LC Control State";
+        OpKind: Text;
+        OpAttemptId: Text;
+        CurrentOpSeq: BigInteger;
+        LastCompletedOpSeq: BigInteger;
+        Completed: Boolean;
+        Obj: JsonObject;
+    begin
+        State.TryGetOperationStatus(Epoch, Token, Generation, AttemptId, OpSeq, OpKind, OpAttemptId, CurrentOpSeq, LastCompletedOpSeq, Completed);
+        Obj.Add('opKind', OpKind);
+        Obj.Add('opAttemptId', OpAttemptId);
+        Obj.Add('opSeq', CurrentOpSeq);
+        Obj.Add('lastCompletedOpSeq', LastCompletedOpSeq);
+        Obj.Add('completed', Completed);
+        Obj.WriteTo(ResultJson);
+    end;
+
     /// <summary>
     /// Run-scoped, single-method execution primitive (spec §5). Activate the mutant, run exactly one
     /// named method under Codeunit isolation, ALWAYS clear the active state before returning. No lease
