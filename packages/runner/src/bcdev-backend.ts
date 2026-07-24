@@ -311,7 +311,22 @@ export class BcDevMcpBackend implements ExecutionBackend {
     // `BcDevDeployment`'s doc comment), so there is no "skip if absent" branch anymore.
     await deployment.harnessVerifier.verify();
     const staged = await this.stageForCompile(instrumentedDir);
-    const artifact = await deployment.compiler.compile(await this.prepareCompileInput(staged));
+    let artifact: CompiledArtifact;
+    try {
+      artifact = await deployment.compiler.compile(await this.prepareCompileInput(staged));
+    } finally {
+      // Reclaim the staged copy — each batch has a distinct batchDir, so `${batchDir}-staged`
+      // would otherwise accumulate one full instrumented-project copy per batch (the `rm` at
+      // the top of stageForCompile only overwrites a re-staged SAME name, never a prior batch's
+      // differently-named one). Nothing reads `staged` again after this point: methodIndex
+      // reads `artifact.appPath` (the compiled .app in outputDir) and localProcedures reads the
+      // ORIGINAL instrumentedDir below. Best-effort, same idiom as compileCheck()'s own cleanup —
+      // a compile already decided the outcome by here, so a stray cleanup failure must never
+      // mask it.
+      await rm(staged, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }).catch(
+        () => {},
+      );
+    }
     // Must happen before publish(): resolves this batch's coverage methodIds ahead of any
     // run() call, from the exact artifact/source that produced them.
     this.methodIndex = await AppMethodIndex.fromAppFile(artifact.appPath);

@@ -1,5 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -638,14 +638,21 @@ describe("BcDevMcpBackend.deploy", () => {
     }
   });
 
-  test("injects the LethAL Control dependency into the staged app.json and stages the symbol, leaving the original untouched", async () => {
+  test("injects the LethAL Control dependency into the staged app.json, stages the symbol, leaves the original untouched, and reclaims the staged copy", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lethal-bcdev-deploy-stage-"));
     try {
       await writeDeployInputs(dir);
       let capturedProjectDir: string | undefined;
+      // Captured DURING compile(), not re-read after deploy() returns: deploy() now cleans up
+      // its staged copy in a `finally` right after compile() settles (Important-1 fix), so by
+      // the time this test can inspect anything, `capturedProjectDir` no longer exists on disk.
+      let capturedAppJson: { dependencies?: Array<{ id: string }> } | undefined;
       const fakeCompiler = {
         compile: async (input: CompileInput) => {
           capturedProjectDir = input.projectDir;
+          capturedAppJson = JSON.parse(
+            await readFile(join(input.projectDir, "app.json"), "utf8"),
+          ) as { dependencies?: Array<{ id: string }> };
           // deploy() reads the returned appPath's own SymbolReference.json right after compile()
           // returns (AppMethodIndex.fromAppFile) — must be a real, readable fake .app zip.
           const appPath = join(dir, "fake.app");
@@ -684,10 +691,7 @@ describe("BcDevMcpBackend.deploy", () => {
       await backend.deploy(dir);
 
       expect(capturedProjectDir).toBeDefined();
-      const stagedAppJson = JSON.parse(
-        await readFile(join(capturedProjectDir as string, "app.json"), "utf8"),
-      ) as { dependencies: Array<{ id: string }> };
-      expect(stagedAppJson.dependencies.some((d) => d.id === CONTROL_APP_ID)).toBe(true);
+      expect(capturedAppJson?.dependencies?.some((d) => d.id === CONTROL_APP_ID)).toBe(true);
 
       // The shared instrumentedDir's own app.json — never mutated. al-runner reads this exact
       // dir directly, so any dependency leaking into it would break al-runner's dependency-free
@@ -699,6 +703,46 @@ describe("BcDevMcpBackend.deploy", () => {
 
       const stagedSymbol = await readFile(join(packageCachePath, "lethal-control.app"));
       expect(stagedSymbol.length).toBeGreaterThan(0);
+
+      // Important-1 fix: deploy() reclaims its staged compile copy once compile() settles —
+      // each batch has a distinct batchDir, so leaving `${batchDir}-staged` behind would
+      // accumulate one full instrumented-project copy per batch across a session.
+      await expect(stat(capturedProjectDir as string)).rejects.toThrow();
+    } finally {
+      await rmStaged(dir);
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("reclaims the staged compile copy even when compile() throws", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-bcdev-deploy-stage-cleanup-throws-"));
+    try {
+      await writeDeployInputs(dir);
+      const fakeCompiler = {
+        compile: async () => {
+          throw new AlcCompileError("boom");
+        },
+      } as unknown as ArtifactCompiler;
+      const backend = new BcDevMcpBackend(
+        {
+          mcpCommand: ["unused"],
+          project: "/al",
+          server: "http://bc",
+          serverInstance: "BC",
+          ...(await controlStaging(dir)),
+        },
+        undefined,
+        {
+          compiler: fakeCompiler,
+          deployer: {} as ContainerDeployer,
+          verifier: {} as DeploymentVerifier,
+          harnessVerifier: fakeHarnessVerifier(),
+        },
+      );
+      await expect(backend.deploy(dir)).rejects.toBeInstanceOf(AlcCompileError);
+      // Even on a compile failure, the staged copy must not linger — same `finally` cleanup as
+      // the success path above.
+      await expect(stat(`${dir}-staged`)).rejects.toThrow();
     } finally {
       await rmStaged(dir);
       await rm(dir, { recursive: true, force: true });
