@@ -17,5 +17,8 @@ lethal.config.local.json
 
 # AL symbol packages (large, machine-local)
 .alpackages/
+
+# Serena's project memories — machine-local agent scratch, not project source
+.serena/
 lethal.sqlite-shm
 lethal.sqlite-wal
