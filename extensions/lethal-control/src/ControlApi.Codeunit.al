@@ -1,7 +1,5 @@
 namespace LethAL.Control;
 
-using System.TestTools.TestRunner;
-
 /// <summary>The OData-exposed control surface (registered as a web service by the install codeunit;
 /// procedures are OData V4 unbound actions /ODataV4/LethALControl_&lt;Proc&gt;). Layer 5C-A.</summary>
 codeunit 71003 "LC Control API"
@@ -152,92 +150,122 @@ codeunit 71003 "LC Control API"
         Obj.WriteTo(ResultJson);
     end;
 
-    /// <summary>
-    /// Run-scoped, single-method execution primitive (spec §5). Activate the mutant, run exactly one
-    /// named method under Codeunit isolation, ALWAYS clear the active state before returning. No lease
-    /// yet — leaseEpoch/leaseToken are reserved and MUST be empty in 5C-A.
-    /// </summary>
-    procedure RunMutant(TargetAppId: Text; ArtifactId: Text; AttemptId: Text; MutantId: Text; TestCodeunitId: Integer; TestMethod: Text; LeaseEpoch: Text; LeaseToken: Text) ResultJson: Text
+    /// <summary>OData action: recover the caller's OWN stranded op marker (design §5/§8). Thin wrapper
+    /// over "LC Control State".TryRecoverOp — the proof-of-ownership rules, the unconditional
+    /// active-tuple clear and the tombstone all live there, as does the client contract this MUST be
+    /// gated by (a parsed application-level terminal response only — never a bare HTTP status, a
+    /// connection error or a client timeout, which are indistinguishable from a still-running AL op).
+    /// JSON: {recovered, alreadyCompleted?}.</summary>
+    procedure RecoverOp(Epoch: Integer; Token: Text; Generation: Text; AttemptId: Text; OpSeq: BigInteger) ResultJson: Text
     var
         State: Codeunit "LC Control State";
+        Recovered: Boolean;
+        AlreadyCompleted: Boolean;
+        Obj: JsonObject;
+    begin
+        State.TryRecoverOp(Epoch, Token, Generation, AttemptId, OpSeq, Recovered, AlreadyCompleted);
+        Obj.Add('recovered', Recovered);
+        if AlreadyCompleted then
+            Obj.Add('alreadyCompleted', AlreadyCompleted);
+        Obj.WriteTo(ResultJson);
+    end;
+
+    /// <summary>OData action: the operator recovery reset (design §8). Step 3 of a FOUR-step procedure
+    /// that a restart alone does not accomplish — restart the NST, read the current serverGeneration
+    /// from a live status/harness call against the restarted instance, call this with that value as
+    /// expectedGeneration, then probe clean and clear the quarantine. The echo is the authorization:
+    /// it binds the reset to a newly-observed service incarnation, because every successful reset mints
+    /// a new generation and so an echo can only come from post-reset live state. Thin wrapper over
+    /// "LC Control State".TryForceResetLease. JSON: {reset, serverGeneration?, epoch?, reason?}.</summary>
+    procedure ForceResetLease(ExpectedGeneration: Text) ResultJson: Text
+    var
+        State: Codeunit "LC Control State";
+        ResetDone: Boolean;
+        NewGeneration: Text;
+        NewEpoch: Integer;
+        Reason: Text;
+        Obj: JsonObject;
+    begin
+        State.TryForceResetLease(ExpectedGeneration, ResetDone, NewGeneration, NewEpoch, Reason);
+        Obj.Add('reset', ResetDone);
+        if ResetDone then begin
+            Obj.Add('serverGeneration', NewGeneration);
+            Obj.Add('epoch', NewEpoch);
+        end else
+            Obj.Add('reason', Reason);
+        Obj.WriteTo(ResultJson);
+    end;
+
+    /// <summary>
+    /// Run-scoped, single-method execution primitive, fenced by the machine-global lease (design §5).
+    /// Three phases, and the split is the whole point: a mutant run that cannot PROVE, after the fact,
+    /// that it still held the lease it started under must not have its result recorded.
+    ///
+    /// Phase 1 — claim, under LockTable, one transaction, one Commit (in TryBeginRun). Validates
+    /// (leaseEpoch, leaseToken, serverGeneration) + the artifact + the opSeq rules, sets Op Kind = run
+    /// and the active tuple together. Refusal -&gt; 'lease-invalid' / 'artifact-mismatch', nothing
+    /// claimed, nothing run.
+    ///
+    /// Phase 2 — run, with NO lease lock held (phase 1's Commit released it), behind a catchable
+    /// Codeunit.Run boundary. A server-known terminal error (test framework / AL exception) is captured
+    /// as a terminal error outcome instead of unwinding past phase 3 and stranding the marker; it is
+    /// reported in codeunitResults as {"error": ...}, the same fail-closed shape RunOneMethod already
+    /// uses, so it can never be mistaken for a test verdict.
+    ///
+    /// Phase 3 — verify-and-clear, under LockTable, ONE transaction with exactly ONE Commit (in
+    /// TryFinishRun). Only an exact (epoch, token, generation) + Op Kind = run + attemptId + opSeq
+    /// match records the result; anything else returns 'lease-invalid' having touched no row.
+    ///
+    /// JSON: the 5C-A status shape, with the new status 'lease-invalid'. On any non-'ran' status the
+    /// result and attestation are deliberately reported as empty/false — there is no verdict to carry.
+    /// </summary>
+    procedure RunMutant(TargetAppId: Text; ArtifactId: Text; AttemptId: Text; MutantId: Text; TestCodeunitId: Integer; TestMethod: Text; LeaseEpoch: Integer; LeaseToken: Text; ServerGeneration: Text; OpSeq: BigInteger) ResultJson: Text
+    var
+        State: Codeunit "LC Control State";
+        Runner: Codeunit "LC Run Method";
+        Claimed: Boolean;
+        ClaimReason: Text;
+        Verified: Boolean;
         CodeunitResults: Text;
         ObservedAny: Boolean;
         IdentityMismatch: Boolean;
     begin
-        // 1. Reserved-param guard — the lease belongs to 5C-B.
-        if (LeaseEpoch <> '') or (LeaseToken <> '') then
-            exit(BuildStatus('reserved-params', TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, '', false, false));
+        // PHASE 1 — claim under lock. Nothing is written, and nothing runs, unless this succeeds.
+        State.TryBeginRun(LeaseEpoch, LeaseToken, ServerGeneration, AttemptId, OpSeq, TargetAppId, ArtifactId, MutantId, Claimed, ClaimReason);
+        if not Claimed then
+            exit(BuildStatus(ClaimReason, TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, '', false, false));
 
-        // 2. Artifact guard (detector; 5C-B makes it a fence). Registry-based — no target dependency.
-        if State.RegisteredArtifact(TargetAppId) <> ArtifactId then
-            exit(BuildStatus('artifact-mismatch', TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, '', false, false));
-
-        // 3. Activate (run-scoped). Empty MutantId = baseline (nothing active).
-        State.SetActive(TargetAppId, ArtifactId, MutantId);
-
-        // 4-5. Run exactly one method. RunAllTests records test failures in the lines (does not throw),
-        //      so control returns here and step 6 always clears. (A catastrophic AL error would escape
-        //      to the caller as an OData error -> client classifies in-flight-unknown -> 5B quarantine.)
-        CodeunitResults := RunOneMethod(State.NextSuiteName(), TestCodeunitId, TestMethod);
+        // PHASE 2 — run exactly one method OUTSIDE the lease lock, behind a catchable boundary.
+        // GetLastErrorText is read immediately on the failing branch, before any other statement can
+        // clear it. Attestation is read here, BEFORE phase 3, because phase 3 resets it unconditionally.
+        Runner.SetRequest(State.NextSuiteName(), TestCodeunitId, TestMethod);
+        if Runner.Run() then
+            CodeunitResults := Runner.Results()
+        else
+            CodeunitResults := BuildRunError(GetLastErrorText());
         ObservedAny := State.AttestationObservedAny();
         IdentityMismatch := State.AttestationMismatch();
 
-        // 6. Clear (run-scoped) — the container is left unmutated after every call.
-        State.ClearActive();
+        // PHASE 3 — verify-and-clear under lock, one transaction, one Commit.
+        State.TryFinishRun(LeaseEpoch, LeaseToken, ServerGeneration, AttemptId, OpSeq, TargetAppId, ArtifactId, MutantId, Verified);
+        if not Verified then
+            exit(BuildStatus('lease-invalid', TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, '', false, false));
 
         exit(BuildStatus('ran', TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, CodeunitResults, ObservedAny, IdentityMismatch));
     end;
 
-    /// <summary>Build a fresh suite, run EXACTLY the one named method (Run flags, since RunAllTests
-    /// resets input filters), return the codeunit's per-method result JSON. Fail closed unless exactly
-    /// one method matches.</summary>
-    local procedure RunOneMethod(SuiteName: Code[10]; TestCodeunitId: Integer; TestMethod: Text): Text
+    /// <summary>Wraps a caught phase-2 terminal error in the SAME {"error": ...} codeunitResults shape
+    /// RunOneMethod already uses for its own fail-closed path. Deliberately not a bare string and not a
+    /// testResults array: a client parsing codeunitResults finds zero test lines and must classify it
+    /// as a typed error, never as a pass/fail verdict.</summary>
+    local procedure BuildRunError(ErrorText: Text): Text
     var
-        ALTestSuite: Record "AL Test Suite";
-        Line: Record "Test Method Line";
-        CodeunitLine: Record "Test Method Line";
-        Mgt: Codeunit "Test Suite Mgt.";
-        ErrObj: JsonObject;
-        ErrJson: Text;
-        MatchCount: Integer;
+        Obj: JsonObject;
+        Out: Text;
     begin
-        if ALTestSuite.Get(SuiteName) then
-            ALTestSuite.Delete(true);
-        Mgt.CreateTestSuite(SuiteName);
-        ALTestSuite.Get(SuiteName);
-        Mgt.SelectTestMethodsByRange(ALTestSuite, Format(TestCodeunitId));
-
-        Line.SetRange("Test Suite", SuiteName);
-        Line.SetRange("Line Type", Line."Line Type"::"Function");
-        if Line.FindSet() then
-            repeat
-                Line.Validate(Run, false);
-                Line.Modify(true);
-            until Line.Next() = 0;
-
-        Line.Reset();
-        Line.SetRange("Test Suite", SuiteName);
-        Line.SetRange("Line Type", Line."Line Type"::"Function");
-        Line.SetRange(Name, TestMethod);
-        MatchCount := Line.Count();
-        if MatchCount <> 1 then begin
-            ErrObj.Add('error', StrSubstNo('expected exactly one method %1, found %2', TestMethod, MatchCount));
-            ErrObj.WriteTo(ErrJson);
-            exit(ErrJson);
-        end;
-        Line.FindFirst();
-        Line.Validate(Run, true);
-        Line.Modify(true);
-
-        Line.Reset();
-        Line.SetRange("Test Suite", SuiteName);
-        Line.FindFirst();
-        Mgt.RunAllTests(Line);
-
-        CodeunitLine.SetRange("Test Suite", SuiteName);
-        CodeunitLine.SetRange("Line Type", CodeunitLine."Line Type"::Codeunit);
-        CodeunitLine.FindFirst();
-        exit(Mgt.TestResultsToJSON(CodeunitLine));
+        Obj.Add('error', ErrorText);
+        Obj.WriteTo(Out);
+        exit(Out);
     end;
 
     /// <summary>Builds the AcquireLease JSON result. On grant: {granted, epoch, token,

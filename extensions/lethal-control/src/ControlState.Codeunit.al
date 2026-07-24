@@ -49,7 +49,13 @@ codeunit 71002 "LC Control State"
         Loaded := true;
     end;
 
-    procedure SetActive(TargetAppId: Text; ArtifactId: Text; MutantId: Text)
+    /// <summary>Writes the active tuple (table + the in-memory attestation expectations this run is
+    /// judged against). Deliberately does NOT Commit: it is called from inside RunMutant phase 1's
+    /// single locked transaction (design §5), which owns the one Commit — so the op marker and the
+    /// active row land atomically or not at all. Local by construction: under the fence, the ONLY
+    /// legitimate writer of "LC Mutation Active" is a phase 1 that has just proven it holds the
+    /// lease; an unfenced public SetActive would be a way around that proof.</summary>
+    local procedure WriteActive(TargetAppId: Text; ArtifactId: Text; MutantId: Text)
     var
         Active: Record "LC Mutation Active";
     begin
@@ -66,14 +72,56 @@ codeunit 71002 "LC Control State"
         Active."Artifact Id" := CopyStr(ArtifactId, 1, MaxStrLen(Active."Artifact Id"));
         Active."Mutant Id" := CopyStr(MutantId, 1, MaxStrLen(Active."Mutant Id"));
         Active.Modify();
-        Commit();
         CachedTargetAppId := TargetAppId;
         CachedArtifactId := ArtifactId;
         CachedMutantId := MutantId;
         Loaded := true;
     end;
 
-    procedure ClearActive()
+    /// <summary>Replaces 5C-A's ClearActive (design §5). Two deliberately DIFFERENT scopes:
+    ///
+    /// The TABLE write is CONDITIONAL — it blanks "LC Mutation Active" only when the row still holds
+    /// THIS attempt's exact tuple, so a phase 3 that arrives after another attempt legitimately
+    /// re-activated the row never blanks that attempt's mutant out from under it. The comparison is
+    /// against the CopyStr-bounded values WriteActive actually stored, not the raw arguments: an
+    /// over-long id would otherwise make our OWN row un-clearable and strand a live mutant in the
+    /// container — the worst failure direction available here.
+    ///
+    /// The IN-MEMORY reset is UNCONDITIONAL (design §5, R4 fable F3), matching 5C-A ClearActive's
+    /// in-memory behavior: a surviving ExpectedArtifactId/ObservedAny would fake a clean attestation
+    /// for the wrong artifact on the next call — precisely the false verdict this layer exists to
+    /// prevent.
+    ///
+    /// NO Commit: phase 3 is ONE transaction with exactly one Commit, which it owns (R2 fix). The
+    /// Commit that 5C-A's ClearActive did has moved there.</summary>
+    procedure ClearActiveIf(TargetAppId: Text; ArtifactId: Text; MutantId: Text)
+    var
+        Active: Record "LC Mutation Active";
+    begin
+        // Nested rather than `if Active.Get('') and (...)`: AL does not guarantee short-circuit
+        // evaluation of `and`, so a single flat condition could reach Modify() on a record whose
+        // Get() failed.
+        if Active.Get('') then
+            if (Active."Target App Id" = CopyStr(TargetAppId, 1, MaxStrLen(Active."Target App Id"))) and
+               (Active."Artifact Id" = CopyStr(ArtifactId, 1, MaxStrLen(Active."Artifact Id"))) and
+               (Active."Mutant Id" = CopyStr(MutantId, 1, MaxStrLen(Active."Mutant Id"))) then begin
+                Active."Target App Id" := '';
+                Active."Artifact Id" := '';
+                Active."Mutant Id" := '';
+                Active.Modify();
+            end;
+        ResetAttestationState();
+    end;
+
+    /// <summary>Blanks the active tuple UNCONDITIONALLY (table + in-memory), no Commit — the caller
+    /// owns the single Commit of its transaction. Used ONLY by the two recovery paths whose
+    /// authorization already proves ownership of whatever the row holds: TryRecoverOp (the caller's
+    /// (epoch, token, generation, attemptId, opSeq) matched the ACTIVE marker, and under the fence
+    /// only a marker holder's phase 1 can have written the row) and TryForceResetLease (design §8,
+    /// R4 sol#5 — a recovered container must not keep a committed mutant that the next fresh session
+    /// would execute and move a verdict with). Everything else must use the tuple-conditional
+    /// ClearActiveIf.</summary>
+    local procedure ForceClearActive()
     var
         Active: Record "LC Mutation Active";
     begin
@@ -82,8 +130,17 @@ codeunit 71002 "LC Control State"
             Active."Artifact Id" := '';
             Active."Mutant Id" := '';
             Active.Modify();
-            Commit();
         end;
+        ResetAttestationState();
+    end;
+
+    /// <summary>Clears every in-memory field the SingleInstance instance carries between calls: the
+    /// cached active tuple AND the attestation expectations/observations. Extracted from 5C-A's
+    /// ClearActive so both phase-3 exits (matched and lease-invalid) can run it unconditionally.
+    /// Loaded stays TRUE with a blank cache on purpose — that makes IsActive fail closed (no mutant
+    /// activates) instead of re-reading a table row that may now belong to another attempt.</summary>
+    local procedure ResetAttestationState()
+    begin
         CachedTargetAppId := '';
         CachedArtifactId := '';
         CachedMutantId := '';
@@ -185,6 +242,33 @@ codeunit 71002 "LC Control State"
     local procedure GraceMs(): Integer
     begin
         exit(3 * RenewPeriodMs());
+    end;
+
+    /// <summary>The minimum runway a run claim guarantees on "Expires At" (design §5: a phase-1 tuple
+    /// match is honored even if momentarily past "Expires At", and the claim extends it atomically).
+    /// Deliberately GraceMs() + one renew period: AcquireLease classifies an unresolved marker as
+    /// orphaned only past "Expires At" + GraceMs(), so this guarantees a run that was just claimed
+    /// cannot be called orphaned before the holder's next heartbeat renew is a full period late.
+    /// It is a FLOOR, never a ceiling — ExtendRunClaim never shortens a longer deadline the holder's
+    /// own RenewLease already set, and it is not the run's time budget: a long run stays alive by
+    /// renewing, exactly as an idle holder does.</summary>
+    local procedure RunClaimRunwayMs(): Integer
+    begin
+        exit(GraceMs() + RenewPeriodMs());
+    end;
+
+    /// <summary>Pushes "Expires At" out to at least RunClaimRunwayMs() from now, never inwards. Called
+    /// only on the two branches of TryBeginRun that actually claim, inside their locked transaction —
+    /// so the "honored even if momentarily past Expires At" rule (design §5 sol#6, same as TryRenew)
+    /// cannot leave a live run sitting on an already-lapsed deadline for a competing acquire to
+    /// classify as orphaned.</summary>
+    local procedure ExtendRunClaim(var Lease: Record "LC Lease")
+    var
+        Runway: DateTime;
+    begin
+        Runway := CurrentDateTime + RunClaimRunwayMs();
+        if Lease."Expires At" < Runway then
+            Lease."Expires At" := Runway;
     end;
 
     /// <summary>Attempts to acquire the machine-global lease under a short LockTable critical section
@@ -503,6 +587,293 @@ codeunit 71002 "LC Control State"
         Completed := OpSeq <= Lease."Last Completed Op Seq";
     end;
 
+    /// <summary>PHASE 1 of the two-phase RunMutant fence (design §5) — CLAIM. A short LockTable
+    /// critical section, ONE transaction, exactly one Commit at the end of each claiming branch (the
+    /// Commit releases the lock BY DESIGN, so phase 2 runs with no lease lock held).
+    ///
+    /// The opSeq rules mirror TryBeginPublish EXACTLY, and must keep doing so. The whole op-marker
+    /// state machine rests on one cross-op invariant: WHILE "Op Kind" &lt;&gt; none, "Op Seq" is always
+    /// "Last Completed Op Seq" + 1. TryBeginPublish's/TryEndPublish's safety argument (their tombstone
+    /// branch and their same-active branch are mutually exclusive regardless of order) is derived from
+    /// that invariant alone, so a run claim assigning "Op Seq" by any other rule would retroactively
+    /// break publish. Order:
+    /// 1. blank/zero credentials or blank AttemptId -&gt; fail loud (ValidateFenceCredentials) — never
+    ///    let a blank value equality-match a blank stored value into a success path.
+    /// 2. (Epoch, Token, Generation) mismatch -&gt; Reason 'lease-invalid', touch nothing. Checked BEFORE
+    ///    the artifact guard on purpose: a caller that has genuinely lost the lease must always be told
+    ///    'lease-invalid', because that is the status the client latches on to invalidate the batch's
+    ///    verdicts (design §8); handing it the weaker 'artifact-mismatch' instead would silently skip
+    ///    that latch when BOTH are wrong. A match is honored EVEN IF momentarily past "Expires At" —
+    ///    same holder, same rule as TryRenew (design §5 sol#6) — and the claim extends it atomically.
+    /// 3. artifact guard -&gt; Reason 'artifact-mismatch', claim nothing. Placed before any write so a
+    ///    mismatched artifact can never strand a marker, and can never briefly activate a mutant for
+    ///    an artifact that is not the deployed one.
+    /// 4. OpSeq &lt;= "Last Completed Op Seq" -&gt; the op is already tombstoned; refuse. A delayed
+    ///    duplicate of a completed run must never re-run it (and its result can no longer be recorded:
+    ///    phase 3 would find the marker gone).
+    /// 5. SAME active (run, OpSeq, AttemptId) -&gt; idempotent re-claim: the claim this caller is asking
+    ///    about IS still its own, which is the truthful answer. Deliberately does NOT restamp
+    ///    "Op Started At" — AcquireLease's orphan classification depends on the ORIGINAL start time.
+    ///    NOTE the client-side counterpart: design §5 forbids retrying a RunMutant whose op is still
+    ///    ACTIVE (the caller polls/quarantines instead), because two concurrent invocations of the same
+    ///    attempt would both execute phase 2 against shared DB state. The server cannot distinguish
+    ///    the retry from the original; the idempotency here is about the CLAIM, not a licence to
+    ///    re-run.
+    /// 6. OpSeq = "Last Completed Op Seq" + 1 AND "Op Kind" = none -&gt; fresh claim.
+    /// 7. else (a different attempt claiming the active seq, a publish in flight, any other non-match)
+    ///    -&gt; refuse 'lease-invalid'.</summary>
+    procedure TryBeginRun(Epoch: Integer; Token: Text; Generation: Text; AttemptId: Text; OpSeq: BigInteger; TargetAppId: Text; ArtifactId: Text; MutantId: Text; var Claimed: Boolean; var Reason: Text)
+    var
+        Lease: Record "LC Lease";
+    begin
+        Claimed := false;
+        Reason := '';
+
+        ValidateFenceCredentials(Epoch, Token, Generation, AttemptId);
+
+        Lease.LockTable();
+        if not Lease.Get('') then
+            Error(LeaseRowMissingErr());
+
+        // 1. Tuple check — highest priority (see doc comment).
+        if (Lease.Epoch <> Epoch) or (Lease.Token <> Token) or (Lease."Server Generation" <> Generation) then begin
+            Reason := 'lease-invalid';
+            exit;
+        end;
+
+        // 2. Artifact guard (5C-A's detector, now inside the fence and before any write). Blank ids
+        // are refused outright: RegisteredArtifact returns '' for an unknown target, so a blank
+        // TargetAppId with a blank ArtifactId would otherwise equality-match ('' = '') and claim a run
+        // for no artifact at all — the empty-vs-empty false match this project treats as its signature
+        // bug.
+        if (TargetAppId = '') or (ArtifactId = '') or (RegisteredArtifact(TargetAppId) <> ArtifactId) then begin
+            Reason := 'artifact-mismatch';
+            exit;
+        end;
+
+        // 3. Tombstone check (priority over same-active/fresh-claim — see TryBeginPublish's argument).
+        if OpSeq <= Lease."Last Completed Op Seq" then begin
+            Reason := 'lease-invalid';
+            exit;
+        end;
+
+        // 4. Same active (run, OpSeq, AttemptId) -> idempotent re-claim. WriteActive re-runs so THIS
+        // session's in-memory attestation expectations are set (they are per-session, and a retry
+        // arriving on a different session would otherwise attest against blanks).
+        if (Lease."Op Kind" = Lease."Op Kind"::run) and (Lease."Op Seq" = OpSeq) and (Lease."Op Attempt Id" = AttemptId) then begin
+            ExtendRunClaim(Lease);
+            Lease.Modify();
+            WriteActive(TargetAppId, ArtifactId, MutantId);
+            Commit();
+            Claimed := true;
+            exit;
+        end;
+
+        // 5. Fresh claim.
+        if (OpSeq = Lease."Last Completed Op Seq" + 1) and (Lease."Op Kind" = Lease."Op Kind"::none) then begin
+            Lease."Op Kind" := Lease."Op Kind"::run;
+            Lease."Op Attempt Id" := CopyStr(AttemptId, 1, MaxStrLen(Lease."Op Attempt Id"));
+            Lease."Op Seq" := OpSeq;
+            Lease."Op Started At" := CurrentDateTime;
+            ExtendRunClaim(Lease);
+            Lease.Modify();
+            WriteActive(TargetAppId, ArtifactId, MutantId);
+            Commit();
+            Claimed := true;
+            exit;
+        end;
+
+        // 6. Anything else -> refuse.
+        Reason := 'lease-invalid';
+    end;
+
+    /// <summary>PHASE 3 of the two-phase RunMutant fence (design §5) — VERIFY-AND-CLEAR. A short
+    /// LockTable critical section, ONE transaction, EXACTLY ONE Commit, and no internal Commit
+    /// anywhere below it (ClearActiveIf deliberately does not commit — R2 fix).
+    ///
+    /// The result of a mutant run is recorded ONLY on an exact match of (Epoch, Token, Generation)
+    /// AND "Op Kind" = run AND "Op Attempt Id" = AttemptId AND "Op Seq" = OpSeq. A run that cannot
+    /// prove it still holds the lease it started under must not have its result recorded — that is the
+    /// entire point of the layer. On a match, the SAME transaction clears this attempt's active tuple
+    /// (tuple-conditional), clears the marker and advances "Last Completed Op Seq" to "Op Seq", so the
+    /// container is left unmutated and the op tombstoned atomically; by the cross-op invariant an
+    /// active marker's "Op Seq" is always "Last Completed Op Seq" + 1, so the tombstone only ever
+    /// advances.
+    ///
+    /// Any mismatch -&gt; Verified = false (the caller reports 'lease-invalid'): BOTH the "LC Lease" row
+    /// and the "LC Mutation Active" row are left completely untouched — they belong to whoever holds
+    /// the lease now.
+    ///
+    /// The in-memory attestation reset runs UNCONDITIONALLY on BOTH exits (design §5, R4 fable F3):
+    /// via ClearActiveIf on the matched path, and directly on the lease-invalid path. A surviving
+    /// ExpectedArtifactId/ObservedAny would fake a clean attestation for the wrong artifact on the
+    /// next call.</summary>
+    procedure TryFinishRun(Epoch: Integer; Token: Text; Generation: Text; AttemptId: Text; OpSeq: BigInteger; TargetAppId: Text; ArtifactId: Text; MutantId: Text; var Verified: Boolean)
+    var
+        Lease: Record "LC Lease";
+    begin
+        Verified := false;
+
+        ValidateFenceCredentials(Epoch, Token, Generation, AttemptId);
+
+        Lease.LockTable();
+        if not Lease.Get('') then
+            Error(LeaseRowMissingErr());
+
+        if (Lease.Epoch = Epoch) and (Lease.Token = Token) and (Lease."Server Generation" = Generation) and
+           (Lease."Op Kind" = Lease."Op Kind"::run) and (Lease."Op Attempt Id" = AttemptId) and (Lease."Op Seq" = OpSeq) then begin
+            ClearActiveIf(TargetAppId, ArtifactId, MutantId);
+            Lease."Op Kind" := Lease."Op Kind"::none;
+            Lease."Last Completed Op Seq" := OpSeq;
+            Lease.Modify();
+            Commit();
+            Verified := true;
+            exit;
+        end;
+
+        // lease-invalid: touch no row. The in-memory reset is still unconditional.
+        ResetAttestationState();
+    end;
+
+    /// <summary>Server-side recovery of the caller's OWN stranded op marker (design §5/§8). A short
+    /// LockTable critical section, ONE transaction, exactly one Commit on the recovering branch.
+    ///
+    /// Authorization is the full proof-of-ownership tuple: (Epoch, Token, Generation) must match the
+    /// current row AND the ACTIVE marker must be exactly this caller's ("Op Attempt Id" = AttemptId
+    /// AND "Op Seq" = OpSeq) — never another attempt's op. Kind-agnostic ("Op Kind" &lt;&gt; none), so it
+    /// recovers a stranded run or a stranded publish alike; the active-tuple clear is a no-op for a
+    /// publish, which never writes that row.
+    ///
+    /// The active clear is UNCONDITIONAL (ForceClearActive) rather than tuple-conditional because
+    /// RecoverOp receives no (targetAppId, artifactId, mutantId) — and it does not need them: under
+    /// the fence, only a marker holder's phase 1 can have written that row, and the marker match IS
+    /// the ownership proof. Leaving it set is the dangerous direction (R4 sol#5).
+    ///
+    /// Idempotent: OpSeq &lt;= "Last Completed Op Seq" -&gt; {Recovered = true, AlreadyCompleted = true},
+    /// mirroring TryEndPublish's tombstone branch — "is my op resolved" is truthfully yes.
+    ///
+    /// CLIENT CONTRACT (design §5, R4 sol#1/fable F2): RecoverOp is permitted ONLY after a PARSED
+    /// application-level terminal response, which proves the AL invocation unwound — NEVER after a
+    /// bare HTTP status (a proxy 502/504), a connection error or a client timeout, which are
+    /// indistinguishable from a still-running AL op and must poll/quarantine instead. The server
+    /// cannot see that difference; the gate is enforced client-side.</summary>
+    procedure TryRecoverOp(Epoch: Integer; Token: Text; Generation: Text; AttemptId: Text; OpSeq: BigInteger; var Recovered: Boolean; var AlreadyCompleted: Boolean)
+    var
+        Lease: Record "LC Lease";
+    begin
+        Recovered := false;
+        AlreadyCompleted := false;
+
+        ValidateFenceCredentials(Epoch, Token, Generation, AttemptId);
+
+        Lease.LockTable();
+        if not Lease.Get('') then
+            Error(LeaseRowMissingErr());
+
+        // 1. Tuple check.
+        if (Lease.Epoch <> Epoch) or (Lease.Token <> Token) or (Lease."Server Generation" <> Generation) then
+            exit;
+
+        // 2. Tombstone check — already resolved, nothing to recover.
+        if OpSeq <= Lease."Last Completed Op Seq" then begin
+            Recovered := true;
+            AlreadyCompleted := true;
+            exit;
+        end;
+
+        // 3. Exact match on the ACTIVE marker -> clear marker + active tuple + tombstone, one txn.
+        if (Lease."Op Kind" <> Lease."Op Kind"::none) and (Lease."Op Attempt Id" = AttemptId) and (Lease."Op Seq" = OpSeq) then begin
+            ForceClearActive();
+            Lease."Op Kind" := Lease."Op Kind"::none;
+            Lease."Last Completed Op Seq" := OpSeq;
+            Lease.Modify();
+            Commit();
+            Recovered := true;
+            exit;
+        end;
+
+        // 4. A different attempt's op, an idle marker, or any other non-match -> refuse.
+    end;
+
+    /// <summary>Operator recovery action (design §8). A short LockTable critical section, ONE
+    /// transaction, exactly one Commit.
+    ///
+    /// OPERATIONAL CONTRACT — the recovery is ONE procedure, in this order, and a restart alone is not
+    /// enough (the marker and the active tuple are committed TABLE ROWS that survive a restart):
+    /// 1. Restart the NST/container. That is what actually kills a surviving AL op — the running
+    ///    session and every SingleInstance codeunit die with it.
+    /// 2. Read the CURRENT "Server Generation" from a live status/harness call against the RESTARTED
+    ///    service instance.
+    /// 3. Call ForceResetLease passing that value as ExpectedGeneration.
+    /// 4. Probe that the container is clean (baseline run / active-state read), then clear the
+    ///    'container-needs-recycle' quarantine record.
+    ///
+    /// AUTHORIZATION (R4 sol#4 — bind the reset to a newly-observed service incarnation, not merely to
+    /// operator credentials): the ExpectedGeneration echo. The reset is refused unless the echo equals
+    /// the row's LIVE "Server Generation". Since every successful reset mints a NEW generation, an echo
+    /// can only be obtained by reading the row after the last reset — so a pre-recorded or replayed
+    /// reset request cannot fire a second time, and an operator who never observed live post-restart
+    /// state cannot supply the value at all. A blank echo fails loud rather than being compared. This
+    /// is deliberately NOT an invented NST-incarnation API: the echo plus this contract IS the binding.
+    ///
+    /// In one transaction: mint a new "Server Generation" (every pre-reset credential is now dead at
+    /// every fence, including a stale pre-recovery client's), "Op Kind" = none, clear Token / "Client
+    /// Nonce" / Owner / "Op Attempt Id" / "Op Started At" / "Op Seq" / "Expires At", Epoch += 1, AND
+    /// clear the committed "LC Mutation Active" row (R4 sol#5 — otherwise a stale active mutant would
+    /// be executed by the next fresh session and move a verdict). "Last Completed Op Seq" is
+    /// deliberately PRESERVED: it is a monotonic tombstone, and rewinding it would allow a sequence
+    /// number to be reused.</summary>
+    procedure TryForceResetLease(ExpectedGeneration: Text; var ResetDone: Boolean; var NewGeneration: Text; var NewEpoch: Integer; var Reason: Text)
+    var
+        Lease: Record "LC Lease";
+    begin
+        ResetDone := false;
+        NewGeneration := '';
+        NewEpoch := 0;
+        Reason := '';
+
+        if ExpectedGeneration = '' then
+            Error(BlankExpectedGenerationErr());
+
+        Lease.LockTable();
+        if not Lease.Get('') then
+            Error(LeaseRowMissingErr());
+
+        if ExpectedGeneration <> Lease."Server Generation" then begin
+            Reason := 'generation-changed';
+            exit;
+        end;
+
+        Lease."Server Generation" := CopyStr(NewToken(), 1, MaxStrLen(Lease."Server Generation"));
+        Lease.Epoch += 1;
+        Lease.Token := '';
+        Lease.Owner := '';
+        Lease."Expires At" := 0DT;
+        Lease."Client Nonce" := '';
+        Lease."Op Kind" := Lease."Op Kind"::none;
+        Lease."Op Attempt Id" := '';
+        Lease."Op Started At" := 0DT;
+        Lease."Op Seq" := 0;
+        Lease.Modify();
+        ForceClearActive();
+        Commit();
+
+        ResetDone := true;
+        NewGeneration := Lease."Server Generation";
+        NewEpoch := Lease.Epoch;
+    end;
+
+    /// <summary>Caller-contract gate shared by every fenced operation (TryBeginRun, TryFinishRun,
+    /// TryRecoverOp). Validated BEFORE taking the lock — a malformed call never gets a critical
+    /// section.</summary>
+    local procedure ValidateFenceCredentials(Epoch: Integer; Token: Text; Generation: Text; AttemptId: Text)
+    begin
+        if (Epoch <= 0) or (Token = '') or (Generation = '') then
+            Error(BlankLeaseCredentialsErr());
+        if AttemptId = '' then
+            Error(BlankAttemptIdErr());
+    end;
+
     local procedure LeaseRowMissingErr(): Text
     begin
         exit('The "LC Lease" pre-seeded row is missing (primary key ''''). Refusing to silently grant a lease without it — reinstall or upgrade "LethAL Control" to re-seed it.');
@@ -517,15 +888,38 @@ codeunit 71002 "LC Control State"
         exit('AcquireLease requires a non-blank clientNonce. Refusing to evaluate the idempotent-nonce replay against a blank value — a blank nonce could false-match an unrelated held lease''s blank "Client Nonce" and leak its credentials.');
     end;
 
-    /// <summary>AttemptId is a required parameter for both TryBeginPublish and TryEndPublish (design
-    /// §4). A blank value is a caller-contract violation, not a legitimate idempotency key: allowing a
-    /// blank AttemptId to persist into "Op Attempt Id" would let an unrelated later caller who ALSO
-    /// supplies a blank AttemptId false-match the "same active (opSeq, attemptId)" idempotent-replay
-    /// check in TryBeginPublish (or the exact-match clear in TryEndPublish) and be treated as the
-    /// original caller retrying its own op — the same empty-vs-empty false-match hazard already closed
-    /// for ClientNonce in TryAcquire (BlankClientNonceErr).</summary>
+    /// <summary>AttemptId is a required parameter for every op-marker operation — TryBeginPublish,
+    /// TryEndPublish, and the run fence's TryBeginRun/TryFinishRun/TryRecoverOp (design §4/§5). A blank
+    /// value is a caller-contract violation, not a legitimate idempotency key: allowing a blank
+    /// AttemptId to persist into "Op Attempt Id" would let an unrelated later caller who ALSO supplies
+    /// a blank AttemptId false-match the "same active (opSeq, attemptId)" idempotent-replay check (or
+    /// the exact-match clear in TryEndPublish/TryFinishRun/TryRecoverOp) and be treated as the original
+    /// caller retrying its own op — the same empty-vs-empty false-match hazard already closed for
+    /// ClientNonce in TryAcquire (BlankClientNonceErr).</summary>
     local procedure BlankAttemptIdErr(): Text
     begin
-        exit('BeginPublish/EndPublish require a non-blank attemptId. Refusing to evaluate the op-marker state machine against a blank value — a blank attemptId could persist into "Op Attempt Id" and later false-match an unrelated caller''s own blank attemptId as the idempotent retry of the same op.');
+        exit('BeginPublish/EndPublish/RunMutant/RecoverOp require a non-blank attemptId. Refusing to evaluate the op-marker state machine against a blank value — a blank attemptId could persist into "Op Attempt Id" and later false-match an unrelated caller''s own blank attemptId as the idempotent retry of the same op.');
+    end;
+
+    /// <summary>The fenced operations authenticate on the FULL (Epoch, Token, Generation) tuple. A
+    /// blank Token, a blank Generation or a non-positive Epoch is a caller-contract violation, never a
+    /// legitimate credential — and each one is exactly the value some legitimate row state already
+    /// holds: TryRelease sets Token = '', and the pristine pre-seeded row has Epoch = 0. A blank/zero
+    /// credential could therefore equality-match those stored values and walk a caller that holds NO
+    /// lease straight into a success path. A granted epoch is always &gt;= 1 (a grant does
+    /// Epoch += 1 from 0) and a granted token is always 32 hex chars, so no legitimate caller is
+    /// refused here.</summary>
+    local procedure BlankLeaseCredentialsErr(): Text
+    begin
+        exit('The fenced control operations (RunMutant, RecoverOp) require a non-blank leaseToken, a non-blank serverGeneration and a leaseEpoch >= 1. Refusing to evaluate the fence against a blank/zero credential — a blank token could equality-match a released lease''s blank "Token" and admit a caller that holds no lease at all.');
+    end;
+
+    /// <summary>ForceResetLease authenticates on an echo of the CURRENT "Server Generation" (design §8,
+    /// R4 sol#4). A blank echo is a caller-contract violation: it proves nothing about which service
+    /// incarnation the operator observed, and the whole point of the echo is that it can only be
+    /// obtained by reading live post-restart state.</summary>
+    local procedure BlankExpectedGenerationErr(): Text
+    begin
+        exit('ForceResetLease requires a non-blank expectedGeneration echoing the CURRENT "Server Generation", read from a live status/harness call AFTER the container/NST restart. Refusing to reset the lease without proof that the caller observed live post-restart state.');
     end;
 }
