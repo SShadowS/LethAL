@@ -89,6 +89,68 @@ the one just compiled, closing the "silent all-survived on a wrong binary" hole.
 - bcdev is single-flight: `runSession` asserts `workers === 1` for the authoritative backend (the
   single `LC Mutation Active` row is not lease-protected against parallel `RunMutant` calls).
 
+## Layer 5C-B1 — machine-global lease + two-phase fence
+
+Layer 5C-B1 closes the gap the "Preconditions" list above states but does not enforce: it gives
+`LethAL Control` a machine-global lease (table `LC Lease`, id 71006) and turns `RunMutant` into a
+two-phase fence, so two concurrent LethAL sessions against one container can no longer interleave a
+publish with a mutant run and record a false verdict. See `design.md` §6.8 for the mechanism and
+`docs/superpowers/specs/2026-07-24-layer-5c-b1-lease-fence-design.md` for the full design, review
+history, and live-gate evidence.
+
+### Single-tenant containers only — read this before pointing LethAL at a shared container
+
+**LethAL 5C-B1 is supported only on a single-tenant BC container.** App publication in Business
+Central is service-instance-wide, not per-tenant: if a second tenant publishes to the same service
+instance, that publish happens **entirely outside the lease**, and the false-verdict window the lease
+exists to close stays open for that configuration.
+
+This is a **documented support constraint, not an enforced one** — a deliberate human decision, not
+an oversight. AL cannot enumerate tenants from an extension: System Application codeunit 417
+(`Tenant Information`) exposes only the current tenant (`GetTenantId`/`GetTenantDisplayName`), never a
+tenant count or list. `HarnessInfo` therefore reports `tenantCountReachable: false`, and the runner
+client surfaces `tenantGate: "unenforced"` plus a console warning every session — it cannot refuse a
+multi-tenant container the way it refuses an incompatible protocol version.
+
+**Before running 5C-B1 against any container you don't already know is single-tenant, verify it
+out of band:**
+
+```powershell
+Get-BcContainerTenants -containerName <name>
+# or
+Get-NAVTenant -ServerInstance <instance>
+```
+
+If more than one tenant is listed, do not run concurrent LethAL sessions against that container —
+the lease will not protect you.
+
+### Recovering from `container-needs-recycle`
+
+A durable `container-needs-recycle` quarantine means an operation marker was left behind by a holder
+presumed dead (an orphaned op past grace, or a session that ended with an unreconcilable marker).
+Recovery is one procedure, in order — **a restart alone does NOT clear the committed marker**:
+
+1. **Restart the NST or the whole container** (`Restart-BcContainerServiceTier` /
+   `Restart-BcContainer`) — kills any AL operation that might still be running.
+2. **`ForceResetLease`** — an authenticated recovery action. It authorizes the caller by requiring the
+   CURRENT `Server Generation` echoed back, which comes from `HarnessInfo(clientProtocol: 2)`. In one
+   transaction it mints a NEW `Server Generation`, clears the marker/token/client-nonce, bumps the
+   `Epoch`, and clears the committed `LC Mutation Active` row (so a fresh session can't inherit a
+   stale active mutant from before recovery).
+3. **A post-recovery probe** confirming the container is actually clean (baseline/active-state check).
+4. **`lethal clear-quarantine`** — only after steps 1-3, and only against the real
+   `~/.lethal/quarantine` store (see the "Wedged-tier reproduction" section below — there is
+   deliberately no override flag to point it elsewhere).
+
+### Troubleshooting: "tier is quarantined" on a run you expect to succeed
+
+A durable quarantine record in `~/.lethal/quarantine` blocks **every** later run against that tier —
+including a run that would otherwise be completely fine — until the record is removed. If a session
+aborts with "tier is quarantined" and you didn't expect it, **check `~/.lethal/quarantine` first**: a
+stale record left over from an earlier failed or interrupted run is the common cause, not a live
+problem with the container. The record names the mutant involved and carries the transport's own
+failure message, so read it before assuming the container itself needs recovery.
+
 ## Note: no `TestIsolation` preflight
 
 Layer 4 briefly shipped a preflight (`findMissingTestIsolation`, `packages/runner/src/discovery.ts`)

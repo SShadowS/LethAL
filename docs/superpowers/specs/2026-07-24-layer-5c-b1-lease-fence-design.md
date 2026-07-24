@@ -9,6 +9,8 @@
 > spec-text/mechanism-completeness — `RecoverOp` precision, explicit op-seq, generation-at-acquire,
 > force-reset completeness). R4 folds those. Predecessors 5A/5B/5C-A merged. Successors: 5C-B2
 > (`RunChunk`), 5C-B3 (cancel/preemption), 5D (pool). Full three-round disposition at the end.
+> Live-gated 2026-07-25 against Cronus281 — see §13-15 for evidence, deviations, and the one
+> residual gap the gate does not close.
 
 ## 1. Goal and honest framing
 
@@ -342,3 +344,81 @@ recovery, and busy/orphaned paths are §9's new probes (not yet spiked).
 | sol5 | `ForceResetLease` doesn't clear the committed active-mutant row → stale mutant executes post-recovery | **§8 `ForceResetLease` clears `LC Mutation Active` in the reset txn + post-recovery baseline probe** |
 | fable F3 | `ClearActiveIf` table-conditional would leave stale in-memory attestation → fake clean attestation next call | **§5 in-memory attestation/`Expected*` reset is UNCONDITIONAL (incl. the `lease-invalid` path); only the table write is conditional** |
 | — | current-batch-only invalidation is exactly right (no under-invalidation); phase-1 past-expiry extend can't race a steal; release epoch-bump kills delayed renews; grace boundary has no steal; recycle-mid-run fails closed; ClearActiveIf-no-Commit breaks no 5C-A guarantee | **Confirmed sound** by both models |
+
+## 13. Live evidence — the gate (2026-07-25, Cronus281, LethAL Control 1.0.0.2)
+
+All four suites PASS, per-mutant identical to the frozen baselines:
+
+- **`lease.itest.ts` (new):** PASS — probes P1-P10 plus a final free-lease check. The P10 chain ran
+  live end to end: `operation-busy` ×6 → `operation-orphaned` ×2 against an unchanged marker →
+  durable `container-needs-recycle` → reconciliation via `GetOperationStatus` → `ForceResetLease`
+  (new server generation, `Epoch = 58`) → the stale pre-recovery tuple rejected under the new
+  generation → lease free.
+- **bcdev:** killed 3 / survived 10 / no-coverage 3, baseline green, both `runOnce` passes
+  per-mutant identical to the committed baseline, protocol-invariant probes PASS — matches the
+  frozen 5C-A baseline exactly, now reproduced under a held+renewed+released lease per §9.
+- **al-runner:** 3 / 13 / 0, both runs per-mutant identical — matches its frozen baseline.
+- **`stale-publish.itest.ts`:** PASS — Probe A (deterministic stale dispatch) + Probe B (concurrent
+  race, 3 rounds), unaffected by the lease (al-runner-shaped path, no `RunMutant`).
+
+**Honest caveat — do not let the green hide this:** bcdev and al-runner each **FAILED on their
+first attempt and passed on re-run**, with **no root cause established**.
+
+- bcdev run 1: mutant M0007 (`ClampPercentRuns`) came back `in-flight-unknown` and wrote a durable
+  `container-needs-recycle` ~30s after P10's `ForceResetLease` plus 24s of polling. That aborted
+  the session early (`survived = 3`), and the *next* run then refused to start at all, because the
+  durable record was still sitting in `~/.lethal/quarantine` (not the probe's own scratch store —
+  see the troubleshooting note in `fixtures/README.md`). Cleared by hand; the re-run was clean.
+  Hypothesis only, unproven: BC still settling after the `ForceResetLease` + poll storm.
+- al-runner run 1: reported 12 survivors instead of 13 (one mutant moved), with no diagnosis
+  captured — the suite had no per-mutant dump at the time. Re-run clean at 13.
+- If either recurs: the quarantine record now carries the transport's own failure message, and
+  both gates print a per-mutant table before asserting, so the next occurrence will not be as
+  undiagnosable as this one. Whether the gates need a settling delay after a
+  `ForceResetLease`-heavy probe run, and whether running `lease.itest.ts` immediately before bcdev
+  is itself the trigger, is unresolved.
+
+## 14. Known deviations from this spec (documented, not silent)
+
+Two requirements this spec states as MUST are **not met as written**, by explicit human decision
+recorded during implementation — not oversights, and not left to be discovered from code comments
+alone.
+
+**D1 — §8's `ForceResetLease` NST-incarnation binding is NOT met.** §8 requires
+`ForceResetLease` to "bind its authorization to a newly-observed NST/process incarnation." What
+ships instead is the generation echo, which delivers **replay protection only**: `Server
+Generation` is a persistent field minted at pre-seed and by `ForceResetLease` itself, so an NST
+restart does not change it, and a pre-restart read of it is byte-identical to a post-restart read.
+"The operator actually restarted first" is procedural discipline the server has no way to verify.
+Taken under the plan's Task-4-Step-4 fallback clause ("if infeasible in AL, document the
+operational binding"). Rejected alternative, recorded here for anyone who later needs to harden
+this: require `min(Active Session[2000000110]."Login Datetime") > "Op Started At"`, which would
+genuinely prove the stranded op's session is gone. Declined during Task 4 as new design mid-keystone
+needing system-table permissions and live verification neither had budget for at the time.
+
+**D2 — §7's single-tenant refusal is NOT enforced.** §7 states 5C-B1 "refuses a multi-tenant /
+shared-publication container." It does not: per human ruling, this became a **documented support
+constraint** instead — "we can just say in the README that it only works if there is one tenant. No
+reason to go too deep if we can write us out of it." AL has no tenant-enumeration API reachable
+from an extension (System Application codeunit 417 exposes only the current tenant), so `HarnessInfo`
+reports `tenantCountReachable: false` and the client surfaces `tenantGate: "unenforced"` plus a
+warning every session — it enforces properly if the server ever *can* report `tenantCountReachable:
+true`, and otherwise cannot. See `fixtures/README.md`'s "Single-tenant containers only" section for
+the operator-facing statement.
+
+## 15. Residual verification gap (the live gate does not close this)
+
+Round-1 finding sol#1 ("lock across run starves renew/steal") was fixed by "lock only in short
+critical sections" — phase 2 holds no lease lock (§5). The live property that fix depends on — a
+concurrent `RenewLease` landing WHILE a real `RunMutant` is genuinely in flight (an AL test actually
+executing) — **is not live-proven by any probe in this gate**. P9 is labelled
+"slow-run-under-renew" but holds a `BeginPublish`/`EndPublish` marker: nothing is executing against
+BC between them and no lock is contended, so it cannot exercise concurrent NST request handling
+under real load. **A regression of the sol#1 fix would pass every probe in `lease.itest.ts`.**
+
+Adjacent evidence exists but does not close the gap: the consolidated probe's D4 showed a concurrent
+`GetOperationStatus` returning in 26ms during a genuinely in-flight `RunMutant` — that is a status
+*read*, not a renew, and it was one sample. Closing this live needs a deliberately-slow AL fixture
+test method (out of scope for this layer's gate); see `fixtures/README.md`'s "Wedged-tier
+reproduction" section for the closest existing pattern (a `NeverReturns`-style fixture method) that
+a future task could adapt.
