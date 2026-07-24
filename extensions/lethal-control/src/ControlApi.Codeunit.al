@@ -33,6 +33,64 @@ codeunit 71003 "LC Control API"
         exit(State.RegisteredArtifact(TargetAppId));
     end;
 
+    /// <summary>OData action: attempt to acquire the machine-global lease (design §4, R4-hardened).
+    /// Thin wrapper — all decision logic (generation-changed / operation-busy / operation-orphaned /
+    /// idempotent-nonce replay / fresh grant / held) lives in "LC Control State".TryAcquire. camelCase
+    /// JSON result keys: {granted, epoch?, token?, serverGeneration?, lastCompletedOpSeq?, expiresAt?,
+    /// reason?, holder?, opAttemptId?, opStartedAt?}.</summary>
+    procedure AcquireLease(Owner: Text; TtlSeconds: Integer; ClientNonce: Text; ExpectedGeneration: Text) ResultJson: Text
+    var
+        State: Codeunit "LC Control State";
+        Granted: Boolean;
+        Epoch: Integer;
+        Token: Text;
+        ServerGeneration: Text;
+        LastCompletedOpSeq: BigInteger;
+        ExpiresAt: DateTime;
+        Reason: Text;
+        Holder: Text;
+        OpAttemptId: Text;
+        OpStartedAt: DateTime;
+    begin
+        State.TryAcquire(Owner, TtlSeconds, ClientNonce, ExpectedGeneration, Granted, Epoch, Token, ServerGeneration, LastCompletedOpSeq, ExpiresAt, Reason, Holder, OpAttemptId, OpStartedAt);
+        ResultJson := BuildAcquireResult(Granted, Epoch, Token, ServerGeneration, LastCompletedOpSeq, ExpiresAt, Reason, Holder, OpAttemptId, OpStartedAt);
+    end;
+
+    /// <summary>OData action: extend the lease's Expires At (design §4). A matching (epoch, token,
+    /// generation) is honored even if momentarily past Expires At. Thin wrapper over
+    /// "LC Control State".TryRenew. JSON: {renewed, expiresAt?}.</summary>
+    procedure RenewLease(Epoch: Integer; Token: Text; Generation: Text; TtlSeconds: Integer) ResultJson: Text
+    var
+        State: Codeunit "LC Control State";
+        Renewed: Boolean;
+        ExpiresAt: DateTime;
+        Obj: JsonObject;
+    begin
+        State.TryRenew(Epoch, Token, Generation, TtlSeconds, Renewed, ExpiresAt);
+        Obj.Add('renewed', Renewed);
+        if Renewed then
+            Obj.Add('expiresAt', ExpiresAt);
+        Obj.WriteTo(ResultJson);
+    end;
+
+    /// <summary>OData action: release the lease, invalidating its renewal credentials so a delayed
+    /// renew cannot resurrect it (design §4). Refused (op-in-flight) while an op marker is set. A
+    /// non-matching call is an idempotent success (a prior release already invalidated it). Thin
+    /// wrapper over "LC Control State".TryRelease. JSON: {released, reason?}.</summary>
+    procedure ReleaseLease(Epoch: Integer; Token: Text; Generation: Text) ResultJson: Text
+    var
+        State: Codeunit "LC Control State";
+        Released: Boolean;
+        Reason: Text;
+        Obj: JsonObject;
+    begin
+        State.TryRelease(Epoch, Token, Generation, Released, Reason);
+        Obj.Add('released', Released);
+        if Reason <> '' then
+            Obj.Add('reason', Reason);
+        Obj.WriteTo(ResultJson);
+    end;
+
     /// <summary>
     /// Run-scoped, single-method execution primitive (spec §5). Activate the mutant, run exactly one
     /// named method under Codeunit isolation, ALWAYS clear the active state before returning. No lease
@@ -119,6 +177,41 @@ codeunit 71003 "LC Control API"
         CodeunitLine.SetRange("Line Type", CodeunitLine."Line Type"::Codeunit);
         CodeunitLine.FindFirst();
         exit(Mgt.TestResultsToJSON(CodeunitLine));
+    end;
+
+    /// <summary>Builds the AcquireLease JSON result. On grant: {granted, epoch, token,
+    /// serverGeneration, lastCompletedOpSeq, expiresAt}. On refusal: {granted:false, reason} plus
+    /// {holder, expiresAt} for "held"/"operation-busy" or {opAttemptId, opStartedAt} for
+    /// "operation-orphaned" (generation-changed carries reason only).</summary>
+    local procedure BuildAcquireResult(Granted: Boolean; Epoch: Integer; Token: Text; ServerGeneration: Text; LastCompletedOpSeq: BigInteger; ExpiresAt: DateTime; Reason: Text; Holder: Text; OpAttemptId: Text; OpStartedAt: DateTime): Text
+    var
+        Obj: JsonObject;
+        Out: Text;
+    begin
+        Obj.Add('granted', Granted);
+        if Granted then begin
+            Obj.Add('epoch', Epoch);
+            Obj.Add('token', Token);
+            Obj.Add('serverGeneration', ServerGeneration);
+            Obj.Add('lastCompletedOpSeq', LastCompletedOpSeq);
+            Obj.Add('expiresAt', ExpiresAt);
+        end else begin
+            Obj.Add('reason', Reason);
+            case Reason of
+                'held', 'operation-busy':
+                    begin
+                        Obj.Add('holder', Holder);
+                        Obj.Add('expiresAt', ExpiresAt);
+                    end;
+                'operation-orphaned':
+                    begin
+                        Obj.Add('opAttemptId', OpAttemptId);
+                        Obj.Add('opStartedAt', OpStartedAt);
+                    end;
+            end;
+        end;
+        Obj.WriteTo(Out);
+        exit(Out);
     end;
 
     local procedure BuildStatus(Status: Text; TargetAppId: Text; ArtifactId: Text; AttemptId: Text; MutantId: Text; TestCodeunitId: Integer; TestMethod: Text; CodeunitResults: Text; ObservedAny: Boolean; IdentityMismatch: Boolean): Text

@@ -169,4 +169,183 @@ codeunit 71002 "LC Control State"
     begin
         exit(DelChr(LowerCase(Format(CreateGuid())), '=', '{}-'));
     end;
+
+    /// <summary>Documented client contract (design §4): a holder of the lease MUST renew faster than
+    /// this period while idle between operations. Not enforced directly — GraceMs() is derived from
+    /// it and absorbs a briefly-late renew/clock jitter without flipping a live holder to orphaned.</summary>
+    local procedure RenewPeriodMs(): Integer
+    begin
+        exit(5000);
+    end;
+
+    /// <summary>A HARD constant &gt;= 3x the documented renew period (design §4, R4 fable F1), so a
+    /// single stalled renew never flips a live op holder to orphaned. Used only to classify an
+    /// unresolved op marker as operation-busy (holder presumed alive) vs operation-orphaned (holder
+    /// presumed dead) on AcquireLease — it does NOT change what RenewLease/RunMutant honor.</summary>
+    local procedure GraceMs(): Integer
+    begin
+        exit(3 * RenewPeriodMs());
+    end;
+
+    /// <summary>Attempts to acquire the machine-global lease under a short LockTable critical section
+    /// (design §4, R4-hardened). Order matters and is deliberate:
+    /// 1. generation-changed — ALWAYS first; a stale acquire that predates a ForceResetLease must
+    ///    never land in the new generation, regardless of any other row state.
+    /// 2. operation-busy / operation-orphaned — an unresolved op (Op Kind &lt;&gt; none) is never
+    ///    stolen; busy (holder presumed alive, within grace) backs off, orphaned (past grace) is
+    ///    reported for the caller's re-check-once + reconcilable quarantine. Takes priority over the
+    ///    idempotent-nonce replay below.
+    /// 3. idempotent-nonce replay — ONLY when the row is currently Held (Token &lt;&gt; '') AND the
+    ///    stored Client Nonce matches (generation already matched in step 1). Fires before a fresh
+    ///    grant so a lost-ack retry from the SAME caller gets back the SAME {epoch, token,
+    ///    serverGeneration} instead of a fresh grant OR a false "held" refusal — but a nonce carried
+    ///    over from a since-released/reset lease (Token = '') can never be mistaken for a live grant
+    ///    (the empty-vs-empty false-match hazard this project treats as its signature bug).
+    /// 4. free (Token = '') or expired-and-idle (Op Kind = none AND CurrentDateTime &gt; Expires At)
+    ///    -> fresh grant.
+    /// 5. else (held, unexpired, different caller) -> refuse with reason "held".
+    /// The pre-seeded row must always Get(''); if it somehow does not, fail loudly rather than
+    /// silently grant.</summary>
+    procedure TryAcquire(Owner: Text; TtlSeconds: Integer; ClientNonce: Text; ExpectedGeneration: Text; var Granted: Boolean; var Epoch: Integer; var Token: Text; var ServerGeneration: Text; var LastCompletedOpSeq: BigInteger; var ExpiresAt: DateTime; var Reason: Text; var Holder: Text; var OpAttemptId: Text; var OpStartedAt: DateTime)
+    var
+        Lease: Record "LC Lease";
+    begin
+        Granted := false;
+        Epoch := 0;
+        Token := '';
+        ServerGeneration := '';
+        LastCompletedOpSeq := 0;
+        ExpiresAt := 0DT;
+        Reason := '';
+        Holder := '';
+        OpAttemptId := '';
+        OpStartedAt := 0DT;
+
+        Lease.LockTable();
+        if not Lease.Get('') then
+            Error(LeaseRowMissingErr());
+
+        // 1. Generation check.
+        if ExpectedGeneration <> Lease."Server Generation" then begin
+            Reason := 'generation-changed';
+            exit;
+        end;
+
+        // 2. Op-marker check.
+        if Lease."Op Kind" <> Lease."Op Kind"::none then begin
+            if CurrentDateTime <= (Lease."Expires At" + GraceMs()) then begin
+                Reason := 'operation-busy';
+                Holder := Lease.Owner;
+                ExpiresAt := Lease."Expires At";
+            end else begin
+                Reason := 'operation-orphaned';
+                OpAttemptId := Lease."Op Attempt Id";
+                OpStartedAt := Lease."Op Started At";
+            end;
+            exit;
+        end;
+
+        // 3. Idempotent-nonce replay (Held only — Token <> '').
+        if (Lease.Token <> '') and (Lease."Client Nonce" = ClientNonce) then begin
+            Granted := true;
+            Epoch := Lease.Epoch;
+            Token := Lease.Token;
+            ServerGeneration := Lease."Server Generation";
+            LastCompletedOpSeq := Lease."Last Completed Op Seq";
+            ExpiresAt := Lease."Expires At";
+            exit;
+        end;
+
+        // 4. Free or expired-and-idle -> fresh grant.
+        if (Lease.Token = '') or (CurrentDateTime > Lease."Expires At") then begin
+            Lease.Epoch += 1;
+            Lease.Token := CopyStr(NewToken(), 1, MaxStrLen(Lease.Token));
+            Lease.Owner := CopyStr(Owner, 1, MaxStrLen(Lease.Owner));
+            Lease."Expires At" := CurrentDateTime + (TtlSeconds * 1000);
+            Lease."Op Kind" := Lease."Op Kind"::none;
+            Lease."Client Nonce" := CopyStr(ClientNonce, 1, MaxStrLen(Lease."Client Nonce"));
+            Lease.Modify();
+            Commit();
+
+            Granted := true;
+            Epoch := Lease.Epoch;
+            Token := Lease.Token;
+            ServerGeneration := Lease."Server Generation";
+            LastCompletedOpSeq := Lease."Last Completed Op Seq";
+            ExpiresAt := Lease."Expires At";
+            exit;
+        end;
+
+        // 5. Held, unexpired, idle, different caller -> refuse.
+        Reason := 'held';
+        Holder := Lease.Owner;
+        ExpiresAt := Lease."Expires At";
+    end;
+
+    /// <summary>Extends the lease under a short LockTable critical section (design §4). A matching
+    /// (Epoch, Token, Generation) is honored EVEN IF momentarily past Expires At — a matching token
+    /// proves no steal occurred (a steal would have changed the token), and an op marker would have
+    /// blocked any competing acquire in the meantime. Any mismatch (stale epoch/token, wrong
+    /// generation, or a released/reset lease) -> renewed:false; no partial state is written.</summary>
+    procedure TryRenew(Epoch: Integer; Token: Text; Generation: Text; TtlSeconds: Integer; var Renewed: Boolean; var ExpiresAt: DateTime)
+    var
+        Lease: Record "LC Lease";
+    begin
+        Renewed := false;
+        ExpiresAt := 0DT;
+
+        Lease.LockTable();
+        if not Lease.Get('') then
+            Error(LeaseRowMissingErr());
+
+        if (Lease.Epoch = Epoch) and (Lease.Token = Token) and (Lease."Server Generation" = Generation) then begin
+            Lease."Expires At" := CurrentDateTime + (TtlSeconds * 1000);
+            Lease.Modify();
+            Commit();
+            Renewed := true;
+            ExpiresAt := Lease."Expires At";
+        end;
+    end;
+
+    /// <summary>Releases the lease under a short LockTable critical section (design §4). Only a
+    /// matching (Epoch, Token, Generation) AND an idle op marker (Op Kind = none) may release — an
+    /// in-flight op is never released out from under itself. A successful release INVALIDATES
+    /// renewal credentials (Token := '', Epoch += 1, Expires At := 0DT, Client Nonce := '') so a
+    /// delayed renew for the old (epoch, token) can never resurrect a released lease. A non-matching
+    /// call is treated as an idempotent success (released:true, no reason) — a prior release already
+    /// bumped the epoch, so a retry of that same release is not an error.</summary>
+    procedure TryRelease(Epoch: Integer; Token: Text; Generation: Text; var Released: Boolean; var Reason: Text)
+    var
+        Lease: Record "LC Lease";
+    begin
+        Released := false;
+        Reason := '';
+
+        Lease.LockTable();
+        if not Lease.Get('') then
+            Error(LeaseRowMissingErr());
+
+        if (Lease.Epoch = Epoch) and (Lease.Token = Token) and (Lease."Server Generation" = Generation) then begin
+            if Lease."Op Kind" <> Lease."Op Kind"::none then begin
+                Reason := 'op-in-flight';
+                exit;
+            end;
+            Lease.Token := '';
+            Lease.Epoch += 1;
+            Lease."Expires At" := 0DT;
+            Lease."Client Nonce" := '';
+            Lease.Modify();
+            Commit();
+            Released := true;
+            exit;
+        end;
+
+        // No match: idempotent success — a prior release/reset already invalidated these credentials.
+        Released := true;
+    end;
+
+    local procedure LeaseRowMissingErr(): Text
+    begin
+        exit('The "LC Lease" pre-seeded row is missing (primary key ''''). Refusing to silently grant a lease without it — reinstall or upgrade "LethAL Control" to re-seed it.');
+    end;
 }
