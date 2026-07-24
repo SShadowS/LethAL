@@ -122,6 +122,13 @@ export interface RecoverOpOutcome {
   readonly alreadyCompleted?: boolean;
 }
 
+/** `ForceResetLease` (design §8, operator recovery). `ControlApi.Codeunit.al`'s doc comment pins
+ * the wire shape: `{reset, serverGeneration?, epoch?, reason?}` — `serverGeneration`/`epoch` are
+ * present only when `reset:true`, `reason` only when `reset:false`. */
+export type ForceResetOutcome =
+  | { readonly reset: true; readonly serverGeneration: string; readonly epoch: number }
+  | { readonly reset: false; readonly reason: string };
+
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
@@ -490,5 +497,43 @@ export class LeaseClient implements LeaseApi {
     const recovered = requireBoolean(json, "recovered", "RecoverOp");
     const alreadyCompleted = optionalBoolean(json, "alreadyCompleted");
     return { recovered, ...(alreadyCompleted !== undefined ? { alreadyCompleted } : {}) };
+  }
+
+  /**
+   * `ForceResetLease` (design §8) — the operator recovery action for a wedged lease row left by a
+   * dead session's unresolved op marker. Deliberately NOT part of `LeaseApi` (see that interface's
+   * doc comment, and `lease.itest.ts`'s `postRawAction` comment): it is an operator-only recovery
+   * step outside the normal fenced session lifecycle `runSession` drives, reached only via
+   * `lethal force-reset-lease` (cli.ts's `performForceResetLease`).
+   *
+   * The reset's WHOLE authorization is `expectedGeneration` matching the row's CURRENT
+   * "Server Generation" (replay protection across resets — `ControlState.Codeunit.al`'s
+   * `TryForceResetLease` doc comment; this is NOT NST-incarnation binding, see that comment for
+   * the full deviation). `TryForceResetLease` `Error()`s outright on a blank echo rather than
+   * returning a typed `{reset:false}` refusal (`BlankExpectedGenerationErr`), so a blank value is
+   * refused HERE, before dispatch — mirroring `assertAttemptId`/`assertTtlBound`'s existing
+   * caller-contract-violation pattern in this file. A STALE (non-blank but mismatched) echo IS a
+   * well-formed refusal (`reset:false, reason:"generation-changed"`) and is returned as a typed
+   * outcome, never thrown.
+   */
+  async forceResetLease(expectedGeneration: string): Promise<ForceResetOutcome> {
+    if (expectedGeneration === "") {
+      throw new Error(
+        "forceResetLease requires a non-blank expectedGeneration echoing the CURRENT " +
+          '"Server Generation", read live via HarnessInfo(clientProtocol: 2) AFTER the ' +
+          "container/NST restart (design §8) — the server rejects a blank echo outright with an " +
+          "error rather than a typed refusal, so this must be caught before the call.",
+      );
+    }
+    const json = await this.post("ForceResetLease", { expectedGeneration });
+    const reset = requireBoolean(json, "reset", "ForceResetLease");
+    if (reset) {
+      return {
+        reset: true,
+        serverGeneration: requireString(json, "serverGeneration", "ForceResetLease"),
+        epoch: requireNumber(json, "epoch", "ForceResetLease"),
+      };
+    }
+    return { reset: false, reason: requireString(json, "reason", "ForceResetLease") };
   }
 }

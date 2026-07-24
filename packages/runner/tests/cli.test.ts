@@ -2,15 +2,18 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { ActivationConfig } from "../src/activation";
 import {
   clearQuarantine,
   leaseSessionFor,
   odataBaseUrl,
   parseCliConfig,
+  performForceResetLease,
   resourceIdentityFor,
   validateAlRunnerConfig,
   validateBcDevConfig,
 } from "../src/cli";
+import { CONTROL_APP_ID } from "../src/harness";
 import { LeaseClient } from "../src/lease";
 import { QuarantineStore } from "../src/quarantine-store";
 import { quarantineResourceKey } from "../src/resource-key";
@@ -288,6 +291,50 @@ describe("parseCliConfig — clear-quarantine subcommand (Task 13)", () => {
 });
 
 // ————————————————————————————————————————————————————————————————————————
+// 5C-B2: `lethal force-reset-lease` — design §8 step 2 of the operator recovery procedure
+// (fixtures/README.md's "Recovering from container-needs-recycle"). Mirrors clear-quarantine's
+// --server/--instance flag handling, plus a --config it needs (unlike clear-quarantine) to
+// authenticate the live HarnessInfo/ForceResetLease OData calls.
+// ————————————————————————————————————————————————————————————————————————
+describe("parseCliConfig — force-reset-lease subcommand (5C-B2)", () => {
+  test("parses --server/--instance/--config", () => {
+    const parsed = parseCliConfig([
+      "force-reset-lease",
+      "--server",
+      "http://Cronus281",
+      "--instance",
+      "BC",
+      "--config",
+      "lethal.config.json",
+    ]);
+    expect(parsed).toEqual({
+      mode: "force-reset-lease",
+      server: "http://Cronus281",
+      serverInstance: "BC",
+      configPath: "lethal.config.json",
+    });
+  });
+
+  test("missing --server throws a clear error", () => {
+    expect(() =>
+      parseCliConfig(["force-reset-lease", "--instance", "BC", "--config", "c.json"]),
+    ).toThrow("missing required --server");
+  });
+
+  test("missing --instance throws a clear error", () => {
+    expect(() =>
+      parseCliConfig(["force-reset-lease", "--server", "http://Cronus281", "--config", "c.json"]),
+    ).toThrow("missing required --instance");
+  });
+
+  test("missing --config throws a clear error naming why it's needed", () => {
+    expect(() =>
+      parseCliConfig(["force-reset-lease", "--server", "http://Cronus281", "--instance", "BC"]),
+    ).toThrow(/missing required --config/);
+  });
+});
+
+// ————————————————————————————————————————————————————————————————————————
 // Task 13 folded fix (Task 11 review, Important-1): `runSession`'s quarantine consult only fires
 // when `SessionConfig.resourceServer`/`resourceServerInstance` are BOTH present, but `cli.ts` did
 // not source them from the loaded config file — so quarantine was silently INERT for every real
@@ -403,4 +450,102 @@ describe("clearQuarantine (Task 13)", () => {
   // — `clearQuarantine` above is a thin, race-free pass-through of whatever `store.clear` returns
   // (it always clears against the generation it JUST read), so re-asserting that outcome here
   // would only re-test `QuarantineStore` through an extra layer of indirection, not this seam.
+});
+
+// ————————————————————————————————————————————————————————————————————————
+// 5C-B2: `performForceResetLease` — the actual read-then-reset mechanics behind
+// `lethal force-reset-lease` (design §8 step 2). Kept separate from the CLI I/O wrapper (like
+// `clearQuarantine`/`clearQuarantineFromCli` above) specifically so THIS — reading the CURRENT
+// serverGeneration live and echoing exactly that value into ForceResetLease — is directly
+// unit-testable against an injected fetchFn, without a real config file or process.argv.
+// ————————————————————————————————————————————————————————————————————————
+describe("performForceResetLease (5C-B2)", () => {
+  const CFG: ActivationConfig = {
+    baseUrl: "http://bc:7048/BC",
+    company: "CRONUS Danmark A/S",
+    username: "u",
+    password: "p",
+    tenant: "default",
+  };
+
+  /** Routes to a HarnessInfo response carrying `serverGeneration`, or a ForceResetLease response
+   *  carrying `resetBody` — mirrors harness.test.ts's `info()` shape (protocol v2, the two fixed
+   *  Codeunit/codeunit arrays) so `HarnessVerifier.verify()` inside `performForceResetLease`
+   *  actually succeeds. Captures the `expectedGeneration` the ForceResetLease call was sent, so a
+   *  test can assert it against the LIVE generation the HarnessInfo leg returned — the exact
+   *  property that makes the generation echo meaningful rather than decorative. */
+  function routerFetch(opts: {
+    serverGeneration: string;
+    resetBody: Record<string, unknown>;
+    onForceReset?: (expectedGeneration: string) => void;
+  }): typeof fetch {
+    return (async (url: unknown, init?: RequestInit) => {
+      const u = String(url);
+      if (u.includes("LethALControl_HarnessInfo")) {
+        return new Response(
+          JSON.stringify({
+            value: JSON.stringify({
+              appId: CONTROL_APP_ID,
+              protocolVersion: 2,
+              serverGeneration: opts.serverGeneration,
+              tenantCountReachable: false,
+              isolationModes: ["Codeunit"],
+              testTypes: ["codeunit"],
+            }),
+          }),
+          { status: 200 },
+        );
+      }
+      if (u.includes("LethALControl_ForceResetLease")) {
+        const body = JSON.parse(String(init?.body)) as { expectedGeneration?: unknown };
+        opts.onForceReset?.(
+          typeof body.expectedGeneration === "string" ? body.expectedGeneration : "",
+        );
+        return new Response(JSON.stringify({ value: JSON.stringify(opts.resetBody) }), {
+          status: 200,
+        });
+      }
+      throw new Error(`performForceResetLease test: unexpected URL ${u}`);
+    }) as typeof fetch;
+  }
+
+  // THE load-bearing property: ForceResetLease's whole authorization is an echo of the CURRENT
+  // serverGeneration, read live immediately before the reset. This is the assertion the
+  // red-check must prove is load-bearing (see the task report) — a version that hardcodes or
+  // caches the echo instead of threading the HarnessInfo read through would still return a
+  // plausible "reset" outcome here (the fake server doesn't validate the echo), but `echoed`
+  // would silently diverge from `liveGen`.
+  test("echoes the LIVE serverGeneration read from HarnessInfo into ForceResetLease", async () => {
+    const liveGen = "a".repeat(32);
+    let echoed: string | undefined;
+    const fetchFn = routerFetch({
+      serverGeneration: liveGen,
+      resetBody: { reset: true, serverGeneration: "b".repeat(32), epoch: 9 },
+      onForceReset: (g) => {
+        echoed = g;
+      },
+    });
+    const result = await performForceResetLease(CFG, fetchFn);
+    expect(echoed).toBe(liveGen);
+    expect(result).toEqual({
+      outcome: "reset",
+      oldGeneration: liveGen,
+      newGeneration: "b".repeat(32),
+      newEpoch: 9,
+    });
+  });
+
+  test("a refused reset (stale generation) surfaces as a typed 'refused' outcome, not a throw", async () => {
+    const liveGen = "c".repeat(32);
+    const fetchFn = routerFetch({
+      serverGeneration: liveGen,
+      resetBody: { reset: false, reason: "generation-changed" },
+    });
+    const result = await performForceResetLease(CFG, fetchFn);
+    expect(result).toEqual({
+      outcome: "refused",
+      oldGeneration: liveGen,
+      reason: "generation-changed",
+    });
+  });
 });

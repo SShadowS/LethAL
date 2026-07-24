@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import type { InstrumentedFile, SelectorConfig } from "@lethal/schemata";
+import type { ActivationConfig, FetchFn } from "./activation";
 import { AlRunnerBackend } from "./al-runner-backend";
 import { ArtifactCompiler, defaultArtifactIo } from "./artifact";
 import type { ExecutionBackend } from "./backend";
@@ -76,15 +77,35 @@ export interface ClearQuarantineCliConfig {
   readonly serverInstance: string;
 }
 
-export type CliConfig = DryRunCliConfig | RunCliConfig | ClearQuarantineCliConfig;
+/**
+ * `lethal force-reset-lease --server <url> --instance <name> --config <path>` (design §8 step 2
+ * of the operator recovery procedure — see fixtures/README.md's "Recovering from
+ * container-needs-recycle" and `performForceResetLease` below). Unlike `clear-quarantine`, this
+ * needs a `--config` too: it authenticates a LIVE `HarnessInfo`/`ForceResetLease` OData call
+ * against the server, which needs the bcdev section's company/username/password/tenant — nothing
+ * clear-quarantine's purely-local quarantine-record clear requires.
+ */
+export interface ForceResetLeaseCliConfig {
+  readonly mode: "force-reset-lease";
+  readonly server: string;
+  readonly serverInstance: string;
+  readonly configPath: string;
+}
 
-const VALID_SUBCOMMANDS = ["run", "clear-quarantine"] as const;
+export type CliConfig =
+  | DryRunCliConfig
+  | RunCliConfig
+  | ClearQuarantineCliConfig
+  | ForceResetLeaseCliConfig;
+
+const VALID_SUBCOMMANDS = ["run", "clear-quarantine", "force-reset-lease"] as const;
 
 /**
- * `lethal` is invoked as `lethal run --project ...` or `lethal clear-quarantine --server ...
- * --instance ...` (see fixtures/README.md) rather than bare flags — require and validate the
- * subcommand explicitly so an unknown/missing one fails with a clear message instead of silently
- * ignoring it. Returns the validated subcommand so callers can dispatch on it.
+ * `lethal` is invoked as `lethal run --project ...`, `lethal clear-quarantine --server ...
+ * --instance ...`, or `lethal force-reset-lease --server ... --instance ... --config ...` (see
+ * fixtures/README.md) rather than bare flags — require and validate the subcommand explicitly so
+ * an unknown/missing one fails with a clear message instead of silently ignoring it. Returns the
+ * validated subcommand so callers can dispatch on it.
  */
 function requireKnownSubcommand(positionals: readonly string[]): string {
   const [subcommand] = positionals;
@@ -134,6 +155,25 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
       throw new Error("missing required --instance <name>");
     }
     return { mode: "clear-quarantine", server, serverInstance };
+  }
+
+  if (subcommand === "force-reset-lease") {
+    const server = values.server;
+    if (server === undefined || server === "") {
+      throw new Error("missing required --server <url>");
+    }
+    const serverInstance = values.instance;
+    if (serverInstance === undefined || serverInstance === "") {
+      throw new Error("missing required --instance <name>");
+    }
+    const configPath = values.config;
+    if (configPath === undefined || configPath === "") {
+      throw new Error(
+        "missing required --config <path> (needed to read the bcdev company/username/password " +
+          "credentials this recovery action authenticates the live OData calls with)",
+      );
+    }
+    return { mode: "force-reset-lease", server, serverInstance, configPath };
   }
 
   const projectDir = values.project;
@@ -604,6 +644,105 @@ async function clearQuarantineFromCli(parsed: ClearQuarantineCliConfig): Promise
   return result === "stale" ? 1 : 0;
 }
 
+/**
+ * What `performForceResetLease` (design §8 step 2) reports back: a real reset (with the old and
+ * new generation, and the new epoch), or a well-formed refusal — the generation read live from
+ * `HarnessInfo` no longer matched the row's current one by the time the reset actually ran (a
+ * concurrent recovery/reset raced this one). Never thrown for the refusal case; the CLI wrapper
+ * decides how to report each outcome.
+ */
+export type ForceResetLeaseResult =
+  | {
+      readonly outcome: "reset";
+      readonly oldGeneration: string;
+      readonly newGeneration: string;
+      readonly newEpoch: number;
+    }
+  | { readonly outcome: "refused"; readonly oldGeneration: string; readonly reason: string };
+
+/**
+ * The actual read-then-reset mechanics behind `lethal force-reset-lease` (design §8 step 2 of
+ * the operator recovery procedure — restart the NST, THIS, a clean-state probe, `lethal
+ * clear-quarantine`; see fixtures/README.md's "Recovering from container-needs-recycle").
+ *
+ * Reads the CURRENT `serverGeneration` live via `HarnessVerifier.verify()` (`HarnessInfo
+ * (clientProtocol: 2)`), then echoes EXACTLY that value into `LeaseClient.forceResetLease` —
+ * `ForceResetLease`'s whole authorization is that echo (replay protection across resets,
+ * `ControlState.Codeunit.al`'s `TryForceResetLease` doc comment), so this must NEVER accept a
+ * caller-supplied or cached generation; the only way to obtain one here is this live read.
+ *
+ * Kept separate from `forceResetLeaseFromCli` below — like `clearQuarantine`/
+ * `clearQuarantineFromCli` above — so this, the actual read-then-reset logic, is directly
+ * unit-testable against an injected `fetchFn`, without touching a real config file or
+ * `process.argv`.
+ */
+export async function performForceResetLease(
+  cfg: ActivationConfig,
+  fetchFn: FetchFn = fetch,
+): Promise<ForceResetLeaseResult> {
+  const { serverGeneration } = await new HarnessVerifier(cfg, fetchFn).verify();
+  const resetOutcome = await new LeaseClient(cfg, fetchFn).forceResetLease(serverGeneration);
+  if (resetOutcome.reset) {
+    return {
+      outcome: "reset",
+      oldGeneration: serverGeneration,
+      newGeneration: resetOutcome.serverGeneration,
+      newEpoch: resetOutcome.epoch,
+    };
+  }
+  return { outcome: "refused", oldGeneration: serverGeneration, reason: resetOutcome.reason };
+}
+
+/**
+ * `lethal force-reset-lease --server ... --instance ... --config ...` (design §8 step 2). Reads
+ * the bcdev credentials (company/username/password/tenant) from the SAME config file `lethal
+ * run` uses via `validateBcDevConfig`, but the operator's `--server`/`--instance` flags — not
+ * whatever the config file's own `bcdev.server`/`bcdev.serverInstance` happen to hold — pick the
+ * target, mirroring `clear-quarantine`'s identity source: an operator recovering a specific
+ * wedged container names it explicitly, rather than trusting a possibly shared/stale config
+ * file to point at the right one.
+ *
+ * This is a recovery tool that clears safety state (the op marker, the committed active-mutant
+ * row, and every outstanding lease credential) — it prints exactly what it is about to reset
+ * BEFORE doing it, and (via `performForceResetLease`) never accepts a generation from anywhere
+ * but a live `HarnessInfo` read.
+ */
+async function forceResetLeaseFromCli(parsed: ForceResetLeaseCliConfig): Promise<number> {
+  const configFile = await loadLethalConfigFile(parsed.configPath);
+  const c = validateBcDevConfig(configFile.bcdev);
+  const odataCfg = {
+    baseUrl: odataBaseUrl(parsed.server, parsed.serverInstance),
+    company: c.company,
+    username: c.username,
+    password: c.password,
+    ...(c.tenant !== undefined ? { tenant: c.tenant } : {}),
+  };
+
+  console.log(
+    `force-reset-lease: about to reset the "LC Lease" row on ${parsed.server} / ${parsed.serverInstance} (company "${c.company}") — this clears any op marker, bumps Epoch, mints a new Server Generation, and clears the committed "LC Mutation Active" row. Every lease credential issued before this reset becomes invalid at every fence.`,
+  );
+
+  let result: ForceResetLeaseResult;
+  try {
+    result = await performForceResetLease(odataCfg);
+  } catch (err) {
+    throw new Error(
+      `force-reset-lease: could not complete the reset — the HarnessInfo/ForceResetLease call failed. Is the "LethAL Control" extension deployed and the NST at ${parsed.server}/${parsed.serverInstance} reachable? If you have not already, restart the NST/container first (design §8 step 1), then retry. Underlying error: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+
+  if (result.outcome === "refused") {
+    throw new Error(
+      `force-reset-lease: server refused the reset (reason: "${result.reason}") — the serverGeneration ${result.oldGeneration} read just before the reset no longer matched the row's current one by the time the reset ran, meaning something changed it in between (another session's own recovery, or a concurrent reset). Just re-run this command — it always reads the CURRENT generation fresh, so a retry is safe.`,
+    );
+  }
+
+  console.log(
+    `force-reset-lease: reset OK — serverGeneration ${result.oldGeneration} -> ${result.newGeneration}, epoch -> ${result.newEpoch}. The committed "LC Mutation Active" row was cleared. Next: run a clean-state probe against the container, then \`lethal clear-quarantine --server ${parsed.server} --instance ${parsed.serverInstance}\`.`,
+  );
+  return 0;
+}
+
 async function main(): Promise<number> {
   const parsed = parseCliConfig(process.argv.slice(2));
   if (parsed.mode === "dry-run") {
@@ -612,6 +751,9 @@ async function main(): Promise<number> {
   }
   if (parsed.mode === "clear-quarantine") {
     return await clearQuarantineFromCli(parsed);
+  }
+  if (parsed.mode === "force-reset-lease") {
+    return await forceResetLeaseFromCli(parsed);
   }
   const report = await runFromCli(parsed);
   console.log(renderConsole(report));

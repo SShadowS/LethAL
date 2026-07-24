@@ -265,6 +265,59 @@ describe("LeaseClient.recoverOp", () => {
   });
 });
 
+describe("LeaseClient.forceResetLease (5C-B2: lethal force-reset-lease)", () => {
+  test("reset:true → parsed outcome with serverGeneration + epoch", async () => {
+    const inner = { reset: true, serverGeneration: "c".repeat(32), epoch: 5 };
+    const outcome = await client(okFetch(inner)).forceResetLease("a".repeat(32));
+    expect(outcome).toEqual({ reset: true, serverGeneration: "c".repeat(32), epoch: 5 });
+  });
+
+  test("reset:false, reason:'generation-changed' → typed refusal, never thrown", async () => {
+    const inner = { reset: false, reason: "generation-changed" };
+    const outcome = await client(okFetch(inner)).forceResetLease("stale-gen");
+    expect(outcome).toEqual({ reset: false, reason: "generation-changed" });
+  });
+
+  test("POSTs LethALControl_ForceResetLease with only expectedGeneration in the body", async () => {
+    const { fetchFn, seen } = captureFetch({
+      reset: true,
+      serverGeneration: "d".repeat(32),
+      epoch: 1,
+    });
+    await client(fetchFn).forceResetLease("a".repeat(32));
+    expect(seen()?.url).toContain("/ODataV4/LethALControl_ForceResetLease");
+    expect(seen()?.body).toEqual({ expectedGeneration: "a".repeat(32) });
+  });
+
+  // ControlState.Codeunit.al's TryForceResetLease Error()s on a blank ExpectedGeneration (a
+  // non-2xx OData error) rather than returning a typed {reset:false} refusal — so this must be
+  // caught client-side, before dispatch, mirroring assertAttemptId/assertTtlBound's existing
+  // caller-contract-violation pattern in this same file.
+  test("blank expectedGeneration is refused before dispatch", async () => {
+    let called = false;
+    const fetchFn = (async (_url: unknown, _init?: RequestInit) => {
+      called = true;
+      return new Response(JSON.stringify({ value: JSON.stringify({ reset: false }) }));
+    }) as typeof fetch;
+    await expect(client(fetchFn).forceResetLease("")).rejects.toThrow(/expectedGeneration/);
+    expect(called).toBe(false);
+  });
+
+  test("reset:true missing serverGeneration → LeaseUnavailableError, not a fake reset", async () => {
+    const inner = { reset: true, epoch: 5 }; // serverGeneration missing
+    await expect(client(okFetch(inner)).forceResetLease("a".repeat(32))).rejects.toBeInstanceOf(
+      LeaseUnavailableError,
+    );
+  });
+
+  test("reset:false missing reason → LeaseUnavailableError, not an empty-vs-empty match", async () => {
+    const inner = { reset: false };
+    await expect(client(okFetch(inner)).forceResetLease("a".repeat(32))).rejects.toBeInstanceOf(
+      LeaseUnavailableError,
+    );
+  });
+});
+
 describe("LeaseClient — request shape (camelCase keys, generation on EVERY call)", () => {
   test("acquire POSTs LethALControl_AcquireLease with exact camelCase body", async () => {
     const { fetchFn, seen } = captureFetch({ granted: false, reason: "held" });

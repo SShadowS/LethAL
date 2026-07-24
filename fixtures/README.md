@@ -138,8 +138,21 @@ Recovery is one procedure, in order — **a restart alone does NOT clear the com
    `Epoch`, and clears the committed `LC Mutation Active` row (so a fresh session can't inherit a
    stale active mutant from before recovery).
 
-   There is **no `lethal force-reset-lease` subcommand yet** (`lethal` ships `run` and
-   `clear-quarantine` only), so this step is two OData calls by hand. Both are `POST`s to
+   ```bash
+   lethal force-reset-lease --server http://cronus281 --instance BC --config lethal.config.json
+   ```
+
+   `lethal force-reset-lease` (`packages/runner/src/cli.ts`'s `performForceResetLease`) does exactly
+   the two-call sequence below itself: it reads the bcdev section's company/username/password/tenant
+   from `--config` (the SAME file `lethal run` uses), reads the CURRENT `Server Generation` live via
+   `HarnessInfo`, and echoes exactly that value into `ForceResetLease` — it never accepts a
+   caller-supplied or cached generation, since that echo is the reset's whole authorization. It prints
+   the old/new generation, the new epoch, and confirms the committed `LC Mutation Active` row was
+   cleared before exiting 0; a refused or unreachable reset exits non-zero with a message naming what
+   to do next (e.g. "restart the NST first" if `HarnessInfo` itself can't be reached).
+
+   **Manual fallback** (no `lethal.config.json` handy, or debugging the extension directly): the same
+   two OData calls by hand. Both are `POST`s to
    `http://<server>:7048/<instance>/ODataV4/LethALControl_<Action>?company=<url-encoded company>&tenant=<tenant>`
    with Basic auth and `content-type: application/json`. **Each response is an OData scalar
    `{"value":"<json-string>"}` — the payload is inside `value` as a string, so it must be parsed
@@ -164,13 +177,12 @@ Recovery is one procedure, in order — **a restart alone does NOT clear the com
    ```
 
    A `reset:false` (or an echoed generation that no longer matches) means the row changed under you —
-   re-read 2a and retry. The `serverGeneration` that comes back is a **new** one, different from the
-   value you echoed; that is the reset landing. Note that the generation echo buys **replay
-   protection only, not proof the NST was restarted** — see deviation D1 in the spec (§14): `Server
-   Generation` is persistent, so the server cannot verify step 1 happened. Doing step 1 first is
-   operator discipline the server will not enforce for you.
-
-   *A `lethal force-reset-lease` subcommand is the better long-term answer — filed for 5C-B2.*
+   re-read 2a and retry (`lethal force-reset-lease` just re-run does the same thing). The
+   `serverGeneration` that comes back is a **new** one, different from the value you echoed; that is
+   the reset landing. Note that the generation echo buys **replay protection only, not proof the NST
+   was restarted** — see deviation D1 in the spec (§14): `Server Generation` is persistent, so the
+   server cannot verify step 1 happened. Doing step 1 first is operator discipline neither the server
+   nor `lethal force-reset-lease` will enforce for you.
 3. **A post-recovery probe** confirming the container is actually clean (baseline/active-state check).
 4. **`lethal clear-quarantine`** — only after steps 1-3, and only against the real
    `~/.lethal/quarantine` store (see the "Wedged-tier reproduction" section below — there is
