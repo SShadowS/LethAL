@@ -24,6 +24,71 @@ verified against a real BC server 2026-07-18. al-runner's compiler simply doesn'
 `idRanges` the way the real Microsoft AL compiler does, so this went undetected until the
 first live bcdev compile.
 
+## Layer 5C-A — server-side execution harness (`LethAL Control` + probe app)
+
+Since Layer 5C-A the bcdev backend no longer drives per-mutant tests through the hub. Instead a
+separate BC extension, **`LethAL Control`** (`extensions/lethal-control/`, app id
+`5e7a1c00-1111-4c00-8c00-1e7a1c000701`, runtime 16, ids 71000–71099), owns a single OData action
+`LethALControl_RunMutant` that, in one server-side call, **activates a mutant → runs exactly one
+named test method under Codeunit isolation → clears the active mutant** (always, on every terminal
+path, so the container is left unmutated after each call). The instrumented target's
+`Mutation Selector.Active(id)` is a thin delegate into `LC Control State.IsActive(targetAppId,
+artifactId, mutantId)`; the target carries no active-mutant table of its own.
+
+### Objects added
+| Object | Id | App | Purpose |
+|---|---|---|---|
+| `LC Mutation Active` (table) | 71000 | `LethAL Control` | The single active-mutant tuple (DataPerCompany=false). |
+| `LC Target Artifact Registry` (table) | 71001 | `LethAL Control` | `targetAppId → artifactId` the target self-registered. |
+| `LC Control State` (codeunit) | 71002 | `LethAL Control` | SingleInstance state: active tuple, registry, per-run attestation. |
+| `LC Control API` (codeunit) | 71003 | `LethAL Control` | OData surface: `HarnessInfo`, `RegisteredArtifact` (read), `RunMutant`. |
+| `LC Control Install` / `Upgrade` | 71004 / 71005 | `LethAL Control` | Reconcile the `LethALControl` web-service row on install/upgrade. |
+| `Sandbox Probe Marker` (table) | 79200 | `sandbox-probes` | Order-matters witness (shared row across two probe methods). |
+| `Order Matters Probe` (codeunit) | 79210 | `sandbox-probes` | Two `[Test]` methods proving single-method selection. |
+| `Fail Probe` (codeunit) | 79211 | `sandbox-probes` | Exact-error round-trip witness. |
+
+The instrumented target also emits, into its own id window (79197–79199), a `Mutation Register`
+install codeunit **and** a `Mutation Upgrade` codeunit (object id 79197, the freed `tableId`) — both
+read identity from the `Mutation Selector` and call `LC Control State.RegisterArtifact`, so the
+target self-registers its baked `artifactId` on a fresh install AND on every ForceSync republish
+(`OnUpgradePerCompany` fires on an altool dev-endpoint ForceSync republish when the app version
+increases — live-probed on Cronus281, 2026-07-22).
+
+### `sandbox-probes` app
+`fixtures/sandbox-probes/` (app id `a3b1c2d4-7788-4a10-9f3e-0c1122334455`, ids 79200–79299, no
+dependencies) holds protocol-invariant probe codeunits. They are **NOT** discovered by `runSession`
+(so the frozen 3/10/3 table stays unchanged — probes are additional, not counted); the bcdev itest
+drives them directly through `RunMutantTransport`. They witness: single-method selection
+(order-matters), the exact-error round-trip, run-scoped clear, and artifact-mismatch behaviour.
+
+### Harness-provisioning prerequisite (publish order)
+The bcdev path requires this order on the container (Cronus281):
+1. **`LethAL Control`** — its `HarnessInfo` must report the expected app id, protocol version ≥ 1,
+   `Codeunit` isolation, and `codeunit` test type; the session verifies this BEFORE any compile/
+   publish (a missing or incompatible harness fails the session loudly, never a silent bad verdict).
+2. The **instrumented sandbox target** — the bcdev backend compiles it in a private staging copy
+   with the `LethAL Control` dependency injected into the staged `app.json` and `lethal-control.app`
+   staged into the package cache (bcdev-only — al-runner shares the emit path and strips the two
+   control-registration codeunits, so it stays dependency-free).
+3. **`sandbox-tests`**, then **`sandbox-probes`**.
+
+### Attestation fence (the correctness guarantee)
+`RunMutant` returns `{observedAny, identityMismatch}` per call: `LC Control State.IsActive` records,
+per run, the `(targetAppId, artifactId)` the LIVE selector presented, as a sticky mismatch flag. The
+transport rejects `identityMismatch: true` as `error` (never a verdict — a wrong/stale binary), and
+the orchestrator requires **at least one clean attestation** (`observedAny && !identityMismatch`) per
+deployed artifact before any of that artifact's verdicts may leave the session — otherwise the
+verdicts are discarded and the container quarantined (fail-closed). This proves the running binary is
+the one just compiled, closing the "silent all-survived on a wrong binary" hole.
+
+### Preconditions (5C-A, not enforced in-code — 5C-B adds the machine-global lease)
+- No concurrent or external publication to a container while a session runs (the session is the only
+  writer of that container's target app and registry).
+- At most ONE instrumented LethAL target installed per container (a second one whose selector is on a
+  test's call path would trip the attestation mismatch and error every such run).
+- bcdev is single-flight: `runSession` asserts `workers === 1` for the authoritative backend (the
+  single `LC Mutation Active` row is not lease-protected against parallel `RunMutant` calls).
+
 ## Note: no `TestIsolation` preflight
 
 Layer 4 briefly shipped a preflight (`findMissingTestIsolation`, `packages/runner/src/discovery.ts`)

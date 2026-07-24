@@ -265,9 +265,11 @@ Correctness guarantee enforced end-to-end: a mutant is reported as killed only i
 
 Reuses the PR review orchestrator pattern already in place.
 
-### 6.2 Precondition · TestIsolation = Function
+### 6.2 Isolation · Codeunit enforced (Function-level is a later goal)
 
-LethAL enforces `TestIsolation = Function` on the project under test. Function-level rollback is the tightest DB isolation BC offers. Anything less (`Codeunit`, `Disabled`) lets intra-test DB state leak, which no session-level machinery can recover. The tool refuses to run against a project that does not meet this requirement and reports the offending codeunits.
+**As built (Layer 5C-A):** the server-side `RunMutant` primitive runs each method through the BC AL Test Suite framework under **Codeunit isolation** — the platform's `Test Runner - Isol. Codeunit` (codeunit 130450), confirmed live on Cronus281. This is the isolation the tool actually enforces today: DB state rolls back at the codeunit boundary between mutant runs, and each `RunMutant` call activates → runs exactly one method → clears the active mutant on every terminal path (§5), so the container is left unmutated after each call regardless of isolation granularity. The fixture's per-mutant frozen table (bcdev 3/10/3) was verified to reproduce identically through this Codeunit-isolation path — no silent verdict move versus the earlier hub isolation (§I1 disposition).
+
+**Function-level (future):** Function-level rollback is the tightest DB isolation BC offers, and moving per-test isolation from Codeunit to Function is a later hardening goal — a test codeunit whose methods share intra-codeunit DB state could, under Codeunit isolation, let one method's writes reach the next. LethAL's `RunMutant` runs exactly one named method per call, which bounds this exposure, but does not make it Function-tight. When Function-level isolation is adopted, the tool will enforce it as a precondition and refuse projects that do not meet it, reporting the offending codeunits.
 
 ### 6.3 Per-Test Fresh Runner Invocation
 

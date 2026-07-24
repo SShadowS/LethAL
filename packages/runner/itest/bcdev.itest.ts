@@ -303,6 +303,26 @@ async function runProtocolInvariantProbes(run: RunOnceResult): Promise<void> {
     `run-scoped-clear: after a killer RunMutant, a baseline RunMutant must pass — the container must be left unmutated. got ${JSON.stringify(cleared)}`,
   );
 
+  // Attestation fence (design §G): both `mutated` and `cleared` are real covered runs that drove
+  // the deployed target's `Mutation Selector` (IsOverBudget's guard consulted `LC Control State`),
+  // so each `ran` verdict must carry a CLEAN attestation — `observedAny` true (a selector was
+  // consulted) AND `identityMismatch` false (the live binary's baked (targetAppId, artifactId)
+  // matched what we deployed). This is the live proof the running binary is ours; a wrong/stale
+  // binary would surface `identityMismatch: true` (already mapped to `error` by the transport, so
+  // it never reaches here as a verdict) or, if it ran no guard, `observedAny: false`.
+  for (const [label, v] of [
+    ["mutated", mutated],
+    ["cleared", cleared],
+  ] as const) {
+    assert.ok(
+      v.attestation !== undefined &&
+        v.attestation.observedAny === true &&
+        v.attestation.identityMismatch === false,
+      `attestation §G: covered run "${label}" must cleanly attest the deployed binary's selector ` +
+        `(observedAny && !identityMismatch). got ${JSON.stringify(v.attestation)}`,
+    );
+  }
+
   // Invariant 3 — artifact-mismatch (spec §C1). A RunMutant whose artifactId differs from the
   // registered one runs nothing and is a typed error, never a verdict.
   const bogusTx = new RunMutantTransport(odataCfg, TARGET_APP_ID, "f".repeat(32));

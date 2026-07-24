@@ -339,10 +339,25 @@ registered as a web service, was invoked over **OData V4** at
   target app's table permissions. Fixed by `InherentPermissions` on the control extension's state
   (§4). The current hub itest masks this via bc-dev's session context.
 
-Remaining to fill during implementation:
+**Upgrade-trigger probe — DONE (2026-07-22, Cronus281). Result: target self-registration on
+republish confirmed.** The Task 8 addendum's registry-read verifier depends on the target's emitted
+Upgrade codeunit re-registering its baked `artifactId` on a republish. Whether `OnUpgradePerCompany`
+fires on the runner's publish path (`altool publishapp --schemaupdatemode ForceSync`, which uses the
+DEV endpoint `POST /BC/dev/apps` — dev/RAD publish historically skips upgrade codeunits) was unknown.
+Probed with a throwaway app depending on `LethAL Control` whose Install writes
+`RegisterArtifact('upgprobe','installed')` and Upgrade writes `'upgraded'`, read back via a
+`RunMutant` oracle (registry match → `status:ran`, mismatch → `status:artifact-mismatch`):
+- Publish v1.0.0.0 (fresh install) → registry `'installed'` (`OnInstallAppPerCompany` fired).
+- Bump to v1.0.0.1, republish ForceSync → registry `'upgraded'` (**`OnUpgradePerCompany` fired**).
+Conclusion: an emitted target Upgrade codeunit re-registers on every republish, provided the app
+version increases (the runner's version is clock-monotonic via `reserveAppVersion`, so it always
+does). Recorded in `mem:runmutant_odata`.
+
+Remaining to fill (require the full live gate on the republished 5C-A stack):
 - Single-method-selection (order-matters) probe transcript.
 - Run-scoped-clear probe: container unmutated after `RunMutant`.
 - Artifact-registry mismatch probe transcript.
+- Per-run attestation: clean `observedAny && !identityMismatch` on covered runs; wrong-binary → `error`.
 - Stale-id alternating probe over a keep-alive client.
 - Hung-test → `in-flight-unknown` quarantine transcript.
-- Full bcdev itest per-mutant baseline (3/10/3) reproduced through `RunMutant`, pre/post.
+- Full bcdev itest per-mutant baseline (3/10/3) reproduced through `RunMutant`, pre/post; al-runner 3/13/0.
