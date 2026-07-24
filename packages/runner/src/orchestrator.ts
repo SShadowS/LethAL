@@ -1,5 +1,5 @@
 import { access, copyFile, readFile, readdir, rm, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
+import { homedir, hostname } from "node:os";
 import { basename, join } from "node:path";
 import { tier1Operators } from "@lethal/builtin-tier1";
 import {
@@ -20,12 +20,14 @@ import {
   writeInstrumentedProject,
 } from "@lethal/schemata";
 import { nextAbove, parseVersionConflict, reserveAppVersion } from "./app-version";
-import { AlcCompileError } from "./artifact";
+import { AlcCompileError, ArtifactPrepareError, DeploymentError } from "./artifact";
 import type { CompiledArtifact } from "./artifact";
 import type { ExecutionBackend, TestMethodRef, TestVerdict } from "./backend";
 import { bisectFailingMutant } from "./bisect";
 import { discoverTests } from "./discovery";
 import { ActivationFailure } from "./failure-classes";
+import { LeaseUnavailableError, MAX_ATTEMPT_ID_LENGTH, MAX_TTL_SECONDS } from "./lease";
+import type { AcquireOutcome, Lease, LeaseApi } from "./lease";
 import { isRetrySafe, requiresUnsafeLatch } from "./operation-outcome";
 import { Semaphore, shardEvenly } from "./pool";
 import { QuarantineStore } from "./quarantine-store";
@@ -39,7 +41,7 @@ import {
   identityKeyOf,
   testKeyOf,
 } from "./selection";
-import { SessionSafety } from "./session-safety";
+import { SessionSafety, SessionUnsafeError } from "./session-safety";
 import type { ResultsStore } from "./store";
 import type { MutantVerdict } from "./store";
 
@@ -133,6 +135,16 @@ export interface SessionConfig {
    */
   readonly resourceServer?: string;
   readonly resourceServerInstance?: string;
+  /**
+   * Layer 5C-B1 (design §6): the machine-global lease this session runs under. Present for an
+   * authoritative (bcdev) session against a `LethAL Control` v2 harness; absent for al-runner and
+   * for every in-memory-backend unit test, which then behave exactly as they did in 5C-A.
+   *
+   * When present, `runSession` acquires before deploying, fences the publish, heartbeats at
+   * ttl/3, binds the tuple into the backend so every `RunMutant` is fenced, and releases
+   * (op-gated) at session end.
+   */
+  readonly lease?: LeaseSessionConfig;
   /** Injectable ISO-timestamp source for durable quarantine records (Task 12). Production code
    *  freely uses `Date`/`Date.now()` (only workflow SCRIPTS forbid them — see design notes);
    *  this exists purely so tests can assert against a fixed, deterministic `recordedAtIso`
@@ -455,6 +467,588 @@ async function readAppVersionBestEffort(projectDir: string): Promise<string | un
   }
 }
 
+// ————————————————————————————————————————————————————————————————————————
+// Layer 5C-B1 (design §4/§5/§6/§8): the machine-global lease session.
+//
+// A session acquires the lease before it deploys, fences its publish behind the server's
+// operation marker, heartbeats the lease at ttl/3, carries the lease tuple into every
+// `RunMutant`, and releases (op-gated) at the end. Losing the lease mid-session means this
+// session can no longer PROVE the container it is measuring is still its own — so it latches
+// `SessionSafety`, stops scheduling, and discards the current batch's verdicts.
+// ————————————————————————————————————————————————————————————————————————
+
+/**
+ * The renew heartbeat's timer seam. Production passes the real `setInterval`/`clearInterval`;
+ * tests inject a fake and fire ticks deterministically, so heartbeat behaviour (single-flight,
+ * stop-on-loss, no dangling timer) is asserted with call counters instead of wall-clock delays.
+ */
+export interface LeaseTimers {
+  readonly setInterval: (fn: () => unknown, ms: number) => unknown;
+  readonly clearInterval: (handle: unknown) => void;
+}
+
+const REAL_TIMERS: LeaseTimers = {
+  setInterval: (fn, ms) => setInterval(fn, ms),
+  clearInterval: (handle) => clearInterval(handle as ReturnType<typeof setInterval>),
+};
+
+/** Bounded acquire retry budget (design §6 step 1: backoff-with-jitter is the default, not optional). */
+const LEASE_ACQUIRE_ATTEMPTS_DEFAULT = 6;
+const LEASE_BACKOFF_BASE_MS = 500;
+const LEASE_BACKOFF_CAP_MS = 8_000;
+/** How long an `op-in-flight` (this caller's OWN still-active attempt) may be polled before it is
+ *  treated as stranded — design §5: poll/wait, and only quarantine if it never clears. */
+const OP_POLL_ATTEMPTS = 8;
+const OP_POLL_DELAY_MS = 1_000;
+/** `QuarantineRecord.opKind` for the durable, tier-keyed record design §6/§8 calls
+ *  `container-needs-recycle`. Cleared only by the §8 recovery sequence (restart + ForceResetLease
+ *  + probe + `lethal clear-quarantine`), never by a session. */
+const CONTAINER_RECYCLE_OP_KIND = "container-needs-recycle";
+/** The server's `LC Lease."Op Kind"` Option formats to its member name (`OptionMembers =
+ *  none,publish,run` — Lease.Table.al), so an idle marker reads back as exactly this. Anything
+ *  else — including an unexpected value — is treated as an UNRESOLVED op: fail safe, never
+ *  release a lease (or trust a container) whose marker we cannot read as idle. */
+const OP_KIND_IDLE = "none";
+
+function defaultSleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Lease wiring for one session. Optional: only an authoritative (bcdev) session against a real
+ * `LethAL Control` v2 harness has a lease to take. When absent, `runSession` behaves exactly as
+ * it did in 5C-A — which is what every in-memory-backend unit test relies on.
+ */
+export interface LeaseSessionConfig {
+  readonly client: LeaseApi;
+  /**
+   * Reads the container's live `serverGeneration` (HarnessInfo v2). Required because
+   * `AcquireLease` refuses ANY `expectedGeneration` that is not the current one
+   * (`generation-changed`, design §4 step 1), and `HarnessInfo` is the only endpoint that
+   * reports it without an already-granted lease. Production wires this to
+   * `HarnessVerifier.verify()`, which also performs design §7's protocol-v2 + tenant checks
+   * BEFORE this session can acquire, let alone publish.
+   */
+  readonly serverGeneration: () => Promise<string>;
+  /** Default (and maximum) `MAX_TTL_SECONDS` = 15s — see lease.ts: the server's `RenewPeriodMs()`
+   *  is 5000ms and `local`, and design §6's ttl/3 heartbeat on a longer ttl would renew less
+   *  often than that period requires. */
+  readonly ttlSeconds?: number;
+  readonly acquireAttempts?: number;
+  readonly backoffBaseMs?: number;
+  /** Defaults to `host:pid:runId`. */
+  readonly owner?: string;
+  readonly sleep?: (ms: number) => Promise<void>;
+  readonly timers?: LeaseTimers;
+}
+
+/** Exponential backoff with jitter — two sessions refused at the same instant must not re-collide
+ *  on an identical schedule (design §6 step 1, fable7). */
+function backoffWithJitter(attempt: number, baseMs: number): number {
+  const capped = Math.min(baseMs * 2 ** attempt, LEASE_BACKOFF_CAP_MS);
+  return Math.max(1, Math.round(capped * (0.5 + Math.random() / 2)));
+}
+
+function describeRefusal(outcome: Extract<AcquireOutcome, { granted: false }>): string {
+  const parts = [`reason ${outcome.reason}`];
+  if (outcome.holder !== undefined) parts.push(`holder ${outcome.holder}`);
+  if (outcome.expiresAt !== undefined) parts.push(`expiresAt ${outcome.expiresAt}`);
+  if (outcome.opAttemptId !== undefined) parts.push(`opAttemptId ${outcome.opAttemptId}`);
+  if (outcome.opStartedAt !== undefined) parts.push(`opStartedAt ${outcome.opStartedAt}`);
+  return parts.join(", ");
+}
+
+/** 64 random bits as 16 hex chars, prefixed — an `Op Attempt Id` the server stores in a Text[64]
+ *  (lease.ts `MAX_ATTEMPT_ID_LENGTH`); a longer id would be silently truncated on write and could
+ *  never match its own retry, so this fails loudly instead of shipping one. */
+function newAttemptId(prefix: string): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(8));
+  const id = `${prefix}-${Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("")}`;
+  if (id.length > MAX_ATTEMPT_ID_LENGTH) {
+    throw new Error(
+      `lease attemptId "${id}" is ${id.length} chars, above the server's Text[64] limit (design §4)`,
+    );
+  }
+  return id;
+}
+
+/**
+ * Writes the durable, tier-keyed `container-needs-recycle` record (design §6/§8). Silently a
+ * no-op for a session with no tier identity — the same backends `runSession`'s quarantine consult
+ * already tolerates (al-runner; an authoritative caller that omitted `resourceServer`/
+ * `resourceServerInstance`, which warns at session start).
+ *
+ * First-reason-wins (design §8): an existing record names the ORIGINAL strand, and a later
+ * downstream symptom must never overwrite it.
+ */
+async function recordContainerRecycle(args: {
+  readonly quarantineStore: QuarantineStore | undefined;
+  readonly resourceKey: string | undefined;
+  readonly nowIso: () => string;
+  readonly detail: string;
+}): Promise<void> {
+  const { quarantineStore, resourceKey } = args;
+  if (quarantineStore === undefined || resourceKey === undefined) return;
+  if ((await quarantineStore.read(resourceKey)) !== null) return;
+  await quarantineStore.record({
+    resourceKey,
+    opKind: CONTAINER_RECYCLE_OP_KIND,
+    detail: args.detail,
+    recordedAtIso: args.nowIso(),
+  });
+}
+
+/**
+ * Design §6 step 1: acquire before `deploy()`, with a bounded backoff-with-jitter over
+ * `held`/`operation-busy`, and the §6 quarantine taxonomy for everything else.
+ *
+ * ONE client nonce is used for every attempt in the loop, deliberately: the server replays a
+ * matching nonce on a HELD row as the SAME `{epoch, token, serverGeneration}` grant
+ * (`ControlState.TryAcquire` step 3), so a retry after a lost ack recovers the caller's own lease
+ * instead of minting a second one or being refused as a competitor.
+ *
+ * `operation-orphaned` is NOT a backoff case: it means a previous session's op marker outlived
+ * its grace window. Design §6 requires a re-check ONCE and a durable `container-needs-recycle`
+ * record ONLY if the marker is unchanged (same `opAttemptId`/`opStartedAt`) across both looks — a
+ * marker that MOVED is a live container making progress, not a stranded one, so it is left to the
+ * ordinary backoff.
+ */
+async function acquireSessionLease(args: {
+  readonly cfg: LeaseSessionConfig;
+  readonly owner: string;
+  readonly ttlSeconds: number;
+  readonly quarantineStore: QuarantineStore | undefined;
+  readonly resourceKey: string | undefined;
+  readonly nowIso: () => string;
+}): Promise<Lease> {
+  const { cfg } = args;
+  const attempts = Math.max(1, Math.floor(cfg.acquireAttempts ?? LEASE_ACQUIRE_ATTEMPTS_DEFAULT));
+  const baseMs = cfg.backoffBaseMs ?? LEASE_BACKOFF_BASE_MS;
+  const sleep = cfg.sleep ?? defaultSleep;
+  const expectedGeneration = await cfg.serverGeneration();
+  if (expectedGeneration === "") {
+    throw new LeaseUnavailableError(
+      "cannot acquire the lease: the harness reported an empty serverGeneration — AcquireLease compares it against the stored generation, so an empty value could only ever match an equally-empty one (design §4)",
+    );
+  }
+  const clientNonce = newArtifactId();
+  let orphanMarker: string | undefined;
+  let lastRefusal = "none";
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    const outcome = await cfg.client.acquire(
+      args.owner,
+      args.ttlSeconds,
+      clientNonce,
+      expectedGeneration,
+    );
+    if (outcome.granted) return outcome.lease;
+    lastRefusal = describeRefusal(outcome);
+    if (outcome.reason === "operation-orphaned") {
+      const marker = `${outcome.opAttemptId ?? ""}|${outcome.opStartedAt ?? ""}`;
+      if (orphanMarker === marker) {
+        const detail = `container-needs-recycle: AcquireLease reported operation-orphaned twice with an UNCHANGED marker (opAttemptId ${outcome.opAttemptId ?? "<none>"}, opStartedAt ${outcome.opStartedAt ?? "<none>"}, serverGeneration ${expectedGeneration}) — a prior session's operation is stranded on this tier. Recovery (design §8): restart the NST/container, ForceResetLease, re-probe, then 'lethal clear-quarantine'.`;
+        await recordContainerRecycle({
+          quarantineStore: args.quarantineStore,
+          resourceKey: args.resourceKey,
+          nowIso: args.nowIso,
+          detail,
+        });
+        throw new LeaseUnavailableError(detail);
+      }
+      orphanMarker = marker; // first sighting — re-check exactly once, after a backoff
+    } else if (outcome.reason !== "held" && outcome.reason !== "operation-busy") {
+      // `generation-changed` (the container was recycled/reset under us) or a reason this client
+      // does not know: neither is something waiting can fix. Fail loudly instead of burning the
+      // whole backoff budget on a refusal that will never change.
+      throw new LeaseUnavailableError(
+        `AcquireLease refused and backoff cannot help: ${lastRefusal}`,
+      );
+    }
+    if (attempt < attempts - 1) await sleep(backoffWithJitter(attempt, baseMs));
+  }
+  throw new LeaseUnavailableError(
+    `AcquireLease was never granted after ${attempts} attempt(s) (last refusal: ${lastRefusal})`,
+  );
+}
+
+/**
+ * Binds the session's lease into the backend so every `RunMutant` carries the fence tuple
+ * (design §5). Duck-typed for the same reason `closeIfSupported` is: `ExecutionBackend` does not
+ * declare `setLease` (al-runner has no lease, and neither do the in-memory test backends).
+ *
+ * Fails LOUDLY when a lease is configured but the backend cannot take it: the alternative is a
+ * session that publishes under a lease and then runs every mutant unfenced — exactly the
+ * false-verdict window this layer exists to close.
+ */
+function leaseBindableOrThrow(backend: ExecutionBackend): (lease: Lease) => void {
+  const bindable = backend as { setLease?: (lease: Lease) => void };
+  if (typeof bindable.setLease !== "function") {
+    throw new Error(
+      "runSession: a lease is configured but this backend exposes no setLease(lease) — every fenced RunMutant must carry the session's (epoch, token, serverGeneration, opSeq) tuple (design §5/§6); refusing to run unfenced",
+    );
+  }
+  return bindable.setLease.bind(backend);
+}
+
+function bindLeaseToBackend(backend: ExecutionBackend, lease: Lease): void {
+  leaseBindableOrThrow(backend)(lease);
+}
+
+/**
+ * A `TestVerdict`'s lease classification (design §5/§8). `operation: "lease-lost"` covers TWO
+ * server answers that must NOT be treated alike:
+ *   - `"op-in-flight"` — THIS caller's own `(opSeq, attemptId)` is still executing server-side (a
+ *     duplicate claim). Poll/wait; never re-dispatch, never `RecoverOp`, and never latch: doing so
+ *     would discard a batch that is perfectly fine.
+ *   - anything else, INCLUDING an absent reason (the phase-3 verify-and-clear refusal carries
+ *     none) — a genuinely lost lease.
+ */
+type LeaseVerdictKind = "none" | "op-in-flight" | "lost";
+
+function classifyLeaseVerdict(v: Pick<TestVerdict, "operation" | "leaseInvalidReason">) {
+  if (v.operation !== "lease-lost") return "none" as LeaseVerdictKind;
+  return (v.leaseInvalidReason === "op-in-flight" ? "op-in-flight" : "lost") as LeaseVerdictKind;
+}
+
+/**
+ * The lease a session holds, plus everything the session does WITH it: the renew heartbeat, the
+ * publish fence, op-seq reconciliation, lease-loss bookkeeping, and the op-gated release.
+ *
+ * Lease-loss is recorded here (not just on `SessionSafety`) because design §6 scopes verdict
+ * invalidation to the batch that was in flight when the lease was lost: earlier batches stand,
+ * since every `RunMutant` in them was individually phase-1/phase-3 fence-validated.
+ */
+class LeaseSession {
+  #handle: unknown;
+  #ticking = false;
+  #stopped = false;
+  #lostBatchIndex: number | undefined;
+  /** The op seq of this batch's publish, used to re-seed the backend's RunMutant counter. */
+  #lastPublishOpSeq: number | undefined;
+  /** Updated by `runSession` at the top of every batch — the scope of a lease-lost invalidation. */
+  currentBatchIndex = 0;
+
+  constructor(
+    private readonly d: {
+      readonly client: LeaseApi;
+      readonly lease: Lease;
+      readonly safety: SessionSafety;
+      readonly ttlSeconds: number;
+      readonly timers: LeaseTimers;
+      readonly sleep: (ms: number) => Promise<void>;
+      readonly quarantineStore: QuarantineStore | undefined;
+      readonly resourceKey: string | undefined;
+      readonly nowIso: () => string;
+      readonly runId: number;
+    },
+  ) {}
+
+  get lease(): Lease {
+    return this.d.lease;
+  }
+
+  /** The batch that was in flight when the lease was lost — `undefined` while the lease is held. */
+  get lostBatchIndex(): number | undefined {
+    return this.#lostBatchIndex;
+  }
+
+  /** design §6 step 3: a single-flight renew at ttl/3. */
+  start(): void {
+    const periodMs = Math.max(1, Math.floor((this.d.ttlSeconds * 1000) / 3));
+    this.#handle = this.d.timers.setInterval(() => this.pulse(), periodMs);
+  }
+
+  stop(): void {
+    this.#stopped = true;
+    if (this.#handle !== undefined) {
+      this.d.timers.clearInterval(this.#handle);
+      this.#handle = undefined;
+    }
+  }
+
+  /**
+   * One heartbeat tick. SINGLE-FLIGHT: a tick that arrives while the previous renew is still in
+   * flight is dropped, never queued — a slow round trip must not pile up renewals that then
+   * arrive out of order.
+   *
+   * A THROWN renew is a lost ack, not a loss: design §6 is explicit that only `renewed:false` is
+   * loss. It earns exactly one retry within the tick; if that also fails, the tick gives up and
+   * the next one tries again (and if the lease really has gone, the very next `RunMutant` is
+   * refused by the phase-1 fence, which IS a confirmed loss).
+   */
+  async pulse(): Promise<void> {
+    if (this.#ticking || this.#stopped) return;
+    this.#ticking = true;
+    try {
+      let outcome: Awaited<ReturnType<LeaseApi["renew"]>>;
+      try {
+        outcome = await this.d.client.renew(this.d.lease, this.d.ttlSeconds);
+      } catch (first) {
+        try {
+          outcome = await this.d.client.renew(this.d.lease, this.d.ttlSeconds);
+        } catch (second) {
+          console.warn(
+            `[lethal] lease renew could not be answered twice in a row (${messageOf(first)}; ${messageOf(second)}) — not treated as lease loss (design §6: only renewed:false is loss); the next tick retries`,
+          );
+          return;
+        }
+      }
+      if (!outcome.renewed) {
+        this.noteLeaseLost("RenewLease answered renewed:false — the lease is no longer ours");
+      }
+    } finally {
+      this.#ticking = false;
+    }
+  }
+
+  /**
+   * design §6: latch `SessionSafety` (reason `lease-lost`), stop renewing, and remember WHICH
+   * batch was in flight so `runSession` can invalidate exactly that batch's verdicts at session
+   * end. Idempotent — the FIRST loss wins, like the latch itself.
+   */
+  noteLeaseLost(detail: string): void {
+    if (this.#lostBatchIndex === undefined) this.#lostBatchIndex = this.currentBatchIndex;
+    this.stop(); // no renew after a loss, and no dangling timer
+    this.d.safety.latchUnsafe(`lease-lost: ${detail}`);
+  }
+
+  /** The server accepts only `lastCompletedOpSeq + 1` (design §5), and this client's publish ops
+   *  and the backend's run ops share ONE server-side sequence — so the authoritative value is
+   *  read back, never guessed from the acquire grant alone. */
+  private async nextOpSeq(): Promise<number> {
+    const status = await this.d.client.getOperationStatus(this.d.lease, "", 0);
+    return status.lastCompletedOpSeq + 1;
+  }
+
+  /**
+   * Re-seeds the backend's RunMutant op-seq counter from the server's own `lastCompletedOpSeq`.
+   *
+   * Needed because the backend increments its counter per RunMutant call ISSUED (bcdev-backend.ts),
+   * while the server advances `Last Completed Op Seq` only when an op actually completes. The one
+   * in-session path that can desynchronise them is `runOnce`'s retry of a `pre-dispatch-rejected`
+   * run: the first attempt consumed a counter value the server never saw, so the retry would send
+   * a too-high `opSeq` and be refused as `lease-invalid` — indistinguishable, at the client, from
+   * a genuinely lost lease. Reconciling here keeps that false lease-loss impossible.
+   */
+  async resyncOpSeq(backend: ExecutionBackend): Promise<void> {
+    const status = await this.d.client.getOperationStatus(this.d.lease, "", 0);
+    bindLeaseToBackend(backend, {
+      ...this.d.lease,
+      lastCompletedOpSeq: status.lastCompletedOpSeq,
+    });
+  }
+
+  /** Re-binds the backend so its first RunMutant of this batch follows THIS batch's publish op. */
+  rebindBackend(backend: ExecutionBackend): void {
+    const publishOpSeq = this.#lastPublishOpSeq;
+    if (publishOpSeq === undefined) return;
+    bindLeaseToBackend(backend, { ...this.d.lease, lastCompletedOpSeq: publishOpSeq });
+  }
+
+  /**
+   * design §6 step 2 — the publication fence. `BeginPublish` claims the operation marker so no
+   * other session can acquire the lease across our publish; `EndPublish` tombstones it on every
+   * CONFIRMED terminal outcome, success or deterministic failure.
+   *
+   * A publish whose result is genuinely UNKNOWN (`DeploymentError` with outcome `indeterminate`
+   * or `anomalous` — the publish may have landed, or may still be landing) deliberately leaves
+   * the marker set and records a durable `container-needs-recycle`: leaving the marker is what
+   * stops the next session from publishing over a half-applied one.
+   */
+  async publish<T>(run: () => Promise<T>): Promise<T> {
+    const opSeq = await this.nextOpSeq();
+    const attemptId = newAttemptId(`pub-${this.d.runId}-b${this.currentBatchIndex}`);
+    const begun = await this.d.client.beginPublish(this.d.lease, attemptId, opSeq);
+    if (!begun.begun) {
+      this.noteLeaseLost(
+        `BeginPublish refused (opSeq ${opSeq}, attemptId ${attemptId}, alreadyCompleted ${String(begun.alreadyCompleted)})`,
+      );
+      throw new LeaseUnavailableError(
+        `BeginPublish refused for opSeq ${opSeq} — the lease or the operation marker is no longer ours (design §4)`,
+      );
+    }
+    let result: T;
+    try {
+      result = await run();
+    } catch (err) {
+      if (isConfirmedTerminalPublishFailure(err)) {
+        await this.endPublish(attemptId, opSeq, "failed");
+      } else {
+        await this.recordRecycle(
+          `publish operation ${opSeq} (attemptId ${attemptId}) ended with an UNKNOWN result — the marker is deliberately left set so no other session publishes across it: ${messageOf(err)}`,
+        );
+      }
+      throw err;
+    }
+    await this.endPublish(attemptId, opSeq, "succeeded");
+    this.#lastPublishOpSeq = opSeq;
+    return result;
+  }
+
+  /**
+   * `EndPublish` on a confirmed-terminal publish. A refusal means our tuple no longer matches —
+   * lease loss. A THROWN call is a lost ack over an op we already know terminated, which is the
+   * one situation design §5 permits `RecoverOp` in: see `reconcileStrandedPublish`.
+   */
+  private async endPublish(attemptId: string, opSeq: number, outcome: string): Promise<void> {
+    let ended: Awaited<ReturnType<LeaseApi["endPublish"]>>;
+    try {
+      ended = await this.d.client.endPublish(this.d.lease, attemptId, opSeq, outcome);
+    } catch (err) {
+      await this.reconcileStrandedPublish(attemptId, opSeq, err);
+      return;
+    }
+    if (ended.ended || ended.alreadyCompleted === true) return;
+    this.noteLeaseLost(`EndPublish refused for publish op ${opSeq} (attemptId ${attemptId})`);
+  }
+
+  /**
+   * Reconciles a publish op whose `EndPublish` ack was lost — design §5's marker-recovery rules,
+   * applied at the ONLY call site in this session that can satisfy them.
+   *
+   * The precondition `RecoverOp` demands is a PARSED application-level terminal response proving
+   * the invocation unwound — never a bare HTTP status, connection error, or client timeout. Two
+   * facts are required here and both are checked before the flag `true` is even constructible:
+   *   1. the publish itself already returned a terminal result (this method is only reached from
+   *      `endPublish`, which is only called on a confirmed-terminal publish), and the AL side of a
+   *      publish op runs nothing — `BeginPublish` returned and set a marker, that is all; and
+   *   2. a parsed `GetOperationStatus` body says the CURRENT marker is exactly our own publish op.
+   * If the status read itself fails, or the marker belongs to some other op (or to a `run`, which
+   * genuinely could still be executing AL), nothing is recovered: the marker stays and the tier is
+   * durably quarantined instead.
+   */
+  private async reconcileStrandedPublish(
+    attemptId: string,
+    opSeq: number,
+    cause: unknown,
+  ): Promise<void> {
+    let status: Awaited<ReturnType<LeaseApi["getOperationStatus"]>>;
+    try {
+      status = await this.d.client.getOperationStatus(this.d.lease, attemptId, opSeq);
+    } catch (err) {
+      await this.recordRecycle(
+        `EndPublish for op ${opSeq} (attemptId ${attemptId}) was not acknowledged (${messageOf(cause)}) and the reconciling GetOperationStatus also failed (${messageOf(err)}) — marker left set`,
+      );
+      return;
+    }
+    if (status.completed) return; // the lost ack had landed after all — already tombstoned
+    if (
+      status.opKind === "publish" &&
+      status.opAttemptId === attemptId &&
+      status.opSeq === opSeq &&
+      attemptId !== ""
+    ) {
+      const recovered = await this.d.client.recoverOp(this.d.lease, attemptId, opSeq, true);
+      if (recovered.recovered || recovered.alreadyCompleted === true) return;
+    }
+    await this.recordRecycle(
+      `publish op ${opSeq} (attemptId ${attemptId}) could not be reconciled after a lost EndPublish ack (${messageOf(cause)}); server marker: opKind ${status.opKind}, opAttemptId ${status.opAttemptId}, opSeq ${status.opSeq}`,
+    );
+  }
+
+  /**
+   * design §5: an `op-in-flight` refusal means our OWN attempt is still executing server-side.
+   * Poll the marker — never re-dispatch, never `RecoverOp` (the op may still be running AL, which
+   * is precisely what that rule forbids clearing). Returns whether it cleared within the budget.
+   */
+  async pollUntilOpClears(): Promise<boolean> {
+    for (let attempt = 0; attempt < OP_POLL_ATTEMPTS; attempt++) {
+      let status: Awaited<ReturnType<LeaseApi["getOperationStatus"]>>;
+      try {
+        status = await this.d.client.getOperationStatus(this.d.lease, "", 0);
+      } catch (err) {
+        console.warn(`[lethal] polling the in-flight operation failed: ${messageOf(err)}`);
+        return false;
+      }
+      if (status.opKind === OP_KIND_IDLE) return true;
+      if (attempt < OP_POLL_ATTEMPTS - 1) await this.d.sleep(OP_POLL_DELAY_MS);
+    }
+    return false;
+  }
+
+  async recordRecycle(detail: string): Promise<void> {
+    await recordContainerRecycle({
+      quarantineStore: this.d.quarantineStore,
+      resourceKey: this.d.resourceKey,
+      nowIso: this.d.nowIso,
+      detail,
+    });
+  }
+
+  /**
+   * design §6 step 5 — stop the heartbeat and release, but ONLY when no operation is in flight.
+   * A normal session's last `RunMutant` cleared its own marker in phase 3, so the gate passes and
+   * the lease is freed immediately for the next session. A marker that is still set means
+   * something may still be executing on the tier: releasing there would let another session in on
+   * top of it, so the lease is left to expire and the tier is durably quarantined instead.
+   *
+   * After a lease LOSS there is nothing to release — our credentials are already invalid, and the
+   * lease now belongs to whoever holds it.
+   */
+  async finish(): Promise<void> {
+    this.stop();
+    if (this.#lostBatchIndex !== undefined) return;
+    let status: Awaited<ReturnType<LeaseApi["getOperationStatus"]>>;
+    try {
+      status = await this.d.client.getOperationStatus(this.d.lease, "", 0);
+    } catch (err) {
+      console.warn(
+        `[lethal] could not read the operation marker at session end (${messageOf(err)}) — leaving the lease to expire rather than releasing over a possibly-live operation`,
+      );
+      return;
+    }
+    if (status.opKind !== OP_KIND_IDLE) {
+      await this.recordRecycle(
+        `session ended with an unresolved operation marker (opKind ${status.opKind}, opAttemptId ${status.opAttemptId}, opSeq ${status.opSeq}) — the lease was NOT released; recover per design §8 (restart, ForceResetLease, probe, clear-quarantine)`,
+      );
+      return;
+    }
+    try {
+      const released = await this.d.client.release(this.d.lease);
+      if (!released.released) {
+        console.warn(
+          `[lethal] ReleaseLease refused (${released.reason ?? "no reason given"}) — the lease will expire on its own`,
+        );
+      }
+    } catch (err) {
+      console.warn(`[lethal] ReleaseLease failed: ${messageOf(err)} — the lease will expire`);
+    }
+  }
+}
+
+/**
+ * Is this deploy failure a CONFIRMED terminal publish outcome (design §6 step 2)?
+ *
+ * Only these are: `AlcCompileError` (alc rejected the source — nothing was ever published),
+ * `ArtifactPrepareError` (an fs/spawn/manifest problem on our side, likewise pre-publish), a
+ * `DeploymentError` whose own `outcome` field is `"failed"` (BC rejected the publish AND identity
+ * verification agrees the server does not run our artifact), and a version conflict (BC named the
+ * installed version verbatim — a deterministic rejection).
+ *
+ * Everything else — notably `DeploymentError` with `indeterminate`/`anomalous` — is a publish
+ * whose result we cannot state, and must NOT be tombstoned with `EndPublish`.
+ */
+function isConfirmedTerminalPublishFailure(err: unknown): boolean {
+  if (err instanceof AlcCompileError || err instanceof ArtifactPrepareError) return true;
+  if (err instanceof DeploymentError) return err.outcome === "failed";
+  return parseVersionConflict(messageOf(err)) !== null;
+}
+
+/**
+ * One deploy dispatch: latch-guarded (design §6: `deploy`, `activate` AND `run` are all guarded)
+ * and, when a lease is held, wrapped in the BeginPublish/EndPublish fence.
+ */
+async function deployOnce(
+  backend: ExecutionBackend,
+  safety: SessionSafety,
+  leaseSession: LeaseSession | undefined,
+  dir: string,
+): Promise<CompiledArtifact | null> {
+  safety.assertSafe(`deploy(${dir})`);
+  if (leaseSession === undefined) return backend.deploy(dir);
+  return leaseSession.publish(() => backend.deploy(dir));
+}
+
 export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // Constructed once for the whole session and threaded to every activateOnce call site
   // (baseline activation below, and the per-mutant loop in runMutantsOnBackend) — the latch is
@@ -589,6 +1183,45 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // conflict retry re-stamped above something newer than the clock would produce).
   let lastIssuedVersion: string | undefined;
 
+  // Layer 5C-B1 (design §6 step 1): acquire the machine-global lease BEFORE the first deploy —
+  // outside the try/finally below, since a failed acquire has nothing to release. Everything from
+  // here on (publish fence, heartbeat, fenced RunMutant, release) hangs off this one lease.
+  let leaseSession: LeaseSession | undefined;
+  if (cfg.lease !== undefined) {
+    const leaseCfg = cfg.lease;
+    const ttlSeconds = leaseCfg.ttlSeconds ?? MAX_TTL_SECONDS;
+    // Checked BEFORE acquiring: a backend that cannot take the lease would otherwise leave a
+    // just-acquired lease held (with no heartbeat and no release) until it lapsed, locking out
+    // every other session on this container for the full ttl.
+    leaseBindableOrThrow(cfg.backend);
+    const lease = await acquireSessionLease({
+      cfg: leaseCfg,
+      // design §6: owner id = host:pid:runId — enough for a human reading a `held` refusal to
+      // find the other session, and unique per run without a registry.
+      owner: leaseCfg.owner ?? `${hostname()}:${process.pid}:${runId}`,
+      ttlSeconds,
+      quarantineStore,
+      resourceKey,
+      nowIso,
+    });
+    leaseSession = new LeaseSession({
+      client: leaseCfg.client,
+      lease,
+      safety,
+      ttlSeconds,
+      timers: leaseCfg.timers ?? REAL_TIMERS,
+      sleep: leaseCfg.sleep ?? defaultSleep,
+      quarantineStore,
+      resourceKey,
+      nowIso,
+      runId,
+    });
+    // Bind before anything can run: the backend fails loudly on a RunMutant with no lease bound,
+    // and this is also the fail-loud point for a backend that cannot take one at all.
+    bindLeaseToBackend(cfg.backend, lease);
+    leaseSession.start();
+  }
+
   try {
     if (workers > 1) {
       const factory = cfg.backendFactory;
@@ -600,6 +1233,11 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       }
     }
     for (const [batchIdx, batchFiles] of artifacts.entries()) {
+      // Layer 5C-B1 (design §6): a lease lost during THIS batch invalidates exactly THIS batch's
+      // verdicts at session end — earlier batches stand, every RunMutant in them having been
+      // individually fence-validated. The heartbeat runs on a timer and can observe the loss at
+      // any moment, so it needs the current batch index, not the one the mutant loop last saw.
+      if (leaseSession !== undefined) leaseSession.currentBatchIndex = batchIdx;
       // 1. write the instrumented project for this artifact — currently
       // always every file `generateMutationSet` found (single artifact).
       // `batchIdx` MUST come from `.entries()`, not a hoisted constant:
@@ -673,7 +1311,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       let deployed = false;
       let deployErr: unknown;
       try {
-        compiled = await cfg.backend.deploy(batchDir);
+        compiled = await deployOnce(cfg.backend, safety, leaseSession, batchDir);
         deployed = true;
       } catch (err) {
         deployErr = err;
@@ -690,7 +1328,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           appVersion = bumped;
           await writeStampedAppJson(batchDir, projectManifest, bumped);
           try {
-            compiled = await cfg.backend.deploy(batchDir);
+            // A fresh publish op (design §4/§6): the first attempt's marker was already
+            // tombstoned by its `EndPublish("failed")` — a version conflict is BC naming the
+            // installed version verbatim, i.e. a confirmed deterministic rejection.
+            compiled = await deployOnce(cfg.backend, safety, leaseSession, batchDir);
             deployed = true;
           } catch (retryErr) {
             const stillInstalled = parseVersionConflict(messageOf(retryErr));
@@ -762,12 +1403,16 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           sha256: compiled.sha256,
         });
       }
+      // Layer 5C-B1 (design §5): this batch's publish consumed an op seq from the SAME
+      // server-side sequence every RunMutant claims against, so the backend's counter must
+      // continue after it — not from the acquire grant's now-stale `lastCompletedOpSeq`.
+      if (leaseSession !== undefined) leaseSession.rebindBackend(cfg.backend);
 
       // 4. baseline
       await activateOnce(cfg.backend, safety, null);
       const baseline: Array<{ ref: TestMethodRef; verdict: TestVerdict }> = [];
       for (const ref of tests) {
-        const v = await runOnce(cfg.backend, ref, {
+        const v = await runOnce(cfg.backend, safety, ref, {
           coverage: caps.coverage,
           timeoutMs: cfg.baselineTimeoutMs ?? BASELINE_TIMEOUT_DEFAULT,
         });
@@ -781,6 +1426,21 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           v.durationMs,
           v.failureMessage,
         );
+        // Layer 5C-B1 (design §5/§6/§8): a lease answer must be classified BEFORE the generic
+        // `requiresUnsafeLatch` quarantine below, which would otherwise record a durable tier
+        // quarantine for a lease loss that leaves the container perfectly healthy — and would
+        // treat a same-attempt duplicate claim as a loss.
+        const baselineLease = classifyLeaseVerdict(v);
+        if (baselineLease !== "none") {
+          await handleBaselineLeaseOutcome({
+            kind: baselineLease,
+            safety,
+            leaseSession,
+            ref,
+            verdict: v,
+          });
+          break;
+        }
         if (v.operation !== undefined && requiresUnsafeLatch(v.operation)) {
           // The server may still be executing this baseline test. Latch unsafe, record a
           // durable tier quarantine, and stop collecting baseline results — no further
@@ -907,6 +1567,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         await runMutantsOnBackend({
           backend: cfg.backend,
           safety,
+          ...(leaseSession !== undefined ? { leaseSession } : {}),
           mutants: execute,
           perMutantTests,
           baselineDuration,
@@ -946,7 +1607,13 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
             // constraint on (run_id, mutant_code), so a duplicate INSERT
             // would corrupt the report silently rather than fail loudly.
             try {
-              await compileLimit.run(() => backend.deploy(batchDir));
+              // Latch-guarded like every other work-plane dispatch (design §6). No publish fence
+              // here: `workers > 1` is rejected outright for an authoritative backend (above), so
+              // a worker shard never publishes under a lease.
+              await compileLimit.run(() => {
+                safety.assertSafe(`deploy(${batchDir}) worker ${i}`);
+                return backend.deploy(batchDir);
+              });
             } catch (err) {
               // Same session-abort rule as the sequential path (3b): only a deterministic alc
               // rejection (AlcCompileError) is bisectable. A DeploymentError, an
@@ -1045,6 +1712,14 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       // any work-plane call (deploy/activate/run) against a tier that may still be stranded.
       if (safety.isUnsafe) break;
     }
+  } catch (err) {
+    // Layer 5C-B1 (design §6): every work-plane dispatch — deploy, activate AND run — is guarded
+    // by the latch, and the latch can now be set ASYNCHRONOUSLY (the renew heartbeat fires on a
+    // timer, mid-mutant). A guard that refuses a dispatch is the system working as designed, not
+    // a session failure: the latch already recorded WHY, this batch's verdicts are invalidated
+    // below, and the report carries `quarantined`. Rejecting here instead would throw all of that
+    // away. Every other error still propagates untouched.
+    if (!(err instanceof SessionUnsafeError)) throw err;
   } finally {
     // Best-effort cleanup: deliberately swallow errors here (unlike the
     // retrying activation calls above) since this only runs to leave every
@@ -1066,6 +1741,28 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         await closeIfSupported(backend).catch(() => {});
       }
     }
+    // Layer 5C-B1 (design §6 step 5): stop the heartbeat and release the lease — op-gated, so a
+    // tier with an unresolved operation marker is left held (and durably quarantined) rather than
+    // handed to the next session. Last in the teardown so the backend's own deactivating
+    // ClearActive (above) still runs under the lease it was taken with.
+    if (leaseSession !== undefined) await leaseSession.finish();
+  }
+
+  // Layer 5C-B1 (design §6, verbatim): "at session end — after the batch loop breaks, before
+  // buildReport — invalidate the CURRENT batch's verdicts". The artifact those verdicts came from
+  // was deployed under a lease this session can no longer prove it held, so nothing measured
+  // against it is trustworthy. EARLIER batches stand: every RunMutant in them was individually
+  // phase-1/phase-3 fence-validated, so invalidating them would be over-invalidation.
+  //
+  // Deliberately NOT delegated to design §G's attestation gate — that gate skips a batch that
+  // already earned a clean attestation, which a batch can do moments before the lease is lost.
+  const lostBatchIndex = leaseSession?.lostBatchIndex;
+  if (lostBatchIndex !== undefined) {
+    invalidateBatchVerdicts(
+      outcomes,
+      lostBatchIndex,
+      `lease-lost: this batch's artifact was deployed under a lease this session could no longer prove it held (${safety.reason ?? "unknown"}) — verdicts discarded (design §6)`,
+    );
   }
 
   // Layer 5C-A Task 8, Task 10 (design §G): a quarantined run must NEVER be marked finished.
@@ -1183,7 +1880,17 @@ async function runMutantsOnBackend(args: {
    * `clean = true` the first time any covered run attests cleanly, never reset.
    */
   readonly attestation: { clean: boolean };
+  /**
+   * Layer 5C-B1: the session's lease, when it holds one. Present only for an authoritative
+   * session configured with `SessionConfig.lease` — the branch that classifies a `lease-lost`
+   * verdict still latches without it (via `safety`), it just cannot poll or scope an
+   * invalidation.
+   */
+  readonly leaseSession?: LeaseSession | undefined;
 }): Promise<void> {
+  const leaseSession = args.leaseSession;
+  const resyncOpSeq =
+    leaseSession !== undefined ? () => leaseSession.resyncOpSeq(args.backend) : undefined;
   for (const m of args.mutants) {
     const covering = args.perMutantTests.get(m.mutantId);
     if (covering === undefined) continue; // uncovered, already recorded above
@@ -1215,7 +1922,13 @@ async function runMutantsOnBackend(args: {
     let transportErrorRef: TestMethodRef | undefined;
     for (const ref of covering) {
       const budget = 2 * (args.baselineDuration.get(testKeyOf(ref)) ?? args.fallbackTimeoutMs);
-      const v = await runOnce(args.backend, ref, { coverage: "none", timeoutMs: budget });
+      const v = await runOnce(
+        args.backend,
+        args.safety,
+        ref,
+        { coverage: "none", timeoutMs: budget },
+        resyncOpSeq,
+      );
       testResultBuffer.push({
         mutantCode: m.mutantId,
         ref,
@@ -1228,6 +1941,47 @@ async function runMutantsOnBackend(args: {
       // "none" transport path (the only path that ever attests) — feed the artifact's ledger.
       if (v.attestation?.observedAny === true && v.attestation.identityMismatch !== true) {
         args.attestation.clean = true;
+      }
+      // Layer 5C-B1 (design §5/§6/§8): classify a lease answer BEFORE the generic
+      // `requiresUnsafeLatch` branch below. That branch is right for `in-flight-unknown` and
+      // WRONG for both lease kinds: it would record a durable tier quarantine for a lease loss
+      // that leaves the container healthy, and it would latch (and so invalidate the whole batch)
+      // for a same-attempt duplicate claim that is not a loss at all.
+      const leaseKind = classifyLeaseVerdict(v);
+      if (leaseKind === "lost") {
+        // Genuine loss: latch `lease-lost`, stop scheduling. The current batch's verdicts are
+        // invalidated at session end (design §6) — NOT here, because earlier mutants of this same
+        // batch were already recorded and only `runSession` can rewrite them. No durable tier
+        // quarantine: a clean lease loss means the container itself is fine.
+        const detail = `${ref.method} (mutant ${m.mutantId}): ${v.failureMessage ?? "RunMutant lease-invalid"}`;
+        if (leaseSession !== undefined) leaseSession.noteLeaseLost(detail);
+        else args.safety.latchUnsafe(`lease-lost: ${detail}`);
+        verdict = "error";
+        failureNote = `lease-lost while running ${ref.method}: this run's result was refused by the fence and never recorded server-side`;
+        break;
+      }
+      if (leaseKind === "op-in-flight") {
+        // OUR OWN (opSeq, attemptId) is still executing server-side. design §5: poll/wait — never
+        // re-dispatch (the server would refuse the duplicate again, forever), never `RecoverOp`
+        // (the op may still be running AL, which is exactly what that rule protects), and never
+        // treat this as lease loss. This mutant's result is simply lost; the session continues.
+        const cleared = (await leaseSession?.pollUntilOpClears()) ?? false;
+        verdict = "error";
+        if (cleared) {
+          failureNote = `op-in-flight: RunMutant refused a duplicate claim on this attempt while it was still executing; the operation has since completed but its result was not returned, so ${ref.method}'s verdict for this mutant is discarded rather than re-dispatched (design §5)`;
+        } else {
+          failureNote =
+            "op-in-flight: RunMutant refused a duplicate claim on this attempt and the operation never cleared — the container may still be executing it";
+          cause = "deadline-exceeded";
+          await quarantineInFlight({
+            safety: args.safety,
+            quarantineStore: args.quarantineStore,
+            resourceKey: args.resourceKey,
+            nowIso: args.nowIso,
+            detail: `operation never cleared after an op-in-flight refusal running ${ref.method} (mutant ${m.mutantId})`,
+          });
+        }
+        break;
       }
       if (v.operation !== undefined && requiresUnsafeLatch(v.operation)) {
         // The server may still be executing this test. Latch unsafe, record a durable tier
@@ -1269,10 +2023,13 @@ async function runMutantsOnBackend(args: {
       }
       if (v.outcome === "fail") {
         await activateOnce(args.backend, args.safety, null);
-        const confirm = await runOnce(args.backend, ref, {
-          coverage: "none",
-          timeoutMs: budget,
-        });
+        const confirm = await runOnce(
+          args.backend,
+          args.safety,
+          ref,
+          { coverage: "none", timeoutMs: budget },
+          resyncOpSeq,
+        );
         testResultBuffer.push({
           mutantCode: null,
           ref,
@@ -1289,7 +2046,32 @@ async function runMutantsOnBackend(args: {
         ) {
           args.attestation.clean = true;
         }
-        if (confirm.operation !== undefined && requiresUnsafeLatch(confirm.operation)) {
+        const confirmLease = classifyLeaseVerdict(confirm);
+        if (confirmLease !== "none") {
+          // Same design §5/§6 split as the covering run above, applied to the confirmation rerun:
+          // a genuine loss latches `lease-lost` (no durable quarantine — the container is fine);
+          // an op-in-flight duplicate is polled out, never re-dispatched, and never latched.
+          const detail = `confirming ${ref.method} (mutant ${m.mutantId}): ${confirm.failureMessage ?? "RunMutant lease-invalid"}`;
+          verdict = "error";
+          if (confirmLease === "lost") {
+            if (leaseSession !== undefined) leaseSession.noteLeaseLost(detail);
+            else args.safety.latchUnsafe(`lease-lost: ${detail}`);
+            failureNote = `lease-lost while ${detail} — the kill could not be confirmed under a provable lease`;
+          } else {
+            const cleared = (await leaseSession?.pollUntilOpClears()) ?? false;
+            failureNote = `op-in-flight while ${detail} — polled instead of re-dispatched (design §5); the operation ${cleared ? "cleared, but its result was not returned" : "never cleared"}`;
+            if (!cleared) {
+              cause = "deadline-exceeded";
+              await quarantineInFlight({
+                safety: args.safety,
+                quarantineStore: args.quarantineStore,
+                resourceKey: args.resourceKey,
+                nowIso: args.nowIso,
+                detail: `operation never cleared after an op-in-flight refusal confirming ${ref.method} (mutant ${m.mutantId})`,
+              });
+            }
+          }
+        } else if (confirm.operation !== undefined && requiresUnsafeLatch(confirm.operation)) {
           // The server may still be executing this confirmation run. Latch unsafe, record a
           // durable tier quarantine, and stop — same in-flight-unknown handling as the
           // covering-test run above (spec §8, §12); the post-loop `safety.isUnsafe` check
@@ -1487,18 +2269,69 @@ export async function activateOnce(
 /**
  * One test run. Retries ONLY a `pre-dispatch-rejected` run (the connect never dispatched a test).
  * An `in-flight-unknown` run is never retried — the first run may still be executing server-side.
+ *
+ * Latch-guarded since Layer 5C-B1 (design §6: "Guard every work-plane dispatch — `deploy`,
+ * `activate`, AND `run` — with the latch (today `runOnce` doesn't check it)"). This is not
+ * belt-and-braces: the renew heartbeat can latch the session between two dispatches inside a
+ * single mutant (covering run → kill-confirmation rerun), where no loop-level `isUnsafe` check
+ * stands between them.
+ *
+ * `resyncOpSeq` runs before the ONE retry a pre-dispatch-rejected run earns: that first attempt
+ * consumed a client-side op-seq the server never saw, so without reconciliation the retry would
+ * send a too-high `opSeq` and be refused as `lease-invalid` — a FALSE lease loss (see
+ * `LeaseSession.resyncOpSeq`).
  */
 export async function runOnce(
   backend: ExecutionBackend,
+  safety: SessionSafety,
   ref: TestMethodRef,
   opts: { coverage: "none" | "procedure" | "line"; timeoutMs: number },
+  resyncOpSeq?: () => Promise<void>,
 ): Promise<TestVerdict> {
+  safety.assertSafe(`run(${ref.codeunitName}.${ref.method})`);
   const first = await backend.run(ref, opts);
   if (first.outcome !== "error") return first;
   if (first.operation !== undefined && isRetrySafe(first.operation)) {
+    safety.assertSafe(`run(${ref.codeunitName}.${ref.method}) retry`);
+    if (resyncOpSeq !== undefined) await resyncOpSeq();
     return backend.run(ref, opts);
   }
   return first;
+}
+
+/**
+ * Layer 5C-B1 (design §5/§6): a lease answer on a BASELINE run, which has no per-mutant verdict
+ * to carry the diagnosis. Either way the session stops — a baseline that cannot produce a result
+ * leaves nothing safe to schedule — but the two kinds stop for different reasons and must not be
+ * conflated:
+ *   - `lost`: latch `lease-lost` and scope this batch for invalidation. NO durable tier
+ *     quarantine — a clean lease loss (epoch mismatch, no stranded op) leaves the container
+ *     perfectly healthy (design §6's quarantine taxonomy).
+ *   - `op-in-flight`: our OWN attempt is still executing. Poll it out (never re-dispatch, never
+ *     `RecoverOp`), and only if it never clears is the tier durably quarantined.
+ */
+async function handleBaselineLeaseOutcome(args: {
+  readonly kind: LeaseVerdictKind;
+  readonly safety: SessionSafety;
+  readonly leaseSession: LeaseSession | undefined;
+  readonly ref: TestMethodRef;
+  readonly verdict: TestVerdict;
+}): Promise<void> {
+  const detail = `baseline test ${args.ref.method}: ${args.verdict.failureMessage ?? "RunMutant lease-invalid"}`;
+  if (args.kind === "lost") {
+    if (args.leaseSession !== undefined) args.leaseSession.noteLeaseLost(detail);
+    else args.safety.latchUnsafe(`lease-lost: ${detail}`);
+    return;
+  }
+  const cleared = (await args.leaseSession?.pollUntilOpClears()) ?? false;
+  if (!cleared) {
+    await args.leaseSession?.recordRecycle(
+      `op-in-flight never cleared after ${detail} — the server-side operation may still be executing`,
+    );
+  }
+  args.safety.latchUnsafe(
+    `lease op-in-flight at baseline (${detail}) — polled instead of re-dispatched (design §5); the operation ${cleared ? "cleared, but its result was never returned" : "never cleared"}, so no baseline result exists`,
+  );
 }
 
 /**
@@ -1533,7 +2366,7 @@ export async function runOnce(
  * future `--skip-known-survivors` run. A direct SQL read of the raw `mutants` table (bypassing
  * `priorSurvivorKeys`) would still see the uncorrected rows; nothing in this codebase does that.
  */
-function invalidateBatchVerdicts(
+export function invalidateBatchVerdicts(
   outcomes: SessionOutcome[],
   batchIndex: number,
   note: string,

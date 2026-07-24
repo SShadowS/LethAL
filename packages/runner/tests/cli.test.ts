@@ -4,12 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   clearQuarantine,
+  leaseSessionFor,
   odataBaseUrl,
   parseCliConfig,
   resourceIdentityFor,
   validateAlRunnerConfig,
   validateBcDevConfig,
 } from "../src/cli";
+import { LeaseClient } from "../src/lease";
 import { QuarantineStore } from "../src/quarantine-store";
 import { quarantineResourceKey } from "../src/resource-key";
 
@@ -335,6 +337,32 @@ describe("resourceIdentityFor (Task 13 folded fix — cli.ts sources quarantine 
   test("bcdev session with an incomplete bcdev config section throws (same validation as buildBackend)", () => {
     const configFile = { bcdev: { server: "http://Cronus281" } };
     expect(() => resourceIdentityFor(bcdevRunConfig, configFile)).toThrow(/missing required field/);
+  });
+
+  // Layer 5C-B1 Task 8: the exact same "wired in the orchestrator but never sourced by cli.ts"
+  // shape as the fix above, one layer up — a bcdev session with no `SessionConfig.lease` takes no
+  // machine-global lease at all, and `BcDevMcpBackend.run()` then fails loudly on the first
+  // mutant ("no lease bound"). al-runner publishes nothing to a shared container and gets none.
+  test("bcdev session is given a lease client + serverGeneration reader; al-runner is not", () => {
+    const configFile = {
+      bcdev: {
+        mcpCommand: ["bun", "x", "bc-dev-mcp"],
+        server: "http://Cronus281",
+        serverInstance: "BC",
+        company: "CRONUS",
+        username: "u",
+        password: "p",
+        packageCachePath: "C:/.alpackages",
+        controlSymbolPath: "C:/lethal-control.app",
+      },
+      alRunner: { alRunnerPath: "al-runner" },
+    };
+    const wired = leaseSessionFor(bcdevRunConfig, configFile);
+    expect(wired.lease?.client).toBeInstanceOf(LeaseClient);
+    expect(typeof wired.lease?.serverGeneration).toBe("function");
+    expect(leaseSessionFor({ ...bcdevRunConfig, backendKind: "al-runner" }, configFile)).toEqual(
+      {},
+    );
   });
 });
 

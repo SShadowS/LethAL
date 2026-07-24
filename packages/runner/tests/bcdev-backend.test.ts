@@ -102,9 +102,22 @@ async function rmStaged(instrumentedDir: string): Promise<void> {
   await rm(`${instrumentedDir}-staged`, { recursive: true, force: true });
 }
 
-/** No-op fake `HarnessVerifier` — `verify()` resolves immediately, never throws. */
+/**
+ * No-op fake `HarnessVerifier` — `verify()` resolves immediately, never throws. Cast through
+ * `unknown`: since Layer 5C-B1 `verify()` returns `HarnessDetails` (protocol version, the
+ * container's `serverGeneration`, and whether design §7's tenant gate was actually enforced), so
+ * a bare `{ verify }` object no longer structurally overlaps the class. Nothing in `deploy()`
+ * reads the returned details — the orchestrator does, via its own verifier — so a resolved
+ * placeholder is enough here.
+ */
 function fakeHarnessVerifier(): HarnessVerifier {
-  return { verify: async () => {} } as HarnessVerifier;
+  return {
+    verify: async () => ({
+      protocolVersion: 2,
+      serverGeneration: "f".repeat(32),
+      tenantGate: "unenforced" as const,
+    }),
+  } as unknown as HarnessVerifier;
 }
 
 /**

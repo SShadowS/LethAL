@@ -36,6 +36,7 @@
  * assertion — see the comments on `assertBFinal` below.
  */
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import {
   access,
   copyFile,
@@ -46,7 +47,7 @@ import {
   rm,
   writeFile,
 } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { InstrumentedFile, MutantManifest, SelectorConfig } from "@lethal/schemata";
@@ -60,7 +61,8 @@ import type { LethalConfigFile } from "../src/cli";
 import { odataBaseUrl, validateBcDevConfig } from "../src/cli";
 import { DeploymentVerifier } from "../src/deployment-verifier";
 import { discoverTests } from "../src/discovery";
-import { CONTROL_APP_ID } from "../src/harness";
+import { CONTROL_APP_ID, HarnessVerifier } from "../src/harness";
+import { LeaseClient, MAX_TTL_SECONDS } from "../src/lease";
 import { generateMutationSet } from "../src/orchestrator";
 import { ContainerDeployer, defaultAlToolPaths, defaultDeployerIo } from "../src/publisher";
 import type { ContainerDeployerIo, SpawnFn } from "../src/publisher";
@@ -87,13 +89,56 @@ const SELECTOR_IDS: SelectorConfig = { selectorId: 79199, controlId: 79198, tabl
 
 const RUN_TIMEOUT_MS = 60_000;
 const PROBE_B_ROUNDS = 3;
-// Layer 5C-B1 (Task 7) added a REQUIRED lease tuple to `RunMutantRequest` (design §5) — this
-// script's direct `RunMutantTransport.run()` probes predate lease acquisition (Task 8 wires
-// `LeaseClient.acquire()`/`runSession` end to end) and are deliberately unfixed here (Task 7's
-// dispatch scopes orchestration wiring out); this file is expected to fail live until Task 8
-// lands. Placeholder only so the file typechecks — the live server fail-loud-rejects epoch 0
-// (ValidateFenceCredentials, design §4) rather than silently accepting it.
-const V1_STUB_LEASE = { epoch: 0, token: "", serverGeneration: "", opSeq: 1 } as const;
+/**
+ * Layer 5C-B1 (Task 8): this script drives `RunMutantTransport` directly (never `runSession`), so
+ * each behaviour probe must take the machine-global lease itself — design §5's two-phase fence
+ * refuses any RunMutant whose (epoch, token, serverGeneration) tuple does not match the row or
+ * whose `opSeq` is not exactly `lastCompletedOpSeq + 1`.
+ *
+ * Acquired and released per probe rather than once for the whole script: the probes publish
+ * between cycles (directly, via ContainerDeployer — deliberately NOT through the publish fence,
+ * since the point of this script is to exercise stale/concurrent publishes), and a short-lived
+ * lease per cycle keeps the op-seq sequence trivially derived from its own fresh grant.
+ */
+async function withProbeLease<T>(
+  cfg: ActivationConfig,
+  body: (
+    fence: () => { epoch: number; token: string; serverGeneration: string; opSeq: number },
+  ) => Promise<T>,
+): Promise<T> {
+  const harness = await new HarnessVerifier(cfg).verify();
+  const client = new LeaseClient(cfg);
+  const outcome = await client.acquire(
+    `${hostname()}:${process.pid}:stale-publish`,
+    MAX_TTL_SECONDS,
+    randomUUID(),
+    harness.serverGeneration,
+  );
+  if (!outcome.granted) {
+    throw new Error(
+      `probe lease was not granted (${JSON.stringify(outcome)}) — the container is held or has a stranded operation (design §8)`,
+    );
+  }
+  const lease = outcome.lease;
+  let opSeq = lease.lastCompletedOpSeq;
+  const heartbeat = setInterval(
+    () => {
+      void client.renew(lease, MAX_TTL_SECONDS).catch(() => {});
+    },
+    Math.floor((MAX_TTL_SECONDS * 1000) / 3),
+  );
+  try {
+    return await body(() => ({
+      epoch: lease.epoch,
+      token: lease.token,
+      serverGeneration: lease.serverGeneration,
+      opSeq: ++opSeq,
+    }));
+  } finally {
+    clearInterval(heartbeat);
+    await client.release(lease).catch(() => {});
+  }
+}
 
 interface LaunchLocalConfig {
   readonly configurations: ReadonlyArray<{
@@ -367,55 +412,57 @@ async function assertFreshBehaviour(
 ): Promise<void> {
   const tx = new RunMutantTransport(ctx.odataCfg, ctx.appId, artifact.artifactId);
   const killerMutantId = findKillerMutantId(artifact.mutantManifest);
+  // Layer 5C-B1: the whole three-call cycle runs under ONE lease, claiming consecutive op seqs.
+  await withProbeLease(ctx.odataCfg, async (fence) => {
+    const baseline = await tx.run({
+      ref: ctx.overBudgetRef,
+      mutantId: "",
+      attemptId: `${label}-baseline`,
+      timeoutMs: RUN_TIMEOUT_MS,
+      lease: fence(),
+    });
+    assert.equal(
+      baseline.outcome,
+      "pass",
+      `${label}: fresh baseline RunMutant of OverBudgetDetected (no mutant active) must PASS, got ` +
+        `${baseline.outcome}${baseline.failureMessage ? `: ${baseline.failureMessage}` : ""}`,
+    );
 
-  const baseline = await tx.run({
-    ref: ctx.overBudgetRef,
-    mutantId: "",
-    attemptId: `${label}-baseline`,
-    timeoutMs: RUN_TIMEOUT_MS,
-    lease: V1_STUB_LEASE,
+    const mutated = await tx.run({
+      ref: ctx.overBudgetRef,
+      mutantId: killerMutantId,
+      attemptId: `${label}-mutated`,
+      timeoutMs: RUN_TIMEOUT_MS,
+      lease: fence(),
+    });
+    assert.equal(
+      mutated.outcome,
+      "fail",
+      `${label}: RunMutant with killer mutant ${killerMutantId} active must FAIL (evidence the server is genuinely running THIS artifact's code, not cached/stale state) — got ${mutated.outcome}`,
+    );
+
+    // RunMutant clears on every terminal path, so a following baseline call proves the container was
+    // left unmutated — the "clear" half of the cycle, now server-enforced rather than a separate call.
+    const cleared = await tx.run({
+      ref: ctx.overBudgetRef,
+      mutantId: "",
+      attemptId: `${label}-cleared`,
+      timeoutMs: RUN_TIMEOUT_MS,
+      lease: fence(),
+    });
+    assert.equal(
+      cleared.outcome,
+      "pass",
+      `${label}: fresh baseline RunMutant after the killer must PASS again (RunMutant left the container unmutated), got ${cleared.outcome}`,
+    );
+
+    // Attestation (design §G): the mutated run drove the deployed selector, so it must cleanly attest
+    // THIS artifact's baked identity — the live proof that B, not a stale A, is the binary that ran.
+    assert.ok(
+      mutated.attestation?.observedAny === true && mutated.attestation.identityMismatch === false,
+      `${label}: mutated RunMutant must cleanly attest artifact ${artifact.artifactId} (observedAny && !identityMismatch) — a stale binary would mismatch. got ${JSON.stringify(mutated.attestation)}`,
+    );
   });
-  assert.equal(
-    baseline.outcome,
-    "pass",
-    `${label}: fresh baseline RunMutant of OverBudgetDetected (no mutant active) must PASS, got ` +
-      `${baseline.outcome}${baseline.failureMessage ? `: ${baseline.failureMessage}` : ""}`,
-  );
-
-  const mutated = await tx.run({
-    ref: ctx.overBudgetRef,
-    mutantId: killerMutantId,
-    attemptId: `${label}-mutated`,
-    timeoutMs: RUN_TIMEOUT_MS,
-    lease: V1_STUB_LEASE,
-  });
-  assert.equal(
-    mutated.outcome,
-    "fail",
-    `${label}: RunMutant with killer mutant ${killerMutantId} active must FAIL (evidence the server is genuinely running THIS artifact's code, not cached/stale state) — got ${mutated.outcome}`,
-  );
-
-  // RunMutant clears on every terminal path, so a following baseline call proves the container was
-  // left unmutated — the "clear" half of the cycle, now server-enforced rather than a separate call.
-  const cleared = await tx.run({
-    ref: ctx.overBudgetRef,
-    mutantId: "",
-    attemptId: `${label}-cleared`,
-    timeoutMs: RUN_TIMEOUT_MS,
-    lease: V1_STUB_LEASE,
-  });
-  assert.equal(
-    cleared.outcome,
-    "pass",
-    `${label}: fresh baseline RunMutant after the killer must PASS again (RunMutant left the container unmutated), got ${cleared.outcome}`,
-  );
-
-  // Attestation (design §G): the mutated run drove the deployed selector, so it must cleanly attest
-  // THIS artifact's baked identity — the live proof that B, not a stale A, is the binary that ran.
-  assert.ok(
-    mutated.attestation?.observedAny === true && mutated.attestation.identityMismatch === false,
-    `${label}: mutated RunMutant must cleanly attest artifact ${artifact.artifactId} (observedAny && !identityMismatch) — a stale binary would mismatch. got ${JSON.stringify(mutated.attestation)}`,
-  );
 }
 
 /**

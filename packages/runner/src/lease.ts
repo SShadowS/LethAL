@@ -243,7 +243,41 @@ async function postLeaseAction(
   return inner;
 }
 
-export class LeaseClient {
+/**
+ * The lease surface `runSession` consumes (Task 8). Structural, and implemented by `LeaseClient`
+ * without it having to declare so: the orchestrator depends on this shape rather than on the
+ * concrete class, so a unit test can drive the whole acquire/heartbeat/fence/release lifecycle
+ * against an in-memory fake with no HTTP anywhere. Every member is exactly `LeaseClient`'s own
+ * signature — including `recoverOp`'s literal-`true` `terminalProof`, which must NOT be widened
+ * to `boolean` here (that parameter's entire purpose is to make an unproven call impossible to
+ * write by accident — see `LeaseClient.recoverOp`).
+ */
+export interface LeaseApi {
+  acquire(
+    owner: string,
+    ttlSeconds: number,
+    clientNonce: string,
+    expectedGeneration: string,
+  ): Promise<AcquireOutcome>;
+  renew(lease: LeaseTuple, ttlSeconds: number): Promise<RenewOutcome>;
+  release(lease: LeaseTuple): Promise<ReleaseOutcome>;
+  beginPublish(lease: LeaseTuple, attemptId: string, opSeq: number): Promise<BeginPublishOutcome>;
+  endPublish(
+    lease: LeaseTuple,
+    attemptId: string,
+    opSeq: number,
+    outcome: string,
+  ): Promise<EndPublishOutcome>;
+  getOperationStatus(lease: LeaseTuple, attemptId: string, opSeq: number): Promise<OperationStatus>;
+  recoverOp(
+    lease: LeaseTuple,
+    attemptId: string,
+    opSeq: number,
+    terminalProof: true,
+  ): Promise<RecoverOpOutcome>;
+}
+
+export class LeaseClient implements LeaseApi {
   constructor(
     private readonly cfg: ActivationConfig,
     private readonly fetchFn: FetchFn = fetch,

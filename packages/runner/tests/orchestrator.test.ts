@@ -19,16 +19,31 @@ import type {
 } from "../src/backend";
 import { DeploymentVerifier, decidePublishOutcome } from "../src/deployment-verifier";
 import { ActivationFailure } from "../src/failure-classes";
+import { LeaseUnavailableError } from "../src/lease";
+import type {
+  AcquireOutcome,
+  BeginPublishOutcome,
+  EndPublishOutcome,
+  Lease,
+  LeaseApi,
+  LeaseTuple,
+  OperationStatus,
+  RecoverOpOutcome,
+  ReleaseOutcome,
+  RenewOutcome,
+} from "../src/lease";
 import {
   activateOnce,
   generateMutationSet,
+  invalidateBatchVerdicts,
   narrowFilesToSubset,
   runOnce,
   runSession,
 } from "../src/orchestrator";
-import type { SessionConfig } from "../src/orchestrator";
+import type { LeaseSessionConfig, LeaseTimers, SessionConfig } from "../src/orchestrator";
 import { QuarantineStore } from "../src/quarantine-store";
-import { SessionSafety } from "../src/session-safety";
+import type { SessionOutcome } from "../src/report";
+import { SessionSafety, SessionUnsafeError } from "../src/session-safety";
 import { ResultsStore } from "../src/store";
 
 const TARGET_AL = `codeunit 79000 "Sandbox Logic"
@@ -2615,7 +2630,10 @@ describe("activateOnce / runOnce — retry only pre-dispatch failures", () => {
         return { ref, outcome: "pass", durationMs: 1 };
       },
     });
-    const v = await runOnce(backend, aRef(), { coverage: "none", timeoutMs: 100 });
+    const v = await runOnce(backend, new SessionSafety(), aRef(), {
+      coverage: "none",
+      timeoutMs: 100,
+    });
     expect(calls).toBe(2);
     expect(v.outcome).toBe("pass");
   });
@@ -2628,7 +2646,10 @@ describe("activateOnce / runOnce — retry only pre-dispatch failures", () => {
         return { ref, outcome: "error", durationMs: 1, operation: "in-flight-unknown" };
       },
     });
-    const v = await runOnce(backend, aRef(), { coverage: "none", timeoutMs: 100 });
+    const v = await runOnce(backend, new SessionSafety(), aRef(), {
+      coverage: "none",
+      timeoutMs: 100,
+    });
     expect(calls).toBe(1);
     expect(v.operation).toBe("in-flight-unknown");
   });
@@ -3257,3 +3278,585 @@ describe("runSession — Task 10 fix: a quarantined run never seeds a future ski
     store.close();
   });
 });
+// ————————————————————————————————————————————————————————————————————————
+// Layer 5C-B1 Task 8 (design §5/§6/§8): `runSession` acquires the machine-global lease before
+// deploy, fences the publish, heartbeats it at ttl/3, guards every work-plane dispatch behind
+// `SessionSafety`, invalidates the CURRENT batch's verdicts when the lease is genuinely lost,
+// and releases (op-gated) at session end.
+//
+// Every fake below is in-memory and counter-driven: the heartbeat is exercised through an
+// injected timer seam (`fire()`), never a wall-clock delay, and the backoff through an injected
+// `sleep`. Ordering assertions read a shared `log` array, not timing.
+// ————————————————————————————————————————————————————————————————————————
+
+const FAKE_GENERATION = "a".repeat(32);
+
+function aLease(over: Partial<Lease> = {}): Lease {
+  return {
+    epoch: 3,
+    token: "tok-abc",
+    serverGeneration: FAKE_GENERATION,
+    lastCompletedOpSeq: 7,
+    expiresAt: "2026-07-24T12:00:00.000Z",
+    ...over,
+  };
+}
+
+/** Records every lease call and answers from caller-seeded queues (last entry repeats). */
+class FakeLeaseClient implements LeaseApi {
+  acquireArgs: Array<{
+    owner: string;
+    ttlSeconds: number;
+    clientNonce: string;
+    expectedGeneration: string;
+  }> = [];
+  renewArgs: Array<{ lease: LeaseTuple; ttlSeconds: number }> = [];
+  releaseCalls = 0;
+  statusArgs: Array<{ attemptId: string; opSeq: number }> = [];
+  beginPublishArgs: Array<{ attemptId: string; opSeq: number }> = [];
+  endPublishArgs: Array<{ attemptId: string; opSeq: number; outcome: string }> = [];
+  recoverArgs: Array<{ attemptId: string; opSeq: number }> = [];
+  acquireQueue: AcquireOutcome[] = [{ granted: true, lease: aLease() }];
+  renewQueue: RenewOutcome[] = [{ renewed: true, expiresAt: "2026-07-24T12:00:15.000Z" }];
+  statusQueue: OperationStatus[] = [
+    { opKind: "none", opAttemptId: "", opSeq: 0, lastCompletedOpSeq: 7, completed: true },
+  ];
+  releaseOutcome: ReleaseOutcome = { released: true };
+  beginPublishOutcome: BeginPublishOutcome = { begun: true };
+  endPublishOutcome: EndPublishOutcome = { ended: true };
+  recoverOutcome: RecoverOpOutcome = { recovered: true };
+  endPublishError: Error | undefined;
+  /** Awaited inside renew() — lets a test hold one heartbeat tick open to prove single-flight. */
+  renewGate: Promise<void> | undefined;
+  constructor(readonly log: string[] = []) {}
+
+  private next<T>(queue: T[], what: string): T {
+    const head = queue.length > 1 ? queue.shift() : queue[0];
+    if (head === undefined) throw new Error(`FakeLeaseClient: no ${what} outcome seeded`);
+    return head;
+  }
+
+  async acquire(
+    owner: string,
+    ttlSeconds: number,
+    clientNonce: string,
+    expectedGeneration: string,
+  ): Promise<AcquireOutcome> {
+    this.log.push("acquire");
+    this.acquireArgs.push({ owner, ttlSeconds, clientNonce, expectedGeneration });
+    return this.next(this.acquireQueue, "acquire");
+  }
+  async renew(lease: LeaseTuple, ttlSeconds: number): Promise<RenewOutcome> {
+    this.log.push("renew");
+    this.renewArgs.push({ lease, ttlSeconds });
+    if (this.renewGate !== undefined) await this.renewGate;
+    return this.next(this.renewQueue, "renew");
+  }
+  async release(_lease: LeaseTuple): Promise<ReleaseOutcome> {
+    this.log.push("release");
+    this.releaseCalls++;
+    return this.releaseOutcome;
+  }
+  async beginPublish(
+    _lease: LeaseTuple,
+    attemptId: string,
+    opSeq: number,
+  ): Promise<BeginPublishOutcome> {
+    this.log.push("beginPublish");
+    this.beginPublishArgs.push({ attemptId, opSeq });
+    return this.beginPublishOutcome;
+  }
+  async endPublish(
+    _lease: LeaseTuple,
+    attemptId: string,
+    opSeq: number,
+    outcome: string,
+  ): Promise<EndPublishOutcome> {
+    this.log.push("endPublish");
+    this.endPublishArgs.push({ attemptId, opSeq, outcome });
+    if (this.endPublishError !== undefined) throw this.endPublishError;
+    return this.endPublishOutcome;
+  }
+  async getOperationStatus(
+    _lease: LeaseTuple,
+    attemptId: string,
+    opSeq: number,
+  ): Promise<OperationStatus> {
+    this.log.push("status");
+    this.statusArgs.push({ attemptId, opSeq });
+    return this.next(this.statusQueue, "status");
+  }
+  async recoverOp(
+    _lease: LeaseTuple,
+    attemptId: string,
+    opSeq: number,
+    terminalProof: true,
+  ): Promise<RecoverOpOutcome> {
+    this.log.push("recoverOp");
+    if (terminalProof !== true) throw new Error("recoverOp called without terminal proof");
+    this.recoverArgs.push({ attemptId, opSeq });
+    return this.recoverOutcome;
+  }
+}
+
+/** Injected timer seam: captures the heartbeat callback so a test can fire it deterministically. */
+class FakeTimers implements LeaseTimers {
+  fn: (() => unknown) | undefined;
+  periodMs: number | undefined;
+  cleared = 0;
+  private readonly handle = { id: "hb" };
+  setInterval(fn: () => unknown, ms: number): unknown {
+    this.fn = fn;
+    this.periodMs = ms;
+    return this.handle;
+  }
+  clearInterval(handle: unknown): void {
+    if (handle === this.handle) this.cleared++;
+  }
+  /** One tick, awaited to completion (the production seam ignores the returned promise). */
+  async fire(): Promise<void> {
+    await this.fn?.();
+  }
+  /** One tick, NOT awaited — for the single-flight proof. */
+  fireDetached(): void {
+    void this.fn?.();
+  }
+}
+
+/** `fakeBackend` + the `setLease` binding an authoritative lease session requires. */
+function leaseBackend(overrides: Partial<ExecutionBackend> = {}): ExecutionBackend & {
+  leases: Lease[];
+} {
+  const leases: Lease[] = [];
+  return Object.assign(
+    fakeBackend({
+      capabilities: () => ({
+        coverage: "none",
+        deploy: "publish",
+        isolation: "session",
+        authoritative: true,
+      }),
+      ...overrides,
+    }),
+    {
+      leases,
+      setLease(lease: Lease): void {
+        leases.push(lease);
+      },
+    },
+  );
+}
+
+function leaseCfg(
+  client: LeaseApi,
+  over: Partial<LeaseSessionConfig> = {},
+): { lease: LeaseSessionConfig; sleeps: number[] } {
+  const sleeps: number[] = [];
+  return {
+    sleeps,
+    lease: {
+      client,
+      serverGeneration: async () => FAKE_GENERATION,
+      sleep: async (ms: number) => {
+        sleeps.push(ms);
+      },
+      timers: new FakeTimers(),
+      ...over,
+    },
+  };
+}
+
+describe("runSession — Layer 5C-B1 Task 8: lease acquisition (design §6 step 1)", () => {
+  test("acquires with the HarnessInfo generation BEFORE any deploy, backing off a `held` refusal", async () => {
+    const log: string[] = [];
+    const client = new FakeLeaseClient(log);
+    client.acquireQueue = [
+      { granted: false, reason: "held", holder: "other-host:1:9" },
+      { granted: true, lease: aLease() },
+    ];
+    const backend = leaseBackend({
+      deploy: async () => {
+        log.push("deploy");
+        return null;
+      },
+    });
+    const { lease, sleeps } = leaseCfg(client);
+    await runSessionForTest(backend, { quarantineDir: freshTmpDir(), lease });
+    // Ordering by call log, never by clock: both acquire attempts precede the first deploy.
+    expect(log.indexOf("deploy")).toBeGreaterThan(-1);
+    expect(log.slice(0, log.indexOf("deploy"))).toContain("acquire");
+    expect(client.acquireArgs).toHaveLength(2);
+    expect(sleeps).toHaveLength(1); // exactly one backoff between the two attempts
+    expect(sleeps[0]).toBeGreaterThan(0);
+    // Same client nonce on the retry: the server replays a held nonce as the SAME grant, so a
+    // lost ack can never mint a second lease (ControlState.TryAcquire step 3).
+    expect(client.acquireArgs[0]?.clientNonce).toBe(client.acquireArgs[1]?.clientNonce ?? "x");
+    expect(client.acquireArgs[0]?.expectedGeneration).toBe(FAKE_GENERATION);
+    // ttl bound: the server's RenewPeriodMs() is 5000ms and design §6 heartbeats at ttl/3.
+    expect(client.acquireArgs[0]?.ttlSeconds).toBeLessThanOrEqual(15);
+    expect(client.acquireArgs[0]?.owner).toMatch(/.+:\d+:\d+/); // host:pid:runId
+  });
+
+  test("a persistently held lease throws LeaseUnavailableError before any deploy", async () => {
+    const client = new FakeLeaseClient();
+    client.acquireQueue = [{ granted: false, reason: "held", holder: "other" }];
+    let deploys = 0;
+    const backend = leaseBackend({
+      deploy: async () => {
+        deploys++;
+        return null;
+      },
+    });
+    const { lease } = leaseCfg(client, { acquireAttempts: 3 });
+    await expect(
+      runSessionForTest(backend, { quarantineDir: freshTmpDir(), lease }),
+    ).rejects.toBeInstanceOf(LeaseUnavailableError);
+    expect(client.acquireArgs).toHaveLength(3);
+    expect(deploys).toBe(0);
+  });
+
+  test("operation-orphaned re-checked ONCE with an unchanged marker writes a durable container-needs-recycle", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    client.acquireQueue = [
+      {
+        granted: false,
+        reason: "operation-orphaned",
+        opAttemptId: "a42",
+        opStartedAt: "2026-07-24T11:00:00.000Z",
+      },
+    ];
+    const { lease } = leaseCfg(client, { acquireAttempts: 5 });
+    await expect(
+      runSessionForTest(leaseBackend(), {
+        quarantineDir: dir,
+        lease,
+        nowIso: () => "2026-07-24T12:00:00.000Z",
+      }),
+    ).rejects.toBeInstanceOf(LeaseUnavailableError);
+    // Re-check ONCE, then stop — not a full backoff run against a stranded container.
+    expect(client.acquireArgs).toHaveLength(2);
+    const rec = await new QuarantineStore(dir).read("http://cronus281|BC");
+    expect(rec?.opKind).toBe("container-needs-recycle");
+    expect(rec?.detail).toContain("a42");
+    expect(rec?.recordedAtIso).toBe("2026-07-24T12:00:00.000Z");
+  });
+
+  test("operation-orphaned whose marker MOVED between checks writes no durable quarantine", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    client.acquireQueue = [
+      {
+        granted: false,
+        reason: "operation-orphaned",
+        opAttemptId: "a42",
+        opStartedAt: "2026-07-24T11:00:00.000Z",
+      },
+      {
+        granted: false,
+        reason: "operation-orphaned",
+        opAttemptId: "a43", // a DIFFERENT op: the container is making progress, not stranded
+        opStartedAt: "2026-07-24T11:00:05.000Z",
+      },
+      { granted: true, lease: aLease() },
+    ];
+    const { lease } = leaseCfg(client, { acquireAttempts: 5 });
+    await runSessionForTest(leaseBackend(), { quarantineDir: dir, lease });
+    expect(await new QuarantineStore(dir).read("http://cronus281|BC")).toBeNull();
+  });
+
+  test("a `generation-changed` refusal aborts immediately — backoff cannot fix a recycled container", async () => {
+    const client = new FakeLeaseClient();
+    client.acquireQueue = [{ granted: false, reason: "generation-changed" }];
+    const { lease } = leaseCfg(client, { acquireAttempts: 5 });
+    await expect(
+      runSessionForTest(leaseBackend(), { quarantineDir: freshTmpDir(), lease }),
+    ).rejects.toBeInstanceOf(LeaseUnavailableError);
+    expect(client.acquireArgs).toHaveLength(1);
+  });
+});
+
+describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (design §6 steps 2/5)", () => {
+  test("publishes inside BeginPublish/EndPublish with an exactly-next opSeq, then rebinds the backend", async () => {
+    const log: string[] = [];
+    const client = new FakeLeaseClient(log);
+    client.statusQueue = [
+      { opKind: "none", opAttemptId: "", opSeq: 0, lastCompletedOpSeq: 7, completed: true },
+    ];
+    const backend = leaseBackend({
+      deploy: async () => {
+        log.push("deploy");
+        return null;
+      },
+    });
+    const { lease } = leaseCfg(client);
+    await runSessionForTest(backend, { quarantineDir: freshTmpDir(), lease });
+    const begin = log.indexOf("beginPublish");
+    expect(begin).toBeGreaterThan(-1);
+    expect(log.indexOf("deploy")).toBeGreaterThan(begin);
+    expect(log.indexOf("endPublish")).toBeGreaterThan(log.indexOf("deploy"));
+    expect(client.beginPublishArgs[0]?.opSeq).toBe(8); // lastCompletedOpSeq + 1
+    expect(client.beginPublishArgs[0]?.attemptId.length).toBeLessThanOrEqual(64);
+    expect(client.endPublishArgs[0]?.opSeq).toBe(8);
+    expect(client.endPublishArgs[0]?.attemptId).toBe(client.beginPublishArgs[0]?.attemptId ?? "x");
+    expect(client.endPublishArgs[0]?.outcome).toBe("succeeded");
+    // The backend's RunMutant op-seq counter must continue AFTER the publish op, not from the
+    // acquire grant's lastCompletedOpSeq (which the publish has since advanced).
+    expect(backend.leases.at(-1)?.lastCompletedOpSeq).toBe(8);
+  });
+
+  test("releases the lease at session end when no op is in flight, and clears the heartbeat timer", async () => {
+    const client = new FakeLeaseClient();
+    const timers = new FakeTimers();
+    const { lease } = leaseCfg(client, { timers });
+    await runSessionForTest(leaseBackend(), { quarantineDir: freshTmpDir(), lease });
+    expect(client.releaseCalls).toBe(1);
+    expect(timers.cleared).toBeGreaterThan(0);
+  });
+
+  test("does NOT release while an op marker is still set — records container-needs-recycle instead", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    // status reads: [0] publish-fence opSeq lookup, [1] the session-end release gate.
+    client.statusQueue = [
+      { opKind: "none", opAttemptId: "", opSeq: 0, lastCompletedOpSeq: 7, completed: true },
+      { opKind: "run", opAttemptId: "a9", opSeq: 9, lastCompletedOpSeq: 8, completed: false },
+    ];
+    const { lease } = leaseCfg(client);
+    await runSessionForTest(leaseBackend(), {
+      quarantineDir: dir,
+      lease,
+      nowIso: () => "2026-07-24T13:00:00.000Z",
+    });
+    expect(client.releaseCalls).toBe(0);
+    const rec = await new QuarantineStore(dir).read("http://cronus281|BC");
+    expect(rec?.opKind).toBe("container-needs-recycle");
+    expect(rec?.detail).toContain("a9");
+  });
+});
+
+describe("runSession — Layer 5C-B1 Task 8: renew heartbeat (design §6 step 3)", () => {
+  test("is single-flight: a tick arriving while one is in flight is dropped, not queued", async () => {
+    const client = new FakeLeaseClient();
+    let openGate: () => void = () => {};
+    client.renewGate = new Promise<void>((resolve) => {
+      openGate = resolve;
+    });
+    const timers = new FakeTimers();
+    const { lease } = leaseCfg(client, { timers });
+    const backend = leaseBackend({
+      run: async (ref, opts) => {
+        // Fire three ticks while the first renew is still parked on the gate.
+        timers.fireDetached();
+        timers.fireDetached();
+        timers.fireDetached();
+        return {
+          ref,
+          outcome: "pass" as const,
+          durationMs: 1,
+          ...(opts.coverage === "none"
+            ? { attestation: { observedAny: true, identityMismatch: false } }
+            : {}),
+        };
+      },
+    });
+    // The gate stays SHUT for the whole session: the first renew never completes, so every one of
+    // the ~30 ticks fired above it must be dropped, not queued behind it.
+    await runSessionForTest(backend, { quarantineDir: freshTmpDir(), lease });
+    expect(client.renewArgs.length).toBe(1);
+    openGate(); // let the one parked renew settle so no promise is left hanging
+    expect(client.renewArgs[0]?.ttlSeconds).toBeLessThanOrEqual(15);
+    expect(timers.periodMs).toBe(5000); // ttl/3 at the 15s ceiling
+  });
+
+  test("renewed:false latches lease-lost, stops scheduling, and stops renewing", async () => {
+    const client = new FakeLeaseClient();
+    client.renewQueue = [{ renewed: false }];
+    const timers = new FakeTimers();
+    const { lease } = leaseCfg(client, { timers });
+    let runs = 0;
+    const backend = leaseBackend({
+      run: async (ref, opts) => {
+        runs++;
+        if (runs === 2) await timers.fire(); // mid-session: the lease is gone
+        return {
+          ref,
+          outcome: "pass" as const,
+          durationMs: 1,
+          ...(opts.coverage === "none"
+            ? { attestation: { observedAny: true, identityMismatch: false } }
+            : {}),
+        };
+      },
+    });
+    const report = await runSessionForTest(backend, { quarantineDir: freshTmpDir(), lease });
+    expect(report.quarantined?.reason).toContain("lease-lost");
+    // THREE_PROC_AL has 9 mutants; scheduling stopped long before all of them ran.
+    expect(runs).toBeLessThan(9);
+    await timers.fire(); // a tick after the loss must not renew again
+    expect(client.renewArgs).toHaveLength(1);
+    expect(timers.cleared).toBeGreaterThan(0);
+  });
+});
+
+describe("runSession — Layer 5C-B1 Task 8: lease-lost invalidation + dispatch guards (design §6)", () => {
+  /** M0001 runs clean and attests cleanly (so design §G's fail-closed attestation gate is NOT
+   *  what invalidates it); M0002's covering run returns the caller-supplied lease verdict. */
+  function leaseLostAfterFirstMutant(over: Partial<TestVerdict>): ExecutionBackend {
+    let activeMutant: string | null = null;
+    return leaseBackend({
+      activate: async (id) => {
+        activeMutant = id;
+      },
+      run: async (ref) => {
+        if (activeMutant === "M0002") {
+          return { ref, outcome: "error" as const, durationMs: 1, ...over };
+        }
+        return {
+          ref,
+          outcome: "pass" as const,
+          durationMs: 1,
+          attestation: { observedAny: true, identityMismatch: false },
+        };
+      },
+    });
+  }
+
+  test("a genuine RunMutant lease-lost invalidates the CURRENT batch's already-recorded verdicts", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    const { lease } = leaseCfg(client);
+    const backend = leaseLostAfterFirstMutant({
+      operation: "lease-lost",
+      leaseInvalidReason: "lease-invalid",
+    });
+    const report = await runSessionForTest(backend, { quarantineDir: dir, lease });
+    const m1 = report.mutants.find((m) => m.mutantCode === "M0001");
+    expect(m1).toBeDefined();
+    // The bug this closes: M0001 was recorded "survived" under a lease we can no longer prove we
+    // held — per-mutant equality, never an aggregate count.
+    expect(m1?.verdict).toBe("error");
+    expect(report.quarantined?.reason).toContain("lease-lost");
+    // A clean lease-lost means the container is FINE (design §6) — no durable tier quarantine.
+    expect(await new QuarantineStore(dir).read("http://cronus281|BC")).toBeNull();
+  });
+
+  test("an `op-in-flight` lease-invalid polls the op instead of latching — earlier verdicts stand", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    client.statusQueue = [
+      { opKind: "none", opAttemptId: "", opSeq: 0, lastCompletedOpSeq: 7, completed: true },
+    ];
+    const { lease } = leaseCfg(client);
+    const backend = leaseLostAfterFirstMutant({
+      operation: "lease-lost",
+      leaseInvalidReason: "op-in-flight",
+    });
+    const report = await runSessionForTest(backend, { quarantineDir: dir, lease });
+    const m1 = report.mutants.find((m) => m.mutantCode === "M0001");
+    const m2 = report.mutants.find((m) => m.mutantCode === "M0002");
+    // op-in-flight is THIS caller's own still-active attempt, NOT lease loss: latching here would
+    // discard a batch that is fine.
+    expect(m1?.verdict).toBe("survived");
+    expect(m2?.verdict).toBe("error");
+    expect(report.quarantined).toBeUndefined();
+    // Polled (getOperationStatus), never re-dispatched and never RecoverOp'd.
+    expect(client.statusArgs.length).toBeGreaterThan(1);
+    expect(client.recoverArgs).toHaveLength(0);
+    expect(await new QuarantineStore(dir).read("http://cronus281|BC")).toBeNull();
+  });
+
+  test("invalidateBatchVerdicts leaves an EARLIER batch's verdicts untouched", () => {
+    const outcomes: SessionOutcome[] = [
+      { mutant: fakeManifestEntry("M0001"), verdict: "survived", batchIndex: 0 },
+      { mutant: fakeManifestEntry("M0002"), verdict: "killed", batchIndex: 0 },
+      { mutant: fakeManifestEntry("M0003"), verdict: "survived", batchIndex: 1 },
+    ];
+    invalidateBatchVerdicts(outcomes, 1, "lease-lost");
+    expect(outcomes[0]?.verdict).toBe("survived"); // earlier batch was individually fence-validated
+    expect(outcomes[1]?.verdict).toBe("killed");
+    expect(outcomes[2]?.verdict).toBe("error");
+  });
+
+  test("runOnce refuses to dispatch once the session is latched unsafe", async () => {
+    let runs = 0;
+    const backend = fakeBackend({
+      run: async (ref) => {
+        runs++;
+        return { ref, outcome: "pass", durationMs: 1 };
+      },
+    });
+    const safety = new SessionSafety();
+    safety.latchUnsafe("lease-lost: renew refused");
+    await expect(
+      runOnce(backend, safety, aRef(), { coverage: "none", timeoutMs: 100 }),
+    ).rejects.toBeInstanceOf(SessionUnsafeError);
+    expect(runs).toBe(0);
+  });
+
+  test("a mid-mutant lease loss stops the very next dispatch, before it reaches the backend", async () => {
+    // The next dispatch after the loss must be a `run` with NO intervening `activate`, or this
+    // test would be satisfied by `activateOnce`'s pre-existing guard and prove nothing about
+    // `runOnce`'s. TWO_TEST_AL gives each mutant TWO covering tests, so the covering-test loop
+    // dispatches run #2 for the SAME mutant with nothing in between: only `runOnce`'s own latch
+    // check can stop it. (Verified by red-check: reverting that check alone reddens this test.)
+    const dirs = await makeProject(TWO_TEST_AL);
+    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), THREE_PROC_AL);
+    const client = new FakeLeaseClient();
+    client.renewQueue = [{ renewed: false }];
+    const timers = new FakeTimers();
+    const { lease } = leaseCfg(client, { timers });
+    let activeMutant: string | null = null;
+    let runsAfterLoss = 0;
+    let lost = false;
+    const backend = leaseBackend({
+      activate: async (id) => {
+        activeMutant = id;
+      },
+      run: async (ref) => {
+        if (lost) runsAfterLoss++;
+        if (activeMutant === "M0001" && !lost) {
+          // First covering test of the first mutant: passes (so the loop moves on to the SECOND
+          // covering test) while the heartbeat loses the lease during this very call.
+          lost = true;
+          await timers.fire();
+        }
+        return {
+          ref,
+          outcome: "pass" as const,
+          durationMs: 1,
+          attestation: { observedAny: true, identityMismatch: false },
+        };
+      },
+    });
+    const report = await runSession({
+      backend,
+      store: new ResultsStore(":memory:"),
+      ...dirs,
+      selectorIds,
+      resourceServer: "http://cronus281",
+      resourceServerInstance: "BC",
+      quarantineDir: freshTmpDir(),
+      lease,
+    });
+    // No second covering run, no next mutant: the latch stopped the dispatch itself.
+    expect(runsAfterLoss).toBe(0);
+    expect(report.quarantined?.reason).toContain("lease-lost");
+  });
+});
+
+function fakeManifestEntry(mutantId: string): MutantManifestEntry {
+  return {
+    mutantId,
+    file: "SandboxLogic.Codeunit.al",
+    operatorName: "conditional-boundary",
+    operatorVersion: "1.0.0",
+    startIndex: 100,
+    endIndex: 110,
+    startLine: 5,
+    codeunitId: 79000,
+    codeunitName: "Sandbox Logic",
+    procedureName: "IsOverBudget",
+    astHash: "hash",
+  };
+}

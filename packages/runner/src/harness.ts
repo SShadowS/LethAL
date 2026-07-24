@@ -7,7 +7,16 @@ import type { ActivationConfig, FetchFn } from "./activation";
  * every verdict.
  */
 export const CONTROL_APP_ID = "5e7a1c00-1111-4c00-8c00-1e7a1c000701";
-const MIN_PROTOCOL_VERSION = 1;
+/**
+ * Layer 5C-B1 (design §7): protocol v2 is incompatible BY CONSTRUCTION in both directions.
+ * `HarnessInfo` takes a REQUIRED `clientProtocol` argument on the v2 server, so a v1 client
+ * (which posts `{}`) cannot reach a valid v2 payload at all; and this client refuses any
+ * `protocolVersion < 2`, so a v2 client cannot run against a v1 server. Both failures land
+ * before any publish, because `verify()` is required and unconditional at the top of
+ * `BcDevMcpBackend.deploy()` and again in `runSession`'s lease acquisition.
+ */
+export const CLIENT_PROTOCOL_VERSION = 2;
+const MIN_PROTOCOL_VERSION = 2;
 
 export class HarnessVerificationError extends Error {
   constructor(message: string) {
@@ -16,11 +25,51 @@ export class HarnessVerificationError extends Error {
   }
 }
 
+/**
+ * Design §7's single-tenant gate: app publication is service-instance-wide, so a per-tenant
+ * lease cannot fence two tenants publishing to one container — 5C-B1 refuses such a container
+ * outright, before any publish. Extends `Error` DIRECTLY (never `HarnessVerificationError`) so
+ * `instanceof` can never cross-match the two: this is a supported-configuration refusal, not
+ * evidence that the harness itself is missing/incompatible.
+ *
+ * NOTE (honest scope): today's server reports `tenantCountReachable: false` — AL genuinely
+ * cannot enumerate tenants from an extension (see `ControlApi.HarnessInfo`'s doc comment,
+ * checked against the System Application 28.0 symbols: codeunit 417 exposes only the CURRENT
+ * tenant). This error is therefore only ever thrown by the branch that has a REAL count to
+ * judge; when the count is unreachable the gate is reported as unenforced (see
+ * `HarnessDetails.tenantGate`) rather than faked into a pass.
+ */
+export class MultiTenantContainerError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "MultiTenantContainerError";
+  }
+}
+
 interface HarnessInfo {
   readonly appId?: unknown;
   readonly protocolVersion?: unknown;
+  readonly serverGeneration?: unknown;
+  readonly tenantCountReachable?: unknown;
+  readonly tenantCount?: unknown;
   readonly isolationModes?: unknown;
   readonly testTypes?: unknown;
+}
+
+/**
+ * What a successful `verify()` learned. Returned (rather than discarded) because two of these
+ * facts are load-bearing elsewhere:
+ *   - `serverGeneration` is the ONLY value `AcquireLease` accepts as `expectedGeneration`
+ *     (design §4 step 1 refuses any mismatch as `generation-changed`), and no other endpoint
+ *     returns it unless an acquire is already GRANTED — so a session must read it here, before
+ *     it can acquire at all.
+ *   - `tenantGate` records whether design §7's single-tenant check was actually ENFORCED
+ *     ("enforced") or could not be evaluated ("unenforced") — never silently conflated.
+ */
+export interface HarnessDetails {
+  readonly protocolVersion: number;
+  readonly serverGeneration: string;
+  readonly tenantGate: "enforced" | "unenforced";
 }
 
 /**
@@ -36,7 +85,7 @@ export class HarnessVerifier {
     private readonly fetchFn: FetchFn = fetch,
   ) {}
 
-  async verify(): Promise<void> {
+  async verify(): Promise<HarnessDetails> {
     const info = await this.fetchHarnessInfo();
 
     if (info.appId !== CONTROL_APP_ID) {
@@ -44,9 +93,10 @@ export class HarnessVerifier {
         `HarnessInfo reported appId ${JSON.stringify(info.appId)}, expected the LethAL Control app ${CONTROL_APP_ID}`,
       );
     }
-    // Forward-compatible: a newer harness (5C-B protocol v2, which only adds lease-token
-    // validation on top of the same activate+run+clear) still runs a 5C-A client's empty-lease
-    // calls. An OLDER/unknown protocol cannot be trusted.
+    // Layer 5C-B1 (design §7): v2 or newer only. v1's "forward-compatible, a 5C-A client's
+    // empty-lease calls still run" allowance is GONE — a v1 server has no lease fence at all, so
+    // every RunMutant this client sends would be unfenced and could interleave with another
+    // session's publish. Fails here, before any publish.
     if (typeof info.protocolVersion !== "number" || info.protocolVersion < MIN_PROTOCOL_VERSION) {
       throw new HarnessVerificationError(
         `HarnessInfo protocolVersion ${JSON.stringify(info.protocolVersion)} is below the minimum this client speaks (${MIN_PROTOCOL_VERSION})`,
@@ -62,6 +112,67 @@ export class HarnessVerifier {
         `HarnessInfo testTypes ${JSON.stringify(info.testTypes)} does not include the required "codeunit"`,
       );
     }
+    // v2 contract: a 32-hex server generation, minted per NST incarnation. Required — a session
+    // cannot acquire the lease without echoing it (design §4), and accepting a missing/blank one
+    // here would push an empty-string `expectedGeneration` onto the wire, where it could only
+    // ever match an equally-empty stored value (the empty-vs-empty false match this project
+    // treats as its signature bug).
+    if (typeof info.serverGeneration !== "string" || info.serverGeneration === "") {
+      throw new HarnessVerificationError(
+        `HarnessInfo serverGeneration ${JSON.stringify(info.serverGeneration)} is missing or empty — protocol v2 must report it (design §4/§7); AcquireLease cannot be fenced without it`,
+      );
+    }
+    return {
+      protocolVersion: info.protocolVersion,
+      serverGeneration: info.serverGeneration,
+      tenantGate: this.checkSingleTenant(info),
+    };
+  }
+
+  /**
+   * Design §7's pre-publish single-tenant gate, implemented against what the server can actually
+   * substantiate — no more.
+   *
+   * `tenantCountReachable: true` (a hypothetical future server that CAN count tenants): the count
+   * is authoritative, so `> 1` refuses the container before any publish, and a non-numeric count
+   * alongside a `true` flag is a contract violation and throws.
+   *
+   * `tenantCountReachable: false` (what the shipped 1.0.0.2 harness reports, and the only value
+   * seen live): the gate is NOT enforced and must not pretend otherwise. AL cannot enumerate
+   * tenants from an extension at all, so there is nothing here to check — this warns, once per
+   * verify, naming the out-of-band command that WOULD enforce it, and reports `"unenforced"` to
+   * the caller. Emitting a silent pass would be strictly worse: the whole point of the gate is
+   * that publication is service-instance-wide, so a second tenant on the same container is
+   * outside this layer's lease entirely.
+   */
+  private checkSingleTenant(info: HarnessInfo): "enforced" | "unenforced" {
+    if (typeof info.tenantCountReachable !== "boolean") {
+      throw new HarnessVerificationError(
+        `HarnessInfo tenantCountReachable ${JSON.stringify(info.tenantCountReachable)} is not a boolean — protocol v2 must report it (design §7)`,
+      );
+    }
+    if (!info.tenantCountReachable) {
+      console.warn(
+        "HarnessVerifier: design §7's single-tenant container gate is NOT ENFORCED — the harness " +
+          "reports tenantCountReachable:false (AL cannot enumerate tenants from an extension; " +
+          "System Application codeunit 417 exposes only the current tenant). A second tenant " +
+          "publishing to this same service instance is NOT fenced by the 5C-B1 lease, because app " +
+          "publication is service-instance-wide. Verify single-tenancy out of band before running " +
+          "against a shared container: Get-BcContainerTenants / Get-NAVTenant.",
+      );
+      return "unenforced";
+    }
+    if (typeof info.tenantCount !== "number") {
+      throw new HarnessVerificationError(
+        `HarnessInfo reported tenantCountReachable:true but tenantCount ${JSON.stringify(info.tenantCount)} is not a number — refusing to gate a publish on an unreadable count (design §7)`,
+      );
+    }
+    if (info.tenantCount > 1) {
+      throw new MultiTenantContainerError(
+        `HarnessInfo reports ${info.tenantCount} tenants on this service instance — 5C-B1 refuses a multi-tenant/shared-publication container: app publication is service-instance-wide, so a per-tenant lease cannot fence two tenants publishing to one container (design §7)`,
+      );
+    }
+    return "enforced";
   }
 
   private async fetchHarnessInfo(): Promise<HarnessInfo> {
@@ -79,7 +190,10 @@ export class HarnessVerifier {
           authorization: `Basic ${btoa(`${this.cfg.username}:${this.cfg.password}`)}`,
           "content-type": "application/json",
         },
-        body: "{}",
+        // design §7: `clientProtocol` is a REQUIRED v2 argument. A v1 client posts `{}` and is
+        // refused by the OData layer before HarnessInfo's own check ever runs — that asymmetry
+        // is what makes v1↔v2 incompatible by construction, so this key must always be sent.
+        body: JSON.stringify({ clientProtocol: CLIENT_PROTOCOL_VERSION }),
         signal: controller.signal,
       });
     } catch (err) {
