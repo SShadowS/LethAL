@@ -808,9 +808,18 @@ async function runFenced(
 ): Promise<FencedRunOutcome> {
   const first = await runOnce(backend, safety, ref, opts, resyncOpSeq);
   if (!isLostAck(first)) return { verdict: first, lostAck: "none", retried: false };
+  // Announce it. A lost ack is rare, it means a result really was thrown away, and a silent
+  // recovery is indistinguishable from the fault never happening — which is exactly the ambiguity
+  // that made this intermittent expensive to diagnose in the first place.
+  console.warn(
+    `[lethal] ${ref.method}: unreadable answer from RunMutant (${first.failureMessage ?? "no detail"}) — reconciling against the operation marker before deciding anything`,
+  );
   if ((await reconcileFencedLostAck(leaseSession, first)) === "unresolved") {
     return { verdict: first, lostAck: "unresolved", retried: false };
   }
+  console.warn(
+    `[lethal] ${ref.method}: the operation was confirmed COMPLETE server-side, so the container is clean and only the result was lost — retrying once as a fresh attempt`,
+  );
   if (resyncOpSeq !== undefined) await resyncOpSeq();
   const retry = await runOnce(backend, safety, ref, opts, resyncOpSeq);
   if (!isLostAck(retry)) return { verdict: retry, lostAck: "none", retried: true };
