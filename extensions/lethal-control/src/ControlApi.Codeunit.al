@@ -173,10 +173,14 @@ codeunit 71003 "LC Control API"
     /// <summary>OData action: the operator recovery reset (design §8). Step 3 of a FOUR-step procedure
     /// that a restart alone does not accomplish — restart the NST, read the current serverGeneration
     /// from a live status/harness call against the restarted instance, call this with that value as
-    /// expectedGeneration, then probe clean and clear the quarantine. The echo is the authorization:
-    /// it binds the reset to a newly-observed service incarnation, because every successful reset mints
-    /// a new generation and so an echo can only come from post-reset live state. Thin wrapper over
-    /// "LC Control State".TryForceResetLease. JSON: {reset, serverGeneration?, epoch?, reason?}.</summary>
+    /// expectedGeneration, then probe clean and clear the quarantine. The echo is REPLAY PROTECTION
+    /// ACROSS RESETS, not incarnation binding: "Server Generation" is a persistent field that an NST
+    /// restart does not change, so a value read before the restart is byte-identical to one read after —
+    /// the echo only proves the caller holds the generation from AFTER THE LAST reset (every successful
+    /// reset mints a new one), refusing a pre-recorded/replayed request or a stale caller. Whether the
+    /// operator actually restarted the NST first (step 1) is procedural discipline this action takes on
+    /// trust; it has no server-side way to verify it. Thin wrapper over "LC Control State".
+    /// TryForceResetLease. JSON: {reset, serverGeneration?, epoch?, reason?}.</summary>
     procedure ForceResetLease(ExpectedGeneration: Text) ResultJson: Text
     var
         State: Codeunit "LC Control State";
@@ -204,7 +208,10 @@ codeunit 71003 "LC Control API"
     /// Phase 1 — claim, under LockTable, one transaction, one Commit (in TryBeginRun). Validates
     /// (leaseEpoch, leaseToken, serverGeneration) + the artifact + the opSeq rules, sets Op Kind = run
     /// and the active tuple together. Refusal -&gt; 'lease-invalid' / 'artifact-mismatch', nothing
-    /// claimed, nothing run.
+    /// claimed, nothing run. A still-active same-attempt duplicate claim is ALSO refused (design §5
+    /// requires Op Kind = none for admission — never an idempotent re-claim on the run path, unlike
+    /// publish) and is reported at the wire's 'lease-invalid' status too, with the finer 'op-in-flight'
+    /// reason surfaced via the `reason` key below.
     ///
     /// Phase 2 — run, with NO lease lock held (phase 1's Commit released it), behind a catchable
     /// Codeunit.Run boundary. A server-known terminal error (test framework / AL exception) is captured
@@ -216,8 +223,12 @@ codeunit 71003 "LC Control API"
     /// TryFinishRun). Only an exact (epoch, token, generation) + Op Kind = run + attemptId + opSeq
     /// match records the result; anything else returns 'lease-invalid' having touched no row.
     ///
-    /// JSON: the 5C-A status shape, with the new status 'lease-invalid'. On any non-'ran' status the
-    /// result and attestation are deliberately reported as empty/false — there is no verdict to carry.
+    /// JSON: the 5C-A status shape, with the new status 'lease-invalid', plus an optional `reason` key
+    /// on phase-1 refusals — e.g. 'op-in-flight' for a still-active same-attempt duplicate, distinct
+    /// from a genuine 'lease-invalid' — so a client can tell "poll, do not retry" from "you lost the
+    /// lease" WITHOUT a new top-level status (the runner tasks are written against the existing
+    /// vocabulary). On any non-'ran' status the result and attestation are deliberately reported as
+    /// empty/false — there is no verdict to carry.
     /// </summary>
     procedure RunMutant(TargetAppId: Text; ArtifactId: Text; AttemptId: Text; MutantId: Text; TestCodeunitId: Integer; TestMethod: Text; LeaseEpoch: Integer; LeaseToken: Text; ServerGeneration: Text; OpSeq: BigInteger) ResultJson: Text
     var
@@ -225,6 +236,7 @@ codeunit 71003 "LC Control API"
         Runner: Codeunit "LC Run Method";
         Claimed: Boolean;
         ClaimReason: Text;
+        ClaimStatus: Text;
         Verified: Boolean;
         CodeunitResults: Text;
         ObservedAny: Boolean;
@@ -232,8 +244,18 @@ codeunit 71003 "LC Control API"
     begin
         // PHASE 1 — claim under lock. Nothing is written, and nothing runs, unless this succeeds.
         State.TryBeginRun(LeaseEpoch, LeaseToken, ServerGeneration, AttemptId, OpSeq, TargetAppId, ArtifactId, MutantId, Claimed, ClaimReason);
-        if not Claimed then
-            exit(BuildStatus(ClaimReason, TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, '', false, false));
+        if not Claimed then begin
+            // 'op-in-flight' (a duplicate claim on a still-active same-attempt marker, design §5) is
+            // reported at the wire's existing 'lease-invalid' status, never as a new top-level status —
+            // the runner tasks are written against that vocabulary. The finer reason travels in the
+            // `reason` key so a client can tell "poll, do not retry" (op-in-flight) from "you lost the
+            // lease" (a genuine lease-invalid or artifact-mismatch).
+            if ClaimReason = 'op-in-flight' then
+                ClaimStatus := 'lease-invalid'
+            else
+                ClaimStatus := ClaimReason;
+            exit(BuildStatus(ClaimStatus, TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, '', false, false, ClaimReason));
+        end;
 
         // PHASE 2 — run exactly one method OUTSIDE the lease lock, behind a catchable boundary.
         // GetLastErrorText is read immediately on the failing branch, before any other statement can
@@ -249,9 +271,9 @@ codeunit 71003 "LC Control API"
         // PHASE 3 — verify-and-clear under lock, one transaction, one Commit.
         State.TryFinishRun(LeaseEpoch, LeaseToken, ServerGeneration, AttemptId, OpSeq, TargetAppId, ArtifactId, MutantId, Verified);
         if not Verified then
-            exit(BuildStatus('lease-invalid', TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, '', false, false));
+            exit(BuildStatus('lease-invalid', TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, '', false, false, ''));
 
-        exit(BuildStatus('ran', TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, CodeunitResults, ObservedAny, IdentityMismatch));
+        exit(BuildStatus('ran', TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, CodeunitResults, ObservedAny, IdentityMismatch, ''));
     end;
 
     /// <summary>Wraps a caught phase-2 terminal error in the SAME {"error": ...} codeunitResults shape
@@ -303,12 +325,18 @@ codeunit 71003 "LC Control API"
         exit(Out);
     end;
 
-    local procedure BuildStatus(Status: Text; TargetAppId: Text; ArtifactId: Text; AttemptId: Text; MutantId: Text; TestCodeunitId: Integer; TestMethod: Text; CodeunitResults: Text; ObservedAny: Boolean; IdentityMismatch: Boolean): Text
+    /// <summary>Builds the RunMutant JSON result. `Reason` is optional (blank on 'ran' and on the
+    /// phase-3 lease-invalid exit, which has no computed reason to surface) — populated only on
+    /// phase-1 refusals, where it may differ from Status (e.g. Status 'lease-invalid' with Reason
+    /// 'op-in-flight' for a still-active same-attempt duplicate claim).</summary>
+    local procedure BuildStatus(Status: Text; TargetAppId: Text; ArtifactId: Text; AttemptId: Text; MutantId: Text; TestCodeunitId: Integer; TestMethod: Text; CodeunitResults: Text; ObservedAny: Boolean; IdentityMismatch: Boolean; Reason: Text): Text
     var
         Obj: JsonObject;
         Out: Text;
     begin
         Obj.Add('status', Status);
+        if Reason <> '' then
+            Obj.Add('reason', Reason);
         Obj.Add('targetAppId', TargetAppId);
         Obj.Add('artifactId', ArtifactId);
         Obj.Add('attemptId', AttemptId);

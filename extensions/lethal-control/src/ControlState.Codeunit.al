@@ -227,9 +227,13 @@ codeunit 71002 "LC Control State"
         exit(DelChr(LowerCase(Format(CreateGuid())), '=', '{}-'));
     end;
 
-    /// <summary>Documented client contract (design §4): a holder of the lease MUST renew faster than
-    /// this period while idle between operations. Not enforced directly — GraceMs() is derived from
-    /// it and absorbs a briefly-late renew/clock jitter without flipping a live holder to orphaned.</summary>
+    /// <summary>Documented client contract (design §4/§6): a holder of the lease MUST renew faster than
+    /// this period, CONTINUOUSLY — design §6's single-flight renew heartbeat runs at ttl/3 in the
+    /// runner as a background timer that keeps firing for the whole duration of an in-flight operation,
+    /// not only while idle between operations. Not enforced directly — GraceMs() is derived from it and
+    /// absorbs a briefly-late renew/clock jitter without flipping a live holder to orphaned. For the
+    /// contract to hold, the client's ttlSeconds must be at most 3 x RenewPeriodMs() (15s at the current
+    /// 5000ms value) — a ttl/3 heartbeat on a longer ttl would renew slower than this period allows.</summary>
     local procedure RenewPeriodMs(): Integer
     begin
         exit(5000);
@@ -251,7 +255,10 @@ codeunit 71002 "LC Control State"
     /// cannot be called orphaned before the holder's next heartbeat renew is a full period late.
     /// It is a FLOOR, never a ceiling — ExtendRunClaim never shortens a longer deadline the holder's
     /// own RenewLease already set, and it is not the run's time budget: a long run stays alive by
-    /// renewing, exactly as an idle holder does.</summary>
+    /// renewing, exactly as an idle holder does — the client's ttl/3 heartbeat (design §6) keeps firing
+    /// for the whole duration of an in-flight operation, not only while idle. This runway is SLACK on
+    /// top of that continuous heartbeat, never a substitute for it: it covers the gap between the claim
+    /// landing and the holder's next scheduled renew, not the run's actual duration.</summary>
     local procedure RunClaimRunwayMs(): Integer
     begin
         exit(GraceMs() + RenewPeriodMs());
@@ -472,7 +479,8 @@ codeunit 71002 "LC Control State"
         if (Lease.Epoch <> Epoch) or (Lease.Token <> Token) or (Lease."Server Generation" <> Generation) then
             exit;
 
-        // 2. Tombstone check (priority over same-active/fresh-begin — see doc comment).
+        // 2. Tombstone check (priority over same-active/fresh-begin — see doc comment). Keep in sync
+        // with the other three opSeq classification blocks (TryEndPublish, TryBeginRun, TryRecoverOp).
         if OpSeq <= Lease."Last Completed Op Seq" then begin
             AlreadyCompleted := true;
             exit;
@@ -531,7 +539,8 @@ codeunit 71002 "LC Control State"
         if (Lease.Epoch <> Epoch) or (Lease.Token <> Token) or (Lease."Server Generation" <> Generation) then
             exit;
 
-        // 2. Tombstone check (idempotent success — see doc comment on the Begin/End asymmetry).
+        // 2. Tombstone check (idempotent success — see doc comment on the Begin/End asymmetry). Keep in
+        // sync with the other three opSeq classification blocks (TryBeginPublish, TryBeginRun, TryRecoverOp).
         if OpSeq <= Lease."Last Completed Op Seq" then begin
             Ended := true;
             AlreadyCompleted := true;
@@ -611,14 +620,19 @@ codeunit 71002 "LC Control State"
     /// 4. OpSeq &lt;= "Last Completed Op Seq" -&gt; the op is already tombstoned; refuse. A delayed
     ///    duplicate of a completed run must never re-run it (and its result can no longer be recorded:
     ///    phase 3 would find the marker gone).
-    /// 5. SAME active (run, OpSeq, AttemptId) -&gt; idempotent re-claim: the claim this caller is asking
-    ///    about IS still its own, which is the truthful answer. Deliberately does NOT restamp
-    ///    "Op Started At" — AcquireLease's orphan classification depends on the ORIGINAL start time.
-    ///    NOTE the client-side counterpart: design §5 forbids retrying a RunMutant whose op is still
-    ///    ACTIVE (the caller polls/quarantines instead), because two concurrent invocations of the same
-    ///    attempt would both execute phase 2 against shared DB state. The server cannot distinguish
-    ///    the retry from the original; the idempotency here is about the CLAIM, not a licence to
-    ///    re-run.
+    /// 5. SAME active (run, OpSeq, AttemptId) -&gt; REFUSE, Reason 'op-in-flight'. Design §5's phase-1
+    ///    rule requires "Op Kind" = none for admission — UNLIKE TryBeginPublish, a same-active match is
+    ///    NEVER treated as an idempotent re-claim here. For publish, admitting a re-claim merely
+    ///    re-affirms a marker; for a run, admission IS the authorization to execute phase 2, so admitting
+    ///    a duplicate here would let it enter phase 2 CONCURRENTLY with the still-running original
+    ///    against shared "AL Test Suite" state — and because the marker carries no MutantId, a duplicate
+    ///    with the same (OpSeq, AttemptId) but a DIFFERENT MutantId would still reach WriteActive and
+    ///    swap the committed active tuple out from under the original, yielding a verdict for the wrong
+    ///    mutant. Touches nothing (no Modify/WriteActive/Commit). 'op-in-flight' reuses TryRelease's
+    ///    existing vocabulary for this exact condition, not a new term. NOTE the client-side counterpart:
+    ///    design §5 forbids retrying a RunMutant whose op is still ACTIVE (the caller polls/quarantines
+    ///    instead) — this refusal is the server-side enforcement of that rule, not merely documentation
+    ///    of it.
     /// 6. OpSeq = "Last Completed Op Seq" + 1 AND "Op Kind" = none -&gt; fresh claim.
     /// 7. else (a different attempt claiming the active seq, a publish in flight, any other non-match)
     ///    -&gt; refuse 'lease-invalid'.</summary>
@@ -652,20 +666,21 @@ codeunit 71002 "LC Control State"
         end;
 
         // 3. Tombstone check (priority over same-active/fresh-claim — see TryBeginPublish's argument).
+        // Keep in sync with the other three opSeq classification blocks (TryBeginPublish, TryEndPublish,
+        // TryRecoverOp). OpSeq <= 0 is not fail-loud here (unlike Epoch/Token/Generation/AttemptId in
+        // ValidateFenceCredentials): "Last Completed Op Seq" starts at 0 on a pristine row, so
+        // OpSeq <= 0 always satisfies this branch (0 <= 0 holds) and is therefore always refused here,
+        // never able to reach the same-active or fresh-claim branches below.
         if OpSeq <= Lease."Last Completed Op Seq" then begin
             Reason := 'lease-invalid';
             exit;
         end;
 
-        // 4. Same active (run, OpSeq, AttemptId) -> idempotent re-claim. WriteActive re-runs so THIS
-        // session's in-memory attestation expectations are set (they are per-session, and a retry
-        // arriving on a different session would otherwise attest against blanks).
+        // 4. Same active (run, OpSeq, AttemptId) -> REFUSE, Reason 'op-in-flight' (design §5: phase 1
+        // admission requires Op Kind = none — no same-active re-claim on the run path; see doc comment).
+        // Deliberately touches nothing: no Modify, no WriteActive, no Commit, Claimed stays false.
         if (Lease."Op Kind" = Lease."Op Kind"::run) and (Lease."Op Seq" = OpSeq) and (Lease."Op Attempt Id" = AttemptId) then begin
-            ExtendRunClaim(Lease);
-            Lease.Modify();
-            WriteActive(TargetAppId, ArtifactId, MutantId);
-            Commit();
-            Claimed := true;
+            Reason := 'op-in-flight';
             exit;
         end;
 
@@ -714,6 +729,11 @@ codeunit 71002 "LC Control State"
     begin
         Verified := false;
 
+        // Re-validates the same (Epoch, Token, Generation, AttemptId) shape phase 1's TryBeginRun
+        // already validated identically, since RunMutant passes it the SAME values for both phases —
+        // reachable as a failure only if RunMutant is ever changed to pass different values to the two
+        // phases. If it did fire here, the Error would unwind past phase 3 and strand the marker (no
+        // phase-3 Commit ever runs to clear it).
         ValidateFenceCredentials(Epoch, Token, Generation, AttemptId);
 
         Lease.LockTable();
@@ -774,7 +794,8 @@ codeunit 71002 "LC Control State"
         if (Lease.Epoch <> Epoch) or (Lease.Token <> Token) or (Lease."Server Generation" <> Generation) then
             exit;
 
-        // 2. Tombstone check — already resolved, nothing to recover.
+        // 2. Tombstone check — already resolved, nothing to recover. Keep in sync with the other three
+        // opSeq classification blocks (TryBeginPublish, TryEndPublish, TryBeginRun).
         if OpSeq <= Lease."Last Completed Op Seq" then begin
             Recovered := true;
             AlreadyCompleted := true;
@@ -801,20 +822,27 @@ codeunit 71002 "LC Control State"
     /// OPERATIONAL CONTRACT — the recovery is ONE procedure, in this order, and a restart alone is not
     /// enough (the marker and the active tuple are committed TABLE ROWS that survive a restart):
     /// 1. Restart the NST/container. That is what actually kills a surviving AL op — the running
-    ///    session and every SingleInstance codeunit die with it.
+    ///    session and every SingleInstance codeunit die with it. THIS STEP IS TAKEN ON TRUST: "Server
+    ///    Generation" is a persistent table field (minted at install/upgrade and by this action itself),
+    ///    not something an NST restart changes, so this action has no server-side way to verify the
+    ///    operator actually restarted anything before calling it — that is procedural discipline, not a
+    ///    mechanism this action enforces.
     /// 2. Read the CURRENT "Server Generation" from a live status/harness call against the RESTARTED
     ///    service instance.
     /// 3. Call ForceResetLease passing that value as ExpectedGeneration.
     /// 4. Probe that the container is clean (baseline run / active-state read), then clear the
     ///    'container-needs-recycle' quarantine record.
     ///
-    /// AUTHORIZATION (R4 sol#4 — bind the reset to a newly-observed service incarnation, not merely to
-    /// operator credentials): the ExpectedGeneration echo. The reset is refused unless the echo equals
-    /// the row's LIVE "Server Generation". Since every successful reset mints a NEW generation, an echo
-    /// can only be obtained by reading the row after the last reset — so a pre-recorded or replayed
-    /// reset request cannot fire a second time, and an operator who never observed live post-restart
-    /// state cannot supply the value at all. A blank echo fails loud rather than being compared. This
-    /// is deliberately NOT an invented NST-incarnation API: the echo plus this contract IS the binding.
+    /// AUTHORIZATION (R4 sol#4): the ExpectedGeneration echo. The reset is refused unless the echo
+    /// equals the row's CURRENT "Server Generation". What this actually delivers is REPLAY PROTECTION
+    /// ACROSS RESETS, not incarnation binding: every successful reset mints a NEW generation, so (a) a
+    /// pre-recorded or replayed reset request cannot fire a second time — its echo goes stale the moment
+    /// the reset it was meant for succeeds — and (b) a caller holding a generation from before the LAST
+    /// reset is refused. It does NOT prove the caller observed a post-restart state that differs from a
+    /// pre-restart one: the generation value is byte-identical before and after a bare NST restart, and
+    /// only a subsequent ForceResetLease call changes it. A blank echo fails loud rather than being
+    /// compared. This is deliberately NOT an invented NST-incarnation API: it is replay protection on the
+    /// generation token, no more.
     ///
     /// In one transaction: mint a new "Server Generation" (every pre-reset credential is now dead at
     /// every fence, including a stale pre-recovery client's), "Op Kind" = none, clear Token / "Client
