@@ -10,7 +10,9 @@ codeunit 71005 "LC Control Upgrade"
     trigger OnUpgradePerCompany()
     var
         Install: Codeunit "LC Control Install";
+        State: Codeunit "LC Control State";
     begin
         Install.ReconcileWebService();
+        State.EnsureLeaseSeeded();
     end;
 }

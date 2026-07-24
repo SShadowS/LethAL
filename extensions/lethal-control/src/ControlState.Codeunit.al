@@ -144,4 +144,29 @@ codeunit 71002 "LC Control State"
     begin
         exit(ObservedIdentityMismatch);
     end;
+
+    /// <summary>Seeds the single "LC Lease" row on first install/upgrade with a fresh Server
+    /// Generation. Never resets an existing row — a restarted service instance re-running install
+    /// or upgrade must not clobber an in-progress lease (recovery from a stale generation is a
+    /// later task's job).</summary>
+    procedure EnsureLeaseSeeded()
+    var
+        Lease: Record "LC Lease";
+    begin
+        if Lease.Get('') then
+            exit;
+        Lease.Init();
+        Lease."Primary Key" := '';
+        Lease."Server Generation" := NewToken();
+        Lease."Op Kind" := Lease."Op Kind"::none;
+        Lease.Insert();
+        Commit();
+    end;
+
+    /// <summary>A fresh 32-char lowercase-hex token derived from a new GUID. Shared generator for
+    /// the lease's Server Generation, Token, etc. (Tasks 2-4 reuse this).</summary>
+    procedure NewToken(): Text
+    begin
+        exit(DelChr(LowerCase(Format(CreateGuid())), '=', '{}-'));
+    end;
 }

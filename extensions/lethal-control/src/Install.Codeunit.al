@@ -10,8 +10,11 @@ codeunit 71004 "LC Control Install"
     Subtype = Install;
 
     trigger OnInstallAppPerCompany()
+    var
+        State: Codeunit "LC Control State";
     begin
         ReconcileWebService();
+        State.EnsureLeaseSeeded();
     end;
 
     procedure ReconcileWebService()
