@@ -87,6 +87,13 @@ const SELECTOR_IDS: SelectorConfig = { selectorId: 79199, controlId: 79198, tabl
 
 const RUN_TIMEOUT_MS = 60_000;
 const PROBE_B_ROUNDS = 3;
+// Layer 5C-B1 (Task 7) added a REQUIRED lease tuple to `RunMutantRequest` (design §5) — this
+// script's direct `RunMutantTransport.run()` probes predate lease acquisition (Task 8 wires
+// `LeaseClient.acquire()`/`runSession` end to end) and are deliberately unfixed here (Task 7's
+// dispatch scopes orchestration wiring out); this file is expected to fail live until Task 8
+// lands. Placeholder only so the file typechecks — the live server fail-loud-rejects epoch 0
+// (ValidateFenceCredentials, design §4) rather than silently accepting it.
+const V1_STUB_LEASE = { epoch: 0, token: "", serverGeneration: "", opSeq: 1 } as const;
 
 interface LaunchLocalConfig {
   readonly configurations: ReadonlyArray<{
@@ -366,6 +373,7 @@ async function assertFreshBehaviour(
     mutantId: "",
     attemptId: `${label}-baseline`,
     timeoutMs: RUN_TIMEOUT_MS,
+    lease: V1_STUB_LEASE,
   });
   assert.equal(
     baseline.outcome,
@@ -379,6 +387,7 @@ async function assertFreshBehaviour(
     mutantId: killerMutantId,
     attemptId: `${label}-mutated`,
     timeoutMs: RUN_TIMEOUT_MS,
+    lease: V1_STUB_LEASE,
   });
   assert.equal(
     mutated.outcome,
@@ -393,6 +402,7 @@ async function assertFreshBehaviour(
     mutantId: "",
     attemptId: `${label}-cleared`,
     timeoutMs: RUN_TIMEOUT_MS,
+    lease: V1_STUB_LEASE,
   });
   assert.equal(
     cleared.outcome,

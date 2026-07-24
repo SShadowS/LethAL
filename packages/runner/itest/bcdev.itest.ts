@@ -86,6 +86,14 @@ const SANDBOX_TESTS_ID = 79100;
 const ORDER_MATTERS_PROBE_ID = 79210;
 const FAIL_PROBE_ID = 79211;
 const PROBE_TIMEOUT_MS = 120_000;
+// Layer 5C-B1 (Task 7) added a REQUIRED lease tuple to `RunMutantRequest` (design §5) — this
+// script's direct `RunMutantTransport.run()` probes predate lease acquisition (Task 8 wires
+// `LeaseClient.acquire()`/`runSession` end to end) and are DELIBERATELY unfixed here: the
+// dispatch for Task 7 scopes orchestration wiring out, and per the frozen tables at the top of
+// CLAUDE.md this file is expected to fail live until Task 8 lands. This placeholder exists only
+// so the file typechecks — the live server will fail-loud-reject epoch 0 (ValidateFenceCredentials,
+// design §4) rather than silently accept it, so it cannot masquerade as a real fenced call.
+const V1_STUB_LEASE = { epoch: 0, token: "", serverGeneration: "", opSeq: 1 } as const;
 
 interface LaunchLocalConfig {
   readonly configurations: ReadonlyArray<{
@@ -279,6 +287,7 @@ async function runProtocolInvariantProbes(run: RunOnceResult): Promise<void> {
     mutantId: "",
     attemptId: "probe-order",
     timeoutMs: PROBE_TIMEOUT_MS,
+    lease: V1_STUB_LEASE,
   });
   assert.equal(
     order.outcome,
@@ -293,6 +302,7 @@ async function runProtocolInvariantProbes(run: RunOnceResult): Promise<void> {
     mutantId: "",
     attemptId: "probe-fail",
     timeoutMs: PROBE_TIMEOUT_MS,
+    lease: V1_STUB_LEASE,
   });
   assert.equal(fail.outcome, "fail", `fail probe must map to fail, got ${JSON.stringify(fail)}`);
   assert.ok(
@@ -312,6 +322,7 @@ async function runProtocolInvariantProbes(run: RunOnceResult): Promise<void> {
     mutantId: killer.mutantCode,
     attemptId: "probe-clear-active",
     timeoutMs: PROBE_TIMEOUT_MS,
+    lease: V1_STUB_LEASE,
   });
   assert.equal(
     mutated.outcome,
@@ -324,6 +335,7 @@ async function runProtocolInvariantProbes(run: RunOnceResult): Promise<void> {
     mutantId: "",
     attemptId: "probe-clear-baseline",
     timeoutMs: PROBE_TIMEOUT_MS,
+    lease: V1_STUB_LEASE,
   });
   assert.equal(
     cleared.outcome,
@@ -359,6 +371,7 @@ async function runProtocolInvariantProbes(run: RunOnceResult): Promise<void> {
     mutantId: "",
     attemptId: "probe-artifact-mismatch",
     timeoutMs: PROBE_TIMEOUT_MS,
+    lease: V1_STUB_LEASE,
   });
   assert.equal(
     mismatch.outcome,

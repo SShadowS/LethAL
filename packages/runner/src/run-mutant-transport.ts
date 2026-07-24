@@ -1,5 +1,6 @@
 import type { ActivationConfig, FetchFn } from "./activation";
 import type { TestMethodRef, TestOutcome, TestVerdict } from "./backend";
+import type { LeaseTuple } from "./lease";
 
 /**
  * OData client for the `LethALControl_RunMutant` action (Layer 5C-A). One call does
@@ -20,11 +21,19 @@ export interface RunMutantRequest {
   readonly mutantId: string;
   readonly attemptId: string;
   readonly timeoutMs: number;
+  /**
+   * Layer 5C-B1's machine-global lease fence (design §5/§6): the tuple this call claims under,
+   * plus the caller-supplied, exactly-next `opSeq` for THIS attempt. `RunMutantTransport` does
+   * not mint or track `opSeq` — the backend seeds/increments it per RunMutant call (see
+   * `bcdev-backend.ts`).
+   */
+  readonly lease: LeaseTuple & { readonly opSeq: number };
 }
 
 /** Parsed `LethALControl_RunMutant` result (the JSON string inside OData's scalar `value`). */
 interface RunMutantResult {
   readonly status?: unknown;
+  readonly reason?: unknown;
   readonly targetAppId?: unknown;
   readonly artifactId?: unknown;
   readonly attemptId?: unknown;
@@ -49,7 +58,7 @@ export class RunMutantTransport {
   ) {}
 
   async run(req: RunMutantRequest): Promise<TestVerdict> {
-    const { ref, mutantId, attemptId, timeoutMs } = req;
+    const { ref, mutantId, attemptId, timeoutMs, lease } = req;
     const started = Date.now();
 
     const params = new URLSearchParams({ company: this.cfg.company });
@@ -71,9 +80,12 @@ export class RunMutantTransport {
         mutantId,
         testCodeunitId: ref.codeunitId,
         testMethod: ref.method,
-        // Reserved for 5C-B — MUST be empty in 5C-A (the server rejects non-empty).
-        leaseEpoch: "",
-        leaseToken: "",
+        // Layer 5C-B1: the two-phase RunMutant fence (design §5) — leaseEpoch is an Integer on
+        // the wire (v1's reserved empty string is OData-rejected by the v2 server).
+        leaseEpoch: lease.epoch,
+        leaseToken: lease.token,
+        serverGeneration: lease.serverGeneration,
+        opSeq: lease.opSeq,
       });
     } catch (err) {
       return {
@@ -187,6 +199,25 @@ export class RunMutantTransport {
         outcome: "error",
         durationMs,
         failureMessage: "RunMutant rejected reserved lease params (protocol mismatch)",
+      };
+    }
+    if (result.status === "lease-invalid") {
+      // Layer 5C-B1 (design §5/§8): a confirmed refusal — never map to `in-flight-unknown`
+      // (client-side ambiguity) or a bare error (the orchestrator must latch/invalidate). `reason`
+      // is preserved verbatim: `"op-in-flight"` means THIS caller's own attempt is still active
+      // server-side (poll, do not retry, not a real loss); anything else (or absent, on the
+      // phase-3 verify-and-clear refusal) is a genuine lost lease. See `TestVerdict.leaseInvalidReason`.
+      const reason = typeof result.reason === "string" ? result.reason : undefined;
+      return {
+        ref,
+        outcome: "error",
+        durationMs,
+        failureMessage:
+          reason !== undefined
+            ? `RunMutant lease-invalid (reason: ${reason})`
+            : "RunMutant lease-invalid",
+        operation: "lease-lost",
+        ...(reason !== undefined ? { leaseInvalidReason: reason } : {}),
       };
     }
     if (result.status !== "ran") {

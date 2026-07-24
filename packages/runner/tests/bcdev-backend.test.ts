@@ -19,6 +19,7 @@ import type { BcDevConfig, BcDevDeployment } from "../src/bcdev-backend";
 import { DeploymentVerifier } from "../src/deployment-verifier";
 import { CONTROL_APP_ID, HarnessVerificationError } from "../src/harness";
 import type { HarnessVerifier } from "../src/harness";
+import type { Lease } from "../src/lease";
 import { requiresUnsafeLatch } from "../src/operation-outcome";
 import { ContainerDeployer } from "../src/publisher";
 import type { SpawnFn } from "../src/publisher";
@@ -29,6 +30,16 @@ const ref = { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "Posting
 
 const TEST_ARTIFACT_ID = "0123456789abcdef0123456789abcdef";
 const TEST_APP_ID = "11111111-1111-1111-1111-111111111111";
+
+/** A held lease fixture (Layer 5C-B1) — `lastCompletedOpSeq: 4` so tests can assert the FIRST
+ * `run(coverage:"none")` after `setLease()` sends `opSeq: 5` (design §5: exactly-next). */
+const FAKE_LEASE: Lease = {
+  epoch: 2,
+  token: "tok-xyz",
+  serverGeneration: "gen-abc",
+  lastCompletedOpSeq: 4,
+  expiresAt: "2026-07-24T00:05:00.000Z",
+};
 
 /** Writes the compile inputs deploy()'s prepare step reads from an instrumented dir. */
 async function writeDeployInputs(dir: string): Promise<void> {
@@ -1106,6 +1117,27 @@ describe("BcDevMcpBackend.activate — bookkeeping (Layer 5C-A)", () => {
     );
   });
 
+  // Layer 5C-B1: the transport is bound (deploy() succeeded), but the orchestrator hasn't called
+  // setLease() yet — must fail loudly, never send a RunMutant with a missing/fabricated lease
+  // tuple (the "empty-vs-empty match" this project treats as its signature bug).
+  test("run(coverage:none) with a bound transport but no lease bound throws (setLease not called)", async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    const { backend, cleanup } = await makeBackendWithDeploy(
+      () => ({ results: [] }),
+      {},
+      undefined,
+      capturingRunMutantFactory(bodies),
+    );
+    try {
+      await expect(backend.run(ref, { coverage: "none", timeoutMs: 1000 })).rejects.toThrow(
+        /no lease bound/,
+      );
+      expect(bodies).toHaveLength(0); // never dispatched
+    } finally {
+      await cleanup();
+    }
+  });
+
   test("the activated mutant flows into RunMutant; activate(null) sends baseline", async () => {
     const bodies: Array<Record<string, unknown>> = [];
     const { backend, cleanup } = await makeBackendWithDeploy(
@@ -1115,6 +1147,7 @@ describe("BcDevMcpBackend.activate — bookkeeping (Layer 5C-A)", () => {
       capturingRunMutantFactory(bodies),
     );
     try {
+      backend.setLease(FAKE_LEASE);
       await backend.activate("M0003");
       const killed = await backend.run(ref, { coverage: "none", timeoutMs: 5000 });
       expect(killed.outcome).toBe("pass"); // fake echoes result:2
@@ -1128,10 +1161,15 @@ describe("BcDevMcpBackend.activate — bookkeeping (Layer 5C-A)", () => {
         artifactId: TEST_ARTIFACT_ID,
         testCodeunitId: ref.codeunitId,
         testMethod: ref.method,
-        leaseEpoch: "",
-        leaseToken: "",
+        leaseEpoch: FAKE_LEASE.epoch,
+        leaseToken: FAKE_LEASE.token,
+        serverGeneration: FAKE_LEASE.serverGeneration,
+        opSeq: FAKE_LEASE.lastCompletedOpSeq + 1, // seeded from lastCompletedOpSeq, exactly-next
       });
-      expect(bodies[1]).toMatchObject({ mutantId: "" });
+      expect(bodies[1]).toMatchObject({
+        mutantId: "",
+        opSeq: FAKE_LEASE.lastCompletedOpSeq + 2, // incremented once per RunMutant call issued
+      });
     } finally {
       await cleanup();
     }
@@ -1149,8 +1187,91 @@ describe("BcDevMcpBackend.activate — bookkeeping (Layer 5C-A)", () => {
       capturingRunMutantFactory(bodies, { observedAny: true, identityMismatch: false }),
     );
     try {
+      backend.setLease(FAKE_LEASE);
       const v = await backend.run(ref, { coverage: "none", timeoutMs: 1000 });
       expect(v.attestation).toEqual({ observedAny: true, identityMismatch: false });
+    } finally {
+      await cleanup();
+    }
+  });
+});
+
+/** A fake RunMutant transport factory whose fetch always answers `status:"lease-invalid"` with
+ *  the given `reason` (or none), echoing the request's own identity fields back — exactly what
+ *  ControlApi.RunMutant's BuildStatus does on every phase-1 refusal (it echoes the caller's own
+ *  input params regardless of status), so this must echo them too or the transport's identity
+ *  guard (§I5) rejects the response before ever reaching the lease-invalid branch. Used to prove
+ *  `BcDevMcpBackend.run()`'s pass-through never loses the distinction between a genuine lost
+ *  lease and an "op-in-flight" same-attempt duplicate. */
+function leaseInvalidRunMutantFactory(reason?: string) {
+  const fetchFn = (async (_url: unknown, init?: RequestInit) => {
+    const b = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    const inner = {
+      status: "lease-invalid",
+      ...(reason !== undefined ? { reason } : {}),
+      targetAppId: b.targetAppId,
+      artifactId: b.artifactId,
+      attemptId: b.attemptId,
+      mutantId: b.mutantId,
+      codeunitId: b.testCodeunitId,
+      method: b.testMethod,
+    };
+    return new Response(JSON.stringify({ value: JSON.stringify(inner) }), { status: 200 });
+  }) as typeof fetch;
+  return (targetAppId: string, artifactId: string) =>
+    new RunMutantTransport(
+      {
+        baseUrl: "http://bc:7048/BC",
+        company: "CRONUS",
+        username: "u",
+        password: "p",
+        tenant: "default",
+      },
+      targetAppId,
+      artifactId,
+      fetchFn,
+    );
+}
+
+// THE BINDING REQUIREMENT (design §5/§8): a lease-invalid RunMutant result must never parse into
+// anything a caller could mistake for a successful run, AND the op-in-flight sub-case (the
+// caller's own attempt still active server-side) must stay distinguishable from a genuine lost
+// lease all the way through BcDevMcpBackend.run()'s pass-through — never silently folded into an
+// indistinguishable operation:"lease-lost".
+describe("BcDevMcpBackend.run — lease-invalid pass-through (Layer 5C-B1)", () => {
+  test("genuine lease-invalid (reason:'lease-invalid') -> error + operation:lease-lost, reason preserved", async () => {
+    const { backend, cleanup } = await makeBackendWithDeploy(
+      () => ({ results: [] }),
+      {},
+      undefined,
+      leaseInvalidRunMutantFactory("lease-invalid"),
+    );
+    try {
+      backend.setLease(FAKE_LEASE);
+      const v = await backend.run(ref, { coverage: "none", timeoutMs: 1000 });
+      expect(v.outcome).toBe("error");
+      expect(v.operation).toBe("lease-lost");
+      expect(v.leaseInvalidReason).toBe("lease-invalid");
+      expect(requiresUnsafeLatch(v.operation ?? "completed-accepted")).toBe(true);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("op-in-flight duplicate claim -> error + operation:lease-lost BUT leaseInvalidReason:'op-in-flight' distinguishes it", async () => {
+    const { backend, cleanup } = await makeBackendWithDeploy(
+      () => ({ results: [] }),
+      {},
+      undefined,
+      leaseInvalidRunMutantFactory("op-in-flight"),
+    );
+    try {
+      backend.setLease(FAKE_LEASE);
+      const v = await backend.run(ref, { coverage: "none", timeoutMs: 1000 });
+      expect(v.outcome).toBe("error");
+      expect(v.operation).toBe("lease-lost");
+      // The distinguishing signal Task 8 must branch on BEFORE treating this as genuine loss.
+      expect(v.leaseInvalidReason).toBe("op-in-flight");
     } finally {
       await cleanup();
     }
