@@ -1,6 +1,10 @@
 import { cp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { emitStaticSelector } from "@lethal/schemata";
+import {
+  CONTROL_REGISTER_FILENAME,
+  CONTROL_UPGRADE_FILENAME,
+  emitStaticSelector,
+} from "@lethal/schemata";
 import { OneShotTransport, ServerTransport } from "./al-runner-transport";
 import type { AlRunnerTransport } from "./al-runner-transport";
 import type { CompiledArtifact } from "./artifact";
@@ -161,6 +165,12 @@ export class AlRunnerBackend implements ExecutionBackend {
     // retries ride out that window instead of failing the whole deploy.
     await rm(activeDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     await cp(instrumentedDir, activeDir, { recursive: true });
+    // al-runner uses the static selector and never talks to LethAL Control; the target's
+    // control-registration codeunits reference `LC Control State` and would fail al-runner's
+    // dependency-free compile. Drop them (design §D). Force: synthetic fixtures may lack them.
+    for (const f of [CONTROL_REGISTER_FILENAME, CONTROL_UPGRADE_FILENAME]) {
+      await rm(join(activeDir, f), { force: true });
+    }
     this.deployedDir = activeDir;
     // Early, LOUD validation of the batch just deployed: a corrupt manifest must fail
     // deploy() itself, not surface only when a later activate() happens to read it. The
@@ -189,6 +199,14 @@ export class AlRunnerBackend implements ExecutionBackend {
 
   async activate(mutantId: string | null): Promise<void> {
     const dir = this.activeDir();
+    // Belt-and-suspenders for the documented no-deploy path (deploy() never called, dir ===
+    // cfg.instrumentedDir): deploy() already strips these when it runs, but a caller driving
+    // activate()/run() straight against cfg.instrumentedDir would otherwise still have the
+    // control-registration codeunits sitting there when run() lazily compiles. Idempotent and
+    // force: harmless when deploy() already removed them, or when a fixture never had them.
+    for (const f of [CONTROL_REGISTER_FILENAME, CONTROL_UPGRADE_FILENAME]) {
+      await rm(join(dir, f), { force: true });
+    }
     await writeFile(
       join(dir, "MutationSelector.Codeunit.al"),
       emitStaticSelector({

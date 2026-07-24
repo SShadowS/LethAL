@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { CONTROL_REGISTER_FILENAME, CONTROL_UPGRADE_FILENAME } from "@lethal/schemata";
 import { AlRunnerBackend } from "../src/al-runner-backend";
 import { MsInMemoryBackend } from "../src/ms-inmemory-backend";
 import { requiresUnsafeLatch } from "../src/operation-outcome";
@@ -99,6 +100,31 @@ describe("AlRunnerBackend.deploy", () => {
       "batch2 selector",
     );
     await expect(readFile(join(activeDir, "StaleOnly.Codeunit.al"), "utf8")).rejects.toThrow();
+  });
+
+  // Task 4's shared emit path writes MutationRegister/MutationUpgrade into every
+  // instrumented project — both reference `Codeunit "LC Control State"`, a LethAL
+  // Control extension object al-runner has no dependency on (it uses the
+  // self-contained emitStaticSelector and never talks to the control extension). Left
+  // in place, al-runner's dependency-free `alc` compile would fail on an unresolved
+  // `LC Control State`. deploy() must strip both files from the active dir it copies
+  // into, while leaving the rest of the batch (the selector, ordinary source) intact.
+  test("deploy() strips the control-registration codeunits from the active dir", async () => {
+    const { dir, backend } = await makeBackend(okSpawn({ tests: [] }).spawn);
+    const sourceDir = await mkdtemp(join(tmpdir(), "lethal-alrunner-control-"));
+    await writeFile(join(sourceDir, "MutationSelector.Codeunit.al"), "selector", "utf8");
+    await writeFile(join(sourceDir, CONTROL_REGISTER_FILENAME), "register", "utf8");
+    await writeFile(join(sourceDir, CONTROL_UPGRADE_FILENAME), "upgrade", "utf8");
+    await writeFile(join(sourceDir, "Other.Codeunit.al"), "some AL source", "utf8");
+
+    await backend.deploy(sourceDir);
+
+    const activeDir = join(dir, "active");
+    const names = await readdir(activeDir);
+    expect(names).not.toContain(CONTROL_REGISTER_FILENAME);
+    expect(names).not.toContain(CONTROL_UPGRADE_FILENAME);
+    expect(names).toContain("MutationSelector.Codeunit.al");
+    expect(names).toContain("Other.Codeunit.al");
   });
 });
 
