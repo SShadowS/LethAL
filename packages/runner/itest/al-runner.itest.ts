@@ -101,6 +101,22 @@ async function runOnce(scratchRoot: string): Promise<SessionReport> {
 }
 
 function assertVerdictTable(report: SessionReport): void {
+  // Always dump the per-mutant table BEFORE asserting — a bare count mismatch says nothing about
+  // WHICH mutant moved, and this gate takes minutes to re-run. Mirrors bcdev.itest.ts.
+  console.log(
+    `  verdicts: killed=${report.counts.killed} survived=${report.counts.survived} noCoverage=${report.counts.noCoverage} baselineGreen=${report.baselineGreen}`,
+  );
+  for (const m of report.mutants) {
+    const cause = m.cause !== undefined ? ` cause=${m.cause}` : "";
+    const note = m.failureNote !== undefined ? ` note=${m.failureNote}` : "";
+    console.log(
+      `    ${m.mutantCode} ${m.verdict}${cause} ${m.file}:${m.line} ${m.operatorName}${note}`,
+    );
+  }
+  if (report.quarantined !== undefined) {
+    console.log(`  quarantined: ${JSON.stringify(report.quarantined)}`);
+  }
+
   assert.equal(
     report.baselineGreen,
     true,

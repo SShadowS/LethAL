@@ -2055,7 +2055,10 @@ async function runMutantsOnBackend(args: {
           quarantineStore: args.quarantineStore,
           resourceKey: args.resourceKey,
           nowIso: args.nowIso,
-          detail: `test in-flight-unknown running ${ref.method} (mutant ${m.mutantId})`,
+          // Carry the transport's own failure message into the record. Without it the operator
+          // is told to recycle a tier and clear a quarantine with no statement of what actually
+          // went wrong — and this record outlives the process that wrote it.
+          detail: `test in-flight-unknown running ${ref.method} (mutant ${m.mutantId})${v.failureMessage !== undefined ? `: ${v.failureMessage}` : ""}`,
         });
         verdict = "error";
         failureNote = `quarantined: ${ref.method} timed out, container may be stranded`;
@@ -2144,7 +2147,7 @@ async function runMutantsOnBackend(args: {
             quarantineStore: args.quarantineStore,
             resourceKey: args.resourceKey,
             nowIso: args.nowIso,
-            detail: `test in-flight-unknown confirming ${ref.method} (mutant ${m.mutantId})`,
+            detail: `test in-flight-unknown confirming ${ref.method} (mutant ${m.mutantId})${confirm.failureMessage !== undefined ? `: ${confirm.failureMessage}` : ""}`,
           });
           verdict = "error";
           failureNote = `quarantined: ${ref.method} confirm timed out, container may be stranded`;

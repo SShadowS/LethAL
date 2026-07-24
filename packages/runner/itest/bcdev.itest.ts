@@ -517,6 +517,20 @@ async function runProtocolInvariantProbes(run: RunOnceResult): Promise<void> {
 }
 
 function assertVerdictTable(report: SessionReport): void {
+  // Always dump the per-mutant table BEFORE asserting. A bare "survived count mismatch 3 !== 10"
+  // says nothing about which mutants moved or why, and this gate takes minutes to re-run against
+  // a live container — so the first run has to carry its own diagnosis.
+  console.log(
+    `  verdicts: killed=${report.counts.killed} survived=${report.counts.survived} noCoverage=${report.counts.noCoverage} baselineGreen=${report.baselineGreen}`,
+  );
+  for (const m of report.mutants) {
+    const cause = m.cause !== undefined ? ` cause=${m.cause}` : "";
+    console.log(`    ${m.mutantCode} ${m.verdict}${cause} ${m.file}:${m.line} ${m.operatorName}`);
+  }
+  if (report.quarantined !== undefined) {
+    console.log(`  quarantined: ${JSON.stringify(report.quarantined)}`);
+  }
+
   assert.equal(
     report.baselineGreen,
     true,
