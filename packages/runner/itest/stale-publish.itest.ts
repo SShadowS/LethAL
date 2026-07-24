@@ -182,6 +182,19 @@ class VersionState {
     this.last = v;
     return v;
   }
+
+  /** Reserve a version strictly above `installed` and adopt it as the new floor, so every later
+   * `next()` also stays above it. Used to climb past a version a prior run already left on the
+   * container (mirrors runSession's version-conflict retry seed). */
+  bumpAbove(installed: string): string {
+    const v = reserveAppVersion({
+      sourceVersion: this.sourceVersion,
+      nowMs: Date.now(),
+      lastIssued: installed,
+    });
+    this.last = v;
+    return v;
+  }
 }
 
 interface Ctx {
@@ -274,6 +287,38 @@ async function compileArtifact(
     mutantManifest,
     appManifest,
   });
+}
+
+/**
+ * Publish an artifact that MUST succeed, climbing past any newer version a prior run already left
+ * installed on the container. The container is shared: bcdev.itest (and earlier stale-publish runs)
+ * publish the sandbox target via runSession's own version-conflict retry, so its installed version
+ * can be well above this script's fresh clock baseline — a plain publish would then be rejected as a
+ * downgrade. On that specific rejection, reserve a version above the installed one (seeding
+ * `ctx.versions` so every later reservation stays above the floor too), recompile at that version,
+ * and republish. Any non-version-conflict failure is re-thrown. Returns the artifact actually
+ * published (recompiled, same artifactId, higher version, if a retry happened).
+ */
+async function publishAboveInstalled(
+  ctx: Ctx,
+  artifact: CompiledArtifact,
+  scratchDir: string,
+  label: string,
+): Promise<CompiledArtifact> {
+  try {
+    await ctx.deployer.publish(artifact);
+    return artifact;
+  } catch (err) {
+    const conflict = parseVersionConflict(messageOf(err));
+    if (conflict === null) throw err;
+    const bumped = ctx.versions.bumpAbove(conflict);
+    console.log(
+      `  ${label}: container already carries ${conflict}; recompiling at ${bumped} and retrying`,
+    );
+    const retried = await compileArtifact(ctx, scratchDir, artifact.artifactId, bumped);
+    await ctx.deployer.publish(retried);
+    return retried;
+  }
 }
 
 /**
@@ -425,17 +470,24 @@ async function probeA(ctx: Ctx): Promise<void> {
   const artifactB = await compileArtifact(ctx, join(ctx.scratchRoot, "probeA-b"), idB, versionB);
   console.log(`  compiled B: version=${artifactB.appVersion} id=${artifactB.artifactId}`);
 
-  await ctx.deployer.publish(artifactB);
-  const verifyB = await ctx.verifier.verify(artifactB);
+  const publishedB = await publishAboveInstalled(
+    ctx,
+    artifactB,
+    join(ctx.scratchRoot, "probeA-b"),
+    "Probe A / B",
+  );
+  const verifyB = await ctx.verifier.verify(publishedB);
   assert.equal(
     verifyB.status,
     "accepted",
     `Probe A: B's own publish must verify as accepted before testing A, got ${JSON.stringify(verifyB)}`,
   );
-  console.log("  published + verified B");
-  await assertFreshBehaviour(ctx, artifactB, "Probe A / after B published");
+  console.log(`  published + verified B (version=${publishedB.appVersion})`);
+  await assertFreshBehaviour(ctx, publishedB, "Probe A / after B published");
   console.log("  fresh-behaviour probe confirms B (baseline pass -> mutant fail -> clear pass)");
 
+  // A was compiled at the fresh clock baseline (below B, whether or not B was bumped above the
+  // installed floor), so publishing it now must be rejected as a downgrade naming B's version.
   let aPublishError: unknown;
   try {
     await ctx.deployer.publish(artifactA);
@@ -451,12 +503,12 @@ async function probeA(ctx: Ctx): Promise<void> {
   const conflictVersion = parseVersionConflict(messageOf(aPublishError));
   assert.equal(
     conflictVersion,
-    artifactB.appVersion,
-    `Probe A: A's rejection must specifically be BC's downgrade check naming B's version (${artifactB.appVersion}) as already installed — got a different failure, which would mean this probe isn't actually exercising the ordering barrier: ${messageOf(aPublishError)}`,
+    publishedB.appVersion,
+    `Probe A: A's rejection must specifically be BC's downgrade check naming B's version (${publishedB.appVersion}) as already installed — got a different failure, which would mean this probe isn't actually exercising the ordering barrier: ${messageOf(aPublishError)}`,
   );
   console.log(`  A's publish rejected as expected: ${messageOf(aPublishError).split("\n")[0]}`);
 
-  await assertBFinal(ctx, artifactA, artifactB, "Probe A / after A's publish was rejected");
+  await assertBFinal(ctx, artifactA, publishedB, "Probe A / after A's publish was rejected");
   console.log("Probe A: PASS");
 }
 
