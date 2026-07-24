@@ -233,13 +233,39 @@ codeunit 71002 "LC Control State"
         exit(DelChr(LowerCase(Format(CreateGuid())), '=', '{}-'));
     end;
 
-    /// <summary>Documented client contract (design §4/§6): a holder of the lease MUST renew faster than
-    /// this period, CONTINUOUSLY — design §6's single-flight renew heartbeat runs at ttl/3 in the
-    /// runner as a background timer that keeps firing for the whole duration of an in-flight operation,
-    /// not only while idle between operations. Not enforced directly — GraceMs() is derived from it and
-    /// absorbs a briefly-late renew/clock jitter without flipping a live holder to orphaned. For the
-    /// contract to hold, the client's ttlSeconds must be at most 3 x RenewPeriodMs() (15s at the current
-    /// 5000ms value) — a ttl/3 heartbeat on a longer ttl would renew slower than this period allows.</summary>
+    /// <summary>Read-only accessor for HarnessInfo v2 (design §7, Task 5): reports the live "Server
+    /// Generation" so a client can obtain the echo ForceResetLease authenticates against (design §8, R4
+    /// sol#4) in the exact recovery situation the action exists for — a session killed mid-run. No OTHER
+    /// endpoint returns this value unless an acquire is GRANTED, and a still-active op or a live
+    /// holder's own token refuses a grant; without this accessor, ForceResetLease would be uninvokable
+    /// in precisely that case. Follows this codeunit's established Get('') + fail-loud pattern. No
+    /// LockTable: a plain informational read, not part of any mutating critical section, so it never
+    /// takes a lock the fenced operations above would otherwise contend on.</summary>
+    procedure CurrentServerGeneration(): Text
+    var
+        Lease: Record "LC Lease";
+    begin
+        if not Lease.Get('') then
+            Error(LeaseRowMissingErr());
+        exit(Lease."Server Generation");
+    end;
+
+    /// <summary>Documented client contract (design §4/§6): a holder of the lease MUST renew AT LEAST AS
+    /// OFTEN AS this period, CONTINUOUSLY — design §6's single-flight renew heartbeat runs at ttl/3 in
+    /// the runner as a background timer that keeps firing for the whole duration of an in-flight
+    /// operation, not only while idle between operations. Not enforced directly — GraceMs() is derived
+    /// from it and absorbs a briefly-late renew/clock jitter without flipping a live holder to orphaned.
+    /// For the contract to hold, the client's ttlSeconds must be at most 3 x RenewPeriodMs() (15s at the
+    /// current 5000ms value) — a ttl/3 heartbeat on a longer ttl would renew less often than this period
+    /// requires. AT EXACTLY 15s the heartbeat interval equals the period, and that is genuinely fine —
+    /// the contract is "at least as often as", never "strictly faster than"; do not tighten this bound.
+    /// NOTE: "3 x RenewPeriodMs()" here and GraceMs() below are numerically equal (both 15000ms) at the
+    /// CURRENT constants only, because each is independently defined as "3 x RenewPeriodMs()" — this is
+    /// a coincidence of today's constants, not a derivation of one from the other, and a reader must not
+    /// assume the ttl bound and GraceMs() are the same obligation just because they share a value today.
+    /// RenewPeriodMs() itself is `local` — Task 8's client-side heartbeat cannot read it and must
+    /// hardcode the 15s bound; cite THIS comment when it does, so the constant's provenance is not
+    /// lost.</summary>
     local procedure RenewPeriodMs(): Integer
     begin
         exit(5000);
@@ -271,10 +297,11 @@ codeunit 71002 "LC Control State"
     end;
 
     /// <summary>Pushes "Expires At" out to at least RunClaimRunwayMs() from now, never inwards. Called
-    /// only on the two branches of TryBeginRun that actually claim, inside their locked transaction —
-    /// so the "honored even if momentarily past Expires At" rule (design §5 sol#6, same as TryRenew)
-    /// cannot leave a live run sitting on an already-lapsed deadline for a competing acquire to
-    /// classify as orphaned.</summary>
+    /// only from the ONE branch of TryBeginRun that actually claims (the fresh-claim branch) — the
+    /// same-active branch that used to also claim was hardened to refuse outright, touching nothing, so
+    /// it no longer calls this — inside the locked transaction, so the "honored even if momentarily past
+    /// Expires At" rule (design §5 sol#6, same as TryRenew) cannot leave a live run sitting on an
+    /// already-lapsed deadline for a competing acquire to classify as orphaned.</summary>
     local procedure ExtendRunClaim(var Lease: Record "LC Lease")
     var
         Runway: DateTime;
@@ -839,8 +866,14 @@ codeunit 71002 "LC Control State"
     /// 4. Probe that the container is clean (baseline run / active-state read), then clear the
     ///    'container-needs-recycle' quarantine record.
     ///
-    /// AUTHORIZATION (R4 sol#4): the ExpectedGeneration echo. The reset is refused unless the echo
-    /// equals the row's CURRENT "Server Generation". What this actually delivers is REPLAY PROTECTION
+    /// AUTHORIZATION (R4 sol#4): a KNOWING, DOCUMENTED DEVIATION from design §8's requirement to "bind
+    /// authorization to a newly-observed NST/process incarnation" — not an oversight. Binding to an
+    /// actual incarnation proved infeasible in AL: there is no reachable API that observes "this process
+    /// just restarted" (the same category of platform limit as HarnessInfo's tenant-count gap — see
+    /// ControlApi.HarnessInfo's doc comment). This takes the plan's Task-4-Step-4 fallback clause ("if
+    /// infeasible in AL, document the operational binding and gate via permission") and substitutes the
+    /// ExpectedGeneration echo below; recorded as such in the Task 10 docs. The reset is refused unless
+    /// the echo equals the row's CURRENT "Server Generation". What this actually delivers is REPLAY PROTECTION
     /// ACROSS RESETS, not incarnation binding: every successful reset mints a NEW generation, so (a) a
     /// pre-recorded or replayed reset request cannot fire a second time — its echo goes stale the moment
     /// the reset it was meant for succeeds — and (b) a caller holding a generation from before the LAST

@@ -4,18 +4,54 @@ namespace LethAL.Control;
 /// procedures are OData V4 unbound actions /ODataV4/LethALControl_&lt;Proc&gt;). Layer 5C-A.</summary>
 codeunit 71003 "LC Control API"
 {
-    /// <summary>Identity + capabilities the client verifies before any execution.</summary>
-    procedure HarnessInfo() InfoJson: Text
+    /// <summary>Identity + capabilities the client verifies before any execution. PROTOCOL V2 (design
+    /// §7, R4 sol#8): ClientProtocol is a REQUIRED argument, not an optional one with a default — a v1
+    /// client that calls with no argument at all (an OData body of `{}`) must fail to reach a valid v2
+    /// payload, so a v1 client can never silently talk to a v2 server. `alc` cannot prove that an
+    /// omitted argument is genuinely refused rather than silently defaulted (that is wire/runtime
+    /// behavior, not something a compile checks); confirming it is the live probe's job (design §7), not
+    /// this comment's. Independently of how the OData layer handles a truly missing argument, a SUPPLIED
+    /// ClientProtocol &lt; 2 is rejected explicitly below, so a caller that deliberately downgrades (or a
+    /// hypothetical mismatched server on the other side of a v2 client) fails the same way, before any
+    /// publish.
+    ///
+    /// Tenant-scope signal (design §7): the client's pre-deploy single-tenant-container check needs to
+    /// know whether more than one tenant shares this service instance. AL CANNOT determine that from
+    /// here — this procedure runs inside exactly one tenant's session, and the only tenant-scoped API
+    /// this runtime exposes at all, System Application's codeunit 417 "Tenant Information", reports
+    /// solely the CURRENT tenant's own id/name (GetTenantId/GetTenantDisplayName); checked directly
+    /// against the System Application 28.0 symbols in this repo's package cache, there is no
+    /// tenant-enumeration or multitenancy-boolean surface anywhere in it reachable from an extension.
+    /// Reporting a fabricated tenantCount, or a `singleTenant: true` this procedure cannot substantiate,
+    /// would be worse than reporting nothing — the client would gate a publish decision on it. So this
+    /// reports `tenantCountReachable: false` and nothing else on the topic: the client's single-tenant
+    /// check (design §7) MUST be performed out-of-band against the container (e.g. the BC admin/
+    /// PowerShell surface — `Get-NAVTenant` / bccontainerhelper's `Get-BcContainerTenants`) BEFORE
+    /// publish, never by asking this endpoint.
+    ///
+    /// `serverGeneration` is also reported (Task 4 dependency): it is the ONLY value ForceResetLease
+    /// authenticates against (design §8, R4 sol#4), and no OTHER endpoint returns it unless an acquire
+    /// is GRANTED — which a still-active op or a live holder's own token refuses. Without it here, a
+    /// session killed mid-run (the exact case ForceResetLease exists for) would have no way to obtain
+    /// the echo it needs. Read via "LC Control State".CurrentServerGeneration(), never straight off the
+    /// table from this codeunit.</summary>
+    procedure HarnessInfo(ClientProtocol: Integer) InfoJson: Text
     var
+        State: Codeunit "LC Control State";
         Obj: JsonObject;
         Isolation: JsonArray;
         TestTypes: JsonArray;
     begin
+        if ClientProtocol < 2 then
+            Error(ProtocolIncompatibleErr(ClientProtocol));
+
         Isolation.Add('Codeunit');
         TestTypes.Add('codeunit');
         Obj.Add('appId', '5e7a1c00-1111-4c00-8c00-1e7a1c000701');
         Obj.Add('semver', '1.0.0.0');
-        Obj.Add('protocolVersion', 1);
+        Obj.Add('protocolVersion', 2);
+        Obj.Add('serverGeneration', State.CurrentServerGeneration());
+        Obj.Add('tenantCountReachable', false);
         Obj.Add('isolationModes', Isolation);
         Obj.Add('testTypes', TestTypes);
         Obj.WriteTo(InfoJson);
@@ -173,7 +209,13 @@ codeunit 71003 "LC Control API"
     /// <summary>OData action: the operator recovery reset (design §8). Step 3 of a FOUR-step procedure
     /// that a restart alone does not accomplish — restart the NST, read the current serverGeneration
     /// from a live status/harness call against the restarted instance, call this with that value as
-    /// expectedGeneration, then probe clean and clear the quarantine. The echo is REPLAY PROTECTION
+    /// expectedGeneration, then probe clean and clear the quarantine. This authorization scheme is a
+    /// KNOWING, DOCUMENTED DEVIATION from design §8's requirement to bind authorization to a
+    /// newly-observed NST/process incarnation — not an oversight: binding to an actual incarnation
+    /// proved infeasible in AL, so this takes the plan's Task-4-Step-4 fallback clause ("if infeasible
+    /// in AL, document the operational binding and gate via permission") and substitutes the echo below;
+    /// see "LC Control State".TryForceResetLease's AUTHORIZATION doc comment for the full rationale, and
+    /// the Task 10 docs for where this deviation is recorded. The echo is REPLAY PROTECTION
     /// ACROSS RESETS, not incarnation binding: "Server Generation" is a persistent field that an NST
     /// restart does not change, so a value read before the restart is byte-identical to one read after —
     /// the echo only proves the caller holds the generation from AFTER THE LAST reset (every successful
@@ -349,5 +391,13 @@ codeunit 71003 "LC Control API"
         Obj.Add('identityMismatch', IdentityMismatch);
         Obj.WriteTo(Out);
         exit(Out);
+    end;
+
+    /// <summary>HarnessInfo's protocol-incompatibility error (design §7, R4 sol#8). Names BOTH sides so
+    /// a client parsing this message (or a human debugging a failed handshake) never has to guess which
+    /// end is stale: the caller's supplied clientProtocol and this server's protocolVersion.</summary>
+    local procedure ProtocolIncompatibleErr(ClientProtocol: Integer): Text
+    begin
+        exit(StrSubstNo('HarnessInfo requires clientProtocol >= 2; caller sent clientProtocol %1, server speaks protocolVersion 2. Refusing an incompatible handshake before any publish (design §7) — a v1 client that omits clientProtocol entirely is refused earlier, as a missing required OData parameter, and never reaches this check.', ClientProtocol));
     end;
 }
