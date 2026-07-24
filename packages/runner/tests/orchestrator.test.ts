@@ -32,6 +32,10 @@ import type {
   ReleaseOutcome,
   RenewOutcome,
 } from "../src/lease";
+// Namespace import purely so the two-batch test can `spyOn` `planArtifacts` — Bun's ESM
+// implementation makes that reach `runSession`'s own intra-module call site, which is the only way
+// to drive more than one batch while `planArtifacts` still collapses everything into one artifact.
+import * as orchestratorModule from "../src/orchestrator";
 import {
   activateOnce,
   generateMutationSet,
@@ -160,6 +164,18 @@ ${WIDE_GAP_MID_PAD}
     procedure IsUnderBudget(Amount: Decimal; Budget: Decimal): Boolean
     begin
         exit(Amount < Budget);
+    end;
+}
+`;
+
+// A SECOND source file with its own mutable sites, so `generateMutationSet` returns two
+// `InstrumentedFile`s that the two-batch lease-scoping test can split into two artifacts (see that
+// test for why the split has to be injected at the `planArtifacts` seam).
+const SECOND_FILE_AL = `codeunit 79001 "Sandbox Other"
+{
+    procedure IsWithinLimit(Amount: Decimal; Limit: Decimal): Boolean
+    begin
+        exit(Amount < Limit);
     end;
 }
 `;
@@ -3326,6 +3342,16 @@ class FakeLeaseClient implements LeaseApi {
   endPublishOutcome: EndPublishOutcome = { ended: true };
   recoverOutcome: RecoverOpOutcome = { recovered: true };
   endPublishError: Error | undefined;
+  /**
+   * When set, a status read made WITH an attemptId — the RECONCILIATION read after a lost
+   * `EndPublish` ack; every other read passes `""` — answers as if the server's current marker
+   * were that exact op, echoing the caller's own `attemptId`/`opSeq` under this `opKind`.
+   * Necessary because the publish attemptId is minted inside the orchestrator (random, per
+   * attempt) and so cannot be seeded into `statusQueue` ahead of time. With `opKind: "publish"`
+   * the marker is provably ours; flipping it to `"run"` changes ONLY the kind, so a test that
+   * asserts `recoverOp` is not called then isolates the `opKind === "publish"` precondition.
+   */
+  reconcileOpKind: string | undefined;
   /** Awaited inside renew() — lets a test hold one heartbeat tick open to prove single-flight. */
   renewGate: Promise<void> | undefined;
   constructor(readonly log: string[] = []) {}
@@ -3384,6 +3410,15 @@ class FakeLeaseClient implements LeaseApi {
   ): Promise<OperationStatus> {
     this.log.push("status");
     this.statusArgs.push({ attemptId, opSeq });
+    if (this.reconcileOpKind !== undefined && attemptId !== "") {
+      return {
+        opKind: this.reconcileOpKind,
+        opAttemptId: attemptId,
+        opSeq,
+        lastCompletedOpSeq: opSeq - 1,
+        completed: false,
+      };
+    }
     return this.next(this.statusQueue, "status");
   }
   async recoverOp(
@@ -3778,6 +3813,27 @@ describe("runSession — Layer 5C-B1 Task 8: lease-lost invalidation + dispatch 
     expect(outcomes[2]?.verdict).toBe("error");
   });
 
+  test("activateOnce refuses its RETRY dispatch when the latch trips during the first attempt", async () => {
+    // design §6 requires EVERY work-plane dispatch to be guarded, and the retry inside
+    // `activateOnce` is a SECOND dispatch: the renew heartbeat can latch lease-loss while the
+    // first attempt is in flight (a `pre-dispatch-rejected` connect failure — the one outcome
+    // that earns a retry — is exactly that shape), so the entry-point `assertSafe` cannot speak
+    // for it. Driven directly rather than through a runSession fixture on purpose: for the
+    // authoritative backend `activate()` is local bookkeeping that never throws
+    // `ActivationFailure`, so no real backend can reach this branch at all.
+    const safety = new SessionSafety();
+    let calls = 0;
+    const backend = fakeBackend({
+      activate: async () => {
+        calls++;
+        safety.latchUnsafe("lease-lost: RenewLease answered renewed:false");
+        throw new ActivationFailure("connect refused", "pre-dispatch-rejected");
+      },
+    });
+    await expect(activateOnce(backend, safety, "M0007")).rejects.toBeInstanceOf(SessionUnsafeError);
+    expect(calls).toBe(1); // the retry never reached the backend
+  });
+
   test("runOnce refuses to dispatch once the session is latched unsafe", async () => {
     let runs = 0;
     const backend = fakeBackend({
@@ -3841,6 +3897,423 @@ describe("runSession — Layer 5C-B1 Task 8: lease-lost invalidation + dispatch 
     });
     // No second covering run, no next mutant: the latch stopped the dispatch itself.
     expect(runsAfterLoss).toBe(0);
+    expect(report.quarantined?.reason).toContain("lease-lost");
+  });
+});
+
+describe("runSession — Layer 5C-B1 fix round 1: no lease is a caller-contract violation, never a default", () => {
+  test("an authoritative, lease-bindable backend with NO lease configured fails before any backend call", async () => {
+    let statusCalls = 0;
+    let deploys = 0;
+    const backend = leaseBackend({
+      status: async () => {
+        statusCalls++;
+        return { ok: true, details: "fake" };
+      },
+      deploy: async () => {
+        deploys++;
+        return null;
+      },
+    });
+    await expect(runSessionForTest(backend, { quarantineDir: freshTmpDir() })).rejects.toThrow(
+      /no lease/i,
+    );
+    // Loud AND early: not one work-plane call, not even the readiness probe, runs unfenced.
+    expect(statusCalls).toBe(0);
+    expect(deploys).toBe(0);
+  });
+
+  test("a lease-lost verdict with no lease session throws instead of latching silently", async () => {
+    // Unreachable in production (a fenceable backend without a lease now throws at session start,
+    // above), but the arm this replaces latched WITHOUT setting `lostBatchIndex`, so the current
+    // batch's already-recorded verdicts were never invalidated — a plausible-looking default that
+    // silently skipped the one thing this layer exists to do.
+    let activeMutant: string | null = null;
+    const backend = fakeBackend({
+      capabilities: () => ({
+        coverage: "none",
+        deploy: "publish",
+        isolation: "session",
+        authoritative: true,
+      }),
+      activate: async (id) => {
+        activeMutant = id;
+      },
+      run: async (ref) =>
+        activeMutant === "M0002"
+          ? {
+              ref,
+              outcome: "error" as const,
+              durationMs: 1,
+              operation: "lease-lost" as const,
+              leaseInvalidReason: "lease-invalid",
+            }
+          : {
+              ref,
+              outcome: "pass" as const,
+              durationMs: 1,
+              attestation: { observedAny: true, identityMismatch: false },
+            },
+    });
+    await expect(runSessionForTest(backend, { quarantineDir: freshTmpDir() })).rejects.toThrow(
+      /holds no lease/,
+    );
+  });
+});
+
+describe("runSession — Layer 5C-B1 fix round 1: publish-fence failure paths + RecoverOp reconciliation (design §6 step 2)", () => {
+  const VERIFY_UNAVAILABLE = { status: "unavailable" as const, detail: "no response" };
+
+  test('a DeploymentError with outcome "failed" is a confirmed terminal — EndPublish tombstones it as failed', async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    const { lease } = leaseCfg(client);
+    const err = new DeploymentError("failed", "BC rejected the package", VERIFY_UNAVAILABLE);
+    const backend = leaseBackend({
+      deploy: async () => {
+        throw err;
+      },
+    });
+    await expect(runSessionForTest(backend, { quarantineDir: dir, lease })).rejects.toBe(err);
+    expect(client.endPublishArgs).toHaveLength(1);
+    expect(client.endPublishArgs[0]?.outcome).toBe("failed");
+    expect(client.endPublishArgs[0]?.attemptId).toBe(client.beginPublishArgs[0]?.attemptId ?? "x");
+    // A confirmed deterministic rejection strands nothing — no durable tier quarantine.
+    expect(await new QuarantineStore(dir).read("http://cronus281|BC")).toBeNull();
+  });
+
+  test('a DeploymentError with outcome "indeterminate" leaves the marker SET and quarantines the tier', async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    const { lease } = leaseCfg(client);
+    const err = new DeploymentError(
+      "indeterminate",
+      "connection reset mid-publish",
+      VERIFY_UNAVAILABLE,
+    );
+    const backend = leaseBackend({
+      deploy: async () => {
+        throw err;
+      },
+    });
+    await expect(
+      runSessionForTest(backend, {
+        quarantineDir: dir,
+        lease,
+        nowIso: () => "2026-07-24T14:00:00.000Z",
+      }),
+    ).rejects.toBe(err);
+    // NEVER tombstoned: the publish may have landed, or may still be landing. Leaving the marker
+    // set is what stops the next session publishing across a half-applied one (design §6 step 2).
+    expect(client.endPublishArgs).toHaveLength(0);
+    const rec = await new QuarantineStore(dir).read("http://cronus281|BC");
+    expect(rec?.opKind).toBe("container-needs-recycle");
+    expect(rec?.detail).toContain("UNKNOWN result");
+    expect(rec?.detail).toContain(String(client.beginPublishArgs[0]?.opSeq ?? -1));
+    expect(rec?.recordedAtIso).toBe("2026-07-24T14:00:00.000Z");
+  });
+
+  test("a lost EndPublish ack whose marker is provably OUR OWN publish op earns exactly one RecoverOp", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    client.endPublishError = new Error("socket hang up");
+    client.reconcileOpKind = "publish"; // the reconciling read names our own attemptId/opSeq
+    const { lease } = leaseCfg(client);
+    await runSessionForTest(leaseBackend(), { quarantineDir: dir, lease });
+    expect(client.recoverArgs).toHaveLength(1);
+    expect(client.recoverArgs[0]?.attemptId).toBe(client.beginPublishArgs[0]?.attemptId ?? "x");
+    expect(client.recoverArgs[0]?.opSeq).toBe(client.beginPublishArgs[0]?.opSeq ?? -1);
+    // Recovered, so nothing is stranded.
+    expect(await new QuarantineStore(dir).read("http://cronus281|BC")).toBeNull();
+  });
+
+  test("a lost EndPublish ack whose marker is a RUN op is NEVER recovered — the marker stays, the tier is quarantined", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    client.endPublishError = new Error("socket hang up");
+    // Identical to the test above except for `opKind`: same lost ack, same echoed attemptId and
+    // opSeq. A `run` marker genuinely could still be executing AL, and clearing it would let a
+    // second session overlap it on shared DB state — the exact sequence design §5 forbids
+    // RecoverOp for. This is the assertion that PROVES the precondition instead of documenting it.
+    client.reconcileOpKind = "run";
+    const { lease } = leaseCfg(client);
+    await runSessionForTest(leaseBackend(), {
+      quarantineDir: dir,
+      lease,
+      nowIso: () => "2026-07-24T15:00:00.000Z",
+    });
+    expect(client.recoverArgs).toHaveLength(0);
+    const rec = await new QuarantineStore(dir).read("http://cronus281|BC");
+    expect(rec?.opKind).toBe("container-needs-recycle");
+    expect(rec?.detail).toContain("could not be reconciled");
+    expect(rec?.detail).toContain("opKind run");
+  });
+});
+
+describe("runSession — Layer 5C-B1 fix round 1: op-seq resync at the BASELINE run site (design §5)", () => {
+  test("a pre-dispatch-rejected baseline run resyncs the op seq before its one retry", async () => {
+    // The first attempt consumed a client-side op-seq the server never saw. Without a resync the
+    // retry sends a stale-HIGH opSeq, which `TryBeginRun` refuses with reason "lease-invalid" —
+    // indistinguishable at the client from genuine lease loss, so a healthy session would be
+    // quarantined and its batch discarded. Safe today only because bcdev reports
+    // `coverage: "procedure"` (baseline never takes the fenced RunMutant path); nothing at the
+    // call site recorded that dependency, which is exactly what this pins.
+    const log: string[] = [];
+    const client = new FakeLeaseClient(log);
+    let runs = 0;
+    const backend = leaseBackend({
+      run: async (ref) => {
+        runs++;
+        log.push(`run${runs}`);
+        if (runs === 1) {
+          return {
+            ref,
+            outcome: "error" as const,
+            durationMs: 1,
+            operation: "pre-dispatch-rejected" as const,
+          };
+        }
+        return {
+          ref,
+          outcome: "pass" as const,
+          durationMs: 1,
+          attestation: { observedAny: true, identityMismatch: false },
+        };
+      },
+    });
+    const { lease } = leaseCfg(client);
+    await runSessionForTest(backend, { quarantineDir: freshTmpDir(), lease });
+    const first = log.indexOf("run1");
+    const retry = log.indexOf("run2");
+    expect(first).toBeGreaterThan(-1);
+    expect(retry).toBeGreaterThan(first);
+    // Ordering by call log, never by clock: a GetOperationStatus read sits between the refused
+    // baseline dispatch and its retry.
+    expect(log.slice(first, retry)).toContain("status");
+    // ...and the re-read seq was bound back into the backend before the retry went out.
+    expect(backend.leases.at(-1)?.lastCompletedOpSeq).toBe(7);
+  });
+});
+
+describe("runSession — Layer 5C-B1 fix round 1: the kill-confirmation rerun's lease branches (design §5/§6)", () => {
+  /**
+   * The KILL path — the common case in a healthy run, and the one the existing lease fixture never
+   * reaches (its covering run returns `outcome:"error"`, so `v.outcome === "fail"` is never true).
+   * M0001 runs clean and attests (so design §G's fail-closed gate is NOT what invalidates it);
+   * M0002's covering run FAILS, and the kill-confirmation rerun that follows answers with the
+   * caller-supplied lease verdict exactly once.
+   */
+  function confirmLeaseAfterKill(over: Partial<TestVerdict>): ExecutionBackend {
+    let activeMutant: string | null = null;
+    let awaitingConfirm = false;
+    return leaseBackend({
+      activate: async (id) => {
+        activeMutant = id;
+      },
+      run: async (ref) => {
+        if (activeMutant === "M0002" && !awaitingConfirm) {
+          awaitingConfirm = true;
+          return {
+            ref,
+            outcome: "fail" as const,
+            durationMs: 1,
+            attestation: { observedAny: true, identityMismatch: false },
+          };
+        }
+        if (awaitingConfirm && activeMutant === null) {
+          awaitingConfirm = false;
+          return { ref, outcome: "error" as const, durationMs: 1, ...over };
+        }
+        return {
+          ref,
+          outcome: "pass" as const,
+          durationMs: 1,
+          attestation: { observedAny: true, identityMismatch: false },
+        };
+      },
+    });
+  }
+
+  test("a failing covering run whose kill-confirmation rerun is lease-lost invalidates the current batch", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    const { lease } = leaseCfg(client);
+    const backend = confirmLeaseAfterKill({
+      operation: "lease-lost",
+      leaseInvalidReason: "lease-invalid",
+    });
+    const report = await runSessionForTest(backend, { quarantineDir: dir, lease });
+    const m1 = report.mutants.find((m) => m.mutantCode === "M0001");
+    const m2 = report.mutants.find((m) => m.mutantCode === "M0002");
+    // Per-mutant, never an aggregate count: M0001 was recorded "survived" under a lease this
+    // session can no longer prove it held.
+    expect(m1?.verdict).toBe("error");
+    expect(m2?.verdict).toBe("error");
+    // Names the CONFIRM rerun, not the covering run — this branch, not its hand-copied sibling.
+    expect(report.quarantined?.reason).toContain("confirming");
+    expect(report.quarantined?.reason).toContain("lease-lost");
+    // A clean lease-lost leaves the container fine (design §6 taxonomy) — nothing durable.
+    expect(await new QuarantineStore(dir).read("http://cronus281|BC")).toBeNull();
+  });
+
+  test("a failing covering run whose kill-confirmation rerun is op-in-flight does NOT latch", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    const { lease } = leaseCfg(client);
+    const backend = confirmLeaseAfterKill({
+      operation: "lease-lost",
+      leaseInvalidReason: "op-in-flight",
+    });
+    const report = await runSessionForTest(backend, { quarantineDir: dir, lease });
+    const m1 = report.mutants.find((m) => m.mutantCode === "M0001");
+    const m2 = report.mutants.find((m) => m.mutantCode === "M0002");
+    // Our OWN attempt is still executing — a duplicate claim, not a loss. Latching here would
+    // discard a batch that is perfectly fine.
+    expect(m1?.verdict).toBe("survived");
+    expect(m2?.verdict).toBe("error");
+    expect(m2?.failureNote).toContain("op-in-flight");
+    expect(report.quarantined).toBeUndefined();
+    expect(client.statusArgs.length).toBeGreaterThan(1); // polled...
+    expect(client.recoverArgs).toHaveLength(0); // ...never RecoverOp'd
+    expect(await new QuarantineStore(dir).read("http://cronus281|BC")).toBeNull();
+  });
+});
+
+describe("runSession — Layer 5C-B1 fix round 1: deploy latch guard + earlier-batch scoping", () => {
+  test("a lease lost DURING the first publish stops the version-conflict retry deploy", async () => {
+    const client = new FakeLeaseClient();
+    client.renewQueue = [{ renewed: false }];
+    const timers = new FakeTimers();
+    const { lease } = leaseCfg(client, { timers });
+    let deploys = 0;
+    const backend = leaseBackend({
+      deploy: async () => {
+        deploys++;
+        await timers.fire(); // the heartbeat observes the loss mid-publish
+        // BC's downgrade rejection, verbatim enough for parseVersionConflict — the ONE deploy
+        // failure that earns a second publish, and so the only path that reaches deployOnce twice.
+        throw new Error("The version 1.0.0.5 or a newer version 9.9.9.9 was already installed");
+      },
+    });
+    const report = await runSessionForTest(backend, { quarantineDir: freshTmpDir(), lease });
+    expect(deploys).toBe(1); // the re-stamped retry never reached the backend
+    expect(report.quarantined?.reason).toContain("lease-lost");
+  });
+
+  test("a lease lost during a worker's deploy stops the NEXT worker's deploy", async () => {
+    // The worker-shard deploy has its own latch guard (a fan-out path, so it cannot reuse
+    // `deployOnce`). `workers > 1` is rejected outright for an AUTHORITATIVE backend, so the only
+    // configuration that reaches this guard under a lease is a non-authoritative fenced backend.
+    // `compileConcurrency: 1` makes the ordering deterministic (Semaphore's waiting queue is FIFO):
+    // worker 0 holds the one permit, loses the lease inside its deploy, and only then is worker 1
+    // woken — with the latch already set.
+    const dirs = await makeProject();
+    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), THREE_PROC_AL);
+    const client = new FakeLeaseClient();
+    client.renewQueue = [{ renewed: false }];
+    const timers = new FakeTimers();
+    const { lease } = leaseCfg(client, { timers });
+    const nonAuthoritative = () =>
+      ({
+        coverage: "none",
+        deploy: "publish",
+        isolation: "session",
+        authoritative: false,
+      }) as const;
+    const workerDeploys = [0, 0];
+    const makeWorker = (i: number) =>
+      fakeBackend({
+        capabilities: nonAuthoritative,
+        deploy: async () => {
+          workerDeploys[i] = (workerDeploys[i] ?? 0) + 1;
+          if (i === 0) await timers.fire(); // worker 0 loses the lease mid-deploy
+          return null;
+        },
+      });
+    const report = await runSession({
+      backend: leaseBackend({ capabilities: nonAuthoritative }),
+      backendFactory: makeWorker,
+      store: new ResultsStore(":memory:"),
+      ...dirs,
+      selectorIds,
+      workers: 2,
+      compileConcurrency: 1,
+      quarantineDir: freshTmpDir(),
+      lease,
+    });
+    expect(workerDeploys[0]).toBe(1);
+    expect(workerDeploys[1]).toBe(0); // refused by the latch, never dispatched
+    expect(report.quarantined?.reason).toContain("lease-lost");
+  });
+
+  test("a lease lost in the SECOND batch invalidates only that batch — the first batch's verdicts stand", async () => {
+    // The "earlier batches STAND" guarantee is otherwise asserted only against the pure
+    // `invalidateBatchVerdicts` helper: nothing drives `runSession` with two batches, so a bug
+    // hardcoding `lostBatchIndex = 0` (or dropping `currentBatchIndex`'s per-batch update) would
+    // pass the whole suite. `planArtifacts` collapses everything into ONE artifact today, so the
+    // split is injected at that seam — Bun's `spyOn` on the module namespace does reach
+    // `runSession`'s own intra-module call (verified: without the spy this test sees one batch).
+    const dirs = await makeProject();
+    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TARGET_AL);
+    await Bun.write(join(dirs.projectDir, "SandboxOther.Codeunit.al"), SECOND_FILE_AL);
+    const client = new FakeLeaseClient();
+    const { lease } = leaseCfg(client);
+    let batchNo = -1;
+    let activeMutant: string | null = null;
+    const backend = leaseBackend({
+      deploy: async () => {
+        batchNo++; // deploy #1 is batch 0, deploy #2 is batch 1
+        return null;
+      },
+      activate: async (id) => {
+        activeMutant = id;
+      },
+      run: async (ref) => {
+        if (batchNo === 1 && activeMutant === "M0002") {
+          return {
+            ref,
+            outcome: "error" as const,
+            durationMs: 1,
+            operation: "lease-lost" as const,
+            leaseInvalidReason: "lease-invalid",
+          };
+        }
+        return {
+          ref,
+          outcome: "pass" as const,
+          durationMs: 1,
+          attestation: { observedAny: true, identityMismatch: false },
+        };
+      },
+    });
+    const spy = spyOn(orchestratorModule, "planArtifacts").mockImplementation((files) =>
+      files.map((f) => [f]),
+    );
+    let report: Awaited<ReturnType<typeof runSession>>;
+    try {
+      report = await runSession({
+        backend,
+        store: new ResultsStore(":memory:"),
+        ...dirs,
+        selectorIds,
+        resourceServer: "http://cronus281",
+        resourceServerInstance: "BC",
+        quarantineDir: freshTmpDir(),
+        lease,
+      });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(report.batches).toBe(2);
+    const first = report.mutants.filter((m) => m.batchIndex === 0);
+    const second = report.mutants.filter((m) => m.batchIndex === 1);
+    expect(first.length).toBeGreaterThan(0);
+    expect(second.length).toBeGreaterThan(0);
+    // Per-mutant equality, never an aggregate: every batch-0 verdict was individually
+    // phase-1/phase-3 fence-validated and must survive the loss untouched.
+    for (const m of first) expect(m.verdict).toBe("survived");
+    // ...while batch 1's already-recorded M0001 is discarded.
+    expect(second.find((m) => m.mutantCode === "M0001")?.verdict).toBe("error");
     expect(report.quarantined?.reason).toContain("lease-lost");
   });
 });

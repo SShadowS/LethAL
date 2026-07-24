@@ -672,6 +672,17 @@ async function acquireSessionLease(args: {
 }
 
 /**
+ * Does this backend carry a fence at all? The same `setLease` duck-type `leaseBindableOrThrow`
+ * uses (below), asked as a question rather than an assertion — it is the only honest predicate for
+ * "this backend's `RunMutant` calls are fenced", since `ExecutionBackend` deliberately does not
+ * declare `setLease`. Used at session start to refuse a fenceable authoritative backend that was
+ * given no lease.
+ */
+function isLeaseBindable(backend: ExecutionBackend): boolean {
+  return typeof (backend as { setLease?: unknown }).setLease === "function";
+}
+
+/**
  * Binds the session's lease into the backend so every `RunMutant` carries the fence tuple
  * (design §5). Duck-typed for the same reason `closeIfSupported` is: `ExecutionBackend` does not
  * declare `setLease` (al-runner has no lease, and neither do the in-memory test backends).
@@ -708,6 +719,26 @@ type LeaseVerdictKind = "none" | "op-in-flight" | "lost";
 function classifyLeaseVerdict(v: Pick<TestVerdict, "operation" | "leaseInvalidReason">) {
   if (v.operation !== "lease-lost") return "none" as LeaseVerdictKind;
   return (v.leaseInvalidReason === "op-in-flight" ? "op-in-flight" : "lost") as LeaseVerdictKind;
+}
+
+/**
+ * Records a GENUINE lease loss (design §6) — and refuses to proceed without a lease session.
+ *
+ * `SessionSafety.latchUnsafe` alone is NOT a safe fallback here, however plausible it looks: it
+ * stops scheduling but leaves `lostBatchIndex` unset, so the current batch's already-recorded
+ * verdicts — measured under a lease this session cannot prove it held — would ship untouched.
+ * That silent skip is exactly the false verdict this layer exists to close, so a `lease-lost`
+ * answer arriving with no lease session is treated as the caller-contract violation it is.
+ * Unreachable in production: `runSession` refuses at session start when a lease-bindable
+ * authoritative backend is configured without a lease.
+ */
+function noteLeaseLostOrThrow(leaseSession: LeaseSession | undefined, detail: string): void {
+  if (leaseSession === undefined) {
+    throw new Error(
+      `runSession: a RunMutant answered lease-lost but this session holds no lease (${detail}) — refusing to latch without invalidating the batch whose verdicts were measured under it (design §6)`,
+    );
+  }
+  leaseSession.noteLeaseLost(detail);
 }
 
 /**
@@ -1059,6 +1090,20 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   const safety = new SessionSafety();
   const caps = cfg.backend.capabilities();
   const nowIso = cfg.nowIso ?? (() => new Date().toISOString());
+  // Layer 5C-B1 (design §6): an authoritative backend that CAN be fenced — it exposes `setLease`,
+  // as bcdev does — MUST be given a lease. Without one every RunMutant runs unfenced, and a
+  // `lease-lost` answer could then only be latched, never scoped: the current batch's
+  // already-recorded verdicts would ship as measured under a lease this session cannot prove it
+  // held. Fail loudly on the caller contract instead of degrading to a plausible default (this
+  // project's signature bug), and do it before ANY backend call — not even a readiness probe runs
+  // unfenced. Scoped by `isLeaseBindable` rather than `caps.authoritative` alone because the
+  // in-memory authoritative stubs the unit suite drives carry no fence at all and legitimately
+  // have no lease to take; a real bcdev session always does.
+  if (caps.authoritative && cfg.lease === undefined && isLeaseBindable(cfg.backend)) {
+    throw new Error(
+      "runSession: this authoritative backend is lease-bindable (it exposes setLease) but no lease is configured — every RunMutant would run unfenced, and a lost lease could not be scoped to the batch whose verdicts it invalidates (design §6). Set SessionConfig.lease.",
+    );
+  }
   // Quarantine consult (spec §8/§9): a tier a PRIOR session marked stranded must refuse this
   // session outright, before even a non-mutating status() probe. Only meaningful for an
   // authoritative backend with a known tier identity — see SessionConfig.resourceServer's doc
@@ -1187,6 +1232,18 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // outside the try/finally below, since a failed acquire has nothing to release. Everything from
   // here on (publish fence, heartbeat, fenced RunMutant, release) hangs off this one lease.
   let leaseSession: LeaseSession | undefined;
+  /**
+   * Layer 5C-B1 (design §5): re-seeds the backend's op-seq counter before the ONE retry a
+   * `pre-dispatch-rejected` run earns — see `LeaseSession.resyncOpSeq`. Built here, once, so
+   * BOTH `runOnce` call sites that dispatch against `cfg.backend` (the baseline loop and, via
+   * `runMutantsOnBackend`, the per-mutant loop) carry it. A call site without it is safe only
+   * while the backend reports `coverage: "procedure"` (the baseline then never takes the fenced
+   * RunMutant path); the day an authoritative backend reports `coverage: "none"`, a baseline
+   * retry would send a stale-high `opSeq`, be refused `reason:"lease-invalid"`, and be
+   * indistinguishable at the client from genuine lease loss — falsely quarantining a healthy
+   * session. Nothing at the call site would record that dependency, so it is simply passed.
+   */
+  let resyncSessionOpSeq: (() => Promise<void>) | undefined;
   if (cfg.lease !== undefined) {
     const leaseCfg = cfg.lease;
     const ttlSeconds = leaseCfg.ttlSeconds ?? MAX_TTL_SECONDS;
@@ -1204,7 +1261,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       resourceKey,
       nowIso,
     });
-    leaseSession = new LeaseSession({
+    const session = new LeaseSession({
       client: leaseCfg.client,
       lease,
       safety,
@@ -1216,10 +1273,12 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       nowIso,
       runId,
     });
+    leaseSession = session;
+    resyncSessionOpSeq = () => session.resyncOpSeq(cfg.backend);
     // Bind before anything can run: the backend fails loudly on a RunMutant with no lease bound,
     // and this is also the fail-loud point for a backend that cannot take one at all.
     bindLeaseToBackend(cfg.backend, lease);
-    leaseSession.start();
+    session.start();
   }
 
   try {
@@ -1412,10 +1471,16 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       await activateOnce(cfg.backend, safety, null);
       const baseline: Array<{ ref: TestMethodRef; verdict: TestVerdict }> = [];
       for (const ref of tests) {
-        const v = await runOnce(cfg.backend, safety, ref, {
-          coverage: caps.coverage,
-          timeoutMs: cfg.baselineTimeoutMs ?? BASELINE_TIMEOUT_DEFAULT,
-        });
+        const v = await runOnce(
+          cfg.backend,
+          safety,
+          ref,
+          {
+            coverage: caps.coverage,
+            timeoutMs: cfg.baselineTimeoutMs ?? BASELINE_TIMEOUT_DEFAULT,
+          },
+          resyncSessionOpSeq,
+        );
         // Baseline test results are not tied to any mutant: mutant_row_id stays NULL.
         cfg.store.recordTestResult(
           runId,
@@ -1954,8 +2019,7 @@ async function runMutantsOnBackend(args: {
         // batch were already recorded and only `runSession` can rewrite them. No durable tier
         // quarantine: a clean lease loss means the container itself is fine.
         const detail = `${ref.method} (mutant ${m.mutantId}): ${v.failureMessage ?? "RunMutant lease-invalid"}`;
-        if (leaseSession !== undefined) leaseSession.noteLeaseLost(detail);
-        else args.safety.latchUnsafe(`lease-lost: ${detail}`);
+        noteLeaseLostOrThrow(leaseSession, detail);
         verdict = "error";
         failureNote = `lease-lost while running ${ref.method}: this run's result was refused by the fence and never recorded server-side`;
         break;
@@ -2054,8 +2118,7 @@ async function runMutantsOnBackend(args: {
           const detail = `confirming ${ref.method} (mutant ${m.mutantId}): ${confirm.failureMessage ?? "RunMutant lease-invalid"}`;
           verdict = "error";
           if (confirmLease === "lost") {
-            if (leaseSession !== undefined) leaseSession.noteLeaseLost(detail);
-            else args.safety.latchUnsafe(`lease-lost: ${detail}`);
+            noteLeaseLostOrThrow(leaseSession, detail);
             failureNote = `lease-lost while ${detail} — the kill could not be confirmed under a provable lease`;
           } else {
             const cleared = (await leaseSession?.pollUntilOpClears()) ?? false;
@@ -2244,6 +2307,11 @@ export async function activateOnce(
   } catch (err) {
     if (err instanceof ActivationFailure) {
       if (isRetrySafe(err.outcome)) {
+        // Layer 5C-B1 (design §6): the retry is a SECOND work-plane dispatch, and the latch can be
+        // set ASYNCHRONOUSLY while the first attempt is in flight (the renew heartbeat fires on a
+        // timer). The entry guard above cannot speak for it — re-check, exactly as `runOnce` does
+        // at its own retry site.
+        safety.assertSafe(`activate(${mutantId ?? "null"}) retry`);
         try {
           await backend.activate(mutantId); // one retry: nothing was dispatched the first time
           return;
@@ -2319,8 +2387,7 @@ async function handleBaselineLeaseOutcome(args: {
 }): Promise<void> {
   const detail = `baseline test ${args.ref.method}: ${args.verdict.failureMessage ?? "RunMutant lease-invalid"}`;
   if (args.kind === "lost") {
-    if (args.leaseSession !== undefined) args.leaseSession.noteLeaseLost(detail);
-    else args.safety.latchUnsafe(`lease-lost: ${detail}`);
+    noteLeaseLostOrThrow(args.leaseSession, detail);
     return;
   }
   const cleared = (await args.leaseSession?.pollUntilOpClears()) ?? false;
