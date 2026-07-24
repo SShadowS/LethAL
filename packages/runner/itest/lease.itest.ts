@@ -79,6 +79,11 @@
  * `RunMutant` call, which is out of scope here. Track this as a residual gap, not something a green
  * P9 closes.
  *
+ * UPDATE (Layer 5C-B2): that fixture now exists — `fixtures/sandbox-probes/src/SlowRunProbe.Codeunit.al`
+ * ("Slow Run Probe", codeunit 79212) sleeps ~23s inside a real `[Test]` method. `P9B` (below, after
+ * P9) drives it through an actual `RunMutant` call and proves sol#1's real concern directly. This
+ * paragraph and P9 itself are left as they were — P9B is additive, not a replacement.
+ *
  * WHAT P7 + `stale-publish.itest.ts` PROBE A DO AND DO NOT JOINTLY PROVE about the rejected-publish
  * path. Probe A calls `ctx.deployer.publish(artifactA)` (`stale-publish.itest.ts:550`) directly
  * against a raw `ContainerDeployer` — no lease, no `BeginPublish`, no `EndPublish` — so it proves the
@@ -169,6 +174,10 @@ const TARGET_APP_ID = "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a";
  *  21/21 there): `RunMethod.Codeunit.al` fails closed against it, caught by `RunMutant`'s
  *  `if Runner.Run() then ... else BuildRunError` — a server-known terminal, never an HTTP error. */
 const NOT_A_TEST_CODEUNIT_ID = 71003;
+/** P9B's genuinely-slow target: `fixtures/sandbox-probes/src/SlowRunProbe.Codeunit.al`'s "Slow Run
+ *  Probe" — a `[Test]` method that sleeps ~23s server-side, entirely inside `SleepsAcrossRenewWindow`
+ *  itself. Requires `sandbox-probes` republished at `app.json` version >= 1.0.1.0. */
+const SLOW_RUN_PROBE_CODEUNIT_ID = 79212;
 const RUN_MUTANT_TIMEOUT_MS = 60_000;
 
 /** Mirrors `ControlState.Codeunit.al`'s `local procedure RenewPeriodMs(): Integer` (5000ms,
@@ -195,6 +204,14 @@ const P9_POLL_INTERVAL_MS = 3_000;
  *  derivation). Holding+renewing across this window and staying `operation-busy` throughout is the
  *  actual proof that renewal — not mere marker presence — is what keeps a long op fenced. */
 const P9_HOLD_MS = SERVER_GRACE_MS + SERVER_RENEW_PERIOD_MS + 3_000;
+
+/** P9B: pacing only, NOT the overlap proof — see the probe body's comment on what actually proves
+ *  overlap (observed promise-settlement ordering, never wall-clock timing). 500ms initial settle
+ *  (let phase 1's short LockTable claim land) + 4 x 3000ms polls = ~12.5s total, comfortably inside
+ *  Slow Run Probe's ~23s sleep. */
+const P9B_INITIAL_SETTLE_MS = 500;
+const P9B_RENEW_COUNT = 4;
+const P9B_RENEW_POLL_MS = 3_000;
 
 const P10_TTL_SECONDS = 3;
 const P10_POLL_INTERVAL_MS = 3_000;
@@ -938,6 +955,8 @@ async function probeHealthyContentionNoQuarantine(
 
 // ===================================================================================================
 // P9 — slow run under renew: the heartbeat keeps a long op's lease fenced (design §6/§9).
+// See P9B (below) for the fixture-backed proof of sol#1's actual concern — a genuinely in-flight
+// RunMutant — which this probe's substitution #1 cannot reach (see the file header).
 // ===================================================================================================
 
 async function probeSlowRunUnderRenew(cfg: ActivationConfig): Promise<void> {
@@ -1005,6 +1024,147 @@ async function probeSlowRunUnderRenew(cfg: ActivationConfig): Promise<void> {
     );
   } finally {
     if (heartbeat !== undefined) clearInterval(heartbeat);
+    await recoverContainerBestEffort(cfg, label);
+  }
+}
+
+// ===================================================================================================
+// P9B — a slow RunMutant GENUINELY in flight: RenewLease lands without starving on phase 2's
+// lock-free window (design §5/§6/§9, Round-1 sol#1). Closes the gap P9's own header documents (see
+// "WHAT A GREEN P9 DOES AND DOES NOT PROVE" above): P9 holds a BeginPublish/EndPublish marker with
+// nothing executing against BC between the two calls, so it cannot exercise sol#1's actual concern.
+// This probe drives fixtures/sandbox-probes's "Slow Run Probe" (codeunit 79212,
+// SLOW_RUN_PROBE_CODEUNIT_ID) — a [Test] method that sleeps ~23s server-side — through a REAL
+// RunMutant call, so phase 2 (the AL test body, holding NO lease lock per
+// ControlState.Codeunit.al's TryBeginRun/TryFinishRun) is genuinely still executing while this probe
+// issues concurrent RenewLease calls and a competing AcquireLease. REQUIRES fixtures/sandbox-probes
+// republished at app.json version >= 1.0.1.0 (the version that added Slow Run Probe) before this
+// file runs — this itest does not publish anything itself.
+// ===================================================================================================
+
+async function probeSlowRunMutantGenuinelyInFlight(
+  cfg: ActivationConfig,
+  artifactId: string,
+): Promise<void> {
+  const label = "P9B slow-runmutant-genuinely-in-flight (sol#1 proof)";
+  const a = await acquireFresh(cfg, "p9b", MAX_TTL_SECONDS);
+  try {
+    const tx = new RunMutantTransport(cfg, TARGET_APP_ID, artifactId);
+    const ref: TestMethodRef = {
+      codeunitId: SLOW_RUN_PROBE_CODEUNIT_ID,
+      codeunitName: "Slow Run Probe",
+      method: "SleepsAcrossRenewWindow",
+    };
+
+    // Dispatched WITHOUT awaiting — the whole point is to observe RenewLease/AcquireLease calls
+    // while this promise is still pending. `runSettled` flips exactly once, the instant RunMutant's
+    // HTTP response actually resolves (pass, fail, or error) — every check below reads it fresh,
+    // which is what makes the overlap proof real rather than a timing guess.
+    let runSettled = false;
+    const runPromise = tx
+      .run({
+        ref,
+        mutantId: "",
+        attemptId: newAttemptId("p9b-slow"),
+        timeoutMs: RUN_MUTANT_TIMEOUT_MS,
+        lease: { ...a.tuple(), opSeq: a.nextOpSeq() },
+      })
+      .finally(() => {
+        runSettled = true;
+      });
+
+    // Let phase 1's short LockTable claim land (milliseconds) before polling — pacing only, not
+    // part of the overlap proof.
+    await sleep(P9B_INITIAL_SETTLE_MS);
+    if (runSettled) {
+      throw new Error(
+        `[${label}] the slow RunMutant call already settled after only ${P9B_INITIAL_SETTLE_MS}ms — Slow Run Probe (codeunit ${SLOW_RUN_PROBE_CODEUNIT_ID}) did not actually sleep the expected ~23s. Check that fixtures/sandbox-probes was republished at app.json version >= 1.0.1.0 and that its SleepsAcrossRenewWindow method is the one that ran, got verdict candidate ${JSON.stringify(await runPromise)}`,
+      );
+    }
+
+    // A competing AcquireLease while the RUN marker (Op Kind = run) is active must take
+    // AcquireLease's op-marker branch UNCONDITIONALLY (ControlState.Codeunit.al:361-363 tests only
+    // `Op Kind <> none`, never which kind) BEFORE the plain-held branch — so this must be
+    // "operation-busy", never "held". P9 already proves this classification for a PUBLISH marker;
+    // this is the RUN-marker case P9's own header says it cannot reach. Asserted here unconditionally
+    // (not gated on runSettled) — at only ~500ms into a ~23000ms sleep the run cannot possibly have
+    // completed yet, so there is no false-pass path through this check.
+    const competitor = new LeaseClient(cfg);
+    const competing = await competitor.acquire(
+      `${hostname()}:${process.pid}:lease-itest:p9b-check`,
+      MAX_TTL_SECONDS,
+      randomUUID(),
+      a.lease.serverGeneration,
+    );
+    if (competing.granted) {
+      throw new Error(
+        `[${label}] competing AcquireLease unexpectedly GRANTED while the run marker should still be ` +
+          `active, got ${JSON.stringify(competing)}`,
+      );
+    }
+    assert.equal(
+      competing.reason,
+      "operation-busy",
+      `[${label}] a competing AcquireLease against a genuinely in-flight RUN marker must be refused "operation-busy" (never "held", which is P9's already-proven PUBLISH-marker case, or "operation-orphaned"), got ${JSON.stringify(competing)}`,
+    );
+    console.log(
+      `  [${label}] competing acquire correctly refused operation-busy against the live run marker`,
+    );
+
+    // THE sol#1 PROOF: several RenewLease calls, each checked immediately after its own await for
+    // whether the run promise had already settled. If phase 2 still held the lease lock (a sol#1
+    // regression), TryRenew's own LockTable() would block behind RunMutant's open transaction and
+    // this renew could not return until the run itself finished — collapsing this check to true.
+    // Requiring EVERY iteration's post-await check to be false is proof the renew genuinely raced
+    // AHEAD of, not behind, the in-flight run — real observed promise-resolution ordering, never a
+    // wall-clock sleep standing in for it.
+    const overlapConfirmedAt: boolean[] = [];
+    for (let i = 1; i <= P9B_RENEW_COUNT; i++) {
+      if (runSettled) {
+        throw new Error(
+          `[${label}] renew ${i}/${P9B_RENEW_COUNT}: the slow RunMutant call already settled before this ` +
+            `renew was even issued — Slow Run Probe's sleep is too short to span ${P9B_RENEW_COUNT} renews ` +
+            `at ${P9B_RENEW_POLL_MS}ms spacing (plus the ${P9B_INITIAL_SETTLE_MS}ms initial settle); lengthen SlowSleepMs() in SlowRunProbe.Codeunit.al or shorten this loop.`,
+        );
+      }
+      const renewed = await a.client.renew(a.tuple(), MAX_TTL_SECONDS);
+      const stillPendingAfter = !runSettled;
+      overlapConfirmedAt.push(stillPendingAfter);
+      assert.equal(
+        renewed.renewed,
+        true,
+        `[${label}] renew ${i}/${P9B_RENEW_COUNT} while RunMutant is genuinely in flight must return renewed:true ` +
+          `— a sol#1 regression (the lease lock held across phase 2) would make this hang or fail. Got ${JSON.stringify(renewed)}`,
+      );
+      assert.ok(
+        stillPendingAfter,
+        `[${label}] renew ${i}/${P9B_RENEW_COUNT}'s response arrived AFTER the RunMutant promise had already settled — expected it to still be pending. This is the direct proof point for sol#1: a regression (renew serialized behind phase 2's lock instead of landing concurrently) would show up as exactly this condition. overlapConfirmedAt so far: ${JSON.stringify(overlapConfirmedAt)}`,
+      );
+      if (!runSettled) await sleep(P9B_RENEW_POLL_MS);
+    }
+    console.log(
+      `  [${label}] all ${P9B_RENEW_COUNT} renews returned renewed:true while the run promise was ` +
+        `still pending (overlapConfirmedAt=${JSON.stringify(overlapConfirmedAt)})`,
+    );
+
+    const verdict = await runPromise;
+    assert.equal(
+      verdict.outcome,
+      "pass",
+      `[${label}] the slow RunMutant call must complete with a real "pass" verdict once phase 2 ` +
+        `finishes, got ${JSON.stringify(verdict)}`,
+    );
+    const minExpectedDurationMs = P9B_INITIAL_SETTLE_MS + (P9B_RENEW_COUNT - 1) * P9B_RENEW_POLL_MS;
+    assert.ok(
+      verdict.durationMs >= minExpectedDurationMs,
+      `[${label}] expected the verdict's own durationMs to reflect the full slow sleep (at least the ` +
+        `${minExpectedDurationMs}ms this probe spent polling before awaiting it), got durationMs=${verdict.durationMs} ` +
+        `— a suspiciously short duration would mean SleepsAcrossRenewWindow (codeunit ${SLOW_RUN_PROBE_CODEUNIT_ID}) did not really run`,
+    );
+    console.log(
+      `  [${label}] slow RunMutant completed: outcome=${verdict.outcome} durationMs=${verdict.durationMs}`,
+    );
+  } finally {
     await recoverContainerBestEffort(cfg, label);
   }
 }
@@ -1344,6 +1504,9 @@ async function main(): Promise<void> {
     console.log("\n=== P9: slow run under renew ===");
     await probeSlowRunUnderRenew(cfg);
 
+    console.log("\n=== P9B: slow RunMutant genuinely in flight (sol#1 proof) ===");
+    await probeSlowRunMutantGenuinelyInFlight(cfg, artifactId);
+
     console.log(
       "\n=== P10: orphaned op -> reconcilable quarantine -> ForceReset recovery -> stale-generation rejection ===",
     );
@@ -1352,7 +1515,7 @@ async function main(): Promise<void> {
     console.log("\n=== Z: final free-lease verification ===");
     await verifyLeaseIsFree(cfg);
 
-    console.log("\nlease itest: PASS (P1-P10)");
+    console.log("\nlease itest: PASS (P1-P10, P9B)");
   } finally {
     await rm(quarantineScratchDir, { recursive: true, force: true }).catch(() => {});
   }
