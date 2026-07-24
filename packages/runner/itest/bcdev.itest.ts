@@ -213,24 +213,52 @@ async function runOnce(scratchRoot: string): Promise<RunOnceResult> {
 }
 
 /**
+ * Read the artifact id the deployed target self-registered, via the control extension's read-only
+ * `LethALControl_RegisteredArtifact` OData action (Task 6/7). Single-parse OData scalar `value`
+ * (a bare string, not the double-JSON RunMutant shape).
+ */
+async function odataReadRegisteredArtifact(
+  cfg: ActivationConfig,
+  targetAppId: string,
+): Promise<string> {
+  const params = new URLSearchParams({ company: cfg.company });
+  if (cfg.tenant !== undefined) params.set("tenant", cfg.tenant);
+  const url = `${cfg.baseUrl}/ODataV4/LethALControl_RegisteredArtifact?${params.toString()}`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      authorization: `Basic ${btoa(`${cfg.username}:${cfg.password}`)}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ targetAppId }),
+  });
+  if (!res.ok) {
+    throw new Error(`RegisteredArtifact read failed: HTTP ${res.status} ${await res.text()}`);
+  }
+  const value = ((await res.json()) as { value?: unknown }).value;
+  return typeof value === "string" ? value : "";
+}
+
+/**
  * The gate is the per-mutant frozen table PLUS these protocol invariants (spec §11): the table
  * alone cannot catch a runner that runs the wrong method set or leaves a mutant active. Each probe
  * drives RunMutant directly against a fixture whose OUTCOME witnesses the invariant — so a lying
  * server (e.g. one that runs a whole codeunit but reports one line) is caught by behaviour, not by
- * a self-reported count. Uses the artifact the scratchB run just deployed (its id is what the
- * target's baked selector and the registry key on), read from the instrumented manifest on disk.
+ * a self-reported count. Uses the artifact the scratchB run just deployed — read from the LIVE
+ * registry (`LethALControl_RegisteredArtifact`), which is the id the deployed binary itself baked
+ * and self-registered on republish. That is the source of truth the RunMutant guard checks against
+ * (so the probes' guard passes by construction) and it needs no knowledge of the orchestrator's
+ * per-batch scratch-dir layout.
  */
 async function runProtocolInvariantProbes(run: RunOnceResult): Promise<void> {
-  const { report, odataCfg, instrumentedDir } = run;
+  const { report, odataCfg } = run;
 
-  const manifest = await readJson<{ artifactId?: unknown }>(
-    join(instrumentedDir, "mutant-manifest.json"),
-    "mutant-manifest.json",
-  );
-  if (typeof manifest.artifactId !== "string") {
-    throw new Error("mutant-manifest.json has no string artifactId — cannot drive probes");
+  const artifactId = await odataReadRegisteredArtifact(odataCfg, TARGET_APP_ID);
+  if (!/^[0-9a-f]{32}$/.test(artifactId)) {
+    throw new Error(
+      `LethALControl_RegisteredArtifact(${TARGET_APP_ID}) returned ${JSON.stringify(artifactId)}, not a 32-hex artifact id — the deployed target did not self-register (design §A/§B)`,
+    );
   }
-  const artifactId = manifest.artifactId;
 
   const tx = new RunMutantTransport(odataCfg, TARGET_APP_ID, artifactId);
   const overBudget: TestMethodRef = {

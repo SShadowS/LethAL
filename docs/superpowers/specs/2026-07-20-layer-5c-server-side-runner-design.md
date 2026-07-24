@@ -353,11 +353,31 @@ Conclusion: an emitted target Upgrade codeunit re-registers on every republish, 
 version increases (the runner's version is clock-monotonic via `reserveAppVersion`, so it always
 does). Recorded in `mem:runmutant_odata`.
 
-Remaining to fill (require the full live gate on the republished 5C-A stack):
-- Single-method-selection (order-matters) probe transcript.
-- Run-scoped-clear probe: container unmutated after `RunMutant`.
-- Artifact-registry mismatch probe transcript.
-- Per-run attestation: clean `observedAny && !identityMismatch` on covered runs; wrong-binary → `error`.
-- Stale-id alternating probe over a keep-alive client.
-- Hung-test → `in-flight-unknown` quarantine transcript.
-- Full bcdev itest per-mutant baseline (3/10/3) reproduced through `RunMutant`, pre/post; al-runner 3/13/0.
+**Full live gate — DONE (2026-07-24, Cronus281). Result: 5C-A stack GREEN through `RunMutant`.**
+Prerequisite stack published in order: `LethAL Control` v1.0.0.1 (attestation fields + read-only
+`RegisteredArtifact`, OData `RegisterArtifact` write removed — verified live: read → HTTP 200 32-hex,
+write → HTTP 404), the instrumented sandbox target (dependency-staged, self-registering on
+republish), `sandbox-tests`, `sandbox-probes`.
+- **`LETHAL_ITEST_BCDEV=1 bun run itest:bcdev` → PASS**, stable across 3 consecutive runs. Both
+  consecutive sessions (scratchA + scratchB) reproduced the frozen per-mutant baseline **killed 3 /
+  survived 10 / no-coverage 3** through the `RunMutant` primitive (errors 0, no quarantine), matched
+  the committed per-mutant baseline (`bcdev.baseline.json`), and were 100% verdict-identical
+  (determinism). All protocol-invariant probes PASS: single-method selection (order-matters),
+  exact-error round-trip, run-scoped clear, artifact-mismatch. Per-run attestation: both covered
+  probe runs (`mutated`, `cleared`) reported clean `observedAny && !identityMismatch` — the live proof
+  the running binary is the one deployed.
+- **`LETHAL_ITEST_ALRUNNER=1 … bun run itest:alrunner` → PASS**, frozen **killed 3 / survived 13 /
+  no-coverage 0** — unchanged, confirming the bcdev-path work (dependency staging, control-codeunit
+  stripping) did not move the al-runner verdicts.
+- One live-only defect found and fixed during the gate: the probe section read the deployed
+  `artifactId` from a local `mutant-manifest.json` path that does not exist at the itest's
+  `instrumentedDir` root (the orchestrator writes per-batch subdirs) — retargeted to read it from the
+  live `LethALControl_RegisteredArtifact` registry (the id the deployed binary itself baked and
+  registered), which is also the source of truth the `RunMutant` guard checks. A cold-container/
+  stale-session window right after the control republish produced transient `error` verdicts on the
+  first session; it settles once the container's OData sessions pick up the new binary (matches the
+  upgrade-probe observation) and was green across 3 consecutive runs thereafter.
+
+Deferred (5C-B, not part of this gate): stale-id alternating probe over a keep-alive client;
+hung-test → `in-flight-unknown` quarantine transcript (the transport implements the 5B dispatch
+state machine and it is unit-tested; a live hung-test reproduction belongs with the lease work).
