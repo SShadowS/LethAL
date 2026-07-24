@@ -158,16 +158,38 @@ export class RunMutantTransport {
     }
 
     const durationMs = Date.now() - started;
-    let value: unknown;
+    // Read the body as text FIRST, then parse. `res.json()` inside a try that collapses to
+    // `undefined` cannot distinguish "the body was not JSON at all" from "the JSON had no
+    // `value` key" — and this branch quarantines a tier, so the operator needs to know which.
+    // Live-earned: this fired repeatedly on one mutant with no way to see what BC actually sent.
+    let rawBody: string;
     try {
-      value = ((await res.json()) as { value?: unknown }).value;
-    } catch {
-      value = undefined;
+      rawBody = await res.text();
+    } catch (err) {
+      return this.inFlightUnknown(
+        ref,
+        durationMs,
+        `RunMutant 2xx body could not be read: ${String(err)}`,
+      );
+    }
+    let value: unknown;
+    let parseError: string | undefined;
+    try {
+      value = (JSON.parse(rawBody) as { value?: unknown }).value;
+    } catch (err) {
+      parseError = String(err);
     }
     if (typeof value !== "string") {
       // 2xx with a malformed body: the run happened but we can't read its result or confirm the
-      // clear — same possibly-stranded risk as a non-2xx.
-      return this.inFlightUnknown(ref, durationMs, "RunMutant returned no string `value`");
+      // clear — same possibly-stranded risk as a non-2xx. Carry the evidence: HTTP status, why
+      // parsing failed (if it did), and the body itself, truncated.
+      const excerpt =
+        rawBody.length > 400 ? `${rawBody.slice(0, 400)}…[${rawBody.length} bytes]` : rawBody;
+      return this.inFlightUnknown(
+        ref,
+        durationMs,
+        `RunMutant returned no string \`value\` (HTTP ${res.status}${parseError !== undefined ? `, body was not JSON: ${parseError}` : ""}), body: ${JSON.stringify(excerpt)}`,
+      );
     }
     let result: RunMutantResult;
     try {
