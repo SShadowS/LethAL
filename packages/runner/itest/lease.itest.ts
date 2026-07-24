@@ -24,27 +24,87 @@
  * them, it re-expresses them against the typed `LeaseClient`/`RunMutantTransport` API design §9
  * requires, plus the lifecycle probes that script never attempted (contention, orphaning, recovery).
  *
- * THREE DELIBERATE SUBSTITUTIONS this file makes, each documented again at its point of use:
+ * FOUR DELIBERATE SUBSTITUTIONS this file makes, each documented again at its point of use:
  *   1. "Slow RunMutant" (P9): `RunMutant`'s phase 1-2-3 all execute inside ONE HTTP round trip
  *      (milliseconds for this fixture — see `scripts/probe-5cb1.ts`'s own comment on why no fixture
  *      test method sleeps or loops long enough to fake this) — it cannot be held open by the client
  *      for a controlled multi-second window. `BeginPublish`/`EndPublish`'s two-call op marker CAN,
  *      and from `AcquireLease`'s perspective a publish marker and a run marker are classified
- *      IDENTICALLY (`Op Kind <> none`, design §4) — so P9 holds a publish marker open across a real
- *      sleep instead.
- *   2. "Deterministic-rejected publish" (P7): a REAL live altool version-downgrade rejection is
- *      already exhaustively proven by `stale-publish.itest.ts`'s Probe A. This file's job is the
+ *      IDENTICALLY (`Op Kind <> none`, design §4; `ControlState.Codeunit.al:361-363` tests only
+ *      `Op Kind <> none`, never the kind) — so P9 holds a publish marker open across a real sleep
+ *      instead. IMPORTANT — what this substitution costs P9, see the P9-specific note below: it is
+ *      NOT interchangeable with a genuinely slow, in-flight `RunMutant` call for every purpose §9
+ *      asks this probe to serve.
+ *   2. "Healthy contention" (P8): same substitution as #1, for the same reason (no fixture test
+ *      method runs long enough to hold `RunMutant` open) — P8 also holds a `BeginPublish`/
+ *      `EndPublish` marker in place of "session A runs". Defensible for the SAME reason as #1:
+ *      `TryAcquire`'s busy/orphaned classification does not distinguish op kind
+ *      (`ControlState.Codeunit.al:361-363`), so a publish marker exercises the identical
+ *      busy/orphaned/no-quarantine contract a run marker would. Unlike P9 (see below), P8's claim
+ *      — the classification treats a healthy, renewed marker as busy and writes no quarantine — does
+ *      not depend on anything actually executing between begin and end, so this substitution does
+ *      not weaken P8's proof.
+ *   3. "Deterministic-rejected publish" (P7): a REAL live altool version-downgrade rejection is
+ *      already exhaustively proven by `stale-publish.itest.ts`'s Probe A — but Probe A and P7 only
+ *      jointly cover HALVES of the end-to-end rejected-publish path, not the whole thing; see the
+ *      P7-specific note below for exactly what remains unproven by either. This file's job is the
  *      narrower, LEASE-layer claim design §5/§6 makes about it — `EndPublish` clears the marker on
  *      ANY confirmed terminal outcome, success or failure, because `ControlState.TryEndPublish`
- *      does not branch on the `outcome` string's content — so P7 reports a realistic rejection
+ *      does not branch on the `outcome` string's content (it is not even a parameter to the state
+ *      transition — `ControlState.Codeunit.al:552-554`) — so P7 reports a realistic rejection
  *      message through the SAME `EndPublish` call a real altool rejection would drive the runner
  *      through, without re-running the whole compile/publish pipeline `stale-publish.itest.ts`
  *      already owns.
- *   3. "Lost ack" (P5): a real dropped TCP ack cannot be forced client-side in-process. What IS
+ *   4. "Lost ack" (P5): a real dropped TCP ack cannot be forced client-side in-process. What IS
  *      provable, and is the actual property reconciliation depends on, is that `GetOperationStatus`
  *      — an INDEPENDENT second channel — reports the exact same state the direct response already
  *      claimed, at every step. If the direct ack had genuinely been lost, this is the call that
  *      would have recovered the truth.
+ *
+ * WHAT A GREEN P9 DOES AND DOES NOT PROVE — read this before trusting a green P9 as closing design
+ * §9's "slow-run-under-renew" property. P9 traces to Round-1 finding sol#1 ("lock across run
+ * starves renew/steal"), whose fix was "lock only in short critical sections": `TryBeginRun`/
+ * `TryFinishRun` each take a short `LockTable()`, commit, and release BEFORE phase 2 runs, so phase
+ * 2 holds no lease lock (`ControlState.Codeunit.al:632-635`). The property sol#1 exists to guarantee
+ * is that WHILE A REAL `RunMutant` CALL IS GENUINELY IN FLIGHT (an AL test actually executing on the
+ * container), a concurrent `RenewLease` can still land — i.e. phase 2's absence of a held lock does
+ * not starve the heartbeat. P9 holds a `BeginPublish`/`EndPublish` marker (substitution #1 above) —
+ * nothing is executing against BC between the two calls, and no lock is contended by anything during
+ * the hold — so P9 cannot exercise that. What P9 DOES prove: the op-marker busy/orphaned
+ * classification treats a long-held, continuously-renewed marker as busy for the WHOLE hold
+ * regardless of op kind, and a competing acquire stays fenced throughout. What it does NOT prove:
+ * sol#1's actual concern. A regression of "lock only in short critical sections" (e.g. someone
+ * reintroducing a `LockTable()` held across phase 2) would NOT be caught by any probe in this file —
+ * it would need a deliberately-slow AL fixture test method genuinely held open across a live
+ * `RunMutant` call, which is out of scope here. Track this as a residual gap, not something a green
+ * P9 closes.
+ *
+ * WHAT P7 + `stale-publish.itest.ts` PROBE A DO AND DO NOT JOINTLY PROVE about the rejected-publish
+ * path. Probe A calls `ctx.deployer.publish(artifactA)` (`stale-publish.itest.ts:550`) directly
+ * against a raw `ContainerDeployer` — no lease, no `BeginPublish`, no `EndPublish` — so it proves the
+ * altool-level rejection mechanics (a real downgrade IS rejected) in complete isolation from the
+ * lease/marker machinery. P7 calls `client.endPublish` directly with a synthetic rejection message,
+ * bypassing the runner's own catch block entirely. The production glue that actually catches a
+ * publish failure and calls `endPublish(attemptId, opSeq, "failed")` lives in
+ * `orchestrator.ts:892-914` (`ContainerDeployer.publish`'s own try/catch) — and NEITHER probe
+ * exercises that glue against a genuine live altool rejection; it is covered only by unit tests, not
+ * by any live probe in this file or `stale-publish.itest.ts`. P7 proves `EndPublish` clears on any
+ * outcome string; Probe A proves altool actually rejects a downgrade. Each proves one half of the
+ * path; together they still leave the wiring between them live-unproven.
+ *
+ * WHAT P8 AND P10 PROVE ABOUT `acquireSessionLease`'S RETRY LOOP, AND WHAT THEY DON'T. Both probes
+ * locally reimplement pieces of `orchestrator.ts`'s `acquireSessionLease` acquire-retry loop instead
+ * of driving `acquireSessionLease`/`runSession` itself — required by this file's own design (drive
+ * `LeaseClient`/`RunMutantTransport` directly, never through `runSession`), not a defect. P8 mirrors
+ * the busy-retry half (treat "operation-busy" as expected, keep polling); P10 mirrors the
+ * orphan-specific re-check-once half (compare this file's P10 loop against
+ * `orchestrator.ts:646-658`: re-check exactly once on an unchanged (opAttemptId, opStartedAt) marker
+ * before concluding it's stranded). Together they mean a green P8/P10 proves the SERVER's
+ * busy/orphaned classification and reset contract, and that the re-check-once pattern is soundly
+ * implementable against that contract — NOT that `orchestrator.ts`'s own copy of the pattern is
+ * bug-free. A regression introduced only inside `acquireSessionLease` itself (e.g. dropping the
+ * marker-unchanged comparison, or re-checking zero or three times instead of once) would pass every
+ * probe in this file untouched.
  *
  * Every probe acquires its OWN fresh lease (own nonce/owner, own `serverGeneration` read) rather
  * than sharing state with another probe — see the task report for the one real ordering coupling
@@ -602,7 +662,7 @@ async function probeLostAckReconciliation(cfg: ActivationConfig): Promise<void> 
       `[${label}] setup: BeginPublish must succeed, got ${JSON.stringify(begun)}`,
     );
 
-    // See the file header's substitution #3: a real dropped ack can't be forced in-process. This
+    // See the file header's substitution #4: a real dropped ack can't be forced in-process. This
     // proves the property reconciliation depends on — GetOperationStatus, as an INDEPENDENT second
     // channel, agrees with the direct response at every step.
     const statusAfterBegin = await a.client.getOperationStatus(a.tuple(), attempt, opSeq);
@@ -731,12 +791,16 @@ async function probeDeterministicRejectedPublishNoRecycle(cfg: ActivationConfig)
       `[${label}] setup: BeginPublish must succeed, got ${JSON.stringify(begun)}`,
     );
 
-    // See the file header's substitution #2: the REAL live altool-rejection mechanics are already
-    // exhaustively proven by stale-publish.itest.ts's Probe A. This probe's narrower job is the
-    // LEASE layer's own guarantee — EndPublish clears the marker on EVERY confirmed terminal
-    // outcome, success or a deterministic failure, because ControlState.TryEndPublish's state
-    // transition does not branch on the `outcome` string's content (only on the fence tuple +
-    // attemptId + opSeq matching) — so reporting a realistic rejection message here drives the
+    // See the file header's substitution #3: the REAL live altool-rejection mechanics are already
+    // exhaustively proven by stale-publish.itest.ts's Probe A — but see the file header's "WHAT P7 +
+    // Probe A DO AND DO NOT JOINTLY PROVE": Probe A drives a raw ContainerDeployer with no lease
+    // involved at all, and this probe bypasses the runner's own failure-catching glue
+    // (orchestrator.ts:892-914) entirely, so together they still don't cover that glue against a
+    // real live rejection. This probe's narrower job is the LEASE layer's own guarantee —
+    // EndPublish clears the marker on EVERY confirmed terminal outcome, success or a deterministic
+    // failure, because ControlState.TryEndPublish's state transition does not branch on the
+    // `outcome` string's content (only on the fence tuple + attemptId + opSeq matching) — so
+    // reporting a realistic rejection message here drives the
     // SAME code path a real altool rejection would.
     const ended = await a.client.endPublish(
       a.tuple(),
@@ -790,6 +854,10 @@ async function probeHealthyContentionNoQuarantine(
   try {
     const attempt = newAttemptId("p8-marker");
     const opSeq = a.nextOpSeq();
+    // See the file header's substitution #2: same substitution as P9 (no fixture test method holds
+    // RunMutant open long enough), and defensible for the same reason — TryAcquire's busy/orphaned
+    // classification does not distinguish op kind, so a publish marker exercises the identical
+    // contract a run marker would.
     const begun = await a.client.beginPublish(a.tuple(), attempt, opSeq);
     assert.equal(
       begun.begun,
@@ -880,7 +948,11 @@ async function probeSlowRunUnderRenew(cfg: ActivationConfig): Promise<void> {
     const attempt = newAttemptId("p9-hold");
     const opSeq = a.nextOpSeq();
     // See the file header's substitution #1: this two-call op marker stands in for a slow
-    // RunMutant, which cannot be held open by the client the way BeginPublish/EndPublish can.
+    // RunMutant, which cannot be held open by the client the way BeginPublish/EndPublish can. See
+    // also the file header's "WHAT A GREEN P9 DOES AND DOES NOT PROVE" — this probe proves the
+    // busy/orphaned classification holds for the WHOLE hold under renewal, not sol#1's actual
+    // concern (a real RunMutant in flight not starving RenewLease); nothing executes against BC
+    // between BeginPublish and EndPublish here.
     const begun = await a.client.beginPublish(a.tuple(), attempt, opSeq);
     assert.equal(
       begun.begun,
