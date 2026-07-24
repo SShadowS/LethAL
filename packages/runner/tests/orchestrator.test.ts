@@ -208,11 +208,17 @@ class StubBackend implements ExecutionBackend {
   async activate(id: string | null) {
     this.activations.push(id);
   }
-  async run(ref: TestMethodRef, _opts: RunOpts): Promise<TestVerdict> {
+  async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
     await this.onRun?.();
     const active = this.activations.at(-1) ?? null;
     const outcome = this.script(active, ref);
     const hasCoverage = active === null && this.caps.coverage === "procedure";
+    // Layer 5C-A Task 8, Task 10 (design §G): this stub represents a healthy, correctly-deployed
+    // authoritative backend by default — every coverage:"none" (the transport path) call attests
+    // cleanly, mirroring what a real RunMutant `ran` result would report. Only the dedicated
+    // `attestingBackend` fake (Task 10's own tests, below) models a NEVER-attests container;
+    // every pre-existing test here keeps its prior verdicts unaffected by the new fail-closed gate.
+    const hasAttestation = this.caps.authoritative && opts.coverage === "none";
     return {
       ref,
       outcome,
@@ -229,6 +235,7 @@ class StubBackend implements ExecutionBackend {
             },
           }
         : {}),
+      ...(hasAttestation ? { attestation: { observedAny: true, identityMismatch: false } } : {}),
     };
   }
 }
@@ -249,6 +256,21 @@ const CAPS_NST: BackendCapabilities = {
   deploy: "publish",
   isolation: "session",
   authoritative: true,
+};
+
+/**
+ * Non-authoritative twin of CAPS_NST — same coverage/deploy/isolation shape, but
+ * `authoritative: false`. Layer 5C-A Task 8, Task 10 (design §G) now rejects `workers > 1` for
+ * an authoritative backend outright (the single `LC Mutation Active` row has no cross-process
+ * lease in 5C-A) — used by pre-existing sharding/worker tests below whose actual subject is the
+ * orchestrator's OWN sharding/dedup logic, not backend authoritativeness, so this twin preserves
+ * their intent without tripping the new assertion.
+ */
+const CAPS_NST_WORKERS: BackendCapabilities = {
+  coverage: "procedure",
+  deploy: "publish",
+  isolation: "session",
+  authoritative: false,
 };
 
 const selectorIds = { selectorId: 50000, controlId: 50001, tableId: 50002 };
@@ -401,11 +423,18 @@ class QualificationBackend implements ExecutionBackend {
   async activate(id: string | null) {
     this.activations.push(id);
   }
-  async run(ref: TestMethodRef, _opts: RunOpts): Promise<TestVerdict> {
+  async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
     const active = this.activations.at(-1) ?? null;
     if (active !== null) {
       this.ranActive++;
-      return { ref, outcome: "fail", durationMs: 5 }; // mutant-active fail → killed
+      // Layer 5C-A Task 8, Task 10 (design §G): the covering-run transport path (coverage:
+      // "none") of a healthy backend — see StubBackend's identical note above.
+      return {
+        ref,
+        outcome: "fail",
+        durationMs: 5,
+        attestation: { observedAny: true, identityMismatch: false },
+      }; // mutant-active fail → killed
     }
     const b = this.baselineFor(ref.method);
     return {
@@ -655,11 +684,16 @@ describe("runSession — parallel workers", () => {
       const dirs = await makeProject();
       const store = new ResultsStore(":memory:");
       const report = await runSession({
-        backend: new StubBackend(CAPS_NST, (mutant) => (mutant === null ? "pass" : "fail"), [
-          "IsOverBudget",
-        ]),
+        // CAPS_NST_WORKERS, not CAPS_NST: this test sweeps workers up to 4, which Task 10 (design
+        // §G) now rejects for an authoritative backend — the sharding determinism under test here
+        // is orthogonal to authoritativeness.
+        backend: new StubBackend(
+          CAPS_NST_WORKERS,
+          (mutant) => (mutant === null ? "pass" : "fail"),
+          ["IsOverBudget"],
+        ),
         backendFactory: () =>
-          new StubBackend(CAPS_NST, (mutant) => (mutant === null ? "pass" : "fail"), [
+          new StubBackend(CAPS_NST_WORKERS, (mutant) => (mutant === null ? "pass" : "fail"), [
             "IsOverBudget",
           ]),
         store,
@@ -851,9 +885,12 @@ describe("runSession — parallel workers", () => {
     // silently duplicate the row rather than fail loudly. Its one covered
     // mutant (IsOverBudget's 2nd) has nothing recorded yet, so the deploy
     // failure legitimately records it as "error".
+    // CAPS_NST_WORKERS, not CAPS_NST: this test runs `workers: 2`, which Task 10 (design §G) now
+    // rejects for an authoritative backend — the no-double-record property under test here is
+    // orthogonal to authoritativeness.
     const make = (workerIndex: number) =>
       new StubBackend(
-        CAPS_NST,
+        CAPS_NST_WORKERS,
         (mutant) => (mutant === null ? "pass" : "fail"),
         ["IsOverBudget"],
         // Typed AlcCompileError — see the sibling test above for why (Task 7 no longer
@@ -1408,7 +1445,14 @@ class PhaseBackend implements ExecutionBackend {
   }
   async run(ref: TestMethodRef, _opts: RunOpts): Promise<TestVerdict> {
     this.calls.push("run");
-    return { ref, outcome: "pass", durationMs: 5 };
+    // Layer 5C-A Task 8, Task 10 (design §G): PHASE_CAPS is always authoritative — attest
+    // cleanly by default (healthy-backend fixture), same rationale as StubBackend's note above.
+    return {
+      ref,
+      outcome: "pass",
+      durationMs: 5,
+      attestation: { observedAny: true, identityMismatch: false },
+    };
   }
 }
 
@@ -2344,10 +2388,17 @@ class CompilePublishVerifyBackend implements ExecutionBackend {
   // after a successful compile, before publish — only a real deploy() may touch this.
   methodIndexAssignments = 0;
 
-  constructor(private readonly compileGuard: (dir: string) => Error | undefined) {}
+  constructor(
+    private readonly compileGuard: (dir: string) => Error | undefined,
+    // Layer 5C-A Task 8, Task 10 (design §G): defaults to PHASE_CAPS's authoritative:true; the
+    // worker-path test below sets this false, since Task 10 now rejects `workers > 1` for an
+    // authoritative backend and that test's actual subject (compile-only bisection counters
+    // staying at zero across a worker's shard) is orthogonal to authoritativeness.
+    private readonly authoritative: boolean = true,
+  ) {}
 
   capabilities(): BackendCapabilities {
-    return PHASE_CAPS;
+    return { ...PHASE_CAPS, authoritative: this.authoritative };
   }
   async status(): Promise<BackendStatus> {
     return { ok: true, details: "counting-phase" };
@@ -2452,6 +2503,7 @@ describe("runSession — Task 7b: bisection's compile-only seam (spec §10 count
                 : undefined;
             }
           : () => undefined, // worker 1 and cfg.backend (-1) always compile fine
+        false, // non-authoritative: this test runs workers: 2, which Task 10 now rejects otherwise
       );
       backends.set(workerIndex, backend);
       return backend;
@@ -2501,7 +2553,20 @@ function fakeBackend(overrides: Partial<ExecutionBackend> = {}): ExecutionBacken
     deploy: async () => null,
     compileCheck: async () => {},
     activate: async () => {},
-    run: async (ref) => ({ ref, outcome: "pass", durationMs: 1 }),
+    // Layer 5C-A Task 8, Task 10 (design §G): attests cleanly on the coverage:"none" (transport)
+    // path by default — same healthy-backend rationale as StubBackend's note above. Harmless for
+    // a test that overrides `capabilities` to a non-authoritative shape while keeping this
+    // default `run`: the orchestrator's fail-closed gate only ever reads `.attestation` when
+    // `caps.authoritative` is true, so an unused attestation field on a non-authoritative fake is
+    // simply ignored.
+    run: async (ref, opts) => ({
+      ref,
+      outcome: "pass",
+      durationMs: 1,
+      ...(opts.coverage === "none"
+        ? { attestation: { observedAny: true, identityMismatch: false } }
+        : {}),
+    }),
     ...overrides,
   };
 }
@@ -3004,5 +3069,89 @@ describe("runSession — latch+quarantine on in-flight-unknown at baseline and k
     expect(sessionReport.mutants).toHaveLength(1);
     expect(sessionReport.mutants[0]?.verdict).toBe("error");
     expect(sessionReport.mutants[0]?.cause).toBe("deadline-exceeded");
+  });
+});
+
+// ————————————————————————————————————————————————————————————————————————
+// Layer 5C-A Task 8, Task 10 (design §G): two orchestrator-side safety properties for the
+// AUTHORITATIVE (bcdev) backend only.
+//   1. `workers > 1` is rejected outright — the single `LC Mutation Active` row is not
+//      lease-protected against parallel RunMutant calls in 5C-A.
+//   2. Per-artifact fail-closed attestation gate: a batch that ran verdict-contributing
+//      (covered) mutants but recorded ZERO clean attestations (`observedAny && !identityMismatch`
+//      on some coverage:"none" run) means no covered run ever confirmed the deployed binary is
+//      actually running. A wrong/stale container legitimately returns observedAny=false on every
+//      run (coverage over-approximates) and would otherwise let every test pass, silently
+//      accumulating false "survived" verdicts — so that batch's verdicts are invalidated to
+//      "error" and the session quarantined instead.
+// Reuses the Task 11 `fakeBackend`/`runSessionForTest` harness above: THREE_PROC_AL (9 mutants
+// across 3 procedures), CAPS_NST-shaped capabilities (authoritative, coverage:"procedure").
+// ————————————————————————————————————————————————————————————————————————
+
+/**
+ * An authoritative fake whose baseline/coverage-discovery run (coverage:"procedure", the hub
+ * path) covers every THREE_PROC_AL procedure — so all 9 mutants are scheduled with >=1 covering
+ * test ("contributed") — and whose per-mutant run (coverage:"none", the transport path: both the
+ * covering run and the null-activation kill-confirmation run) always passes and carries a FIXED
+ * attestation. Mirrors `TestVerdict.attestation`'s doc comment in backend.ts: attestation is
+ * present ONLY on the coverage:"none" path, never on the coverage:"procedure" baseline.
+ */
+function attestingBackend(attestation: {
+  readonly observedAny: boolean;
+  readonly identityMismatch: boolean;
+}): ExecutionBackend {
+  return fakeBackend({
+    run: async (ref, opts) => {
+      if (opts.coverage === "procedure") {
+        return {
+          ref,
+          outcome: "pass",
+          durationMs: 1,
+          coverage: {
+            granularity: "procedure" as const,
+            entries: [
+              { objectType: "Codeunit", objectId: 79000, procedure: "IsOverBudget" },
+              { objectType: "Codeunit", objectId: 79000, procedure: "IsUnderBudget" },
+              { objectType: "Codeunit", objectId: 79000, procedure: "IsEqualBudget" },
+            ],
+          },
+        };
+      }
+      return { ref, outcome: "pass", durationMs: 1, attestation };
+    },
+  });
+}
+
+describe("runSession — Task 10 workers=1 assertion + per-artifact clean-attestation gate (design §G)", () => {
+  test("authoritative backend with workers > 1 is rejected", async () => {
+    await expect(
+      runSessionForTest(attestingBackend({ observedAny: true, identityMismatch: false }), {
+        quarantineDir: freshTmpDir(),
+        workers: 2,
+      }),
+    ).rejects.toThrow(/workers.*1.*authoritative/i);
+  });
+
+  test("covered artifact that never attests cleanly -> verdicts invalidated + quarantined", async () => {
+    const report = await runSessionForTest(
+      attestingBackend({ observedAny: false, identityMismatch: false }),
+      { quarantineDir: freshTmpDir() },
+    );
+    // Every one of THREE_PROC_AL's 9 mutants is covered and every run "passes" — without the
+    // gate every one of these would report "survived". Zero clean attestations means the gate
+    // must discard the whole batch's verdicts instead.
+    expect(report.mutants.length).toBeGreaterThan(0);
+    expect(report.mutants.every((m) => m.verdict !== "survived")).toBe(true);
+    expect(report.mutants.every((m) => m.verdict === "error")).toBe(true);
+    expect(report.quarantined).toBeDefined();
+  });
+
+  test("covered artifact with >=1 clean attestation reports verdicts normally, no quarantine", async () => {
+    const report = await runSessionForTest(
+      attestingBackend({ observedAny: true, identityMismatch: false }),
+      { quarantineDir: freshTmpDir() },
+    );
+    expect(report.mutants.some((m) => m.verdict === "survived")).toBe(true);
+    expect(report.quarantined).toBeUndefined();
   });
 });

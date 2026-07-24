@@ -554,6 +554,17 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // missing fractional index are dropped with no error (shardEvenly's own
   // `if (target !== undefined)` guard swallows them).
   const workers = Math.max(1, Math.floor(cfg.workers ?? 1));
+  // Layer 5C-A Task 8, Task 10 (design §G, preconditions): bcdev (authoritative) is single-flight
+  // in 5C-A — the single `LC Mutation Active` row is not lease-protected against concurrent
+  // RunMutant calls, so two workers racing activate()/run() against the same container could
+  // silently cross-attribute a verdict to the wrong mutant. Cross-process safety (a real lease)
+  // is 5C-B; for now this must fail loudly rather than let it happen. al-runner (non-
+  // authoritative) has its own per-worker process/backend and is unaffected.
+  if (caps.authoritative && workers > 1) {
+    throw new Error(
+      `runSession: workers=${workers} > 1 is rejected for an authoritative (bcdev) backend in Layer 5C-A — the single LC Mutation Active row is not lease-protected against parallel RunMutant calls (cross-process safety is 5C-B).`,
+    );
+  }
   // Bounds compile-heavy deploy() calls independently of worker count: alc is
   // CPU-bound, so worker count (mutant concurrency) must not silently become
   // compile concurrency.
@@ -881,6 +892,13 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       // cfg.backend; only the kill-detection phase below fans out, since
       // that's the part that's actually per-mutant work.
       const fallbackTimeoutMs = cfg.baselineTimeoutMs ?? BASELINE_TIMEOUT_DEFAULT;
+      // Layer 5C-A Task 8, Task 10 (design §G): per-ARTIFACT clean-attestation ledger. Declared
+      // fresh for each batch (each batch republishes its own artifactId) — `clean` flips true the
+      // first time ANY covered run (across every worker/shard sharing this one artifact) reports
+      // `attestation.observedAny === true && identityMismatch !== true`. Checked against
+      // `contributed` right after the mutant work below finishes, before the next batch (or the
+      // final `buildReport`) ever sees this batch's verdicts.
+      const attestation = { clean: false };
       if (workers === 1) {
         // Sequential IS the parallel path with a pool of one: this is the
         // exact same runMutantsOnBackend call the fan-out branch below makes
@@ -900,6 +918,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           quarantineStore,
           resourceKey,
           nowIso,
+          attestation,
         });
       } else {
         const shards = shardEvenly(execute, workers);
@@ -986,6 +1005,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
               quarantineStore,
               resourceKey,
               nowIso,
+              attestation,
             });
           }),
         );
@@ -993,6 +1013,28 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           (r): r is PromiseRejectedResult => r.status === "rejected",
         );
         if (firstRejection !== undefined) throw firstRejection.reason;
+      }
+      // Layer 5C-A Task 8, Task 10 (design §G): per-artifact fail-closed attestation gate. A
+      // batch "contributed verdicts" if any mutant it scheduled had >=1 covering test (a batch
+      // with nothing but no-coverage/unsupported mutants has nothing a wrong binary could fake).
+      // For an authoritative backend, a contributing batch that never earned a single clean
+      // attestation means no covered run ever confirmed the deployed binary is actually running
+      // — a wrong/stale container legitimately returns observedAny=false on every run (coverage
+      // over-approximates) and every test would pass, silently accumulating false "survived"
+      // verdicts. Invalidate this batch's verdicts and quarantine BEFORE any of them can leave
+      // the orchestrator (`buildReport` only runs once, at `runSession`'s return, below).
+      // al-runner (non-authoritative) carries no attestation at all — `attestation.clean` would
+      // always be false there, so this gate is scoped to `caps.authoritative` to avoid misfiring
+      // on every al-runner session. Also scoped to `!safety.isUnsafe`: if this batch's mutant
+      // loop already latched unsafe for a MORE SPECIFIC reason (e.g. an in-flight-unknown test
+      // run, recorded with its own `cause`/`failureNote` via `quarantineInFlight`), the session
+      // is already quarantined — re-invalidating here would only clobber that specific diagnostic
+      // with this gate's generic "unattested artifact" note, losing information for no benefit.
+      const contributed = execute.some((m) => (perMutantTests.get(m.mutantId)?.length ?? 0) > 0);
+      if (caps.authoritative && !safety.isUnsafe && contributed && !attestation.clean) {
+        const note = `unattested artifact: no covered run observed the deployed binary's selector (artifactId ${compiled?.artifactId ?? "unknown"}) — verdicts discarded, container quarantined (design §G)`;
+        invalidateBatchVerdicts(outcomes, batchIdx, note);
+        safety.latchUnsafe(note);
       }
       // Task 12 (spec §8/§12): an in-flight-unknown deadline anywhere in this batch's mutant
       // loop latches `safety` and records a durable quarantine — no further batch may schedule
@@ -1115,6 +1157,13 @@ async function runMutantsOnBackend(args: {
   readonly quarantineStore?: QuarantineStore | undefined;
   readonly resourceKey?: string | undefined;
   readonly nowIso: () => string;
+  /**
+   * Layer 5C-A Task 8, Task 10 (design §G): this batch's artifact-scoped clean-attestation
+   * ledger — shared (by reference) across every worker/shard `runSession` fans this batch's
+   * mutants out to, since they all exercise the SAME deployed artifact. Mutated in place: set
+   * `clean = true` the first time any covered run attests cleanly, never reset.
+   */
+  readonly attestation: { clean: boolean };
 }): Promise<void> {
   for (const m of args.mutants) {
     const covering = args.perMutantTests.get(m.mutantId);
@@ -1156,6 +1205,11 @@ async function runMutantsOnBackend(args: {
         failureMessage: v.failureMessage,
       });
       spent += v.durationMs;
+      // Layer 5C-A Task 8, Task 10 (design §G): this covering run went through the coverage:
+      // "none" transport path (the only path that ever attests) — feed the artifact's ledger.
+      if (v.attestation?.observedAny === true && v.attestation.identityMismatch !== true) {
+        args.attestation.clean = true;
+      }
       if (v.operation !== undefined && requiresUnsafeLatch(v.operation)) {
         // The server may still be executing this test. Latch unsafe, record a durable tier
         // quarantine, and stop — no further work-plane call (spec §8, §12).
@@ -1207,6 +1261,15 @@ async function runMutantsOnBackend(args: {
           durationMs: confirm.durationMs,
           failureMessage: confirm.failureMessage,
         });
+        // Layer 5C-A Task 8, Task 10 (design §G): the kill-confirmation rerun is a
+        // null-activation run that ALSO goes through the coverage:"none" transport path (see
+        // the covering-run feed above) — it attests too, so it must feed the same ledger.
+        if (
+          confirm.attestation?.observedAny === true &&
+          confirm.attestation.identityMismatch !== true
+        ) {
+          args.attestation.clean = true;
+        }
         if (confirm.operation !== undefined && requiresUnsafeLatch(confirm.operation)) {
           // The server may still be executing this confirmation run. Latch unsafe, record a
           // durable tier quarantine, and stop — same in-flight-unknown handling as the
@@ -1417,6 +1480,40 @@ export async function runOnce(
     return backend.run(ref, opts);
   }
   return first;
+}
+
+/**
+ * Layer 5C-A Task 8, Task 10 (design §G): rewrites every `SessionOutcome` recorded so far for
+ * `batchIndex` to verdict `"error"` with `note`, dropping any `killingTest`/`cause` — used by the
+ * per-artifact fail-closed attestation gate in `runSession` when a batch's artifact ran
+ * verdict-contributing (covered) mutants but earned zero clean attestations. `buildReport`
+ * (`runSession`'s only call, at its very return) reads `outcomes` — the in-memory array this
+ * function mutates in place — so nothing invalidated here can ever leave the orchestrator as a
+ * (false) "survived".
+ *
+ * Accepted limitation: this does NOT rewrite the rows `record()` already wrote to `store` for
+ * this batch (there is no store-row-update API — `ResultsStore` only ever inserts). That is
+ * tolerated because `runSession` always pairs this call with `safety.latchUnsafe(note)`
+ * immediately after, which marks the WHOLE session `report.quarantined` (spec §8/§12) — a caller
+ * that treats a quarantined session's report as untrustworthy must treat its persisted rows the
+ * same way, so a stale unattested verdict surviving on disk is moot, not silently shipped as a
+ * trustworthy one.
+ */
+function invalidateBatchVerdicts(
+  outcomes: SessionOutcome[],
+  batchIndex: number,
+  note: string,
+): void {
+  for (let i = 0; i < outcomes.length; i++) {
+    const o = outcomes[i];
+    if (o === undefined || o.batchIndex !== batchIndex) continue;
+    outcomes[i] = {
+      mutant: o.mutant,
+      verdict: "error",
+      batchIndex: o.batchIndex,
+      failureNote: note,
+    };
+  }
 }
 
 /**
