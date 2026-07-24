@@ -3154,4 +3154,106 @@ describe("runSession — Task 10 workers=1 assertion + per-artifact clean-attest
     expect(report.mutants.some((m) => m.verdict === "survived")).toBe(true);
     expect(report.quarantined).toBeUndefined();
   });
+
+  // Coordinator review, Fix 1 (Critical): reproduces the ordering the first three tests above
+  // miss. M0001 (the first scheduled mutant) runs clean and would-be "survived" — but its
+  // attestation is EMPTY (observedAny:false), the wrong-binary signature. Before that batch's
+  // gate ever runs, M0002 (the SECOND scheduled mutant) hits an in-flight-unknown run and
+  // latches `safety` unsafe mid-loop — recorded with its OWN `cause`. The gate must still fire
+  // for THIS batch (M0001's false "survived" came from the SAME unattested binary) even though
+  // `safety.isUnsafe` is already true by the time the gate runs; a `!safety.isUnsafe` guard on
+  // the gate (an earlier, incorrect fix) would skip it and ship M0001 as a false "survived"
+  // right alongside the quarantined flag.
+  test("an earlier mutant's false survived in the same batch is invalidated even though a LATER mutant already latched unsafe", async () => {
+    let activeMutant: string | null = null;
+    const backend = fakeBackend({
+      activate: async (id) => {
+        activeMutant = id;
+      },
+      run: async (ref, opts) => {
+        if (opts.coverage === "procedure") {
+          return {
+            ref,
+            outcome: "pass",
+            durationMs: 1,
+            coverage: {
+              granularity: "procedure" as const,
+              entries: [
+                { objectType: "Codeunit", objectId: 79000, procedure: "IsOverBudget" },
+                { objectType: "Codeunit", objectId: 79000, procedure: "IsUnderBudget" },
+                { objectType: "Codeunit", objectId: 79000, procedure: "IsEqualBudget" },
+              ],
+            },
+          };
+        }
+        if (activeMutant === "M0002") {
+          // The second scheduled mutant: an in-flight-unknown run — latches `safety` mid-batch,
+          // recorded with its own `cause: "deadline-exceeded"`.
+          return {
+            ref,
+            outcome: "deadline-exceeded",
+            durationMs: 1,
+            operation: "in-flight-unknown",
+          };
+        }
+        // M0001 (the first scheduled mutant): passes cleanly, but attests EMPTY — never proves
+        // the deployed binary is the one that ran.
+        return {
+          ref,
+          outcome: "pass",
+          durationMs: 1,
+          attestation: { observedAny: false, identityMismatch: false },
+        };
+      },
+    });
+    const report = await runSessionForTest(backend, { quarantineDir: freshTmpDir() });
+    const m1 = report.mutants.find((m) => m.mutantCode === "M0001");
+    expect(m1).toBeDefined();
+    // The bug: without Fix 1, M0001 ships "survived" (a false survivor from an unproven binary)
+    // right alongside a quarantined report — exactly the silent-false-survivor shape this task
+    // exists to prevent.
+    expect(m1?.verdict).toBe("error");
+    expect(report.quarantined).toBeDefined();
+  });
+});
+
+// Coordinator review, Fix 2 (Important): `invalidateBatchVerdicts` only corrects the in-memory
+// `outcomes[]` the report is built from — the `mutants` rows already written to `store` during
+// the batch keep whatever verdict they had at `record()` time (no store-row-update API exists).
+// `priorSurvivorKeys` (store.ts) treats the most recent FINISHED run's "survived"/"known-survivor"
+// rows as a future session's `skipKnownSurvivors` skip-list. Without a guard, a quarantined run's
+// uncorrected on-disk "survived" rows (from a NEVER-attested, unproven binary) would become that
+// skip-list — permanently skipping re-test of a mutant whose only "survived" ever came from a
+// binary that was never confirmed to be the one that actually ran. Fix: `runSession` never calls
+// `store.finishRun` for a run that latched unsafe, so `priorSurvivorKeys`'s
+// `finished_at IS NOT NULL` filter excludes it entirely — uses `runSession` directly (not the
+// Task 11 `runSessionForTest` helper, which discards its internal `store`/`projectDir`) so this
+// test can query `priorSurvivorKeys` against the SAME store afterward.
+describe("runSession — Task 10 fix: a quarantined run never seeds a future skip-list", () => {
+  test("a never-attested (quarantined) run leaves no finished row for priorSurvivorKeys to find", async () => {
+    const dirs = await makeProject();
+    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), THREE_PROC_AL);
+    const store = new ResultsStore(":memory:");
+    const backend = attestingBackend({ observedAny: false, identityMismatch: false });
+    const report = await runSession({
+      backend,
+      store,
+      ...dirs,
+      selectorIds,
+      resourceServer: "http://cronus281",
+      resourceServerInstance: "BC",
+      quarantineDir: freshTmpDir(),
+    });
+    expect(report.quarantined).toBeDefined();
+    // Sanity: the store DOES hold uncorrected "survived" rows for this run (recorded before the
+    // gate ran) — the bug this test guards against is that those rows must never become history.
+    const rawVerdicts = store.db.query("SELECT verdict FROM mutants").all() as Array<{
+      verdict: string;
+    }>;
+    expect(rawVerdicts.some((r) => r.verdict === "survived")).toBe(true);
+    // The actual guard: an unfinished run is invisible to priorSurvivorKeys.
+    const keys = store.priorSurvivorKeys(dirs.projectDir);
+    expect(keys.size).toBe(0);
+    store.close();
+  });
 });

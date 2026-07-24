@@ -1025,13 +1025,17 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       // the orchestrator (`buildReport` only runs once, at `runSession`'s return, below).
       // al-runner (non-authoritative) carries no attestation at all — `attestation.clean` would
       // always be false there, so this gate is scoped to `caps.authoritative` to avoid misfiring
-      // on every al-runner session. Also scoped to `!safety.isUnsafe`: if this batch's mutant
-      // loop already latched unsafe for a MORE SPECIFIC reason (e.g. an in-flight-unknown test
-      // run, recorded with its own `cause`/`failureNote` via `quarantineInFlight`), the session
-      // is already quarantined — re-invalidating here would only clobber that specific diagnostic
-      // with this gate's generic "unattested artifact" note, losing information for no benefit.
+      // on every al-runner session.
+      //
+      // MUST run even when this batch already latched `safety` unsafe for a DIFFERENT, more
+      // specific reason (e.g. mutant M2 hit an in-flight-unknown mid-batch): an earlier mutant M1
+      // in the SAME batch may already have been recorded a (false) "survived" — from the SAME
+      // unattested binary — before M2 ever ran, and skipping the gate here would let that false
+      // survivor ship in `report.mutants`/`counts` untouched. `invalidateBatchVerdicts` (below)
+      // is what protects M2's own specific diagnostic from being clobbered by this gate's generic
+      // note, not a guard here.
       const contributed = execute.some((m) => (perMutantTests.get(m.mutantId)?.length ?? 0) > 0);
-      if (caps.authoritative && !safety.isUnsafe && contributed && !attestation.clean) {
+      if (caps.authoritative && contributed && !attestation.clean) {
         const note = `unattested artifact: no covered run observed the deployed binary's selector (artifactId ${compiled?.artifactId ?? "unknown"}) — verdicts discarded, container quarantined (design §G)`;
         invalidateBatchVerdicts(outcomes, batchIdx, note);
         safety.latchUnsafe(note);
@@ -1064,10 +1068,25 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     }
   }
 
-  cfg.store.finishRun(runId, {
-    batchCount: artifacts.length,
-    baselineGreen: baselineGreenOverall,
-  });
+  // Layer 5C-A Task 8, Task 10 (design §G): a quarantined run must NEVER be marked finished.
+  // `priorSurvivorKeys` (store.ts) selects the most recent run with `finished_at IS NOT NULL` and
+  // treats its "survived"/"known-survivor" mutant rows as a future session's skip-list
+  // (skipKnownSurvivors). `invalidateBatchVerdicts` only corrects the in-memory `outcomes[]` — the
+  // `mutants` rows this session already wrote to `store` keep whatever verdict they had at
+  // `record()` time (no store-row-update API exists). Leaving `finished_at` NULL for a quarantined
+  // run excludes it from `priorSurvivorKeys` entirely, so those uncorrected on-disk rows (which
+  // may include a false "survived" from an unproven binary) can never seed a future skip-list.
+  // Verified no other consumer reads `finished_at`/`batch_count`/`baseline_green` (grepped
+  // `finishRun`/`finished_at` across src/cli/itest): the only reader is `priorSurvivorKeys`'s
+  // `WHERE finished_at IS NOT NULL` filter. `runs.app_version`/`app_id`/`artifact_id` provenance
+  // is written by `createRun`/`recordArtifact`, never by `finishRun` — so app-version reservation
+  // (clock-derived via `reserveAppVersion`, Layer 5A) has no dependency on this run ever finishing.
+  if (!safety.isUnsafe) {
+    cfg.store.finishRun(runId, {
+      batchCount: artifacts.length,
+      baselineGreen: baselineGreenOverall,
+    });
+  }
   // Sort accumulated outcomes so report ordering never depends on which
   // worker finished first — determinism must not hinge on scheduling.
   // Compare (file, startIndex) as (string, number), not a colon-joined
@@ -1483,21 +1502,36 @@ export async function runOnce(
 }
 
 /**
- * Layer 5C-A Task 8, Task 10 (design §G): rewrites every `SessionOutcome` recorded so far for
- * `batchIndex` to verdict `"error"` with `note`, dropping any `killingTest`/`cause` — used by the
- * per-artifact fail-closed attestation gate in `runSession` when a batch's artifact ran
- * verdict-contributing (covered) mutants but earned zero clean attestations. `buildReport`
- * (`runSession`'s only call, at its very return) reads `outcomes` — the in-memory array this
- * function mutates in place — so nothing invalidated here can ever leave the orchestrator as a
- * (false) "survived".
+ * Layer 5C-A Task 8, Task 10 (design §G): rewrites every UNPROTECTED `SessionOutcome` recorded so
+ * far for `batchIndex` to verdict `"error"` with `note` — used by the per-artifact fail-closed
+ * attestation gate in `runSession` when a batch's artifact ran verdict-contributing (covered)
+ * mutants but earned zero clean attestations. `buildReport` (`runSession`'s only call, at its
+ * very return) reads `outcomes` — the in-memory array this function mutates in place — so nothing
+ * invalidated here can ever leave the orchestrator as a (false) "survived".
+ *
+ * Two kinds of entries are deliberately left UNTOUCHED, not swept into the generic "unattested"
+ * error:
+ *   - `o.cause !== undefined` — already a specifically-classified error (deadline-exceeded /
+ *     unstable / an in-flight-unknown quarantine via `quarantineInFlight`) produced by a DIFFERENT
+ *     code path that already knows exactly why this one mutant is untrustworthy. Overwriting it
+ *     with this gate's generic note would destroy strictly more specific diagnostic information
+ *     for no benefit — the mutant is already `"error"` either way.
+ *   - `o.verdict === "known-survivor"` — a HISTORY verdict (Task 6, `filterHistory`/
+ *     `skipKnownSurvivors`): it was never re-tested against THIS batch's binary at all, so this
+ *     artifact's attestation failure says nothing about it.
+ * Every other verdict this batch produced — survived, killed, timeout-killed, no-coverage, or a
+ * plain (cause-less) error — came from actually exercising the unattested binary and must be
+ * invalidated: this is the gate's whole point (a false "survived" is the failure mode being
+ * closed).
  *
  * Accepted limitation: this does NOT rewrite the rows `record()` already wrote to `store` for
- * this batch (there is no store-row-update API — `ResultsStore` only ever inserts). That is
- * tolerated because `runSession` always pairs this call with `safety.latchUnsafe(note)`
- * immediately after, which marks the WHOLE session `report.quarantined` (spec §8/§12) — a caller
- * that treats a quarantined session's report as untrustworthy must treat its persisted rows the
- * same way, so a stale unattested verdict surviving on disk is moot, not silently shipped as a
- * trustworthy one.
+ * this batch (there is no store-row-update API — `ResultsStore` only ever inserts). `runSession`
+ * always pairs this call with `safety.latchUnsafe(note)` immediately after, which marks the WHOLE
+ * session `report.quarantined` (spec §8/§12); a quarantined run is never passed to
+ * `store.finishRun` (see `runSession`'s return path), so `priorSurvivorKeys`'s
+ * `finished_at IS NOT NULL` filter excludes it — its stale on-disk verdicts can never seed a
+ * future `--skip-known-survivors` run. A direct SQL read of the raw `mutants` table (bypassing
+ * `priorSurvivorKeys`) would still see the uncorrected rows; nothing in this codebase does that.
  */
 function invalidateBatchVerdicts(
   outcomes: SessionOutcome[],
@@ -1507,6 +1541,7 @@ function invalidateBatchVerdicts(
   for (let i = 0; i < outcomes.length; i++) {
     const o = outcomes[i];
     if (o === undefined || o.batchIndex !== batchIndex) continue;
+    if (o.cause !== undefined || o.verdict === "known-survivor") continue; // preserved, see above
     outcomes[i] = {
       mutant: o.mutant,
       verdict: "error",
