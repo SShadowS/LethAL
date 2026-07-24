@@ -3105,7 +3105,14 @@ describe("runSession — latch+quarantine on in-flight-unknown at baseline and k
     // that single mutant (M0001, the first one activated) reaches `report.mutants`.
     expect(sessionReport.mutants).toHaveLength(1);
     expect(sessionReport.mutants[0]?.verdict).toBe("error");
-    expect(sessionReport.mutants[0]?.cause).toBe("deadline-exceeded");
+    // Layer 5C-B2: this used to assert `cause: "deadline-exceeded"`, which was simply wrong — an
+    // in-flight-unknown is an UNREADABLE ANSWER, and our own client timeout produces a different
+    // verdict entirely (`RunMutant timed out`, mapped by the `v.outcome === "deadline-exceeded"`
+    // branch that follows this one). Labelling it a deadline inflated `counts.deadlineExceeded` in
+    // the report and mislabelled the durable record. `cause`'s union has no accurate member for
+    // "the ack was lost", so it is left unset rather than carrying a misleading one.
+    expect(sessionReport.mutants[0]?.cause).toBeUndefined();
+    expect(sessionReport.counts.deadlineExceeded).toBe(0);
   });
 });
 
@@ -3224,8 +3231,9 @@ describe("runSession — Task 10 workers=1 assertion + per-artifact clean-attest
           };
         }
         if (activeMutant === "M0002") {
-          // The second scheduled mutant: an in-flight-unknown run — latches `safety` mid-batch,
-          // recorded with its own `cause: "deadline-exceeded"`.
+          // The second scheduled mutant: an in-flight-unknown run — latches `safety` mid-batch.
+          // (It carries no `fencedOp`, so 5C-B2's lost-ack reconciliation has no op to ask about
+          // and the conservative quarantine applies, exactly as before.)
           return {
             ref,
             outcome: "deadline-exceeded",
@@ -3354,6 +3362,14 @@ class FakeLeaseClient implements LeaseApi {
    * asserts `recoverOp` is not called then isolates the `opKind === "publish"` precondition.
    */
   reconcileOpKind: string | undefined;
+  /**
+   * Layer 5C-B2: answers a status read made WITH a non-empty attemptId — the LOST-ACK
+   * reconciliation read. Takes precedence over `reconcileOpKind`, which cannot express a
+   * COMPLETED op (it hardcodes `completed: false` for the publish-recovery precondition) and so
+   * cannot cover the case this exists for. May throw, to drive the "the status read itself
+   * failed" arm.
+   */
+  reconcileStatus: ((attemptId: string, opSeq: number) => OperationStatus) | undefined;
   /** Awaited inside renew() — lets a test hold one heartbeat tick open to prove single-flight. */
   renewGate: Promise<void> | undefined;
   constructor(readonly log: string[] = []) {}
@@ -3413,6 +3429,9 @@ class FakeLeaseClient implements LeaseApi {
   ): Promise<OperationStatus> {
     this.log.push("status");
     this.statusArgs.push({ attemptId, opSeq });
+    if (this.reconcileStatus !== undefined && attemptId !== "") {
+      return this.reconcileStatus(attemptId, opSeq);
+    }
     if (this.reconcileOpKind !== undefined && attemptId !== "") {
       return {
         opKind: this.reconcileOpKind,
@@ -4126,6 +4145,281 @@ describe("runSession — Layer 5C-B1 fix round 1: publish-fence failure paths + 
     expect(rec?.opKind).toBe("container-needs-recycle");
     expect(rec?.detail).toContain("could not be reconciled");
     expect(rec?.detail).toContain("opKind run");
+  });
+});
+
+// ————————————————————————————————————————————————————————————————————————
+// Layer 5C-B2 item 1 — lost-ack reconciliation for a fenced RunMutant (design §5).
+//
+// Live-observed on 3 of 8 bcdev gate runs: BC answers a `RunMutant` with HTTP 200 and a
+// ZERO-BYTE body. The transport can only call that `in-flight-unknown`, and the orchestrator used
+// to go straight to a durable `container-needs-recycle` that blocks every later session on the
+// tier until an operator deletes the record by hand. The lease row read live moments after one
+// such failure said `{"opKind":"none","opAttemptId":"a10","opSeq":304,"lastCompletedOpSeq":304,
+// "completed":true}` — phase 3 HAD run and tombstoned the op. Only the HTTP response body was
+// lost; nothing was ever stranded.
+//
+// design §5 already prescribes the fix: read `GetOperationStatus` first, and quarantine ONLY when
+// the op cannot be shown to have finished. `RecoverOp` is forbidden on this path outright (an
+// unreadable body is not a parsed application-level terminal), which every test below asserts.
+// ————————————————————————————————————————————————————————————————————————
+describe("runSession — Layer 5C-B2: a lost RunMutant ack is reconciled, not blindly quarantined (design §5)", () => {
+  /** The fence coordinates of the failed attempt, shaped exactly like the live evidence. */
+  const LOST_OP = { attemptId: "a10", opSeq: 304 } as const;
+  const TIER = "http://cronus281|BC";
+
+  function tombstoned(attemptId: string, opSeq: number): OperationStatus {
+    return {
+      opKind: "none",
+      opAttemptId: attemptId,
+      opSeq,
+      lastCompletedOpSeq: opSeq,
+      completed: true,
+    };
+  }
+  function stillOurs(attemptId: string, opSeq: number): OperationStatus {
+    return {
+      opKind: "run",
+      opAttemptId: attemptId,
+      opSeq,
+      lastCompletedOpSeq: opSeq - 1,
+      completed: false,
+    };
+  }
+
+  /** M0001 runs clean and attests cleanly (so design §G's fail-closed gate is NOT what marks it);
+   *  M0002's covering run comes back with an unreadable answer carrying its fence coordinates. */
+  function lostAckAfterFirstMutant(
+    over: Partial<TestVerdict> = {},
+    fencedOp: { readonly attemptId: string; readonly opSeq: number } | null = LOST_OP,
+  ): ExecutionBackend {
+    let activeMutant: string | null = null;
+    return leaseBackend({
+      activate: async (id) => {
+        activeMutant = id;
+      },
+      run: async (ref) => {
+        if (activeMutant === "M0002") {
+          return {
+            ref,
+            outcome: "error" as const,
+            durationMs: 1,
+            failureMessage: 'RunMutant returned no string `value` (HTTP 200), body: ""',
+            operation: "in-flight-unknown" as const,
+            ...(fencedOp !== null ? { fencedOp } : {}),
+            ...over,
+          };
+        }
+        return {
+          ref,
+          outcome: "pass" as const,
+          durationMs: 1,
+          attestation: { observedAny: true, identityMismatch: false },
+        };
+      },
+    });
+  }
+
+  test("a TOMBSTONED op writes NO durable quarantine — the container is clean and the session continues", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    client.reconcileStatus = tombstoned;
+    const { lease } = leaseCfg(client);
+    const report = await runSessionForTest(lostAckAfterFirstMutant(), {
+      quarantineDir: dir,
+      lease,
+    });
+    // THE assertion this whole change exists for: a container that provably finished the op is
+    // not condemned. A durable record here locks out every later session on this tier until an
+    // operator deletes it by hand.
+    expect(await new QuarantineStore(dir).read(TIER)).toBeNull();
+    expect(report.quarantined).toBeUndefined();
+    // The reconciling read asked about OUR attempt, by its own coordinates.
+    expect(client.statusArgs).toContainEqual({ attemptId: "a10", opSeq: 304 });
+    // Never on this path: an unreadable body is not a parsed application-level terminal (design §5).
+    expect(client.recoverArgs).toHaveLength(0);
+    const m1 = report.mutants.find((m) => m.mutantCode === "M0001");
+    const m2 = report.mutants.find((m) => m.mutantCode === "M0002");
+    const m3 = report.mutants.find((m) => m.mutantCode === "M0003");
+    expect(m1?.verdict).toBe("survived"); // an earlier, fence-validated verdict still stands
+    expect(m2?.verdict).toBe("error"); // THIS mutant's result is genuinely lost
+    expect(m2?.failureNote).toContain("unreadable");
+    expect(m2?.failureNote).toContain("COMPLETED server-side");
+    expect(m3).toBeDefined(); // the run continued to the next mutant
+    // Not a deadline: our own client timeout produces a different verdict entirely.
+    expect(m2?.cause).toBeUndefined();
+    expect(report.counts.deadlineExceeded).toBe(0);
+  });
+
+  test("an op still ACTIVE and ours that CLEARS while polling is likewise not quarantined", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    client.reconcileStatus = stillOurs; // first look: the run op is still marked, and it is ours
+    // ...and the poll (which reads with an EMPTY attemptId) finds the marker idle.
+    client.statusQueue = [
+      { opKind: "none", opAttemptId: "", opSeq: 0, lastCompletedOpSeq: 7, completed: true },
+    ];
+    const { lease } = leaseCfg(client);
+    const report = await runSessionForTest(lostAckAfterFirstMutant(), {
+      quarantineDir: dir,
+      lease,
+    });
+    expect(await new QuarantineStore(dir).read(TIER)).toBeNull();
+    expect(report.quarantined).toBeUndefined();
+    expect(client.recoverArgs).toHaveLength(0);
+    expect(report.mutants.find((m) => m.mutantCode === "M0002")?.verdict).toBe("error");
+    expect(report.mutants.find((m) => m.mutantCode === "M0003")).toBeDefined();
+  });
+
+  test("an op that NEVER clears still writes the durable container-needs-recycle and stops the session", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    client.reconcileStatus = stillOurs;
+    // Head entry answers the publish fence's own `nextOpSeq` read; every later poll sees a marker
+    // that never goes idle (the last seeded entry repeats).
+    client.statusQueue = [
+      { opKind: "none", opAttemptId: "", opSeq: 0, lastCompletedOpSeq: 7, completed: true },
+      { opKind: "run", opAttemptId: "a10", opSeq: 304, lastCompletedOpSeq: 303, completed: false },
+    ];
+    const { lease } = leaseCfg(client);
+    const report = await runSessionForTest(lostAckAfterFirstMutant(), {
+      quarantineDir: dir,
+      lease,
+      nowIso: () => "2026-07-25T09:00:00.000Z",
+    });
+    // The conservative default is UNCHANGED: a container that may genuinely still be executing is
+    // still condemned.
+    const rec = await new QuarantineStore(dir).read(TIER);
+    expect(rec?.opKind).toBe("test-run"); // the SAME durable record this path has always written
+    expect(rec?.recordedAtIso).toBe("2026-07-25T09:00:00.000Z");
+    expect(report.quarantined).toBeDefined();
+    expect(client.recoverArgs).toHaveLength(0);
+  });
+
+  test("a status read that FAILS quarantines — conservative when the facts cannot be established", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    client.reconcileStatus = () => {
+      throw new LeaseUnavailableError("GetOperationStatus unreachable");
+    };
+    const { lease } = leaseCfg(client);
+    const report = await runSessionForTest(lostAckAfterFirstMutant(), {
+      quarantineDir: dir,
+      lease,
+    });
+    expect((await new QuarantineStore(dir).read(TIER))?.opKind).toBe("test-run");
+    expect(report.quarantined).toBeDefined();
+    expect(client.recoverArgs).toHaveLength(0);
+  });
+
+  test("a marker belonging to SOMEONE ELSE quarantines — it is not ours to declare finished", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    // Same shape as `stillOurs` except the attempt id: another attempt holds the marker, so our
+    // own op's fate is unknown. Isolating exactly the ownership predicate.
+    client.reconcileStatus = (_attemptId, opSeq) => ({
+      opKind: "run",
+      opAttemptId: "a99",
+      opSeq,
+      lastCompletedOpSeq: opSeq - 1,
+      completed: false,
+    });
+    const { lease } = leaseCfg(client);
+    const report = await runSessionForTest(lostAckAfterFirstMutant(), {
+      quarantineDir: dir,
+      lease,
+    });
+    expect((await new QuarantineStore(dir).read(TIER))?.opKind).toBe("test-run");
+    expect(report.quarantined).toBeDefined();
+    expect(client.recoverArgs).toHaveLength(0);
+  });
+
+  test("an in-flight-unknown carrying NO fence coordinates quarantines exactly as before", async () => {
+    // al-runner, the bc-dev hub's coverage runs, and any pre-5C-B2 verdict claim no op at all —
+    // there is nothing to reconcile, so the conservative path must remain the default rather than
+    // an absent field being read as "nothing was stranded" (the empty-vs-empty match this
+    // codebase keeps getting bitten by).
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    const { lease } = leaseCfg(client);
+    const backend = lostAckAfterFirstMutant({}, null);
+    const report = await runSessionForTest(backend, { quarantineDir: dir, lease });
+    expect((await new QuarantineStore(dir).read(TIER))?.opKind).toBe("test-run");
+    expect(report.quarantined).toBeDefined();
+    // Not even asked: with no coordinates there is no reconciling read to make.
+    expect(client.statusArgs.filter((a) => a.attemptId !== "")).toHaveLength(0);
+  });
+
+  test("a lost ack on the KILL-CONFIRMATION rerun is reconciled the same way", async () => {
+    // The confirm rerun is a hand-copied sibling of the covering-run branch; a fix applied to only
+    // one of them leaves the other quarantining healthy containers.
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    client.reconcileStatus = tombstoned;
+    const { lease } = leaseCfg(client);
+    let activeMutant: string | null = null;
+    let awaitingConfirm = false;
+    const backend = leaseBackend({
+      activate: async (id) => {
+        activeMutant = id;
+      },
+      run: async (ref) => {
+        if (activeMutant === "M0002" && !awaitingConfirm) {
+          awaitingConfirm = true;
+          return {
+            ref,
+            outcome: "fail" as const,
+            durationMs: 1,
+            attestation: { observedAny: true, identityMismatch: false },
+          };
+        }
+        if (awaitingConfirm && activeMutant === null) {
+          awaitingConfirm = false;
+          return {
+            ref,
+            outcome: "error" as const,
+            durationMs: 1,
+            failureMessage: 'RunMutant returned no string `value` (HTTP 200), body: ""',
+            operation: "in-flight-unknown" as const,
+            fencedOp: LOST_OP,
+          };
+        }
+        return {
+          ref,
+          outcome: "pass" as const,
+          durationMs: 1,
+          attestation: { observedAny: true, identityMismatch: false },
+        };
+      },
+    });
+    const report = await runSessionForTest(backend, { quarantineDir: dir, lease });
+    expect(await new QuarantineStore(dir).read(TIER)).toBeNull();
+    expect(report.quarantined).toBeUndefined();
+    expect(client.recoverArgs).toHaveLength(0);
+    const m2 = report.mutants.find((m) => m.mutantCode === "M0002");
+    expect(m2?.verdict).toBe("error"); // the kill could not be confirmed — never "killed"
+    expect(m2?.failureNote).toContain("unreadable");
+    expect(m2?.cause).toBeUndefined();
+    expect(report.counts.deadlineExceeded).toBe(0);
+  });
+
+  test("our OWN client timeout is reconciled too, and is no longer mislabelled a deadline", async () => {
+    // The transport's abort path returns `outcome:"deadline-exceeded"` WITH
+    // `operation:"in-flight-unknown"`, so it lands in this same branch. design §5 permits the
+    // status READ after a client timeout (only `RecoverOp` is forbidden), and a tombstoned op
+    // proves the run finished.
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    client.reconcileStatus = tombstoned;
+    const { lease } = leaseCfg(client);
+    const backend = lostAckAfterFirstMutant({
+      outcome: "deadline-exceeded" as const,
+      failureMessage: "RunMutant timed out: AbortError",
+    });
+    const report = await runSessionForTest(backend, { quarantineDir: dir, lease });
+    expect(await new QuarantineStore(dir).read(TIER)).toBeNull();
+    expect(report.quarantined).toBeUndefined();
+    expect(client.recoverArgs).toHaveLength(0);
   });
 });
 

@@ -67,6 +67,11 @@ export class RunMutantTransport {
     // `lease-invalid` while leaving `Op Kind = run` set, which quarantines the whole tier.
     assertAttemptId(attemptId);
     const started = Date.now();
+    // Layer 5C-B2 (design §5): every exit below that can only say "the server's answer was
+    // unreadable" carries these, so the orchestrator can ask the lease row what actually happened
+    // to THIS attempt instead of quarantining the tier on an unreadable response. Terminal and
+    // pre-dispatch exits deliberately omit them — see `TestVerdict.fencedOp`.
+    const fencedOp = { attemptId, opSeq: lease.opSeq } as const;
 
     const params = new URLSearchParams({ company: this.cfg.company });
     if (this.cfg.tenant !== undefined) params.set("tenant", this.cfg.tenant);
@@ -130,6 +135,7 @@ export class RunMutantTransport {
           durationMs,
           failureMessage: `RunMutant timed out: ${String(err)}`,
           operation: "in-flight-unknown",
+          fencedOp,
         };
       }
       // fetchFn was already invoked; a rejection here (e.g. connection reset) may have reached BC
@@ -140,6 +146,7 @@ export class RunMutantTransport {
         durationMs,
         failureMessage: `RunMutant connection failed after dispatch: ${String(err)}`,
         operation: "in-flight-unknown",
+        fencedOp,
       };
     } finally {
       clearTimeout(timer);
@@ -154,6 +161,7 @@ export class RunMutantTransport {
         durationMs: Date.now() - started,
         failureMessage: `RunMutant failed: HTTP ${res.status}`,
         operation: "in-flight-unknown",
+        fencedOp,
       };
     }
 
@@ -170,6 +178,7 @@ export class RunMutantTransport {
         ref,
         durationMs,
         `RunMutant 2xx body could not be read: ${String(err)}`,
+        fencedOp,
       );
     }
     let value: unknown;
@@ -189,13 +198,19 @@ export class RunMutantTransport {
         ref,
         durationMs,
         `RunMutant returned no string \`value\` (HTTP ${res.status}${parseError !== undefined ? `, body was not JSON: ${parseError}` : ""}), body: ${JSON.stringify(excerpt)}`,
+        fencedOp,
       );
     }
     let result: RunMutantResult;
     try {
       result = JSON.parse(value) as RunMutantResult;
     } catch {
-      return this.inFlightUnknown(ref, durationMs, `RunMutant \`value\` is not JSON: ${value}`);
+      return this.inFlightUnknown(
+        ref,
+        durationMs,
+        `RunMutant \`value\` is not JSON: ${value}`,
+        fencedOp,
+      );
     }
 
     // Identity guard (spec §I5): the echoed tuple MUST equal what we sent. A mismatch means the
@@ -254,25 +269,37 @@ export class RunMutantTransport {
         ref,
         durationMs,
         `RunMutant unexpected status: ${JSON.stringify(result.status)}`,
+        fencedOp,
       );
     }
 
-    return this.mapRanResult(ref, durationMs, result);
+    return this.mapRanResult(ref, durationMs, result, fencedOp);
   }
 
   private mapRanResult(
     ref: TestMethodRef,
     durationMs: number,
     result: RunMutantResult,
+    fencedOp: { readonly attemptId: string; readonly opSeq: number },
   ): TestVerdict {
     if (typeof result.codeunitResults !== "string") {
-      return this.inFlightUnknown(ref, durationMs, "RunMutant status=ran but no codeunitResults");
+      return this.inFlightUnknown(
+        ref,
+        durationMs,
+        "RunMutant status=ran but no codeunitResults",
+        fencedOp,
+      );
     }
     let parsed: { testResults?: unknown };
     try {
       parsed = JSON.parse(result.codeunitResults) as { testResults?: unknown };
     } catch {
-      return this.inFlightUnknown(ref, durationMs, "RunMutant codeunitResults is not JSON");
+      return this.inFlightUnknown(
+        ref,
+        durationMs,
+        "RunMutant codeunitResults is not JSON",
+        fencedOp,
+      );
     }
     const lines = Array.isArray(parsed.testResults) ? parsed.testResults : [];
     // Fail closed: RunMutant selects exactly one method server-side, so exactly one line is the
@@ -367,13 +394,22 @@ export class RunMutantTransport {
     return mismatches.length > 0 ? `RunMutant identity mismatch: ${mismatches.join(", ")}` : null;
   }
 
-  private inFlightUnknown(ref: TestMethodRef, durationMs: number, detail: string): TestVerdict {
+  /** `fencedOp` is REQUIRED, not optional: every caller is an unreadable-answer exit, and design
+   *  §5's reconciliation can only name an op the verdict actually carries. Making it a parameter
+   *  (rather than defaulting it away) means a future exit cannot silently ship uncoordinated. */
+  private inFlightUnknown(
+    ref: TestMethodRef,
+    durationMs: number,
+    detail: string,
+    fencedOp: { readonly attemptId: string; readonly opSeq: number },
+  ): TestVerdict {
     return {
       ref,
       outcome: "error",
       durationMs,
       failureMessage: detail,
       operation: "in-flight-unknown",
+      fencedOp,
     };
   }
 }

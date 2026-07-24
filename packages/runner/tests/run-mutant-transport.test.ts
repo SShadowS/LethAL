@@ -210,6 +210,70 @@ describe("RunMutantTransport.run — 5B dispatch classification", () => {
   });
 });
 
+// Layer 5C-B2 item 1: an `in-flight-unknown` verdict is the ONLY input the orchestrator's
+// lost-ack reconciliation (design §5) has to work from, and it can only ask
+// `GetOperationStatus(attemptId, opSeq)` about an op it can name. Every ambiguous exit therefore
+// carries the fence coordinates of the attempt that produced it — without them the orchestrator
+// has no choice but to condemn the tier, which is exactly the live defect (BC answering a
+// RunMutant with HTTP 200 and a zero-byte body, three times in eight gate runs).
+describe("RunMutantTransport.run — ambiguous exits carry their fence coordinates (5C-B2)", () => {
+  const FENCE = { attemptId: "a1", opSeq: 7 };
+
+  test("the live defect: HTTP 200 with a ZERO-BYTE body carries attemptId + opSeq", async () => {
+    const emptyBody = (async (_url: unknown, _init?: RequestInit) =>
+      new Response("", { status: 200 })) as typeof fetch;
+    const v = await transport(emptyBody).run(REQ);
+    expect(v.operation).toBe("in-flight-unknown");
+    expect(v.fencedOp).toEqual(FENCE);
+  });
+
+  test("a non-2xx carries them", async () => {
+    const five00 = (async (_url: unknown, _init?: RequestInit) =>
+      new Response("boom", { status: 500 })) as typeof fetch;
+    expect((await transport(five00).run(REQ)).fencedOp).toEqual(FENCE);
+  });
+
+  test("a post-dispatch connection failure carries them", async () => {
+    const fetchFn = (async (_url: unknown, _init?: RequestInit) => {
+      throw new Error("ECONNRESET");
+    }) as unknown as typeof fetch;
+    expect((await transport(fetchFn).run(REQ)).fencedOp).toEqual(FENCE);
+  });
+
+  test("our own client timeout carries them", async () => {
+    const neverResolving = ((_url: unknown, init?: RequestInit) =>
+      new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new Error("aborted")));
+      })) as typeof fetch;
+    const v = await transport(neverResolving).run({ ...REQ, timeoutMs: 20 });
+    expect(v.outcome).toBe("deadline-exceeded");
+    expect(v.fencedOp).toEqual(FENCE);
+  });
+
+  test("a `value` that is not JSON carries them", async () => {
+    const notJson = (async (_url: unknown, _init?: RequestInit) =>
+      new Response(JSON.stringify({ value: "{{{" }), { status: 200 })) as typeof fetch;
+    expect((await transport(notJson).run(REQ)).fencedOp).toEqual(FENCE);
+  });
+
+  test("a terminal verdict carries NONE — the op resolved, there is nothing to reconcile", async () => {
+    const v = await transport(okFetch(echo())).run(REQ);
+    expect(v.outcome).toBe("pass");
+    expect(v.fencedOp).toBeUndefined();
+  });
+
+  test("a pre-dispatch rejection carries NONE — no op was ever claimed", async () => {
+    const badCfg: ActivationConfig = { ...CFG, password: "π" }; // btoa throws on >255 code units
+    const spyFetch = (async (_url: unknown, _init?: RequestInit) =>
+      new Response(JSON.stringify({ value: JSON.stringify(echo()) }), {
+        status: 200,
+      })) as typeof fetch;
+    const v = await new RunMutantTransport(badCfg, TA, AR, spyFetch).run(REQ);
+    expect(v.operation).toBe("pre-dispatch-rejected");
+    expect(v.fencedOp).toBeUndefined();
+  });
+});
+
 describe("RunMutantTransport.run — guards", () => {
   test("artifact-mismatch → typed error, never survived, ran nothing (no in-flight)", async () => {
     const inner = {

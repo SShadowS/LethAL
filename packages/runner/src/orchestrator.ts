@@ -734,6 +734,32 @@ function classifyLeaseVerdict(v: Pick<TestVerdict, "operation" | "leaseInvalidRe
 }
 
 /**
+ * Layer 5C-B2 (design §5): what a lost `RunMutant` ack could be established to be.
+ *   - `"completed"` — the server-side fence provably finished (the op is tombstoned, or it cleared
+ *     while we polled). Only the RESULT was lost; the container is clean.
+ *   - `"unresolved"` — anything we could not establish, including a failed status read and a marker
+ *     that is not ours. The conservative durable quarantine applies.
+ */
+type LostAckOutcome = "completed" | "unresolved";
+
+/**
+ * The lost-ack reconciliation as the two `in-flight-unknown` call sites see it (design §5).
+ *
+ * `"unresolved"` for a verdict carrying no `fencedOp`, deliberately: al-runner, the bc-dev hub's
+ * coverage runs, and any verdict from a session holding no lease name no operation at all, so
+ * there is nothing to ask the server about and the pre-5C-B2 quarantine remains exactly right. An
+ * absent field must never read as "nothing was stranded".
+ */
+async function reconcileFencedLostAck(
+  leaseSession: LeaseSession | undefined,
+  verdict: Pick<TestVerdict, "fencedOp">,
+): Promise<LostAckOutcome> {
+  const { fencedOp } = verdict;
+  if (leaseSession === undefined || fencedOp === undefined) return "unresolved";
+  return leaseSession.reconcileLostAck(fencedOp);
+}
+
+/**
  * Records a GENUINE lease loss (design §6) — and refuses to proceed without a lease session.
  *
  * `SessionSafety.latchUnsafe` alone is NOT a safe fallback here, however plausible it looks: it
@@ -983,6 +1009,59 @@ class LeaseSession {
     await this.recordRecycle(
       `publish op ${opSeq} (attemptId ${attemptId}) could not be reconciled after a lost EndPublish ack (${messageOf(cause)}); server marker: opKind ${status.opKind}, opAttemptId ${status.opAttemptId}, opSeq ${status.opSeq}`,
     );
+  }
+
+  /**
+   * Layer 5C-B2 (design §5): reconcile a FENCED `RunMutant` whose answer we could not read.
+   *
+   * The live defect this closes: BC answered `RunMutant` with HTTP 200 and a zero-byte body on 3
+   * of 8 bcdev gate runs. The transport can only call that `in-flight-unknown`, and the
+   * orchestrator went straight to a durable `container-needs-recycle` that blocks every later
+   * session on the tier until an operator deletes it by hand. The lease row read moments after one
+   * such failure said `{"opKind":"none","opAttemptId":"a10","opSeq":304,
+   * "lastCompletedOpSeq":304,"completed":true}` — phase 3 HAD run and tombstoned the op. Nothing
+   * was ever stranded; only the HTTP response body was lost.
+   *
+   * design §5's three rules, in order:
+   *   - the attempt is **completed/tombstoned** → the whole fence ran; discard the lost result
+   *     client-side, no recycle;
+   *   - the attempt is **still active AND ours** → it may still be executing AL → poll (via the one
+   *     `pollUntilOpClears` helper); only if it never clears is the tier condemned;
+   *   - anything else — the status read failed, or the marker names an op that is not ours — is
+   *     unresolved, and the conservative quarantine stands. Establishing nothing is NOT evidence of
+   *     health (the empty-vs-empty match this codebase keeps getting bitten by, here guarding the
+   *     verdict that a container is safe to keep using).
+   *
+   * `RecoverOp` is NEVER called from here, at any branch: an unreadable body is not a parsed
+   * application-level terminal response, and clearing a marker over a still-running AL op is the
+   * exact overlap→false-verdict sequence design §5 exists to close.
+   */
+  async reconcileLostAck(op: {
+    readonly attemptId: string;
+    readonly opSeq: number;
+  }): Promise<LostAckOutcome> {
+    let status: Awaited<ReturnType<LeaseApi["getOperationStatus"]>>;
+    try {
+      status = await this.d.client.getOperationStatus(this.d.lease, op.attemptId, op.opSeq);
+    } catch (err) {
+      console.warn(
+        `[lethal] could not reconcile the lost RunMutant ack for op ${op.opSeq} (attemptId ${op.attemptId}): ${messageOf(err)} — treating the operation as unresolved`,
+      );
+      return "unresolved";
+    }
+    // `completed` is the server's own `opSeq <= Last Completed Op Seq`; the second term repeats it
+    // from the raw fields so a server that ever omitted/mis-set the boolean cannot silently turn a
+    // tombstoned op into an unresolved one.
+    if (status.completed || op.opSeq <= status.lastCompletedOpSeq) return "completed";
+    // Ours means ALL THREE of kind/attempt/seq name this exact attempt. An empty `attemptId` is
+    // refused outright rather than allowed to match an equally-empty marker.
+    const ours =
+      op.attemptId !== "" &&
+      status.opKind === "run" &&
+      status.opAttemptId === op.attemptId &&
+      status.opSeq === op.opSeq;
+    if (!ours) return "unresolved";
+    return (await this.pollUntilOpClears()) ? "completed" : "unresolved";
   }
 
   /**
@@ -2094,8 +2173,21 @@ async function runMutantsOnBackend(args: {
         break;
       }
       if (v.operation !== undefined && requiresUnsafeLatch(v.operation)) {
-        // The server may still be executing this test. Latch unsafe, record a durable tier
-        // quarantine, and stop — no further work-plane call (spec §8, §12).
+        // Layer 5C-B2 (design §5): the server may still be executing this test — or it may have
+        // completed the entire fence and only lost the response on the way back. Ask the lease row
+        // WHICH before condemning the tier; `reconcileFencedLostAck` answers "unresolved" for
+        // anything it cannot establish, so the conservative path below is still the default.
+        const reconciled = await reconcileFencedLostAck(leaseSession, v);
+        verdict = "error";
+        if (reconciled === "completed") {
+          // Phase 3 ran: the op is tombstoned and the container is clean. This mutant's RESULT is
+          // genuinely lost (so `error`, never a verdict), but there is nothing to recycle, nothing
+          // to latch, and the session runs on to the next mutant.
+          failureNote = `lost ack running ${ref.method}: RunMutant's response was unreadable${v.failureMessage !== undefined ? ` (${v.failureMessage})` : ""}, but GetOperationStatus confirms the operation COMPLETED server-side (design §5) — this mutant's result is discarded; the container is not stranded`;
+          break;
+        }
+        // Unresolved: latch unsafe, record a durable tier quarantine, and stop — no further
+        // work-plane call (spec §8, §12).
         await quarantineInFlight({
           safety: args.safety,
           quarantineStore: args.quarantineStore,
@@ -2106,9 +2198,7 @@ async function runMutantsOnBackend(args: {
           // went wrong — and this record outlives the process that wrote it.
           detail: `test in-flight-unknown running ${ref.method} (mutant ${m.mutantId})${v.failureMessage !== undefined ? `: ${v.failureMessage}` : ""}`,
         });
-        verdict = "error";
-        failureNote = `quarantined: ${ref.method} timed out, container may be stranded`;
-        cause = "deadline-exceeded";
+        failureNote = `quarantined: ${ref.method} returned no readable result and its operation could not be confirmed complete — container may be stranded`;
         break;
       }
       if (v.outcome === "deadline-exceeded") {
@@ -2184,20 +2274,25 @@ async function runMutantsOnBackend(args: {
             }
           }
         } else if (confirm.operation !== undefined && requiresUnsafeLatch(confirm.operation)) {
-          // The server may still be executing this confirmation run. Latch unsafe, record a
-          // durable tier quarantine, and stop — same in-flight-unknown handling as the
-          // covering-test run above (spec §8, §12); the post-loop `safety.isUnsafe` check
-          // (below) stops scheduling further mutants.
-          await quarantineInFlight({
-            safety: args.safety,
-            quarantineStore: args.quarantineStore,
-            resourceKey: args.resourceKey,
-            nowIso: args.nowIso,
-            detail: `test in-flight-unknown confirming ${ref.method} (mutant ${m.mutantId})${confirm.failureMessage !== undefined ? `: ${confirm.failureMessage}` : ""}`,
-          });
+          // Layer 5C-B2 (design §5): same lost-ack reconciliation as the covering-test run above —
+          // this branch is its hand-copied sibling, and a fix applied to only one of them would
+          // leave the other quarantining containers that provably finished the op. The kill is
+          // unconfirmable either way (`error`, never `killed`); what differs is whether the tier is
+          // condemned. The post-loop `safety.isUnsafe` check (below) stops scheduling only if it is.
+          const reconciled = await reconcileFencedLostAck(leaseSession, confirm);
           verdict = "error";
-          failureNote = `quarantined: ${ref.method} confirm timed out, container may be stranded`;
-          cause = "deadline-exceeded";
+          if (reconciled === "completed") {
+            failureNote = `lost ack confirming ${ref.method}: RunMutant's response was unreadable${confirm.failureMessage !== undefined ? ` (${confirm.failureMessage})` : ""}, but GetOperationStatus confirms the operation COMPLETED server-side (design §5) — the kill could not be confirmed, but the container is not stranded`;
+          } else {
+            await quarantineInFlight({
+              safety: args.safety,
+              quarantineStore: args.quarantineStore,
+              resourceKey: args.resourceKey,
+              nowIso: args.nowIso,
+              detail: `test in-flight-unknown confirming ${ref.method} (mutant ${m.mutantId})${confirm.failureMessage !== undefined ? `: ${confirm.failureMessage}` : ""}`,
+            });
+            failureNote = `quarantined: ${ref.method} confirm returned no readable result and its operation could not be confirmed complete — container may be stranded`;
+          }
         } else if (confirm.outcome === "pass") {
           verdict = "killed";
           killingTest = ref.method;

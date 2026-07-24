@@ -61,6 +61,24 @@ export interface TestVerdict {
    * path — that path is correct for a real loss, wrong for a same-attempt duplicate.
    */
   readonly leaseInvalidReason?: string;
+  /**
+   * Layer 5C-B2 (design §5): the fence coordinates of the `RunMutant` attempt behind this verdict,
+   * set by `RunMutantTransport` on — and ONLY on — its `operation: "in-flight-unknown"` exits.
+   *
+   * Those exits mean the client could not read the server's answer, not that the server failed to
+   * produce one. Naming the attempt is what lets the orchestrator ask
+   * `GetOperationStatus(attemptId, opSeq)` whether phase 3 already ran (op tombstoned ⇒ only the
+   * RESULT was lost and the container is clean) instead of durably condemning the tier on the
+   * strength of an unreadable HTTP response. Live-earned: BC answered `RunMutant` with HTTP 200
+   * and a zero-byte body on 3 of 8 bcdev gate runs, each one quarantining a container whose lease
+   * row showed the op completed.
+   *
+   * Absent on every terminal verdict (the op resolved — nothing to reconcile), on
+   * `pre-dispatch-rejected` (no op was ever claimed), and on every unfenced backend (al-runner,
+   * the bc-dev hub's coverage runs). Absent therefore means "no op this client can name", and the
+   * orchestrator must keep quarantining — never read a missing field as "nothing was stranded".
+   */
+  readonly fencedOp?: { readonly attemptId: string; readonly opSeq: number };
 }
 
 export interface BackendCapabilities {
