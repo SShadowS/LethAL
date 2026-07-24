@@ -213,34 +213,6 @@ async function runOnce(scratchRoot: string): Promise<RunOnceResult> {
 }
 
 /**
- * OData `LethALControl_RegisterArtifact` — pins the target-artifact registry so the RunMutant
- * artifact guard passes for the run-probes, independent of whether registration reached the server
- * via a fresh install or an upgrade (the install-vs-upgrade timing is Task 8's concern). The
- * target's own install codeunit already registers the same id; this is belt-and-suspenders for the
- * probe section.
- */
-async function odataRegisterArtifact(
-  cfg: ActivationConfig,
-  targetAppId: string,
-  artifactId: string,
-): Promise<void> {
-  const params = new URLSearchParams({ company: cfg.company });
-  if (cfg.tenant !== undefined) params.set("tenant", cfg.tenant);
-  const url = `${cfg.baseUrl}/ODataV4/LethALControl_RegisterArtifact?${params.toString()}`;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      authorization: `Basic ${btoa(`${cfg.username}:${cfg.password}`)}`,
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({ targetAppId, artifactId }),
-  });
-  if (!res.ok) {
-    throw new Error(`RegisterArtifact probe setup failed: HTTP ${res.status} ${await res.text()}`);
-  }
-}
-
-/**
  * The gate is the per-mutant frozen table PLUS these protocol invariants (spec §11): the table
  * alone cannot catch a runner that runs the wrong method set or leaves a mutant active. Each probe
  * drives RunMutant directly against a fixture whose OUTCOME witnesses the invariant — so a lying
@@ -259,8 +231,6 @@ async function runProtocolInvariantProbes(run: RunOnceResult): Promise<void> {
     throw new Error("mutant-manifest.json has no string artifactId — cannot drive probes");
   }
   const artifactId = manifest.artifactId;
-
-  await odataRegisterArtifact(odataCfg, TARGET_APP_ID, artifactId);
 
   const tx = new RunMutantTransport(odataCfg, TARGET_APP_ID, artifactId);
   const overBudget: TestMethodRef = {
