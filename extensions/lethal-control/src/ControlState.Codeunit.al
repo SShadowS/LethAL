@@ -221,6 +221,9 @@ codeunit 71002 "LC Control State"
         OpAttemptId := '';
         OpStartedAt := 0DT;
 
+        if ClientNonce = '' then
+            Error(BlankClientNonceErr());
+
         Lease.LockTable();
         if not Lease.Get('') then
             Error(LeaseRowMissingErr());
@@ -245,8 +248,10 @@ codeunit 71002 "LC Control State"
             exit;
         end;
 
-        // 3. Idempotent-nonce replay (Held only — Token <> '').
-        if (Lease.Token <> '') and (Lease."Client Nonce" = ClientNonce) then begin
+        // 3. Idempotent-nonce replay (Held only — Token <> ''). ClientNonce <> '' is redundant with
+        // the top-of-procedure guard but kept here as defense in depth: this branch must never
+        // false-match on a blank nonce regardless of any future caller path that bypasses that guard.
+        if (Lease.Token <> '') and (ClientNonce <> '') and (Lease."Client Nonce" = ClientNonce) then begin
             Granted := true;
             Epoch := Lease.Epoch;
             Token := Lease.Token;
@@ -347,5 +352,14 @@ codeunit 71002 "LC Control State"
     local procedure LeaseRowMissingErr(): Text
     begin
         exit('The "LC Lease" pre-seeded row is missing (primary key ''''). Refusing to silently grant a lease without it — reinstall or upgrade "LethAL Control" to re-seed it.');
+    end;
+
+    /// <summary>ClientNonce is a required AcquireLease parameter (design §4). A blank value is a
+    /// caller-contract violation, not a legitimate replay key: "Client Nonce" is blank on the pristine
+    /// pre-seeded row and is reset to '' by every TryRelease, so a blank incoming nonce could otherwise
+    /// false-match an unrelated held lease and leak its live credentials to the wrong caller.</summary>
+    local procedure BlankClientNonceErr(): Text
+    begin
+        exit('AcquireLease requires a non-blank clientNonce. Refusing to evaluate the idempotent-nonce replay against a blank value — a blank nonce could false-match an unrelated held lease''s blank "Client Nonce" and leak its credentials.');
     end;
 }
