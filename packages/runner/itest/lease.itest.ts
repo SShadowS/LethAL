@@ -1109,10 +1109,17 @@ async function probeOrphanedOpRecovery(
     // reconcilable record (the marker cleared through some other path in the meantime) would be
     // clearable WITHOUT a recycle. GetOperationStatus does not gate on tuple match, so any tuple
     // works (mirrors scripts/probe-5cb1.ts's final section-E read).
+    //
+    // Ask about A'S OWN op, not opSeq 0. `completed` is `askedOpSeq <= Last Completed Op Seq`
+    // (ControlState.Codeunit.al) — it answers "is the op I asked about already tombstoned?", NOT
+    // "is the current marker resolved?". Passing 0 makes it trivially true on any container whose
+    // Last Completed Op Seq has ever advanced, which asserts nothing about A. Live-caught: this
+    // probe originally passed 0 and failed against a healthy container reporting the correct
+    // still-stranded marker (opSeq 26 > lastCompletedOpSeq 25).
     const status = await bClient.getOperationStatus(
       { epoch: 0, token: "", serverGeneration: "" },
-      "",
-      0,
+      attemptA,
+      opSeqA,
     );
     assert.equal(
       status.opKind,
@@ -1127,7 +1134,7 @@ async function probeOrphanedOpRecovery(
     assert.equal(
       status.completed,
       false,
-      `[${label}] reconciliation: expected completed:false (the op never resolved), got ${JSON.stringify(status)}`,
+      `[${label}] reconciliation: expected completed:false for A's own opSeq ${opSeqA} (the op never resolved, so it was never tombstoned), got ${JSON.stringify(status)} — completed:true here would mean Last Completed Op Seq advanced past A's op, i.e. something DID resolve it`,
     );
     console.log(
       `  [${label}] reconciliation confirms the marker is genuinely still active — not stale — so a recycle really is required`,
