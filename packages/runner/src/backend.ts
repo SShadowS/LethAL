@@ -50,6 +50,17 @@ export interface TestVerdict {
    * (hub-routed coverage runs, and any error/timeout verdict).
    */
   readonly attestation?: { readonly observedAny: boolean; readonly identityMismatch: boolean };
+  /**
+   * The raw server `reason` string on a Layer 5C-B1 `RunMutant` `lease-invalid` result — set ONLY
+   * alongside `operation:"lease-lost"` (design §5/§8). `"op-in-flight"` means THIS caller's own
+   * (attemptId, opSeq) is still active server-side — a duplicate claim on a still-running same
+   * attempt, e.g. a retry after an ambiguous prior response — meaning "poll `getOperationStatus`,
+   * do not retry, do not treat as lease loss." Any other value (or a phase-3 verify-and-clear
+   * refusal, which carries none) is a genuine lost lease. The orchestrator (Task 8) MUST branch on
+   * this field before applying `requiresUnsafeLatch("lease-lost")`'s generic abort-and-invalidate
+   * path — that path is correct for a real loss, wrong for a same-attempt duplicate.
+   */
+  readonly leaseInvalidReason?: string;
 }
 
 export interface BackendCapabilities {

@@ -1,5 +1,7 @@
 import type { ActivationConfig, FetchFn } from "./activation";
 import type { TestMethodRef, TestOutcome, TestVerdict } from "./backend";
+import { assertAttemptId } from "./lease";
+import type { LeaseTuple } from "./lease";
 
 /**
  * OData client for the `LethALControl_RunMutant` action (Layer 5C-A). One call does
@@ -20,11 +22,19 @@ export interface RunMutantRequest {
   readonly mutantId: string;
   readonly attemptId: string;
   readonly timeoutMs: number;
+  /**
+   * Layer 5C-B1's machine-global lease fence (design §5/§6): the tuple this call claims under,
+   * plus the caller-supplied, exactly-next `opSeq` for THIS attempt. `RunMutantTransport` does
+   * not mint or track `opSeq` — the backend seeds/increments it per RunMutant call (see
+   * `bcdev-backend.ts`).
+   */
+  readonly lease: LeaseTuple & { readonly opSeq: number };
 }
 
 /** Parsed `LethALControl_RunMutant` result (the JSON string inside OData's scalar `value`). */
 interface RunMutantResult {
   readonly status?: unknown;
+  readonly reason?: unknown;
   readonly targetAppId?: unknown;
   readonly artifactId?: unknown;
   readonly attemptId?: unknown;
@@ -49,7 +59,13 @@ export class RunMutantTransport {
   ) {}
 
   async run(req: RunMutantRequest): Promise<TestVerdict> {
-    const { ref, mutantId, attemptId, timeoutMs } = req;
+    const { ref, mutantId, attemptId, timeoutMs, lease } = req;
+    // Layer 5C-B1: the SAME bound every lease action is held to (`lease.ts`), applied here because
+    // `RunMutant` writes the same Text[64] column. Deliberately a THROW, not a `TestVerdict` —
+    // an over-long id is a caller-contract violation, and every verdict-shaped alternative is
+    // worse: phase 1 would store a truncated id that phase 3 could never match, refusing with
+    // `lease-invalid` while leaving `Op Kind = run` set, which quarantines the whole tier.
+    assertAttemptId(attemptId);
     const started = Date.now();
 
     const params = new URLSearchParams({ company: this.cfg.company });
@@ -71,9 +87,12 @@ export class RunMutantTransport {
         mutantId,
         testCodeunitId: ref.codeunitId,
         testMethod: ref.method,
-        // Reserved for 5C-B — MUST be empty in 5C-A (the server rejects non-empty).
-        leaseEpoch: "",
-        leaseToken: "",
+        // Layer 5C-B1: the two-phase RunMutant fence (design §5) — leaseEpoch is an Integer on
+        // the wire (v1's reserved empty string is OData-rejected by the v2 server).
+        leaseEpoch: lease.epoch,
+        leaseToken: lease.token,
+        serverGeneration: lease.serverGeneration,
+        opSeq: lease.opSeq,
       });
     } catch (err) {
       return {
@@ -139,16 +158,38 @@ export class RunMutantTransport {
     }
 
     const durationMs = Date.now() - started;
-    let value: unknown;
+    // Read the body as text FIRST, then parse. `res.json()` inside a try that collapses to
+    // `undefined` cannot distinguish "the body was not JSON at all" from "the JSON had no
+    // `value` key" — and this branch quarantines a tier, so the operator needs to know which.
+    // Live-earned: this fired repeatedly on one mutant with no way to see what BC actually sent.
+    let rawBody: string;
     try {
-      value = ((await res.json()) as { value?: unknown }).value;
-    } catch {
-      value = undefined;
+      rawBody = await res.text();
+    } catch (err) {
+      return this.inFlightUnknown(
+        ref,
+        durationMs,
+        `RunMutant 2xx body could not be read: ${String(err)}`,
+      );
+    }
+    let value: unknown;
+    let parseError: string | undefined;
+    try {
+      value = (JSON.parse(rawBody) as { value?: unknown }).value;
+    } catch (err) {
+      parseError = String(err);
     }
     if (typeof value !== "string") {
       // 2xx with a malformed body: the run happened but we can't read its result or confirm the
-      // clear — same possibly-stranded risk as a non-2xx.
-      return this.inFlightUnknown(ref, durationMs, "RunMutant returned no string `value`");
+      // clear — same possibly-stranded risk as a non-2xx. Carry the evidence: HTTP status, why
+      // parsing failed (if it did), and the body itself, truncated.
+      const excerpt =
+        rawBody.length > 400 ? `${rawBody.slice(0, 400)}…[${rawBody.length} bytes]` : rawBody;
+      return this.inFlightUnknown(
+        ref,
+        durationMs,
+        `RunMutant returned no string \`value\` (HTTP ${res.status}${parseError !== undefined ? `, body was not JSON: ${parseError}` : ""}), body: ${JSON.stringify(excerpt)}`,
+      );
     }
     let result: RunMutantResult;
     try {
@@ -187,6 +228,25 @@ export class RunMutantTransport {
         outcome: "error",
         durationMs,
         failureMessage: "RunMutant rejected reserved lease params (protocol mismatch)",
+      };
+    }
+    if (result.status === "lease-invalid") {
+      // Layer 5C-B1 (design §5/§8): a confirmed refusal — never map to `in-flight-unknown`
+      // (client-side ambiguity) or a bare error (the orchestrator must latch/invalidate). `reason`
+      // is preserved verbatim: `"op-in-flight"` means THIS caller's own attempt is still active
+      // server-side (poll, do not retry, not a real loss); anything else (or absent, on the
+      // phase-3 verify-and-clear refusal) is a genuine lost lease. See `TestVerdict.leaseInvalidReason`.
+      const reason = typeof result.reason === "string" ? result.reason : undefined;
+      return {
+        ref,
+        outcome: "error",
+        durationMs,
+        failureMessage:
+          reason !== undefined
+            ? `RunMutant lease-invalid (reason: ${reason})`
+            : "RunMutant lease-invalid",
+        operation: "lease-lost",
+        ...(reason !== undefined ? { leaseInvalidReason: reason } : {}),
       };
     }
     if (result.status !== "ran") {

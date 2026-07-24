@@ -1,23 +1,57 @@
 namespace LethAL.Control;
 
-using System.TestTools.TestRunner;
-
 /// <summary>The OData-exposed control surface (registered as a web service by the install codeunit;
 /// procedures are OData V4 unbound actions /ODataV4/LethALControl_&lt;Proc&gt;). Layer 5C-A.</summary>
 codeunit 71003 "LC Control API"
 {
-    /// <summary>Identity + capabilities the client verifies before any execution.</summary>
-    procedure HarnessInfo() InfoJson: Text
+    /// <summary>Identity + capabilities the client verifies before any execution. PROTOCOL V2 (design
+    /// §7, R4 sol#8): ClientProtocol is a REQUIRED argument, not an optional one with a default — a v1
+    /// client that calls with no argument at all (an OData body of `{}`) must fail to reach a valid v2
+    /// payload, so a v1 client can never silently talk to a v2 server. `alc` cannot prove that an
+    /// omitted argument is genuinely refused rather than silently defaulted (that is wire/runtime
+    /// behavior, not something a compile checks); confirming it is the live probe's job (design §7), not
+    /// this comment's. Independently of how the OData layer handles a truly missing argument, a SUPPLIED
+    /// ClientProtocol &lt; 2 is rejected explicitly below, so a caller that deliberately downgrades (or a
+    /// hypothetical mismatched server on the other side of a v2 client) fails the same way, before any
+    /// publish.
+    ///
+    /// Tenant-scope signal (design §7): the client's pre-deploy single-tenant-container check needs to
+    /// know whether more than one tenant shares this service instance. AL CANNOT determine that from
+    /// here — this procedure runs inside exactly one tenant's session, and the only tenant-scoped API
+    /// this runtime exposes at all, System Application's codeunit 417 "Tenant Information", reports
+    /// solely the CURRENT tenant's own id/name (GetTenantId/GetTenantDisplayName); checked directly
+    /// against the System Application 28.0 symbols in this repo's package cache, there is no
+    /// tenant-enumeration or multitenancy-boolean surface anywhere in it reachable from an extension.
+    /// Reporting a fabricated tenantCount, or a `singleTenant: true` this procedure cannot substantiate,
+    /// would be worse than reporting nothing — the client would gate a publish decision on it. So this
+    /// reports `tenantCountReachable: false` and nothing else on the topic: the client's single-tenant
+    /// check (design §7) MUST be performed out-of-band against the container (e.g. the BC admin/
+    /// PowerShell surface — `Get-NAVTenant` / bccontainerhelper's `Get-BcContainerTenants`) BEFORE
+    /// publish, never by asking this endpoint.
+    ///
+    /// `serverGeneration` is also reported (Task 4 dependency): it is the ONLY value ForceResetLease
+    /// authenticates against (design §8, R4 sol#4), and no OTHER endpoint returns it unless an acquire
+    /// is GRANTED — which a still-active op or a live holder's own token refuses. Without it here, a
+    /// session killed mid-run (the exact case ForceResetLease exists for) would have no way to obtain
+    /// the echo it needs. Read via "LC Control State".CurrentServerGeneration(), never straight off the
+    /// table from this codeunit.</summary>
+    procedure HarnessInfo(ClientProtocol: Integer) InfoJson: Text
     var
+        State: Codeunit "LC Control State";
         Obj: JsonObject;
         Isolation: JsonArray;
         TestTypes: JsonArray;
     begin
+        if ClientProtocol < 2 then
+            Error(ProtocolIncompatibleErr(ClientProtocol));
+
         Isolation.Add('Codeunit');
         TestTypes.Add('codeunit');
         Obj.Add('appId', '5e7a1c00-1111-4c00-8c00-1e7a1c000701');
         Obj.Add('semver', '1.0.0.0');
-        Obj.Add('protocolVersion', 1);
+        Obj.Add('protocolVersion', 2);
+        Obj.Add('serverGeneration', State.CurrentServerGeneration());
+        Obj.Add('tenantCountReachable', false);
         Obj.Add('isolationModes', Isolation);
         Obj.Add('testTypes', TestTypes);
         Obj.WriteTo(InfoJson);
@@ -33,100 +67,318 @@ codeunit 71003 "LC Control API"
         exit(State.RegisteredArtifact(TargetAppId));
     end;
 
-    /// <summary>
-    /// Run-scoped, single-method execution primitive (spec §5). Activate the mutant, run exactly one
-    /// named method under Codeunit isolation, ALWAYS clear the active state before returning. No lease
-    /// yet — leaseEpoch/leaseToken are reserved and MUST be empty in 5C-A.
-    /// </summary>
-    procedure RunMutant(TargetAppId: Text; ArtifactId: Text; AttemptId: Text; MutantId: Text; TestCodeunitId: Integer; TestMethod: Text; LeaseEpoch: Text; LeaseToken: Text) ResultJson: Text
+    /// <summary>OData action: attempt to acquire the machine-global lease (design §4, R4-hardened).
+    /// Thin wrapper — all decision logic (generation-changed / operation-busy / operation-orphaned /
+    /// idempotent-nonce replay / fresh grant / held) lives in "LC Control State".TryAcquire. camelCase
+    /// JSON result keys: {granted, epoch?, token?, serverGeneration?, lastCompletedOpSeq?, expiresAt?,
+    /// reason?, holder?, opAttemptId?, opStartedAt?}.</summary>
+    procedure AcquireLease(Owner: Text; TtlSeconds: Integer; ClientNonce: Text; ExpectedGeneration: Text) ResultJson: Text
     var
         State: Codeunit "LC Control State";
+        Granted: Boolean;
+        Epoch: Integer;
+        Token: Text;
+        ServerGeneration: Text;
+        LastCompletedOpSeq: BigInteger;
+        ExpiresAt: DateTime;
+        Reason: Text;
+        Holder: Text;
+        OpAttemptId: Text;
+        OpStartedAt: DateTime;
+    begin
+        State.TryAcquire(Owner, TtlSeconds, ClientNonce, ExpectedGeneration, Granted, Epoch, Token, ServerGeneration, LastCompletedOpSeq, ExpiresAt, Reason, Holder, OpAttemptId, OpStartedAt);
+        ResultJson := BuildAcquireResult(Granted, Epoch, Token, ServerGeneration, LastCompletedOpSeq, ExpiresAt, Reason, Holder, OpAttemptId, OpStartedAt);
+    end;
+
+    /// <summary>OData action: extend the lease's Expires At (design §4). A matching (epoch, token,
+    /// generation) is honored even if momentarily past Expires At. Thin wrapper over
+    /// "LC Control State".TryRenew. JSON: {renewed, expiresAt?}.</summary>
+    procedure RenewLease(Epoch: Integer; Token: Text; Generation: Text; TtlSeconds: Integer) ResultJson: Text
+    var
+        State: Codeunit "LC Control State";
+        Renewed: Boolean;
+        ExpiresAt: DateTime;
+        Obj: JsonObject;
+    begin
+        State.TryRenew(Epoch, Token, Generation, TtlSeconds, Renewed, ExpiresAt);
+        Obj.Add('renewed', Renewed);
+        if Renewed then
+            Obj.Add('expiresAt', ExpiresAt);
+        Obj.WriteTo(ResultJson);
+    end;
+
+    /// <summary>OData action: release the lease, invalidating its renewal credentials so a delayed
+    /// renew cannot resurrect it (design §4). Refused (op-in-flight) while an op marker is set. A
+    /// non-matching call is an idempotent success (a prior release already invalidated it). Thin
+    /// wrapper over "LC Control State".TryRelease. JSON: {released, reason?}.</summary>
+    procedure ReleaseLease(Epoch: Integer; Token: Text; Generation: Text) ResultJson: Text
+    var
+        State: Codeunit "LC Control State";
+        Released: Boolean;
+        Reason: Text;
+        Obj: JsonObject;
+    begin
+        State.TryRelease(Epoch, Token, Generation, Released, Reason);
+        Obj.Add('released', Released);
+        if Reason <> '' then
+            Obj.Add('reason', Reason);
+        Obj.WriteTo(ResultJson);
+    end;
+
+    /// <summary>OData action: begin a publish operation under the op-marker state machine (design §4).
+    /// Thin wrapper over "LC Control State".TryBeginPublish — all decision logic (tuple check /
+    /// tombstone check / same-active idempotent replay / fresh begin / refuse) lives there. JSON:
+    /// {begun, alreadyCompleted?}.</summary>
+    procedure BeginPublish(Epoch: Integer; Token: Text; Generation: Text; AttemptId: Text; OpSeq: BigInteger) ResultJson: Text
+    var
+        State: Codeunit "LC Control State";
+        Begun: Boolean;
+        AlreadyCompleted: Boolean;
+        Obj: JsonObject;
+    begin
+        State.TryBeginPublish(Epoch, Token, Generation, AttemptId, OpSeq, Begun, AlreadyCompleted);
+        Obj.Add('begun', Begun);
+        if AlreadyCompleted then
+            Obj.Add('alreadyCompleted', AlreadyCompleted);
+        Obj.WriteTo(ResultJson);
+    end;
+
+    /// <summary>OData action: end (tombstone) a publish operation (design §4). Outcome is part of the
+    /// interface contract but does NOT change the state transition — EndPublish clears/tombstones the
+    /// marker identically whether the caller reports success or a deterministic failure; only a
+    /// genuinely-unknown publish result should leave the marker set, and deciding/acting on that is a
+    /// later task's recovery concern (§8), not invented here. Thin wrapper over
+    /// "LC Control State".TryEndPublish. JSON: {ended, alreadyCompleted?}.</summary>
+    procedure EndPublish(Epoch: Integer; Token: Text; Generation: Text; AttemptId: Text; OpSeq: BigInteger; Outcome: Text) ResultJson: Text
+    var
+        State: Codeunit "LC Control State";
+        Ended: Boolean;
+        AlreadyCompleted: Boolean;
+        Obj: JsonObject;
+    begin
+        State.TryEndPublish(Epoch, Token, Generation, AttemptId, OpSeq, Ended, AlreadyCompleted);
+        Obj.Add('ended', Ended);
+        if AlreadyCompleted then
+            Obj.Add('alreadyCompleted', AlreadyCompleted);
+        Obj.WriteTo(ResultJson);
+    end;
+
+    /// <summary>OData action: lost-ack reconciliation read for any op, publish or run (design §4).
+    /// Deliberately does NOT gate on (epoch, token, generation) matching the current row — see
+    /// "LC Control State".TryGetOperationStatus's doc comment for why. Thin wrapper. JSON: {opKind,
+    /// opAttemptId, opSeq, lastCompletedOpSeq, completed}.</summary>
+    procedure GetOperationStatus(Epoch: Integer; Token: Text; Generation: Text; AttemptId: Text; OpSeq: BigInteger) ResultJson: Text
+    var
+        State: Codeunit "LC Control State";
+        OpKind: Text;
+        OpAttemptId: Text;
+        CurrentOpSeq: BigInteger;
+        LastCompletedOpSeq: BigInteger;
+        Completed: Boolean;
+        Obj: JsonObject;
+    begin
+        State.TryGetOperationStatus(Epoch, Token, Generation, AttemptId, OpSeq, OpKind, OpAttemptId, CurrentOpSeq, LastCompletedOpSeq, Completed);
+        Obj.Add('opKind', OpKind);
+        Obj.Add('opAttemptId', OpAttemptId);
+        Obj.Add('opSeq', CurrentOpSeq);
+        Obj.Add('lastCompletedOpSeq', LastCompletedOpSeq);
+        Obj.Add('completed', Completed);
+        Obj.WriteTo(ResultJson);
+    end;
+
+    /// <summary>OData action: recover the caller's OWN stranded op marker (design §5/§8). Thin wrapper
+    /// over "LC Control State".TryRecoverOp — the proof-of-ownership rules, the unconditional
+    /// active-tuple clear and the tombstone all live there, as does the client contract this MUST be
+    /// gated by (a parsed application-level terminal response only — never a bare HTTP status, a
+    /// connection error or a client timeout, which are indistinguishable from a still-running AL op).
+    /// JSON: {recovered, alreadyCompleted?}.</summary>
+    procedure RecoverOp(Epoch: Integer; Token: Text; Generation: Text; AttemptId: Text; OpSeq: BigInteger) ResultJson: Text
+    var
+        State: Codeunit "LC Control State";
+        Recovered: Boolean;
+        AlreadyCompleted: Boolean;
+        Obj: JsonObject;
+    begin
+        State.TryRecoverOp(Epoch, Token, Generation, AttemptId, OpSeq, Recovered, AlreadyCompleted);
+        Obj.Add('recovered', Recovered);
+        if AlreadyCompleted then
+            Obj.Add('alreadyCompleted', AlreadyCompleted);
+        Obj.WriteTo(ResultJson);
+    end;
+
+    /// <summary>OData action: the operator recovery reset (design §8). Step 3 of a FOUR-step procedure
+    /// that a restart alone does not accomplish — restart the NST, read the current serverGeneration
+    /// from a live status/harness call against the restarted instance, call this with that value as
+    /// expectedGeneration, then probe clean and clear the quarantine. This authorization scheme is a
+    /// KNOWING, DOCUMENTED DEVIATION from design §8's requirement to bind authorization to a
+    /// newly-observed NST/process incarnation — not an oversight: binding to an actual incarnation
+    /// proved infeasible in AL, so this takes the plan's Task-4-Step-4 fallback clause ("if infeasible
+    /// in AL, document the operational binding and gate via permission") and substitutes the echo below;
+    /// see "LC Control State".TryForceResetLease's AUTHORIZATION doc comment for the full rationale, and
+    /// the Task 10 docs for where this deviation is recorded. The echo is REPLAY PROTECTION
+    /// ACROSS RESETS, not incarnation binding: "Server Generation" is a persistent field that an NST
+    /// restart does not change, so a value read before the restart is byte-identical to one read after —
+    /// the echo only proves the caller holds the generation from AFTER THE LAST reset (every successful
+    /// reset mints a new one), refusing a pre-recorded/replayed request or a stale caller. Whether the
+    /// operator actually restarted the NST first (step 1) is procedural discipline this action takes on
+    /// trust; it has no server-side way to verify it. Thin wrapper over "LC Control State".
+    /// TryForceResetLease. JSON: {reset, serverGeneration?, epoch?, reason?}.</summary>
+    procedure ForceResetLease(ExpectedGeneration: Text) ResultJson: Text
+    var
+        State: Codeunit "LC Control State";
+        ResetDone: Boolean;
+        NewGeneration: Text;
+        NewEpoch: Integer;
+        Reason: Text;
+        Obj: JsonObject;
+    begin
+        State.TryForceResetLease(ExpectedGeneration, ResetDone, NewGeneration, NewEpoch, Reason);
+        Obj.Add('reset', ResetDone);
+        if ResetDone then begin
+            Obj.Add('serverGeneration', NewGeneration);
+            Obj.Add('epoch', NewEpoch);
+        end else
+            Obj.Add('reason', Reason);
+        Obj.WriteTo(ResultJson);
+    end;
+
+    /// <summary>
+    /// Run-scoped, single-method execution primitive, fenced by the machine-global lease (design §5).
+    /// Three phases, and the split is the whole point: a mutant run that cannot PROVE, after the fact,
+    /// that it still held the lease it started under must not have its result recorded.
+    ///
+    /// Phase 1 — claim, under LockTable, one transaction, one Commit (in TryBeginRun). Validates
+    /// (leaseEpoch, leaseToken, serverGeneration) + the artifact + the opSeq rules, sets Op Kind = run
+    /// and the active tuple together. Refusal -&gt; 'lease-invalid' / 'artifact-mismatch', nothing
+    /// claimed, nothing run. A still-active same-attempt duplicate claim is ALSO refused (design §5
+    /// requires Op Kind = none for admission — never an idempotent re-claim on the run path, unlike
+    /// publish) and is reported at the wire's 'lease-invalid' status too, with the finer 'op-in-flight'
+    /// reason surfaced via the `reason` key below.
+    ///
+    /// Phase 2 — run, with NO lease lock held (phase 1's Commit released it), behind a catchable
+    /// Codeunit.Run boundary. A server-known terminal error (test framework / AL exception) is captured
+    /// as a terminal error outcome instead of unwinding past phase 3 and stranding the marker; it is
+    /// reported in codeunitResults as {"error": ...}, the same fail-closed shape RunOneMethod already
+    /// uses, so it can never be mistaken for a test verdict.
+    ///
+    /// Phase 3 — verify-and-clear, under LockTable, ONE transaction with exactly ONE Commit (in
+    /// TryFinishRun). Only an exact (epoch, token, generation) + Op Kind = run + attemptId + opSeq
+    /// match records the result; anything else returns 'lease-invalid' having touched no row.
+    ///
+    /// JSON: the 5C-A status shape, with the new status 'lease-invalid', plus an optional `reason` key
+    /// on phase-1 refusals — e.g. 'op-in-flight' for a still-active same-attempt duplicate, distinct
+    /// from a genuine 'lease-invalid' — so a client can tell "poll, do not retry" from "you lost the
+    /// lease" WITHOUT a new top-level status (the runner tasks are written against the existing
+    /// vocabulary). On any non-'ran' status the result and attestation are deliberately reported as
+    /// empty/false — there is no verdict to carry.
+    /// </summary>
+    procedure RunMutant(TargetAppId: Text; ArtifactId: Text; AttemptId: Text; MutantId: Text; TestCodeunitId: Integer; TestMethod: Text; LeaseEpoch: Integer; LeaseToken: Text; ServerGeneration: Text; OpSeq: BigInteger) ResultJson: Text
+    var
+        State: Codeunit "LC Control State";
+        Runner: Codeunit "LC Run Method";
+        Claimed: Boolean;
+        ClaimReason: Text;
+        ClaimStatus: Text;
+        Verified: Boolean;
         CodeunitResults: Text;
         ObservedAny: Boolean;
         IdentityMismatch: Boolean;
     begin
-        // 1. Reserved-param guard — the lease belongs to 5C-B.
-        if (LeaseEpoch <> '') or (LeaseToken <> '') then
-            exit(BuildStatus('reserved-params', TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, '', false, false));
+        // PHASE 1 — claim under lock. Nothing is written, and nothing runs, unless this succeeds.
+        State.TryBeginRun(LeaseEpoch, LeaseToken, ServerGeneration, AttemptId, OpSeq, TargetAppId, ArtifactId, MutantId, Claimed, ClaimReason);
+        if not Claimed then begin
+            // 'op-in-flight' (a duplicate claim on a still-active same-attempt marker, design §5) is
+            // reported at the wire's existing 'lease-invalid' status, never as a new top-level status —
+            // the runner tasks are written against that vocabulary. The finer reason travels in the
+            // `reason` key so a client can tell "poll, do not retry" (op-in-flight) from "you lost the
+            // lease" (a genuine lease-invalid or artifact-mismatch).
+            if ClaimReason = 'op-in-flight' then
+                ClaimStatus := 'lease-invalid'
+            else
+                ClaimStatus := ClaimReason;
+            exit(BuildStatus(ClaimStatus, TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, '', false, false, ClaimReason));
+        end;
 
-        // 2. Artifact guard (detector; 5C-B makes it a fence). Registry-based — no target dependency.
-        if State.RegisteredArtifact(TargetAppId) <> ArtifactId then
-            exit(BuildStatus('artifact-mismatch', TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, '', false, false));
-
-        // 3. Activate (run-scoped). Empty MutantId = baseline (nothing active).
-        State.SetActive(TargetAppId, ArtifactId, MutantId);
-
-        // 4-5. Run exactly one method. RunAllTests records test failures in the lines (does not throw),
-        //      so control returns here and step 6 always clears. (A catastrophic AL error would escape
-        //      to the caller as an OData error -> client classifies in-flight-unknown -> 5B quarantine.)
-        CodeunitResults := RunOneMethod(State.NextSuiteName(), TestCodeunitId, TestMethod);
+        // PHASE 2 — run exactly one method OUTSIDE the lease lock, behind a catchable boundary.
+        // GetLastErrorText is read immediately on the failing branch, before any other statement can
+        // clear it. Attestation is read here, BEFORE phase 3, because phase 3 resets it unconditionally.
+        Runner.SetRequest(State.NextSuiteName(), TestCodeunitId, TestMethod);
+        if Runner.Run() then
+            CodeunitResults := Runner.Results()
+        else
+            CodeunitResults := BuildRunError(GetLastErrorText());
         ObservedAny := State.AttestationObservedAny();
         IdentityMismatch := State.AttestationMismatch();
 
-        // 6. Clear (run-scoped) — the container is left unmutated after every call.
-        State.ClearActive();
+        // PHASE 3 — verify-and-clear under lock, one transaction, one Commit.
+        State.TryFinishRun(LeaseEpoch, LeaseToken, ServerGeneration, AttemptId, OpSeq, TargetAppId, ArtifactId, MutantId, Verified);
+        if not Verified then
+            exit(BuildStatus('lease-invalid', TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, '', false, false, ''));
 
-        exit(BuildStatus('ran', TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, CodeunitResults, ObservedAny, IdentityMismatch));
+        exit(BuildStatus('ran', TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, CodeunitResults, ObservedAny, IdentityMismatch, ''));
     end;
 
-    /// <summary>Build a fresh suite, run EXACTLY the one named method (Run flags, since RunAllTests
-    /// resets input filters), return the codeunit's per-method result JSON. Fail closed unless exactly
-    /// one method matches.</summary>
-    local procedure RunOneMethod(SuiteName: Code[10]; TestCodeunitId: Integer; TestMethod: Text): Text
+    /// <summary>Wraps a caught phase-2 terminal error in the SAME {"error": ...} codeunitResults shape
+    /// RunOneMethod already uses for its own fail-closed path. Deliberately not a bare string and not a
+    /// testResults array: a client parsing codeunitResults finds zero test lines and must classify it
+    /// as a typed error, never as a pass/fail verdict.</summary>
+    local procedure BuildRunError(ErrorText: Text): Text
     var
-        ALTestSuite: Record "AL Test Suite";
-        Line: Record "Test Method Line";
-        CodeunitLine: Record "Test Method Line";
-        Mgt: Codeunit "Test Suite Mgt.";
-        ErrObj: JsonObject;
-        ErrJson: Text;
-        MatchCount: Integer;
+        Obj: JsonObject;
+        Out: Text;
     begin
-        if ALTestSuite.Get(SuiteName) then
-            ALTestSuite.Delete(true);
-        Mgt.CreateTestSuite(SuiteName);
-        ALTestSuite.Get(SuiteName);
-        Mgt.SelectTestMethodsByRange(ALTestSuite, Format(TestCodeunitId));
-
-        Line.SetRange("Test Suite", SuiteName);
-        Line.SetRange("Line Type", Line."Line Type"::"Function");
-        if Line.FindSet() then
-            repeat
-                Line.Validate(Run, false);
-                Line.Modify(true);
-            until Line.Next() = 0;
-
-        Line.Reset();
-        Line.SetRange("Test Suite", SuiteName);
-        Line.SetRange("Line Type", Line."Line Type"::"Function");
-        Line.SetRange(Name, TestMethod);
-        MatchCount := Line.Count();
-        if MatchCount <> 1 then begin
-            ErrObj.Add('error', StrSubstNo('expected exactly one method %1, found %2', TestMethod, MatchCount));
-            ErrObj.WriteTo(ErrJson);
-            exit(ErrJson);
-        end;
-        Line.FindFirst();
-        Line.Validate(Run, true);
-        Line.Modify(true);
-
-        Line.Reset();
-        Line.SetRange("Test Suite", SuiteName);
-        Line.FindFirst();
-        Mgt.RunAllTests(Line);
-
-        CodeunitLine.SetRange("Test Suite", SuiteName);
-        CodeunitLine.SetRange("Line Type", CodeunitLine."Line Type"::Codeunit);
-        CodeunitLine.FindFirst();
-        exit(Mgt.TestResultsToJSON(CodeunitLine));
+        Obj.Add('error', ErrorText);
+        Obj.WriteTo(Out);
+        exit(Out);
     end;
 
-    local procedure BuildStatus(Status: Text; TargetAppId: Text; ArtifactId: Text; AttemptId: Text; MutantId: Text; TestCodeunitId: Integer; TestMethod: Text; CodeunitResults: Text; ObservedAny: Boolean; IdentityMismatch: Boolean): Text
+    /// <summary>Builds the AcquireLease JSON result. On grant: {granted, epoch, token,
+    /// serverGeneration, lastCompletedOpSeq, expiresAt}. On refusal: {granted:false, reason} plus
+    /// {holder, expiresAt} for "held"/"operation-busy" or {opAttemptId, opStartedAt} for
+    /// "operation-orphaned" (generation-changed carries reason only).</summary>
+    local procedure BuildAcquireResult(Granted: Boolean; Epoch: Integer; Token: Text; ServerGeneration: Text; LastCompletedOpSeq: BigInteger; ExpiresAt: DateTime; Reason: Text; Holder: Text; OpAttemptId: Text; OpStartedAt: DateTime): Text
+    var
+        Obj: JsonObject;
+        Out: Text;
+    begin
+        Obj.Add('granted', Granted);
+        if Granted then begin
+            Obj.Add('epoch', Epoch);
+            Obj.Add('token', Token);
+            Obj.Add('serverGeneration', ServerGeneration);
+            Obj.Add('lastCompletedOpSeq', LastCompletedOpSeq);
+            Obj.Add('expiresAt', ExpiresAt);
+        end else begin
+            Obj.Add('reason', Reason);
+            case Reason of
+                'held', 'operation-busy':
+                    begin
+                        Obj.Add('holder', Holder);
+                        Obj.Add('expiresAt', ExpiresAt);
+                    end;
+                'operation-orphaned':
+                    begin
+                        Obj.Add('opAttemptId', OpAttemptId);
+                        Obj.Add('opStartedAt', OpStartedAt);
+                    end;
+            end;
+        end;
+        Obj.WriteTo(Out);
+        exit(Out);
+    end;
+
+    /// <summary>Builds the RunMutant JSON result. `Reason` is optional (blank on 'ran' and on the
+    /// phase-3 lease-invalid exit, which has no computed reason to surface) — populated only on
+    /// phase-1 refusals, where it may differ from Status (e.g. Status 'lease-invalid' with Reason
+    /// 'op-in-flight' for a still-active same-attempt duplicate claim).</summary>
+    local procedure BuildStatus(Status: Text; TargetAppId: Text; ArtifactId: Text; AttemptId: Text; MutantId: Text; TestCodeunitId: Integer; TestMethod: Text; CodeunitResults: Text; ObservedAny: Boolean; IdentityMismatch: Boolean; Reason: Text): Text
     var
         Obj: JsonObject;
         Out: Text;
     begin
         Obj.Add('status', Status);
+        if Reason <> '' then
+            Obj.Add('reason', Reason);
         Obj.Add('targetAppId', TargetAppId);
         Obj.Add('artifactId', ArtifactId);
         Obj.Add('attemptId', AttemptId);
@@ -139,5 +391,13 @@ codeunit 71003 "LC Control API"
         Obj.Add('identityMismatch', IdentityMismatch);
         Obj.WriteTo(Out);
         exit(Out);
+    end;
+
+    /// <summary>HarnessInfo's protocol-incompatibility error (design §7, R4 sol#8). Names BOTH sides so
+    /// a client parsing this message (or a human debugging a failed handshake) never has to guess which
+    /// end is stale: the caller's supplied clientProtocol and this server's protocolVersion.</summary>
+    local procedure ProtocolIncompatibleErr(ClientProtocol: Integer): Text
+    begin
+        exit(StrSubstNo('HarnessInfo requires clientProtocol >= 2; caller sent clientProtocol %1, server speaks protocolVersion 2. Refusing an incompatible handshake before any publish (design §7) — a v1 client that omits clientProtocol entirely is refused earlier, as a missing required OData parameter, and never reaches this check.', ClientProtocol));
     end;
 }

@@ -19,8 +19,9 @@
  * See fixtures/README.md for the expected shape of both files.
  */
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ActivationConfig } from "../src/activation";
@@ -31,6 +32,8 @@ import { odataBaseUrl, validateBcDevConfig } from "../src/cli";
 import type { LethalConfigFile } from "../src/cli";
 import { DeploymentVerifier } from "../src/deployment-verifier";
 import { HarnessVerifier } from "../src/harness";
+import { LeaseClient, MAX_TTL_SECONDS } from "../src/lease";
+import type { Lease } from "../src/lease";
 import { generateMutationSet, runSession } from "../src/orchestrator";
 import { ContainerDeployer, defaultAlToolPaths, defaultDeployerIo } from "../src/publisher";
 import type { SessionReport } from "../src/report";
@@ -86,6 +89,86 @@ const SANDBOX_TESTS_ID = 79100;
 const ORDER_MATTERS_PROBE_ID = 79210;
 const FAIL_PROBE_ID = 79211;
 const PROBE_TIMEOUT_MS = 120_000;
+/**
+ * Layer 5C-B1 (Task 8): the protocol-invariant probes below drive `RunMutantTransport` DIRECTLY,
+ * not through `runSession`, so they must take the machine-global lease themselves — the two-phase
+ * fence (design §5) refuses any RunMutant whose (epoch, token, serverGeneration) tuple does not
+ * match the row, or whose `opSeq` is not exactly `lastCompletedOpSeq + 1`. `runSession` has
+ * already released its own lease by the time the probes run, so this acquire is uncontended.
+ *
+ * Also live-exercises the renew heartbeat: the probes take minutes and the ttl is 15s, so without
+ * renewing, the lease would lapse mid-probe (phase 1 honors a matching-but-lapsed tuple, but a
+ * competing acquire could then steal it — exactly the design §9 "slow-run-under-renew" case).
+ */
+interface ProbeLease {
+  readonly client: LeaseClient;
+  readonly lease: Lease;
+  /** The next exactly-next `opSeq` for a fenced RunMutant. */
+  readonly nextOpSeq: () => number;
+  /**
+   * Task 9 diagnosability fix: the heartbeat used to be `client.renew(...).catch(() => {})` with
+   * `renewed` never inspected — a genuinely lost probe lease then surfaced only as a downstream
+   * protocol-invariant assertion failure with no hint it was actually a lease problem. Returns
+   * `lost:true` once the heartbeat has seen `renewed:false` TWICE in a row (retry-once on a lost
+   * ack before concluding loss, design §6) or a renew call itself throw twice in a row — a single
+   * bad renew is not conclusive, but two are.
+   */
+  readonly leaseLostDiagnosis: () => string | undefined;
+  readonly stop: () => Promise<void>;
+}
+
+async function acquireProbeLease(cfg: ActivationConfig): Promise<ProbeLease> {
+  const harness = await new HarnessVerifier(cfg).verify();
+  const client = new LeaseClient(cfg);
+  const outcome = await client.acquire(
+    `${hostname()}:${process.pid}:probes`,
+    MAX_TTL_SECONDS,
+    randomUUID(),
+    harness.serverGeneration,
+  );
+  if (!outcome.granted) {
+    throw new Error(
+      `probe lease was not granted (${JSON.stringify(outcome)}) — the container is held or has a stranded operation; recover per design §8 before re-running the gate`,
+    );
+  }
+  const lease = outcome.lease;
+  let opSeq = lease.lastCompletedOpSeq;
+  let consecutiveRenewFailures = 0;
+  let lostDiagnosis: string | undefined;
+  const heartbeat = setInterval(
+    () => {
+      void client
+        .renew(lease, MAX_TTL_SECONDS)
+        .then((r) => {
+          if (r.renewed) {
+            consecutiveRenewFailures = 0;
+            return;
+          }
+          consecutiveRenewFailures++;
+          if (consecutiveRenewFailures >= 2 && lostDiagnosis === undefined) {
+            lostDiagnosis = `probe lease heartbeat: RenewLease returned renewed:false twice in a row (epoch=${lease.epoch}) — the lease is genuinely lost, not a single dropped ack`;
+          }
+        })
+        .catch((err: unknown) => {
+          consecutiveRenewFailures++;
+          if (consecutiveRenewFailures >= 2 && lostDiagnosis === undefined) {
+            lostDiagnosis = `probe lease heartbeat: RenewLease threw twice in a row: ${err instanceof Error ? err.message : String(err)}`;
+          }
+        });
+    },
+    Math.floor((MAX_TTL_SECONDS * 1000) / 3),
+  );
+  return {
+    client,
+    lease,
+    nextOpSeq: () => ++opSeq,
+    leaseLostDiagnosis: () => lostDiagnosis,
+    stop: async () => {
+      clearInterval(heartbeat);
+      await client.release(lease).catch(() => {});
+    },
+  };
+}
 
 interface LaunchLocalConfig {
   readonly configurations: ReadonlyArray<{
@@ -202,6 +285,23 @@ async function runOnce(scratchRoot: string): Promise<RunOnceResult> {
       testDir: TEST_DIR,
       instrumentedDir,
       selectorIds: SELECTOR_IDS,
+      // Layer 5C-B1 (design §6): the session takes the machine-global lease before it deploys,
+      // fences the publish, heartbeats it, carries the tuple into every RunMutant, and releases
+      // at the end. `serverGeneration` goes through the SAME HarnessVerifier the backend's
+      // deploy() uses, so design §7's protocol-v2 gate runs before this session can acquire.
+      lease: {
+        client: new LeaseClient(odataCfg),
+        serverGeneration: async () => (await harnessVerifier.verify()).serverGeneration,
+      },
+      resourceServer: bcdev.server,
+      resourceServerInstance: bcdev.serverInstance,
+      // A SCRATCH quarantine dir, deliberately NOT defaultQuarantineDir() (~/.lethal/quarantine —
+      // the REAL store a live `lethal run` writes to), matching lease.itest.ts. Since 5C-B1 this
+      // gate can write durable container-needs-recycle records, and one transient failure landing
+      // in the real store poisons EVERY later gate run until an operator deletes it by hand
+      // (observed live). The code path under test is identical either way — the store is
+      // constructed from this path and nothing else — so do not "simplify" this back out.
+      quarantineDir: join(scratchRoot, "quarantine"),
     });
     return { report, odataCfg, instrumentedDir };
   } finally {
@@ -261,124 +361,183 @@ async function runProtocolInvariantProbes(run: RunOnceResult): Promise<void> {
   }
 
   const tx = new RunMutantTransport(odataCfg, TARGET_APP_ID, artifactId);
-  const overBudget: TestMethodRef = {
-    codeunitId: SANDBOX_TESTS_ID,
-    codeunitName: "Sandbox Tests",
-    method: "OverBudgetDetected",
-  };
-
-  // Invariant 1 — exactly-one-method-ran (order-matters witness, spec §C1). Requesting only
-  // ZzFailsIfMarkerPresent and observing PASS proves AaInsertsMarker did NOT also run: had the
-  // server run the whole codeunit, the marker would be present and this method would fail.
-  const order = await tx.run({
-    ref: {
-      codeunitId: ORDER_MATTERS_PROBE_ID,
-      codeunitName: "Order Matters Probe",
-      method: "ZzFailsIfMarkerPresent",
-    },
-    mutantId: "",
-    attemptId: "probe-order",
-    timeoutMs: PROBE_TIMEOUT_MS,
+  // One lease for every probe below; each RunMutant claims the next op seq under it (design §5).
+  const probe = await acquireProbeLease(odataCfg);
+  const fence = () => ({
+    epoch: probe.lease.epoch,
+    token: probe.lease.token,
+    serverGeneration: probe.lease.serverGeneration,
+    opSeq: probe.nextOpSeq(),
   });
-  assert.equal(
-    order.outcome,
-    "pass",
-    `exactly-one-method invariant: RunMutant(ZzFailsIfMarkerPresent) must run ONLY that method; a non-pass means AaInsertsMarker also ran server-side (whole-codeunit run). got ${JSON.stringify(order)}`,
-  );
+  try {
+    const overBudget: TestMethodRef = {
+      codeunitId: SANDBOX_TESTS_ID,
+      codeunitName: "Sandbox Tests",
+      method: "OverBudgetDetected",
+    };
 
-  // Failure round-trip (spec §11): the exact error text survives the identity-validated mapping
-  // (result enum 1 -> fail, message carried through).
-  const fail = await tx.run({
-    ref: { codeunitId: FAIL_PROBE_ID, codeunitName: "Fail Probe", method: "AlwaysFails" },
-    mutantId: "",
-    attemptId: "probe-fail",
-    timeoutMs: PROBE_TIMEOUT_MS,
-  });
-  assert.equal(fail.outcome, "fail", `fail probe must map to fail, got ${JSON.stringify(fail)}`);
-  assert.ok(
-    fail.failureMessage?.includes("LETHAL-PROBE-FAIL: exact-error-round-trip"),
-    `fail probe must round-trip its exact error, got ${JSON.stringify(fail.failureMessage)}`,
-  );
-
-  // Invariant 2 — run-scoped clear (spec §5 step 6, §C2). A killer mutant from the frozen table:
-  // RunMutant activating it must make OverBudgetDetected fail (proof it was active during the run),
-  // then a baseline RunMutant must pass (proof the same call cleared it — container left unmutated).
-  const killer = report.mutants.find((m) => m.verdict === "killed");
-  if (!killer) {
-    throw new Error("no killed mutant in report — cannot drive the run-scoped-clear probe");
-  }
-  const mutated = await tx.run({
-    ref: overBudget,
-    mutantId: killer.mutantCode,
-    attemptId: "probe-clear-active",
-    timeoutMs: PROBE_TIMEOUT_MS,
-  });
-  assert.equal(
-    mutated.outcome,
-    "fail",
-    `run-scoped-clear setup: killer mutant ${killer.mutantCode} must make OverBudgetDetected fail ` +
-      `(mutant active during the run). got ${JSON.stringify(mutated)}`,
-  );
-  const cleared = await tx.run({
-    ref: overBudget,
-    mutantId: "",
-    attemptId: "probe-clear-baseline",
-    timeoutMs: PROBE_TIMEOUT_MS,
-  });
-  assert.equal(
-    cleared.outcome,
-    "pass",
-    `run-scoped-clear: after a killer RunMutant, a baseline RunMutant must pass — the container must be left unmutated. got ${JSON.stringify(cleared)}`,
-  );
-
-  // Attestation fence (design §G): both `mutated` and `cleared` are real covered runs that drove
-  // the deployed target's `Mutation Selector` (IsOverBudget's guard consulted `LC Control State`),
-  // so each `ran` verdict must carry a CLEAN attestation — `observedAny` true (a selector was
-  // consulted) AND `identityMismatch` false (the live binary's baked (targetAppId, artifactId)
-  // matched what we deployed). This is the live proof the running binary is ours; a wrong/stale
-  // binary would surface `identityMismatch: true` (already mapped to `error` by the transport, so
-  // it never reaches here as a verdict) or, if it ran no guard, `observedAny: false`.
-  for (const [label, v] of [
-    ["mutated", mutated],
-    ["cleared", cleared],
-  ] as const) {
-    assert.ok(
-      v.attestation !== undefined &&
-        v.attestation.observedAny === true &&
-        v.attestation.identityMismatch === false,
-      `attestation §G: covered run "${label}" must cleanly attest the deployed binary's selector ` +
-        `(observedAny && !identityMismatch). got ${JSON.stringify(v.attestation)}`,
+    // Invariant 1 — exactly-one-method-ran (order-matters witness, spec §C1). Requesting only
+    // ZzFailsIfMarkerPresent and observing PASS proves AaInsertsMarker did NOT also run: had the
+    // server run the whole codeunit, the marker would be present and this method would fail.
+    const order = await tx.run({
+      ref: {
+        codeunitId: ORDER_MATTERS_PROBE_ID,
+        codeunitName: "Order Matters Probe",
+        method: "ZzFailsIfMarkerPresent",
+      },
+      mutantId: "",
+      attemptId: "probe-order",
+      timeoutMs: PROBE_TIMEOUT_MS,
+      lease: fence(),
+    });
+    assert.equal(
+      order.outcome,
+      "pass",
+      `exactly-one-method invariant: RunMutant(ZzFailsIfMarkerPresent) must run ONLY that method; a non-pass means AaInsertsMarker also ran server-side (whole-codeunit run). got ${JSON.stringify(order)}`,
     );
+
+    // Failure round-trip (spec §11): the exact error text survives the identity-validated mapping
+    // (result enum 1 -> fail, message carried through).
+    const fail = await tx.run({
+      ref: { codeunitId: FAIL_PROBE_ID, codeunitName: "Fail Probe", method: "AlwaysFails" },
+      mutantId: "",
+      attemptId: "probe-fail",
+      timeoutMs: PROBE_TIMEOUT_MS,
+      lease: fence(),
+    });
+    assert.equal(fail.outcome, "fail", `fail probe must map to fail, got ${JSON.stringify(fail)}`);
+    assert.ok(
+      fail.failureMessage?.includes("LETHAL-PROBE-FAIL: exact-error-round-trip"),
+      `fail probe must round-trip its exact error, got ${JSON.stringify(fail.failureMessage)}`,
+    );
+
+    // Invariant 2 — run-scoped clear (spec §5 step 6, §C2). A killer mutant from the frozen table:
+    // RunMutant activating it must make OverBudgetDetected fail (proof it was active during the run),
+    // then a baseline RunMutant must pass (proof the same call cleared it — container left unmutated).
+    const killer = report.mutants.find((m) => m.verdict === "killed");
+    if (!killer) {
+      throw new Error("no killed mutant in report — cannot drive the run-scoped-clear probe");
+    }
+    const mutated = await tx.run({
+      ref: overBudget,
+      mutantId: killer.mutantCode,
+      attemptId: "probe-clear-active",
+      timeoutMs: PROBE_TIMEOUT_MS,
+      lease: fence(),
+    });
+    assert.equal(
+      mutated.outcome,
+      "fail",
+      `run-scoped-clear setup: killer mutant ${killer.mutantCode} must make OverBudgetDetected fail ` +
+        `(mutant active during the run). got ${JSON.stringify(mutated)}`,
+    );
+    const cleared = await tx.run({
+      ref: overBudget,
+      mutantId: "",
+      attemptId: "probe-clear-baseline",
+      timeoutMs: PROBE_TIMEOUT_MS,
+      lease: fence(),
+    });
+    assert.equal(
+      cleared.outcome,
+      "pass",
+      `run-scoped-clear: after a killer RunMutant, a baseline RunMutant must pass — the container must be left unmutated. got ${JSON.stringify(cleared)}`,
+    );
+
+    // Attestation fence (design §G): both `mutated` and `cleared` are real covered runs that drove
+    // the deployed target's `Mutation Selector` (IsOverBudget's guard consulted `LC Control State`),
+    // so each `ran` verdict must carry a CLEAN attestation — `observedAny` true (a selector was
+    // consulted) AND `identityMismatch` false (the live binary's baked (targetAppId, artifactId)
+    // matched what we deployed). This is the live proof the running binary is ours; a wrong/stale
+    // binary would surface `identityMismatch: true` (already mapped to `error` by the transport, so
+    // it never reaches here as a verdict) or, if it ran no guard, `observedAny: false`.
+    for (const [label, v] of [
+      ["mutated", mutated],
+      ["cleared", cleared],
+    ] as const) {
+      assert.ok(
+        v.attestation !== undefined &&
+          v.attestation.observedAny === true &&
+          v.attestation.identityMismatch === false,
+        `attestation §G: covered run "${label}" must cleanly attest the deployed binary's selector ` +
+          `(observedAny && !identityMismatch). got ${JSON.stringify(v.attestation)}`,
+      );
+    }
+
+    // Invariant 3 — artifact-mismatch (spec §C1). A RunMutant whose artifactId differs from the
+    // registered one runs nothing and is a typed error, never a verdict.
+    //
+    // ORDERING HAZARD (Task 9, design §5 phase 1): an artifact-mismatch is refused at phase 1
+    // ("2. Artifact guard") BEFORE the opSeq tombstone check ever runs, so the server's
+    // `Last Completed Op Seq` does NOT advance past it — this call's `fence()`-supplied opSeq is
+    // consumed by our LOCAL bookkeeping (`probe.nextOpSeq()`) but never recorded server-side. That
+    // leaves `probe`'s local opSeq counter one ahead of the server's. This is harmless ONLY because
+    // this is the LAST fenced call under `probe` before the `finally` releases it — a later fenced
+    // call reusing `probe` would send `serverLastCompleted + 2` instead of `+ 1` and be refused as
+    // `lease-invalid` (phase 1's "OpSeq <= Last Completed Op Seq" / "else refuse" branches never see
+    // an exact match). If you add a fenced call AFTER this one, either move this artifact-mismatch
+    // probe to stay last, or resync first via `probe.client.getOperationStatus(...)` and rebuild
+    // `probe`'s opSeq counter from its `lastCompletedOpSeq` — do not just append and assume opSeq
+    // bookkeeping still lines up.
+    const bogusTx = new RunMutantTransport(odataCfg, TARGET_APP_ID, "f".repeat(32));
+    const mismatch = await bogusTx.run({
+      ref: overBudget,
+      mutantId: "",
+      attemptId: "probe-artifact-mismatch",
+      timeoutMs: PROBE_TIMEOUT_MS,
+      lease: fence(),
+    });
+    assert.equal(
+      mismatch.outcome,
+      "error",
+      `artifact-mismatch must be a typed error, never a verdict. got ${JSON.stringify(mismatch)}`,
+    );
+    assert.ok(
+      mismatch.failureMessage?.includes("artifact-mismatch"),
+      `artifact-mismatch probe must surface the mismatch, got ${JSON.stringify(mismatch.failureMessage)}`,
+    );
+
+    // Invariant 4 — identity-mismatch rejection (spec §I5). Every real RunMutant above validated the
+    // echoed identity tuple; a server that ran something other than requested would have surfaced as
+    // an error and failed the assertions here. The client-side rejection of a doctored echo is
+    // unit-tested in run-mutant-transport.test.ts.
+
+    console.log("bcdev itest: protocol-invariant probes PASS");
+  } catch (err) {
+    // Task 9 diagnosability fix (design §9 hazard): a genuinely lost probe lease used to surface
+    // only as a confusing downstream protocol-invariant assertion failure (e.g. an unexpected
+    // "lease-invalid" on some later RunMutant), with no hint the ROOT cause was the heartbeat
+    // losing the renew race, not a bug in the invariant being probed. If the heartbeat itself
+    // observed the loss, prepend that diagnosis so the failure names the actual root cause.
+    const lost = probe.leaseLostDiagnosis();
+    if (lost !== undefined) {
+      throw new Error(
+        `runProtocolInvariantProbes failed, and the probe lease heartbeat independently reported a lease loss — this is very likely a LEASE-LOSS failure, not a bug in the protocol invariant being probed. Heartbeat diagnosis: ${lost}. Original error: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    throw err;
+  } finally {
+    // Always stop renewing and release, even on a failed assertion: a probe lease left held would
+    // block the next gate run (and every other session on this container) until it lapsed.
+    await probe.stop();
   }
-
-  // Invariant 3 — artifact-mismatch (spec §C1). A RunMutant whose artifactId differs from the
-  // registered one runs nothing and is a typed error, never a verdict.
-  const bogusTx = new RunMutantTransport(odataCfg, TARGET_APP_ID, "f".repeat(32));
-  const mismatch = await bogusTx.run({
-    ref: overBudget,
-    mutantId: "",
-    attemptId: "probe-artifact-mismatch",
-    timeoutMs: PROBE_TIMEOUT_MS,
-  });
-  assert.equal(
-    mismatch.outcome,
-    "error",
-    `artifact-mismatch must be a typed error, never a verdict. got ${JSON.stringify(mismatch)}`,
-  );
-  assert.ok(
-    mismatch.failureMessage?.includes("artifact-mismatch"),
-    `artifact-mismatch probe must surface the mismatch, got ${JSON.stringify(mismatch.failureMessage)}`,
-  );
-
-  // Invariant 4 — identity-mismatch rejection (spec §I5). Every real RunMutant above validated the
-  // echoed identity tuple; a server that ran something other than requested would have surfaced as
-  // an error and failed the assertions here. The client-side rejection of a doctored echo is
-  // unit-tested in run-mutant-transport.test.ts.
-
-  console.log("bcdev itest: protocol-invariant probes PASS");
 }
 
 function assertVerdictTable(report: SessionReport): void {
+  // Always dump the per-mutant table BEFORE asserting. A bare "survived count mismatch 3 !== 10"
+  // says nothing about which mutants moved or why, and this gate takes minutes to re-run against
+  // a live container — so the first run has to carry its own diagnosis.
+  console.log(
+    `  verdicts: killed=${report.counts.killed} survived=${report.counts.survived} noCoverage=${report.counts.noCoverage} baselineGreen=${report.baselineGreen}`,
+  );
+  for (const m of report.mutants) {
+    const cause = m.cause !== undefined ? ` cause=${m.cause}` : "";
+    console.log(`    ${m.mutantCode} ${m.verdict}${cause} ${m.file}:${m.line} ${m.operatorName}`);
+  }
+  if (report.quarantined !== undefined) {
+    console.log(`  quarantined: ${JSON.stringify(report.quarantined)}`);
+  }
+
   assert.equal(
     report.baselineGreen,
     true,

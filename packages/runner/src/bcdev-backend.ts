@@ -24,6 +24,7 @@ import { decidePublishOutcome } from "./deployment-verifier";
 import type { DeploymentVerifier } from "./deployment-verifier";
 import { CONTROL_APP_ID } from "./harness";
 import type { HarnessVerifier } from "./harness";
+import type { Lease } from "./lease";
 import type { ContainerDeployer } from "./publisher";
 import type { RunMutantTransport } from "./run-mutant-transport";
 
@@ -123,6 +124,16 @@ export class BcDevMcpBackend implements ExecutionBackend {
   private runMutantTransport: RunMutantTransport | undefined;
   // Monotonic per-backend attempt id, echoed by RunMutant and validated by the transport (§I5).
   private attemptSeq = 0;
+  // Layer 5C-B1: the machine-global lease this session holds, bound by the orchestrator (Task 8)
+  // via setLease() — see that method's doc comment for why setLease, not the constructor.
+  private sessionLease: Lease | undefined;
+  // Seeded from sessionLease.lastCompletedOpSeq by setLease() (design §5: the server accepts
+  // only opSeq = lastCompletedOpSeq + 1), then incremented once per RunMutant call issued —
+  // mirrors attemptSeq's simple monotonic-increment shape. This is a per-call counter only: it
+  // does NOT resync against the server's actual lastCompletedOpSeq after a failed/refused call
+  // (that reconciliation, via getOperationStatus, is Task 8's job), so a caller that retries a
+  // refused call must account for the counter having already moved on.
+  private nextOpSeq = 0;
 
   constructor(
     private readonly cfg: BcDevConfig,
@@ -404,6 +415,24 @@ export class BcDevMcpBackend implements ExecutionBackend {
   }
 
   /**
+   * Binds the machine-global lease this session holds (Layer 5C-B1, design §5/§6) — the
+   * orchestrator (Task 8) calls this once, after `LeaseClient.acquire()` grants a lease and
+   * before the first `run(coverage:"none")` (a setter rather than a constructor param: the
+   * backend is constructed before the lease exists — acquisition happens per-session, at
+   * `runSession` start, while the backend itself may outlive one lease across retries).
+   *
+   * Seeds the local op-seq counter from `lease.lastCompletedOpSeq` — the exact value the server
+   * returned in the acquire grant — so the FIRST `run(coverage:"none")` sends the correct
+   * `lastCompletedOpSeq + 1` (design §5). Overwrites any previous lease/counter: a re-acquired
+   * lease (e.g. after a renew-based recovery) always restarts the op-seq sequence from ITS OWN
+   * `lastCompletedOpSeq`, never carries over the prior lease's counter.
+   */
+  setLease(lease: Lease): void {
+    this.sessionLease = lease;
+    this.nextOpSeq = lease.lastCompletedOpSeq + 1;
+  }
+
+  /**
    * One test run. `coverage` discovery stays on the bc-dev hub (`bcdev_test_run`, one method per
    * call — spec §10); a mutant execution (`coverage: "none"`) goes through the self-contained
    * RunMutant OData call (activate + run one method + clear), which is 5B-classified and
@@ -421,12 +450,26 @@ export class BcDevMcpBackend implements ExecutionBackend {
         "BcDevMcpBackend: RunMutant transport not configured — deploy() must run (and succeed) first",
       );
     }
+    const lease = this.sessionLease;
+    if (!lease) {
+      throw new Error(
+        'BcDevMcpBackend: no lease bound — the orchestrator must call setLease() (Layer 5C-B1) before run(coverage:"none")',
+      );
+    }
     this.attemptSeq += 1;
+    const opSeq = this.nextOpSeq;
+    this.nextOpSeq += 1;
     return transport.run({
       ref,
       mutantId: this.pendingMutantId ?? "",
       attemptId: `a${this.attemptSeq}`,
       timeoutMs: opts.timeoutMs,
+      lease: {
+        epoch: lease.epoch,
+        token: lease.token,
+        serverGeneration: lease.serverGeneration,
+        opSeq,
+      },
     });
   }
 

@@ -305,6 +305,69 @@ Cost is paid only on failing tests.
 
 Baseline test subset time × 2. Timeout counts as killed (mutation caused observable misbehavior, including potential nontermination).
 
+### 6.8 Machine-Global Lease + Fence (Layer 5C-B1)
+
+**As built:** `LethAL Control` owns a machine-global lease (table `LC Lease`, id 71006, single row)
+so two concurrent LethAL sessions against one container cannot interleave a publish with a
+`RunMutant` and record a false verdict — the gap §6.2's 5C-A preconditions documented but did not
+enforce. The row carries a `Server Generation` (random, minted at pre-seed and by every
+`ForceResetLease`; the basis for cross-recycle safety, not `Epoch`, which resets on rebuild), an
+`Epoch`/`Token` pair bumped per acquire, an operation marker (`Op Kind: none|publish|run`,
+`Op Attempt Id`, `Op Started At`), and an `Op Seq` counter with a `Last Completed Op Seq` tombstone
+that the client supplies explicitly (`opSeq = lastCompleted + 1`), so a delayed duplicate
+`Begin*`/`End*`/`RunMutant` for an already-tombstoned attempt can never reopen or reclear a later op.
+
+The lease lock (`LockTable`) is held only in short critical sections, never across a run —
+no-overlap is enforced by the operation marker, not by holding the lock for the run's duration.
+`AcquireLease` refuses while another session's op is unresolved and its holder is presumed alive
+(`operation-busy`; bounded backoff, no durable quarantine); only a marker whose holder is presumed
+dead — expired past a grace window `>= 3×` the renew period, re-checked once before quarantining —
+writes a durable `operation-orphaned` → `container-needs-recycle` record.
+
+`RunMutant` is a two-phase fence. **Phase 1 — claim** (short `LockTable` critical section, one
+transaction): validates `(leaseEpoch, leaseToken, serverGeneration)` against the row, requires
+`Op Kind = none`, sets `Op Kind = run` plus the attempt's `Op Seq`, and commits — releasing the lock
+before any test executes. **Phase 2 — run** executes with no lease lock held, behind a catchable
+`Codeunit.Run` boundary, so a server-known terminal (a test-framework or AL exception) is captured
+rather than unwinding past phase 3. **Phase 3 — verify-and-clear** (short `LockTable` critical
+section, ONE transaction, a single final `Commit`): re-validates the tuple and `Op Kind = run` plus
+the attempt id, then — in the same transaction — conditionally clears the active-mutant row
+(`ClearActiveIf`, only if it still equals this attempt's tuple) and tombstones `Op Seq`. The
+in-memory attestation reset (the §6.2 attestation fence) is unconditional on both phase-3 exits, so a
+stale `ExpectedArtifactId` can never survive into the next call regardless of whether the table write
+happened.
+
+A tuple mismatch or a claim onto an already-active op both return `status: lease-invalid`, but the
+server reports a distinguishing `reason`: a genuinely stale `(epoch, token, serverGeneration)` — the
+client's OWN lease is no longer authoritative — reports `reason: "lease-invalid"` and maps, at the
+transport, to `operation: "lease-lost"`, latching the session unsafe; a claim landing on the caller's
+OWN still-active attempt reports `reason: "op-in-flight"`, which is NOT lease loss — the orchestrator
+reads `reason` before the lease-lost latch and polls/waits for the original attempt instead of
+retrying, since retrying would double-execute the mutant against a run still genuinely in progress.
+On genuine lease loss, the runner invalidates only the CURRENT batch's verdicts at session end (after
+the batch loop, before the report is built); earlier batches stand, because every `RunMutant` in them
+was individually phase-1/phase-3 fence-validated regardless of what happened to the lease afterward.
+
+Quarantine is two-tier. `container-needs-recycle` (durable, tier-keyed, `~/.lethal/quarantine`) is
+written only for an orphaned op or a session ending with an unreconcilable marker, and is cleared by
+an explicit recovery sequence: restart the NST/container → `ForceResetLease` (mints a new generation,
+clears the marker/token/nonce, and clears the committed `LC Mutation Active` row in one transaction)
+→ a post-recovery probe → `lethal clear-quarantine`. Note that "restart first" is **procedural
+discipline the server cannot verify** (spec §14 deviation D1): `Server Generation` is persistent, so
+a pre-restart read of it is byte-identical to a post-restart one and `ForceResetLease`'s generation
+echo therefore buys replay protection only, never NST-incarnation binding.
+
+`lease-lost` on an otherwise-clean container (an
+epoch/generation mismatch, no stranded op) is session-local — latch, abort, invalidate the current
+batch — with NO durable tier quarantine, since the container itself is fine.
+
+**Precondition, documented rather than enforced:** the lease is per-container, but BC app
+publication is service-instance-wide — a second tenant publishing to the same service instance falls
+entirely outside the lease. AL has no tenant-enumeration API reachable from an extension (System
+Application codeunit 417 exposes only the current tenant), so the client cannot detect this; 5C-B1 is
+therefore a stated single-tenant-container support constraint, not a fenced one — see
+`fixtures/README.md` for the operator-facing statement and out-of-band verification steps.
+
 ## 7. Equivalence Detection
 
 Correctness framing: two error modes are not symmetric. A **false-positive equivalence** (tool says "equivalent" when a test could kill it) hides real signal; this is the failure mode to avoid. A **false-negative equivalence** (tool says "not equivalent" when it is) adds noise but the developer can manually mark and move on. Policy: **sound techniques filter, unsound techniques advise**.

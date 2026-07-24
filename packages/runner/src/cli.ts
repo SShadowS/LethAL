@@ -10,6 +10,7 @@ import type { ExecutionBackend } from "./backend";
 import { BcDevMcpBackend } from "./bcdev-backend";
 import { DeploymentVerifier } from "./deployment-verifier";
 import { HarnessVerifier } from "./harness";
+import { LeaseClient } from "./lease";
 import {
   defaultQuarantineDir,
   generateMutationSet,
@@ -415,6 +416,42 @@ async function buildBackend(
  * Task 11's review and folded into Task 13. A test on this one function pins the fix down without
  * needing to unit-test `main()`/`runFromCli` end to end.
  */
+/**
+ * Layer 5C-B1 (design §6): the lease wiring for a bcdev session — `SessionConfig.lease`, or `{}`
+ * for al-runner (a `deploy: "none"` backend publishes nothing to a shared container, so there is
+ * nothing for a machine-global lease to fence).
+ *
+ * `serverGeneration` is wired to a REAL `HarnessVerifier.verify()` rather than a bare
+ * HarnessInfo read: the verifier is also design §7's pre-publish gate (protocol v2 required,
+ * multi-tenant container refused), and calling it here runs that gate before this session can
+ * acquire — let alone publish. Sourced from the same `odataCfg` as every other control-surface
+ * client, so the lease is taken against the exact container the mutants will run on.
+ *
+ * Kept as its own small seam (like `resourceIdentityFor` above, and for the same reason) so a
+ * regression that leaves a real CLI-driven bcdev session unfenced is directly testable.
+ */
+export function leaseSessionFor(
+  parsed: RunCliConfig,
+  configFile: LethalConfigFile,
+): Pick<SessionConfig, "lease"> {
+  if (parsed.backendKind !== "bcdev") return {};
+  const c = validateBcDevConfig(configFile.bcdev);
+  const odataCfg = {
+    baseUrl: odataBaseUrl(c.server, c.serverInstance),
+    company: c.company,
+    username: c.username,
+    password: c.password,
+    ...(c.tenant !== undefined ? { tenant: c.tenant } : {}),
+  };
+  const harnessVerifier = new HarnessVerifier(odataCfg);
+  return {
+    lease: {
+      client: new LeaseClient(odataCfg),
+      serverGeneration: async () => (await harnessVerifier.verify()).serverGeneration,
+    },
+  };
+}
+
 export function resourceIdentityFor(
   parsed: RunCliConfig,
   configFile: LethalConfigFile,
@@ -497,6 +534,7 @@ async function runFromCli(parsed: RunCliConfig): Promise<SessionReport> {
         ? { compileConcurrency: parsed.compileConcurrency }
         : {}),
       ...resourceIdentityFor(parsed, configFile),
+      ...leaseSessionFor(parsed, configFile),
       ...(parsed.workers > 1
         ? {
             backendFactory: (i: number) => {

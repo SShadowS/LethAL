@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { ActivationConfig } from "../src/activation";
 import type { TestMethodRef } from "../src/backend";
+import { MAX_ATTEMPT_ID_LENGTH } from "../src/lease";
 import { RunMutantTransport } from "../src/run-mutant-transport";
 
 const CFG: ActivationConfig = {
@@ -17,7 +18,14 @@ const REF: TestMethodRef = {
   codeunitName: "Sandbox Tests",
   method: "OverBudgetDetected",
 };
-const REQ = { ref: REF, mutantId: "M0003", attemptId: "a1", timeoutMs: 5000 } as const;
+const LEASE = { epoch: 3, token: "tok-abc", serverGeneration: "gen-1", opSeq: 7 } as const;
+const REQ = {
+  ref: REF,
+  mutantId: "M0003",
+  attemptId: "a1",
+  timeoutMs: 5000,
+  lease: LEASE,
+} as const;
 
 /** An identity-echoing RunMutant result, overridable per-field. */
 function echo(over: Record<string, unknown> = {}): Record<string, unknown> {
@@ -112,7 +120,7 @@ describe("RunMutantTransport.run — terminal mapping", () => {
 });
 
 describe("RunMutantTransport.run — request shape", () => {
-  test("POSTs LethALControl_RunMutant with camelCase body + empty lease params", async () => {
+  test("POSTs LethALControl_RunMutant with camelCase body + the lease tuple", async () => {
     let seen: { url: string; body: unknown } | undefined;
     const capture = (async (url: unknown, init?: RequestInit) => {
       seen = { url: String(url), body: JSON.parse(String(init?.body)) };
@@ -129,8 +137,10 @@ describe("RunMutantTransport.run — request shape", () => {
       mutantId: "M0003",
       testCodeunitId: 79100,
       testMethod: "OverBudgetDetected",
-      leaseEpoch: "",
-      leaseToken: "",
+      leaseEpoch: 3,
+      leaseToken: "tok-abc",
+      serverGeneration: "gen-1",
+      opSeq: 7,
     });
   });
 });
@@ -229,6 +239,101 @@ describe("RunMutantTransport.run — guards", () => {
     const v = await transport(okFetch(inner)).run(REQ);
     expect(v.outcome).toBe("error");
     expect(v.failureMessage).toContain("identity mismatch");
+  });
+
+  // Layer 5C-B1: the fenced RunMutant carries an attemptId into the server's Text[64] column, so
+  // it is held to the SAME bound every lease action is (lease.ts). Over-length must be refused
+  // BEFORE dispatch: phase 1 stores CopyStr(AttemptId,1,64) while phase 3 compares that truncated
+  // value against the full incoming one, so dispatching would leave `Op Kind = run` set and
+  // quarantine the tier. The zero-call assertion is the load-bearing half — a test that only
+  // asserted "it throws" would still pass if the throw happened after the request went out.
+  test("attemptId over MAX_ATTEMPT_ID_LENGTH throws before any fetch is issued", async () => {
+    let calls = 0;
+    const fetchFn = (async (_url: unknown, _init?: RequestInit) => {
+      calls++;
+      return new Response(JSON.stringify({ value: JSON.stringify(echo()) }), { status: 200 });
+    }) as typeof fetch;
+    const tooLong = "a".repeat(MAX_ATTEMPT_ID_LENGTH + 1);
+    await expect(transport(fetchFn).run({ ...REQ, attemptId: tooLong })).rejects.toThrow(
+      /attemptId/,
+    );
+    expect(calls).toBe(0);
+  });
+
+  test("an attemptId exactly at the bound is dispatched normally", async () => {
+    let calls = 0;
+    const atBound = "a".repeat(MAX_ATTEMPT_ID_LENGTH);
+    const fetchFn = (async (_url: unknown, _init?: RequestInit) => {
+      calls++;
+      return new Response(JSON.stringify({ value: JSON.stringify(echo({ attemptId: atBound })) }), {
+        status: 200,
+      });
+    }) as typeof fetch;
+    const v = await transport(fetchFn).run({ ...REQ, attemptId: atBound });
+    expect(calls).toBe(1);
+    expect(v.outcome).toBe("pass");
+  });
+});
+
+describe("RunMutantTransport.run — lease-invalid mapping (design §5/§8, Layer 5C-B1)", () => {
+  // Phase-1 genuine tuple mismatch: ControlState.TryBeginRun sets Reason:'lease-invalid', and
+  // ControlApi.RunMutant echoes it verbatim as the `reason` key (BuildStatus only omits `reason`
+  // when it's blank) — so a real lost lease carries reason:"lease-invalid", same as status.
+  test("phase-1 genuine lease-invalid (reason echoes 'lease-invalid') -> outcome:error, operation:lease-lost, reason preserved", async () => {
+    const inner = {
+      status: "lease-invalid",
+      reason: "lease-invalid",
+      targetAppId: TA,
+      artifactId: AR,
+      attemptId: "a1",
+      mutantId: "M0003",
+      codeunitId: 79100,
+      method: "OverBudgetDetected",
+    };
+    const v = await transport(okFetch(inner)).run(REQ);
+    expect(v.outcome).toBe("error");
+    expect(v.operation).toBe("lease-lost");
+    expect(v.leaseInvalidReason).toBe("lease-invalid");
+  });
+
+  // Phase-3 verify-and-clear refusal: ControlApi.RunMutant's phase-3 exit passes '' for Reason,
+  // so BuildStatus omits the `reason` key entirely — no reason to surface.
+  test("phase-3 lease-invalid (no `reason` key) -> outcome:error, operation:lease-lost, no leaseInvalidReason", async () => {
+    const inner = {
+      status: "lease-invalid",
+      targetAppId: TA,
+      artifactId: AR,
+      attemptId: "a1",
+      mutantId: "M0003",
+      codeunitId: 79100,
+      method: "OverBudgetDetected",
+    };
+    const v = await transport(okFetch(inner)).run(REQ);
+    expect(v.outcome).toBe("error");
+    expect(v.operation).toBe("lease-lost");
+    expect(v.leaseInvalidReason).toBeUndefined();
+  });
+
+  // THE BINDING REQUIREMENT: a still-active same-attempt duplicate claim (ClaimReason
+  // 'op-in-flight' in TryBeginRun) means the caller's OWN attempt is still executing
+  // server-side — poll, do not retry, do not treat as genuine lease loss. It must be
+  // distinguishable from the two cases above via `leaseInvalidReason`, never silently folded
+  // into an indistinguishable `operation:"lease-lost"`.
+  test("op-in-flight duplicate claim -> operation:lease-lost AND leaseInvalidReason:'op-in-flight' (distinguishable from genuine loss)", async () => {
+    const inner = {
+      status: "lease-invalid",
+      reason: "op-in-flight",
+      targetAppId: TA,
+      artifactId: AR,
+      attemptId: "a1",
+      mutantId: "M0003",
+      codeunitId: 79100,
+      method: "OverBudgetDetected",
+    };
+    const v = await transport(okFetch(inner)).run(REQ);
+    expect(v.outcome).toBe("error");
+    expect(v.operation).toBe("lease-lost");
+    expect(v.leaseInvalidReason).toBe("op-in-flight");
   });
 });
 
