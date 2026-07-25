@@ -1,5 +1,5 @@
 import type { ALSyntaxNode, MutationSpec } from "@lethal/engine";
-import { ALNodeKind, findFirst, printWithRewrites } from "@lethal/engine";
+import { ALNodeKind, findFirst, isStatementPosition, printWithRewrites } from "@lethal/engine";
 import { buildComponents } from "./components";
 import { emitDispatch } from "./dispatch";
 import { type IdedSpec, assignMutantIds } from "./ids";
@@ -122,11 +122,18 @@ function injectMutationSelectorVar(root: ALSyntaxNode, rewrites: Map<ALSyntaxNod
  *   against the real AL compiler, which rejects a bare `if` as a procedure
  *   body with AL0104/AL0198 — so this case always needs the wrap.
  *
- * - **`statement.parent` is not a `code_block`** — the root sits in a bare
- *   BRANCH position instead: the single then/else statement of an `if`, or
- *   the single body of a `while`/`for`/`repeat`/`case`, with no surrounding
+ * - **`!isStatementPosition(statement)`** — the root sits in a bare BRANCH
+ *   position instead: the single then/else statement of an `if`, or the
+ *   single body of a `while`/`for`/`repeat`/`case`, with no surrounding
  *   `begin ... end` of its own (e.g. `if X then Y := 1 else Y := 2;` —
- *   `Y := 1`'s parent is the `if_statement`, not a block).
+ *   `Y := 1`'s parent is the `if_statement`, not a block's statement list).
+ *   `isStatementPosition` (packages/engine) answers this by the statement's
+ *   immediate parent rather than a fixed container kind: the grammar
+ *   interposes a `statement_block` between a `code_block` and its
+ *   statements, so a genuine statement-list member's parent is the
+ *   `statement_block`, not the `code_block` itself — keying on `code_block`
+ *   directly would misclassify every ordinary statement as a bare branch
+ *   and wrap it unnecessarily.
  *
  * In BOTH cases, splicing the chain in unwrapped embeds a complete nested
  * `if ... then ... else ...;` directly as that branch: if its own trailing
@@ -158,15 +165,15 @@ function injectMutationSelectorVar(root: ALSyntaxNode, rewrites: Map<ALSyntaxNod
  * consumed can neither orphan an `else` nor drop a terminator the next
  * statement needs.
  *
- * Only a genuine `code_block` member (root is one of possibly several
- * statements inside an existing `begin ... end`) needs no wrap at all — the
- * next token there can never be a misattributed `else`.
+ * Only a genuine statement-position member (root is one of possibly several
+ * statements inside an existing `begin ... end`, per `isStatementPosition`)
+ * needs no wrap at all — the next token there can never be a misattributed
+ * `else`.
  */
 function wrapIfSingleStatementSlot(statement: ALSyntaxNode, text: string): string {
-  const needsWrap =
-    statement.kind === ALNodeKind.block ||
-    (statement.parent !== null && statement.parent.kind !== ALNodeKind.block);
-  if (!needsWrap) return text;
+  const isBlockOrNonStatementChild =
+    statement.kind === ALNodeKind.block || !isStatementPosition(statement);
+  if (!isBlockOrNonStatementChild) return text;
   const consumedTerminator = statement.text.trimEnd().endsWith(";");
   return `begin\n${text}\nend${consumedTerminator ? ";" : ""}`;
 }
