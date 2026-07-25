@@ -32,7 +32,7 @@ export const emptyBlock: MutationOperator = {
     // Skip already-empty blocks. Cheapest signal: whether the block has any
     // namedChildren that aren't `begin` / `end` keywords. The grammar exposes
     // these tokens as named nodes with rawKind `begin_keyword` / `end_keyword`
-    // (v2.5.0); older/alternate grammars may use bare `begin` / `end`.
+    // (v3.0.1); older/alternate grammars may use bare `begin` / `end`.
     const hasContent = node.namedChildren.some(
       (c) =>
         c.rawKind !== "begin_keyword" &&

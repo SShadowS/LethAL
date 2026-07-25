@@ -4,6 +4,7 @@ import {
   type MutationOperator,
   type MutationSpec,
   type SemanticContext,
+  isStatementPosition,
 } from "@lethal/operator-sdk";
 import { synthesizeAfter } from "./mutate-helpers";
 
@@ -17,8 +18,9 @@ export const voidMethodCall: MutationOperator = {
 
   targets(node: ALSyntaxNode, _ctx: SemanticContext): boolean {
     if (node.kind !== ALNodeKind.procedure_call) return false;
-    // Only statement-position calls (direct child of a code_block).
-    return node.parent !== null && node.parent.kind === ALNodeKind.block;
+    // Only statement-position calls. v3 wraps a block's statements in a
+    // `statement_block`, so this cannot key on `code_block` directly.
+    return isStatementPosition(node);
   },
 
   generate(node: ALSyntaxNode, _ctx: SemanticContext): readonly MutationSpec[] {

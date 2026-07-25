@@ -23,11 +23,26 @@ const BRANCH_PARENT_KINDS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Is this node a direct member of a block's statement list?
+ *
+ * Grammar note: v3 wraps a `code_block`'s statements in a `statement_block`
+ * container, so a statement's parent is the `statement_block` and its
+ * grandparent is the `code_block`. Keying on `code_block` alone — as this
+ * codebase did under v2.5.0 — silently matches nothing under v3.
+ */
+export function isStatementPosition(node: ALSyntaxNode): boolean {
+  const parent = node.parent;
+  if (parent === null) return false;
+  return parent.kind === ALNodeKind.statement_block || parent.kind === ALNodeKind.block;
+}
+
+/**
  * Narrowest ancestor that the grammar treats as a statement.
  *
  * Includes the statement kinds plus two positional cases:
  *   - a `code_block` whose parent is a procedure, trigger, or branch
- *   - a `call_expression` whose parent is a `code_block` (expression-statement quirk)
+ *   - a `call_expression` in statement position (expression-statement quirk;
+ *     see `isStatementPosition` for the container-skipping detail)
  *
  * Returns `null` if the node has no statement ancestor (e.g., the root node).
  * The node itself is considered a candidate — calling with an `if_statement`
@@ -37,11 +52,7 @@ export function findEnclosingStatement(node: ALSyntaxNode): ALSyntaxNode | null 
   let current: ALSyntaxNode | null = node;
   while (current !== null) {
     if (STATEMENT_KINDS.has(current.kind)) return current;
-    if (
-      current.kind === ALNodeKind.procedure_call &&
-      current.parent !== null &&
-      current.parent.kind === ALNodeKind.block
-    ) {
+    if (current.kind === ALNodeKind.procedure_call && isStatementPosition(current)) {
       return current;
     }
     if (
@@ -74,4 +85,38 @@ export function findEnclosingCodeBlock(node: ALSyntaxNode): ALSyntaxNode | null 
     current = current.parent;
   }
   return null;
+}
+
+/**
+ * The statements of a block, skipping v3's `statement_block` container.
+ *
+ * Returns the block's own named children under a grammar without the
+ * container, so callers need no version branching.
+ */
+export function blockStatements(block: ALSyntaxNode): readonly ALSyntaxNode[] {
+  const inner = block.namedChildren.find((c) => c.kind === ALNodeKind.statement_block);
+  return inner === undefined ? block.namedChildren : inner.namedChildren;
+}
+
+/**
+ * The declarations of a `var_section`, skipping v3's `var_body` container.
+ */
+export function varDeclarations(varSection: ALSyntaxNode): readonly ALSyntaxNode[] {
+  const inner = varSection.namedChildren.find((c) => c.kind === ALNodeKind.var_body);
+  return inner === undefined ? varSection.namedChildren : inner.namedChildren;
+}
+
+/**
+ * The members of an object declaration (codeunit/table/page/report),
+ * skipping v3's `declaration_body` container.
+ *
+ * Not named in the Task 4 brief, but required by it: under v3, an object
+ * declaration's `var_section` and `procedure` members are not direct
+ * `namedChildren` of the object node — they sit one level down inside a
+ * `declaration_body`. Without this, `symbol-table.ts` finds neither
+ * globals nor procedures for any object.
+ */
+export function declarationMembers(objectNode: ALSyntaxNode): readonly ALSyntaxNode[] {
+  const inner = objectNode.namedChildren.find((c) => c.kind === ALNodeKind.declaration_body);
+  return inner === undefined ? objectNode.namedChildren : inner.namedChildren;
 }

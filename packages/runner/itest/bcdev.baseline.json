@@ -7,13 +7,6 @@
     "errorClass": null
   },
   {
-    "key": "346fd0a58a51cf923e45387c4c0f5483b1d1edcad7202a1e2d3a5bc96ff17b1a|Sandbox Logic|lethal.empty-block|1",
-    "verdict": "survived",
-    "killingTest": null,
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
     "key": "4004a181f8c0dc8bbe0c7c3051d719211b1ca22dadad08ae600b2df9f72fbe82|Sandbox Logic|lethal.return-value|1",
     "verdict": "killed",
     "killingTest": "OverBudgetDetected",
@@ -42,21 +35,14 @@
     "errorClass": null
   },
   {
+    "key": "5c9b5c3e0234666484725bd281b0610957f03a54fadff8a87364e8cf29fd8222|Sandbox Logic|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "OverBudgetDetected",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "5cba655a6ac203ce40d31b0b4974a7b2f308cfec342a35d8e1a4f8d8c09c5c03|Sandbox Logic|lethal.negate-conditional|1",
-    "verdict": "survived",
-    "killingTest": null,
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "6e62b3f846fccbf0c68709ecf3b27a522c1b6bb8735e2a5ca991fd8193976690|Sandbox Logic|lethal.empty-block|1",
-    "verdict": "survived",
-    "killingTest": null,
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "6f3d664cc2b021fd203650e64f1f855d436986ad295b86001c04775b93346252|Sandbox Logic|lethal.empty-block|1",
     "verdict": "survived",
     "killingTest": null,
     "coverageFiltered": false,
@@ -84,21 +70,35 @@
     "errorClass": null
   },
   {
-    "key": "bdc7ff58e859be34b764eab287242a360199c9cbbd5b6ead399ada03a8ace4bc|Sandbox Pricing|lethal.empty-block|1",
+    "key": "af16d6b1942beab927de37b79a2264af52d35d115e82408215959bdf23882ae2|Sandbox Logic|lethal.empty-block|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "b03dba085d6a4498f41e5e223ecb64c66e6eee1d2d2ef7ab55f84fa7c63835d7|Sandbox Logic|lethal.empty-block|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "e2fe1df979a97af7156c420973b37fd55f8da2e2e4c8f48073b2d8a00752683f|Sandbox Logic|lethal.empty-block|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "e7216a276891ae7f02f66d83d4fad98fdc3ca56552d617d1f70fa371f7cfc667|Sandbox Pricing|lethal.empty-block|1",
     "verdict": "no-coverage",
     "killingTest": null,
     "coverageFiltered": true,
     "errorClass": null
   },
   {
-    "key": "d3bd86558b73591064df51d2e4cf2f47c1c84e8b58d5c8ddea5210fe57a5178f|Sandbox Logic|lethal.empty-block|1",
-    "verdict": "killed",
-    "killingTest": "OverBudgetDetected",
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "db2c5bd64bb1bbe42ddd19f8c872882dba60ccb4478d88d1fe27579a7cceeeb7|Sandbox Logic|lethal.empty-block|1",
+    "key": "e916a17f72dabdb8c19d15a128f9917639a221cb341ff6022deb52b71b9b929d|Sandbox Logic|lethal.empty-block|1",
     "verdict": "survived",
     "killingTest": null,
     "coverageFiltered": false,

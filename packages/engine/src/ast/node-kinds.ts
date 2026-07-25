@@ -1,11 +1,18 @@
 /**
  * ALNodeKind — enumeration of AST node types produced by the
- * SShadowS/tree-sitter-al grammar (v2.5.0).
+ * SShadowS/tree-sitter-al grammar (v3.0.1).
  *
  * String values are cross-checked against the grammar's node-types.json.
  * Where the design-plan name differs from the grammar name, the plan's key
  * is preserved (downstream code references `ALNodeKind.codeunit`) but the
  * string value matches the grammar verbatim (e.g. `"codeunit_declaration"`).
+ *
+ * v3 adds *container* nodes rather than renaming anything from v2.5.0: a
+ * `code_block`'s statements now sit inside a `statement_block`, a
+ * `var_section`'s declarations inside a `var_body`, and an object
+ * declaration's members inside a `declaration_body`. Code that walked
+ * straight from the parent to its children under v2.5.0 must skip these
+ * containers explicitly.
  */
 export const ALNodeKind = {
   // --- Top-level / declarations --------------------------------------------
@@ -17,6 +24,10 @@ export const ALNodeKind = {
   procedure: "procedure",
   trigger: "trigger_declaration",
   var_section: "var_section",
+  /** v3 wraps a `var_section`'s declarations in a `var_body` container. */
+  var_body: "var_body",
+  /** v3 wraps an object declaration's members in a `declaration_body` container. */
+  declaration_body: "declaration_body",
   variable_declaration: "variable_declaration",
   parameter_list: "parameter_list",
   parameter: "parameter",
@@ -24,6 +35,8 @@ export const ALNodeKind = {
   // --- Statements ----------------------------------------------------------
   /** Grammar calls the compound `begin...end` block `code_block`. */
   block: "code_block",
+  /** v3 wraps a `code_block`'s statements in a `statement_block` container. */
+  statement_block: "statement_block",
   if_statement: "if_statement",
   case_statement: "case_statement",
   repeat_statement: "repeat_statement",

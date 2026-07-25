@@ -23,6 +23,7 @@ import { readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ALNodeKind } from "../packages/engine/src/ast/node-kinds";
 import { initParser, parseAL } from "../packages/engine/src/ast/parser";
+import { isStatementPosition } from "../packages/engine/src/ast/tree-walks";
 import { type ALSyntaxNode, wrapRoot } from "../packages/engine/src/ast/syntax-node";
 
 interface FileResult {
@@ -88,11 +89,12 @@ for (const [i, name] of entries.entries()) {
     }
     if (n.kind === ALNodeKind.procedure) siteCounts.procedures++;
     if (n.kind === ALNodeKind.exit_statement) siteCounts.exits++;
-    if (
-      n.kind === ALNodeKind.procedure_call &&
-      n.parent !== null &&
-      n.parent.kind === ALNodeKind.block
-    ) {
+    // Count statement-position calls through the SAME predicate the operators use, never a
+    // hand-rolled copy. A probe that hardcodes its own notion of statement position measures the
+    // probe, not the tool: this line previously checked `parent.kind === code_block` directly and
+    // would have reported 0 forever after the v3 upgrade — the exact silent-zero this script exists
+    // to catch, reproduced inside the detector.
+    if (n.kind === ALNodeKind.procedure_call && isStatementPosition(n)) {
       siteCounts.statementCalls++;
     }
   });
