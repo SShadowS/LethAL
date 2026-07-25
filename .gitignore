@@ -22,3 +22,6 @@ lethal.config.local.json
 .serena/
 lethal.sqlite-shm
 lethal.sqlite-wal
+
+# Model-panel review artifacts — agent scratch, not project source
+.panel/
