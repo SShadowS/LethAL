@@ -129,6 +129,10 @@ describe("writeInstrumentedProject", () => {
       const manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8"));
       expect(manifest.mutants[0]?.procedureName).toBe("");
       expect(manifest.mutants[0]?.triggerName).toBe("OnInsert");
+      // Coverage keys on (objectType, objectId): `table 50100` is not `codeunit 50100`, and it is
+      // the TABLE-ness that entitles this mutant to the coverage fallbacks in
+      // packages/runner/src/selection.ts. Without it the fallbacks cannot tell the two apart.
+      expect(manifest.mutants[0]?.objectType).toBe("table");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -216,6 +220,7 @@ describe("writeInstrumentedProject", () => {
       expect(manifest.selectorIds).toEqual({ selectorId: 60000, controlId: 60001, tableId: 60002 });
       let entry = manifest.mutants[0];
       expect(entry.astHash).toMatch(/^[0-9a-f]{8,}$/);
+      expect(entry.objectType).toBe("codeunit");
       expect(entry.codeunitId).toBe(51040);
       expect(entry.codeunitName).toBe("P");
       expect(entry.procedureName).toBe("P");

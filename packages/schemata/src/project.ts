@@ -53,6 +53,20 @@ export interface MutantManifestEntry {
   readonly operatorName: string;
   readonly operatorVersion: string;
   readonly astHash: string;
+  /**
+   * The AL object KEYWORD this mutant's object was declared with, lowercased: `table`,
+   * `codeunit`, `page`, `report`, `query`, `xmlport`, `enum`.
+   *
+   * Required, and deliberately not optional: BC object ids are unique PER TYPE, so
+   * `codeunitId` alone does not identify an object — `table 50100 "Foo"` alongside
+   * `codeunit 50100 "Foo Mgt."` is ordinary. Coverage lookup keys on the (type, id) pair
+   * (`packages/runner/src/selection.ts`), and a manifest that cannot supply the type is
+   * refused there rather than silently defaulted: defaulting merges two different objects'
+   * coverage and turns a live mutation site into a false survivor.
+   */
+  readonly objectType: string;
+  /** The object's id. Named `codeunitId` for history; it is the id of whatever
+   *  `objectType` names, not necessarily a codeunit. */
   readonly codeunitId: number;
   readonly codeunitName: string;
   readonly procedureName: string;
@@ -76,10 +90,21 @@ function lineOfIndex(source: string, index: number): number {
 const OBJECT_HEADER =
   /^\s*(codeunit|table|page|report|query|xmlport|enum)\s+(\d+)\s+("([^"]+)"|(\w+))/im;
 
-function objectHeaderOf(source: string): { id: number; name: string } {
+/**
+ * The declared object's kind, id and name. `type` is the matched AL keyword lowercased
+ * (`table`, `codeunit`, ...) — a BC object id is unique only WITHIN a type, so every consumer
+ * that identifies an object (coverage lookup above all) needs the pair, not the id alone.
+ */
+function objectHeaderOf(source: string): { type: string; id: number; name: string } {
   const m = OBJECT_HEADER.exec(source);
   if (!m) throw new Error("instrumented file has no AL object header");
-  return { id: Number(m[2]), name: m[4] ?? m[5] ?? "" };
+  const type = m[1];
+  if (type === undefined) {
+    // Unreachable while OBJECT_HEADER keeps group 1 — asserted rather than defaulted, because a
+    // wrong/absent object type silently merges two objects' coverage (see MutantManifestEntry).
+    throw new Error("AL object header matched without an object keyword");
+  }
+  return { type: type.toLowerCase(), id: Number(m[2]), name: m[4] ?? m[5] ?? "" };
 }
 
 function stripQuotes(s: string): string {
@@ -146,6 +171,7 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
         operatorName: spec.operatorName,
         operatorVersion: spec.operatorVersion,
         astHash: astSubtreeHash(spec.before),
+        objectType: header.type,
         codeunitId: header.id,
         codeunitName: header.name,
         procedureName: procedureNameOf(spec),

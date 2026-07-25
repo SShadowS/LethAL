@@ -18,6 +18,7 @@ function entry(over: Partial<Record<string, unknown>> = {}) {
     operatorName: "conditional-boundary",
     operatorVersion: "1.2.0",
     astHash: "abc123",
+    objectType: "codeunit",
     codeunitId: 70000,
     codeunitName: "Sample",
     procedureName: "Post",
@@ -91,36 +92,46 @@ describe("coverage", () => {
 });
 
 // SymbolReference.json never records a trigger (AppMethodIndex.lookup can never name one), so a
-// trigger mutant's member-level key can never hit. These prove the object-level fallback: it
-// widens to "any test that covered ANYTHING in this object" only when triggerName is present, and
-// never manufactures coverage where none exists.
+// table trigger mutant's member-level key can never hit. These prove the object-level fallback: it
+// widens to "any test that covered ANYTHING in this object" only for a TABLE trigger, and never
+// manufactures coverage where none exists.
 describe("coverage: trigger fallback", () => {
   const baseline = [
     {
       ref: t1,
       coverage: {
         granularity: "procedure" as const,
-        entries: [{ objectType: "Codeunit", objectId: 70000, procedure: "Post" }],
+        entries: [
+          { objectType: "Codeunit", objectId: 70000, procedure: "Post" },
+          // Table 70000 is a DIFFERENT object from codeunit 70000 — both indexes key on the
+          // (type, id) pair, so this entry is what makes the object-level fallback below hit.
+          { objectType: "Table", objectId: 70000, procedure: "Insert" },
+        ],
       },
     },
     { ref: t2, coverage: { granularity: "procedure" as const, entries: [] } },
   ];
 
-  test("trigger mutant with no member-level entry falls back to object-level coverage", () => {
+  test("table trigger mutant with no member-level entry falls back to object-level coverage", () => {
     const index = buildCoverageIndex(baseline);
-    const m = entry({ procedureName: "", triggerName: "OnInsert" });
+    const m = entry({ objectType: "table", procedureName: "", triggerName: "OnInsert" });
     const split = coverageFilter([m], index, [t1, t2]);
     expect(split.covered.get("M0001")).toEqual([t1]);
     expect(split.uncovered.length).toBe(0);
   });
 
-  // Superseded by the "run untargeted" describe block below (Task 5 amendment): a trigger
+  // Superseded by the "run untargeted" describe block below (Task 5 amendment): a table trigger
   // mutant whose object has no coverage anywhere no longer lands in `uncovered` — it now runs
   // against every green test, because we cannot silently report no-coverage on a mutation site
   // BC's coverage index can never name. See that block for the full behavior + the warning.
-  test("trigger mutant whose object has no coverage anywhere still resolves — not uncovered", () => {
+  test("table trigger mutant whose object has no coverage anywhere still resolves — not uncovered", () => {
     const index = buildCoverageIndex(baseline);
-    const m = entry({ codeunitId: 99999, procedureName: "", triggerName: "OnInsert" });
+    const m = entry({
+      objectType: "table",
+      codeunitId: 99999,
+      procedureName: "",
+      triggerName: "OnInsert",
+    });
     const split = coverageFilter([m], index, [t1, t2]);
     expect(split.covered.get("M0001")).toEqual([t1, t2]);
     expect(split.uncovered.length).toBe(0);
@@ -151,49 +162,56 @@ describe("coverage: trigger fallback", () => {
 // instead of reporting no-coverage — over-running costs time, silently skipping hides a live
 // mutation site. Resolution order stays most-precise-first: member (Task 1) > object (Task 1) >
 // all-green-tests (this task) > uncovered (unchanged, and unreachable for a trigger mutant now).
-describe("coverage: trigger mutants run untargeted when coverage cannot see them", () => {
+describe("coverage: table trigger mutants run untargeted when coverage cannot see them", () => {
   const t3 = { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "OtherProc" };
   const baseline = [
     {
       ref: t1,
       coverage: {
         granularity: "procedure" as const,
-        entries: [{ objectType: "Codeunit", objectId: 70000, procedure: "Post" }],
+        entries: [{ objectType: "Table", objectId: 70000, procedure: "Post" }],
       },
     },
     {
       ref: t3,
       coverage: {
         granularity: "procedure" as const,
-        entries: [{ objectType: "Codeunit", objectId: 70000, procedure: "OtherProc" }],
+        entries: [{ objectType: "Table", objectId: 70000, procedure: "OtherProc" }],
       },
     },
     // t2 covers nothing — present only so "all green tests" is a strictly wider set than the
-    // object-level index for codeunit 70000 (which is {t1, t3}), so the tests below can tell
+    // object-level index for table 70000 (which is {t1, t3}), so the tests below can tell
     // "narrower, matched set" apart from "all tests, because nothing matched".
     { ref: t2, coverage: { granularity: "procedure" as const, entries: [] } },
   ];
   const allGreen = [t1, t2, t3];
 
-  test("1. trigger mutant with no coverage anywhere resolves to all green tests, not uncovered", () => {
+  test("1. table trigger mutant with no coverage anywhere resolves to all green tests, not uncovered", () => {
     const index = buildCoverageIndex(baseline);
-    const m = entry({ codeunitId: 99999, procedureName: "", triggerName: "OnInsert" });
+    const m = entry({
+      objectType: "table",
+      codeunitId: 99999,
+      procedureName: "",
+      triggerName: "OnInsert",
+    });
     const split = coverageFilter([m], index, allGreen);
     expect(split.covered.get("M0001")).toEqual(allGreen);
     expect(split.uncovered.length).toBe(0);
   });
 
-  test("2. trigger mutant with object-level coverage uses that narrower set, not all tests", () => {
+  test("2. table trigger mutant with object-level coverage uses that narrower set, not all tests", () => {
+    // objectId 70000, no member hit
     const index = buildCoverageIndex(baseline);
-    const m = entry({ procedureName: "", triggerName: "OnInsert" }); // codeunitId 70000, no member hit
+    const m = entry({ objectType: "table", procedureName: "", triggerName: "OnInsert" });
     const split = coverageFilter([m], index, allGreen);
     expect(split.covered.get("M0001")).toEqual([t1, t3]); // object-level for 70000 — not [t1, t2, t3]
     expect(split.uncovered.length).toBe(0);
   });
 
-  test("3. trigger mutant with member-level coverage uses that, not the wider fallbacks", () => {
+  test("3. table trigger mutant with member-level coverage uses that, not the wider fallbacks", () => {
+    // member AND object both resolvable
     const index = buildCoverageIndex(baseline);
-    const m = entry({ procedureName: "Post", triggerName: "OnInsert" }); // member AND object both resolvable
+    const m = entry({ objectType: "table", procedureName: "Post", triggerName: "OnInsert" });
     const split = coverageFilter([m], index, allGreen);
     expect(split.covered.get("M0001")).toEqual([t1]); // member-exact — not [t1, t3] and not all tests
     expect(split.uncovered.length).toBe(0);
@@ -201,7 +219,7 @@ describe("coverage: trigger mutants run untargeted when coverage cannot see them
 
   test("4. non-trigger mutant with no coverage anywhere stays uncovered — guards against inflating every run", () => {
     const index = buildCoverageIndex(baseline);
-    const m = entry({ codeunitId: 99999, procedureName: "Untested" }); // no triggerName
+    const m = entry({ objectType: "table", codeunitId: 99999, procedureName: "Untested" }); // no triggerName
     const split = coverageFilter([m], index, allGreen);
     expect(split.covered.size).toBe(0);
     expect(split.uncovered).toEqual([m]);
@@ -213,12 +231,14 @@ describe("coverage: trigger mutants run untargeted when coverage cannot see them
     try {
       const m1 = entry({
         mutantId: "M0001",
+        objectType: "table",
         codeunitId: 99999,
         procedureName: "",
         triggerName: "OnInsert",
       });
       const m2 = entry({
         mutantId: "M0002",
+        objectType: "table",
         codeunitId: 99998,
         procedureName: "",
         triggerName: "OnModify",
@@ -226,22 +246,174 @@ describe("coverage: trigger mutants run untargeted when coverage cannot see them
       coverageFilter([m1, m2], index, allGreen);
       expect(warnSpy).toHaveBeenCalledTimes(1);
       const message = String(warnSpy.mock.calls[0]?.[0]);
-      expect(message).toContain("2 trigger mutant");
+      expect(message).toContain("2 table trigger mutant");
       expect(message).toContain("3 green test");
     } finally {
       warnSpy.mockRestore();
     }
   });
 
-  test("does not warn when no trigger mutant needed the untargeted fallback", () => {
+  test("does not warn when no table trigger mutant needed the untargeted fallback", () => {
     const index = buildCoverageIndex(baseline);
     const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
     try {
-      const m = entry({ procedureName: "Post", triggerName: "OnInsert" }); // member-level hit
+      // member-level hit
+      const m = entry({ objectType: "table", procedureName: "Post", triggerName: "OnInsert" });
       coverageFilter([m], index, allGreen);
       expect(warnSpy).not.toHaveBeenCalled();
     } finally {
       warnSpy.mockRestore();
     }
+  });
+});
+
+// A BC object id is unique only WITHIN a type — `table 50100` and `codeunit 50100` are two
+// different objects and a project routinely holds both. Keying coverage on the bare numeric id
+// merges them, and the merge silently defeats the untargeted fallback above: the table trigger
+// mutant's member key misses, the bare-id object lookup returns the CODEUNIT's covering tests
+// (non-empty), so the mutant runs against tests that cannot reach it and is scored `survived`.
+describe("coverage: object id collisions across object types", () => {
+  const baseline = [
+    {
+      ref: t1,
+      coverage: {
+        granularity: "procedure" as const,
+        // ONLY the codeunit is covered. Nothing anywhere covers table 50100.
+        entries: [{ objectType: "Codeunit", objectId: 50100, procedure: "Run" }],
+      },
+    },
+    { ref: t2, coverage: { granularity: "procedure" as const, entries: [] } },
+  ];
+  const allGreen = [t1, t2];
+
+  test("a table trigger mutant does NOT inherit the same-id codeunit's covering tests", () => {
+    const index = buildCoverageIndex(baseline);
+    const m = entry({
+      objectType: "table",
+      codeunitId: 50100,
+      procedureName: "",
+      triggerName: "OnValidate",
+    });
+    const split = coverageFilter([m], index, allGreen);
+    // Bare-id keying would answer [t1] here — the codeunit's test, which never touches the
+    // table — and the all-green-tests safety net would never fire.
+    expect(split.covered.get("M0001")).not.toEqual([t1]);
+    expect(split.covered.get("M0001")).toEqual(allGreen);
+    expect(split.uncovered.length).toBe(0);
+  });
+
+  test("an ordinary procedure mutant does NOT match a same-id other-type coverage entry", () => {
+    const index = buildCoverageIndex(baseline);
+    // table 50100 has a procedure that happens to share the codeunit procedure's name.
+    const m = entry({ objectType: "table", codeunitId: 50100, procedureName: "Run" });
+    const split = coverageFilter([m], index, allGreen);
+    expect(split.covered.size).toBe(0);
+    expect(split.uncovered).toEqual([m]);
+  });
+
+  test("the covered codeunit itself still matches, member-exact", () => {
+    const index = buildCoverageIndex(baseline);
+    const m = entry({ objectType: "codeunit", codeunitId: 50100, procedureName: "Run" });
+    expect(coverageFilter([m], index, allGreen).covered.get("M0001")).toEqual([t1]);
+  });
+});
+
+// Finding 2: `triggerNameOf` (@lethal/schemata) walks to the nearest `trigger_declaration`, which
+// matches a codeunit's `trigger OnRun()` and a page's `OnAction` just as readily as a table
+// trigger. The "BC reports no coverage for trigger code" measurement covers TABLE triggers only,
+// so the fallbacks must not widen to object kinds nobody has measured.
+describe("coverage: only TABLE triggers get the coverage fallbacks", () => {
+  const baseline = [
+    {
+      ref: t1,
+      coverage: {
+        granularity: "procedure" as const,
+        entries: [{ objectType: "Codeunit", objectId: 70000, procedure: "Post" }],
+      },
+    },
+    { ref: t2, coverage: { granularity: "procedure" as const, entries: [] } },
+  ];
+  const allGreen = [t1, t2];
+
+  test("an uncovered codeunit OnRun mutant reports no-coverage, not survived-against-everything", () => {
+    const index = buildCoverageIndex(baseline);
+    const m = entry({
+      objectType: "codeunit",
+      codeunitId: 88888, // nothing covers this codeunit at all
+      procedureName: "",
+      triggerName: "OnRun",
+    });
+    const split = coverageFilter([m], index, allGreen);
+    expect(split.covered.size).toBe(0);
+    expect(split.uncovered).toEqual([m]);
+  });
+
+  test("a codeunit OnRun mutant does not widen to the object-level index either", () => {
+    const index = buildCoverageIndex(baseline);
+    // codeunit 70000 IS covered (procedure Post), so the object-level fallback would resolve to
+    // [t1] if it applied to a codeunit trigger. It must not: `Post` is not `OnRun`.
+    const m = entry({ objectType: "codeunit", procedureName: "", triggerName: "OnRun" });
+    const split = coverageFilter([m], index, allGreen);
+    expect(split.covered.size).toBe(0);
+    expect(split.uncovered).toEqual([m]);
+  });
+
+  test("a page trigger mutant is likewise not widened", () => {
+    const index = buildCoverageIndex(baseline);
+    const m = entry({
+      objectType: "page",
+      codeunitId: 70000,
+      procedureName: "",
+      triggerName: "OnOpenPage",
+    });
+    const split = coverageFilter([m], index, allGreen);
+    expect(split.uncovered).toEqual([m]);
+  });
+
+  test("no warning fires for a non-table trigger mutant", () => {
+    const index = buildCoverageIndex(baseline);
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const m = entry({ objectType: "codeunit", codeunitId: 88888, triggerName: "OnRun" });
+      coverageFilter([m], index, allGreen);
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+});
+
+// A manifest that predates `objectType` parses to `undefined` here. Defaulting it would resurrect
+// exactly the bare-id merge the pair key exists to prevent, so it is refused loudly instead.
+describe("coverage: a manifest entry with no objectType is refused, never defaulted", () => {
+  const baseline = [
+    {
+      ref: t1,
+      coverage: {
+        granularity: "procedure" as const,
+        entries: [{ objectType: "Codeunit", objectId: 70000, procedure: "Post" }],
+      },
+    },
+  ];
+
+  test("coverageFilter throws, naming the mutant", () => {
+    const index = buildCoverageIndex(baseline);
+    const m = entry({ objectType: undefined, procedureName: "Post" });
+    expect(() => coverageFilter([m], index, [t1])).toThrow(/objectType|object type/i);
+    expect(() => coverageFilter([m], index, [t1])).toThrow(/M0001/);
+  });
+
+  test("buildCoverageIndex throws on a coverage entry with no objectType", () => {
+    expect(() =>
+      buildCoverageIndex([
+        {
+          ref: t1,
+          coverage: {
+            granularity: "procedure" as const,
+            entries: [{ objectType: "", objectId: 70000, procedure: "Post" }],
+          },
+        },
+      ]),
+    ).toThrow(/object type/i);
   });
 });
