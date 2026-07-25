@@ -37,6 +37,7 @@ import type {
 // to drive more than one batch while `planArtifacts` still collapses everything into one artifact.
 import * as orchestratorModule from "../src/orchestrator";
 import {
+  MIN_MUTANT_BUDGET_MS,
   activateOnce,
   generateMutationSet,
   invalidateBatchVerdicts,
@@ -669,6 +670,95 @@ describe("runSession — deadline vs runner-confirmed timeout", () => {
     expect(report.counts.unstable).toBe(0);
     expect(report.counts.killed).toBe(0);
     store.close();
+  });
+});
+
+// Tier 6B Phase 0 Task 6: `budget = 2 * baselineDuration` had no floor. Measured live, a
+// warm baseline (~95ms) yields a ~190ms budget that a cold first execution (~1872ms measured)
+// blows straight through — the client aborts, which the orchestrator turns into a durable tier
+// quarantine and an aborted session, for a mutant that runs fine on its own. `MIN_MUTANT_BUDGET_MS`
+// floors the budget so a cold start can't trigger that; a genuinely slow test's `2x` budget must
+// stay uncapped above the floor, since the floor's job is absorbing a cold start, not capping
+// performance.
+describe("runSession — per-mutant budget floor (Tier 6B Phase 0 Task 6)", () => {
+  /**
+   * Records every `run()` call's `(active mutant, timeoutMs)` in dispatch order so a test can
+   * assert on the actual budget the orchestrator computed, not just on the resulting verdict — a
+   * test that only checked "it ran" would pass whether or not the floor exists. `activations`
+   * mirrors `StubBackend`'s pattern above: the most recent `activate()` call determines whether
+   * the next `run()` is the baseline/confirm-rerun (`null`) or a mutant's covering run (mutant id).
+   * `coverage: "none"` (like the "coverage:none capability" test above) sidesteps needing a
+   * procedure coverage list — every green test runs under every mutant regardless.
+   */
+  class BudgetProbeBackend implements ExecutionBackend {
+    activations: Array<string | null> = [];
+    readonly runs: Array<{ active: string | null; timeoutMs: number }> = [];
+    constructor(private readonly baselineDurationMs: number) {}
+    capabilities(): BackendCapabilities {
+      return { coverage: "none", deploy: "none", isolation: "full-reset", authoritative: false };
+    }
+    async status(): Promise<BackendStatus> {
+      return { ok: true, details: "budget-probe" };
+    }
+    async deploy(): Promise<CompiledArtifact | null> {
+      return null;
+    }
+    async compileCheck(): Promise<void> {}
+    async activate(id: string | null) {
+      this.activations.push(id);
+    }
+    async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
+      const active = this.activations.at(-1) ?? null;
+      this.runs.push({ active, timeoutMs: opts.timeoutMs });
+      // The very first call is the baseline: reports the caller-chosen duration that feeds
+      // `baselineDuration` and so the naive (unfloored) budget. Every later call — the mutant's
+      // covering run, or the confirm re-run after a fail — reports an instant duration, so any
+      // floor observed on ITS budget can only have come from the floor, never from its own time.
+      const isBaseline = this.runs.length === 1;
+      return {
+        ref,
+        outcome: active === null ? "pass" : "fail",
+        durationMs: isBaseline ? this.baselineDurationMs : 1,
+      };
+    }
+  }
+
+  test("a tiny baseline duration still dispatches the covering run at the floored budget", async () => {
+    const dirs = await makeProject();
+    const backend = new BudgetProbeBackend(50); // naive 2x budget = 100ms, far under the floor
+    const store = new ResultsStore(":memory:");
+    await runSession({ backend, store, ...dirs, selectorIds });
+    store.close();
+    // runs[0] = baseline; runs[1] = the first mutant's covering run.
+    const mutantRun = backend.runs[1];
+    expect(mutantRun).toBeDefined();
+    expect(mutantRun?.active).not.toBeNull();
+    expect(mutantRun?.timeoutMs).toBeGreaterThanOrEqual(MIN_MUTANT_BUDGET_MS);
+  });
+
+  test("a large baseline duration still gets exactly 2x, uncapped by the floor", async () => {
+    const dirs = await makeProject();
+    const backend = new BudgetProbeBackend(60_000); // naive 2x budget = 120,000ms, above the floor
+    const store = new ResultsStore(":memory:");
+    await runSession({ backend, store, ...dirs, selectorIds });
+    store.close();
+    const mutantRun = backend.runs[1];
+    expect(mutantRun).toBeDefined();
+    expect(mutantRun?.timeoutMs).toBe(120_000);
+  });
+
+  test("the same floor applies to the confirm-rerun after a fail", async () => {
+    const dirs = await makeProject();
+    const backend = new BudgetProbeBackend(50); // "fail" under every mutant triggers a confirm rerun
+    const store = new ResultsStore(":memory:");
+    await runSession({ backend, store, ...dirs, selectorIds });
+    store.close();
+    // runs[0] = baseline, runs[1] = mutant covering run ("fail"), runs[2] = confirm rerun (null
+    // activation) — the same `budget` variable dispatches both runs[1] and runs[2].
+    const confirmRun = backend.runs[2];
+    expect(confirmRun).toBeDefined();
+    expect(confirmRun?.active).toBeNull();
+    expect(confirmRun?.timeoutMs).toBeGreaterThanOrEqual(MIN_MUTANT_BUDGET_MS);
   });
 });
 

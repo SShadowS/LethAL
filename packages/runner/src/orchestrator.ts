@@ -48,6 +48,21 @@ import type { MutantVerdict } from "./store";
 const BASELINE_TIMEOUT_DEFAULT = 120_000;
 
 /**
+ * Floor for a mutant run's time budget.
+ *
+ * The budget is `2 x` the test's baseline duration, which is far too tight for a
+ * fast test: measured live, the same test through the same fence took 1872ms on
+ * its first (cold) call and ~95ms warm. A baseline measured warm yields a ~190ms
+ * budget, so the first cold execution in the mutant loop aborts — and an abort is
+ * not a retry here, it becomes an `in-flight-unknown`, a durable tier quarantine
+ * and an aborted session.
+ *
+ * The budget's job is catching a runaway mutant, not enforcing performance, so a
+ * floor that absorbs a cold start costs nothing real.
+ */
+export const MIN_MUTANT_BUDGET_MS = 30_000;
+
+/**
  * Tier of every currently registered operator, keyed by name — the mapping
  * `writeInstrumentedProject` needs to resolve Tier-2 narrowings of a Tier-1
  * operator (`dedupeSpecs` in `@lethal/schemata`). Built once from the same
@@ -2208,7 +2223,10 @@ async function runMutantsOnBackend(args: {
     }> = [];
     let transportErrorRef: TestMethodRef | undefined;
     for (const ref of covering) {
-      const budget = 2 * (args.baselineDuration.get(testKeyOf(ref)) ?? args.fallbackTimeoutMs);
+      const budget = Math.max(
+        2 * (args.baselineDuration.get(testKeyOf(ref)) ?? args.fallbackTimeoutMs),
+        MIN_MUTANT_BUDGET_MS,
+      );
       // Layer 5C-B2: `runFenced`, not `runOnce` — a lost ack that reconciliation PROVES completed
       // earns one fresh attempt, and `v` is then that attempt's verdict. Only the final verdict is
       // buffered/attested/classified below, exactly as `runOnce`'s own pre-dispatch-rejected retry
