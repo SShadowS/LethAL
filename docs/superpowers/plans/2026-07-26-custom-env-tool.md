@@ -167,6 +167,83 @@ git commit -m "probe(envtool): measure what a Continia environment supports"
 
 ---
 
+## Probe result (2026-07-26)
+
+**`coverageMode: "none"`.** `bcdev_status` was run against the one existing environment
+(`continia env list --json` → `description: "WI-63396"`, `status: "Running"` at the start of the
+probe) and returned `ok: false` on every attempt, fast (no hang — each call returned in well under a
+second, so this is a clean failure, not a timeout).
+
+Ran with `BcDevMcpBackend({ mcpCommand: ["bun", "run", "U:/Git/bc-dev-mcp/src/mcp/index.ts"], server:
+origin, serverInstance: instance, tenant: "default", company: "CRONUS Danmark A/S",
+packageCachePath: ".alpackages", controlSymbolPath: "unused-for-status", env: { BC_DEV_USER,
+BC_DEV_PASSWORD } }).status()` (project added — see "Deviation from the brief" below).
+
+### Evidence, and why the fallback — not a shrug
+
+Two independent, distinguishable failures, both established before accepting `"none"`:
+
+1. **The environment surface itself was not answering.** The baseline Automation-API check
+   (`{origin}/{instance}/api/microsoft/automation/v2.0/companies`) returned `503 Service Temporarily
+   Unavailable` from `nginx` — and so did the bare root path `{origin}/{instance}/` with no API
+   suffix at all, and a retry loop (3 attempts, 2s apart) got the identical `503` every time. Mid-probe,
+   `continia env list --json` showed the environment's own reported status flip from `Running` to
+   `Starting` — i.e. it had gone idle since the last real request and our probing triggered a cold
+   start. The plan's own "Already measured" table above says `Starting → Running` takes **390s**; a
+   background poll (`continia env list --json` every 15s) confirmed it stayed `Starting` for 60s+
+   without flipping back to `Running` within the probe's run. This half of the failure is the
+   **environment being asleep**, not bc-dev-mcp — consistent with Step 3's instruction to check the
+   Automation-API status first.
+
+2. **Independent of (1): bc-dev-mcp's dev-endpoint resolution is structurally incompatible with how
+   Continia hosts this environment**, and would fail even against a fully-awake environment. Because
+   `server` is supplied without `environmentType`, bc-dev-mcp's `resolveConnection`
+   (`bc-dev-mcp/src/core/launch-config.ts:121`) treats the connection as `"OnPrem"`, and OnPrem
+   metadata resolution (`bc-dev-mcp/src/core/urls.ts`, `DEFAULT_DEV_PORT = 7049`) always targets
+   `{origin}:7049/{instance}/dev/metadata` — a raw TCP port. `bcdev_status`'s own error text:
+
+   ```
+   Dev endpoint unreachable at https://demoportaldev.continiaonline.com:7049/0494e53d-c76e-4a05-96f5-593d49830a64/dev/metadata?tenant=default
+   — is the BC server running and the developer service port open?
+   (Error: Unable to connect. Is the computer able to access the url?)
+   ```
+
+   That is a **connection-refused/unreachable** failure (TCP-level, verified directly: fetching
+   `{origin}:7049/...` gave the same "Unable to connect" outside the backend too), not an auth
+   rejection (no 401/403 was ever seen) and not an unsupported-endpoint-version error (bc-dev-mcp
+   never got far enough to negotiate a version). Continia's hosted portal
+   (`demoportaldev.continiaonline.com`) fronts everything through a single HTTPS reverse proxy,
+   path-routed by environment id — there is no dev-service TCP port exposed at that hostname for
+   bc-dev-mcp to reach, awake or not. `BcDevConfig`/`connectionShape` do carry a `port` override, but
+   pointing it at 443 would not help: the dev endpoint's own routing (`/dev/metadata`, not
+   `/{instance}/api/...`) is not one nginx is proxying through at all judging by the identical 503 on
+   every path tried, including the bare root.
+
+Given both a (possibly transient) environment-availability problem and a structural port-model
+mismatch, `"procedure"` cannot be claimed. Per spec §Coverage, the session runs every mutant against
+all green tests (`coverage: "none"`) — slower, never wrong.
+
+### Deviation from the brief's literal script (recorded per the brief's own step 4)
+
+The brief's Step 1 script was written against an earlier/assumed shape of `BcDevConfig`
+(`packages/runner/src/bcdev-backend.ts`). Checked against the actual current interface before
+running:
+
+- `BcDevConfig.project` is a **required** `string` (not optional) — added
+  `project: process.cwd()` to the constructed config. `bcdev_status`'s own schema
+  (`connectionShape.project`, bc-dev-mcp) treats it as optional (falls back to the server's own cwd,
+  and only matters for `.vscode/launch.json` discovery, which is fully overridden here anyway by the
+  explicit `server`/`serverInstance`/`tenant` — this repo's root has no `.vscode/launch.json`, so
+  the value is inert either way).
+- `BcDevConfig` has **no** `username`/`password` fields at all — removed from the brief's literal
+  script. `bcdev_status`'s wire schema carries no credential params; credentials reach the spawned
+  bc-dev-mcp server only through `BC_DEV_USER`/`BC_DEV_PASSWORD` in `env`, which the brief's script
+  already set correctly.
+
+Neither change affects the verdict — both are TypeScript-shape corrections, not behavior changes.
+
+---
+
 ### Task 2: `env-tool.ts` — config types and pure validation
 
 **Files:**
