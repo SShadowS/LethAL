@@ -15,6 +15,11 @@ import {
 // register-install codeunit so the control extension keys state on the full identity tuple.
 const TARGET_APP_ID = "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a";
 
+// None of these fixtures use colliding operator names, so an empty tier map is enough —
+// `dedupeSpecs` (tested on its own in dedup.test.ts) never has to resolve a real precedence
+// here. Real callers populate this from the registered operator set (see orchestrator.ts).
+const NO_TIERS: ReadonlyMap<string, 1 | 2 | 3 | "custom"> = new Map();
+
 describe("writeInstrumentedProject", () => {
   beforeAll(async () => {
     await initParser();
@@ -43,6 +48,7 @@ describe("writeInstrumentedProject", () => {
         selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
         artifactId: "0123456789abcdef0123456789abcdef",
         targetAppId: TARGET_APP_ID,
+        operatorTiers: NO_TIERS,
       });
 
       const entries = (await readdir(dir)).sort();
@@ -117,11 +123,59 @@ describe("writeInstrumentedProject", () => {
         selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
         artifactId: "0123456789abcdef0123456789abcdef",
         targetAppId: TARGET_APP_ID,
+        operatorTiers: NO_TIERS,
       });
 
       const manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8"));
       expect(manifest.mutants[0]?.procedureName).toBe("");
       expect(manifest.mutants[0]?.triggerName).toBe("OnInsert");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("records the enclosing trigger's name for a mutation inside a field-level trigger", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-trigger-field-"));
+    try {
+      const src = `table 50100 "T"
+{
+    fields
+    {
+        field(1; "No."; Code[20])
+        {
+            trigger OnValidate()
+            begin
+                DoThing();
+            end;
+        }
+    }
+    keys { key(PK; "No.") { Clustered = true; } }
+}`;
+      const root = wrapRoot(parseAL(src));
+      const call = findFirst(root, ALNodeKind.procedure_call);
+      if (call === null) throw new Error("no call expression");
+      const specs: MutationSpec[] = [
+        {
+          operatorName: "op.void",
+          operatorVersion: "1.0.0",
+          astNodeId: `${call.startIndex}`,
+          before: call,
+          after: { ...call, text: "" } as never,
+          parentContext: "statement-position",
+        },
+      ];
+      await writeInstrumentedProject({
+        targetDir: dir,
+        files: [{ path: "T.Table.al", source: src, root, specs }],
+        selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
+        artifactId: "0123456789abcdef0123456789abcdef",
+        targetAppId: TARGET_APP_ID,
+        operatorTiers: NO_TIERS,
+      });
+
+      const manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8"));
+      expect(manifest.mutants[0]?.procedureName).toBe("");
+      expect(manifest.mutants[0]?.triggerName).toBe("OnValidate");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -155,6 +209,7 @@ describe("writeInstrumentedProject", () => {
         selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
         artifactId: "0123456789abcdef0123456789abcdef",
         targetAppId: TARGET_APP_ID,
+        operatorTiers: NO_TIERS,
       });
 
       let manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8"));
@@ -193,6 +248,7 @@ describe("writeInstrumentedProject", () => {
         selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
         artifactId: "0123456789abcdef0123456789abcdef",
         targetAppId: TARGET_APP_ID,
+        operatorTiers: NO_TIERS,
       });
 
       manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8"));
@@ -229,6 +285,7 @@ describe("writeInstrumentedProject", () => {
         selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
         artifactId: "0123456789abcdef0123456789abcdef",
         targetAppId: TARGET_APP_ID,
+        operatorTiers: NO_TIERS,
       });
 
       manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8"));
@@ -307,6 +364,7 @@ describe("writeInstrumentedProject", () => {
         selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
         artifactId: "0123456789abcdef0123456789abcdef",
         targetAppId: TARGET_APP_ID,
+        operatorTiers: NO_TIERS,
       });
 
       const manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8"));
@@ -400,6 +458,7 @@ describe("writeInstrumentedProject", () => {
         selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
         artifactId: "0123456789abcdef0123456789abcdef",
         targetAppId: TARGET_APP_ID,
+        operatorTiers: NO_TIERS,
       });
 
       const manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8"));
@@ -424,6 +483,7 @@ describe("writeInstrumentedProject", () => {
         selectorIds: { selectorId: 79000, controlId: 79001, tableId: 79002 },
         artifactId: "0123456789abcdef0123456789abcdef",
         targetAppId: TARGET_APP_ID,
+        operatorTiers: NO_TIERS,
       });
       const manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8")) as {
         artifactId: string;
@@ -445,6 +505,7 @@ describe("writeInstrumentedProject", () => {
         selectorIds: { selectorId: 79199, controlId: 79198, tableId: 79197 },
         artifactId: "0123456789abcdef0123456789abcdef",
         targetAppId: TARGET_APP_ID,
+        operatorTiers: NO_TIERS,
       });
 
       const entries = await readdir(dir);
