@@ -1573,6 +1573,19 @@ describe("generateMutationSet: object kinds that cannot carry the selector var",
       expect(report.mutants.length).toBeGreaterThan(0);
       // Every surviving mutant belongs to the codeunit — the page contributed none.
       expect([...new Set(report.mutants.map((m) => m.file))]).toEqual(["SandboxLogic.Codeunit.al"]);
+
+      // Skipping the page costs its mutants and nothing else: `prepareBatchProject` still copies
+      // it into the batch dir, byte-identical to source, so what gets published is unchanged.
+      const batchDirs = (await readdir(dirs.instrumentedDir)).filter((e) =>
+        /^run-\d+-batch-0$/.test(e),
+      );
+      const [batchDir] = batchDirs;
+      if (batchDir === undefined) throw new Error(`no batch dir under ${dirs.instrumentedDir}`);
+      const published = await readFile(
+        join(dirs.instrumentedDir, batchDir, "SandboxPage.Page.al"),
+        "utf8",
+      );
+      expect(published).toBe(PAGE_AL);
     } finally {
       warnSpy.mockRestore();
       store.close();
