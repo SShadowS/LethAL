@@ -3363,6 +3363,17 @@ class FakeLeaseClient implements LeaseApi {
    */
   reconcileOpKind: string | undefined;
   /**
+   * 5C-B2 (t10): override the `opAttemptId`/`opSeq` echoed back under `reconcileOpKind`. By
+   * default (`undefined`) the reconciling read echoes the CALLER's own tuple, which makes
+   * `reconcileStrandedPublish`'s `opAttemptId === attemptId` / `opSeq === opSeq` conjuncts
+   * tautologically true no matter what — deleting either reddens no test. Setting one (with
+   * `reconcileOpKind` still `"publish"`) reports a marker that IS a publish op but is NOT this
+   * caller's own attempt, isolating that one conjunct. Every existing test leaves both
+   * `undefined` and so is unaffected.
+   */
+  reconcileOpAttemptId: string | undefined;
+  reconcileOpSeq: number | undefined;
+  /**
    * Layer 5C-B2: answers a status read made WITH a non-empty attemptId — the LOST-ACK
    * reconciliation read. Takes precedence over `reconcileOpKind`, which cannot express a
    * COMPLETED op (it hardcodes `completed: false` for the publish-recovery precondition) and so
@@ -3435,8 +3446,8 @@ class FakeLeaseClient implements LeaseApi {
     if (this.reconcileOpKind !== undefined && attemptId !== "") {
       return {
         opKind: this.reconcileOpKind,
-        opAttemptId: attemptId,
-        opSeq,
+        opAttemptId: this.reconcileOpAttemptId ?? attemptId,
+        opSeq: this.reconcileOpSeq ?? opSeq,
         lastCompletedOpSeq: opSeq - 1,
         completed: false,
       };
@@ -3902,6 +3913,49 @@ describe("runSession — Layer 5C-B1 Task 8: lease-lost invalidation + dispatch 
     expect(await new QuarantineStore(dir).read("http://cronus281|BC")).toBeNull();
   });
 
+  test("an `op-in-flight` lease-invalid that never clears is durably quarantined (t12: runMutantsOnBackend's own op-in-flight branch)", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    // `FakeLeaseClient.next` shifts until exactly one entry is left, then returns that SAME entry
+    // forever — so seeding a non-idle final entry means the poll never sees `opKind: "none"` and
+    // exhausts every attempt. Distinct from the "still-ACTIVE op that never clears" coverage under
+    // `reconcileLostAck` (this file, the 5C-B2 lost-RunMutant-ack describe block): that drives
+    // `pollUntilOpClears` via the lost-ack path. This drives the SAME method from
+    // `runMutantsOnBackend`'s own explicit `leaseKind === "op-in-flight"` branch
+    // (orchestrator.ts:2245-2266) — the ONE call site t12 named as still uncovered, since both
+    // existing op-in-flight tests in this block seed a statusQueue that clears on the FIRST poll.
+    client.statusQueue = [
+      { opKind: "none", opAttemptId: "", opSeq: 0, lastCompletedOpSeq: 7, completed: true },
+      {
+        opKind: "run",
+        opAttemptId: "someone-else",
+        opSeq: 99,
+        lastCompletedOpSeq: 98,
+        completed: false,
+      },
+    ];
+    const { lease } = leaseCfg(client);
+    const backend = leaseLostAfterFirstMutant({
+      operation: "lease-lost",
+      leaseInvalidReason: "op-in-flight",
+    });
+    const report = await runSessionForTest(backend, {
+      quarantineDir: dir,
+      lease,
+      nowIso: () => "2026-07-24T17:00:00.000Z",
+    });
+    const m1 = report.mutants.find((m) => m.mutantCode === "M0001");
+    const m2 = report.mutants.find((m) => m.mutantCode === "M0002");
+    expect(m1?.verdict).toBe("survived"); // earlier verdict stands — never latched retroactively
+    expect(m2?.verdict).toBe("error");
+    expect(m2?.failureNote).toContain("never cleared");
+    expect(report.quarantined).toBeDefined();
+    expect(client.recoverArgs).toHaveLength(0); // never RecoverOp'd — the op may still be executing
+    const rec = await new QuarantineStore(dir).read("http://cronus281|BC");
+    expect(rec?.opKind).toBe("test-run");
+    expect(rec?.detail).toContain("operation never cleared after an op-in-flight refusal");
+  });
+
   test("invalidateBatchVerdicts leaves an EARLIER batch's verdicts untouched", () => {
     const outcomes: SessionOutcome[] = [
       { mutant: fakeManifestEntry("M0001"), verdict: "survived", batchIndex: 0 },
@@ -4148,6 +4202,90 @@ describe("runSession — Layer 5C-B1 fix round 1: publish-fence failure paths + 
     expect(rec?.opKind).toBe("container-needs-recycle");
     expect(rec?.detail).toContain("could not be reconciled");
     expect(rec?.detail).toContain("opKind run");
+  });
+
+  test("a lost EndPublish ack whose marker is a publish op at our OWN opSeq but a DIFFERENT attemptId is NEVER recovered (t10: the attemptId conjunct)", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    client.endPublishError = new Error("socket hang up");
+    client.reconcileOpKind = "publish";
+    // Same opKind, same opSeq (still echoed from the caller) — ONLY the attemptId diverges from
+    // our own. Isolates `status.opAttemptId === attemptId` on its own: the two tests above never
+    // could, since the fixture always echoed the caller's own attemptId back.
+    client.reconcileOpAttemptId = "someone-elses-attempt";
+    const { lease } = leaseCfg(client);
+    await runSessionForTest(leaseBackend(), {
+      quarantineDir: dir,
+      lease,
+      nowIso: () => "2026-07-24T16:00:00.000Z",
+    });
+    expect(client.recoverArgs).toHaveLength(0);
+    const rec = await new QuarantineStore(dir).read("http://cronus281|BC");
+    expect(rec?.opKind).toBe("container-needs-recycle");
+    expect(rec?.detail).toContain("could not be reconciled");
+  });
+
+  test("a lost EndPublish ack whose marker is a publish op under our OWN attemptId but a DIFFERENT opSeq is NEVER recovered (t10: the opSeq conjunct)", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    client.endPublishError = new Error("socket hang up");
+    client.reconcileOpKind = "publish";
+    // Same opKind, same attemptId (still echoed from the caller) — ONLY the opSeq diverges,
+    // isolating `status.opSeq === opSeq` on its own.
+    client.reconcileOpSeq = 999;
+    const { lease } = leaseCfg(client);
+    await runSessionForTest(leaseBackend(), {
+      quarantineDir: dir,
+      lease,
+      nowIso: () => "2026-07-24T16:05:00.000Z",
+    });
+    expect(client.recoverArgs).toHaveLength(0);
+    const rec = await new QuarantineStore(dir).read("http://cronus281|BC");
+    expect(rec?.opKind).toBe("container-needs-recycle");
+    expect(rec?.detail).toContain("could not be reconciled");
+  });
+
+  test("a lost EndPublish ack whose reconciling read reports the op already completed needs no recovery (t11: the `status.completed` early return)", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    client.endPublishError = new Error("socket hang up");
+    client.reconcileStatus = (attemptId, opSeq) => ({
+      opKind: "publish",
+      opAttemptId: attemptId,
+      opSeq,
+      lastCompletedOpSeq: opSeq,
+      completed: true, // the lost EndPublish ack had actually landed
+    });
+    const { lease } = leaseCfg(client);
+    await runSessionForTest(leaseBackend(), {
+      quarantineDir: dir,
+      lease,
+      nowIso: () => "2026-07-24T16:10:00.000Z",
+    });
+    // Nothing to recover (already tombstoned) and nothing to strand.
+    expect(client.recoverArgs).toHaveLength(0);
+    expect(await new QuarantineStore(dir).read("http://cronus281|BC")).toBeNull();
+  });
+
+  test("a lost EndPublish ack whose reconciling GetOperationStatus ALSO fails records both failures and leaves the marker set (t11: the reconciling read itself throwing)", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    client.endPublishError = new Error("socket hang up");
+    client.reconcileStatus = () => {
+      throw new LeaseUnavailableError("GetOperationStatus unreachable");
+    };
+    const { lease } = leaseCfg(client);
+    await runSessionForTest(leaseBackend(), {
+      quarantineDir: dir,
+      lease,
+      nowIso: () => "2026-07-24T16:15:00.000Z",
+    });
+    expect(client.recoverArgs).toHaveLength(0);
+    const rec = await new QuarantineStore(dir).read("http://cronus281|BC");
+    expect(rec?.opKind).toBe("container-needs-recycle");
+    expect(rec?.detail).toContain("was not acknowledged");
+    expect(rec?.detail).toContain("also failed");
+    expect(rec?.recordedAtIso).toBe("2026-07-24T16:15:00.000Z");
   });
 });
 
