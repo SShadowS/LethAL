@@ -13,7 +13,7 @@ describe("ALNodeKind", () => {
     expect(ALNodeKind.procedure).toBe("procedure");
     expect(ALNodeKind.source_file).toBe("source_file");
 
-    // Values adjusted to match SShadowS/tree-sitter-al v2.5.0 node-types.
+    // Values adjusted to match SShadowS/tree-sitter-al v3.0.1 node-types.
     // Plan key is kept; string value mirrors the grammar's actual node type.
     expect(ALNodeKind.codeunit).toBe("codeunit_declaration");
   });

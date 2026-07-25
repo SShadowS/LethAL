@@ -6,7 +6,7 @@
  * Layer 1: we resolve only bare `identifier`-style call targets against
  * the enclosing object's own procedures.
  *
- * Grammar note (SShadowS/tree-sitter-al v2.5.0):
+ * Grammar note (SShadowS/tree-sitter-al v3.0.1):
  *   - There is no distinct `method_call` node. Method invocations and
  *     procedure invocations both appear as `call_expression`
  *     (ALNodeKind.procedure_call). A `call_expression` has a `function`

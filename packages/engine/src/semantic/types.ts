@@ -5,7 +5,7 @@
  * node kinds: literals, identifiers (resolved via the symbol table), and
  * binary/unary expressions over built-in types.
  *
- * Grammar adjustments (SShadowS/tree-sitter-al v2.5.0):
+ * Grammar adjustments (SShadowS/tree-sitter-al v3.0.1):
  *   - There is no single `binary_expression` kind; binary ops are split
  *     across four precedence classes. We dispatch on `isBinaryExpressionKind`.
  *   - Operators are named leaf children (e.g. `comparison_operator`). We

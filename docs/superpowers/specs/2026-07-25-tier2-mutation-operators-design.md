@@ -244,12 +244,21 @@ Per-mutant equality is the gate throughout. Aggregate counts matching for the wr
   (3 found), which also confirms Tier-1 `empty-block` will fire on them once §3.1 lands. `ALNodeKind` does
   not *declare* constants for the table members, but the grammar emits them and `node.kind` matches on the
   raw strings — Phase 0 should add the constants rather than hard-code strings.
-- **Vendored grammar is behind the grammar repo.** LethAL bundles `packages/engine/vendor/tree-sitter-al.wasm`
-  built from v2.5.0 (`packages/engine/src/ast/node-kinds.ts:3`), while `SShadowS/tree-sitter-al` is at v3.0.1.
-  Everything above was measured against the **vendored** v2.5.0, so it describes what LethAL has today.
-  Upgrading is not required by this design and should not be bundled into it: a grammar bump can change node
-  kinds that all five Tier-1 operators key on, and the frozen Tier-1 baselines are the only thing that would
-  catch it. If an upgrade is wanted, it is its own change with its own live gate.
+- ~~**Vendored grammar is behind the grammar repo.**~~ **RESOLVED — the upgrade landed as its own layer
+  (Layer 6A, `docs/superpowers/plans/2026-07-25-grammar-v3-upgrade.md`), exactly as this bullet asked.** LethAL
+  now vendors a locally-built **v3.0.1** wasm. Two consequences bind Tier 2's predicates:
+  - **Write predicates against the v3 shape.** v3 renames nothing but inserts container nodes:
+    `statement_block` between a `code_block` and its statements, `var_body` inside `var_section`,
+    `declaration_body` inside an object declaration. Use `isStatementPosition`, `blockStatements`,
+    `varDeclarations` and `declarationMembers` from `packages/engine/src/ast/tree-walks.ts` — never a
+    hand-rolled parent-kind check. Two probe scripts and four production call sites each hand-rolled one and
+    silently matched nothing after the bump.
+  - **The measurements in §8 above still hold**, and improved: the same 2,876-file corpus parses 100% clean
+    under v3 (99.9% under v2.5.0), with 710,950 statement-position calls (703,239 before) and every other site
+    count identical. The table-member addressability finding is unchanged.
+  The upgrade also confirmed this bullet's own warning was well-founded: the bump silently zeroed
+  `void-method-call` until it was fixed, and moved the identity hash of all six `empty-block` mutants in both
+  frozen live baselines — with every verdict and killing test held constant.
 - **AL member ordering in tables** (§3.1) is unverified against the real compiler; assume at least one
   `alc` correction cycle.
 - **Equivalent-mutant dilution on real projects.** The fixture is engineered so Tier-2 mutants are killable.
