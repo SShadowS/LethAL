@@ -103,12 +103,27 @@ const NON_OBJECT_DECLARATION_KINDS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Names the object declaration(s) this file actually contains, for the "cannot instrument this
- * object kind" error below. `wrapRoot(parseAL(src))` yields a `source_file` whose named children
- * are the object declarations; a caller that passed a declaration node straight in is handled
- * too.
+ * True when this file's object declaration can carry the
+ * `var MutationSelector: Codeunit "Mutation Selector";` declaration — i.e. it is a codeunit or a
+ * table. Exported as the SINGLE construction point of that predicate: `generateMutationSet`
+ * (@lethal/runner) drops a file's specs up front when this is false, and
+ * `injectMutationSelectorVar` below throws on the same condition as the backstop. Two hand-rolled
+ * copies of "codeunit or table" could drift, and the drift is silent in the dangerous direction
+ * (specs generated for a file the injector will then refuse, aborting the session).
  */
-function describeObjectKinds(root: ALSyntaxNode): string {
+export function canCarryMutationSelectorVar(root: ALSyntaxNode): boolean {
+  return (
+    findFirst(root, ALNodeKind.codeunit) !== null || findFirst(root, ALNodeKind.table) !== null
+  );
+}
+
+/**
+ * Names the object declaration(s) this file actually contains, for the "cannot instrument this
+ * object kind" error below and for `generateMutationSet`'s skip warning. `wrapRoot(parseAL(src))`
+ * yields a `source_file` whose named children are the object declarations; a caller that passed a
+ * declaration node straight in is handled too.
+ */
+export function describeObjectKinds(root: ALSyntaxNode): string {
   const candidates = root.rawKind.endsWith("_declaration") ? [root] : root.namedChildren;
   const kinds = [
     ...new Set(
@@ -163,10 +178,14 @@ function describeObjectKinds(root: ALSyntaxNode): string {
  * rather than returning: this runs only when `specs.length > 0`, i.e. after the guard calls have
  * already been spliced in, so a silent return emits `MutationSelector.Active(...)` with no
  * declaration in scope — AL0118, an `AlcCompileError`, and bisection then halves the mutant set
- * and converges on an innocent mutant. `generateMutationSet` walks every `.al` file with no
- * object-kind filter, and a `page` with `OnAction` bodies is ordinary in a real project, so this
- * is reachable, not theoretical. Refusing a project shape LethAL cannot instrument is the honest
- * answer; emitting AL that cannot compile is not.
+ * and converges on an innocent mutant.
+ *
+ * This throw is the BACKSTOP, not the primary handling: `generateMutationSet` (@lethal/runner)
+ * already drops the specs of any file `canCarryMutationSelectorVar` rejects, so an ordinary
+ * session with a `page` full of `OnAction` bodies skips that page rather than aborting. What
+ * reaches here is a caller that assembled its own `InstrumentedFile` list without applying that
+ * filter — a caller-contract violation, and refusing it loudly beats emitting AL that cannot
+ * compile.
  */
 function injectMutationSelectorVar(
   root: ALSyntaxNode,
@@ -179,7 +198,9 @@ function injectMutationSelectorVar(
       'the `var MutationSelector: Codeunit "Mutation Selector";` declaration can only be ' +
       "injected into a codeunit or a table. Mutation guards were already emitted for this " +
       "file, so every `MutationSelector.Active(...)` call would fail to compile with AL0118. " +
-      "Exclude this file from the mutation set, or add selector-var support for this object kind.";
+      "Spec generation is supposed to have dropped this file already (`generateMutationSet` " +
+      "filters on `canCarryMutationSelectorVar`); a caller building its own file list must " +
+      "apply the same filter, or add selector-var support for this object kind.";
     throw new Error(
       `compileSchemataForFile: cannot instrument ${filePath} — it declares ${describeObjectKinds(root)}, and ${why}`,
     );
@@ -231,7 +252,14 @@ function injectMutationSelectorVar(
   // for a table: the codeunit branch's anchor is always `members[0]`, which
   // is defined whenever `members.length > 0`, already checked above).
   const lastMember = members.at(-1);
-  if (lastMember === undefined) return;
+  if (lastMember === undefined) {
+    // Unreachable — `members.length === 0` threw above — but a silent return here would ship the
+    // already-emitted guard calls with no declaration in scope (AL0118), exactly like the two
+    // branches above. Same failure, same answer.
+    throw new Error(
+      `compileSchemataForFile: cannot instrument ${filePath} — no member to anchor the selector var after, yet mutation guards were emitted for it.`,
+    );
+  }
   rewrites.set(
     insertionNodeAt(lastMember, lastMember.endIndex),
     `\n\n    var\n        MutationSelector: Codeunit "Mutation Selector";`,

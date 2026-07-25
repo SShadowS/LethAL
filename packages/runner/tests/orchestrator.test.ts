@@ -1487,6 +1487,99 @@ describe("runSession — single artifact", () => {
   });
 });
 
+// A mutation guard is a bare `MutationSelector.Active(...)` call, and only a codeunit or a table
+// can carry the `var MutationSelector: Codeunit "Mutation Selector";` declaration that makes it
+// resolve (AL0118 otherwise). The tier-1 operators happily target a page's `OnAction` body, and a
+// page with actions is ordinary AL — so without an object-kind filter at generation time, ONE
+// such page reaches `compileSchemataForFile`, which throws, and the whole session dies. The
+// page's own mutants are the only thing lost: `prepareBatchProject` still copies it into the
+// batch dir verbatim, so what is published is byte-identical to the source project.
+describe("generateMutationSet: object kinds that cannot carry the selector var", () => {
+  const PAGE_AL = `page 79010 "Sandbox Page"
+{
+    PageType = Card;
+    SourceTable = Customer;
+
+    layout { area(Content) { field(Name; Rec.Name) { } } }
+
+    actions
+    {
+        area(Processing)
+        {
+            action(DoIt)
+            {
+                trigger OnAction()
+                begin
+                    if Rec.Name = '' then
+                        Rec.Name := 'x';
+                end;
+            }
+        }
+    }
+}
+`;
+
+  async function pageProject(): Promise<{
+    projectDir: string;
+    testDir: string;
+    instrumentedDir: string;
+  }> {
+    const root = await mkdtemp(join(tmpdir(), "lethal-orch-objkind-"));
+    const projectDir = join(root, "app");
+    await Bun.write(join(projectDir, "SandboxLogic.Codeunit.al"), TARGET_AL);
+    await Bun.write(join(projectDir, "SandboxPage.Page.al"), PAGE_AL);
+    await Bun.write(join(projectDir, "app.json"), APP_JSON);
+    await Bun.write(join(root, "tests", "SandboxTests.Codeunit.al"), TEST_AL);
+    return {
+      projectDir,
+      testDir: join(root, "tests"),
+      instrumentedDir: join(root, "instr"),
+    };
+  }
+
+  test("drops the page's specs, keeps the codeunit's, and warns once naming the file and kind", async () => {
+    const dirs = await pageProject();
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    let files: InstrumentedFile[];
+    let messages: string[];
+    try {
+      files = await generateMutationSet(dirs.projectDir);
+      messages = warnSpy.mock.calls.map((c) => String(c[0]));
+    } finally {
+      warnSpy.mockRestore();
+    }
+    expect(files.map((f) => f.path)).toEqual(["SandboxLogic.Codeunit.al"]);
+
+    const skips = messages.filter((m) => m.includes("skipped"));
+    expect(skips).toHaveLength(1); // once per RUN, not once per file/spec
+    const [message] = skips;
+    expect(message).toContain("SandboxPage.Page.al");
+    expect(message).toContain("page_declaration");
+    // Guards this whole test against passing vacuously: if the page fixture stopped producing
+    // mutation sites, dropping it would prove nothing. The count comes from the specs actually
+    // generated for it, so it can only be >=1 if there was something real to drop.
+    expect(message).toMatch(/holding [1-9]\d* mutation site/);
+  });
+
+  test("a session over a project containing that page still completes", async () => {
+    const dirs = await pageProject();
+    const backend = new StubBackend(CAPS_NST, () => "pass", ["IsOverBudget"]);
+    const store = new ResultsStore(":memory:");
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const report = await runSession({ backend, store, ...dirs, selectorIds });
+      expect(report.baselineGreen).toBe(true);
+      expect(report.counts.errors).toBe(0);
+      expect(report.mutants.length).toBeGreaterThan(0);
+      // Every surviving mutant belongs to the codeunit — the page contributed none.
+      expect([...new Set(report.mutants.map((m) => m.file))]).toEqual(["SandboxLogic.Codeunit.al"]);
+    } finally {
+      warnSpy.mockRestore();
+      store.close();
+    }
+  });
+});
+
 // ————————————————————————————————————————————————————————————————————————
 // Layer 5A (Task 6): deployment identity — compile/publish/verify phases,
 // version reservation, artifact provenance, version-conflict retry.
