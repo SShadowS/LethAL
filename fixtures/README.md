@@ -237,10 +237,21 @@ declaration — the general fenced-path write-permission problem is filed, not s
 
 3 killed / 2 survived / 2 no-coverage — mutation score 60.0%, zero errors, zero unstable.
 
-BC reports **no coverage at all for trigger code**, so every trigger mutant here is
+**This table is a committed gate, not just documentation:** `bun run itest:tables`
+(`packages/runner/itest/tables.itest.ts`, env-gated on `LETHAL_ITEST_TABLES=1`) asserts the
+aggregate counts, the score, and the per-mutant verdict map above, then diffs against
+`packages/runner/itest/tables.baseline.json` exactly as the Tier-1 gates do. It reads
+`fixtures/sandbox-data/lethal.config.local.json` — **not** sandbox-app's; the two fixtures target
+different containers.
+
+BC reports **no coverage at all for table trigger code**, so every trigger mutant here is
 coverage-invisible. `coverageFilter` therefore falls back (most-precise-first: member key →
-object-level → all green tests) and runs each unmatched trigger mutant against every green test,
-announcing it on stderr rather than silently discarding it as no-coverage.
+object-level → all green tests) and runs each unmatched table trigger mutant against every green
+test, announcing it on stderr rather than silently discarding it as no-coverage. Both fallbacks
+require the object to be a **table**: the measurement above says nothing about a codeunit's
+`trigger OnRun` or a page's `OnAction`, so those keep the honest `no-coverage` bucket rather than
+being widened on a guess. Coverage is keyed on the **(objectType, objectId) pair** throughout,
+because a BC object id is unique only within its type.
 
 ### al-runner — measured 2026-07-25, and why it kills nothing here
 
@@ -825,9 +836,16 @@ determinism conclusion above.
 ```bash
 bun run itest:alrunner   # needs LETHAL_ITEST_ALRUNNER=1 and LETHAL_ALRUNNER_PATH=<path to al-runner>
 bun run itest:bcdev      # needs LETHAL_ITEST_BCDEV=1, and the local files above populated
+bun run itest:tables     # needs LETHAL_ITEST_TABLES=1 and fixtures/sandbox-data/lethal.config.local.json
 ```
 
-Both skip cleanly (print "skipped", exit 0) when their gate env var is unset, so they never
+`tables.itest.ts` is the same shape as `bcdev.itest.ts` but pointed at the TABLE fixture
+(`sandbox-data` + `sandbox-data-tests`) — the trigger half of Tier-2 Phase 0, whose result was
+previously recorded only by hand in this file. It reads sandbox-data's own
+`lethal.config.local.json` (a different container from sandbox-app's) and has no committed
+baseline until a live run records one; see §Tier-2 Phase 0 above.
+
+All three skip cleanly (print "skipped", exit 0) when their gate env var is unset, so they never
 affect a plain `bun test` or CI run that hasn't opted in.
 
 ### Per-mutant healthy-path regression guard (Task 15, design spec §14)
