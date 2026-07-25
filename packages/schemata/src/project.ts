@@ -157,7 +157,7 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
   for (const f of input.files) {
     const ided = idedByFile.get(f.path) ?? [];
     const deduped = specsByFile.get(f.path) ?? [];
-    const compiled = compileSchemataForFile(f.source, f.root, deduped, ided);
+    const compiled = compileSchemataForFile(f.source, f.root, deduped, ided, f.path);
     await writeFile(join(input.targetDir, basename(f.path)), compiled, "utf8");
     const header = objectHeaderOf(f.source);
     for (const { mutantId, spec } of ided) {

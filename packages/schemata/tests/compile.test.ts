@@ -628,6 +628,53 @@ describe("compileSchemataForFile — selector var injection into table objects",
     expect(countErrorNodes(out)).toBe(0);
   });
 
+  it("throws, naming the object kind and the file, for an object kind it cannot instrument", () => {
+    // A page with an `OnAction` body is ordinary AL, `generateMutationSet` walks every `.al`
+    // file with no object-kind filter, and the header regex in project.ts accepts `page`. The
+    // guard calls are emitted before the selector var is injected, so returning silently here
+    // ships `MutationSelector.Active(...)` with no declaration in scope: AL0118 -> AlcCompileError
+    // -> bisection halves the mutant set and blames an innocent mutant. Refuse instead.
+    const source = `page 50100 "My Page"
+{
+    PageType = Card;
+    SourceTable = Customer;
+    layout { area(Content) { field(Name; Rec.Name) { } } }
+    actions
+    {
+        area(Processing)
+        {
+            action(DoIt)
+            {
+                trigger OnAction()
+                begin
+                    DoThing();
+                end;
+            }
+        }
+    }
+}`;
+    const root = wrapRoot(parseAL(source));
+    let thrown: unknown;
+    try {
+      compileSchemataForFile(source, root, [specAtFirstCall(root)], undefined, "MyPage.Page.al");
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    const message = thrown instanceof Error ? thrown.message : "";
+    expect(message).toContain("MyPage.Page.al");
+    expect(message).toContain("page_declaration");
+    expect(message).toContain("AL0118");
+  });
+
+  it("does NOT throw when there are no specs — an unmutated page emits no guards to strand", () => {
+    // The throw is conditioned on guards having been emitted (`specs.length > 0`). A page LethAL
+    // found nothing to mutate in is passed through untouched, exactly as before.
+    const source = `page 50101 "Quiet Page" { PageType = Card; }`;
+    const root = wrapRoot(parseAL(source));
+    expect(compileSchemataForFile(source, root, [], undefined, "QuietPage.Page.al")).toBe(source);
+  });
+
   it("reuses a table's existing var section rather than adding a second", () => {
     const source = `table 50102 "V"
 {

@@ -15,6 +15,9 @@ export function compileSchemataForFile(
   root: ALSyntaxNode,
   specs: readonly MutationSpec[],
   ided?: readonly IdedSpec[],
+  /** Target file path, used only to name the file in the "cannot instrument this object kind"
+   *  error below. Single-file callers (tests) may omit it. */
+  filePath?: string,
 ): string {
   // Mutant ids must be allocated exactly once, artifact-wide (see
   // `writeInstrumentedProject`), so multi-file callers pass their
@@ -44,8 +47,10 @@ export function compileSchemataForFile(
   // without a `var MutationSelector: Codeunit "Mutation Selector";`
   // declaration in scope, every guard site fails with AL0118 ("The name
   // 'MutationSelector' does not exist in the current context"). Inject one
-  // declaration per codeunit that actually has a mutation in it.
-  if (specs.length > 0) injectMutationSelectorVar(root, rewrites);
+  // declaration per codeunit or TABLE that actually has a mutation in it — and throw for any
+  // other object kind, since by this point the guard calls are already in `rewrites` and
+  // shipping them without a declaration is precisely the AL0118 this injection prevents.
+  if (specs.length > 0) injectMutationSelectorVar(root, rewrites, filePath ?? "<file>");
 
   return printWithRewrites(source, root, rewrites);
 }
@@ -86,6 +91,36 @@ function insertionNodeAt(anchor: ALSyntaxNode, index: number): ALSyntaxNode {
 }
 
 /**
+ * Grammar kinds ending in `_declaration` that are NOT an AL object declaration — they name a
+ * member (or a page control) inside one, so they must never be reported as "the object kind
+ * this file declares".
+ */
+const NON_OBJECT_DECLARATION_KINDS: ReadonlySet<string> = new Set([
+  "declaration_body",
+  "trigger_declaration",
+  "variable_declaration",
+  "action_declaration",
+]);
+
+/**
+ * Names the object declaration(s) this file actually contains, for the "cannot instrument this
+ * object kind" error below. `wrapRoot(parseAL(src))` yields a `source_file` whose named children
+ * are the object declarations; a caller that passed a declaration node straight in is handled
+ * too.
+ */
+function describeObjectKinds(root: ALSyntaxNode): string {
+  const candidates = root.rawKind.endsWith("_declaration") ? [root] : root.namedChildren;
+  const kinds = [
+    ...new Set(
+      candidates
+        .map((c) => c.rawKind)
+        .filter((k) => k.endsWith("_declaration") && !NON_OBJECT_DECLARATION_KINDS.has(k)),
+    ),
+  ];
+  return kinds.length > 0 ? kinds.join(", ") : `no object declaration (root is ${root.rawKind})`;
+}
+
+/**
  * Insert `var MutationSelector: Codeunit "Mutation Selector";` into the
  * file's codeunit or table — reusing its existing `var_section` if present,
  * or inserting a fresh one otherwise. A zero-width edit (`start === end`) is
@@ -114,10 +149,41 @@ function insertionNodeAt(anchor: ALSyntaxNode, index: number): ALSyntaxNode {
  * trigger while still carrying a mutable trigger body: a field-level
  * `OnValidate` lives inside `fields_section`, not as an object-level member,
  * so it never becomes a `declarationMembers` anchor candidate.
+ *
+ * "Before the first object-level trigger" is safe, not merely lucky, and the reason is about
+ * where a TRIGGER may go, not only about where a `var` may go: in a table, an object-level
+ * trigger may not precede `fields`, and may not sit between `fields` and `keys`. Both were
+ * verified against `alc 18.0.2498801` — `trigger OnInsert` declared before `fields` is
+ * `AL0104: Syntax error, 'fields' expected`, and `fields` → `trigger` → `keys` is
+ * `AL0104`/`AL0198`. So the first object-level trigger, when there is one, always sits AFTER
+ * every section-like member; anchoring immediately before it therefore lands the `var` after
+ * `fields`/`keys`/`fieldgroups` by construction, for every table AL will accept.
+ *
+ * Only a codeunit and a table can carry the declaration today. Every other object kind THROWS
+ * rather than returning: this runs only when `specs.length > 0`, i.e. after the guard calls have
+ * already been spliced in, so a silent return emits `MutationSelector.Active(...)` with no
+ * declaration in scope — AL0118, an `AlcCompileError`, and bisection then halves the mutant set
+ * and converges on an innocent mutant. `generateMutationSet` walks every `.al` file with no
+ * object-kind filter, and a `page` with `OnAction` bodies is ordinary in a real project, so this
+ * is reachable, not theoretical. Refusing a project shape LethAL cannot instrument is the honest
+ * answer; emitting AL that cannot compile is not.
  */
-function injectMutationSelectorVar(root: ALSyntaxNode, rewrites: Map<ALSyntaxNode, string>): void {
+function injectMutationSelectorVar(
+  root: ALSyntaxNode,
+  rewrites: Map<ALSyntaxNode, string>,
+  filePath: string,
+): void {
   const object = findFirst(root, ALNodeKind.codeunit) ?? findFirst(root, ALNodeKind.table);
-  if (object === null) return; // no object we know how to guard — no guard call is ever emitted there
+  if (object === null) {
+    const why =
+      'the `var MutationSelector: Codeunit "Mutation Selector";` declaration can only be ' +
+      "injected into a codeunit or a table. Mutation guards were already emitted for this " +
+      "file, so every `MutationSelector.Active(...)` call would fail to compile with AL0118. " +
+      "Exclude this file from the mutation set, or add selector-var support for this object kind.";
+    throw new Error(
+      `compileSchemataForFile: cannot instrument ${filePath} — it declares ${describeObjectKinds(root)}, and ${why}`,
+    );
+  }
 
   const isTable = object.kind === ALNodeKind.table;
   const headerKinds = isTable ? TABLE_HEADER_KINDS : CODEUNIT_HEADER_KINDS;
@@ -141,7 +207,15 @@ function injectMutationSelectorVar(root: ALSyntaxNode, rewrites: Map<ALSyntaxNod
     return;
   }
 
-  if (members.length === 0) return; // header-only object (no members) — nothing to guard
+  // Header-only object: no member to anchor the insertion against. Unreachable in practice (a
+  // spec implies mutable code, which lives in a member) but throws for the same reason the
+  // unsupported-kind branch above does — the guard calls are already emitted, so returning here
+  // ships AL that cannot compile.
+  if (members.length === 0) {
+    throw new Error(
+      `compileSchemataForFile: cannot instrument ${filePath} — its object declaration has no members to anchor the selector var against, yet mutation guards were emitted for it.`,
+    );
+  }
 
   const anchor = isTable ? members.find((c) => c.kind === ALNodeKind.trigger) : members[0];
 

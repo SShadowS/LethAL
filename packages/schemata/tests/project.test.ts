@@ -479,6 +479,71 @@ describe("writeInstrumentedProject", () => {
     }
   });
 
+  // Exit criterion 4's artifact-level clause: "the suppressed mutant is absent from the EMITTED
+  // ARTIFACT, not merely from the manifest". dedup.test.ts covers `dedupeSpecs` in isolation, and
+  // that is not the same claim: `compileSchemataForFile` ignores its `specs` argument entirely
+  // when `ided` is supplied (except for the `specs.length > 0` var-injection guard), so the only
+  // thing that keeps the dropped mutant out of the emitted AL is `assignMutantIds` receiving the
+  // DEDUPED map. Nothing pinned that. Wiring the deduped specs to the compile call but the raw
+  // ones to `assignMutantIds` would leave an id-bearing guard compiled into the dispatch chain
+  // that no manifest entry names — an unreported mutation that still exists in the artifact.
+  it("emits the surviving mutant ONCE in the AL, not just once in the manifest, when two specs collide", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-dedup-artifact-"));
+    try {
+      const src = `codeunit 51070 "D" { procedure P() begin Rec.TestField(Name); end; }`;
+      const root = wrapRoot(parseAL(src));
+      const call = findFirst(root, ALNodeKind.procedure_call);
+      if (call === null) throw new Error("no call expression");
+      // Same site, same replacement text (deletion), two operators of different tiers — exactly
+      // the collision `dedupeSpecs` resolves in favour of the more specific Tier-2 operator.
+      const collide = (operatorName: string): MutationSpec => ({
+        operatorName,
+        operatorVersion: "1.0.0",
+        astNodeId: `${call.startIndex}-${operatorName}`,
+        before: call,
+        after: { ...call, text: "" } as never,
+        parentContext: "statement-position",
+      });
+      await writeInstrumentedProject({
+        targetDir: dir,
+        files: [
+          {
+            path: "D.Codeunit.al",
+            source: src,
+            root,
+            specs: [collide("lethal.void-method-call"), collide("lethal.remove-testfield")],
+          },
+        ],
+        selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
+        artifactId: "0123456789abcdef0123456789abcdef",
+        targetAppId: TARGET_APP_ID,
+        // A REAL tier map — the empty NO_TIERS map would make `dedupeSpecs` throw on this pair
+        // ("one of them is unregistered"), so the collision would never be resolved at all.
+        operatorTiers: new Map<string, 1 | 2 | 3 | "custom">([
+          ["lethal.void-method-call", 1],
+          ["lethal.remove-testfield", 2],
+        ]),
+      });
+
+      const manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8")) as {
+        mutants: Array<{ mutantId: string; operatorName: string }>;
+      };
+      expect(manifest.mutants).toHaveLength(1);
+      expect(manifest.mutants[0]?.operatorName).toBe("lethal.remove-testfield");
+
+      const emitted = await readFile(join(dir, "D.Codeunit.al"), "utf8");
+      const guards = emitted.match(/MutationSelector\.Active\(/g) ?? [];
+      expect(guards).toHaveLength(1);
+      // ...and the one guard emitted is the one the manifest names. A second mutant would have
+      // taken M0002, so an artifact holding M0001 AND M0002 while the manifest lists only one is
+      // exactly the "unreported mutation still in the artifact" failure.
+      expect(emitted).toContain("MutationSelector.Active('M0001')");
+      expect(emitted).not.toContain("M0002");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("writes the artifact id into the manifest and the generated selector", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lethal-artifactid-"));
     try {
