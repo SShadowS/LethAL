@@ -44,10 +44,11 @@ export function filterHistory(
 /**
  * `byMember` is the precise `<objectId>::<member>` index (exact, correct for every ordinary
  * procedure). `byObject` is a coarser `<objectId>` index carrying every test that covered
- * ANYTHING in that object — the only lookup that can ever match a trigger, since
+ * ANYTHING in that object — the finer of the two lookups that can match a trigger, since
  * `SymbolReference.json` never records a trigger at all (`AppMethodIndex.lookup` — see
  * `bcdev-backend.ts:606` — can therefore never name one; `app-package.ts:137-149` builds the
- * index exclusively from that file). See `coverageFilter`'s trigger-fallback branch.
+ * index exclusively from that file). When neither index names a trigger mutant, `coverageFilter`
+ * falls back further still, to every green test — see its trigger-fallback branches.
  */
 export interface CoverageIndex {
   readonly byMember: ReadonlyMap<string, ReadonlySet<string>>;
@@ -97,6 +98,9 @@ export function coverageFilter(
   const byKey = new Map(allTests.map((t) => [testKeyOf(t), t]));
   const covered = new Map<string, TestMethodRef[]>();
   const uncovered: MutantManifestEntry[] = [];
+  // Task 5 amendment: how many trigger mutants fell through to the untargeted (all-green-tests)
+  // fallback below, tallied so the warning fires once per run rather than once per mutant.
+  let untargetedTriggerCount = 0;
   for (const m of mutants) {
     // Member-level first: precise, and correct for every ordinary procedure.
     let testKeys = index.byMember.get(`${m.codeunitId}::${m.procedureName.toLowerCase()}`);
@@ -108,6 +112,18 @@ export function coverageFilter(
     if ((testKeys === undefined || testKeys.size === 0) && m.triggerName !== undefined) {
       testKeys = index.byObject.get(m.codeunitId);
     }
+    // A live-gate run found real trigger mutants BC's coverage index cannot name at ANY
+    // precision — object-level came back empty too. We genuinely don't know which tests reach
+    // that trigger, and the honest response to "I don't know" is to run every green test, not to
+    // silently report no-coverage: skipping would hide a live mutation site, which is the exact
+    // failure this layer exists to prevent. Over-running costs time; under-running hides bugs.
+    // Gated on `triggerName` so an ordinary uncovered procedure — genuinely untested — still
+    // reports `no-coverage` instead of inflating every run.
+    if ((testKeys === undefined || testKeys.size === 0) && m.triggerName !== undefined) {
+      covered.set(m.mutantId, [...allTests]);
+      untargetedTriggerCount++;
+      continue;
+    }
     if (!testKeys || testKeys.size === 0) {
       uncovered.push(m);
       continue;
@@ -115,6 +131,11 @@ export function coverageFilter(
     covered.set(
       m.mutantId,
       [...testKeys].flatMap((k) => byKey.get(k) ?? []),
+    );
+  }
+  if (untargetedTriggerCount > 0) {
+    console.warn(
+      `[lethal] ${untargetedTriggerCount} trigger mutant(s) could not be coverage-matched (BC does not report coverage for trigger code) — running each against all ${allTests.length} green test(s).`,
     );
   }
   return { covered, uncovered };
