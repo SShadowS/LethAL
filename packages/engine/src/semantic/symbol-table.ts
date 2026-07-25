@@ -6,7 +6,7 @@
  * and procedure-local vars. Base-app / system-app symbols are **out of
  * scope** at Layer 1; callers treat unresolved names as external.
  *
- * Grammar-field adjustments (SShadowS/tree-sitter-al v2.5.0):
+ * Grammar-field adjustments (SShadowS/tree-sitter-al v3.0.1):
  *   - Object header id is exposed as the field `object_id` (not `id`).
  *   - Object header name is exposed as `object_name` (not `name`), and the
  *     name node is either `identifier` or `quoted_identifier`; quotes are
@@ -16,10 +16,15 @@
  *     (no field name in the grammar), so we locate it by kind.
  *   - `parameter` and `variable_declaration` both expose `name` and `type`
  *     as fields, matching the plan.
+ *   - v3 wraps an object declaration's members (`var_section`, `procedure`)
+ *     in a `declaration_body` container, and a `var_section`'s declarations
+ *     in a `var_body` container. See `declarationMembers` / `varDeclarations`
+ *     in `ast/tree-walks.ts`, which skip these containers.
  */
 import { ALNodeKind } from "../ast/node-kinds";
 import type { ALSyntaxNode } from "../ast/syntax-node";
 import { findAll } from "../ast/syntax-node";
+import { declarationMembers, varDeclarations } from "../ast/tree-walks";
 
 export interface SourceFile {
   readonly path: string;
@@ -77,18 +82,20 @@ export function buildSymbolTable(files: readonly SourceFile[]): SymbolTable {
       if (header === null) continue;
       objects.push({ ...header, node: objectNode });
 
-      // Globals: a var_section that's a direct namedChild of the object.
-      const objectVarSection = objectNode.namedChildren.find(
-        (c) => c.kind === ALNodeKind.var_section,
-      );
+      // Object members (var_section, procedure) sit inside v3's
+      // declaration_body container rather than being direct namedChildren.
+      const members = declarationMembers(objectNode);
+
+      // Globals: a var_section that's a direct member of the object.
+      const objectVarSection = members.find((c) => c.kind === ALNodeKind.var_section);
       if (objectVarSection !== undefined) {
         globals.set(header.name, collectVarDeclarations(objectVarSection));
       }
 
-      // Procedures: direct namedChildren of kind `procedure`. Avoid findAll
-      // so we don't misattribute nested future constructs.
+      // Procedures: direct members of kind `procedure`. Avoid a recursive
+      // search so we don't misattribute nested future constructs.
       const procs: ProcedureSymbol[] = [];
-      for (const child of objectNode.namedChildren) {
+      for (const child of members) {
         if (child.kind !== ALNodeKind.procedure) continue;
         const proc = parseProcedure(child, header.name);
         if (proc !== null) procs.push(proc);
@@ -180,7 +187,8 @@ function collectParameters(paramsNode: ALSyntaxNode): VarSymbol[] {
 
 function collectVarDeclarations(varSection: ALSyntaxNode): VarSymbol[] {
   const out: VarSymbol[] = [];
-  for (const decl of findAll(varSection, ALNodeKind.variable_declaration)) {
+  for (const decl of varDeclarations(varSection)) {
+    if (decl.kind !== ALNodeKind.variable_declaration) continue;
     const name = decl.childForFieldName("name")?.text ?? "";
     const type = decl.childForFieldName("type")?.text ?? "";
     if (name !== "") {

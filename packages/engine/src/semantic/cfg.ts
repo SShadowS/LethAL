@@ -5,19 +5,22 @@
  * transitions (branch, fall-through, exit). Used later by dataflow advisories
  * (design §7) and unreachable-mutation-site detection (§3.3).
  *
- * Grammar-field adjustments (SShadowS/tree-sitter-al v2.5.0):
+ * Grammar-field adjustments (SShadowS/tree-sitter-al v3.0.1):
  *   - `if_statement` field names are `then_branch` and `else_branch`
  *     (NOT `consequence` / `alternative` as the design plan suggested).
  *     `childForFieldName("then_branch")` returns the then-branch statement
  *     (it may also match a trailing `;` in raw children, but field lookup
  *     surfaces the first match which is the statement itself).
  *   - `code_block` (AL `begin...end`) lists `begin_keyword` and `end_keyword`
- *     as named children alongside the statements. The CFG builder filters
- *     these out so they don't appear as "statements" in basic blocks.
+ *     as named children alongside its `statement_block`. The CFG builder
+ *     filters the keyword tokens out so they don't appear as "statements" in
+ *     basic blocks, and walks through `statement_block` via `blockStatements`
+ *     (see `ast/tree-walks.ts`) to reach the actual statement nodes.
  *   - `procedure` names the body as `code_block` (ALNodeKind.block).
  */
 import { ALNodeKind } from "../ast/node-kinds";
 import type { ALSyntaxNode } from "../ast/syntax-node";
+import { blockStatements } from "../ast/tree-walks";
 
 export interface CFG {
   readonly entry: BasicBlock;
@@ -83,7 +86,7 @@ class Builder {
 
   emitBlock(block: ALSyntaxNode, current: MutableBlock, exitBlock: MutableBlock): MutableBlock[] {
     let tails: MutableBlock[] = [current];
-    for (const stmt of block.namedChildren) {
+    for (const stmt of blockStatements(block)) {
       if (!isStatementNode(stmt)) continue;
       if (tails.length === 0) {
         // Previous statement terminated control flow (e.g. exit). Subsequent
@@ -137,7 +140,7 @@ class Builder {
 
     if (stmt.kind === ALNodeKind.block) {
       let current = tails;
-      for (const inner of stmt.namedChildren) {
+      for (const inner of blockStatements(stmt)) {
         if (!isStatementNode(inner)) continue;
         if (current.length === 0) {
           // Dead code following a terminating statement inside this block.

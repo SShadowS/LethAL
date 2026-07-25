@@ -86,3 +86,37 @@ export function findEnclosingCodeBlock(node: ALSyntaxNode): ALSyntaxNode | null 
   }
   return null;
 }
+
+/**
+ * The statements of a block, skipping v3's `statement_block` container.
+ *
+ * Returns the block's own named children under a grammar without the
+ * container, so callers need no version branching.
+ */
+export function blockStatements(block: ALSyntaxNode): readonly ALSyntaxNode[] {
+  const inner = block.namedChildren.find((c) => c.kind === ALNodeKind.statement_block);
+  return inner === undefined ? block.namedChildren : inner.namedChildren;
+}
+
+/**
+ * The declarations of a `var_section`, skipping v3's `var_body` container.
+ */
+export function varDeclarations(varSection: ALSyntaxNode): readonly ALSyntaxNode[] {
+  const inner = varSection.namedChildren.find((c) => c.kind === ALNodeKind.var_body);
+  return inner === undefined ? varSection.namedChildren : inner.namedChildren;
+}
+
+/**
+ * The members of an object declaration (codeunit/table/page/report),
+ * skipping v3's `declaration_body` container.
+ *
+ * Not named in the Task 4 brief, but required by it: under v3, an object
+ * declaration's `var_section` and `procedure` members are not direct
+ * `namedChildren` of the object node — they sit one level down inside a
+ * `declaration_body`. Without this, `symbol-table.ts` finds neither
+ * globals nor procedures for any object.
+ */
+export function declarationMembers(objectNode: ALSyntaxNode): readonly ALSyntaxNode[] {
+  const inner = objectNode.namedChildren.find((c) => c.kind === ALNodeKind.declaration_body);
+  return inner === undefined ? objectNode.namedChildren : inner.namedChildren;
+}
