@@ -101,6 +101,18 @@ export class AlRunnerBackend implements ExecutionBackend {
       : new OneShotTransport(cfg.alRunnerPath, spawn);
   }
 
+  /**
+   * `authoritative: false` is load-bearing, and one measured reason is worth naming here.
+   * al-runner reports `pass` for an `asserterror` whose guarded statement raised NOTHING —
+   * `asserterror I := 1;` passes (probed 2026-07-25, fixtures/README.md §Tier-2 Phase 0). So a
+   * mutant that removes the only `Error` an asserterror test was checking still lets that test
+   * pass, and the mutant is reported SURVIVED where bcdev kills it. Under-reporting kills is the
+   * safe direction — al-runner never produces a FALSE kill this way — but it is silent, so
+   * `buildBackend` warns on every al-runner session.
+   *
+   * Table triggers themselves are fine: al-runner executes object-level and field-level triggers,
+   * and the selector guard injected into a table's `var` section fires there (same probe).
+   */
   capabilities(): BackendCapabilities {
     return { coverage: "none", deploy: "none", isolation: "full-reset", authoritative: false };
   }

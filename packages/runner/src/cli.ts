@@ -396,6 +396,18 @@ async function buildBackend(
 ): Promise<ExecutionBackend> {
   if (parsed.backendKind === "al-runner") {
     const c = validateAlRunnerConfig(configFile.alRunner);
+    // Measured 2026-07-25 against the sandbox-data table fixture (fixtures/README.md §Tier-2
+    // Phase 0): al-runner reports `pass` for an `asserterror` whose guarded statement raised
+    // nothing — `asserterror I := 1;` passes. Every mutant whose only killer is an asserterror
+    // assertion therefore comes back "survived" here while bcdev kills it. Under-reporting is
+    // the safe direction, but it is silent, and a silent wrong verdict is exactly what this
+    // project refuses to ship unannounced.
+    console.warn(
+      "[lethal] al-runner is NOT authoritative: it reports `pass` for an `asserterror` that " +
+        "raised no error, so any mutant killable only by an asserterror assertion is reported " +
+        "as SURVIVED. Treat survivors from this backend as unconfirmed — re-run them under " +
+        "--backend bcdev before acting on them.",
+    );
     return new AlRunnerBackend({
       alRunnerPath: c.alRunnerPath,
       instrumentedDir: join(scratchDir, "al-runner-active"),
