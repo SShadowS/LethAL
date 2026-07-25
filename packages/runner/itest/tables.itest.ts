@@ -24,10 +24,11 @@
  * server. See fixtures/README.md for the expected shape.
  */
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { MutantManifest, MutantManifestEntry } from "@lethal/schemata";
 import type { ActivationConfig } from "../src/activation";
 import { ArtifactCompiler, defaultArtifactIo } from "../src/artifact";
 import { BcDevMcpBackend } from "../src/bcdev-backend";
@@ -269,18 +270,87 @@ function assertVerdictTable(report: SessionReport): void {
     "per-mutant verdict table mismatch against the live gate of 2026-07-25 " +
       "(fixtures/README.md §Tier-2 Phase 0) — see the dump above for which mutant moved",
   );
+}
 
-  // The exit criterion is a kill AND a survive on TRIGGER sites specifically: a kill alone can
-  // come from a runtime error unrelated to any assertion, and an all-survive table proves
-  // nothing about activation. Both killed trigger mutants live in a field-level `OnValidate`;
-  // the surviving M0003 is the object-level `OnInsert`.
-  const killedTriggerFiles = report.mutants
-    .filter((m) => m.verdict === "killed")
-    .map((m) => m.file);
-  for (const file of killedTriggerFiles) {
-    assert.ok(
-      file.includes("DataMain") || file.includes("DataNoTrigger"),
-      `every kill must come from a table fixture file, got ${file}`,
+/**
+ * Every mutant of every artifact this run actually deployed, keyed by mutant id.
+ *
+ * `MutantOutcome` (report.ts) carries neither `triggerName` nor `objectType`, so the report alone
+ * cannot say whether a verdict landed on a TRIGGER site — the one claim Phase 0 exists to prove.
+ * The manifest can: `prepareArtifactDir` writes one `mutant-manifest.json` per artifact into
+ * `<instrumentedDir>/run-<runId>-batch-<n>/`, from the same `triggerNameOf`/`objectHeaderOf`
+ * attribution the coverage key uses.
+ *
+ * `run-…-batch-<n>-bisect` dirs are excluded by the `\d+$` anchor: those hold NARROWED subsets
+ * written while searching for a compile-failure culprit, not the deployed set.
+ */
+async function readDeployedManifests(
+  instrumentedDir: string,
+): Promise<Map<string, MutantManifestEntry>> {
+  const byId = new Map<string, MutantManifestEntry>();
+  const entries = await readdir(instrumentedDir, { withFileTypes: true });
+  for (const e of entries) {
+    if (!e.isDirectory() || !/^run-.+-batch-\d+$/.test(e.name)) continue;
+    const raw = await readFile(join(instrumentedDir, e.name, "mutant-manifest.json"), "utf8");
+    for (const m of (JSON.parse(raw) as MutantManifest).mutants) byId.set(m.mutantId, m);
+  }
+  if (byId.size === 0) {
+    const why =
+      "cannot verify trigger attribution, and passing without verifying it is exactly the " +
+      "failure this gate exists to catch";
+    throw new Error(`no deployed mutant-manifest.json found under ${instrumentedDir} — ${why}`);
+  }
+  return byId;
+}
+
+/**
+ * The exit criterion, asserted rather than described: a kill AND a survive on TRIGGER sites
+ * specifically. A kill alone can come from a runtime error unrelated to any assertion, and an
+ * all-survive table proves nothing about activation. Both killed trigger mutants live in a
+ * field-level `OnValidate`; the surviving M0003 is the object-level `OnInsert`.
+ *
+ * Trigger-ness comes from the deployed manifest, not from the mutant's file name: the file-name
+ * check this replaced could not fail (the fixture holds only `DataMain`/`DataNoTrigger`), so it
+ * asserted nothing at all.
+ */
+function assertTriggerKillAndSurvive(
+  report: SessionReport,
+  byId: ReadonlyMap<string, MutantManifestEntry>,
+): void {
+  const sited = report.mutants.map((m) => {
+    const entry = byId.get(m.mutantCode);
+    if (entry === undefined) {
+      // Report and deployed artifact disagree about which mutants exist — never "close enough".
+      throw new Error(
+        `mutant ${m.mutantCode} appears in the report but in no deployed mutant-manifest.json`,
+      );
+    }
+    return { code: m.mutantCode, verdict: m.verdict, entry };
+  });
+  const triggers = sited.filter((s) => s.entry.triggerName !== undefined);
+  console.log(
+    `  trigger-sited mutants: ${
+      triggers
+        .map((t) => `${t.code}=${t.verdict} (${t.entry.objectType} ${t.entry.triggerName})`)
+        .join(", ") || "(none)"
+    }`,
+  );
+
+  assert.ok(
+    triggers.some((t) => t.verdict === "killed"),
+    "no KILLED mutant sits at a trigger site (manifest `triggerName` set) — Phase 0's claim is " +
+      "that a mutation inside a table trigger is generated, attributed, executed AND killed",
+  );
+  assert.ok(
+    triggers.some((t) => t.verdict === "survived"),
+    "no SURVIVED mutant sits at a trigger site — without one, an all-kill table could equally " +
+      "be explained by the whole tier erroring out rather than by real activation",
+  );
+  for (const t of triggers) {
+    assert.equal(
+      t.entry.objectType,
+      "table",
+      `${t.code}: this fixture's trigger sites must all be table triggers, got ${t.entry.objectType}`,
     );
   }
 }
@@ -301,6 +371,12 @@ async function main(): Promise<void> {
   try {
     const run = await runOnce(scratch);
     assertVerdictTable(run.report);
+    // The trigger claim itself, read off the manifests the run actually deployed (the scratch
+    // dir is still on disk here — it is removed in the `finally` below).
+    assertTriggerKillAndSurvive(
+      run.report,
+      await readDeployedManifests(join(scratch, "instrumented")),
+    );
     // Per-mutant regression guard against the committed baseline, keyed on semantic identity
     // (astHash/codeunitName/operatorName/operatorMajor) rather than mutant code — so it survives
     // renumbering that the EXPECTED.verdicts map above deliberately does not.

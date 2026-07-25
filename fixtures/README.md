@@ -240,7 +240,10 @@ declaration — the general fenced-path write-permission problem is filed, not s
 **This table is a committed gate, not just documentation:** `bun run itest:tables`
 (`packages/runner/itest/tables.itest.ts`, env-gated on `LETHAL_ITEST_TABLES=1`) asserts the
 aggregate counts, the score, and the per-mutant verdict map above, then diffs against
-`packages/runner/itest/tables.baseline.json` exactly as the Tier-1 gates do. It reads
+`packages/runner/itest/tables.baseline.json` exactly as the Tier-1 gates do. It also reads the
+`mutant-manifest.json` the run actually deployed and asserts that at least one **killed** and at
+least one **survived** mutant sit at a site whose manifest entry carries a `triggerName` — Phase
+0's claim itself rather than a proxy for it (`MutantOutcome` carries no trigger info). It reads
 `fixtures/sandbox-data/lethal.config.local.json` — **not** sandbox-app's; the two fixtures target
 different containers.
 
