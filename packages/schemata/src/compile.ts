@@ -1,5 +1,11 @@
 import type { ALSyntaxNode, MutationSpec } from "@lethal/engine";
-import { ALNodeKind, findFirst, isStatementPosition, printWithRewrites } from "@lethal/engine";
+import {
+  ALNodeKind,
+  declarationMembers,
+  findFirst,
+  isStatementPosition,
+  printWithRewrites,
+} from "@lethal/engine";
 import { buildComponents } from "./components";
 import { emitDispatch } from "./dispatch";
 import { type IdedSpec, assignMutantIds } from "./ids";
@@ -62,12 +68,23 @@ const CODEUNIT_HEADER_KINDS: ReadonlySet<string> = new Set([
  * `[start, end)`, so a synthetic node with `start === end === firstMember.
  * startIndex` inserts text there without consuming (or conflicting with)
  * any other rewrite targeting the first member's own contents.
+ *
+ * A codeunit's members (`var_section`, `procedure`) sit inside v3's
+ * `declaration_body` container, not as direct `namedChildren` of the
+ * codeunit itself — reading `codeunit.namedChildren` straight finds neither
+ * an existing `var_section` nor a first member under v3, so every codeunit
+ * silently fell through to the "no existing var_section" branch and got a
+ * second, separate object-level `var` section instead of reusing the one it
+ * already had. `declarationMembers` skips the container (and is a no-op
+ * under a grammar without one).
  */
 function injectMutationSelectorVar(root: ALSyntaxNode, rewrites: Map<ALSyntaxNode, string>): void {
   const codeunit = findFirst(root, ALNodeKind.codeunit);
   if (codeunit === null) return; // not a codeunit object — no guard call is ever emitted there
 
-  const existingVar = codeunit.namedChildren.find((c) => c.kind === ALNodeKind.var_section);
+  const members = declarationMembers(codeunit);
+
+  const existingVar = members.find((c) => c.kind === ALNodeKind.var_section);
   if (existingVar !== undefined) {
     if (rewrites.has(existingVar)) {
       throw new Error(
@@ -81,7 +98,7 @@ function injectMutationSelectorVar(root: ALSyntaxNode, rewrites: Map<ALSyntaxNod
     return;
   }
 
-  const firstMember = codeunit.namedChildren.find((c) => !CODEUNIT_HEADER_KINDS.has(c.kind));
+  const firstMember = members.find((c) => !CODEUNIT_HEADER_KINDS.has(c.kind));
   if (firstMember === undefined) return; // header-only codeunit (no members) — nothing to guard
 
   const insertionPoint: ALSyntaxNode = {

@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import {
   ALNodeKind,
+  declarationMembers,
   findAll,
   findFirst,
   initParser,
@@ -513,5 +514,68 @@ describe("compileSchemataForFile — member splice reproduces a consumed termina
     expect(out).toContain("if X > 0 then begin end\n        else\n            Y := 2;");
     expect(out).not.toMatch(/begin end;\s*else/);
     expect(countErrorNodes(out)).toBe(0);
+  });
+});
+
+describe("compileSchemataForFile — selector var reuses an existing object-level var_section", () => {
+  it("appends the selector var to the codeunit's existing var_section instead of inserting a second one", async () => {
+    await initParser();
+    // Under v3, a codeunit's members (var_section, procedure) sit inside a
+    // `declaration_body` container rather than being direct namedChildren of
+    // the codeunit. Reading `codeunit.namedChildren` straight (the bug this
+    // test guards against) never finds this existing `var_section`, so the
+    // selector var falls through to the "no existing var_section" path and
+    // gets inserted as a SECOND, separate object-level `var` block ahead of
+    // this one instead of being appended to it.
+    const src = `codeunit 51906 "G"
+{
+    var
+        GlobalVar: Integer;
+
+    procedure P()
+    begin
+        GlobalVar := 1;
+    end;
+}
+`;
+    const root = wrapRoot(parseAL(src));
+    const assign = findFirst(root, ALNodeKind.assignment_statement);
+    if (assign === null) throw new Error("no assignment");
+
+    const out = compileSchemataForFile(src, root, [
+      spec(assign, "GlobalVar := 2;", "lethal.some-operator"),
+    ]);
+
+    expect(out).toContain("if MutationSelector.Active('M0001') then begin");
+    expect(out).toContain("GlobalVar := 2;");
+    // `assignment_statement.text` excludes its own terminating `;` (same
+    // quirk `exit_statement` has — see the "overlapping specs" test above),
+    // so the untouched original branch reads without a trailing `;` here.
+    expect(out).toContain("GlobalVar := 1");
+
+    // Structural check, not just string-matching: re-parse the emitted file
+    // and count the codeunit's OWN object-level var_section members. A
+    // second, separately-inserted var_section — the exact shape the reuse
+    // branch exists to prevent — would still contain valid AL and would
+    // still satisfy `toContain` checks on either declaration in isolation,
+    // so only counting members through `declarationMembers` (the v3-aware
+    // walk) actually discriminates "reused" from "duplicated".
+    const outRoot = wrapRoot(parseAL(out));
+    let errorCount = 0;
+    visit(outRoot, (node) => {
+      if (node.rawKind === "ERROR") errorCount++;
+    });
+    expect(errorCount).toBe(0);
+
+    const outCodeunit = findFirst(outRoot, ALNodeKind.codeunit);
+    if (outCodeunit === null) throw new Error("no codeunit in output");
+    const varSections = declarationMembers(outCodeunit).filter(
+      (c) => c.kind === ALNodeKind.var_section,
+    );
+    expect(varSections).toHaveLength(1);
+    const [varSection] = varSections;
+    if (varSection === undefined) throw new Error("fixture drift");
+    expect(varSection.text).toContain("GlobalVar: Integer;");
+    expect(varSection.text).toContain('MutationSelector: Codeunit "Mutation Selector";');
   });
 });

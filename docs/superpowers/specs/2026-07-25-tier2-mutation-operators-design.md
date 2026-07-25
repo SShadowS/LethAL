@@ -251,8 +251,12 @@ Per-mutant equality is the gate throughout. Aggregate counts matching for the wr
     `statement_block` between a `code_block` and its statements, `var_body` inside `var_section`,
     `declaration_body` inside an object declaration. Use `isStatementPosition`, `blockStatements`,
     `varDeclarations` and `declarationMembers` from `packages/engine/src/ast/tree-walks.ts` — never a
-    hand-rolled parent-kind check. Two probe scripts and four production call sites each hand-rolled one and
-    silently matched nothing after the bump.
+    hand-rolled parent-kind check. Two probe scripts and **five** production call sites each hand-rolled one
+    and silently matched nothing after the bump — the layer's own sweep found and fixed four of the five;
+    the fifth (`packages/schemata/src/compile.ts`'s `injectMutationSelectorVar`, reading a codeunit's
+    `var_section` straight off `namedChildren` instead of through `declarationMembers`) was missed by that
+    sweep and caught only by the subsequent whole-branch review. Treat the sweep's own count as a lower
+    bound, not a completeness guarantee.
   - **The measurements in §8 above still hold**, and improved: the same 2,876-file corpus parses 100% clean
     under v3 (99.9% under v2.5.0), with 710,950 statement-position calls (703,239 before) and every other site
     count identical. The table-member addressability finding is unchanged.
