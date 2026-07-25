@@ -55,9 +55,9 @@ export function filterHistory(
  *
  * `byMember` is the precise `<type>:<id>::<member>` index (exact, correct for every ordinary
  * procedure). `byObject` is a coarser `<type>:<id>` index carrying every test that covered
- * ANYTHING in that object — the finer of the two lookups that can match a trigger, since
- * `SymbolReference.json` never records a trigger at all (`AppMethodIndex.lookup` — see
- * `bcdev-backend.ts:606` — can therefore never name one; `app-package.ts:137-149` builds the
+ * ANYTHING in that object — the finer of the two lookups that can match a trigger of ANY object
+ * kind, since `SymbolReference.json` never records a trigger at all (`AppMethodIndex.lookup` —
+ * see `bcdev-backend.ts:606` — can therefore never name one; `app-package.ts:137-149` builds the
  * index exclusively from that file). When neither index names a TABLE trigger mutant,
  * `coverageFilter` falls back further still, to every green test — see its fallback branches.
  */
@@ -158,31 +158,39 @@ export function coverageFilter(
     let testKeys = index.byMember.get(
       memberKeyOf(m.objectType, m.codeunitId, m.procedureName, context),
     );
-    // A TABLE trigger has no member-level entry to match — SymbolReference.json does not record
-    // triggers at all, so AppMethodIndex can never name one. Fall back to "any test that covered
-    // ANYTHING in this object". Deliberately conservative: it may run more tests than strictly
-    // needed, but it never wrongly reports a table trigger mutant as no-coverage, which would
-    // silently hide a live mutation site.
+    // FALLBACK 1 — object-level, for ANY trigger mutant, whatever object kind it lives in.
     //
-    // Gated on the object being a TABLE, not merely on `triggerName` being set. `triggerNameOf`
-    // (@lethal/schemata) walks to the nearest `trigger_declaration`, which also matches a
-    // codeunit's `trigger OnRun()`, a page's `OnOpenPage`/`OnAction`, and report triggers — but
-    // the measured fact that BC reports NO coverage for trigger code was established for table
-    // triggers only (live gate 2026-07-25, fixtures/README.md §Tier-2 Phase 0). Widening these
-    // fallbacks to unmeasured object kinds would flip a genuinely-uncovered codeunit `OnRun`
-    // mutant from `no-coverage` (excluded from the score, honestly "we don't know") to
-    // `survived` (scored) on a guess, and run it against every green test. `no-coverage` is the
-    // right bucket until someone measures those kinds.
-    const isTableTrigger =
-      m.triggerName !== undefined && normalizeObjectType(m.objectType, context) === "table";
-    if ((testKeys === undefined || testKeys.size === 0) && isTableTrigger) {
+    // NO trigger has a member-level entry to match: SymbolReference.json does not record triggers
+    // at all, so AppMethodIndex can never name one — not for a table's `OnValidate`, not for a
+    // codeunit's `trigger OnRun()`, not for a page's `OnOpenPage`/`OnAction`. Fall back to "any
+    // test that covered ANYTHING in this object". The widening is narrow and evidence-based, not
+    // a guess: the key carries `objectType`, so it can only ever return tests that measurably
+    // executed something in THIS object. An object nothing covers resolves to nothing here and
+    // still falls through to `no-coverage`.
+    //
+    // Gating this on the object being a TABLE is the harmful direction, and was tried: a
+    // codeunit's `trigger OnRun()` is the most ordinary shape in AL, its member-level key can
+    // never hit, and this is its ONLY route to ever being executed — so the gate silently
+    // reported every mutant in a COVERED codeunit's `OnRun` as `no-coverage` and dropped it from
+    // the score. Over-running costs time; under-running hides bugs.
+    const isTrigger = m.triggerName !== undefined;
+    if ((testKeys === undefined || testKeys.size === 0) && isTrigger) {
       testKeys = index.byObject.get(objectKeyOf(m.objectType, m.codeunitId, context));
     }
+    // FALLBACK 2 — every green test. TABLE triggers only; that gate is the measured part.
+    //
     // A live-gate run found real table trigger mutants BC's coverage index cannot name at ANY
     // precision — object-level came back empty too. We genuinely don't know which tests reach
     // that trigger, and the honest response to "I don't know" is to run every green test, not to
     // silently report no-coverage: skipping would hide a live mutation site, which is the exact
-    // failure this layer exists to prevent. Over-running costs time; under-running hides bugs.
+    // failure this layer exists to prevent.
+    //
+    // Unlike fallback 1 this one is UNMEASURED for every other object kind. "Coverage sees
+    // nothing in this object at all, yet the trigger is still reachable from the test suite" was
+    // established for table triggers (live gate 2026-07-25, fixtures/README.md §Tier-2 Phase 0).
+    // Extending it would flip a mutant in a wholly-uncovered codeunit/page from `no-coverage`
+    // (excluded from the score, honestly "we don't know") to `survived` (scored) on a guess.
+    const isTableTrigger = isTrigger && normalizeObjectType(m.objectType, context) === "table";
     if ((testKeys === undefined || testKeys.size === 0) && isTableTrigger) {
       covered.set(m.mutantId, [...allTests]);
       untargetedTriggerCount++;

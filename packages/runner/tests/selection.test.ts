@@ -318,11 +318,24 @@ describe("coverage: object id collisions across object types", () => {
   });
 });
 
-// Finding 2: `triggerNameOf` (@lethal/schemata) walks to the nearest `trigger_declaration`, which
-// matches a codeunit's `trigger OnRun()` and a page's `OnAction` just as readily as a table
-// trigger. The "BC reports no coverage for trigger code" measurement covers TABLE triggers only,
-// so the fallbacks must not widen to object kinds nobody has measured.
-describe("coverage: only TABLE triggers get the coverage fallbacks", () => {
+// The two fallbacks are gated DIFFERENTLY, and this block pins the seam between them.
+//
+// `triggerNameOf` (@lethal/schemata) walks to the nearest `trigger_declaration`, so it names a
+// codeunit's `trigger OnRun()` and a page's `OnOpenPage` as readily as a table trigger — and
+// SymbolReference.json records none of them, so NONE can hit at member level.
+//
+//   Fallback 1 (object-level, "tests that covered something in THIS object") applies to every
+//   trigger: it is evidence-based (the key carries objectType) and it is a codeunit `OnRun`
+//   mutant's only route to being executed at all. Gating it on table-ness silently reported
+//   covered codeunit `OnRun` mutants as `no-coverage` and dropped them from the score.
+//
+//   Fallback 2 (ALL green tests, when even the object level is empty) stays table-only: "coverage
+//   sees nothing in this object, yet the trigger is reachable" is measured for tables only.
+//
+// The baseline below makes the two distinguishable: the object-level set for any single object is
+// a strict subset of `allGreen`, so "matched narrowly" can never be confused with "everything".
+describe("coverage: fallback 1 applies to any trigger; fallback 2 is TABLE-only", () => {
+  const t3 = { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "PageProc" };
   const baseline = [
     {
       ref: t1,
@@ -331,9 +344,17 @@ describe("coverage: only TABLE triggers get the coverage fallbacks", () => {
         entries: [{ objectType: "Codeunit", objectId: 70000, procedure: "Post" }],
       },
     },
+    {
+      ref: t3,
+      coverage: {
+        granularity: "procedure" as const,
+        entries: [{ objectType: "Page", objectId: 70200, procedure: "Refresh" }],
+      },
+    },
+    // Covers nothing — present only so `allGreen` is STRICTLY wider than either object-level set.
     { ref: t2, coverage: { granularity: "procedure" as const, entries: [] } },
   ];
-  const allGreen = [t1, t2];
+  const allGreen = [t1, t2, t3];
 
   test("an uncovered codeunit OnRun mutant reports no-coverage, not survived-against-everything", () => {
     const index = buildCoverageIndex(baseline);
@@ -344,38 +365,93 @@ describe("coverage: only TABLE triggers get the coverage fallbacks", () => {
       triggerName: "OnRun",
     });
     const split = coverageFilter([m], index, allGreen);
+    // Fallback 1 found nothing (correctly — nothing covers 88888) and fallback 2 does not apply
+    // to a codeunit, so the honest answer is no-coverage, NOT "run it against every green test".
     expect(split.covered.size).toBe(0);
     expect(split.uncovered).toEqual([m]);
   });
 
-  test("a codeunit OnRun mutant does not widen to the object-level index either", () => {
+  test("a covered codeunit OnRun mutant DOES widen to that codeunit's covering tests", () => {
     const index = buildCoverageIndex(baseline);
-    // codeunit 70000 IS covered (procedure Post), so the object-level fallback would resolve to
-    // [t1] if it applied to a codeunit trigger. It must not: `Post` is not `OnRun`.
+    // codeunit 70000 IS covered (procedure Post). `OnRun` can never hit at member level, so this
+    // object-level widening is the only way the mutant ever executes. Gating it on table-ness
+    // reported it `no-coverage` and silently excluded a live mutation site from the score.
     const m = entry({ objectType: "codeunit", procedureName: "", triggerName: "OnRun" });
     const split = coverageFilter([m], index, allGreen);
-    expect(split.covered.size).toBe(0);
-    expect(split.uncovered).toEqual([m]);
+    expect(split.covered.get("M0001")).toEqual([t1]);
+    // ...and it stops there: [t1] is the object-level set, not the all-green fallback.
+    expect(split.covered.get("M0001")).not.toEqual(allGreen);
+    expect(split.uncovered.length).toBe(0);
   });
 
-  test("a page trigger mutant is likewise not widened", () => {
+  test("a covered page trigger mutant likewise gets that page's covering tests, not all of them", () => {
     const index = buildCoverageIndex(baseline);
     const m = entry({
       objectType: "page",
-      codeunitId: 70000,
+      codeunitId: 70200,
       procedureName: "",
       triggerName: "OnOpenPage",
     });
     const split = coverageFilter([m], index, allGreen);
+    expect(split.covered.get("M0001")).toEqual([t3]);
+    expect(split.covered.get("M0001")).not.toEqual(allGreen);
+    expect(split.uncovered.length).toBe(0);
+  });
+
+  test("an uncovered page trigger mutant stays no-coverage — fallback 2 never reaches it", () => {
+    const index = buildCoverageIndex(baseline);
+    const m = entry({
+      objectType: "page",
+      codeunitId: 70300, // nothing covers this page
+      procedureName: "",
+      triggerName: "OnOpenPage",
+    });
+    const split = coverageFilter([m], index, allGreen);
+    expect(split.covered.size).toBe(0);
     expect(split.uncovered).toEqual([m]);
   });
 
-  test("no warning fires for a non-table trigger mutant", () => {
+  test("the object-level widening respects the (type, id) pair — a codeunit trigger never takes a same-id table's tests", () => {
+    const index = buildCoverageIndex([
+      {
+        ref: t1,
+        coverage: {
+          granularity: "procedure" as const,
+          entries: [{ objectType: "Table", objectId: 70000, procedure: "Insert" }],
+        },
+      },
+      { ref: t2, coverage: { granularity: "procedure" as const, entries: [] } },
+    ]);
+    // Only TABLE 70000 is covered. A codeunit 70000 `OnRun` mutant must not inherit its tests.
+    const m = entry({
+      objectType: "codeunit",
+      codeunitId: 70000,
+      procedureName: "",
+      triggerName: "OnRun",
+    });
+    const split = coverageFilter([m], index, [t1, t2]);
+    expect(split.covered.size).toBe(0);
+    expect(split.uncovered).toEqual([m]);
+  });
+
+  test("no warning fires for a non-table trigger mutant — covered or not", () => {
     const index = buildCoverageIndex(baseline);
     const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
     try {
-      const m = entry({ objectType: "codeunit", codeunitId: 88888, triggerName: "OnRun" });
-      coverageFilter([m], index, allGreen);
+      const uncovered = entry({
+        mutantId: "M0001",
+        objectType: "codeunit",
+        codeunitId: 88888,
+        triggerName: "OnRun",
+      });
+      const covered = entry({
+        mutantId: "M0002",
+        objectType: "codeunit",
+        codeunitId: 70000,
+        procedureName: "",
+        triggerName: "OnRun",
+      });
+      coverageFilter([uncovered, covered], index, allGreen);
       expect(warnSpy).not.toHaveBeenCalled();
     } finally {
       warnSpy.mockRestore();

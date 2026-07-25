@@ -245,13 +245,22 @@ aggregate counts, the score, and the per-mutant verdict map above, then diffs ag
 different containers.
 
 BC reports **no coverage at all for table trigger code**, so every trigger mutant here is
-coverage-invisible. `coverageFilter` therefore falls back (most-precise-first: member key →
-object-level → all green tests) and runs each unmatched table trigger mutant against every green
-test, announcing it on stderr rather than silently discarding it as no-coverage. Both fallbacks
-require the object to be a **table**: the measurement above says nothing about a codeunit's
-`trigger OnRun` or a page's `OnAction`, so those keep the honest `no-coverage` bucket rather than
-being widened on a guess. Coverage is keyed on the **(objectType, objectId) pair** throughout,
-because a BC object id is unique only within its type.
+coverage-invisible. `coverageFilter` therefore falls back, most-precise-first: member key →
+object-level → all green tests. The two fallbacks are gated **differently**:
+
+- **object-level** (any test that covered anything in *this* object) applies to **any trigger**,
+  whatever object kind it sits in. `SymbolReference.json` records no trigger at all, so no
+  trigger's member-level key can ever hit — for a codeunit's `trigger OnRun` this is its only
+  route to being executed, and gating it on table-ness silently reported mutants in covered
+  codeunit triggers as `no-coverage`. The widening is evidence-based: the key carries the object
+  type, so it can only return tests that measurably ran something in that same object.
+- **all green tests** (announced on stderr rather than silently discarded as no-coverage) stays
+  **table-only**. "Coverage sees nothing in this object at all, yet the trigger is still
+  reachable" is what the measurement above established, and it established it for tables. A
+  mutant in a wholly-uncovered codeunit or page keeps the honest `no-coverage` bucket.
+
+Coverage is keyed on the **(objectType, objectId) pair** throughout, because a BC object id is
+unique only within its type.
 
 ### al-runner — measured 2026-07-25, and why it kills nothing here
 
