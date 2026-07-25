@@ -12,6 +12,7 @@ export {
   findEnclosingStatement,
   findEnclosingProcedure,
   findEnclosingCodeBlock,
+  isStatementPosition,
 } from "./ast/tree-walks";
 
 // Semantic

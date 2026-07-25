@@ -23,11 +23,26 @@ const BRANCH_PARENT_KINDS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Is this node a direct member of a block's statement list?
+ *
+ * Grammar note: v3 wraps a `code_block`'s statements in a `statement_block`
+ * container, so a statement's parent is the `statement_block` and its
+ * grandparent is the `code_block`. Keying on `code_block` alone — as this
+ * codebase did under v2.5.0 — silently matches nothing under v3.
+ */
+export function isStatementPosition(node: ALSyntaxNode): boolean {
+  const parent = node.parent;
+  if (parent === null) return false;
+  return parent.kind === ALNodeKind.statement_block || parent.kind === ALNodeKind.block;
+}
+
+/**
  * Narrowest ancestor that the grammar treats as a statement.
  *
  * Includes the statement kinds plus two positional cases:
  *   - a `code_block` whose parent is a procedure, trigger, or branch
- *   - a `call_expression` whose parent is a `code_block` (expression-statement quirk)
+ *   - a `call_expression` in statement position (expression-statement quirk;
+ *     see `isStatementPosition` for the container-skipping detail)
  *
  * Returns `null` if the node has no statement ancestor (e.g., the root node).
  * The node itself is considered a candidate — calling with an `if_statement`
@@ -37,11 +52,7 @@ export function findEnclosingStatement(node: ALSyntaxNode): ALSyntaxNode | null 
   let current: ALSyntaxNode | null = node;
   while (current !== null) {
     if (STATEMENT_KINDS.has(current.kind)) return current;
-    if (
-      current.kind === ALNodeKind.procedure_call &&
-      current.parent !== null &&
-      current.parent.kind === ALNodeKind.block
-    ) {
+    if (current.kind === ALNodeKind.procedure_call && isStatementPosition(current)) {
       return current;
     }
     if (

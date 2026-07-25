@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeAll } from "bun:test";
+import { beforeAll, describe, expect, it } from "bun:test";
+import type { ALSyntaxNode } from "../../src";
 import {
   ALNodeKind,
   findEnclosingCodeBlock,
@@ -6,13 +7,16 @@ import {
   findEnclosingStatement,
   findFirst,
   initParser,
+  isStatementPosition,
   parseAL,
   visit,
   wrapRoot,
 } from "../../src";
 
 describe("tree-walks", () => {
-  beforeAll(async () => { await initParser(); });
+  beforeAll(async () => {
+    await initParser();
+  });
 
   it("findEnclosingStatement returns narrowest statement ancestor", () => {
     const src = `codeunit 51100 "T" { procedure P(A: Integer) begin if A > 0 then X := A + 1; end; }`;
@@ -29,7 +33,8 @@ describe("tree-walks", () => {
     const root = wrapRoot(parseAL(src));
     let integerNode = null as ReturnType<typeof findFirst>;
     visit(root, (n) => {
-      if (integerNode === null && n.kind === ALNodeKind.integer_literal && n.text === "42") integerNode = n;
+      if (integerNode === null && n.kind === ALNodeKind.integer_literal && n.text === "42")
+        integerNode = n;
     });
     if (integerNode === null) throw new Error("no integer literal");
     const stmt = findEnclosingStatement(integerNode);
@@ -65,5 +70,27 @@ describe("tree-walks", () => {
     expect(findEnclosingProcedure(root)).toBeNull();
     expect(findEnclosingStatement(root)).toBeNull();
     expect(findEnclosingCodeBlock(root)).toBeNull();
+  });
+
+  it("isStatementPosition accepts a call directly inside a block's statement list", async () => {
+    const root = wrapRoot(parseAL("codeunit 50000 T { procedure P() begin Foo(); end; }"));
+    const calls: ALSyntaxNode[] = [];
+    visit(root, (n) => {
+      if (n.kind === ALNodeKind.procedure_call) calls.push(n);
+    });
+    expect(calls.length).toBe(1);
+    expect(isStatementPosition(calls[0] as ALSyntaxNode)).toBe(true);
+  });
+
+  it("isStatementPosition rejects a call that is an if-branch, not a statement-list member", async () => {
+    const root = wrapRoot(
+      parseAL("codeunit 50000 T { procedure P() begin if X then Foo(); end; }"),
+    );
+    const calls: ALSyntaxNode[] = [];
+    visit(root, (n) => {
+      if (n.kind === ALNodeKind.procedure_call && n.text.startsWith("Foo")) calls.push(n);
+    });
+    expect(calls.length).toBe(1);
+    expect(isStatementPosition(calls[0] as ALSyntaxNode)).toBe(false);
   });
 });
