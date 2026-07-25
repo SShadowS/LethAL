@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import {
+  ALNodeKind,
   type ALSyntaxNode,
   type MutationSpec,
   astSubtreeHash,
@@ -49,6 +50,7 @@ export interface MutantManifestEntry {
   readonly codeunitId: number;
   readonly codeunitName: string;
   readonly procedureName: string;
+  readonly triggerName?: string;
 }
 
 export interface MutantManifest {
@@ -88,6 +90,27 @@ function procedureNameOf(spec: MutationSpec): string {
   return nameNode === null ? "" : stripQuotes(nameNode.text);
 }
 
+/**
+ * Name of the enclosing `trigger_declaration`, or `undefined` outside one.
+ *
+ * Trigger bodies have no enclosing `procedure`, so `procedureNameOf` returns
+ * `""` for them. That empty string becomes the coverage key `<objectId>::`,
+ * which matches no coverage entry and silently classifies every trigger mutant
+ * as no-coverage — no error, no failing test, just a tier that appears to have
+ * nothing to run.
+ */
+function triggerNameOf(spec: MutationSpec): string | undefined {
+  let current: ALSyntaxNode | null = spec.before;
+  while (current !== null) {
+    if (current.kind === ALNodeKind.trigger) {
+      const nameNode = current.childForFieldName("name");
+      return nameNode === null ? undefined : stripQuotes(nameNode.text);
+    }
+    current = current.parent;
+  }
+  return undefined;
+}
+
 export async function writeInstrumentedProject(input: WriteInput): Promise<void> {
   await mkdir(input.targetDir, { recursive: true });
 
@@ -102,6 +125,7 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
     await writeFile(join(input.targetDir, basename(f.path)), compiled, "utf8");
     const header = objectHeaderOf(f.source);
     for (const { mutantId, spec } of ided) {
+      const triggerName = triggerNameOf(spec);
       manifest.push({
         mutantId,
         file: f.path,
@@ -114,6 +138,7 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
         codeunitId: header.id,
         codeunitName: header.name,
         procedureName: procedureNameOf(spec),
+        ...(triggerName !== undefined ? { triggerName } : {}),
       });
     }
   }

@@ -89,3 +89,52 @@ describe("coverage", () => {
     expect(coverageFilter([m], index, [t1, t2]).covered.get("M0001")).toEqual([t1]);
   });
 });
+
+// SymbolReference.json never records a trigger (AppMethodIndex.lookup can never name one), so a
+// trigger mutant's member-level key can never hit. These prove the object-level fallback: it
+// widens to "any test that covered ANYTHING in this object" only when triggerName is present, and
+// never manufactures coverage where none exists.
+describe("coverage: trigger fallback", () => {
+  const baseline = [
+    {
+      ref: t1,
+      coverage: {
+        granularity: "procedure" as const,
+        entries: [{ objectType: "Codeunit", objectId: 70000, procedure: "Post" }],
+      },
+    },
+    { ref: t2, coverage: { granularity: "procedure" as const, entries: [] } },
+  ];
+
+  test("trigger mutant with no member-level entry falls back to object-level coverage", () => {
+    const index = buildCoverageIndex(baseline);
+    const m = entry({ procedureName: "", triggerName: "OnInsert" });
+    const split = coverageFilter([m], index, [t1, t2]);
+    expect(split.covered.get("M0001")).toEqual([t1]);
+    expect(split.uncovered.length).toBe(0);
+  });
+
+  test("trigger mutant whose object has no coverage anywhere still lands in uncovered", () => {
+    const index = buildCoverageIndex(baseline);
+    const m = entry({ codeunitId: 99999, procedureName: "", triggerName: "OnInsert" });
+    const split = coverageFilter([m], index, [t1, t2]);
+    expect(split.covered.size).toBe(0);
+    expect(split.uncovered).toEqual([m]);
+  });
+
+  test("ordinary procedure mutant is unaffected and still matches member-first", () => {
+    const index = buildCoverageIndex(baseline);
+    const m = entry({ procedureName: "Post" });
+    const split = coverageFilter([m], index, [t1, t2]);
+    expect(split.covered.get("M0001")).toEqual([t1]);
+    expect(split.uncovered.length).toBe(0);
+  });
+
+  test("no triggerName and a missing member key does NOT use the object fallback", () => {
+    const index = buildCoverageIndex(baseline);
+    const m = entry({ procedureName: "Untested" }); // no triggerName
+    const split = coverageFilter([m], index, [t1, t2]);
+    expect(split.covered.size).toBe(0);
+    expect(split.uncovered).toEqual([m]);
+  });
+});

@@ -87,6 +87,46 @@ describe("writeInstrumentedProject", () => {
     }
   });
 
+  it("records the enclosing trigger's name for a mutation inside a table trigger", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-trigger-"));
+    try {
+      const src = `table 50100 "T"
+{
+    fields { field(1; "No."; Code[20]) { } }
+    trigger OnInsert()
+    begin
+        DoThing();
+    end;
+}`;
+      const root = wrapRoot(parseAL(src));
+      const call = findFirst(root, ALNodeKind.procedure_call);
+      if (call === null) throw new Error("no call expression");
+      const specs: MutationSpec[] = [
+        {
+          operatorName: "op.void",
+          operatorVersion: "1.0.0",
+          astNodeId: `${call.startIndex}`,
+          before: call,
+          after: { ...call, text: "" } as never,
+          parentContext: "statement-position",
+        },
+      ];
+      await writeInstrumentedProject({
+        targetDir: dir,
+        files: [{ path: "T.Table.al", source: src, root, specs }],
+        selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
+        artifactId: "0123456789abcdef0123456789abcdef",
+        targetAppId: TARGET_APP_ID,
+      });
+
+      const manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8"));
+      expect(manifest.mutants[0]?.procedureName).toBe("");
+      expect(manifest.mutants[0]?.triggerName).toBe("OnInsert");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("manifest entries carry identity and coverage-lookup fields", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lethal-"));
     try {

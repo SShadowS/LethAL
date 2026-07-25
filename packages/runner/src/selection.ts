@@ -41,7 +41,18 @@ export function filterHistory(
   return { execute, knownSurvivors };
 }
 
-export type CoverageIndex = ReadonlyMap<string, ReadonlySet<string>>;
+/**
+ * `byMember` is the precise `<objectId>::<member>` index (exact, correct for every ordinary
+ * procedure). `byObject` is a coarser `<objectId>` index carrying every test that covered
+ * ANYTHING in that object — the only lookup that can ever match a trigger, since
+ * `SymbolReference.json` never records a trigger at all (`AppMethodIndex.lookup` — see
+ * `bcdev-backend.ts:606` — can therefore never name one; `app-package.ts:137-149` builds the
+ * index exclusively from that file). See `coverageFilter`'s trigger-fallback branch.
+ */
+export interface CoverageIndex {
+  readonly byMember: ReadonlyMap<string, ReadonlySet<string>>;
+  readonly byObject: ReadonlyMap<number, ReadonlySet<string>>;
+}
 
 export interface CoverageSplit {
   readonly covered: ReadonlyMap<string, readonly TestMethodRef[]>;
@@ -55,19 +66,27 @@ export function testKeyOf(ref: TestMethodRef): string {
 export function buildCoverageIndex(
   baseline: ReadonlyArray<{ ref: TestMethodRef; coverage?: CoverageMap }>,
 ): CoverageIndex {
-  const index = new Map<string, Set<string>>();
+  const byMember = new Map<string, Set<string>>();
+  const byObject = new Map<number, Set<string>>();
   for (const b of baseline) {
     for (const e of b.coverage?.entries ?? []) {
-      const key = `${e.objectId}::${e.procedure.toLowerCase()}`;
-      let set = index.get(key);
-      if (!set) {
-        set = new Set();
-        index.set(key, set);
+      const memberKey = `${e.objectId}::${e.procedure.toLowerCase()}`;
+      let memberSet = byMember.get(memberKey);
+      if (!memberSet) {
+        memberSet = new Set();
+        byMember.set(memberKey, memberSet);
       }
-      set.add(testKeyOf(b.ref));
+      memberSet.add(testKeyOf(b.ref));
+
+      let objectSet = byObject.get(e.objectId);
+      if (!objectSet) {
+        objectSet = new Set();
+        byObject.set(e.objectId, objectSet);
+      }
+      objectSet.add(testKeyOf(b.ref));
     }
   }
-  return index;
+  return { byMember, byObject };
 }
 
 export function coverageFilter(
@@ -79,7 +98,16 @@ export function coverageFilter(
   const covered = new Map<string, TestMethodRef[]>();
   const uncovered: MutantManifestEntry[] = [];
   for (const m of mutants) {
-    const testKeys = index.get(`${m.codeunitId}::${m.procedureName.toLowerCase()}`);
+    // Member-level first: precise, and correct for every ordinary procedure.
+    let testKeys = index.byMember.get(`${m.codeunitId}::${m.procedureName.toLowerCase()}`);
+    // A trigger has no member-level entry to match — SymbolReference.json does not record
+    // triggers at all, so AppMethodIndex can never name one. Fall back to "any test that covered
+    // ANYTHING in this object". Deliberately conservative: it may run more tests than strictly
+    // needed, but it never wrongly reports a mutant as no-coverage, which would silently hide a
+    // live mutation site.
+    if ((testKeys === undefined || testKeys.size === 0) && m.triggerName !== undefined) {
+      testKeys = index.byObject.get(m.codeunitId);
+    }
     if (!testKeys || testKeys.size === 0) {
       uncovered.push(m);
       continue;
