@@ -17,6 +17,8 @@ import {
   type MutantManifest,
   type MutantManifestEntry,
   type SelectorConfig,
+  canCarryMutationSelectorVar,
+  describeObjectKinds,
   writeInstrumentedProject,
 } from "@lethal/schemata";
 import { nextAbove, parseVersionConflict, reserveAppVersion } from "./app-version";
@@ -48,6 +50,33 @@ import type { MutantVerdict } from "./store";
 const BASELINE_TIMEOUT_DEFAULT = 120_000;
 
 /**
+ * Floor for a mutant run's time budget.
+ *
+ * The budget is `2 x` the test's baseline duration, which is far too tight for a
+ * fast test: measured live, the same test through the same fence took 1872ms on
+ * its first (cold) call and ~95ms warm. A baseline measured warm yields a ~190ms
+ * budget, so the first cold execution in the mutant loop aborts — and an abort is
+ * not a retry here, it becomes an `in-flight-unknown`, a durable tier quarantine
+ * and an aborted session.
+ *
+ * The budget's job is catching a runaway mutant, not enforcing performance, so a
+ * floor that absorbs a cold start costs nothing real.
+ */
+export const MIN_MUTANT_BUDGET_MS = 30_000;
+
+/**
+ * Tier of every currently registered operator, keyed by name — the mapping
+ * `writeInstrumentedProject` needs to resolve Tier-2 narrowings of a Tier-1
+ * operator (`dedupeSpecs` in `@lethal/schemata`). Built once from the same
+ * `tier1Operators` import `generateMutationSet` walks, so a mutant's identity
+ * after dedup can never diverge between the two — see `manifestMutants` in
+ * `orchestrator.test.ts` for a caller that leans on that parity.
+ */
+export const operatorTiers: ReadonlyMap<string, 1 | 2 | 3 | "custom"> = new Map(
+  tier1Operators.map((op) => [op.name, op.tier]),
+);
+
+/**
  * Parse every `.al` file under `projectDir` (skipping emitted `Mutation*`
  * artifacts) and run the Tier 1 operator set over each. Mirrors the
  * ops -> compile -> write pipeline exercised by
@@ -57,10 +86,22 @@ const BASELINE_TIMEOUT_DEFAULT = 120_000;
  * post-Layer-4.3): overlapping mutants coalesce into one flat dispatch chain
  * at compile time (`compileSchemataForFile`), so every spec this returns runs
  * behind its own guard in the same single instrumented artifact.
+ *
+ * Files whose object kind cannot carry the selector var are dropped here, with one warning per
+ * run. A mutation guard is a bare `MutationSelector.Active(...)` call, which needs a
+ * `var MutationSelector: Codeunit "Mutation Selector";` in scope, and only a codeunit or a table
+ * can carry that declaration today (`canCarryMutationSelectorVar` / `injectMutationSelectorVar`
+ * in @lethal/schemata). A real project routinely holds a page with `OnAction`/`OnOpenPage`
+ * bodies, and the tier-1 operators target those bodies happily — so without this filter one such
+ * page aborts the whole session at compile time. Dropping the specs costs only those mutants:
+ * `prepareBatchProject` copies every project `.al` file the instrumented write did not produce
+ * into the batch dir verbatim, so the page still reaches the server, byte-identical to source.
  */
 export async function generateMutationSet(projectDir: string): Promise<InstrumentedFile[]> {
   await initParser();
   const files: InstrumentedFile[] = [];
+  /** Files with >=1 spec that no selector var can be injected into — reported once, below. */
+  const skipped: Array<{ file: string; kinds: string; specs: number }> = [];
   const entries = (await readdir(projectDir, { recursive: true }))
     .filter((e) => e.toLowerCase().endsWith(".al"))
     .filter((e) => !basename(e).startsWith("Mutation"));
@@ -93,7 +134,23 @@ export async function generateMutationSet(projectDir: string): Promise<Instrumen
         }
       }
     });
-    if (specs.length > 0) files.push({ path: rel, source, root, specs });
+    if (specs.length === 0) continue;
+    if (!canCarryMutationSelectorVar(root)) {
+      skipped.push({ file: rel, kinds: describeObjectKinds(root), specs: specs.length });
+      continue;
+    }
+    files.push({ path: rel, source, root, specs });
+  }
+  if (skipped.length > 0) {
+    const total = skipped.reduce((n, s) => n + s.specs, 0);
+    const detail = skipped.map((s) => `${s.file} (${s.kinds}, ${s.specs} site(s))`).join(", ");
+    const why =
+      "only a codeunit or a table can carry the injected " +
+      '`var MutationSelector: Codeunit "Mutation Selector";` declaration, so a guard in any ' +
+      "other object kind cannot compile (AL0118). Not mutated; published unchanged";
+    console.warn(
+      `[lethal] skipped ${skipped.length} file(s) holding ${total} mutation site(s): ${why}: ${detail}.`,
+    );
   }
   return files;
 }
@@ -306,6 +363,7 @@ async function prepareArtifactDir(args: {
     selectorIds: args.selectorIds,
     artifactId: args.artifactId,
     targetAppId: targetAppIdOf(args.projectManifest),
+    operatorTiers,
   });
   await prepareBatchProject(args.projectDir, args.targetDir, args.projectManifest, args.appVersion);
 }
@@ -2195,7 +2253,10 @@ async function runMutantsOnBackend(args: {
     }> = [];
     let transportErrorRef: TestMethodRef | undefined;
     for (const ref of covering) {
-      const budget = 2 * (args.baselineDuration.get(testKeyOf(ref)) ?? args.fallbackTimeoutMs);
+      const budget = Math.max(
+        2 * (args.baselineDuration.get(testKeyOf(ref)) ?? args.fallbackTimeoutMs),
+        MIN_MUTANT_BUDGET_MS,
+      );
       // Layer 5C-B2: `runFenced`, not `runOnce` — a lost ack that reconciliation PROVES completed
       // earns one fresh attempt, and `v` is then that attempt's verdict. Only the final verdict is
       // buffered/attested/classified below, exactly as `runOnce`'s own pre-dispatch-rejected retry

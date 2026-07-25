@@ -1,12 +1,14 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import {
+  ALNodeKind,
   type ALSyntaxNode,
   type MutationSpec,
   astSubtreeHash,
   findEnclosingProcedure,
 } from "@lethal/engine";
 import { compileSchemataForFile } from "./compile";
+import { type TierResolver, dedupeSpecs } from "./dedup";
 import { assignMutantIds } from "./ids";
 import {
   type SelectorConfig,
@@ -35,6 +37,11 @@ export interface WriteInput {
    *  register-install codeunit so the LethAL Control extension keys state on the full
    *  (targetAppId, artifactId, mutantId) tuple (Layer 5C-A). */
   readonly targetAppId: string;
+  /** Tier of each registered operator, keyed by `MutationSpec.operatorName` — used to resolve
+   *  Tier-2 narrowings of a Tier-1 operator that would otherwise emit a byte-identical mutant at
+   *  the same site under two names (see `dedupeSpecs`). `MutationSpec` itself carries no tier
+   *  (that's a property of `MutationOperator`), so the caller supplies this map. */
+  readonly operatorTiers: ReadonlyMap<string, 1 | 2 | 3 | "custom">;
 }
 
 export interface MutantManifestEntry {
@@ -46,9 +53,24 @@ export interface MutantManifestEntry {
   readonly operatorName: string;
   readonly operatorVersion: string;
   readonly astHash: string;
+  /**
+   * The AL object KEYWORD this mutant's object was declared with, lowercased: `table`,
+   * `codeunit`, `page`, `report`, `query`, `xmlport`, `enum`.
+   *
+   * Required, and deliberately not optional: BC object ids are unique PER TYPE, so
+   * `codeunitId` alone does not identify an object — `table 50100 "Foo"` alongside
+   * `codeunit 50100 "Foo Mgt."` is ordinary. Coverage lookup keys on the (type, id) pair
+   * (`packages/runner/src/selection.ts`), and a manifest that cannot supply the type is
+   * refused there rather than silently defaulted: defaulting merges two different objects'
+   * coverage and turns a live mutation site into a false survivor.
+   */
+  readonly objectType: string;
+  /** The object's id. Named `codeunitId` for history; it is the id of whatever
+   *  `objectType` names, not necessarily a codeunit. */
   readonly codeunitId: number;
   readonly codeunitName: string;
   readonly procedureName: string;
+  readonly triggerName?: string;
 }
 
 export interface MutantManifest {
@@ -65,13 +87,121 @@ function lineOfIndex(source: string, index: number): number {
   return line;
 }
 
+/** Global, so `matchAll` can find EVERY object header in the file, not just the first. */
 const OBJECT_HEADER =
-  /^\s*(codeunit|table|page|report|query|xmlport|enum)\s+(\d+)\s+("([^"]+)"|(\w+))/im;
+  /^\s*(codeunit|table|page|report|query|xmlport|enum)\s+(\d+)\s+("([^"]+)"|(\w+))/gim;
 
-function objectHeaderOf(source: string): { id: number; name: string } {
-  const m = OBJECT_HEADER.exec(source);
-  if (!m) throw new Error("instrumented file has no AL object header");
-  return { id: Number(m[2]), name: m[4] ?? m[5] ?? "" };
+/**
+ * Blanks out AL comments, preserving length (so any index computed against the result still
+ * addresses the same character of the original).
+ *
+ * `objectHeaderOf` counts headers with a regex, and the "more than one object" check it added
+ * turns a false positive into a refused file. A commented-out object is exactly that false
+ * positive, and it is a shape real AL carries: an old `codeunit 50100 "Old Impl"` left inside a
+ * block comment above the live `codeunit 50101 "New Impl"`.
+ *
+ * The regex anchors at line start, so a `//`-commented header never matched — but a block-
+ * commented one starts its own line and does. Worse, if the commented object came FIRST it won
+ * the `matches[0]` race and mislabelled every mutant in the file, silently. Both go away by
+ * scanning the comment-free text.
+ *
+ * String literals are tracked because AL text may legally contain `//` or `/*`
+ * (`Error('use // here')`), and a stripper blind to them would blank the rest of the file and
+ * report "no AL object header" on a valid one. `''` inside a single-quoted string is an escaped
+ * quote, which this handles by simply re-entering the string state on the next quote.
+ */
+export function stripAlComments(source: string): string {
+  const out = source.split("");
+  let state: "code" | "line-comment" | "block-comment" | "string" | "identifier" = "code";
+  for (let i = 0; i < source.length; i++) {
+    const c = source[i];
+    const next = source[i + 1];
+    if (state === "code") {
+      if (c === "'") state = "string";
+      else if (c === '"') state = "identifier";
+      else if (c === "/" && next === "/") {
+        state = "line-comment";
+        out[i] = " ";
+      } else if (c === "/" && next === "*") {
+        state = "block-comment";
+        out[i] = " ";
+      }
+      continue;
+    }
+    if (state === "string") {
+      if (c === "'") state = "code";
+      continue;
+    }
+    if (state === "identifier") {
+      if (c === '"') state = "code";
+      continue;
+    }
+    // Inside a comment: blank everything except newlines, so line numbers and the regex's
+    // `^` anchors keep addressing the same lines they did in the original.
+    if (state === "line-comment") {
+      if (c === "\n") state = "code";
+      else out[i] = " ";
+      continue;
+    }
+    // block-comment
+    if (c !== "\n") out[i] = " ";
+    if (c === "*" && next === "/") {
+      out[i + 1] = " ";
+      i++;
+      state = "code";
+    }
+  }
+  return out.join("");
+}
+
+/**
+ * The declared object's kind, id and name. `type` is the matched AL keyword lowercased
+ * (`table`, `codeunit`, ...) — a BC object id is unique only WITHIN a type, so every consumer
+ * that identifies an object (coverage lookup above all) needs the pair, not the id alone.
+ *
+ * Exactly ONE object declaration per file is required, and a file with more THROWS. AL permits
+ * several objects in one file (rare, but legal), and every layer downstream of here assumes one:
+ *
+ * - this function labels every mutant in the file with the FIRST header's `(type, id)`, so a
+ *   mutant in the second object is looked up under the first object's coverage key — the wrong
+ *   test set, hence a verdict that is silently wrong rather than merely imprecise (the exact
+ *   failure the (type, id) pair key exists to prevent, see `MutantManifestEntry.objectType`);
+ * - `injectMutationSelectorVar` (compile.ts) injects into `findFirst(codeunit) ?? findFirst
+ *   (table)`, which for `page X` + `codeunit Y` in one file is the SECOND object, leaving the
+ *   guards emitted into the first object with no declaration in scope: AL0118.
+ *
+ * Refusing the shape is the honest answer; producing verdicts we know can be wrong is not.
+ */
+function objectHeaderOf(
+  source: string,
+  filePath: string,
+): { type: string; id: number; name: string } {
+  // Comment-free text, so a commented-out object neither wins the `matches[0]` race nor trips
+  // the "more than one object" refusal — see `stripAlComments`.
+  // `matchAll` operates on an internal clone, so the shared `g` regex's `lastIndex` never carries
+  // between calls (a plain `.exec` loop on OBJECT_HEADER would).
+  const matches = [...stripAlComments(source).matchAll(OBJECT_HEADER)];
+  const first = matches[0];
+  if (first === undefined) throw new Error(`${filePath}: file has no AL object header`);
+  if (matches.length > 1) {
+    const found = matches.map((m) => `${m[1]?.toLowerCase()} ${m[2]} ${m[4] ?? m[5] ?? ""}`);
+    const why =
+      "LethAL supports exactly one AL object per file. Every mutant in the file would be " +
+      "attributed to the FIRST object's (objectType, objectId), so mutants in the others would " +
+      "be coverage-matched against the wrong object's tests — wrong verdicts, silently — and " +
+      "the selector var is injected into only one of the objects (AL0118 in the rest). Split " +
+      "them into one file each.";
+    throw new Error(
+      `writeInstrumentedProject: cannot instrument ${filePath} — it declares ${matches.length} AL objects (${found.join("; ")}). ${why}`,
+    );
+  }
+  const type = first[1];
+  if (type === undefined) {
+    // Unreachable while OBJECT_HEADER keeps group 1 — asserted rather than defaulted, because a
+    // wrong/absent object type silently merges two objects' coverage (see MutantManifestEntry).
+    throw new Error(`${filePath}: AL object header matched without an object keyword`);
+  }
+  return { type: type.toLowerCase(), id: Number(first[2]), name: first[4] ?? first[5] ?? "" };
 }
 
 function stripQuotes(s: string): string {
@@ -88,20 +218,50 @@ function procedureNameOf(spec: MutationSpec): string {
   return nameNode === null ? "" : stripQuotes(nameNode.text);
 }
 
+/**
+ * Name of the enclosing `trigger_declaration`, or `undefined` outside one.
+ *
+ * Trigger bodies have no enclosing `procedure`, so `procedureNameOf` returns
+ * `""` for them. That empty string becomes the coverage key `<objectId>::`,
+ * which matches no coverage entry and silently classifies every trigger mutant
+ * as no-coverage — no error, no failing test, just a tier that appears to have
+ * nothing to run.
+ */
+function triggerNameOf(spec: MutationSpec): string | undefined {
+  let current: ALSyntaxNode | null = spec.before;
+  while (current !== null) {
+    if (current.kind === ALNodeKind.trigger) {
+      const nameNode = current.childForFieldName("name");
+      return nameNode === null ? undefined : stripQuotes(nameNode.text);
+    }
+    current = current.parent;
+  }
+  return undefined;
+}
+
 export async function writeInstrumentedProject(input: WriteInput): Promise<void> {
   await mkdir(input.targetDir, { recursive: true });
 
+  // Dedup runs BEFORE ids are assigned and BEFORE compilation: dropping a mutant only while
+  // building the manifest would leave it compiled into the emitted dispatch chain holding an
+  // assigned id — an unreported mutation that still exists in the artifact.
+  const tierOf: TierResolver = (name) => input.operatorTiers.get(name);
   const specsByFile = new Map<string, readonly MutationSpec[]>();
-  for (const f of input.files) specsByFile.set(f.path, f.specs);
+  for (const f of input.files) specsByFile.set(f.path, dedupeSpecs(f.specs, tierOf));
   const idedByFile = assignMutantIds(specsByFile);
 
   const manifest: MutantManifestEntry[] = [];
   for (const f of input.files) {
     const ided = idedByFile.get(f.path) ?? [];
-    const compiled = compileSchemataForFile(f.source, f.root, f.specs, ided);
+    const deduped = specsByFile.get(f.path) ?? [];
+    // Read the header BEFORE instrumenting: both of its throws (no object, several objects) mean
+    // this file can never be attributed correctly, and failing before the write keeps a refused
+    // file from being left behind, half-instrumented, in the artifact dir.
+    const header = objectHeaderOf(f.source, f.path);
+    const compiled = compileSchemataForFile(f.source, f.root, deduped, ided, f.path);
     await writeFile(join(input.targetDir, basename(f.path)), compiled, "utf8");
-    const header = objectHeaderOf(f.source);
     for (const { mutantId, spec } of ided) {
+      const triggerName = triggerNameOf(spec);
       manifest.push({
         mutantId,
         file: f.path,
@@ -111,9 +271,11 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
         operatorName: spec.operatorName,
         operatorVersion: spec.operatorVersion,
         astHash: astSubtreeHash(spec.before),
+        objectType: header.type,
         codeunitId: header.id,
         codeunitName: header.name,
         procedureName: procedureNameOf(spec),
+        ...(triggerName !== undefined ? { triggerName } : {}),
       });
     }
   }

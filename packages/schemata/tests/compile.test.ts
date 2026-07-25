@@ -24,6 +24,31 @@ function spec(before: ALSyntaxNode, afterText: string, operatorName: string): Mu
   };
 }
 
+/** Finds the first call in the fixture and builds a void-method-call deletion spec for it. */
+function specAtFirstCall(root: ALSyntaxNode): MutationSpec {
+  const call = findFirst(root, ALNodeKind.procedure_call);
+  if (call === null) throw new Error("no call in fixture");
+  return spec(call, "", "lethal.void-method-call");
+}
+
+/**
+ * Re-parse emitted AL and count tree-sitter ERROR nodes — 0 means it still
+ * parses. CAVEAT (verified against the real parser): tree-sitter-al
+ * false-positives an ERROR on any bare nested block (`begin begin ... end
+ * end`), a shape the real AL compiler accepts and that every block-ROOTED
+ * dispatch chain contains (each branch's text is itself `begin ... end`).
+ * So this oracle is only used on emissions whose component root is NOT a
+ * block — the exact-string assertions carry the block-rooted cases.
+ */
+function countErrorNodes(source: string): number {
+  const r = wrapRoot(parseAL(source));
+  let n = 0;
+  visit(r, (node) => {
+    if (node.rawKind === "ERROR") n++;
+  });
+  return n;
+}
+
 describe("compileSchemataForFile", () => {
   beforeAll(async () => {
     await initParser();
@@ -377,24 +402,6 @@ describe("compileSchemataForFile — bare branch positions keep the enclosing el
 });
 
 describe("compileSchemataForFile — member splice reproduces a consumed terminator (C1)", () => {
-  /**
-   * Re-parse emitted AL and count tree-sitter ERROR nodes — 0 means it still
-   * parses. CAVEAT (verified against the real parser): tree-sitter-al
-   * false-positives an ERROR on any bare nested block (`begin begin ... end
-   * end`), a shape the real AL compiler accepts and that every block-ROOTED
-   * dispatch chain contains (each branch's text is itself `begin ... end`).
-   * So this oracle is only used on emissions whose component root is NOT a
-   * block — the exact-string assertions carry the block-rooted cases.
-   */
-  function countErrorNodes(source: string): number {
-    const r = wrapRoot(parseAL(source));
-    let n = 0;
-    visit(r, (node) => {
-      if (node.rawKind === "ERROR") n++;
-    });
-    return n;
-  }
-
   it("an inner-block member followed by a sibling statement keeps its ';' (reviewer probe shape)", async () => {
     await initParser();
     // The shape the sandbox fixture structurally lacks: an inner block that
@@ -577,5 +584,108 @@ describe("compileSchemataForFile — selector var reuses an existing object-leve
     if (varSection === undefined) throw new Error("fixture drift");
     expect(varSection.text).toContain("GlobalVar: Integer;");
     expect(varSection.text).toContain('MutationSelector: Codeunit "Mutation Selector";');
+  });
+});
+
+describe("compileSchemataForFile — selector var injection into table objects", () => {
+  it("injects the selector var into a table, after its sections and before its triggers", () => {
+    const source = `table 50100 "T"
+{
+    fields { field(1; "No."; Code[20]) { } }
+    keys { key(PK; "No.") { Clustered = true; } }
+
+    trigger OnInsert()
+    begin
+        DoThing();
+    end;
+}`;
+    const root = wrapRoot(parseAL(source));
+    const out = compileSchemataForFile(source, root, [specAtFirstCall(root)]);
+    const varAt = out.indexOf("MutationSelector: Codeunit");
+    expect(varAt).toBeGreaterThan(out.indexOf("keys"));
+    expect(varAt).toBeLessThan(out.indexOf("trigger OnInsert"));
+    expect(countErrorNodes(out)).toBe(0);
+  });
+
+  it("injects the selector var at the end when a table has only a field-level trigger", () => {
+    const source = `table 50101 "U"
+{
+    fields
+    {
+        field(1; "No."; Code[20])
+        {
+            trigger OnValidate()
+            begin
+                DoThing();
+            end;
+        }
+    }
+    keys { key(PK; "No.") { Clustered = true; } }
+}`;
+    const root = wrapRoot(parseAL(source));
+    const out = compileSchemataForFile(source, root, [specAtFirstCall(root)]);
+    expect(out.indexOf("MutationSelector: Codeunit")).toBeGreaterThan(out.indexOf("keys"));
+    expect(countErrorNodes(out)).toBe(0);
+  });
+
+  it("throws, naming the object kind and the file, for an object kind it cannot instrument", () => {
+    // A page with an `OnAction` body is ordinary AL, `generateMutationSet` walks every `.al`
+    // file with no object-kind filter, and the header regex in project.ts accepts `page`. The
+    // guard calls are emitted before the selector var is injected, so returning silently here
+    // ships `MutationSelector.Active(...)` with no declaration in scope: AL0118 -> AlcCompileError
+    // -> bisection halves the mutant set and blames an innocent mutant. Refuse instead.
+    const source = `page 50100 "My Page"
+{
+    PageType = Card;
+    SourceTable = Customer;
+    layout { area(Content) { field(Name; Rec.Name) { } } }
+    actions
+    {
+        area(Processing)
+        {
+            action(DoIt)
+            {
+                trigger OnAction()
+                begin
+                    DoThing();
+                end;
+            }
+        }
+    }
+}`;
+    const root = wrapRoot(parseAL(source));
+    let thrown: unknown;
+    try {
+      compileSchemataForFile(source, root, [specAtFirstCall(root)], undefined, "MyPage.Page.al");
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    const message = thrown instanceof Error ? thrown.message : "";
+    expect(message).toContain("MyPage.Page.al");
+    expect(message).toContain("page_declaration");
+    expect(message).toContain("AL0118");
+  });
+
+  it("does NOT throw when there are no specs — an unmutated page emits no guards to strand", () => {
+    // The throw is conditioned on guards having been emitted (`specs.length > 0`). A page LethAL
+    // found nothing to mutate in is passed through untouched, exactly as before.
+    const source = `page 50101 "Quiet Page" { PageType = Card; }`;
+    const root = wrapRoot(parseAL(source));
+    expect(compileSchemataForFile(source, root, [], undefined, "QuietPage.Page.al")).toBe(source);
+  });
+
+  it("reuses a table's existing var section rather than adding a second", () => {
+    const source = `table 50102 "V"
+{
+    fields { field(1; "No."; Code[20]) { } }
+    var
+        Existing: Integer;
+    trigger OnInsert() begin DoThing(); end;
+}`;
+    const root = wrapRoot(parseAL(source));
+    const out = compileSchemataForFile(source, root, [specAtFirstCall(root)]);
+    expect(out.match(/^\s*var\s*$/gm)?.length ?? 0).toBe(1);
+    expect(countErrorNodes(out)).toBe(0);
   });
 });

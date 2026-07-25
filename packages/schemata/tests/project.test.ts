@@ -8,12 +8,18 @@ import {
   CONTROL_REGISTER_FILENAME,
   CONTROL_SELECTOR_FILENAME,
   CONTROL_UPGRADE_FILENAME,
+  stripAlComments,
   writeInstrumentedProject,
 } from "../src/project";
 
 // The target project's own app.json `id` — threaded into the delegating selector and the
 // register-install codeunit so the control extension keys state on the full identity tuple.
 const TARGET_APP_ID = "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a";
+
+// None of these fixtures use colliding operator names, so an empty tier map is enough —
+// `dedupeSpecs` (tested on its own in dedup.test.ts) never has to resolve a real precedence
+// here. Real callers populate this from the registered operator set (see orchestrator.ts).
+const NO_TIERS: ReadonlyMap<string, 1 | 2 | 3 | "custom"> = new Map();
 
 describe("writeInstrumentedProject", () => {
   beforeAll(async () => {
@@ -43,6 +49,7 @@ describe("writeInstrumentedProject", () => {
         selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
         artifactId: "0123456789abcdef0123456789abcdef",
         targetAppId: TARGET_APP_ID,
+        operatorTiers: NO_TIERS,
       });
 
       const entries = (await readdir(dir)).sort();
@@ -87,6 +94,98 @@ describe("writeInstrumentedProject", () => {
     }
   });
 
+  it("records the enclosing trigger's name for a mutation inside a table trigger", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-trigger-"));
+    try {
+      const src = `table 50100 "T"
+{
+    fields { field(1; "No."; Code[20]) { } }
+    trigger OnInsert()
+    begin
+        DoThing();
+    end;
+}`;
+      const root = wrapRoot(parseAL(src));
+      const call = findFirst(root, ALNodeKind.procedure_call);
+      if (call === null) throw new Error("no call expression");
+      const specs: MutationSpec[] = [
+        {
+          operatorName: "op.void",
+          operatorVersion: "1.0.0",
+          astNodeId: `${call.startIndex}`,
+          before: call,
+          after: { ...call, text: "" } as never,
+          parentContext: "statement-position",
+        },
+      ];
+      await writeInstrumentedProject({
+        targetDir: dir,
+        files: [{ path: "T.Table.al", source: src, root, specs }],
+        selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
+        artifactId: "0123456789abcdef0123456789abcdef",
+        targetAppId: TARGET_APP_ID,
+        operatorTiers: NO_TIERS,
+      });
+
+      const manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8"));
+      expect(manifest.mutants[0]?.procedureName).toBe("");
+      expect(manifest.mutants[0]?.triggerName).toBe("OnInsert");
+      // Coverage keys on (objectType, objectId): `table 50100` is not `codeunit 50100`, and it is
+      // the TABLE-ness that entitles this mutant to the coverage fallbacks in
+      // packages/runner/src/selection.ts. Without it the fallbacks cannot tell the two apart.
+      expect(manifest.mutants[0]?.objectType).toBe("table");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("records the enclosing trigger's name for a mutation inside a field-level trigger", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-trigger-field-"));
+    try {
+      const src = `table 50100 "T"
+{
+    fields
+    {
+        field(1; "No."; Code[20])
+        {
+            trigger OnValidate()
+            begin
+                DoThing();
+            end;
+        }
+    }
+    keys { key(PK; "No.") { Clustered = true; } }
+}`;
+      const root = wrapRoot(parseAL(src));
+      const call = findFirst(root, ALNodeKind.procedure_call);
+      if (call === null) throw new Error("no call expression");
+      const specs: MutationSpec[] = [
+        {
+          operatorName: "op.void",
+          operatorVersion: "1.0.0",
+          astNodeId: `${call.startIndex}`,
+          before: call,
+          after: { ...call, text: "" } as never,
+          parentContext: "statement-position",
+        },
+      ];
+      await writeInstrumentedProject({
+        targetDir: dir,
+        files: [{ path: "T.Table.al", source: src, root, specs }],
+        selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
+        artifactId: "0123456789abcdef0123456789abcdef",
+        targetAppId: TARGET_APP_ID,
+        operatorTiers: NO_TIERS,
+      });
+
+      const manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8"));
+      expect(manifest.mutants[0]?.procedureName).toBe("");
+      expect(manifest.mutants[0]?.triggerName).toBe("OnValidate");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("manifest entries carry identity and coverage-lookup fields", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lethal-"));
     try {
@@ -115,12 +214,14 @@ describe("writeInstrumentedProject", () => {
         selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
         artifactId: "0123456789abcdef0123456789abcdef",
         targetAppId: TARGET_APP_ID,
+        operatorTiers: NO_TIERS,
       });
 
       let manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8"));
       expect(manifest.selectorIds).toEqual({ selectorId: 60000, controlId: 60001, tableId: 60002 });
       let entry = manifest.mutants[0];
       expect(entry.astHash).toMatch(/^[0-9a-f]{8,}$/);
+      expect(entry.objectType).toBe("codeunit");
       expect(entry.codeunitId).toBe(51040);
       expect(entry.codeunitName).toBe("P");
       expect(entry.procedureName).toBe("P");
@@ -153,6 +254,7 @@ describe("writeInstrumentedProject", () => {
         selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
         artifactId: "0123456789abcdef0123456789abcdef",
         targetAppId: TARGET_APP_ID,
+        operatorTiers: NO_TIERS,
       });
 
       manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8"));
@@ -189,6 +291,7 @@ describe("writeInstrumentedProject", () => {
         selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
         artifactId: "0123456789abcdef0123456789abcdef",
         targetAppId: TARGET_APP_ID,
+        operatorTiers: NO_TIERS,
       });
 
       manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8"));
@@ -267,6 +370,7 @@ describe("writeInstrumentedProject", () => {
         selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
         artifactId: "0123456789abcdef0123456789abcdef",
         targetAppId: TARGET_APP_ID,
+        operatorTiers: NO_TIERS,
       });
 
       const manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8"));
@@ -360,6 +464,7 @@ describe("writeInstrumentedProject", () => {
         selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
         artifactId: "0123456789abcdef0123456789abcdef",
         targetAppId: TARGET_APP_ID,
+        operatorTiers: NO_TIERS,
       });
 
       const manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8"));
@@ -375,6 +480,71 @@ describe("writeInstrumentedProject", () => {
     }
   });
 
+  // Exit criterion 4's artifact-level clause: "the suppressed mutant is absent from the EMITTED
+  // ARTIFACT, not merely from the manifest". dedup.test.ts covers `dedupeSpecs` in isolation, and
+  // that is not the same claim: `compileSchemataForFile` ignores its `specs` argument entirely
+  // when `ided` is supplied (except for the `specs.length > 0` var-injection guard), so the only
+  // thing that keeps the dropped mutant out of the emitted AL is `assignMutantIds` receiving the
+  // DEDUPED map. Nothing pinned that. Wiring the deduped specs to the compile call but the raw
+  // ones to `assignMutantIds` would leave an id-bearing guard compiled into the dispatch chain
+  // that no manifest entry names — an unreported mutation that still exists in the artifact.
+  it("emits the surviving mutant ONCE in the AL, not just once in the manifest, when two specs collide", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-dedup-artifact-"));
+    try {
+      const src = `codeunit 51070 "D" { procedure P() begin Rec.TestField(Name); end; }`;
+      const root = wrapRoot(parseAL(src));
+      const call = findFirst(root, ALNodeKind.procedure_call);
+      if (call === null) throw new Error("no call expression");
+      // Same site, same replacement text (deletion), two operators of different tiers — exactly
+      // the collision `dedupeSpecs` resolves in favour of the more specific Tier-2 operator.
+      const collide = (operatorName: string): MutationSpec => ({
+        operatorName,
+        operatorVersion: "1.0.0",
+        astNodeId: `${call.startIndex}-${operatorName}`,
+        before: call,
+        after: { ...call, text: "" } as never,
+        parentContext: "statement-position",
+      });
+      await writeInstrumentedProject({
+        targetDir: dir,
+        files: [
+          {
+            path: "D.Codeunit.al",
+            source: src,
+            root,
+            specs: [collide("lethal.void-method-call"), collide("lethal.remove-testfield")],
+          },
+        ],
+        selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
+        artifactId: "0123456789abcdef0123456789abcdef",
+        targetAppId: TARGET_APP_ID,
+        // A REAL tier map — the empty NO_TIERS map would make `dedupeSpecs` throw on this pair
+        // ("one of them is unregistered"), so the collision would never be resolved at all.
+        operatorTiers: new Map<string, 1 | 2 | 3 | "custom">([
+          ["lethal.void-method-call", 1],
+          ["lethal.remove-testfield", 2],
+        ]),
+      });
+
+      const manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8")) as {
+        mutants: Array<{ mutantId: string; operatorName: string }>;
+      };
+      expect(manifest.mutants).toHaveLength(1);
+      expect(manifest.mutants[0]?.operatorName).toBe("lethal.remove-testfield");
+
+      const emitted = await readFile(join(dir, "D.Codeunit.al"), "utf8");
+      const guards = emitted.match(/MutationSelector\.Active\(/g) ?? [];
+      expect(guards).toHaveLength(1);
+      // ...and the one guard emitted is the one the manifest names. A second mutant would have
+      // taken M0002, so an artifact holding M0001 AND M0002 while the manifest lists only one is
+      // exactly the "unreported mutation still in the artifact" failure.
+      expect(emitted).toContain("MutationSelector.Active('M0001')");
+      expect(emitted).not.toContain("M0002");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("writes the artifact id into the manifest and the generated selector", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lethal-artifactid-"));
     try {
@@ -384,6 +554,7 @@ describe("writeInstrumentedProject", () => {
         selectorIds: { selectorId: 79000, controlId: 79001, tableId: 79002 },
         artifactId: "0123456789abcdef0123456789abcdef",
         targetAppId: TARGET_APP_ID,
+        operatorTiers: NO_TIERS,
       });
       const manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8")) as {
         artifactId: string;
@@ -405,6 +576,7 @@ describe("writeInstrumentedProject", () => {
         selectorIds: { selectorId: 79199, controlId: 79198, tableId: 79197 },
         artifactId: "0123456789abcdef0123456789abcdef",
         targetAppId: TARGET_APP_ID,
+        operatorTiers: NO_TIERS,
       });
 
       const entries = await readdir(dir);
@@ -420,5 +592,218 @@ describe("writeInstrumentedProject", () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+
+  // Two objects in ONE file is legal AL (rare, but legal) and every layer below assumes one:
+  // the manifest labels every mutant in the file with the FIRST header's (objectType, objectId),
+  // so a mutant in the second object gets the first object's coverage key — the wrong test set,
+  // hence a verdict that is silently wrong. And `injectMutationSelectorVar` picks
+  // `findFirst(codeunit) ?? findFirst(table)`, which for `table` + `codeunit` in one file is the
+  // SECOND object, leaving the first object's guards undeclared (AL0118). Refuse the shape.
+  describe("a file declaring more than one AL object", () => {
+    const TWO_OBJECTS = `table 51050 "First Obj"
+{
+    fields { field(1; "No."; Code[20]) { } }
+}
+
+codeunit 51051 "Second Obj"
+{
+    procedure P()
+    begin
+        X := 1;
+    end;
+}
+`;
+
+    function twoObjectFile() {
+      const root = wrapRoot(parseAL(TWO_OBJECTS));
+      const assign = findFirst(root, ALNodeKind.assignment_statement);
+      if (assign === null) throw new Error("fixture has no assignment to mutate");
+      const specs: MutationSpec[] = [
+        {
+          operatorName: "op.flip",
+          operatorVersion: "1.0.0",
+          astNodeId: `${assign.startIndex}`,
+          before: assign,
+          after: { ...assign, text: "X := 2;" } as never,
+          parentContext: "statement-position",
+        },
+      ];
+      return { path: "Two.Objects.al", source: TWO_OBJECTS, root, specs };
+    }
+
+    it("throws, naming the file and both objects, instead of misattributing the mutants", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "lethal-two-objects-"));
+      try {
+        let thrown: unknown;
+        try {
+          await writeInstrumentedProject({
+            targetDir: dir,
+            files: [twoObjectFile()],
+            selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
+            artifactId: "0123456789abcdef0123456789abcdef",
+            targetAppId: TARGET_APP_ID,
+            operatorTiers: NO_TIERS,
+          });
+        } catch (err) {
+          thrown = err;
+        }
+        expect(thrown).toBeInstanceOf(Error);
+        const message = thrown instanceof Error ? thrown.message : "";
+        expect(message).toContain("Two.Objects.al");
+        expect(message).toContain("table 51050");
+        expect(message).toContain("codeunit 51051");
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("refuses BEFORE writing the half-instrumented source into the artifact dir", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "lethal-two-objects-nowrite-"));
+      try {
+        await writeInstrumentedProject({
+          targetDir: dir,
+          files: [twoObjectFile()],
+          selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
+          artifactId: "0123456789abcdef0123456789abcdef",
+          targetAppId: TARGET_APP_ID,
+          operatorTiers: NO_TIERS,
+        }).catch(() => {});
+        expect(await readdir(dir)).not.toContain("Two.Objects.al");
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("still accepts an ordinary one-object file", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "lethal-one-object-"));
+      try {
+        const src = `codeunit 51052 "Only" { procedure P() begin X := 1; end; }`;
+        const root = wrapRoot(parseAL(src));
+        const assign = findFirst(root, ALNodeKind.assignment_statement);
+        if (assign === null) throw new Error("no assignment");
+        await writeInstrumentedProject({
+          targetDir: dir,
+          files: [
+            {
+              path: "Only.Codeunit.al",
+              source: src,
+              root,
+              specs: [
+                {
+                  operatorName: "op.flip",
+                  operatorVersion: "1.0.0",
+                  astNodeId: `${assign.startIndex}`,
+                  before: assign,
+                  after: { ...assign, text: "X := 2;" } as never,
+                  parentContext: "statement-position",
+                },
+              ],
+            },
+          ],
+          selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
+          artifactId: "0123456789abcdef0123456789abcdef",
+          targetAppId: TARGET_APP_ID,
+          operatorTiers: NO_TIERS,
+        });
+        const manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8")) as {
+          mutants: Array<{ objectType: string; codeunitId: number }>;
+        };
+        expect(manifest.mutants).toHaveLength(1);
+        expect(manifest.mutants[0]?.objectType).toBe("codeunit");
+        expect(manifest.mutants[0]?.codeunitId).toBe(51052);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    // The refusal above counts headers with a regex, so a COMMENTED-OUT object is a false
+    // positive that would refuse a perfectly ordinary file. Worse, a commented object above the
+    // live one used to win the `matches[0]` race and label every mutant with ITS (type, id) —
+    // the silent misattribution the pair key exists to prevent. Both are why the count runs on
+    // comment-stripped text.
+    it("ignores a block-commented object header instead of refusing the file", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "lethal-commented-object-"));
+      try {
+        const src = [
+          "/*",
+          'codeunit 51060 "Retired Impl"',
+          "{",
+          "}",
+          "*/",
+          'table 51061 "Live Obj"',
+          "{",
+          '    fields { field(1; "No."; Code[20]) { } }',
+          "",
+          "    procedure P()",
+          "    begin",
+          "        X := 1;",
+          "    end;",
+          "}",
+        ].join("\n");
+        const root = wrapRoot(parseAL(src));
+        const assign = findFirst(root, ALNodeKind.assignment_statement);
+        if (assign === null) throw new Error("fixture has no assignment to mutate");
+        await writeInstrumentedProject({
+          targetDir: dir,
+          files: [
+            {
+              path: "Live.Table.al",
+              source: src,
+              root,
+              specs: [
+                {
+                  operatorName: "op.flip",
+                  operatorVersion: "1.0.0",
+                  astNodeId: `${assign.startIndex}`,
+                  before: assign,
+                  after: { ...assign, text: "X := 2;" } as never,
+                  parentContext: "statement-position",
+                },
+              ],
+            },
+          ],
+          selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
+          artifactId: "0123456789abcdef0123456789abcdef",
+          targetAppId: TARGET_APP_ID,
+          operatorTiers: NO_TIERS,
+        });
+        const manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8")) as {
+          mutants: Array<{ objectType: string; codeunitId: number }>;
+        };
+        // The LIVE object, not the commented one — this is the assertion that fails if the
+        // stripper is removed (the commented `codeunit 51060` matches first).
+        expect(manifest.mutants[0]?.objectType).toBe("table");
+        expect(manifest.mutants[0]?.codeunitId).toBe(51061);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe("stripAlComments", () => {
+    it("blanks line and block comments while preserving length and newlines", () => {
+      const src = "a // gone\n/* also\ngone */ b";
+      const out = stripAlComments(src);
+      expect(out.length).toBe(src.length);
+      expect(out.split("\n").length).toBe(src.split("\n").length);
+      expect(out).not.toContain("gone");
+      expect(out).toContain("a ");
+      expect(out.trimEnd().endsWith("b")).toBe(true);
+    });
+
+    it("leaves comment markers that live inside AL string literals alone", () => {
+      // A stripper blind to strings would treat this `//` as a comment start and blank the rest
+      // of the file — which would then report "no AL object header" on a valid object.
+      const src = "Error('use // and /* here');\ncodeunit 51070 \"After\"\n{\n}\n";
+      const out = stripAlComments(src);
+      expect(out).toContain("use // and /* here");
+      expect(out).toContain('codeunit 51070 "After"');
+    });
+
+    it("leaves a quoted AL identifier containing a comment marker alone", () => {
+      const src = 'Rec."Field // Odd" := 1;\n';
+      expect(stripAlComments(src)).toBe(src);
+    });
   });
 });

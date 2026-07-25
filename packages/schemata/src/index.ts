@@ -13,7 +13,11 @@ export { liftExpression } from "./lift";
 export type { LiftInput, LiftArtifacts } from "./lift";
 export { duplicateEnclosing } from "./duplicate";
 export type { DuplicateInput } from "./duplicate";
-export { compileSchemataForFile } from "./compile";
+export {
+  compileSchemataForFile,
+  canCarryMutationSelectorVar,
+  describeObjectKinds,
+} from "./compile";
 export {
   writeInstrumentedProject,
   CONTROL_SELECTOR_FILENAME,

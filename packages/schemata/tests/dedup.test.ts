@@ -1,0 +1,190 @@
+import { describe, expect, it } from "bun:test";
+import { ALNodeKind } from "@lethal/engine";
+import type { MutationSpec } from "@lethal/engine";
+import { dedupeSpecs } from "../src/dedup";
+
+/** Minimal stub node — dedup reads only kind/startIndex/endIndex/text. */
+function node(
+  start: number,
+  end: number,
+  text: string,
+  kind: ALNodeKind = ALNodeKind.procedure_call,
+): MutationSpec["before"] {
+  return {
+    kind,
+    rawKind: kind,
+    text,
+    startIndex: start,
+    endIndex: end,
+    startPosition: { row: 0, column: start },
+    endPosition: { row: 0, column: end },
+    parent: null,
+    children: [],
+    namedChildren: [],
+    fieldName: null,
+    childForFieldName: () => null,
+  };
+}
+
+function spec(o: {
+  operatorName: string;
+  start: number;
+  end: number;
+  after: string;
+  kind?: ALNodeKind;
+  equivalenceHint?: "likely-equivalent" | "unknown";
+}): MutationSpec {
+  return {
+    operatorName: o.operatorName,
+    operatorVersion: "1.0.0",
+    astNodeId: `${o.start}-${o.end}`,
+    before: node(o.start, o.end, "Rec.Foo(X)", o.kind),
+    after: node(o.start, o.end, o.after, o.kind),
+    parentContext: "statement-position",
+    ...(o.equivalenceHint !== undefined ? { equivalenceHint: o.equivalenceHint } : {}),
+  };
+}
+
+const TIERS = new Map<string, 1 | 2 | 3 | "custom">([
+  ["lethal.void-method-call", 1],
+  ["lethal.remove-testfield", 2],
+  ["lethal.remove-setloadfields", 2],
+  ["lethal.swap-modify-flag", 2],
+  ["lethal.a", 2],
+  ["lethal.b", 2],
+  ["vendor.custom", "custom"],
+  ["vendor.custom-two", "custom"],
+]);
+const tierOf = (name: string) => TIERS.get(name);
+
+describe("dedupeSpecs", () => {
+  it("keeps the more specific operator when two produce the same identity", () => {
+    const generic = spec({
+      operatorName: "lethal.void-method-call",
+      start: 10,
+      end: 20,
+      after: "",
+    });
+    const specific = spec({
+      operatorName: "lethal.remove-testfield",
+      start: 10,
+      end: 20,
+      after: "",
+    });
+    const out = dedupeSpecs([generic, specific], tierOf);
+    expect(out.length).toBe(1);
+    expect(out[0]?.operatorName).toBe("lethal.remove-testfield");
+  });
+
+  it("keeps both when the after-form differs — they are distinct mutations", () => {
+    const del = spec({ operatorName: "lethal.void-method-call", start: 10, end: 20, after: "" });
+    const swap = spec({
+      operatorName: "lethal.swap-modify-flag",
+      start: 10,
+      end: 20,
+      after: "Modify(false)",
+    });
+    expect(dedupeSpecs([del, swap], tierOf).length).toBe(2);
+  });
+
+  it("never lets a likely-equivalent Tier-2 mutant suppress a scored Tier-1 one", () => {
+    const scored = spec({ operatorName: "lethal.void-method-call", start: 10, end: 20, after: "" });
+    const hinted = spec({
+      operatorName: "lethal.remove-setloadfields",
+      start: 10,
+      end: 20,
+      after: "",
+      equivalenceHint: "likely-equivalent",
+    });
+    const out = dedupeSpecs([scored, hinted], tierOf);
+    expect(out.length).toBe(1);
+    expect(out[0]?.operatorName).toBe("lethal.void-method-call");
+  });
+
+  it("throws naming both operators when two of the same tier collide", () => {
+    const a = spec({ operatorName: "lethal.a", start: 10, end: 20, after: "" });
+    const b = spec({ operatorName: "lethal.b", start: 10, end: 20, after: "" });
+    expect(() => dedupeSpecs([a, b], tierOf)).toThrow(/lethal\.a.*lethal\.b|lethal\.b.*lethal\.a/);
+  });
+
+  it("throws when an operator's tier is unknown rather than guessing a precedence", () => {
+    const known = spec({ operatorName: "lethal.void-method-call", start: 10, end: 20, after: "" });
+    const unknown = spec({ operatorName: "lethal.not-registered", start: 10, end: 20, after: "" });
+    expect(() => dedupeSpecs([known, unknown], tierOf)).toThrow(/lethal\.not-registered/);
+  });
+
+  it("reports two UNREGISTERED operators as unorderable, not as a same-tier collision", () => {
+    // `tierOf` returns undefined for both, and `undefined === undefined` is true — so testing
+    // tier equality first blamed "registration order" for a pair that has no tier at all, sending
+    // the reader to the precedence table instead of to the missing registration.
+    const a = spec({ operatorName: "vendor.unregistered-a", start: 10, end: 20, after: "" });
+    const b = spec({ operatorName: "vendor.unregistered-b", start: 10, end: 20, after: "" });
+    expect(() => dedupeSpecs([a, b], tierOf)).toThrow(/unregistered/);
+    expect(() => dedupeSpecs([a, b], tierOf)).not.toThrow(/registration order/);
+  });
+
+  it("reports two CUSTOM-tier operators as unorderable, not as a same-tier collision", () => {
+    // Same trap one step along: `"custom" === "custom"` is true, but `custom` has no defined
+    // position against anything, so "the winner would depend on registration order" is wrong.
+    const a = spec({ operatorName: "vendor.custom", start: 10, end: 20, after: "" });
+    const b = spec({ operatorName: "vendor.custom-two", start: 10, end: 20, after: "" });
+    expect(() => dedupeSpecs([a, b], tierOf)).toThrow(/custom-tier/);
+    expect(() => dedupeSpecs([a, b], tierOf)).not.toThrow(/registration order/);
+  });
+
+  it("gives a single operator colliding with itself its own message", () => {
+    // One operator emitting the same mutation twice is a bug in its generate(), not an
+    // interaction between two operators — 'operators "lethal.a" and "lethal.a" both claim...'
+    // reads as the latter and sends the reader to the registry.
+    const once = spec({ operatorName: "lethal.a", start: 10, end: 20, after: "" });
+    const twice = spec({ operatorName: "lethal.a", start: 10, end: 20, after: "" });
+    expect(() => dedupeSpecs([once, twice], tierOf)).toThrow(/emitted the same mutation twice/);
+    expect(() => dedupeSpecs([once, twice], tierOf)).not.toThrow(/registration order/);
+  });
+
+  it("keeps a parent and a same-span child as distinct mutations", () => {
+    // Same-span parent/child pairs are real in this grammar, not hypothetical: parsing
+    // `procedure P() begin if X then Y := 1; end;` gives a `statement_block` and the single
+    // `if_statement` inside it BOTH spanning 57-74 (also `declaration_body`/`procedure` and
+    // `var_body`/`variable_declaration`). Two operators targeting those two nodes are producing
+    // two different mutations; identity keyed on span alone merges them, so one genuinely
+    // different mutation site vanishes — silently, since the survivor still looks plausible.
+    // Same-tier here, so a merge additionally surfaces as a spurious collision throw.
+    const child = spec({
+      operatorName: "lethal.a",
+      start: 10,
+      end: 20,
+      after: "",
+      kind: ALNodeKind.if_statement,
+    });
+    const parent = spec({
+      operatorName: "lethal.b",
+      start: 10,
+      end: 20,
+      after: "",
+      kind: ALNodeKind.statement_block,
+    });
+    const out = dedupeSpecs([child, parent], tierOf);
+    expect(out.length).toBe(2);
+    expect(out.map((s) => s.operatorName).sort()).toEqual(["lethal.a", "lethal.b"]);
+  });
+
+  it("still throws on a same-tier collision even when one side is likely-equivalent", () => {
+    // Deliberate: the same-tier check precedes the likely-equivalent one. Within a
+    // tier, operators are specified to match distinct method names, so two of them
+    // claiming one site is a caller-contract violation however they are tagged —
+    // and an equivalence hint must not quietly promote one into the winner of a
+    // collision that should never have happened. Loud beats a plausible default.
+    const plain = spec({ operatorName: "lethal.a", start: 10, end: 20, after: "" });
+    const hinted = spec({
+      operatorName: "lethal.b",
+      start: 10,
+      end: 20,
+      after: "",
+      equivalenceHint: "likely-equivalent",
+    });
+    expect(() => dedupeSpecs([plain, hinted], tierOf)).toThrow(
+      /lethal\.a.*lethal\.b|lethal\.b.*lethal\.a/,
+    );
+  });
+});

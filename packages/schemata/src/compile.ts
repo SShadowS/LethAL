@@ -15,6 +15,9 @@ export function compileSchemataForFile(
   root: ALSyntaxNode,
   specs: readonly MutationSpec[],
   ided?: readonly IdedSpec[],
+  /** Target file path, used only to name the file in the "cannot instrument this object kind"
+   *  error below. Single-file callers (tests) may omit it. */
+  filePath?: string,
 ): string {
   // Mutant ids must be allocated exactly once, artifact-wide (see
   // `writeInstrumentedProject`), so multi-file callers pass their
@@ -44,8 +47,10 @@ export function compileSchemataForFile(
   // without a `var MutationSelector: Codeunit "Mutation Selector";`
   // declaration in scope, every guard site fails with AL0118 ("The name
   // 'MutationSelector' does not exist in the current context"). Inject one
-  // declaration per codeunit that actually has a mutation in it.
-  if (specs.length > 0) injectMutationSelectorVar(root, rewrites);
+  // declaration per codeunit or TABLE that actually has a mutation in it — and throw for any
+  // other object kind, since by this point the guard calls are already in `rewrites` and
+  // shipping them without a declaration is precisely the AL0118 this injection prevents.
+  if (specs.length > 0) injectMutationSelectorVar(root, rewrites, filePath ?? "<file>");
 
   return printWithRewrites(source, root, rewrites);
 }
@@ -58,37 +63,162 @@ const CODEUNIT_HEADER_KINDS: ReadonlySet<string> = new Set([
   ALNodeKind.identifier,
 ]);
 
+/** Raw grammar kinds of a `table_declaration`'s three header tokens. */
+const TABLE_HEADER_KINDS: ReadonlySet<string> = new Set([
+  "table_keyword",
+  ALNodeKind.integer_literal,
+  "quoted_identifier",
+  ALNodeKind.identifier,
+]);
+
+/** Builds the zero-width synthetic node `printWithRewrites` inserts text at. */
+function insertionNodeAt(anchor: ALSyntaxNode, index: number): ALSyntaxNode {
+  const position = index === anchor.startIndex ? anchor.startPosition : anchor.endPosition;
+  return {
+    kind: anchor.kind,
+    rawKind: anchor.rawKind,
+    text: "",
+    startIndex: index,
+    endIndex: index,
+    startPosition: position,
+    endPosition: position,
+    parent: anchor.parent,
+    children: [],
+    namedChildren: [],
+    fieldName: null,
+    childForFieldName: () => null,
+  };
+}
+
+/**
+ * Grammar kinds ending in `_declaration` that are NOT an AL object declaration — they name a
+ * member (or a page control) inside one, so they must never be reported as "the object kind
+ * this file declares".
+ */
+const NON_OBJECT_DECLARATION_KINDS: ReadonlySet<string> = new Set([
+  "declaration_body",
+  "trigger_declaration",
+  "variable_declaration",
+  "action_declaration",
+]);
+
+/**
+ * True when this file's object declaration can carry the
+ * `var MutationSelector: Codeunit "Mutation Selector";` declaration — i.e. it is a codeunit or a
+ * table. Exported as the SINGLE construction point of that predicate: `generateMutationSet`
+ * (@lethal/runner) drops a file's specs up front when this is false, and
+ * `injectMutationSelectorVar` below throws on the same condition as the backstop. Two hand-rolled
+ * copies of "codeunit or table" could drift, and the drift is silent in the dangerous direction
+ * (specs generated for a file the injector will then refuse, aborting the session).
+ */
+export function canCarryMutationSelectorVar(root: ALSyntaxNode): boolean {
+  return (
+    findFirst(root, ALNodeKind.codeunit) !== null || findFirst(root, ALNodeKind.table) !== null
+  );
+}
+
+/**
+ * Names the object declaration(s) this file actually contains, for the "cannot instrument this
+ * object kind" error below and for `generateMutationSet`'s skip warning. `wrapRoot(parseAL(src))`
+ * yields a `source_file` whose named children are the object declarations; a caller that passed a
+ * declaration node straight in is handled too.
+ */
+export function describeObjectKinds(root: ALSyntaxNode): string {
+  const candidates = root.rawKind.endsWith("_declaration") ? [root] : root.namedChildren;
+  const kinds = [
+    ...new Set(
+      candidates
+        .map((c) => c.rawKind)
+        .filter((k) => k.endsWith("_declaration") && !NON_OBJECT_DECLARATION_KINDS.has(k)),
+    ),
+  ];
+  return kinds.length > 0 ? kinds.join(", ") : `no object declaration (root is ${root.rawKind})`;
+}
+
 /**
  * Insert `var MutationSelector: Codeunit "Mutation Selector";` into the
- * file's codeunit — reusing its existing `var_section` if present, or
- * inserting a fresh one right before the first member (field/procedure)
- * otherwise. A zero-width edit (`start === end`) anchored on the first
- * member's own start index is used for the "no existing var_section" case:
- * `printWithRewrites` keys rewrites by node identity and applies each as
- * `[start, end)`, so a synthetic node with `start === end === firstMember.
- * startIndex` inserts text there without consuming (or conflicting with)
- * any other rewrite targeting the first member's own contents.
+ * file's codeunit or table — reusing its existing `var_section` if present,
+ * or inserting a fresh one otherwise. A zero-width edit (`start === end`) is
+ * used for the "no existing var_section" case: `printWithRewrites` keys
+ * rewrites by node identity and applies each as `[start, end)`, so a
+ * synthetic node with `start === end` inserts text there without consuming
+ * (or conflicting with) any other rewrite targeting a real member's own
+ * contents.
  *
- * A codeunit's members (`var_section`, `procedure`) sit inside v3's
- * `declaration_body` container, not as direct `namedChildren` of the
- * codeunit itself — reading `codeunit.namedChildren` straight finds neither
- * an existing `var_section` nor a first member under v3, so every codeunit
- * silently fell through to the "no existing var_section" branch and got a
- * second, separate object-level `var` section instead of reusing the one it
- * already had. `declarationMembers` skips the container (and is a no-op
- * under a grammar without one).
+ * A codeunit's/table's members (`var_section`, `procedure`, `trigger`, ...)
+ * sit inside v3's `declaration_body` container, not as direct
+ * `namedChildren` of the object itself — reading `object.namedChildren`
+ * straight finds neither an existing `var_section` nor a first member under
+ * v3, so every object silently fell through to the "no existing var_section"
+ * branch and got a second, separate object-level `var` section instead of
+ * reusing the one it already had. `declarationMembers` skips the container
+ * (and is a no-op under a grammar without one).
+ *
+ * The insertion ANCHOR differs by object kind, and this is measured against
+ * `alc`, not assumed: in a codeunit, `var` before the first member compiles
+ * clean, but in a TABLE, `var` before `fields` is a hard syntax error
+ * (AL0107/AL0104/AL0198 — the parse does not recover). So for a table the
+ * selector must go AFTER the section-like members (`fields`, `keys`,
+ * `fieldgroups`) — before the first object-level trigger, or trailing (after
+ * the last member) when the table has none. A table CAN have no object-level
+ * trigger while still carrying a mutable trigger body: a field-level
+ * `OnValidate` lives inside `fields_section`, not as an object-level member,
+ * so it never becomes a `declarationMembers` anchor candidate.
+ *
+ * "Before the first object-level trigger" is safe, not merely lucky, and the reason is about
+ * where a TRIGGER may go, not only about where a `var` may go: in a table, an object-level
+ * trigger may not precede `fields`, and may not sit between `fields` and `keys`. Both were
+ * verified against `alc 18.0.2498801` — `trigger OnInsert` declared before `fields` is
+ * `AL0104: Syntax error, 'fields' expected`, and `fields` → `trigger` → `keys` is
+ * `AL0104`/`AL0198`. So the first object-level trigger, when there is one, always sits AFTER
+ * every section-like member; anchoring immediately before it therefore lands the `var` after
+ * `fields`/`keys`/`fieldgroups` by construction, for every table AL will accept.
+ *
+ * Only a codeunit and a table can carry the declaration today. Every other object kind THROWS
+ * rather than returning: this runs only when `specs.length > 0`, i.e. after the guard calls have
+ * already been spliced in, so a silent return emits `MutationSelector.Active(...)` with no
+ * declaration in scope — AL0118, an `AlcCompileError`, and bisection then halves the mutant set
+ * and converges on an innocent mutant.
+ *
+ * This throw is the BACKSTOP, not the primary handling: `generateMutationSet` (@lethal/runner)
+ * already drops the specs of any file `canCarryMutationSelectorVar` rejects, so an ordinary
+ * session with a `page` full of `OnAction` bodies skips that page rather than aborting. What
+ * reaches here is a caller that assembled its own `InstrumentedFile` list without applying that
+ * filter — a caller-contract violation, and refusing it loudly beats emitting AL that cannot
+ * compile.
  */
-function injectMutationSelectorVar(root: ALSyntaxNode, rewrites: Map<ALSyntaxNode, string>): void {
-  const codeunit = findFirst(root, ALNodeKind.codeunit);
-  if (codeunit === null) return; // not a codeunit object — no guard call is ever emitted there
+function injectMutationSelectorVar(
+  root: ALSyntaxNode,
+  rewrites: Map<ALSyntaxNode, string>,
+  filePath: string,
+): void {
+  const object = findFirst(root, ALNodeKind.codeunit) ?? findFirst(root, ALNodeKind.table);
+  if (object === null) {
+    const why =
+      'the `var MutationSelector: Codeunit "Mutation Selector";` declaration can only be ' +
+      "injected into a codeunit or a table. Mutation guards were already emitted for this " +
+      "file, so every `MutationSelector.Active(...)` call would fail to compile with AL0118. " +
+      "Spec generation is supposed to have dropped this file already (`generateMutationSet` " +
+      "filters on `canCarryMutationSelectorVar`); a caller building its own file list must " +
+      "apply the same filter, or add selector-var support for this object kind.";
+    throw new Error(
+      `compileSchemataForFile: cannot instrument ${filePath} — it declares ${describeObjectKinds(root)}, and ${why}`,
+    );
+  }
 
-  const members = declarationMembers(codeunit);
+  const isTable = object.kind === ALNodeKind.table;
+  const headerKinds = isTable ? TABLE_HEADER_KINDS : CODEUNIT_HEADER_KINDS;
+  // Under the current v3 grammar `declarationMembers` already strips the
+  // `declaration_body` container, so header tokens never actually reach
+  // `members` here — this filter only matters as a defensive fallback for a
+  // grammar without that container (see `declarationMembers`'s own fallback).
+  const members = declarationMembers(object).filter((c) => !headerKinds.has(c.kind));
 
   const existingVar = members.find((c) => c.kind === ALNodeKind.var_section);
   if (existingVar !== undefined) {
     if (rewrites.has(existingVar)) {
       throw new Error(
-        "compileSchemataForFile: codeunit var_section already targeted by another rewrite",
+        "compileSchemataForFile: object's var_section already targeted by another rewrite",
       );
     }
     rewrites.set(
@@ -98,26 +228,41 @@ function injectMutationSelectorVar(root: ALSyntaxNode, rewrites: Map<ALSyntaxNod
     return;
   }
 
-  const firstMember = members.find((c) => !CODEUNIT_HEADER_KINDS.has(c.kind));
-  if (firstMember === undefined) return; // header-only codeunit (no members) — nothing to guard
+  // Header-only object: no member to anchor the insertion against. Unreachable in practice (a
+  // spec implies mutable code, which lives in a member) but throws for the same reason the
+  // unsupported-kind branch above does — the guard calls are already emitted, so returning here
+  // ships AL that cannot compile.
+  if (members.length === 0) {
+    throw new Error(
+      `compileSchemataForFile: cannot instrument ${filePath} — its object declaration has no members to anchor the selector var against, yet mutation guards were emitted for it.`,
+    );
+  }
 
-  const insertionPoint: ALSyntaxNode = {
-    kind: firstMember.kind,
-    rawKind: firstMember.rawKind,
-    text: "",
-    startIndex: firstMember.startIndex,
-    endIndex: firstMember.startIndex,
-    startPosition: firstMember.startPosition,
-    endPosition: firstMember.startPosition,
-    parent: firstMember.parent,
-    children: [],
-    namedChildren: [],
-    fieldName: null,
-    childForFieldName: () => null,
-  };
+  const anchor = isTable ? members.find((c) => c.kind === ALNodeKind.trigger) : members[0];
+
+  if (anchor !== undefined) {
+    rewrites.set(
+      insertionNodeAt(anchor, anchor.startIndex),
+      `    var\n        MutationSelector: Codeunit "Mutation Selector";\n\n`,
+    );
+    return;
+  }
+
+  // Table with no object-level trigger to anchor before (only ever reached
+  // for a table: the codeunit branch's anchor is always `members[0]`, which
+  // is defined whenever `members.length > 0`, already checked above).
+  const lastMember = members.at(-1);
+  if (lastMember === undefined) {
+    // Unreachable — `members.length === 0` threw above — but a silent return here would ship the
+    // already-emitted guard calls with no declaration in scope (AL0118), exactly like the two
+    // branches above. Same failure, same answer.
+    throw new Error(
+      `compileSchemataForFile: cannot instrument ${filePath} — no member to anchor the selector var after, yet mutation guards were emitted for it.`,
+    );
+  }
   rewrites.set(
-    insertionPoint,
-    `    var\n        MutationSelector: Codeunit "Mutation Selector";\n\n`,
+    insertionNodeAt(lastMember, lastMember.endIndex),
+    `\n\n    var\n        MutationSelector: Codeunit "Mutation Selector";`,
   );
 }
 

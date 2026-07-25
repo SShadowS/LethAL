@@ -209,6 +209,88 @@ verified by scanning test-codeunit sources. Layer 4 does not check it — it's a
 verified manually against the real backend instead (see `--test-isolation method` in
 `al-runner-backend.ts`'s `run()`, verified against the real al-runner CLI).
 
+## Tier-2 Phase 0 — the `sandbox-data` table fixture
+
+`fixtures/sandbox-data` (+ `sandbox-data-tests`) is the table-trigger counterpart to
+`sandbox-app`: two tables carrying an object-level `OnInsert` and two field-level `OnValidate`
+triggers, plus a procedure no test calls. It exists to prove that mutants living inside table
+triggers are generated, attributed, instrumented, executed and killed — the Phase 0 exit
+criteria for the trigger half of Tier 2.
+
+Both tables declare `InherentPermissions = RIMD`. That is not decoration: the fenced `RunMutant`
+path executes under the OData runner session, which does not hold the test app's write
+permissions, so a test that INSERTs fails there with *"Sorry, the current permissions prevented
+the action"* while passing everywhere else. A real customer table will not carry that
+declaration — the general fenced-path write-permission problem is filed, not solved.
+
+### bcdev (authoritative) — live gate, 2026-07-25, Cronus282
+
+| Mutant | Site | Operator | Verdict | Why |
+|---|---|---|---|---|
+| M0001 | `DataMain` field `No.` OnValidate body | empty-block | **killed** | `BlankNoValidateFails` — the guard's `Error` no longer fires. |
+| M0002 | same trigger's `if` | negate-conditional | **killed** | Same test — `= ''` → `<> ''` stops raising on a blank. |
+| M0003 | `DataMain` OnInsert body | empty-block | survived | `InsertDoublesAmountWeak` is weak on purpose — it asserts nothing. |
+| M0004 | `TouchCount()` body | empty-block | no-coverage | No test calls `TouchCount`. |
+| M0005 | `TouchCount()` return | return-value | no-coverage | Same. |
+| M0006 | `DataNoTrigger` field OnValidate body | empty-block | **killed** | `TooLongNoValidateFails`. |
+| M0007 | same trigger's `>` | conditional-boundary | survived | `NoTriggerValidateRunsWeak` asserts nothing. |
+
+3 killed / 2 survived / 2 no-coverage — mutation score 60.0%, zero errors, zero unstable.
+
+**This table is a committed gate, not just documentation:** `bun run itest:tables`
+(`packages/runner/itest/tables.itest.ts`, env-gated on `LETHAL_ITEST_TABLES=1`) asserts the
+aggregate counts, the score, and the per-mutant verdict map above, then diffs against
+`packages/runner/itest/tables.baseline.json` exactly as the Tier-1 gates do. It also reads the
+`mutant-manifest.json` the run actually deployed and asserts that at least one **killed** and at
+least one **survived** mutant sit at a site whose manifest entry carries a `triggerName` — Phase
+0's claim itself rather than a proxy for it (`MutantOutcome` carries no trigger info). It reads
+`fixtures/sandbox-data/lethal.config.local.json` — **not** sandbox-app's; the two fixtures target
+different containers.
+
+BC reports **no coverage at all for table trigger code**, so every trigger mutant here is
+coverage-invisible. `coverageFilter` therefore falls back, most-precise-first: member key →
+object-level → all green tests. The two fallbacks are gated **differently**:
+
+- **object-level** (any test that covered anything in *this* object) applies to **any trigger**,
+  whatever object kind it sits in. `SymbolReference.json` records no trigger at all, so no
+  trigger's member-level key can ever hit — for a codeunit's `trigger OnRun` this is its only
+  route to being executed, and gating it on table-ness silently reported mutants in covered
+  codeunit triggers as `no-coverage`. The widening is evidence-based: the key carries the object
+  type, so it can only return tests that measurably ran something in that same object.
+- **all green tests** (announced on stderr rather than silently discarded as no-coverage) stays
+  **table-only**. "Coverage sees nothing in this object at all, yet the trigger is still
+  reachable" is what the measurement above established, and it established it for tables. A
+  mutant in a wholly-uncovered codeunit or page keeps the honest `no-coverage` bucket.
+
+Coverage is keyed on the **(objectType, objectId) pair** throughout, because a BC object id is
+unique only within its type.
+
+### al-runner — measured 2026-07-25, and why it kills nothing here
+
+`bun run scripts/probe-alrunner-tables.ts` (same shape as the al-runner itest, pointed at this
+fixture) reports **0 killed / 7 survived / 0 no-coverage** against bcdev's 3 kills. Two separate
+facts explain it, and only the second is a defect:
+
+1. **al-runner does execute table triggers, and the injected guard fires inside table code.**
+   Directly probed: an `OnInsert` that doubles `Amount` produces 10 from 5 there, and a field
+   `OnValidate` raises its own `Error` with the exact text. Statically activating M0001
+   (`emitStaticSelector` with `activeId = 'M0001'`) makes that error disappear — so the
+   `MutationSelector.Active(...)` guard injected into a table's `var` section works.
+2. **al-runner's `asserterror` never fails a test.** `asserterror I := 1;` — a statement that
+   cannot raise — is reported `pass` (al-runner v1.0.31-era build, 2026-07-25). Under M0001 the
+   fixture's `asserterror DataMain.Validate("No.", '')` still passes with `GetLastErrorText()`
+   empty. All three of bcdev's kills come from `asserterror` tests, so all three become false
+   survivors.
+
+Consequence for users: **on the al-runner backend, any mutation whose only killer is an
+`asserterror` assertion is reported as survived.** That under-reports the mutation score
+(survivors are safe-direction, a missed kill is never a false kill) but it is silent, so the CLI
+warns whenever a non-authoritative backend is selected. Confirm survivors against bcdev.
+
+One further al-runner divergence, observed while probing and not chased: a table's global var
+does not carry its trigger's write back out — after `Validate("No.", 'B2')`, the fixture's
+`TouchCount()` returns 0 there even though the trigger body demonstrably ran.
+
 ## Expected verdict table (hand-computed)
 
 Generated by walking `fixtures/sandbox-app/src/*.al` through every Tier 1 operator
@@ -766,9 +848,16 @@ determinism conclusion above.
 ```bash
 bun run itest:alrunner   # needs LETHAL_ITEST_ALRUNNER=1 and LETHAL_ALRUNNER_PATH=<path to al-runner>
 bun run itest:bcdev      # needs LETHAL_ITEST_BCDEV=1, and the local files above populated
+bun run itest:tables     # needs LETHAL_ITEST_TABLES=1 and fixtures/sandbox-data/lethal.config.local.json
 ```
 
-Both skip cleanly (print "skipped", exit 0) when their gate env var is unset, so they never
+`tables.itest.ts` is the same shape as `bcdev.itest.ts` but pointed at the TABLE fixture
+(`sandbox-data` + `sandbox-data-tests`) — the trigger half of Tier-2 Phase 0, whose result was
+previously recorded only by hand in this file. It reads sandbox-data's own
+`lethal.config.local.json` (a different container from sandbox-app's) and has no committed
+baseline until a live run records one; see §Tier-2 Phase 0 above.
+
+All three skip cleanly (print "skipped", exit 0) when their gate env var is unset, so they never
 affect a plain `bun test` or CI run that hasn't opted in.
 
 ### Per-mutant healthy-path regression guard (Task 15, design spec §14)

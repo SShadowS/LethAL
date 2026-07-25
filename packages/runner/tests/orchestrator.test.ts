@@ -37,10 +37,12 @@ import type {
 // to drive more than one batch while `planArtifacts` still collapses everything into one artifact.
 import * as orchestratorModule from "../src/orchestrator";
 import {
+  MIN_MUTANT_BUDGET_MS,
   activateOnce,
   generateMutationSet,
   invalidateBatchVerdicts,
   narrowFilesToSubset,
+  operatorTiers,
   runOnce,
   runSession,
 } from "../src/orchestrator";
@@ -671,6 +673,109 @@ describe("runSession — deadline vs runner-confirmed timeout", () => {
   });
 });
 
+// Tier 6B Phase 0 Task 6: `budget = 2 * baselineDuration` had no floor. Measured live, a
+// warm baseline (~95ms) yields a ~190ms budget that a cold first execution (~1872ms measured)
+// blows straight through — the client aborts, which the orchestrator turns into a durable tier
+// quarantine and an aborted session, for a mutant that runs fine on its own. `MIN_MUTANT_BUDGET_MS`
+// floors the budget so a cold start can't trigger that; a genuinely slow test's `2x` budget must
+// stay uncapped above the floor, since the floor's job is absorbing a cold start, not capping
+// performance.
+describe("runSession — per-mutant budget floor (Tier 6B Phase 0 Task 6)", () => {
+  /**
+   * Records every `run()` call's `(active mutant, timeoutMs)` in dispatch order so a test can
+   * assert on the actual budget the orchestrator computed, not just on the resulting verdict — a
+   * test that only checked "it ran" would pass whether or not the floor exists. `activations`
+   * mirrors `StubBackend`'s pattern above: the most recent `activate()` call determines whether
+   * the next `run()` is the baseline/confirm-rerun (`null`) or a mutant's covering run (mutant id).
+   * `coverage: "none"` (like the "coverage:none capability" test above) sidesteps needing a
+   * procedure coverage list — every green test runs under every mutant regardless.
+   */
+  class BudgetProbeBackend implements ExecutionBackend {
+    activations: Array<string | null> = [];
+    readonly runs: Array<{ active: string | null; timeoutMs: number }> = [];
+    constructor(private readonly baselineDurationMs: number) {}
+    capabilities(): BackendCapabilities {
+      return { coverage: "none", deploy: "none", isolation: "full-reset", authoritative: false };
+    }
+    async status(): Promise<BackendStatus> {
+      return { ok: true, details: "budget-probe" };
+    }
+    async deploy(): Promise<CompiledArtifact | null> {
+      return null;
+    }
+    async compileCheck(): Promise<void> {}
+    async activate(id: string | null) {
+      this.activations.push(id);
+    }
+    async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
+      const active = this.activations.at(-1) ?? null;
+      this.runs.push({ active, timeoutMs: opts.timeoutMs });
+      // The very first call is the baseline: reports the caller-chosen duration that feeds
+      // `baselineDuration` and so the naive (unfloored) budget. Every later call — the mutant's
+      // covering run, or the confirm re-run after a fail — reports an instant duration, so any
+      // floor observed on ITS budget can only have come from the floor, never from its own time.
+      const isBaseline = this.runs.length === 1;
+      return {
+        ref,
+        outcome: active === null ? "pass" : "fail",
+        durationMs: isBaseline ? this.baselineDurationMs : 1,
+      };
+    }
+  }
+
+  // The fixture's premise, asserted rather than assumed: these tests feed a 50ms baseline, so the
+  // naive `2 * 50 = 100ms` budget must be strictly BELOW the floor for the floor to be what the
+  // observed budget demonstrates. Pinning it here is also what stops the assertions below from
+  // passing against the constant they are testing — `toBeGreaterThanOrEqual(MIN_MUTANT_BUDGET_MS)`
+  // alone stays green if someone sets `MIN_MUTANT_BUDGET_MS = 0`.
+  test("fixture premise: the floor is above the naive 2x budget these tests produce", () => {
+    expect(MIN_MUTANT_BUDGET_MS).toBeGreaterThan(2 * 50);
+  });
+
+  test("a tiny baseline duration still dispatches the covering run at the floored budget", async () => {
+    const dirs = await makeProject();
+    const backend = new BudgetProbeBackend(50); // naive 2x budget = 100ms, far under the floor
+    const store = new ResultsStore(":memory:");
+    await runSession({ backend, store, ...dirs, selectorIds });
+    store.close();
+    // runs[0] = baseline; runs[1] = the first mutant's covering run.
+    const mutantRun = backend.runs[1];
+    expect(mutantRun).toBeDefined();
+    expect(mutantRun?.active).not.toBeNull();
+    // A LITERAL, not `MIN_MUTANT_BUDGET_MS`: asserting against the constant under test passes
+    // whether or not the floor is applied (set the constant to 0 and `>= 0` is trivially true).
+    expect(mutantRun?.timeoutMs).toBe(30_000);
+    expect(mutantRun?.timeoutMs).toBe(MIN_MUTANT_BUDGET_MS); // ...and the constant still names it
+  });
+
+  test("a large baseline duration still gets exactly 2x, uncapped by the floor", async () => {
+    const dirs = await makeProject();
+    const backend = new BudgetProbeBackend(60_000); // naive 2x budget = 120,000ms, above the floor
+    const store = new ResultsStore(":memory:");
+    await runSession({ backend, store, ...dirs, selectorIds });
+    store.close();
+    const mutantRun = backend.runs[1];
+    expect(mutantRun).toBeDefined();
+    expect(mutantRun?.timeoutMs).toBe(120_000);
+  });
+
+  test("the same floor applies to the confirm-rerun after a fail", async () => {
+    const dirs = await makeProject();
+    const backend = new BudgetProbeBackend(50); // "fail" under every mutant triggers a confirm rerun
+    const store = new ResultsStore(":memory:");
+    await runSession({ backend, store, ...dirs, selectorIds });
+    store.close();
+    // runs[0] = baseline, runs[1] = mutant covering run ("fail"), runs[2] = confirm rerun (null
+    // activation) — the same `budget` variable dispatches both runs[1] and runs[2].
+    const confirmRun = backend.runs[2];
+    expect(confirmRun).toBeDefined();
+    expect(confirmRun?.active).toBeNull();
+    // Literal, for the same reason as above.
+    expect(confirmRun?.timeoutMs).toBe(30_000);
+    expect(confirmRun?.timeoutMs).toBe(MIN_MUTANT_BUDGET_MS);
+  });
+});
+
 describe("runSession — I7 second consecutive transport error aborts the session", () => {
   test("stub backend erroring on every active-mutant run throws, persists partial results", async () => {
     const root = await mkdtemp(join(tmpdir(), "lethal-orch-i7-"));
@@ -1168,6 +1273,7 @@ describe("mutation score — timeout-killed contribution", () => {
             operatorName: "Op1",
             operatorVersion: "1.0.0",
             astHash: "hash1",
+            objectType: "codeunit",
             codeunitId: 50000,
             codeunitName: "Test",
             procedureName: "TestProc",
@@ -1185,6 +1291,7 @@ describe("mutation score — timeout-killed contribution", () => {
             operatorName: "Op2",
             operatorVersion: "1.0.0",
             astHash: "hash2",
+            objectType: "codeunit",
             codeunitId: 50000,
             codeunitName: "Test",
             procedureName: "TestProc",
@@ -1220,6 +1327,7 @@ describe("mutation score — timeout-killed contribution", () => {
             operatorName: "Op1",
             operatorVersion: "1.0.0",
             astHash: "hash1",
+            objectType: "codeunit",
             codeunitId: 50000,
             codeunitName: "Test",
             procedureName: "TestProc",
@@ -1238,6 +1346,7 @@ describe("mutation score — timeout-killed contribution", () => {
             operatorName: "Op2",
             operatorVersion: "1.0.0",
             astHash: "hash2",
+            objectType: "codeunit",
             codeunitId: 50000,
             codeunitName: "Test",
             procedureName: "TestProc",
@@ -1255,6 +1364,7 @@ describe("mutation score — timeout-killed contribution", () => {
             operatorName: "Op3",
             operatorVersion: "1.0.0",
             astHash: "hash3",
+            objectType: "codeunit",
             codeunitId: 50000,
             codeunitName: "Test",
             procedureName: "TestProc",
@@ -1272,6 +1382,7 @@ describe("mutation score — timeout-killed contribution", () => {
             operatorName: "Op4",
             operatorVersion: "1.0.0",
             astHash: "hash4",
+            objectType: "codeunit",
             codeunitId: 50000,
             codeunitName: "Test",
             procedureName: "TestProc",
@@ -1308,6 +1419,7 @@ describe("mutation score — timeout-killed contribution", () => {
             operatorName: "Op1",
             operatorVersion: "1.0.0",
             astHash: "hash1",
+            objectType: "codeunit",
             codeunitId: 50000,
             codeunitName: "Test",
             procedureName: "TestProc",
@@ -1325,6 +1437,7 @@ describe("mutation score — timeout-killed contribution", () => {
             operatorName: "Op2",
             operatorVersion: "1.0.0",
             astHash: "hash2",
+            objectType: "codeunit",
             codeunitId: 50000,
             codeunitName: "Test",
             procedureName: "TestProc",
@@ -1371,6 +1484,112 @@ describe("runSession — single artifact", () => {
     expect(report.batches).toBe(0);
     expect(report.mutants.length).toBe(0);
     store.close();
+  });
+});
+
+// A mutation guard is a bare `MutationSelector.Active(...)` call, and only a codeunit or a table
+// can carry the `var MutationSelector: Codeunit "Mutation Selector";` declaration that makes it
+// resolve (AL0118 otherwise). The tier-1 operators happily target a page's `OnAction` body, and a
+// page with actions is ordinary AL — so without an object-kind filter at generation time, ONE
+// such page reaches `compileSchemataForFile`, which throws, and the whole session dies. The
+// page's own mutants are the only thing lost: `prepareBatchProject` still copies it into the
+// batch dir verbatim, so what is published is byte-identical to the source project.
+describe("generateMutationSet: object kinds that cannot carry the selector var", () => {
+  const PAGE_AL = `page 79010 "Sandbox Page"
+{
+    PageType = Card;
+    SourceTable = Customer;
+
+    layout { area(Content) { field(Name; Rec.Name) { } } }
+
+    actions
+    {
+        area(Processing)
+        {
+            action(DoIt)
+            {
+                trigger OnAction()
+                begin
+                    if Rec.Name = '' then
+                        Rec.Name := 'x';
+                end;
+            }
+        }
+    }
+}
+`;
+
+  async function pageProject(): Promise<{
+    projectDir: string;
+    testDir: string;
+    instrumentedDir: string;
+  }> {
+    const root = await mkdtemp(join(tmpdir(), "lethal-orch-objkind-"));
+    const projectDir = join(root, "app");
+    await Bun.write(join(projectDir, "SandboxLogic.Codeunit.al"), TARGET_AL);
+    await Bun.write(join(projectDir, "SandboxPage.Page.al"), PAGE_AL);
+    await Bun.write(join(projectDir, "app.json"), APP_JSON);
+    await Bun.write(join(root, "tests", "SandboxTests.Codeunit.al"), TEST_AL);
+    return {
+      projectDir,
+      testDir: join(root, "tests"),
+      instrumentedDir: join(root, "instr"),
+    };
+  }
+
+  test("drops the page's specs, keeps the codeunit's, and warns once naming the file and kind", async () => {
+    const dirs = await pageProject();
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    let files: InstrumentedFile[];
+    let messages: string[];
+    try {
+      files = await generateMutationSet(dirs.projectDir);
+      messages = warnSpy.mock.calls.map((c) => String(c[0]));
+    } finally {
+      warnSpy.mockRestore();
+    }
+    expect(files.map((f) => f.path)).toEqual(["SandboxLogic.Codeunit.al"]);
+
+    const skips = messages.filter((m) => m.includes("skipped"));
+    expect(skips).toHaveLength(1); // once per RUN, not once per file/spec
+    const [message] = skips;
+    expect(message).toContain("SandboxPage.Page.al");
+    expect(message).toContain("page_declaration");
+    // Guards this whole test against passing vacuously: if the page fixture stopped producing
+    // mutation sites, dropping it would prove nothing. The count comes from the specs actually
+    // generated for it, so it can only be >=1 if there was something real to drop.
+    expect(message).toMatch(/holding [1-9]\d* mutation site/);
+  });
+
+  test("a session over a project containing that page still completes", async () => {
+    const dirs = await pageProject();
+    const backend = new StubBackend(CAPS_NST, () => "pass", ["IsOverBudget"]);
+    const store = new ResultsStore(":memory:");
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const report = await runSession({ backend, store, ...dirs, selectorIds });
+      expect(report.baselineGreen).toBe(true);
+      expect(report.counts.errors).toBe(0);
+      expect(report.mutants.length).toBeGreaterThan(0);
+      // Every surviving mutant belongs to the codeunit — the page contributed none.
+      expect([...new Set(report.mutants.map((m) => m.file))]).toEqual(["SandboxLogic.Codeunit.al"]);
+
+      // Skipping the page costs its mutants and nothing else: `prepareBatchProject` still copies
+      // it into the batch dir, byte-identical to source, so what gets published is unchanged.
+      const batchDirs = (await readdir(dirs.instrumentedDir)).filter((e) =>
+        /^run-\d+-batch-0$/.test(e),
+      );
+      const [batchDir] = batchDirs;
+      if (batchDir === undefined) throw new Error(`no batch dir under ${dirs.instrumentedDir}`);
+      const published = await readFile(
+        join(dirs.instrumentedDir, batchDir, "SandboxPage.Page.al"),
+        "utf8",
+      );
+      expect(published).toBe(PAGE_AL);
+    } finally {
+      warnSpy.mockRestore();
+      store.close();
+    }
   });
 });
 
@@ -1723,6 +1942,7 @@ describe("narrowFilesToSubset", () => {
       operatorName,
       operatorVersion: "1.0.0",
       astHash: "h",
+      objectType: "codeunit",
       codeunitId: 1,
       codeunitName: "C",
       procedureName: "P",
@@ -2070,6 +2290,7 @@ async function manifestMutants(
     selectorIds,
     artifactId: "seed00000000000000000000000000",
     targetAppId: "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",
+    operatorTiers,
   });
   const manifest = JSON.parse(await readFile(join(scratchDir, "mutant-manifest.json"), "utf8")) as {
     mutants: MutantManifestEntry[];
@@ -5109,6 +5330,7 @@ function fakeManifestEntry(mutantId: string): MutantManifestEntry {
     startIndex: 100,
     endIndex: 110,
     startLine: 5,
+    objectType: "codeunit",
     codeunitId: 79000,
     codeunitName: "Sandbox Logic",
     procedureName: "IsOverBudget",
