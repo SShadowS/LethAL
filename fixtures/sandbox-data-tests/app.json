@@ -1,0 +1,35 @@
+{
+  "id": "ae4589f8-4376-41a5-acf3-8df73772fefd",
+  "name": "LethAL Sandbox Data Tests",
+  "publisher": "LethAL",
+  "version": "1.0.0.0",
+  "brief": "Tier-2 Phase 0 fixture: test app for the sandbox-data mutation target.",
+  "description": "Test codeunit exercising fixtures/sandbox-data's table triggers. Asserts via Error()/asserterror — no Library Assert dependency. Not for production use — see fixtures/README.md.",
+  "privacyStatement": "",
+  "EULA": "",
+  "help": "",
+  "url": "",
+  "logo": "",
+  "dependencies": [
+    {
+      "id": "aa2f0691-47c3-470e-a351-5bfe955d4f13",
+      "name": "LethAL Sandbox Data",
+      "publisher": "LethAL",
+      "version": "1.0.0.0"
+    }
+  ],
+  "screenshots": [],
+  "idRanges": [
+    {
+      "from": 79300,
+      "to": 79399
+    }
+  ],
+  "resourceExposurePolicy": {
+    "allowDebugging": true,
+    "allowDownloadingSource": true,
+    "includeSourceInSymbolFile": true
+  },
+  "runtime": "13.0",
+  "features": []
+}
