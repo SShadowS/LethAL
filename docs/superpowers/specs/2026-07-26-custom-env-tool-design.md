@@ -32,6 +32,8 @@ it?", then hands a resolved connection to `BcDevMcpBackend`.
 ```
 session start
   1. envId       from config, else run createEnv template  → read envId from its JSON
+  1b. start      create-mode only: run startEnv, then poll readyWhen until the environment
+                 reports ready — `env create` returns an INERT environment (measured below)
   2. resolve     run resolve templates                     → baseUrl, username, password, …
   3. derive      server = origin(baseUrl), serverInstance = first path segment
                  (either may instead be read explicitly via `reads`)
@@ -51,6 +53,30 @@ session end
 
 The tool is spawned a handful of times per session, never once per mutant, so its latency does not
 multiply across the mutant set.
+
+### Provisioning is two async phases, not one command (measured 2026-07-26)
+
+Spiked against the real portal, creating and deleting one DK BC 28.0 environment:
+
+| phase | result |
+|---|---|
+| `env create` | returns promptly, environment status **`Draft`** — inert, nothing listening |
+| `env start` | ~2 s, prints "start requested" — also async |
+| `Draft → Starting` | ~1 s after the start request |
+| `Starting → Running` | **390 s** |
+| BC Automation API answers `200` | **391 s** after the start request |
+
+Status vocabulary: `Draft`, `Starting`, `Running`, `Stopped` — `env start` / `env stop` are PATCHes
+of that field. A fresh environment already contains the companies `CRONUS Danmark A/S` and
+`My Company`.
+
+Two consequences. **Create-mode must start and then wait**: publishing to a `Draft` environment
+would fail against a dead endpoint, so `startEnv` and `readyWhen` are required in create-mode.
+And **`timeoutSeconds` is the wrong budget for readiness** — provisioning is not one long command
+but a fast async call plus a poll, so `readyWhen` carries its own `timeoutSeconds` and
+`pollSeconds` while the per-command timeout stays modest.
+
+Ephemeral mode therefore costs ~6.5 minutes before a single mutant runs. Reuse stays the default.
 
 **Step 6 verifies before publishing, deliberately.** The machine-global lease lives in
 `LethAL Control`'s own tables, and a republish runs its install/upgrade codeunits. Unconditionally
@@ -179,6 +205,14 @@ real environment variable always wins over a `.env` entry.
       "command": ["env", "create", "--name", "{envName}", "--profile", "{profile}", "--json"],
       "reads":   { "envId": "id" }
     },
+    "startEnv":  { "command": ["env", "start", "{envId}"] },
+    "readyWhen": {
+      "command": ["env", "get", "{envId}", "--json"],
+      "reads":   { "status": "status" },
+      "equals":  "Running",
+      "pollSeconds": 20,
+      "timeoutSeconds": 1800
+    },
     "resolve": [
       { "command": ["env", "get", "{envId}", "--json"],
         "reads": { "baseUrl": "url", "expiresUtc": "expiresUtc" } },
@@ -237,6 +271,7 @@ Validation-time errors, all before any process is spawned:
 | `username`, `password` | BC credentials for OData and bc-dev-mcp | yes |
 | `server`, `serverInstance` | explicit override of the derivation above | no |
 | `expiresUtc` | ISO timestamp; drives the expiry refusal | no |
+| `status` | the environment's lifecycle state, compared against `readyWhen.equals` | in create-mode |
 
 Any other key throws at validation time. So does the same key being produced by two blocks —
 silently letting the last one win is the same "two sources, one value" hazard as above.
@@ -260,6 +295,7 @@ Per run, not globally:
 | `resolve` | always |
 | `publish` | always |
 | `createEnv`, `deleteEnv` | `envId` is absent |
+| `startEnv`, `readyWhen` | `envId` is absent — a created environment is `Draft` until started |
 | `publishApps` | `envId` is absent (see "The test app problem") |
 | `downloadSymbols` | `bcdev.packageCachePath` is absent |
 
@@ -398,20 +434,26 @@ the fenced path keeps `asserterror` fidelity that al-runner lacks (R7).
 4. **R2 (single-tenant containers) is unenforceable in-band** and equally unenforceable here: the
    harness cannot enumerate tenants. Whether Continia environments are guaranteed single-tenant is
    a question for their operators.
-5. **Does a Continia environment's base URL survive `env stop` / `start`?** If a restart can move
-   it, a long session holding a resolved `baseUrl` would keep calling a dead endpoint. Unknown;
-   worth one probe alongside Task 1.
-6. **Does republishing `lethal-control.app` over an identical installed version re-run
+5. **Does republishing `lethal-control.app` over an identical installed version re-run
    install/upgrade and move `serverGeneration`?** The verify-before-publish rule in step 6 makes
    this mostly moot, but the answer decides whether "mostly" is "entirely".
-7. **Cost and duration.** Ephemeral mode creates a real environment per run; `env create` duration
-   against the 900 s default timeout is unmeasured. Reuse is the default for this reason.
+6. **A stopped environment.** `readyWhen` covers create-mode. A *reused* environment that is
+   `Stopped` when the session starts is not handled: LethAL will resolve it, fail to reach the
+   endpoint, and abort. Starting someone else's environment unasked is worse than refusing, so the
+   refusal should name the status. Whether to offer an opt-in `--start-env` is a follow-up, not
+   this spec.
 
 **Settled during review** (recorded so they are not re-asked): `continia env users --json` does
 return plaintext passwords and `env get --json` does return `url`, so the worked example's dot
 paths are real; `continia publish` relays BC's `Message`, so version-conflict recovery works
 through it; `continia publish` hardcodes `tenant=default`, which is the expected `tenant` value for
 these environments.
+
+**Settled by the 2026-07-26 spike**: provisioning is two async phases and takes ~6.5 minutes to a
+usable endpoint (table above). The base URL is `{origin}/{envId}` — derived from the id — so a
+stop/start cannot move it, and a resolved `baseUrl` stays valid for the life of the environment.
+A fresh environment already carries `CRONUS Danmark A/S`, so the fixture's `company` needs no
+special handling.
 
 ## Exit criteria
 
