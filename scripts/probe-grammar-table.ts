@@ -18,6 +18,7 @@
 import { readFile } from "node:fs/promises";
 import { ALNodeKind } from "../packages/engine/src/ast/node-kinds";
 import { initParser, parseAL } from "../packages/engine/src/ast/parser";
+import { isStatementPosition } from "../packages/engine/src/ast/tree-walks";
 import { type ALSyntaxNode, wrapRoot } from "../packages/engine/src/ast/syntax-node";
 
 const DEFAULT_FIXTURE = "fixtures/grammar-probe/ProbeTable.Table.al";
@@ -81,7 +82,7 @@ console.log("\n=== Tier-2 target call sites (statement position)");
 const found = new Map<string, { qualified: number; implicit: number }>();
 walk(root, (n) => {
   if (n.kind !== ALNodeKind.procedure_call) return;
-  if (n.parent === null || n.parent.kind !== ALNodeKind.block) return;
+  if (!isStatementPosition(n)) return;
   const fn = n.childForFieldName("function");
   const text = (fn ?? n).text;
   const qualified = text.includes(".");
