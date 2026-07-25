@@ -104,4 +104,23 @@ describe("dedupeSpecs", () => {
     const unknown = spec({ operatorName: "lethal.not-registered", start: 10, end: 20, after: "" });
     expect(() => dedupeSpecs([known, unknown], tierOf)).toThrow(/lethal\.not-registered/);
   });
+
+  it("still throws on a same-tier collision even when one side is likely-equivalent", () => {
+    // Deliberate: the same-tier check precedes the likely-equivalent one. Within a
+    // tier, operators are specified to match distinct method names, so two of them
+    // claiming one site is a caller-contract violation however they are tagged —
+    // and an equivalence hint must not quietly promote one into the winner of a
+    // collision that should never have happened. Loud beats a plausible default.
+    const plain = spec({ operatorName: "lethal.a", start: 10, end: 20, after: "" });
+    const hinted = spec({
+      operatorName: "lethal.b",
+      start: 10,
+      end: 20,
+      after: "",
+      equivalenceHint: "likely-equivalent",
+    });
+    expect(() => dedupeSpecs([plain, hinted], tierOf)).toThrow(
+      /lethal\.a.*lethal\.b|lethal\.b.*lethal\.a/,
+    );
+  });
 });
