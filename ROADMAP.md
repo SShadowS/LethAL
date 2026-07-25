@@ -28,6 +28,7 @@ Priority is deliberately not a column: the ordering inside each section is the p
 | **R12** | **Live proof of a dedup collision.** `dedupeSpecs` is unit-proven and runs on the live path, but no two Tier-1 operators claim the same site, so the collision branch has never fired against a real server. Do it at Phase 1's gate, with a real Tier-1/Tier-2 overlap — do not fake one with a throwaway duplicate operator. | blocked (R10) |
 | **R11** | **`tierRank` has no tier-3 rank.** A tier-3 operator colliding with a tier-1 one hits "cannot order" and throws instead of resolving by precedence. Fix when tier 3 becomes real. | blocked (R13) |
 | **R13** | **Tier-3 operators.** Design not started; sequenced after Tier 2 ships. | open |
+| **R15** | **Custom environment tool support** — run LethAL against environments owned by an external CLI (first case: Continia's `continia.exe`), described purely in config: tool path plus command templates for create / resolve / symbols / publish / delete. The tool provisions; LethAL's fenced `RunMutant` path still decides every verdict. Spec: `docs/superpowers/specs/2026-07-26-custom-env-tool-design.md`. **First task is a live probe** of bc-dev-mcp against a Continia env — it decides whether coverage is `"procedure"` or falls back to `"none"`. | open (spec approved) |
 
 ## Correctness risks (measured, not closed)
 
