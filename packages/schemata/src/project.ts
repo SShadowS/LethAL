@@ -87,24 +87,56 @@ function lineOfIndex(source: string, index: number): number {
   return line;
 }
 
+/** Global, so `matchAll` can find EVERY object header in the file, not just the first. */
 const OBJECT_HEADER =
-  /^\s*(codeunit|table|page|report|query|xmlport|enum)\s+(\d+)\s+("([^"]+)"|(\w+))/im;
+  /^\s*(codeunit|table|page|report|query|xmlport|enum)\s+(\d+)\s+("([^"]+)"|(\w+))/gim;
 
 /**
  * The declared object's kind, id and name. `type` is the matched AL keyword lowercased
  * (`table`, `codeunit`, ...) — a BC object id is unique only WITHIN a type, so every consumer
  * that identifies an object (coverage lookup above all) needs the pair, not the id alone.
+ *
+ * Exactly ONE object declaration per file is required, and a file with more THROWS. AL permits
+ * several objects in one file (rare, but legal), and every layer downstream of here assumes one:
+ *
+ * - this function labels every mutant in the file with the FIRST header's `(type, id)`, so a
+ *   mutant in the second object is looked up under the first object's coverage key — the wrong
+ *   test set, hence a verdict that is silently wrong rather than merely imprecise (the exact
+ *   failure the (type, id) pair key exists to prevent, see `MutantManifestEntry.objectType`);
+ * - `injectMutationSelectorVar` (compile.ts) injects into `findFirst(codeunit) ?? findFirst
+ *   (table)`, which for `page X` + `codeunit Y` in one file is the SECOND object, leaving the
+ *   guards emitted into the first object with no declaration in scope: AL0118.
+ *
+ * Refusing the shape is the honest answer; producing verdicts we know can be wrong is not.
  */
-function objectHeaderOf(source: string): { type: string; id: number; name: string } {
-  const m = OBJECT_HEADER.exec(source);
-  if (!m) throw new Error("instrumented file has no AL object header");
-  const type = m[1];
+function objectHeaderOf(
+  source: string,
+  filePath: string,
+): { type: string; id: number; name: string } {
+  // `matchAll` operates on an internal clone, so the shared `g` regex's `lastIndex` never carries
+  // between calls (a plain `.exec` loop on OBJECT_HEADER would).
+  const matches = [...source.matchAll(OBJECT_HEADER)];
+  const first = matches[0];
+  if (first === undefined) throw new Error(`${filePath}: file has no AL object header`);
+  if (matches.length > 1) {
+    const found = matches.map((m) => `${m[1]?.toLowerCase()} ${m[2]} ${m[4] ?? m[5] ?? ""}`);
+    const why =
+      "LethAL supports exactly one AL object per file. Every mutant in the file would be " +
+      "attributed to the FIRST object's (objectType, objectId), so mutants in the others would " +
+      "be coverage-matched against the wrong object's tests — wrong verdicts, silently — and " +
+      "the selector var is injected into only one of the objects (AL0118 in the rest). Split " +
+      "them into one file each.";
+    throw new Error(
+      `writeInstrumentedProject: cannot instrument ${filePath} — it declares ${matches.length} AL objects (${found.join("; ")}). ${why}`,
+    );
+  }
+  const type = first[1];
   if (type === undefined) {
     // Unreachable while OBJECT_HEADER keeps group 1 — asserted rather than defaulted, because a
     // wrong/absent object type silently merges two objects' coverage (see MutantManifestEntry).
-    throw new Error("AL object header matched without an object keyword");
+    throw new Error(`${filePath}: AL object header matched without an object keyword`);
   }
-  return { type: type.toLowerCase(), id: Number(m[2]), name: m[4] ?? m[5] ?? "" };
+  return { type: type.toLowerCase(), id: Number(first[2]), name: first[4] ?? first[5] ?? "" };
 }
 
 function stripQuotes(s: string): string {
@@ -157,9 +189,12 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
   for (const f of input.files) {
     const ided = idedByFile.get(f.path) ?? [];
     const deduped = specsByFile.get(f.path) ?? [];
+    // Read the header BEFORE instrumenting: both of its throws (no object, several objects) mean
+    // this file can never be attributed correctly, and failing before the write keeps a refused
+    // file from being left behind, half-instrumented, in the artifact dir.
+    const header = objectHeaderOf(f.source, f.path);
     const compiled = compileSchemataForFile(f.source, f.root, deduped, ided, f.path);
     await writeFile(join(input.targetDir, basename(f.path)), compiled, "utf8");
-    const header = objectHeaderOf(f.source);
     for (const { mutantId, spec } of ided) {
       const triggerName = triggerNameOf(spec);
       manifest.push({

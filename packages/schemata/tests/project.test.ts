@@ -592,4 +592,128 @@ describe("writeInstrumentedProject", () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  // Two objects in ONE file is legal AL (rare, but legal) and every layer below assumes one:
+  // the manifest labels every mutant in the file with the FIRST header's (objectType, objectId),
+  // so a mutant in the second object gets the first object's coverage key — the wrong test set,
+  // hence a verdict that is silently wrong. And `injectMutationSelectorVar` picks
+  // `findFirst(codeunit) ?? findFirst(table)`, which for `table` + `codeunit` in one file is the
+  // SECOND object, leaving the first object's guards undeclared (AL0118). Refuse the shape.
+  describe("a file declaring more than one AL object", () => {
+    const TWO_OBJECTS = `table 51050 "First Obj"
+{
+    fields { field(1; "No."; Code[20]) { } }
+}
+
+codeunit 51051 "Second Obj"
+{
+    procedure P()
+    begin
+        X := 1;
+    end;
+}
+`;
+
+    function twoObjectFile() {
+      const root = wrapRoot(parseAL(TWO_OBJECTS));
+      const assign = findFirst(root, ALNodeKind.assignment_statement);
+      if (assign === null) throw new Error("fixture has no assignment to mutate");
+      const specs: MutationSpec[] = [
+        {
+          operatorName: "op.flip",
+          operatorVersion: "1.0.0",
+          astNodeId: `${assign.startIndex}`,
+          before: assign,
+          after: { ...assign, text: "X := 2;" } as never,
+          parentContext: "statement-position",
+        },
+      ];
+      return { path: "Two.Objects.al", source: TWO_OBJECTS, root, specs };
+    }
+
+    it("throws, naming the file and both objects, instead of misattributing the mutants", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "lethal-two-objects-"));
+      try {
+        let thrown: unknown;
+        try {
+          await writeInstrumentedProject({
+            targetDir: dir,
+            files: [twoObjectFile()],
+            selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
+            artifactId: "0123456789abcdef0123456789abcdef",
+            targetAppId: TARGET_APP_ID,
+            operatorTiers: NO_TIERS,
+          });
+        } catch (err) {
+          thrown = err;
+        }
+        expect(thrown).toBeInstanceOf(Error);
+        const message = thrown instanceof Error ? thrown.message : "";
+        expect(message).toContain("Two.Objects.al");
+        expect(message).toContain("table 51050");
+        expect(message).toContain("codeunit 51051");
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("refuses BEFORE writing the half-instrumented source into the artifact dir", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "lethal-two-objects-nowrite-"));
+      try {
+        await writeInstrumentedProject({
+          targetDir: dir,
+          files: [twoObjectFile()],
+          selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
+          artifactId: "0123456789abcdef0123456789abcdef",
+          targetAppId: TARGET_APP_ID,
+          operatorTiers: NO_TIERS,
+        }).catch(() => {});
+        expect(await readdir(dir)).not.toContain("Two.Objects.al");
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("still accepts an ordinary one-object file", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "lethal-one-object-"));
+      try {
+        const src = `codeunit 51052 "Only" { procedure P() begin X := 1; end; }`;
+        const root = wrapRoot(parseAL(src));
+        const assign = findFirst(root, ALNodeKind.assignment_statement);
+        if (assign === null) throw new Error("no assignment");
+        await writeInstrumentedProject({
+          targetDir: dir,
+          files: [
+            {
+              path: "Only.Codeunit.al",
+              source: src,
+              root,
+              specs: [
+                {
+                  operatorName: "op.flip",
+                  operatorVersion: "1.0.0",
+                  astNodeId: `${assign.startIndex}`,
+                  before: assign,
+                  after: { ...assign, text: "X := 2;" } as never,
+                  parentContext: "statement-position",
+                },
+              ],
+            },
+          ],
+          selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
+          artifactId: "0123456789abcdef0123456789abcdef",
+          targetAppId: TARGET_APP_ID,
+          operatorTiers: NO_TIERS,
+        });
+        const manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8")) as {
+          mutants: Array<{ objectType: string; codeunitId: number }>;
+        };
+        expect(manifest.mutants).toHaveLength(1);
+        expect(manifest.mutants[0]?.objectType).toBe("codeunit");
+        expect(manifest.mutants[0]?.codeunitId).toBe(51052);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+  });
 });
