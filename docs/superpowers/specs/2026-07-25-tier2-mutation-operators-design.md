@@ -12,13 +12,15 @@ procedure, and never checks that validation actually fired.
 
 ## 2. What changed after adversarial review (and why)
 
-The first draft of this design was reviewed by three independent models (Anthropic Fable 5, Google Gemini
-3.1 Pro, OpenAI GPT-5.5), each reading the codebase in isolation. Three findings were then **verified
-directly against the source** by the author before being accepted. They reshaped the design:
+This design was reviewed twice by three independent models (Anthropic Fable 5, Google Gemini 3.1 Pro, OpenAI
+GPT-5.5), each reading the codebase in isolation, and every accepted finding was then **verified directly
+against the source** by the author. Round 1 reshaped the design; round 2 reviewed the committed spec and
+forced three further changes (§3.2 dedup ordering, §3.2 precedence, §4 predicates). The five changes below
+came out of round 1:
 
 | First draft | This design | Verified evidence |
 |---|---|---|
-| 8 operators, all built | 6 built, `EmptyTrigger` dropped, `SwapRecXRec` gated on an experiment | `ALNodeKind.trigger` is in `BODY_PARENT_KINDS` (`packages/builtin-tier1/src/empty-block.ts:12`), so Tier-1 `empty-block` **already** empties trigger bodies. `EmptyTrigger` would double-count every trigger site. |
+| 8 operators, all built | 6 built, `EmptyTrigger` dropped, `SwapRecXRec` gated on an experiment | `ALNodeKind.trigger` is in `BODY_PARENT_KINDS` (`packages/builtin-tier1/src/empty-block.ts:12`), so Tier-1 `empty-block` empties trigger bodies wherever they are instrumented. It does not double-count *today* only because §3.1's defect means table files never get usable guards — the moment that is fixed, `EmptyTrigger` would duplicate every trigger site. |
 | Five deletion operators as new, parallel operators | Deletion operators are **narrowings** of `void-method-call`, with a dedup rule | `procedure_call` maps to `call_expression`, and the grammar has no distinct method-call node (`packages/engine/src/ast/node-kinds.ts:60-66`). `Rec.CalcFields(x);` in statement position is therefore matched by `void-method-call` (`void-method-call.ts:19-22`) **today**. Parallel operators would emit byte-identical duplicate mutants under different names. |
 | "Spike: does wrap-lift-duplicate emit valid AL in a table?" | **Phase 0 deliverable**, not a spike | `injectMutationSelectorVar` returns early when the file has no codeunit (`packages/schemata/src/compile.ts:67-68`) while `project.ts` accepts `table` object headers. Guards would emit `MutationSelector.Active(...)` into a table with no variable in scope. This is a known defect with a known fix. |
 | Tier-1 operators and baselines out of scope | Tier-1 **dedup interaction** in scope; Tier-1 baselines still untouched | Follows from the duplicate-mutant finding above. |
@@ -47,9 +49,41 @@ structural compile failure, so this is verified by a real `alc` compile rather t
 
 ### 3.2 Mutant identity and dedup
 
-A single rule, applied where the manifest is built: a mutant's identity is
-`(file, startIndex, endIndex, after-form)`. When two operators produce the same identity, the **more specific
-operator wins** — Tier 2 over Tier 1 — and the losing mutant is not emitted.
+A single rule: a mutant's identity is `(file, startIndex, endIndex, after-form)`. When two operators produce
+the same identity, the **more specific operator wins** — Tier 2 over Tier 1 — and the losing mutant is not
+emitted.
+
+**Where it runs is part of the requirement, not an implementation detail.** Dedup MUST happen before mutant
+IDs are assigned and before compilation. Today `writeInstrumentedProject` passes raw `f.specs` to
+`assignMutantIds` and then to `compileSchemataForFile(f.source, f.root, f.specs, ided)`
+(`packages/schemata/src/project.ts:95-100`). Dropping a mutant only from the manifest would leave it compiled
+into the emitted dispatch chain holding an assigned ID — an unreported mutation that still exists in the
+artifact, which is worse than no dedup. Required order inside `writeInstrumentedProject`: dedup specs per
+file → assign IDs to the deduped set → compile from the deduped set → emit the manifest from the same set.
+
+**Precedence must never demote a scored mutant into an excluded bucket.** Tier 2 wins over Tier 1 ONLY when
+the winning mutant is not tagged `likely-equivalent`. Otherwise an overbroad Tier-2 predicate — say
+`RemoveSetLoadFields` wrongly claiming a user-defined `Loader.SetLoadFields(x)` — would suppress the fully
+scored Tier-1 deletion and replace it with a mutant excluded from the score, hiding both the real mutant and
+the predicate bug. A `likely-equivalent` Tier-2 mutant colliding with a scored Tier-1 mutant loses.
+
+**Span discipline.** Tier-2 deletion operators MUST target the identical `call_expression` node that
+`void-method-call` targets — not the enclosing statement, not the `member_expression`. A differently-bounded
+span produces a different identity, dedup silently never fires, and two near-identical mutants ship under two
+names. The §7.4 regression test would pass in exactly that failure mode, so the discipline is stated here as
+a requirement rather than left to the test to catch.
+
+**Precedence ordering is defined only over builtin tiers.** `MutationOperator.tier` also admits `"custom"`
+(`packages/engine/src/operator/interface.ts`), which has no position in a specificity ordering. A collision
+involving a custom operator fails loudly, exactly like a same-tier collision — a third-party operator must
+not silently suppress a builtin mutant, nor be silently suppressed by one.
+
+**This is a byte-duplicate rule, not a semantic-duplicate rule, and that is accepted.** Tier-1 `empty-block`
+emptying a one-statement trigger body and Tier-2 `RemoveTestField` deleting that same statement produce
+different spans and different after-forms, so both are kept even though the resulting behaviour is identical.
+The same overlap already exists within Tier 1 (a procedure body containing a single void call). Detecting
+semantic duplicates needs equivalence analysis this project does not have; the cost is a small number of
+redundant mutants, which is preferable to a rule that guesses.
 
 Two operators **of the same tier** producing one identity is a caller-contract violation, not something to
 resolve by precedence: it means two operators claim the same mutation and the result would depend on
@@ -70,14 +104,57 @@ Record the enclosing trigger's identity for mutants inside trigger bodies, and e
 backend maps a trigger site to covering tests. If trigger mutants cannot be attributed to a covering test,
 Tier 2's trigger-based value is unreachable and we need to know that in Phase 0, not Phase 2.
 
-### 3.4 Phase 0 exit criterion
+### 3.4 Phase 0 exit criteria
 
-One mutation inside a table trigger compiles, publishes, activates, and returns a real verdict (not
-`no-coverage`) on a live container.
+A single successful trigger mutant is not sufficient — it exercises §3.1 and §3.3 while proving nothing about
+§3.2, and it can pass on a trivially-shaped table. All of the following must hold:
+
+1. A table carrying `fields`, `keys`, an **existing** `var` section and **multiple** triggers instruments and
+   compiles under real `alc`. The existing-`var` case matters: injection must extend a present section, not
+   assume it is absent.
+2. Both a **table-level** trigger (`OnInsert`) and a **field-level** trigger (`OnValidate` on a field
+   declaration) are proven — they are structurally different insertion contexts, and one can work while the
+   other is broken.
+3. A trigger mutant carries explicit trigger attribution in the manifest — not an empty `procedureName`.
+4. A dedup fixture proves a Tier-2 mutant replaces the colliding Tier-1 mutant **before ID assignment**: the
+   suppressed mutant must be absent from the emitted artifact, not merely from the manifest.
+5. Live, on trigger sites: **both a kill and a survive**. A kill alone can come from a runtime error unrelated
+   to any assertion, which would satisfy a weaker criterion while proving nothing about attribution.
+6. The existing Tier-1 per-mutant baselines (bcdev 3/10/3, al-runner 3/13/0) are re-run and unchanged.
+7. al-runner's behaviour on table triggers is established — executed, or documented as unsupported. §8 lists
+   this as unproven; Phase 0 is where it stops being unproven, not Phase 2.
 
 ## 4. Phase 1 — the four operators that survive scrutiny
 
-All four are statement-position only, and all four claim their site from `void-method-call` via §3.2.
+All four are statement-position only. The three **deletion** operators claim their site from
+`void-method-call` via §3.2. `SwapModifyFlag` does not and must not: it rewrites `Modify(true)` to
+`Modify(false)` rather than deleting, so its after-form differs from `void-method-call`'s empty one, dedup
+correctly does not fire, and both mutants coexist at that site. That is not duplication — they are two
+distinct mutations, exactly as `conditional-boundary` and `negate-conditional` already coexist on one
+expression.
+
+### 4.1 Receiver resolution — the rule every predicate below depends on
+
+The semantic layer is source-derived and cannot prove a receiver is a base-app `Record` (§2). Name-only
+matching is therefore unsafe in both directions, and every predicate must satisfy this rule:
+
+- **Match the implicit-receiver form.** Inside a table or field trigger body, `TestField("No.")`,
+  `SetRange(F, V)`, `CalcFields(X)` and `Modify(true)` are legal with no receiver — `Rec` is implicit. These
+  are precisely the trigger-body sites Tier 2 exists to mutate, so a predicate requiring `<rec>.` would miss
+  its own reason for existing.
+- **Reject a receiver that resolves to a non-record in source.** Where the symbol table can see the
+  declaration (`Loader: Codeunit "My Loader"`), a call on it is not the AL record method and must not be
+  claimed.
+- **Reject a name that resolves to a procedure declared in the project.** A local `procedure Commit()` or a
+  user-defined `TestField` shadows the builtin for matching purposes.
+- **Where the receiver cannot be resolved at all, do not claim the site.** The Tier-1 `void-method-call`
+  mutant still covers it. Missing a Tier-2 site costs one operator's signal; claiming a wrong one emits a
+  mislabelled mutation and, under §3.2 precedence, can suppress a correct Tier-1 mutant.
+- **Matching is case-insensitive.** AL is case-insensitive, so `Modify(TRUE)`, `MODIFY(True)` and
+  `Rec.SETRANGE(...)` are the same sites. A text-sensitive lowercase-only predicate silently misses real code.
+- **Note the parenthesis-less call form.** AL permits `Commit;` without parentheses, which may not parse as a
+  `call_expression` at all. Phase 2 must establish how the grammar represents it and either handle or
+  explicitly document it as unsupported. (Tier-1 `void-method-call` has the same gap today.)
 
 | Operator | Predicate | Documented limits |
 |---|---|---|
@@ -119,9 +196,20 @@ Required shapes:
 - **`asserterror` negative tests**, or `RemoveTestField` survives trivially and the baseline's "real kills"
   claim is false.
 - A **`Validate()`-driven path**, so `OnValidate` actually fires from test code.
-- **Negative targets** that a sloppy predicate would wrongly claim: a user-defined procedure named `Commit`,
-  an `Insert(false)`, a `SetRange` with no value, a `SetLoadFields()` with no arguments, a
-  `Modify(SomeBoolean)`.
+- **Negative targets** that a sloppy predicate would wrongly claim: a user-defined procedure named `Commit`
+  *plus a call to it*, an `Insert(false)`, a `SetRange` with no value, a `SetLoadFields()` with no arguments,
+  a `Modify(SomeBoolean)`.
+- **User-defined methods sharing a builtin name, taking arguments, with observable side effects** —
+  `Loader.SetLoadFields(FieldNo)`, `Validator.TestField(X)`, `Builder.SetRange('A', 'Z')`. The no-argument
+  negatives above do not catch a predicate that matches any same-named call with arguments, and under §3.2
+  precedence such a bug also suppresses a correct Tier-1 mutant.
+- **Implicit-receiver positive targets** inside trigger bodies — an unqualified `TestField(...)` and
+  `Modify(true)` — or a predicate that only handles `<rec>.` forms passes the whole fixture while missing the
+  sites Tier 2 exists for.
+- **Case variants**: `Modify(TRUE)`, `Rec.SETRANGE(...)`.
+- **Both `TestField` overloads**: a one-argument-only implementation must fail.
+- A **weak positive test** that calls `TestField` without asserting, so a genuine survivor is represented
+  alongside the `asserterror` negatives.
 - Both **strong and weak tests**, so the expected baseline contains real kills *and* real survivors.
 
 ## 7. Verification
@@ -138,8 +226,17 @@ Per-mutant equality is the gate throughout. Aggregate counts matching for the wr
 
 ## 8. Risks
 
+- **The grammar's table-object coverage is unmapped.** `ALNodeKind` carries `table_declaration` and
+  `trigger_declaration` but no kinds for field declarations, field groups, keys, or field-level triggers —
+  yet §3.1 requires locating members by node kind to place the `var` section correctly. Whether tree-sitter-al
+  parses table bodies into usable named nodes at all is unverified, and the whole Tier-2 program rests on it.
+  This is the first thing Phase 0 should establish, before writing injection code.
 - **AL member ordering in tables** (§3.1) is unverified against the real compiler; assume at least one
   `alc` correction cycle.
+- **Equivalent-mutant dilution on real projects.** The fixture is engineered so Tier-2 mutants are killable.
+  Real BC code is data-dependent in ways a fixture is not, so a production run will surface survivors that
+  reflect data shape rather than test quality, and only `SetLoadFields` gets an excluded bucket. The headline
+  mutation score will absorb the rest.
 - **Trigger coverage attribution** (§3.3) may prove unworkable, which would strand the trigger-based value
   of Tier 2. Phase 0 exists to surface that early.
 - **Hand-computed baselines**: `fixtures/README.md` records that the verdict table is hand-derived. Trigger
