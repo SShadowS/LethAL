@@ -19,6 +19,15 @@ codeunit 79310 "Data Tests"
     begin
         // Weak on purpose: exercises the object-level OnInsert trigger (Amount := Amount * 2)
         // but asserts nothing about the result, so a mutant there survives genuinely.
+        //
+        // MUST be idempotent. A normal BC test rolls back, but LethAL's two-phase fence commits
+        // around each mutant run, so a row inserted here PERSISTS into the next run. Inserting a
+        // fixed primary key without clearing it first made every run after the first contend with
+        // the surviving row, and RunMutant timed out deterministically — which surfaced as an
+        // in-flight-unknown quarantine, not as a test failure. Delete before insert.
+        if DataMain.Get('X1') then
+            DataMain.Delete(false);
+        DataMain.Init();
         DataMain."No." := 'X1';
         DataMain.Amount := 5;
         DataMain.Insert(true);
