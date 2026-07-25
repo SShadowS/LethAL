@@ -73,6 +73,8 @@ environments, which picks the coverage mode. No production code changes.
  *
  *   CONTINIA_API_TOKEN=... CONTINIA_ENV_ID=... bun run scripts/probe-continia-env.ts
  */
+import { BcDevMcpBackend } from "../packages/runner/src/bcdev-backend";
+
 const TOOL = process.env.CONTINIA_TOOL ?? "U:/Git/CLI/continia.exe";
 const ENV_ID = process.env.CONTINIA_ENV_ID;
 if (ENV_ID === undefined) throw new Error("set CONTINIA_ENV_ID");
@@ -100,27 +102,57 @@ const user = users[0];
 if (user === undefined) throw new Error("env has no users");
 console.log(`url=${env.url} expiresUtc=${env.expiresUtc ?? "(none)"} user=${user.username}`);
 
-// Q1: does the BC OData surface answer at all with these credentials?
 const origin = new URL(env.url).origin;
 const instance = new URL(env.url).pathname.replace(/^\/+|\/+$/g, "");
+
+// Baseline: does the BC surface answer these credentials at all? If this fails, nothing below
+// can succeed and the environment — not bc-dev-mcp — is the problem.
 const auth = `Basic ${btoa(`${user.username}:${user.password}`)}`;
 const probeUrl = `${origin}/${instance}/api/microsoft/automation/v2.0/companies`;
 const res = await fetch(probeUrl, { headers: { Authorization: auth } });
 console.log(`automation api: ${res.status} ${res.statusText}`);
 
-// Q1b: bc-dev-mcp OnPrem connection against the same server/instance.
-console.log(`\nNow run bc-dev-mcp manually against server=${origin} serverInstance=${instance}`);
-console.log("and record whether bcdev_status succeeds. That answer picks the coverage mode.");
+// THE question: drive the real backend exactly as a session would, rather than eyeballing
+// bc-dev-mcp by hand. `status()` is what runSession hard-gates on (orchestrator.ts), so this is
+// the same call that would abort a real run.
+const backend = new BcDevMcpBackend({
+  mcpCommand: ["bun", "run", "U:/Git/bc-dev-mcp/src/mcp/index.ts"],
+  server: origin,
+  serverInstance: instance,
+  tenant: "default",
+  company: "CRONUS Danmark A/S",
+  username: user.username,
+  password: user.password,
+  packageCachePath: ".alpackages",
+  controlSymbolPath: "unused-for-status",
+  env: { BC_DEV_USER: user.username, BC_DEV_PASSWORD: user.password },
+});
+try {
+  const status = await backend.status();
+  console.log(`bcdev_status ok=${status.ok}`);
+  console.log(status.details.slice(0, 800));
+  console.log(
+    status.ok
+      ? '\nVERDICT: coverageMode "procedure" — bc-dev-mcp drives this environment.'
+      : '\nVERDICT: coverageMode "none" — quote the details above in the plan.',
+  );
+} finally {
+  await backend.close();
+}
 ```
 
 - [ ] **Step 2: Run it**
 
 Run: `CONTINIA_API_TOKEN=… CONTINIA_ENV_ID=… bun run scripts/probe-continia-env.ts`
-Expected: prints the env url, an Automation-API status line, and the bc-dev-mcp instructions.
+Expected: the env url, an Automation-API status line, then `bcdev_status ok=true|false` and a
+VERDICT line. Either verdict is a valid result — the point is to learn which, not to get `true`.
 
-- [ ] **Step 3: Probe bc-dev-mcp by hand**
+- [ ] **Step 3: If `bcdev_status` failed, establish WHY before accepting the fallback**
 
-Point bc-dev-mcp at `server` = the origin, `serverInstance` = the path segment, `BC_DEV_USER`/`BC_DEV_PASSWORD` = the env user, and call `bcdev_status`. Record success or failure verbatim.
+A `"none"` verdict costs real fidelity, so do not accept it on one failed call. Check that the
+Automation-API line above returned 200 (if it did not, the environment is the problem, not
+bc-dev-mcp), and quote bc-dev-mcp's own error text. A connection refused, an auth rejection, and an
+unsupported-endpoint error are three different findings with three different follow-ups.
 
 - [ ] **Step 4: Record the answer in this plan**
 
@@ -1295,13 +1327,21 @@ import { EnvToolClient } from "../src/env-tool";
 import type { EnvToolConfigSection } from "../src/env-tool";
 import { startEnvToolSession } from "../src/env-tool-session";
 
-const RESOLVE_OUT = {
-  "env get": '{"url":"https://host/env-4711","expiresUtc":"2099-01-01T00:00:00Z"}',
-  "env users": '[{"username":"admin","password":"hunter2"}]',
-  "env create": '{"id":"env-new"}',
-};
+const FAR_FUTURE = "2099-01-01T00:00:00Z";
 
-function harness(cfgOver: Partial<EnvToolConfigSection> = {}) {
+/** Canned tool output, parameterised by expiry so no test mutates shared state. */
+function resolveOut(expiresUtc: string = FAR_FUTURE): Record<string, string> {
+  return {
+    "env get": `{"url":"https://host/env-4711","expiresUtc":"${expiresUtc}"}`,
+    "env users": '[{"username":"admin","password":"hunter2"}]',
+    "env create": '{"id":"env-new"}',
+  };
+}
+
+function harness(
+  cfgOver: Partial<EnvToolConfigSection> = {},
+  out: Record<string, string> = resolveOut(),
+) {
   const calls: string[][] = [];
   const published: string[] = [];
   const cfg: EnvToolConfigSection = {
@@ -1322,8 +1362,8 @@ function harness(cfgOver: Partial<EnvToolConfigSection> = {}) {
   const client = new EnvToolClient(cfg, {
     spawn: async (argv) => {
       calls.push([...argv]);
-      const key = Object.keys(RESOLVE_OUT).find((k) => argv.join(" ").includes(k));
-      return { exitCode: 0, stdout: key ? RESOLVE_OUT[key as keyof typeof RESOLVE_OUT] : "{}", stderr: "" };
+      const key = Object.keys(out).find((k) => argv.join(" ").includes(k));
+      return { exitCode: 0, stdout: key === undefined ? "{}" : (out[key] ?? "{}"), stderr: "" };
     },
   });
   return { calls, published, cfg, client };
@@ -1334,8 +1374,12 @@ const BCDEV_RAW = {
   packageCachePath: "C:/pkg", controlSymbolPath: "C:/lethal-control.app",
 };
 
-async function start(over: Record<string, unknown> = {}, cfgOver: Partial<EnvToolConfigSection> = {}) {
-  const h = harness(cfgOver);
+async function start(
+  over: Record<string, unknown> = {},
+  cfgOver: Partial<EnvToolConfigSection> = {},
+  out: Record<string, string> = resolveOut(),
+) {
+  const h = harness(cfgOver, out);
   let harnessCalls = 0;
   const session = await startEnvToolSession({
     cfg: h.cfg,
@@ -1429,10 +1473,11 @@ describe("startEnvToolSession", () => {
           }
           if (line.includes("env start")) seen.push("start");
           if (line.includes("env create")) seen.push("create");
-          const key = Object.keys(RESOLVE_OUT).find((k) => line.includes(k));
+          const out = resolveOut();
+          const key = Object.keys(out).find((k) => line.includes(k));
           return {
             exitCode: 0,
-            stdout: key ? RESOLVE_OUT[key as keyof typeof RESOLVE_OUT] : "{}",
+            stdout: key === undefined ? "{}" : (out[key] ?? "{}"),
             stderr: "",
           };
         },
@@ -1491,10 +1536,11 @@ describe("startEnvToolSession", () => {
             clock += 1000; // one simulated second per poll
             return { exitCode: 0, stdout: '{"status":"Starting"}', stderr: "" };
           }
-          const key = Object.keys(RESOLVE_OUT).find((k) => line.includes(k));
+          const out = resolveOut();
+          const key = Object.keys(out).find((k) => line.includes(k));
           return {
             exitCode: 0,
-            stdout: key ? RESOLVE_OUT[key as keyof typeof RESOLVE_OUT] : "{}",
+            stdout: key === undefined ? "{}" : (out[key] ?? "{}"),
             stderr: "",
           };
         },
@@ -1519,21 +1565,13 @@ describe("startEnvToolSession", () => {
 
   it("refuses to start when the env expires within the hour", async () => {
     const soon = new Date(Date.now() + 10 * 60_000).toISOString();
-    await expect(
-      start({ now: () => Date.now() }, {
-        resolve: [
-          { command: ["env", "get", "{envId}", "--json"],
-            reads: { baseUrl: "url", expiresUtc: "expiresUtc" } },
-          { command: ["env", "users", "{envId}", "--json"],
-            reads: { username: "0.username", password: "0.password" } },
-        ],
-      }).then(async () => {
-        // replace the canned expiry with an imminent one
-        RESOLVE_OUT["env get"] = `{"url":"https://host/env-4711","expiresUtc":"${soon}"}`;
-        return start();
-      }),
-    ).rejects.toThrow(/expires/);
-    RESOLVE_OUT["env get"] = '{"url":"https://host/env-4711","expiresUtc":"2099-01-01T00:00:00Z"}';
+    await expect(start({}, {}, resolveOut(soon))).rejects.toThrow(/expires/);
+  });
+
+  it("proceeds on an imminent expiry when explicitly allowed", async () => {
+    const soon = new Date(Date.now() + 10 * 60_000).toISOString();
+    const { session } = await start({ allowExpiring: true }, {}, resolveOut(soon));
+    expect(session.bcdev.baseUrl).toBe("https://host/env-4711");
   });
 
   it("never deletes a config-supplied env", async () => {
@@ -1562,8 +1600,9 @@ describe("startEnvToolSession", () => {
       spawn: async (argv) => {
         h.calls.push([...argv]);
         if (argv.includes("delete")) return { exitCode: 1, stdout: "", stderr: "gone" };
-        const key = Object.keys(RESOLVE_OUT).find((k) => argv.join(" ").includes(k));
-        return { exitCode: 0, stdout: key ? RESOLVE_OUT[key as keyof typeof RESOLVE_OUT] : "{}", stderr: "" };
+        const out = resolveOut();
+        const key = Object.keys(out).find((k) => argv.join(" ").includes(k));
+        return { exitCode: 0, stdout: key === undefined ? "{}" : (out[key] ?? "{}"), stderr: "" };
       },
     });
     const session = await startEnvToolSession({
