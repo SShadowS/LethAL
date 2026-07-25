@@ -58,37 +58,80 @@ const CODEUNIT_HEADER_KINDS: ReadonlySet<string> = new Set([
   ALNodeKind.identifier,
 ]);
 
+/** Raw grammar kinds of a `table_declaration`'s three header tokens. */
+const TABLE_HEADER_KINDS: ReadonlySet<string> = new Set([
+  "table_keyword",
+  ALNodeKind.integer_literal,
+  "quoted_identifier",
+  ALNodeKind.identifier,
+]);
+
+/** Builds the zero-width synthetic node `printWithRewrites` inserts text at. */
+function insertionNodeAt(anchor: ALSyntaxNode, index: number): ALSyntaxNode {
+  const position = index === anchor.startIndex ? anchor.startPosition : anchor.endPosition;
+  return {
+    kind: anchor.kind,
+    rawKind: anchor.rawKind,
+    text: "",
+    startIndex: index,
+    endIndex: index,
+    startPosition: position,
+    endPosition: position,
+    parent: anchor.parent,
+    children: [],
+    namedChildren: [],
+    fieldName: null,
+    childForFieldName: () => null,
+  };
+}
+
 /**
  * Insert `var MutationSelector: Codeunit "Mutation Selector";` into the
- * file's codeunit — reusing its existing `var_section` if present, or
- * inserting a fresh one right before the first member (field/procedure)
- * otherwise. A zero-width edit (`start === end`) anchored on the first
- * member's own start index is used for the "no existing var_section" case:
- * `printWithRewrites` keys rewrites by node identity and applies each as
- * `[start, end)`, so a synthetic node with `start === end === firstMember.
- * startIndex` inserts text there without consuming (or conflicting with)
- * any other rewrite targeting the first member's own contents.
+ * file's codeunit or table — reusing its existing `var_section` if present,
+ * or inserting a fresh one otherwise. A zero-width edit (`start === end`) is
+ * used for the "no existing var_section" case: `printWithRewrites` keys
+ * rewrites by node identity and applies each as `[start, end)`, so a
+ * synthetic node with `start === end` inserts text there without consuming
+ * (or conflicting with) any other rewrite targeting a real member's own
+ * contents.
  *
- * A codeunit's members (`var_section`, `procedure`) sit inside v3's
- * `declaration_body` container, not as direct `namedChildren` of the
- * codeunit itself — reading `codeunit.namedChildren` straight finds neither
- * an existing `var_section` nor a first member under v3, so every codeunit
- * silently fell through to the "no existing var_section" branch and got a
- * second, separate object-level `var` section instead of reusing the one it
- * already had. `declarationMembers` skips the container (and is a no-op
- * under a grammar without one).
+ * A codeunit's/table's members (`var_section`, `procedure`, `trigger`, ...)
+ * sit inside v3's `declaration_body` container, not as direct
+ * `namedChildren` of the object itself — reading `object.namedChildren`
+ * straight finds neither an existing `var_section` nor a first member under
+ * v3, so every object silently fell through to the "no existing var_section"
+ * branch and got a second, separate object-level `var` section instead of
+ * reusing the one it already had. `declarationMembers` skips the container
+ * (and is a no-op under a grammar without one).
+ *
+ * The insertion ANCHOR differs by object kind, and this is measured against
+ * `alc`, not assumed: in a codeunit, `var` before the first member compiles
+ * clean, but in a TABLE, `var` before `fields` is a hard syntax error
+ * (AL0107/AL0104/AL0198 — the parse does not recover). So for a table the
+ * selector must go AFTER the section-like members (`fields`, `keys`,
+ * `fieldgroups`) — before the first object-level trigger, or trailing (after
+ * the last member) when the table has none. A table CAN have no object-level
+ * trigger while still carrying a mutable trigger body: a field-level
+ * `OnValidate` lives inside `fields_section`, not as an object-level member,
+ * so it never becomes a `declarationMembers` anchor candidate.
  */
 function injectMutationSelectorVar(root: ALSyntaxNode, rewrites: Map<ALSyntaxNode, string>): void {
-  const codeunit = findFirst(root, ALNodeKind.codeunit);
-  if (codeunit === null) return; // not a codeunit object — no guard call is ever emitted there
+  const object = findFirst(root, ALNodeKind.codeunit) ?? findFirst(root, ALNodeKind.table);
+  if (object === null) return; // no object we know how to guard — no guard call is ever emitted there
 
-  const members = declarationMembers(codeunit);
+  const isTable = object.kind === ALNodeKind.table;
+  const headerKinds = isTable ? TABLE_HEADER_KINDS : CODEUNIT_HEADER_KINDS;
+  // Under the current v3 grammar `declarationMembers` already strips the
+  // `declaration_body` container, so header tokens never actually reach
+  // `members` here — this filter only matters as a defensive fallback for a
+  // grammar without that container (see `declarationMembers`'s own fallback).
+  const members = declarationMembers(object).filter((c) => !headerKinds.has(c.kind));
 
   const existingVar = members.find((c) => c.kind === ALNodeKind.var_section);
   if (existingVar !== undefined) {
     if (rewrites.has(existingVar)) {
       throw new Error(
-        "compileSchemataForFile: codeunit var_section already targeted by another rewrite",
+        "compileSchemataForFile: object's var_section already targeted by another rewrite",
       );
     }
     rewrites.set(
@@ -98,26 +141,26 @@ function injectMutationSelectorVar(root: ALSyntaxNode, rewrites: Map<ALSyntaxNod
     return;
   }
 
-  const firstMember = members.find((c) => !CODEUNIT_HEADER_KINDS.has(c.kind));
-  if (firstMember === undefined) return; // header-only codeunit (no members) — nothing to guard
+  if (members.length === 0) return; // header-only object (no members) — nothing to guard
 
-  const insertionPoint: ALSyntaxNode = {
-    kind: firstMember.kind,
-    rawKind: firstMember.rawKind,
-    text: "",
-    startIndex: firstMember.startIndex,
-    endIndex: firstMember.startIndex,
-    startPosition: firstMember.startPosition,
-    endPosition: firstMember.startPosition,
-    parent: firstMember.parent,
-    children: [],
-    namedChildren: [],
-    fieldName: null,
-    childForFieldName: () => null,
-  };
+  const anchor = isTable ? members.find((c) => c.kind === ALNodeKind.trigger) : members[0];
+
+  if (anchor !== undefined) {
+    rewrites.set(
+      insertionNodeAt(anchor, anchor.startIndex),
+      `    var\n        MutationSelector: Codeunit "Mutation Selector";\n\n`,
+    );
+    return;
+  }
+
+  // Table with no object-level trigger to anchor before (only ever reached
+  // for a table: the codeunit branch's anchor is always `members[0]`, which
+  // is defined whenever `members.length > 0`, already checked above).
+  const lastMember = members.at(-1);
+  if (lastMember === undefined) return;
   rewrites.set(
-    insertionPoint,
-    `    var\n        MutationSelector: Codeunit "Mutation Selector";\n\n`,
+    insertionNodeAt(lastMember, lastMember.endIndex),
+    `\n\n    var\n        MutationSelector: Codeunit "Mutation Selector";`,
   );
 }
 
