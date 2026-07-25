@@ -8,6 +8,7 @@ import {
   CONTROL_REGISTER_FILENAME,
   CONTROL_SELECTOR_FILENAME,
   CONTROL_UPGRADE_FILENAME,
+  stripAlComments,
   writeInstrumentedProject,
 } from "../src/project";
 
@@ -714,6 +715,95 @@ codeunit 51051 "Second Obj"
       } finally {
         await rm(dir, { recursive: true, force: true });
       }
+    });
+
+    // The refusal above counts headers with a regex, so a COMMENTED-OUT object is a false
+    // positive that would refuse a perfectly ordinary file. Worse, a commented object above the
+    // live one used to win the `matches[0]` race and label every mutant with ITS (type, id) —
+    // the silent misattribution the pair key exists to prevent. Both are why the count runs on
+    // comment-stripped text.
+    it("ignores a block-commented object header instead of refusing the file", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "lethal-commented-object-"));
+      try {
+        const src = [
+          "/*",
+          'codeunit 51060 "Retired Impl"',
+          "{",
+          "}",
+          "*/",
+          'table 51061 "Live Obj"',
+          "{",
+          '    fields { field(1; "No."; Code[20]) { } }',
+          "",
+          "    procedure P()",
+          "    begin",
+          "        X := 1;",
+          "    end;",
+          "}",
+        ].join("\n");
+        const root = wrapRoot(parseAL(src));
+        const assign = findFirst(root, ALNodeKind.assignment_statement);
+        if (assign === null) throw new Error("fixture has no assignment to mutate");
+        await writeInstrumentedProject({
+          targetDir: dir,
+          files: [
+            {
+              path: "Live.Table.al",
+              source: src,
+              root,
+              specs: [
+                {
+                  operatorName: "op.flip",
+                  operatorVersion: "1.0.0",
+                  astNodeId: `${assign.startIndex}`,
+                  before: assign,
+                  after: { ...assign, text: "X := 2;" } as never,
+                  parentContext: "statement-position",
+                },
+              ],
+            },
+          ],
+          selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
+          artifactId: "0123456789abcdef0123456789abcdef",
+          targetAppId: TARGET_APP_ID,
+          operatorTiers: NO_TIERS,
+        });
+        const manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8")) as {
+          mutants: Array<{ objectType: string; codeunitId: number }>;
+        };
+        // The LIVE object, not the commented one — this is the assertion that fails if the
+        // stripper is removed (the commented `codeunit 51060` matches first).
+        expect(manifest.mutants[0]?.objectType).toBe("table");
+        expect(manifest.mutants[0]?.codeunitId).toBe(51061);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe("stripAlComments", () => {
+    it("blanks line and block comments while preserving length and newlines", () => {
+      const src = "a // gone\n/* also\ngone */ b";
+      const out = stripAlComments(src);
+      expect(out.length).toBe(src.length);
+      expect(out.split("\n").length).toBe(src.split("\n").length);
+      expect(out).not.toContain("gone");
+      expect(out).toContain("a ");
+      expect(out.trimEnd().endsWith("b")).toBe(true);
+    });
+
+    it("leaves comment markers that live inside AL string literals alone", () => {
+      // A stripper blind to strings would treat this `//` as a comment start and blank the rest
+      // of the file — which would then report "no AL object header" on a valid object.
+      const src = "Error('use // and /* here');\ncodeunit 51070 \"After\"\n{\n}\n";
+      const out = stripAlComments(src);
+      expect(out).toContain("use // and /* here");
+      expect(out).toContain('codeunit 51070 "After"');
+    });
+
+    it("leaves a quoted AL identifier containing a comment marker alone", () => {
+      const src = 'Rec."Field // Odd" := 1;\n';
+      expect(stripAlComments(src)).toBe(src);
     });
   });
 });

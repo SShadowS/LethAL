@@ -92,6 +92,69 @@ const OBJECT_HEADER =
   /^\s*(codeunit|table|page|report|query|xmlport|enum)\s+(\d+)\s+("([^"]+)"|(\w+))/gim;
 
 /**
+ * Blanks out AL comments, preserving length (so any index computed against the result still
+ * addresses the same character of the original).
+ *
+ * `objectHeaderOf` counts headers with a regex, and the "more than one object" check it added
+ * turns a false positive into a refused file. A commented-out object is exactly that false
+ * positive, and it is a shape real AL carries: an old `codeunit 50100 "Old Impl"` left inside a
+ * block comment above the live `codeunit 50101 "New Impl"`.
+ *
+ * The regex anchors at line start, so a `//`-commented header never matched — but a block-
+ * commented one starts its own line and does. Worse, if the commented object came FIRST it won
+ * the `matches[0]` race and mislabelled every mutant in the file, silently. Both go away by
+ * scanning the comment-free text.
+ *
+ * String literals are tracked because AL text may legally contain `//` or `/*`
+ * (`Error('use // here')`), and a stripper blind to them would blank the rest of the file and
+ * report "no AL object header" on a valid one. `''` inside a single-quoted string is an escaped
+ * quote, which this handles by simply re-entering the string state on the next quote.
+ */
+export function stripAlComments(source: string): string {
+  const out = source.split("");
+  let state: "code" | "line-comment" | "block-comment" | "string" | "identifier" = "code";
+  for (let i = 0; i < source.length; i++) {
+    const c = source[i];
+    const next = source[i + 1];
+    if (state === "code") {
+      if (c === "'") state = "string";
+      else if (c === '"') state = "identifier";
+      else if (c === "/" && next === "/") {
+        state = "line-comment";
+        out[i] = " ";
+      } else if (c === "/" && next === "*") {
+        state = "block-comment";
+        out[i] = " ";
+      }
+      continue;
+    }
+    if (state === "string") {
+      if (c === "'") state = "code";
+      continue;
+    }
+    if (state === "identifier") {
+      if (c === '"') state = "code";
+      continue;
+    }
+    // Inside a comment: blank everything except newlines, so line numbers and the regex's
+    // `^` anchors keep addressing the same lines they did in the original.
+    if (state === "line-comment") {
+      if (c === "\n") state = "code";
+      else out[i] = " ";
+      continue;
+    }
+    // block-comment
+    if (c !== "\n") out[i] = " ";
+    if (c === "*" && next === "/") {
+      out[i + 1] = " ";
+      i++;
+      state = "code";
+    }
+  }
+  return out.join("");
+}
+
+/**
  * The declared object's kind, id and name. `type` is the matched AL keyword lowercased
  * (`table`, `codeunit`, ...) — a BC object id is unique only WITHIN a type, so every consumer
  * that identifies an object (coverage lookup above all) needs the pair, not the id alone.
@@ -113,9 +176,11 @@ function objectHeaderOf(
   source: string,
   filePath: string,
 ): { type: string; id: number; name: string } {
+  // Comment-free text, so a commented-out object neither wins the `matches[0]` race nor trips
+  // the "more than one object" refusal — see `stripAlComments`.
   // `matchAll` operates on an internal clone, so the shared `g` regex's `lastIndex` never carries
   // between calls (a plain `.exec` loop on OBJECT_HEADER would).
-  const matches = [...source.matchAll(OBJECT_HEADER)];
+  const matches = [...stripAlComments(source).matchAll(OBJECT_HEADER)];
   const first = matches[0];
   if (first === undefined) throw new Error(`${filePath}: file has no AL object header`);
   if (matches.length > 1) {
