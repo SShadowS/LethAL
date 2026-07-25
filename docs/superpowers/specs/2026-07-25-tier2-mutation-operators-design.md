@@ -126,12 +126,21 @@ A single successful trigger mutant is not sufficient — it exercises §3.1 and 
 
 ## 4. Phase 1 — the four operators that survive scrutiny
 
-All four are statement-position only. The three **deletion** operators claim their site from
-`void-method-call` via §3.2. `SwapModifyFlag` does not and must not: it rewrites `Modify(true)` to
-`Modify(false)` rather than deleting, so its after-form differs from `void-method-call`'s empty one, dedup
-correctly does not fire, and both mutants coexist at that site. That is not duplication — they are two
-distinct mutations, exactly as `conditional-boundary` and `negate-conditional` already coexist on one
-expression.
+The three **deletion** operators are statement-position only and claim their site from `void-method-call`
+via §3.2. Deletion requires statement position: removing a call that is an `if`'s then-branch would leave
+`if Cond then ;` and change control flow rather than delete a statement.
+
+`SwapModifyFlag` is **not** statement-position restricted, and must not be. It rewrites an argument
+(`Modify(true)` → `Modify(false)`) rather than deleting, so it is safe in any position. Restricting it to
+statement position would miss `if Rec.FindSet() then Rec.Modify(true);` — a routine BC idiom where the call
+is the then-branch, not a direct child of a `code_block`. **Measured, not assumed:** the grammar probe
+(`scripts/probe-grammar-table.ts`) found exactly this — every other targeted call reached statement position
+while `Modify` did not, precisely because the fixture writes it as a then-branch.
+
+For the same reason `SwapModifyFlag` does not claim its site from `void-method-call`: its after-form differs
+from the deletion's empty one, dedup correctly does not fire, and both mutants coexist at that site. That is
+not duplication — they are two distinct mutations, exactly as `conditional-boundary` and `negate-conditional`
+already coexist on one expression.
 
 ### 4.1 Receiver resolution — the rule every predicate below depends on
 
@@ -226,11 +235,21 @@ Per-mutant equality is the gate throughout. Aggregate counts matching for the wr
 
 ## 8. Risks
 
-- **The grammar's table-object coverage is unmapped.** `ALNodeKind` carries `table_declaration` and
-  `trigger_declaration` but no kinds for field declarations, field groups, keys, or field-level triggers —
-  yet §3.1 requires locating members by node kind to place the `var` section correctly. Whether tree-sitter-al
-  parses table bodies into usable named nodes at all is unverified, and the whole Tier-2 program rests on it.
-  This is the first thing Phase 0 should establish, before writing injection code.
+- ~~**The grammar's table-object coverage is unmapped.**~~ **RESOLVED — measured 2026-07-25** by
+  `scripts/probe-grammar-table.ts` against the vendored wasm. A table carrying fields, a FlowField, keys,
+  fieldgroups, an existing `var` section, table-level triggers and a field-level `OnValidate` parses with
+  **zero** ERROR/MISSING nodes, and every member Phase 0 must locate is addressable:
+  `table_declaration`, `field_declaration`, `keys_section`, `fieldgroups_section`, `var_section`,
+  `trigger_declaration`. Trigger bodies are reachable as `code_block` whose parent is `trigger_declaration`
+  (3 found), which also confirms Tier-1 `empty-block` will fire on them once §3.1 lands. `ALNodeKind` does
+  not *declare* constants for the table members, but the grammar emits them and `node.kind` matches on the
+  raw strings — Phase 0 should add the constants rather than hard-code strings.
+- **Vendored grammar is behind the grammar repo.** LethAL bundles `packages/engine/vendor/tree-sitter-al.wasm`
+  built from v2.5.0 (`packages/engine/src/ast/node-kinds.ts:3`), while `SShadowS/tree-sitter-al` is at v3.0.1.
+  Everything above was measured against the **vendored** v2.5.0, so it describes what LethAL has today.
+  Upgrading is not required by this design and should not be bundled into it: a grammar bump can change node
+  kinds that all five Tier-1 operators key on, and the frozen Tier-1 baselines are the only thing that would
+  catch it. If an upgrade is wanted, it is its own change with its own live gate.
 - **AL member ordering in tables** (§3.1) is unverified against the real compiler; assume at least one
   `alc` correction cycle.
 - **Equivalent-mutant dilution on real projects.** The fixture is engineered so Tier-2 mutants are killable.
