@@ -2,6 +2,9 @@
 
 Mutation-testing tool for Microsoft Dynamics 365 Business Central **AL** code. Bun + TypeScript monorepo. Authoritative architecture is `design.md` (repo root); per-layer specs/plans under `docs/superpowers/`.
 
+## `ROADMAP.md` (repo root) — read it, and keep it current
+Open work, measured-but-unclosed correctness risks, and known product gaps live in `ROADMAP.md`, each with a stable `R<n>` id and an evidence pointer. **Add an item the moment you discover one** (a limitation you hit, a gap a real project would trip on) and mark items `done (<commit>)` as they land — session ledgers under `.superpowers/` are scratch and get archived; the roadmap is the durable record. Check it before starting new work: what you are about to build may already be filed, or blocked on something that is.
+
 ## Packages (workspaces under `packages/`)
 - `engine` — AST (tree-sitter-al), `MutationSpec`, semantic layer, `astSubtreeHash`.
 - `operator-sdk` — operator interfaces.
