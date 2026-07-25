@@ -41,7 +41,10 @@ if (alRunnerPath === undefined) {
   process.exit(1);
 }
 
-const files = await generateMutationSet(join(PROJECT_DIR, "src"));
+// PROJECT_DIR, not `<PROJECT_DIR>/src`: `runSession` below generates its own set from
+// `projectDir`, so scanning a different root here would print a header that is not guaranteed to
+// describe the run underneath it (different roots also yield different relative `path` values).
+const files = await generateMutationSet(PROJECT_DIR);
 console.log(`mutant sites: ${files.reduce((n, f) => n + f.specs.length, 0)}`);
 for (const f of files) {
   console.log(`  ${f.path}: ${f.specs.length}`);
