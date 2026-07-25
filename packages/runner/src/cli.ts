@@ -389,6 +389,27 @@ export function odataCfgFor(c: BcDevConfigSection): ActivationConfig {
  *     outputDir per worker additionally keeps each worker's scratch/final
  *     artifacts physically separate and independently disposable.
  */
+/**
+ * Announces al-runner's non-authoritative survivors. Measured 2026-07-25 against the sandbox-data
+ * table fixture (fixtures/README.md §Tier-2 Phase 0): al-runner reports `pass` for an
+ * `asserterror` whose guarded statement raised nothing — `asserterror I := 1;` passes. Every
+ * mutant whose only killer is an asserterror assertion therefore comes back "survived" here while
+ * bcdev kills it. Under-reporting is the safe direction, but it is silent, and a silent wrong
+ * verdict is exactly what this project refuses to ship unannounced.
+ *
+ * Called ONCE per session from `runFromCli`, not from `buildBackend`: backends are constructed
+ * once for the session plus once per worker, so warning at construction printed the same
+ * paragraph five times under `--workers 4` and trained the reader to scroll past it.
+ */
+function warnAlRunnerNotAuthoritative(): void {
+  console.warn(
+    "[lethal] al-runner is NOT authoritative: it reports `pass` for an `asserterror` that " +
+      "raised no error, so any mutant killable only by an asserterror assertion is reported " +
+      "as SURVIVED. Treat survivors from this backend as unconfirmed — re-run them under " +
+      "--backend bcdev before acting on them.",
+  );
+}
+
 async function buildBackend(
   parsed: RunCliConfig,
   configFile: LethalConfigFile,
@@ -396,18 +417,6 @@ async function buildBackend(
 ): Promise<ExecutionBackend> {
   if (parsed.backendKind === "al-runner") {
     const c = validateAlRunnerConfig(configFile.alRunner);
-    // Measured 2026-07-25 against the sandbox-data table fixture (fixtures/README.md §Tier-2
-    // Phase 0): al-runner reports `pass` for an `asserterror` whose guarded statement raised
-    // nothing — `asserterror I := 1;` passes. Every mutant whose only killer is an asserterror
-    // assertion therefore comes back "survived" here while bcdev kills it. Under-reporting is
-    // the safe direction, but it is silent, and a silent wrong verdict is exactly what this
-    // project refuses to ship unannounced.
-    console.warn(
-      "[lethal] al-runner is NOT authoritative: it reports `pass` for an `asserterror` that " +
-        "raised no error, so any mutant killable only by an asserterror assertion is reported " +
-        "as SURVIVED. Treat survivors from this backend as unconfirmed — re-run them under " +
-        "--backend bcdev before acting on them.",
-    );
     return new AlRunnerBackend({
       alRunnerPath: c.alRunnerPath,
       instrumentedDir: join(scratchDir, "al-runner-active"),
@@ -568,6 +577,7 @@ async function printDryRun(projectDir: string): Promise<void> {
 async function runFromCli(parsed: RunCliConfig): Promise<SessionReport> {
   const configFile = await loadLethalConfigFile(parsed.configPath);
   const scratchRoot = await mkdtemp(join(tmpdir(), "lethal-"));
+  if (parsed.backendKind === "al-runner") warnAlRunnerNotAuthoritative();
   const backend = await buildBackend(parsed, configFile, scratchRoot);
   // `SessionConfig.backendFactory` is synchronous (`runSession` calls it
   // without awaiting — see orchestrator.ts), but building a worker's backend

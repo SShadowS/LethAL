@@ -723,6 +723,15 @@ describe("runSession — per-mutant budget floor (Tier 6B Phase 0 Task 6)", () =
     }
   }
 
+  // The fixture's premise, asserted rather than assumed: these tests feed a 50ms baseline, so the
+  // naive `2 * 50 = 100ms` budget must be strictly BELOW the floor for the floor to be what the
+  // observed budget demonstrates. Pinning it here is also what stops the assertions below from
+  // passing against the constant they are testing — `toBeGreaterThanOrEqual(MIN_MUTANT_BUDGET_MS)`
+  // alone stays green if someone sets `MIN_MUTANT_BUDGET_MS = 0`.
+  test("fixture premise: the floor is above the naive 2x budget these tests produce", () => {
+    expect(MIN_MUTANT_BUDGET_MS).toBeGreaterThan(2 * 50);
+  });
+
   test("a tiny baseline duration still dispatches the covering run at the floored budget", async () => {
     const dirs = await makeProject();
     const backend = new BudgetProbeBackend(50); // naive 2x budget = 100ms, far under the floor
@@ -733,7 +742,10 @@ describe("runSession — per-mutant budget floor (Tier 6B Phase 0 Task 6)", () =
     const mutantRun = backend.runs[1];
     expect(mutantRun).toBeDefined();
     expect(mutantRun?.active).not.toBeNull();
-    expect(mutantRun?.timeoutMs).toBeGreaterThanOrEqual(MIN_MUTANT_BUDGET_MS);
+    // A LITERAL, not `MIN_MUTANT_BUDGET_MS`: asserting against the constant under test passes
+    // whether or not the floor is applied (set the constant to 0 and `>= 0` is trivially true).
+    expect(mutantRun?.timeoutMs).toBe(30_000);
+    expect(mutantRun?.timeoutMs).toBe(MIN_MUTANT_BUDGET_MS); // ...and the constant still names it
   });
 
   test("a large baseline duration still gets exactly 2x, uncapped by the floor", async () => {
@@ -758,7 +770,9 @@ describe("runSession — per-mutant budget floor (Tier 6B Phase 0 Task 6)", () =
     const confirmRun = backend.runs[2];
     expect(confirmRun).toBeDefined();
     expect(confirmRun?.active).toBeNull();
-    expect(confirmRun?.timeoutMs).toBeGreaterThanOrEqual(MIN_MUTANT_BUDGET_MS);
+    // Literal, for the same reason as above.
+    expect(confirmRun?.timeoutMs).toBe(30_000);
+    expect(confirmRun?.timeoutMs).toBe(MIN_MUTANT_BUDGET_MS);
   });
 });
 

@@ -10,9 +10,17 @@ import type { MutationSpec } from "@lethal/engine";
  */
 export type TierResolver = (operatorName: string) => 1 | 2 | 3 | "custom" | undefined;
 
-/** Identity of an emitted mutation: same site, same replacement text. */
+/**
+ * Identity of an emitted mutation: same NODE at the same site, same replacement text.
+ *
+ * `before.kind` is part of the identity, not decoration. A span alone conflates a parent with a
+ * same-span child — `Rec.TestField(Name)` as a `call_expression` and the statement wrapping it
+ * can carry byte-identical start/end offsets, and two operators targeting those two different
+ * nodes are producing two different mutations that merely happen to print the same text. Merging
+ * them by span drops a real mutant (or, worse, raises a spurious same-tier collision).
+ */
 function identityOf(spec: MutationSpec): string {
-  return `${spec.before.startIndex}:${spec.before.endIndex}:${spec.after.text}`;
+  return `${spec.before.kind}:${spec.before.startIndex}:${spec.before.endIndex}:${spec.after.text}`;
 }
 
 function tierRank(spec: MutationSpec, tierOf: TierResolver): number {
@@ -31,9 +39,14 @@ function tierRank(spec: MutationSpec, tierOf: TierResolver): number {
  * from the manifest would leave it compiled into the dispatch chain holding an
  * ID — an unreported mutation that still exists in the artifact.
  *
- * A `likely-equivalent` mutant never suppresses a scored one. Otherwise an
- * overbroad Tier-2 predicate would replace a fully scored Tier-1 mutant with one
- * excluded from the mutation score, hiding both the real mutant and the bug.
+ * A `likely-equivalent` mutant never suppresses a plain one. TODAY that hint changes exactly one
+ * thing: which of two colliding specs wins here. It does NOT reach `MutantManifestEntry`, the
+ * store, or the report — this module is `equivalenceHint`'s only consumer — so a surviving
+ * `likely-equivalent` mutant is scored like any other. The rule still matters: an overbroad
+ * Tier-2 predicate that tagged itself `likely-equivalent` would otherwise displace the Tier-1
+ * mutant at that site, and the reason it was tagged (someone believed it unkillable) is the
+ * reason it must not be the one that gets reported. Score exclusion is Tier-2 work; do not read
+ * this comment as describing a scoring feature that exists.
  */
 export function dedupeSpecs(
   specs: readonly MutationSpec[],
@@ -47,9 +60,38 @@ export function dedupeSpecs(
       winners.set(id, spec);
       continue;
     }
-    if (tierOf(held.operatorName) === tierOf(spec.operatorName)) {
+    const site = `${spec.before.kind} at ${spec.before.startIndex}-${spec.before.endIndex}`;
+    // ONE operator emitting the same mutation twice is a bug in that operator — there is no
+    // pair to order and no precedence question, so it gets its own message. The pair message
+    // ('operators "lethal.a" and "lethal.a" both claim...') reads as an interaction between two
+    // operators and sends the reader to the registry instead of to the generate() that
+    // double-emitted.
+    if (held.operatorName === spec.operatorName) {
       throw new Error(
-        `dedupeSpecs: operators "${held.operatorName}" and "${spec.operatorName}" both claim the same mutation at ${spec.before.startIndex}-${spec.before.endIndex}; the winner would depend on registration order`,
+        `dedupeSpecs: operator "${spec.operatorName}" emitted the same mutation twice at ${site} (identical node, identical replacement text) — that is a bug in the operator's own generate(), not a precedence question between operators`,
+      );
+    }
+    const heldTier = tierOf(held.operatorName);
+    const specTier = tierOf(spec.operatorName);
+    // Two operators of the SAME tier claiming one site — but only when both tiers are actually
+    // orderable. `undefined === undefined` is true, so testing equality first reported two
+    // UNREGISTERED operators (and two `custom`-tier ones) as a same-tier collision, blaming
+    // "registration order" for what is really "neither has a tier at all" and sending the reader
+    // to the wrong fix. Within a tier, operators are specified to match distinct method names, so
+    // a genuine same-tier collision is a caller-contract violation however either side is tagged
+    // — the equivalence hint below must not quietly promote one into the winner of a collision
+    // that should never have happened.
+    const orderable = (t: 1 | 2 | 3 | "custom" | undefined) => t !== undefined && t !== "custom";
+    if (orderable(heldTier) && orderable(specTier) && heldTier === specTier) {
+      throw new Error(
+        `dedupeSpecs: operators "${held.operatorName}" and "${spec.operatorName}" both claim the same mutation at ${site}; the winner would depend on registration order`,
+      );
+    }
+    const rank = tierRank(spec, tierOf);
+    const heldRank = tierRank(held, tierOf);
+    if (Number.isNaN(rank) || Number.isNaN(heldRank)) {
+      throw new Error(
+        `dedupeSpecs: cannot order "${held.operatorName}" (tier ${String(heldTier)}) against "${spec.operatorName}" (tier ${String(specTier)}) at ${site} — at least one is unregistered, custom-tier, or of a tier with no defined precedence against a builtin`,
       );
     }
     const heldHinted = held.equivalenceHint === "likely-equivalent";
@@ -57,13 +99,6 @@ export function dedupeSpecs(
     if (heldHinted !== specHinted) {
       winners.set(id, heldHinted ? spec : held);
       continue;
-    }
-    const rank = tierRank(spec, tierOf);
-    const heldRank = tierRank(held, tierOf);
-    if (Number.isNaN(rank) || Number.isNaN(heldRank)) {
-      throw new Error(
-        `dedupeSpecs: cannot order "${held.operatorName}" against "${spec.operatorName}" at ${spec.before.startIndex}-${spec.before.endIndex} — one of them is unregistered or custom-tier, and neither has a defined precedence against a builtin`,
-      );
     }
     if (rank > heldRank) winners.set(id, spec);
   }
