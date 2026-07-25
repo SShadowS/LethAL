@@ -9,9 +9,17 @@ package loads this file at runtime via `web-tree-sitter` to parse AL source.
 - Repository: <https://github.com/SShadowS/tree-sitter-al>
 - License: MIT
 - Version: `3.0.1` (`package.json`)
-- Commit: `f150581` — "queries: capture scoped member-trigger names (Object::Member)", 2026-06-28
+- Commit: `f150581de8dd4393b8774ead02098a20ecc1e527` — "queries: capture scoped
+  member-trigger names (Object::Member)", 2026-06-28, contained in `origin/main`
 - Provenance: **built locally from source at that commit**, NOT downloaded from a
-  release. `tree-sitter build --wasm`, tree-sitter CLI 0.26.11, 7,979,068 bytes.
+  release. `tree-sitter build --wasm`, tree-sitter CLI 0.26.11.
+- Artifact: 7,979,068 bytes,
+  `sha256:3ea975682469daa2382137daff0b3954030c84a8619243333f68528af964d49c`
+
+A commit alone does not determine the binary — `tree-sitter build --wasm` uses
+local Emscripten when present and falls back to a Docker image otherwise, and the
+two toolchains do not produce byte-identical output. Record the artifact hash on
+every bump so the vendored file can be *verified*, not merely re-approximated.
 
 > The `tree-sitter-al.wasm` checked into the grammar repo's own root is NOT the
 > same artifact — it is dated before the commit above and is 8,941,485 bytes.
@@ -78,10 +86,27 @@ all of this:
 5. Run the live gate (`itest:bcdev`, `itest:alrunner`, `itest:lease`,
    `itest:stale-publish`). Expect the per-mutant baselines to flag a difference
    if any operator's target subtree changed shape: `empty-block`'s identity hash
-   moved in the v3 bump because its `before` node IS the `code_block`. Before
-   re-recording a baseline, PROVE the verdicts held — compare the
-   `(object, operator, verdict, killingTest)` signature across old and new, and
-   confirm which operators' keys moved and why. Never re-record simply to make
-   the gate pass.
+   moved in the v3 bump because its `before` node IS the `code_block`, and
+   `astSubtreeHash` serializes named children recursively.
+
+   **Before re-recording a baseline, prove per-site — not per-signature.**
+   Comparing the `(object, operator, verdict, killingTest)` signature as a
+   multiset is NOT sufficient: it cannot see a swap between two same-operator
+   sites in the same object. The sandbox fixture has five `empty-block` sites in
+   one codeunit with verdicts {killed ×1, survived ×4}, so a shift in *which*
+   block is the killed one leaves that signature byte-identical.
+
+   The decisive check takes about a minute and needs no server. The old parser is
+   always one command away:
+
+   ```bash
+   git show <base-commit>:packages/engine/vendor/tree-sitter-al.wasm > /tmp/old.wasm
+   ```
+
+   Load both wasms through `web-tree-sitter`, replicate the affected operator's
+   `targets()` and `astSubtreeHash` over the fixture files, and build an
+   old-key → **source line** → new-key map. Diff by line. Every site must appear
+   on both sides with its verdict unchanged; a site that appears or disappears is
+   a coverage change and a BLOCK. Never re-record simply to make the gate pass.
 6. If node-type names shifted, regenerate `ALNodeKind` from the new
    `src/node-types.json` and update every consumer.
