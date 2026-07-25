@@ -8,6 +8,7 @@ import {
   findEnclosingProcedure,
 } from "@lethal/engine";
 import { compileSchemataForFile } from "./compile";
+import { type TierResolver, dedupeSpecs } from "./dedup";
 import { assignMutantIds } from "./ids";
 import {
   type SelectorConfig,
@@ -36,6 +37,11 @@ export interface WriteInput {
    *  register-install codeunit so the LethAL Control extension keys state on the full
    *  (targetAppId, artifactId, mutantId) tuple (Layer 5C-A). */
   readonly targetAppId: string;
+  /** Tier of each registered operator, keyed by `MutationSpec.operatorName` — used to resolve
+   *  Tier-2 narrowings of a Tier-1 operator that would otherwise emit a byte-identical mutant at
+   *  the same site under two names (see `dedupeSpecs`). `MutationSpec` itself carries no tier
+   *  (that's a property of `MutationOperator`), so the caller supplies this map. */
+  readonly operatorTiers: ReadonlyMap<string, 1 | 2 | 3 | "custom">;
 }
 
 export interface MutantManifestEntry {
@@ -114,14 +120,19 @@ function triggerNameOf(spec: MutationSpec): string | undefined {
 export async function writeInstrumentedProject(input: WriteInput): Promise<void> {
   await mkdir(input.targetDir, { recursive: true });
 
+  // Dedup runs BEFORE ids are assigned and BEFORE compilation: dropping a mutant only while
+  // building the manifest would leave it compiled into the emitted dispatch chain holding an
+  // assigned id — an unreported mutation that still exists in the artifact.
+  const tierOf: TierResolver = (name) => input.operatorTiers.get(name);
   const specsByFile = new Map<string, readonly MutationSpec[]>();
-  for (const f of input.files) specsByFile.set(f.path, f.specs);
+  for (const f of input.files) specsByFile.set(f.path, dedupeSpecs(f.specs, tierOf));
   const idedByFile = assignMutantIds(specsByFile);
 
   const manifest: MutantManifestEntry[] = [];
   for (const f of input.files) {
     const ided = idedByFile.get(f.path) ?? [];
-    const compiled = compileSchemataForFile(f.source, f.root, f.specs, ided);
+    const deduped = specsByFile.get(f.path) ?? [];
+    const compiled = compileSchemataForFile(f.source, f.root, deduped, ided);
     await writeFile(join(input.targetDir, basename(f.path)), compiled, "utf8");
     const header = objectHeaderOf(f.source);
     for (const { mutantId, spec } of ided) {

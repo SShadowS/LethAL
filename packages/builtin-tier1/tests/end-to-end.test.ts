@@ -15,6 +15,9 @@ import { compileSchemataForFile, writeInstrumentedProject } from "@lethal/schema
 import { tier1Operators } from "../src";
 
 const SRC_PATH = fileURLToPath(new URL("./fixtures/al/mixed-operators.al", import.meta.url));
+const OPERATOR_TIERS: ReadonlyMap<string, 1 | 2 | 3 | "custom"> = new Map(
+  tier1Operators.map((op) => [op.name, op.tier]),
+);
 
 describe("end-to-end Layer 3", () => {
   beforeAll(async () => {
@@ -61,6 +64,7 @@ describe("end-to-end Layer 3", () => {
         selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
         artifactId: "0123456789abcdef0123456789abcdef",
         targetAppId: "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",
+        operatorTiers: OPERATOR_TIERS,
       });
       const written = await readFile(join(dir, "mixed.al"), "utf8");
       expect(written).toBe(compiled);

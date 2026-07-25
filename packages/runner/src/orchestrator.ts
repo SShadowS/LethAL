@@ -48,6 +48,18 @@ import type { MutantVerdict } from "./store";
 const BASELINE_TIMEOUT_DEFAULT = 120_000;
 
 /**
+ * Tier of every currently registered operator, keyed by name — the mapping
+ * `writeInstrumentedProject` needs to resolve Tier-2 narrowings of a Tier-1
+ * operator (`dedupeSpecs` in `@lethal/schemata`). Built once from the same
+ * `tier1Operators` import `generateMutationSet` walks, so a mutant's identity
+ * after dedup can never diverge between the two — see `manifestMutants` in
+ * `orchestrator.test.ts` for a caller that leans on that parity.
+ */
+export const operatorTiers: ReadonlyMap<string, 1 | 2 | 3 | "custom"> = new Map(
+  tier1Operators.map((op) => [op.name, op.tier]),
+);
+
+/**
  * Parse every `.al` file under `projectDir` (skipping emitted `Mutation*`
  * artifacts) and run the Tier 1 operator set over each. Mirrors the
  * ops -> compile -> write pipeline exercised by
@@ -306,6 +318,7 @@ async function prepareArtifactDir(args: {
     selectorIds: args.selectorIds,
     artifactId: args.artifactId,
     targetAppId: targetAppIdOf(args.projectManifest),
+    operatorTiers,
   });
   await prepareBatchProject(args.projectDir, args.targetDir, args.projectManifest, args.appVersion);
 }

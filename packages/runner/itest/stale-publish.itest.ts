@@ -63,7 +63,7 @@ import { DeploymentVerifier } from "../src/deployment-verifier";
 import { discoverTests } from "../src/discovery";
 import { CONTROL_APP_ID, HarnessVerifier } from "../src/harness";
 import { LeaseClient, MAX_TTL_SECONDS } from "../src/lease";
-import { generateMutationSet } from "../src/orchestrator";
+import { generateMutationSet, operatorTiers } from "../src/orchestrator";
 import { ContainerDeployer, defaultAlToolPaths, defaultDeployerIo } from "../src/publisher";
 import type { ContainerDeployerIo, SpawnFn } from "../src/publisher";
 import { RunMutantTransport } from "../src/run-mutant-transport";
@@ -287,6 +287,7 @@ async function compileArtifact(
     selectorIds: SELECTOR_IDS,
     artifactId,
     targetAppId: ctx.appId,
+    operatorTiers,
   });
   // Layer 5C-A: the instrumented target's selector delegates to `Codeunit "LC Control State"`, so
   // it cannot compile without the LethAL Control dependency (+ its symbol staged in the package
