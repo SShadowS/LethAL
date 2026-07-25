@@ -43,9 +43,35 @@ No operators are written in this phase. Three deliverables:
 
 ### 3.1 Selector injection into table objects
 
-Extend `injectMutationSelectorVar` to handle `table` objects, respecting AL's member ordering (fields, then
-keys, then the global `var` section, then triggers). Emitting the `var` section in the wrong position is a
-structural compile failure, so this is verified by a real `alc` compile rather than by unit test alone.
+Extend `injectMutationSelectorVar` to handle `table` objects. **The member ordering this depends on is no
+longer an unknown — it was measured against real `alc` on 2026-07-25, before implementation:**
+
+| emitted shape | `alc` result |
+|---|---|
+| `var` before `fields` | **AL0107 / AL0104 / AL0198 — hard syntax error**, the parse does not recover |
+| `var` after `fields`/`keys`/`fieldgroups`, before `trigger` | compiles clean |
+| `var` as the LAST member, table has only a field-level `OnValidate` | compiles clean |
+
+So the codeunit strategy — "insert before the first member" — is **invalid for tables** and would break every
+instrumented table object. The rule is:
+
+- Read members with `declarationMembers(tableNode)`. v3 wraps a table's members in `declaration_body` exactly
+  as it does a codeunit's; measured order inside it is `property`, `fields_section`, `keys_section`,
+  `fieldgroups_section`, `var_section`, `trigger_declaration`… That helper already exists, is exported, and is
+  used by `symbol-table.ts` and the codeunit path — do not hand-roll a sixth shape check.
+- If an object-level `var_section` exists, append the selector to it (identical to the codeunit path).
+- Otherwise insert a fresh `var` section **after the last section-like member** — equivalently, immediately
+  before the first object-level `trigger_declaration`, and at the end of the members when the table has none.
+- The "no object-level trigger" case is not hypothetical: a field-level `OnValidate` lives inside
+  `fields_section`, not as an object-level member, so a table can carry mutable trigger bodies with no
+  object-level trigger to anchor against. The third row above confirms a trailing `var` is legal and that a
+  field trigger may reference a variable declared after it.
+
+`CODEUNIT_HEADER_KINDS` in `compile.ts` needs a table analogue (`table_keyword`, `integer`,
+`quoted_identifier`) for the member scan.
+
+Still verify the finished emission with a real `alc` compile — these three shapes are the ones reasoned about,
+not a proof that every table in the wild is covered.
 
 ### 3.2 Mutant identity and dedup
 
@@ -263,8 +289,10 @@ Per-mutant equality is the gate throughout. Aggregate counts matching for the wr
   The upgrade also confirmed this bullet's own warning was well-founded: the bump silently zeroed
   `void-method-call` until it was fixed, and moved the identity hash of all six `empty-block` mutants in both
   frozen live baselines — with every verdict and killing test held constant.
-- **AL member ordering in tables** (§3.1) is unverified against the real compiler; assume at least one
-  `alc` correction cycle.
+- ~~**AL member ordering in tables** (§3.1) is unverified against the real compiler.~~ **RESOLVED — measured
+  against `alc` 18.0.38.8509 on 2026-07-25**, before implementation rather than during it. `var` before
+  `fields` is a hard syntax error; `var` after the sections (before triggers, or trailing when there are none)
+  compiles clean. The anchor rule is written into §3.1. No correction cycle should be needed for these shapes.
 - **Equivalent-mutant dilution on real projects.** The fixture is engineered so Tier-2 mutants are killable.
   Real BC code is data-dependent in ways a fixture is not, so a production run will surface survivors that
   reflect data shape rather than test quality, and only `SetLoadFields` gets an excluded bucket. The headline
