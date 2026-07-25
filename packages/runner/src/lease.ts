@@ -52,6 +52,26 @@ export class LeaseUnavailableError extends Error {
   }
 }
 
+/**
+ * Thrown when a CALLER violates this module's own contract before any request is even shaped —
+ * an `attemptId` over the server's `Text[64]` bound (`assertAttemptId`), a `ttlSeconds` outside
+ * `(0, MAX_TTL_SECONDS]` (`assertTtlBound`), `recoverOp` invoked without its required
+ * `terminalProof: true`, or `forceResetLease` invoked with a blank `expectedGeneration`. None of
+ * these ever reach the wire.
+ *
+ * Distinct from `LeaseUnavailableError` (a transport/shape failure this module could not have
+ * prevented, however carefully it was called) so a caller can `instanceof`-distinguish "you
+ * called this wrong" from "the server/network failed" — see CLAUDE.md's typed-error-classes
+ * convention: this extends `Error` directly, never `LeaseUnavailableError`, mirroring the
+ * `AlcCompileError`/`ArtifactPrepareError`/`DeploymentError` separation elsewhere in this repo.
+ */
+export class LeaseCallerContractError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "LeaseCallerContractError";
+  }
+}
+
 /** The held lease's identity + bookkeeping, as returned by a granted `acquire()`. Carried by the
  * caller through every subsequent fenced call (design §6: "Every `RunMutant` passes `(epoch,
  * token, serverGeneration, attemptId)`" — the same tuple fences renew/release/beginPublish/
@@ -95,9 +115,15 @@ export type RenewOutcome =
   | { readonly renewed: true; readonly expiresAt: string }
   | { readonly renewed: false };
 
+/** `ControlState.Codeunit.al`'s `TryRelease` has exactly one `Released := false` path — a
+ * non-idle `"Op Kind"` — and it always sets `Reason := 'op-in-flight'` before that `exit`; every
+ * OTHER path (tuple match with an idle marker, or a no-match idempotent success) sets
+ * `Released := true`. So `reason` is REQUIRED whenever `released` is `false`, never merely
+ * possible — a response that says `released:false` with no `reason` is a protocol violation,
+ * not a legitimate "no reason given" refusal (t4, 5C-B2). */
 export type ReleaseOutcome =
   | { readonly released: true }
-  | { readonly released: false; readonly reason?: string };
+  | { readonly released: false; readonly reason: string };
 
 export interface BeginPublishOutcome {
   readonly begun: boolean;
@@ -184,7 +210,7 @@ function optionalBoolean(json: Record<string, unknown>, key: string): boolean | 
  */
 export function assertAttemptId(attemptId: string): void {
   if (attemptId.length > MAX_ATTEMPT_ID_LENGTH) {
-    throw new Error(
+    throw new LeaseCallerContractError(
       `attemptId must be at most ${MAX_ATTEMPT_ID_LENGTH} characters — the server stores it in a Text[64] and compares the stored (truncated) value against the full incoming one, so a longer id could never match its own retry (design §4). Got ${attemptId.length} chars: ${attemptId}`,
     );
   }
@@ -195,12 +221,12 @@ function assertTtlBound(ttlSeconds: number): void {
   // grants something already expired, and design §6's ttl/3 heartbeat then degenerates to
   // `Math.max(1, …)` = a 1ms renew loop (orchestrator.ts). Fail loudly rather than accept it.
   if (!(ttlSeconds > 0)) {
-    throw new Error(
+    throw new LeaseCallerContractError(
       `ttlSeconds must be greater than 0 — the server grants a lease expiring ttlSeconds from now, so a non-positive ttl is born expired and its ttl/3 heartbeat degenerates to a 1ms renew loop (design §6). Got ${ttlSeconds}`,
     );
   }
   if (ttlSeconds > MAX_TTL_SECONDS) {
-    throw new Error(
+    throw new LeaseCallerContractError(
       `ttlSeconds must be at most ${MAX_TTL_SECONDS}s — the server renews on a ${MAX_TTL_SECONDS}s grace derived from RenewPeriodMs() (ControlState.Codeunit.al), and design §6's ttl/3 heartbeat on a longer ttl would renew less often than that period requires. Got ${ttlSeconds}`,
     );
   }
@@ -380,8 +406,7 @@ export class LeaseClient implements LeaseApi {
     });
     const released = requireBoolean(json, "released", "ReleaseLease");
     if (released) return { released: true };
-    const reason = optionalString(json, "reason");
-    return { released: false, ...(reason !== undefined ? { reason } : {}) };
+    return { released: false, reason: requireString(json, "reason", "ReleaseLease") };
   }
 
   /** `BeginPublish` (design §4): the publish op-marker state machine's entry. */
@@ -479,7 +504,7 @@ export class LeaseClient implements LeaseApi {
     terminalProof: true,
   ): Promise<RecoverOpOutcome> {
     if (terminalProof !== true) {
-      throw new Error(
+      throw new LeaseCallerContractError(
         "recoverOp requires terminalProof: true — RecoverOp may ONLY follow a PARSED " +
           "application-level terminal response (or a completed/tombstoned GetOperationStatus " +
           "read), NEVER a bare HTTP status, connection error, or client timeout (design §5) — " +
@@ -518,7 +543,7 @@ export class LeaseClient implements LeaseApi {
    */
   async forceResetLease(expectedGeneration: string): Promise<ForceResetOutcome> {
     if (expectedGeneration === "") {
-      throw new Error(
+      throw new LeaseCallerContractError(
         "forceResetLease requires a non-blank expectedGeneration echoing the CURRENT " +
           '"Server Generation", read live via HarnessInfo(clientProtocol: 2) AFTER the ' +
           "container/NST restart (design §8) — the server rejects a blank echo outright with an " +

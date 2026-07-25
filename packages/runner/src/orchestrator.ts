@@ -1247,7 +1247,7 @@ class LeaseSession {
       const released = await this.d.client.release(this.d.lease);
       if (!released.released) {
         console.warn(
-          `[lethal] ReleaseLease refused (${released.reason ?? "no reason given"}) — the lease will expire on its own`,
+          `[lethal] ReleaseLease refused (${released.reason}) — the lease will expire on its own`,
         );
       }
     } catch (err) {
@@ -2618,6 +2618,21 @@ export async function runOnce(
  *     perfectly healthy (design §6's quarantine taxonomy).
  *   - `op-in-flight`: our OWN attempt is still executing. Poll it out (never re-dispatch, never
  *     `RecoverOp`), and only if it never clears is the tier durably quarantined.
+ *
+ * `op-in-flight` always latches unsafe below, even when `pollUntilOpClears()` reports the marker
+ * cleared (t6, 5C-B2 review — checked whether `LeaseSession.reconcileLostAck`'s later
+ * reconciliation, added for the fenced RunMutant lost-ack path, makes this unconditional latch
+ * unnecessary here too). It does not: `reconcileLostAck` resolves `in-flight-unknown` — an
+ * UNREADABLE answer, where the caller must first establish whose op the marker names and whether
+ * it completed. This branch is reached from `classifyLeaseVerdict`'s `lease-lost` case instead — a
+ * confirmed, LEGIBLE server refusal (`operation-outcome.ts`'s doc comment) that has already told
+ * us the marker is our own and still active; there is nothing left to reconcile. And even a
+ * cleared marker doesn't change the actual problem: the baseline RunMutant call for `ref` was
+ * REFUSED, not executed, so this session has no pass/fail verdict for it — greenTests can never be
+ * complete, and scheduling any mutant against an incomplete baseline is exactly the false-verdict
+ * risk this layer exists to close. Recovering would require re-dispatching the baseline test as a
+ * fresh attempt post-clear, which `runOnce`'s single `pre-dispatch-rejected` retry does not cover
+ * and which is out of scope for this fix (see carried-minors.md t6).
  */
 async function handleBaselineLeaseOutcome(args: {
   readonly kind: LeaseVerdictKind;

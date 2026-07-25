@@ -3,10 +3,12 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ActivationConfig } from "../src/activation";
+import type { BcDevConfigSection } from "../src/cli";
 import {
   clearQuarantine,
   leaseSessionFor,
   odataBaseUrl,
+  odataCfgFor,
   parseCliConfig,
   performForceResetLease,
   resourceIdentityFor,
@@ -162,6 +164,47 @@ describe("odataBaseUrl", () => {
 
   test("leaves an already-correct port 7048 alone", () => {
     expect(odataBaseUrl("http://Cronus28:7048", "BC")).toBe("http://cronus28:7048/BC");
+  });
+});
+
+// t7 (5C-B2): buildBackend's HarnessVerifier and leaseSessionFor's own separate one used to build
+// this object inline, independently — the two could silently drift if either grew a field. Both
+// now call this single helper; these tests pin its own shape down directly (buildBackend itself
+// is not unit-tested — it needs a real alc.exe/AL-extension install — so this is the closest
+// direct seam for the extraction).
+describe("odataCfgFor (t7: the shared OData config both buildBackend and leaseSessionFor build from)", () => {
+  const FULL_SECTION: BcDevConfigSection = {
+    mcpCommand: ["bun", "x", "bc-dev-mcp"],
+    server: "http://Cronus281",
+    serverInstance: "BC",
+    tenant: "default",
+    company: "CRONUS Danmark A/S",
+    username: "u",
+    password: "p",
+    packageCachePath: "C:/.alpackages",
+    controlSymbolPath: "C:/lethal-control.app",
+  };
+
+  test("builds baseUrl (via odataBaseUrl) + company/username/password/tenant", () => {
+    expect(odataCfgFor(FULL_SECTION)).toEqual({
+      baseUrl: "http://cronus281:7048/BC",
+      company: "CRONUS Danmark A/S",
+      username: "u",
+      password: "p",
+      tenant: "default",
+    });
+  });
+
+  test("omits the tenant key entirely when absent (exactOptionalPropertyTypes)", () => {
+    const { tenant: _tenant, ...withoutTenant } = FULL_SECTION;
+    const cfg = odataCfgFor(withoutTenant);
+    expect(cfg).not.toHaveProperty("tenant");
+    expect(cfg).toEqual({
+      baseUrl: "http://cronus281:7048/BC",
+      company: "CRONUS Danmark A/S",
+      username: "u",
+      password: "p",
+    });
   });
 });
 

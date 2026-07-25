@@ -350,6 +350,30 @@ export function odataBaseUrl(server: string, serverInstance: string): string {
 }
 
 /**
+ * The OData config every bcdev control-surface client built FROM THE LOADED CONFIG FILE is
+ * shaped from: `DeploymentVerifier`/`HarnessVerifier` (`buildBackend`) and the lease client's own
+ * `HarnessVerifier` (`leaseSessionFor`) both used to build this object inline, independently
+ * (t7, 5C-B2 review) — a real session then made two separate `HarnessInfo` round trips built from
+ * what were SUPPOSED to be identical fields, with no compiler check that they stayed that way: a
+ * field added to one construction and not the other would silently target the two clients at
+ * differently-configured endpoints. One helper, one source of truth.
+ *
+ * Deliberately NOT reused by `forceResetLeaseFromCli`'s own construction below: that one sources
+ * `baseUrl` from the operator's `--server`/`--instance` flags, not `c.server`/`c.serverInstance`
+ * — a real divergence (see that function's doc comment), not the accidental duplication this
+ * fixes.
+ */
+export function odataCfgFor(c: BcDevConfigSection): ActivationConfig {
+  return {
+    baseUrl: odataBaseUrl(c.server, c.serverInstance),
+    company: c.company,
+    username: c.username,
+    password: c.password,
+    ...(c.tenant !== undefined ? { tenant: c.tenant } : {}),
+  };
+}
+
+/**
  * Builds one backend instance targeting `scratchDir` for all of its own scratch
  * output. Called once for the session's main backend (baseline/coverage), and —
  * when `--workers > 1` — once more per worker with a distinct `scratchDir`
@@ -415,13 +439,7 @@ async function buildBackend(
   // One OData config, several consumers on the same LethAL Control / MutationControl web-service
   // endpoints: the RunMutant execution transport, the HarnessInfo prerequisite check, and the
   // (Layer-5A) deployment identity verifier.
-  const odataCfg = {
-    baseUrl: odataBaseUrl(c.server, c.serverInstance),
-    company: c.company,
-    username: c.username,
-    password: c.password,
-    ...(c.tenant !== undefined ? { tenant: c.tenant } : {}),
-  };
+  const odataCfg = odataCfgFor(c);
   const verifier = new DeploymentVerifier(odataCfg);
   const harnessVerifier = new HarnessVerifier(odataCfg);
   return new BcDevMcpBackend(
@@ -476,13 +494,7 @@ export function leaseSessionFor(
 ): Pick<SessionConfig, "lease"> {
   if (parsed.backendKind !== "bcdev") return {};
   const c = validateBcDevConfig(configFile.bcdev);
-  const odataCfg = {
-    baseUrl: odataBaseUrl(c.server, c.serverInstance),
-    company: c.company,
-    username: c.username,
-    password: c.password,
-    ...(c.tenant !== undefined ? { tenant: c.tenant } : {}),
-  };
+  const odataCfg = odataCfgFor(c);
   const harnessVerifier = new HarnessVerifier(odataCfg);
   return {
     lease: {

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { ActivationConfig } from "../src/activation";
 import {
   type Lease,
+  LeaseCallerContractError,
   LeaseClient,
   LeaseUnavailableError,
   MAX_ATTEMPT_ID_LENGTH,
@@ -161,6 +162,16 @@ describe("LeaseClient.release", () => {
       LEASE,
     );
     expect(outcome).toEqual({ released: false, reason: "op-in-flight" });
+  });
+
+  // t4 (5C-B2): TryRelease's only `Released := false` path (a non-idle "Op Kind") always sets
+  // Reason := 'op-in-flight' before that exit — every other path sets Released := true. So a
+  // released:false with no reason is a protocol violation, not a legitimate empty refusal.
+  test("released:false missing reason → LeaseUnavailableError, not an empty-vs-empty match", async () => {
+    const inner = { released: false }; // reason missing
+    await expect(client(okFetch(inner)).release(LEASE)).rejects.toBeInstanceOf(
+      LeaseUnavailableError,
+    );
   });
 });
 
@@ -459,6 +470,27 @@ describe("LeaseClient — LeaseUnavailableError (transport-level failure, distin
       LeaseUnavailableError,
     );
   });
+
+  // t1 (5C-B2): postLeaseAction double-parses the OData scalar `value` — outer envelope JSON,
+  // then the codeunit's own JSON string inside it. The outer failure paths were already covered
+  // above; these two exercise the INNER parse, previously untested.
+  test("outer value is a string but not itself JSON (inner JSON.parse throws) → LeaseUnavailableError", async () => {
+    const notJson = (async (_url: unknown, _init?: RequestInit) =>
+      new Response(JSON.stringify({ value: "not-json{" }), { status: 200 })) as typeof fetch;
+    await expect(client(notJson).acquire("o", 15, "n", "g")).rejects.toBeInstanceOf(
+      LeaseUnavailableError,
+    );
+  });
+
+  test("inner value parses to a non-object JSON value (an array) → LeaseUnavailableError, never a fake refusal", async () => {
+    const arrayInner = (async (_url: unknown, _init?: RequestInit) =>
+      new Response(JSON.stringify({ value: JSON.stringify([1, 2, 3]) }), {
+        status: 200,
+      })) as typeof fetch;
+    await expect(client(arrayInner).acquire("o", 15, "n", "g")).rejects.toBeInstanceOf(
+      LeaseUnavailableError,
+    );
+  });
 });
 
 describe("LeaseClient — caller-contract bounds", () => {
@@ -471,6 +503,10 @@ describe("LeaseClient — caller-contract bounds", () => {
     }) as typeof fetch;
     const tooLong = "a".repeat(MAX_ATTEMPT_ID_LENGTH + 1);
     await expect(client(fetchFn).beginPublish(LEASE, tooLong, 6)).rejects.toThrow(/attemptId/);
+    // t3 (5C-B2): a caller-contract violation is instanceof-distinguishable from any other bug.
+    await expect(client(fetchFn).beginPublish(LEASE, tooLong, 6)).rejects.toBeInstanceOf(
+      LeaseCallerContractError,
+    );
     expect(called).toBe(false);
   });
 
@@ -488,6 +524,9 @@ describe("LeaseClient — caller-contract bounds", () => {
       return new Response(JSON.stringify({ value: JSON.stringify({ renewed: true }) }));
     }) as typeof fetch;
     await expect(client(fetchFn).renew(LEASE, MAX_TTL_SECONDS + 1)).rejects.toThrow(/ttlSeconds/);
+    await expect(client(fetchFn).renew(LEASE, MAX_TTL_SECONDS + 1)).rejects.toBeInstanceOf(
+      LeaseCallerContractError,
+    );
     expect(called).toBe(false);
   });
 
@@ -505,6 +544,9 @@ describe("LeaseClient — caller-contract bounds", () => {
       await expect(client(fetchFn).renew(LEASE, ttl)).rejects.toThrow(
         new RegExp(`ttlSeconds must be greater than 0[\\s\\S]*Got ${ttl}$`),
       );
+      await expect(client(fetchFn).renew(LEASE, ttl)).rejects.toBeInstanceOf(
+        LeaseCallerContractError,
+      );
       await expect(client(fetchFn).acquire("o", ttl, "n", "g")).rejects.toThrow(/greater than 0/);
       expect(called).toBe(false);
     },
@@ -515,5 +557,51 @@ describe("LeaseClient — caller-contract bounds", () => {
       okFetch({ renewed: true, expiresAt: "2026-07-24T12:00:01Z" }),
     ).renew(LEASE, 1);
     expect(outcome.renewed).toBe(true);
+  });
+});
+
+// t3 (5C-B2): assertAttemptId/assertTtlBound's caller-contract violations are covered with
+// LeaseCallerContractError assertions above (in their own describe blocks, alongside the
+// message-regex tests they extend). These two are the remaining caller-contract guards in this
+// file — recoverOp's terminalProof literal and forceResetLease's blank-echo guard — which had no
+// dedicated coverage at all before t3, let alone an instanceof one.
+describe("LeaseClient — caller-contract violations are instanceof-distinguishable (t3, 5C-B2)", () => {
+  test("recoverOp without terminalProof: true throws LeaseCallerContractError, never dispatches", async () => {
+    let called = false;
+    const fetchFn = (async (_url: unknown, _init?: RequestInit) => {
+      called = true;
+      return new Response(JSON.stringify({ value: JSON.stringify({ recovered: true }) }));
+    }) as typeof fetch;
+    const notProven = false as unknown as true;
+    await expect(client(fetchFn).recoverOp(LEASE, "attempt-1", 6, notProven)).rejects.toThrow(
+      /terminalProof/,
+    );
+    await expect(
+      client(fetchFn).recoverOp(LEASE, "attempt-1", 6, notProven),
+    ).rejects.toBeInstanceOf(LeaseCallerContractError);
+    expect(called).toBe(false);
+  });
+
+  test("forceResetLease with a blank expectedGeneration throws LeaseCallerContractError, never dispatches", async () => {
+    let called = false;
+    const fetchFn = (async (_url: unknown, _init?: RequestInit) => {
+      called = true;
+      return new Response(JSON.stringify({ value: JSON.stringify({ reset: false }) }));
+    }) as typeof fetch;
+    await expect(client(fetchFn).forceResetLease("")).rejects.toThrow(/expectedGeneration/);
+    await expect(client(fetchFn).forceResetLease("")).rejects.toBeInstanceOf(
+      LeaseCallerContractError,
+    );
+    expect(called).toBe(false);
+  });
+
+  // Transport/shape failures must NOT be conflated with caller-contract violations — the whole
+  // point of the two typed classes is that a caller can tell them apart.
+  test("a genuine transport failure (LeaseUnavailableError) is NOT a LeaseCallerContractError", async () => {
+    const five00 = (async (_url: unknown, _init?: RequestInit) =>
+      new Response("boom", { status: 500 })) as typeof fetch;
+    await expect(client(five00).acquire("o", 15, "n", "g")).rejects.not.toBeInstanceOf(
+      LeaseCallerContractError,
+    );
   });
 });

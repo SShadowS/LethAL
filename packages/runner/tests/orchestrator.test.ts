@@ -3793,8 +3793,11 @@ describe("runSession — Layer 5C-B1 Task 8: renew heartbeat (design §6 step 3)
         };
       },
     });
-    // The gate stays SHUT for the whole session: the first renew never completes, so every one of
-    // the ~30 ticks fired above it must be dropped, not queued behind it.
+    // The gate stays SHUT for the whole session: the first renew never completes, so no tick may
+    // ever queue behind it. `run` (above) fires 3 ticks PER CALL, not 30 — the ~30 comes from the
+    // session's own baseline run plus THREE_PROC_AL's 9 mutant runs (~10 `run()` calls this
+    // session, 3 ticks each), and every one of those ~30 must be dropped by the single-flight
+    // guard (t9, 5C-B2: the prior wording read as if 30 ticks fired from the 3 lines above).
     await runSessionForTest(backend, { quarantineDir: freshTmpDir(), lease });
     expect(client.renewArgs.length).toBe(1);
     openGate(); // let the one parked renew settle so no promise is left hanging
