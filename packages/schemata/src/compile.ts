@@ -158,15 +158,27 @@ export function describeObjectKinds(root: ALSyntaxNode): string {
  * (and is a no-op under a grammar without one).
  *
  * The insertion ANCHOR differs by object kind, and this is measured against
- * `alc`, not assumed: in a codeunit, `var` before the first member compiles
- * clean, but in a TABLE, `var` before `fields` is a hard syntax error
- * (AL0107/AL0104/AL0198 — the parse does not recover). So for a table the
- * selector must go AFTER the section-like members (`fields`, `keys`,
+ * `alc`, not assumed: in a TABLE, `var` before `fields` is a hard syntax
+ * error (AL0107/AL0104/AL0198 — the parse does not recover). So for a table
+ * the selector must go AFTER the section-like members (`fields`, `keys`,
  * `fieldgroups`) — before the first object-level trigger, or trailing (after
  * the last member) when the table has none. A table CAN have no object-level
  * trigger while still carrying a mutable trigger body: a field-level
  * `OnValidate` lives inside `fields_section`, not as an object-level member,
  * so it never becomes a `declarationMembers` anchor candidate.
+ *
+ * BOTH kinds must also clear the object's own PROPERTIES (R38). AL requires every object-level
+ * property (`Permissions`, `Access`, `Subtype`, `SingleInstance`, `EventSubscriberInstance`,
+ * `TableNo`, …) to precede any `var` section, so a codeunit anchored at `members[0]` emits
+ * `{ var MutationSelector … Permissions = …` and `alc` reads `Permissions` as a variable name,
+ * never recovering. This had gone unnoticed because every fixture codeunit declares no
+ * properties: `members[0]` was a `procedure` and the emission was legal by accident. Measured on
+ * the real Continia Document Output app — 19 of 162 instrumented files, 246 errors, whole-app
+ * compile fails, so not one mutant could run. Note tree-sitter RECOVERS from the bad ordering
+ * without an ERROR node, so re-parsing the emission does not catch it; only `alc` does.
+ *
+ * A table needed no separate fix for this: properties precede `fields`, and both table anchors
+ * (before the first object-level trigger, or trailing) already sit after `fields`.
  *
  * "Before the first object-level trigger" is safe, not merely lucky, and the reason is about
  * where a TRIGGER may go, not only about where a `var` may go: in a table, an object-level
@@ -227,7 +239,13 @@ function injectSelectorVarIntoObject(
     );
   }
 
-  const anchor = isTable ? members.find((c) => c.kind === ALNodeKind.trigger) : members[0];
+  // A codeunit anchors before its first NON-PROPERTY member (R38) — `members[0]` would land the
+  // `var` ahead of `Permissions`/`Access`/`Subtype`, which AL rejects. `undefined` here (a
+  // codeunit whose members are all properties) falls through to the trailing branch below, the
+  // same one the trigger-less table uses.
+  const anchor = isTable
+    ? members.find((c) => c.kind === ALNodeKind.trigger)
+    : members.find((c) => c.kind !== ALNodeKind.property);
 
   if (anchor !== undefined) {
     rewrites.set(
@@ -237,9 +255,9 @@ function injectSelectorVarIntoObject(
     return;
   }
 
-  // Table with no object-level trigger to anchor before (only ever reached
-  // for a table: the codeunit branch's anchor is always `members[0]`, which
-  // is defined whenever `members.length > 0`, already checked above).
+  // No member to anchor BEFORE: a table with no object-level trigger, or (since R38) a codeunit
+  // whose members are all properties. Appending after the last member is right for both — it
+  // clears every property by construction, and for the table it also clears `fields`/`keys`.
   const lastMember = members.at(-1);
   if (lastMember === undefined) {
     // Unreachable — `members.length === 0` threw above — but a silent return here would ship the
