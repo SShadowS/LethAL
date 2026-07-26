@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { mkdir, mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { parseArgs } from "node:util";
 import type { InstrumentedFile, SelectorConfig } from "@lethal/schemata";
 import type { ActivationConfig, FetchFn } from "./activation";
@@ -10,6 +10,11 @@ import { ArtifactCompiler, defaultArtifactIo } from "./artifact";
 import type { ExecutionBackend } from "./backend";
 import { BcDevMcpBackend } from "./bcdev-backend";
 import { DeploymentVerifier } from "./deployment-verifier";
+import { EnvToolClient, EnvToolError, validateEnvToolConfig } from "./env-tool";
+import type { EnvToolBlock, EnvToolConfigSection } from "./env-tool";
+import { EnvToolPublisher } from "./env-tool-publisher";
+import { startEnvToolSession } from "./env-tool-session";
+import type { EnvToolSession } from "./env-tool-session";
 import { HarnessVerifier } from "./harness";
 import { LeaseClient } from "./lease";
 import {
@@ -19,7 +24,9 @@ import {
   runSession,
 } from "./orchestrator";
 import type { SessionConfig } from "./orchestrator";
+import { canonicalContainerKey } from "./publish-serializer";
 import { ContainerDeployer, defaultAlToolPaths, defaultDeployerIo } from "./publisher";
+import type { AppPublisher } from "./publisher";
 import { QuarantineStore } from "./quarantine-store";
 import { renderConsole, writeJsonReport } from "./report";
 import type { SessionReport } from "./report";
@@ -64,6 +71,10 @@ export interface RunCliConfig {
   readonly outPath?: string;
   readonly workers: number;
   readonly compileConcurrency?: number;
+  // Env-tool session controls (Task 7). Both default to false and are only meaningful for the
+  // bcdev backend's environment tool (Task 6) — al-runner has no environment to keep or expire.
+  readonly keepEnv: boolean;
+  readonly allowExpiringEnv: boolean;
 }
 
 /**
@@ -140,6 +151,8 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
       "compile-concurrency": { type: "string" },
       server: { type: "string" },
       instance: { type: "string" },
+      "keep-env": { type: "boolean", default: false },
+      "allow-expiring-env": { type: "boolean", default: false },
     },
   });
 
@@ -229,6 +242,18 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     );
   }
 
+  // Task 7: the env-tool session (Task 6) lives entirely under the bcdev backend — al-runner has
+  // no environment for either flag to act on. `--keep-env` is refused outright rather than
+  // silently ignored: a caller who passes it expecting an environment to survive teardown, on a
+  // backend with no environment at all, should hear about the mismatch, not see it do nothing.
+  const keepEnv = values["keep-env"] === true;
+  const allowExpiringEnv = values["allow-expiring-env"] === true;
+  if (keepEnv && backendArg === "al-runner") {
+    throw new Error(
+      "--keep-env applies to the bcdev backend's environment tool; al-runner has no environment",
+    );
+  }
+
   return {
     mode: "run",
     projectDir,
@@ -238,6 +263,8 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     configPath: values.config ?? join(projectDir, "lethal.config.json"),
     skipKnownSurvivors: values["skip-known-survivors"] ?? false,
     workers,
+    keepEnv,
+    allowExpiringEnv,
     ...(values.out !== undefined ? { outPath: values.out } : {}),
     ...(compileConcurrency !== undefined ? { compileConcurrency } : {}),
   };
@@ -284,6 +311,9 @@ export interface AlRunnerConfigSection {
 export interface LethalConfigFile {
   readonly bcdev?: Partial<BcDevConfigSection>;
   readonly alRunner?: Partial<AlRunnerConfigSection>;
+  // Task 7: an environment tool (Task 6) resolves/provisions the bcdev section instead of it
+  // being hand-written — see `resolveEnvToolSession` below.
+  readonly envTool?: Partial<EnvToolConfigSection>;
 }
 
 /** Pure validators — no I/O — so "missing config field" errors are unit-testable directly. */
@@ -422,10 +452,111 @@ function warnAlRunnerNotAuthoritative(): void {
   );
 }
 
+/**
+ * Builds one `EnvToolPublisher` for a resolved bcdev connection. The ONLY place that derives
+ * `serializerKey` for this project — called both by `resolveEnvToolSession` (for the control app
+ * and `publishApps` entries) and by `buildBackend` (for each batch's compiled artifact), always
+ * from the SAME resolved `BcDevConfigSection` and the SAME `EnvToolClient` instance. Two
+ * independently-derived keys for one environment would silently defeat
+ * `serializePublish`'s per-environment serialization (Task 4's carried-forward warning); reusing
+ * one function — and, just as importantly, one `client` — closes that off structurally rather
+ * than by convention. Reusing the client also matters for credential redaction: only the client
+ * that actually resolved username/password (via `EnvToolClient.run`'s `reads` handling) has them
+ * in its `secrets` list, so a second, freshly-constructed client used for the batch-artifact
+ * publisher would fail to redact them from a publish failure's error text.
+ */
+export function makeEnvToolPublisher(
+  client: EnvToolClient,
+  publishBlock: EnvToolBlock,
+  bcdev: BcDevConfigSection,
+): EnvToolPublisher {
+  return new EnvToolPublisher(
+    client,
+    publishBlock,
+    { envId: bcdev.serverInstance, serializerKey: canonicalContainerKey(bcdev) },
+    { readArtifact: async (p) => new Uint8Array(await readFile(p)) },
+  );
+}
+
+/**
+ * Runs Task 6's `startEnvToolSession` lifecycle EXACTLY ONCE for a `run` invocation and returns a
+ * `LethalConfigFile` with `bcdev` substituted by the resolved section — the object `buildBackend`,
+ * `leaseSessionFor`, and `resourceIdentityFor` all read `configFile.bcdev` from (each calls
+ * `validateBcDevConfig` independently; that is fine, since it is pure and does not provision
+ * anything — what must never happen more than once is THIS function's call to `startSession`,
+ * which spawns the configured tool and, in create-mode, provisions a real environment). A naive
+ * port that resolved at each of those three seams instead of once here would provision THREE
+ * environments for one `lethal run`.
+ *
+ * Also returns `deploy` — the same `client` and `publishBlock` `startEnvToolSession`'s own
+ * publisher was built from — so `buildBackend` can build its batch-artifact publisher through
+ * `makeEnvToolPublisher` without re-deriving either (see that function's doc comment for why
+ * reusing the client, not just the key-derivation function, matters).
+ *
+ * al-runner and a bcdev config with no `envTool` section are a no-op: the config file comes back
+ * unchanged, `envSession` is absent, and there is nothing for `runFromCli`'s `finally` to tear
+ * down. `startEnvToolSession` itself trusts that `validateEnvToolConfig` already ran — this
+ * function is the only caller in `cli.ts`, and it always validates immediately before starting,
+ * so that ordering holds on every path that reaches it.
+ */
+export async function resolveEnvToolSession(
+  parsed: RunCliConfig,
+  configFile: LethalConfigFile,
+  runId: string,
+  deps: {
+    makeClient?: (cfg: EnvToolConfigSection) => EnvToolClient;
+    startSession?: typeof startEnvToolSession;
+    // Real default is a live `HarnessVerifier` fetch — injectable so this function (and the
+    // create-mode/resolve-mode paths through it) is unit-testable without a real BC endpoint.
+    verifyHarness?: (cfg: ActivationConfig) => Promise<void>;
+  } = {},
+): Promise<{
+  readonly effectiveConfig: LethalConfigFile;
+  readonly envSession?: EnvToolSession;
+  readonly deploy?: { readonly client: EnvToolClient; readonly publishBlock: EnvToolBlock };
+}> {
+  if (parsed.backendKind !== "bcdev" || configFile.envTool === undefined) {
+    return { effectiveConfig: configFile };
+  }
+  const envCfg = validateEnvToolConfig(configFile.envTool, {
+    env: process.env,
+    hasPackageCachePath: Boolean(configFile.bcdev?.packageCachePath),
+  });
+  const makeClient = deps.makeClient ?? ((cfg: EnvToolConfigSection) => new EnvToolClient(cfg));
+  const client = makeClient(envCfg);
+  const publishBlock = envCfg.publish;
+  // Unreachable once `validateEnvToolConfig` has succeeded (it requires `publish` itself) — this
+  // narrows the type for the closures below rather than defending against a real gap.
+  if (publishBlock === undefined) throw new EnvToolError("envTool.publish is required");
+  const start = deps.startSession ?? startEnvToolSession;
+  const verifyHarness =
+    deps.verifyHarness ??
+    (async (cfg: ActivationConfig) => {
+      await new HarnessVerifier(cfg).verify();
+    });
+  const envSession = await start({
+    cfg: envCfg,
+    bcdevRaw: configFile.bcdev ?? {},
+    projectDir: parsed.projectDir,
+    testDir: parsed.testDir,
+    runId,
+    client,
+    makePublisher: (bcdev) => makeEnvToolPublisher(client, publishBlock, bcdev),
+    verifyHarness,
+    allowExpiring: parsed.allowExpiringEnv,
+  });
+  return {
+    effectiveConfig: { ...configFile, bcdev: envSession.bcdev },
+    envSession,
+    deploy: { client, publishBlock },
+  };
+}
+
 async function buildBackend(
   parsed: RunCliConfig,
   configFile: LethalConfigFile,
   scratchDir: string,
+  envToolDeploy?: { readonly client: EnvToolClient; readonly publishBlock: EnvToolBlock },
 ): Promise<ExecutionBackend> {
   if (parsed.backendKind === "al-runner") {
     const c = validateAlRunnerConfig(configFile.alRunner);
@@ -458,17 +589,26 @@ async function buildBackend(
     },
     defaultArtifactIo,
   );
-  const deployer = new ContainerDeployer(
-    {
-      altoolPath: toolPaths.altoolPath,
-      server: c.server,
-      serverInstance: c.serverInstance,
-      username: c.username,
-      password: c.password,
-      ...(c.tenant !== undefined ? { tenant: c.tenant } : {}),
-    },
-    defaultDeployerIo,
-  );
+  // Task 7: when this session's `envTool` section resolved the connection, publish batch
+  // artifacts through it too — `ContainerDeployer`/altool has no notion of the configured tool's
+  // environment at all. `envToolDeploy` is threaded down from `resolveEnvToolSession` rather than
+  // re-derived from `configFile.envTool` here so there is exactly one `EnvToolClient` instance and
+  // one `canonicalContainerKey` derivation shared with the control-app/`publishApps` publisher —
+  // see `makeEnvToolPublisher`'s doc comment.
+  const deployer: AppPublisher =
+    envToolDeploy !== undefined
+      ? makeEnvToolPublisher(envToolDeploy.client, envToolDeploy.publishBlock, c)
+      : new ContainerDeployer(
+          {
+            altoolPath: toolPaths.altoolPath,
+            server: c.server,
+            serverInstance: c.serverInstance,
+            username: c.username,
+            password: c.password,
+            ...(c.tenant !== undefined ? { tenant: c.tenant } : {}),
+          },
+          defaultDeployerIo,
+        );
   // One OData config, several consumers on the same LethAL Control / MutationControl web-service
   // endpoints: the RunMutant execution transport, the HarnessInfo prerequisite check, and the
   // (Layer-5A) deployment identity verifier.
@@ -591,7 +731,19 @@ async function runFromCli(parsed: RunCliConfig): Promise<SessionReport> {
   const configFile = await loadLethalConfigFile(parsed.configPath);
   const scratchRoot = await mkdtemp(join(tmpdir(), "lethal-"));
   if (parsed.backendKind === "al-runner") warnAlRunnerNotAuthoritative();
-  const backend = await buildBackend(parsed, configFile, scratchRoot);
+
+  // Task 7: resolves the bcdev section EXACTLY ONCE (see `resolveEnvToolSession`'s doc comment)
+  // and substitutes it into `effectiveConfig`, which every downstream seam below reads instead of
+  // the raw `configFile` — `buildBackend` (both the main backend and, in a future multi-worker
+  // bcdev world, any per-worker one), `resourceIdentityFor`, and `leaseSessionFor` all still call
+  // `validateBcDevConfig` independently, but against the SAME already-resolved section.
+  const { effectiveConfig, envSession, deploy } = await resolveEnvToolSession(
+    parsed,
+    configFile,
+    basename(scratchRoot),
+  );
+
+  const backend = await buildBackend(parsed, effectiveConfig, scratchRoot, deploy);
   // `SessionConfig.backendFactory` is synchronous (`runSession` calls it
   // without awaiting — see orchestrator.ts), but building a worker's backend
   // is async (bcdev needs `defaultAlToolPaths()` + `mkdir`). So every worker
@@ -600,15 +752,22 @@ async function runFromCli(parsed: RunCliConfig): Promise<SessionReport> {
   // the already-built instance for that index. `runSession` still owns
   // disposing them (see `closeIfSupported` in orchestrator.ts) — it just
   // doesn't own constructing them.
+  //
+  // (bcdev + --workers > 1 is refused in `parseCliConfig`, so this loop only ever builds al-runner
+  // backends today — `effectiveConfig` equals `configFile` on that path regardless, since
+  // `resolveEnvToolSession` is a no-op for al-runner.)
   const workerBackends: ExecutionBackend[] = [];
   if (parsed.workers > 1) {
     for (let i = 0; i < parsed.workers; i++) {
-      workerBackends.push(await buildBackend(parsed, configFile, join(scratchRoot, `worker-${i}`)));
+      workerBackends.push(
+        await buildBackend(parsed, effectiveConfig, join(scratchRoot, `worker-${i}`)),
+      );
     }
   }
   const store = new ResultsStore(parsed.dbPath);
+  let report: SessionReport | undefined;
   try {
-    return await runSession({
+    report = await runSession({
       backend,
       store,
       projectDir: parsed.projectDir,
@@ -620,8 +779,8 @@ async function runFromCli(parsed: RunCliConfig): Promise<SessionReport> {
       ...(parsed.compileConcurrency !== undefined
         ? { compileConcurrency: parsed.compileConcurrency }
         : {}),
-      ...resourceIdentityFor(parsed, configFile),
-      ...leaseSessionFor(parsed, configFile),
+      ...resourceIdentityFor(parsed, effectiveConfig),
+      ...leaseSessionFor(parsed, effectiveConfig),
       ...(parsed.workers > 1
         ? {
             backendFactory: (i: number) => {
@@ -634,6 +793,7 @@ async function runFromCli(parsed: RunCliConfig): Promise<SessionReport> {
           }
         : {}),
     });
+    return report;
   } finally {
     store.close();
     // Release whatever the backend is holding open: the spawned bc-dev MCP
@@ -643,6 +803,16 @@ async function runFromCli(parsed: RunCliConfig): Promise<SessionReport> {
     // process instead.
     if (backend instanceof BcDevMcpBackend) await backend.close();
     if (backend instanceof AlRunnerBackend) await backend.close();
+    if (envSession !== undefined) {
+      // Never allowed to change the report or the exit code: verdicts are the product. `report`
+      // is `undefined` only when `runSession` itself threw (a real failure, not a quarantine
+      // verdict) — that is not treated as a quarantine here either, matching what `main()` reports
+      // as the exit code (an uncaught throw exits 1, never the quarantine code 3).
+      await envSession.teardown({
+        keepEnv: parsed.keepEnv,
+        quarantined: report?.quarantined !== undefined,
+      });
+    }
   }
 }
 

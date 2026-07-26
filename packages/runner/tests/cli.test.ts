@@ -69,6 +69,8 @@ describe("parseCliConfig", () => {
       configPath: join("proj", "lethal.config.json"),
       skipKnownSurvivors: false,
       workers: 1,
+      keepEnv: false,
+      allowExpiringEnv: false,
     });
   });
 
@@ -99,6 +101,8 @@ describe("parseCliConfig", () => {
       skipKnownSurvivors: true,
       outPath: "report.json",
       workers: 1,
+      keepEnv: false,
+      allowExpiringEnv: false,
     });
   });
 
@@ -411,6 +415,8 @@ describe("resourceIdentityFor (Task 13 folded fix — cli.ts sources quarantine 
     configPath: "cfg",
     skipKnownSurvivors: false,
     workers: 1,
+    keepEnv: false,
+    allowExpiringEnv: false,
   };
 
   test("bcdev session sources resourceServer/resourceServerInstance from the bcdev config section", () => {
