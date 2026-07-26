@@ -100,4 +100,44 @@ codeunit 79311 "R1 Permission Probe"
             Customer.ReadPermission(),
             Customer.WritePermission());
     end;
+
+    /// <summary>Stream A follow-up — the unmeasured, load-bearing case: does the mock also strip
+    /// write permission on a table owned by the SAME extension as the running test codeunit? "R1 Same
+    /// Ext" (79312, R1SameExt.Table.al) is declared in THIS app ("LethAL Sandbox Data Tests", same as
+    /// this codeunit) and deliberately carries NO InherentPermissions — the exact shape proposed for
+    /// a same-extension canary table in `extensions/lethal-control`. Reports ReadPermission() /
+    /// WritePermission() AND the outcome of an actual Insert, alongside the already-measured
+    /// different-extension (DataMain, 79300) and Microsoft (Customer, 18) cases in the SAME message so
+    /// all three appear side by side under one run.
+    ///
+    /// The insert is captured via `Codeunit.Run` on `R1 Same Ext Insert` (79313), not a local
+    /// `[TryFunction]`: measured that a write-performing TryFunction cannot be called from inside a
+    /// `[Test]` method's own call scope, at any nesting depth — "Call to the function 'INSERT' is not
+    /// allowed inside the call to 'MethodName' when it is used as a TryFunction" (the platform names
+    /// the specific calling test method there). Only a
+    /// genuinely separate method scope (Codeunit.Run's own OnRun) sidesteps it.</summary>
+    [Test]
+    procedure R1ReportPermissionsSameExt()
+    var
+        SameExt: Record "R1 Same Ext";
+        DataMain: Record "Data Main";
+        Customer: Record Customer;
+        InsertOutcome: Text;
+    begin
+        if Codeunit.Run(Codeunit::"R1 Same Ext Insert") then
+            InsertOutcome := 'OK'
+        else
+            InsertOutcome := GetLastErrorText();
+
+        Error(
+            'R1DIAG-SAMEEXT user=%1 | SameExt(79312, SAME-ext, this app) read=%2 write=%3 insert=%4 | DataMain(79300, diff-ext) read=%5 write=%6 | Customer(18, Microsoft) read=%7 write=%8',
+            UserId(),
+            SameExt.ReadPermission(),
+            SameExt.WritePermission(),
+            InsertOutcome,
+            DataMain.ReadPermission(),
+            DataMain.WritePermission(),
+            Customer.ReadPermission(),
+            Customer.WritePermission());
+    end;
 }
