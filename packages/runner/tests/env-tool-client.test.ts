@@ -109,6 +109,14 @@ describe("redact", () => {
       "user=admin pw=*** again ***",
     );
   });
+
+  it("redacts longest-first so a secret that is a substring of another is not left partially exposed", () => {
+    // "ab" is a substring of "abc123". Processing shortest-first would consume the "ab" inside
+    // "abc123" FIRST, leaving a mangled "***c123" behind that the later "abc123" pass can no
+    // longer match (it's not contiguous text anymore) — the longer secret would never fully
+    // vanish. Longest-first redacts "abc123" whole before "ab" is ever considered.
+    expect(redact("token=abc123 short=ab", ["ab", "abc123"])).toBe("token=*** short=***");
+  });
 });
 
 describe("EnvToolClient.run", () => {
@@ -124,10 +132,14 @@ describe("EnvToolClient.run", () => {
   });
 
   it("indexes arrays with numeric path segments", async () => {
-    const users = { command: ["env", "users"], reads: { username: "0.username" } };
-    const io = fakeSpawn([{ exitCode: 0, stdout: '[{"username":"admin"}]', stderr: "" }]);
+    // A 2+ element array indexed at a NON-zero position — a single-element array indexed "0"
+    // cannot distinguish real indexing from a mutant that constant-folds the index to 0.
+    const users = { command: ["env", "users"], reads: { username: "1.username" } };
+    const io = fakeSpawn([
+      { exitCode: 0, stdout: '[{"username":"admin"},{"username":"other"}]', stderr: "" },
+    ]);
     expect(await new EnvToolClient(CFG, io).run(users, "resolve[1]", {})).toEqual({
-      username: "admin",
+      username: "other",
     });
   });
 

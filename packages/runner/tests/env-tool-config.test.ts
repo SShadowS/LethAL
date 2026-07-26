@@ -28,7 +28,7 @@ function withoutEnvId(cfg: Partial<EnvToolConfigSection>): Partial<EnvToolConfig
   return rest;
 }
 
-const opts = { env: ENV, hasPackageCachePath: true };
+const opts = { env: ENV, hasPackageCachePath: true, bcdevDeclaredKeys: [] };
 
 describe("validateEnvToolConfig", () => {
   it("accepts a reuse-mode config and substitutes ${VAR}", () => {
@@ -80,11 +80,19 @@ describe("validateEnvToolConfig", () => {
   });
 
   it("rejects a vars value referencing another vars entry", () => {
+    // R22d: the fixture's vars key used to be named "a" and the assertion was `/\ba\b/` — but
+    // the thrown message's own FIXED boilerplate ("...only LethAL-supplied placeholders may
+    // appear inside **a** vars value") contains a standalone "a" regardless of which key is
+    // actually referenced, so the regex passed even against a message naming a DIFFERENT key.
+    // Renamed to "zz" (which cannot appear in the boilerplate) and the regex now pins the exact
+    // sentence naming it.
     const cfg = base({
-      vars: { a: "1", b: "{a}" },
-      publish: { command: ["publish", "{a}", "{b}", "{appFile}"] },
+      vars: { zz: "1", b: "{zz}" },
+      publish: { command: ["publish", "{zz}", "{b}", "{appFile}"] },
     });
-    expect(() => validateEnvToolConfig(cfg, opts)).toThrow(/\ba\b/);
+    expect(() => validateEnvToolConfig(cfg, opts)).toThrow(
+      /envTool\.vars\.b references another vars entry \{zz\}/,
+    );
   });
 
   it("allows a LethAL placeholder inside a vars value", () => {
@@ -150,9 +158,13 @@ describe("validateEnvToolConfig", () => {
   });
 
   it("requires downloadSymbols when packageCachePath is absent", () => {
-    expect(() => validateEnvToolConfig(base(), { env: ENV, hasPackageCachePath: false })).toThrow(
-      /downloadSymbols/,
-    );
+    expect(() =>
+      validateEnvToolConfig(base(), {
+        env: ENV,
+        hasPackageCachePath: false,
+        bcdevDeclaredKeys: [],
+      }),
+    ).toThrow(/downloadSymbols/);
   });
 
   it("requires resolve to produce baseUrl, username and password", () => {
@@ -184,6 +196,7 @@ describe("validateEnvToolConfig", () => {
     const out = validateEnvToolConfig(cfg, {
       env: { ...ENV, READY_STATUS: "Running" },
       hasPackageCachePath: true,
+      bcdevDeclaredKeys: [],
     });
     expect(out.readyWhen?.equals).toBe("Running");
   });
@@ -274,8 +287,45 @@ describe("validateEnvToolConfig — bcdev/reads collision (item 6)", () => {
     ).not.toThrow();
   });
 
-  it("does not throw when bcdevDeclaredKeys is omitted (opt-in check, no false positives for callers that don't pass it)", () => {
-    const cfg = base();
+  // R24: `bcdevDeclaredKeys` is now REQUIRED, not optional — a caller that omits it must fail to
+  // compile rather than silently lose the collision guard. This cannot be a normal runtime
+  // assertion (JS does not enforce "required" at all; omitting the field at runtime just makes
+  // `opts.bcdevDeclaredKeys` `undefined`, and `bun test` never type-checks). `it.skip` means the
+  // body never RUNS, but `tsc --build` still type-checks it like any other source line — so
+  // `@ts-expect-error` here is itself the assertion: if the call below stops being a type error
+  // (i.e. someone makes the parameter optional again), `tsc` reports an unused
+  // `@ts-expect-error` directive and `bun run typecheck` fails.
+  it.skip("compile-time only: omitting bcdevDeclaredKeys must fail tsc --build, never run", () => {
+    // @ts-expect-error - bcdevDeclaredKeys is required (R24); a caller that omits it must not compile.
+    validateEnvToolConfig(base(), { env: ENV, hasPackageCachePath: true });
+  });
+});
+
+// ————————————————————————————————————————————————————————————————————————
+// R23: nothing may read `username`/`password` from `envTool.publish` — see env-tool.ts's doc
+// comment on the check for why (the credential-withholding rule would silently blank a real
+// publish failure's detail, which is exactly what the orchestrator's version-conflict recovery
+// parses BC's rejection text out of).
+// ————————————————————————————————————————————————————————————————————————
+describe("validateEnvToolConfig — no credentials in envTool.publish.reads (R23)", () => {
+  it("rejects username read from envTool.publish", () => {
+    const cfg = base({
+      publish: { command: ["publish", "{envId}", "{appFile}"], reads: { username: "u" } },
+    });
+    expect(() => validateEnvToolConfig(cfg, opts)).toThrow(/envTool\.publish\.reads.*username/s);
+  });
+
+  it("rejects password read from envTool.publish", () => {
+    const cfg = base({
+      publish: { command: ["publish", "{envId}", "{appFile}"], reads: { password: "p" } },
+    });
+    expect(() => validateEnvToolConfig(cfg, opts)).toThrow(/envTool\.publish\.reads.*password/s);
+  });
+
+  it("still allows envTool.publish to read a non-credential key", () => {
+    const cfg = base({
+      publish: { command: ["publish", "{envId}", "{appFile}"], reads: { server: "server" } },
+    });
     expect(() => validateEnvToolConfig(cfg, opts)).not.toThrow();
   });
 });
