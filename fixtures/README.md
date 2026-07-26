@@ -587,8 +587,10 @@ A created `envId` is written to `~/.lethal/env-state/<runId>.json` **before** an
 a stable location, not session scratch, because a crashed process cannot print and a `mkdtemp`
 directory cannot be found afterwards. The file records the `envId`, the exact resolved `deleteEnv`
 argv, and the start time (`recordCreatedEnv`, `env-tool-session.ts`), and is removed once
-`deleteEnv` actually succeeds. A later `lethal run` should warn on stale entries it finds there;
-removal is manual and deliberate, since LethAL cannot know whether another session still owns the
+`deleteEnv` actually succeeds. Every `lethal run` against an `envTool` config scans this directory
+at session start and `console.warn`s each stale entry it finds, naming the envId and the exact
+delete command already recorded (`warnStaleEnvRecords`, `env-tool-session.ts`); removal itself is
+manual and deliberate, since LethAL cannot know whether another session still owns the
 environment.
 
 The one window this file cannot close: a crash **during** `createEnv` itself, before the

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -725,6 +725,127 @@ describe("buildBackend (Important 3 — never silently drop the env-tool publish
     await expect(buildBackend(RUN_CONFIG_BCDEV, configFile, "C:/scratch")).rejects.toThrow(
       /no env-tool deploy was supplied/,
     );
+  });
+});
+
+// ————————————————————————————————————————————————————————————————————————
+// R21: the env-tool publish path never constructs a `ContainerDeployer`, so altool.exe is
+// irrelevant to it — only alc.exe (compilation, which is always local) is genuinely required
+// there. `buildBackend`'s "could not locate..." message must name only what the CHOSEN path
+// actually uses.
+// ————————————————————————————————————————————————————————————————————————
+describe("buildBackend (R21 — accurate alc/altool requirement per path)", () => {
+  const configFile: LethalConfigFile = {
+    bcdev: RESOLVED_BCDEV,
+    envTool: resolveModeCfg("env-4711"),
+  };
+  const deploy = {
+    client: new EnvToolClient(resolveModeCfg("env-4711"), {
+      spawn: async () => ({ exitCode: 0, stdout: "{}", stderr: "" }),
+    }),
+    publishBlock: { command: ["publish"] },
+    envId: "env-4711",
+  };
+  const missingAlToolPaths = async () => undefined;
+
+  it("names only alc.exe (not altool.exe) when the env-tool deploy path is taken", async () => {
+    await expect(
+      buildBackend(RUN_CONFIG_BCDEV, configFile, "C:/scratch", deploy, {
+        alToolPaths: missingAlToolPaths,
+      }),
+    ).rejects.toThrow(/could not locate alc\.exe under/);
+    // The differentiator: must not ALSO claim altool.exe is required on this path.
+    const err = await buildBackend(RUN_CONFIG_BCDEV, configFile, "C:/scratch", deploy, {
+      alToolPaths: missingAlToolPaths,
+    }).catch((e: unknown) => (e instanceof Error ? e.message : String(e)));
+    expect(err).not.toContain("altool.exe");
+  });
+
+  it("still names both alc.exe and altool.exe on the ordinary ContainerDeployer path (no envToolDeploy)", async () => {
+    const err = await buildBackend(
+      RUN_CONFIG_BCDEV,
+      { bcdev: RESOLVED_BCDEV },
+      "C:/scratch",
+      undefined,
+      {
+        alToolPaths: missingAlToolPaths,
+      },
+    ).catch((e: unknown) => (e instanceof Error ? e.message : String(e)));
+    expect(err).toContain("alc.exe/altool.exe");
+  });
+});
+
+// ————————————————————————————————————————————————————————————————————————
+// R18: `--keep-env`/`--allow-expiring-env` are refused OUTRIGHT for `--backend al-runner` on the
+// reasoning that a silent no-op is wrong (see parseCliConfig). A whole configured `envTool`
+// section being silently ignored on that same backend deserves at least a warning.
+// ————————————————————————————————————————————————————————————————————————
+describe("runFromCli (R18 — envTool configured but ignored under al-runner)", () => {
+  async function writeConfigWithEnvTool(): Promise<string> {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-cfgtest-"));
+    const path = join(dir, "lethal.config.json");
+    await writeFile(path, JSON.stringify({ envTool: { toolPath: "tool.exe" } }), "utf8");
+    return path;
+  }
+
+  it("warns when envTool is configured but --backend al-runner cannot use it", async () => {
+    const configPath = await writeConfigWithEnvTool();
+    const parsed: RunCliConfig = {
+      ...RUN_CONFIG_BCDEV,
+      backendKind: "al-runner",
+      configPath,
+      dbPath: ":memory:",
+    };
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    let warnings: string[];
+    try {
+      await runFromCli(parsed, {
+        resolveEnvToolSession: async () => ({ effectiveConfig: {} }),
+        buildBackend: async () =>
+          new AlRunnerBackend({
+            alRunnerPath: "unused",
+            instrumentedDir: "unused",
+            testDir: "unused",
+            selectorObjectId: 1,
+          }),
+        runSession: async () => FAKE_REPORT,
+      });
+      // Captured BEFORE mockRestore(), which clears .mock.calls (mirrors harness.test.ts's
+      // verifyQuiet — reading .mock.calls after restore sees an empty array).
+      warnings = warnSpy.mock.calls.map((c) => String(c[0]));
+    } finally {
+      warnSpy.mockRestore();
+    }
+    expect(warnings.some((w) => w.includes("envTool") && w.includes("IGNORED"))).toBe(true);
+  });
+
+  it("does not warn under al-runner when no envTool section is configured", async () => {
+    const configPath = await writeTempConfig(); // writes "{}" — no envTool key at all
+    const parsed: RunCliConfig = {
+      ...RUN_CONFIG_BCDEV,
+      backendKind: "al-runner",
+      configPath,
+      dbPath: ":memory:",
+    };
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    let warnings: string[];
+    try {
+      await runFromCli(parsed, {
+        resolveEnvToolSession: async () => ({ effectiveConfig: {} }),
+        buildBackend: async () =>
+          new AlRunnerBackend({
+            alRunnerPath: "unused",
+            instrumentedDir: "unused",
+            testDir: "unused",
+            selectorObjectId: 1,
+          }),
+        runSession: async () => FAKE_REPORT,
+      });
+      warnings = warnSpy.mock.calls.map((c) => String(c[0]));
+    } finally {
+      warnSpy.mockRestore();
+    }
+    expect(warnings.some((w) => w.includes("envTool"))).toBe(false);
   });
 });
 

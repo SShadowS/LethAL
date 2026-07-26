@@ -1,4 +1,4 @@
-import { mkdir, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ActivationConfig } from "./activation";
@@ -79,6 +79,12 @@ export async function startEnvToolSession(args: {
   const now = args.now ?? Date.now;
   const sleep = args.sleep ?? ((ms: number) => Bun.sleep(ms));
   const stateDir = args.stateDir ?? join(homedir(), ".lethal", "env-state");
+  // R17: `recordCreatedEnv`/`removeRecordedEnv` below maintain this directory, but until now
+  // nothing ever LISTED it — the entire crash-recovery story for a leaked environment was a file
+  // nothing reads. Scan it at the start of every session and warn on whatever is still there.
+  // Never deletes anything: LethAL cannot know whether another concurrent session owns a given
+  // record, so this is strictly advisory.
+  await warnStaleEnvRecords(stateDir, args.runId);
   const supplied: Record<string, string> = {
     projectDir: args.projectDir,
     testDir: args.testDir,
@@ -369,6 +375,58 @@ function deriveMcpPort(baseUrl: string): number {
   const url = new URL(baseUrl);
   if (url.port !== "") return Number(url.port);
   return url.protocol === "https:" ? 443 : 80;
+}
+
+/**
+ * R17: the crash-recovery reader — `recordCreatedEnv` below writes one `<runId>.json` per created
+ * environment, and until now nothing ever read the directory back. Every entry found here (other
+ * than THIS run's own, written moments from now by `recordCreatedEnv`, or in flight if a PRIOR
+ * call to this same function already wrote nothing — there is none yet) is necessarily left over
+ * from an earlier run: either it ended without ever reaching `removeRecordedEnv` (crash, kill,
+ * `--keep-env`, a quarantine) or its delete attempt failed. `console.warn`s each one with its
+ * envId and the EXACT delete command `recordCreatedEnv` already rendered and stored — never
+ * deletes anything itself: this process cannot know whether another concurrent session still
+ * owns the environment a given record names.
+ */
+async function warnStaleEnvRecords(stateDir: string, currentRunId: string): Promise<void> {
+  let entries: string[];
+  try {
+    entries = await readdir(stateDir);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return; // nothing has ever been recorded — nothing to scan
+    console.warn(
+      `[lethal] could not scan the env-tool crash-recovery directory (${stateDir}): ` +
+        `${err instanceof Error ? err.message : String(err)}`,
+    );
+    return;
+  }
+  for (const entry of entries) {
+    if (!entry.endsWith(".json")) continue;
+    const runId = entry.slice(0, -".json".length);
+    if (runId === currentRunId) continue; // this run's own record — not stale, just written
+    const path = join(stateDir, entry);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(await readFile(path, "utf8"));
+    } catch (err) {
+      console.warn(
+        `[lethal] env-tool crash-recovery record ${path} could not be read/parsed — leaving it ` +
+          `in place: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      continue;
+    }
+    const rec = parsed as { runId?: unknown; envId?: unknown; deleteArgv?: unknown };
+    const recRunId = typeof rec.runId === "string" ? rec.runId : runId;
+    const envId = typeof rec.envId === "string" ? rec.envId : "(unknown envId)";
+    const deleteCmd = Array.isArray(rec.deleteArgv)
+      ? rec.deleteArgv.join(" ")
+      : "(no delete command recorded)";
+    console.warn(
+      `[lethal] stale env-tool crash-recovery record for run ${recRunId}: environment ${envId} ` +
+        `may still exist and be billing. Delete it with: ${deleteCmd}`,
+    );
+  }
 }
 
 /**
