@@ -16,20 +16,22 @@ namespace LethAL.Control;
 /// ABSENCE of that line is load-bearing, so it will look — to a linter, a reviewer, or a future
 /// you skimming for inconsistency — exactly like an oversight. It is not.
 ///
-/// MEASURED on this container (2026-07-26), not inferred: Microsoft's Permissions Mock (codeunit
-/// 131006, driven by "Test Runner - Mgt" 130454's `PlatformBeforeTestRun` ->
-/// `StartStopPermissionMock`) strips a test body's permissions, and under it a table WITHOUT
-/// `InherentPermissions` reports `read=No write=No` and its `Insert` fails with "Sorry, the
-/// current permissions prevented the action". It does so IDENTICALLY whether the table lives in
-/// the same extension as the running test codeunit or in a different one — there is no
-/// same-extension exemption; the presence or absence of `InherentPermissions` is what decides the
-/// outcome. Off the mock, the same probe reports `read=Yes write=Yes` and the `Insert` succeeds.
+/// MEASURED on this container (2026-07-26), not inferred: a test codeunit that omits
+/// `TestPermissions` runs Restrictive (the AL default) and a table WITHOUT `InherentPermissions`
+/// then reports `read=No write=No` inside its body, its `Insert` failing with "Sorry, the current
+/// permissions prevented the action". Flip that ONE property to `TestPermissions = Disabled` — same
+/// app, same tables, same server, Microsoft's Permissions Mock (codeunit 131006) running in both
+/// arms — and the identical probe reports `read=Yes write=Yes` and the `Insert` succeeds. The
+/// declaration on the test codeunit is what decides it; the invocation path is not the variable.
+/// "LC Permission Canary" therefore declares `TestPermissions = Disabled` (see its summary), and
+/// this table's omission is what keeps the remaining measurement honest.
 ///
 /// So "make this consistent with its siblings" would silently convert the canary into a probe that
-/// answers `not-mocked` on every server, forever: a permanently green light with nothing behind
-/// it, which is precisely the class of silent-wrong-answer this project exists to refuse. If you
-/// are convinced this table should match the others, delete the canary outright instead — at least
-/// then its absence is visible in the report rather than disguised as a clean result.
+/// answers `not-mocked` on every server, forever, no matter what the platform does: an inherent
+/// grant cannot be stripped, so the write could never fail and the light could never turn red. That
+/// is precisely the class of silent-wrong-answer this project exists to refuse. If you are
+/// convinced this table should match the others, delete the canary outright instead — at least then
+/// its absence is visible in the report rather than disguised as a clean result.
 /// </summary>
 table 71008 "LC Permission Probe"
 {

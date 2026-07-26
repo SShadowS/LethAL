@@ -204,6 +204,13 @@ const APP_JSON = JSON.stringify(
 class StubBackend implements ExecutionBackend {
   activations: Array<string | null> = [];
   deploys: string[] = [];
+  /**
+   * ROADMAP R26: the `failureMessage` a failing run carries, if any. A public field rather than
+   * another positional constructor arg — the ctor already takes seven, and only the permissions-
+   * diagnosis tests need this. Consulted ONLY when the scripted outcome is `"fail"`, so a test that
+   * sets it cannot accidentally attach a failure message to a passing run.
+   */
+  failureMessageFor?: (mutant: string | null, ref: TestMethodRef) => string | undefined;
   constructor(
     private readonly caps: BackendCapabilities,
     private readonly script: (mutant: string | null, ref: TestMethodRef) => TestVerdict["outcome"],
@@ -258,10 +265,12 @@ class StubBackend implements ExecutionBackend {
     // `attestingBackend` fake (Task 10's own tests, below) models a NEVER-attests container;
     // every pre-existing test here keeps its prior verdicts unaffected by the new fail-closed gate.
     const hasAttestation = this.caps.authoritative && opts.coverage === "none";
+    const failureMessage = outcome === "fail" ? this.failureMessageFor?.(active, ref) : undefined;
     return {
       ref,
       outcome,
       durationMs: 5,
+      ...(failureMessage !== undefined ? { failureMessage } : {}),
       ...(hasCoverage
         ? {
             coverage: {
@@ -388,6 +397,84 @@ describe("runSession", () => {
     expect(report.counts.errors).toBeGreaterThan(0);
     expect(report.counts.unstable).toBeGreaterThan(0);
     expect(report.counts.killed).toBe(0);
+    // The control for the two R26 tests below: an unstable failure carrying NO permissions
+    // refusal must get NO diagnosis. Without this, a diagnosis that fired unconditionally would
+    // still pass the "names TestPermissions" assertion and mean nothing.
+    for (const m of report.mutants) {
+      if (m.cause !== "unstable") continue;
+      expect(m.failureNote).toContain("fails at baseline confirmation");
+      expect(m.failureNote).not.toContain("TestPermissions");
+    }
+  });
+
+  // ————————————————————————————————————————————————————————————————————————
+  // ROADMAP R26 (second half). MEASURED A/B (2026-07-26): a test codeunit that omits
+  // `TestPermissions = Disabled` runs Restrictive (the AL default) and BC refuses its writes on
+  // every path through `Test Runner - Mgt` 130454. Such a test fails under the mutant AND at
+  // baseline confirmation, so it lands in the `unstable` branch — a deterministic, one-line-fixable
+  // condition reported to the user as flakiness. The diagnosis names it. It must remain strictly a
+  // DIAGNOSIS: same verdict, same cause, failure not suppressed, and never consulted where it could
+  // move a killed/survived outcome.
+  // ————————————————————————————————————————————————————————————————————————
+  const BC_PERMISSION_REFUSAL =
+    "Sorry, the current permissions prevented the action. " +
+    "(TableData 79300 Data Main Insert: LethAL Sandbox Data Tests)";
+
+  test("R26: an unstable failure carrying BC's permission refusal names TestPermissions and quotes BC", async () => {
+    const dirs = await makeProject();
+    let inactiveRuns = 0;
+    const backend = new StubBackend(
+      CAPS_NST,
+      (mutant) => {
+        if (mutant !== null) return "fail";
+        inactiveRuns++;
+        return inactiveRuns === 1 ? "pass" : "fail";
+      },
+      ["IsOverBudget"],
+    );
+    // Every failing run is refused by BC — exactly what a Restrictive test codeunit that writes
+    // produces, on the mutant run and on the baseline confirmation alike.
+    backend.failureMessageFor = () => BC_PERMISSION_REFUSAL;
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({ backend, store, ...dirs, selectorIds });
+
+    // The verdict is UNCHANGED — this is a diagnosis attached to an existing failure, not a new
+    // classification. If a future edit made the pattern match decide anything, this goes red.
+    expect(report.counts.unstable).toBeGreaterThan(0);
+    expect(report.counts.killed).toBe(0);
+    expect(report.counts.survived).toBe(0);
+
+    const diagnosed = report.mutants.filter((m) => m.cause === "unstable");
+    expect(diagnosed.length).toBeGreaterThan(0);
+    for (const m of diagnosed) {
+      expect(m.verdict).toBe("error");
+      // The original failure text is still there — the diagnosis is appended, never substituted.
+      expect(m.failureNote).toContain("fails at baseline confirmation");
+      expect(m.failureNote).toContain("TestPermissions = Disabled");
+      // BC's own words survive verbatim, so a reader who disagrees can still see what BC said.
+      expect(m.failureNote).toContain(BC_PERMISSION_REFUSAL);
+    }
+    // And it reaches the operator: `renderConsole` prints `failureNote` under an error row.
+    expect(renderConsole(report)).toContain("TestPermissions = Disabled");
+  });
+
+  test("R26: a permissions refusal that PASSES at baseline is still a kill, undiagnosed", async () => {
+    const dirs = await makeProject();
+    // The kill shape: fails under the mutant (with BC's refusal text, which the diagnosis would
+    // happily match), passes at baseline confirmation. The pattern must not be consulted here —
+    // if it ever downgraded or annotated a kill, `killed` would stop being the verdict.
+    const backend = new StubBackend(CAPS_NST, (mutant) => (mutant === null ? "pass" : "fail"), [
+      "IsOverBudget",
+    ]);
+    backend.failureMessageFor = () => BC_PERMISSION_REFUSAL;
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({ backend, store, ...dirs, selectorIds });
+    expect(report.counts.killed).toBeGreaterThan(0);
+    expect(report.counts.unstable).toBe(0);
+    for (const m of report.mutants) {
+      expect(m.verdict).toBe("killed");
+      expect(m.failureNote).toBeUndefined();
+    }
   });
 
   test("timeout under mutant = timeout-killed, no confirmation re-run", async () => {

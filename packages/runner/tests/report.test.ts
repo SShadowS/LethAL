@@ -124,7 +124,12 @@ describe("renderConsole — permission canary reiteration (R26)", () => {
     const canaryLineIdx = lines.findIndex((l) => l.includes("R26"));
     expect(scoreLineIdx).toBeGreaterThanOrEqual(0);
     expect(canaryLineIdx).toBeGreaterThan(scoreLineIdx);
-    expect(out).toContain("CONFIRMED");
+    // R26 after the R1 correction: a `mocked` verdict now reports a VIOLATED PRECONDITION (the
+    // platform stripping even a codeunit that declares `TestPermissions = Disabled`), not the
+    // disproved fenced-path-vs-mock story. The consequence line is unchanged — such mutants are
+    // still silently unscored.
+    expect(out).toContain("PRECONDITION VIOLATED");
+    expect(out).toContain("TestPermissions = Disabled");
     expect(out).toContain("UNSCORED");
   });
 
@@ -137,7 +142,10 @@ describe("renderConsole — permission canary reiteration (R26)", () => {
     };
     const out = renderConsole({ ...bcdevReport, permissionCanary: canary });
     expect(out).toContain("R26");
-    expect(out).toContain("does NOT strip permissions");
+    expect(out).toContain("CAN write its own app's tables");
+    // The weaker, honest claim: a clean canary confirms the SERVER's precondition and says nothing
+    // about any particular target suite, whose own `TestPermissions` decides that.
+    expect(out).toContain("says nothing about any particular target suite");
   });
 
   test("inconclusive prints its reason AND explicitly disclaims being 'not mocked'", () => {

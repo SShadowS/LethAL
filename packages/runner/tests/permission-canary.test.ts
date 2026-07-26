@@ -1,10 +1,13 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { ActivationConfig, FetchFn } from "../src/activation";
 import {
   PermissionCanaryClient,
   type PermissionCanaryProbe,
   type PermissionCanaryResult,
   PermissionCanaryUnavailableError,
+  describeTestPermissionsRefusal,
   permissionCanaryWarnings,
   runPermissionCanary,
 } from "../src/permission-canary";
@@ -133,7 +136,7 @@ describe("runPermissionCanary — verdict mapping", () => {
     const line = permissionCanaryWarnings(r)[0] ?? "";
     expect(line).toContain("could not determine");
     expect(line).toContain("not allowed inside the call to 'RunTests'");
-    expect(line).not.toContain("does NOT strip permissions");
+    expect(line).not.toContain("CAN write its own app's tables");
   });
 
   test("a server inconclusive with no detail still gets a reason (never a bare, unactionable verdict)", async () => {
@@ -309,7 +312,11 @@ describe("runPermissionCanary — a verdict its own payload contradicts", () => 
 });
 
 describe("permissionCanaryWarnings", () => {
-  test("mocked says the mutants are silently unscored, and names the probe failure", () => {
+  // The wording tracks the question the canary actually answers (can a codeunit declaring
+  // `TestPermissions = Disabled` write here?), not the disproved fenced-path story. A 'mocked'
+  // answer is now a PRECONDITION VIOLATION — the platform rule itself having changed — and must
+  // not read as the everyday "your test codeunit omits the property" case.
+  test("mocked reports a violated precondition, says the mutants are unscored, and names the probe failure", () => {
     const lines = permissionCanaryWarnings({
       verdict: "mocked",
       readPermission: false,
@@ -318,8 +325,9 @@ describe("permissionCanaryWarnings", () => {
       detail: "Sorry, the current permissions prevented the action.",
     });
     expect(lines).toHaveLength(1);
-    expect(lines[0]).toContain("CONFIRMED");
+    expect(lines[0]).toContain("PRECONDITION VIOLATED");
     expect(lines[0]).toContain("R26");
+    expect(lines[0]).toContain("TestPermissions = Disabled");
     expect(lines[0]).toContain("UNSCORED");
     expect(lines[0]).toContain("permissions prevented the action");
   });
@@ -338,7 +346,10 @@ describe("permissionCanaryWarnings", () => {
     expect(lines[0]).toContain("outside the fence");
   });
 
-  test("not-mocked flags a mock that IS installed but is not stripping this path", () => {
+  // Codeunit 131006 being installed while writes still succeed is exactly what the A/B measurement
+  // predicts, so the line must say the mock is NOT the culprit — otherwise the next operator to see
+  // a refused write blames an installed app instead of the target codeunit's own declaration.
+  test("not-mocked says an installed mock is not the reason any test fails to write", () => {
     const lines = permissionCanaryWarnings({
       verdict: "not-mocked",
       baselineReadPermission: true,
@@ -348,7 +359,9 @@ describe("permissionCanaryWarnings", () => {
       writePermission: true,
       insertSucceeded: true,
     });
-    expect(lines[0]).toContain("IS installed here but is not stripping this path");
+    expect(lines[0]).toContain("131006");
+    expect(lines[0]).toContain("is not the reason any test fails to write");
+    expect(lines[0]).toContain("TestPermissions");
   });
 
   test("not-mocked still says something — a silent report cannot distinguish 'clean' from 'nobody looked'", () => {
@@ -359,8 +372,25 @@ describe("permissionCanaryWarnings", () => {
       insertSucceeded: true,
     });
     expect(lines).toHaveLength(1);
-    expect(lines[0]).toContain("does NOT strip permissions");
-    expect(lines[0]).not.toContain("CONFIRMED");
+    expect(lines[0]).toContain("CAN write its own app's tables");
+    expect(lines[0]).not.toContain("PRECONDITION VIOLATED");
+  });
+
+  // The weaker claim is the whole point of the R1 correction: a clean canary characterises the
+  // SERVER's precondition and nothing about a particular suite, whose own `TestPermissions`
+  // decides whether its tests may write. If this line ever promises target-suite scores are
+  // unaffected, the canary is over-claiming again.
+  test("not-mocked does NOT promise anything about a particular target suite", () => {
+    const lines = permissionCanaryWarnings({
+      verdict: "not-mocked",
+      readPermission: true,
+      writePermission: true,
+      insertSucceeded: true,
+    });
+    const line = lines[0] ?? "";
+    expect(line).toContain("says nothing about any particular target suite");
+    expect(line).toContain("TestPermissions");
+    expect(line).not.toContain("are scored normally here");
   });
 
   test("inconclusive explicitly disclaims being 'not mocked', and prints the reason", () => {
@@ -480,5 +510,132 @@ describe("PermissionCanaryClient", () => {
   test("the happy path end-to-end through the real client maps to a verdict", async () => {
     const r = await runPermissionCanary(new PermissionCanaryClient(CFG, okFetch(NOT_MOCKED_WIRE)));
     expect(r.verdict).toBe("not-mocked");
+  });
+});
+
+// ————————————————————————————————————————————————————————————————————————
+// describeTestPermissionsRefusal — the half operators actually hit. MEASURED A/B (2026-07-26): a
+// test codeunit that omits `TestPermissions` runs Restrictive (the AL default) and is refused when
+// it writes; `TestPermissions = Disabled` is not. That refusal is deterministic and one line to
+// fix, yet it used to reach the user as `error cause=unstable` with a bare "fails at baseline
+// confirmation". These tests pin the three properties that make the diagnosis trustworthy: it
+// FIRES on BC's real refusal shape, it NAMES the property, and it stays SILENT on anything else —
+// a diagnosis that fires on ordinary assertion failures would be worse than none.
+// ————————————————————————————————————————————————————————————————————————
+
+/** The exact text BC produced, verbatim, on the live suite that exposed this. */
+const BC_REFUSAL =
+  "Sorry, the current permissions prevented the action. " +
+  "(TableData 79300 Data Main Insert: LethAL Sandbox Data Tests)";
+
+describe("describeTestPermissionsRefusal", () => {
+  test("names TestPermissions = Disabled and quotes BC verbatim, parenthetical included", () => {
+    const d = describeTestPermissionsRefusal(BC_REFUSAL);
+    expect(d).toBeDefined();
+    expect(d).toContain("TestPermissions = Disabled");
+    // Quoting rather than replacing: a reader who disagrees with the diagnosis still has the
+    // platform's own words, including the part that names the table and the operation.
+    expect(d).toContain(BC_REFUSAL);
+    expect(d).toContain("TableData 79300 Data Main Insert");
+    // It is a diagnosis, not a verdict — it must read as "most likely", never as a finding.
+    expect(d).toContain("most likely");
+  });
+
+  test("fires on the bare sentence with no parenthetical (older/short BC messages)", () => {
+    const d = describeTestPermissionsRefusal(
+      "Sorry, the current permissions prevented the action.",
+    );
+    expect(d).toBeDefined();
+    expect(d).toContain("Sorry, the current permissions prevented the action.");
+    expect(d).toContain("TestPermissions = Disabled");
+  });
+
+  // `failureMessage` is `message` + "\n" + `stackTrace` (see `RunMutantTransport.failureTextOf`),
+  // so the quote must stop at the line break — otherwise the diagnosis drags a stack frame into
+  // the quoted text and the operator can no longer tell what BC actually said.
+  test("quotes only BC's sentence when a stack trace follows", () => {
+    const d = describeTestPermissionsRefusal(
+      `${BC_REFUSAL}\n"Data Main Tests"(CodeUnit 79300).InsertDoublesAmountWeak line 4`,
+    );
+    expect(d).toBeDefined();
+    expect(d).toContain(BC_REFUSAL);
+    expect(d).not.toContain("line 4");
+    expect(d).not.toContain("InsertDoublesAmountWeak");
+  });
+
+  test("is silent on an ordinary assertion failure — no diagnosis where there is no refusal", () => {
+    expect(
+      describeTestPermissionsRefusal("Assert.AreEqual failed. Expected: 200 Actual: 100"),
+    ).toBeUndefined();
+  });
+
+  test("is silent on a permissions-adjacent message that is not the refusal", () => {
+    expect(
+      describeTestPermissionsRefusal(
+        "You do not have the following permissions on TableData 79300: Insert.",
+      ),
+    ).toBeUndefined();
+  });
+
+  // A failing test line need not carry a message at all — that is a legitimate state, not a
+  // caller-contract violation, so it answers "no diagnosis" rather than throwing or inventing one.
+  test("absent text yields no diagnosis", () => {
+    expect(describeTestPermissionsRefusal(undefined)).toBeUndefined();
+    expect(describeTestPermissionsRefusal("")).toBeUndefined();
+  });
+
+  // The regex is used repeatedly against different messages within one session; a stateful (`/g`)
+  // regex would answer correctly and then, on the very next call, silently miss.
+  test("is stateless across calls — the same input answers the same way every time", () => {
+    const first = describeTestPermissionsRefusal(BC_REFUSAL);
+    const second = describeTestPermissionsRefusal(BC_REFUSAL);
+    const third = describeTestPermissionsRefusal(BC_REFUSAL);
+    expect(second).toBe(first as string);
+    expect(third).toBe(first as string);
+  });
+});
+
+// ————————————————————————————————————————————————————————————————————————
+// The AL half, guarded from TypeScript because AL has no unit-test harness in this repo. Two
+// declarations in `extensions/lethal-control` are load-bearing in a way a linter, a reviewer, or a
+// future tidy-up will read as an oversight, and getting either wrong turns the canary into a
+// confident liar rather than a broken one:
+//
+//   - codeunit 71010 MUST declare `TestPermissions = Disabled`. Without it the codeunit is
+//     Restrictive (the AL default) and its write is refused on EVERY server, including ones where a
+//     real suite writes fine — the canary would then be measuring its own declaration. That is the
+//     defect control app 1.0.0.6 fixed, and it shipped for weeks reporting `mocked` about itself.
+//   - table 71008 MUST NOT declare `InherentPermissions`. With it the write could never fail, and
+//     the light could never turn red.
+//
+// COMMENT LINES ARE STRIPPED FIRST, deliberately. Both files' doc comments repeat these exact
+// phrases many times (the DO-NOT banners quote them), so a naive substring search over the raw file
+// would pass whether or not the declaration is actually there — the "test passes for the wrong
+// reason" hazard, in the one place where nothing else would catch it.
+// ————————————————————————————————————————————————————————————————————————
+
+const CONTROL_SRC = join(import.meta.dir, "..", "..", "..", "extensions", "lethal-control", "src");
+
+/** The file's CODE lines only — every `//`-prefixed line (incl. `///` doc comments) dropped. */
+function codeLinesOf(file: string): string[] {
+  return readFileSync(join(CONTROL_SRC, file), "utf8")
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l !== "" && !l.startsWith("//"));
+}
+
+describe("LethAL Control AL declarations the canary's meaning depends on", () => {
+  test("codeunit 71010 declares `TestPermissions = Disabled` in CODE, not just in a comment", () => {
+    const code = codeLinesOf("PermissionCanary.Codeunit.al");
+    // Sanity: we are reading the right object, and reading it as code.
+    expect(code).toContain('codeunit 71010 "LC Permission Canary"');
+    expect(code).toContain("Subtype = Test;");
+    expect(code).toContain("TestPermissions = Disabled;");
+  });
+
+  test("table 71008 declares no InherentPermissions in CODE — the omission is the measurement", () => {
+    const code = codeLinesOf("PermissionProbe.Table.al");
+    expect(code).toContain('table 71008 "LC Permission Probe"');
+    expect(code.filter((l) => l.includes("InherentPermissions"))).toEqual([]);
   });
 });
