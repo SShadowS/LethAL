@@ -523,10 +523,14 @@ environment:
 | `Starting → Running` | **390 s** |
 | BC endpoint answers `200` | **391 s** after the start request |
 
-Status vocabulary: `Draft`, `Starting`, `Running`, `Stopped` — `env start`/`env stop` are PATCHes of
-that field. A fresh environment already contains the companies `CRONUS Danmark A/S` and
-`My Company`. The environment's URL is `{origin}/{envId}`, derived from the id, so a stop/start
-cannot move it.
+Status vocabulary: `Draft`, `Deploying`, `Starting`, `Running`, `Stopped` — `env start`/`env stop`
+are PATCHes of that field. **`Deploying` was not in the first measurement** and only appeared during
+the create-mode gate run of 2026-07-26 (`Deploying → Starting → Running`), so treat this list as
+observed rather than exhaustive: `readyWhen` matches on the ready value (`Running`) and polls
+through whatever else the portal reports, which is why it is written as an equality test on the
+target rather than a state machine over the transitions. A fresh environment already contains the
+companies `CRONUS Danmark A/S` and `My Company`. The environment's URL is `{origin}/{envId}`,
+derived from the id, so a stop/start cannot move it.
 
 This is why `startEnv` and `readyWhen` are **mandatory in create-mode**: publishing to a `Draft`
 environment fails against a dead endpoint. It is also why reuse (`envId` supplied in config or via

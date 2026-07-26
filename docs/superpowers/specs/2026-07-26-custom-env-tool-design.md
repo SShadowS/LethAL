@@ -66,7 +66,7 @@ Spiked against the real portal, creating and deleting one DK BC 28.0 environment
 | `Starting → Running` | **390 s** |
 | BC Automation API answers `200` | **391 s** after the start request |
 
-Status vocabulary: `Draft`, `Starting`, `Running`, `Stopped` — `env start` / `env stop` are PATCHes
+Status vocabulary: `Draft`, `Deploying`, `Starting`, `Running`, `Stopped` — `env start` / `env stop` are PATCHes
 of that field. A fresh environment already contains the companies `CRONUS Danmark A/S` and
 `My Company`.
 
@@ -485,6 +485,10 @@ special handling.
 3. A run with no `envId` creates an environment, publishes `publishApps` and the control app,
    completes, and deletes the environment; the created id is present in `~/.lethal/env-state/`
    while the run is in flight and gone after a clean finish.
+   **MET, live, 2026-07-26.** The gate run in create-mode provisioned `b696e134-…`, polled it
+   `Deploying → Starting → Running`, published both fixture apps and `lethal-control.app`, produced
+   the frozen 3 / 10 / 3 table, then deleted the environment (confirmed absent from `env list`) and
+   removed its `~/.lethal/env-state/` record.
 4. `--keep-env` and the quarantine path both demonstrably skip deletion, and a failing `deleteEnv`
    leaves the report and exit code untouched.
 5. Every failure mode in the execution-contract table throws with its named fields — proven by unit
