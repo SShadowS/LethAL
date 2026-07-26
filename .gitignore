@@ -10,6 +10,7 @@ coverage/
 launch.local.json
 lethal.sqlite
 lethal.config.local.json
+lethal.config.envtool.json
 *.app
 
 # Local MCP server config — contains credentials
