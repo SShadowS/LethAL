@@ -167,80 +167,93 @@ git commit -m "probe(envtool): measure what a Continia environment supports"
 
 ---
 
-## Probe result (2026-07-26)
+## Probe result (2026-07-26, corrected)
 
-**`coverageMode: "none"`.** `bcdev_status` was run against the one existing environment
-(`continia env list --json` → `description: "WI-63396"`, `status: "Running"` at the start of the
-probe) and returned `ok: false` on every attempt, fast (no hang — each call returned in well under a
-second, so this is a clean failure, not a timeout).
+**`coverageMode: "procedure"`.** The first pass through this section recorded `"none"` and that
+verdict was **wrong** — do not re-derive it. It was reached during a run that was confounded by a
+cold-starting environment (503s from every path, including the bare root) and rested on a false
+structural claim ("Continia's reverse proxy never exposes `{origin}:7049`"). Re-verified directly
+against the awake environment; both problems are now resolved with direct evidence.
 
-Ran with `BcDevMcpBackend({ mcpCommand: ["bun", "run", "U:/Git/bc-dev-mcp/src/mcp/index.ts"], server:
-origin, serverInstance: instance, tenant: "default", company: "CRONUS Danmark A/S",
-packageCachePath: ".alpackages", controlSymbolPath: "unused-for-status", env: { BC_DEV_USER,
-BC_DEV_PASSWORD } }).status()` (project added — see "Deviation from the brief" below).
+### 7049 is a fallback, not a hard target
 
-### Evidence, and why the fallback — not a shrug
+`bc-dev-mcp/src/core/urls.ts:12`:
 
-Two independent, distinguishable failures, both established before accepting `"none"`:
+```ts
+const port = c.port ?? (u.port ? Number(u.port) : DEFAULT_DEV_PORT);   // DEFAULT_DEV_PORT = 7049
+```
 
-1. **The environment surface itself was not answering.** The baseline Automation-API check
-   (`{origin}/{instance}/api/microsoft/automation/v2.0/companies`) returned `503 Service Temporarily
-   Unavailable` from `nginx` — and so did the bare root path `{origin}/{instance}/` with no API
-   suffix at all, and a retry loop (3 attempts, 2s apart) got the identical `503` every time. Mid-probe,
-   `continia env list --json` showed the environment's own reported status flip from `Running` to
-   `Starting` — i.e. it had gone idle since the last real request and our probing triggered a cold
-   start. The plan's own "Already measured" table above says `Starting → Running` takes **390s**; a
-   background poll (`continia env list --json` every 15s) confirmed it stayed `Starting` for 60s+
-   without flipping back to `Running` within the probe's run. This half of the failure is the
-   **environment being asleep**, not bc-dev-mcp — consistent with Step 3's instruction to check the
-   Automation-API status first.
+`ConnectionConfig.port` is an explicit override, and `bcdev_status` exposes `port` as a tool param
+(`bc-dev-mcp/src/mcp/tools/shared.ts:90`). 7049 is reached only when neither the connection URL nor
+`port` supplies one — the earlier writeup treated that fallback as if it were the only path.
 
-2. **Independent of (1): bc-dev-mcp's dev-endpoint resolution is structurally incompatible with how
-   Continia hosts this environment**, and would fail even against a fully-awake environment. Because
-   `server` is supplied without `environmentType`, bc-dev-mcp's `resolveConnection`
-   (`bc-dev-mcp/src/core/launch-config.ts:121`) treats the connection as `"OnPrem"`, and OnPrem
-   metadata resolution (`bc-dev-mcp/src/core/urls.ts`, `DEFAULT_DEV_PORT = 7049`) always targets
-   `{origin}:7049/{instance}/dev/metadata` — a raw TCP port. `bcdev_status`'s own error text:
+Every port-less HTTPS server hits 7049 for a structural reason that has nothing to do with
+Continia specifically: the WHATWG URL API normalizes away a default port
+(`new URL("https://host:443").port === ""`), so embedding `:443` inside the `server` string does
+**not** help — only the separate `port` field reaches this override.
 
-   ```
-   Dev endpoint unreachable at https://demoportaldev.continiaonline.com:7049/0494e53d-c76e-4a05-96f5-593d49830a64/dev/metadata?tenant=default
-   — is the BC server running and the developer service port open?
-   (Error: Unable to connect. Is the computer able to access the url?)
-   ```
+### The portal answers on standard HTTPS
 
-   That is a **connection-refused/unreachable** failure (TCP-level, verified directly: fetching
-   `{origin}:7049/...` gave the same "Unable to connect" outside the backend too), not an auth
-   rejection (no 401/403 was ever seen) and not an unsupported-endpoint-version error (bc-dev-mcp
-   never got far enough to negotiate a version). Continia's hosted portal
-   (`demoportaldev.continiaonline.com`) fronts everything through a single HTTPS reverse proxy,
-   path-routed by environment id — there is no dev-service TCP port exposed at that hostname for
-   bc-dev-mcp to reach, awake or not. `BcDevConfig`/`connectionShape` do carry a `port` override, but
-   pointing it at 443 would not help: the dev endpoint's own routing (`/dev/metadata`, not
-   `/{instance}/api/...`) is not one nginx is proxying through at all judging by the identical 503 on
-   every path tried, including the bare root.
+`curl` with Basic auth against the resolved environment, once awake:
 
-Given both a (possibly transient) environment-availability problem and a structural port-model
-mismatch, `"procedure"` cannot be claimed. Per spec §Coverage, the session runs every mutant against
-all green tests (`coverage: "none"`) — slower, never wrong.
+- `https://demoportaldev.continiaonline.com/{envId}/dev/metadata?tenant=default` → **200**
+- `.../dev/apps?tenant=default` → 404 on a GET — expected, that route is POST-only (publish), not
+  evidence of a missing route. (The earlier writeup's "identical 503 on every path" observation was
+  real, but was the cold-start symptom, not proof the dev-service route is unrouted.)
 
-### Deviation from the brief's literal script (recorded per the brief's own step 4)
+### Decisive: the real backend, with `port` supplied
 
-The brief's Step 1 script was written against an earlier/assumed shape of `BcDevConfig`
-(`packages/runner/src/bcdev-backend.ts`). Checked against the actual current interface before
-running:
+Spawned bc-dev-mcp exactly as `BcDevMcpBackend` does (credentials only via `BC_DEV_USER`/
+`BC_DEV_PASSWORD` in the child env, per this section's "Deviation" note below) and called
+`bcdev_status`:
 
-- `BcDevConfig.project` is a **required** `string` (not optional) — added
-  `project: process.cwd()` to the constructed config. `bcdev_status`'s own schema
-  (`connectionShape.project`, bc-dev-mcp) treats it as optional (falls back to the server's own cwd,
-  and only matters for `.vscode/launch.json` discovery, which is fully overridden here anyway by the
-  explicit `server`/`serverInstance`/`tenant` — this repo's root has no `.vscode/launch.json`, so
-  the value is inert either way).
-- `BcDevConfig` has **no** `username`/`password` fields at all — removed from the brief's literal
-  script. `bcdev_status`'s wire schema carries no credential params; credentials reach the spawned
-  bc-dev-mcp server only through `BC_DEV_USER`/`BC_DEV_PASSWORD` in `env`, which the brief's script
-  already set correctly.
+- **without `port`** → `isError: true`:
+  ```
+  Dev endpoint unreachable at https://demoportaldev.continiaonline.com:7049/0494e53d-c76e-4a05-96f5-593d49830a64/dev/metadata?tenant=default
+  — is the BC server running and the developer service port open?
+  (Error: Unable to connect. Is the computer able to access the url?)
+  ```
+  (the same failure the first pass recorded and stopped at)
+- **with `port: 443`** → **success**:
+  ```json
+  { "webApiVersion": "7.0", "runtimeVersion": "17.0", "debuggerVersion": "7.0",
+    "supportsTestRunning": true, "supportsCoreSignalR": true, "supportsSourceDownload": true }
+  ```
 
-Neither change affects the verdict — both are TypeScript-shape corrections, not behavior changes.
+`supportsTestRunning`/`supportsCoreSignalR` are both true — the coverage path bc-dev-mcp needs is
+available against this environment.
+
+### Why the first pass got it wrong
+
+Two confounds, both now isolated:
+
+1. **Cold start.** The environment had gone idle and was cycling `Running → Starting` during the
+   first probe; the Automation-API baseline returned `503` on every path. That is consistent with a
+   genuinely sleeping environment (measured `Starting → Running` = 390s elsewhere in this plan), not
+   a permanent block — but the probe run never separated "asleep" from "structurally unreachable",
+   so it reported them as one finding.
+2. **The `"port` would not help" claim was asserted, not tested.** `server` without
+   `environmentType` does force `"OnPrem"` mode, and OnPrem's dev-endpoint resolution does default
+   to 7049 — true, and unchanged. What was false is the next step: `ConnectionConfig.port` is a real
+   override, `bcdev_status` exposes it, and passing `port: 443` makes the call succeed. Nobody
+   supplied it in the first pass, so the fallback path fired every time in a way that looked
+   identical to "no override exists."
+
+### The new requirement this exposes
+
+`BcDevConfig` (`packages/runner/src/bcdev-backend.ts`) has no `port` field today, and
+`connectionParams()` never sends one — so as written, LethAL cannot reach a path-routed HTTPS
+portal like Continia's. Task 5 adds `port?: number` to `BcDevConfig` and threads it through
+`connectionParams()`. Task 6 derives it in `env-tool-session.ts` from the resolved `baseUrl` (the
+URL's own explicit port if it carries one, else 443 for `https:` / 80 for `http:`).
+
+### Deviation from the brief's literal script (unchanged by this correction)
+
+The original probe script (Task 1, Step 1) was written against an earlier/assumed shape of
+`BcDevConfig`: `project` is a **required** `string` (added `project: process.cwd()`), and
+`BcDevConfig` has **no** `username`/`password` fields (credentials reach bc-dev-mcp only via
+`BC_DEV_USER`/`BC_DEV_PASSWORD` in `env`). Both are TypeScript-shape corrections, not behavior
+changes, and neither affects this corrected verdict.
 
 ---
 
@@ -1238,7 +1251,12 @@ Without this, a fallback run aborts at `runSession`'s readiness gate before any 
 
 **Interfaces:**
 - Consumes: `HarnessVerifier` from `./harness` (already imported by callers).
-- Produces: `BcDevConfig.coverageMode?: "procedure" | "none"` — default `"procedure"`, so every existing caller is unchanged.
+- Produces: `BcDevConfig.coverageMode?: "procedure" | "none"` — default `"procedure"`, so every
+  existing caller is unchanged. Also `BcDevConfig.port?: number`, threaded through
+  `connectionParams()` — required for a path-routed HTTPS environment tool (Continia) whose dev
+  endpoint has no listener at bc-dev-mcp's OnPrem fallback port, 7049 (see the corrected "Probe
+  result" above: `port: 443` is what turns `bcdev_status` from `isError: true` into success against
+  such an environment).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1280,14 +1298,53 @@ describe("coverageMode", () => {
     await expect(backend.status()).rejects.toThrow(/harnessVerifier/);
   });
 });
+
+// A path-routed HTTPS portal (Continia) has no listener at bc-dev-mcp's OnPrem fallback port
+// (7049) — the resolved port must actually reach the wire call, not just live on the config
+// object. Asserted on the arguments bc-dev-mcp's OWN tool handler receives (McpServer +
+// InMemoryTransport, the same live-round-trip pattern `makeBackend`/`statusHandler` already use
+// in this file), not on a private-method reach-in, since `connectionParams()` is private and the
+// wire arguments are the thing that actually matters.
+describe("port in connectionParams", () => {
+  it("omits port from bcdev_status's arguments when the config sets none", async () => {
+    let seenArgs: Record<string, unknown> = {};
+    const backend = makeBackend(
+      () => ({ results: [] }),
+      (args) => {
+        seenArgs = args as Record<string, unknown>;
+        return "ok";
+      },
+    );
+    await backend.status();
+    expect(seenArgs.port).toBeUndefined();
+  });
+
+  it("carries port through to bcdev_status's arguments when the config sets one", async () => {
+    let seenArgs: Record<string, unknown> = {};
+    const backend = makeBackend(
+      () => ({ results: [] }),
+      (args) => {
+        seenArgs = args as Record<string, unknown>;
+        return "ok";
+      },
+      { port: 443 },
+    );
+    await backend.status();
+    expect(seenArgs.port).toBe(443);
+  });
+});
 ```
 
-(`baseConfig()` and `deploymentStub()` already exist in this test file; reuse them.)
+(`baseConfig()` and `deploymentStub()` already exist in this test file; reuse them. `makeBackend`
+also already exists — extend its signature with an optional fourth `overrides: Partial<BcDevConfig>`
+parameter, spread into the config object it constructs, so both new tests can supply `port` without
+duplicating the whole fixture.)
 
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `bun test packages/runner/tests/bcdev-backend.test.ts`
-Expected: FAIL — `coverageMode` is not a known property, `capabilities().coverage` is always `"procedure"`.
+Expected: FAIL — `coverageMode`/`port` are not known properties, `capabilities().coverage` is always
+`"procedure"`, and `seenArgs.port` is always `undefined`.
 
 - [ ] **Step 3: Implement**
 
@@ -1302,6 +1359,32 @@ In `BcDevConfig` add:
    * transport in BOTH modes, so this changes baseline routing and selection only.
    */
   readonly coverageMode?: "procedure" | "none";
+  /**
+   * Explicit dev-endpoint port, passed through verbatim to bc-dev-mcp as `port`. Required whenever
+   * the server has no port of its own AND the environment does not listen on bc-dev-mcp's OnPrem
+   * fallback (7049) — a path-routed HTTPS portal (Continia's `demoportaldev.continiaonline.com`)
+   * is exactly that case (see the corrected "Probe result" section of this plan). The WHATWG URL
+   * API normalizes away a default port (`new URL("https://host:443").port === ""`), so embedding
+   * `:443` inside `server` does nothing — only this field reaches bc-dev-mcp's own override
+   * (`bc-dev-mcp/src/core/urls.ts:12`: `c.port ?? (u.port ? Number(u.port) : DEFAULT_DEV_PORT)`).
+   */
+  readonly port?: number;
+```
+
+Update `connectionParams()` to also carry `port` (still omitted when `undefined`, per
+`exactOptionalPropertyTypes`):
+
+```typescript
+  private connectionParams(): Record<string, unknown> {
+    const {
+      project, server, serverInstance, tenant, environmentType, environmentName, company, port,
+    } = this.cfg;
+    return Object.fromEntries(
+      Object.entries({
+        project, server, serverInstance, tenant, environmentType, environmentName, company, port,
+      }).filter(([, v]) => v !== undefined),
+    );
+  }
 ```
 
 Replace `capabilities()` and `status()`:
@@ -1347,7 +1430,7 @@ Expected: PASS.
 
 - [ ] **Step 5: Red-check**
 
-Revert `capabilities()` to the hardcoded `"procedure"`, confirm the `coverage "none"` test goes RED, restore. Report both.
+Revert `capabilities()` to the hardcoded `"procedure"`, confirm the `coverage "none"` test goes RED, restore. Then drop `port` from the `connectionParams()` destructure/output object, confirm "carries port through to bcdev_status's arguments when the config sets one" goes RED, restore. Report all.
 
 - [ ] **Step 6: Commit**
 
@@ -1363,7 +1446,10 @@ git commit -m "feat(runner): coverage mode as config, with an MCP-free readiness
 
 **Files:**
 - Create: `packages/runner/src/env-tool-session.ts`
-- Modify: `packages/runner/src/cli.ts` — add `baseUrl?: string` to `BcDevConfigSection`, and make `odataCfgFor` prefer it
+- Modify: `packages/runner/src/cli.ts` — add `baseUrl?: string` and `port?: number` to
+  `BcDevConfigSection`, make `odataCfgFor` prefer `baseUrl`, and forward `port` into the
+  `BcDevConfig` `buildBackend` constructs (Task 5 added `BcDevConfig.port`; without this forward the
+  resolved port would sit on `BcDevConfigSection` with no consumer)
 - Test: `packages/runner/tests/env-tool-session.test.ts`
 
 **Interfaces:**
@@ -1489,6 +1575,35 @@ describe("startEnvToolSession", () => {
     expect(session.bcdev.username).toBe("admin");
     expect(session.bcdev.company).toBe("CRONUS");
     expect(session.createdEnvId).toBeUndefined();
+  });
+
+  it("derives port 443 from an https baseUrl carrying no port of its own", async () => {
+    // The corrected Probe result (above): bc-dev-mcp's OnPrem mode defaults to port 7049 unless
+    // `port` is supplied, and Continia's path-routed HTTPS portal listens on 443, not 7049 — a
+    // resolved `baseUrl` with no explicit port must still produce a usable `port`.
+    const { session } = await start();
+    expect(session.bcdev.port).toBe(443);
+  });
+
+  it("derives port 80 from an http baseUrl carrying no port of its own", async () => {
+    const { session } = await start(
+      {},
+      {},
+      {
+        ...resolveOut(),
+        "env get": '{"url":"http://host/env-4711","expiresUtc":"2099-01-01T00:00:00Z"}',
+      },
+    );
+    expect(session.bcdev.port).toBe(80);
+  });
+
+  it("takes an explicit port from the baseUrl itself over the protocol default", async () => {
+    const { session } = await start(
+      {},
+      {},
+      { ...resolveOut(), "env get": '{"url":"https://host:8443/env-4711","expiresUtc":"2099-01-01T00:00:00Z"}' },
+    );
+    expect(session.bcdev.port).toBe(8443);
   });
 
   it("verifies the harness BEFORE publishing the control app, and again after", async () => {
@@ -1699,7 +1814,7 @@ describe("startEnvToolSession", () => {
 Run: `bun test packages/runner/tests/env-tool-session.test.ts`
 Expected: FAIL — module not found.
 
-- [ ] **Step 3: Add `baseUrl` to `BcDevConfigSection` and prefer it in `odataCfgFor` (`cli.ts`)**
+- [ ] **Step 3: Add `baseUrl`/`port` to `BcDevConfigSection`, prefer `baseUrl` in `odataCfgFor`, and forward `port` into `buildBackend` (`cli.ts`)**
 
 ```typescript
   /**
@@ -1708,6 +1823,12 @@ Expected: FAIL — module not found.
    * `env-tool-session`; a hand-written bcdev section leaves it absent and keeps the derivation.
    */
   readonly baseUrl?: string;
+  /**
+   * bc-dev-mcp connection port. Set only by `env-tool-session` (derived from `baseUrl` — see
+   * `deriveMcpPort` below); a hand-written bcdev section leaves it absent, matching a container's
+   * existing behaviour of letting bc-dev-mcp fall back to its own default.
+   */
+  readonly port?: number;
 ```
 
 ```typescript
@@ -1720,6 +1841,14 @@ export function odataCfgFor(c: BcDevConfigSection): ActivationConfig {
     ...(c.tenant !== undefined ? { tenant: c.tenant } : {}),
   };
 }
+```
+
+`buildBackend`'s existing `BcDevMcpBackend` construction (the object literal that already lists
+`mcpCommand`/`project`/`server`/`serverInstance`/`company`/`packageCachePath`/`controlSymbolPath`/
+`tenant`/`env`) must add one more conditional entry, or the field just added is dead:
+
+```typescript
+      ...(c.port !== undefined ? { port: c.port } : {}),
 ```
 
 - [ ] **Step 4: Implement `env-tool-session.ts`**
@@ -1818,10 +1947,14 @@ export async function startEnvToolSession(args: {
     }
   }
 
-  // 4. derive server/serverInstance from baseUrl unless read explicitly.
+  // 4. derive server/serverInstance/port from baseUrl unless read explicitly. A path-routed HTTPS
+  //    portal (Continia) has no listener at bc-dev-mcp's OnPrem fallback port (7049 — see the
+  //    corrected "Probe result" section of this plan), so the port bc-dev-mcp actually needs must
+  //    be derived here rather than left to that fallback.
   const baseUrl = resolved.baseUrl;
   if (baseUrl === undefined) throw new EnvToolError("resolve produced no baseUrl");
   const { server, serverInstance } = splitBaseUrl(baseUrl, resolved.server, resolved.serverInstance);
+  const port = deriveMcpPort(baseUrl);
   const username = resolved.username;
   const password = resolved.password;
   if (username === undefined || password === undefined) {
@@ -1833,6 +1966,7 @@ export async function startEnvToolSession(args: {
     baseUrl,
     server,
     serverInstance,
+    port,
     username,
     password,
     packageCachePath,
@@ -1956,6 +2090,20 @@ function splitBaseUrl(
 }
 
 /**
+ * Derives the port bc-dev-mcp's `ConnectionConfig.port` needs from a resolved `baseUrl`. The
+ * WHATWG URL API normalizes away a default port — `new URL("https://host:443").port === ""` — so
+ * an explicit port survives only when the URL text actually carries one; everything else falls
+ * back to the protocol default. Without this, bc-dev-mcp's OWN fallback (`DEFAULT_DEV_PORT = 7049`,
+ * `bc-dev-mcp/src/core/urls.ts:12`) would fire instead, which is unreachable on a path-routed
+ * HTTPS portal (the corrected "Probe result" section of this plan measured this directly).
+ */
+function deriveMcpPort(baseUrl: string): number {
+  const url = new URL(baseUrl);
+  if (url.port !== "") return Number(url.port);
+  return url.protocol === "https:" ? 443 : 80;
+}
+
+/**
  * Records a created environment where a LATER process can find it. Session scratch is a mkdtemp
  * directory nobody can locate after a crash, and a crashed process cannot print. A residual window
  * remains: a crash DURING createEnv leaves an environment whose id LethAL never learned — the
@@ -1983,7 +2131,7 @@ async function recordCreatedEnv(
 - [ ] **Step 5: Run to verify it passes**
 
 Run: `bun run typecheck && rm -rf packages/*/dist && bun test packages/runner/tests/env-tool-session.test.ts`
-Expected: PASS, 11 tests.
+Expected: PASS, 14 tests.
 
 - [ ] **Step 6: Red-check the verify-before-publish rule**
 
