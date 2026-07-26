@@ -695,17 +695,14 @@ describe("writeInstrumentedProject", () => {
       expect(emitted).not.toContain("M0007");
       expect(emitted).not.toContain("M0008");
 
-      // Standing regression (spec §7.4): no surviving mutant's (site, operator) pair repeats.
-      // Two different sites legitimately sharing an operator name (the three deletion winners)
-      // is fine; the SAME site keeping the SAME operator twice would mean dedupeSpecs let an
-      // operator collide with itself — a bug in that operator's own generate(), per dedup.ts's
-      // own message.
-      const seen = new Set<string>();
-      for (const m of manifest.mutants) {
-        const key = `${m.startIndex}:${m.operatorName}`;
-        expect(seen.has(key)).toBe(false);
-        seen.add(key);
-      }
+      // A "(site, operator) never repeats" loop used to sit here, credited against spec §7.4. It
+      // could not fail: with four distinct sites and one spec per operator per site in this
+      // batch, no key can repeat whatever `dedupeSpecs` does — and any behaviour that got the
+      // grouping wrong is already caught by the `toHaveLength(5)` and `byStart(...)` assertions
+      // above. §7.4's invariant only bites over the PRE-dedup set produced by REAL operators, so
+      // it is asserted where the real registries are importable:
+      // `packages/runner/tests/orchestrator.test.ts` ("generateMutationSet: real cross-tier
+      // collisions").
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

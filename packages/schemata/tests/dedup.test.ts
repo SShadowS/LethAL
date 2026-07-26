@@ -244,18 +244,21 @@ describe("dedupeSpecs", () => {
       expect(atModify).toEqual(["lethal.swap-modify-flag", "lethal.void-method-call"]);
     });
 
-    // Spec §7.4: "a dedup regression test asserting no two operators ever emit the same
-    // (site, after-form)" — a standing invariant, not a one-off. Recomputes the identity
-    // `dedupeSpecs` itself keys on (kind:start:end:after-text) over the SURVIVING set and
-    // checks no two entries share it. This is the assertion the red-check below forces to
-    // fail, by making two genuinely different mutations collide on paper.
-    it("no two surviving mutants ever share the same (site, after-form) identity", () => {
-      const out = dedupeSpecs(batch, tierOf);
-      expect(out).toHaveLength(5);
-      const identities = out.map(
-        (s) => `${s.before.kind}:${s.before.startIndex}:${s.before.endIndex}:${s.after.text}`,
-      );
-      expect(new Set(identities).size).toBe(identities.length);
+    // Eight input specs in, five out: the three deletion collisions each resolve to one winner and
+    // the Modify pair does not collide at all.
+    //
+    // What used to sit here as well — recomputing `kind:start:end:after-text` over the SURVIVING
+    // set and asserting the identities are distinct — could not fail: `dedupeSpecs` returns the
+    // values of a Map keyed on exactly that string, so uniqueness holds for ANY input, correct
+    // implementation or not. The count below is the load-bearing half, and it is kept.
+    //
+    // Spec §7.4's standing invariant ("no two operators ever emit the same (site, after-form)")
+    // is only meaningful over the PRE-dedup set produced by REAL operators, which this package
+    // cannot build — `schemata` deliberately does not depend on the operator packages. It is
+    // asserted in `packages/runner/tests/orchestrator.test.ts`
+    // ("generateMutationSet: real cross-tier collisions"), which imports both registries.
+    it("resolves eight specs at four sites into five surviving mutants", () => {
+      expect(dedupeSpecs(batch, tierOf)).toHaveLength(5);
     });
   });
 });
