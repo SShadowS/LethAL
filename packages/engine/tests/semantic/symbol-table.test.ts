@@ -39,4 +39,44 @@ describe("buildSymbolTable", () => {
     const locals = table.localsOf("Vars Test", "Compute");
     expect(locals.map((l) => l.name)).toEqual(["Local"]);
   });
+
+  // A `tableextension` adds members to a table it only NAMES. It is indexed separately from
+  // `objects` so nothing that walks `objects` (buildCallerIndex, buildTypeTable) changes
+  // behaviour, while a consumer that must answer "does the project declare this procedure on
+  // that table?" can still see it — `claimsRecordMethod` in @lethal/builtin-tier2 is that
+  // consumer, and answering "no" there wrongly CLAIMS a mutation site.
+  describe("tableextension", () => {
+    const EXT = `tableextension 50002 "Other Ext" extends "Other Table"
+{
+    fields { field(50000; MyField; Integer) { } }
+
+    procedure SetRange(FromNo: Code[20]; ToNo: Code[20])
+    begin
+    end;
+}`;
+    const build = (src: string) =>
+      buildSymbolTable([{ path: "ext.al", root: wrapRoot(parseAL(src)) }]);
+
+    it("indexes it with its own name and its extends target, quotes stripped", () => {
+      const table = build(EXT);
+      expect(table.tableExtensions.map((e) => [e.kind, e.name, e.baseObject])).toEqual([
+        ["tableextension", "Other Ext", "Other Table"],
+      ]);
+    });
+
+    it("keeps it OUT of `objects` — an extension declares no object of its own", () => {
+      expect(build(EXT).objects).toEqual([]);
+    });
+
+    it("does not register the extension's procedures under the extension's name", () => {
+      // They belong to the extended table; an owner named after the extension is one no AL call
+      // can ever name, and would make `resolveProcedure` answer for a receiver that cannot exist.
+      expect(build(EXT).resolveProcedure("Other Ext", "SetRange")).toBeNull();
+    });
+
+    it("is an empty array — never absent — for a project with no extensions", async () => {
+      const src = await load();
+      expect(build(src).tableExtensions).toEqual([]);
+    });
+  });
 });

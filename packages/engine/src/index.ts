@@ -21,6 +21,7 @@ export type {
   SourceFile,
   SymbolTable,
   ObjectSymbol,
+  ExtensionSymbol,
   ProcedureSymbol,
   VarSymbol,
 } from "./semantic/symbol-table";

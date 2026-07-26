@@ -147,6 +147,26 @@ const SHADOWING_TABLE = `table 50001 "Other Table"
     end;
 }`;
 
+/** The same table WITHOUT the shadowing procedure — the extension below supplies it instead. */
+const PLAIN_TABLE = `table 50001 "Other Table"
+{
+    fields { field(1; "No."; Code[20]) { } }
+}`;
+
+/**
+ * A `tableextension` declaring `SetRange` on `Other Table`. In AL an extension's public
+ * procedures are callable on a variable of the EXTENDED table's type, so this shadows the builtin
+ * for every `Record "Other Table"` in the project exactly as a procedure on the table itself does.
+ */
+const SHADOWING_EXTENSION = `tableextension 50002 "Other Ext" extends "Other Table"
+{
+    fields { field(50000; MyField; Integer) { } }
+
+    procedure SetRange(FromNo: Code[20]; ToNo: Code[20])
+    begin
+    end;
+}`;
+
 // --- the rules -------------------------------------------------------------
 
 describe("claimsRecordMethod", () => {
@@ -331,11 +351,110 @@ ${SHADOWING_TABLE}`;
       const cuRoot = parseClean(
         codeunitSource("Other.SetRange(A, B);", { Other: 'Record "Other Table"' }),
       );
+      const tableRoot = parseClean(PLAIN_TABLE);
+      const ctx = projectContextFor([cuRoot, tableRoot]);
+      expect(claimsRecordMethod(onlyCall(cuRoot), ctx, "SetRange")).toBe(true);
+    });
+
+    /**
+     * Rule 3 through a `tableextension` — the same defect one object kind over, and it pointed
+     * the DANGEROUS way. In AL an extension's public procedures are callable on a variable of the
+     * extended table's type, so this call is `Other Ext`'s procedure, not the builtin. Measured
+     * `true` (a wrong claim) before `symbols.tableExtensions` existed: it mislabels the mutation
+     * and, under §3.2 dedup precedence, suppresses the correct Tier-1 `void-method-call` mutant
+     * at the same site.
+     *
+     * Note the counterweight two cases above is `PLAIN_TABLE` + no extension, and still CLAIMS —
+     * so these cannot pass by refusing every cross-file receiver.
+     */
+    it("REFUSES a receiver whose table is extended by a tableextension declaring that procedure", () => {
+      const cuRoot = parseClean(
+        codeunitSource("Other.SetRange(A, B);", { Other: 'Record "Other Table"' }),
+      );
+      const ctx = projectContextFor([
+        cuRoot,
+        parseClean(PLAIN_TABLE),
+        parseClean(SHADOWING_EXTENSION),
+      ]);
+      expect(claimsRecordMethod(onlyCall(cuRoot), ctx, "SetRange")).toBe(false);
+    });
+
+    /**
+     * The common real-world spelling: a project `tableextension` over a BASE-APP table, which a
+     * source-only symbol table can never see. Requiring the base table to resolve first would
+     * leave exactly the same wrong claim standing for `extends Customer`.
+     */
+    it("REFUSES it even when the extended table is not in the project at all", () => {
+      const cuRoot = parseClean(
+        codeunitSource("Other.SetRange(A, B);", { Other: 'Record "Other Table"' }),
+      );
+      const ctx = projectContextFor([cuRoot, parseClean(SHADOWING_EXTENSION)]);
+      expect(claimsRecordMethod(onlyCall(cuRoot), ctx, "SetRange")).toBe(false);
+    });
+
+    it("REFUSES it when the receiver names the table by ID and the extension extends it by name", () => {
+      // `R: Record 50001` is legal AL; the extends target is always a NAME, so the two spellings
+      // have to be bridged through the resolved table rather than compared directly.
+      const cuRoot = parseClean(codeunitSource("Other.SetRange(A, B);", { Other: "Record 50001" }));
+      const ctx = projectContextFor([
+        cuRoot,
+        parseClean(PLAIN_TABLE),
+        parseClean(SHADOWING_EXTENSION),
+      ]);
+      expect(claimsRecordMethod(onlyCall(cuRoot), ctx, "SetRange")).toBe(false);
+    });
+
+    it("REFUSES it when the extends target differs from the table name only in case", () => {
+      const cuRoot = parseClean(
+        codeunitSource("Other.SetRange(A, B);", { Other: 'Record "Other Table"' }),
+      );
+      const ext = parseClean(
+        SHADOWING_EXTENSION.replace('extends "Other Table"', 'extends "OTHER TABLE"'),
+      );
+      const ctx = projectContextFor([cuRoot, parseClean(PLAIN_TABLE), ext]);
+      expect(claimsRecordMethod(onlyCall(cuRoot), ctx, "SetRange")).toBe(false);
+    });
+
+    it("REFUSES the IMPLICIT-receiver form when a tableextension of the enclosing table declares it", () => {
+      // Inside `Other Table` itself, `SetRange(A, B)` binds to the extension's procedure exactly
+      // as it would to one declared on the table.
       const tableRoot = parseClean(`table 50001 "Other Table"
 {
     fields { field(1; "No."; Code[20]) { } }
+
+    trigger OnInsert()
+    begin
+        SetRange(A, B);
+    end;
 }`);
-      const ctx = projectContextFor([cuRoot, tableRoot]);
+      const ctx = projectContextFor([tableRoot, parseClean(SHADOWING_EXTENSION)]);
+      expect(claimsRecordMethod(onlyCall(tableRoot), ctx, "SetRange")).toBe(false);
+    });
+
+    /**
+     * The counterweight for the extension cases: an extension that exists but extends a DIFFERENT
+     * table must not refuse. Without this, every case above could pass by refusing whenever any
+     * `tableextension` is present anywhere in the project.
+     */
+    it("still CLAIMS when the only tableextension present extends a different table", () => {
+      const cuRoot = parseClean(
+        codeunitSource("Other.SetRange(A, B);", { Other: 'Record "Other Table"' }),
+      );
+      const ext = parseClean(
+        SHADOWING_EXTENSION.replace('extends "Other Table"', 'extends "Unrelated Table"'),
+      );
+      const ctx = projectContextFor([cuRoot, parseClean(PLAIN_TABLE), ext]);
+      expect(claimsRecordMethod(onlyCall(cuRoot), ctx, "SetRange")).toBe(true);
+    });
+
+    it("still CLAIMS when the tableextension declares some OTHER procedure", () => {
+      const cuRoot = parseClean(
+        codeunitSource("Other.SetRange(A, B);", { Other: 'Record "Other Table"' }),
+      );
+      const ext = parseClean(
+        SHADOWING_EXTENSION.replace("procedure SetRange", "procedure Unrelated"),
+      );
+      const ctx = projectContextFor([cuRoot, parseClean(PLAIN_TABLE), ext]);
       expect(claimsRecordMethod(onlyCall(cuRoot), ctx, "SetRange")).toBe(true);
     });
 

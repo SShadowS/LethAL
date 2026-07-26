@@ -109,6 +109,17 @@ export function memberKeyOf(
 export interface CoverageSplit {
   readonly covered: ReadonlyMap<string, readonly TestMethodRef[]>;
   readonly uncovered: MutantManifestEntry[];
+  /**
+   * How many TABLE trigger mutants took FALLBACK 2 — "coverage could place this at no precision
+   * at all, so run every green test". The single signal separating "coverage attributed the
+   * trigger precisely" (FALLBACK 1, object-level) from "we gave up", and the two are otherwise
+   * indistinguishable in the verdicts: on a fixture where nearly every test touches the table,
+   * both fallbacks produce near-identical results, so a regression that re-empties `byObject`
+   * (the bug `0a463fd` fixed) would not move a single verdict. Returned as DATA rather than left
+   * as the `console.warn` below, so `SessionReport.untargetedTriggerCount` can carry it into a
+   * gate that pins it — see `tables.itest.ts`, which asserts 0.
+   */
+  readonly untargetedTriggerCount: number;
 }
 
 export function testKeyOf(ref: TestMethodRef): string {
@@ -175,7 +186,9 @@ export function coverageFilter(
   const covered = new Map<string, TestMethodRef[]>();
   const uncovered: MutantManifestEntry[] = [];
   // Task 5 amendment: how many TABLE trigger mutants fell through to the untargeted
-  // (all-green-tests) fallback below, tallied so the warning fires once per run, not per mutant.
+  // (all-green-tests) fallback below, tallied so the warning fires once per run, not per mutant —
+  // and RETURNED on `CoverageSplit` (see its doc) so a gate can assert it instead of a human
+  // having to notice a stderr line.
   let untargetedTriggerCount = 0;
   for (const m of mutants) {
     const context = `mutant ${m.mutantId} (${m.file})`;
@@ -242,5 +255,5 @@ export function coverageFilter(
       `[lethal] ${untargetedTriggerCount} table trigger mutant(s) could not be coverage-matched (no green test reported executing anything in that table, and no trigger is nameable at member level) — running each against all ${allTests.length} green test(s).`,
     );
   }
-  return { covered, uncovered };
+  return { covered, uncovered, untargetedTriggerCount };
 }

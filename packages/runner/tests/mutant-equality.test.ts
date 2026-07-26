@@ -1,4 +1,6 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, test } from "bun:test";
+import { readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 import { diffMutants, normalizeForComparison } from "../itest/mutant-equality";
 import type { NormalizedMutant } from "../itest/mutant-equality";
 import type { MutantOutcome, SessionReport } from "../src/report";
@@ -40,6 +42,7 @@ function report(mutants: readonly MutantOutcome[]): SessionReport {
     mutants,
     unsupportedTests: [],
     notInstrumented: { totalFiles: 0, fileCount: 0, siteCount: 0, files: [] },
+    untargetedTriggerCount: 0,
   };
 }
 
@@ -195,16 +198,56 @@ describe("diffMutants", () => {
     ]);
   });
 
-  it("flags a duplicate semantic identity within one side", () => {
-    const dup: NormalizedMutant = {
-      key: "same-key",
-      verdict: "survived",
-      killingTest: null,
-      coverageFiltered: false,
-      errorClass: null,
-    };
+  // --- repeated semantic identities (per-key MULTISET comparison) ---------------------------
+  //
+  // A semantic identity legitimately repeats: `identityKeyOf` is (astHash, codeunitName,
+  // operatorName, operatorMajor), so two textually identical statements in the same object hash
+  // identically. `tables.baseline.json` holds 75 records over 67 distinct keys, one group six
+  // deep. Treating a repeat as a defect made `diffMutants(baseline, baseline)` non-empty — the
+  // committed baseline could never pass, and re-recording regenerated the same file.
+  const rec = (over: Partial<NormalizedMutant> = {}): NormalizedMutant => ({
+    key: "same-key",
+    verdict: "survived",
+    killingTest: null,
+    coverageFiltered: false,
+    errorClass: null,
+    ...over,
+  });
+
+  it("a semantic identity repeated identically on BOTH sides is not a difference", () => {
+    const dup = rec();
+    expect(diffMutants([dup, dup], [dup, dup])).toEqual([]);
+  });
+
+  it("a MIXED-verdict repeated identity is not a difference, in any order (the tables.baseline shape)", () => {
+    const survived = rec({ verdict: "survived" });
+    const killedA = rec({ verdict: "killed", killingTest: "TestA" });
+    const killedB = rec({ verdict: "killed", killingTest: "TestB" });
+    // Same multiset, deliberately different array order on the two sides: within one key the
+    // members are indistinguishable except by the compared fields, so order is not a difference.
+    expect(diffMutants([survived, killedA, killedB], [killedB, survived, killedA])).toEqual([]);
+  });
+
+  it("one member of a repeated identity flipping verdict IS a difference, naming the occurrence", () => {
+    const survived = rec({ verdict: "survived" });
+    const killedA = rec({ verdict: "killed", killingTest: "TestA" });
+    const killedB = rec({ verdict: "killed", killingTest: "TestB" });
+    const diffs = diffMutants(
+      [survived, killedA, killedB],
+      [survived, killedA, rec({ verdict: "survived" })],
+    );
+    expect(diffs).toHaveLength(1);
+    expect(diffs[0]).toContain("occurrence");
+    expect(diffs[0]).toContain("verdict killed -> survived");
+    expect(diffs[0]).toContain("killingTest TestB -> null");
+  });
+
+  it("a repeated identity whose GROUP SIZE changes is its own difference", () => {
+    const dup = rec();
     const diffs = diffMutants([dup, dup], [dup]);
-    expect(diffs.some((d) => d.includes('appears 2 times in "before"'))).toBe(true);
+    expect(diffs).toEqual([
+      'mutant same-key: appears 2 times in "before" but 1 time in "after" (semantic-identity group size changed)',
+    ]);
   });
 
   it("ignores fields outside the comparable set — two runs with different mutantCode/duration/runId are not inputs to diffMutants at all", () => {
@@ -251,4 +294,40 @@ describe("diffMutants", () => {
       "mutant hash-M0001|Sandbox Logic|conditional-boundary|1: errorClass unstable -> deadline-exceeded",
     ]);
   });
+});
+
+/**
+ * The gate on the gate. Every `*.baseline.json` in `itest/` is the frozen input to
+ * `assertMatchesBaseline`, which diffs a live run against it; if a committed file cannot even
+ * match ITSELF, that live gate is dead and says so only after minutes against a real server —
+ * and its remediation advice ("delete, re-run, re-record") regenerates the same unusable file.
+ * `tables.baseline.json` shipped in exactly that state: 75 records over 67 distinct keys, which
+ * the old duplicate-identity rule reported as 6 differences against itself.
+ *
+ * Globbed rather than listed by name so a baseline added later is covered without anyone
+ * remembering to extend this, and so a DELETED one (tables.baseline.json is deleted pending a
+ * live re-record) does not fail the suite.
+ */
+describe("committed itest baselines", () => {
+  const ITEST_DIR = join(import.meta.dir, "..", "itest");
+  const names = readdirSync(ITEST_DIR).filter((f) => f.endsWith(".baseline.json"));
+
+  test("at least one baseline is committed (a glob that matches nothing must not pass silently)", () => {
+    expect(names.length).toBeGreaterThan(0);
+  });
+
+  for (const name of names) {
+    test(`${name} parses, is non-empty, and diffs clean against itself`, () => {
+      const parsed = JSON.parse(readFileSync(join(ITEST_DIR, name), "utf8")) as NormalizedMutant[];
+      expect(Array.isArray(parsed)).toBe(true);
+      expect(parsed.length).toBeGreaterThan(0);
+      for (const m of parsed) {
+        expect(typeof m.key).toBe("string");
+        expect(m.key).not.toBe("");
+        expect(typeof m.verdict).toBe("string");
+        expect(typeof m.coverageFiltered).toBe("boolean");
+      }
+      expect(diffMutants(parsed, parsed)).toEqual([]);
+    });
+  }
 });

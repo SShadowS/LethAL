@@ -67,75 +67,111 @@ function fmt(v: string | boolean | null): string {
   return v === null ? "null" : String(v);
 }
 
+/** Total order over the compared fields — the tie-break that makes a group's order canonical. */
+function recordOrder(a: NormalizedMutant, b: NormalizedMutant): number {
+  return canonical(a).localeCompare(canonical(b));
+}
+
+/** Every compared field, in a single string. Used ONLY for ordering, never for reporting. */
+export function canonical(m: NormalizedMutant): string {
+  return `${m.verdict}|${fmt(m.killingTest)}|${fmt(m.coverageFiltered)}|${fmt(m.errorClass)}`;
+}
+
+function times(n: number): string {
+  return n === 1 ? "1 time" : `${n} times`;
+}
+
+function groupByKey(mutants: readonly NormalizedMutant[]): Map<string, NormalizedMutant[]> {
+  const map = new Map<string, NormalizedMutant[]>();
+  for (const m of mutants) {
+    const list = map.get(m.key);
+    if (list) list.push(m);
+    else map.set(m.key, [m]);
+  }
+  return map;
+}
+
 /**
  * Returns human-readable differences; empty array means equal. One entry PER MUTANT that
  * differs (not one per differing field) — a verdict swapped between two mutants therefore
  * produces exactly two entries, not four, matching how a reviewer would actually read the
  * diff: "these two mutants changed," not four disconnected field deltas.
  *
- * Also flags a semantic identity appearing more than once within a single side (an
- * `identityKeyOf` collision — see selection.ts's own caveat about non-laminar specs) and a
- * mutant present on only one side, both of which are regressions equality-by-index would miss
- * entirely.
+ * COMPARISON IS PER-KEY MULTISET, not per-key single record. A semantic identity legitimately
+ * repeats within one report: `identityKeyOf` is (astHash, codeunitName, operatorName,
+ * operatorMajor), and two textually identical statements in the same object hash identically —
+ * `tables.baseline.json`'s `Data Ops` holds one such group SIX deep. Treating a repeat as a
+ * defect in its own right made `diffMutants(baseline, baseline)` non-empty, i.e. the committed
+ * baseline could never pass, and the failure was self-reinforcing: the guard's own advice
+ * ("delete, re-run, re-record") regenerated a byte-identical file. Comparing `[0]` of each group
+ * instead would have been worse than useless — the six-deep group carries MIXED verdicts (one
+ * survived, five killed, three distinct killing tests), so which record `[0]` names depends on
+ * report order, exactly the fragility semantic-identity keying exists to remove.
+ *
+ * So: group both sides by key, sort each group by `canonical` (a total order over the compared
+ * fields alone), and compare element-wise. That pins every record rather than one per key, and
+ * it is order-insensitive by construction — reordering a group's members is not a difference,
+ * because within one key the members ARE indistinguishable except by the fields being compared.
+ *
+ * Adding a within-key ordinal to `keyOf` would achieve the same count and reintroduce exactly the
+ * report-order sensitivity this avoids; it is deliberately not done.
+ *
+ * Still flagged, each as its own diff: a key whose group SIZE differs between the sides (a
+ * mutant gained or lost at that identity), and a key present on only one side.
  */
 export function diffMutants(
   before: readonly NormalizedMutant[],
   after: readonly NormalizedMutant[],
 ): string[] {
   const diffs: string[] = [];
-
-  const groupByKey = (mutants: readonly NormalizedMutant[]): Map<string, NormalizedMutant[]> => {
-    const map = new Map<string, NormalizedMutant[]>();
-    for (const m of mutants) {
-      const list = map.get(m.key);
-      if (list) list.push(m);
-      else map.set(m.key, [m]);
-    }
-    return map;
-  };
   const beforeByKey = groupByKey(before);
   const afterByKey = groupByKey(after);
 
-  for (const [key, list] of beforeByKey) {
-    if (list.length > 1) {
-      diffs.push(
-        `mutant ${key}: appears ${list.length} times in "before" (duplicate semantic identity)`,
-      );
-    }
-  }
-  for (const [key, list] of afterByKey) {
-    if (list.length > 1) {
-      diffs.push(
-        `mutant ${key}: appears ${list.length} times in "after" (duplicate semantic identity)`,
-      );
-    }
-  }
-
   const allKeys = new Set([...beforeByKey.keys(), ...afterByKey.keys()]);
   for (const key of allKeys) {
-    const b = beforeByKey.get(key)?.[0];
-    const a = afterByKey.get(key)?.[0];
-    if (b === undefined) {
-      diffs.push(`mutant ${key}: present in "after" but missing from "before"`);
+    const b = [...(beforeByKey.get(key) ?? [])].sort(recordOrder);
+    const a = [...(afterByKey.get(key) ?? [])].sort(recordOrder);
+    if (b.length === 0) {
+      const n = a.length > 1 ? ` (${times(a.length)})` : "";
+      diffs.push(`mutant ${key}: present in "after" but missing from "before"${n}`);
       continue;
     }
-    if (a === undefined) {
-      diffs.push(`mutant ${key}: present in "before" but missing from "after"`);
+    if (a.length === 0) {
+      const n = b.length > 1 ? ` (${times(b.length)})` : "";
+      diffs.push(`mutant ${key}: present in "before" but missing from "after"${n}`);
       continue;
     }
-    const fieldDiffs: string[] = [];
-    if (b.verdict !== a.verdict) fieldDiffs.push(`verdict ${fmt(b.verdict)} -> ${fmt(a.verdict)}`);
-    if (b.killingTest !== a.killingTest) {
-      fieldDiffs.push(`killingTest ${fmt(b.killingTest)} -> ${fmt(a.killingTest)}`);
+    if (b.length !== a.length) {
+      diffs.push(
+        `mutant ${key}: appears ${times(b.length)} in "before" but ${times(a.length)} in "after" (semantic-identity group size changed)`,
+      );
+      continue;
     }
-    if (b.coverageFiltered !== a.coverageFiltered) {
-      fieldDiffs.push(`coverageFiltered ${fmt(b.coverageFiltered)} -> ${fmt(a.coverageFiltered)}`);
-    }
-    if (b.errorClass !== a.errorClass) {
-      fieldDiffs.push(`errorClass ${fmt(b.errorClass)} -> ${fmt(a.errorClass)}`);
-    }
-    if (fieldDiffs.length > 0) {
-      diffs.push(`mutant ${key}: ${fieldDiffs.join("; ")}`);
+    // Element-wise over the two canonically ordered groups. `where` is empty for the ordinary
+    // one-record group so those messages stay exactly as they were.
+    for (let i = 0; i < b.length; i++) {
+      const bi = b[i];
+      const ai = a[i];
+      if (bi === undefined || ai === undefined) continue; // unreachable: lengths are equal
+      const fieldDiffs: string[] = [];
+      if (bi.verdict !== ai.verdict) {
+        fieldDiffs.push(`verdict ${fmt(bi.verdict)} -> ${fmt(ai.verdict)}`);
+      }
+      if (bi.killingTest !== ai.killingTest) {
+        fieldDiffs.push(`killingTest ${fmt(bi.killingTest)} -> ${fmt(ai.killingTest)}`);
+      }
+      if (bi.coverageFiltered !== ai.coverageFiltered) {
+        fieldDiffs.push(
+          `coverageFiltered ${fmt(bi.coverageFiltered)} -> ${fmt(ai.coverageFiltered)}`,
+        );
+      }
+      if (bi.errorClass !== ai.errorClass) {
+        fieldDiffs.push(`errorClass ${fmt(bi.errorClass)} -> ${fmt(ai.errorClass)}`);
+      }
+      if (fieldDiffs.length > 0) {
+        const where = b.length > 1 ? ` [occurrence ${i + 1} of ${b.length}]` : "";
+        diffs.push(`mutant ${key}${where}: ${fieldDiffs.join("; ")}`);
+      }
     }
   }
 

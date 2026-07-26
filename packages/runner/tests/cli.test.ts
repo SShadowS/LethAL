@@ -930,6 +930,7 @@ describe("withAlRunnerCanary (R7/R8 report persistence)", () => {
     mutants: [],
     unsupportedTests: [],
     notInstrumented: { totalFiles: 0, fileCount: 0, siteCount: 0, files: [] },
+    untargetedTriggerCount: 0,
   };
 
   test("attaches the measured result under alRunnerCanary, leaving every other field untouched", () => {

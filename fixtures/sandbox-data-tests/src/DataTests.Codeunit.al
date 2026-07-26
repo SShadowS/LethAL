@@ -307,7 +307,9 @@ codeunit 79310 "Data Tests"
         Actual: Integer;
     begin
         // The SAME-FILE twin of ShadowedBuiltinsRun. The two must agree about whether Tier 2
-        // claims the site; today they do not, and this pair is what makes that visible.
+        // claims the site, and since 0c4989b (one project-wide SemanticContext) they do: neither
+        // is claimed. The pair stays as the regression guard for that — a relapse to per-file
+        // contexts changes the cross-file half's operatorName without moving any verdict.
         // 5 + StrLen('A') + StrLen('BB') = 8.
         Actual := Shadow.SelfShadowed();
         if Actual <> 8 then

@@ -18,13 +18,14 @@
  * are each individually load-bearing and are red-checked as such.
  *
  * CONTRACT ON THE CALLER'S CONTEXT: the shadowing refusal reads `ctx.symbols`
- * for the receiver's table, so it can only fire over a semantic context built
- * across the WHOLE project (spec §4.1: "a procedure declared in the project").
- * Handed a one-file context while the table lives in its own file — the normal
- * AL layout — the guard finds no table and the site is claimed. That is why
- * `generateMutationSet` (`packages/runner/src/orchestrator.ts`) parses every
- * file first and builds a single project-wide context for the operator walk,
- * and why the tests for this guard build the context the same way.
+ * for the receiver's table AND for any `tableextension` of it, so it can only
+ * fire over a semantic context built across the WHOLE project (spec §4.1: "a
+ * procedure declared in the project"). Handed a one-file context while the
+ * table (or the extension) lives in its own file — the normal AL layout — the
+ * guard finds neither and the site is claimed. That is why `generateMutationSet`
+ * (`packages/runner/src/orchestrator.ts`) parses every file first and builds a
+ * single project-wide context for the operator walk, and why the tests for this
+ * guard build the context the same way.
  *
  * Imports come from `@lethal/engine` rather than `@lethal/operator-sdk`
  * because the SDK deliberately re-exports only the operator-facing subset;
@@ -43,20 +44,21 @@ import {
 } from "@lethal/engine";
 
 /**
- * Object declaration kinds a call site can sit inside.
+ * Object declaration kinds a call SITE can sit inside.
  *
- * DOCUMENTED LIMIT — extension objects are absent, and every Tier-2 operator therefore refuses
- * every site inside a `tableextension` or `pageextension`: `enclosingObject` finds no enclosing
- * object and `claimsRecordMethod` returns `false`. That is the safe direction (a missed site costs
+ * DOCUMENTED LIMIT — extension objects are absent, so every Tier-2 operator refuses every site
+ * written INSIDE a `tableextension` or `pageextension`: `enclosingObject` finds no enclosing
+ * object and `claimsRecordMethod` returns `false`. This is the safe direction (a missed site costs
  * one operator's signal; Tier-1 `void-method-call` still covers it), but it is a real hole: a lot
  * of BC code lives in extension objects, including the `Rec.TestField(...)` / `Rec.Modify(true)`
- * shapes these operators exist for.
+ * shapes these operators exist for. Closing it needs `resolveReceiver` to resolve an implicit
+ * `Rec` inside an extension to the EXTENDED table (which the header names rather than declares),
+ * which is more than this list.
  *
- * The list mirrors `ObjectSymbol["kind"]` in `@lethal/engine`'s symbol table, which itself indexes
- * only these four — closing the hole means widening the symbol table first (an implicit `Rec`
- * inside a `tableextension` resolves to the EXTENDED table, which the extension object header
- * names rather than declares), so it is deliberately out of scope for this pass rather than
- * papered over here.
+ * NOT a limit any more, and deliberately not filed here: a `tableextension` that DECLARES a
+ * builtin-named procedure on a table a call site elsewhere uses. That was the unsafe direction —
+ * the site was wrongly CLAIMED — and rule 3 now consults `symbols.tableExtensions`; see
+ * `projectDeclaresProcedureOnTable`.
  */
 const OBJECT_KINDS: ReadonlySet<string> = new Set<string>([
   ALNodeKind.codeunit,
@@ -134,8 +136,11 @@ export function claimsRecordMethod(
     // Tier 2 exists to mutate. Anywhere else there is no implicit record we
     // can prove, so do not claim.
     if (objectNode.kind !== ALNodeKind.table) return false;
-    // GUARD: project-declared procedure (rule 3).
+    // GUARD: project-declared procedure (rule 3). The enclosing table itself, AND any
+    // `tableextension` of it — an extension's procedure is callable on the implicit `Rec` here
+    // exactly as the table's own is.
     if (declaresProcedure(objectNode, target.name)) return false;
+    if (extensionDeclaresProcedure(symbols, objectName, target.name)) return false;
     return true;
   }
 
@@ -146,12 +151,12 @@ export function claimsRecordMethod(
   // GUARD: receiver resolves to a non-record in source (rule 2).
   if (receiver.kind === "non-record") return false;
 
-  // GUARD (rule 3, qualified form): the receiver is a record, but its table is
-  // declared in this project and declares a procedure of that name, so the call
-  // is that procedure and not the builtin.
+  // GUARD (rule 3, qualified form): the receiver is a record, and this project declares a
+  // procedure of that name ON that table — in the table itself or in a `tableextension` of it —
+  // so the call is that procedure and not the builtin.
   if (
     receiver.tableRef !== null &&
-    projectTableDeclaresProcedure(symbols, receiver.tableRef, target.name)
+    projectDeclaresProcedureOnTable(symbols, receiver.tableRef, target.name)
   ) {
     return false;
   }
@@ -258,8 +263,8 @@ function lookupVar(
  *
  * `tableRef` is that reference verbatim, and it is NOT always a name: `R: Record 50004` is legal
  * AL and measures as `reference: integer "50004"`. Hence `tableRef` rather than `tableName`, and
- * hence `projectTableDeclaresProcedure` resolving it through `resolveObject` (which matches id and
- * name alike) rather than by name comparison.
+ * hence `projectDeclaresProcedureOnTable` resolving it through `resolveObject` (which matches id
+ * and name alike) rather than by name comparison.
  */
 function classifyDeclaredType(declaration: VarSymbol): ResolvedReceiver {
   const typeNode = declaration.node.childForFieldName("type");
@@ -288,7 +293,8 @@ function declaresProcedure(objectNode: ALSyntaxNode, name: string): boolean {
 }
 
 /**
- * Does the project's declaration of `tableRef` declare a procedure named `procName`?
+ * Does this project declare a procedure named `procName` ON the table `tableRef` — in the table's
+ * own declaration, or in any `tableextension` of it?
  *
  * `tableRef` is whatever the `record_type`'s `reference` field held, which is a table NAME
  * (`Record Customer`, `Record "Sales Line"`) or a table ID — `R: Record 50004` is legal AL and
@@ -297,18 +303,54 @@ function declaresProcedure(objectNode: ALSyntaxNode, name: string): boolean {
  * (`packages/engine/src/semantic/symbol-table.ts`); a hand-rolled name-only loop silently never
  * matched the id form, so `R.SetRange(...)` on a table declaring its own `SetRange` was CLAIMED.
  *
+ * THE EXTENSION HALF is the same defect one object kind over. In AL a `tableextension`'s public
+ * procedures are callable on a variable of the extended table's type, so
+ * `tableextension "Ext" extends "Other Table" { procedure SetRange(A; B) }` makes
+ * `Other.SetRange('A','B')` that procedure — measured true against the vendored grammar before
+ * this guard existed, which is a WRONG CLAIM: it mislabels the mutation and, under §3.2 dedup
+ * precedence, suppresses the correct Tier-1 `void-method-call` mutant at the same site. Unlike
+ * the missing-call-site limit in `OBJECT_KINDS` (safe direction, still open) this one pointed the
+ * dangerous way, so it is closed rather than documented.
+ *
+ * The extension scan does NOT require the base table to be in the project. A project
+ * `tableextension` over a base-app table (`extends Customer`) is ordinary BC, the extended table
+ * is invisible to a source-only symbol table, and refusing to look would leave exactly the same
+ * wrong claim standing for the most common real-world spelling of it.
+ *
  * "In the project" means across every file in the semantic context, per spec §4.1 — see
  * `generateMutationSet` in `packages/runner/src/orchestrator.ts`, which builds one context over
  * every parsed file precisely so this guard can fire on the normal one-object-per-file layout.
  */
-function projectTableDeclaresProcedure(
+function projectDeclaresProcedureOnTable(
   symbols: SymbolTable,
   tableRef: string,
   procName: string,
 ): boolean {
   const table = resolveTable(symbols, tableRef);
-  if (table === null) return false;
-  return declaresProcedure(table.node, procName);
+  if (table !== null && declaresProcedure(table.node, procName)) return true;
+  // Match extensions on the table's resolved NAME when we have one (so the `Record 50004` id
+  // spelling still finds `extends "The Table"`), and on the raw reference otherwise.
+  if (table !== null && extensionDeclaresProcedure(symbols, table.name, procName)) return true;
+  return extensionDeclaresProcedure(symbols, tableRef, procName);
+}
+
+/**
+ * Does any project `tableextension` whose `extends` target is `tableName` declare `procName`?
+ *
+ * Name comparison is case-insensitive because AL is; `ExtensionSymbol.baseObject` is the extends
+ * target with quotes already stripped, so `extends "Other Table"` and `extends Customer` compare
+ * the same way.
+ */
+function extensionDeclaresProcedure(
+  symbols: SymbolTable,
+  tableName: string,
+  procName: string,
+): boolean {
+  for (const ext of symbols.tableExtensions) {
+    if (!equalsIgnoreCase(ext.baseObject, tableName)) continue;
+    if (declaresProcedure(ext.node, procName)) return true;
+  }
+  return false;
 }
 
 /**
@@ -318,6 +360,10 @@ function projectTableDeclaresProcedure(
  * case-SENSITIVE while AL is not, so a case-insensitive scan backs it up. Losing that would move
  * this guard in the dangerous direction (fewer refusals means more wrongly claimed sites), which
  * is why the fallback is here rather than left to `resolveObject`'s own semantics.
+ *
+ * `null` is NOT "no such table" — it is "no table DECLARED in this project", which a base-app
+ * table also produces. Callers must not treat it as permission to claim; see
+ * `projectDeclaresProcedureOnTable`, which still scans extensions when this returns null.
  */
 function resolveTable(symbols: SymbolTable, idOrName: string): ObjectSymbol | null {
   const direct = symbols.resolveObject({ kind: "table", idOrName });

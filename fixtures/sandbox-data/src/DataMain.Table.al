@@ -35,12 +35,15 @@ table 79300 "Data Main"
                 // and the asserterror fails. The seeded rows are load-bearing — with none, 0 = 0
                 // and the mutant is equivalent (spec §6).
                 //
-                // Deliberately in a TRIGGER rather than a table procedure. BC reports no coverage
-                // for table trigger code, so `coverageFilter` falls all the way back to "every
-                // green test" (selection.ts FALLBACK 2) and this site is guaranteed to execute. A
-                // table PROCEDURE has no such fallback: it needs a member-level coverage entry, and
-                // whether BC emits one for table procedures is unmeasured here. Hosting this
-                // operator's only kill there would have made its verdict depend on that unknown.
+                // Deliberately in a TRIGGER rather than a table procedure — but NOT for the reason
+                // originally written here ("triggers fall back to every green test, so they always
+                // execute"). Since 0a463fd that fallback is the rare case, not the rule: a coverage
+                // observation naming no member credits the OBJECT, so any test that reaches this
+                // trigger lands in byObject["table:79300"] and coverageFilter's FALLBACK 1 answers
+                // precisely. Every test in this suite touches Data Main, so this site executes
+                // because it is COVERED, not because attribution gave up — itest:tables asserts
+                // untargetedTriggerCount = 0. A trigger is still the safer host: it needs only
+                // object-level credit, where a table procedure needs a member-level entry.
                 CalcFields("Related Total");
                 if "Related Total" > 1000 then
                     Error('related total too large');
@@ -114,11 +117,14 @@ table 79300 "Data Main"
     // lowercase-only predicate silently misses real code. `CountInCategoryUppercaseSetRange` seeds
     // out-of-filter decoy rows in another category so the deletion is observable.
     //
-    // This one is a table PROCEDURE, and its verdict therefore depends on whether BC emits a
-    // member-level coverage entry for table procedures (see the Category trigger above): killed if
-    // it does, no-coverage if it does not. Either way the site's OPERATOR NAME is pinned by the
-    // committed baseline, which is what catches a predicate that stops matching the uppercase
-    // spelling — and RemoveSetRange's guaranteed kill lives in `Data Ops.CountForMain`, a codeunit.
+    // This one is a table PROCEDURE, so it needs a member-level coverage entry — and it gets one:
+    // it scores, while the only two no-coverage mutants in the whole run belong to `TouchCount`
+    // below, which no test calls. So BC does emit member-level coverage for a CALLED table
+    // procedure; that was an open question when this comment was first written. The site's
+    // OPERATOR NAME is pinned by the committed baseline either way, which is what catches a
+    // predicate that stops matching the uppercase spelling — and RemoveSetRange's guaranteed kill
+    // still lives in `Data Ops.CountForMain`, a codeunit, so one operator's evidence never rests
+    // on a single coverage path.
     procedure CountInCategory(CategoryCode: Code[10]): Integer
     begin
         Rec.SETRANGE(Category, CategoryCode);

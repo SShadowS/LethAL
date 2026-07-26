@@ -1531,6 +1531,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // (fail/error) across all batches — surfaced in the report so an unsupported
   // test type (or a broken test) is named, never silently dropped.
   const unsupportedTestNames = new Set<string>();
+  // Summed across batches — see `SessionReport.untargetedTriggerCount`. Declared out here rather
+  // than read off the last batch's split: each batch runs its own coverage filter, and a session
+  // whose only untargeted trigger sits in batch 1 must not report 0.
+  let untargetedTriggerCount = 0;
   // Math.floor: a fractional workers value (e.g. 2.5) would otherwise reach
   // shardEvenly's `Array.from({ length: n }, ...)`, which silently truncates
   // to a shorter array than `i % n` can index into — mutants landing on the
@@ -1933,12 +1937,20 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         );
         perMutantTests = split.covered;
         uncovered = split.uncovered;
+        untargetedTriggerCount += split.untargetedTriggerCount;
       }
       // A mutant uncovered by any GREEN test but covered by a non-passing
       // baseline test is `error` (score-excluded) with a named note — never a
       // silent `no-coverage` false-negative (a real test DOES cover it; it just
       // couldn't run). `unsupportedCoverage` reuses coverageFilter against the
       // second index; empty for coverage:"none" (uncovered is empty there too).
+      //
+      // Its `untargetedTriggerCount` is deliberately NOT added to the session tally: a table
+      // trigger can never appear in `uncovered` (FALLBACK 2 above catches every one of them
+      // before the `uncovered.push`), so this call's tally is structurally 0 — and were that
+      // ever to change, adding it would double-count mutants the SESSION already ran against
+      // every green test. The number on the report means "took the all-green-tests fallback in
+      // the run that decided the verdict", and this call decides no verdict.
       const unsupportedCoverage =
         uncovered.length === 0
           ? new Map<string, readonly TestMethodRef[]>()
@@ -2225,6 +2237,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     outcomes,
     unsupportedTests: [...unsupportedTestNames].sort(),
     notInstrumented: { totalFiles: totalAlFiles, files: notInstrumentedFiles },
+    untargetedTriggerCount,
     ...(safety.isUnsafe ? { quarantined: { reason: safety.reason ?? "unknown" } } : {}),
     ...(permissionCanary !== undefined ? { permissionCanary } : {}),
   });

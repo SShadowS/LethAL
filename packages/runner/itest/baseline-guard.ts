@@ -21,12 +21,22 @@
  */
 import { readFile, writeFile } from "node:fs/promises";
 import type { SessionReport } from "../src/report";
-import { diffMutants, normalizeForComparison } from "./mutant-equality";
+import { canonical, diffMutants, normalizeForComparison } from "./mutant-equality";
 import type { NormalizedMutant } from "./mutant-equality";
 
-/** Deterministic on-disk ordering — a baseline file's diff must never depend on report order. */
+/**
+ * Deterministic on-disk ordering — a baseline file's diff must never depend on report order.
+ *
+ * Key alone is not a total order: a semantic identity legitimately repeats (see `diffMutants`'s
+ * multiset comparison — `tables.baseline.json` holds one six-deep group), and `Array#sort` is
+ * stable, so within such a group the file would otherwise inherit report order verbatim. Two
+ * re-records of the same verdicts could then differ as text while comparing equal. `canonical`
+ * breaks the tie on the compared fields themselves.
+ */
 function sortedForDisk(mutants: readonly NormalizedMutant[]): NormalizedMutant[] {
-  return [...mutants].sort((a, b) => a.key.localeCompare(b.key));
+  return [...mutants].sort(
+    (a, b) => a.key.localeCompare(b.key) || canonical(a).localeCompare(canonical(b)),
+  );
 }
 
 /**

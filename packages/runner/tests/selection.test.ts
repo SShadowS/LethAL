@@ -265,6 +265,44 @@ describe("coverage: table trigger mutants run untargeted when coverage cannot se
       warnSpy.mockRestore();
     }
   });
+
+  // The warning above is unassertable by any gate: it goes to stderr and vanishes. The same tally
+  // is returned on `CoverageSplit` so `SessionReport.untargetedTriggerCount` can carry it into
+  // `tables.itest.ts`, which pins it at 0. Without the number, a regression re-emptying `byObject`
+  // (the `0a463fd` bug) silently swaps precise attribution for "run every test" while leaving
+  // every verdict and every aggregate count identical.
+  test("returns the untargeted tally as DATA, counting exactly the mutants that took fallback 2", () => {
+    const index = buildCoverageIndex(baseline);
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const fellBack = entry({
+        mutantId: "M0001",
+        objectType: "table",
+        codeunitId: 99999, // nothing in the coverage index at all
+        procedureName: "",
+        triggerName: "OnInsert",
+      });
+      const attributed = entry({
+        mutantId: "M0002",
+        objectType: "table", // objectId 70000 — object-level (fallback 1) answers
+        procedureName: "",
+        triggerName: "OnModify",
+      });
+      const split = coverageFilter([fellBack, attributed], index, allGreen);
+      // Both ran; only one of them ran untargeted. The verdict-visible state is identical.
+      expect(split.covered.get("M0001")).toEqual(allGreen);
+      expect(split.covered.get("M0002")).toEqual([t1, t3]);
+      expect(split.untargetedTriggerCount).toBe(1);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  test("the tally is 0 — not undefined — when every trigger was attributed precisely", () => {
+    const index = buildCoverageIndex(baseline);
+    const m = entry({ objectType: "table", procedureName: "Post", triggerName: "OnInsert" });
+    expect(coverageFilter([m], index, allGreen).untargetedTriggerCount).toBe(0);
+  });
 });
 
 // A BC object id is unique only WITHIN a type — `table 50100` and `codeunit 50100` are two

@@ -299,6 +299,34 @@ async function makeProject(testAl: string = TEST_AL) {
   return { projectDir, testDir, instrumentedDir };
 }
 
+/**
+ * A table whose field trigger holds two mutation sites (`empty-block` on the trigger body,
+ * `negate-conditional` on the `=`). `StubBackend`'s coverage only ever names
+ * `Codeunit 79000`, so nothing in the index mentions this table at any precision — which is the
+ * shape that drives `coverageFilter`'s FALLBACK 2 ("run every green test").
+ */
+const TRIGGER_TABLE_AL = `table 79001 "Sandbox Table"
+{
+    fields
+    {
+        field(1; "No."; Code[20])
+        {
+            trigger OnValidate()
+            begin
+                if "No." = '' then
+                    Error('blank');
+            end;
+        }
+    }
+}
+`;
+
+async function makeProjectWithTriggerTable() {
+  const dirs = await makeProject();
+  await Bun.write(join(dirs.projectDir, "SandboxTable.Table.al"), TRIGGER_TABLE_AL);
+  return dirs;
+}
+
 const CAPS_NST: BackendCapabilities = {
   coverage: "procedure",
   deploy: "publish",
@@ -375,6 +403,45 @@ describe("runSession", () => {
     for (const d of backend.deploys) {
       expect(d.startsWith(dirs.instrumentedDir)).toBe(true);
     }
+  });
+
+  // `coverageFilter`'s all-green-tests fallback for table triggers reached only a `console.warn`
+  // before, so nothing could gate on it — and it is invisible in the verdicts: a mutant run
+  // against every test and a mutant run against its attributed tests are both simply "run". A
+  // regression re-emptying `byObject` (the bug `0a463fd` fixed) therefore left every count and
+  // every per-mutant verdict identical. These two tests pin the number that does move.
+  describe("untargetedTriggerCount reaches the report", () => {
+    test("counts the table trigger mutants coverage could not place at all", async () => {
+      const dirs = await makeProjectWithTriggerTable();
+      // Covers only the CODEUNIT's procedure — the table is named nowhere in the index, so its
+      // trigger mutants miss at member level, miss at object level, and take fallback 2.
+      const backend = new StubBackend(CAPS_NST, () => "pass", ["IsOverBudget"]);
+      const store = new ResultsStore(":memory:");
+      const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const report = await runSession({ backend, store, ...dirs, selectorIds });
+        const triggerMutants = report.mutants.filter((m) => m.file.includes("SandboxTable"));
+        expect(triggerMutants.length).toBeGreaterThan(0);
+        expect(report.untargetedTriggerCount).toBe(triggerMutants.length);
+        // ...and every one of them was RUN, not dropped — the fallback's whole purpose.
+        for (const m of triggerMutants) expect(m.verdict).not.toBe("no-coverage");
+      } finally {
+        warnSpy.mockRestore();
+        store.close();
+      }
+    });
+
+    test("is 0 on a project with no table triggers at all — a measured zero, never absent", async () => {
+      const dirs = await makeProject();
+      const backend = new StubBackend(CAPS_NST, () => "pass", ["IsOverBudget"]);
+      const store = new ResultsStore(":memory:");
+      try {
+        const report = await runSession({ backend, store, ...dirs, selectorIds });
+        expect(report.untargetedTriggerCount).toBe(0);
+      } finally {
+        store.close();
+      }
+    });
   });
 
   test("late flakiness: fails under mutant AND at confirmation = error + unstable", async () => {
@@ -1356,6 +1423,7 @@ describe("mutation score — timeout-killed contribution", () => {
       batches: 1,
       unsupportedTests: [],
       notInstrumented: { totalFiles: 0, files: [] },
+      untargetedTriggerCount: 0,
       outcomes: [
         {
           mutant: {
@@ -1411,6 +1479,7 @@ describe("mutation score — timeout-killed contribution", () => {
       batches: 1,
       unsupportedTests: [],
       notInstrumented: { totalFiles: 0, files: [] },
+      untargetedTriggerCount: 0,
       outcomes: [
         {
           mutant: {
@@ -1504,6 +1573,7 @@ describe("mutation score — timeout-killed contribution", () => {
       batches: 1,
       unsupportedTests: [],
       notInstrumented: { totalFiles: 0, files: [] },
+      untargetedTriggerCount: 0,
       outcomes: [
         {
           mutant: {

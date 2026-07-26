@@ -12,7 +12,8 @@
 // Every call to these is a Tier-1 `lethal.void-method-call` site and must STAY one. A Tier-2
 // operator that wrongly claimed `Shadow.TestField(42)` or `Shadow.SetRange('AA', 'ZZZ')` would win
 // the §3.2 dedup precedence and REPLACE the correct Tier-1 mutant — which is why the committed
-// baseline pins `operatorName` per mutant, not just the verdict.
+// baseline pins `operatorName` per mutant, not just the verdict. As shipped, this object carries
+// ten mutants and not one of them is Tier-2.
 table 79303 "Data Shadow"
 {
     DataClassification = CustomerContent;
@@ -63,12 +64,15 @@ table 79303 "Data Shadow"
     // declares those procedures, declared in a file the symbol table can see the table in.
     //
     // `Data Ops.ShadowedBuiltins` holds the CROSS-FILE instance of the same shape, and the two
-    // must produce the same answer. They do not today: `generateMutationSet`
-    // (packages/runner/src/orchestrator.ts) builds one `SemanticContext` PER FILE, so
-    // `projectTableDeclaresProcedure` finds no table at all from another file and the guard cannot
-    // fire. Spec §4.1 says "a name that resolves to a procedure declared IN THE PROJECT", so the
-    // cross-file half is a real gap — this pair is what makes it visible in the baseline instead
-    // of invisible.
+    // must produce the same answer. They now do. They did not before `0c4989b`:
+    // `generateMutationSet` (packages/runner/src/orchestrator.ts) built one `SemanticContext` PER
+    // FILE, so `projectDeclaresProcedureOnTable` found no table at all from another file and the
+    // guard could not fire — spec §4.1 says "a name that resolves to a procedure declared IN THE
+    // PROJECT", and one AL object per file is the normal layout, so the guard was unreachable in
+    // every real run. The orchestrator now parses every file first and builds ONE project-wide
+    // context. Keep the pair: it is the regression guard for that fix, and because Tier 2 outranks
+    // Tier 1 in §3.2 dedup, a relapse shows up as a changed operatorName in the committed baseline
+    // rather than as a moved verdict.
     procedure SelfShadowed(): Integer
     var
         Other: Record "Data Shadow";

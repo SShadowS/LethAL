@@ -234,12 +234,14 @@ LethAL's. Measured by A/B on that one property (commit `769f667`); a real BC sui
 on zero tables. **Every `Subtype = Test` codeunit here must declare `TestPermissions = Disabled`;
 no table here may reintroduce `InherentPermissions`.**
 
-### bcdev (authoritative) — live gate, 2026-07-25, Cronus282 — SUPERSEDED by Phase 1
+### bcdev (authoritative) — live gate, 2026-07-25, Cronus282 — Phase-0 half only
 
-The table below is the Phase-0 fixture's frozen result. Phase 1 added mutation sites (75 deployed
-mutants, see §Phase 1), so both this table and the `EXPECTED` map in `tables.itest.ts` need
-re-recording from a live run. It is kept because it is still the clearest statement of what the
-Phase-0 half of the fixture proves.
+The table below is the Phase-0 fixture's frozen result, kept because it is still the clearest
+statement of what the Phase-0 half of the fixture proves. It is NOT this fixture's current
+aggregate: Phase 1 grew it to 75 deployed mutants and the re-record happened —
+`tables.itest.ts`'s `EXPECTED` now asserts the live-measured **63 killed / 10 survived / 2
+no-coverage** (see §Phase 1). The Phase-0 objects and their tests are unchanged inside that
+larger set.
 
 | Mutant | Site | Operator | Verdict | Why |
 |---|---|---|---|---|
@@ -253,18 +255,28 @@ Phase-0 half of the fixture proves.
 
 3 killed / 2 survived / 2 no-coverage — mutation score 60.0%, zero errors, zero unstable.
 
-**This table is a committed gate, not just documentation:** `bun run itest:tables`
+**The Phase-1 result is a committed gate, not just documentation:** `bun run itest:tables`
 (`packages/runner/itest/tables.itest.ts`, env-gated on `LETHAL_ITEST_TABLES=1`) asserts the
-aggregate counts and the score, then diffs against
-`packages/runner/itest/tables.baseline.json` exactly as the Tier-1 gates do. (The per-mutant map
-is now asserted only by that baseline file — the inline 7-entry `EXPECTED.verdicts` map was
-removed when the fixture grew to 75 deployed mutants, since a 7-key map cannot match 75 results
-and asserting it proved nothing.) It also reads the
+aggregate counts, the score, and `SessionReport.untargetedTriggerCount` (see §Phase 1), then diffs
+per mutant against `packages/runner/itest/tables.baseline.json` exactly as the Tier-1 gates do.
+(The per-mutant map is asserted only by that baseline file — the inline 7-entry
+`EXPECTED.verdicts` map was removed when the fixture grew to 75 deployed mutants, since a 7-key
+map cannot match 75 results and asserting it proved nothing.) It also reads the
 `mutant-manifest.json` the run actually deployed and asserts that at least one **killed** and at
 least one **survived** mutant sit at a site whose manifest entry carries a `triggerName` — Phase
 0's claim itself rather than a proxy for it (`MutantOutcome` carries no trigger info). It reads
 `fixtures/sandbox-data/lethal.config.local.json` — **not** sandbox-app's; the two fixtures target
 different containers.
+
+> **`tables.baseline.json` is absent right now, deliberately.** The recorded file could never
+> match itself: `diffMutants` treated a repeated semantic identity as a difference, and this
+> fixture legitimately has 75 records over 67 distinct keys (one group six deep — six textually
+> identical statements in `Data Ops` hash the same). Every run after the recording one therefore
+> failed, and the failure advice ("delete, re-run, re-record") regenerated the same unusable file.
+> `diffMutants` now compares per-key MULTISETS, the file was deleted, and the next
+> `bun run itest:tables` re-records it — review the diff and commit it. A committed baseline that
+> cannot match itself is now a unit-test failure (`packages/runner/tests/mutant-equality.test.ts`,
+> "committed itest baselines"), not something a live gate discovers minutes into a run.
 
 **Correction (2026-07-26, measured on Cronus282): BC DOES report coverage for table-trigger
 code.** `bcdev_test_run` with `coverage: "procedure"` returned, for table 79300, `methodId
@@ -279,8 +291,8 @@ fired, and every table-trigger mutant ran against one irrelevant test. Perverse 
 public procedures scored WORSE than one with none (`Data No Trigger`'s empty `byObject` fell
 through correctly). **10 of 20 survivors on the Phase-1 fixture were false**; each was then driven
 individually through the fenced path against its intended killer and killed, making the honest
-result **63 killed / 10 survived / 2 no-coverage**, not 53/20/2 — which is what `EXPECTED` in
-`tables.itest.ts` now asserts, pending a live re-record.
+result **63 killed / 10 survived / 2 no-coverage**, not 53/20/2 — re-recorded live and frozen in
+`532c5fb`, and what `EXPECTED` in `tables.itest.ts` asserts today.
 
 The fix: an observation whose methodId resolves to no name and has no local-procedure fallback is
 emitted as an **object-level** `CoverageEntry` (`objectType`/`objectId`, `procedure` ABSENT — never
@@ -299,10 +311,15 @@ most-precise-first: member key → object-level → all green tests. The two fal
   route to being executed, and gating it on table-ness silently reported mutants in covered
   codeunit triggers as `no-coverage`. The widening is evidence-based: the key carries the object
   type, so it can only return tests that measurably ran something in that same object.
-- **all green tests** (announced on stderr rather than silently discarded as no-coverage) stays
-  **table-only**. "Coverage sees nothing in this object at all, yet the trigger is still
-  reachable" is what the measurement above established, and it established it for tables. A
-  mutant in a wholly-uncovered codeunit or page keeps the honest `no-coverage` bucket.
+- **all green tests** stays **table-only**. "Coverage sees nothing in this object at all, yet the
+  trigger is still reachable" is what the measurement above established, and it established it
+  for tables. A mutant in a wholly-uncovered codeunit or page keeps the honest `no-coverage`
+  bucket. How often it fires is reported as **data**, not just announced on stderr:
+  `SessionReport.untargetedTriggerCount` (printed after the score as `COVERAGE FALLBACK:` when
+  non-zero, and in `--out` JSON). A stderr warning cannot be asserted, and this is the ONLY
+  observable that separates "attributed precisely" from "gave up" — the verdicts do not move when
+  it regresses, because on a suite where most tests touch the table both regimes kill the same
+  mutants. `tables.itest.ts` pins it at 0.
 
 Coverage is keyed on the **(objectType, objectId) pair** throughout, because a BC object id is
 unique only within its type.
@@ -385,11 +402,13 @@ return-value mutants are unaffected.
 
 ### Tier-2 Phase 1 — the shapes that make a broken operator fail
 
-Phase 1 extends `sandbox-data` from 7 to **75 deployed mutants** (83 raw specs; 8 Tier-1
-`void-method-call` specs lose the §3.2 dedup to a Tier-2 deletion at the same site). Every shape
-below exists because its ABSENCE lets a broken operator pass — a fixture that only exercises the
-happy path tells you nothing. Design spec: `docs/superpowers/specs/2026-07-25-tier2-mutation-operators-design.md`
-§6.
+Phase 1 extends `sandbox-data` from 7 to **75 deployed mutants** — **81 raw specs**, of which
+**6** Tier-1 `void-method-call` specs lose the §3.2 dedup to a Tier-2 deletion at the same site.
+Both numbers are reproducible offline, no server needed: `generateMutationSet` returns 81 (which
+`tables.itest.ts` asserts before it deploys anything), `dedupeSpecs` drops 6, and 63 + 10 + 2 = 75
+scored mutants come back from the live gate. Every shape below exists because its ABSENCE lets a
+broken operator pass — a fixture that only exercises the happy path tells you nothing. Design
+spec: `docs/superpowers/specs/2026-07-25-tier2-mutation-operators-design.md` §6.
 
 | Required shape | Where it lives |
 |---|---|
@@ -416,22 +435,34 @@ Two rules the fixture depends on, both easy to break by accident:
   the correct `lethal.void-method-call` one. That surfaces as a changed `operatorName` on a mutant
   whose verdict never moved, which is why every negative here has a test that kills its Tier-1
   mutant, and why the committed baseline keys on `operatorName`, not just the verdict.
-- **Where a positive lives decides whether it can be killed at all.** Table TRIGGER mutants fall
-  all the way back to "every green test" (`selection.ts` FALLBACK 2), so they always execute.
-  Table PROCEDURE mutants need a member-level coverage entry, and whether BC emits one for table
-  procedures is unmeasured here — so each operator's guaranteed kill is hosted either in a trigger
-  (`RemoveCalcFields`, and one each of `RemoveTestField`/`SwapModifyFlag`) or in a codeunit
-  (`RemoveSetRange`, and the other `RemoveTestField`/`SwapModifyFlag`). `Data Main.CountInCategory`
-  and the `Data Shadow` procedures are the sites whose bucket depends on that unknown.
+- **Where a positive lives decides whether it can be killed at all** — for a reason that CHANGED
+  in `0a463fd`, so read the current one rather than the historical one. A table trigger is
+  member-invisible (`SymbolReference.json` records no trigger), but a coverage observation that
+  names no member now credits the OBJECT, so any test that reaches the trigger puts itself in
+  `byObject["table:<id>"]` and `coverageFilter`'s FALLBACK 1 answers precisely. FALLBACK 2 ("every
+  green test") is the net for a table nothing covers at all, and on this fixture it catches
+  nobody: `tables.itest.ts` asserts `untargetedTriggerCount === 0`. Table PROCEDURE mutants still
+  need a member-level entry, and BC DOES emit one — `Data Main.CountInCategory` is a table
+  procedure and it scores; the only two `no-coverage` mutants in the whole run are `TouchCount`'s,
+  a table procedure no test calls, which is the honest answer. Each operator's guaranteed kill is
+  still hosted either in a trigger (`RemoveCalcFields`, and one each of
+  `RemoveTestField`/`SwapModifyFlag`) or in a codeunit (`RemoveSetRange`, and the other
+  `RemoveTestField`/`SwapModifyFlag`) — a spread worth keeping, since it makes no operator's only
+  evidence depend on one coverage path.
 
-**Known gap this fixture exposes (do not "fix" the fixture instead).** `Data Ops.ShadowedBuiltins`
+**The cross-file / same-file shadowing pair, and what it now proves.** `Data Ops.ShadowedBuiltins`
 and `Data Shadow.SelfShadowed` are the same shape — a record whose own table declares that
-procedure — reached cross-file and same-file. They disagree: `generateMutationSet`
-(`packages/runner/src/orchestrator.ts`) builds one `SemanticContext` PER FILE, so
-`projectTableDeclaresProcedure` sees no table from another file and rule 3's qualified half cannot
-fire. Spec §4.1 says "a name that resolves to a procedure declared **in the project**", so the
-cross-file half is a real defect: `Shadow.TestField(42)` and `Shadow.SetRange('AA', 'ZZZ')` are
-claimed by Tier 2 today and should not be. The pair is what makes it visible in the baseline.
+procedure — reached cross-file and same-file. They used to DISAGREE, because `generateMutationSet`
+built one `SemanticContext` per file: `projectDeclaresProcedureOnTable` saw no table from another
+file, rule 3's qualified half could not fire, and `Shadow.TestField(42)` /
+`Shadow.SetRange('AA', 'ZZZ')` were wrongly claimed by Tier 2. **Fixed in `0c4989b`**
+(`packages/runner/src/orchestrator.ts` parses every file first and builds ONE project-wide
+context, matching spec §4.1's "declared **in the project**"), and the fixture now proves the fix
+rather than the bug: both halves refuse, every one of `Data Shadow`'s 10 mutants is Tier-1
+(`lethal.empty-block` / `lethal.void-method-call` / `lethal.return-value`), and the object carries
+no Tier-2 mutant at all. Keep the pair — it is the regression guard that would catch a return to
+per-file contexts, and because Tier 2 outranks Tier 1 in dedup, the symptom would be a changed
+`operatorName` on mutants whose verdicts never move.
 
 ## Expected verdict table (hand-computed)
 

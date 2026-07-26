@@ -24,6 +24,7 @@ AL extension: `extensions/lethal-control` (the `LethAL Control` BC extension, ru
 - `LETHAL_ITEST_BCDEV=1 bun run itest:bcdev` — authoritative backend. Frozen: killed **3** / survived **10** / no-coverage **3**.
 - `LETHAL_ITEST_ALRUNNER=1 LETHAL_ALRUNNER_PATH="C:/Users/SShadowS/.dotnet/tools/al-runner.exe" bun run itest:alrunner` — frozen: **3 / 13 / 0**.
 - `LETHAL_ITEST_ENVTOOL=1 bun run itest:envtool` — bcdev reached through a config-declared external environment tool (Layer 6C; see `fixtures/README.md` §"Running against an external environment tool") instead of a directly-configured container. Frozen: **3 / 10 / 3** — identical to `itest:bcdev` on the same fixture, which is the point: procedure-level coverage survives the indirection. Needs a gitignored `fixtures/sandbox-app/lethal.config.envtool.json` naming a reachable environment.
+- `LETHAL_ITEST_TABLES=1 bun run itest:tables` — the TABLE fixture (`fixtures/sandbox-data` + `-tests`), where Tier-2 operators and table-trigger mutation live. Frozen: killed **63** / survived **10** / no-coverage **2** over 75 deployed mutants (81 raw specs), plus `untargetedTriggerCount` **0**. Needs a gitignored `fixtures/sandbox-data/lethal.config.local.json` — **not** sandbox-app's; the two fixtures target different containers.
 - A differing verdict is a BLOCK (a real regression), never "close enough". Live execution is the authority — unit tests are structurally blind to AL that can't compile or to real BC behavior. Use `/live-gate`.
 
 ## AL has no unit-test harness

@@ -99,6 +99,20 @@ const EXPECTED = {
   survived: 10,
   noCoverage: 2,
   mutationScore: 63 / (63 + 10),
+  /**
+   * `coverageFilter`'s FALLBACK 2 ("coverage places this table trigger nowhere, run every green
+   * test") must fire for NOBODY here. This is the assertion `0a463fd` actually earns: before it,
+   * member-less coverage observations were discarded, `byObject["table:79300"]` held one
+   * accidental test, and trigger mutants ran against a wrong-but-non-empty set. The verdicts
+   * alone cannot tell the two regimes apart on this fixture — nearly every test touches
+   * `Data Main`, so precise attribution and "run everything" kill the same mutants — which is
+   * exactly why the tally has to be asserted rather than admired in a stderr line.
+   *
+   * A future rise here is not automatically a bug (an honestly unplaceable trigger SHOULD run
+   * everything), but it IS a change in what this gate proves, and must be explained before the
+   * number is edited.
+   */
+  untargetedTriggerCount: 0,
 };
 
 interface LaunchLocalConfig {
@@ -248,7 +262,7 @@ function assertVerdictTable(report: SessionReport): void {
   // says nothing about which mutant moved, and this gate takes minutes to re-run against a live
   // container — so the first run has to carry its own diagnosis.
   console.log(
-    `  verdicts: killed=${report.counts.killed} survived=${report.counts.survived} noCoverage=${report.counts.noCoverage} baselineGreen=${report.baselineGreen} score=${report.mutationScore}`,
+    `  verdicts: killed=${report.counts.killed} survived=${report.counts.survived} noCoverage=${report.counts.noCoverage} baselineGreen=${report.baselineGreen} score=${report.mutationScore} untargetedTriggers=${report.untargetedTriggerCount}`,
   );
   for (const m of report.mutants) {
     const cause = m.cause !== undefined ? ` cause=${m.cause}` : "";
@@ -272,6 +286,14 @@ function assertVerdictTable(report: SessionReport): void {
   assert.equal(report.counts.errors, 0, "no mutant may error on the healthy path");
   assert.equal(report.counts.unstable, 0, "no mutant may be unstable on the healthy path");
   assert.equal(report.mutationScore, EXPECTED.mutationScore, "mutation score mismatch");
+  assert.equal(
+    report.untargetedTriggerCount,
+    EXPECTED.untargetedTriggerCount,
+    "table trigger mutants took coverageFilter's all-green-tests FALLBACK 2 — object-level " +
+      "coverage should place every trigger in this fixture (FALLBACK 1). A non-zero here with " +
+      "unchanged verdicts is the signature of the pre-0a463fd bug returning: `byObject` starved, " +
+      "attribution silently coarsened, every count identical",
+  );
   // Per-mutant verdicts are asserted by `assertMatchesBaseline` (tables.baseline.json), not here
   // — see EXPECTED's doc comment for why the old inline 7-entry map was removed rather than
   // extended by hand.

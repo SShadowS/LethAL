@@ -90,6 +90,27 @@ export interface SessionReport {
     readonly files: readonly NotInstrumentedFile[];
   };
   /**
+   * Table trigger mutants that took `coverageFilter`'s FALLBACK 2 — "coverage places this
+   * nowhere at all, so run every green test" (`selection.ts`; summed over every batch).
+   *
+   * The only signal distinguishing precise trigger attribution (FALLBACK 1, object-level) from
+   * giving up, and it is invisible in the verdicts: on a suite where most tests touch the table,
+   * running the right tests and running all of them produce the same kills. Commit `0a463fd`
+   * deliberately made this branch rare by feeding member-less coverage observations into
+   * `byObject`; a regression that re-emptied `byObject` would silently restore the old behaviour
+   * with every aggregate count and every per-mutant verdict unchanged. It reached only a
+   * `console.warn` before, which no gate can assert — hence a report field.
+   *
+   * NOT a defect on its own: a genuinely unreachable-by-coverage trigger SHOULD run everything
+   * rather than be dropped as `no-coverage`. It is a number to pin, and a rise in it is the thing
+   * to explain.
+   *
+   * 0 on a backend declaring `coverage: "none"` (al-runner) — no coverage filtering happens
+   * there at all, every mutant runs every green test by construction, and no mutant reaches any
+   * fallback. Read it only alongside `backend`.
+   */
+  readonly untargetedTriggerCount: number;
+  /**
    * Set only when the session latched unsafe (spec §8/§12) — a test run came back
    * in-flight-unknown (the server may still be executing it) and the session recorded a
    * durable tier quarantine and stopped scheduling further mutants. `reason` is
@@ -182,6 +203,9 @@ export interface BuildReportInput {
     readonly totalFiles: number;
     readonly files: readonly NotInstrumentedFile[];
   };
+  /** Summed over every batch's `coverageFilter` — see `SessionReport.untargetedTriggerCount`.
+   *  Required, not optional: an absent tally and a measured zero must never look alike. */
+  readonly untargetedTriggerCount: number;
   /** Threaded straight through from `runSession`'s `SessionSafety` — see `SessionReport.quarantined`. */
   readonly quarantined?: {
     readonly reason: string;
@@ -261,6 +285,7 @@ export function buildReport(input: BuildReportInput): SessionReport {
       siteCount: notInstrumentedSites,
       files: input.notInstrumented.files,
     },
+    untargetedTriggerCount: input.untargetedTriggerCount,
     ...(input.quarantined !== undefined ? { quarantined: input.quarantined } : {}),
     ...(input.permissionCanary !== undefined ? { permissionCanary: input.permissionCanary } : {}),
   };
@@ -312,6 +337,15 @@ export function renderConsole(r: SessionReport): string {
     for (const f of r.notInstrumented.files) {
       lines.push(`  ${f.file} (${f.kinds}, ${f.sites} site(s))`);
     }
+  }
+  // Same reasoning as NOT INSTRUMENTED above: a qualifier on the score belongs next to the score.
+  // These mutants were scored against EVERY green test rather than against tests coverage placed
+  // in their table — honest (better than dropping them as no-coverage) but slower and coarser, and
+  // a rise here is the visible symptom of coverage attribution regressing.
+  if (r.untargetedTriggerCount > 0) {
+    lines.push(
+      `COVERAGE FALLBACK: ${r.untargetedTriggerCount} table trigger mutant(s) coverage could place nowhere — each was run against every green test rather than against an attributed set.`,
+    );
   }
   // R7/R8: repeat the al-runner canary's measured verdict at the END too — `announceAlRunnerCanary`
   // (cli.ts) already prints it once via console.warn at the very start of the session, before a
