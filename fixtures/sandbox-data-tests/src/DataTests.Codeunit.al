@@ -34,20 +34,13 @@ codeunit 79310 "Data Tests"
         // Weak on purpose: exercises the object-level OnInsert trigger (Amount := Amount * 2)
         // but asserts nothing about the result, so a mutant there survives genuinely.
         //
-        // MUST be idempotent. A normal BC test rolls back, but LethAL's two-phase fence commits
-        // around each mutant run, so a row inserted here PERSISTS into the next run. Inserting a
-        // fixed primary key without clearing it first made every run after the first contend with
-        // the surviving row, and RunMutant timed out deterministically — which surfaced as an
-        // in-flight-unknown quarantine, not as a test failure. Delete before insert.
-        //
-        // EVERY test below follows the same rule via ResetMain/ClearRelated/AddRelated.
-        if DataMain.Get('X1') then
-            DataMain.Delete(false);
-        DataMain.Init();
-        DataMain."No." := 'X1';
-        DataMain.Amount := 5;
-        DataMain.Insert(true);
-    end;
+        // Idempotent by construction (delete before insert). The original reason given here was
+        // that LethAL's two-phase fence commits around each mutant run, so rows persist between
+        // runs. MEASURED 2026-07-27 (R32 verification): they do NOT — platform test isolation
+        // rolls test writes back, and all four fixture tables held 0 rows in both companies after
+        // 432 fenced runs. The idempotence is still correct and still cheap; only the stated
+        // reason was wrong, and a fixture comment asserting the wrong platform behaviour is how
+        // the next person builds on a false premise.
 
     [Test]
     procedure NoTriggerValidateRunsWeak()
@@ -317,7 +310,8 @@ codeunit 79310 "Data Tests"
     end;
 
     // ---------------------------------------------------------------------------------------------
-    // Seeding helpers. All idempotent — see InsertDoublesAmountWeak's comment: the fence commits
+    // Seeding helpers. All idempotent — see InsertDoublesAmountWeak's comment for why that is
+    // kept even though the persistence claim behind it was measured false.
     // around every mutant run, so rows PERSIST into the next one.
     //
     // Both inserts use `Insert(false)` deliberately: running Data Main's OnInsert here would kill
