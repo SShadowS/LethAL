@@ -1760,6 +1760,204 @@ describe("generateMutationSet: object kinds that cannot carry the selector var",
   });
 });
 
+/**
+ * The Tier-2 shadowing guard, observed through the pipeline's OWN context shape.
+ *
+ * `claimsRecordMethod` (packages/builtin-tier2/src/receiver.ts) refuses a call whose receiver's
+ * table declares a procedure of that name "in the project" (design doc §4.1). It reads
+ * `ctx.symbols`, so it can only ever fire over a context that HOLDS the table — and while this
+ * function built one context per file, a normal AL project (one object per file) never gave it
+ * one. The guard's unit test was red-checkable but certified a configuration no run produced;
+ * these two tests use the real thing, two files and whatever context `generateMutationSet` builds.
+ */
+describe("generateMutationSet: project-wide semantic context", () => {
+  const CALLER_AL = `codeunit 79310 "Shadow Caller"
+{
+    procedure P()
+    var
+        Other: Record "Other Table";
+    begin
+        Other.SetRange("No.", 'A');
+    end;
+}
+`;
+
+  const tableAL = (withProcedure: boolean): string => `table 79311 "Other Table"
+{
+    fields { field(1; "No."; Code[20]) { } }
+${
+  withProcedure
+    ? `
+    procedure SetRange(A: Code[20]; B: Code[20])
+    begin
+    end;
+`
+    : ""
+}}
+`;
+
+  async function operatorsAtSetRange(withProcedure: boolean): Promise<string[]> {
+    const root = await mkdtemp(join(tmpdir(), "lethal-orch-shadow-"));
+    const projectDir = join(root, "app");
+    // Separate files — the layout the guard was inert against, and the ordinary AL convention.
+    await Bun.write(join(projectDir, "ShadowCaller.Codeunit.al"), CALLER_AL);
+    await Bun.write(join(projectDir, "OtherTable.Table.al"), tableAL(withProcedure));
+    await Bun.write(join(projectDir, "app.json"), APP_JSON);
+    try {
+      const { files } = await generateMutationSet(projectDir);
+      const caller = files.find((f) => f.path === "ShadowCaller.Codeunit.al");
+      if (caller === undefined) throw new Error("caller file produced no specs at all");
+      return caller.specs
+        .filter((s) => s.before.text.startsWith("Other.SetRange"))
+        .map((s) => s.operatorName)
+        .sort();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }
+
+  test("the shadowing refusal fires across files: only the Tier-1 mutant remains", async () => {
+    expect(await operatorsAtSetRange(true)).toEqual(["lethal.void-method-call"]);
+  });
+
+  test("with no shadowing procedure in that table, RemoveSetRange claims the same site", async () => {
+    // The counterweight: without it, the test above would pass just as well if `RemoveSetRange`
+    // never claimed anything in a two-file project for some unrelated reason.
+    expect(await operatorsAtSetRange(false)).toEqual([
+      "lethal.remove-setrange",
+      "lethal.void-method-call",
+    ]);
+  });
+});
+
+/**
+ * The only place a REAL cross-tier collision is observed end to end.
+ *
+ * `packages/schemata/tests/dedup.test.ts` and `project.test.ts` hand-build their colliding specs
+ * — correctly, since `schemata` deliberately does not depend on the operator packages — so they
+ * verify how `dedupeSpecs` resolves a collision, never that the real operators actually produce
+ * one. This package imports BOTH registries, so `generateMutationSet` over a temp project holding
+ * the four Tier-2 shapes answers the question the spec's §7.4 invariant is really about: do
+ * `void-method-call` and each Tier-2 narrowing agree, byte for byte, on the span and the
+ * after-form at a shared site? Span discipline is what makes them collide at all; a Tier-2
+ * operator that claimed a slightly different span would silently emit a SECOND mutant at every
+ * site instead of replacing the Tier-1 one, and every assertion in `schemata` would still pass.
+ */
+describe("generateMutationSet: real cross-tier collisions", () => {
+  const COLLISION_AL = `codeunit 79300 "Tier2 Collisions"
+{
+    procedure P()
+    var
+        Cust: Record Customer;
+    begin
+        Cust.TestField("No.");
+        Cust.SetRange("No.", 'A');
+        Cust.CalcFields(Balance);
+        Cust.Modify(true);
+    end;
+}
+`;
+
+  /** Exactly the identity `dedupeSpecs` keys on (`packages/schemata/src/dedup.ts`). */
+  const identityOf = (s: MutationSpec): string =>
+    `${s.before.kind}:${s.before.startIndex}:${s.before.endIndex}:${s.after.text}`;
+
+  async function collisionSpecs(): Promise<readonly MutationSpec[]> {
+    const root = await mkdtemp(join(tmpdir(), "lethal-orch-collide-"));
+    const projectDir = join(root, "app");
+    await Bun.write(join(projectDir, "Collisions.Codeunit.al"), COLLISION_AL);
+    await Bun.write(join(projectDir, "app.json"), APP_JSON);
+    const { files } = await generateMutationSet(projectDir);
+    const [file] = files;
+    if (file === undefined) throw new Error("expected one instrumented file");
+    return file.specs;
+  }
+
+  const spanOf = (specs: readonly MutationSpec[], text: string): string => {
+    const hit = specs.find((s) => s.before.text === text);
+    if (hit === undefined) {
+      throw new Error(
+        `no spec at ${JSON.stringify(text)}; produced: ${JSON.stringify(specs.map((s) => s.before.text))}`,
+      );
+    }
+    return `${hit.before.startIndex}:${hit.before.endIndex}`;
+  };
+
+  test("each Tier-2 deletion collides with void-method-call on the SAME span and after-form", async () => {
+    const specs = await collisionSpecs();
+
+    for (const [callText, tier2Name] of [
+      ['Cust.TestField("No.")', "lethal.remove-testfield"],
+      ["Cust.SetRange(\"No.\", 'A')", "lethal.remove-setrange"],
+      ["Cust.CalcFields(Balance)", "lethal.remove-calcfields"],
+    ] as const) {
+      const span = spanOf(specs, callText);
+      const atSite = specs.filter((s) => `${s.before.startIndex}:${s.before.endIndex}` === span);
+      expect(atSite.map((s) => s.operatorName).sort()).toEqual(
+        ["lethal.void-method-call", tier2Name].sort(),
+      );
+      // The collision itself: one identity, two operators claiming it.
+      expect(new Set(atSite.map(identityOf)).size).toBe(1);
+    }
+  });
+
+  test("the Modify(true) site produces two DIFFERENT identities — coexistence, not a collision", async () => {
+    const specs = await collisionSpecs();
+    const span = spanOf(specs, "Cust.Modify(true)");
+    const atSite = specs.filter((s) => `${s.before.startIndex}:${s.before.endIndex}` === span);
+    expect(atSite.map((s) => s.operatorName).sort()).toEqual([
+      "lethal.swap-modify-flag",
+      "lethal.void-method-call",
+    ]);
+    expect(new Set(atSite.map(identityOf)).size).toBe(2);
+    expect(atSite.map((s) => s.after.text).sort()).toEqual(["", "Cust.Modify(false)"]);
+  });
+
+  test("the whole pipeline resolves them to one mutant per deletion site and two at Modify", async () => {
+    const root = await mkdtemp(join(tmpdir(), "lethal-orch-collide-e2e-"));
+    const projectDir = join(root, "app");
+    const outDir = join(root, "instr");
+    await Bun.write(join(projectDir, "Collisions.Codeunit.al"), COLLISION_AL);
+    await Bun.write(join(projectDir, "app.json"), APP_JSON);
+    try {
+      const { files } = await generateMutationSet(projectDir);
+      await writeInstrumentedProject({
+        targetDir: outDir,
+        files,
+        selectorIds,
+        artifactId: "0123456789abcdef0123456789abcdef",
+        targetAppId: "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",
+        operatorTiers,
+      });
+      const manifest = JSON.parse(await readFile(join(outDir, "mutant-manifest.json"), "utf8")) as {
+        mutants: Array<{ startIndex: number; operatorName: string }>;
+      };
+      const [file] = files;
+      if (file === undefined) throw new Error("expected one instrumented file");
+
+      const survivorsAt = (callText: string): string[] => {
+        const start = Number(spanOf(file.specs, callText).split(":")[0]);
+        return manifest.mutants
+          .filter((m) => m.startIndex === start)
+          .map((m) => m.operatorName)
+          .sort();
+      };
+
+      // Tier 2 outranks Tier 1: the narrowing wins and void-method-call is gone from the artifact.
+      expect(survivorsAt('Cust.TestField("No.")')).toEqual(["lethal.remove-testfield"]);
+      expect(survivorsAt("Cust.SetRange(\"No.\", 'A')")).toEqual(["lethal.remove-setrange"]);
+      expect(survivorsAt("Cust.CalcFields(Balance)")).toEqual(["lethal.remove-calcfields"]);
+      // Different after-form, so no collision to resolve — both survive.
+      expect(survivorsAt("Cust.Modify(true)")).toEqual([
+        "lethal.swap-modify-flag",
+        "lethal.void-method-call",
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 // ————————————————————————————————————————————————————————————————————————
 // Layer 5A (Task 6): deployment identity — compile/publish/verify phases,
 // version reservation, artifact provenance, version-conflict retry.

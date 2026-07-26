@@ -33,9 +33,12 @@ const METHOD_NAME = "TestField";
  * to omit or get wrong. (Contrast `RemoveSetRange`, which must additionally refuse a no-value
  * argument list.)
  *
- * Documented limit (spec §4 table): only observable on a failing path. A `TestField` mutant
- * survives trivially without an `asserterror` negative test in the target suite — that is the
- * intended signal, but the fixture must supply one or the baseline teaches nothing.
+ * Documented limits:
+ *   - (spec §4 table) only observable on a failing path. A `TestField` mutant survives trivially
+ *     without an `asserterror` negative test in the target suite — that is the intended signal,
+ *     but the fixture must supply one or the baseline teaches nothing.
+ *   - No site inside a `tableextension`/`pageextension` is ever claimed; see `OBJECT_KINDS` in
+ *     `./receiver.ts` for why, and for the rest of that predicate's documented limits.
  */
 export const removeTestField: MutationOperator = {
   name: "lethal.remove-testfield",

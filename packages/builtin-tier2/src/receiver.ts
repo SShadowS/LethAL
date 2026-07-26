@@ -17,14 +17,24 @@
  * (non-record receiver / project-declared procedure / unresolvable receiver)
  * are each individually load-bearing and are red-checked as such.
  *
+ * CONTRACT ON THE CALLER'S CONTEXT: the shadowing refusal reads `ctx.symbols`
+ * for the receiver's table, so it can only fire over a semantic context built
+ * across the WHOLE project (spec §4.1: "a procedure declared in the project").
+ * Handed a one-file context while the table lives in its own file — the normal
+ * AL layout — the guard finds no table and the site is claimed. That is why
+ * `generateMutationSet` (`packages/runner/src/orchestrator.ts`) parses every
+ * file first and builds a single project-wide context for the operator walk,
+ * and why the tests for this guard build the context the same way.
+ *
  * Imports come from `@lethal/engine` rather than `@lethal/operator-sdk`
  * because the SDK deliberately re-exports only the operator-facing subset;
- * `declarationMembers`, `SymbolTable` and `VarSymbol` are engine surface.
- * Both are declared dependencies of this package.
+ * `declarationMembers`, `SymbolTable`, `ObjectSymbol` and `VarSymbol` are
+ * engine surface. Both are declared dependencies of this package.
  */
 import {
   ALNodeKind,
   type ALSyntaxNode,
+  type ObjectSymbol,
   type SemanticContext,
   type SymbolTable,
   type VarSymbol,
@@ -32,7 +42,22 @@ import {
   findEnclosingProcedure,
 } from "@lethal/engine";
 
-/** Object declaration kinds a call site can sit inside. */
+/**
+ * Object declaration kinds a call site can sit inside.
+ *
+ * DOCUMENTED LIMIT — extension objects are absent, and every Tier-2 operator therefore refuses
+ * every site inside a `tableextension` or `pageextension`: `enclosingObject` finds no enclosing
+ * object and `claimsRecordMethod` returns `false`. That is the safe direction (a missed site costs
+ * one operator's signal; Tier-1 `void-method-call` still covers it), but it is a real hole: a lot
+ * of BC code lives in extension objects, including the `Rec.TestField(...)` / `Rec.Modify(true)`
+ * shapes these operators exist for.
+ *
+ * The list mirrors `ObjectSymbol["kind"]` in `@lethal/engine`'s symbol table, which itself indexes
+ * only these four — closing the hole means widening the symbol table first (an implicit `Rec`
+ * inside a `tableextension` resolves to the EXTENDED table, which the extension object header
+ * names rather than declares), so it is deliberately out of scope for this pass rather than
+ * papered over here.
+ */
 const OBJECT_KINDS: ReadonlySet<string> = new Set<string>([
   ALNodeKind.codeunit,
   ALNodeKind.table,
@@ -125,8 +150,8 @@ export function claimsRecordMethod(
   // declared in this project and declares a procedure of that name, so the call
   // is that procedure and not the builtin.
   if (
-    receiver.tableName !== null &&
-    projectTableDeclaresProcedure(symbols, receiver.tableName, target.name)
+    receiver.tableRef !== null &&
+    projectTableDeclaresProcedure(symbols, receiver.tableRef, target.name)
   ) {
     return false;
   }
@@ -166,7 +191,7 @@ function describeCallee(callee: ALSyntaxNode): CallTarget | null {
 // --- receiver resolution ---------------------------------------------------
 
 type ResolvedReceiver =
-  | { readonly kind: "record"; readonly tableName: string | null }
+  | { readonly kind: "record"; readonly tableRef: string | null }
   | { readonly kind: "non-record" }
   | { readonly kind: "unresolved" };
 
@@ -186,7 +211,7 @@ function resolveReceiver(
   // Not declared anywhere the symbol table can see. The one case that is still
   // provable from source: a table's implicit `Rec` / `xRec`.
   if (objectNode.kind === ALNodeKind.table && IMPLICIT_RECORD_NAMES.has(lower(receiverName))) {
-    return { kind: "record", tableName: objectName };
+    return { kind: "record", tableRef: objectName };
   }
 
   return { kind: "unresolved" };
@@ -230,6 +255,11 @@ function lookupVar(
  * `Record "Sales Line" temporary` and `Record Customer` classify identically:
  * `type_specification` wraps a `record_type` whose `reference` field names the
  * table.
+ *
+ * `tableRef` is that reference verbatim, and it is NOT always a name: `R: Record 50004` is legal
+ * AL and measures as `reference: integer "50004"`. Hence `tableRef` rather than `tableName`, and
+ * hence `projectTableDeclaresProcedure` resolving it through `resolveObject` (which matches id and
+ * name alike) rather than by name comparison.
  */
 function classifyDeclaredType(declaration: VarSymbol): ResolvedReceiver {
   const typeNode = declaration.node.childForFieldName("type");
@@ -237,7 +267,7 @@ function classifyDeclaredType(declaration: VarSymbol): ResolvedReceiver {
   const recordType = typeNode.namedChildren.find((c) => c.kind === ALNodeKind.record_type);
   if (recordType === undefined) return { kind: "non-record" };
   const reference = recordType.childForFieldName("reference");
-  return { kind: "record", tableName: reference === null ? null : stripQuotes(reference.text) };
+  return { kind: "record", tableRef: reference === null ? null : stripQuotes(reference.text) };
 }
 
 // --- project-declared procedures ------------------------------------------
@@ -257,17 +287,44 @@ function declaresProcedure(objectNode: ALSyntaxNode, name: string): boolean {
   return false;
 }
 
+/**
+ * Does the project's declaration of `tableRef` declare a procedure named `procName`?
+ *
+ * `tableRef` is whatever the `record_type`'s `reference` field held, which is a table NAME
+ * (`Record Customer`, `Record "Sales Line"`) or a table ID — `R: Record 50004` is legal AL and
+ * measures as `reference: integer "50004"`. Resolution therefore goes through
+ * `symbols.resolveObject`, which matches id and name alike
+ * (`packages/engine/src/semantic/symbol-table.ts`); a hand-rolled name-only loop silently never
+ * matched the id form, so `R.SetRange(...)` on a table declaring its own `SetRange` was CLAIMED.
+ *
+ * "In the project" means across every file in the semantic context, per spec §4.1 — see
+ * `generateMutationSet` in `packages/runner/src/orchestrator.ts`, which builds one context over
+ * every parsed file precisely so this guard can fire on the normal one-object-per-file layout.
+ */
 function projectTableDeclaresProcedure(
   symbols: SymbolTable,
-  tableName: string,
+  tableRef: string,
   procName: string,
 ): boolean {
-  for (const object of symbols.objects) {
-    if (object.kind !== "table") continue;
-    if (!equalsIgnoreCase(object.name, tableName)) continue;
-    if (declaresProcedure(object.node, procName)) return true;
-  }
-  return false;
+  const table = resolveTable(symbols, tableRef);
+  if (table === null) return false;
+  return declaresProcedure(table.node, procName);
+}
+
+/**
+ * The project's `table` object for an id-or-name reference.
+ *
+ * `resolveObject` handles the id form and an exact name match, but its name comparison is
+ * case-SENSITIVE while AL is not, so a case-insensitive scan backs it up. Losing that would move
+ * this guard in the dangerous direction (fewer refusals means more wrongly claimed sites), which
+ * is why the fallback is here rather than left to `resolveObject`'s own semantics.
+ */
+function resolveTable(symbols: SymbolTable, idOrName: string): ObjectSymbol | null {
+  const direct = symbols.resolveObject({ kind: "table", idOrName });
+  if (direct !== null) return direct;
+  return (
+    symbols.objects.find((o) => o.kind === "table" && equalsIgnoreCase(o.name, idOrName)) ?? null
+  );
 }
 
 // --- small helpers ---------------------------------------------------------

@@ -40,9 +40,12 @@ const METHOD_NAME = "CalcFields";
  * the multi-field form `CalcFields(X, Y)` are both claimed identically — there is no arg-count
  * guard to omit or get wrong.
  *
- * Documented limit (spec §4 table): no signal when the FlowField is never read afterwards, when
- * `SetAutoCalcFields` or a second `CalcFields` makes it redundant, or when the call retrieves a
- * BLOB (where "FlowField stays 0" is the wrong model).
+ * Documented limits:
+ *   - (spec §4 table) no signal when the FlowField is never read afterwards, when
+ *     `SetAutoCalcFields` or a second `CalcFields` makes it redundant, or when the call retrieves a
+ *     BLOB (where "FlowField stays 0" is the wrong model).
+ *   - No site inside a `tableextension`/`pageextension` is ever claimed; see `OBJECT_KINDS` in
+ *     `./receiver.ts` for why, and for the rest of that predicate's documented limits.
  */
 export const removeCalcFields: MutationOperator = {
   name: "lethal.remove-calcfields",

@@ -12,17 +12,20 @@ import {
   ALNodeKind,
   type ALSyntaxNode,
   type SemanticContext,
-  buildSemanticContext,
   findAll,
   initParser,
-  parseAL,
-  wrapRoot,
 } from "@lethal/engine";
 import { removeTestField } from "../src/remove-testfield";
+import { contextFor, parseClean } from "./parse-clean";
 
+/**
+ * `parseClean` rather than a bare `parseAL`: the refusal assertions below would pass for the wrong
+ * reason on a snippet that failed to parse — no `call_expression`, hence no spec, hence "refused"
+ * whatever the operator's guards did.
+ */
 function specsFor(sourceAL: string) {
-  const root = wrapRoot(parseAL(sourceAL));
-  const ctx: SemanticContext = buildSemanticContext([{ path: "fixture.al", root }]);
+  const root = parseClean(sourceAL);
+  const ctx: SemanticContext = contextFor(root);
   const calls: ALSyntaxNode[] = findAll(root, ALNodeKind.procedure_call);
   return calls
     .filter((n) => removeTestField.targets(n, ctx))

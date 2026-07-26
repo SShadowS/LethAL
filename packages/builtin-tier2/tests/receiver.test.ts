@@ -15,41 +15,18 @@ import {
   ALNodeKind,
   type ALSyntaxNode,
   type SemanticContext,
-  buildSemanticContext,
   findAll,
   initParser,
-  parseAL,
   visit,
-  wrapRoot,
 } from "@lethal/engine";
 import { claimsRecordMethod } from "../src/receiver";
+import { contextFor, parseClean, projectContextFor } from "./parse-clean";
 
 // --- fixture plumbing ------------------------------------------------------
 // Same shape as packages/builtin-tier1/tests/*: parse a snippet, build the
-// semantic context over it, locate the node, call the predicate.
-
-/**
- * Parse and fail loudly if the fixture itself is malformed — a snippet that
- * does not parse would make the predicate return `false` for a reason that has
- * nothing to do with the rule under test.
- */
-function parseClean(src: string): ALSyntaxNode {
-  const root = wrapRoot(parseAL(src));
-  const bad: string[] = [];
-  visit(root, (n) => {
-    if (n.rawKind === "ERROR" || n.rawKind === "MISSING") {
-      bad.push(`${n.rawKind}@${n.startIndex}:${JSON.stringify(n.text.slice(0, 40))}`);
-    }
-  });
-  if (bad.length > 0) {
-    throw new Error(`test fixture does not parse cleanly: ${bad.join(", ")}\n---\n${src}`);
-  }
-  return root;
-}
-
-function contextFor(root: ALSyntaxNode): SemanticContext {
-  return buildSemanticContext([{ path: "fixture.al", root }]);
-}
+// semantic context over it, locate the node, call the predicate. `parseClean`
+// and the two context builders are shared with the four operator suites via
+// `./parse-clean.ts`.
 
 /** The single `call_expression` in a snippet; throws if there is not exactly one. */
 function onlyCall(root: ALSyntaxNode): ALSyntaxNode {
@@ -159,6 +136,16 @@ function claimsRecordMethodInCodeunit(
 ): boolean {
   return claimsIn(codeunitSource(stmt, locals), methodName);
 }
+
+/** A table that declares its OWN `SetRange`, shadowing the builtin for every receiver of its type. */
+const SHADOWING_TABLE = `table 50001 "Other Table"
+{
+    fields { field(1; "No."; Code[20]) { } }
+
+    procedure SetRange(A: Integer; B: Integer)
+    begin
+    end;
+}`;
 
 // --- the rules -------------------------------------------------------------
 
@@ -290,15 +277,66 @@ describe("claimsRecordMethod", () => {
     it("REFUSES a record receiver whose table declares that procedure in the project", () => {
       const src = `${codeunitSource("Other.SetRange(A, B);", { Other: 'Record "Other Table"' })}
 
-table 50001 "Other Table"
+${SHADOWING_TABLE}`;
+      expect(claimsIn(src, "SetRange")).toBe(false);
+    });
+
+    /**
+     * The same rule, but with the two objects in SEPARATE FILES — one AL object per file is the
+     * normal layout, and `generateMutationSet` (packages/runner/src/orchestrator.ts) builds ONE
+     * semantic context across every file precisely so this guard can fire there.
+     *
+     * The single-file case above is genuinely red-checkable but certifies a configuration the
+     * pipeline never produced: while the orchestrator built a context PER FILE, the codeunit's
+     * context held no table at all, the guard could not fire, and this site was CLAIMED in every
+     * real run. This case is the one that observes the pipeline's actual shape.
+     */
+    it("REFUSES it across FILES, with the context built the way the orchestrator builds it", () => {
+      const cuRoot = parseClean(
+        codeunitSource("Other.SetRange(A, B);", { Other: 'Record "Other Table"' }),
+      );
+      const tableRoot = parseClean(SHADOWING_TABLE);
+      const ctx = projectContextFor([cuRoot, tableRoot]);
+      expect(claimsRecordMethod(onlyCall(cuRoot), ctx, "SetRange")).toBe(false);
+    });
+
+    /**
+     * `R: Record 50004` is legal AL, and the grammar reports the record_type reference as the
+     * INTEGER `50004`, not a name. A guard that resolves the receiver's table by name alone never
+     * matches that spelling, so the shadowed call was claimed as the builtin.
+     */
+    it("REFUSES a receiver declared by table ID whose table declares that procedure", () => {
+      const cuRoot = parseClean(codeunitSource("Other.SetRange(A, B);", { Other: "Record 50001" }));
+      const tableRoot = parseClean(SHADOWING_TABLE);
+      const ctx = projectContextFor([cuRoot, tableRoot]);
+      expect(claimsRecordMethod(onlyCall(cuRoot), ctx, "SetRange")).toBe(false);
+    });
+
+    it("REFUSES a receiver whose table name differs only in case from the declaration", () => {
+      // AL is case-insensitive; `resolveObject`'s own name comparison is not.
+      const cuRoot = parseClean(
+        codeunitSource("Other.SetRange(A, B);", { Other: 'Record "other table"' }),
+      );
+      const tableRoot = parseClean(SHADOWING_TABLE);
+      const ctx = projectContextFor([cuRoot, tableRoot]);
+      expect(claimsRecordMethod(onlyCall(cuRoot), ctx, "SetRange")).toBe(false);
+    });
+
+    /**
+     * The counterweight to the three cases above: with the table present but declaring NO
+     * `SetRange`, the very same project-wide context must still CLAIM. Without this, all four
+     * could pass by refusing every cross-file receiver for some unrelated reason.
+     */
+    it("still CLAIMS across files when the table declares no such procedure", () => {
+      const cuRoot = parseClean(
+        codeunitSource("Other.SetRange(A, B);", { Other: 'Record "Other Table"' }),
+      );
+      const tableRoot = parseClean(`table 50001 "Other Table"
 {
     fields { field(1; "No."; Code[20]) { } }
-
-    procedure SetRange(A: Integer; B: Integer)
-    begin
-    end;
-}`;
-      expect(claimsIn(src, "SetRange")).toBe(false);
+}`);
+      const ctx = projectContextFor([cuRoot, tableRoot]);
+      expect(claimsRecordMethod(onlyCall(cuRoot), ctx, "SetRange")).toBe(true);
     });
 
     it("REFUSES when the receiver cannot be resolved at all", () => {

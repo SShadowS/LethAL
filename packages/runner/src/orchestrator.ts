@@ -74,9 +74,9 @@ export const MIN_MUTANT_BUDGET_MS = 30_000;
 /**
  * Every currently registered operator across all tiers, in registration order. The single source
  * both `operatorTiers` (below) and `generateMutationSet`'s tree walk read, so a Tier-2 operator
- * registered in `@lethal/builtin-tier2` needs no second wiring edit here when it lands — it is
- * empty today (docs/superpowers/plans/2026-07-26-tier2-phase1.md, Task 1) and stays a no-op for
- * both consumers until then.
+ * registered in `@lethal/builtin-tier2` needs no second wiring edit here — appending to that
+ * package's own `tier2Operators` array is the whole change. Tier 2 holds four operators today
+ * (`RemoveTestField`, `RemoveSetRange`, `RemoveCalcFields`, `SwapModifyFlag`).
  */
 const allOperators: readonly MutationOperator[] = [...tier1Operators, ...tier2Operators];
 
@@ -97,11 +97,25 @@ export const operatorTiers: ReadonlyMap<string, 1 | 2 | 3 | "custom"> = new Map(
 
 /**
  * Parse every `.al` file under `projectDir` (skipping emitted `Mutation*`
- * artifacts) and run every registered operator (all tiers) over each. Mirrors the
- * ops -> compile -> write pipeline exercised by
- * `packages/builtin-tier1/tests/end-to-end.test.ts`: build a per-file
- * semantic context, walk the tree, and collect every spec each operator
- * targets. Overlap resolution isn't needed here (or anywhere downstream
+ * artifacts) and run every registered operator (all tiers) over each: parse the
+ * whole project, build ONE semantic context across all of it, then walk each
+ * file's tree collecting every spec each operator targets.
+ *
+ * The context is project-wide, not per-file, because that is the only shape in
+ * which the Tier-2 shadowing guard can do its job. `claimsRecordMethod`
+ * (`packages/builtin-tier2/src/receiver.ts`) refuses a call whose receiver's
+ * table declares a procedure of that name "in the project" (design doc §4.1) —
+ * with a per-file context and the normal one-object-per-file AL layout, the
+ * table is never in the context, the guard never fires, and the site is claimed
+ * as a builtin when it is really that table's own method. Measured both ways;
+ * see `generateMutationSet: project-wide semantic context` in
+ * `tests/orchestrator.test.ts`. Cost is nil: every root is retained afterwards
+ * anyway (`InstrumentedFile.root`), and one table over N files is the same
+ * total work as N tables over one file each.
+ *
+ * Mirrors the ops -> compile -> write pipeline exercised by
+ * `packages/builtin-tier1/tests/end-to-end.test.ts`.
+ * Overlap resolution isn't needed here (or anywhere downstream
  * post-Layer-4.3): overlapping mutants coalesce into one flat dispatch chain
  * at compile time (`compileSchemataForFile`), so every spec this returns runs
  * behind its own guard in the same single instrumented artifact.
@@ -140,10 +154,18 @@ export async function generateMutationSet(projectDir: string): Promise<MutationS
   const entries = (await readdir(projectDir, { recursive: true }))
     .filter((e) => e.toLowerCase().endsWith(".al"))
     .filter((e) => !basename(e).startsWith("Mutation"));
-  for (const rel of entries.sort()) {
-    const source = await readFile(join(projectDir, rel), "utf8");
-    const root = wrapRoot(parseAL(source));
-    const ctx = buildSemanticContext([{ path: rel, root }]);
+  // Pass 1: parse every file. Pass 2 (below) walks them against ONE context
+  // built over all of them — see this function's doc comment for why the
+  // context must be project-wide.
+  const parsed = await Promise.all(
+    entries.sort().map(async (rel) => {
+      const source = await readFile(join(projectDir, rel), "utf8");
+      return { path: rel, source, root: wrapRoot(parseAL(source)) };
+    }),
+  );
+  const ctx = buildSemanticContext(parsed.map(({ path, root }) => ({ path, root })));
+
+  for (const { path: rel, source, root } of parsed) {
     // Built once per file (not per spec): a per-spec tree walk here would be
     // O(specs x nodes) on a file with many mutation sites. See
     // `buildSpanIndex`'s doc comment in @lethal/engine.
