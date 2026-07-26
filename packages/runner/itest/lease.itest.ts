@@ -130,9 +130,11 @@
  * before its own `finally` executes (e.g. the process is killed outright, or the finally's own
  * `ForceResetLease` call itself hits a network error) — see the task report.
  *
- * KNOWN LIVE-GATE NOISE (not a failure): `HarnessVerifier.verify()`'s `console.warn` about the
- * unenforced design §7 tenant gate fires on EVERY acquire+every cleanup call in this file (dozens of
- * times) — expected, per the brief; do not read a noisy stdout as a failure signal.
+ * TENANT-GATE WARNING (not a failure): `HarnessVerifier.verify()` warns about the unenforced
+ * design §7 tenant gate. It used to fire on EVERY acquire and every cleanup call in this file —
+ * dozens of times per run, which is how a real warning trains people to skim past it. Since
+ * ROADMAP R2 it fires at most ONCE PER PROCESS, so seeing it a single time here is expected and
+ * seeing it repeatedly is now itself the anomaly.
  */
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
