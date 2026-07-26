@@ -73,6 +73,8 @@ environments, which picks the coverage mode. No production code changes.
  *
  *   CONTINIA_API_TOKEN=... CONTINIA_ENV_ID=... bun run scripts/probe-continia-env.ts
  */
+import { BcDevMcpBackend } from "../packages/runner/src/bcdev-backend";
+
 const TOOL = process.env.CONTINIA_TOOL ?? "U:/Git/CLI/continia.exe";
 const ENV_ID = process.env.CONTINIA_ENV_ID;
 if (ENV_ID === undefined) throw new Error("set CONTINIA_ENV_ID");
@@ -100,27 +102,57 @@ const user = users[0];
 if (user === undefined) throw new Error("env has no users");
 console.log(`url=${env.url} expiresUtc=${env.expiresUtc ?? "(none)"} user=${user.username}`);
 
-// Q1: does the BC OData surface answer at all with these credentials?
 const origin = new URL(env.url).origin;
 const instance = new URL(env.url).pathname.replace(/^\/+|\/+$/g, "");
+
+// Baseline: does the BC surface answer these credentials at all? If this fails, nothing below
+// can succeed and the environment — not bc-dev-mcp — is the problem.
 const auth = `Basic ${btoa(`${user.username}:${user.password}`)}`;
 const probeUrl = `${origin}/${instance}/api/microsoft/automation/v2.0/companies`;
 const res = await fetch(probeUrl, { headers: { Authorization: auth } });
 console.log(`automation api: ${res.status} ${res.statusText}`);
 
-// Q1b: bc-dev-mcp OnPrem connection against the same server/instance.
-console.log(`\nNow run bc-dev-mcp manually against server=${origin} serverInstance=${instance}`);
-console.log("and record whether bcdev_status succeeds. That answer picks the coverage mode.");
+// THE question: drive the real backend exactly as a session would, rather than eyeballing
+// bc-dev-mcp by hand. `status()` is what runSession hard-gates on (orchestrator.ts), so this is
+// the same call that would abort a real run.
+const backend = new BcDevMcpBackend({
+  mcpCommand: ["bun", "run", "U:/Git/bc-dev-mcp/src/mcp/index.ts"],
+  server: origin,
+  serverInstance: instance,
+  tenant: "default",
+  company: "CRONUS Danmark A/S",
+  username: user.username,
+  password: user.password,
+  packageCachePath: ".alpackages",
+  controlSymbolPath: "unused-for-status",
+  env: { BC_DEV_USER: user.username, BC_DEV_PASSWORD: user.password },
+});
+try {
+  const status = await backend.status();
+  console.log(`bcdev_status ok=${status.ok}`);
+  console.log(status.details.slice(0, 800));
+  console.log(
+    status.ok
+      ? '\nVERDICT: coverageMode "procedure" — bc-dev-mcp drives this environment.'
+      : '\nVERDICT: coverageMode "none" — quote the details above in the plan.',
+  );
+} finally {
+  await backend.close();
+}
 ```
 
 - [ ] **Step 2: Run it**
 
 Run: `CONTINIA_API_TOKEN=… CONTINIA_ENV_ID=… bun run scripts/probe-continia-env.ts`
-Expected: prints the env url, an Automation-API status line, and the bc-dev-mcp instructions.
+Expected: the env url, an Automation-API status line, then `bcdev_status ok=true|false` and a
+VERDICT line. Either verdict is a valid result — the point is to learn which, not to get `true`.
 
-- [ ] **Step 3: Probe bc-dev-mcp by hand**
+- [ ] **Step 3: If `bcdev_status` failed, establish WHY before accepting the fallback**
 
-Point bc-dev-mcp at `server` = the origin, `serverInstance` = the path segment, `BC_DEV_USER`/`BC_DEV_PASSWORD` = the env user, and call `bcdev_status`. Record success or failure verbatim.
+A `"none"` verdict costs real fidelity, so do not accept it on one failed call. Check that the
+Automation-API line above returned 200 (if it did not, the environment is the problem, not
+bc-dev-mcp), and quote bc-dev-mcp's own error text. A connection refused, an auth rejection, and an
+unsupported-endpoint error are three different findings with three different follow-ups.
 
 - [ ] **Step 4: Record the answer in this plan**
 
@@ -132,6 +164,96 @@ Append a `## Probe result` section to this file stating the chosen `coverageMode
 git add scripts/probe-continia-env.ts docs/superpowers/plans/2026-07-26-custom-env-tool.md
 git commit -m "probe(envtool): measure what a Continia environment supports"
 ```
+
+---
+
+## Probe result (2026-07-26, corrected)
+
+**`coverageMode: "procedure"`.** The first pass through this section recorded `"none"` and that
+verdict was **wrong** — do not re-derive it. It was reached during a run that was confounded by a
+cold-starting environment (503s from every path, including the bare root) and rested on a false
+structural claim ("Continia's reverse proxy never exposes `{origin}:7049`"). Re-verified directly
+against the awake environment; both problems are now resolved with direct evidence.
+
+### 7049 is a fallback, not a hard target
+
+`bc-dev-mcp/src/core/urls.ts:12`:
+
+```ts
+const port = c.port ?? (u.port ? Number(u.port) : DEFAULT_DEV_PORT);   // DEFAULT_DEV_PORT = 7049
+```
+
+`ConnectionConfig.port` is an explicit override, and `bcdev_status` exposes `port` as a tool param
+(`bc-dev-mcp/src/mcp/tools/shared.ts:90`). 7049 is reached only when neither the connection URL nor
+`port` supplies one — the earlier writeup treated that fallback as if it were the only path.
+
+Every port-less HTTPS server hits 7049 for a structural reason that has nothing to do with
+Continia specifically: the WHATWG URL API normalizes away a default port
+(`new URL("https://host:443").port === ""`), so embedding `:443` inside the `server` string does
+**not** help — only the separate `port` field reaches this override.
+
+### The portal answers on standard HTTPS
+
+`curl` with Basic auth against the resolved environment, once awake:
+
+- `https://demoportaldev.continiaonline.com/{envId}/dev/metadata?tenant=default` → **200**
+- `.../dev/apps?tenant=default` → 404 on a GET — expected, that route is POST-only (publish), not
+  evidence of a missing route. (The earlier writeup's "identical 503 on every path" observation was
+  real, but was the cold-start symptom, not proof the dev-service route is unrouted.)
+
+### Decisive: the real backend, with `port` supplied
+
+Spawned bc-dev-mcp exactly as `BcDevMcpBackend` does (credentials only via `BC_DEV_USER`/
+`BC_DEV_PASSWORD` in the child env, per this section's "Deviation" note below) and called
+`bcdev_status`:
+
+- **without `port`** → `isError: true`:
+  ```
+  Dev endpoint unreachable at https://demoportaldev.continiaonline.com:7049/0494e53d-c76e-4a05-96f5-593d49830a64/dev/metadata?tenant=default
+  — is the BC server running and the developer service port open?
+  (Error: Unable to connect. Is the computer able to access the url?)
+  ```
+  (the same failure the first pass recorded and stopped at)
+- **with `port: 443`** → **success**:
+  ```json
+  { "webApiVersion": "7.0", "runtimeVersion": "17.0", "debuggerVersion": "7.0",
+    "supportsTestRunning": true, "supportsCoreSignalR": true, "supportsSourceDownload": true }
+  ```
+
+`supportsTestRunning`/`supportsCoreSignalR` are both true — the coverage path bc-dev-mcp needs is
+available against this environment.
+
+### Why the first pass got it wrong
+
+Two confounds, both now isolated:
+
+1. **Cold start.** The environment had gone idle and was cycling `Running → Starting` during the
+   first probe; the Automation-API baseline returned `503` on every path. That is consistent with a
+   genuinely sleeping environment (measured `Starting → Running` = 390s elsewhere in this plan), not
+   a permanent block — but the probe run never separated "asleep" from "structurally unreachable",
+   so it reported them as one finding.
+2. **The `"port` would not help" claim was asserted, not tested.** `server` without
+   `environmentType` does force `"OnPrem"` mode, and OnPrem's dev-endpoint resolution does default
+   to 7049 — true, and unchanged. What was false is the next step: `ConnectionConfig.port` is a real
+   override, `bcdev_status` exposes it, and passing `port: 443` makes the call succeed. Nobody
+   supplied it in the first pass, so the fallback path fired every time in a way that looked
+   identical to "no override exists."
+
+### The new requirement this exposes
+
+`BcDevConfig` (`packages/runner/src/bcdev-backend.ts`) has no `port` field today, and
+`connectionParams()` never sends one — so as written, LethAL cannot reach a path-routed HTTPS
+portal like Continia's. Task 5 adds `port?: number` to `BcDevConfig` and threads it through
+`connectionParams()`. Task 6 derives it in `env-tool-session.ts` from the resolved `baseUrl` (the
+URL's own explicit port if it carries one, else 443 for `https:` / 80 for `http:`).
+
+### Deviation from the brief's literal script (unchanged by this correction)
+
+The original probe script (Task 1, Step 1) was written against an earlier/assumed shape of
+`BcDevConfig`: `project` is a **required** `string` (added `project: process.cwd()`), and
+`BcDevConfig` has **no** `username`/`password` fields (credentials reach bc-dev-mcp only via
+`BC_DEV_USER`/`BC_DEV_PASSWORD` in `env`). Both are TypeScript-shape corrections, not behavior
+changes, and neither affects this corrected verdict.
 
 ---
 
@@ -1129,7 +1251,12 @@ Without this, a fallback run aborts at `runSession`'s readiness gate before any 
 
 **Interfaces:**
 - Consumes: `HarnessVerifier` from `./harness` (already imported by callers).
-- Produces: `BcDevConfig.coverageMode?: "procedure" | "none"` — default `"procedure"`, so every existing caller is unchanged.
+- Produces: `BcDevConfig.coverageMode?: "procedure" | "none"` — default `"procedure"`, so every
+  existing caller is unchanged. Also `BcDevConfig.port?: number`, threaded through
+  `connectionParams()` — required for a path-routed HTTPS environment tool (Continia) whose dev
+  endpoint has no listener at bc-dev-mcp's OnPrem fallback port, 7049 (see the corrected "Probe
+  result" above: `port: 443` is what turns `bcdev_status` from `isError: true` into success against
+  such an environment).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1171,14 +1298,53 @@ describe("coverageMode", () => {
     await expect(backend.status()).rejects.toThrow(/harnessVerifier/);
   });
 });
+
+// A path-routed HTTPS portal (Continia) has no listener at bc-dev-mcp's OnPrem fallback port
+// (7049) — the resolved port must actually reach the wire call, not just live on the config
+// object. Asserted on the arguments bc-dev-mcp's OWN tool handler receives (McpServer +
+// InMemoryTransport, the same live-round-trip pattern `makeBackend`/`statusHandler` already use
+// in this file), not on a private-method reach-in, since `connectionParams()` is private and the
+// wire arguments are the thing that actually matters.
+describe("port in connectionParams", () => {
+  it("omits port from bcdev_status's arguments when the config sets none", async () => {
+    let seenArgs: Record<string, unknown> = {};
+    const backend = makeBackend(
+      () => ({ results: [] }),
+      (args) => {
+        seenArgs = args as Record<string, unknown>;
+        return "ok";
+      },
+    );
+    await backend.status();
+    expect(seenArgs.port).toBeUndefined();
+  });
+
+  it("carries port through to bcdev_status's arguments when the config sets one", async () => {
+    let seenArgs: Record<string, unknown> = {};
+    const backend = makeBackend(
+      () => ({ results: [] }),
+      (args) => {
+        seenArgs = args as Record<string, unknown>;
+        return "ok";
+      },
+      { port: 443 },
+    );
+    await backend.status();
+    expect(seenArgs.port).toBe(443);
+  });
+});
 ```
 
-(`baseConfig()` and `deploymentStub()` already exist in this test file; reuse them.)
+(`baseConfig()` and `deploymentStub()` already exist in this test file; reuse them. `makeBackend`
+also already exists — extend its signature with an optional fourth `overrides: Partial<BcDevConfig>`
+parameter, spread into the config object it constructs, so both new tests can supply `port` without
+duplicating the whole fixture.)
 
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `bun test packages/runner/tests/bcdev-backend.test.ts`
-Expected: FAIL — `coverageMode` is not a known property, `capabilities().coverage` is always `"procedure"`.
+Expected: FAIL — `coverageMode`/`port` are not known properties, `capabilities().coverage` is always
+`"procedure"`, and `seenArgs.port` is always `undefined`.
 
 - [ ] **Step 3: Implement**
 
@@ -1193,6 +1359,32 @@ In `BcDevConfig` add:
    * transport in BOTH modes, so this changes baseline routing and selection only.
    */
   readonly coverageMode?: "procedure" | "none";
+  /**
+   * Explicit dev-endpoint port, passed through verbatim to bc-dev-mcp as `port`. Required whenever
+   * the server has no port of its own AND the environment does not listen on bc-dev-mcp's OnPrem
+   * fallback (7049) — a path-routed HTTPS portal (Continia's `demoportaldev.continiaonline.com`)
+   * is exactly that case (see the corrected "Probe result" section of this plan). The WHATWG URL
+   * API normalizes away a default port (`new URL("https://host:443").port === ""`), so embedding
+   * `:443` inside `server` does nothing — only this field reaches bc-dev-mcp's own override
+   * (`bc-dev-mcp/src/core/urls.ts:12`: `c.port ?? (u.port ? Number(u.port) : DEFAULT_DEV_PORT)`).
+   */
+  readonly port?: number;
+```
+
+Update `connectionParams()` to also carry `port` (still omitted when `undefined`, per
+`exactOptionalPropertyTypes`):
+
+```typescript
+  private connectionParams(): Record<string, unknown> {
+    const {
+      project, server, serverInstance, tenant, environmentType, environmentName, company, port,
+    } = this.cfg;
+    return Object.fromEntries(
+      Object.entries({
+        project, server, serverInstance, tenant, environmentType, environmentName, company, port,
+      }).filter(([, v]) => v !== undefined),
+    );
+  }
 ```
 
 Replace `capabilities()` and `status()`:
@@ -1238,7 +1430,7 @@ Expected: PASS.
 
 - [ ] **Step 5: Red-check**
 
-Revert `capabilities()` to the hardcoded `"procedure"`, confirm the `coverage "none"` test goes RED, restore. Report both.
+Revert `capabilities()` to the hardcoded `"procedure"`, confirm the `coverage "none"` test goes RED, restore. Then drop `port` from the `connectionParams()` destructure/output object, confirm "carries port through to bcdev_status's arguments when the config sets one" goes RED, restore. Report all.
 
 - [ ] **Step 6: Commit**
 
@@ -1254,7 +1446,10 @@ git commit -m "feat(runner): coverage mode as config, with an MCP-free readiness
 
 **Files:**
 - Create: `packages/runner/src/env-tool-session.ts`
-- Modify: `packages/runner/src/cli.ts` — add `baseUrl?: string` to `BcDevConfigSection`, and make `odataCfgFor` prefer it
+- Modify: `packages/runner/src/cli.ts` — add `baseUrl?: string` and `port?: number` to
+  `BcDevConfigSection`, make `odataCfgFor` prefer `baseUrl`, and forward `port` into the
+  `BcDevConfig` `buildBackend` constructs (Task 5 added `BcDevConfig.port`; without this forward the
+  resolved port would sit on `BcDevConfigSection` with no consumer)
 - Test: `packages/runner/tests/env-tool-session.test.ts`
 
 **Interfaces:**
@@ -1295,13 +1490,21 @@ import { EnvToolClient } from "../src/env-tool";
 import type { EnvToolConfigSection } from "../src/env-tool";
 import { startEnvToolSession } from "../src/env-tool-session";
 
-const RESOLVE_OUT = {
-  "env get": '{"url":"https://host/env-4711","expiresUtc":"2099-01-01T00:00:00Z"}',
-  "env users": '[{"username":"admin","password":"hunter2"}]',
-  "env create": '{"id":"env-new"}',
-};
+const FAR_FUTURE = "2099-01-01T00:00:00Z";
 
-function harness(cfgOver: Partial<EnvToolConfigSection> = {}) {
+/** Canned tool output, parameterised by expiry so no test mutates shared state. */
+function resolveOut(expiresUtc: string = FAR_FUTURE): Record<string, string> {
+  return {
+    "env get": `{"url":"https://host/env-4711","expiresUtc":"${expiresUtc}"}`,
+    "env users": '[{"username":"admin","password":"hunter2"}]',
+    "env create": '{"id":"env-new"}',
+  };
+}
+
+function harness(
+  cfgOver: Partial<EnvToolConfigSection> = {},
+  out: Record<string, string> = resolveOut(),
+) {
   const calls: string[][] = [];
   const published: string[] = [];
   const cfg: EnvToolConfigSection = {
@@ -1322,8 +1525,8 @@ function harness(cfgOver: Partial<EnvToolConfigSection> = {}) {
   const client = new EnvToolClient(cfg, {
     spawn: async (argv) => {
       calls.push([...argv]);
-      const key = Object.keys(RESOLVE_OUT).find((k) => argv.join(" ").includes(k));
-      return { exitCode: 0, stdout: key ? RESOLVE_OUT[key as keyof typeof RESOLVE_OUT] : "{}", stderr: "" };
+      const key = Object.keys(out).find((k) => argv.join(" ").includes(k));
+      return { exitCode: 0, stdout: key === undefined ? "{}" : (out[key] ?? "{}"), stderr: "" };
     },
   });
   return { calls, published, cfg, client };
@@ -1334,8 +1537,12 @@ const BCDEV_RAW = {
   packageCachePath: "C:/pkg", controlSymbolPath: "C:/lethal-control.app",
 };
 
-async function start(over: Record<string, unknown> = {}, cfgOver: Partial<EnvToolConfigSection> = {}) {
-  const h = harness(cfgOver);
+async function start(
+  over: Record<string, unknown> = {},
+  cfgOver: Partial<EnvToolConfigSection> = {},
+  out: Record<string, string> = resolveOut(),
+) {
+  const h = harness(cfgOver, out);
   let harnessCalls = 0;
   const session = await startEnvToolSession({
     cfg: h.cfg,
@@ -1368,6 +1575,35 @@ describe("startEnvToolSession", () => {
     expect(session.bcdev.username).toBe("admin");
     expect(session.bcdev.company).toBe("CRONUS");
     expect(session.createdEnvId).toBeUndefined();
+  });
+
+  it("derives port 443 from an https baseUrl carrying no port of its own", async () => {
+    // The corrected Probe result (above): bc-dev-mcp's OnPrem mode defaults to port 7049 unless
+    // `port` is supplied, and Continia's path-routed HTTPS portal listens on 443, not 7049 — a
+    // resolved `baseUrl` with no explicit port must still produce a usable `port`.
+    const { session } = await start();
+    expect(session.bcdev.port).toBe(443);
+  });
+
+  it("derives port 80 from an http baseUrl carrying no port of its own", async () => {
+    const { session } = await start(
+      {},
+      {},
+      {
+        ...resolveOut(),
+        "env get": '{"url":"http://host/env-4711","expiresUtc":"2099-01-01T00:00:00Z"}',
+      },
+    );
+    expect(session.bcdev.port).toBe(80);
+  });
+
+  it("takes an explicit port from the baseUrl itself over the protocol default", async () => {
+    const { session } = await start(
+      {},
+      {},
+      { ...resolveOut(), "env get": '{"url":"https://host:8443/env-4711","expiresUtc":"2099-01-01T00:00:00Z"}' },
+    );
+    expect(session.bcdev.port).toBe(8443);
   });
 
   it("verifies the harness BEFORE publishing the control app, and again after", async () => {
@@ -1429,10 +1665,11 @@ describe("startEnvToolSession", () => {
           }
           if (line.includes("env start")) seen.push("start");
           if (line.includes("env create")) seen.push("create");
-          const key = Object.keys(RESOLVE_OUT).find((k) => line.includes(k));
+          const out = resolveOut();
+          const key = Object.keys(out).find((k) => line.includes(k));
           return {
             exitCode: 0,
-            stdout: key ? RESOLVE_OUT[key as keyof typeof RESOLVE_OUT] : "{}",
+            stdout: key === undefined ? "{}" : (out[key] ?? "{}"),
             stderr: "",
           };
         },
@@ -1491,10 +1728,11 @@ describe("startEnvToolSession", () => {
             clock += 1000; // one simulated second per poll
             return { exitCode: 0, stdout: '{"status":"Starting"}', stderr: "" };
           }
-          const key = Object.keys(RESOLVE_OUT).find((k) => line.includes(k));
+          const out = resolveOut();
+          const key = Object.keys(out).find((k) => line.includes(k));
           return {
             exitCode: 0,
-            stdout: key ? RESOLVE_OUT[key as keyof typeof RESOLVE_OUT] : "{}",
+            stdout: key === undefined ? "{}" : (out[key] ?? "{}"),
             stderr: "",
           };
         },
@@ -1519,21 +1757,13 @@ describe("startEnvToolSession", () => {
 
   it("refuses to start when the env expires within the hour", async () => {
     const soon = new Date(Date.now() + 10 * 60_000).toISOString();
-    await expect(
-      start({ now: () => Date.now() }, {
-        resolve: [
-          { command: ["env", "get", "{envId}", "--json"],
-            reads: { baseUrl: "url", expiresUtc: "expiresUtc" } },
-          { command: ["env", "users", "{envId}", "--json"],
-            reads: { username: "0.username", password: "0.password" } },
-        ],
-      }).then(async () => {
-        // replace the canned expiry with an imminent one
-        RESOLVE_OUT["env get"] = `{"url":"https://host/env-4711","expiresUtc":"${soon}"}`;
-        return start();
-      }),
-    ).rejects.toThrow(/expires/);
-    RESOLVE_OUT["env get"] = '{"url":"https://host/env-4711","expiresUtc":"2099-01-01T00:00:00Z"}';
+    await expect(start({}, {}, resolveOut(soon))).rejects.toThrow(/expires/);
+  });
+
+  it("proceeds on an imminent expiry when explicitly allowed", async () => {
+    const soon = new Date(Date.now() + 10 * 60_000).toISOString();
+    const { session } = await start({ allowExpiring: true }, {}, resolveOut(soon));
+    expect(session.bcdev.baseUrl).toBe("https://host/env-4711");
   });
 
   it("never deletes a config-supplied env", async () => {
@@ -1562,8 +1792,9 @@ describe("startEnvToolSession", () => {
       spawn: async (argv) => {
         h.calls.push([...argv]);
         if (argv.includes("delete")) return { exitCode: 1, stdout: "", stderr: "gone" };
-        const key = Object.keys(RESOLVE_OUT).find((k) => argv.join(" ").includes(k));
-        return { exitCode: 0, stdout: key ? RESOLVE_OUT[key as keyof typeof RESOLVE_OUT] : "{}", stderr: "" };
+        const out = resolveOut();
+        const key = Object.keys(out).find((k) => argv.join(" ").includes(k));
+        return { exitCode: 0, stdout: key === undefined ? "{}" : (out[key] ?? "{}"), stderr: "" };
       },
     });
     const session = await startEnvToolSession({
@@ -1583,7 +1814,7 @@ describe("startEnvToolSession", () => {
 Run: `bun test packages/runner/tests/env-tool-session.test.ts`
 Expected: FAIL — module not found.
 
-- [ ] **Step 3: Add `baseUrl` to `BcDevConfigSection` and prefer it in `odataCfgFor` (`cli.ts`)**
+- [ ] **Step 3: Add `baseUrl`/`port` to `BcDevConfigSection`, prefer `baseUrl` in `odataCfgFor`, and forward `port` into `buildBackend` (`cli.ts`)**
 
 ```typescript
   /**
@@ -1592,6 +1823,12 @@ Expected: FAIL — module not found.
    * `env-tool-session`; a hand-written bcdev section leaves it absent and keeps the derivation.
    */
   readonly baseUrl?: string;
+  /**
+   * bc-dev-mcp connection port. Set only by `env-tool-session` (derived from `baseUrl` — see
+   * `deriveMcpPort` below); a hand-written bcdev section leaves it absent, matching a container's
+   * existing behaviour of letting bc-dev-mcp fall back to its own default.
+   */
+  readonly port?: number;
 ```
 
 ```typescript
@@ -1604,6 +1841,14 @@ export function odataCfgFor(c: BcDevConfigSection): ActivationConfig {
     ...(c.tenant !== undefined ? { tenant: c.tenant } : {}),
   };
 }
+```
+
+`buildBackend`'s existing `BcDevMcpBackend` construction (the object literal that already lists
+`mcpCommand`/`project`/`server`/`serverInstance`/`company`/`packageCachePath`/`controlSymbolPath`/
+`tenant`/`env`) must add one more conditional entry, or the field just added is dead:
+
+```typescript
+      ...(c.port !== undefined ? { port: c.port } : {}),
 ```
 
 - [ ] **Step 4: Implement `env-tool-session.ts`**
@@ -1702,10 +1947,14 @@ export async function startEnvToolSession(args: {
     }
   }
 
-  // 4. derive server/serverInstance from baseUrl unless read explicitly.
+  // 4. derive server/serverInstance/port from baseUrl unless read explicitly. A path-routed HTTPS
+  //    portal (Continia) has no listener at bc-dev-mcp's OnPrem fallback port (7049 — see the
+  //    corrected "Probe result" section of this plan), so the port bc-dev-mcp actually needs must
+  //    be derived here rather than left to that fallback.
   const baseUrl = resolved.baseUrl;
   if (baseUrl === undefined) throw new EnvToolError("resolve produced no baseUrl");
   const { server, serverInstance } = splitBaseUrl(baseUrl, resolved.server, resolved.serverInstance);
+  const port = deriveMcpPort(baseUrl);
   const username = resolved.username;
   const password = resolved.password;
   if (username === undefined || password === undefined) {
@@ -1717,6 +1966,7 @@ export async function startEnvToolSession(args: {
     baseUrl,
     server,
     serverInstance,
+    port,
     username,
     password,
     packageCachePath,
@@ -1840,6 +2090,20 @@ function splitBaseUrl(
 }
 
 /**
+ * Derives the port bc-dev-mcp's `ConnectionConfig.port` needs from a resolved `baseUrl`. The
+ * WHATWG URL API normalizes away a default port — `new URL("https://host:443").port === ""` — so
+ * an explicit port survives only when the URL text actually carries one; everything else falls
+ * back to the protocol default. Without this, bc-dev-mcp's OWN fallback (`DEFAULT_DEV_PORT = 7049`,
+ * `bc-dev-mcp/src/core/urls.ts:12`) would fire instead, which is unreachable on a path-routed
+ * HTTPS portal (the corrected "Probe result" section of this plan measured this directly).
+ */
+function deriveMcpPort(baseUrl: string): number {
+  const url = new URL(baseUrl);
+  if (url.port !== "") return Number(url.port);
+  return url.protocol === "https:" ? 443 : 80;
+}
+
+/**
  * Records a created environment where a LATER process can find it. Session scratch is a mkdtemp
  * directory nobody can locate after a crash, and a crashed process cannot print. A residual window
  * remains: a crash DURING createEnv leaves an environment whose id LethAL never learned — the
@@ -1867,7 +2131,7 @@ async function recordCreatedEnv(
 - [ ] **Step 5: Run to verify it passes**
 
 Run: `bun run typecheck && rm -rf packages/*/dist && bun test packages/runner/tests/env-tool-session.test.ts`
-Expected: PASS, 11 tests.
+Expected: PASS, 14 tests.
 
 - [ ] **Step 6: Red-check the verify-before-publish rule**
 

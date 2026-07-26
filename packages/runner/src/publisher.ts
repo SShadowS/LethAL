@@ -6,7 +6,7 @@ import { canonicalContainerKey, serializePublish } from "./publish-serializer";
 
 export type SpawnFn = (
   argv: readonly string[],
-  opts?: { signal?: AbortSignal; env?: Record<string, string> },
+  opts?: { signal?: AbortSignal; env?: Record<string, string>; cwd?: string },
 ) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
 
 const bunSpawn: SpawnFn = async (argv, opts) => {
@@ -20,6 +20,7 @@ const bunSpawn: SpawnFn = async (argv, opts) => {
     // with process.env (unlike leaving it unset, which fully inherits) — merge explicitly so
     // adding credentials for altool doesn't drop PATH/SystemRoot/etc. that alc/altool need.
     ...(opts?.env !== undefined ? { env: { ...process.env, ...opts.env } } : {}),
+    ...(opts?.cwd !== undefined ? { cwd: opts.cwd } : {}),
   });
   const [stdout, stderr] = await Promise.all([
     new Response(proc.stdout).text(),
@@ -29,6 +30,15 @@ const bunSpawn: SpawnFn = async (argv, opts) => {
 };
 
 export const defaultSpawn = bunSpawn;
+
+/**
+ * The publish half of a deployment channel. `ContainerDeployer` (altool against a container) and
+ * `EnvToolPublisher` (an external environment CLI) both satisfy it, so `BcDevDeployment` can name
+ * the contract rather than one implementation.
+ */
+export interface AppPublisher {
+  publish(artifact: CompiledArtifact): Promise<void>;
+}
 
 /**
  * Config for `ContainerDeployer.publish()` — only the fields that concern shipping an
@@ -67,7 +77,7 @@ export const defaultDeployerIo: ContainerDeployerIo = {
  * `ArtifactCompiler` produced, not something that changed underneath it between compile and
  * publish.
  */
-export class ContainerDeployer {
+export class ContainerDeployer implements AppPublisher {
   constructor(
     private readonly cfg: ContainerDeployerConfig,
     private readonly io: ContainerDeployerIo,

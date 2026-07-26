@@ -367,6 +367,224 @@ actually grows with mutants. An earlier version of this itest summed both and re
 cross-fixture growth curve. True source growth on this fixture is **3.59x**, at **~155
 marginal bytes per mutant** (`(instrumented source − original) / mutants`).
 
+## Running against an external environment tool (`envTool`)
+
+Layer 6C. Spec: `docs/superpowers/specs/2026-07-26-custom-env-tool-design.md`. Plan:
+`docs/superpowers/plans/2026-07-26-custom-env-tool.md`. Roadmap: R15.
+
+Everything above this section assumes a BC container LethAL reaches directly (`server` +
+`serverInstance` in the `bcdev` config, published to with `altool`). `envTool` is a second way to
+reach a bcdev-backed environment: a project points LethAL at an **external CLI** that owns the
+environment's lifecycle — create it, start it, tell LethAL where it is, publish an app to it, tear
+it down — described entirely as config (a tool path plus argv templates). LethAL vendors no
+tool-specific code; the first and only consumer today is Continia's `continia.exe`
+(`U:/Git/CLI/continia.exe`). The tool only **provisions**. Every verdict still comes from the
+unchanged fenced `RunMutant` path (Layer 5C-B1) via the bcdev backend — `envTool` never becomes a
+new execution backend.
+
+### The worked config
+
+From the design spec, unchanged (this is the actual shape `validateEnvToolConfig`,
+`packages/runner/src/env-tool.ts`, accepts — read it for the authoritative field list):
+
+```jsonc
+{
+  "bcdev": {
+    "company": "CRONUS Danmark A/S",
+    "tenant": "default",
+    "controlSymbolPath": "U:/Git/LethAL/extensions/lethal-control/lethal-control.app"
+    // no server/serverInstance/username/password/baseUrl/port — envTool resolves those.
+    // Hand-writing any of them alongside an envTool section is a validation error: declaring a
+    // field in both envTool.reads and the bcdev section is "two sources, one value", which is how
+    // two clients end up pointed at different endpoints.
+  },
+  "envTool": {
+    "toolPath": "U:/Git/CLI/continia.exe",
+    "cwd": ".",                                  // optional; default = project dir
+    "env": { "CONTINIA_API_TOKEN": "${CONTINIA_API_TOKEN}" },
+    "vars": { "profile": "bc28-w1", "envName": "lethal-{runId}" },
+    "envId": "${CONTINIA_ENV_ID}",               // optional — absent means "create one"
+    "timeoutSeconds": 900,
+    "publishApps": ["U:/Git/LethAL/fixtures/sandbox-tests/out/tests.app"],
+
+    "createEnv": {
+      "command": ["env", "create", "--name", "{envName}", "--profile", "{profile}", "--json"],
+      "reads":   { "envId": "id" }
+    },
+    "startEnv":  { "command": ["env", "start", "{envId}"] },
+    "readyWhen": {
+      "command": ["env", "get", "{envId}", "--json"],
+      "reads":   { "status": "status" },
+      "equals":  "Running",
+      "pollSeconds": 20,
+      "timeoutSeconds": 1800
+    },
+    "resolve": [
+      { "command": ["env", "get", "{envId}", "--json"],
+        "reads": { "baseUrl": "url", "expiresUtc": "expiresUtc" } },
+      { "command": ["env", "users", "{envId}", "--json"],
+        "reads": { "username": "0.username", "password": "0.password" } }
+    ],
+    "downloadSymbols": { "command": ["deps", "download", "{envId}", "{projectDir}", "--json"] },
+    "publish":         { "command": ["publish", "{envId}", "{appFile}",
+                                     "--sync-mode", "ForceSync", "--json"] },
+    "deleteEnv":       { "command": ["env", "delete", "{envId}"] }
+  }
+}
+```
+
+```sh
+# .env — gitignored. Bun loads .env from the PROCESS CWD ONLY, never from a subdirectory — there
+# is no separate loader to write or maintain (packages/runner/src/cli.ts passes process.env
+# straight into validateEnvToolConfig). `bun run itest:envtool` and a plain `lethal run` both
+# invoke `bun` from the REPO ROOT, so this file belongs at the repo root, not "next to the
+# project" — a .env dropped into fixtures/sandbox-app or any other project dir is silently never
+# read. A real environment variable always wins over a .env entry.
+CONTINIA_API_TOKEN=…
+CONTINIA_ENV_ID=env-4711        # omit to make every run create and delete its own env
+```
+
+`${VAR}` is valid in any config **value** and is resolved from `process.env` after `.env` loads; an
+unset (or empty) variable throws at validation time naming both the variable and the config field
+that referenced it — before any process is spawned. `{placeholder}` is valid only inside a
+`command` array element: the closed set is `{envId}`, `{appFile}`, `{projectDir}`, `{testDir}`,
+`{packageCache}`, `{runId}`, plus whatever the config's own `vars` map declares.
+
+### Flags
+
+- **`--keep-env`** — suppresses `deleteEnv` for an environment this run created. A no-op (with a
+  console warning) when the config has no `envTool` section, or when `envId` came from config (a
+  config-supplied environment is never deleted regardless of this flag). Refused outright at parse
+  time together with `--backend al-runner`, since al-runner has no environment to keep.
+- **`--allow-expiring-env`** — overrides the expiry refusal below. Also refused together with
+  `--backend al-runner`.
+
+### Lifecycle, in order (`startEnvToolSession`, `packages/runner/src/env-tool-session.ts`)
+
+Resolution runs exactly **once per process**, before `buildBackend`, `leaseSessionFor` and
+`resourceIdentityFor` all consume its output — a naive per-seam re-resolve would, in create-mode,
+provision a second and third environment.
+
+1. **envId** — taken from config, or `createEnv` runs and `envId` is read from its JSON output.
+2. **start + wait** (create-mode only) — `startEnv` runs, then `readyWhen` polls (`pollSeconds`,
+   default 20s) until its `status` read equals `readyWhen.equals`, or `timeoutSeconds` (default
+   1800s) elapses. Every status transition is logged — a silent six-minute wait is indistinguishable
+   from a hang.
+3. **resolve** — each block in `resolve` runs in order; their `reads` outputs merge into one map.
+   `baseUrl`, `username` and `password` must end up produced by some block, or validation fails
+   before anything spawns.
+4. **expiry check** — if `resolve` produced `expiresUtc` and it falls within the next hour, the
+   session refuses to start (see "Expiry: refuse, do not warn" below) unless `--allow-expiring-env`
+   was given.
+5. **derive `server` / `serverInstance` / `port`** from the resolved `baseUrl` (unless a block
+   declared explicit `reads` entries for `server`/`serverInstance`) — see "The port trap" below.
+6. **symbols** — `downloadSymbols` runs if `bcdev.packageCachePath` is absent; its output populates
+   `<projectDir>/.alpackages`, which `{packageCache}` expands to.
+7. **prepublish** — every entry in `publishApps` is published, in declared order, through the
+   `publish` template (the test app and its dependencies — see "The test app problem" below).
+8. **control app** — `HarnessVerifier` checks first; `lethal-control.app` is published ONLY if it
+   does not already answer correctly, then verified again. Deliberately verify-before-publish: the
+   machine-global lease (5C-B1) lives in the control app's own tables, and republishing runs its
+   install/upgrade codeunits, which would disturb a concurrent session's lease and
+   `serverGeneration` on a shared long-lived environment.
+9. **per batch** — the instrumented `.app` publishes through the same `publish` template;
+   `DeploymentVerifier` confirms the artifact id that actually landed (unchanged bcdev semantics).
+10. **per mutant** — LethAL's fenced `RunMutant` OData call. Completely unchanged code; `envTool`
+    never touches this path.
+11. **teardown** — `deleteEnv` runs only if this session created the environment, and only if
+    neither `--keep-env` nor a quarantine applies (a quarantined session keeps the environment on
+    purpose — deleting it would destroy the evidence of what wedged). A failing `deleteEnv` is
+    logged with the manual delete command and never changes the session's report or exit code.
+
+The tool is spawned a handful of times per session, never once per mutant, so its latency does not
+multiply across the mutant set.
+
+### The test app problem
+
+LethAL's normal contract is that the test app is already on the server — publishing it is the
+user's own workflow, not LethAL's job. That is impossible for an environment that did not exist
+until LethAL created it: a fresh Continia environment from a BC profile carries no user test app, so
+a create-mode run would discover tests from source and then fail every one of them at execution.
+`publishApps` closes that gap — an optional ordered list of pre-built `.app` paths published at
+session start (step 7 above), before the control app. **Create-mode requires it**: a config with no
+`envId` and no `publishApps` is a validation error naming the reason. Reuse-mode ignores it if
+absent.
+
+### The measured provisioning facts — why this shape exists
+
+Spiked 2026-07-26 against the real Continia portal, creating and deleting one DK BC 28.0
+environment:
+
+| phase | result |
+|---|---|
+| `env create` | returns promptly, status **`Draft`** — inert, nothing listening |
+| `env start` | ~2 s, prints "start requested" — also async |
+| `Draft → Starting` | ~1 s after the start request |
+| `Starting → Running` | **390 s** |
+| BC endpoint answers `200` | **391 s** after the start request |
+
+Status vocabulary: `Draft`, `Starting`, `Running`, `Stopped` — `env start`/`env stop` are PATCHes of
+that field. A fresh environment already contains the companies `CRONUS Danmark A/S` and
+`My Company`. The environment's URL is `{origin}/{envId}`, derived from the id, so a stop/start
+cannot move it.
+
+This is why `startEnv` and `readyWhen` are **mandatory in create-mode**: publishing to a `Draft`
+environment fails against a dead endpoint. It is also why reuse (`envId` supplied in config or via
+`${CONTINIA_ENV_ID}`) is the default posture for repeat runs — ephemeral (create-mode) costs ~6.5
+minutes before a single mutant runs, every time.
+
+### The port trap — not Continia-specific
+
+bc-dev-mcp's OnPrem dev-endpoint resolution computes
+`port = c.port ?? (u.port ? Number(u.port) : 7049)` (`bc-dev-mcp/src/core/urls.ts`) — it falls back
+to port 7049 whenever neither the connection URL nor an explicit `port` override supplies one.
+Embedding `:443` into the server string does not help: the WHATWG URL API normalizes away a default
+port (`new URL("https://host:443").port === ""`), so only a genuine, separate `port` field reaches
+bc-dev-mcp's own override. Continia's hosted portal fronts every environment through a single HTTPS
+reverse proxy, path-routed by environment id, with nothing listening on 7049 there — so
+`bcdev_status` fails (`Dev endpoint unreachable at https://host:7049/...`) unless `port` is
+supplied, and with `port: 443` it succeeds.
+
+This is a general trap, not a Continia quirk: **every port-less HTTPS server** silently falls back
+to 7049 unless something derives the real port. LethAL now derives it itself: `deriveMcpPort`
+(`packages/runner/src/env-tool-session.ts`) takes the resolved `baseUrl`'s explicit port if the URL
+text carries one, else 443 for `https:` / 80 for `http:`, and passes it as `BcDevConfigSection.port`
+— a field that exists for exactly this reason and is threaded through
+`BcDevMcpBackend.connectionParams()`. Without it, LethAL cannot reach any path-routed HTTPS BC
+portal, Continia or otherwise.
+
+The live probe against a real Continia environment (Task 1 of the plan, corrected 2026-07-26 after
+an earlier cold-start-confounded pass wrongly recorded `"none"`) confirmed `bcdev_status` connects
+and returns coverage once given `port: 443`:
+`{"webApiVersion":"7.0","runtimeVersion":"17.0","supportsTestRunning":true,"supportsCoreSignalR":true,"supportsSourceDownload":true}`
+— full **`coverage: "procedure"`** fidelity, identical to a container run. A `coverage: "none"`
+fallback mode still exists in the backend (constructor input, default `"procedure"`) as a documented
+contingency for some future `envTool` target bc-dev-mcp genuinely cannot reach, but this deployment
+does not need it.
+
+### Expiry: refuse, do not warn
+
+If a config declares a `reads` entry for `expiresUtc` and the environment expires within the hour,
+`startEnvToolSession` refuses to start rather than warning, unless `--allow-expiring-env` overrides
+it. An environment that expires mid-run does not merely fail: the in-flight call becomes
+`in-flight-unknown` and durably quarantines the tier, which then needs an operator
+`clear-quarantine`. Refusing costs a re-run; not refusing costs a manual recovery.
+
+### Recovering a leaked environment
+
+A created `envId` is written to `~/.lethal/env-state/<runId>.json` **before** anything else runs —
+a stable location, not session scratch, because a crashed process cannot print and a `mkdtemp`
+directory cannot be found afterwards. The file records the `envId`, the exact resolved `deleteEnv`
+argv, and the start time (`recordCreatedEnv`, `env-tool-session.ts`), and is removed once
+`deleteEnv` actually succeeds. A later `lethal run` should warn on stale entries it finds there;
+removal is manual and deliberate, since LethAL cannot know whether another session still owns the
+environment.
+
+The one window this file cannot close: a crash **during** `createEnv` itself, before the
+environment's id is ever read back into LethAL — nothing has been written yet because the id does
+not exist until the call returns. Recovery for that case is the tool's own listing command
+(`continia env list`), not LethAL.
+
 Honest reading: this is **one data point on one small fixture**, not a growth curve. A single
 measurement cannot by itself distinguish "linear in mutant count" from "some other sub-2^depth
 curve" — that needs multiple fixtures at varying mutant counts/nesting depths plotted against

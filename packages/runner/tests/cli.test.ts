@@ -69,6 +69,8 @@ describe("parseCliConfig", () => {
       configPath: join("proj", "lethal.config.json"),
       skipKnownSurvivors: false,
       workers: 1,
+      keepEnv: false,
+      allowExpiringEnv: false,
     });
   });
 
@@ -99,6 +101,8 @@ describe("parseCliConfig", () => {
       skipKnownSurvivors: true,
       outPath: "report.json",
       workers: 1,
+      keepEnv: false,
+      allowExpiringEnv: false,
     });
   });
 
@@ -205,6 +209,21 @@ describe("odataCfgFor (t7: the shared OData config both buildBackend and leaseSe
       username: "u",
       password: "p",
     });
+  });
+
+  // item 6 (6c fix wave 1): the baseUrl preference is exercised only indirectly by the tests
+  // above (FULL_SECTION never sets it) — these two make the preference itself the assertion.
+  test("uses baseUrl verbatim when present, instead of the derived container URL", () => {
+    const withBaseUrl: BcDevConfigSection = {
+      ...FULL_SECTION,
+      baseUrl: "https://host/env-4711",
+    };
+    expect(odataCfgFor(withBaseUrl).baseUrl).toBe("https://host/env-4711");
+  });
+
+  test("derives the port-7048 container URL from server/serverInstance when baseUrl is absent", () => {
+    expect(FULL_SECTION).not.toHaveProperty("baseUrl");
+    expect(odataCfgFor(FULL_SECTION).baseUrl).toBe("http://cronus281:7048/BC");
   });
 });
 
@@ -396,6 +415,8 @@ describe("resourceIdentityFor (Task 13 folded fix — cli.ts sources quarantine 
     configPath: "cfg",
     skipKnownSurvivors: false,
     workers: 1,
+    keepEnv: false,
+    allowExpiringEnv: false,
   };
 
   test("bcdev session sources resourceServer/resourceServerInstance from the bcdev config section", () => {

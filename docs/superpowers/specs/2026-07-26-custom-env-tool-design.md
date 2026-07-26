@@ -114,6 +114,7 @@ pointed at different endpoints.
 |---|---|---|
 | `baseUrl` (`ActivationConfig`) | `reads` | used verbatim; never passed through `odataBaseUrl` |
 | `server`, `serverInstance` | derived from `baseUrl`, or `reads` | derivation throws on a path-less URL |
+| `port` | derived from `baseUrl` | explicit port from the URL if it carries one, else 443 for `https:` / 80 for `http:` — bc-dev-mcp's own OnPrem fallback (7049) is unreachable on a path-routed HTTPS portal (see Coverage below) |
 | `username`, `password` | `reads` | also fed to bc-dev-mcp as `BC_DEV_USER` / `BC_DEV_PASSWORD` |
 | `company` | `bcdev` section | the tool does not know it; every OData URL carries `?company=` (`activation.ts:5`) |
 | `tenant` | `bcdev` section, no default | raw OData Basic auth 401s without it even on a single-tenant server (`activation.ts:10`). `continia.exe` hardcodes `tenant=default` when it publishes, so `"default"` is the expected value for Continia environments — but LethAL will not invent it |
@@ -121,23 +122,40 @@ pointed at different endpoints.
 | `controlSymbolPath` | `bcdev` section | path to the compiled `lethal-control.app` on this machine |
 | `mcpCommand` | `bcdev` section | **required only in `coverage: "procedure"` mode** (see below) |
 
-## Coverage: one probe decides the mode, and the mode is an explicit delta
+## Coverage: the probe is done — `"procedure"`, with the fallback kept as a contingency
 
-bc-dev-mcp produces the coverage that drives mutant selection. It has never been pointed at a
-Continia environment, so **the first implementation task is a live probe**, and its answer picks
-the mode:
+bc-dev-mcp produces the coverage that drives mutant selection. **The live probe against a real
+Continia environment has run, and passed:** `bcdev_status` connects and returns coverage
+(`webApiVersion: "7.0"`, `supportsTestRunning: true`, `supportsCoreSignalR: true`) once it is given
+the right port (below). The answer is **`coverage: "procedure"`** — full fidelity, identical to a
+container run. Do not re-run this probe or re-derive the mode; the plan's "Probe result" section
+carries the full evidence, including that an earlier pass recorded `"none"` and was wrong (a
+cold-start-confounded read, plus a false claim that the port could not be overridden).
+
+### Why a port is needed at all
+
+bc-dev-mcp's OnPrem dev-endpoint resolution defaults to port 7049 (`DEFAULT_DEV_PORT`,
+`bc-dev-mcp/src/core/urls.ts`) whenever neither the connection URL nor an explicit `port` override
+supplies one. Continia's hosted portal fronts every environment through a single HTTPS reverse
+proxy, path-routed by environment id, with nothing listening on 7049 there — so `bcdev_status`
+fails unless `port` is supplied. Embedding `:443` in the server string does not help: the WHATWG URL
+API normalizes away a default port (`new URL("https://host:443").port === ""`), so only a genuine
+`port` field reaches bc-dev-mcp's own override. `BcDevConfig.port` (Task 5) and its derivation from
+the resolved `baseUrl` (Task 6, see the `port` row above) exist for exactly this reason.
+
+### The `"none"` fallback stays as a documented contingency
 
 | probe result | mode | consequence |
 |---|---|---|
-| bc-dev-mcp connects and returns coverage | `coverage: "procedure"` | full fidelity; identical to a container run |
-| it does not | `coverage: "none"` | every mutant runs against all green tests — slower, never wrong |
+| bc-dev-mcp connects and returns coverage (**this deployment's actual, measured result**) | `coverage: "procedure"` | full fidelity; identical to a container run |
+| it does not (a different `envTool` target that bc-dev-mcp genuinely cannot reach) | `coverage: "none"` | every mutant runs against all green tests — slower, never wrong |
 
-**The fallback is not free, and the earlier claim that the backend is "unchanged" was wrong.**
+**The fallback is not free, and an earlier claim that the backend is "unchanged" was wrong.**
 `BcDevMcpBackend` hardcodes `coverage: "procedure"` (`bcdev-backend.ts:149`), and `status()` goes
 through bc-dev-mcp (`bcdev-backend.ts:206`) while `runSession` hard-gates on `status()` being ok
-(`orchestrator.ts:1419`). If bc-dev-mcp cannot reach a Continia environment, the session would
-abort at the readiness probe before any fenced call. Fallback mode therefore requires three small,
-named changes:
+(`orchestrator.ts:1419`). Even though this probe passed, the fallback is implemented anyway, as a
+contingency for a future `envTool` target that cannot be reached — otherwise that session would
+abort at the readiness probe before any fenced call. Three small, named changes:
 
 1. **Coverage mode becomes a constructor input** rather than a literal, defaulting to
    `"procedure"` so existing callers are untouched.
@@ -424,8 +442,10 @@ the fenced path keeps `asserterror` fidelity that al-runner lacks (R7).
 
 ## Risks and open questions
 
-1. **bc-dev-mcp against a Continia environment is unproven.** Task 1 is that probe; its result
-   selects the coverage mode and decides whether the three backend changes above are needed.
+1. ~~bc-dev-mcp against a Continia environment is unproven.~~ **Resolved by Task 1's probe:** it
+   connects and returns coverage, given the right `port` (see Coverage above) — `coverage:
+   "procedure"`. The three backend changes are implemented anyway, as a documented fallback
+   contingency, not because this deployment needs them.
 2. **`LethAL Control` must publish to a Continia environment and answer OData.** `HarnessVerifier`
    already checks exactly this. If it cannot, the fence is unavailable there and this feature stops
    at "provision and publish" — no mutation runs.
