@@ -90,6 +90,23 @@ export interface SessionReport {
     readonly files: readonly NotInstrumentedFile[];
   };
   /**
+   * R41: the `--only` narrowing this run was asked for, if any. Absent means the whole project
+   * was considered.
+   *
+   * Present for the same reason `notInstrumented` is: `mutationScore` covers what was RUN, and a
+   * narrowed run's score describes the chosen slice, not the project. A report that recorded the
+   * score but not the narrowing would be indistinguishable from a full run at the same number —
+   * and would stay that way in the `--out` JSON, long after the console line scrolled away.
+   *
+   * `excludedFileCount` counts FILES, never sites: the sites in an excluded file are never
+   * generated, so their number is not something this run measured (see
+   * `MutationSetResult.excludedByOnly`).
+   */
+  readonly only?: {
+    readonly patterns: readonly string[];
+    readonly excludedFileCount: number;
+  };
+  /**
    * Table trigger mutants that took `coverageFilter`'s FALLBACK 2 — "coverage places this
    * nowhere at all, so run every green test" (`selection.ts`; summed over every batch).
    *
@@ -203,6 +220,12 @@ export interface BuildReportInput {
     readonly totalFiles: number;
     readonly files: readonly NotInstrumentedFile[];
   };
+  /** R41: the `--only` patterns and how many files they excluded — see `SessionReport.only`.
+   *  Absent when the run was not narrowed. */
+  readonly only?: {
+    readonly patterns: readonly string[];
+    readonly excludedFileCount: number;
+  };
   /** Summed over every batch's `coverageFilter` — see `SessionReport.untargetedTriggerCount`.
    *  Required, not optional: an absent tally and a measured zero must never look alike. */
   readonly untargetedTriggerCount: number;
@@ -286,6 +309,7 @@ export function buildReport(input: BuildReportInput): SessionReport {
       files: input.notInstrumented.files,
     },
     untargetedTriggerCount: input.untargetedTriggerCount,
+    ...(input.only !== undefined ? { only: input.only } : {}),
     ...(input.quarantined !== undefined ? { quarantined: input.quarantined } : {}),
     ...(input.permissionCanary !== undefined ? { permissionCanary: input.permissionCanary } : {}),
   };
@@ -337,6 +361,13 @@ export function renderConsole(r: SessionReport): string {
     for (const f of r.notInstrumented.files) {
       lines.push(`  ${f.file} (${f.kinds}, ${f.sites} site(s))`);
     }
+  }
+  // R41: a narrowed run's score describes the slice that was asked for, not the project. Same
+  // placement rule as NOT INSTRUMENTED — a qualifier on the score belongs next to the score.
+  if (r.only !== undefined) {
+    lines.push(
+      `NARROWED (--only): ${r.only.patterns.map((p) => `"${p}"`).join(", ")} — ${r.only.excludedFileCount} .al file(s) contributed no mutants. The score above covers the narrowed set ONLY, it is not a project score.`,
+    );
   }
   // Same reasoning as NOT INSTRUMENTED above: a qualifier on the score belongs next to the score.
   // These mutants were scored against EVERY green test rather than against tests coverage placed
