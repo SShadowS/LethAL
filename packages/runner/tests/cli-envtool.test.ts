@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { AlRunnerBackend } from "../src/al-runner-backend";
 import type { BcDevConfigSection, LethalConfigFile, RunCliConfig } from "../src/cli";
 import {
   bcDevBackendConfig,
@@ -21,6 +22,7 @@ import type { EnvToolConfigSection } from "../src/env-tool";
 import type { EnvToolPublisher } from "../src/env-tool-publisher";
 import type { EnvToolSession } from "../src/env-tool-session";
 import type { SessionReport } from "../src/report";
+import { ResultsStore } from "../src/store";
 
 /** Writes a minimal valid (empty) `lethal.config.json` to a fresh scratch dir and returns its path.
  * Every field of `LethalConfigFile` is optional, so `{}` parses fine — tests that need real
@@ -392,6 +394,11 @@ const FAKE_REPORT: SessionReport = {
   unsupportedTests: [],
 };
 
+const QUARANTINED_FAKE_REPORT: SessionReport = {
+  ...FAKE_REPORT,
+  quarantined: { reason: "test: in-flight-unknown" },
+};
+
 describe("withEnvTeardown", () => {
   it("Important 1: tears down even when body throws (e.g. buildBackend failing)", async () => {
     const teardownCalls: Array<{ keepEnv: boolean; quarantined: boolean }> = [];
@@ -545,6 +552,93 @@ describe("runFromCli (Task 7 review wiring)", () => {
     expect(warnCalls.some((args) => String(args[0]).includes("--keep-env has no effect"))).toBe(
       true,
     );
+  });
+
+  // Task 7 review, wave 2: the restructure that fixed Important 1 introduced a new bug — a
+  // `return await runSession(...)` directly inside the `try` whose `finally` calls
+  // `store.close()`/`backend.close()`. Per JS `try/finally` semantics, a throw from `finally`
+  // silently DISCARDS the `try`'s pending return value. `report = await runSession(...)` (a local,
+  // captured BEFORE the `finally` runs) plus non-fatal, warn-only cleanup closes both holes. Uses a
+  // REAL `ResultsStore(":memory:")`/`AlRunnerBackend`, monkey-patching their own `close()` methods
+  // to fail — exactly how the coordinator's own re-review verified the defect — rather than fully
+  // fake objects, so the `instanceof` checks in `runFromCli`'s cleanup actually engage.
+  it("wave 2: a quarantined report survives a store.close() failure, and teardown still sees quarantined:true", async () => {
+    const configPath = await writeTempConfig();
+    const teardownCalls: Array<{ keepEnv: boolean; quarantined: boolean }> = [];
+    const fakeSession: EnvToolSession = {
+      bcdev: RESOLVED_BCDEV,
+      createdEnvId: "env-created",
+      async teardown(opts) {
+        teardownCalls.push(opts);
+      },
+    };
+    // al-runner (not bcdev): `resourceIdentityFor`/`leaseSessionFor` are no-ops for al-runner, so
+    // this doesn't ALSO need a real/fake `bcdev` config section just to reach `runTheSession` — the
+    // point of this test is purely the store/backend cleanup-vs-return-value ordering, which is
+    // identical for either backend kind.
+    const parsed: RunCliConfig = {
+      ...RUN_CONFIG_BCDEV,
+      backendKind: "al-runner",
+      configPath,
+      dbPath: ":memory:",
+    };
+    const originalClose = ResultsStore.prototype.close;
+    ResultsStore.prototype.close = () => {
+      throw new Error("store.close boom");
+    };
+    try {
+      const result = await runFromCli(parsed, {
+        resolveEnvToolSession: async () => ({
+          effectiveConfig: {},
+          envSession: fakeSession,
+        }),
+        buildBackend: async () =>
+          new AlRunnerBackend({
+            alRunnerPath: "unused",
+            instrumentedDir: "unused",
+            testDir: "unused",
+            selectorObjectId: 1,
+          }),
+        runSession: async () => QUARANTINED_FAKE_REPORT,
+      });
+      expect(result).toBe(QUARANTINED_FAKE_REPORT);
+    } finally {
+      ResultsStore.prototype.close = originalClose;
+    }
+    // Asserted via the teardown spy's actual arguments — not inferred from the resolved report —
+    // since the whole point is that a `store.close()` failure must not make `quarantined` look
+    // `false` to `envSession.teardown` (which would delete the environment the quarantine exists
+    // to preserve).
+    expect(teardownCalls).toEqual([{ keepEnv: false, quarantined: true }]);
+  });
+
+  it("wave 2: a normal report survives a backend.close() failure", async () => {
+    const configPath = await writeTempConfig();
+    const parsed: RunCliConfig = {
+      ...RUN_CONFIG_BCDEV,
+      backendKind: "al-runner",
+      configPath,
+      dbPath: ":memory:",
+    };
+    const originalClose = AlRunnerBackend.prototype.close;
+    AlRunnerBackend.prototype.close = async () => {
+      throw new Error("backend.close boom");
+    };
+    try {
+      const result = await runFromCli(parsed, {
+        buildBackend: async () =>
+          new AlRunnerBackend({
+            alRunnerPath: "unused",
+            instrumentedDir: "unused",
+            testDir: "unused",
+            selectorObjectId: 1,
+          }),
+        runSession: async () => FAKE_REPORT,
+      });
+      expect(result).toBe(FAKE_REPORT);
+    } finally {
+      AlRunnerBackend.prototype.close = originalClose;
+    }
   });
 });
 

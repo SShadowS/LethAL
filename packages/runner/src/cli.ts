@@ -849,6 +849,11 @@ export async function runFromCli(
   deps: {
     resolveEnvToolSession?: typeof resolveEnvToolSession;
     buildBackend?: typeof buildBackend;
+    // Task 7 review, wave 2: injectable so a test can drive `runFromCli`'s own cleanup/return-value
+    // wiring (a quarantined report surviving a `store.close()` failure; a report surviving a
+    // `backend.close()` failure) with a canned `SessionReport`, without needing a real backend/AL
+    // project to produce one for real.
+    runSession?: typeof runSession;
   } = {},
 ): Promise<SessionReport> {
   const configFile = await loadLethalConfigFile(parsed.configPath);
@@ -881,6 +886,7 @@ export async function runFromCli(
   }
 
   const build = deps.buildBackend ?? buildBackend;
+  const runTheSession = deps.runSession ?? runSession;
 
   // Important 1 (Task 7 review): the try/finally that owns teardown (`withEnvTeardown`) now wraps
   // `buildBackend`, the worker-backend loop, and `new ResultsStore(...)` too — not just
@@ -889,6 +895,17 @@ export async function runFromCli(
   return await withEnvTeardown(envSession, parsed.keepEnv, async () => {
     let backend: ExecutionBackend | undefined;
     let store: ResultsStore | undefined;
+    // Task 7 review, wave 2 (Important — the restructure itself introduced this): `report` MUST be
+    // captured in a local BEFORE the `finally` runs, and returned AFTER it — never
+    // `return await runSession(...)` directly inside the `try`. Per JS `try/finally` semantics, a
+    // throw from `finally` silently DISCARDS the `try`'s pending return value and replaces it with
+    // the `finally`'s own error; a `store.close()`/`backend.close()` failure would then look
+    // identical to `runSession` itself throwing — `withEnvTeardown`'s `report` would stay
+    // `undefined`, `quarantined` would evaluate `false` even for an actually-quarantined report,
+    // and `envSession.teardown` would take the DELETE branch on the environment the quarantine
+    // exists to preserve for investigation. `main()` would also exit 1 instead of the quarantine
+    // code 3, and the report would never be printed/written.
+    let report: SessionReport | undefined;
     try {
       backend = await build(parsed, effectiveConfig, scratchRoot, deploy);
       // `SessionConfig.backendFactory` is synchronous (`runSession` calls it
@@ -916,7 +933,7 @@ export async function runFromCli(
         }
       }
       store = new ResultsStore(parsed.dbPath);
-      return await runSession({
+      report = await runTheSession({
         backend,
         store,
         projectDir: parsed.projectDir,
@@ -943,15 +960,46 @@ export async function runFromCli(
           : {}),
       });
     } finally {
-      store?.close();
+      // Best-effort cleanup — mirrors orchestrator.ts's own posture (~line 2056: "deliberately
+      // swallow errors here... a failure here must not mask/replace whatever real error is already
+      // propagating"). Each close is independently guarded so one failing never skips the others,
+      // and none of them can replace `report` (captured above) or a real error already unwinding
+      // through this `finally`.
+      if (store !== undefined) {
+        try {
+          store.close();
+        } catch (err) {
+          console.warn(
+            `[lethal] store.close() failed during cleanup (best-effort; the session's report/exit code is unaffected): ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
       // Release whatever the backend is holding open: the spawned bc-dev MCP
       // child, or (server mode) the one warm al-runner process. The
       // `process.exit(0)` below would paper over a leak here, but only for this
       // entry point — anything else embedding the backend would hang or leak a
       // process instead.
-      if (backend instanceof BcDevMcpBackend) await backend.close();
-      if (backend instanceof AlRunnerBackend) await backend.close();
+      if (backend instanceof BcDevMcpBackend || backend instanceof AlRunnerBackend) {
+        try {
+          await backend.close();
+        } catch (err) {
+          console.warn(
+            `[lethal] backend.close() failed during cleanup (best-effort; the session's report/exit code is unaffected): ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
     }
+    // Reached only when the `try` above completed WITHOUT throwing, so `runSession` resolved and
+    // `report` is set — a throw from `runSession` (or from `build`/`ResultsStore`) propagates
+    // through this `finally` and out of this function instead of falling through to here. Guarded
+    // explicitly (never a `!` assertion — biome forbids them) rather than trusted, matching this
+    // project's "fail loudly on a caller-contract violation" rule.
+    if (report === undefined) {
+      throw new Error(
+        "runFromCli: the try block completed without throwing but produced no report — this is a bug in runFromCli, not a session failure",
+      );
+    }
+    return report;
   });
 }
 
