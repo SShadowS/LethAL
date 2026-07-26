@@ -1360,6 +1360,28 @@ describe("coverageMode", () => {
     const backend = new BcDevMcpBackend({ ...baseConfig(), coverageMode: "none" });
     await expect(backend.status()).rejects.toThrow(/harnessVerifier/);
   });
+
+  // Ledger item m10 (final review): `harnessVerifier.verify()` itself throwing (a real HarnessInfo
+  // failure — network error, HTTP 404, malformed response) must map to `{ok: false}` like every
+  // other status() failure mode, never rethrow — the orchestrator's readiness gate expects a
+  // BackendStatus, not an exception, from status().
+  test('status() in "none" mode maps a harnessVerifier.verify() failure to {ok:false}, never a throw', async () => {
+    const harnessVerifier = {
+      verify: async () => {
+        throw new Error("HarnessInfo failed: HTTP 404");
+      },
+    };
+    const backend = new BcDevMcpBackend(
+      { ...baseConfig(), coverageMode: "none" },
+      () => {
+        throw new Error("bc-dev-mcp must not be contacted in coverage:none mode");
+      },
+      { ...deploymentStub(), harnessVerifier } as never,
+    );
+    const status = await backend.status();
+    expect(status.ok).toBe(false);
+    expect(status.details).toContain("HarnessInfo failed");
+  });
 });
 
 // A path-routed HTTPS portal (Continia) has no listener at bc-dev-mcp's OnPrem fallback port

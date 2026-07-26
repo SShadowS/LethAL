@@ -106,11 +106,121 @@ function blocksOf(
   return out;
 }
 
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+function describeShape(v: unknown): string {
+  if (Array.isArray(v)) return "an array";
+  if (v === null) return "null";
+  return typeof v;
+}
+
+/** `envTool.<path>` must be an array of strings — `command` and `publishApps`. */
+function requireStringArray(v: unknown, path: string): void {
+  if (!Array.isArray(v) || v.some((x) => typeof x !== "string")) {
+    throw new EnvToolError(`envTool.${path} must be an array of strings (got ${describeShape(v)})`);
+  }
+}
+
+/** `envTool.<path>` must be a plain object whose every value is a string — `vars`, `env`, and a
+ * block's `reads`. */
+function requireStringRecord(v: unknown, path: string): void {
+  if (!isPlainObject(v)) {
+    throw new EnvToolError(`envTool.${path} must be an object (got ${describeShape(v)})`);
+  }
+  for (const [key, val] of Object.entries(v)) {
+    if (typeof val !== "string") {
+      throw new EnvToolError(`envTool.${path}.${key} must be a string (got ${describeShape(val)})`);
+    }
+  }
+}
+
+/** Shape of one `EnvToolBlock`-like value at `path`: an object carrying a `command` array of
+ * strings, and — if present — a `reads` map of strings. */
+function validateBlockShape(v: unknown, path: string): void {
+  if (!isPlainObject(v)) {
+    throw new EnvToolError(`envTool.${path} must be an object (got ${describeShape(v)})`);
+  }
+  requireStringArray(v.command, `${path}.command`);
+  if (v.reads !== undefined) requireStringRecord(v.reads, `${path}.reads`);
+}
+
+const BLOCK_FIELDS = [
+  "createEnv",
+  "startEnv",
+  "readyWhen",
+  "downloadSymbols",
+  "publish",
+  "deleteEnv",
+] as const;
+
+/**
+ * A shape pass over the RAW, untrusted config text — run BEFORE `substituteSection` (which
+ * assumes every field already has its declared type) and before any later semantic check. This
+ * module's own header claims every "your config is wrong" error is unit-testable and fires
+ * BEFORE any process is spawned; without this pass that claim was false for five common typos —
+ * each previously either crashed with a raw, unattributed `TypeError` deep inside
+ * `substituteSection`/`renderCommand` (a missing/mistyped `command`, a `resolve` given as an
+ * object instead of an array, a non-string `vars` value) or didn't throw here AT ALL — a
+ * non-string `reads` value is never touched by substitution (only `command`/`vars`/`env` are), so
+ * it silently reached `EnvToolClient.run`'s `readPath` at actual spawn time instead.
+ */
+function validateRawShape(raw: Partial<EnvToolConfigSection>): void {
+  for (const name of BLOCK_FIELDS) {
+    const v = raw[name];
+    if (v !== undefined) validateBlockShape(v, name);
+  }
+  // `readyWhen.equals` isn't part of the generic block shape (only `createEnv`/`startEnv`/etc.
+  // have it) — checked separately, and only for its TYPE; whether it's present at all is still
+  // `validateEnvToolConfig`'s later "envTool.readyWhen.equals is required" check, not this one.
+  if (raw.readyWhen !== undefined) {
+    // `raw` is untrusted JSON cast to `Partial<EnvToolConfigSection>` — its declared type says
+    // `equals: string`, but the whole point of this pass is to check what's ACTUALLY there at
+    // runtime, which may not match. `as unknown as` first: `EnvToolReadyBlock` has no index
+    // signature, so a direct cast to `Record<string, unknown>` doesn't overlap enough for TS.
+    const equals = (raw.readyWhen as unknown as Record<string, unknown>).equals;
+    if (equals !== undefined && typeof equals !== "string") {
+      throw new EnvToolError(
+        `envTool.readyWhen.equals must be a string (got ${describeShape(equals)})`,
+      );
+    }
+  }
+  if (raw.resolve !== undefined) {
+    if (!Array.isArray(raw.resolve)) {
+      throw new EnvToolError(
+        `envTool.resolve must be an array (got ${describeShape(raw.resolve)})`,
+      );
+    }
+    raw.resolve.forEach((b, i) => validateBlockShape(b, `resolve[${i}]`));
+  }
+  if (raw.vars !== undefined) requireStringRecord(raw.vars, "vars");
+  if (raw.env !== undefined) requireStringRecord(raw.env, "env");
+  if (raw.publishApps !== undefined) requireStringArray(raw.publishApps, "publishApps");
+}
+
 export function validateEnvToolConfig(
   raw: Partial<EnvToolConfigSection> | undefined,
-  opts: { env: Readonly<Record<string, string | undefined>>; hasPackageCachePath: boolean },
+  opts: {
+    env: Readonly<Record<string, string | undefined>>;
+    hasPackageCachePath: boolean;
+    /**
+     * Keys the raw `bcdev` config section actually declares (non-empty) that overlap
+     * `READS_KEYS` (e.g. `server`, `serverInstance`, `username`, `password`, `baseUrl`) — see the
+     * "two sources, one value" check below (fixtures/README.md's worked example names this by
+     * name). This module has no `BcDevConfigSection` type of its own to inspect directly (that
+     * type lives in cli.ts, which imports FROM here); the caller derives this list and passes it
+     * in. Optional and defaults to none, so a caller that doesn't have a bcdev section at hand
+     * (or a test that isn't exercising this check) is unaffected.
+     */
+    bcdevDeclaredKeys?: readonly string[];
+  },
 ): EnvToolConfigSection {
   if (!raw) throw new EnvToolError('config file is missing the "envTool" section');
+
+  // 0. A shape pass over the RAW, untrusted config text — see `validateRawShape`'s doc comment
+  // for why this must run before anything below, including substitution.
+  validateRawShape(raw);
 
   // 1. ${VAR} substitution first — later checks read substituted values.
   const cfg = substituteSection(raw, opts.env);
@@ -197,6 +307,18 @@ export function validateEnvToolConfig(
   }
   if (createMode && !produced.has("envId")) {
     throw new EnvToolError("envTool.createEnv.reads must produce envId in create-mode");
+  }
+  // A field env-tool resolves via some block's `reads` must not ALSO be hand-written in the
+  // bcdev config section — two sources for one value is how two clients end up pointed at
+  // different endpoints (fixtures/README.md's worked example calls this out by name). This is
+  // deliberately NOT a precedence rule: it is a validation error, not "resolved wins".
+  for (const key of opts.bcdevDeclaredKeys ?? []) {
+    const producer = produced.get(key);
+    if (producer !== undefined) {
+      throw new EnvToolError(
+        `envTool: "${key}" is produced by ${producer}'s reads AND hand-written in the bcdev config section — two sources for one value is how two clients end up pointed at different endpoints. Remove it from one.`,
+      );
+    }
   }
 
   // 4. Placeholders: known, and every declared var referenced by something.
@@ -385,6 +507,10 @@ export class EnvToolClient {
   constructor(
     private readonly cfg: EnvToolConfigSection,
     private readonly io: { spawn: SpawnFn } = { spawn: defaultSpawn },
+    // Fixtures/README.md documents `envTool.cwd`'s default as "the project dir" — this is that
+    // default, supplied by the caller that actually knows the project dir (cli.ts), never guessed
+    // here. `cfg.cwd` always wins when the config sets one explicitly.
+    private readonly defaultCwd?: string,
   ) {
     for (const v of Object.values(cfg.env ?? {})) this.secrets.push(v);
   }
@@ -420,9 +546,11 @@ export class EnvToolClient {
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     let res: { exitCode: number; stdout: string; stderr: string };
     try {
+      const cwd = this.cfg.cwd ?? this.defaultCwd;
       res = await this.io.spawn(argv, {
         signal: controller.signal,
         ...(this.cfg.env !== undefined ? { env: { ...this.cfg.env } } : {}),
+        ...(cwd !== undefined ? { cwd } : {}),
       });
     } catch (err) {
       throw new EnvToolError(

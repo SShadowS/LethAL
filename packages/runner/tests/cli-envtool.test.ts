@@ -217,13 +217,17 @@ describe("resolveEnvToolSession", () => {
       bcdev: BCDEV_RAW,
       envTool: resolveModeCfg("env-4711"),
     };
-    const fakeSession: EnvToolSession = { bcdev: RESOLVED_BCDEV, async teardown() {} };
+    const fakeSession: EnvToolSession = {
+      bcdev: RESOLVED_BCDEV,
+      envId: RESOLVED_BCDEV.serverInstance,
+      async teardown() {},
+    };
     const result = await resolveEnvToolSession(RUN_CONFIG_BCDEV, configFile, "run-1", {
       startSession: async (args) => {
         startCalls++;
         // The client/publisher wiring passed to `startEnvToolSession` must be usable — exercise
         // `makePublisher` the same way the real session does, proving it doesn't throw.
-        args.makePublisher(RESOLVED_BCDEV);
+        args.makePublisher(RESOLVED_BCDEV, RESOLVED_BCDEV.serverInstance);
         return fakeSession;
       },
     });
@@ -272,7 +276,11 @@ describe("resolveEnvToolSession", () => {
     expect(() => validateBcDevConfig(BCDEV_RAW)).toThrow(/missing required field/);
 
     const configFile: LethalConfigFile = { bcdev: BCDEV_RAW, envTool: resolveModeCfg("env-4711") };
-    const fakeSession: EnvToolSession = { bcdev: RESOLVED_BCDEV, async teardown() {} };
+    const fakeSession: EnvToolSession = {
+      bcdev: RESOLVED_BCDEV,
+      envId: RESOLVED_BCDEV.serverInstance,
+      async teardown() {},
+    };
     const { effectiveConfig } = await resolveEnvToolSession(RUN_CONFIG_BCDEV, configFile, "run-1", {
       startSession: async () => fakeSession,
     });
@@ -355,13 +363,66 @@ describe("resolveEnvToolSession", () => {
     // Publisher B: exactly what `startEnvToolSession`'s own `makePublisher` callback builds (same
     // recipe — reconstructed here since the session's internal instance was already used and
     // never returned).
-    const publisherB = makeEnvToolPublisher(deploy.client, deploy.publishBlock, envSession.bcdev);
+    const publisherB = makeEnvToolPublisher(
+      deploy.client,
+      deploy.publishBlock,
+      deploy.envId,
+      envSession.bcdev,
+    );
 
     // `publishFile` reads real bytes off disk (to hash and log) — point both calls at this test
     // file itself, which always exists, rather than a fictitious path.
     const realFile = import.meta.path;
     await Promise.all([publisherA.publishFile(realFile), publisherB.publishFile(realFile)]);
     expect(counter.max).toBe(1);
+  });
+
+  // Final review item 2: `makeEnvToolPublisher` used to derive `envId` from `bcdev.serverInstance`,
+  // which only coincidentally equals the real envId when `serverInstance` is itself derived from
+  // `baseUrl`'s first path segment AND that segment happens to be the envId. Neither holds for a
+  // portal whose URL is `https://host/tenants/{envId}` — fixtures/README.md's own worked example
+  // of the failure mode — where `serverInstance` derives to `"tenants"`. The publish command must
+  // still target the real, resolved envId.
+  it("threads the actual resolved envId to the publish command, not bcdev.serverInstance derived from an unrelated URL segment", async () => {
+    const envId = "env-4711";
+    const calls: string[][] = [];
+    const configFile: LethalConfigFile = { bcdev: BCDEV_RAW, envTool: resolveModeCfg(envId) };
+    const result = await resolveEnvToolSession(RUN_CONFIG_BCDEV, configFile, "run-1", {
+      makeClient: (cfg) =>
+        new EnvToolClient(cfg, {
+          spawn: async (argv) => {
+            calls.push([...argv]);
+            const line = argv.join(" ");
+            if (line.includes("env get")) {
+              // First path segment is "tenants", not the envId — exactly the case
+              // fixtures/README.md calls out by name.
+              return { exitCode: 0, stdout: `{"url":"https://host/tenants/${envId}"}`, stderr: "" };
+            }
+            return fakeSpawn(envId)(argv);
+          },
+        }),
+      verifyHarness: async () => {},
+    });
+    const { envSession, deploy } = result;
+    if (envSession === undefined || deploy === undefined) {
+      throw new Error("expected a resolved env-tool session");
+    }
+    expect(envSession.bcdev.serverInstance).toBe("tenants");
+    expect(envSession.envId).toBe(envId);
+    expect(deploy.envId).toBe(envId);
+
+    const publisher = makeEnvToolPublisher(
+      deploy.client,
+      deploy.publishBlock,
+      deploy.envId,
+      envSession.bcdev,
+    );
+    calls.length = 0; // isolate the argv this publish call itself produces
+    await publisher.publishFile(import.meta.path);
+    const publishCall = calls.find((c) => c.includes("publish"));
+    expect(publishCall).toBeDefined();
+    expect(publishCall).toContain(envId);
+    expect(publishCall).not.toContain("tenants");
   });
 });
 
@@ -404,6 +465,7 @@ describe("withEnvTeardown", () => {
     const teardownCalls: Array<{ keepEnv: boolean; quarantined: boolean }> = [];
     const envSession: EnvToolSession = {
       bcdev: RESOLVED_BCDEV,
+      envId: RESOLVED_BCDEV.serverInstance,
       createdEnvId: "env-created",
       async teardown(opts) {
         teardownCalls.push(opts);
@@ -432,6 +494,7 @@ describe("withEnvTeardown", () => {
     try {
       const envSession: EnvToolSession = {
         bcdev: RESOLVED_BCDEV,
+        envId: RESOLVED_BCDEV.serverInstance,
         createdEnvId: "env-created",
         async teardown() {
           // Mirrors env-tool-session.ts's own failure mode: `deleteEnv` names `{appFile}`, which
@@ -452,6 +515,7 @@ describe("withEnvTeardown", () => {
   it("Important 2: a rejecting teardown does not replace the body's own thrown error", async () => {
     const envSession: EnvToolSession = {
       bcdev: RESOLVED_BCDEV,
+      envId: RESOLVED_BCDEV.serverInstance,
       createdEnvId: "env-created",
       async teardown() {
         throw new Error("deleteEnv boom");
@@ -479,6 +543,7 @@ describe("runFromCli (Task 7 review wiring)", () => {
     const teardownCalls: Array<{ keepEnv: boolean; quarantined: boolean }> = [];
     const fakeSession: EnvToolSession = {
       bcdev: RESOLVED_BCDEV,
+      envId: RESOLVED_BCDEV.serverInstance,
       createdEnvId: "env-created",
       async teardown(opts) {
         teardownCalls.push(opts);
@@ -506,6 +571,7 @@ describe("runFromCli (Task 7 review wiring)", () => {
     const configPath = await writeTempConfig();
     const fakeSession: EnvToolSession = {
       bcdev: RESOLVED_BCDEV,
+      envId: RESOLVED_BCDEV.serverInstance,
       createdEnvId: "env-created",
       async teardown() {
         throw new EnvToolError("envTool: no value available for placeholder {appFile}");
@@ -567,6 +633,7 @@ describe("runFromCli (Task 7 review wiring)", () => {
     const teardownCalls: Array<{ keepEnv: boolean; quarantined: boolean }> = [];
     const fakeSession: EnvToolSession = {
       bcdev: RESOLVED_BCDEV,
+      envId: RESOLVED_BCDEV.serverInstance,
       createdEnvId: "env-created",
       async teardown(opts) {
         teardownCalls.push(opts);

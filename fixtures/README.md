@@ -434,9 +434,12 @@ From the design spec, unchanged (this is the actual shape `validateEnvToolConfig
 ```
 
 ```sh
-# .env — gitignored, next to the project. Bun loads .env into process.env automatically
-# (packages/runner/src/cli.ts passes process.env straight into validateEnvToolConfig — there is no
-# separate loader to write or maintain). A real environment variable always wins over a .env entry.
+# .env — gitignored. Bun loads .env from the PROCESS CWD ONLY, never from a subdirectory — there
+# is no separate loader to write or maintain (packages/runner/src/cli.ts passes process.env
+# straight into validateEnvToolConfig). `bun run itest:envtool` and a plain `lethal run` both
+# invoke `bun` from the REPO ROOT, so this file belongs at the repo root, not "next to the
+# project" — a .env dropped into fixtures/sandbox-app or any other project dir is silently never
+# read. A real environment variable always wins over a .env entry.
 CONTINIA_API_TOKEN=…
 CONTINIA_ENV_ID=env-4711        # omit to make every run create and delete its own env
 ```

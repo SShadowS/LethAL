@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { validateEnvToolConfig } from "../src/env-tool";
-import type { EnvToolConfigSection, EnvToolReadyBlock } from "../src/env-tool";
+import type { EnvToolBlock, EnvToolConfigSection, EnvToolReadyBlock } from "../src/env-tool";
 
 const ENV = { CONTINIA_ENV_ID: "env-4711", TOKEN: "s3cret" };
 
@@ -162,6 +162,120 @@ describe("validateEnvToolConfig", () => {
 
   it("allows a block with no reads at all", () => {
     const cfg = base({ deleteEnv: { command: ["env", "delete", "{envId}"] } });
+    expect(() => validateEnvToolConfig(cfg, opts)).not.toThrow();
+  });
+
+  it("substitutes ${VAR} inside readyWhen.equals", () => {
+    // Item 7: zero prior coverage that ${VAR} substitution reaches `equals` specifically — every
+    // other readyWhen test uses a literal.
+    const cfg = withoutEnvId(
+      base({
+        createEnv: { command: ["env", "create", "--json"], reads: { envId: "id" } },
+        deleteEnv: { command: ["env", "delete", "{envId}"] },
+        startEnv: { command: ["env", "start", "{envId}"] },
+        readyWhen: {
+          command: ["env", "get", "{envId}", "--json"],
+          reads: { status: "status" },
+          equals: "${READY_STATUS}",
+        },
+        publishApps: ["tests.app"],
+      }),
+    );
+    const out = validateEnvToolConfig(cfg, {
+      env: { ...ENV, READY_STATUS: "Running" },
+      hasPackageCachePath: true,
+    });
+    expect(out.readyWhen?.equals).toBe("Running");
+  });
+});
+
+// ————————————————————————————————————————————————————————————————————————
+// Item 4 (final review): a shape pass over the RAW config text, before substitution. Measured
+// against the real function: each of these previously either crashed with a raw, unattributed
+// `TypeError` deep inside `substituteSection`/`renderCommand`, or (the `reads` row) didn't throw
+// at validation time AT ALL — it silently reached `EnvToolClient.run`'s `readPath` at spawn time.
+// ————————————————————————————————————————————————————————————————————————
+describe("validateEnvToolConfig — shape pass (item 4)", () => {
+  it("names the field when a block is missing its command array", () => {
+    const cfg = base({ publish: {} as unknown as EnvToolBlock });
+    expect(() => validateEnvToolConfig(cfg, opts)).toThrow(
+      /envTool\.publish\.command must be an array of strings/,
+    );
+  });
+
+  it("names the field when a block's command is a string instead of an array", () => {
+    const cfg = base({
+      publish: { command: "publish {appFile}" } as unknown as EnvToolBlock,
+    });
+    expect(() => validateEnvToolConfig(cfg, opts)).toThrow(
+      /envTool\.publish\.command must be an array of strings/,
+    );
+  });
+
+  it("names the field when resolve is an object instead of an array", () => {
+    const cfg = base({
+      resolve: { command: ["env", "get"] } as unknown as readonly EnvToolBlock[],
+    });
+    expect(() => validateEnvToolConfig(cfg, opts)).toThrow(/envTool\.resolve must be an array/);
+  });
+
+  it("names the field when a vars value is not a string", () => {
+    const cfg = base({ vars: { n: 5 } as unknown as Record<string, string> });
+    expect(() => validateEnvToolConfig(cfg, opts)).toThrow(/envTool\.vars\.n must be a string/);
+  });
+
+  it("names the field when a reads value is not a string (previously did not throw at all)", () => {
+    const cfg = base({
+      resolve: [
+        {
+          command: ["env", "get", "{envId}", "--json"],
+          reads: { baseUrl: "url", serverInstance: 123 } as unknown as Record<string, string>,
+        },
+        {
+          command: ["env", "users", "{envId}", "--json"],
+          reads: { username: "0.username", password: "0.password" },
+        },
+      ],
+    });
+    expect(() => validateEnvToolConfig(cfg, opts)).toThrow(
+      /envTool\.resolve\[0\]\.reads\.serverInstance must be a string/,
+    );
+  });
+});
+
+// ————————————————————————————————————————————————————————————————————————
+// Item 6 (final review): a field env-tool resolves via some block's `reads` must not ALSO be
+// hand-written in the bcdev config section — fixtures/README.md's worked example calls this "two
+// sources, one value". This is deliberately a validation error, not a precedence rule.
+// ————————————————————————————————————————————————————————————————————————
+describe("validateEnvToolConfig — bcdev/reads collision (item 6)", () => {
+  it("rejects a reads key that is ALSO hand-written in the bcdev section", () => {
+    const cfg = base({
+      resolve: [
+        {
+          command: ["env", "get", "{envId}", "--json"],
+          reads: { baseUrl: "url", server: "server" },
+        },
+        {
+          command: ["env", "users", "{envId}", "--json"],
+          reads: { username: "0.username", password: "0.password" },
+        },
+      ],
+    });
+    expect(() => validateEnvToolConfig(cfg, { ...opts, bcdevDeclaredKeys: ["server"] })).toThrow(
+      /"server".*bcdev config section/,
+    );
+  });
+
+  it("does not throw when nothing in bcdevDeclaredKeys collides with a produced reads key", () => {
+    const cfg = base();
+    expect(() =>
+      validateEnvToolConfig(cfg, { ...opts, bcdevDeclaredKeys: ["company", "tenant"] }),
+    ).not.toThrow();
+  });
+
+  it("does not throw when bcdevDeclaredKeys is omitted (opt-in check, no false positives for callers that don't pass it)", () => {
+    const cfg = base();
     expect(() => validateEnvToolConfig(cfg, opts)).not.toThrow();
   });
 });

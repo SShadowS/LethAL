@@ -11,7 +11,7 @@ import type { ExecutionBackend } from "./backend";
 import { BcDevMcpBackend } from "./bcdev-backend";
 import type { BcDevConfig } from "./bcdev-backend";
 import { DeploymentVerifier } from "./deployment-verifier";
-import { EnvToolClient, EnvToolError, validateEnvToolConfig } from "./env-tool";
+import { EnvToolClient, EnvToolError, READS_KEYS, validateEnvToolConfig } from "./env-tool";
 import type { EnvToolBlock, EnvToolConfigSection } from "./env-tool";
 import { EnvToolPublisher } from "./env-tool-publisher";
 import { startEnvToolSession } from "./env-tool-session";
@@ -482,16 +482,24 @@ function warnAlRunnerNotAuthoritative(): void {
  * that actually resolved username/password (via `EnvToolClient.run`'s `reads` handling) has them
  * in its `secrets` list, so a second, freshly-constructed client used for the batch-artifact
  * publisher would fail to redact them from a publish failure's error text.
+ *
+ * `envId` is taken as an explicit parameter — NEVER derived from `bcdev.serverInstance` here.
+ * That only happens to hold when `serverInstance` was itself derived from `baseUrl`'s first path
+ * segment AND that segment happens to equal the envId (`splitBaseUrl`, env-tool-session.ts); it
+ * does not hold for an explicit `reads: { serverInstance: ... }` override, or a portal whose URL
+ * is `https://host/tenants/env-4711` (`serverInstance === "tenants"`, not the envId at all). The
+ * real, resolved envId lives on `EnvToolSession.envId` — callers thread it through from there.
  */
 export function makeEnvToolPublisher(
   client: EnvToolClient,
   publishBlock: EnvToolBlock,
+  envId: string,
   bcdev: BcDevConfigSection,
 ): EnvToolPublisher {
   return new EnvToolPublisher(
     client,
     publishBlock,
-    { envId: bcdev.serverInstance, serializerKey: canonicalContainerKey(bcdev) },
+    { envId, serializerKey: canonicalContainerKey(bcdev) },
     { readArtifact: async (p) => new Uint8Array(await readFile(p)) },
   );
 }
@@ -509,10 +517,14 @@ export function makeEnvToolPublisher(
 export function deployerFor(
   c: BcDevConfigSection,
   altoolPath: string,
-  envToolDeploy?: { readonly client: EnvToolClient; readonly publishBlock: EnvToolBlock },
+  envToolDeploy?: {
+    readonly client: EnvToolClient;
+    readonly publishBlock: EnvToolBlock;
+    readonly envId: string;
+  },
 ): AppPublisher {
   return envToolDeploy !== undefined
-    ? makeEnvToolPublisher(envToolDeploy.client, envToolDeploy.publishBlock, c)
+    ? makeEnvToolPublisher(envToolDeploy.client, envToolDeploy.publishBlock, envToolDeploy.envId, c)
     : new ContainerDeployer(
         {
           altoolPath,
@@ -584,16 +596,33 @@ export async function resolveEnvToolSession(
 ): Promise<{
   readonly effectiveConfig: LethalConfigFile;
   readonly envSession?: EnvToolSession;
-  readonly deploy?: { readonly client: EnvToolClient; readonly publishBlock: EnvToolBlock };
+  readonly deploy?: {
+    readonly client: EnvToolClient;
+    readonly publishBlock: EnvToolBlock;
+    readonly envId: string;
+  };
 }> {
   if (parsed.backendKind !== "bcdev" || configFile.envTool === undefined) {
     return { effectiveConfig: configFile };
   }
+  // Item 6 (final review): a field env-tool resolves via some block's `reads` must not ALSO be
+  // hand-written in the `bcdev` section — fixtures/README.md's worked example calls this "two
+  // sources, one value". `validateEnvToolConfig` (env-tool.ts) has no `BcDevConfigSection` type of
+  // its own to check that against, so the overlap is computed here, from the SAME raw bcdev
+  // section `startEnvToolSession` below reads, and handed in as plain key names.
+  const bcdevRaw = configFile.bcdev ?? {};
+  const bcdevDeclaredKeys = (READS_KEYS as readonly string[]).filter((key) => {
+    const v = (bcdevRaw as Record<string, unknown>)[key];
+    return typeof v === "string" && v !== "";
+  });
   const envCfg = validateEnvToolConfig(configFile.envTool, {
     env: process.env,
     hasPackageCachePath: Boolean(configFile.bcdev?.packageCachePath),
+    bcdevDeclaredKeys,
   });
-  const makeClient = deps.makeClient ?? ((cfg: EnvToolConfigSection) => new EnvToolClient(cfg));
+  const makeClient =
+    deps.makeClient ??
+    ((cfg: EnvToolConfigSection) => new EnvToolClient(cfg, undefined, parsed.projectDir));
   const client = makeClient(envCfg);
   const publishBlock = envCfg.publish;
   // Unreachable once `validateEnvToolConfig` has succeeded (it requires `publish` itself) — this
@@ -607,19 +636,21 @@ export async function resolveEnvToolSession(
     });
   const envSession = await start({
     cfg: envCfg,
-    bcdevRaw: configFile.bcdev ?? {},
+    bcdevRaw,
     projectDir: parsed.projectDir,
     testDir: parsed.testDir,
     runId,
     client,
-    makePublisher: (bcdev) => makeEnvToolPublisher(client, publishBlock, bcdev),
+    // Item 2 (final review): thread the ACTUAL resolved envId through — never `bcdev.serverInstance`
+    // (see `makeEnvToolPublisher`'s doc comment for why that only sometimes coincides with it).
+    makePublisher: (bcdev, envId) => makeEnvToolPublisher(client, publishBlock, envId, bcdev),
     verifyHarness,
     allowExpiring: parsed.allowExpiringEnv,
   });
   return {
     effectiveConfig: { ...configFile, bcdev: envSession.bcdev },
     envSession,
-    deploy: { client, publishBlock },
+    deploy: { client, publishBlock, envId: envSession.envId },
   };
 }
 
@@ -627,7 +658,11 @@ export async function buildBackend(
   parsed: RunCliConfig,
   configFile: LethalConfigFile,
   scratchDir: string,
-  envToolDeploy?: { readonly client: EnvToolClient; readonly publishBlock: EnvToolBlock },
+  envToolDeploy?: {
+    readonly client: EnvToolClient;
+    readonly publishBlock: EnvToolBlock;
+    readonly envId: string;
+  },
 ): Promise<ExecutionBackend> {
   if (parsed.backendKind === "al-runner") {
     const c = validateAlRunnerConfig(configFile.alRunner);

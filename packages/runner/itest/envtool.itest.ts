@@ -86,7 +86,11 @@
  * ```
  *
  * ```sh
- * # .env next to fixtures/sandbox-app — gitignored, loaded automatically by Bun
+ * # .env — gitignored, at the REPO ROOT (not next to fixtures/sandbox-app). Bun loads .env from
+ * # the process cwd only, never from a subdirectory, and `bun run itest:envtool` (root
+ * # package.json) always runs with cwd = repo root — a .env placed next to the project is
+ * # silently never read, and this gate then dies in validateEnvToolConfig with "environment
+ * # variable ${CONTINIA_API_TOKEN} is not set".
  * CONTINIA_API_TOKEN=…
  * CONTINIA_ENV_ID=0494e53d-c76e-4a05-96f5-593d49830a64
  * ```

@@ -130,6 +130,25 @@ describe("startEnvToolSession", () => {
     expect(session.bcdev.username).toBe("admin");
     expect(session.bcdev.company).toBe("CRONUS");
     expect(session.createdEnvId).toBeUndefined();
+    expect(session.envId).toBe("env-4711");
+  });
+
+  // Final review item 2: `session.envId` is the real, resolved envId a publish call must target —
+  // it must never be conflated with `bcdev.serverInstance`, which only coincidentally matches it
+  // when `serverInstance` is itself derived from `baseUrl`'s first path segment AND that segment
+  // happens to be the envId. A portal whose URL is `https://host/tenants/{envId}`
+  // (fixtures/README.md's own worked example) derives `serverInstance` to `"tenants"` instead.
+  it("resolves envId independently of a serverInstance derived from an unrelated URL path segment", async () => {
+    const { session } = await start(
+      {},
+      {},
+      {
+        ...resolveOut(),
+        "env get": '{"url":"https://host/tenants/env-4711","expiresUtc":"2099-01-01T00:00:00Z"}',
+      },
+    );
+    expect(session.bcdev.serverInstance).toBe("tenants");
+    expect(session.envId).toBe("env-4711");
   });
 
   it("derives port 443 from an https baseUrl carrying no port of its own", async () => {
@@ -184,6 +203,7 @@ describe("startEnvToolSession", () => {
     const stateDir = await mkdtemp(join(tmpdir(), "lethal-envstate-"));
     const { session } = await start({ stateDir }, { envId: undefined });
     expect(session.createdEnvId).toBe("env-new");
+    expect(session.envId).toBe("env-new");
     const files = await readdir(stateDir);
     expect(files).toHaveLength(1);
     const rec = JSON.parse(await readFile(join(stateDir, files[0] ?? ""), "utf8")) as {
@@ -312,6 +332,96 @@ describe("startEnvToolSession", () => {
         stateDir: await mkdtemp(join(tmpdir(), "lethal-envstate-")),
       }),
     ).rejects.toThrow(/did not reach status "Running"/);
+  });
+
+  // Final review item 1: a provisioned environment used to leak whenever ANYTHING after
+  // `createEnv` succeeded threw — a `readyWhen` timeout, a symbols failure, a `publishApps` typo,
+  // a control-app publish rejection — because the object carrying `teardown` was only constructed
+  // at the very end, so a throw anywhere in between escaped with no teardown ever attempted. A
+  // `downloadSymbols` failure is the most likely first-run failure mode (a wrong/expired token, a
+  // typo'd command) and exercises exactly that window.
+  it("a downloadSymbols failure in create-mode attempts the delete and still propagates the original error (item 1)", async () => {
+    const h = harness({ envId: undefined });
+    const cfg = {
+      ...h.cfg,
+      downloadSymbols: { command: ["deps", "download", "{envId}", "{projectDir}"] },
+    };
+    const deleteCalls: string[][] = [];
+    const failing = new EnvToolClient(cfg, {
+      spawn: async (argv) => {
+        const line = argv.join(" ");
+        if (argv.includes("delete")) {
+          deleteCalls.push([...argv]);
+          return { exitCode: 0, stdout: "", stderr: "" };
+        }
+        if (line.includes("deps download")) {
+          return { exitCode: 1, stdout: "", stderr: "symbols download failed: HTTP 403" };
+        }
+        if (line.includes("env status")) {
+          return { exitCode: 0, stdout: '{"status":"Running"}', stderr: "" };
+        }
+        const out = resolveOut();
+        const key = Object.keys(out).find((k) => line.includes(k));
+        return { exitCode: 0, stdout: key === undefined ? "{}" : (out[key] ?? "{}"), stderr: "" };
+      },
+    });
+    const stateDir = await mkdtemp(join(tmpdir(), "lethal-envstate-"));
+    await expect(
+      startEnvToolSession({
+        cfg,
+        bcdevRaw: BCDEV_RAW,
+        projectDir: "C:/proj",
+        testDir: "C:/tests",
+        runId: "r-leak",
+        client: failing,
+        makePublisher: () => ({ publishFile: async () => {} }),
+        verifyHarness: async () => {},
+        stateDir,
+      }),
+    ).rejects.toThrow(/symbols download failed/);
+    // The leak-prevention path: the environment THIS call created is attempted for delete BEFORE
+    // the original error propagates — never left billing with no teardown ever attempted.
+    expect(deleteCalls).toHaveLength(1);
+    expect(deleteCalls[0]).toEqual(["tool.exe", "env", "delete", "env-new"]);
+  });
+
+  it("when the delete attempt ALSO fails after a startup failure, the ORIGINAL error still wins (item 1)", async () => {
+    const h = harness({ envId: undefined });
+    const cfg = {
+      ...h.cfg,
+      downloadSymbols: { command: ["deps", "download", "{envId}", "{projectDir}"] },
+    };
+    const failing = new EnvToolClient(cfg, {
+      spawn: async (argv) => {
+        const line = argv.join(" ");
+        if (argv.includes("delete")) {
+          return { exitCode: 1, stdout: "", stderr: "delete also failed" };
+        }
+        if (line.includes("deps download")) {
+          return { exitCode: 1, stdout: "", stderr: "symbols download failed: HTTP 403" };
+        }
+        if (line.includes("env status")) {
+          return { exitCode: 0, stdout: '{"status":"Running"}', stderr: "" };
+        }
+        const out = resolveOut();
+        const key = Object.keys(out).find((k) => line.includes(k));
+        return { exitCode: 0, stdout: key === undefined ? "{}" : (out[key] ?? "{}"), stderr: "" };
+      },
+    });
+    await expect(
+      startEnvToolSession({
+        cfg,
+        bcdevRaw: BCDEV_RAW,
+        projectDir: "C:/proj",
+        testDir: "C:/tests",
+        runId: "r-leak-2",
+        client: failing,
+        makePublisher: () => ({ publishFile: async () => {} }),
+        verifyHarness: async () => {},
+        stateDir: await mkdtemp(join(tmpdir(), "lethal-envstate-")),
+      }),
+      // Never "delete also failed" — a failing delete attempt must never mask the real error.
+    ).rejects.toThrow(/symbols download failed/);
   });
 
   it("refuses to start when the env expires within the hour", async () => {

@@ -221,6 +221,46 @@ describe("EnvToolClient.run", () => {
     expect(err).not.toMatch(/exit 143/);
   });
 
+  it("passes envTool.cwd through to spawn when the config sets one", async () => {
+    const cfg: EnvToolConfigSection = { ...CFG, cwd: "C:/some/tool/dir" };
+    let seenCwd: string | undefined;
+    const io = {
+      spawn: async (argv: readonly string[], opts?: { cwd?: string }) => {
+        seenCwd = opts?.cwd;
+        return { exitCode: 0, stdout: '{"url":"https://h/e1"}', stderr: "" };
+      },
+    };
+    await new EnvToolClient(cfg, io).run(block, "resolve[0]", { envId: "e1" });
+    expect(seenCwd).toBe("C:/some/tool/dir");
+  });
+
+  it("defaults cwd to the project dir supplied at construction when envTool.cwd is absent", async () => {
+    let seenCwd: string | undefined;
+    const io = {
+      spawn: async (argv: readonly string[], opts?: { cwd?: string }) => {
+        seenCwd = opts?.cwd;
+        return { exitCode: 0, stdout: '{"url":"https://h/e1"}', stderr: "" };
+      },
+    };
+    // Third constructor arg is the default cwd cli.ts supplies (the project dir) — CFG itself
+    // has no `cwd` field, so this proves the fallback, not an explicit config value.
+    await new EnvToolClient(CFG, io, "C:/proj").run(block, "resolve[0]", { envId: "e1" });
+    expect(seenCwd).toBe("C:/proj");
+  });
+
+  it("envTool.cwd wins over the constructor's default project dir", async () => {
+    const cfg: EnvToolConfigSection = { ...CFG, cwd: "C:/explicit" };
+    let seenCwd: string | undefined;
+    const io = {
+      spawn: async (argv: readonly string[], opts?: { cwd?: string }) => {
+        seenCwd = opts?.cwd;
+        return { exitCode: 0, stdout: '{"url":"https://h/e1"}', stderr: "" };
+      },
+    };
+    await new EnvToolClient(cfg, io, "C:/proj").run(block, "resolve[0]", { envId: "e1" });
+    expect(seenCwd).toBe("C:/explicit");
+  });
+
   it("attributes a renderCommand failure to the named block", async () => {
     // Reproduced: run(block, "resolve[3]", {}) with a missing {envId} previously reported no
     // mention of "resolve[3]" at all, because renderCommand's throw bypassed the

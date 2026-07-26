@@ -38,6 +38,15 @@ function requireBcDevRawFields(bcdevRaw: Partial<BcDevConfigSection>): void {
 
 export interface EnvToolSession {
   readonly bcdev: BcDevConfigSection;
+  /**
+   * The resolved environment id — from config in reuse-mode, or `createEnv`'s output in
+   * create-mode. This is the id a `publish` call must target, NOT `bcdev.serverInstance`: that
+   * field is only a same-value coincidence when `serverInstance` happens to be derived from
+   * `baseUrl`'s first path segment AND that segment happens to equal the envId — neither holds
+   * for an explicit `reads: { serverInstance: ... }` override, or a portal whose path segment
+   * names something else entirely (e.g. `https://host/tenants/env-4711`).
+   */
+  readonly envId: string;
   readonly createdEnvId?: string;
   teardown(opts: { keepEnv: boolean; quarantined: boolean }): Promise<void>;
 }
@@ -55,7 +64,10 @@ export async function startEnvToolSession(args: {
   testDir: string;
   runId: string;
   client: EnvToolClient;
-  makePublisher: (bcdev: BcDevConfigSection) => { publishFile: (p: string) => Promise<void> };
+  makePublisher: (
+    bcdev: BcDevConfigSection,
+    envId: string,
+  ) => { publishFile: (p: string) => Promise<void> };
   verifyHarness: (cfg: ActivationConfig) => Promise<void>;
   allowExpiring?: boolean;
   now?: () => number;
@@ -86,160 +98,204 @@ export async function startEnvToolSession(args: {
     envId = created;
     createdEnvId = created;
     await recordCreatedEnv(stateDir, args.runId, created, cfg, now);
-
-    // 1b. Start, then WAIT — unconditionally required once THIS call created the environment.
-    // `validateEnvToolConfig` (env-tool.ts) already makes both mandatory in create-mode with no
-    // carve-out: `env create` returns a Draft environment with nothing listening, and `env start`
-    // is async (Starting → Running measured at ~390s). A caller that skips both would publish into
-    // that dead Draft endpoint minutes into a paid provisioning cycle. Each branch names exactly
-    // the block that's missing, rather than a generic "both or neither" message, so a config with
-    // exactly one configured is diagnosed precisely too.
-    const startBlock = cfg.startEnv;
-    const readyBlock = cfg.readyWhen;
-    if (startBlock === undefined) {
-      throw new EnvToolError(
-        "envTool.startEnv is required once an environment is created — a newly created " +
-          "environment is inert (Draft, nothing listening) until it is started",
-      );
-    }
-    if (readyBlock === undefined) {
-      throw new EnvToolError(
-        "envTool.readyWhen is required once an environment is created — starting is asynchronous " +
-          "(measured ~390s to Running), so LethAL must know how to poll for readiness rather than " +
-          "publishing into a dead endpoint",
-      );
-    }
-    // Measured 2026-07-26: create returns a Draft environment, `env start` returns "start
-    // requested" in ~2s, and the BC endpoint answers ~391s later. Publishing before that fails
-    // against a dead endpoint.
-    await client.run(startBlock, "startEnv", { ...supplied, envId });
-    await waitUntilReady(client, readyBlock, { ...supplied, envId }, now, sleep);
   }
   supplied.envId = envId;
 
-  // 2. resolve.
-  const resolved: Record<string, string> = {};
-  for (const [i, block] of (cfg.resolve ?? []).entries()) {
-    Object.assign(resolved, await client.run(block, `resolve[${i}]`, supplied));
-  }
-
-  // 3. expiry — refuse rather than warn: expiring mid-run lands as in-flight-unknown and
-  //    durably quarantines the tier, which needs an operator clear-quarantine to undo.
-  const expiresUtc = resolved.expiresUtc;
-  if (expiresUtc !== undefined && args.allowExpiring !== true) {
-    const at = Date.parse(expiresUtc);
-    if (!Number.isNaN(at) && at - now() < EXPIRY_MARGIN_MS) {
-      throw new EnvToolError(
-        `environment ${envId} expires at ${expiresUtc}, within the hour — refusing to start. A run that outlives its environment quarantines the tier. Re-run with --allow-expiring-env to override.`,
-      );
-    }
-  }
-
-  // 4. derive server/serverInstance/port from baseUrl unless read explicitly. A path-routed HTTPS
-  //    portal (Continia) has no listener at bc-dev-mcp's OnPrem fallback port (7049), so the port
-  //    bc-dev-mcp actually needs must be derived here rather than left to that fallback.
-  const baseUrl = resolved.baseUrl;
-  if (baseUrl === undefined) throw new EnvToolError("resolve produced no baseUrl");
-  const { server, serverInstance } = splitBaseUrl(
-    baseUrl,
-    resolved.server,
-    resolved.serverInstance,
-  );
-  const port = deriveMcpPort(baseUrl);
-  const username = resolved.username;
-  const password = resolved.password;
-  if (username === undefined || password === undefined) {
-    throw new EnvToolError("resolve produced no username/password");
-  }
-  const packageCachePath = args.bcdevRaw.packageCachePath ?? join(args.projectDir, ".alpackages");
-  const bcdev: BcDevConfigSection = {
-    ...(args.bcdevRaw as BcDevConfigSection),
-    baseUrl,
-    server,
-    serverInstance,
-    port,
-    username,
-    password,
-    packageCachePath,
-    env: { ...(args.bcdevRaw.env ?? {}), BC_DEV_USER: username, BC_DEV_PASSWORD: password },
-  };
-
-  // 5. symbols.
-  if (cfg.downloadSymbols !== undefined) {
-    await client.run(cfg.downloadSymbols, "downloadSymbols", {
-      ...supplied,
-      packageCache: packageCachePath,
-    });
-  }
-
-  // 6. prepublish + control app. Verify FIRST: the machine-global lease lives in the control
-  //    app's own tables, and republishing runs its install/upgrade codeunits, which would disturb
-  //    a concurrent session's lease and serverGeneration on a shared long-lived environment.
-  const publisher = args.makePublisher(bcdev);
-  for (const app of cfg.publishApps ?? []) await publisher.publishFile(app);
-  const odataCfg: ActivationConfig = {
-    baseUrl,
-    company: bcdev.company,
-    username,
-    password,
-    ...(bcdev.tenant !== undefined ? { tenant: bcdev.tenant } : {}),
-  };
-  let harnessOk = true;
+  // Everything below this point runs against an environment that — if THIS call just created it
+  // — is already real and billed, with nothing pointing back to it yet except the crash-recovery
+  // record `recordCreatedEnv` just wrote above. A failure anywhere in here (a `readyWhen` timeout,
+  // a symbols failure, a `publishApps` typo, a control-app publish rejection) must not leak it:
+  // this function's own caller (`resolveEnvToolSession`) only gets an `EnvToolSession` — and hence
+  // a `teardown` to call — once this function RETURNS, so a throw from anywhere below would
+  // otherwise escape with no teardown ever attempted. The catch below performs the same delete
+  // `teardown` would, before rethrowing the ORIGINAL error unchanged — a failed delete is logged,
+  // never allowed to replace or mask it. A reused (non-created) environment has nothing here to
+  // delete, so the catch is a no-op rethrow for that case.
   try {
-    await args.verifyHarness(odataCfg);
-  } catch (err) {
-    // Only a HarnessVerificationError plausibly means "the control app is missing or the wrong
-    // build" (appId mismatch, protocol version too low, missing isolation/test type, no
-    // serverGeneration — see harness.ts). Anything else — most importantly a
-    // MultiTenantContainerError (design §7's single-tenant gate: a supported-configuration
-    // refusal, not "app missing"; it extends `Error` directly, never `HarnessVerificationError`,
-    // precisely so it can't be mistaken for one here) — is rethrown unwrapped. Republishing runs
-    // `LethAL Control`'s install/upgrade codeunits, and the machine-global lease lives in that
-    // app's own tables: a needless republish for a refusal it cannot fix (multi-tenant, auth, a
-    // transient blip) can disturb a concurrent session's lease and serverGeneration.
-    if (!(err instanceof HarnessVerificationError)) throw err;
-    harnessOk = false;
-  }
-  if (!harnessOk) {
-    await publisher.publishFile(bcdev.controlSymbolPath);
-    await args.verifyHarness(odataCfg); // throws if it still does not answer
-  }
+    if (createdEnvId !== undefined) {
+      // 1b. Start, then WAIT — unconditionally required once THIS call created the environment.
+      // `validateEnvToolConfig` (env-tool.ts) already makes both mandatory in create-mode with no
+      // carve-out: `env create` returns a Draft environment with nothing listening, and `env start`
+      // is async (Starting → Running measured at ~390s). A caller that skips both would publish
+      // into that dead Draft endpoint minutes into a paid provisioning cycle. Each branch names
+      // exactly the block that's missing, rather than a generic "both or neither" message, so a
+      // config with exactly one configured is diagnosed precisely too.
+      const startBlock = cfg.startEnv;
+      const readyBlock = cfg.readyWhen;
+      if (startBlock === undefined) {
+        throw new EnvToolError(
+          "envTool.startEnv is required once an environment is created — a newly created " +
+            "environment is inert (Draft, nothing listening) until it is started",
+        );
+      }
+      if (readyBlock === undefined) {
+        throw new EnvToolError(
+          "envTool.readyWhen is required once an environment is created — starting is " +
+            "asynchronous (measured ~390s to Running), so LethAL must know how to poll for " +
+            "readiness rather than publishing into a dead endpoint",
+        );
+      }
+      // Measured 2026-07-26: create returns a Draft environment, `env start` returns "start
+      // requested" in ~2s, and the BC endpoint answers ~391s later. Publishing before that fails
+      // against a dead endpoint.
+      await client.run(startBlock, "startEnv", { ...supplied, envId });
+      await waitUntilReady(client, readyBlock, { ...supplied, envId }, now, sleep);
+    }
 
-  return {
-    bcdev,
-    ...(createdEnvId !== undefined ? { createdEnvId } : {}),
-    async teardown(opts) {
-      if (createdEnvId === undefined) return;
-      const block = cfg.deleteEnv;
-      if (opts.keepEnv || opts.quarantined) {
-        const hint =
-          block === undefined
-            ? ""
-            : ` Delete it with: ${renderCommand(block, cfg, { ...supplied, envId: createdEnvId }).join(" ")}`;
-        console.warn(
-          `[lethal] keeping environment ${createdEnvId} (${
-            opts.quarantined ? "session quarantined" : "--keep-env"
-          }).${hint}`,
+    // 2. resolve.
+    const resolved: Record<string, string> = {};
+    for (const [i, block] of (cfg.resolve ?? []).entries()) {
+      Object.assign(resolved, await client.run(block, `resolve[${i}]`, supplied));
+    }
+
+    // 3. expiry — refuse rather than warn: expiring mid-run lands as in-flight-unknown and
+    //    durably quarantines the tier, which needs an operator clear-quarantine to undo.
+    const expiresUtc = resolved.expiresUtc;
+    if (expiresUtc !== undefined && args.allowExpiring !== true) {
+      const at = Date.parse(expiresUtc);
+      if (!Number.isNaN(at) && at - now() < EXPIRY_MARGIN_MS) {
+        throw new EnvToolError(
+          `environment ${envId} expires at ${expiresUtc}, within the hour — refusing to start. A run that outlives its environment quarantines the tier. Re-run with --allow-expiring-env to override.`,
         );
-        return;
       }
-      if (block === undefined) return;
-      try {
-        await client.run(block, "deleteEnv", { ...supplied, envId: createdEnvId });
-      } catch (err) {
-        // Cleanup failure must never replace the session's verdicts or exit code. The
-        // crash-recovery record deliberately survives a failed delete — the environment may
-        // still exist, and an operator recovering later needs it to find that out.
-        console.warn(
-          `[lethal] could not delete environment ${createdEnvId}: ` +
-            `${err instanceof Error ? err.message : String(err)}\n` +
-            `[lethal] delete it manually: ${renderCommand(block, cfg, { ...supplied, envId: createdEnvId }).join(" ")}`,
-        );
-        return;
-      }
-      await removeRecordedEnv(stateDir, args.runId);
-    },
-  };
+    }
+
+    // 4. derive server/serverInstance/port from baseUrl unless read explicitly. A path-routed
+    //    HTTPS portal (Continia) has no listener at bc-dev-mcp's OnPrem fallback port (7049), so
+    //    the port bc-dev-mcp actually needs must be derived here rather than left to that fallback.
+    const baseUrl = resolved.baseUrl;
+    if (baseUrl === undefined) throw new EnvToolError("resolve produced no baseUrl");
+    const { server, serverInstance } = splitBaseUrl(
+      baseUrl,
+      resolved.server,
+      resolved.serverInstance,
+    );
+    const port = deriveMcpPort(baseUrl);
+    const username = resolved.username;
+    const password = resolved.password;
+    if (username === undefined || password === undefined) {
+      throw new EnvToolError("resolve produced no username/password");
+    }
+    const packageCachePath = args.bcdevRaw.packageCachePath ?? join(args.projectDir, ".alpackages");
+    const bcdev: BcDevConfigSection = {
+      ...(args.bcdevRaw as BcDevConfigSection),
+      baseUrl,
+      server,
+      serverInstance,
+      port,
+      username,
+      password,
+      packageCachePath,
+      env: { ...(args.bcdevRaw.env ?? {}), BC_DEV_USER: username, BC_DEV_PASSWORD: password },
+    };
+
+    // 5. symbols.
+    if (cfg.downloadSymbols !== undefined) {
+      await client.run(cfg.downloadSymbols, "downloadSymbols", {
+        ...supplied,
+        packageCache: packageCachePath,
+      });
+    }
+
+    // 6. prepublish + control app. Verify FIRST: the machine-global lease lives in the control
+    //    app's own tables, and republishing runs its install/upgrade codeunits, which would
+    //    disturb a concurrent session's lease and serverGeneration on a shared long-lived
+    //    environment.
+    const publisher = args.makePublisher(bcdev, envId);
+    for (const app of cfg.publishApps ?? []) await publisher.publishFile(app);
+    const odataCfg: ActivationConfig = {
+      baseUrl,
+      company: bcdev.company,
+      username,
+      password,
+      ...(bcdev.tenant !== undefined ? { tenant: bcdev.tenant } : {}),
+    };
+    let harnessOk = true;
+    try {
+      await args.verifyHarness(odataCfg);
+    } catch (err) {
+      // Only a HarnessVerificationError plausibly means "the control app is missing or the wrong
+      // build" (appId mismatch, protocol version too low, missing isolation/test type, no
+      // serverGeneration — see harness.ts). Anything else — most importantly a
+      // MultiTenantContainerError (design §7's single-tenant gate: a supported-configuration
+      // refusal, not "app missing"; it extends `Error` directly, never `HarnessVerificationError`,
+      // precisely so it can't be mistaken for one here) — is rethrown unwrapped. Republishing runs
+      // `LethAL Control`'s install/upgrade codeunits, and the machine-global lease lives in that
+      // app's own tables: a needless republish for a refusal it cannot fix (multi-tenant, auth, a
+      // transient blip) can disturb a concurrent session's lease and serverGeneration.
+      if (!(err instanceof HarnessVerificationError)) throw err;
+      harnessOk = false;
+    }
+    if (!harnessOk) {
+      await publisher.publishFile(bcdev.controlSymbolPath);
+      await args.verifyHarness(odataCfg); // throws if it still does not answer
+    }
+
+    return {
+      bcdev,
+      envId,
+      ...(createdEnvId !== undefined ? { createdEnvId } : {}),
+      async teardown(opts) {
+        if (createdEnvId === undefined) return;
+        const block = cfg.deleteEnv;
+        if (opts.keepEnv || opts.quarantined) {
+          const hint =
+            block === undefined
+              ? ""
+              : ` Delete it with: ${renderCommand(block, cfg, { ...supplied, envId: createdEnvId }).join(" ")}`;
+          console.warn(
+            `[lethal] keeping environment ${createdEnvId} (${
+              opts.quarantined ? "session quarantined" : "--keep-env"
+            }).${hint}`,
+          );
+          return;
+        }
+        if (block === undefined) return;
+        try {
+          await client.run(block, "deleteEnv", { ...supplied, envId: createdEnvId });
+        } catch (err) {
+          // Cleanup failure must never replace the session's verdicts or exit code. The
+          // crash-recovery record deliberately survives a failed delete — the environment may
+          // still exist, and an operator recovering later needs it to find that out.
+          console.warn(
+            `[lethal] could not delete environment ${createdEnvId}: ` +
+              `${err instanceof Error ? err.message : String(err)}\n` +
+              `[lethal] delete it manually: ${renderCommand(block, cfg, { ...supplied, envId: createdEnvId }).join(" ")}`,
+          );
+          return;
+        }
+        await removeRecordedEnv(stateDir, args.runId);
+      },
+    };
+  } catch (err) {
+    // The leak-prevention path (see the doc comment above the `try`): only a session THIS call
+    // created has anything to delete — a reused (config-supplied) environment is never LethAL's
+    // to delete, matching `teardown`'s own `createdEnvId === undefined` no-op.
+    if (createdEnvId === undefined) throw err;
+    const block = cfg.deleteEnv;
+    // Unreachable once `validateEnvToolConfig` has run (it requires `deleteEnv` in create-mode) —
+    // this only guards a caller (a unit test, or a future caller) that skipped validation.
+    if (block === undefined) throw err;
+    try {
+      await client.run(block, "deleteEnv", { ...supplied, envId: createdEnvId });
+    } catch (deleteErr) {
+      // The delete attempt's own failure must NEVER replace or mask the original error — that is
+      // what the caller needs to see and act on. Logged at `error` (not `teardown`'s `warn`):
+      // unlike a normal end-of-session teardown, this is a first-run failure mode with the
+      // crash-recovery record as the only other trace, so it must not be easy to miss.
+      const deleteArgv = renderCommand(block, cfg, { ...supplied, envId: createdEnvId }).join(" ");
+      const deleteDetail = deleteErr instanceof Error ? deleteErr.message : String(deleteErr);
+      console.error(
+        `[lethal] environment ${createdEnvId} could not be deleted after a startup failure — it may still exist and be billing. Delete it manually: ${deleteArgv}\n[lethal] delete failure: ${deleteDetail}`,
+      );
+      throw err;
+    }
+    // Deleted successfully — the crash-recovery record now describes an environment that is
+    // already gone; remove it the same way a normal successful teardown would (best-effort:
+    // `removeRecordedEnv` itself never throws, matching every other call site of it here).
+    await removeRecordedEnv(stateDir, args.runId);
+    throw err;
+  }
 }
 
 /**

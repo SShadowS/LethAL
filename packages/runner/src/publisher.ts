@@ -6,7 +6,7 @@ import { canonicalContainerKey, serializePublish } from "./publish-serializer";
 
 export type SpawnFn = (
   argv: readonly string[],
-  opts?: { signal?: AbortSignal; env?: Record<string, string> },
+  opts?: { signal?: AbortSignal; env?: Record<string, string>; cwd?: string },
 ) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
 
 const bunSpawn: SpawnFn = async (argv, opts) => {
@@ -20,6 +20,7 @@ const bunSpawn: SpawnFn = async (argv, opts) => {
     // with process.env (unlike leaving it unset, which fully inherits) — merge explicitly so
     // adding credentials for altool doesn't drop PATH/SystemRoot/etc. that alc/altool need.
     ...(opts?.env !== undefined ? { env: { ...process.env, ...opts.env } } : {}),
+    ...(opts?.cwd !== undefined ? { cwd: opts.cwd } : {}),
   });
   const [stdout, stderr] = await Promise.all([
     new Response(proc.stdout).text(),
