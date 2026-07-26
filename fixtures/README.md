@@ -255,17 +255,43 @@ Phase-0 half of the fixture proves.
 
 **This table is a committed gate, not just documentation:** `bun run itest:tables`
 (`packages/runner/itest/tables.itest.ts`, env-gated on `LETHAL_ITEST_TABLES=1`) asserts the
-aggregate counts, the score, and the per-mutant verdict map above, then diffs against
-`packages/runner/itest/tables.baseline.json` exactly as the Tier-1 gates do. It also reads the
+aggregate counts and the score, then diffs against
+`packages/runner/itest/tables.baseline.json` exactly as the Tier-1 gates do. (The per-mutant map
+is now asserted only by that baseline file — the inline 7-entry `EXPECTED.verdicts` map was
+removed when the fixture grew to 75 deployed mutants, since a 7-key map cannot match 75 results
+and asserting it proved nothing.) It also reads the
 `mutant-manifest.json` the run actually deployed and asserts that at least one **killed** and at
 least one **survived** mutant sit at a site whose manifest entry carries a `triggerName` — Phase
 0's claim itself rather than a proxy for it (`MutantOutcome` carries no trigger info). It reads
 `fixtures/sandbox-data/lethal.config.local.json` — **not** sandbox-app's; the two fixtures target
 different containers.
 
-BC reports **no coverage at all for table trigger code**, so every trigger mutant here is
-coverage-invisible. `coverageFilter` therefore falls back, most-precise-first: member key →
-object-level → all green tests. The two fallbacks are gated **differently**:
+**Correction (2026-07-26, measured on Cronus282): BC DOES report coverage for table-trigger
+code.** `bcdev_test_run` with `coverage: "procedure"` returned, for table 79300, `methodId
+-1650094725` for one test and `2060272969` for another. The earlier claim that it reports none was
+an artifact of the pipeline discarding the observation: `SymbolReference.json` records no trigger,
+so `AppMethodIndex.lookup` cannot NAME the methodId, and `buildCoverageMap` then dropped the
+observation entirely whenever the local-procedure fallback was also empty — which is exactly the
+case for `Data Main`, whose procedures are all public. The object lost credit along with the
+member, `byObject["table:79300"]` held only the one sibling test whose methodId happened to
+resolve, the object-level fallback answered non-empty-but-wrong, the all-green-tests fallback never
+fired, and every table-trigger mutant ran against one irrelevant test. Perverse shape: a table with
+public procedures scored WORSE than one with none (`Data No Trigger`'s empty `byObject` fell
+through correctly). **10 of 20 survivors on the Phase-1 fixture were false**; each was then driven
+individually through the fenced path against its intended killer and killed, making the honest
+result **63 killed / 10 survived / 2 no-coverage**, not 53/20/2 — which is what `EXPECTED` in
+`tables.itest.ts` now asserts, pending a live re-record.
+
+The fix: an observation whose methodId resolves to no name and has no local-procedure fallback is
+emitted as an **object-level** `CoverageEntry` (`objectType`/`objectId`, `procedure` ABSENT — never
+`""`, which would key `byMember` as `table:79300::` and collide with the empty member key a trigger
+mutant itself builds). `buildCoverageIndex` joins such an entry to `byObject` and skips it for
+`byMember` structurally.
+
+A trigger mutant is still **member-invisible** — no trigger appears in `SymbolReference.json`, so
+no trigger's member-level key can ever hit. `coverageFilter` therefore falls back,
+most-precise-first: member key → object-level → all green tests. The two fallbacks are gated
+**differently**:
 
 - **object-level** (any test that covered anything in *this* object) applies to **any trigger**,
   whatever object kind it sits in. `SymbolReference.json` records no trigger at all, so no

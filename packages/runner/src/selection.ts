@@ -55,7 +55,9 @@ export function filterHistory(
  *
  * `byMember` is the precise `<type>:<id>::<member>` index (exact, correct for every ordinary
  * procedure). `byObject` is a coarser `<type>:<id>` index carrying every test that covered
- * ANYTHING in that object — the finer of the two lookups that can match a trigger of ANY object
+ * ANYTHING in that object — including observations that name no member at all
+ * (`CoverageEntry.procedure` absent), which join `byObject` alone and never `byMember`. It is the
+ * finer of the two lookups that can match a trigger of ANY object
  * kind, since `SymbolReference.json` never records a trigger at all (`AppMethodIndex.lookup` —
  * see `bcdev-backend.ts:606` — can therefore never name one; `app-package.ts:137-149` builds the
  * index exclusively from that file). When neither index names a TABLE trigger mutant,
@@ -121,14 +123,10 @@ export function buildCoverageIndex(
   for (const b of baseline) {
     for (const e of b.coverage?.entries ?? []) {
       const context = `coverage entry from ${testKeyOf(b.ref)} for object id ${e.objectId}`;
-      const memberKey = memberKeyOf(e.objectType, e.objectId, e.procedure, context);
-      let memberSet = byMember.get(memberKey);
-      if (!memberSet) {
-        memberSet = new Set();
-        byMember.set(memberKey, memberSet);
-      }
-      memberSet.add(testKeyOf(b.ref));
-
+      // OBJECT level first, and unconditionally. EVERY observation — member-named or not — is
+      // evidence that this test executed something in this object, which is precisely what
+      // `coverageFilter`'s FALLBACK 1 consumes. An object-level-only entry (see `CoverageEntry`)
+      // reaches this line and nothing else.
       const objectKey = objectKeyOf(e.objectType, e.objectId, context);
       let objectSet = byObject.get(objectKey);
       if (!objectSet) {
@@ -136,6 +134,33 @@ export function buildCoverageIndex(
         byObject.set(objectKey, objectSet);
       }
       objectSet.add(testKeyOf(b.ref));
+
+      // MEMBER level only when the observation actually names a member. The skip is STRUCTURAL —
+      // `procedure === undefined`, not a comparison against some sentinel string — so no member
+      // key is ever synthesized for an observation that names no member.
+      const { procedure } = e;
+      if (procedure === undefined) continue;
+      if (procedure.trim() === "") {
+        // A blank-but-present name is a producer bug, and a uniquely dangerous one: it would key
+        // `byMember` as `<type>:<id>::`, the SAME key `coverageFilter` builds for a trigger
+        // mutant (`procedureName` is `""` there), so the object-level observation would be
+        // returned as an exact member match and the trigger fallbacks would never run. Refuse it
+        // rather than index it — absence is expressed by omitting `procedure`, never by "".
+        const why =
+          "A coverage observation that cannot name a member must OMIT `procedure` so it is " +
+          "indexed at object level only; an empty name would collide with a trigger mutant's " +
+          "own empty member key.";
+        throw new Error(
+          `${context}: procedure name is present but blank (got ${JSON.stringify(procedure)}). ${why}`,
+        );
+      }
+      const memberKey = memberKeyOf(e.objectType, e.objectId, procedure, context);
+      let memberSet = byMember.get(memberKey);
+      if (!memberSet) {
+        memberSet = new Set();
+        byMember.set(memberKey, memberSet);
+      }
+      memberSet.add(testKeyOf(b.ref));
     }
   }
   return { byMember, byObject };
@@ -179,11 +204,18 @@ export function coverageFilter(
     }
     // FALLBACK 2 — every green test. TABLE triggers only; that gate is the measured part.
     //
-    // A live-gate run found real table trigger mutants BC's coverage index cannot name at ANY
-    // precision — object-level came back empty too. We genuinely don't know which tests reach
-    // that trigger, and the honest response to "I don't know" is to run every green test, not to
-    // silently report no-coverage: skipping would hide a live mutation site, which is the exact
-    // failure this layer exists to prevent.
+    // A live-gate run found real table trigger mutants coverage cannot place at ANY precision —
+    // object-level came back empty too. We genuinely don't know which tests reach that trigger,
+    // and the honest response to "I don't know" is to run every green test, not to silently
+    // report no-coverage: skipping would hide a live mutation site, which is the exact failure
+    // this layer exists to prevent.
+    //
+    // This branch is now MUCH rarer than it was, and deliberately so. BC does report coverage for
+    // table-trigger code (measured on Cronus282, 2026-07-26) — `buildCoverageMap` used to discard
+    // the observation because it could not NAME the member, which starved `byObject` and pushed
+    // table triggers onto whatever wrong answer fallback 1 could scrape together. Object-level
+    // entries (`CoverageEntry` with no `procedure`) feed `byObject` now, so fallback 1 answers
+    // precisely and this all-green net catches only the genuinely unseen.
     //
     // Unlike fallback 1 this one is UNMEASURED for every other object kind. "Coverage sees
     // nothing in this object at all, yet the trigger is still reachable from the test suite" was
@@ -207,7 +239,7 @@ export function coverageFilter(
   }
   if (untargetedTriggerCount > 0) {
     console.warn(
-      `[lethal] ${untargetedTriggerCount} table trigger mutant(s) could not be coverage-matched (BC does not report coverage for table trigger code) — running each against all ${allTests.length} green test(s).`,
+      `[lethal] ${untargetedTriggerCount} table trigger mutant(s) could not be coverage-matched (no green test reported executing anything in that table, and no trigger is nameable at member level) — running each against all ${allTests.length} green test(s).`,
     );
   }
   return { covered, uncovered };

@@ -15,10 +15,33 @@ export interface TestMethodRef {
  */
 export type TestOutcome = "pass" | "fail" | "skip" | "timeout" | "deadline-exceeded" | "error";
 
+/**
+ * One coverage observation: "this test executed code in this object", optionally narrowed to a
+ * named member.
+ *
+ * `procedure` is OPTIONAL, and its absence is load-bearing rather than incidental. BC reports
+ * coverage for code a compiled app's `SymbolReference.json` cannot name — it records no trigger
+ * at all, so `AppMethodIndex.lookup` (app-package.ts) returns `undefined` for every trigger
+ * methodId, and the local-procedure scan that normally covers the gap finds nothing in an object
+ * whose procedures are all public. Such an observation is real evidence about the OBJECT while
+ * carrying none about any member, so it is emitted with no `procedure`.
+ *
+ * Dropping it instead is how table-trigger mutants became false survivors: `byObject` lost the
+ * covering test, `coverageFilter`'s object-level fallback returned a non-empty-but-WRONG set from
+ * whichever sibling test happened to resolve, and the all-green-tests fallback therefore never
+ * fired. Perversely, a table with public procedures scored worse than a table with none — the
+ * latter's empty `byObject` fell through to the correct fallback.
+ *
+ * Absence is `procedure` being ABSENT, never `""`. An empty string would key `byMember` as
+ * `"<type>:<id>::"` — the exact key `coverageFilter` builds for a trigger mutant (whose
+ * `procedureName` is `""`) — so the two empties would collide and an object-level observation
+ * would masquerade as an exact member match. `buildCoverageIndex` therefore skips an absent
+ * `procedure` structurally and refuses a blank-but-present one loudly.
+ */
 export interface CoverageEntry {
   readonly objectType: string;
   readonly objectId: number;
-  readonly procedure: string;
+  readonly procedure?: string;
   readonly line?: number;
 }
 

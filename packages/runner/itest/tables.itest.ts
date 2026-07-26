@@ -67,27 +67,38 @@ const BASELINE_PATH = join(HERE, "tables.baseline.json");
 const SELECTOR_IDS = { selectorId: 79199, controlId: 79198, tableId: 79197 };
 
 /**
- * Frozen from the live gate of 2026-07-25 against the authoritative bcdev backend
- * (fixtures/README.md §Tier-2 Phase 0). The per-mutant map is the point: aggregate counts stay
- * 3/2/2 even if two verdicts swap between mutants, and a trigger mutant silently reclassified
- * from `killed` to `no-coverage` is exactly the regression this fixture exists to catch.
+ * The 81-site fixture's expected aggregate result.
+ *
+ * 63 / 10 / 2 is the CORRECTED result. The run recorded before the object-level-coverage fix
+ * reported 53 killed / 20 survived / 2 no-coverage, and 10 of those 20 survivors were FALSE. BC
+ * DOES report coverage for table-trigger code, but `buildCoverageMap` (bcdev-backend.ts) dropped
+ * any observation it could name neither via SymbolReference.json (which records no trigger) nor
+ * via the local-procedure scan (empty for `Data Main`, whose procedures are all public), so the
+ * OBJECT lost credit along with the member: `byObject["table:79300"]` held only the one test whose
+ * methodId happened to resolve, `coverageFilter`'s FALLBACK 1 answered with that non-empty-but-
+ * wrong set, its all-green-tests FALLBACK 2 never fired, and every table-trigger mutant ran
+ * against a single irrelevant test. Each of the 10 was then driven individually through the fenced
+ * path against its intended killer and KILLED. Note the shape of the old bug: a table with public
+ * procedures scored WORSE than one with none (`Data No Trigger`'s empty `byObject` fell through to
+ * the correct fallback and scored right).
+ *
+ * `mutationScore` is written as the division, not a rounded literal — `report.ts` computes
+ * `killed / (killed + timeoutKilled + survived)` in full float precision and this must equal it
+ * exactly.
+ *
+ * PER-MUTANT: the old `verdicts` map (7 entries, from the superseded 7-mutant fixture) is gone.
+ * Asserting a 7-key map against 75 scored mutants cannot pass and proves nothing; the per-mutant
+ * regression guard for THIS fixture is `assertMatchesBaseline` against the committed
+ * `tables.baseline.json` (semantic-identity keyed, and self-recording when the file is absent —
+ * it is absent right now, so the next live run records it and the operator must review + commit
+ * it). `assertTriggerKillAndSurvive` below independently pins the trigger claim.
  */
 const EXPECTED = {
-  totalMutantSites: 7,
-  killed: 3,
-  survived: 2,
+  totalMutantSites: 81,
+  killed: 63,
+  survived: 10,
   noCoverage: 2,
-  mutationScore: 0.6,
-  /** mutantCode -> verdict, per fixtures/README.md's frozen table. */
-  verdicts: {
-    M0001: "killed", // DataMain field "No." OnValidate body — empty-block
-    M0002: "killed", // same trigger's `if` — negate-conditional
-    M0003: "survived", // DataMain OnInsert body — empty-block (weak test asserts nothing)
-    M0004: "no-coverage", // TouchCount() body — empty-block (no test calls it)
-    M0005: "no-coverage", // TouchCount() return — return-value
-    M0006: "killed", // DataNoTrigger field OnValidate body — empty-block
-    M0007: "survived", // same trigger's `>` — conditional-boundary (weak test)
-  } as Record<string, string>,
+  mutationScore: 63 / (63 + 10),
 };
 
 interface LaunchLocalConfig {
@@ -261,15 +272,9 @@ function assertVerdictTable(report: SessionReport): void {
   assert.equal(report.counts.errors, 0, "no mutant may error on the healthy path");
   assert.equal(report.counts.unstable, 0, "no mutant may be unstable on the healthy path");
   assert.equal(report.mutationScore, EXPECTED.mutationScore, "mutation score mismatch");
-
-  // Per-mutant, not aggregate: the counts above stay 3/2/2 even if two verdicts swap.
-  const actual = Object.fromEntries(report.mutants.map((m) => [m.mutantCode, m.verdict]));
-  assert.deepEqual(
-    actual,
-    EXPECTED.verdicts,
-    "per-mutant verdict table mismatch against the live gate of 2026-07-25 " +
-      "(fixtures/README.md §Tier-2 Phase 0) — see the dump above for which mutant moved",
-  );
+  // Per-mutant verdicts are asserted by `assertMatchesBaseline` (tables.baseline.json), not here
+  // — see EXPECTED's doc comment for why the old inline 7-entry map was removed rather than
+  // extended by hand.
 }
 
 /**
