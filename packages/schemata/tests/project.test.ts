@@ -8,9 +8,11 @@ import {
   CONTROL_REGISTER_FILENAME,
   CONTROL_SELECTOR_FILENAME,
   CONTROL_UPGRADE_FILENAME,
+  attributeHeader,
   stripAlComments,
   writeInstrumentedProject,
 } from "../src/project";
+import type { ObjectHeader } from "../src/project";
 
 // The target project's own app.json `id` — threaded into the delegating selector and the
 // register-install codeunit so the control extension keys state on the full identity tuple.
@@ -594,29 +596,126 @@ describe("writeInstrumentedProject", () => {
     }
   });
 
-  // Two objects in ONE file is legal AL (rare, but legal) and every layer below assumes one:
-  // the manifest labels every mutant in the file with the FIRST header's (objectType, objectId),
-  // so a mutant in the second object gets the first object's coverage key — the wrong test set,
-  // hence a verdict that is silently wrong. And `injectMutationSelectorVar` picks
-  // `findFirst(codeunit) ?? findFirst(table)`, which for `table` + `codeunit` in one file is the
-  // SECOND object, leaving the first object's guards undeclared (AL0118). Refuse the shape.
+  // Two objects in ONE file is legal AL (rare, but legal). R6: when every object in the file can
+  // carry the injected selector var (a codeunit or a table), LethAL now attributes each mutant to
+  // its OWN enclosing object instead of always the first header — see `attributeHeader`
+  // (project.ts) and the per-object grouping in `injectMutationSelectorVar` (compile.ts). A file
+  // that mixes an injectable object with a non-injectable one (page/report/query/xmlport/enum)
+  // still refuses outright: dropping only the non-injectable object's mutants isn't implemented.
   describe("a file declaring more than one AL object", () => {
-    const TWO_OBJECTS = `table 51050 "First Obj"
+    // A mutant in EACH object — the fixture that actually exercises attribution, not just
+    // "two objects, no throw". If either object's mutant were mislabelled with the OTHER
+    // object's (type, id), the assertions below would catch it directly.
+    const TWO_INJECTABLE_OBJECTS = `table 51050 "First Obj"
 {
     fields { field(1; "No."; Code[20]) { } }
+
+    trigger OnInsert()
+    begin
+        FirstFlag := 1;
+    end;
 }
 
 codeunit 51051 "Second Obj"
 {
     procedure P()
     begin
-        X := 1;
+        SecondFlag := 1;
     end;
 }
 `;
 
-    function twoObjectFile() {
-      const root = wrapRoot(parseAL(TWO_OBJECTS));
+    function twoInjectableObjectFile() {
+      const root = wrapRoot(parseAL(TWO_INJECTABLE_OBJECTS));
+      const assigns: ALSyntaxNode[] = [];
+      const collect = (node: ALSyntaxNode): void => {
+        if (node.kind === ALNodeKind.assignment_statement) assigns.push(node);
+        for (const child of node.namedChildren) collect(child);
+      };
+      collect(root);
+      const [firstAssign, secondAssign] = assigns;
+      if (firstAssign === undefined || secondAssign === undefined) {
+        throw new Error(`fixture expected 2 assignments, found ${assigns.length}`);
+      }
+      const specs: MutationSpec[] = [firstAssign, secondAssign].map((assign, i) => ({
+        operatorName: "op.flip",
+        operatorVersion: "1.0.0",
+        astNodeId: `${assign.startIndex}`,
+        before: assign,
+        after: { ...assign, text: `X := ${i + 2};` } as never,
+        parentContext: "statement-position",
+      }));
+      return { path: "Two.Objects.al", source: TWO_INJECTABLE_OBJECTS, root, specs };
+    }
+
+    it("attributes each mutant to its OWN object, not the file's first header", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "lethal-two-injectable-objects-"));
+      try {
+        await writeInstrumentedProject({
+          targetDir: dir,
+          files: [twoInjectableObjectFile()],
+          selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
+          artifactId: "0123456789abcdef0123456789abcdef",
+          targetAppId: TARGET_APP_ID,
+          operatorTiers: NO_TIERS,
+        });
+
+        const manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8")) as {
+          mutants: Array<{
+            mutantId: string;
+            objectType: string;
+            codeunitId: number;
+            codeunitName: string;
+            triggerName?: string;
+            procedureName: string;
+          }>;
+        };
+        expect(manifest.mutants).toHaveLength(2);
+
+        const tableEntry = manifest.mutants.find((m) => m.triggerName === "OnInsert");
+        const codeunitEntry = manifest.mutants.find((m) => m.procedureName === "P");
+        if (tableEntry === undefined || codeunitEntry === undefined) {
+          throw new Error("expected one table-trigger entry and one codeunit-procedure entry");
+        }
+        // The regression this guards: the old "always the first header" rule would have
+        // labelled BOTH entries `table 51050 "First Obj"`.
+        expect(tableEntry.objectType).toBe("table");
+        expect(tableEntry.codeunitId).toBe(51050);
+        expect(tableEntry.codeunitName).toBe("First Obj");
+        expect(codeunitEntry.objectType).toBe("codeunit");
+        expect(codeunitEntry.codeunitId).toBe(51051);
+        expect(codeunitEntry.codeunitName).toBe("Second Obj");
+
+        // Selector-var injection (compile.ts) must have anchored a declaration in BOTH objects —
+        // the old `findFirst(codeunit) ?? findFirst(table)` rule injected into only one, leaving
+        // the other's guard call with no declaration in scope (AL0118).
+        const rewritten = await readFile(join(dir, "Two.Objects.al"), "utf8");
+        const declarations = rewritten.match(/MutationSelector: Codeunit "Mutation Selector";/g);
+        expect(declarations).toHaveLength(2);
+        expect(rewritten).toContain(`MutationSelector.Active('${tableEntry.mutantId}')`);
+        expect(rewritten).toContain(`MutationSelector.Active('${codeunitEntry.mutantId}')`);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    const MIXED_KIND_OBJECTS = `codeunit 51052 "Injectable"
+{
+    procedure P()
+    begin
+        X := 1;
+    end;
+}
+
+page 51053 "Not Injectable"
+{
+    PageType = Card;
+    layout { area(Content) { } }
+}
+`;
+
+    function mixedKindFile() {
+      const root = wrapRoot(parseAL(MIXED_KIND_OBJECTS));
       const assign = findFirst(root, ALNodeKind.assignment_statement);
       if (assign === null) throw new Error("fixture has no assignment to mutate");
       const specs: MutationSpec[] = [
@@ -629,17 +728,17 @@ codeunit 51051 "Second Obj"
           parentContext: "statement-position",
         },
       ];
-      return { path: "Two.Objects.al", source: TWO_OBJECTS, root, specs };
+      return { path: "Mixed.Kind.al", source: MIXED_KIND_OBJECTS, root, specs };
     }
 
-    it("throws, naming the file and both objects, instead of misattributing the mutants", async () => {
-      const dir = await mkdtemp(join(tmpdir(), "lethal-two-objects-"));
+    it("still throws for a file mixing an injectable object with a non-injectable one", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "lethal-mixed-kind-"));
       try {
         let thrown: unknown;
         try {
           await writeInstrumentedProject({
             targetDir: dir,
-            files: [twoObjectFile()],
+            files: [mixedKindFile()],
             selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
             artifactId: "0123456789abcdef0123456789abcdef",
             targetAppId: TARGET_APP_ID,
@@ -650,26 +749,26 @@ codeunit 51051 "Second Obj"
         }
         expect(thrown).toBeInstanceOf(Error);
         const message = thrown instanceof Error ? thrown.message : "";
-        expect(message).toContain("Two.Objects.al");
-        expect(message).toContain("table 51050");
-        expect(message).toContain("codeunit 51051");
+        expect(message).toContain("Mixed.Kind.al");
+        expect(message).toContain("codeunit 51052");
+        expect(message).toContain("page 51053");
       } finally {
         await rm(dir, { recursive: true, force: true });
       }
     });
 
     it("refuses BEFORE writing the half-instrumented source into the artifact dir", async () => {
-      const dir = await mkdtemp(join(tmpdir(), "lethal-two-objects-nowrite-"));
+      const dir = await mkdtemp(join(tmpdir(), "lethal-mixed-kind-nowrite-"));
       try {
         await writeInstrumentedProject({
           targetDir: dir,
-          files: [twoObjectFile()],
+          files: [mixedKindFile()],
           selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
           artifactId: "0123456789abcdef0123456789abcdef",
           targetAppId: TARGET_APP_ID,
           operatorTiers: NO_TIERS,
         }).catch(() => {});
-        expect(await readdir(dir)).not.toContain("Two.Objects.al");
+        expect(await readdir(dir)).not.toContain("Mixed.Kind.al");
       } finally {
         await rm(dir, { recursive: true, force: true });
       }
@@ -804,6 +903,27 @@ codeunit 51051 "Second Obj"
     it("leaves a quoted AL identifier containing a comment marker alone", () => {
       const src = 'Rec."Field // Odd" := 1;\n';
       expect(stripAlComments(src)).toBe(src);
+    });
+  });
+
+  // Boundary case a plain revert of `attributeHeader`'s loop condition cannot reach either
+  // direction: `header.startIndex > spec.before.startIndex` breaks the loop, so a mutant sitting
+  // at EXACTLY a header's own startIndex is the one input where `>` vs `>=` changes the answer.
+  describe("attributeHeader", () => {
+    const fakeSpecAt = (startIndex: number): MutationSpec =>
+      ({ before: { startIndex } }) as unknown as MutationSpec;
+
+    it("attributes a mutant sitting exactly at a header's startIndex to THAT header, not the previous one", () => {
+      const headers: readonly ObjectHeader[] = [
+        { type: "table", id: 1, name: "A", startIndex: 0 },
+        { type: "codeunit", id: 2, name: "B", startIndex: 100 },
+      ];
+      const atSecondHeader = attributeHeader(headers, fakeSpecAt(100), "test.al");
+      expect(atSecondHeader.id).toBe(2);
+
+      // One offset earlier still belongs to the first (previous) object.
+      const justBeforeSecondHeader = attributeHeader(headers, fakeSpecAt(99), "test.al");
+      expect(justBeforeSecondHeader.id).toBe(1);
     });
   });
 });
