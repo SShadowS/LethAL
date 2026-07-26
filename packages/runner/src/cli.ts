@@ -1,9 +1,17 @@
 #!/usr/bin/env bun
-import { mkdir, mkdtemp, readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { parseArgs } from "node:util";
-import type { InstrumentedFile, SelectorConfig } from "@lethal/schemata";
+import {
+  type AppIdRange,
+  type DeclaredObject,
+  type InstrumentedFile,
+  type SelectorConfig,
+  parseIdRanges,
+  scanDeclaredObjects,
+  validateSelectorIds,
+} from "@lethal/schemata";
 import type { ActivationConfig, FetchFn } from "./activation";
 import { AlRunnerBackend } from "./al-runner-backend";
 import { ArtifactCompiler, defaultArtifactIo } from "./artifact";
@@ -47,14 +55,113 @@ import { ResultsStore } from "./store";
 // Selector/Control/Active objects — unlike al-runner's compiler, which tolerated
 // out-of-idRange ids without complaint. 50000/50001/50002 fall outside the fixture's
 // 79000-79199 idRange and failed real compilation; these must live inside whatever
-// idRange the target app declares. There is no general solution for arbitrary target
-// apps yet (no CLI flag to override), so this default only holds for apps whose idRange
-// covers 79197-79199 (e.g. the fixture) — a real target app may need its own ids.
+// idRange the target app declares. Kept as the default so every existing caller (and both
+// frozen container gates) behaves identically — a real target app whose idRanges exclude
+// this band overrides it via `--selector-id`/`--control-id`/`--table-id` or a config file
+// `selectorIds` section (R3/R4; see `resolveSelectorIds` and `validateSelectorIdsForProject`
+// below).
 const DEFAULT_SELECTOR_IDS: SelectorConfig = {
   selectorId: 79199,
   controlId: 79198,
   tableId: 79197,
 };
+
+/**
+ * Resolves the three injected object ids (the "Mutation Selector"/"Mutation Register"/"Mutation
+ * Upgrade" codeunits) with precedence CLI flag > `lethal.config.json`'s `selectorIds` section >
+ * `DEFAULT_SELECTOR_IDS` — decided independently PER ID, so a caller overriding just one of the
+ * three (say, because only `selectorId` collides with something) doesn't have to name the other
+ * two. R3: previously all three were hardcoded to `DEFAULT_SELECTOR_IDS` with no override surface
+ * at all, so any target app whose `idRanges` excluded 79197-79199 could not be instrumented.
+ *
+ * Three independent ids rather than one base id + fixed offsets: a real target app's `idRanges`
+ * can be several disjoint, narrow bands (e.g. accreted over time from separate Microsoft
+ * allocations), and a base+offset scheme can't place ids across such a gap. Three explicit knobs
+ * are more to type but work for every declared-range shape; `validateSelectorIdsForProject` below
+ * is what actually catches a bad choice, so the extra flexibility costs nothing in safety.
+ */
+export function resolveSelectorIds(
+  cliOverrides: Partial<SelectorConfig>,
+  configFileSelectorIds: Partial<SelectorConfig> | undefined,
+): SelectorConfig {
+  return {
+    selectorId:
+      cliOverrides.selectorId ??
+      configFileSelectorIds?.selectorId ??
+      DEFAULT_SELECTOR_IDS.selectorId,
+    controlId:
+      cliOverrides.controlId ?? configFileSelectorIds?.controlId ?? DEFAULT_SELECTOR_IDS.controlId,
+    tableId: cliOverrides.tableId ?? configFileSelectorIds?.tableId ?? DEFAULT_SELECTOR_IDS.tableId,
+  };
+}
+
+/**
+ * Reads and parses the target project's `app.json` purely to validate selector ids against its
+ * `idRanges` — a narrower, standalone reader kept separate from orchestrator.ts's own
+ * `readProjectManifest` (which is per-batch and un-exported) so this validation has no dependency
+ * on orchestrator.ts at all.
+ */
+async function readTargetAppManifestForIdCheck(
+  projectDir: string,
+): Promise<Record<string, unknown>> {
+  const appJsonPath = join(projectDir, "app.json");
+  let raw: string;
+  try {
+    raw = await readFile(appJsonPath, "utf8");
+  } catch (err) {
+    throw new Error(
+      `cannot read ${appJsonPath} to validate selector ids against the target app's idRanges: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  try {
+    return JSON.parse(raw) as Record<string, unknown>;
+  } catch (err) {
+    throw new Error(
+      `${appJsonPath} is not valid JSON — cannot validate selector ids: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
+/**
+ * Scans every `.al` file under `projectDir` (mirroring `generateMutationSet`'s own filter in
+ * orchestrator.ts: skip non-`.al` files and anything already named `Mutation*`, since those are
+ * this tool's own emitted output, never a real collision target) for codeunit ids the target
+ * project ALREADY declares — the input `validateSelectorIds`'s existing-object-collision check
+ * needs. Only codeunits are collected: all three injected objects are codeunits (see
+ * `emitMutationSelector`/`emitRegisterInstall`/`emitRegisterUpgrade`), and a BC object id is
+ * unique only within its own type, so a same-id table/page is not a real collision.
+ */
+async function scanProjectCodeunitIds(projectDir: string): Promise<Map<number, DeclaredObject>> {
+  const entries = (await readdir(projectDir, { recursive: true }))
+    .filter((e) => e.toLowerCase().endsWith(".al"))
+    .filter((e) => !basename(e).startsWith("Mutation"));
+  const byId = new Map<number, DeclaredObject>();
+  for (const rel of entries) {
+    const source = await readFile(join(projectDir, rel), "utf8");
+    for (const obj of scanDeclaredObjects(source)) {
+      if (obj.type === "codeunit" && !byId.has(obj.id)) byId.set(obj.id, obj);
+    }
+  }
+  return byId;
+}
+
+/**
+ * The full R3/R4 pre-compile check: reads the target's `app.json` `idRanges`, scans its already-
+ * declared codeunit ids, and validates the resolved `selectorIds` against both plus the
+ * pairwise-distinct rule — all BEFORE any `alc`/`altool` invocation. Called from `buildBackend`
+ * (both branches), positioned after every existing early-exit check that doesn't need a real
+ * project directory (see call sites for why) so a caller can be shown a fast, actionable error
+ * instead of burning a live BC round trip on an AL0297.
+ */
+export async function validateSelectorIdsForProject(
+  projectDir: string,
+  selectorIds: SelectorConfig,
+): Promise<void> {
+  const manifest = await readTargetAppManifestForIdCheck(projectDir);
+  const idRanges: AppIdRange[] = parseIdRanges(manifest);
+  const existingCodeunitIds = await scanProjectCodeunitIds(projectDir);
+  validateSelectorIds(selectorIds, idRanges, existingCodeunitIds);
+}
 
 export interface DryRunCliConfig {
   readonly mode: "dry-run";
@@ -76,6 +183,14 @@ export interface RunCliConfig {
   // bcdev backend's environment tool (Task 6) — al-runner has no environment to keep or expire.
   readonly keepEnv: boolean;
   readonly allowExpiringEnv: boolean;
+  /**
+   * R3: per-id overrides from `--selector-id`/`--control-id`/`--table-id`, present only for the
+   * ids actually given on argv — absent (not `{}`) when none were passed, matching this file's
+   * `exactOptionalPropertyTypes` convention for optional fields and keeping every pre-existing
+   * `parseCliConfig` equality test (which expects no such key at all) unaffected. Resolved against
+   * `lethal.config.json`'s `selectorIds` section and `DEFAULT_SELECTOR_IDS` by `resolveSelectorIds`.
+   */
+  readonly selectorIdOverrides?: Partial<SelectorConfig>;
 }
 
 /**
@@ -131,6 +246,19 @@ function requireKnownSubcommand(positionals: readonly string[]): string {
 }
 
 /**
+ * Parses a `--selector-id`/`--control-id`/`--table-id` flag value into a positive integer object
+ * id, or `undefined` when the flag was not given at all. Mirrors `--workers`'s validation.
+ */
+function parseObjectIdFlag(value: string | undefined, flagName: string): number | undefined {
+  if (value === undefined) return undefined;
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 1) {
+    throw new Error(`--${flagName} must be a positive integer`);
+  }
+  return n;
+}
+
+/**
  * Pure argument parsing/validation — no file or network I/O. Kept separate
  * from `main()` so arg-validation errors (missing --project, unknown
  * --backend, ...) are directly unit-testable without spawning a process.
@@ -154,6 +282,9 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
       instance: { type: "string" },
       "keep-env": { type: "boolean", default: false },
       "allow-expiring-env": { type: "boolean", default: false },
+      "selector-id": { type: "string" },
+      "control-id": { type: "string" },
+      "table-id": { type: "string" },
     },
   });
 
@@ -223,6 +354,20 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
   )
     throw new Error("--compile-concurrency must be a positive integer");
 
+  // R3: `--selector-id`/`--control-id`/`--table-id` override the three injected object ids
+  // (DEFAULT_SELECTOR_IDS) independently — see `resolveSelectorIds`'s doc comment for why three
+  // explicit ids rather than one base+offsets. Parsed here (not left to `resolveSelectorIds`) so
+  // a non-integer/non-positive value is rejected at argv-parse time, matching `--workers`/
+  // `--compile-concurrency` immediately above.
+  const selectorIdFlag = parseObjectIdFlag(values["selector-id"], "selector-id");
+  const controlIdFlag = parseObjectIdFlag(values["control-id"], "control-id");
+  const tableIdFlag = parseObjectIdFlag(values["table-id"], "table-id");
+  const selectorIdOverrides: Partial<SelectorConfig> = {
+    ...(selectorIdFlag !== undefined ? { selectorId: selectorIdFlag } : {}),
+    ...(controlIdFlag !== undefined ? { controlId: controlIdFlag } : {}),
+    ...(tableIdFlag !== undefined ? { tableId: tableIdFlag } : {}),
+  };
+
   // bcdev mutant activation is a single server-side record shared by every worker — server +
   // serverInstance + company, one row (Layer 5C-A: RunMutant's SetActive+run+ClearActive touches
   // that same `LC Mutation Active` row). Per-worker ArtifactCompiler.outputDir isolates each
@@ -275,6 +420,7 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     allowExpiringEnv,
     ...(values.out !== undefined ? { outPath: values.out } : {}),
     ...(compileConcurrency !== undefined ? { compileConcurrency } : {}),
+    ...(Object.keys(selectorIdOverrides).length > 0 ? { selectorIdOverrides } : {}),
   };
 }
 
@@ -332,6 +478,14 @@ export interface LethalConfigFile {
   // Task 7: an environment tool (Task 6) resolves/provisions the bcdev section instead of it
   // being hand-written — see `resolveEnvToolSession` below.
   readonly envTool?: Partial<EnvToolConfigSection>;
+  /**
+   * R3: config-file override for the three injected object ids, one precedence step below
+   * `--selector-id`/`--control-id`/`--table-id` and one above `DEFAULT_SELECTOR_IDS` — see
+   * `resolveSelectorIds`. Lets a project pin non-default ids (e.g. because its `idRanges` exclude
+   * 79197-79199, or because it shares a container with another instrumented project) without
+   * having to pass flags on every invocation.
+   */
+  readonly selectorIds?: Partial<SelectorConfig>;
 }
 
 /** Pure validators — no I/O — so "missing config field" errors are unit-testable directly. */
@@ -667,8 +821,17 @@ export async function buildBackend(
   // real install — the real default (`defaultAlToolPaths`) reads `~/.vscode/extensions`, which a
   // test cannot control.
   deps: { alToolPaths?: typeof defaultAlToolPaths } = {},
+  // R3: the resolved selector/control/table ids (`resolveSelectorIds`) — trailing, defaulted
+  // param so every pre-existing positional call site (tests included) keeps behaving exactly as
+  // before without having to name it. `runFromCli` is the one real caller that threads a
+  // non-default value through.
+  selectorIds: SelectorConfig = DEFAULT_SELECTOR_IDS,
 ): Promise<ExecutionBackend> {
   if (parsed.backendKind === "al-runner") {
+    // R3/R4: validated here, first, before constructing anything — al-runner's own `alc` run is
+    // lazy (`AlRunnerBackend.activate()`, see `selector.ts`'s doc comment), so this is the
+    // earliest point that can catch a bad id for this backend too.
+    await validateSelectorIdsForProject(parsed.projectDir, selectorIds);
     const c = validateAlRunnerConfig(configFile.alRunner);
     return new AlRunnerBackend({
       alRunnerPath: c.alRunnerPath,
@@ -676,7 +839,7 @@ export async function buildBackend(
       testDir: parsed.testDir,
       ...(c.packagesDir !== undefined ? { packagesDir: c.packagesDir } : {}),
       ...(c.stubsDir !== undefined ? { stubsDir: c.stubsDir } : {}),
-      selectorObjectId: DEFAULT_SELECTOR_IDS.selectorId,
+      selectorObjectId: selectorIds.selectorId,
       ...(c.serverMode !== undefined ? { serverMode: c.serverMode } : {}),
     });
   }
@@ -718,6 +881,12 @@ export async function buildBackend(
         "(~/.vscode/extensions/ms-dynamics-smb.al-*); install the extension, or run with --backend al-runner",
     );
   }
+  // R3/R4: validated here — after alc/altool are confirmed present (so the "could not locate..."
+  // guard above still fires first when BOTH conditions are wrong, matching this function's prior
+  // error-priority for an incomplete install) but before any compiler/deployer object touches the
+  // target project, and well before an actual `alc` invocation would burn a live BC round trip on
+  // an AL0297.
+  await validateSelectorIdsForProject(parsed.projectDir, selectorIds);
   const outputDir = join(scratchDir, "publish");
   await mkdir(outputDir, { recursive: true });
   const compiler = new ArtifactCompiler(
@@ -910,6 +1079,13 @@ export async function runFromCli(
   } = {},
 ): Promise<SessionReport> {
   const configFile = await loadLethalConfigFile(parsed.configPath);
+  // R3: resolved once, up front, from CLI flags > this config file's `selectorIds` section >
+  // DEFAULT_SELECTOR_IDS (`resolveSelectorIds`). Threaded through to every `build(...)` call below
+  // and into `runTheSession`'s `SessionConfig.selectorIds` — the actual idRanges/collision
+  // validation (`validateSelectorIdsForProject`) happens inside the REAL `buildBackend`, not here,
+  // since `deps.buildBackend` is what most of this file's own unit tests override with a fake
+  // `projectDir` that has no real app.json to read.
+  const selectorIds = resolveSelectorIds(parsed.selectorIdOverrides ?? {}, configFile.selectorIds);
   const scratchRoot = await mkdtemp(join(tmpdir(), "lethal-"));
   if (parsed.backendKind === "al-runner") {
     warnAlRunnerNotAuthoritative();
@@ -975,7 +1151,7 @@ export async function runFromCli(
     // code 3, and the report would never be printed/written.
     let report: SessionReport | undefined;
     try {
-      backend = await build(parsed, effectiveConfig, scratchRoot, deploy);
+      backend = await build(parsed, effectiveConfig, scratchRoot, deploy, {}, selectorIds);
       // `SessionConfig.backendFactory` is synchronous (`runSession` calls it
       // without awaiting — see orchestrator.ts), but building a worker's backend
       // is async (bcdev needs `defaultAlToolPaths()` + `mkdir`). So every worker
@@ -996,7 +1172,14 @@ export async function runFromCli(
       if (parsed.workers > 1) {
         for (let i = 0; i < parsed.workers; i++) {
           workerBackends.push(
-            await build(parsed, effectiveConfig, join(scratchRoot, `worker-${i}`), deploy),
+            await build(
+              parsed,
+              effectiveConfig,
+              join(scratchRoot, `worker-${i}`),
+              deploy,
+              {},
+              selectorIds,
+            ),
           );
         }
       }
@@ -1007,7 +1190,7 @@ export async function runFromCli(
         projectDir: parsed.projectDir,
         testDir: parsed.testDir,
         instrumentedDir: join(scratchRoot, "instrumented"),
-        selectorIds: DEFAULT_SELECTOR_IDS,
+        selectorIds,
         skipKnownSurvivors: parsed.skipKnownSurvivors,
         workers: parsed.workers,
         ...(parsed.compileConcurrency !== undefined

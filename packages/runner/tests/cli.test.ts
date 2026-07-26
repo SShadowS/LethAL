@@ -11,6 +11,7 @@ import {
   odataCfgFor,
   parseCliConfig,
   performForceResetLease,
+  resolveSelectorIds,
   resourceIdentityFor,
   validateAlRunnerConfig,
   validateBcDevConfig,
@@ -305,6 +306,139 @@ describe("parseCliConfig — worker flags", () => {
     ]);
     if (p.mode !== "run") throw new Error("expected a run config");
     expect(p.workers).toBe(1);
+  });
+});
+
+// R3: --selector-id/--control-id/--table-id override the three injected object ids
+// (DEFAULT_SELECTOR_IDS) independently.
+describe("parseCliConfig — selector id flags", () => {
+  test("no flags given: selectorIdOverrides is absent entirely", () => {
+    const p = parseCliConfig(["run", "--project", "p", "--tests", "t", "--backend", "al-runner"]);
+    if (p.mode !== "run") throw new Error("expected a run config");
+    expect(p.selectorIdOverrides).toBeUndefined();
+    expect("selectorIdOverrides" in p).toBe(false);
+  });
+
+  test("all three flags populate selectorIdOverrides", () => {
+    const p = parseCliConfig([
+      "run",
+      "--project",
+      "p",
+      "--tests",
+      "t",
+      "--backend",
+      "al-runner",
+      "--selector-id",
+      "50002",
+      "--control-id",
+      "50001",
+      "--table-id",
+      "50000",
+    ]);
+    if (p.mode !== "run") throw new Error("expected a run config");
+    expect(p.selectorIdOverrides).toEqual({
+      selectorId: 50002,
+      controlId: 50001,
+      tableId: 50000,
+    });
+  });
+
+  test("a single flag overrides only that one id", () => {
+    const p = parseCliConfig([
+      "run",
+      "--project",
+      "p",
+      "--tests",
+      "t",
+      "--backend",
+      "al-runner",
+      "--selector-id",
+      "50002",
+    ]);
+    if (p.mode !== "run") throw new Error("expected a run config");
+    expect(p.selectorIdOverrides).toEqual({ selectorId: 50002 });
+  });
+
+  test("rejects a non-positive --selector-id", () => {
+    expect(() =>
+      parseCliConfig([
+        "run",
+        "--project",
+        "p",
+        "--tests",
+        "t",
+        "--backend",
+        "al-runner",
+        "--selector-id",
+        "0",
+      ]),
+    ).toThrow(/--selector-id must be a positive integer/);
+  });
+
+  test("rejects a non-numeric --control-id", () => {
+    expect(() =>
+      parseCliConfig([
+        "run",
+        "--project",
+        "p",
+        "--tests",
+        "t",
+        "--backend",
+        "al-runner",
+        "--control-id",
+        "not-a-number",
+      ]),
+    ).toThrow(/--control-id must be a positive integer/);
+  });
+
+  test("rejects a non-integer --table-id", () => {
+    expect(() =>
+      parseCliConfig([
+        "run",
+        "--project",
+        "p",
+        "--tests",
+        "t",
+        "--backend",
+        "al-runner",
+        "--table-id",
+        "1.5",
+      ]),
+    ).toThrow(/--table-id must be a positive integer/);
+  });
+});
+
+describe("resolveSelectorIds", () => {
+  test("no overrides at all: falls back to DEFAULT_SELECTOR_IDS", () => {
+    expect(resolveSelectorIds({}, undefined)).toEqual({
+      selectorId: 79199,
+      controlId: 79198,
+      tableId: 79197,
+    });
+  });
+
+  test("CLI override wins over config file and default", () => {
+    expect(resolveSelectorIds({ selectorId: 1 }, { selectorId: 2, controlId: 3 })).toEqual({
+      selectorId: 1,
+      controlId: 3,
+      tableId: 79197,
+    });
+  });
+
+  test("config file wins over the default when no CLI override is given", () => {
+    expect(resolveSelectorIds({}, { selectorId: 2, controlId: 3, tableId: 4 })).toEqual({
+      selectorId: 2,
+      controlId: 3,
+      tableId: 4,
+    });
+  });
+
+  test("per-field resolution: each id picks its own source independently", () => {
+    expect(resolveSelectorIds({ tableId: 9 }, { selectorId: 2 })).toEqual({
+      selectorId: 2,
+      controlId: 79198,
+      tableId: 9,
+    });
   });
 });
 
