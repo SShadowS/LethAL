@@ -9,6 +9,7 @@ import { AlRunnerBackend } from "./al-runner-backend";
 import { ArtifactCompiler, defaultArtifactIo } from "./artifact";
 import type { ExecutionBackend } from "./backend";
 import { BcDevMcpBackend } from "./bcdev-backend";
+import type { BcDevConfig } from "./bcdev-backend";
 import { DeploymentVerifier } from "./deployment-verifier";
 import { EnvToolClient, EnvToolError, validateEnvToolConfig } from "./env-tool";
 import type { EnvToolBlock, EnvToolConfigSection } from "./env-tool";
@@ -253,6 +254,13 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
       "--keep-env applies to the bcdev backend's environment tool; al-runner has no environment",
     );
   }
+  // Minor 5 (Task 7 review): `--allow-expiring-env` got the silent-no-op treatment `--keep-env`
+  // just above explicitly argues against — same backend-mismatch, same refusal, same reasoning.
+  if (allowExpiringEnv && backendArg === "al-runner") {
+    throw new Error(
+      "--allow-expiring-env applies to the bcdev backend's environment tool; al-runner has no environment",
+    );
+  }
 
   return {
     mode: "run",
@@ -297,6 +305,16 @@ export interface BcDevConfigSection {
    * existing behaviour of letting bc-dev-mcp fall back to its own default.
    */
   readonly port?: number;
+  /**
+   * Coverage the backend claims for baseline routing/selection — forwarded verbatim to
+   * `BcDevMcpBackend` as `coverageMode` (see `BcDevConfig.coverageMode`, bcdev-backend.ts, for the
+   * full rationale: `"none"` is the env-tool fallback for when bc-dev-mcp cannot reach the
+   * environment). Mirrors `port` immediately above exactly: absent (the default) leaves
+   * `BcDevMcpBackend`'s own `"procedure"` default in effect. Task 7 review, Important 4: this
+   * field did not exist before, so `coverageMode: "none"` could never actually be selected by any
+   * `lethal run` — `BcDevConfig.coverageMode` existed but had no config surface reaching it.
+   */
+  readonly coverageMode?: "procedure" | "none";
 }
 
 export interface AlRunnerConfigSection {
@@ -479,6 +497,59 @@ export function makeEnvToolPublisher(
 }
 
 /**
+ * Selects the deployer `buildBackend` uses for the bcdev batch-artifact publisher: through the
+ * env-tool publisher when a session resolved one (`envToolDeploy` defined), else the ordinary
+ * container/altool deployer. Extracted out of `buildBackend` (Task 7 review, Minor 7) rather than
+ * left inlined there, so a test can invoke the EXACT function `buildBackend` calls when proving the
+ * env-tool publisher and the `publishApps`/control-app publisher share one `serializerKey` (Task
+ * 4's carried-forward requirement) — a hand-rolled reconstruction of `buildBackend`'s own ternary
+ * would stay green even if `buildBackend` itself diverged, which is precisely the regression that
+ * guarantee exists to catch.
+ */
+export function deployerFor(
+  c: BcDevConfigSection,
+  altoolPath: string,
+  envToolDeploy?: { readonly client: EnvToolClient; readonly publishBlock: EnvToolBlock },
+): AppPublisher {
+  return envToolDeploy !== undefined
+    ? makeEnvToolPublisher(envToolDeploy.client, envToolDeploy.publishBlock, c)
+    : new ContainerDeployer(
+        {
+          altoolPath,
+          server: c.server,
+          serverInstance: c.serverInstance,
+          username: c.username,
+          password: c.password,
+          ...(c.tenant !== undefined ? { tenant: c.tenant } : {}),
+        },
+        defaultDeployerIo,
+      );
+}
+
+/**
+ * Shapes the `BcDevConfig` object `buildBackend` passes to `BcDevMcpBackend`'s constructor — pure,
+ * no I/O, so the forwarding of every optional field (`tenant`, `env`, `port`, `coverageMode`) is
+ * directly unit-testable without a real `alc.exe`/`altool.exe` install. Extracted (Task 7 review,
+ * Important 4) specifically so `coverageMode`'s forwarding — mirroring `port`'s existing
+ * pass-through exactly — has a seam a test can call directly.
+ */
+export function bcDevBackendConfig(c: BcDevConfigSection, projectDir: string): BcDevConfig {
+  return {
+    mcpCommand: c.mcpCommand,
+    project: projectDir,
+    server: c.server,
+    serverInstance: c.serverInstance,
+    company: c.company,
+    packageCachePath: c.packageCachePath,
+    controlSymbolPath: c.controlSymbolPath,
+    ...(c.tenant !== undefined ? { tenant: c.tenant } : {}),
+    ...(c.env !== undefined ? { env: c.env } : {}),
+    ...(c.port !== undefined ? { port: c.port } : {}),
+    ...(c.coverageMode !== undefined ? { coverageMode: c.coverageMode } : {}),
+  };
+}
+
+/**
  * Runs Task 6's `startEnvToolSession` lifecycle EXACTLY ONCE for a `run` invocation and returns a
  * `LethalConfigFile` with `bcdev` substituted by the resolved section — the object `buildBackend`,
  * `leaseSessionFor`, and `resourceIdentityFor` all read `configFile.bcdev` from (each calls
@@ -552,7 +623,7 @@ export async function resolveEnvToolSession(
   };
 }
 
-async function buildBackend(
+export async function buildBackend(
   parsed: RunCliConfig,
   configFile: LethalConfigFile,
   scratchDir: string,
@@ -572,6 +643,21 @@ async function buildBackend(
   }
 
   const c = validateBcDevConfig(configFile.bcdev);
+
+  // Important 3 (Task 7 review): a worker backend that silently drops `envToolDeploy` would build
+  // a `ContainerDeployer` and publish via altool to an env-tool-provisioned HTTPS environment —
+  // exactly the plausible-silent-default this project forbids. Every caller building a bcdev
+  // backend for a config with an `envTool` section MUST thread `deploy` through; a call site that
+  // forgets throws here, loudly, rather than silently falling back to altool. Checked BEFORE any
+  // I/O (`defaultAlToolPaths`, `mkdir`) so this is reachable without a real alc/altool install.
+  if (configFile.envTool !== undefined && envToolDeploy === undefined) {
+    throw new Error(
+      "buildBackend: bcdev config has an `envTool` section configured but no env-tool deploy was " +
+        "supplied — refusing to fall back to ContainerDeployer/altool, which would silently " +
+        "publish outside the configured environment tool",
+    );
+  }
+
   const toolPaths = await defaultAlToolPaths();
   if (!toolPaths) {
     throw new Error(
@@ -594,21 +680,9 @@ async function buildBackend(
   // environment at all. `envToolDeploy` is threaded down from `resolveEnvToolSession` rather than
   // re-derived from `configFile.envTool` here so there is exactly one `EnvToolClient` instance and
   // one `canonicalContainerKey` derivation shared with the control-app/`publishApps` publisher —
-  // see `makeEnvToolPublisher`'s doc comment.
-  const deployer: AppPublisher =
-    envToolDeploy !== undefined
-      ? makeEnvToolPublisher(envToolDeploy.client, envToolDeploy.publishBlock, c)
-      : new ContainerDeployer(
-          {
-            altoolPath: toolPaths.altoolPath,
-            server: c.server,
-            serverInstance: c.serverInstance,
-            username: c.username,
-            password: c.password,
-            ...(c.tenant !== undefined ? { tenant: c.tenant } : {}),
-          },
-          defaultDeployerIo,
-        );
+  // see `makeEnvToolPublisher`'s doc comment. `deployerFor` (Minor 7) is the same function a test
+  // exercises directly to prove both publisher constructions share one `serializerKey`.
+  const deployer: AppPublisher = deployerFor(c, toolPaths.altoolPath, envToolDeploy);
   // One OData config, several consumers on the same LethAL Control / MutationControl web-service
   // endpoints: the RunMutant execution transport, the HarnessInfo prerequisite check, and the
   // (Layer-5A) deployment identity verifier.
@@ -616,18 +690,7 @@ async function buildBackend(
   const verifier = new DeploymentVerifier(odataCfg);
   const harnessVerifier = new HarnessVerifier(odataCfg);
   return new BcDevMcpBackend(
-    {
-      mcpCommand: c.mcpCommand,
-      project: parsed.projectDir,
-      server: c.server,
-      serverInstance: c.serverInstance,
-      company: c.company,
-      packageCachePath: c.packageCachePath,
-      controlSymbolPath: c.controlSymbolPath,
-      ...(c.tenant !== undefined ? { tenant: c.tenant } : {}),
-      ...(c.env !== undefined ? { env: c.env } : {}),
-      ...(c.port !== undefined ? { port: c.port } : {}),
-    },
+    bcDevBackendConfig(c, parsed.projectDir),
     undefined,
     { compiler, deployer, verifier, harnessVerifier },
     (targetAppId, artifactId) => new RunMutantTransport(odataCfg, targetAppId, artifactId),
@@ -727,7 +790,67 @@ async function printDryRun(projectDir: string): Promise<void> {
   }
 }
 
-async function runFromCli(parsed: RunCliConfig): Promise<SessionReport> {
+/**
+ * Runs `body` — everything from directly after `resolveEnvToolSession` resolves through to the end
+ * of the session (`buildBackend`, the worker-backend loop, `ResultsStore`, `runSession`) — and
+ * tears down `envSession` in a `finally` that runs no matter how `body` settles.
+ *
+ * Task 7 review, Important 1: `resolveEnvToolSession` may already have provisioned a REAL, billed
+ * environment by the time `body` starts. `body` throwing — `buildBackend` failing on the common
+ * first-run "could not locate alc.exe/altool.exe" path, the worker loop, or `new
+ * ResultsStore(...)` — must still reach this `finally`, or the only way back is the
+ * `~/.lethal/env-state/<runId>.json` crash-recovery record instead of an automatic teardown.
+ *
+ * Task 7 review, Important 2: `teardown`'s own failure is caught here and only `console.warn`ed —
+ * the SAME posture `env-tool-session.ts`'s own `teardown` already uses internally for a failed
+ * `deleteEnv` spawn. `teardown` can also reject for a reason `env-tool-session.ts` cannot catch
+ * itself: `validateEnvToolConfig` only checks that a `deleteEnv` placeholder is KNOWN, not that
+ * it's suppliable at teardown time, so a `deleteEnv` block naming `{appFile}` makes `renderCommand`
+ * throw from inside `teardown`'s own `catch`. Left unguarded, that would discard `body`'s report
+ * and error, turning exit 0 or the quarantine exit code 3 into an ordinary uncaught-throw exit 1 —
+ * exactly the "fix your config and retry" signal the quarantine code exists to avoid sending when
+ * the real state is a stranded tier.
+ *
+ * Exported so both properties are directly unit-testable against a `body`/`teardown` that
+ * throw/reject on demand, without a real backend or a real environment tool.
+ */
+export async function withEnvTeardown(
+  envSession: EnvToolSession | undefined,
+  keepEnv: boolean,
+  body: () => Promise<SessionReport>,
+): Promise<SessionReport> {
+  let report: SessionReport | undefined;
+  try {
+    report = await body();
+    return report;
+  } finally {
+    if (envSession !== undefined) {
+      try {
+        await envSession.teardown({
+          keepEnv,
+          // `report` is `undefined` only when `body` itself threw (a real failure, not a
+          // quarantine verdict) — that is not treated as a quarantine here either, matching what
+          // `main()` reports as the exit code (an uncaught throw exits 1, never the quarantine
+          // code 3).
+          quarantined: report?.quarantined !== undefined,
+        });
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        console.warn(
+          `[lethal] env-tool teardown failed and could not complete automatically — the environment may still exist; check ~/.lethal/env-state for the crash-recovery record. Underlying error: ${detail}`,
+        );
+      }
+    }
+  }
+}
+
+export async function runFromCli(
+  parsed: RunCliConfig,
+  deps: {
+    resolveEnvToolSession?: typeof resolveEnvToolSession;
+    buildBackend?: typeof buildBackend;
+  } = {},
+): Promise<SessionReport> {
   const configFile = await loadLethalConfigFile(parsed.configPath);
   const scratchRoot = await mkdtemp(join(tmpdir(), "lethal-"));
   if (parsed.backendKind === "al-runner") warnAlRunnerNotAuthoritative();
@@ -737,83 +860,99 @@ async function runFromCli(parsed: RunCliConfig): Promise<SessionReport> {
   // the raw `configFile` — `buildBackend` (both the main backend and, in a future multi-worker
   // bcdev world, any per-worker one), `resourceIdentityFor`, and `leaseSessionFor` all still call
   // `validateBcDevConfig` independently, but against the SAME already-resolved section.
-  const { effectiveConfig, envSession, deploy } = await resolveEnvToolSession(
+  const resolveSession = deps.resolveEnvToolSession ?? resolveEnvToolSession;
+  const { effectiveConfig, envSession, deploy } = await resolveSession(
     parsed,
     configFile,
     basename(scratchRoot),
   );
 
-  const backend = await buildBackend(parsed, effectiveConfig, scratchRoot, deploy);
-  // `SessionConfig.backendFactory` is synchronous (`runSession` calls it
-  // without awaiting — see orchestrator.ts), but building a worker's backend
-  // is async (bcdev needs `defaultAlToolPaths()` + `mkdir`). So every worker
-  // backend is constructed here, up front, each with its own
-  // `<scratchRoot>/worker-<i>` scratch dir; the factory below just hands back
-  // the already-built instance for that index. `runSession` still owns
-  // disposing them (see `closeIfSupported` in orchestrator.ts) — it just
-  // doesn't own constructing them.
-  //
-  // (bcdev + --workers > 1 is refused in `parseCliConfig`, so this loop only ever builds al-runner
-  // backends today — `effectiveConfig` equals `configFile` on that path regardless, since
-  // `resolveEnvToolSession` is a no-op for al-runner.)
-  const workerBackends: ExecutionBackend[] = [];
-  if (parsed.workers > 1) {
-    for (let i = 0; i < parsed.workers; i++) {
-      workerBackends.push(
-        await buildBackend(parsed, effectiveConfig, join(scratchRoot, `worker-${i}`)),
-      );
-    }
+  // Minor 6 (Task 7 review): `--keep-env` with a bcdev backend but no `envTool` section configured
+  // is a silent no-op — there is no environment for it to act on. Not catchable at parse time
+  // (parsing has no config file loaded yet), so it's caught here, right after the config-dependent
+  // `envSession` is known. `--keep-env` + `--backend al-runner` is refused outright at parse time
+  // instead (see `parseCliConfig`), so by construction the only way to reach this with `keepEnv`
+  // true and `envSession` undefined is exactly this case.
+  if (parsed.keepEnv && envSession === undefined) {
+    console.warn(
+      "[lethal] --keep-env has no effect: the bcdev config has no `envTool` section configured, " +
+        "so there is no environment for LethAL to keep",
+    );
   }
-  const store = new ResultsStore(parsed.dbPath);
-  let report: SessionReport | undefined;
-  try {
-    report = await runSession({
-      backend,
-      store,
-      projectDir: parsed.projectDir,
-      testDir: parsed.testDir,
-      instrumentedDir: join(scratchRoot, "instrumented"),
-      selectorIds: DEFAULT_SELECTOR_IDS,
-      skipKnownSurvivors: parsed.skipKnownSurvivors,
-      workers: parsed.workers,
-      ...(parsed.compileConcurrency !== undefined
-        ? { compileConcurrency: parsed.compileConcurrency }
-        : {}),
-      ...resourceIdentityFor(parsed, effectiveConfig),
-      ...leaseSessionFor(parsed, effectiveConfig),
-      ...(parsed.workers > 1
-        ? {
-            backendFactory: (i: number) => {
-              const b = workerBackends[i];
-              if (b === undefined) {
-                throw new Error(`runFromCli: no worker backend pre-built for index ${i}`);
-              }
-              return b;
-            },
-          }
-        : {}),
-    });
-    return report;
-  } finally {
-    store.close();
-    // Release whatever the backend is holding open: the spawned bc-dev MCP
-    // child, or (server mode) the one warm al-runner process. The
-    // `process.exit(0)` below would paper over a leak here, but only for this
-    // entry point — anything else embedding the backend would hang or leak a
-    // process instead.
-    if (backend instanceof BcDevMcpBackend) await backend.close();
-    if (backend instanceof AlRunnerBackend) await backend.close();
-    if (envSession !== undefined) {
-      // Never allowed to change the report or the exit code: verdicts are the product. `report`
-      // is `undefined` only when `runSession` itself threw (a real failure, not a quarantine
-      // verdict) — that is not treated as a quarantine here either, matching what `main()` reports
-      // as the exit code (an uncaught throw exits 1, never the quarantine code 3).
-      await envSession.teardown({
-        keepEnv: parsed.keepEnv,
-        quarantined: report?.quarantined !== undefined,
+
+  const build = deps.buildBackend ?? buildBackend;
+
+  // Important 1 (Task 7 review): the try/finally that owns teardown (`withEnvTeardown`) now wraps
+  // `buildBackend`, the worker-backend loop, and `new ResultsStore(...)` too — not just
+  // `runSession` — so a REAL, possibly-billed, provisioned environment from `resolveEnvToolSession`
+  // above is never leaked no matter which of those steps throws.
+  return await withEnvTeardown(envSession, parsed.keepEnv, async () => {
+    let backend: ExecutionBackend | undefined;
+    let store: ResultsStore | undefined;
+    try {
+      backend = await build(parsed, effectiveConfig, scratchRoot, deploy);
+      // `SessionConfig.backendFactory` is synchronous (`runSession` calls it
+      // without awaiting — see orchestrator.ts), but building a worker's backend
+      // is async (bcdev needs `defaultAlToolPaths()` + `mkdir`). So every worker
+      // backend is constructed here, up front, each with its own
+      // `<scratchRoot>/worker-<i>` scratch dir; the factory below just hands back
+      // the already-built instance for that index. `runSession` still owns
+      // disposing them (see `closeIfSupported` in orchestrator.ts) — it just
+      // doesn't own constructing them.
+      //
+      // (bcdev + --workers > 1 is refused in `parseCliConfig`, so this loop only ever builds
+      // al-runner backends today — `effectiveConfig` equals `configFile` on that path regardless,
+      // since `resolveEnvToolSession` is a no-op for al-runner. `deploy` is still threaded through
+      // (Important 3, Task 7 review): a bcdev worker built without it would silently publish via
+      // `ContainerDeployer`/altool instead of through the configured env tool — unreachable today
+      // only because of the `--workers > 1` bcdev refusal above, and that restriction is
+      // explicitly deferred rather than permanent.)
+      const workerBackends: ExecutionBackend[] = [];
+      if (parsed.workers > 1) {
+        for (let i = 0; i < parsed.workers; i++) {
+          workerBackends.push(
+            await build(parsed, effectiveConfig, join(scratchRoot, `worker-${i}`), deploy),
+          );
+        }
+      }
+      store = new ResultsStore(parsed.dbPath);
+      return await runSession({
+        backend,
+        store,
+        projectDir: parsed.projectDir,
+        testDir: parsed.testDir,
+        instrumentedDir: join(scratchRoot, "instrumented"),
+        selectorIds: DEFAULT_SELECTOR_IDS,
+        skipKnownSurvivors: parsed.skipKnownSurvivors,
+        workers: parsed.workers,
+        ...(parsed.compileConcurrency !== undefined
+          ? { compileConcurrency: parsed.compileConcurrency }
+          : {}),
+        ...resourceIdentityFor(parsed, effectiveConfig),
+        ...leaseSessionFor(parsed, effectiveConfig),
+        ...(parsed.workers > 1
+          ? {
+              backendFactory: (i: number) => {
+                const b = workerBackends[i];
+                if (b === undefined) {
+                  throw new Error(`runFromCli: no worker backend pre-built for index ${i}`);
+                }
+                return b;
+              },
+            }
+          : {}),
       });
+    } finally {
+      store?.close();
+      // Release whatever the backend is holding open: the spawned bc-dev MCP
+      // child, or (server mode) the one warm al-runner process. The
+      // `process.exit(0)` below would paper over a leak here, but only for this
+      // entry point — anything else embedding the backend would hang or leak a
+      // process instead.
+      if (backend instanceof BcDevMcpBackend) await backend.close();
+      if (backend instanceof AlRunnerBackend) await backend.close();
     }
-  }
+  });
 }
 
 /**

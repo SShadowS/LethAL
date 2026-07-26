@@ -1,16 +1,37 @@
 import { describe, expect, it } from "bun:test";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { BcDevConfigSection, LethalConfigFile, RunCliConfig } from "../src/cli";
 import {
+  bcDevBackendConfig,
+  buildBackend,
+  deployerFor,
   leaseSessionFor,
   makeEnvToolPublisher,
   parseCliConfig,
   resolveEnvToolSession,
   resourceIdentityFor,
+  runFromCli,
   validateBcDevConfig,
+  withEnvTeardown,
 } from "../src/cli";
 import { EnvToolClient, EnvToolError } from "../src/env-tool";
 import type { EnvToolConfigSection } from "../src/env-tool";
+import type { EnvToolPublisher } from "../src/env-tool-publisher";
 import type { EnvToolSession } from "../src/env-tool-session";
+import type { SessionReport } from "../src/report";
+
+/** Writes a minimal valid (empty) `lethal.config.json` to a fresh scratch dir and returns its path.
+ * Every field of `LethalConfigFile` is optional, so `{}` parses fine — tests that need real
+ * `bcdev`/`envTool` content inject `resolveEnvToolSession` instead of relying on this file's
+ * content, exactly like `resolveEnvToolSession`'s own no-op path for al-runner/no-envTool. */
+async function writeTempConfig(): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), "lethal-cfgtest-"));
+  const path = join(dir, "lethal.config.json");
+  await writeFile(path, "{}", "utf8");
+  return path;
+}
 
 describe("env-tool CLI flags", () => {
   const argv = [
@@ -40,6 +61,9 @@ describe("env-tool CLI flags", () => {
   });
 
   it("rejects --keep-env with --backend al-runner, which has no environment", () => {
+    // Minor 9 (Task 7 review): `/keep-env/` also matches parseArgs' OWN "Unknown option
+    // '--keep-env'" — deleting both the option declaration and the guard would leave this green.
+    // Match text unique to the guard's own message instead.
     expect(() =>
       parseCliConfig([
         "run",
@@ -53,7 +77,26 @@ describe("env-tool CLI flags", () => {
         "c.json",
         "--keep-env",
       ]),
-    ).toThrow(/keep-env/);
+    ).toThrow(/al-runner has no environment/);
+  });
+
+  // Minor 5 (Task 7 review): `--allow-expiring-env` got the silent-no-op treatment `--keep-env`
+  // above explicitly refuses against — give it the identical guard and the identical test shape.
+  it("rejects --allow-expiring-env with --backend al-runner, which has no environment", () => {
+    expect(() =>
+      parseCliConfig([
+        "run",
+        "--project",
+        "p",
+        "--tests",
+        "t",
+        "--backend",
+        "al-runner",
+        "--config",
+        "c.json",
+        "--allow-expiring-env",
+      ]),
+    ).toThrow(/al-runner has no environment/);
   });
 });
 
@@ -188,13 +231,16 @@ describe("resolveEnvToolSession", () => {
     expect(result.deploy).toBeDefined();
 
     // Downstream seams (buildBackend/leaseSessionFor/resourceIdentityFor in cli.ts) read
-    // `effectiveConfig`, not the raw `configFile` — consuming it here must never re-trigger
-    // provisioning (the fake above only allows exactly one call before it would already have
-    // failed a caller expecting more).
+    // `effectiveConfig`, not the raw `configFile`. None of them take `startSession` as an
+    // argument, so by construction they cannot re-trigger provisioning — there is nothing further
+    // to assert about `startCalls` after calling them (Minor 8, Task 7 review: a trailing
+    // `expect(startCalls).toBe(1)` here could never go red no matter what these three functions
+    // did, and was deleted). What this DOES still prove: none of the three throw when fed
+    // `effectiveConfig`. The exactly-once guarantee itself is already pinned by the
+    // `expect(startCalls).toBe(1)` directly above, right after `resolveEnvToolSession` returns.
     validateBcDevConfig(result.effectiveConfig.bcdev);
     leaseSessionFor(RUN_CONFIG_BCDEV, result.effectiveConfig);
     resourceIdentityFor(RUN_CONFIG_BCDEV, result.effectiveConfig);
-    expect(startCalls).toBe(1);
   });
 
   it("validates the envTool config BEFORE ever starting a session", async () => {
@@ -291,13 +337,19 @@ describe("resolveEnvToolSession", () => {
     if (envSession === undefined || deploy === undefined) {
       throw new Error("expected a resolved env-tool session");
     }
-    // Publisher A: exactly what `buildBackend` constructs for the batch-artifact deployer.
+    // Publisher A: exactly what `buildBackend` constructs for the batch-artifact deployer — via
+    // `deployerFor`, the SAME function `buildBackend` itself calls (Minor 7, Task 7 review: this
+    // test used to call `makeEnvToolPublisher` directly for BOTH publishers, which only proved
+    // that function deterministic and would have stayed green even if `buildBackend` inlined a
+    // divergent `serializerKey` — the exact regression this test claims to guard). `deployerFor`
+    // is given an `envToolDeploy`, so it always takes the env-tool branch and the (unused in that
+    // branch) `altoolPath` argument is a placeholder.
     const resolvedForBuildBackend = validateBcDevConfig(effectiveConfig.bcdev);
-    const publisherA = makeEnvToolPublisher(
-      deploy.client,
-      deploy.publishBlock,
+    const publisherA = deployerFor(
       resolvedForBuildBackend,
-    );
+      "unused-altool-path",
+      deploy,
+    ) as EnvToolPublisher;
     // Publisher B: exactly what `startEnvToolSession`'s own `makePublisher` callback builds (same
     // recipe — reconstructed here since the session's internal instance was already used and
     // never returned).
@@ -308,5 +360,231 @@ describe("resolveEnvToolSession", () => {
     const realFile = import.meta.path;
     await Promise.all([publisherA.publishFile(realFile), publisherB.publishFile(realFile)]);
     expect(counter.max).toBe(1);
+  });
+});
+
+// ————————————————————————————————————————————————————————————————————————
+// Task 7 review, Important 1 + 2 — `withEnvTeardown`: the core mechanism that (1) tears down
+// `envSession` no matter how `body` settles (a `buildBackend` failure must not leak a real,
+// possibly-billed environment), and (2) never lets a REJECTING `teardown` replace `body`'s own
+// report or thrown error (a `deleteEnv` block naming an unsuppliable placeholder like `{appFile}`
+// makes `env-tool-session.ts`'s own `teardown` reject even after it already caught its own
+// `client.run` failure — see that file's doc comment).
+// ————————————————————————————————————————————————————————————————————————
+
+const FAKE_REPORT: SessionReport = {
+  backend: "fake",
+  authoritative: true,
+  baselineGreen: true,
+  batches: 1,
+  counts: {
+    killed: 0,
+    survived: 0,
+    noCoverage: 0,
+    timeoutKilled: 0,
+    knownSurvivors: 0,
+    unstable: 0,
+    errors: 0,
+    deadlineExceeded: 0,
+  },
+  mutationScore: null,
+  mutants: [],
+  unsupportedTests: [],
+};
+
+describe("withEnvTeardown", () => {
+  it("Important 1: tears down even when body throws (e.g. buildBackend failing)", async () => {
+    const teardownCalls: Array<{ keepEnv: boolean; quarantined: boolean }> = [];
+    const envSession: EnvToolSession = {
+      bcdev: RESOLVED_BCDEV,
+      createdEnvId: "env-created",
+      async teardown(opts) {
+        teardownCalls.push(opts);
+      },
+    };
+    const bodyErr = new Error("could not locate alc.exe/altool.exe");
+    await expect(
+      withEnvTeardown(envSession, false, async () => {
+        throw bodyErr;
+      }),
+    ).rejects.toBe(bodyErr);
+    expect(teardownCalls).toEqual([{ keepEnv: false, quarantined: false }]);
+  });
+
+  it("is a no-op when there is no env-tool session (al-runner / bcdev without envTool)", async () => {
+    const result = await withEnvTeardown(undefined, false, async () => FAKE_REPORT);
+    expect(result).toBe(FAKE_REPORT);
+  });
+
+  it("Important 2: a rejecting teardown does not replace the body's report (exit code stays intact)", async () => {
+    const warnCalls: unknown[][] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => {
+      warnCalls.push(args);
+    };
+    try {
+      const envSession: EnvToolSession = {
+        bcdev: RESOLVED_BCDEV,
+        createdEnvId: "env-created",
+        async teardown() {
+          // Mirrors env-tool-session.ts's own failure mode: `deleteEnv` names `{appFile}`, which
+          // `renderCommand` cannot supply at teardown time.
+          throw new EnvToolError(
+            "envTool: no value available for placeholder {appFile} while building deleteEnv",
+          );
+        },
+      };
+      const result = await withEnvTeardown(envSession, false, async () => FAKE_REPORT);
+      expect(result).toBe(FAKE_REPORT);
+    } finally {
+      console.warn = originalWarn;
+    }
+    expect(warnCalls.some((args) => String(args[0]).includes("teardown failed"))).toBe(true);
+  });
+
+  it("Important 2: a rejecting teardown does not replace the body's own thrown error", async () => {
+    const envSession: EnvToolSession = {
+      bcdev: RESOLVED_BCDEV,
+      createdEnvId: "env-created",
+      async teardown() {
+        throw new Error("deleteEnv boom");
+      },
+    };
+    const bodyErr = new Error("runSession blew up");
+    await expect(
+      withEnvTeardown(envSession, false, async () => {
+        throw bodyErr;
+      }),
+    ).rejects.toBe(bodyErr);
+  });
+});
+
+// ————————————————————————————————————————————————————————————————————————
+// Task 7 review, Important 1 + 3 + Minor 6 — `runFromCli`'s own wiring: proves the fixes actually
+// reach the real entry point (not just `withEnvTeardown` in isolation). `resolveEnvToolSession` and
+// `buildBackend` are injected so these run without a real environment tool or a real alc/altool
+// install; `loadLethalConfigFile` still reads a REAL (minimal, empty) file since it isn't
+// injectable — its content is irrelevant once `resolveEnvToolSession` is replaced.
+// ————————————————————————————————————————————————————————————————————————
+describe("runFromCli (Task 7 review wiring)", () => {
+  it("Important 1: a buildBackend failure still tears down an env-tool-provisioned environment", async () => {
+    const configPath = await writeTempConfig();
+    const teardownCalls: Array<{ keepEnv: boolean; quarantined: boolean }> = [];
+    const fakeSession: EnvToolSession = {
+      bcdev: RESOLVED_BCDEV,
+      createdEnvId: "env-created",
+      async teardown(opts) {
+        teardownCalls.push(opts);
+      },
+    };
+    const parsed: RunCliConfig = { ...RUN_CONFIG_BCDEV, configPath };
+    const buildErr = new Error(
+      "could not locate alc.exe/altool.exe under the AL Language VS Code extension install",
+    );
+    await expect(
+      runFromCli(parsed, {
+        resolveEnvToolSession: async () => ({
+          effectiveConfig: {},
+          envSession: fakeSession,
+        }),
+        buildBackend: async () => {
+          throw buildErr;
+        },
+      }),
+    ).rejects.toBe(buildErr);
+    expect(teardownCalls).toEqual([{ keepEnv: false, quarantined: false }]);
+  });
+
+  it("Important 2: teardown rejecting after a buildBackend failure surfaces the ORIGINAL error, not teardown's", async () => {
+    const configPath = await writeTempConfig();
+    const fakeSession: EnvToolSession = {
+      bcdev: RESOLVED_BCDEV,
+      createdEnvId: "env-created",
+      async teardown() {
+        throw new EnvToolError("envTool: no value available for placeholder {appFile}");
+      },
+    };
+    const parsed: RunCliConfig = { ...RUN_CONFIG_BCDEV, configPath };
+    const buildErr = new Error("could not locate alc.exe/altool.exe");
+    await expect(
+      runFromCli(parsed, {
+        resolveEnvToolSession: async () => ({
+          effectiveConfig: {},
+          envSession: fakeSession,
+        }),
+        buildBackend: async () => {
+          throw buildErr;
+        },
+      }),
+    ).rejects.toBe(buildErr);
+  });
+
+  it("Minor 6: --keep-env with bcdev but no envTool section warns instead of a silent no-op", async () => {
+    const configPath = await writeTempConfig();
+    const parsed: RunCliConfig = { ...RUN_CONFIG_BCDEV, configPath, keepEnv: true };
+    const warnCalls: unknown[][] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => {
+      warnCalls.push(args);
+    };
+    try {
+      // The REAL `resolveEnvToolSession` runs here (not injected) — `{}` has no `bcdev`/`envTool`
+      // section, so it takes the no-op path (`envSession` undefined) exactly like a real bcdev
+      // config with no `envTool` section would. `buildBackend` is injected to stop the run before
+      // it needs a real alc/altool install — this test is only about the warning.
+      await expect(
+        runFromCli(parsed, {
+          buildBackend: async () => {
+            throw new Error("stop before a real backend build");
+          },
+        }),
+      ).rejects.toThrow("stop before a real backend build");
+    } finally {
+      console.warn = originalWarn;
+    }
+    expect(warnCalls.some((args) => String(args[0]).includes("--keep-env has no effect"))).toBe(
+      true,
+    );
+  });
+});
+
+// ————————————————————————————————————————————————————————————————————————
+// Task 7 review, Important 3 — `buildBackend` must refuse to silently fall back to
+// `ContainerDeployer`/altool for a bcdev config that has an `envTool` section configured but was
+// not given an env-tool deploy to publish through (the worker-backend loop is the one call site
+// that used to omit it).
+// ————————————————————————————————————————————————————————————————————————
+describe("buildBackend (Important 3 — never silently drop the env-tool publisher)", () => {
+  it("throws when bcdev + envTool is configured but no env-tool deploy was supplied", async () => {
+    const configFile: LethalConfigFile = {
+      bcdev: RESOLVED_BCDEV,
+      envTool: resolveModeCfg("env-4711"),
+    };
+    // Reachable without a real alc/altool install: the check fires before `defaultAlToolPaths()`.
+    await expect(buildBackend(RUN_CONFIG_BCDEV, configFile, "C:/scratch")).rejects.toThrow(
+      /no env-tool deploy was supplied/,
+    );
+  });
+});
+
+// ————————————————————————————————————————————————————————————————————————
+// Task 7 review, Important 4 — `coverageMode` (the env-tool fallback for when bc-dev-mcp cannot
+// reach the environment) had no `BcDevConfigSection` field and nothing forwarded one, so `"none"`
+// could never actually be selected by a `lethal run`. `bcDevBackendConfig` is the pure seam
+// `buildBackend` uses to shape `BcDevMcpBackend`'s config — tested directly, mirroring exactly how
+// `port` (an existing, working pass-through) is proven.
+// ————————————————————————————————————————————————————————————————————————
+describe("bcDevBackendConfig (Important 4 — coverageMode config surface)", () => {
+  it("forwards coverageMode when present, exactly like port", () => {
+    const c: BcDevConfigSection = { ...RESOLVED_BCDEV, port: 7050, coverageMode: "none" };
+    const cfg = bcDevBackendConfig(c, "C:/proj");
+    expect(cfg.coverageMode).toBe("none");
+    expect(cfg.port).toBe(7050);
+  });
+
+  it("omits coverageMode when absent, leaving BcDevMcpBackend's own default in effect", () => {
+    const cfg = bcDevBackendConfig(RESOLVED_BCDEV, "C:/proj");
+    expect(cfg.coverageMode).toBeUndefined();
+    expect("coverageMode" in cfg).toBe(false);
   });
 });
