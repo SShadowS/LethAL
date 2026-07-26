@@ -8,6 +8,7 @@ import {
   CONTROL_REGISTER_FILENAME,
   CONTROL_SELECTOR_FILENAME,
   CONTROL_UPGRADE_FILENAME,
+  scanDeclaredObjects,
   stripAlComments,
   writeInstrumentedProject,
 } from "../src/project";
@@ -804,6 +805,36 @@ codeunit 51051 "Second Obj"
     it("leaves a quoted AL identifier containing a comment marker alone", () => {
       const src = 'Rec."Field // Odd" := 1;\n';
       expect(stripAlComments(src)).toBe(src);
+    });
+  });
+
+  // R3/R4: `validateSelectorIds` (id-ranges.ts) needs every AL object a target project already
+  // declares, across every file — not just the single header `objectHeaderOf` enforces for a file
+  // this tool instruments. `scanDeclaredObjects` is the lenient counterpart used only for that
+  // collision scan; it never throws on more than one header.
+  describe("scanDeclaredObjects", () => {
+    it("finds a single object header", () => {
+      const src = 'codeunit 50100 "Some Codeunit"\n{\n}\n';
+      expect(scanDeclaredObjects(src)).toEqual([
+        { type: "codeunit", id: 50100, name: "Some Codeunit" },
+      ]);
+    });
+
+    it("finds every header in a file with more than one object (unlike objectHeaderOf)", () => {
+      const src = 'codeunit 50100 "First"\n{\n}\ntable 50101 "Second"\n{\n}\n';
+      expect(scanDeclaredObjects(src)).toEqual([
+        { type: "codeunit", id: 50100, name: "First" },
+        { type: "table", id: 50101, name: "Second" },
+      ]);
+    });
+
+    it("ignores a commented-out object header", () => {
+      const src = '// codeunit 50100 "Dead"\ncodeunit 50101 "Live"\n{\n}\n';
+      expect(scanDeclaredObjects(src)).toEqual([{ type: "codeunit", id: 50101, name: "Live" }]);
+    });
+
+    it("returns an empty array for a file with no object header", () => {
+      expect(scanDeclaredObjects("// just a comment\n")).toEqual([]);
     });
   });
 });
