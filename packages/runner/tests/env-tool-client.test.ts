@@ -24,6 +24,33 @@ function fakeSpawn(results: Array<{ exitCode: number; stdout: string; stderr: st
   };
 }
 
+/**
+ * A fake spawn that honours `opts.signal`: instead of resolving immediately, it waits for the
+ * signal to abort (or resolves immediately if a signal was never passed or is already aborted),
+ * then resolves with `result` — mirroring Bun.spawn's real behaviour when killed via AbortSignal
+ * (it resolves with exitCode 143 / SIGTERM, it does NOT throw). Driven by the AbortController's
+ * own timer, never a real wall-clock wait in the test itself.
+ */
+function fakeSpawnHonoringAbort(result: { exitCode: number; stdout: string; stderr: string }) {
+  const calls: string[][] = [];
+  return {
+    calls,
+    spawn: async (
+      argv: readonly string[],
+      opts?: { signal?: AbortSignal; env?: Record<string, string> },
+    ) => {
+      calls.push([...argv]);
+      const signal = opts?.signal;
+      if (signal !== undefined && !signal.aborted) {
+        await new Promise<void>((resolve) => {
+          signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      }
+      return result;
+    },
+  };
+}
+
 describe("renderCommand", () => {
   it("prefixes toolPath and substitutes LethAL placeholders and vars", () => {
     const argv = renderCommand(CFG.publish as never, CFG, { envId: "e1", appFile: "a.app" });
@@ -39,6 +66,20 @@ describe("renderCommand", () => {
 
   it("throws when a placeholder has no supplied value", () => {
     expect(() => renderCommand(CFG.publish as never, CFG, { envId: "e1" })).toThrow(/appFile/);
+  });
+
+  it("throws (never ships the literal text) when a vars value references a LethAL placeholder missing from supplied", () => {
+    // Reproduces the design doc's own worked example: vars.envName references {runId}, but no
+    // runId is supplied. Before the fix this silently produced the literal argument
+    // "lethal-{runId}" instead of failing.
+    const cfg: EnvToolConfigSection = {
+      ...CFG,
+      vars: { envName: "lethal-{runId}" },
+    };
+    const createBlock = { command: ["env", "create", "--name", "{envName}"] };
+    expect(() => renderCommand(createBlock, cfg, { envId: "e1", appFile: "a.app" })).toThrow(
+      /vars\.envName.*\{runId\}/s,
+    );
   });
 });
 
@@ -121,5 +162,55 @@ describe("EnvToolClient.run", () => {
       .catch((e: unknown) => (e instanceof Error ? e.message : String(e)));
     expect(err).not.toContain("hunter2");
     expect(err).toContain("***");
+  });
+
+  it("NEVER echoes stdout or stderr on a non-zero exit for a credential-bearing block", async () => {
+    // The reviewer's counter-test: hard-coding readsCredentials to false on ONLY this branch (the
+    // JSON-parse-failure branch stayed intact) still let the full suite pass — proof this half of
+    // credential withholding had no regression protection. This is the more likely real failure:
+    // `env users --json` exiting non-zero while dumping the user table to stderr.
+    const creds = {
+      command: ["env", "users"],
+      reads: { username: "0.username", password: "0.password" },
+    };
+    const io = fakeSpawn([
+      {
+        exitCode: 1,
+        stdout: '[{"username":"admin","password":"hunter2"}]',
+        stderr: "fatal: dumping table failed, password=hunter2",
+      },
+    ]);
+    const err = await new EnvToolClient(CFG, io)
+      .run(creds, "resolve[1]", {})
+      .catch((e: unknown) => (e instanceof Error ? e.message : String(e)));
+    expect(err).not.toContain("hunter2");
+    expect(err).toMatch(/withheld/);
+  });
+
+  it("distinguishes a timed-out block from an ordinary crash", async () => {
+    // Verified live: Bun.spawn killed via AbortSignal resolves (does not throw) with exitCode 143
+    // and signalCode "SIGTERM". Driven by a tiny configured timeout and a fake spawn that resolves
+    // only once aborted — no real wall-clock wait.
+    const cfg: EnvToolConfigSection = { ...CFG, timeoutSeconds: 0.01 };
+    const io = fakeSpawnHonoringAbort({ exitCode: 143, stdout: "", stderr: "" });
+    const err = await new EnvToolClient(cfg, io)
+      .run(block, "resolve[0]", { envId: "e1" })
+      .catch((e: unknown) => (e instanceof Error ? e.message : String(e)));
+    expect(err).toMatch(/timed out/i);
+    expect(err).toContain("0.01");
+    expect(err).not.toMatch(/exit 143/);
+  });
+
+  it("attributes a renderCommand failure to the named block", async () => {
+    // Reproduced: run(block, "resolve[3]", {}) with a missing {envId} previously reported no
+    // mention of "resolve[3]" at all, because renderCommand's throw bypassed the
+    // `envTool.${name}:` prefix every other failure in run() carries.
+    const missingEnvIdBlock = { command: ["env", "get", "{envId}"] };
+    const io = fakeSpawn([]);
+    const err = await new EnvToolClient(CFG, io)
+      .run(missingEnvIdBlock, "resolve[3]", {})
+      .catch((e: unknown) => (e instanceof Error ? e.message : String(e)));
+    expect(err).toContain("resolve[3]");
+    expect(io.calls.length).toBe(0);
   });
 });

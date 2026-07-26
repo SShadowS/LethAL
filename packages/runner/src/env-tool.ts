@@ -308,8 +308,20 @@ export function renderCommand(
 ): string[] {
   const values: Record<string, string> = { ...(cfg.vars ?? {}), ...supplied };
   // A vars value may itself contain LethAL placeholders ("lethal-{runId}") — resolve those first.
+  // A missing/empty reference must throw (mirrors substituteVars's ${VAR} handling above): silently
+  // keeping the literal "{runId}" text would ship a plausible-looking but corrupt argument to the
+  // external tool (e.g. an environment literally named "lethal-{runId}").
   for (const [k, v] of Object.entries(cfg.vars ?? {})) {
-    values[k] = v.replace(PLACEHOLDER_PATTERN, (m, ref: string) => supplied[ref] ?? m);
+    values[k] = v.replace(PLACEHOLDER_PATTERN, (_m, ref: string) => {
+      const sv = supplied[ref];
+      if (sv === undefined || sv === "") {
+        throw new EnvToolError(
+          `envTool.vars.${k}: placeholder {${ref}} has no supplied value while rendering ` +
+            `${JSON.stringify(block.command.join(" "))} — refusing to ship the literal placeholder text`,
+        );
+      }
+      return sv;
+    });
   }
   const args = block.command.map((arg) =>
     arg.replace(PLACEHOLDER_PATTERN, (_m, ref: string) => {
@@ -375,12 +387,23 @@ export class EnvToolClient {
     name: string,
     supplied: Readonly<Record<string, string>>,
   ): Promise<Record<string, string>> {
-    const argv = renderCommand(block, this.cfg, supplied);
+    // Attribute render failures (e.g. an unresolved placeholder) to this named block, same as
+    // every other failure below — otherwise the caller has no idea which of N configured blocks
+    // is broken.
+    let argv: string[];
+    try {
+      argv = renderCommand(block, this.cfg, supplied);
+    } catch (err) {
+      throw new EnvToolError(
+        `envTool.${name}: ${redact(err instanceof Error ? err.message : String(err), this.secrets)}`,
+      );
+    }
     const shown = redact(argv.join(" "), this.secrets);
     const readsCredentials = Object.keys(block.reads ?? {}).some((k) =>
       (CREDENTIAL_READS_KEYS as readonly string[]).includes(k),
     );
-    const timeoutMs = (this.cfg.timeoutSeconds ?? 900) * 1000;
+    const timeoutSeconds = this.cfg.timeoutSeconds ?? 900;
+    const timeoutMs = timeoutSeconds * 1000;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     let res: { exitCode: number; stdout: string; stderr: string };
@@ -398,6 +421,16 @@ export class EnvToolClient {
       );
     } finally {
       clearTimeout(timer);
+    }
+    // Bun.spawn killed via AbortSignal does NOT throw — it resolves with exitCode 143 and
+    // signalCode "SIGTERM" (verified live). Left unchecked, that falls into the generic
+    // non-zero-exit branch below and reads like an ordinary tool crash, indistinguishable from
+    // LethAL's own configured budget expiring. Check this BEFORE the exit-code branch can claim
+    // it. No stdout/stderr is echoed here, so the credential-withholding rule holds automatically.
+    if (controller.signal.aborted) {
+      throw new EnvToolError(
+        `envTool.${name}: ${shown} timed out after ${timeoutSeconds}s (envTool.timeoutSeconds) — this is LethAL's own budget expiring, not the tool crashing`,
+      );
     }
     if (res.exitCode !== 0) {
       const detail = readsCredentials
