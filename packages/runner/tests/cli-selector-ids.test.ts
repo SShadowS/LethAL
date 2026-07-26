@@ -78,15 +78,31 @@ describe("validateSelectorIdsForProject", () => {
     await expect(validateSelectorIdsForProject(dir, IN_RANGE_IDS)).resolves.toBeUndefined();
   });
 
-  it("ignores this tool's own previously emitted Mutation*.al files when scanning for collisions", async () => {
+  it("ignores this tool's own previously emitted files (exact filenames) when scanning for collisions", async () => {
     // `emitRegisterUpgrade` bakes the *previous* tableId into a file literally named
-    // MutationUpgrade.Codeunit.al — if the scan didn't skip `Mutation*` files (mirroring
-    // `generateMutationSet`'s own filter), a project that had EVER been instrumented before would
-    // permanently collide with its own prior selector ids.
+    // MutationUpgrade.Codeunit.al (CONTROL_UPGRADE_FILENAME) — if the scan didn't skip this
+    // exact, known set of this tool's own emitted filenames, a project that had EVER been
+    // instrumented before would permanently collide with its own prior selector ids.
     const dir = await writeTempProject(DEFAULT_RANGE, {
       "MutationUpgrade.Codeunit.al": 'codeunit 79197 "Mutation Upgrade"\n{\n}\n',
     });
     await expect(validateSelectorIdsForProject(dir, IN_RANGE_IDS)).resolves.toBeUndefined();
+  });
+
+  it("does NOT ignore a user file that merely starts with 'Mutation' but isn't one of this tool's exact emitted filenames", async () => {
+    // Review fix (R3): the original scan skipped every `Mutation*.al` file by PREFIX, which would
+    // also silently skip a user's own legitimately-named file (e.g. a hand-written
+    // "MutationTestHelper.Codeunit.al") from the collision scan — exactly the "miss a real
+    // collision" failure this whole check exists to prevent. The scan now matches the three
+    // emitted filenames exactly (CONTROL_SELECTOR_FILENAME/CONTROL_REGISTER_FILENAME/
+    // CONTROL_UPGRADE_FILENAME), so a same-name-but-different file like this one is scanned like
+    // any other and its id collision is caught.
+    const dir = await writeTempProject(DEFAULT_RANGE, {
+      "MutationTestHelper.Codeunit.al": 'codeunit 79198 "Mutation Test Helper"\n{\n}\n',
+    });
+    await expect(validateSelectorIdsForProject(dir, IN_RANGE_IDS)).rejects.toThrow(
+      /controlId.*= 79198 is already declared as codeunit 79198 "Mutation Test Helper"/s,
+    );
   });
 });
 

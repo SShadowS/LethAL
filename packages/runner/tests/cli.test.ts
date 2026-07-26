@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { SelectorConfig } from "@lethal/schemata";
 import type { ActivationConfig } from "../src/activation";
 import type { BcDevConfigSection } from "../src/cli";
 import {
@@ -15,6 +16,7 @@ import {
   resourceIdentityFor,
   validateAlRunnerConfig,
   validateBcDevConfig,
+  validateSelectorIdsConfig,
 } from "../src/cli";
 import { CONTROL_APP_ID } from "../src/harness";
 import { LeaseClient } from "../src/lease";
@@ -439,6 +441,55 @@ describe("resolveSelectorIds", () => {
       controlId: 79198,
       tableId: 9,
     });
+  });
+});
+
+describe("validateSelectorIdsConfig", () => {
+  test("undefined section is fine — returned as-is", () => {
+    expect(validateSelectorIdsConfig(undefined)).toBeUndefined();
+  });
+
+  test("a well-formed section (partial) is returned unchanged", () => {
+    const section = { selectorId: 79150 };
+    expect(validateSelectorIdsConfig(section)).toEqual(section);
+  });
+
+  test("a well-formed section (all three) is returned unchanged", () => {
+    const section = { selectorId: 79150, controlId: 79151, tableId: 79152 };
+    expect(validateSelectorIdsConfig(section)).toEqual(section);
+  });
+
+  test("rejects a non-object section, naming what was actually given", () => {
+    // A malformed lethal.config.json — bare JSON.parse means this compiles fine at the type level
+    // (`as LethalConfigFile`) but is wrong at runtime, exactly the shape validateBcDevConfig etc.
+    // already guard against.
+    expect(() => validateSelectorIdsConfig("nope" as unknown as Partial<SelectorConfig>)).toThrow(
+      /"selectorIds" section must be an object/,
+    );
+  });
+
+  test("rejects an array section", () => {
+    expect(() => validateSelectorIdsConfig([] as unknown as Partial<SelectorConfig>)).toThrow(
+      /"selectorIds" section must be an object/,
+    );
+  });
+
+  test("rejects a non-integer field, naming it", () => {
+    expect(() => validateSelectorIdsConfig({ selectorId: 1.5 } as Partial<SelectorConfig>)).toThrow(
+      /invalid field\(s\).*selectorId/s,
+    );
+  });
+
+  test("rejects a non-positive field, naming it", () => {
+    expect(() => validateSelectorIdsConfig({ controlId: 0 })).toThrow(
+      /invalid field\(s\).*controlId/s,
+    );
+  });
+
+  test("names every invalid field at once", () => {
+    expect(() =>
+      validateSelectorIdsConfig({ selectorId: -1, controlId: 0, tableId: 79150 }),
+    ).toThrow(/selectorId, controlId/);
   });
 });
 

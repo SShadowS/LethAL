@@ -5,6 +5,9 @@ import { basename, join } from "node:path";
 import { parseArgs } from "node:util";
 import {
   type AppIdRange,
+  CONTROL_REGISTER_FILENAME,
+  CONTROL_SELECTOR_FILENAME,
+  CONTROL_UPGRADE_FILENAME,
   type DeclaredObject,
   type InstrumentedFile,
   type SelectorConfig,
@@ -96,6 +99,41 @@ export function resolveSelectorIds(
 }
 
 /**
+ * Validates the optional `lethal.config.json` `"selectorIds"` section's SHAPE — pure, no I/O.
+ * Absent entirely is fine (returned as-is): the section is optional, and `resolveSelectorIds`
+ * falls back to `DEFAULT_SELECTOR_IDS` for any id it doesn't supply. When present, each of
+ * `selectorId`/`controlId`/`tableId` that IS given must be a positive integer.
+ *
+ * Mirrors `validateBcDevConfig`/`validateAlRunnerConfig`'s posture: `loadLethalConfigFile` is a
+ * bare `JSON.parse(...) as LethalConfigFile`, so a string/0/negative value here would otherwise
+ * flow silently into `resolveSelectorIds` and only surface later as a confusing "falls outside
+ * every idRange" from `validateSelectorIds` — correct, but it doesn't name the config file as the
+ * source of the bad value the way this does, or the way the `--selector-id` flag's own parse-time
+ * check already does.
+ */
+export function validateSelectorIdsConfig(
+  raw: Partial<SelectorConfig> | undefined,
+): Partial<SelectorConfig> | undefined {
+  if (raw === undefined) return undefined;
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    throw new Error(
+      `lethal.config.json "selectorIds" section must be an object with optional numeric "selectorId"/"controlId"/"tableId" fields, got ${JSON.stringify(raw)}`,
+    );
+  }
+  const invalid: string[] = [];
+  for (const key of ["selectorId", "controlId", "tableId"] as const) {
+    const v = raw[key];
+    if (v !== undefined && (!Number.isInteger(v) || v < 1)) invalid.push(key);
+  }
+  if (invalid.length > 0) {
+    throw new Error(
+      `lethal.config.json "selectorIds" section has invalid field(s) (each must be a positive integer): ${invalid.join(", ")}`,
+    );
+  }
+  return raw;
+}
+
+/**
  * Reads and parses the target project's `app.json` purely to validate selector ids against its
  * `idRanges` — a narrower, standalone reader kept separate from orchestrator.ts's own
  * `readProjectManifest` (which is per-batch and un-exported) so this validation has no dependency
@@ -122,19 +160,30 @@ async function readTargetAppManifestForIdCheck(
   }
 }
 
+// This tool's own emitted files, by their exact names (@lethal/schemata) — never a real
+// collision target. A prefix heuristic (`!basename(e).startsWith("Mutation")`) would ALSO skip a
+// user's own legitimately-named file (e.g. `MutationTestHelper.Codeunit.al`), silently dropping
+// it from the collision scan — exactly the "miss a real collision" failure this check exists to
+// prevent. `orchestrator.ts`'s `generateMutationSet` has the same prefix heuristic and predates
+// this change; left alone here (out of this task's scope) but worth the same fix.
+const EMITTED_FILENAMES: ReadonlySet<string> = new Set([
+  CONTROL_SELECTOR_FILENAME,
+  CONTROL_REGISTER_FILENAME,
+  CONTROL_UPGRADE_FILENAME,
+]);
+
 /**
- * Scans every `.al` file under `projectDir` (mirroring `generateMutationSet`'s own filter in
- * orchestrator.ts: skip non-`.al` files and anything already named `Mutation*`, since those are
- * this tool's own emitted output, never a real collision target) for codeunit ids the target
- * project ALREADY declares — the input `validateSelectorIds`'s existing-object-collision check
- * needs. Only codeunits are collected: all three injected objects are codeunits (see
- * `emitMutationSelector`/`emitRegisterInstall`/`emitRegisterUpgrade`), and a BC object id is
- * unique only within its own type, so a same-id table/page is not a real collision.
+ * Scans every `.al` file under `projectDir` (skipping this tool's own emitted files — see
+ * `EMITTED_FILENAMES`) for codeunit ids the target project ALREADY declares — the input
+ * `validateSelectorIds`'s existing-object-collision check needs. Only codeunits are collected:
+ * all three injected objects are codeunits (see `emitMutationSelector`/`emitRegisterInstall`/
+ * `emitRegisterUpgrade`), and a BC object id is unique only within its own type, so a same-id
+ * table/page is not a real collision.
  */
 async function scanProjectCodeunitIds(projectDir: string): Promise<Map<number, DeclaredObject>> {
   const entries = (await readdir(projectDir, { recursive: true }))
     .filter((e) => e.toLowerCase().endsWith(".al"))
-    .filter((e) => !basename(e).startsWith("Mutation"));
+    .filter((e) => !EMITTED_FILENAMES.has(basename(e)));
   const byId = new Map<number, DeclaredObject>();
   for (const rel of entries) {
     const source = await readFile(join(projectDir, rel), "utf8");
@@ -148,10 +197,15 @@ async function scanProjectCodeunitIds(projectDir: string): Promise<Map<number, D
 /**
  * The full R3/R4 pre-compile check: reads the target's `app.json` `idRanges`, scans its already-
  * declared codeunit ids, and validates the resolved `selectorIds` against both plus the
- * pairwise-distinct rule — all BEFORE any `alc`/`altool` invocation. Called from `buildBackend`
- * (both branches), positioned after every existing early-exit check that doesn't need a real
- * project directory (see call sites for why) so a caller can be shown a fast, actionable error
- * instead of burning a live BC round trip on an AL0297.
+ * pairwise-distinct rule — all BEFORE any `alc`/`altool` invocation.
+ *
+ * Called twice on the real `lethal run` path, deliberately: first from `runFromCli`, as early as
+ * both inputs (`parsed.projectDir`, resolved `selectorIds`) are available — specifically BEFORE
+ * `resolveEnvToolSession`, which can provision a real, billed Layer-6C environment, so a bad id
+ * fails in milliseconds rather than after a live environment already exists. Second, inside
+ * `buildBackend` (both branches), positioned after every pre-existing early-exit check that
+ * doesn't need a real project directory — kept as defense in depth for any caller that reaches
+ * `buildBackend` some other way, and because it costs nothing beyond a second fs read.
  */
 export async function validateSelectorIdsForProject(
   projectDir: string,
@@ -1076,16 +1130,31 @@ export async function runFromCli(
     // `backend.close()` failure) with a canned `SessionReport`, without needing a real backend/AL
     // project to produce one for real.
     runSession?: typeof runSession;
+    // R3 review: injectable for the same reason as the three above — most of this file's own
+    // `runFromCli` unit tests use a fake, nonexistent `projectDir` (e.g. "C:/proj") and inject
+    // `buildBackend`/`runSession` to avoid touching real I/O; without this seam, the REAL
+    // `validateSelectorIdsForProject` below would try to read a nonexistent app.json and break
+    // every one of them. See its call site's comment for WHY it moved here at all.
+    validateSelectorIdsForProject?: typeof validateSelectorIdsForProject;
   } = {},
 ): Promise<SessionReport> {
   const configFile = await loadLethalConfigFile(parsed.configPath);
   // R3: resolved once, up front, from CLI flags > this config file's `selectorIds` section >
   // DEFAULT_SELECTOR_IDS (`resolveSelectorIds`). Threaded through to every `build(...)` call below
-  // and into `runTheSession`'s `SessionConfig.selectorIds` — the actual idRanges/collision
-  // validation (`validateSelectorIdsForProject`) happens inside the REAL `buildBackend`, not here,
-  // since `deps.buildBackend` is what most of this file's own unit tests override with a fake
-  // `projectDir` that has no real app.json to read.
-  const selectorIds = resolveSelectorIds(parsed.selectorIdOverrides ?? {}, configFile.selectorIds);
+  // and into `runTheSession`'s `SessionConfig.selectorIds`.
+  const selectorIds = resolveSelectorIds(
+    parsed.selectorIdOverrides ?? {},
+    validateSelectorIdsConfig(configFile.selectorIds),
+  );
+  // R3 review (Important): validated HERE, before `resolveSession` below — not left solely to the
+  // check already inside the real `buildBackend` (kept there too, as defense in depth, since a
+  // caller could reach `buildBackend` some other way). `resolveEnvToolSession` can provision a
+  // REAL, billed environment (Layer 6C `envTool`); by the time `buildBackend`'s own check would
+  // fire, that environment already exists. Both inputs this needs — `parsed.projectDir` and the
+  // resolved `selectorIds` — are available now, with no I/O of `resolveSession`'s own in between,
+  // so there is no reason to defer it past this point.
+  const validateIds = deps.validateSelectorIdsForProject ?? validateSelectorIdsForProject;
+  await validateIds(parsed.projectDir, selectorIds);
   const scratchRoot = await mkdtemp(join(tmpdir(), "lethal-"));
   if (parsed.backendKind === "al-runner") {
     warnAlRunnerNotAuthoritative();
