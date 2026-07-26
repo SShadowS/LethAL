@@ -48,6 +48,8 @@ function spec(o: {
 const TIERS = new Map<string, 1 | 2 | 3 | "custom">([
   ["lethal.void-method-call", 1],
   ["lethal.remove-testfield", 2],
+  ["lethal.remove-setrange", 2],
+  ["lethal.remove-calcfields", 2],
   ["lethal.remove-setloadfields", 2],
   ["lethal.swap-modify-flag", 2],
   ["lethal.a", 2],
@@ -186,5 +188,74 @@ describe("dedupeSpecs", () => {
     expect(() => dedupeSpecs([plain, hinted], tierOf)).toThrow(
       /lethal\.a.*lethal\.b|lethal\.b.*lethal\.a/,
     );
+  });
+
+  // Task 7 (R12): the first real exercise of this module's collision branch. Tier 2
+  // (packages/builtin-tier2) introduced four operators that target sites Tier 1's
+  // `void-method-call` also targets: three deletions (`RemoveTestField`, `RemoveSetRange`,
+  // `RemoveCalcFields`) claim the identical empty after-form at their own site, and
+  // `SwapModifyFlag` claims a `Modify(true)` site with a DIFFERENT after-form
+  // (design doc §4 intro; §3.2). This batch mirrors all four shapes at once, at four
+  // DIFFERENT sites, so the same call to `dedupeSpecs` exercises precedence (win) and
+  // coexistence (no dedup) side by side, the way a real instrumented file would.
+  describe("Tier 2 precedence and coexistence across all four Phase-1 shapes (design doc §4, §7.4)", () => {
+    const testFieldSite = { start: 100, end: 120 };
+    const setRangeSite = { start: 200, end: 230 };
+    const calcFieldsSite = { start: 300, end: 320 };
+    const modifySite = { start: 400, end: 415 };
+
+    const deletionAt = (operatorName: string, site: { start: number; end: number }): MutationSpec =>
+      spec({ operatorName, start: site.start, end: site.end, after: "" });
+
+    // Three deletion collisions (void-method-call vs. the Tier-2 narrowing, same empty
+    // after-form) plus one non-collision (void-method-call's empty after-form vs.
+    // swap-modify-flag's `Modify(false)` after-form) — eight input specs, four sites.
+    const batch: readonly MutationSpec[] = [
+      deletionAt("lethal.void-method-call", testFieldSite),
+      deletionAt("lethal.remove-testfield", testFieldSite),
+      deletionAt("lethal.void-method-call", setRangeSite),
+      deletionAt("lethal.remove-setrange", setRangeSite),
+      deletionAt("lethal.void-method-call", calcFieldsSite),
+      deletionAt("lethal.remove-calcfields", calcFieldsSite),
+      deletionAt("lethal.void-method-call", modifySite),
+      spec({
+        operatorName: "lethal.swap-modify-flag",
+        start: modifySite.start,
+        end: modifySite.end,
+        after: "Rec.Modify(false)",
+      }),
+    ];
+
+    it("each Tier-2 deletion suppresses void-method-call at its OWN site", () => {
+      const out = dedupeSpecs(batch, tierOf);
+      const at = (start: number) =>
+        out.filter((s) => s.before.startIndex === start).map((s) => s.operatorName);
+      expect(at(testFieldSite.start)).toEqual(["lethal.remove-testfield"]);
+      expect(at(setRangeSite.start)).toEqual(["lethal.remove-setrange"]);
+      expect(at(calcFieldsSite.start)).toEqual(["lethal.remove-calcfields"]);
+    });
+
+    it("the Modify(true) site yields TWO mutants — coexistence, not a collision", () => {
+      const out = dedupeSpecs(batch, tierOf);
+      const atModify = out
+        .filter((s) => s.before.startIndex === modifySite.start)
+        .map((s) => s.operatorName)
+        .sort();
+      expect(atModify).toEqual(["lethal.swap-modify-flag", "lethal.void-method-call"]);
+    });
+
+    // Spec §7.4: "a dedup regression test asserting no two operators ever emit the same
+    // (site, after-form)" — a standing invariant, not a one-off. Recomputes the identity
+    // `dedupeSpecs` itself keys on (kind:start:end:after-text) over the SURVIVING set and
+    // checks no two entries share it. This is the assertion the red-check below forces to
+    // fail, by making two genuinely different mutations collide on paper.
+    it("no two surviving mutants ever share the same (site, after-form) identity", () => {
+      const out = dedupeSpecs(batch, tierOf);
+      expect(out).toHaveLength(5);
+      const identities = out.map(
+        (s) => `${s.before.kind}:${s.before.startIndex}:${s.before.endIndex}:${s.after.text}`,
+      );
+      expect(new Set(identities).size).toBe(identities.length);
+    });
   });
 });
