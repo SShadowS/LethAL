@@ -31,7 +31,11 @@ import { ActivationFailure } from "./failure-classes";
 import { LeaseUnavailableError, MAX_ATTEMPT_ID_LENGTH, MAX_TTL_SECONDS } from "./lease";
 import type { AcquireOutcome, Lease, LeaseApi } from "./lease";
 import { isRetrySafe, requiresUnsafeLatch } from "./operation-outcome";
-import { type PermissionCanaryResult, permissionCanaryWarnings } from "./permission-canary";
+import {
+  type PermissionCanaryResult,
+  describeTestPermissionsRefusal,
+  permissionCanaryWarnings,
+} from "./permission-canary";
 import { Semaphore, shardEvenly } from "./pool";
 import { QuarantineStore } from "./quarantine-store";
 import { buildReport } from "./report";
@@ -2540,8 +2544,22 @@ async function runMutantsOnBackend(args: {
           failureNote = `deadline exceeded confirming ${ref.method} (infrastructure, not a kill)`;
           cause = "deadline-exceeded";
         } else {
+          // Fails under the mutant AND at baseline: by construction this says nothing about the
+          // mutant, so it stays `error cause=unstable` (the verdict is NOT reconsidered below).
+          // But "unstable" is a guess about flakiness, and one specific cause is deterministic and
+          // fully explicable: a test codeunit that omits `TestPermissions = Disabled` is stripped
+          // of write permission and refused on BOTH runs, every time (ROADMAP R26, measured A/B —
+          // see `describeTestPermissionsRefusal`). When BC's own refusal text is in either run's
+          // message, NAME it here rather than leave the user with "unstable" for a one-line fix.
+          // Strictly additive: the diagnosis is appended to the note, never substituted for the
+          // failure, and this branch is only reachable once the outcome is already decided.
           verdict = "error";
-          failureNote = `unstable test ${ref.method}: fails at baseline confirmation`;
+          const refusal =
+            describeTestPermissionsRefusal(confirm.failureMessage) ??
+            describeTestPermissionsRefusal(v.failureMessage);
+          failureNote = `unstable test ${ref.method}: fails at baseline confirmation${
+            refusal !== undefined ? ` — ${refusal}` : ""
+          }`;
           cause = "unstable";
         }
         break;
