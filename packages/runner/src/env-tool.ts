@@ -1,3 +1,6 @@
+import { defaultSpawn } from "./publisher";
+import type { SpawnFn } from "./publisher";
+
 /**
  * Config surface for an external environment tool (spec:
  * docs/superpowers/specs/2026-07-26-custom-env-tool-design.md). Pure — no I/O, no BC knowledge:
@@ -295,4 +298,150 @@ function substituteSection(
     ...(raw.publish !== undefined ? { publish: subBlock(raw.publish, "publish") } : {}),
     ...(raw.deleteEnv !== undefined ? { deleteEnv: subBlock(raw.deleteEnv, "deleteEnv") } : {}),
   };
+}
+
+/** Renders one block's argv: `[toolPath, ...command]` with every `{placeholder}` substituted. */
+export function renderCommand(
+  block: EnvToolBlock,
+  cfg: EnvToolConfigSection,
+  supplied: Readonly<Record<string, string>>,
+): string[] {
+  const values: Record<string, string> = { ...(cfg.vars ?? {}), ...supplied };
+  // A vars value may itself contain LethAL placeholders ("lethal-{runId}") — resolve those first.
+  for (const [k, v] of Object.entries(cfg.vars ?? {})) {
+    values[k] = v.replace(PLACEHOLDER_PATTERN, (m, ref: string) => supplied[ref] ?? m);
+  }
+  const args = block.command.map((arg) =>
+    arg.replace(PLACEHOLDER_PATTERN, (_m, ref: string) => {
+      const v = values[ref];
+      if (v === undefined || v === "") {
+        throw new EnvToolError(
+          `envTool: no value available for placeholder {${ref}} while building ` +
+            `${JSON.stringify(block.command.join(" "))}`,
+        );
+      }
+      return v;
+    }),
+  );
+  return [cfg.toolPath, ...args];
+}
+
+/** Replaces every occurrence of every secret with `***`. Order-independent, longest first. */
+export function redact(text: string, secrets: readonly string[]): string {
+  let out = text;
+  for (const s of [...secrets].filter((s) => s.length > 0).sort((a, b) => b.length - a.length)) {
+    out = out.split(s).join("***");
+  }
+  return out;
+}
+
+function readPath(root: unknown, path: string): unknown {
+  let cur: unknown = root;
+  for (const seg of path.split(".")) {
+    if (cur === null || cur === undefined) return undefined;
+    if (Array.isArray(cur)) {
+      const idx = Number.parseInt(seg, 10);
+      if (Number.isNaN(idx)) return undefined;
+      cur = cur[idx];
+      continue;
+    }
+    if (typeof cur !== "object") return undefined;
+    cur = (cur as Record<string, unknown>)[seg];
+  }
+  return cur;
+}
+
+/**
+ * Spawns the configured tool. argv array, never a shell: no quoting rules for the user to get
+ * wrong and no injection surface from an interpolated value.
+ */
+export class EnvToolClient {
+  private readonly secrets: string[] = [];
+
+  constructor(
+    private readonly cfg: EnvToolConfigSection,
+    private readonly io: { spawn: SpawnFn } = { spawn: defaultSpawn },
+  ) {
+    for (const v of Object.values(cfg.env ?? {})) this.secrets.push(v);
+  }
+
+  /** Registers a value that must never appear in any error or log (resolved passwords). */
+  addSecret(value: string): void {
+    if (value.length > 0) this.secrets.push(value);
+  }
+
+  async run(
+    block: EnvToolBlock,
+    name: string,
+    supplied: Readonly<Record<string, string>>,
+  ): Promise<Record<string, string>> {
+    const argv = renderCommand(block, this.cfg, supplied);
+    const shown = redact(argv.join(" "), this.secrets);
+    const readsCredentials = Object.keys(block.reads ?? {}).some((k) =>
+      (CREDENTIAL_READS_KEYS as readonly string[]).includes(k),
+    );
+    const timeoutMs = (this.cfg.timeoutSeconds ?? 900) * 1000;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let res: { exitCode: number; stdout: string; stderr: string };
+    try {
+      res = await this.io.spawn(argv, {
+        signal: controller.signal,
+        ...(this.cfg.env !== undefined ? { env: { ...this.cfg.env } } : {}),
+      });
+    } catch (err) {
+      throw new EnvToolError(
+        `envTool.${name}: ${shown} failed to run: ${redact(
+          err instanceof Error ? err.message : String(err),
+          this.secrets,
+        )}`,
+      );
+    } finally {
+      clearTimeout(timer);
+    }
+    if (res.exitCode !== 0) {
+      const detail = readsCredentials
+        ? "(output withheld: this command's output carries credentials)"
+        : redact(
+            [res.stdout, res.stderr].filter((s) => s.trim().length > 0).join("\n"),
+            this.secrets,
+          );
+      throw new EnvToolError(`envTool.${name}: ${shown} exit ${res.exitCode}:\n${detail}`);
+    }
+    const reads = block.reads;
+    if (reads === undefined) return {};
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(res.stdout);
+    } catch (err) {
+      const tail = readsCredentials
+        ? "(output withheld: this command's output carries credentials)"
+        : `stdout began: ${redact(res.stdout.slice(0, 200), this.secrets)}`;
+      throw new EnvToolError(
+        `envTool.${name}: ${shown} did not print JSON (${
+          err instanceof Error ? err.message : String(err)
+        }) — ${tail}`,
+      );
+    }
+    const out: Record<string, string> = {};
+    for (const [key, path] of Object.entries(reads)) {
+      const value = readPath(parsed, path);
+      if (typeof value !== "string" && typeof value !== "number") {
+        throw new EnvToolError(
+          `envTool.${name}: reads.${key} path ${JSON.stringify(path)} did not resolve to a ` +
+            `string or number in the output of ${shown}`,
+        );
+      }
+      const asString = String(value);
+      if (asString.length === 0) {
+        throw new EnvToolError(
+          `envTool.${name}: reads.${key} path ${JSON.stringify(path)} resolved to an EMPTY value ` +
+            `in the output of ${shown} — refusing to carry an empty ${key} forward`,
+        );
+      }
+      out[key] = asString;
+      if ((CREDENTIAL_READS_KEYS as readonly string[]).includes(key)) this.addSecret(asString);
+    }
+    return out;
+  }
 }
