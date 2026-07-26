@@ -81,6 +81,26 @@ describe("renderCommand", () => {
       /vars\.envName.*\{runId\}/s,
     );
   });
+
+  it("does not throw rendering a DIFFERENT block that never references an unresolved vars entry", () => {
+    // vars.tag is referenced only by `publish`'s command and itself references {appFile}. Task 2's
+    // validation already rejects a vars entry nothing anywhere references, so `tag` reaching this
+    // point means SOME block uses it — but that must not make rendering `deleteEnv` (which never
+    // mentions `tag`, and has no reason to have `appFile` supplied) throw about an unresolved
+    // {appFile}. That would be a spurious abort of a run that should succeed, landing at teardown.
+    const cfg: EnvToolConfigSection = {
+      ...CFG,
+      vars: { tag: "{appFile}-suffix" },
+      publish: { command: ["publish", "{envId}", "{appFile}", "--tag", "{tag}"] },
+    };
+    const deleteBlock = { command: ["env", "delete", "{envId}"] };
+    expect(renderCommand(deleteBlock, cfg, { envId: "e1" })).toEqual([
+      "C:/tools/continia.exe",
+      "env",
+      "delete",
+      "e1",
+    ]);
+  });
 });
 
 describe("redact", () => {

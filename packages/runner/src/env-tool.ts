@@ -307,11 +307,23 @@ export function renderCommand(
   supplied: Readonly<Record<string, string>>,
 ): string[] {
   const values: Record<string, string> = { ...(cfg.vars ?? {}), ...supplied };
-  // A vars value may itself contain LethAL placeholders ("lethal-{runId}") — resolve those first.
-  // A missing/empty reference must throw (mirrors substituteVars's ${VAR} handling above): silently
-  // keeping the literal "{runId}" text would ship a plausible-looking but corrupt argument to the
-  // external tool (e.g. an environment literally named "lethal-{runId}").
+  // A vars value may itself contain LethAL placeholders ("lethal-{runId}") — resolve those first,
+  // but ONLY for vars keys THIS block's command actually references. Task 2's validation already
+  // rejects a vars entry that nothing anywhere references, so a vars entry not referenced by THIS
+  // block is legitimately used by some OTHER block — e.g. `vars: { tag: "{appFile}-suffix" }`
+  // referenced only by `publish` must not abort rendering `deleteEnv`, which never mentions `tag`
+  // and has no reason to have `appFile` supplied. A missing/empty reference in a referenced vars
+  // entry must still throw (mirrors substituteVars's ${VAR} handling above): silently keeping the
+  // literal "{runId}" text would ship a plausible-looking but corrupt argument to the external tool
+  // (e.g. an environment literally named "lethal-{runId}").
+  const referencedVarKeys = new Set<string>();
+  for (const arg of block.command) {
+    for (const [, ref] of arg.matchAll(PLACEHOLDER_PATTERN)) {
+      if (ref !== undefined) referencedVarKeys.add(ref);
+    }
+  }
   for (const [k, v] of Object.entries(cfg.vars ?? {})) {
+    if (!referencedVarKeys.has(k)) continue;
     values[k] = v.replace(PLACEHOLDER_PATTERN, (_m, ref: string) => {
       const sv = supplied[ref];
       if (sv === undefined || sv === "") {
