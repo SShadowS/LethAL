@@ -219,18 +219,27 @@ verified manually against the real backend instead (see `--test-isolation method
 ## Tier-2 Phase 0 — the `sandbox-data` table fixture
 
 `fixtures/sandbox-data` (+ `sandbox-data-tests`) is the table-trigger counterpart to
-`sandbox-app`: two tables carrying an object-level `OnInsert` and two field-level `OnValidate`
-triggers, plus a procedure no test calls. It exists to prove that mutants living inside table
+`sandbox-app`. It started as two tables carrying an object-level `OnInsert` and two field-level
+`OnValidate` triggers, plus a procedure no test calls, to prove that mutants living inside table
 triggers are generated, attributed, instrumented, executed and killed — the Phase 0 exit
-criteria for the trigger half of Tier 2.
+criteria for the trigger half of Tier 2. Tier-2 Phase 1 extended it (§Phase 1 below); the Phase-0
+objects and their four tests are unchanged inside it.
 
-Both tables declare `InherentPermissions = RIMD`. That is not decoration: the fenced `RunMutant`
-path executes under the OData runner session, which does not hold the test app's write
-permissions, so a test that INSERTs fails there with *"Sorry, the current permissions prevented
-the action"* while passing everywhere else. A real customer table will not carry that
-declaration — the general fenced-path write-permission problem is filed, not solved.
+Neither table declares `InherentPermissions`, and none must. That property was added once, to
+work around the fenced `RunMutant` path refusing writes, and it was **masking a fixture defect**:
+`Data Tests` never declared `TestPermissions = Disabled`, so it defaulted to Restrictive and
+Microsoft's Permissions Mock refused every write from its body — on every runner, not just
+LethAL's. Measured by A/B on that one property (commit `769f667`); a real BC suite declares it
+(the Continia Document Output suite: 77 of 77 test codeunits) and carries `InherentPermissions`
+on zero tables. **Every `Subtype = Test` codeunit here must declare `TestPermissions = Disabled`;
+no table here may reintroduce `InherentPermissions`.**
 
-### bcdev (authoritative) — live gate, 2026-07-25, Cronus282
+### bcdev (authoritative) — live gate, 2026-07-25, Cronus282 — SUPERSEDED by Phase 1
+
+The table below is the Phase-0 fixture's frozen result. Phase 1 added mutation sites (75 deployed
+mutants, see §Phase 1), so both this table and the `EXPECTED` map in `tables.itest.ts` need
+re-recording from a live run. It is kept because it is still the clearest statement of what the
+Phase-0 half of the fixture proves.
 
 | Mutant | Site | Operator | Verdict | Why |
 |---|---|---|---|---|
@@ -347,6 +356,56 @@ same as R7. Verified end-to-end against the real binary on this machine: reports
 `defect-confirmed`. Any mutant whose only observable effect is table-global (non-field) state may
 still be misjudged on this backend when the canary confirms the defect present; field-only and
 return-value mutants are unaffected.
+
+### Tier-2 Phase 1 — the shapes that make a broken operator fail
+
+Phase 1 extends `sandbox-data` from 7 to **75 deployed mutants** (83 raw specs; 8 Tier-1
+`void-method-call` specs lose the §3.2 dedup to a Tier-2 deletion at the same site). Every shape
+below exists because its ABSENCE lets a broken operator pass — a fixture that only exercises the
+happy path tells you nothing. Design spec: `docs/superpowers/specs/2026-07-25-tier2-mutation-operators-design.md`
+§6.
+
+| Required shape | Where it lives |
+|---|---|
+| Out-of-filter **decoy rows** | `CountForMainIgnoresDecoys` (3 decoys), `CountInCategoryUppercaseSetRange` (category `CB`) |
+| Seeded **related-table rows** | `CategoryGuardNeedsCalcFields` — two `Data Related` rows summing to 1300 |
+| **`asserterror` negative tests** | `BlankNoValidateFails`, `TooLongNoValidateFails`, `ProcessedRequiresCategory`, `CategoryGuardNeedsCalcFields`, `RequireCategoryAFails` |
+| A **`Validate()`-driven path** | every test above plus `FlaggedFiresModifyTrigger` |
+| **Implicit-receiver positives in trigger bodies** | `Data Main` fields `Category` (`CalcFields`), `Processed` (`TestField`), `Flagged` (`Modify(true)`) |
+| **Case variants** | `Data Ops.MarkProcessed` (`MODIFY(TRUE)`), `Data Main.CountInCategory` (`Rec.SETRANGE`) |
+| **Both `TestField` overloads** | `Data Ops.RequireCategoryA` (two-argument), `Data Ops.TouchCategory` + the `Processed` trigger (one-argument) |
+| A **weak positive test** calling `TestField` without asserting | `TouchCategoryWeak` |
+| Negative: user-defined `procedure Commit()` **plus a call to it** | `Data Shadow.Commit` / `Data Shadow.BumpViaCommit` |
+| Negative: `Insert(false)` | `Data Ops.InsertWithoutTrigger` |
+| Negative: no-value `SetRange(F)` | `Data Ops.CountIgnoringMainFilter` |
+| Negative: no-argument `SetLoadFields()` | `Data Ops.LoadAmount` |
+| Negative: `Modify(SomeBoolean)` | `Data Ops.MarkWithFlag` |
+| Negative: user-defined builtin-named methods **taking arguments, with side effects** | `Data Loader.SetLoadFields` / `Data Validator.TestField` / `Data Builder.SetRange`, called from `Data Ops.RunUserDefinedBuiltins` |
+| Negative: a project **table** declaring a builtin-named procedure **and a record variable of it** | `Data Shadow` + `Data Ops.ShadowedBuiltins` (cross-file) and `Data Shadow.SelfShadowed` (same-file) |
+
+Two rules the fixture depends on, both easy to break by accident:
+
+- **A negative target is only useful if the suite pins a verdict on it.** Tier 2 outranks Tier 1
+  in the §3.2 dedup precedence, so a wrongly-claimed negative does not add a mutant — it REPLACES
+  the correct `lethal.void-method-call` one. That surfaces as a changed `operatorName` on a mutant
+  whose verdict never moved, which is why every negative here has a test that kills its Tier-1
+  mutant, and why the committed baseline keys on `operatorName`, not just the verdict.
+- **Where a positive lives decides whether it can be killed at all.** Table TRIGGER mutants fall
+  all the way back to "every green test" (`selection.ts` FALLBACK 2), so they always execute.
+  Table PROCEDURE mutants need a member-level coverage entry, and whether BC emits one for table
+  procedures is unmeasured here — so each operator's guaranteed kill is hosted either in a trigger
+  (`RemoveCalcFields`, and one each of `RemoveTestField`/`SwapModifyFlag`) or in a codeunit
+  (`RemoveSetRange`, and the other `RemoveTestField`/`SwapModifyFlag`). `Data Main.CountInCategory`
+  and the `Data Shadow` procedures are the sites whose bucket depends on that unknown.
+
+**Known gap this fixture exposes (do not "fix" the fixture instead).** `Data Ops.ShadowedBuiltins`
+and `Data Shadow.SelfShadowed` are the same shape — a record whose own table declares that
+procedure — reached cross-file and same-file. They disagree: `generateMutationSet`
+(`packages/runner/src/orchestrator.ts`) builds one `SemanticContext` PER FILE, so
+`projectTableDeclaresProcedure` sees no table from another file and rule 3's qualified half cannot
+fire. Spec §4.1 says "a name that resolves to a procedure declared **in the project**", so the
+cross-file half is a real defect: `Shadow.TestField(42)` and `Shadow.SetRange('AA', 'ZZZ')` are
+claimed by Tier 2 today and should not be. The pair is what makes it visible in the baseline.
 
 ## Expected verdict table (hand-computed)
 
