@@ -6,12 +6,10 @@ import {
   type SemanticContext,
   isStatementPosition,
 } from "@lethal/operator-sdk";
-import { synthesizeAfter } from "./mutate-helpers";
+import { countArguments, synthesizeAfter } from "./mutate-helpers";
 import { claimsRecordMethod } from "./receiver";
 
 const METHOD_NAME = "SetRange";
-/** `argument_list` isn't in `ALNodeKind`; the field name is grammar-stable regardless. */
-const ARGUMENTS_FIELD = "arguments";
 /**
  * Below this many arguments, the call is the no-value form (`SetRange(F)`), which *clears* a
  * filter rather than setting one. `SetRange(F, V)` and the three-argument range form
@@ -36,11 +34,15 @@ const MIN_VALUE_ARGUMENTS = 2;
  *      removing one — the exact inverse of what every other deletion operator does at its site.
  *      A missing guard here doesn't just miss a mutant; it emits a backwards one that would
  *      quietly corrupt kill/survive results. `SetRange(F, V)` and `SetRange(F, From, To)` both
- *      pass; the bare `SetRange(F)` form does not.
+ *      pass; the bare `SetRange(F)` form does not — including when a comment sits inside its
+ *      parentheses, which the grammar reports as a second *named* child (see `hasValueArguments`).
  *
- * Documented limit (spec §4 table): highly data-dependent. With only in-range rows present in
- * the target suite's data, the mutant is equivalent with respect to that data — the fixture must
- * seed out-of-filter decoy rows for a kill to be possible at all.
+ * Documented limits:
+ *   - (spec §4 table) highly data-dependent. With only in-range rows present in the target suite's
+ *     data, the mutant is equivalent with respect to that data — the fixture must seed
+ *     out-of-filter decoy rows for a kill to be possible at all.
+ *   - No site inside a `tableextension`/`pageextension` is ever claimed; see `OBJECT_KINDS` in
+ *     `./receiver.ts` for why, and for the rest of that predicate's documented limits.
  */
 export const removeSetRange: MutationOperator = {
   name: "lethal.remove-setrange",
@@ -99,17 +101,17 @@ export const removeSetRange: MutationOperator = {
 /**
  * Does the call carry a value (or a from/to range) beyond the field itself?
  *
- * Grammar shape (measured, not assumed — see `packages/builtin-tier2/src/receiver.ts`'s own
- * grammar notes): a `call_expression`'s `arguments` field is an `argument_list` whose
- * `namedChildren` are exactly the argument expressions, with the surrounding parens and commas
- * as anonymous tokens. `SetRange(F)` yields one named child (the field); `SetRange(F, V)` and
- * `SetRange(F, From, To)` yield two and three.
+ * Delegates to `countArguments` (`./mutate-helpers.ts`), which counts top-level comma separators
+ * rather than named children. That distinction is the whole point here: the grammar emits comments
+ * as **named** children of an `argument_list`, so a `namedChildren.length >= 2` test reads
+ * `SetRange("No." <comment>)` — the multi-line `// reset the filter` layout is ordinary AL — as a
+ * two-argument call and claims it. Claiming it is not a near miss but a backwards mutation:
+ * deleting the no-value form *preserves* a filter instead of removing one. Counting separators
+ * cannot be inflated by any trivia node, comment or otherwise.
  *
  * No argument list at all (a shape that shouldn't parse for `SetRange`, but the grammar is not
  * this function's contract to enforce) is treated the same as the no-value form: refuse.
  */
 function hasValueArguments(node: ALSyntaxNode): boolean {
-  const argumentList = node.childForFieldName(ARGUMENTS_FIELD);
-  if (argumentList === null) return false;
-  return argumentList.namedChildren.length >= MIN_VALUE_ARGUMENTS;
+  return countArguments(node) >= MIN_VALUE_ARGUMENTS;
 }

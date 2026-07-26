@@ -14,17 +14,20 @@ import {
   ALNodeKind,
   type ALSyntaxNode,
   type SemanticContext,
-  buildSemanticContext,
   findAll,
   initParser,
-  parseAL,
-  wrapRoot,
 } from "@lethal/engine";
 import { removeSetRange } from "../src/remove-setrange";
+import { contextFor, parseClean } from "./parse-clean";
 
+/**
+ * `parseClean` rather than a bare `parseAL`: half the assertions below are REFUSALS, and a snippet
+ * that failed to parse would yield no `call_expression` at all — the operator would "refuse" it
+ * whatever its guards did. The comment cases in particular carry layouts worth proving parse.
+ */
 function specsFor(sourceAL: string) {
-  const root = wrapRoot(parseAL(sourceAL));
-  const ctx: SemanticContext = buildSemanticContext([{ path: "fixture.al", root }]);
+  const root = parseClean(sourceAL);
+  const ctx: SemanticContext = contextFor(root);
   const calls: ALSyntaxNode[] = findAll(root, ALNodeKind.procedure_call);
   return calls
     .filter((n) => removeSetRange.targets(n, ctx))
@@ -64,6 +67,45 @@ describe("removeSetRange", () => {
   it("REFUSES the no-value SetRange(F) form — it clears a filter, so deleting it preserves one", () => {
     const src = `codeunit 50123 "C" { procedure P() var Cust: Record Customer; begin Cust.SetRange("No."); end; }`;
     expect(specsFor(src)).toEqual([]);
+  });
+
+  /**
+   * The three cases below are the same rule as the one above, with a COMMENT inside the
+   * parentheses. The grammar emits comments as **named** children of an `argument_list`
+   * (measured: `["quoted_identifier", "multiline_comment"]` / `["quoted_identifier", "comment"]`),
+   * so an arity guard reading `namedChildren.length >= 2` sees a two-argument call and claims the
+   * site.
+   *
+   * That is worse than a missed site. `SetRange(F)` CLEARS a filter, so deleting it PRESERVES one
+   * — the inverse of the intended mutation, quietly corrupting kill/survive results at that site
+   * and (Tier 2 outranking Tier 1 in §3.2 dedup) suppressing the correct `void-method-call` mutant
+   * there too. The multi-line `// reset the filter` layout is ordinary AL.
+   */
+  it("REFUSES SetRange(F) with a block comment inside the parentheses", () => {
+    const src = `codeunit 50127 "C" { procedure P() var Cust: Record Customer; begin Cust.SetRange("No." /* clear it */); end; }`;
+    expect(specsFor(src)).toEqual([]);
+  });
+
+  it("REFUSES SetRange(F) with a trailing line comment on a multi-line call", () => {
+    const src = `codeunit 50128 "C"
+{
+    procedure P()
+    var
+        Cust: Record Customer;
+    begin
+        Cust.SetRange(
+            "No."  // reset the filter
+        );
+    end;
+}`;
+    expect(specsFor(src)).toEqual([]);
+  });
+
+  it("still CLAIMS SetRange(F, V) when a comment sits inside the parentheses", () => {
+    // The counterweight: the comment fix must not turn into "refuse anything with a comment".
+    const src = `codeunit 50129 "C" { procedure P() var Cust: Record Customer; begin Cust.SetRange("No." /* the key */, 'A'); end; }`;
+    const specs = specsFor(src);
+    expect(specs.map((s) => s.before.text)).toEqual(["Cust.SetRange(\"No.\" /* the key */, 'A')"]);
   });
 
   it("REFUSES a receiver that resolves to a non-record (Builder.SetRange)", () => {

@@ -3,14 +3,14 @@ import {
   type ALSyntaxNode,
   type MutationOperator,
   type MutationSpec,
+  type ParentContextHint,
   type SemanticContext,
+  isStatementPosition,
 } from "@lethal/operator-sdk";
-import { synthesizeAfter } from "./mutate-helpers";
+import { soleArgument, synthesizeAfter } from "./mutate-helpers";
 import { claimsRecordMethod } from "./receiver";
 
 const METHOD_NAME = "Modify";
-/** `argument_list` isn't in `ALNodeKind`; the field name is grammar-stable regardless. */
-const ARGUMENTS_FIELD = "arguments";
 const TRUE_LITERAL = "true";
 const FALSE_REPLACEMENT = "false";
 
@@ -59,9 +59,12 @@ const FALSE_REPLACEMENT = "false";
  * either side of the argument are left exactly as written, so `MODIFY(True)` keeps `MODIFY`'s own
  * casing; only the argument span is spliced.
  *
- * Documented limit (spec §4 table): only observable when the table's `OnModify` does something the
- * test asserts. The semantic layer cannot see base-app triggers, so equivalent mutants on base-app
- * records cannot be hinted away.
+ * Documented limits:
+ *   - (spec §4 table) only observable when the table's `OnModify` does something the test asserts.
+ *     The semantic layer cannot see base-app triggers, so equivalent mutants on base-app records
+ *     cannot be hinted away.
+ *   - No site inside a `tableextension`/`pageextension` is ever claimed; see `OBJECT_KINDS` in
+ *     `./receiver.ts` for why, and for the rest of that predicate's documented limits.
  */
 export const swapModifyFlag: MutationOperator = {
   name: "lethal.swap-modify-flag",
@@ -90,7 +93,7 @@ export const swapModifyFlag: MutationOperator = {
         astNodeId: `${node.startIndex}-${node.endIndex}`,
         before: node,
         after: synthesizeAfter(node, mutatedText),
-        parentContext: "statement-position",
+        parentContext: parentContextOf(node),
       },
     ];
   },
@@ -112,14 +115,41 @@ export const swapModifyFlag: MutationOperator = {
       sourceAL: `codeunit 50141 "C" { procedure P() var Cust: Record Customer; begin if Cust.FindSet() then Cust.Modify(true); end; }`,
       expectedSpecs: [
         {
-          parentContext: "statement-position",
+          // Not statement position — `isStatementPosition` measures `false` for an un-braced
+          // then-branch, and the hint says so rather than repeating the statement-position claim.
+          parentContext: "expression-position",
           beforeText: "Cust.Modify(true)",
           afterText: "Cust.Modify(false)",
         },
       ],
     },
+    {
+      name: "sees through a comment inside the parentheses",
+      sourceAL: `codeunit 50142 "C" { procedure P() var Cust: Record Customer; begin Cust.Modify(true /* run the trigger */); end; }`,
+      expectedSpecs: [
+        {
+          parentContext: "statement-position",
+          beforeText: "Cust.Modify(true /* run the trigger */)",
+          afterText: "Cust.Modify(false /* run the trigger */)",
+        },
+      ],
+    },
   ],
 };
+
+/**
+ * The honest `parentContext` for this site.
+ *
+ * Unlike the three deletion operators, this one claims sites that are NOT in statement position
+ * (`Ok := Cust.Modify(true)`, `if not Cust.Modify(true) then ...`, an un-braced then-branch).
+ * Hardcoding `"statement-position"` there would state something `isStatementPosition` itself
+ * measures as false. Nothing downstream branches on the hint today — it is validated
+ * (`spec-validation.ts`) and reported — which is precisely why it must not be allowed to drift
+ * into a lie.
+ */
+function parentContextOf(node: ALSyntaxNode): ParentContextHint {
+  return isStatementPosition(node) ? "statement-position" : "expression-position";
+}
 
 /**
  * Does the call carry exactly one argument, and is it the literal `true` (any case)?
@@ -129,12 +159,17 @@ export const swapModifyFlag: MutationOperator = {
  * overload but not this predicate's contract to police), or a sole argument that is not a
  * `boolean_literal` node at all (an identifier, a comparison, the literal `false`) — the only
  * literal this operator ever swaps is `true`.
+ *
+ * "Exactly one argument" comes from `soleArgument` (`./mutate-helpers.ts`), shared with
+ * `RemoveSetRange`'s `countArguments` so the two cannot drift apart on the same grammar fact: the
+ * grammar emits comments as **named** children of an `argument_list`, so a plain
+ * `namedChildren.length === 1` test refuses a `Modify(true)` with a comment inside its
+ * parentheses. Here that refusal was merely a missed site; in `RemoveSetRange` the same blindness
+ * produced an inverted mutation, which is why both now read the argument list through one helper.
  */
 function booleanTrueArgument(node: ALSyntaxNode): ALSyntaxNode | null {
-  const argumentList = node.childForFieldName(ARGUMENTS_FIELD);
-  if (argumentList === null) return null;
-  const [only, ...rest] = argumentList.namedChildren;
-  if (only === undefined || rest.length > 0) return null;
+  const only = soleArgument(node);
+  if (only === null) return null;
   if (only.kind !== ALNodeKind.boolean_literal) return null;
   return only.text.toLowerCase() === TRUE_LITERAL ? only : null;
 }
