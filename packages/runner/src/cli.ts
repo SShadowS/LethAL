@@ -258,6 +258,18 @@ export interface BcDevConfigSection {
   // Extra env vars for the spawned bc-dev-mcp server process, e.g.
   // { "BC_DEV_USER": "...", "BC_DEV_PASSWORD": "..." } — see BcDevConfig.env.
   readonly env?: Record<string, string>;
+  /**
+   * OData root, used VERBATIM when present. `odataBaseUrl` injects port 7048, which is right for a
+   * container and wrong for an environment tool's `https://host/{envId}`. Set only by
+   * `env-tool-session`; a hand-written bcdev section leaves it absent and keeps the derivation.
+   */
+  readonly baseUrl?: string;
+  /**
+   * bc-dev-mcp connection port. Set only by `env-tool-session` (derived from `baseUrl` — see
+   * `deriveMcpPort` there); a hand-written bcdev section leaves it absent, matching a container's
+   * existing behaviour of letting bc-dev-mcp fall back to its own default.
+   */
+  readonly port?: number;
 }
 
 export interface AlRunnerConfigSection {
@@ -365,7 +377,7 @@ export function odataBaseUrl(server: string, serverInstance: string): string {
  */
 export function odataCfgFor(c: BcDevConfigSection): ActivationConfig {
   return {
-    baseUrl: odataBaseUrl(c.server, c.serverInstance),
+    baseUrl: c.baseUrl ?? odataBaseUrl(c.server, c.serverInstance),
     company: c.company,
     username: c.username,
     password: c.password,
@@ -474,6 +486,7 @@ async function buildBackend(
       controlSymbolPath: c.controlSymbolPath,
       ...(c.tenant !== undefined ? { tenant: c.tenant } : {}),
       ...(c.env !== undefined ? { env: c.env } : {}),
+      ...(c.port !== undefined ? { port: c.port } : {}),
     },
     undefined,
     { compiler, deployer, verifier, harnessVerifier },
