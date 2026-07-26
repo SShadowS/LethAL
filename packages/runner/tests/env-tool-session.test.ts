@@ -1,5 +1,5 @@
-import { describe, expect, it } from "bun:test";
-import { mkdtemp, readFile, readdir } from "node:fs/promises";
+import { describe, expect, it, spyOn } from "bun:test";
+import { mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EnvToolClient, EnvToolError } from "../src/env-tool";
@@ -475,6 +475,70 @@ describe("startEnvToolSession", () => {
     expect(await readdir(deletedDir)).toHaveLength(0); // gone — the env itself is gone too
   });
 
+  // R17: `recordCreatedEnv`/`removeRecordedEnv` had a writer and no reader — the whole
+  // crash-recovery story for a leaked environment was a file nothing ever listed. A session start
+  // must now scan `stateDir` and warn on whatever it finds, naming the envId and the exact delete
+  // command already recorded — never deleting anything itself.
+  it("warns on a stale crash-recovery record left by an earlier run, naming its envId and delete command (R17)", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "lethal-envstate-"));
+    await writeFile(
+      join(stateDir, "some-other-run.json"),
+      JSON.stringify({
+        runId: "some-other-run",
+        envId: "env-orphan",
+        deleteArgv: ["tool.exe", "env", "delete", "env-orphan"],
+        startedAtMs: Date.now(),
+      }),
+      "utf8",
+    );
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    let warnings: string[];
+    try {
+      await start({ stateDir });
+      // Captured BEFORE mockRestore(), which clears .mock.calls (mirrors harness.test.ts's
+      // verifyQuiet — reading .mock.calls after restore sees an empty array).
+      warnings = warnSpy.mock.calls.map((c) => String(c[0]));
+    } finally {
+      warnSpy.mockRestore();
+    }
+    expect(
+      warnings.some(
+        (w) => w.includes("env-orphan") && w.includes("tool.exe env delete env-orphan"),
+      ),
+    ).toBe(true);
+  });
+
+  it("does not warn about a record matching the CURRENT run's own id, or when stateDir has none at all (R17)", async () => {
+    const emptyDir = await mkdtemp(join(tmpdir(), "lethal-envstate-"));
+    const warnSpy1 = spyOn(console, "warn").mockImplementation(() => {});
+    let warnings1: string[];
+    try {
+      await start({ stateDir: emptyDir });
+      warnings1 = warnSpy1.mock.calls.map((c) => String(c[0]));
+    } finally {
+      warnSpy1.mockRestore();
+    }
+    expect(warnings1.some((w) => w.includes("stale env-tool crash-recovery"))).toBe(false);
+
+    // `start()` always uses runId "r1" — pre-seed a record under that SAME id (as if this run
+    // were retrying after already recording itself) and prove it is never reported back as stale.
+    const ownDir = await mkdtemp(join(tmpdir(), "lethal-envstate-"));
+    await writeFile(
+      join(ownDir, "r1.json"),
+      JSON.stringify({ runId: "r1", envId: "env-4711", deleteArgv: [], startedAtMs: Date.now() }),
+      "utf8",
+    );
+    const warnSpy2 = spyOn(console, "warn").mockImplementation(() => {});
+    let warnings2: string[];
+    try {
+      await start({ stateDir: ownDir });
+      warnings2 = warnSpy2.mock.calls.map((c) => String(c[0]));
+    } finally {
+      warnSpy2.mockRestore();
+    }
+    expect(warnings2.some((w) => w.includes("stale env-tool crash-recovery"))).toBe(false);
+  });
+
   it("a failing deleteEnv does not throw out of teardown, and keeps the crash-recovery record", async () => {
     const h = harness({ envId: undefined });
     const failing = new EnvToolClient(h.cfg, {
@@ -575,35 +639,40 @@ describe("startEnvToolSession", () => {
       }),
     ).rejects.toThrow(EnvToolError);
 
+    // R22e: `.rejects.toThrow(/readyWhen/)` / `.toThrow(/startEnv/)` each independently survived
+    // a revert to a SINGLE combined message naming both blocks regardless of which was actually
+    // missing — the earlier "requires the whole create-mode block set" combined message contains
+    // both substrings too. Capture the real error and assert it names the missing block AND does
+    // NOT name the other one, which a merged message would fail.
     const { readyWhen: _readyWhen2, ...cfgWithoutReadyWhen } = h.cfg;
-    await expect(
-      startEnvToolSession({
-        cfg: cfgWithoutReadyWhen,
-        bcdevRaw: BCDEV_RAW,
-        projectDir: "C:/proj",
-        testDir: "C:/tests",
-        runId: "r-missing-ready",
-        client: h.client,
-        makePublisher: () => ({ publishFile: async () => {} }),
-        verifyHarness: async () => {},
-        stateDir: await mkdtemp(join(tmpdir(), "lethal-envstate-")),
-      }),
-    ).rejects.toThrow(/readyWhen/);
+    const readyWhenErr = await startEnvToolSession({
+      cfg: cfgWithoutReadyWhen,
+      bcdevRaw: BCDEV_RAW,
+      projectDir: "C:/proj",
+      testDir: "C:/tests",
+      runId: "r-missing-ready",
+      client: h.client,
+      makePublisher: () => ({ publishFile: async () => {} }),
+      verifyHarness: async () => {},
+      stateDir: await mkdtemp(join(tmpdir(), "lethal-envstate-")),
+    }).catch((e: unknown) => (e instanceof Error ? e.message : String(e)));
+    expect(readyWhenErr).toMatch(/envTool\.readyWhen is required/);
+    expect(readyWhenErr).not.toContain("envTool.startEnv");
 
     const { startEnv: _startEnv2, ...cfgWithoutStartEnv } = h.cfg;
-    await expect(
-      startEnvToolSession({
-        cfg: cfgWithoutStartEnv,
-        bcdevRaw: BCDEV_RAW,
-        projectDir: "C:/proj",
-        testDir: "C:/tests",
-        runId: "r-missing-start",
-        client: h.client,
-        makePublisher: () => ({ publishFile: async () => {} }),
-        verifyHarness: async () => {},
-        stateDir: await mkdtemp(join(tmpdir(), "lethal-envstate-")),
-      }),
-    ).rejects.toThrow(/startEnv/);
+    const startEnvErr = await startEnvToolSession({
+      cfg: cfgWithoutStartEnv,
+      bcdevRaw: BCDEV_RAW,
+      projectDir: "C:/proj",
+      testDir: "C:/tests",
+      runId: "r-missing-start",
+      client: h.client,
+      makePublisher: () => ({ publishFile: async () => {} }),
+      verifyHarness: async () => {},
+      stateDir: await mkdtemp(join(tmpdir(), "lethal-envstate-")),
+    }).catch((e: unknown) => (e instanceof Error ? e.message : String(e)));
+    expect(startEnvErr).toMatch(/envTool\.startEnv is required/);
+    expect(startEnvErr).not.toContain("envTool.readyWhen");
   });
 
   it("throws when the resolved baseUrl has no path segment to use as serverInstance (item 5)", async () => {

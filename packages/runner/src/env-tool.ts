@@ -210,10 +210,13 @@ export function validateEnvToolConfig(
      * "two sources, one value" check below (fixtures/README.md's worked example names this by
      * name). This module has no `BcDevConfigSection` type of its own to inspect directly (that
      * type lives in cli.ts, which imports FROM here); the caller derives this list and passes it
-     * in. Optional and defaults to none, so a caller that doesn't have a bcdev section at hand
-     * (or a test that isn't exercising this check) is unaffected.
+     * in. REQUIRED (R24) — not optional: an earlier version defaulted this to a no-op when
+     * omitted, which means a future second caller of `validateEnvToolConfig` that simply forgot
+     * to derive and pass it would silently lose the "two sources, one value" guard rather than
+     * fail loudly. A caller with no bcdev section to check against passes an empty array to say
+     * so explicitly, rather than omitting the parameter.
      */
-    bcdevDeclaredKeys?: readonly string[];
+    bcdevDeclaredKeys: readonly string[];
   },
 ): EnvToolConfigSection {
   if (!raw) throw new EnvToolError('config file is missing the "envTool" section');
@@ -231,6 +234,23 @@ export function validateEnvToolConfig(
     throw new EnvToolError("envTool.resolve is required — LethAL cannot find the environment");
   }
   if (!cfg.publish) throw new EnvToolError("envTool.publish is required");
+  // R23: `publish`'s failure text is exactly what the orchestrator's one-shot version-conflict
+  // recovery parses BC's rejection message out of (see EnvToolPublisher's doc comment). Every
+  // block's `reads` is otherwise free to name any known key, but `EnvToolClient.run`'s
+  // credential-withholding rule replaces a NON-ZERO-EXIT failure's entire stdout/stderr with
+  // "(output withheld: this command's output carries credentials)" the moment a block declares
+  // it reads `username`/`password` — if `publish` itself did that, a real publish failure would
+  // silently lose the detail that recovery depends on. No plausible tool actually emits
+  // credentials from a publish command, so this is a guardrail, not a live bug — reject it here,
+  // before any process is spawned, and name the reason.
+  const publishCredKeys = Object.keys(cfg.publish.reads ?? {}).filter((k) =>
+    (CREDENTIAL_READS_KEYS as readonly string[]).includes(k),
+  );
+  if (publishCredKeys.length > 0) {
+    throw new EnvToolError(
+      `envTool.publish.reads must not read ${publishCredKeys.join(", ")}: a publish failure's output is what the orchestrator's version-conflict recovery parses BC's rejection text out of, and the credential-withholding rule would silently replace it with "(output withheld)" on every failure`,
+    );
+  }
   const createMode = cfg.envId === undefined || cfg.envId === "";
   if (createMode) {
     if (!cfg.createEnv) {
@@ -312,7 +332,7 @@ export function validateEnvToolConfig(
   // bcdev config section — two sources for one value is how two clients end up pointed at
   // different endpoints (fixtures/README.md's worked example calls this out by name). This is
   // deliberately NOT a precedence rule: it is a validation error, not "resolved wins".
-  for (const key of opts.bcdevDeclaredKeys ?? []) {
+  for (const key of opts.bcdevDeclaredKeys) {
     const producer = produced.get(key);
     if (producer !== undefined) {
       throw new EnvToolError(

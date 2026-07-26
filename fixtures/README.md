@@ -109,8 +109,15 @@ This is a **documented support constraint, not an enforced one** — a deliberat
 an oversight. AL cannot enumerate tenants from an extension: System Application codeunit 417
 (`Tenant Information`) exposes only the current tenant (`GetTenantId`/`GetTenantDisplayName`), never a
 tenant count or list. `HarnessInfo` therefore reports `tenantCountReachable: false`, and the runner
-client surfaces `tenantGate: "unenforced"` plus a console warning every session — it cannot refuse a
-multi-tenant container the way it refuses an incompatible protocol version.
+client surfaces `tenantGate: "unenforced"` plus a console warning (once per process, not once per
+`HarnessInfo` check — a single session calls `verify()` several times, and repeating the same
+paragraph on every call trains a reader to scroll past it) — it cannot refuse a multi-tenant
+container the way it refuses an incompatible protocol version.
+
+**This gate is unenforceable in-band, full stop.** There is no LethAL flag, config key, or future
+protocol version that closes this from inside the AL extension — AL genuinely cannot see the tenant
+list. Single-tenancy must be verified out of band, every time, before pointing 5C-B1 at a container
+you don't already know is single-tenant.
 
 **Before running 5C-B1 against any container you don't already know is single-tenant, verify it
 out of band:**
@@ -580,8 +587,10 @@ A created `envId` is written to `~/.lethal/env-state/<runId>.json` **before** an
 a stable location, not session scratch, because a crashed process cannot print and a `mkdtemp`
 directory cannot be found afterwards. The file records the `envId`, the exact resolved `deleteEnv`
 argv, and the start time (`recordCreatedEnv`, `env-tool-session.ts`), and is removed once
-`deleteEnv` actually succeeds. A later `lethal run` should warn on stale entries it finds there;
-removal is manual and deliberate, since LethAL cannot know whether another session still owns the
+`deleteEnv` actually succeeds. Every `lethal run` against an `envTool` config scans this directory
+at session start and `console.warn`s each stale entry it finds, naming the envId and the exact
+delete command already recorded (`warnStaleEnvRecords`, `env-tool-session.ts`); removal itself is
+manual and deliberate, since LethAL cannot know whether another session still owns the
 environment.
 
 The one window this file cannot close: a crash **during** `createEnv` itself, before the

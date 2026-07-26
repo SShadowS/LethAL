@@ -663,6 +663,10 @@ export async function buildBackend(
     readonly publishBlock: EnvToolBlock;
     readonly envId: string;
   },
+  // R21: injectable so a unit test can drive the "AL extension not found" branch below without a
+  // real install — the real default (`defaultAlToolPaths`) reads `~/.vscode/extensions`, which a
+  // test cannot control.
+  deps: { alToolPaths?: typeof defaultAlToolPaths } = {},
 ): Promise<ExecutionBackend> {
   if (parsed.backendKind === "al-runner") {
     const c = validateAlRunnerConfig(configFile.alRunner);
@@ -693,8 +697,22 @@ export async function buildBackend(
     );
   }
 
-  const toolPaths = await defaultAlToolPaths();
+  const alToolPaths = deps.alToolPaths ?? defaultAlToolPaths;
+  const toolPaths = await alToolPaths();
   if (!toolPaths) {
+    // R21: the env-tool publish path (`envToolDeploy` defined, `deployerFor` below takes the
+    // env-tool branch) never constructs a `ContainerDeployer` and so never touches
+    // `toolPaths.altoolPath` — altool.exe is irrelevant there. `alc.exe` is still genuinely
+    // required on EVERY path: compilation is always local, env-tool or not. Naming altool.exe as
+    // a requirement on a path that never uses it is a confusing gate for an install that only
+    // has the AL compiler and not the (server-publish-only) altool binary.
+    if (envToolDeploy !== undefined) {
+      throw new Error(
+        "could not locate alc.exe under the AL Language VS Code extension install " +
+          "(~/.vscode/extensions/ms-dynamics-smb.al-*); alc.exe is required because compilation " +
+          "is always local, even when publishing through envTool — install the AL extension",
+      );
+    }
     throw new Error(
       "could not locate alc.exe/altool.exe under the AL Language VS Code extension install " +
         "(~/.vscode/extensions/ms-dynamics-smb.al-*); install the extension, or run with --backend al-runner",
@@ -893,7 +911,22 @@ export async function runFromCli(
 ): Promise<SessionReport> {
   const configFile = await loadLethalConfigFile(parsed.configPath);
   const scratchRoot = await mkdtemp(join(tmpdir(), "lethal-"));
-  if (parsed.backendKind === "al-runner") warnAlRunnerNotAuthoritative();
+  if (parsed.backendKind === "al-runner") {
+    warnAlRunnerNotAuthoritative();
+    // R18: `--keep-env`/`--allow-expiring-env` are refused OUTRIGHT for al-runner (parseCliConfig,
+    // above) on the reasoning that a silent no-op is wrong — a whole configured `envTool` section
+    // being silently ignored deserves at least the same treatment. Not refused outright (unlike
+    // those flags) because a config file is often shared across `--backend` choices and an
+    // operator switching backends for a one-off al-runner run shouldn't be blocked by it; but
+    // silence is exactly the failure mode this project refuses to ship.
+    if (configFile.envTool !== undefined) {
+      console.warn(
+        "[lethal] envTool is configured but IGNORED: --backend al-runner has no environment to " +
+          "resolve or provision — the entire `envTool` section in this config is silently unused " +
+          "on this path. Remove it, or run with --backend bcdev to have it take effect.",
+      );
+    }
+  }
 
   // Task 7: resolves the bcdev section EXACTLY ONCE (see `resolveEnvToolSession`'s doc comment)
   // and substitutes it into `effectiveConfig`, which every downstream seam below reads instead of

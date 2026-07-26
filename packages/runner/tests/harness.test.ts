@@ -1,11 +1,19 @@
-import { describe, expect, spyOn, test } from "bun:test";
+import { beforeEach, describe, expect, spyOn, test } from "bun:test";
 import type { ActivationConfig } from "../src/activation";
 import {
   CONTROL_APP_ID,
   HarnessVerificationError,
   HarnessVerifier,
   MultiTenantContainerError,
+  resetSingleTenantWarningForTests,
 } from "../src/harness";
+
+// R2: the "unenforced" warning is now a once-per-PROCESS latch (module-scope), not once per
+// `HarnessVerifier` instance — reset it before every test so tests don't leak state into each
+// other depending on execution order.
+beforeEach(() => {
+  resetSingleTenantWarningForTests();
+});
 
 const CFG: ActivationConfig = {
   baseUrl: "http://bc:7048/BC",
@@ -113,6 +121,19 @@ describe("HarnessVerifier.verify", () => {
     expect(warnings.some((w) => w.includes("NOT ENFORCED"))).toBe(true);
   });
 
+  // R2: a single gate run measured FOUR verify() calls printing the same paragraph — trains a
+  // reader to scroll past it. Proven across TWO calls (including from a SECOND, freshly
+  // constructed HarnessVerifier — the whole reason the latch is module-scope, not per-instance)
+  // rather than just one, so a revert to "warn every call" is the thing that goes red.
+  test("warns at most ONCE per process, even across multiple verify() calls and instances (R2)", async () => {
+    const first = await verifyQuiet(verifier(okFetch(info())));
+    expect(first.warnings.some((w) => w.includes("NOT ENFORCED"))).toBe(true);
+
+    const second = await verifyQuiet(verifier(okFetch(info())));
+    expect(second.details.tenantGate).toBe("unenforced"); // still reported correctly
+    expect(second.warnings.some((w) => w.includes("NOT ENFORCED"))).toBe(false); // not reprinted
+  });
+
   test("refuses a multi-tenant container when the count IS reachable", async () => {
     await expect(
       verifier(okFetch(info({ tenantCountReachable: true, tenantCount: 2 }))).verify(),
@@ -172,6 +193,47 @@ describe("HarnessVerifier.verify", () => {
     const five00 = (async (_url: unknown, _init?: RequestInit) =>
       new Response("boom", { status: 500 })) as typeof fetch;
     await expect(verifier(five00).verify()).rejects.toThrow(/HTTP 500/);
+  });
+
+  // R25: hit live 2026-07-26 — a stale locally-built lethal-control.app (extensions/lethal-control
+  // /lethal-control.app is gitignored, so it's a local build every machine makes for itself)
+  // publishes and answers fine, then fails HarnessInfo with BC's own "clientProtocol is not a
+  // valid parameter" 400. That reads like a protocol bug; the real cause is the stale build.
+  test("names a stale local control-app build as the real cause of BC's clientProtocol 400 (R25)", async () => {
+    const staleAppFetch = (async (_url: unknown, _init?: RequestInit) =>
+      new Response(
+        "The parameter 'clientProtocol' in the request payload is not a valid parameter for " +
+          "the operation 'LethALControl_HarnessInfo'",
+        { status: 400 },
+      )) as typeof fetch;
+    let err: unknown;
+    try {
+      await verifier(staleAppFetch).verify();
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(HarnessVerificationError);
+    const message = err instanceof Error ? err.message : String(err);
+    // Names the real cause and the fix...
+    expect(message).toMatch(/stale/i);
+    expect(message).toMatch(/rebuild extensions\/lethal-control and republish/);
+    // ...without discarding BC's own original text as evidence.
+    expect(message).toContain("clientProtocol");
+    expect(message).toContain("not a valid parameter");
+  });
+
+  test("does NOT misdiagnose an unrelated 400 as a stale control app (R25)", async () => {
+    const unrelated400 = (async (_url: unknown, _init?: RequestInit) =>
+      new Response("The parameter 'company' is required", { status: 400 })) as typeof fetch;
+    let err: unknown;
+    try {
+      await verifier(unrelated400).verify();
+    } catch (e) {
+      err = e;
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    expect(message).not.toMatch(/stale/i);
+    expect(message).toContain("company");
   });
 
   test("POSTs LethALControl_HarnessInfo with company + tenant", async () => {
