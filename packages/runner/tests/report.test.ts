@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { AlRunnerCanaryResult } from "../src/al-runner-canary";
+import type { PermissionCanaryResult } from "../src/permission-canary";
 import { renderConsole } from "../src/report";
 import type { SessionReport } from "../src/report";
 
@@ -75,5 +76,84 @@ describe("renderConsole — al-runner canary reiteration (R7/R8)", () => {
     const out = renderConsole({ ...baseReport, alRunnerCanary: canary });
     expect(out).toContain("could not determine");
     expect(out).toContain("spawn ENOENT");
+  });
+});
+
+// ————————————————————————————————————————————————————————————————————————
+// R26: `renderConsole` repeats the PERMISSION canary's measured verdict after the score, for the
+// same reason the al-runner canary is repeated — it is announced once, right after the lease is
+// acquired and before the first mutant, which on a real session is many minutes and a whole mutant
+// table before the number it qualifies. Reverting the addition (i.e. `renderConsole` ignoring
+// `r.permissionCanary`) reddens every test below.
+// ————————————————————————————————————————————————————————————————————————
+describe("renderConsole — permission canary reiteration (R26)", () => {
+  // A bcdev/authoritative base report: unlike the al-runner canary, this one belongs on an
+  // AUTHORITATIVE report — the permission mock is a property of the fenced (bcdev) path.
+  const bcdevReport: SessionReport = {
+    backend: "bcdev",
+    authoritative: true,
+    baselineGreen: true,
+    batches: 1,
+    counts: {
+      killed: 3,
+      survived: 10,
+      noCoverage: 3,
+      timeoutKilled: 0,
+      knownSurvivors: 0,
+      unstable: 0,
+      errors: 0,
+      deadlineExceeded: 0,
+    },
+    mutationScore: 3 / 13,
+    mutants: [],
+    unsupportedTests: [],
+    notInstrumented: { totalFiles: 0, fileCount: 0, siteCount: 0, files: [] },
+  };
+
+  test("appends the mocked warning AFTER the score on an authoritative report", () => {
+    const canary: PermissionCanaryResult = {
+      verdict: "mocked",
+      readPermission: false,
+      writePermission: false,
+      insertSucceeded: false,
+      detail: "Sorry, the current permissions prevented the action.",
+    };
+    const out = renderConsole({ ...bcdevReport, permissionCanary: canary });
+    const lines = out.split("\n");
+    const scoreLineIdx = lines.findIndex((l) => l.startsWith("score:"));
+    const canaryLineIdx = lines.findIndex((l) => l.includes("R26"));
+    expect(scoreLineIdx).toBeGreaterThanOrEqual(0);
+    expect(canaryLineIdx).toBeGreaterThan(scoreLineIdx);
+    expect(out).toContain("CONFIRMED");
+    expect(out).toContain("UNSCORED");
+  });
+
+  test("not-mocked is reported too — silence would be indistinguishable from 'nobody looked'", () => {
+    const canary: PermissionCanaryResult = {
+      verdict: "not-mocked",
+      readPermission: true,
+      writePermission: true,
+      insertSucceeded: true,
+    };
+    const out = renderConsole({ ...bcdevReport, permissionCanary: canary });
+    expect(out).toContain("R26");
+    expect(out).toContain("does NOT strip permissions");
+  });
+
+  test("inconclusive prints its reason AND explicitly disclaims being 'not mocked'", () => {
+    const canary: PermissionCanaryResult = {
+      verdict: "inconclusive",
+      detail: "HTTP 404 — the published LethAL Control app has no PermissionCanary action",
+    };
+    const out = renderConsole({ ...bcdevReport, permissionCanary: canary });
+    expect(out).toContain("could not determine");
+    expect(out).toContain("HTTP 404");
+    expect(out).toContain('NOT the same as "not mocked"');
+  });
+
+  test("omits the reiteration entirely when no permission canary ran", () => {
+    const out = renderConsole(bcdevReport);
+    expect(out).not.toContain("R26");
+    expect(out).not.toContain("permission canary");
   });
 });

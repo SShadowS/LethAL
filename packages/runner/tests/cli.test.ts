@@ -14,6 +14,7 @@ import {
   odataCfgFor,
   parseCliConfig,
   performForceResetLease,
+  permissionCanaryFor,
   resolveSelectorIds,
   resourceIdentityFor,
   validateAlRunnerConfig,
@@ -661,6 +662,36 @@ describe("resourceIdentityFor (Task 13 folded fix — cli.ts sources quarantine 
     expect(typeof wired.lease?.serverGeneration).toBe("function");
     expect(leaseSessionFor({ ...bcdevRunConfig, backendKind: "al-runner" }, configFile)).toEqual(
       {},
+    );
+  });
+
+  // R26: the same "wired in the orchestrator but never sourced by cli.ts" shape once more — a
+  // bcdev session with no `SessionConfig.permissionCanary` silently never measures whether the
+  // permission mock is stripping its test bodies, and the report says nothing at all about it.
+  test("bcdev session is given a permission canary; al-runner is not (no fenced path to measure)", () => {
+    const configFile = {
+      bcdev: {
+        mcpCommand: ["bun", "x", "bc-dev-mcp"],
+        server: "http://Cronus281",
+        serverInstance: "BC",
+        company: "CRONUS",
+        username: "u",
+        password: "p",
+        packageCachePath: "C:/.alpackages",
+        controlSymbolPath: "C:/lethal-control.app",
+      },
+      alRunner: { alRunnerPath: "al-runner" },
+    };
+    const wired = permissionCanaryFor(bcdevRunConfig, configFile);
+    expect(typeof wired.permissionCanary).toBe("function");
+    expect(
+      permissionCanaryFor({ ...bcdevRunConfig, backendKind: "al-runner" }, configFile),
+    ).toEqual({});
+  });
+
+  test("bcdev session with an incomplete bcdev config section throws, same as the lease wiring", () => {
+    expect(() => permissionCanaryFor(bcdevRunConfig, { bcdev: { server: "http://x" } })).toThrow(
+      /missing required field/,
     );
   });
 });

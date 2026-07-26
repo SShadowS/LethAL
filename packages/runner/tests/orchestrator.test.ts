@@ -5401,6 +5401,95 @@ describe("runSession — Layer 5C-B1 fix round 1: deploy latch guard + earlier-b
   });
 });
 
+// ————————————————————————————————————————————————————————————————————————
+// ROADMAP R26: the permission canary runs EXACTLY ONCE per session — after the lease is acquired
+// (it drives the platform test runner, which is exactly what the lease serialises) and before any
+// mutant — and its verdict reaches `SessionReport`. Ordering is asserted from the shared call log,
+// never from timing.
+// ————————————————————————————————————————————————————————————————————————
+describe("runSession — R26 permission canary", () => {
+  test("runs once, after acquire and before the first deploy, and lands on the report", async () => {
+    const log: string[] = [];
+    const client = new FakeLeaseClient(log);
+    const backend = leaseBackend({
+      deploy: async () => {
+        log.push("deploy");
+        return null;
+      },
+    });
+    const { lease } = leaseCfg(client);
+    let calls = 0;
+    const report = await runSessionForTest(backend, {
+      quarantineDir: freshTmpDir(),
+      lease,
+      permissionCanary: async () => {
+        calls++;
+        log.push("canary");
+        return {
+          verdict: "mocked",
+          readPermission: false,
+          writePermission: false,
+          insertSucceeded: false,
+          detail: "Sorry, the current permissions prevented the action.",
+        };
+      },
+    });
+    expect(calls).toBe(1); // once per SESSION, never per mutant or per batch
+    expect(log.indexOf("canary")).toBeGreaterThan(log.indexOf("acquire"));
+    expect(log.indexOf("canary")).toBeLessThan(log.indexOf("deploy"));
+    expect(report.permissionCanary?.verdict).toBe("mocked");
+    expect(report.permissionCanary?.detail).toContain("permissions prevented the action");
+    // ...and it survives into the rendered console report, after the score.
+    expect(renderConsole(report)).toContain("R26");
+  });
+
+  test("a not-mocked verdict is carried through unchanged (the two worlds stay distinguishable)", async () => {
+    const client = new FakeLeaseClient();
+    const { lease } = leaseCfg(client);
+    const report = await runSessionForTest(leaseBackend(), {
+      quarantineDir: freshTmpDir(),
+      lease,
+      permissionCanary: async () => ({
+        verdict: "not-mocked",
+        readPermission: true,
+        writePermission: true,
+        insertSucceeded: true,
+      }),
+    });
+    expect(report.permissionCanary?.verdict).toBe("not-mocked");
+  });
+
+  test("no canary configured leaves the field absent — never a fabricated verdict", async () => {
+    const client = new FakeLeaseClient();
+    const { lease } = leaseCfg(client);
+    const report = await runSessionForTest(leaseBackend(), {
+      quarantineDir: freshTmpDir(),
+      lease,
+    });
+    expect(report.permissionCanary).toBeUndefined();
+    expect("permissionCanary" in report).toBe(false);
+  });
+
+  // The failure mode this guard exists for: a canary that throws must not take the session with
+  // it. Before it was guarded, an infrastructure hiccup would abort BEFORE A SINGLE MUTANT RAN,
+  // producing no SessionReport at all — strictly worse than not knowing whether the mock is on.
+  test("a THROWING canary is demoted to inconclusive and the session still completes", async () => {
+    const client = new FakeLeaseClient();
+    const { lease } = leaseCfg(client);
+    const report = await runSessionForTest(leaseBackend(), {
+      quarantineDir: freshTmpDir(),
+      lease,
+      permissionCanary: async () => {
+        throw new Error("canary transport exploded");
+      },
+    });
+    expect(report.permissionCanary?.verdict).toBe("inconclusive");
+    expect(report.permissionCanary?.detail).toContain("canary transport exploded");
+    // The session itself is unharmed: mutants were still scored.
+    expect(report.mutants.length).toBeGreaterThan(0);
+  });
+});
+
 function fakeManifestEntry(mutantId: string): MutantManifestEntry {
   return {
     mutantId,
