@@ -1,6 +1,7 @@
 import type { MutantManifestEntry } from "@lethal/schemata";
 import { type AlRunnerCanaryResult, alRunnerCanaryWarnings } from "./al-runner-canary";
 import type { BackendCapabilities } from "./backend";
+import { type PermissionCanaryResult, permissionCanaryWarnings } from "./permission-canary";
 import { identityKeyOf } from "./selection";
 import type { MutantVerdict } from "./store";
 
@@ -111,6 +112,24 @@ export interface SessionReport {
    * scrolled past by the time a reader gets to the score.
    */
   readonly alRunnerCanary?: AlRunnerCanaryResult;
+  /**
+   * R26: set on every session that ran the permission canary — an authoritative (bcdev) session,
+   * where the fenced `RunMutant` path is the thing being characterised. Absent on al-runner and on
+   * every in-memory-backend unit test, which have no fenced path and so nothing to measure.
+   *
+   * Persisting it here (not just a `console.warn` after the lease is acquired) is what makes the
+   * verdict survive into a `--out` JSON report or reach a CI that discards stderr — and it is what
+   * lets two runs of the same project on two different servers be compared honestly, since
+   * `"mocked"` and `"not-mocked"` produce legitimately different scores for the same code. As with
+   * `alRunnerCanary`, `renderConsole` also repeats it AFTER the score: a warning printed before a
+   * single mutant ran has scrolled well off screen by the time a reader reaches the number it
+   * qualifies.
+   *
+   * `"inconclusive"` is a first-class value here, never collapsed into `"not-mocked"` — an older
+   * control app with no such action, a transport failure, or an unparseable response must stay
+   * visibly distinct from a measured clean result.
+   */
+  readonly permissionCanary?: PermissionCanaryResult;
 }
 
 export interface MutantOutcome {
@@ -167,6 +186,9 @@ export interface BuildReportInput {
   readonly quarantined?: {
     readonly reason: string;
   };
+  /** R26: the once-per-session permission canary's measured verdict, threaded straight through
+   *  from `runSession` — see `SessionReport.permissionCanary`. */
+  readonly permissionCanary?: PermissionCanaryResult;
 }
 
 export function buildReport(input: BuildReportInput): SessionReport {
@@ -240,6 +262,7 @@ export function buildReport(input: BuildReportInput): SessionReport {
       files: input.notInstrumented.files,
     },
     ...(input.quarantined !== undefined ? { quarantined: input.quarantined } : {}),
+    ...(input.permissionCanary !== undefined ? { permissionCanary: input.permissionCanary } : {}),
   };
 }
 
@@ -298,6 +321,16 @@ export function renderConsole(r: SessionReport): string {
   if (!r.authoritative && r.alRunnerCanary !== undefined) {
     lines.push("");
     lines.push(...alRunnerCanaryWarnings(r.alRunnerCanary));
+  }
+  // R26: same reasoning, same lesson — the permission canary is announced once, right after the
+  // lease is acquired and before the first mutant runs, which on a real session is many minutes
+  // and a full mutant table before the score a reader is actually looking at. Repeat it here.
+  // Unlike the al-runner canary above this is NOT gated on `authoritative`: the permission mock is
+  // a property of the FENCED (bcdev) path, so an authoritative report is exactly where it belongs
+  // — presence of the field alone decides, and nothing else ever sets it.
+  if (r.permissionCanary !== undefined) {
+    lines.push("");
+    lines.push(...permissionCanaryWarnings(r.permissionCanary));
   }
   return lines.join("\n");
 }

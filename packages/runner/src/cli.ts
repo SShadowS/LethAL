@@ -41,6 +41,7 @@ import {
   runSession,
 } from "./orchestrator";
 import type { SessionConfig } from "./orchestrator";
+import { PermissionCanaryClient, runPermissionCanary } from "./permission-canary";
 import { canonicalContainerKey } from "./publish-serializer";
 import { ContainerDeployer, defaultAlToolPaths, defaultDeployerIo } from "./publisher";
 import type { AppPublisher } from "./publisher";
@@ -1023,6 +1024,28 @@ export function leaseSessionFor(
   };
 }
 
+/**
+ * R26: wires the once-per-session permission canary for an authoritative (bcdev) session.
+ *
+ * bcdev-only, and not by convention — the Permissions Mock is a property of the FENCED
+ * `RunMutant` -> `Test Suite Mgt.RunAllTests` path, which only the bcdev backend has. al-runner
+ * has no such path (and no `LethAL Control` app to ask), so there is genuinely nothing to measure
+ * there; returning `{}` leaves `SessionReport.permissionCanary` absent rather than reporting an
+ * inconclusive verdict for a question that does not apply.
+ *
+ * Built through the SAME `odataCfgFor(c)` helper as the lease client and both harness verifiers,
+ * so this cannot end up pointed at a differently-configured endpoint than the calls whose
+ * behaviour it is characterising — see that helper's doc comment for the bug that motivated it.
+ */
+export function permissionCanaryFor(
+  parsed: RunCliConfig,
+  configFile: LethalConfigFile,
+): Pick<SessionConfig, "permissionCanary"> {
+  if (parsed.backendKind !== "bcdev") return {};
+  const client = new PermissionCanaryClient(odataCfgFor(validateBcDevConfig(configFile.bcdev)));
+  return { permissionCanary: () => runPermissionCanary(client) };
+}
+
 export function resourceIdentityFor(
   parsed: RunCliConfig,
   configFile: LethalConfigFile,
@@ -1344,6 +1367,7 @@ export async function runFromCli(
           : {}),
         ...resourceIdentityFor(parsed, effectiveConfig),
         ...leaseSessionFor(parsed, effectiveConfig),
+        ...permissionCanaryFor(parsed, effectiveConfig),
         ...(parsed.workers > 1
           ? {
               backendFactory: (i: number) => {

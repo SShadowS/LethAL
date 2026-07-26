@@ -31,6 +31,7 @@ import { ActivationFailure } from "./failure-classes";
 import { LeaseUnavailableError, MAX_ATTEMPT_ID_LENGTH, MAX_TTL_SECONDS } from "./lease";
 import type { AcquireOutcome, Lease, LeaseApi } from "./lease";
 import { isRetrySafe, requiresUnsafeLatch } from "./operation-outcome";
+import { type PermissionCanaryResult, permissionCanaryWarnings } from "./permission-canary";
 import { Semaphore, shardEvenly } from "./pool";
 import { QuarantineStore } from "./quarantine-store";
 import { buildReport } from "./report";
@@ -218,6 +219,22 @@ export interface SessionConfig {
    * (op-gated) at session end.
    */
   readonly lease?: LeaseSessionConfig;
+  /**
+   * R26: the once-per-session permission canary (`permission-canary.ts`). Present only for an
+   * authoritative (bcdev) session — `cli.ts`'s `permissionCanaryFor` wires it to the real
+   * `LethALControl_PermissionCanary` OData action; absent for al-runner and for every in-memory
+   * unit test, which have no fenced test path to characterise.
+   *
+   * Invoked EXACTLY ONCE, after the lease is acquired (it drives the platform test runner, which
+   * is precisely what the lease serialises) and before any mutant runs — never per mutant. Its
+   * verdict lands on `SessionReport.permissionCanary` and is printed twice (here, and again after
+   * the score via `renderConsole`).
+   *
+   * The production implementation never throws; this call site treats a throw from ANY
+   * implementation as `"inconclusive"` anyway, because a canary that could abort a session would
+   * be a strictly worse failure than not measuring at all.
+   */
+  readonly permissionCanary?: () => Promise<PermissionCanaryResult>;
   /** Injectable ISO-timestamp source for durable quarantine records (Task 12). Production code
    *  freely uses `Date`/`Date.now()` (only workflow SCRIPTS forbid them — see design notes);
    *  this exists purely so tests can assert against a fixed, deterministic `recordedAtIso`
@@ -1568,7 +1585,22 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     session.start();
   }
 
+  // R26: the permission canary's measured verdict for THIS session, or `undefined` when no canary
+  // was configured (al-runner; every in-memory-backend unit test). Declared out here so it reaches
+  // `buildReport` at the very end — the whole point is that it survives into `--out` JSON and gets
+  // repeated after the score, not that it flashes past once in stderr.
+  let permissionCanary: PermissionCanaryResult | undefined;
+
   try {
+    // R26: run it EXACTLY ONCE, here — after the lease is acquired above (the canary drives the
+    // platform test runner through the same `Test Suite Mgt.RunAllTests` path `RunMutant` uses,
+    // which is exactly what the lease serialises) and before the first deploy, let alone the first
+    // mutant. Inside the `try` rather than before it, so its lease is still released by the
+    // `finally` below whatever happens here.
+    if (cfg.permissionCanary !== undefined) {
+      permissionCanary = await runPermissionCanaryQuietly(cfg.permissionCanary);
+      for (const line of permissionCanaryWarnings(permissionCanary)) console.warn(line);
+    }
     if (workers > 1) {
       const factory = cfg.backendFactory;
       if (factory === undefined) {
@@ -2154,7 +2186,33 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     unsupportedTests: [...unsupportedTestNames].sort(),
     notInstrumented: { totalFiles: totalAlFiles, files: notInstrumentedFiles },
     ...(safety.isUnsafe ? { quarantined: { reason: safety.reason ?? "unknown" } } : {}),
+    ...(permissionCanary !== undefined ? { permissionCanary } : {}),
   });
+}
+
+/**
+ * R26: runs the configured permission canary and guarantees it cannot end the session.
+ *
+ * The production implementation (`runPermissionCanary`, permission-canary.ts) already turns every
+ * server-side and transport failure into an `"inconclusive"` result rather than throwing, so in
+ * practice this catch never fires. It exists because the alternative failure mode is
+ * catastrophically asymmetric: a canary that threw would abort a real mutation session BEFORE A
+ * SINGLE MUTANT RAN, producing no `SessionReport` at all — the exact outcome the al-runner canary
+ * (R7/R8) learned to guard against the hard way, and a far worse one than simply not knowing
+ * whether the permission mock is active. The reason is preserved verbatim in `detail`, so a
+ * genuinely broken canary is loud in the report rather than silently absent from it.
+ */
+async function runPermissionCanaryQuietly(
+  canary: () => Promise<PermissionCanaryResult>,
+): Promise<PermissionCanaryResult> {
+  try {
+    return await canary();
+  } catch (err) {
+    return {
+      verdict: "inconclusive",
+      detail: `the permission canary itself failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
 }
 
 /**
