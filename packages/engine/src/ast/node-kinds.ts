@@ -23,6 +23,13 @@ export const ALNodeKind = {
   report: "report_declaration",
   procedure: "procedure",
   trigger: "trigger_declaration",
+  /**
+   * An object-level property assignment (`Permissions = …;`, `Access = Internal;`,
+   * `Subtype = Test;`). A sibling of `procedure`/`trigger_declaration`/`var_section` under
+   * `declaration_body`, and AL requires every one of them BEFORE any `var` section — which is why
+   * the selector-var injector has to know this kind rather than anchoring at the first member.
+   */
+  property: "property",
   var_section: "var_section",
   /** v3 wraps a `var_section`'s declarations in a `var_body` container. */
   var_body: "var_body",

@@ -1,6 +1,6 @@
-import { access, copyFile, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { homedir, hostname } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 import { tier1Operators } from "@lethal/builtin-tier1";
 import { tier2Operators } from "@lethal/builtin-tier2";
 import {
@@ -2707,6 +2707,22 @@ async function writeStampedAppJson(
 }
 
 /**
+ * True for a NON-AL path under a tooling directory rather than app content — any SEGMENT starting
+ * with `.`, so a nested one is caught too. In practice that is `.alpackages`, `.netpackages`,
+ * `.vscode`, `.snapshots` and `.git`. Excluding `.alpackages` is not merely tidiness: it is
+ * hundreds of megabytes of symbol packages that would otherwise be duplicated into every batch
+ * dir.
+ *
+ * Applied ONLY to the resource copy, never to `.al`. A dot-directory can hold real source: the
+ * Continia Document Output app keeps 137 genuine `.al` files under `.dependencies`, and `alc`
+ * compiles them, so filtering them out would silently shrink the app. The `.al` sweep therefore
+ * stays exactly as broad as it has always been.
+ */
+function isToolResourcePath(rel: string): boolean {
+  return rel.split(/[\\/]/).some((segment) => segment.startsWith("."));
+}
+
+/**
  * Spec §5: the instrumented app must keep the target app's id, carry the
  * per-artifact version reserved via `reserveAppVersion` (app-version.ts —
  * clock-derived, monotonic across runs with no stored counter; the old
@@ -2714,8 +2730,21 @@ async function writeStampedAppJson(
  * results DB), and must contain every project source file so `alc` can
  * actually compile it — not just the files `writeInstrumentedProject` wrote
  * for this batch's mutants.
+ *
+ * "Every project source file" means resources too (R39). `app.json` names a `logo`, and a real
+ * project also carries translations (`.xlf`), report layouts, control add-in bundles and
+ * permission XML. Copying only `*.al` left `alc` to stop at
+ * `app.json(13,3): error AL1001: Source file 'Images\Logo.png' could not be found` — BEFORE
+ * compiling a line, so the failure was not even attributable to instrumentation. Every fixture in
+ * this repo is resource-free, which is why the real Continia Document Output app was what found
+ * it. Resources keep their relative path, since that is what `app.json` and every layout
+ * reference names; only `.al` is flattened, because that is the shape
+ * `writeInstrumentedProject` writes.
+ *
+ * Exported for direct testing: the layout it produces is what `alc` compiles, and a defect here
+ * surfaces as a compile error attributed to the wrong thing entirely.
  */
-async function prepareBatchProject(
+export async function prepareBatchProject(
   projectDir: string,
   batchDir: string,
   projectManifest: Readonly<Record<string, unknown>>,
@@ -2723,16 +2752,49 @@ async function prepareBatchProject(
 ): Promise<void> {
   await writeStampedAppJson(batchDir, projectManifest, appVersion);
 
+  const entries = await readdir(projectDir, { recursive: true, withFileTypes: true });
+
   // writeInstrumentedProject only wrote files with >=1 mutant spec in this
   // batch; copy every other project source file verbatim (files whose sites
   // landed in a different batch, or that have no mutable sites at all) so
   // the batch dir holds the FULL project alc needs to compile.
-  const entries = (await readdir(projectDir, { recursive: true })).filter((e) =>
-    e.toLowerCase().endsWith(".al"),
-  );
-  for (const rel of entries) {
-    const dest = join(batchDir, basename(rel));
+  //
+  // The flattening to `basename` is dictated by `writeInstrumentedProject`, which writes its
+  // emissions that way. It makes two same-named files in different folders collide, and the
+  // `pathExists` skip below — there to leave an instrumented emission alone — would silently
+  // swallow the second one, dropping an AL object from the published app with no diagnostic.
+  // So collisions are detected here on the SOURCE paths, independently of what is already on
+  // disk, and refused loudly. (Continia Document Output has 551 distinct basenames across 551
+  // files, so the flattening survives there — by luck, not by design.)
+  const alBySeenBasename = new Map<string, string>();
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    const rel = relative(projectDir, join(entry.parentPath, entry.name));
+    if (!rel.toLowerCase().endsWith(".al")) continue;
+    const base = basename(rel);
+    const previous = alBySeenBasename.get(base.toLowerCase());
+    if (previous !== undefined) {
+      throw new Error(
+        `cannot build the batch project: two source files share the basename "${base}" (${previous} and ${rel}). Instrumented files are written flat, so one would silently replace the other and its AL objects would be missing from the published app. Rename one of them.`,
+      );
+    }
+    alBySeenBasename.set(base.toLowerCase(), rel);
+    const dest = join(batchDir, base);
     if (await pathExists(dest)) continue;
+    await copyFile(join(projectDir, rel), dest);
+  }
+
+  // Resources: same set minus the `.al` files above, minus the stamped `app.json` and any
+  // already-built `.app` package, copied with their directory structure intact.
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    const rel = relative(projectDir, join(entry.parentPath, entry.name));
+    const lower = rel.toLowerCase();
+    if (lower.endsWith(".al") || lower.endsWith(".app")) continue;
+    if (basename(lower) === "app.json") continue;
+    if (isToolResourcePath(rel)) continue;
+    const dest = join(batchDir, rel);
+    await mkdir(dirname(dest), { recursive: true });
     await copyFile(join(projectDir, rel), dest);
   }
 }

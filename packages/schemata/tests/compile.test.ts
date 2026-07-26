@@ -587,6 +587,119 @@ describe("compileSchemataForFile — selector var reuses an existing object-leve
   });
 });
 
+/**
+ * R38. AL requires an object's PROPERTIES before any `var` section, so anchoring the selector var
+ * at `members[0]` emits `{ var MutationSelector … Permissions = …` — and `alc` then reads
+ * `Permissions` as a variable name and never recovers (AL0104/AL0107/AL0105). Measured on the real
+ * Continia Document Output app: 19 of 162 instrumented files, 246 errors, whole-app compile fails.
+ * Every fixture codeunit here declared no properties, which is why `members[0]` looked safe.
+ *
+ * These assert POSITION rather than re-parsing, deliberately: tree-sitter recovers from the bad
+ * ordering without an ERROR node, so `countErrorNodes` is blind to exactly this defect. The
+ * authoritative check is an offline `alc` compile.
+ */
+describe("compileSchemataForFile — selector var injection past codeunit properties", () => {
+  it("inserts the selector var AFTER a codeunit property, not before it", () => {
+    const source = `codeunit 50100 "P"
+{
+    Permissions = tabledata "Sales Header" = rm;
+
+    procedure Go()
+    begin
+        DoThing();
+    end;
+}`;
+    const root = wrapRoot(parseAL(source));
+    const out = compileSchemataForFile(source, root, [specAtFirstCall(root)]);
+    const varAt = out.indexOf("MutationSelector: Codeunit");
+    expect(varAt).toBeGreaterThan(out.indexOf("Permissions ="));
+    expect(varAt).toBeLessThan(out.indexOf("procedure Go"));
+  });
+
+  it("inserts the selector var after the LAST of several properties", () => {
+    const source = `codeunit 50101 "Q"
+{
+    Access = Internal;
+    SingleInstance = true;
+    EventSubscriberInstance = Manual;
+    TableNo = 18;
+
+    procedure Go()
+    begin
+        DoThing();
+    end;
+}`;
+    const root = wrapRoot(parseAL(source));
+    const out = compileSchemataForFile(source, root, [specAtFirstCall(root)]);
+    const varAt = out.indexOf("MutationSelector: Codeunit");
+    expect(varAt).toBeGreaterThan(out.indexOf("TableNo = 18;"));
+    expect(varAt).toBeLessThan(out.indexOf("procedure Go"));
+  });
+
+  it("still reuses an existing var_section that sits after a property", () => {
+    // The real-world shape this most often takes: `Subtype = Test;` followed by the codeunit's
+    // own globals. Reuse must win over insertion, or the emission carries two var sections.
+    const source = `codeunit 50102 "R"
+{
+    Subtype = Test;
+
+    var
+        Flag: Boolean;
+
+    procedure Go()
+    begin
+        DoThing();
+    end;
+}`;
+    const root = wrapRoot(parseAL(source));
+    const out = compileSchemataForFile(source, root, [specAtFirstCall(root)]);
+    const outRoot = wrapRoot(parseAL(out));
+    const outCodeunit = findFirst(outRoot, ALNodeKind.codeunit);
+    if (outCodeunit === null) throw new Error("no codeunit in output");
+    const varSections = declarationMembers(outCodeunit).filter(
+      (c) => c.kind === ALNodeKind.var_section,
+    );
+    expect(varSections).toHaveLength(1);
+    const [varSection] = varSections;
+    if (varSection === undefined) throw new Error("fixture drift");
+    expect(varSection.text).toContain("Flag: Boolean;");
+    expect(varSection.text).toContain('MutationSelector: Codeunit "Mutation Selector";');
+  });
+
+  it("keeps inserting before the first member when a codeunit declares no properties", () => {
+    // The pre-R38 behaviour, which was correct for this shape and must not regress.
+    const source = `codeunit 50103 "S"
+{
+    procedure Go()
+    begin
+        DoThing();
+    end;
+}`;
+    const root = wrapRoot(parseAL(source));
+    const out = compileSchemataForFile(source, root, [specAtFirstCall(root)]);
+    expect(out.indexOf("MutationSelector: Codeunit")).toBeLessThan(out.indexOf("procedure Go"));
+  });
+
+  it("inserts after a trailing property when a codeunit's only members are properties and a trigger", () => {
+    // An install/upgrade codeunit: properties, then an object-level trigger and no procedure.
+    const source = `codeunit 50104 "T"
+{
+    Subtype = Install;
+    Access = Internal;
+
+    trigger OnInstallAppPerCompany()
+    begin
+        DoThing();
+    end;
+}`;
+    const root = wrapRoot(parseAL(source));
+    const out = compileSchemataForFile(source, root, [specAtFirstCall(root)]);
+    const varAt = out.indexOf("MutationSelector: Codeunit");
+    expect(varAt).toBeGreaterThan(out.indexOf("Access = Internal;"));
+    expect(varAt).toBeLessThan(out.indexOf("trigger OnInstallAppPerCompany"));
+  });
+});
+
 describe("compileSchemataForFile — selector var injection into table objects", () => {
   it("injects the selector var into a table, after its sections and before its triggers", () => {
     const source = `table 50100 "T"
