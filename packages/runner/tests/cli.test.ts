@@ -16,6 +16,7 @@ import {
   resourceIdentityFor,
   validateAlRunnerConfig,
   validateBcDevConfig,
+  withAlRunnerCanary,
 } from "../src/cli";
 import { CONTROL_APP_ID } from "../src/harness";
 import { LeaseClient } from "../src/lease";
@@ -632,20 +633,22 @@ describe("announceAlRunnerCanary (R7/R8)", () => {
     };
   }
 
-  test("runs the canary and prints its warnings when alRunnerPath is configured", async () => {
+  test("runs the canary, prints its warnings, and RETURNS the measured result when alRunnerPath is configured", async () => {
     const calls: string[] = [];
     const warnings: string[] = [];
     const originalWarn = console.warn;
     console.warn = ((...args: unknown[]) => {
       warnings.push(args.map(String).join(" "));
     }) as typeof console.warn;
+    const canned: AlRunnerCanaryResult = {
+      asserterror: "defect-confirmed",
+      tableGlobalVar: "defect-not-reproduced",
+    };
+    let result: AlRunnerCanaryResult | undefined;
     try {
-      await announceAlRunnerCanary(
+      result = await announceAlRunnerCanary(
         { alRunner: { alRunnerPath: "C:/al-runner.exe" } },
-        fakeCanary(
-          { asserterror: "defect-confirmed", tableGlobalVar: "defect-not-reproduced" },
-          calls,
-        ),
+        fakeCanary(canned, calls),
       );
     } finally {
       console.warn = originalWarn;
@@ -653,17 +656,21 @@ describe("announceAlRunnerCanary (R7/R8)", () => {
     expect(calls).toEqual(["C:/al-runner.exe"]);
     expect(warnings.some((l) => l.includes("R7") && l.includes("CONFIRMED"))).toBe(true);
     expect(warnings.some((l) => l.includes("R8") && l.includes("did NOT"))).toBe(true);
+    // R7/R8 report-persistence fix: the caller (runFromCli) needs this value back to attach it
+    // to the SessionReport via withAlRunnerCanary — printing it was never enough on its own.
+    expect(result).toEqual(canned);
   });
 
-  test("falls back to the static warning WITHOUT running the canary when alRunnerPath is not yet configured", async () => {
+  test("falls back to the static warning WITHOUT running the canary, and returns undefined, when alRunnerPath is not yet configured", async () => {
     const calls: string[] = [];
     const warnings: string[] = [];
     const originalWarn = console.warn;
     console.warn = ((...args: unknown[]) => {
       warnings.push(args.map(String).join(" "));
     }) as typeof console.warn;
+    let result: AlRunnerCanaryResult | undefined;
     try {
-      await announceAlRunnerCanary(
+      result = await announceAlRunnerCanary(
         {},
         fakeCanary({ asserterror: "defect-confirmed", tableGlobalVar: "defect-confirmed" }, calls),
       );
@@ -675,5 +682,51 @@ describe("announceAlRunnerCanary (R7/R8)", () => {
     expect(calls).toEqual([]);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain("al-runner is NOT authoritative");
+    expect(result).toBeUndefined();
+  });
+});
+
+// ————————————————————————————————————————————————————————————————————————
+// R7/R8 report-persistence fix: `withAlRunnerCanary` — the plain merge `runFromCli` applies to
+// its final `SessionReport` before returning it, extracted so it's testable without a real
+// backend/runSession producing a `SessionReport`. Reverting `runFromCli` to drop this call (i.e.
+// return `report` as-is) would leave a `--out` JSON report or any CI that discards stderr with
+// no record of the canary's measured verdict — exactly the gap review flagged, since only the
+// console.warn lines from `announceAlRunnerCanary` would carry it.
+// ————————————————————————————————————————————————————————————————————————
+describe("withAlRunnerCanary (R7/R8 report persistence)", () => {
+  const baseReport = {
+    backend: "al-runner",
+    authoritative: false,
+    baselineGreen: true,
+    batches: 1,
+    counts: {
+      killed: 0,
+      survived: 0,
+      noCoverage: 0,
+      timeoutKilled: 0,
+      knownSurvivors: 0,
+      unstable: 0,
+      errors: 0,
+      deadlineExceeded: 0,
+    },
+    mutationScore: null,
+    mutants: [],
+    unsupportedTests: [],
+  };
+
+  test("attaches the measured result under alRunnerCanary, leaving every other field untouched", () => {
+    const canary: AlRunnerCanaryResult = {
+      asserterror: "defect-confirmed",
+      tableGlobalVar: "defect-confirmed",
+    };
+    const result = withAlRunnerCanary(baseReport, canary);
+    expect(result).toEqual({ ...baseReport, alRunnerCanary: canary });
+  });
+
+  test("undefined canary (bcdev session, or the no-alRunnerPath fallback) leaves the report exactly as given, with no alRunnerCanary key at all", () => {
+    const result = withAlRunnerCanary(baseReport, undefined);
+    expect(result).toEqual(baseReport);
+    expect("alRunnerCanary" in result).toBe(false);
   });
 });

@@ -6,7 +6,11 @@ import { parseArgs } from "node:util";
 import type { InstrumentedFile, SelectorConfig } from "@lethal/schemata";
 import type { ActivationConfig, FetchFn } from "./activation";
 import { AlRunnerBackend } from "./al-runner-backend";
-import { alRunnerCanaryWarnings, runAlRunnerCanary } from "./al-runner-canary";
+import {
+  type AlRunnerCanaryResult,
+  alRunnerCanaryWarnings,
+  runAlRunnerCanary,
+} from "./al-runner-canary";
 import { ArtifactCompiler, defaultArtifactIo } from "./artifact";
 import type { ExecutionBackend } from "./backend";
 import { BcDevMcpBackend } from "./bcdev-backend";
@@ -906,25 +910,46 @@ export async function withEnvTeardown(
  * repeating a claim frozen at the moment someone last measured it by hand. Only possible once
  * `alRunnerPath` is known; if it isn't, `buildBackend` throws its own targeted "missing
  * alRunnerPath" error moments later, and the static fallback (`warnAlRunnerNotAuthoritative`)
- * covers that gap instead.
+ * covers that gap instead — in which case there is nothing measured to return either.
  *
  * Extracted out of `runFromCli` (rather than left inlined there) so this specific branch — which
  * config field gates the canary vs. the fallback, and that the canary's own warnings actually
  * reach `console.warn` — is directly testable without mocking `runFromCli`'s config-file I/O,
  * `resolveEnvToolSession`, `buildBackend`, and `runSession` all at once (see cli.test.ts's own
  * note on why it deliberately does not exercise `runFromCli` end to end).
+ *
+ * Returns the measured result (or `undefined` on the no-`alRunnerPath` fallback path) so
+ * `runFromCli` can attach it to the `SessionReport` via `withAlRunnerCanary` below — printing it
+ * once via `console.warn` here and nowhere else was the exact "warning that scrolls past, and a
+ * `--out` JSON report or any CI that discards stderr never sees it at all" gap review flagged.
  */
 export async function announceAlRunnerCanary(
   configFile: LethalConfigFile,
   runCanary: typeof runAlRunnerCanary = runAlRunnerCanary,
-): Promise<void> {
+): Promise<AlRunnerCanaryResult | undefined> {
   const alRunnerPath = configFile.alRunner?.alRunnerPath;
-  if (alRunnerPath !== undefined) {
-    const canary = await runCanary(alRunnerPath);
-    for (const line of alRunnerCanaryWarnings(canary)) console.warn(line);
-  } else {
+  if (alRunnerPath === undefined) {
     warnAlRunnerNotAuthoritative();
+    return undefined;
   }
+  const canary = await runCanary(alRunnerPath);
+  for (const line of alRunnerCanaryWarnings(canary)) console.warn(line);
+  return canary;
+}
+
+/**
+ * Attaches a measured al-runner canary result onto a `SessionReport` — a plain, obviously-correct
+ * merge (never mutating `report`) extracted so it's directly unit-testable without needing a real
+ * `runSession`/`ResultsStore`/backend to produce a `SessionReport` in the first place. `canary`
+ * is `undefined` on every bcdev session (never computed) and on the al-runner no-`alRunnerPath`
+ * fallback path (nothing was measured) — both leave `report` untouched rather than adding an
+ * `alRunnerCanary` key with no real content.
+ */
+export function withAlRunnerCanary(
+  report: SessionReport,
+  canary: AlRunnerCanaryResult | undefined,
+): SessionReport {
+  return canary !== undefined ? { ...report, alRunnerCanary: canary } : report;
 }
 
 export async function runFromCli(
@@ -944,8 +969,16 @@ export async function runFromCli(
 ): Promise<SessionReport> {
   const configFile = await loadLethalConfigFile(parsed.configPath);
   const scratchRoot = await mkdtemp(join(tmpdir(), "lethal-"));
+  // R7/R8: captured here (outer scope) rather than discarded, so the `withEnvTeardown` closure
+  // below can attach it to the final `SessionReport` — see `withAlRunnerCanary`. Stays
+  // `undefined` for every bcdev session (this branch never runs) and for the al-runner
+  // no-`alRunnerPath` fallback path.
+  let alRunnerCanaryResult: AlRunnerCanaryResult | undefined;
   if (parsed.backendKind === "al-runner") {
-    await announceAlRunnerCanary(configFile, deps.runAlRunnerCanary ?? runAlRunnerCanary);
+    alRunnerCanaryResult = await announceAlRunnerCanary(
+      configFile,
+      deps.runAlRunnerCanary ?? runAlRunnerCanary,
+    );
     // R18: `--keep-env`/`--allow-expiring-env` are refused OUTRIGHT for al-runner (parseCliConfig,
     // above) on the reasoning that a silent no-op is wrong — a whole configured `envTool` section
     // being silently ignored deserves at least the same treatment. Not refused outright (unlike
@@ -1100,7 +1133,10 @@ export async function runFromCli(
         "runFromCli: the try block completed without throwing but produced no report — this is a bug in runFromCli, not a session failure",
       );
     }
-    return report;
+    // R7/R8: persist the measured canary verdict onto the report itself (a `--out` JSON report,
+    // or any CI that discards stderr, previously had no record of it at all — only the
+    // console.warn lines printed once at the very start, before a single mutant ran).
+    return withAlRunnerCanary(report, alRunnerCanaryResult);
   });
 }
 

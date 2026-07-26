@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { readdir } from "node:fs/promises";
+import { readdir, mkdtemp as realMkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import {
+  type AlRunnerCanaryFsOps,
   type AlRunnerCanaryResult,
   alRunnerCanaryWarnings,
   runAlRunnerCanary,
@@ -138,6 +139,98 @@ describe("runAlRunnerCanary", () => {
     const after = await readdir(tmpdir());
     const leaked = after.filter((f) => f.startsWith("lethal-alrunner-canary-") && !before.has(f));
     expect(leaked).toEqual([]);
+  });
+
+  test('an unrecognized test status (neither exactly "pass" nor "fail") is inconclusive, not read as a confirmed defect either way', async () => {
+    const spawn: SpawnFn = async (argv) => {
+      const runIdx = argv.indexOf("--run");
+      const method = argv[runIdx + 1];
+      // A hypothetical future runner-internal status, distinct from both "pass" and "fail".
+      return {
+        exitCode: 0,
+        stdout: JSON.stringify({ tests: [{ name: method, status: "error" }] }),
+        stderr: "",
+      };
+    };
+    const result = await runAlRunnerCanary("al-runner", spawn);
+    expect(result.asserterror).toBe("inconclusive");
+    expect(result.tableGlobalVar).toBe("inconclusive");
+    expect(result.asserterrorDetail).toContain('unexpected status "error"');
+  });
+});
+
+// ————————————————————————————————————————————————————————————————————————
+// Important fix (review): the canary's own infrastructure failures (mkdtemp / cleanup rm) had no
+// try/catch anywhere up to main() — an ENOSPC/EBUSY/EPERM there propagated all the way up
+// uncaught, so main() printed a stack trace and exited 1 BEFORE A SINGLE MUTANT RAN, with no
+// SessionReport at all. That is the hard-refuse-on-infra-hiccup outcome this module's own R7
+// "loud-warn, not hard-refuse" decision explicitly argues against, arriving by omission. Fixed by
+// wrapping the canary body in try/catch (demoting any throw to "inconclusive") and giving the
+// cleanup `rm` the same maxRetries/retryDelay convention AlRunnerBackend.deploy() already uses
+// for the structurally identical Windows EBUSY/EPERM hazard.
+// ————————————————————————————————————————————————————————————————————————
+describe("runAlRunnerCanary — infrastructure-failure safety", () => {
+  test("an mkdtemp failure never throws — demotes BOTH probes to inconclusive with the real error as detail, and never spawns al-runner at all", async () => {
+    let spawnCalled = false;
+    const spawn: SpawnFn = async () => {
+      spawnCalled = true;
+      return { exitCode: 0, stdout: JSON.stringify({ tests: [] }), stderr: "" };
+    };
+    const fsOps: AlRunnerCanaryFsOps = {
+      mkdtemp: async () => {
+        throw new Error("ENOSPC: no space left on device");
+      },
+      rm: async () => {},
+    };
+    const result = await runAlRunnerCanary("al-runner", spawn, fsOps);
+    expect(result.asserterror).toBe("inconclusive");
+    expect(result.tableGlobalVar).toBe("inconclusive");
+    expect(result.asserterrorDetail).toContain("ENOSPC");
+    expect(result.tableGlobalVarDetail).toContain("ENOSPC");
+    expect(spawnCalled).toBe(false);
+  });
+
+  test("a cleanup (rm) failure is swallowed — the already-computed REAL result survives (not silently discarded), and a warning is printed instead of a thrown error", async () => {
+    const { spawn } = scriptedSpawn(BOTH_CONFIRMED);
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = ((...args: unknown[]) => {
+      warnings.push(args.map(String).join(" "));
+    }) as typeof console.warn;
+    const fsOps: AlRunnerCanaryFsOps = {
+      mkdtemp: (prefix) => realMkdtemp(prefix),
+      rm: async () => {
+        throw new Error("EBUSY: resource busy or locked");
+      },
+    };
+    let result: AlRunnerCanaryResult;
+    try {
+      result = await runAlRunnerCanary("al-runner", spawn, fsOps);
+    } finally {
+      console.warn = originalWarn;
+    }
+    // The real, correctly-computed verdicts — NOT "inconclusive" — must survive a cleanup
+    // failure: a naive `finally { await rm(...) }` that rethrows would otherwise discard this
+    // pending return value entirely (JS try/finally semantics), turning a harmless leaked temp
+    // directory into a crashed session.
+    expect(result.asserterror).toBe("defect-confirmed");
+    expect(result.tableGlobalVar).toBe("defect-confirmed");
+    expect(warnings.some((l) => l.includes("EBUSY"))).toBe(true);
+  });
+
+  test("cleanup uses AlRunnerBackend.deploy()'s established maxRetries/retryDelay convention for the same Windows EBUSY/EPERM hazard", async () => {
+    const { spawn } = scriptedSpawn(BOTH_CONFIRMED);
+    let rmOpts:
+      | { recursive: boolean; force: boolean; maxRetries: number; retryDelay: number }
+      | undefined;
+    const fsOps: AlRunnerCanaryFsOps = {
+      mkdtemp: (prefix) => realMkdtemp(prefix),
+      rm: async (_path, opts) => {
+        rmOpts = opts;
+      },
+    };
+    await runAlRunnerCanary("al-runner", spawn, fsOps);
+    expect(rmOpts).toEqual({ recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
   });
 });
 

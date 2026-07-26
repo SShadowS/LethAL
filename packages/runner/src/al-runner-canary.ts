@@ -229,24 +229,85 @@ async function probe(
   if (t === undefined) {
     return { kind: "inconclusive", note: "al-runner output did not include the canary test" };
   }
-  // Mirrors AlRunnerBackend.run()'s own reading: al-runner reports exactly "pass"/"fail" per
-  // test, so anything other than "pass" is a fail for this probe's purposes too.
-  return t.status === "pass"
-    ? { kind: "pass" }
-    : { kind: "fail", ...(t.message !== undefined ? { note: t.message } : {}) };
+  // Unlike AlRunnerBackend.run() (which treats anything other than "pass" as a mutant-kill
+  // "fail", because ANY non-pass outcome is equally a legitimate kill there), this canary reads
+  // "fail" as evidence toward a SPECIFIC defect verdict — so an unrecognized third status (e.g.
+  // a future runner-internal "error") must not silently fall into "fail" and get read as a
+  // confirmed defect. Only "pass" and exactly "fail" are conclusive; anything else is
+  // inconclusive.
+  if (t.status === "pass") return { kind: "pass" };
+  if (t.status === "fail")
+    return { kind: "fail", ...(t.message !== undefined ? { note: t.message } : {}) };
+  return { kind: "inconclusive", note: `al-runner reported unexpected status "${t.status}"` };
+}
+
+/**
+ * The two filesystem operations that can fail for infrastructure reasons unrelated to al-runner
+ * itself (disk full, a locked scratch dir, Windows EBUSY/EPERM on a directory something else
+ * still has open) — injectable so a test can force each failure deterministically instead of
+ * relying on real filesystem edge cases. `writeCanaryProject`'s own `mkdir`/`writeFile` calls
+ * are NOT injected: they write into a directory `mkdtemp` just created, so failing independently
+ * of it is far less plausible, and any throw there is still caught by `runAlRunnerCanary`'s own
+ * outer `catch` below (see there) — just not independently unit-testable without real fs tricks.
+ */
+export interface AlRunnerCanaryFsOps {
+  readonly mkdtemp: (prefix: string) => Promise<string>;
+  readonly rm: (
+    path: string,
+    opts: { recursive: boolean; force: boolean; maxRetries: number; retryDelay: number },
+  ) => Promise<void>;
+}
+
+const defaultFsOps: AlRunnerCanaryFsOps = {
+  mkdtemp: (prefix) => mkdtemp(prefix),
+  rm: (path, opts) => rm(path, opts),
+};
+
+async function cleanUpQuietly(root: string, fsOps: AlRunnerCanaryFsOps): Promise<void> {
+  try {
+    // maxRetries/retryDelay mirrors AlRunnerBackend.deploy()'s identical delete
+    // (al-runner-backend.ts): on Windows, deleting a directory a warm al-runner process, an
+    // indexer, or an AV scanner still holds open is a known EBUSY/EPERM flake that `force`
+    // alone does not cover — `force` only suppresses ENOENT (path already gone).
+    await fsOps.rm(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+  } catch (err) {
+    // Best-effort: a scratch-dir cleanup failure must never discard the canary's own
+    // successfully-computed result (see the doc comment below) or crash the session — it just
+    // leaves a stray temp directory behind, reported so an operator can find it.
+    console.warn(
+      `[lethal] al-runner canary: could not clean up its scratch directory ${root} (harmless; ` +
+        `session continues): ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 }
 
 /**
  * Runs both probes against `alRunnerPath` in a fresh scratch directory, always cleaned up
  * (success, defect, or infrastructure failure alike — a canary that leaked scratch dirs on
  * every session would be its own small bug).
+ *
+ * NEVER throws. `probe()` itself already turns every al-runner-side failure (bad exit code,
+ * malformed JSON, a missing test in the payload) into `{ kind: "inconclusive" }` rather than
+ * throwing, but the surrounding scratch-directory setup (`mkdtemp`, `writeCanaryProject`) is
+ * real filesystem I/O that CAN throw for reasons that have nothing to do with al-runner (disk
+ * full, a locked directory, permissions). Before this was guarded, that kind of infrastructure
+ * hiccup propagated all the way up through `announceAlRunnerCanary`/`runFromCli` uncaught —
+ * `main()` printed a stack trace and exited 1 BEFORE A SINGLE MUTANT RAN, with no `SessionReport`
+ * at all. That is exactly the hard-refuse-on-any-hiccup outcome this module's own R7 decision
+ * (loud-warn, not hard-refuse — see the top-of-file doc comment) argues against; it would just
+ * have arrived by omission instead of by design. So: any throw from the setup/probe path is
+ * caught and demoted to `inconclusive` for both defects, with the real error text as the detail,
+ * and the mutation session proceeds exactly as it would if the canary had never been asked to
+ * run at all.
  */
 export async function runAlRunnerCanary(
   alRunnerPath: string,
   spawn: SpawnFn = defaultSpawn,
+  fsOps: AlRunnerCanaryFsOps = defaultFsOps,
 ): Promise<AlRunnerCanaryResult> {
-  const root = await mkdtemp(join(tmpdir(), "lethal-alrunner-canary-"));
+  let root: string | undefined;
   try {
+    root = await fsOps.mkdtemp(join(tmpdir(), "lethal-alrunner-canary-"));
     const { dataDir, testDir } = await writeCanaryProject(root);
     const transport = new OneShotTransport(alRunnerPath, spawn);
     try {
@@ -277,8 +338,16 @@ export async function runAlRunnerCanary(
     } finally {
       await transport.close();
     }
+  } catch (err) {
+    const detail = `canary infrastructure failure: ${err instanceof Error ? err.message : String(err)}`;
+    return {
+      asserterror: "inconclusive",
+      tableGlobalVar: "inconclusive",
+      asserterrorDetail: detail,
+      tableGlobalVarDetail: detail,
+    };
   } finally {
-    await rm(root, { recursive: true, force: true });
+    if (root !== undefined) await cleanUpQuietly(root, fsOps);
   }
 }
 
