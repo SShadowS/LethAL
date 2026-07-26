@@ -50,6 +50,24 @@ export interface BcDevConfig {
   // `compileCheck()` need this SEPARATELY so `stageForCompile` can stage the control symbol
   // into the exact cache alc reads from via `/packagecachepath:`.
   readonly packageCachePath: string;
+  /**
+   * Coverage the backend claims. Default "procedure" — bc-dev-mcp returns per-procedure coverage
+   * for the baseline run. Set to "none" when bc-dev-mcp cannot reach the environment (the env-tool
+   * fallback, spec §Coverage): the session then runs every mutant against all green tests, which
+   * is slower and never wrong. Per-mutant execution is `coverage: "none"` through the fenced
+   * transport in BOTH modes, so this changes baseline routing and selection only.
+   */
+  readonly coverageMode?: "procedure" | "none";
+  /**
+   * Explicit dev-endpoint port, passed through verbatim to bc-dev-mcp as `port`. Required whenever
+   * the server has no port of its own AND the environment does not listen on bc-dev-mcp's OnPrem
+   * fallback (7049) — a path-routed HTTPS portal (Continia's `demoportaldev.continiaonline.com`)
+   * is exactly that case (see the corrected "Probe result" section of this plan). The WHATWG URL
+   * API normalizes away a default port (`new URL("https://host:443").port === ""`), so embedding
+   * `:443` inside `server` does nothing — only this field reaches bc-dev-mcp's own override
+   * (`bc-dev-mcp/src/core/urls.ts:12`: `c.port ?? (u.port ? Number(u.port) : DEFAULT_DEV_PORT)`).
+   */
+  readonly port?: number;
 }
 
 // Verified against a real BC server (2026-07-18) via bc-dev-mcp source
@@ -146,7 +164,12 @@ export class BcDevMcpBackend implements ExecutionBackend {
   ) {}
 
   capabilities(): BackendCapabilities {
-    return { coverage: "procedure", deploy: "publish", isolation: "session", authoritative: true };
+    return {
+      coverage: this.cfg.coverageMode ?? "procedure",
+      deploy: "publish",
+      isolation: "session",
+      authoritative: true,
+    };
   }
 
   private async connect(): Promise<Client> {
@@ -188,8 +211,16 @@ export class BcDevMcpBackend implements ExecutionBackend {
   }
 
   private connectionParams(): Record<string, unknown> {
-    const { project, server, serverInstance, tenant, environmentType, environmentName, company } =
-      this.cfg;
+    const {
+      project,
+      server,
+      serverInstance,
+      tenant,
+      environmentType,
+      environmentName,
+      company,
+      port,
+    } = this.cfg;
     return Object.fromEntries(
       Object.entries({
         project,
@@ -199,11 +230,31 @@ export class BcDevMcpBackend implements ExecutionBackend {
         environmentType,
         environmentName,
         company,
+        port,
       }).filter(([, v]) => v !== undefined),
     );
   }
 
   async status(): Promise<BackendStatus> {
+    // In "none" mode nothing in this session ever calls bc-dev-mcp — baseline and mutant runs both
+    // go through RunMutantTransport, and discovery is static from source. Probing it here would
+    // fail the session's readiness gate (orchestrator.ts) for a capability it does not use, so the
+    // readiness question becomes "does the control app answer", which is the thing that matters.
+    if ((this.cfg.coverageMode ?? "procedure") === "none") {
+      const harnessVerifier = this.deployment?.harnessVerifier;
+      if (harnessVerifier === undefined) {
+        throw new Error(
+          'BcDevMcpBackend: coverageMode "none" requires a harnessVerifier in BcDevDeployment — ' +
+            "it is the readiness probe in that mode",
+        );
+      }
+      try {
+        const details = await harnessVerifier.verify();
+        return { ok: true, details: `harness generation ${details.serverGeneration}` };
+      } catch (err) {
+        return { ok: false, details: err instanceof Error ? err.message : String(err) };
+      }
+    }
     try {
       const client = await this.connect();
       const res = await client.callTool({

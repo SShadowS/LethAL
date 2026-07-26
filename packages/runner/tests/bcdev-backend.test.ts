@@ -93,6 +93,37 @@ const UNUSED_STAGING_CFG = {
 };
 
 /**
+ * A minimal, valid `BcDevConfig` for tests that only touch `capabilities()`/`status()` and never
+ * `deploy()`/`compileCheck()` — same shape as the literal repeated across `makeBackend` and the
+ * activate/bookkeeping tests below, factored out for Task 5's `coverageMode`/`port` tests so they
+ * don't have to restate every field just to layer on one override.
+ */
+function baseConfig(): BcDevConfig {
+  return {
+    mcpCommand: ["unused"],
+    project: "/al",
+    server: "http://bc",
+    serverInstance: "BC",
+    ...UNUSED_STAGING_CFG,
+  };
+}
+
+/**
+ * A `BcDevDeployment` stub for tests that need a `deployment` object to exist (so
+ * `this.deployment?.harnessVerifier` resolves) but never call `deploy()`/`compileCheck()` — the
+ * compiler/deployer/verifier fields are structurally present but never read. Callers overriding
+ * `harnessVerifier` (e.g. the coverageMode:"none" status() tests) spread over this.
+ */
+function deploymentStub(): BcDevDeployment {
+  return {
+    compiler: {} as ArtifactCompiler,
+    deployer: {} as ContainerDeployer,
+    verifier: {} as DeploymentVerifier,
+    harnessVerifier: fakeHarnessVerifier(),
+  };
+}
+
+/**
  * `stageForCompile` (Task 8) creates `${instrumentedDir}-staged` as a SIBLING directory via a
  * real `cp` — outside whatever tmp dir a test passed to `deploy()`, so it survives that dir's
  * own cleanup and leaks under the OS tmp root unless removed explicitly. (`compileCheck()`
@@ -197,6 +228,7 @@ const anyArgs = z.object({}).passthrough();
 function makeBackend(
   runHandler: (args: unknown) => unknown,
   statusHandler: (args: unknown) => unknown = () => "fake",
+  overrides: Partial<BcDevConfig> = {},
 ) {
   const server = new McpServer({ name: "fake-bc-dev", version: "0.0.0" });
   // `await` matters here: a handler that returns a never-resolving Promise (the timeout
@@ -219,6 +251,7 @@ function makeBackend(
       server: "http://bc",
       serverInstance: "BC",
       ...UNUSED_STAGING_CFG,
+      ...overrides,
     },
     () => clientTransport,
   );
@@ -1288,5 +1321,78 @@ describe("BcDevMcpBackend.run — lease-invalid pass-through (Layer 5C-B1)", () 
     } finally {
       await cleanup();
     }
+  });
+});
+
+describe("coverageMode", () => {
+  test("defaults to procedure and probes status through bc-dev-mcp", () => {
+    const backend = new BcDevMcpBackend(baseConfig());
+    expect(backend.capabilities().coverage).toBe("procedure");
+  });
+
+  test('reports coverage "none" when configured, keeping authoritative true', () => {
+    const backend = new BcDevMcpBackend({ ...baseConfig(), coverageMode: "none" });
+    expect(backend.capabilities().coverage).toBe("none");
+    expect(backend.capabilities().authoritative).toBe(true);
+  });
+
+  test('status() in "none" mode probes the harness, never bc-dev-mcp', async () => {
+    let harnessCalls = 0;
+    const harnessVerifier = {
+      verify: async () => {
+        harnessCalls += 1;
+        return { serverGeneration: "g1" } as never;
+      },
+    };
+    const backend = new BcDevMcpBackend(
+      { ...baseConfig(), coverageMode: "none" },
+      () => {
+        throw new Error("bc-dev-mcp must not be contacted in coverage:none mode");
+      },
+      { ...deploymentStub(), harnessVerifier } as never,
+    );
+    const status = await backend.status();
+    expect(status.ok).toBe(true);
+    expect(harnessCalls).toBe(1);
+  });
+
+  test('throws in "none" mode when no harness verifier was provided', async () => {
+    const backend = new BcDevMcpBackend({ ...baseConfig(), coverageMode: "none" });
+    await expect(backend.status()).rejects.toThrow(/harnessVerifier/);
+  });
+});
+
+// A path-routed HTTPS portal (Continia) has no listener at bc-dev-mcp's OnPrem fallback port
+// (7049) — the resolved port must actually reach the wire call, not just live on the config
+// object. Asserted on the arguments bc-dev-mcp's OWN tool handler receives (McpServer +
+// InMemoryTransport, the same live-round-trip pattern `makeBackend`/`statusHandler` already use
+// in this file), not on a private-method reach-in, since `connectionParams()` is private and the
+// wire arguments are the thing that actually matters.
+describe("port in connectionParams", () => {
+  test("omits port from bcdev_status's arguments when the config sets none", async () => {
+    let seenArgs: Record<string, unknown> = {};
+    const backend = makeBackend(
+      () => ({ results: [] }),
+      (args) => {
+        seenArgs = args as Record<string, unknown>;
+        return "ok";
+      },
+    );
+    await backend.status();
+    expect(seenArgs.port).toBeUndefined();
+  });
+
+  test("carries port through to bcdev_status's arguments when the config sets one", async () => {
+    let seenArgs: Record<string, unknown> = {};
+    const backend = makeBackend(
+      () => ({ results: [] }),
+      (args) => {
+        seenArgs = args as Record<string, unknown>;
+        return "ok";
+      },
+      { port: 443 },
+    );
+    await backend.status();
+    expect(seenArgs.port).toBe(443);
   });
 });
