@@ -1,12 +1,40 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ActivationConfig } from "./activation";
 import type { BcDevConfigSection } from "./cli";
 import { EnvToolError, renderCommand } from "./env-tool";
 import type { EnvToolClient, EnvToolConfigSection, EnvToolReadyBlock } from "./env-tool";
+import { HarnessVerificationError } from "./harness";
 
 const EXPIRY_MARGIN_MS = 60 * 60_000;
+
+/**
+ * Fields `bcdevRaw` must carry that the env tool itself can never produce: `company` and
+ * `controlSymbolPath` name local facts (which BC company to target, where the locally-compiled
+ * control app lives on disk), and `mcpCommand` launches a local process — none of these come from
+ * resolving an environment. `validateBcDevConfig` (cli.ts) cannot be reused here: it also demands
+ * `server`/`serverInstance`, which do not exist yet at this point in env-tool mode (they're
+ * derived from the resolved `baseUrl` further down). Checked explicitly, rather than trusting the
+ * `as BcDevConfigSection` cast below, so a config missing one of these fails LOUDLY right here —
+ * instead of producing a `BcDevConfigSection` whose string-typed field is `undefined` at runtime
+ * and propagating silently into an OData call or backend construction.
+ */
+function requireBcDevRawFields(bcdevRaw: Partial<BcDevConfigSection>): void {
+  const missing: string[] = [];
+  if (!Array.isArray(bcdevRaw.mcpCommand) || bcdevRaw.mcpCommand.length === 0) {
+    missing.push("mcpCommand");
+  }
+  if (bcdevRaw.company === undefined || bcdevRaw.company === "") missing.push("company");
+  if (bcdevRaw.controlSymbolPath === undefined || bcdevRaw.controlSymbolPath === "") {
+    missing.push("controlSymbolPath");
+  }
+  if (missing.length > 0) {
+    throw new EnvToolError(
+      `bcdev config is missing required field(s) the env tool cannot supply: ${missing.join(", ")}`,
+    );
+  }
+}
 
 export interface EnvToolSession {
   readonly bcdev: BcDevConfigSection;
@@ -35,6 +63,7 @@ export async function startEnvToolSession(args: {
   stateDir?: string;
 }): Promise<EnvToolSession> {
   const { cfg, client } = args;
+  requireBcDevRawFields(args.bcdevRaw);
   const now = args.now ?? Date.now;
   const sleep = args.sleep ?? ((ms: number) => Bun.sleep(ms));
   const stateDir = args.stateDir ?? join(homedir(), ".lethal", "env-state");
@@ -58,26 +87,33 @@ export async function startEnvToolSession(args: {
     createdEnvId = created;
     await recordCreatedEnv(stateDir, args.runId, created, cfg, now);
 
-    // 1b. Start, then WAIT — but only when this config actually declares both steps. A config
-    // that has been through create-mode validation (Task 3's validateEnvToolConfig) always has
-    // both; a config built directly for a narrower purpose may legitimately have neither (nothing
-    // to start/wait for — e.g. the tool's `env create` already returns a running environment).
-    // Exactly one of the two present is not a coherent state either way, so THAT combination fails
-    // loudly rather than silently skipping half the contract.
+    // 1b. Start, then WAIT — unconditionally required once THIS call created the environment.
+    // `validateEnvToolConfig` (env-tool.ts) already makes both mandatory in create-mode with no
+    // carve-out: `env create` returns a Draft environment with nothing listening, and `env start`
+    // is async (Starting → Running measured at ~390s). A caller that skips both would publish into
+    // that dead Draft endpoint minutes into a paid provisioning cycle. Each branch names exactly
+    // the block that's missing, rather than a generic "both or neither" message, so a config with
+    // exactly one configured is diagnosed precisely too.
     const startBlock = cfg.startEnv;
     const readyBlock = cfg.readyWhen;
-    if (startBlock !== undefined || readyBlock !== undefined) {
-      if (startBlock === undefined || readyBlock === undefined) {
-        throw new EnvToolError(
-          "envTool.startEnv and envTool.readyWhen must both be configured, or neither",
-        );
-      }
-      // Measured 2026-07-26: create returns a Draft environment, `env start` returns "start
-      // requested" in ~2s, and the BC endpoint answers ~391s later. Publishing before that fails
-      // against a dead endpoint.
-      await client.run(startBlock, "startEnv", { ...supplied, envId });
-      await waitUntilReady(client, readyBlock, { ...supplied, envId }, now, sleep);
+    if (startBlock === undefined) {
+      throw new EnvToolError(
+        "envTool.startEnv is required once an environment is created — a newly created " +
+          "environment is inert (Draft, nothing listening) until it is started",
+      );
     }
+    if (readyBlock === undefined) {
+      throw new EnvToolError(
+        "envTool.readyWhen is required once an environment is created — starting is asynchronous " +
+          "(measured ~390s to Running), so LethAL must know how to poll for readiness rather than " +
+          "publishing into a dead endpoint",
+      );
+    }
+    // Measured 2026-07-26: create returns a Draft environment, `env start` returns "start
+    // requested" in ~2s, and the BC endpoint answers ~391s later. Publishing before that fails
+    // against a dead endpoint.
+    await client.run(startBlock, "startEnv", { ...supplied, envId });
+    await waitUntilReady(client, readyBlock, { ...supplied, envId }, now, sleep);
   }
   supplied.envId = envId;
 
@@ -151,7 +187,17 @@ export async function startEnvToolSession(args: {
   let harnessOk = true;
   try {
     await args.verifyHarness(odataCfg);
-  } catch {
+  } catch (err) {
+    // Only a HarnessVerificationError plausibly means "the control app is missing or the wrong
+    // build" (appId mismatch, protocol version too low, missing isolation/test type, no
+    // serverGeneration — see harness.ts). Anything else — most importantly a
+    // MultiTenantContainerError (design §7's single-tenant gate: a supported-configuration
+    // refusal, not "app missing"; it extends `Error` directly, never `HarnessVerificationError`,
+    // precisely so it can't be mistaken for one here) — is rethrown unwrapped. Republishing runs
+    // `LethAL Control`'s install/upgrade codeunits, and the machine-global lease lives in that
+    // app's own tables: a needless republish for a refusal it cannot fix (multi-tenant, auth, a
+    // transient blip) can disturb a concurrent session's lease and serverGeneration.
+    if (!(err instanceof HarnessVerificationError)) throw err;
     harnessOk = false;
   }
   if (!harnessOk) {
@@ -181,13 +227,17 @@ export async function startEnvToolSession(args: {
       try {
         await client.run(block, "deleteEnv", { ...supplied, envId: createdEnvId });
       } catch (err) {
-        // Cleanup failure must never replace the session's verdicts or exit code.
+        // Cleanup failure must never replace the session's verdicts or exit code. The
+        // crash-recovery record deliberately survives a failed delete — the environment may
+        // still exist, and an operator recovering later needs it to find that out.
         console.warn(
           `[lethal] could not delete environment ${createdEnvId}: ` +
             `${err instanceof Error ? err.message : String(err)}\n` +
             `[lethal] delete it manually: ${renderCommand(block, cfg, { ...supplied, envId: createdEnvId }).join(" ")}`,
         );
+        return;
       }
+      await removeRecordedEnv(stateDir, args.runId);
     },
   };
 }
@@ -286,4 +336,28 @@ async function recordCreatedEnv(
     `${JSON.stringify({ runId, envId, deleteArgv, startedAtMs: now() }, null, 2)}\n`,
     "utf8",
   );
+}
+
+/**
+ * Removes a crash-recovery record after the environment it describes has actually been deleted.
+ * Without this, `stateDir` accumulates one file per historical run forever, and an operator
+ * recovering from a REAL crash can no longer tell a stale record (session ended cleanly) from a
+ * genuinely orphaned environment (session crashed mid-run). Only called from the successful branch
+ * of `teardown`'s `deleteEnv` — never when the environment is kept (`keepEnv`/quarantined, where
+ * the record is exactly the recovery hint an operator needs) or when the delete itself failed
+ * (where the environment may still exist).
+ */
+async function removeRecordedEnv(stateDir: string, runId: string): Promise<void> {
+  try {
+    await unlink(join(stateDir, `${runId}.json`));
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return; // already gone — nothing to do
+    // Best-effort: a stale record left behind by a failed unlink must never fail an otherwise-
+    // successful teardown (the environment itself IS already deleted at this point).
+    console.warn(
+      `[lethal] could not remove crash-recovery record for run ${runId}: ` +
+        `${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 }

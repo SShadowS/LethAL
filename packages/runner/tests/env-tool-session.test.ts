@@ -2,9 +2,10 @@ import { describe, expect, it } from "bun:test";
 import { mkdtemp, readFile, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { EnvToolClient } from "../src/env-tool";
+import { EnvToolClient, EnvToolError } from "../src/env-tool";
 import type { EnvToolConfigSection } from "../src/env-tool";
 import { startEnvToolSession } from "../src/env-tool-session";
+import { HarnessVerificationError, MultiTenantContainerError } from "../src/harness";
 
 const FAR_FUTURE = "2099-01-01T00:00:00Z";
 
@@ -51,13 +52,29 @@ function harness(cfgOver: EnvToolConfigOverride = {}, out: Record<string, string
     ],
     publish: { command: ["publish", "{envId}", "{appFile}"] },
     createEnv: { command: ["env", "create", "--json"], reads: { envId: "id" } },
+    // Create-mode unconditionally requires both (env-tool-session.ts item 1 fix, mirroring
+    // validateEnvToolConfig's own unconditional requirement) — every create-mode test needs a
+    // working default for these unless it's specifically testing their absence, in which case it
+    // destructures them back out of `.cfg` itself. `pollSeconds: 0` + the spawn below returning the
+    // ready status on the FIRST poll keeps every other test's runtime near-zero.
+    startEnv: { command: ["env", "start", "{envId}"] },
+    readyWhen: {
+      command: ["env", "status", "{envId}", "--json"],
+      reads: { status: "status" },
+      equals: "Running",
+      pollSeconds: 0,
+    },
     deleteEnv: { command: ["env", "delete", "{envId}"] },
     ...restOver,
   };
   const client = new EnvToolClient(cfg, {
     spawn: async (argv) => {
       calls.push([...argv]);
-      const key = Object.keys(out).find((k) => argv.join(" ").includes(k));
+      const line = argv.join(" ");
+      if (line.includes("env status")) {
+        return { exitCode: 0, stdout: '{"status":"Running"}', stderr: "" };
+      }
+      const key = Object.keys(out).find((k) => line.includes(k));
       return { exitCode: 0, stdout: key === undefined ? "{}" : (out[key] ?? "{}"), stderr: "" };
     },
   });
@@ -93,7 +110,10 @@ async function start(
     }),
     verifyHarness: async () => {
       harnessCalls += 1;
-      if (harnessCalls === 1) throw new Error("no harness yet");
+      // A real first-deploy failure: HarnessInfo answers with no matching app yet. Typed as
+      // `HarnessVerificationError` (not a bare `Error`) because item 3's fix only republishes for
+      // this specific type — a bare `Error` here would no longer exercise the republish path.
+      if (harnessCalls === 1) throw new HarnessVerificationError("HarnessInfo failed: HTTP 404");
     },
     stateDir: await mkdtemp(join(tmpdir(), "lethal-envstate-")),
     ...over,
@@ -325,17 +345,42 @@ describe("startEnvToolSession", () => {
     expect(c.calls.some((cc) => cc.includes("delete"))).toBe(true);
   });
 
-  it("a failing deleteEnv does not throw out of teardown", async () => {
+  it("unlinks the crash-recovery record after a successful delete, but keeps it when the env survives (item 4)", async () => {
+    const keptDir = await mkdtemp(join(tmpdir(), "lethal-envstate-"));
+    const kept = await start({ stateDir: keptDir }, { envId: undefined });
+    expect(await readdir(keptDir)).toHaveLength(1);
+    await kept.session.teardown({ keepEnv: true, quarantined: false });
+    expect(await readdir(keptDir)).toHaveLength(1); // still there — this IS the recovery hint
+
+    const quarantinedDir = await mkdtemp(join(tmpdir(), "lethal-envstate-"));
+    const quarantined = await start({ stateDir: quarantinedDir }, { envId: undefined });
+    expect(await readdir(quarantinedDir)).toHaveLength(1);
+    await quarantined.session.teardown({ keepEnv: false, quarantined: true });
+    expect(await readdir(quarantinedDir)).toHaveLength(1);
+
+    const deletedDir = await mkdtemp(join(tmpdir(), "lethal-envstate-"));
+    const deleted = await start({ stateDir: deletedDir }, { envId: undefined });
+    expect(await readdir(deletedDir)).toHaveLength(1);
+    await deleted.session.teardown({ keepEnv: false, quarantined: false });
+    expect(await readdir(deletedDir)).toHaveLength(0); // gone — the env itself is gone too
+  });
+
+  it("a failing deleteEnv does not throw out of teardown, and keeps the crash-recovery record", async () => {
     const h = harness({ envId: undefined });
     const failing = new EnvToolClient(h.cfg, {
       spawn: async (argv) => {
         h.calls.push([...argv]);
+        const line = argv.join(" ");
         if (argv.includes("delete")) return { exitCode: 1, stdout: "", stderr: "gone" };
+        if (line.includes("env status")) {
+          return { exitCode: 0, stdout: '{"status":"Running"}', stderr: "" };
+        }
         const out = resolveOut();
-        const key = Object.keys(out).find((k) => argv.join(" ").includes(k));
+        const key = Object.keys(out).find((k) => line.includes(k));
         return { exitCode: 0, stdout: key === undefined ? "{}" : (out[key] ?? "{}"), stderr: "" };
       },
     });
+    const stateDir = await mkdtemp(join(tmpdir(), "lethal-envstate-"));
     const session = await startEnvToolSession({
       cfg: h.cfg,
       bcdevRaw: BCDEV_RAW,
@@ -345,8 +390,122 @@ describe("startEnvToolSession", () => {
       client: failing,
       makePublisher: () => ({ publishFile: async () => {} }),
       verifyHarness: async () => {},
-      stateDir: await mkdtemp(join(tmpdir(), "lethal-envstate-")),
+      stateDir,
     });
+    expect(await readdir(stateDir)).toHaveLength(1);
     await session.teardown({ keepEnv: false, quarantined: false }); // must not reject
+    // A failed delete means the environment may still exist — the crash-recovery record must
+    // survive so an operator can find it later (item 4).
+    expect(await readdir(stateDir)).toHaveLength(1);
+  });
+
+  it("bcdevRaw missing fields (item 2)", async () => {
+    const { mcpCommand: _mcpCommand, ...withoutMcpCommand } = BCDEV_RAW;
+    await expect(start({ bcdevRaw: withoutMcpCommand })).rejects.toThrow(/mcpCommand/);
+
+    const { company: _company, ...withoutCompany } = BCDEV_RAW;
+    await expect(start({ bcdevRaw: withoutCompany })).rejects.toThrow(/company/);
+
+    const { controlSymbolPath: _controlSymbolPath, ...withoutControlSymbolPath } = BCDEV_RAW;
+    await expect(start({ bcdevRaw: withoutControlSymbolPath })).rejects.toThrow(
+      /controlSymbolPath/,
+    );
+
+    // All three missing at once: every field is named, not just the first found.
+    await expect(start({ bcdevRaw: { packageCachePath: "C:/pkg" } })).rejects.toThrow(
+      /mcpCommand.*company.*controlSymbolPath/,
+    );
+  });
+
+  it("does NOT republish the control app for a multi-tenant refusal, and rethrows it unwrapped (item 3)", async () => {
+    const h = harness();
+    const published: string[] = [];
+    await expect(
+      startEnvToolSession({
+        cfg: h.cfg,
+        bcdevRaw: BCDEV_RAW,
+        projectDir: "C:/proj",
+        testDir: "C:/tests",
+        runId: "r-multitenant",
+        client: h.client,
+        makePublisher: () => ({
+          publishFile: async (p: string) => {
+            published.push(p);
+          },
+        }),
+        verifyHarness: async () => {
+          throw new MultiTenantContainerError(
+            "5C-B1 refuses a multi-tenant/shared-publication container",
+          );
+        },
+        stateDir: await mkdtemp(join(tmpdir(), "lethal-envstate-")),
+      }),
+    ).rejects.toThrow(MultiTenantContainerError);
+    // The differentiator: a MultiTenantContainerError must never trigger the "republish the
+    // control app" fallback — republishing runs install/upgrade codeunits that can disturb a
+    // concurrent session's lease, and this refusal isn't something a republish can fix anyway.
+    expect(published).not.toContain(BCDEV_RAW.controlSymbolPath);
+  });
+
+  it("requires startEnv and readyWhen once an environment is created, naming whichever is missing (items 1 + 5)", async () => {
+    const h = harness({ envId: undefined });
+
+    const { startEnv: _startEnv, readyWhen: _readyWhen, ...cfgWithoutEither } = h.cfg;
+    await expect(
+      startEnvToolSession({
+        cfg: cfgWithoutEither,
+        bcdevRaw: BCDEV_RAW,
+        projectDir: "C:/proj",
+        testDir: "C:/tests",
+        runId: "r-missing-both",
+        client: h.client,
+        makePublisher: () => ({ publishFile: async () => {} }),
+        verifyHarness: async () => {},
+        stateDir: await mkdtemp(join(tmpdir(), "lethal-envstate-")),
+      }),
+    ).rejects.toThrow(EnvToolError);
+
+    const { readyWhen: _readyWhen2, ...cfgWithoutReadyWhen } = h.cfg;
+    await expect(
+      startEnvToolSession({
+        cfg: cfgWithoutReadyWhen,
+        bcdevRaw: BCDEV_RAW,
+        projectDir: "C:/proj",
+        testDir: "C:/tests",
+        runId: "r-missing-ready",
+        client: h.client,
+        makePublisher: () => ({ publishFile: async () => {} }),
+        verifyHarness: async () => {},
+        stateDir: await mkdtemp(join(tmpdir(), "lethal-envstate-")),
+      }),
+    ).rejects.toThrow(/readyWhen/);
+
+    const { startEnv: _startEnv2, ...cfgWithoutStartEnv } = h.cfg;
+    await expect(
+      startEnvToolSession({
+        cfg: cfgWithoutStartEnv,
+        bcdevRaw: BCDEV_RAW,
+        projectDir: "C:/proj",
+        testDir: "C:/tests",
+        runId: "r-missing-start",
+        client: h.client,
+        makePublisher: () => ({ publishFile: async () => {} }),
+        verifyHarness: async () => {},
+        stateDir: await mkdtemp(join(tmpdir(), "lethal-envstate-")),
+      }),
+    ).rejects.toThrow(/startEnv/);
+  });
+
+  it("throws when the resolved baseUrl has no path segment to use as serverInstance (item 5)", async () => {
+    await expect(
+      start(
+        {},
+        {},
+        {
+          ...resolveOut(),
+          "env get": '{"url":"https://host","expiresUtc":"2099-01-01T00:00:00Z"}',
+        },
+      ),
+    ).rejects.toThrow(/no path segment/);
   });
 });
