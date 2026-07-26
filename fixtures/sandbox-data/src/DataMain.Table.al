@@ -1,11 +1,10 @@
 table 79300 "Data Main"
 {
     DataClassification = CustomerContent;
-    // The fenced RunMutant path executes under the OData runner session, which does not hold
-    // the test app's write permissions on this table — a test that INSERTs fails with
-    // "the current permissions prevented the action" there while passing elsewhere. LethAL's
-    // own control tables carry the same declaration for exactly this reason (Lease.Table.al).
-    InherentPermissions = RIMD;
+    // ROADMAP R1 REPRODUCTION (Stream A, scratch — NOT to be merged): the workaround is
+    // deliberately neutralised here to reproduce the fenced-path write-permission failure that a
+    // real customer table would hit, since a real customer table carries no such declaration.
+    // InherentPermissions = RIMD;
 
     fields
     {
