@@ -16,7 +16,7 @@ import { writeInstrumentedProject } from "@lethal/schemata";
 import { generateMutationSet, operatorTiers } from "../src/orchestrator";
 
 const PROJECT = join(import.meta.dir, "..", "..", "..", "fixtures", "sandbox-app");
-const files = await generateMutationSet(PROJECT);
+const { files } = await generateMutationSet(PROJECT);
 const originalBytes = files.reduce((n, f) => n + f.source.length, 0);
 const mutantCount = files.reduce((n, f) => n + f.specs.length, 0);
 

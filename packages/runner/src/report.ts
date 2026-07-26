@@ -23,6 +23,19 @@ export interface SessionOutcome {
   readonly cause?: "deadline-exceeded" | "unstable";
 }
 
+/**
+ * A file `generateMutationSet` (orchestrator.ts) dropped because no object it declares can carry
+ * the injected `var MutationSelector: Codeunit "Mutation Selector";` guard — only a codeunit or
+ * a table can (page/report/query/xmlport cannot). See `SessionReport.notInstrumented`.
+ */
+export interface NotInstrumentedFile {
+  readonly file: string;
+  /** Object kind(s) this file declares, e.g. `"page_declaration"` — from `describeObjectKinds`. */
+  readonly kinds: string;
+  /** Mutation sites the tier-1 operators found here, none of which could ever run. */
+  readonly sites: number;
+}
+
 export interface SessionReport {
   readonly backend: string;
   readonly authoritative: boolean;
@@ -58,6 +71,22 @@ export interface SessionReport {
    * present; empty when the whole baseline passed. Deduped, sorted.
    */
   readonly unsupportedTests: readonly string[];
+  /**
+   * Files never instrumented because no object they declare can carry the selector-var guard
+   * (R5 — see `NotInstrumentedFile`). `mutationScore` above is computed ONLY over instrumented
+   * sites: a project whose skipped files hold a large share of its code can otherwise read as a
+   * confident, near-complete score while most of the project was never measured at all. Always
+   * present; `files` is empty and `fileCount`/`siteCount` are 0 when nothing was skipped.
+   * `totalFiles` is every `.al` source file `generateMutationSet` scanned (the denominator for
+   * judging how much of the project `files` represents) — it is NOT the same as `batches` or any
+   * other count already in this report.
+   */
+  readonly notInstrumented: {
+    readonly totalFiles: number;
+    readonly fileCount: number;
+    readonly siteCount: number;
+    readonly files: readonly NotInstrumentedFile[];
+  };
   /**
    * Set only when the session latched unsafe (spec §8/§12) — a test run came back
    * in-flight-unknown (the server may still be executing it) and the session recorded a
@@ -117,6 +146,11 @@ export interface BuildReportInput {
   readonly outcomes: readonly SessionOutcome[];
   /** Deduped, sorted qualified names of baseline tests that did not pass — see `SessionReport.unsupportedTests`. */
   readonly unsupportedTests: readonly string[];
+  /** Threaded straight from `generateMutationSet`'s return — see `SessionReport.notInstrumented`. */
+  readonly notInstrumented: {
+    readonly totalFiles: number;
+    readonly files: readonly NotInstrumentedFile[];
+  };
   /** Threaded straight through from `runSession`'s `SessionSafety` — see `SessionReport.quarantined`. */
   readonly quarantined?: {
     readonly reason: string;
@@ -177,6 +211,7 @@ export function buildReport(input: BuildReportInput): SessionReport {
   }
 
   const denom = counts.killed + counts.timeoutKilled + counts.survived;
+  const notInstrumentedSites = input.notInstrumented.files.reduce((n, f) => n + f.sites, 0);
   return {
     backend: input.caps.authoritative ? "bcdev" : "al-runner",
     authoritative: input.caps.authoritative,
@@ -186,6 +221,12 @@ export function buildReport(input: BuildReportInput): SessionReport {
     mutationScore: denom === 0 ? null : (counts.killed + counts.timeoutKilled) / denom,
     mutants,
     unsupportedTests: input.unsupportedTests,
+    notInstrumented: {
+      totalFiles: input.notInstrumented.totalFiles,
+      fileCount: input.notInstrumented.files.length,
+      siteCount: notInstrumentedSites,
+      files: input.notInstrumented.files,
+    },
     ...(input.quarantined !== undefined ? { quarantined: input.quarantined } : {}),
   };
 }
@@ -222,6 +263,21 @@ export function renderConsole(r: SessionReport): string {
       `timeout-killed ${r.counts.timeoutKilled}, known-survivor ${r.counts.knownSurvivors}, ` +
       `error ${r.counts.errors} [unstable ${r.counts.unstable}])`,
   );
+  // R5: the score above is computed ONLY over instrumented sites — say so explicitly, right next
+  // to it, whenever any file was dropped. A page-heavy project could otherwise read a confident
+  // "100%" as full coverage when most of its code was never instrumented at all.
+  if (r.notInstrumented.fileCount > 0) {
+    const pct =
+      r.notInstrumented.totalFiles > 0
+        ? `${((r.notInstrumented.fileCount / r.notInstrumented.totalFiles) * 100).toFixed(1)}%`
+        : "?";
+    lines.push(
+      `NOT INSTRUMENTED: ${r.notInstrumented.fileCount}/${r.notInstrumented.totalFiles} .al file(s) (${pct}), ${r.notInstrumented.siteCount} mutation site(s) never measured — the score above excludes them entirely, it is not a full-project score. Only a codeunit or a table can carry the injected selector var; page/report/query/xmlport objects are published unchanged.`,
+    );
+    for (const f of r.notInstrumented.files) {
+      lines.push(`  ${f.file} (${f.kinds}, ${f.sites} site(s))`);
+    }
+  }
   return lines.join("\n");
 }
 

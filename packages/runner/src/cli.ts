@@ -827,7 +827,7 @@ function sitesOf(files: readonly InstrumentedFile[]) {
  * this can never report a number `runSession` wouldn't actually produce.
  */
 async function printDryRun(projectDir: string): Promise<void> {
-  const files = await generateMutationSet(projectDir);
+  const { files, skipped, totalFiles } = await generateMutationSet(projectDir);
   const sites = sitesOf(files);
   const artifacts = planArtifacts(files);
 
@@ -839,6 +839,17 @@ async function printDryRun(projectDir: string): Promise<void> {
     console.log(`\nbatch ${i} (${artifactSites.length} mutant site(s)):`);
     for (const s of artifactSites) {
       console.log(`  ${s.file}:${s.line}  ${s.operatorName}`);
+    }
+  }
+  // R5: dry-run mirrors the session report's "not instrumented" accounting so it's visible
+  // before any deploy, not just at the end of a real run.
+  if (skipped.length > 0) {
+    const skippedSites = skipped.reduce((n, s) => n + s.sites, 0);
+    console.log(
+      `\nnot instrumented: ${skipped.length}/${totalFiles} .al file(s), ${skippedSites} mutation site(s) never measured — object kind cannot carry the selector var:`,
+    );
+    for (const s of skipped) {
+      console.log(`  ${s.file} (${s.kinds}, ${s.sites} site(s))`);
     }
   }
 }

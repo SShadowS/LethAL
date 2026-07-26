@@ -359,7 +359,7 @@ async function main(): Promise<void> {
   // PROJECT_DIR, not `<PROJECT_DIR>/src` — `runSession` generates from `cfg.projectDir`, so
   // scanning anything else would let this header describe a different file set than the run
   // below it actually executes.
-  const files = await generateMutationSet(PROJECT_DIR);
+  const { files } = await generateMutationSet(PROJECT_DIR);
   const total = files.reduce((n, f) => n + f.specs.length, 0);
   assert.equal(
     total,

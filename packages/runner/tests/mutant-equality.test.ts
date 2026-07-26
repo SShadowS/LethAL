@@ -39,6 +39,7 @@ function report(mutants: readonly MutantOutcome[]): SessionReport {
     mutationScore: null,
     mutants,
     unsupportedTests: [],
+    notInstrumented: { totalFiles: 0, fileCount: 0, siteCount: 0, files: [] },
   };
 }
 
