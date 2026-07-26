@@ -2,7 +2,9 @@ import { access, copyFile, readFile, readdir, rm, writeFile } from "node:fs/prom
 import { homedir, hostname } from "node:os";
 import { basename, join } from "node:path";
 import { tier1Operators } from "@lethal/builtin-tier1";
+import { tier2Operators } from "@lethal/builtin-tier2";
 import {
+  type MutationOperator,
   type MutationSpec,
   buildSemanticContext,
   buildSpanIndex,
@@ -70,24 +72,50 @@ const BASELINE_TIMEOUT_DEFAULT = 120_000;
 export const MIN_MUTANT_BUDGET_MS = 30_000;
 
 /**
+ * Every currently registered operator across all tiers, in registration order. The single source
+ * both `operatorTiers` (below) and `generateMutationSet`'s tree walk read, so a Tier-2 operator
+ * registered in `@lethal/builtin-tier2` needs no second wiring edit here — appending to that
+ * package's own `tier2Operators` array is the whole change. Tier 2 holds four operators today
+ * (`RemoveTestField`, `RemoveSetRange`, `RemoveCalcFields`, `SwapModifyFlag`).
+ */
+const allOperators: readonly MutationOperator[] = [...tier1Operators, ...tier2Operators];
+
+/**
  * Tier of every currently registered operator, keyed by name — the mapping
  * `writeInstrumentedProject` needs to resolve Tier-2 narrowings of a Tier-1
- * operator (`dedupeSpecs` in `@lethal/schemata`). Built once from the same
- * `tier1Operators` import `generateMutationSet` walks, so a mutant's identity
- * after dedup can never diverge between the two — see `manifestMutants` in
+ * operator (`dedupeSpecs` in `@lethal/schemata`). `dedupeSpecs`'s `TierResolver`
+ * throws on an unregistered operator by design (an unknown tier makes a
+ * collision winner depend on registration order), so every operator whose specs
+ * can reach dedup must have an entry here. Built once from the same
+ * `allOperators` list `generateMutationSet` walks, so a mutant's identity after
+ * dedup can never diverge between the two — see `manifestMutants` in
  * `orchestrator.test.ts` for a caller that leans on that parity.
  */
 export const operatorTiers: ReadonlyMap<string, 1 | 2 | 3 | "custom"> = new Map(
-  tier1Operators.map((op) => [op.name, op.tier]),
+  allOperators.map((op) => [op.name, op.tier]),
 );
 
 /**
  * Parse every `.al` file under `projectDir` (skipping emitted `Mutation*`
- * artifacts) and run the Tier 1 operator set over each. Mirrors the
- * ops -> compile -> write pipeline exercised by
- * `packages/builtin-tier1/tests/end-to-end.test.ts`: build a per-file
- * semantic context, walk the tree, and collect every spec each operator
- * targets. Overlap resolution isn't needed here (or anywhere downstream
+ * artifacts) and run every registered operator (all tiers) over each: parse the
+ * whole project, build ONE semantic context across all of it, then walk each
+ * file's tree collecting every spec each operator targets.
+ *
+ * The context is project-wide, not per-file, because that is the only shape in
+ * which the Tier-2 shadowing guard can do its job. `claimsRecordMethod`
+ * (`packages/builtin-tier2/src/receiver.ts`) refuses a call whose receiver's
+ * table declares a procedure of that name "in the project" (design doc §4.1) —
+ * with a per-file context and the normal one-object-per-file AL layout, the
+ * table is never in the context, the guard never fires, and the site is claimed
+ * as a builtin when it is really that table's own method. Measured both ways;
+ * see `generateMutationSet: project-wide semantic context` in
+ * `tests/orchestrator.test.ts`. Cost is nil: every root is retained afterwards
+ * anyway (`InstrumentedFile.root`), and one table over N files is the same
+ * total work as N tables over one file each.
+ *
+ * Mirrors the ops -> compile -> write pipeline exercised by
+ * `packages/builtin-tier1/tests/end-to-end.test.ts`.
+ * Overlap resolution isn't needed here (or anywhere downstream
  * post-Layer-4.3): overlapping mutants coalesce into one flat dispatch chain
  * at compile time (`compileSchemataForFile`), so every spec this returns runs
  * behind its own guard in the same single instrumented artifact.
@@ -126,17 +154,25 @@ export async function generateMutationSet(projectDir: string): Promise<MutationS
   const entries = (await readdir(projectDir, { recursive: true }))
     .filter((e) => e.toLowerCase().endsWith(".al"))
     .filter((e) => !basename(e).startsWith("Mutation"));
-  for (const rel of entries.sort()) {
-    const source = await readFile(join(projectDir, rel), "utf8");
-    const root = wrapRoot(parseAL(source));
-    const ctx = buildSemanticContext([{ path: rel, root }]);
+  // Pass 1: parse every file. Pass 2 (below) walks them against ONE context
+  // built over all of them — see this function's doc comment for why the
+  // context must be project-wide.
+  const parsed = await Promise.all(
+    entries.sort().map(async (rel) => {
+      const source = await readFile(join(projectDir, rel), "utf8");
+      return { path: rel, source, root: wrapRoot(parseAL(source)) };
+    }),
+  );
+  const ctx = buildSemanticContext(parsed.map(({ path, root }) => ({ path, root })));
+
+  for (const { path: rel, source, root } of parsed) {
     // Built once per file (not per spec): a per-spec tree walk here would be
     // O(specs x nodes) on a file with many mutation sites. See
     // `buildSpanIndex`'s doc comment in @lethal/engine.
     const spanIndex = buildSpanIndex(root);
     const specs: MutationSpec[] = [];
     visit(root, (node) => {
-      for (const op of tier1Operators) {
+      for (const op of allOperators) {
         if (op.targets(node, ctx)) {
           for (const spec of op.generate(node, ctx)) {
             // Reject specs whose `before` isn't a real node in this file's
@@ -1495,6 +1531,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // (fail/error) across all batches — surfaced in the report so an unsupported
   // test type (or a broken test) is named, never silently dropped.
   const unsupportedTestNames = new Set<string>();
+  // Summed across batches — see `SessionReport.untargetedTriggerCount`. Declared out here rather
+  // than read off the last batch's split: each batch runs its own coverage filter, and a session
+  // whose only untargeted trigger sits in batch 1 must not report 0.
+  let untargetedTriggerCount = 0;
   // Math.floor: a fractional workers value (e.g. 2.5) would otherwise reach
   // shardEvenly's `Array.from({ length: n }, ...)`, which silently truncates
   // to a shorter array than `i % n` can index into — mutants landing on the
@@ -1897,12 +1937,20 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         );
         perMutantTests = split.covered;
         uncovered = split.uncovered;
+        untargetedTriggerCount += split.untargetedTriggerCount;
       }
       // A mutant uncovered by any GREEN test but covered by a non-passing
       // baseline test is `error` (score-excluded) with a named note — never a
       // silent `no-coverage` false-negative (a real test DOES cover it; it just
       // couldn't run). `unsupportedCoverage` reuses coverageFilter against the
       // second index; empty for coverage:"none" (uncovered is empty there too).
+      //
+      // Its `untargetedTriggerCount` is deliberately NOT added to the session tally: a table
+      // trigger can never appear in `uncovered` (FALLBACK 2 above catches every one of them
+      // before the `uncovered.push`), so this call's tally is structurally 0 — and were that
+      // ever to change, adding it would double-count mutants the SESSION already ran against
+      // every green test. The number on the report means "took the all-green-tests fallback in
+      // the run that decided the verdict", and this call decides no verdict.
       const unsupportedCoverage =
         uncovered.length === 0
           ? new Map<string, readonly TestMethodRef[]>()
@@ -2189,6 +2237,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     outcomes,
     unsupportedTests: [...unsupportedTestNames].sort(),
     notInstrumented: { totalFiles: totalAlFiles, files: notInstrumentedFiles },
+    untargetedTriggerCount,
     ...(safety.isUnsafe ? { quarantined: { reason: safety.reason ?? "unknown" } } : {}),
     ...(permissionCanary !== undefined ? { permissionCanary } : {}),
   });

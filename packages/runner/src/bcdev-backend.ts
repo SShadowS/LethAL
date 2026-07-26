@@ -646,6 +646,13 @@ export class BcDevMcpBackend implements ExecutionBackend {
    * over-approximation (it can mark a genuinely-uncovered local procedure as covered) but a
    * SAFE one: it only ever turns a would-be "no-coverage" skip into an actual test run, never
    * hides a real kill by wrongly skipping a mutant a test could have caught.
+   *
+   * When even that finds nothing (an unresolvable methodId in an object declaring NO local
+   * procedure — the shape of every table whose procedures are public, and of every trigger,
+   * which SymbolReference.json never records), the observation is emitted at OBJECT level: a
+   * `CoverageEntry` carrying `objectType`/`objectId` and no `procedure`. Same safe direction,
+   * one precision level coarser. See the branch below for the false survivors that emitting
+   * nothing produced.
    */
   private buildCoverageMap(
     wireCoverage: readonly WireCoverageEntry[] | undefined,
@@ -664,6 +671,21 @@ export class BcDevMcpBackend implements ExecutionBackend {
         continue;
       }
       const locals = this.localProcedures?.get(`${p.objectType}:${p.objectId}`) ?? [];
+      if (locals.length === 0) {
+        // Neither route can NAME this member — but BC measured it, so the observation is still
+        // hard evidence that this test executed code in this OBJECT. Emit it at object level
+        // (no `procedure`; see CoverageEntry) rather than dropping it.
+        //
+        // Dropping it was the false-survivor bug (measured on Cronus282): BC reports coverage for
+        // table-trigger code, SymbolReference.json records no trigger, and a table whose
+        // procedures are all PUBLIC has no local-procedure fallback either — so the object lost
+        // credit along with the member. `byObject` then held only whichever sibling test happened
+        // to resolve, `coverageFilter`'s FALLBACK 1 returned that non-empty-but-wrong set, its
+        // all-green-tests FALLBACK 2 never fired, and every table-trigger mutant ran against one
+        // irrelevant test. 10 of 20 survivors on the table fixture were false.
+        entries.push({ objectType: objectTypeName(p.objectType), objectId: p.objectId });
+        continue;
+      }
       for (const localName of locals) {
         entries.push({
           objectType: objectTypeName(p.objectType),

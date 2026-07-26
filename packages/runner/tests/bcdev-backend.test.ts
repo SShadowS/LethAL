@@ -474,6 +474,72 @@ describe("BcDevMcpBackend.run", () => {
     }
   });
 
+  // The false-survivor bug, at its seam. BC DOES report coverage for table-trigger code (measured
+  // on Cronus282: table 79300, methodId -1650094725 for one test, 2060272969 for another), but
+  // SymbolReference.json records no trigger, so `AppMethodIndex.lookup` returns undefined — and a
+  // table whose procedures are all PUBLIC has no local-procedure fallback either. The old code
+  // emitted NOTHING for such an observation, so the object lost credit along with the member:
+  // `byObject` held only the sibling test whose methodId happened to resolve, `coverageFilter`'s
+  // FALLBACK 1 returned that non-empty-but-wrong set, FALLBACK 2 never fired, and every table
+  // trigger mutant ran against one irrelevant test. 10 of 20 survivors were false.
+  test("credits the OBJECT when a methodId resolves to no name and the object declares no local procedure", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-bcdev-backend-objlevel-"));
+    await Bun.write(
+      join(dir, "DataMain.Table.al"),
+      [
+        // Deliberately NO `local procedure` anywhere — both procedures are public, which is the
+        // shape of every real app's tables and the reason the local-procedure fallback is empty.
+        'table 79300 "Data Main"',
+        "{",
+        '    fields { field(1; "No."; Code[20]) { trigger OnValidate() begin Touch(); end; } }',
+        "",
+        "    procedure Touch()",
+        "    begin",
+        "    end;",
+        "",
+        "    procedure TouchCount(): Integer",
+        "    begin",
+        "        exit(1);",
+        "    end;",
+        "}",
+        "",
+      ].join("\n"),
+    );
+    const { backend, cleanup } = await makeBackendWithDeploy(
+      () => ({
+        results: [
+          { codeunitId: 79100, method: "ValidatesNo", status: "passed", durationMs: 1, output: "" },
+        ],
+        coverage: [
+          {
+            testObjectId: 79100,
+            testMethodId: 111,
+            // The real trigger methodId observed live. It is in no SymbolReference.json, and
+            // table 79300 declares no local procedure, so BOTH naming routes come up empty.
+            coveredProcedures: [{ objectType: 1, objectId: 79300, methodId: -1650094725 }],
+          },
+        ],
+      }),
+      { Tables: [{ Id: 79300, Name: "Data Main", Methods: [{ Id: 777, Name: "Touch" }] }] },
+      dir,
+    );
+    try {
+      const v = await backend.run(
+        { codeunitId: 79100, codeunitName: "Sandbox Data Tests", method: "ValidatesNo" },
+        { coverage: "procedure", timeoutMs: 5000 },
+      );
+      // Not nothing: one entry, naming the object and NO member.
+      expect(v.coverage?.entries).toEqual([{ objectType: "Table", objectId: 79300 }]);
+      // Absence is the property being ABSENT, never "" — an empty string would key `byMember` as
+      // `table:79300::`, colliding with the empty member key a trigger mutant itself builds.
+      const [only] = v.coverage?.entries ?? [];
+      expect(only === undefined ? "MISSING" : "procedure" in only).toBe(false);
+    } finally {
+      await cleanup();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("forwards codeunit/method restriction and connection params", async () => {
     let seen: unknown;
     const backend = makeBackend((args) => {

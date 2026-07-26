@@ -38,6 +38,34 @@ export interface ObjectSymbol {
   readonly node: ALSyntaxNode;
 }
 
+/**
+ * A `tableextension` declaration, indexed SEPARATELY from `objects`.
+ *
+ * Not an `ObjectSymbol`: an extension declares no object of its own, it adds members to one the
+ * header only NAMES. Folding it into `objects` would silently change what `buildCallerIndex` and
+ * `buildTypeTable` (both of which walk `objects`) consider a declaring object, which is a much
+ * wider change than the one this exists for. A parallel list changes nothing that already works.
+ *
+ * WHY IT EXISTS: in AL, a `tableextension`'s public procedures are callable on a variable of the
+ * EXTENDED table's type. `Rec.SetRange(A, B)` where a project `tableextension` declares
+ * `procedure SetRange(A; B)` is that procedure, not the builtin — so a consumer asking "does the
+ * project declare a procedure of this name on this table?" must see extensions or it answers
+ * wrongly in the dangerous direction. `claimsRecordMethod` in `@lethal/builtin-tier2` is that
+ * consumer.
+ *
+ * No `id` field: nothing needs it, and an extension whose `object_id` failed to parse would then
+ * have to be either dropped (losing a refusal) or given a fabricated id. `name` and `baseObject`
+ * are the two the matching actually depends on, and an entry is indexed only when both are real.
+ */
+export interface ExtensionSymbol {
+  readonly kind: "tableextension";
+  /** The extension object's own name, quotes stripped. */
+  readonly name: string;
+  /** The `extends` target verbatim, quotes stripped — always a NAME in AL, never an id. */
+  readonly baseObject: string;
+  readonly node: ALSyntaxNode;
+}
+
 export interface VarSymbol {
   readonly name: string;
   readonly typeText: string;
@@ -62,6 +90,8 @@ export interface SymbolTable {
   globalsOf(ownerName: string): readonly VarSymbol[];
   localsOf(ownerName: string, procName: string): readonly VarSymbol[];
   readonly objects: readonly ObjectSymbol[];
+  /** Every `tableextension` in the project — see `ExtensionSymbol`. Empty, never absent. */
+  readonly tableExtensions: readonly ExtensionSymbol[];
 }
 
 const OBJECT_KIND_BY_NODE: Record<string, ObjectSymbol["kind"]> = {
@@ -71,13 +101,37 @@ const OBJECT_KIND_BY_NODE: Record<string, ObjectSymbol["kind"]> = {
   [ALNodeKind.report]: "report",
 };
 
+/**
+ * The grammar's node kind for `tableextension 50000 "X" extends "Y"`, and its `extends` field.
+ *
+ * Local consts rather than `ALNodeKind` members, matching how `receiver.ts` handles
+ * `quoted_identifier`: `ALNodeKind` enumerates the kinds the mutation pipeline TARGETS, and
+ * widening it also widens `isALNodeKind`, which every `ALSyntaxNode.kind` consumer reads.
+ * Measured against the vendored tree-sitter-al v3.0.1 grammar: the header exposes `object_id`,
+ * `object_name` and `base_object` as fields, and members sit in the same `declaration_body`
+ * container an ordinary object uses.
+ */
+const TABLEEXTENSION_DECLARATION = "tableextension_declaration";
+const BASE_OBJECT_FIELD = "base_object";
+
 export function buildSymbolTable(files: readonly SourceFile[]): SymbolTable {
   const objects: ObjectSymbol[] = [];
   const procedures = new Map<string, ProcedureSymbol[]>();
   const globals = new Map<string, VarSymbol[]>();
 
+  const tableExtensions: ExtensionSymbol[] = [];
+
   for (const file of files) {
     for (const objectNode of file.root.children) {
+      const extension = parseTableExtensionHeader(objectNode);
+      if (extension !== null) {
+        // Indexed and then SKIPPED for everything below: an extension's procedures belong to the
+        // extended table, not to an object of its own, so registering them under the extension's
+        // name in `procedures`/`globals` would invent an owner no AL call can name. Consumers
+        // reach them through `ExtensionSymbol.node` instead.
+        tableExtensions.push({ ...extension, node: objectNode });
+        continue;
+      }
       const header = parseObjectHeader(objectNode);
       if (header === null) continue;
       objects.push({ ...header, node: objectNode });
@@ -128,7 +182,28 @@ export function buildSymbolTable(files: readonly SourceFile[]): SymbolTable {
       return resolveProcedure(ownerName, procName)?.locals ?? [];
     },
     objects,
+    tableExtensions,
   };
+}
+
+/**
+ * `tableextension <id> "<name>" extends "<base>"` -> its name and its extends target.
+ *
+ * `null` for any other node kind, and for an extension missing either name — both are what the
+ * matching in `@lethal/builtin-tier2`'s `claimsRecordMethod` keys on, and half an entry could
+ * only ever produce a wrong match.
+ */
+function parseTableExtensionHeader(
+  node: ALSyntaxNode,
+): { kind: "tableextension"; name: string; baseObject: string } | null {
+  if (node.rawKind !== TABLEEXTENSION_DECLARATION) return null;
+  const nameNode = node.childForFieldName("object_name");
+  const baseNode = node.childForFieldName(BASE_OBJECT_FIELD);
+  if (nameNode === null || baseNode === null) return null;
+  const name = stripQuotes(nameNode.text);
+  const baseObject = stripQuotes(baseNode.text);
+  if (name === "" || baseObject === "") return null;
+  return { kind: "tableextension", name, baseObject };
 }
 
 function parseObjectHeader(

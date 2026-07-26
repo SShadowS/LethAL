@@ -31,6 +31,7 @@ describe("renderConsole — al-runner canary reiteration (R7/R8)", () => {
     mutants: [],
     unsupportedTests: [],
     notInstrumented: { totalFiles: 0, fileCount: 0, siteCount: 0, files: [] },
+    untargetedTriggerCount: 0,
   };
 
   test("appends both canary lines after the score when the backend is non-authoritative and a canary result is present", () => {
@@ -108,6 +109,7 @@ describe("renderConsole — permission canary reiteration (R26)", () => {
     mutants: [],
     unsupportedTests: [],
     notInstrumented: { totalFiles: 0, fileCount: 0, siteCount: 0, files: [] },
+    untargetedTriggerCount: 0,
   };
 
   test("appends the mocked warning AFTER the score on an authoritative report", () => {

@@ -265,6 +265,44 @@ describe("coverage: table trigger mutants run untargeted when coverage cannot se
       warnSpy.mockRestore();
     }
   });
+
+  // The warning above is unassertable by any gate: it goes to stderr and vanishes. The same tally
+  // is returned on `CoverageSplit` so `SessionReport.untargetedTriggerCount` can carry it into
+  // `tables.itest.ts`, which pins it at 0. Without the number, a regression re-emptying `byObject`
+  // (the `0a463fd` bug) silently swaps precise attribution for "run every test" while leaving
+  // every verdict and every aggregate count identical.
+  test("returns the untargeted tally as DATA, counting exactly the mutants that took fallback 2", () => {
+    const index = buildCoverageIndex(baseline);
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const fellBack = entry({
+        mutantId: "M0001",
+        objectType: "table",
+        codeunitId: 99999, // nothing in the coverage index at all
+        procedureName: "",
+        triggerName: "OnInsert",
+      });
+      const attributed = entry({
+        mutantId: "M0002",
+        objectType: "table", // objectId 70000 — object-level (fallback 1) answers
+        procedureName: "",
+        triggerName: "OnModify",
+      });
+      const split = coverageFilter([fellBack, attributed], index, allGreen);
+      // Both ran; only one of them ran untargeted. The verdict-visible state is identical.
+      expect(split.covered.get("M0001")).toEqual(allGreen);
+      expect(split.covered.get("M0002")).toEqual([t1, t3]);
+      expect(split.untargetedTriggerCount).toBe(1);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  test("the tally is 0 — not undefined — when every trigger was attributed precisely", () => {
+    const index = buildCoverageIndex(baseline);
+    const m = entry({ objectType: "table", procedureName: "Post", triggerName: "OnInsert" });
+    expect(coverageFilter([m], index, allGreen).untargetedTriggerCount).toBe(0);
+  });
 });
 
 // A BC object id is unique only WITHIN a type — `table 50100` and `codeunit 50100` are two
@@ -456,6 +494,98 @@ describe("coverage: fallback 1 applies to any trigger; fallback 2 is TABLE-only"
     } finally {
       warnSpy.mockRestore();
     }
+  });
+});
+
+// The other half of the false-survivor fix (bcdev-backend's `buildCoverageMap` emits it; this is
+// where it has to LAND). An observation BC measured but whose member neither SymbolReference.json
+// nor the local-procedure scan can name arrives here with `procedure` absent. It is evidence that
+// the test executed SOMETHING in that object and no evidence about any member — so it must join
+// `byObject` and stay out of `byMember`.
+//
+// Both directions matter. Dropping it (the bug) leaves `byObject` holding only whichever sibling
+// test happened to resolve, so FALLBACK 1 answers non-empty-but-wrong and FALLBACK 2 never fires.
+// Indexing it at member level with an empty name is the mirror-image trap: `<type>:<id>::` is the
+// exact key `coverageFilter` builds for a trigger mutant, so the object-level entry would come
+// back as an "exact member match" and both fallbacks would be skipped.
+describe("coverage: an observation that names no member credits the object only", () => {
+  const t3 = { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "TouchesCount" };
+  // Table 79300 = the live `Data Main` shape: one test's methodId resolved to a public procedure,
+  // the other's was a TRIGGER and resolved to nothing at all.
+  const baseline = [
+    {
+      ref: t1,
+      coverage: {
+        granularity: "procedure" as const,
+        // trigger observation — measured, unnameable
+        entries: [{ objectType: "Table", objectId: 79300 }],
+      },
+    },
+    {
+      ref: t3,
+      coverage: {
+        granularity: "procedure" as const,
+        entries: [{ objectType: "Table", objectId: 79300, procedure: "TouchCount" }],
+      },
+    },
+    // Covers nothing — so the object-level set {t1, t3} is STRICTLY narrower than all green
+    // tests, and "matched precisely" can never be mistaken for "ran against everything".
+    { ref: t2, coverage: { granularity: "procedure" as const, entries: [] } },
+  ];
+  const allGreen = [t1, t2, t3];
+
+  test("it joins byObject", () => {
+    const index = buildCoverageIndex(baseline);
+    expect(index.byObject.get("table:79300")).toEqual(new Set([testKeyOf(t1), testKeyOf(t3)]));
+  });
+
+  test("it never joins byMember — no empty-named key is synthesized", () => {
+    const index = buildCoverageIndex(baseline);
+    // The collision key a trigger mutant's own member lookup would build.
+    expect(index.byMember.has("table:79300::")).toBe(false);
+    // ...and t1 contributed no member key at all, at any name.
+    expect([...index.byMember.keys()]).toEqual(["table:79300::touchcount"]);
+    expect(index.byMember.get("table:79300::touchcount")).toEqual(new Set([testKeyOf(t3)]));
+  });
+
+  test("a trigger mutant in that object is matched to the object-level-only test", () => {
+    const index = buildCoverageIndex(baseline);
+    const m = entry({
+      objectType: "table",
+      codeunitId: 79300,
+      procedureName: "",
+      triggerName: "OnValidate",
+    });
+    const split = coverageFilter([m], index, allGreen);
+    // The bug's signature: without t1's object-level entry this answered [t3] — the ONE test that
+    // happened to resolve, which does not exercise the trigger — and scored the mutant survived.
+    expect(split.covered.get("M0001")).toEqual([t1, t3]);
+    expect(split.covered.get("M0001")).not.toEqual([t3]);
+    expect(split.uncovered.length).toBe(0);
+  });
+
+  test("an ordinary procedure mutant is NOT credited by an object-level-only entry", () => {
+    const index = buildCoverageIndex(baseline);
+    // `Touch` is covered by nobody. t1's object-level entry must not be read as covering it —
+    // object-level evidence says nothing about any particular member.
+    const m = entry({ objectType: "table", codeunitId: 79300, procedureName: "Touch" });
+    const split = coverageFilter([m], index, allGreen);
+    expect(split.covered.size).toBe(0);
+    expect(split.uncovered).toEqual([m]);
+  });
+
+  test("a blank-but-present procedure name is refused, never indexed", () => {
+    expect(() =>
+      buildCoverageIndex([
+        {
+          ref: t1,
+          coverage: {
+            granularity: "procedure" as const,
+            entries: [{ objectType: "Table", objectId: 79300, procedure: "" }],
+          },
+        },
+      ]),
+    ).toThrow(/blank/i);
   });
 });
 

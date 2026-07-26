@@ -48,6 +48,8 @@ function spec(o: {
 const TIERS = new Map<string, 1 | 2 | 3 | "custom">([
   ["lethal.void-method-call", 1],
   ["lethal.remove-testfield", 2],
+  ["lethal.remove-setrange", 2],
+  ["lethal.remove-calcfields", 2],
   ["lethal.remove-setloadfields", 2],
   ["lethal.swap-modify-flag", 2],
   ["lethal.a", 2],
@@ -186,5 +188,77 @@ describe("dedupeSpecs", () => {
     expect(() => dedupeSpecs([plain, hinted], tierOf)).toThrow(
       /lethal\.a.*lethal\.b|lethal\.b.*lethal\.a/,
     );
+  });
+
+  // Task 7 (R12): the first real exercise of this module's collision branch. Tier 2
+  // (packages/builtin-tier2) introduced four operators that target sites Tier 1's
+  // `void-method-call` also targets: three deletions (`RemoveTestField`, `RemoveSetRange`,
+  // `RemoveCalcFields`) claim the identical empty after-form at their own site, and
+  // `SwapModifyFlag` claims a `Modify(true)` site with a DIFFERENT after-form
+  // (design doc §4 intro; §3.2). This batch mirrors all four shapes at once, at four
+  // DIFFERENT sites, so the same call to `dedupeSpecs` exercises precedence (win) and
+  // coexistence (no dedup) side by side, the way a real instrumented file would.
+  describe("Tier 2 precedence and coexistence across all four Phase-1 shapes (design doc §4, §7.4)", () => {
+    const testFieldSite = { start: 100, end: 120 };
+    const setRangeSite = { start: 200, end: 230 };
+    const calcFieldsSite = { start: 300, end: 320 };
+    const modifySite = { start: 400, end: 415 };
+
+    const deletionAt = (operatorName: string, site: { start: number; end: number }): MutationSpec =>
+      spec({ operatorName, start: site.start, end: site.end, after: "" });
+
+    // Three deletion collisions (void-method-call vs. the Tier-2 narrowing, same empty
+    // after-form) plus one non-collision (void-method-call's empty after-form vs.
+    // swap-modify-flag's `Modify(false)` after-form) — eight input specs, four sites.
+    const batch: readonly MutationSpec[] = [
+      deletionAt("lethal.void-method-call", testFieldSite),
+      deletionAt("lethal.remove-testfield", testFieldSite),
+      deletionAt("lethal.void-method-call", setRangeSite),
+      deletionAt("lethal.remove-setrange", setRangeSite),
+      deletionAt("lethal.void-method-call", calcFieldsSite),
+      deletionAt("lethal.remove-calcfields", calcFieldsSite),
+      deletionAt("lethal.void-method-call", modifySite),
+      spec({
+        operatorName: "lethal.swap-modify-flag",
+        start: modifySite.start,
+        end: modifySite.end,
+        after: "Rec.Modify(false)",
+      }),
+    ];
+
+    it("each Tier-2 deletion suppresses void-method-call at its OWN site", () => {
+      const out = dedupeSpecs(batch, tierOf);
+      const at = (start: number) =>
+        out.filter((s) => s.before.startIndex === start).map((s) => s.operatorName);
+      expect(at(testFieldSite.start)).toEqual(["lethal.remove-testfield"]);
+      expect(at(setRangeSite.start)).toEqual(["lethal.remove-setrange"]);
+      expect(at(calcFieldsSite.start)).toEqual(["lethal.remove-calcfields"]);
+    });
+
+    it("the Modify(true) site yields TWO mutants — coexistence, not a collision", () => {
+      const out = dedupeSpecs(batch, tierOf);
+      const atModify = out
+        .filter((s) => s.before.startIndex === modifySite.start)
+        .map((s) => s.operatorName)
+        .sort();
+      expect(atModify).toEqual(["lethal.swap-modify-flag", "lethal.void-method-call"]);
+    });
+
+    // Eight input specs in, five out: the three deletion collisions each resolve to one winner and
+    // the Modify pair does not collide at all.
+    //
+    // What used to sit here as well — recomputing `kind:start:end:after-text` over the SURVIVING
+    // set and asserting the identities are distinct — could not fail: `dedupeSpecs` returns the
+    // values of a Map keyed on exactly that string, so uniqueness holds for ANY input, correct
+    // implementation or not. The count below is the load-bearing half, and it is kept.
+    //
+    // Spec §7.4's standing invariant ("no two operators ever emit the same (site, after-form)")
+    // is only meaningful over the PRE-dedup set produced by REAL operators, which this package
+    // cannot build — `schemata` deliberately does not depend on the operator packages. It is
+    // asserted in `packages/runner/tests/orchestrator.test.ts`
+    // ("generateMutationSet: real cross-tier collisions"), which imports both registries.
+    it("resolves eight specs at four sites into five surviving mutants", () => {
+      expect(dedupeSpecs(batch, tierOf)).toHaveLength(5);
+    });
   });
 });
