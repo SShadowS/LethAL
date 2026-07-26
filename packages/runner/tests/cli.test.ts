@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { SelectorConfig } from "@lethal/schemata";
 import type { ActivationConfig } from "../src/activation";
 import type { BcDevConfigSection } from "../src/cli";
 import {
@@ -11,9 +12,11 @@ import {
   odataCfgFor,
   parseCliConfig,
   performForceResetLease,
+  resolveSelectorIds,
   resourceIdentityFor,
   validateAlRunnerConfig,
   validateBcDevConfig,
+  validateSelectorIdsConfig,
 } from "../src/cli";
 import { CONTROL_APP_ID } from "../src/harness";
 import { LeaseClient } from "../src/lease";
@@ -305,6 +308,188 @@ describe("parseCliConfig — worker flags", () => {
     ]);
     if (p.mode !== "run") throw new Error("expected a run config");
     expect(p.workers).toBe(1);
+  });
+});
+
+// R3: --selector-id/--control-id/--table-id override the three injected object ids
+// (DEFAULT_SELECTOR_IDS) independently.
+describe("parseCliConfig — selector id flags", () => {
+  test("no flags given: selectorIdOverrides is absent entirely", () => {
+    const p = parseCliConfig(["run", "--project", "p", "--tests", "t", "--backend", "al-runner"]);
+    if (p.mode !== "run") throw new Error("expected a run config");
+    expect(p.selectorIdOverrides).toBeUndefined();
+    expect("selectorIdOverrides" in p).toBe(false);
+  });
+
+  test("all three flags populate selectorIdOverrides", () => {
+    const p = parseCliConfig([
+      "run",
+      "--project",
+      "p",
+      "--tests",
+      "t",
+      "--backend",
+      "al-runner",
+      "--selector-id",
+      "50002",
+      "--control-id",
+      "50001",
+      "--table-id",
+      "50000",
+    ]);
+    if (p.mode !== "run") throw new Error("expected a run config");
+    expect(p.selectorIdOverrides).toEqual({
+      selectorId: 50002,
+      controlId: 50001,
+      tableId: 50000,
+    });
+  });
+
+  test("a single flag overrides only that one id", () => {
+    const p = parseCliConfig([
+      "run",
+      "--project",
+      "p",
+      "--tests",
+      "t",
+      "--backend",
+      "al-runner",
+      "--selector-id",
+      "50002",
+    ]);
+    if (p.mode !== "run") throw new Error("expected a run config");
+    expect(p.selectorIdOverrides).toEqual({ selectorId: 50002 });
+  });
+
+  test("rejects a non-positive --selector-id", () => {
+    expect(() =>
+      parseCliConfig([
+        "run",
+        "--project",
+        "p",
+        "--tests",
+        "t",
+        "--backend",
+        "al-runner",
+        "--selector-id",
+        "0",
+      ]),
+    ).toThrow(/--selector-id must be a positive integer/);
+  });
+
+  test("rejects a non-numeric --control-id", () => {
+    expect(() =>
+      parseCliConfig([
+        "run",
+        "--project",
+        "p",
+        "--tests",
+        "t",
+        "--backend",
+        "al-runner",
+        "--control-id",
+        "not-a-number",
+      ]),
+    ).toThrow(/--control-id must be a positive integer/);
+  });
+
+  test("rejects a non-integer --table-id", () => {
+    expect(() =>
+      parseCliConfig([
+        "run",
+        "--project",
+        "p",
+        "--tests",
+        "t",
+        "--backend",
+        "al-runner",
+        "--table-id",
+        "1.5",
+      ]),
+    ).toThrow(/--table-id must be a positive integer/);
+  });
+});
+
+describe("resolveSelectorIds", () => {
+  test("no overrides at all: falls back to DEFAULT_SELECTOR_IDS", () => {
+    expect(resolveSelectorIds({}, undefined)).toEqual({
+      selectorId: 79199,
+      controlId: 79198,
+      tableId: 79197,
+    });
+  });
+
+  test("CLI override wins over config file and default", () => {
+    expect(resolveSelectorIds({ selectorId: 1 }, { selectorId: 2, controlId: 3 })).toEqual({
+      selectorId: 1,
+      controlId: 3,
+      tableId: 79197,
+    });
+  });
+
+  test("config file wins over the default when no CLI override is given", () => {
+    expect(resolveSelectorIds({}, { selectorId: 2, controlId: 3, tableId: 4 })).toEqual({
+      selectorId: 2,
+      controlId: 3,
+      tableId: 4,
+    });
+  });
+
+  test("per-field resolution: each id picks its own source independently", () => {
+    expect(resolveSelectorIds({ tableId: 9 }, { selectorId: 2 })).toEqual({
+      selectorId: 2,
+      controlId: 79198,
+      tableId: 9,
+    });
+  });
+});
+
+describe("validateSelectorIdsConfig", () => {
+  test("undefined section is fine — returned as-is", () => {
+    expect(validateSelectorIdsConfig(undefined)).toBeUndefined();
+  });
+
+  test("a well-formed section (partial) is returned unchanged", () => {
+    const section = { selectorId: 79150 };
+    expect(validateSelectorIdsConfig(section)).toEqual(section);
+  });
+
+  test("a well-formed section (all three) is returned unchanged", () => {
+    const section = { selectorId: 79150, controlId: 79151, tableId: 79152 };
+    expect(validateSelectorIdsConfig(section)).toEqual(section);
+  });
+
+  test("rejects a non-object section, naming what was actually given", () => {
+    // A malformed lethal.config.json — bare JSON.parse means this compiles fine at the type level
+    // (`as LethalConfigFile`) but is wrong at runtime, exactly the shape validateBcDevConfig etc.
+    // already guard against.
+    expect(() => validateSelectorIdsConfig("nope" as unknown as Partial<SelectorConfig>)).toThrow(
+      /"selectorIds" section must be an object/,
+    );
+  });
+
+  test("rejects an array section", () => {
+    expect(() => validateSelectorIdsConfig([] as unknown as Partial<SelectorConfig>)).toThrow(
+      /"selectorIds" section must be an object/,
+    );
+  });
+
+  test("rejects a non-integer field, naming it", () => {
+    expect(() => validateSelectorIdsConfig({ selectorId: 1.5 } as Partial<SelectorConfig>)).toThrow(
+      /invalid field\(s\).*selectorId/s,
+    );
+  });
+
+  test("rejects a non-positive field, naming it", () => {
+    expect(() => validateSelectorIdsConfig({ controlId: 0 })).toThrow(
+      /invalid field\(s\).*controlId/s,
+    );
+  });
+
+  test("names every invalid field at once", () => {
+    expect(() =>
+      validateSelectorIdsConfig({ selectorId: -1, controlId: 0, tableId: 79150 }),
+    ).toThrow(/selectorId, controlId/);
   });
 });
 

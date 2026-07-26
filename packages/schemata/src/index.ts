@@ -20,6 +20,7 @@ export {
 } from "./compile";
 export {
   writeInstrumentedProject,
+  scanDeclaredObjects,
   CONTROL_SELECTOR_FILENAME,
   CONTROL_REGISTER_FILENAME,
   CONTROL_UPGRADE_FILENAME,
@@ -32,3 +33,5 @@ export type {
 } from "./project";
 export { resolveSite } from "./enclosing";
 export type { ResolvedSite } from "./enclosing";
+export { parseIdRanges, validateSelectorIds } from "./id-ranges";
+export type { AppIdRange, DeclaredObject } from "./id-ranges";

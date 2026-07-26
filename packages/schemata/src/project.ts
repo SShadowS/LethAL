@@ -9,6 +9,7 @@ import {
 } from "@lethal/engine";
 import { compileSchemataForFile } from "./compile";
 import { type TierResolver, dedupeSpecs } from "./dedup";
+import type { DeclaredObject } from "./id-ranges";
 import { assignMutantIds } from "./ids";
 import {
   type SelectorConfig,
@@ -202,6 +203,23 @@ function objectHeaderOf(
     throw new Error(`${filePath}: AL object header matched without an object keyword`);
   }
   return { type: type.toLowerCase(), id: Number(first[2]), name: first[4] ?? first[5] ?? "" };
+}
+
+/**
+ * Every AL object header declared in `source` — unlike `objectHeaderOf` above (which enforces
+ * exactly one object per file and throws otherwise, a rule that only applies to files THIS TOOL
+ * instruments), this returns however many there are. Used for a structural id-collision scan
+ * (`validateSelectorIds`, `id-ranges.ts`) across every `.al` file in a target project, including
+ * ones with no mutation sites at all — those are never passed through `objectHeaderOf`, but their
+ * object ids still occupy real AL id space the injected selector ids must not collide with.
+ */
+export function scanDeclaredObjects(source: string): DeclaredObject[] {
+  const clean = stripAlComments(source);
+  return [...clean.matchAll(OBJECT_HEADER)].map((m) => ({
+    type: (m[1] ?? "").toLowerCase(),
+    id: Number(m[2]),
+    name: m[4] ?? m[5] ?? "",
+  }));
 }
 
 function stripQuotes(s: string): string {

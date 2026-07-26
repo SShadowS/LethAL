@@ -537,6 +537,64 @@ describe("withEnvTeardown", () => {
 // install; `loadLethalConfigFile` still reads a REAL (minimal, empty) file since it isn't
 // injectable — its content is irrelevant once `resolveEnvToolSession` is replaced.
 // ————————————————————————————————————————————————————————————————————————
+// ————————————————————————————————————————————————————————————————————————
+// R3 review: `validateSelectorIdsForProject` must run BEFORE `resolveEnvToolSession` —
+// `resolveEnvToolSession` can provision a real, billed Layer-6C environment (`startEnvToolSession`
+// in create-mode), so a bad selector id should fail in milliseconds, not after that environment
+// already exists. Asserted with a call-order counter on fakes for both, per this project's "assert
+// phase ordering with call counters on stateful fakes, never wall-clock timing" convention — NOT
+// by timing anything.
+// ————————————————————————————————————————————————————————————————————————
+describe("runFromCli (R3 review — id validation runs before env-tool provisioning)", () => {
+  it("calls validateSelectorIdsForProject before resolveEnvToolSession", async () => {
+    const configPath = await writeTempConfig();
+    const parsed: RunCliConfig = { ...RUN_CONFIG_BCDEV, configPath };
+    const calls: string[] = [];
+    await expect(
+      runFromCli(parsed, {
+        validateSelectorIdsForProject: async () => {
+          calls.push("validateSelectorIdsForProject");
+        },
+        resolveEnvToolSession: async () => {
+          calls.push("resolveEnvToolSession");
+          return { effectiveConfig: {} };
+        },
+        buildBackend: async () => {
+          calls.push("buildBackend");
+          throw new Error("stop before a real backend build");
+        },
+      }),
+    ).rejects.toThrow("stop before a real backend build");
+    expect(calls).toEqual([
+      "validateSelectorIdsForProject",
+      "resolveEnvToolSession",
+      "buildBackend",
+    ]);
+  });
+
+  it("a rejecting validateSelectorIdsForProject aborts before resolveEnvToolSession ever runs", async () => {
+    const configPath = await writeTempConfig();
+    const parsed: RunCliConfig = { ...RUN_CONFIG_BCDEV, configPath };
+    const calls: string[] = [];
+    const idErr = new Error("selector id out of range: selectorId = 1 falls outside...");
+    await expect(
+      runFromCli(parsed, {
+        validateSelectorIdsForProject: async () => {
+          calls.push("validateSelectorIdsForProject");
+          throw idErr;
+        },
+        resolveEnvToolSession: async () => {
+          calls.push("resolveEnvToolSession");
+          return { effectiveConfig: {} };
+        },
+      }),
+    ).rejects.toBe(idErr);
+    // The whole point: resolveEnvToolSession (and therefore any real environment provisioning)
+    // never runs at all once id validation has already failed.
+    expect(calls).toEqual(["validateSelectorIdsForProject"]);
+  });
+});
+
 describe("runFromCli (Task 7 review wiring)", () => {
   it("Important 1: a buildBackend failure still tears down an env-tool-provisioned environment", async () => {
     const configPath = await writeTempConfig();
@@ -555,6 +613,10 @@ describe("runFromCli (Task 7 review wiring)", () => {
     );
     await expect(
       runFromCli(parsed, {
+        // R3 review: `runFromCli` now runs `validateSelectorIdsForProject` before
+        // `resolveEnvToolSession` — faked here (a no-op) since `RUN_CONFIG_BCDEV.projectDir`
+        // ("C:/proj") has no real app.json for the real one to read.
+        validateSelectorIdsForProject: async () => {},
         resolveEnvToolSession: async () => ({
           effectiveConfig: {},
           envSession: fakeSession,
@@ -581,6 +643,7 @@ describe("runFromCli (Task 7 review wiring)", () => {
     const buildErr = new Error("could not locate alc.exe/altool.exe");
     await expect(
       runFromCli(parsed, {
+        validateSelectorIdsForProject: async () => {},
         resolveEnvToolSession: async () => ({
           effectiveConfig: {},
           envSession: fakeSession,
@@ -607,6 +670,7 @@ describe("runFromCli (Task 7 review wiring)", () => {
       // it needs a real alc/altool install — this test is only about the warning.
       await expect(
         runFromCli(parsed, {
+          validateSelectorIdsForProject: async () => {},
           buildBackend: async () => {
             throw new Error("stop before a real backend build");
           },
@@ -655,6 +719,7 @@ describe("runFromCli (Task 7 review wiring)", () => {
     };
     try {
       const result = await runFromCli(parsed, {
+        validateSelectorIdsForProject: async () => {},
         resolveEnvToolSession: async () => ({
           effectiveConfig: {},
           envSession: fakeSession,
@@ -693,6 +758,7 @@ describe("runFromCli (Task 7 review wiring)", () => {
     };
     try {
       const result = await runFromCli(parsed, {
+        validateSelectorIdsForProject: async () => {},
         buildBackend: async () =>
           new AlRunnerBackend({
             alRunnerPath: "unused",
@@ -800,6 +866,7 @@ describe("runFromCli (R18 — envTool configured but ignored under al-runner)", 
     let warnings: string[];
     try {
       await runFromCli(parsed, {
+        validateSelectorIdsForProject: async () => {},
         resolveEnvToolSession: async () => ({ effectiveConfig: {} }),
         buildBackend: async () =>
           new AlRunnerBackend({
@@ -831,6 +898,7 @@ describe("runFromCli (R18 — envTool configured but ignored under al-runner)", 
     let warnings: string[];
     try {
       await runFromCli(parsed, {
+        validateSelectorIdsForProject: async () => {},
         resolveEnvToolSession: async () => ({ effectiveConfig: {} }),
         buildBackend: async () =>
           new AlRunnerBackend({
