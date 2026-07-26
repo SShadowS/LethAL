@@ -46,6 +46,42 @@ export class MultiTenantContainerError extends Error {
   }
 }
 
+/**
+ * R2: the single-tenant gate's "unenforced" warning used to print on EVERY `verify()` call — a
+ * single gate run calls it four times (deploy, lease acquire, and again per worker/session step),
+ * which trains a reader to scroll past it. Module-scope, not per-instance: a fresh
+ * `HarnessVerifier` is constructed at several of those call sites, so an instance-level flag
+ * would not have deduplicated across them. Deliberately process-lifetime, never reset — the text
+ * itself is unchanged, only how often it prints.
+ */
+let singleTenantWarningPrinted = false;
+
+/**
+ * Test-only: resets the once-per-process latch so each test starts from a clean slate. No
+ * production caller ever calls this — the entire point of the latch is that it stays flipped for
+ * the life of the process.
+ */
+export function resetSingleTenantWarningForTests(): void {
+  singleTenantWarningPrinted = false;
+}
+
+/**
+ * R25: `extensions/lethal-control/lethal-control.app` is gitignored, so it is a LOCAL build every
+ * machine makes for itself. A build older than its AL source still publishes and still answers
+ * `HarnessInfo` — it just rejects the newer `clientProtocol` argument this client always sends,
+ * because BC's OData layer validates the request shape against the OLD action signature before
+ * `HarnessInfo`'s own body ever runs. That surfaces as a generic-looking
+ * `HTTP 400: The parameter 'clientProtocol' ... is not a valid parameter for the operation
+ * 'LethALControl_HarnessInfo'`, which reads like a protocol/API bug — the real cause is a stale
+ * local build. Detected narrowly (400 plus BOTH markers) so an unrelated 400 is never
+ * misdiagnosed as this.
+ */
+function isStaleControlAppRejection(status: number, bodyText: string): boolean {
+  return (
+    status === 400 && /clientProtocol/i.test(bodyText) && /not a valid parameter/i.test(bodyText)
+  );
+}
+
 interface HarnessInfo {
   readonly appId?: unknown;
   readonly protocolVersion?: unknown;
@@ -152,14 +188,20 @@ export class HarnessVerifier {
       );
     }
     if (!info.tenantCountReachable) {
-      console.warn(
-        "HarnessVerifier: design §7's single-tenant container gate is NOT ENFORCED — the harness " +
-          "reports tenantCountReachable:false (AL cannot enumerate tenants from an extension; " +
-          "System Application codeunit 417 exposes only the current tenant). A second tenant " +
-          "publishing to this same service instance is NOT fenced by the 5C-B1 lease, because app " +
-          "publication is service-instance-wide. Verify single-tenancy out of band before running " +
-          "against a shared container: Get-BcContainerTenants / Get-NAVTenant.",
-      );
+      // R2: print this at most once per process. `verify()` runs several times in a single
+      // session (deploy, lease acquire, ...) — measured 2026-07-26: a single gate run printed
+      // this four times, which trains a reader to scroll past it rather than act on it.
+      if (!singleTenantWarningPrinted) {
+        singleTenantWarningPrinted = true;
+        console.warn(
+          "HarnessVerifier: design §7's single-tenant container gate is NOT ENFORCED — the harness " +
+            "reports tenantCountReachable:false (AL cannot enumerate tenants from an extension; " +
+            "System Application codeunit 417 exposes only the current tenant). A second tenant " +
+            "publishing to this same service instance is NOT fenced by the 5C-B1 lease, because app " +
+            "publication is service-instance-wide. Verify single-tenancy out of band before running " +
+            "against a shared container: Get-BcContainerTenants / Get-NAVTenant.",
+        );
+      }
       return "unenforced";
     }
     if (typeof info.tenantCount !== "number") {
@@ -202,7 +244,23 @@ export class HarnessVerifier {
       clearTimeout(timer);
     }
     if (!res.ok) {
-      throw new HarnessVerificationError(`HarnessInfo failed: HTTP ${res.status}`);
+      // R25: read the body BEFORE throwing — BC's own rejection text is the only evidence that
+      // distinguishes a stale local control-app build from a real protocol/transport failure, and
+      // it must never be discarded even when this isn't that specific shape.
+      let bodyText = "";
+      try {
+        bodyText = await res.text();
+      } catch {
+        // best-effort — fall through with an empty body rather than losing the status entirely
+      }
+      if (isStaleControlAppRejection(res.status, bodyText)) {
+        throw new HarnessVerificationError(
+          `HarnessInfo failed: HTTP ${res.status}: ${bodyText}\nThis looks like a STALE locally-built lethal-control.app, not a protocol bug: extensions/lethal-control/lethal-control.app is gitignored (every machine builds its own), and a build older than its AL source still publishes and still answers HarnessInfo — it just rejects the newer 'clientProtocol' argument this client sends, because BC validates the request shape against the OLD action signature before HarnessInfo's own logic runs. Fix: rebuild extensions/lethal-control and republish it.`,
+        );
+      }
+      throw new HarnessVerificationError(
+        `HarnessInfo failed: HTTP ${res.status}${bodyText ? `: ${bodyText}` : ""}`,
+      );
     }
     let value: unknown;
     try {
