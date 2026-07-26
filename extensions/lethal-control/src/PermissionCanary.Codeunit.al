@@ -14,22 +14,47 @@ namespace LethAL.Control;
 /// the same project can score differently on two servers with nothing in the report saying which
 /// world it ran in. This codeunit is what puts that in the report.
 ///
-/// It deliberately NEVER fails. Every outcome — permissions present, permissions stripped, the
-/// insert blowing up — is recorded as data on "LC Permission Canary State" and the method returns
-/// normally. A canary that signalled by failing would be indistinguishable from a canary that
-/// failed for some unrelated reason, and the caller could not tell "mocked" from "broken". So the
-/// framework's own pass/fail line stays a pure infrastructure signal: anything other than a clean
-/// pass, or a missing observation, means INCONCLUSIVE at the API layer, never a verdict.
+/// ############################################################################################
+/// #  DO NOT WRAP THE Insert BELOW IN A [TryFunction] (OR ANY OTHER ERROR TRAP).               #
+/// ############################################################################################
+///
+/// MEASURED LIVE, and the whole reason this file was rewritten (Cronus282, control app 1.0.0.3):
+/// the first version of this canary called the `Insert` from a `[TryFunction]`, so it could
+/// capture `GetLastErrorText()` and always return normally. The platform refused the call outright:
+///
+///     Call to the function 'INSERT' is not allowed inside the call to 'RunTests'
+///     when it is used as a TryFunction.
+///
+/// That refusal is a TryFunction-CONTRACT violation, not an ordinary runtime error — it is not
+/// caught by the very [TryFunction] that triggered it; it unwinds straight past it and aborts the
+/// test method. So the canary never reached its recording call (`observed:false`), and the thing it
+/// actually measured was "the platform forbids writes inside a TryFunction under RunTests" — a
+/// statement about the canary's own call shape, having nothing to do with permissions. Permissions
+/// were never consulted.
+///
+/// The proof that this was a call-shape difference and not a platform-wide truth: `RunMutant`'s own
+/// path reaches a real, unwrapped `Insert` in the fixture's `InsertDoublesAmountWeak`
+/// (`fixtures/sandbox-data-tests/src/DataTests.Codeunit.al`) and gets the PERMISSIONS refusal —
+/// "Sorry, the current permissions prevented the action" — which is exactly the signal this canary
+/// exists to observe. Same server, same test framework, different call shape. A canary that does
+/// not travel the path it characterises measures nothing, and is worse than no canary at all
+/// because it reports confidently about a path it never entered.
+///
+/// SO THE INSERT IS PLAIN, and the method is therefore ALLOWED TO FAIL. Under the mock it aborts at
+/// the `Insert` and the framework records a failure; that is the expected shape of the mocked
+/// world, not a malfunction. What makes that survivable is the two-stage recording below: the
+/// permission flags are written to "LC Permission Canary State" BEFORE the write is attempted, so
+/// an aborting write cannot erase what was already known, and a second flag is set AFTER it, which
+/// only a permitted write can reach. Those globals live in the session, not the database, so the
+/// abort and its rollback do not touch them — the identical property "LC Control State"'s
+/// attestation already depends on for every KILLED (i.e. failing) mutant on this same path.
 /// </summary>
 codeunit 71010 "LC Permission Canary"
 {
     Subtype = Test;
 
-    var
-        ProbeKey: Code[20];
-
-    /// <summary>Reports `ReadPermission`/`WritePermission` on "LC Permission Probe" and attempts a
-    /// real `Insert` on it, capturing the failure text instead of letting it abort the test.
+    /// <summary>Records `ReadPermission`/`WritePermission` on "LC Permission Probe", then attempts
+    /// a real, unwrapped `Insert` on it — the same call shape an ordinary test body uses.
     ///
     /// The probe table has NO `InherentPermissions` — that omission is the whole measurement; see
     /// `PermissionProbe.Table.al`'s summary before touching either object.</summary>
@@ -38,61 +63,39 @@ codeunit 71010 "LC Permission Canary"
     var
         Probe: Record "LC Permission Probe";
         CanaryState: Codeunit "LC Permission Canary State";
-        CanRead: Boolean;
-        CanWrite: Boolean;
-        InsertOk: Boolean;
-        InsertError: Text;
     begin
-        // A FRESH key per run, never a fixed one. With a constant key, a row left behind by an
-        // earlier canary run (the test runner's per-test rollback normally removes it, but a
-        // rollback is not something this method can prove happened) would make the next Insert
-        // fail with "the record already exists" — a failure this canary would then read as
-        // evidence of stripped permissions. That is the project's signature bug in miniature: a
-        // result that looks like a measurement and is actually an artefact of leftover state.
-        ProbeKey := NewProbeKey();
+        // STAGE 1 — recorded BEFORE the write, because the write may abort this method outright
+        // (it does, under the mock). Reading the two flags first also means nothing the write does,
+        // or rolls back, can influence what they report.
+        CanaryState.ObservePermissions(Probe.ReadPermission(), Probe.WritePermission());
 
-        // Read both permission flags BEFORE the write attempt, so nothing the attempt does (or
-        // rolls back) can influence what they report.
-        CanRead := Probe.ReadPermission();
-        CanWrite := Probe.WritePermission();
-
-        InsertOk := TryInsertProbe();
-        // GetLastErrorText() is read IMMEDIATELY on the failing branch, before any other statement
-        // can clear it — the same discipline `RunMutant` phase 2 follows (ControlApi.Codeunit.al).
-        if not InsertOk then
-            InsertError := GetLastErrorText();
-
-        CanaryState.Observe(CanRead, CanWrite, InsertOk, InsertError);
-
-        // Best-effort tidy-up of a SUCCESSFUL insert (the not-mocked world). The test runner's
-        // per-test isolation normally rolls it back anyway; this just means a server whose
-        // isolation ever differs does not accumulate one probe row per session. Wrapped and
-        // ignored: a failed cleanup must never change what the canary reports.
-        if InsertOk then
-            if TryDeleteProbe() then;
-    end;
-
-    /// <summary>The real `Insert` under test, behind a catchable boundary. A [TryFunction] (not
-    /// `Codeunit.Run`) because this call tree does NOT commit — a plain `Insert` on one table —
-    /// so the [TryFunction] restriction that rules it out for `LC Run Method` (see that codeunit's
-    /// doc comment: `Test Suite Mgt.RunAllTests` commits) does not apply here.</summary>
-    [TryFunction]
-    local procedure TryInsertProbe()
-    var
-        Probe: Record "LC Permission Probe";
-    begin
+        // STAGE 2 — the measurement: a PLAIN Insert, in the test body, exactly as
+        // `InsertDoublesAmountWeak` does it on the path this canary characterises. No TryFunction,
+        // no asserterror, no `if ... then` swallow: any error trap here either changes the call
+        // shape (see this codeunit's summary) or converts the abort into a pass, and both destroy
+        // the signal. When permissions are stripped this line raises and the method ends here,
+        // leaving stage 1's observation intact and stage 3 deliberately unreached.
+        //
+        // A FRESH GUID key per run, never a fixed one. Rows inserted on this path PERSIST between
+        // runs — LethAL's two-phase fence commits around each mutant run, as the fixture's own
+        // `InsertDoublesAmountWeak` records the hard way — so a constant key would make every run
+        // after the first fail with "the record already exists", which this canary would then read
+        // as evidence of stripped permissions. That is the project's signature bug in miniature: a
+        // result that looks like a measurement and is an artefact of leftover state.
         Probe.Init();
-        Probe."Primary Key" := ProbeKey;
+        Probe."Primary Key" := NewProbeKey();
         Probe.Insert(true);
-    end;
 
-    [TryFunction]
-    local procedure TryDeleteProbe()
-    var
-        Probe: Record "LC Permission Probe";
-    begin
-        if Probe.Get(ProbeKey) then
-            Probe.Delete(true);
+        // STAGE 3 — reached ONLY when the write was permitted. Its own presence is the observation;
+        // there is nothing to record about an insert that never happened, and the API layer reports
+        // exactly that (see "LC Permission Canary State".InsertSucceeded).
+        CanaryState.ObserveInsertSucceeded();
+
+        // Cleanup, deliberately LAST and deliberately unguarded. It runs only in the world where a
+        // write is permitted, so it is expected to succeed there; and because it comes after stage
+        // 3, a failure here can only fail the test line — it can no longer change or erase a
+        // complete observation.
+        Probe.Delete(true);
     end;
 
     /// <summary>20 characters of a fresh GUID — unique per run, within Code[20].</summary>

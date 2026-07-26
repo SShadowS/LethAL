@@ -22,6 +22,14 @@ import type { ActivationConfig, FetchFn } from "./activation";
  * table deliberately has NO `InherentPermissions`, unlike every one of its siblings; see that
  * table's own doc comment before touching it.
  *
+ * "Same path" has to be true all the way down to the write itself, and that is not free: the first
+ * live proof (Cronus282, control app 1.0.0.3) came back `observed:false` because the probe's
+ * `Insert` sat inside a `[TryFunction]`, which BC refuses under `RunTests` with a contract error
+ * that the `[TryFunction]` does not even catch — so the canary measured its own call shape and
+ * never reached permissions at all. The AL side now uses a plain, unwrapped `Insert` and records
+ * in two stages around it. If a `detail` ever surfaces "not allowed inside the call to 'RunTests'"
+ * again, that is the AL side having drifted back off the path, not a property of the server.
+ *
  * This module is the client half. It is modelled directly on `al-runner-canary.ts` (R7/R8), whose
  * shape it follows on purpose, including its hardest-won lesson: a verdict printed once at session
  * start scrolls past on a long run, so the result is persisted on `SessionReport` and repeated by

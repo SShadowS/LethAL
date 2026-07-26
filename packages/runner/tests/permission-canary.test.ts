@@ -91,6 +91,36 @@ describe("runPermissionCanary — verdict mapping", () => {
     expect(r.insertSucceeded).toBeUndefined();
   });
 
+  // The EXACT wire shape the first live proof produced (Cronus282, control app 1.0.0.3): the
+  // canary's `Insert` was wrapped in a [TryFunction], the platform refused the call outright with
+  // a contract error that the [TryFunction] did not catch, and the test method aborted before
+  // recording anything. Two properties are being pinned here, both of which are what made that
+  // defect diagnosable instead of a silent wrong answer: the client reports `inconclusive` rather
+  // than the reassuring `not-mocked`, AND it carries the platform's own message through verbatim
+  // instead of flattening it into a generic "could not determine".
+  test("the live TryFunction-defect response maps to inconclusive with the platform message intact", async () => {
+    const r = await runPermissionCanary(
+      fakeProbe({
+        verdict: "inconclusive",
+        observed: false,
+        detail:
+          "the canary test recorded no observation; the fenced test run returned: " +
+          '{"testResults":[{"method":"ProbeInherentPermissions","result":1,"message":' +
+          "\"Call to the function 'INSERT' is not allowed inside the call to 'RunTests' " +
+          'when it is used as a TryFunction."}]}',
+      }),
+    );
+    expect(r.verdict).toBe("inconclusive");
+    expect(r.detail).toContain("not allowed inside the call to 'RunTests'");
+    expect(r.readPermission).toBeUndefined();
+    expect(r.insertSucceeded).toBeUndefined();
+    // The warning line an operator actually reads must not claim the server is clean.
+    const line = permissionCanaryWarnings(r)[0] ?? "";
+    expect(line).toContain("could not determine");
+    expect(line).toContain("not allowed inside the call to 'RunTests'");
+    expect(line).not.toContain("does NOT strip permissions");
+  });
+
   test("a server inconclusive with no detail still gets a reason (never a bare, unactionable verdict)", async () => {
     const r = await runPermissionCanary(fakeProbe({ verdict: "inconclusive", observed: false }));
     expect(r.verdict).toBe("inconclusive");

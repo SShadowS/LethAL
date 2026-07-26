@@ -345,6 +345,18 @@ codeunit 71003 "LC Control API"
     /// the platform test runner — is still respected: the CLIENT calls this once per session while
     /// it already holds the lease (design §6 step 1), before any mutant runs.
     ///
+    /// THE CANARY TEST IS ALLOWED TO FAIL, and under the mock it MUST. Its `Insert` is plain and
+    /// unwrapped — the same call shape a real test body uses — so a refused write aborts the method
+    /// rather than returning an error string. That is deliberate and was earned live: the first
+    /// version wrapped the `Insert` in a [TryFunction] so it could always return normally, and the
+    /// platform answered "Call to the function 'INSERT' is not allowed inside the call to
+    /// 'RunTests' when it is used as a TryFunction" — a contract violation that is NOT caught by
+    /// that [TryFunction], aborting the method before it recorded anything, and measuring the
+    /// canary's own call shape instead of the permission state. See "LC Permission Canary"'s
+    /// summary. So the framework's pass/fail line is NOT an infrastructure signal here; the
+    /// two-stage observation on "LC Permission Canary State" is, and the failing line's message is
+    /// only used as human-readable `detail`.
+    ///
     /// JSON: {verdict, observed, readPermission?, writePermission?, insertSucceeded?, detail?}.
     /// `verdict` is one of 'mocked' | 'not-mocked' | 'inconclusive'. The three observation keys are
     /// present ONLY when `observed` is true — omitted rather than defaulted to false, because
@@ -358,48 +370,128 @@ codeunit 71003 "LC Control API"
         Runner: Codeunit "LC Run Method";
         CanaryState: Codeunit "LC Permission Canary State";
         RunError: Text;
+        RunnerResults: Text;
+        TestMessage: Text;
+        TestResult: Integer;
+        HaveTestLine: Boolean;
         CanRead: Boolean;
         CanWrite: Boolean;
         InsertOk: Boolean;
     begin
         // Cleared BEFORE dispatch, never after: `HasObservation()` is the proof that THIS run's
-        // test body reached its recording call, and a stale observation from an earlier call in
-        // this session would otherwise answer a confident verdict for a run that never happened.
+        // test body reached its first recording call, and a stale observation from an earlier call
+        // in this session would otherwise answer a confident verdict for a run that never happened.
         CanaryState.ClearObservation();
 
         Runner.SetRequest(State.NextSuiteName(), Codeunit::"LC Permission Canary", 'ProbeInherentPermissions');
         if not Runner.Run() then
             // Read immediately on the failing branch, before any other statement can clear it.
             RunError := GetLastErrorText();
+        RunnerResults := Runner.Results();
+        HaveTestLine := ReadCanaryTestLine(RunnerResults, TestMessage, TestResult);
 
         if not CanaryState.HasObservation() then
-            // The test body never recorded anything: the framework refused the run, the method
-            // could not be selected, or the body aborted before its recording call. INCONCLUSIVE —
-            // never 'not-mocked'. `LC Permission Canary`'s test method is written to complete
-            // normally in BOTH worlds (see its doc comment), so reaching here means something
-            // OTHER than the permission state went wrong, and the caller must be told that rather
-            // than handed the reassuring answer.
-            exit(BuildCanaryInconclusive(CanaryInconclusiveDetail(RunError, Runner.Results())));
+            // The test body never reached even its FIRST statement: the framework refused the run,
+            // the method could not be selected, or the body aborted before stage 1. INCONCLUSIVE —
+            // never 'not-mocked'. Stage 1 precedes every operation that can fail on permissions, so
+            // reaching here means something OTHER than the permission state went wrong, and the
+            // caller must be told that rather than handed the reassuring answer.
+            exit(BuildCanaryInconclusive(CanaryInconclusiveDetail(RunError, RunnerResults)));
 
         CanRead := CanaryState.ReadAllowed();
         CanWrite := CanaryState.WriteAllowed();
         InsertOk := CanaryState.InsertSucceeded();
-        exit(BuildCanaryResult(CanRead, CanWrite, InsertOk, CanaryState.InsertErrorText()));
+
+        // Consistency guard, and the direct lesson of the live failure this action was rewritten
+        // for: if stage 2 was never reached, the write must actually have aborted the method, so
+        // the framework MUST report this test as failed. A reported SUCCESS with no stage 2 means
+        // the framework did not execute the body this canary assumes it did — exactly the class of
+        // "the canary is not on the path it thinks it is on" defect that produced a confident,
+        // meaningless answer last time. Refuse to rule on it.
+        if (not InsertOk) and HaveTestLine and (TestResult = TestResultSuccess()) then
+            exit(BuildCanaryInconclusive(
+                StrSubstNo('the canary test reported SUCCESS yet never reached its post-insert recording call — the test framework did not execute the body this canary assumes. Runner result: %1', RunnerResults)));
+
+        exit(BuildCanaryResult(CanRead, CanWrite, InsertOk, CanaryRefusalDetail(InsertOk, HaveTestLine, TestMessage, RunnerResults)));
     end;
 
-    /// <summary>The verdict mapping, from the two MEASURED worlds (2026-07-26, this container):
-    /// under the mock the probe reports read=No write=No and its Insert fails with "Sorry, the
-    /// current permissions prevented the action"; off the mock it reports read=Yes write=Yes and
-    /// the Insert succeeds.
+    /// <summary>The refused-write diagnostic. There is no `GetLastErrorText()` to read — the write
+    /// is plain and aborts the test method — so the text comes from the framework's own record of
+    /// that failure, which is where BC put it. Falls back to the whole runner result rather than to
+    /// an empty string: an inconclusive-looking verdict with no reason attached is the one an
+    /// operator cannot act on.</summary>
+    local procedure CanaryRefusalDetail(InsertOk: Boolean; HaveTestLine: Boolean; TestMessage: Text; RunnerResults: Text): Text
+    begin
+        if InsertOk then
+            exit('');
+        if HaveTestLine and (TestMessage <> '') then
+            exit(TestMessage);
+        exit(StrSubstNo('the probe insert did not complete and the test framework reported no message; runner result: %1', RunnerResults));
+    end;
+
+    /// <summary>`Test Method Line.Result::Success` as `TestResultsToJSON` emits it — confirmed live
+    /// on Cronus281 and already relied on by `run-mutant-transport.ts`'s `RESULT_SUCCESS`. Named
+    /// here rather than written as a bare `2` at the one call site so the two ends of that same
+    /// wire contract are greppable together.</summary>
+    local procedure TestResultSuccess(): Integer
+    begin
+        exit(2);
+    end;
+
+    /// <summary>Reads the single test line out of `LC Run Method`'s result JSON — the SAME
+    /// `Test Suite Mgt.TestResultsToJSON` shape `run-mutant-transport.ts` parses for every mutant
+    /// ({testResults:[{method, result, message, stackTrace}]}), not a new format. Returns false,
+    /// leaving the outputs untouched, for anything that is not exactly that shape (including the
+    /// fail-closed {"error": ...} payload `RunOneMethod` produces): a caller that cannot read a
+    /// test line must not act as though it read one.</summary>
+    local procedure ReadCanaryTestLine(ResultsJson: Text; var TestMessage: Text; var TestResult: Integer): Boolean
+    var
+        Root: JsonObject;
+        LineObj: JsonObject;
+        ResultsTok: JsonToken;
+        LineTok: JsonToken;
+        FieldTok: JsonToken;
+    begin
+        TestMessage := '';
+        TestResult := 0;
+        if ResultsJson = '' then
+            exit(false);
+        if not Root.ReadFrom(ResultsJson) then
+            exit(false);
+        if not Root.Get('testResults', ResultsTok) then
+            exit(false);
+        if not ResultsTok.IsArray() then
+            exit(false);
+        if not ResultsTok.AsArray().Get(0, LineTok) then
+            exit(false);
+        if not LineTok.IsObject() then
+            exit(false);
+        LineObj := LineTok.AsObject();
+        if LineObj.Get('result', FieldTok) then
+            if FieldTok.IsValue() then
+                TestResult := FieldTok.AsValue().AsInteger();
+        if LineObj.Get('message', FieldTok) then
+            if FieldTok.IsValue() then
+                TestMessage := FieldTok.AsValue().AsText();
+        exit(true);
+    end;
+
+    /// <summary>The verdict mapping, from the two MEASURED worlds: under the mock a plain `Insert`
+    /// in a test body is refused with "Sorry, the current permissions prevented the action" and the
+    /// probe reports read=No write=No; off the mock it reports read=Yes write=Yes and the `Insert`
+    /// succeeds.
     ///
-    /// 'mocked' requires BOTH a refused write flag AND a failed insert. The failed insert is the
-    /// operationally decisive fact (it is exactly what makes a real test fail inside the fence);
-    /// `WritePermission` corroborates it, and demanding both keeps a plain insert failure for some
-    /// unrelated reason — a broken table, a disk error — from being reported as the permission
-    /// mock. 'not-mocked' demands the complete clean picture. Anything in between is a genuinely
-    /// mixed signal and is reported INCONCLUSIVE with the observation attached, never rounded to
+    /// 'mocked' requires BOTH a refused write flag AND an insert that did not complete. The insert
+    /// is the operationally decisive fact (it is exactly what makes a real test fail inside the
+    /// fence); `WritePermission` corroborates it, and demanding both keeps an insert failing for
+    /// some unrelated reason — a broken table, a disk error — from being reported as the permission
+    /// mock. That conjunction is UNCHANGED from the first version: the live failure was in how the
+    /// insert was invoked, not in what the verdict is derived from, and weakening the rule to
+    /// `WritePermission` alone would have dodged the platform error rather than fixed it.
+    /// 'not-mocked' demands the complete clean picture. Anything in between is a genuinely mixed
+    /// signal and is reported INCONCLUSIVE with the observation attached, never rounded to
     /// whichever verdict is closer.</summary>
-    local procedure BuildCanaryResult(CanRead: Boolean; CanWrite: Boolean; InsertOk: Boolean; InsertError: Text): Text
+    local procedure BuildCanaryResult(CanRead: Boolean; CanWrite: Boolean; InsertOk: Boolean; RefusalDetail: Text): Text
     var
         Obj: JsonObject;
         Out: Text;
@@ -408,14 +500,14 @@ codeunit 71003 "LC Control API"
     begin
         if (not CanWrite) and (not InsertOk) then begin
             Verdict := 'mocked';
-            Detail := InsertError;
+            Detail := RefusalDetail;
         end else
             if CanRead and CanWrite and InsertOk then begin
                 Verdict := 'not-mocked';
                 Detail := '';
             end else begin
                 Verdict := 'inconclusive';
-                Detail := StrSubstNo('mixed signal — read=%1 write=%2 insert=%3 error=%4', CanRead, CanWrite, InsertOk, InsertError);
+                Detail := StrSubstNo('mixed signal — read=%1 write=%2 insert=%3 detail=%4', CanRead, CanWrite, InsertOk, RefusalDetail);
             end;
 
         Obj.Add('verdict', Verdict);
@@ -445,9 +537,12 @@ codeunit 71003 "LC Control API"
 
     /// <summary>Whichever diagnostic actually exists for a no-observation run: the caught terminal
     /// error text when `Runner.Run()` returned false, otherwise the runner's own result JSON (which
-    /// carries either the fail-closed {"error": ...} shape or the test line that did not reach the
-    /// recording call). Never both, never an empty string — an inconclusive verdict with no reason
-    /// attached is the thing an operator cannot act on.</summary>
+    /// carries either the fail-closed {"error": ...} shape or the test line that did not reach
+    /// stage 1). Never both, never an empty string — an inconclusive verdict with no reason attached
+    /// is the thing an operator cannot act on. This is also the exit that reported the live
+    /// [TryFunction] defect (2026-07-26, Cronus282), carrying the platform's own "not allowed inside
+    /// the call to 'RunTests'" message all the way to the operator, which is what made it
+    /// diagnosable at all rather than a silent wrong answer.</summary>
     local procedure CanaryInconclusiveDetail(RunError: Text; RunnerResults: Text): Text
     begin
         if RunError <> '' then
