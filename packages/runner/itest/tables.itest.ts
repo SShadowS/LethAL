@@ -367,22 +367,46 @@ async function main(): Promise<void> {
     `expected ${EXPECTED.totalMutantSites} mutant sites across the table fixture, generated ${total} — either the fixture changed or a tier-1 operator's targeting changed; update fixtures/README.md`,
   );
 
-  const scratch = await mkdtemp(join(tmpdir(), "lethal-itest-tables-"));
+  // R9: runs the session TWICE and asserts verdict-identity, matching itest:bcdev/itest:alrunner
+  // — a single run left cross-run nondeterminism here indistinguishable from a confusing
+  // per-mutant baseline mismatch instead of an explicit determinism failure.
+  const scratchA = await mkdtemp(join(tmpdir(), "lethal-itest-tables-a-"));
+  const scratchB = await mkdtemp(join(tmpdir(), "lethal-itest-tables-b-"));
   try {
-    const run = await runOnce(scratch);
-    assertVerdictTable(run.report);
+    const first = await runOnce(scratchA);
+    assertVerdictTable(first.report);
     // The trigger claim itself, read off the manifests the run actually deployed (the scratch
     // dir is still on disk here — it is removed in the `finally` below).
     assertTriggerKillAndSurvive(
-      run.report,
-      await readDeployedManifests(join(scratch, "instrumented")),
+      first.report,
+      await readDeployedManifests(join(scratchA, "instrumented")),
     );
     // Per-mutant regression guard against the committed baseline, keyed on semantic identity
     // (astHash/codeunitName/operatorName/operatorMajor) rather than mutant code — so it survives
     // renumbering that the EXPECTED.verdicts map above deliberately does not.
-    await assertMatchesBaseline(run.report, BASELINE_PATH, "tables itest");
+    await assertMatchesBaseline(first.report, BASELINE_PATH, "tables itest");
+
+    const second = await runOnce(scratchB);
+    assertVerdictTable(second.report);
+    assertTriggerKillAndSurvive(
+      second.report,
+      await readDeployedManifests(join(scratchB, "instrumented")),
+    );
+
+    const shape = (r: SessionReport) =>
+      [...r.mutants]
+        .map((m) => ({ mutantCode: m.mutantCode, verdict: m.verdict, killingTest: m.killingTest }))
+        .sort((a, b) => a.mutantCode.localeCompare(b.mutantCode));
+    assert.deepEqual(
+      shape(first.report),
+      shape(second.report),
+      "two consecutive runs must be 100% verdict-identical (determinism exit criterion) — R9: " +
+        "cross-run nondeterminism here must surface as an explicit determinism failure, not a " +
+        "confusing per-mutant baseline mismatch",
+    );
   } finally {
-    await rm(scratch, { recursive: true, force: true });
+    await rm(scratchA, { recursive: true, force: true });
+    await rm(scratchB, { recursive: true, force: true });
   }
 
   console.log("tables itest: PASS");
