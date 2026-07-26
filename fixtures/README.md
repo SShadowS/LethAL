@@ -294,9 +294,59 @@ Consequence for users: **on the al-runner backend, any mutation whose only kille
 (survivors are safe-direction, a missed kill is never a false kill) but it is silent, so the CLI
 warns whenever a non-authoritative backend is selected. Confirm survivors against bcdev.
 
-One further al-runner divergence, observed while probing and not chased: a table's global var
-does not carry its trigger's write back out — after `Validate("No.", 'B2')`, the fixture's
-`TouchCount()` returns 0 there even though the trigger body demonstrably ran.
+**R7 update, 2026-07-26 — a startup canary, not just a warning.** A static warning printed on
+every al-runner session names a defect frozen at the moment someone measured it by hand; it
+cannot tell a fixed al-runner build apart from a broken one. `packages/runner/src/al-runner-canary.ts`
+replaces it: `runFromCli`'s al-runner branch (`announceAlRunnerCanary`) now runs
+`asserterror I := 1;` — a statement that cannot raise — through the ACTUAL configured binary at
+the start of every `--backend al-runner` session, and reports whether the defect reproduced on
+THIS build (`defect-confirmed` / `defect-not-reproduced` / `inconclusive`, printed via
+`alRunnerCanaryWarnings`) instead of restating the 2026-07-25 finding as fact regardless of what
+binary is actually installed. **Loud-warn, not hard-refuse:** the backend already declares
+`authoritative: false`, the defect only under-reports (survivors are safe-direction — never a
+false kill), and refusing to run at all would block legitimate offline smoke-testing over a
+third-party binary's bug rather than this project's own code. A hard refusal also cannot adapt if
+al-runner is ever patched upstream, where a canary automatically stops warning the moment the
+defect stops reproducing. Verified end-to-end against the real `al-runner.exe` on this machine
+(still v1.0.31-era, 2026-07-26): the canary reports `defect-confirmed` and the CLI's live output
+carries the R7 line, with the frozen baseline below unaffected — the canary changes no verdict, it
+only adds a diagnostic.
+
+**R8 — the table global var divergence, root-caused 2026-07-26.** A table's global var does not
+carry its trigger's write back out: after `Validate("No.", 'B2')`, the fixture's `TouchCount()`
+returns 0 there even though the trigger body demonstrably ran. Three throwaway diagnostic probes
+against al-runner.exe directly (same table/trigger/procedure shape, run in isolation, each
+probe's own outcome read from an unguarded `Error()` message rather than through R7's broken
+`asserterror` path) pinned the cause down precisely:
+
+1. **The write is real.** Rigging the trigger to `Error()` with its own in-frame value of
+   `Touched` immediately after incrementing it reports `Touched=1` — the assignment executes.
+2. **The field write survives the call boundary; the global does not.** Reading `"No."` (a real
+   field) from the caller's frame after `Validate()` returns correctly shows `'B2'`. Reading
+   `TouchCount()` (which reads the non-field global `Touched`) from that SAME caller frame
+   reports 0.
+3. **A NESTED call to `TouchCount()` made from inside the trigger's own execution — before
+   control returns to the caller — correctly reads 1.** So the boundary that loses the value is
+   specifically "return from `Validate()`, then make a separate, later top-level dispatch onto
+   the same record variable" — not "the record instance is unshared" in general (fields prove
+   that's false) and not "TouchCount() itself reads the wrong place" (the nested call proves
+   that's false too).
+
+Conclusion: al-runner persists a `Record` variable's FIELD buffer across separate calls
+correctly (matching real AL/BC semantics — verified independently, not merely assumed), but does
+not persist a table object's own non-field GLOBAL variables the same way; each fresh top-level
+dispatch onto the table object appears to reset them, while a call nested within one dispatch
+correctly shares the single in-progress instantiation. **Third-party, upstream, documented —
+legitimate as an outcome per this project's own bar**, not a gap needing a LethAL-side fix.
+**Detectable, and now detected**: the same canary mechanism built for R7 carries a second probe
+(`GlobalVarSurvivesValidate`, same `al-runner-canary.ts`) that runs exactly this pattern —
+`Rec.Validate("No.", 'X')` then `Rec.TouchCount()` on the same variable, asserted via a plain
+`Error()` rather than `asserterror` so R7's own defect cannot contaminate this probe's signal —
+and reports `defect-confirmed`/`defect-not-reproduced`/`inconclusive` for it every session, the
+same as R7. Verified end-to-end against the real binary on this machine: reports
+`defect-confirmed`. Any mutant whose only observable effect is table-global (non-field) state may
+still be misjudged on this backend when the canary confirms the defect present; field-only and
+return-value mutants are unaffected.
 
 ## Expected verdict table (hand-computed)
 

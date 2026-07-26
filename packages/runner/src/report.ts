@@ -1,4 +1,5 @@
 import type { MutantManifestEntry } from "@lethal/schemata";
+import { type AlRunnerCanaryResult, alRunnerCanaryWarnings } from "./al-runner-canary";
 import type { BackendCapabilities } from "./backend";
 import { identityKeyOf } from "./selection";
 import type { MutantVerdict } from "./store";
@@ -99,6 +100,17 @@ export interface SessionReport {
   readonly quarantined?: {
     readonly reason: string;
   };
+  /**
+   * R7/R8: set only on an al-runner session that actually ran the startup canary
+   * (`packages/runner/src/al-runner-canary.ts`, attached via `cli.ts`'s `withAlRunnerCanary`) —
+   * absent on every bcdev session and on the al-runner no-`alRunnerPath` fallback path, where
+   * nothing was measured. Persisting the measured verdict here (not just a `console.warn` at
+   * session start) is what makes it survive into a `--out` JSON report or reach a CI that
+   * discards stderr; `renderConsole` also repeats it at the END of the printed report for the
+   * same reason — a warning seen once, before the mutant table, is easy to have already
+   * scrolled past by the time a reader gets to the score.
+   */
+  readonly alRunnerCanary?: AlRunnerCanaryResult;
 }
 
 export interface MutantOutcome {
@@ -277,6 +289,15 @@ export function renderConsole(r: SessionReport): string {
     for (const f of r.notInstrumented.files) {
       lines.push(`  ${f.file} (${f.kinds}, ${f.sites} site(s))`);
     }
+  }
+  // R7/R8: repeat the al-runner canary's measured verdict at the END too — `announceAlRunnerCanary`
+  // (cli.ts) already prints it once via console.warn at the very start of the session, before a
+  // single mutant has run, which is exactly the "warning that scrolls past on a long run" pattern
+  // that let the original static claim go unnoticed for a session's whole duration. The end of a
+  // long run — right after the score — is where a reader actually is.
+  if (!r.authoritative && r.alRunnerCanary !== undefined) {
+    lines.push("");
+    lines.push(...alRunnerCanaryWarnings(r.alRunnerCanary));
   }
   return lines.join("\n");
 }

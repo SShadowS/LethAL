@@ -14,8 +14,11 @@
  * survived / 2 no-coverage. NOT a trigger-support gap — al-runner does execute table triggers and
  * the injected selector guard does fire inside table code (both probed directly). The whole
  * difference is that al-runner reports `pass` for an `asserterror` that raised no error, and all
- * three bcdev kills come from asserterror tests. Full write-up: fixtures/README.md §Tier-2
- * Phase 0. The CLI now warns on every al-runner session because of it.
+ * three bcdev kills come from asserterror tests (R7). Full write-up: fixtures/README.md §Tier-2
+ * Phase 0. `packages/runner/src/al-runner-canary.ts` now proves this defect (and R8, the
+ * table-global-var divergence root-caused 2026-07-26 in the same write-up) against the ACTUAL
+ * configured al-runner binary at the start of every `--backend al-runner` session, instead of
+ * this script's one-time manual measurement being the only record of it.
  *
  *   LETHAL_ALRUNNER_PATH="C:/Users/SShadowS/.dotnet/tools/al-runner.exe" \
  *     bun run scripts/probe-alrunner-tables.ts
