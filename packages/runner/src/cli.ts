@@ -6,6 +6,7 @@ import { parseArgs } from "node:util";
 import type { InstrumentedFile, SelectorConfig } from "@lethal/schemata";
 import type { ActivationConfig, FetchFn } from "./activation";
 import { AlRunnerBackend } from "./al-runner-backend";
+import { alRunnerCanaryWarnings, runAlRunnerCanary } from "./al-runner-canary";
 import { ArtifactCompiler, defaultArtifactIo } from "./artifact";
 import type { ExecutionBackend } from "./backend";
 import { BcDevMcpBackend } from "./bcdev-backend";
@@ -450,12 +451,13 @@ export function odataCfgFor(c: BcDevConfigSection): ActivationConfig {
  *     artifacts physically separate and independently disposable.
  */
 /**
- * Announces al-runner's non-authoritative survivors. Measured 2026-07-25 against the sandbox-data
- * table fixture (fixtures/README.md §Tier-2 Phase 0): al-runner reports `pass` for an
- * `asserterror` whose guarded statement raised nothing — `asserterror I := 1;` passes. Every
- * mutant whose only killer is an asserterror assertion therefore comes back "survived" here while
- * bcdev kills it. Under-reporting is the safe direction, but it is silent, and a silent wrong
- * verdict is exactly what this project refuses to ship unannounced.
+ * Static fallback for the al-runner non-authoritative warning, used ONLY when `runFromCli`
+ * cannot yet run the real canary (`al-runner-canary.ts`) because `lethal.config.json` has no
+ * `alRunnerPath` configured — `validateAlRunnerConfig` throws its own targeted error for that
+ * moments later in `buildBackend`, so this is printed on the way to that throw, not instead of
+ * it. Every session that DOES have a configured path gets `alRunnerCanaryWarnings`'s dynamic,
+ * measured-on-this-binary text instead (R7/R8 — see that module's doc comment for why a canary
+ * that re-proves the defect every session beats a warning frozen at 2026-07-25).
  *
  * Called ONCE per session from `runFromCli`, not from `buildBackend`: backends are constructed
  * once for the session plus once per worker, so warning at construction printed the same
@@ -897,6 +899,34 @@ export async function withEnvTeardown(
   }
 }
 
+/**
+ * R7/R8: prove — on the ACTUAL configured binary, every al-runner session — whether the two
+ * measured al-runner defects (asserterror never fails; a table object's own global var doesn't
+ * survive a trigger's write back out) are present on THIS machine's build, rather than
+ * repeating a claim frozen at the moment someone last measured it by hand. Only possible once
+ * `alRunnerPath` is known; if it isn't, `buildBackend` throws its own targeted "missing
+ * alRunnerPath" error moments later, and the static fallback (`warnAlRunnerNotAuthoritative`)
+ * covers that gap instead.
+ *
+ * Extracted out of `runFromCli` (rather than left inlined there) so this specific branch — which
+ * config field gates the canary vs. the fallback, and that the canary's own warnings actually
+ * reach `console.warn` — is directly testable without mocking `runFromCli`'s config-file I/O,
+ * `resolveEnvToolSession`, `buildBackend`, and `runSession` all at once (see cli.test.ts's own
+ * note on why it deliberately does not exercise `runFromCli` end to end).
+ */
+export async function announceAlRunnerCanary(
+  configFile: LethalConfigFile,
+  runCanary: typeof runAlRunnerCanary = runAlRunnerCanary,
+): Promise<void> {
+  const alRunnerPath = configFile.alRunner?.alRunnerPath;
+  if (alRunnerPath !== undefined) {
+    const canary = await runCanary(alRunnerPath);
+    for (const line of alRunnerCanaryWarnings(canary)) console.warn(line);
+  } else {
+    warnAlRunnerNotAuthoritative();
+  }
+}
+
 export async function runFromCli(
   parsed: RunCliConfig,
   deps: {
@@ -907,12 +937,15 @@ export async function runFromCli(
     // `backend.close()` failure) with a canned `SessionReport`, without needing a real backend/AL
     // project to produce one for real.
     runSession?: typeof runSession;
+    // R7/R8: injectable so a test can drive the al-runner canary's warning wiring below with a
+    // canned `AlRunnerCanaryResult`, without spawning a real al-runner process.
+    runAlRunnerCanary?: typeof runAlRunnerCanary;
   } = {},
 ): Promise<SessionReport> {
   const configFile = await loadLethalConfigFile(parsed.configPath);
   const scratchRoot = await mkdtemp(join(tmpdir(), "lethal-"));
   if (parsed.backendKind === "al-runner") {
-    warnAlRunnerNotAuthoritative();
+    await announceAlRunnerCanary(configFile, deps.runAlRunnerCanary ?? runAlRunnerCanary);
     // R18: `--keep-env`/`--allow-expiring-env` are refused OUTRIGHT for al-runner (parseCliConfig,
     // above) on the reasoning that a silent no-op is wrong — a whole configured `envTool` section
     // being silently ignored deserves at least the same treatment. Not refused outright (unlike

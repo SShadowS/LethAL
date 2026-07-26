@@ -3,8 +3,10 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ActivationConfig } from "../src/activation";
+import type { AlRunnerCanaryResult } from "../src/al-runner-canary";
 import type { BcDevConfigSection } from "../src/cli";
 import {
+  announceAlRunnerCanary,
   clearQuarantine,
   leaseSessionFor,
   odataBaseUrl,
@@ -611,5 +613,67 @@ describe("performForceResetLease (5C-B2)", () => {
       oldGeneration: liveGen,
       reason: "generation-changed",
     });
+  });
+});
+
+// ————————————————————————————————————————————————————————————————————————
+// R7/R8: `announceAlRunnerCanary` — the exact branch `runFromCli` takes for an al-runner
+// session, extracted so it's testable without mocking config-file I/O, resolveEnvToolSession,
+// buildBackend, and runSession all at once (see the `resourceIdentityFor` describe block above
+// for the same reasoning applied to an earlier fix). Reverting this branch to unconditionally
+// call the static `warnAlRunnerNotAuthoritative()` fallback (its pre-canary behaviour) would
+// fail every test below that asserts a canary-shaped line landed in `console.warn`.
+// ————————————————————————————————————————————————————————————————————————
+describe("announceAlRunnerCanary (R7/R8)", () => {
+  function fakeCanary(result: AlRunnerCanaryResult, calls: string[]) {
+    return async (alRunnerPath: string) => {
+      calls.push(alRunnerPath);
+      return result;
+    };
+  }
+
+  test("runs the canary and prints its warnings when alRunnerPath is configured", async () => {
+    const calls: string[] = [];
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = ((...args: unknown[]) => {
+      warnings.push(args.map(String).join(" "));
+    }) as typeof console.warn;
+    try {
+      await announceAlRunnerCanary(
+        { alRunner: { alRunnerPath: "C:/al-runner.exe" } },
+        fakeCanary(
+          { asserterror: "defect-confirmed", tableGlobalVar: "defect-not-reproduced" },
+          calls,
+        ),
+      );
+    } finally {
+      console.warn = originalWarn;
+    }
+    expect(calls).toEqual(["C:/al-runner.exe"]);
+    expect(warnings.some((l) => l.includes("R7") && l.includes("CONFIRMED"))).toBe(true);
+    expect(warnings.some((l) => l.includes("R8") && l.includes("did NOT"))).toBe(true);
+  });
+
+  test("falls back to the static warning WITHOUT running the canary when alRunnerPath is not yet configured", async () => {
+    const calls: string[] = [];
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = ((...args: unknown[]) => {
+      warnings.push(args.map(String).join(" "));
+    }) as typeof console.warn;
+    try {
+      await announceAlRunnerCanary(
+        {},
+        fakeCanary({ asserterror: "defect-confirmed", tableGlobalVar: "defect-confirmed" }, calls),
+      );
+    } finally {
+      console.warn = originalWarn;
+    }
+    // The canary must never run against an unconfigured/undefined path — buildBackend's own
+    // validateAlRunnerConfig throws the targeted "missing alRunnerPath" error moments later.
+    expect(calls).toEqual([]);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("al-runner is NOT authoritative");
   });
 });
