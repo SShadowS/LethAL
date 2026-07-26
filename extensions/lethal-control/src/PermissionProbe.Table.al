@@ -1,0 +1,49 @@
+namespace LethAL.Control;
+
+/// <summary>
+/// The permission canary's probe table (ROADMAP R26). Its SHAPE is irrelevant — one Code[20] key
+/// and nothing else. Its PERMISSION DECLARATION is the entire experiment.
+///
+/// ############################################################################################
+/// #  DO NOT ADD `InherentPermissions` TO THIS TABLE. THE OMISSION IS THE POINT OF THE OBJECT. #
+/// ############################################################################################
+///
+/// Every OTHER table in this extension — "LC Mutation Active" (71000), "LC Target Artifact
+/// Registry" (71001), "LC Lease" (71006) — declares `InherentPermissions = RIMD` deliberately:
+/// they are read and written by the control codeunits from an OData session running under the
+/// CALLING USER, who does not hold this extension's permission set (5C-A live spike). Each of
+/// those carries a comment saying so. This table is the one place in the extension where the
+/// ABSENCE of that line is load-bearing, so it will look — to a linter, a reviewer, or a future
+/// you skimming for inconsistency — exactly like an oversight. It is not.
+///
+/// MEASURED on this container (2026-07-26), not inferred: Microsoft's Permissions Mock (codeunit
+/// 131006, driven by "Test Runner - Mgt" 130454's `PlatformBeforeTestRun` ->
+/// `StartStopPermissionMock`) strips a test body's permissions, and under it a table WITHOUT
+/// `InherentPermissions` reports `read=No write=No` and its `Insert` fails with "Sorry, the
+/// current permissions prevented the action". It does so IDENTICALLY whether the table lives in
+/// the same extension as the running test codeunit or in a different one — there is no
+/// same-extension exemption; the presence or absence of `InherentPermissions` is what decides the
+/// outcome. Off the mock, the same probe reports `read=Yes write=Yes` and the `Insert` succeeds.
+///
+/// So "make this consistent with its siblings" would silently convert the canary into a probe that
+/// answers `not-mocked` on every server, forever: a permanently green light with nothing behind
+/// it, which is precisely the class of silent-wrong-answer this project exists to refuse. If you
+/// are convinced this table should match the others, delete the canary outright instead — at least
+/// then its absence is visible in the report rather than disguised as a clean result.
+/// </summary>
+table 71008 "LC Permission Probe"
+{
+    DataClassification = SystemMetadata;
+    DataPerCompany = false;
+    // NO InherentPermissions. See the summary above — this omission is the measurement.
+
+    fields
+    {
+        field(1; "Primary Key"; Code[20]) { }
+    }
+
+    keys
+    {
+        key(PK; "Primary Key") { Clustered = true; }
+    }
+}

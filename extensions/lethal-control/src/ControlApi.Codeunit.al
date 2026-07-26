@@ -318,6 +318,145 @@ codeunit 71003 "LC Control API"
         exit(BuildStatus('ran', TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, CodeunitResults, ObservedAny, IdentityMismatch, ''));
     end;
 
+    /// <summary>
+    /// OData action: the permission canary (ROADMAP R26). Answers ONE question about THIS server,
+    /// once per session — does the fenced test path strip a test body's permissions?
+    ///
+    /// WHY IT MATTERS. Microsoft's Permissions Mock (codeunit 131006, toggled by "Test Runner -
+    /// Mgt" 130454's `PlatformBeforeTestRun` -> `StartStopPermissionMock`) strips permissions from
+    /// a test body, but only on the FENCED path below and only when that Microsoft app is
+    /// installed; the dev-service path LethAL uses for baseline/coverage runs is unaffected. A test
+    /// that writes to its own app's tables therefore fails inside the fence only — its mutant lands
+    /// `error cause=unstable` and goes silently UNSCORED instead of killed — and since it depends on
+    /// an app being installed, the same project can score differently on two servers with nothing
+    /// in the report saying which world it ran in. This action is what makes that visible.
+    ///
+    /// IT MUST TRAVEL THE SAME PATH IT CHARACTERISES. The canary runs through "LC Run Method"
+    /// (71007) — the identical `Test Suite Mgt.RunAllTests` mechanism `RunMutant` phase 2 uses,
+    /// invoked through the same catchable `Codeunit.Run` boundary — not through a second,
+    /// convenient-looking route. A canary reached by a different path measures that path, not the
+    /// one mutants are scored on, and would be worse than no canary at all.
+    ///
+    /// NOT LEASE-FENCED, deliberately. Unlike `RunMutant` this takes no `(epoch, token,
+    /// serverGeneration, attemptId, opSeq)`: it activates no mutant, writes no control state, and
+    /// touches neither "LC Mutation Active" nor "LC Lease", so there is no claim for the op-marker
+    /// state machine to protect and nothing a mismatched tuple could corrupt. Taking a marker here
+    /// would only add a way to strand one. What the fence exists to serialise — concurrent use of
+    /// the platform test runner — is still respected: the CLIENT calls this once per session while
+    /// it already holds the lease (design §6 step 1), before any mutant runs.
+    ///
+    /// JSON: {verdict, observed, readPermission?, writePermission?, insertSucceeded?, detail?}.
+    /// `verdict` is one of 'mocked' | 'not-mocked' | 'inconclusive'. The three observation keys are
+    /// present ONLY when `observed` is true — omitted rather than defaulted to false, because
+    /// `readPermission:false, writePermission:false, insertSucceeded:false` is byte-identical to a
+    /// genuine 'mocked' observation, and a client reading defaults as measurements is exactly the
+    /// empty-result-reads-as-a-clean-one failure this codebase refuses to ship.
+    /// </summary>
+    procedure PermissionCanary() ResultJson: Text
+    var
+        State: Codeunit "LC Control State";
+        Runner: Codeunit "LC Run Method";
+        CanaryState: Codeunit "LC Permission Canary State";
+        RunError: Text;
+        CanRead: Boolean;
+        CanWrite: Boolean;
+        InsertOk: Boolean;
+    begin
+        // Cleared BEFORE dispatch, never after: `HasObservation()` is the proof that THIS run's
+        // test body reached its recording call, and a stale observation from an earlier call in
+        // this session would otherwise answer a confident verdict for a run that never happened.
+        CanaryState.ClearObservation();
+
+        Runner.SetRequest(State.NextSuiteName(), Codeunit::"LC Permission Canary", 'ProbeInherentPermissions');
+        if not Runner.Run() then
+            // Read immediately on the failing branch, before any other statement can clear it.
+            RunError := GetLastErrorText();
+
+        if not CanaryState.HasObservation() then
+            // The test body never recorded anything: the framework refused the run, the method
+            // could not be selected, or the body aborted before its recording call. INCONCLUSIVE —
+            // never 'not-mocked'. `LC Permission Canary`'s test method is written to complete
+            // normally in BOTH worlds (see its doc comment), so reaching here means something
+            // OTHER than the permission state went wrong, and the caller must be told that rather
+            // than handed the reassuring answer.
+            exit(BuildCanaryInconclusive(CanaryInconclusiveDetail(RunError, Runner.Results())));
+
+        CanRead := CanaryState.ReadAllowed();
+        CanWrite := CanaryState.WriteAllowed();
+        InsertOk := CanaryState.InsertSucceeded();
+        exit(BuildCanaryResult(CanRead, CanWrite, InsertOk, CanaryState.InsertErrorText()));
+    end;
+
+    /// <summary>The verdict mapping, from the two MEASURED worlds (2026-07-26, this container):
+    /// under the mock the probe reports read=No write=No and its Insert fails with "Sorry, the
+    /// current permissions prevented the action"; off the mock it reports read=Yes write=Yes and
+    /// the Insert succeeds.
+    ///
+    /// 'mocked' requires BOTH a refused write flag AND a failed insert. The failed insert is the
+    /// operationally decisive fact (it is exactly what makes a real test fail inside the fence);
+    /// `WritePermission` corroborates it, and demanding both keeps a plain insert failure for some
+    /// unrelated reason — a broken table, a disk error — from being reported as the permission
+    /// mock. 'not-mocked' demands the complete clean picture. Anything in between is a genuinely
+    /// mixed signal and is reported INCONCLUSIVE with the observation attached, never rounded to
+    /// whichever verdict is closer.</summary>
+    local procedure BuildCanaryResult(CanRead: Boolean; CanWrite: Boolean; InsertOk: Boolean; InsertError: Text): Text
+    var
+        Obj: JsonObject;
+        Out: Text;
+        Verdict: Text;
+        Detail: Text;
+    begin
+        if (not CanWrite) and (not InsertOk) then begin
+            Verdict := 'mocked';
+            Detail := InsertError;
+        end else
+            if CanRead and CanWrite and InsertOk then begin
+                Verdict := 'not-mocked';
+                Detail := '';
+            end else begin
+                Verdict := 'inconclusive';
+                Detail := StrSubstNo('mixed signal — read=%1 write=%2 insert=%3 error=%4', CanRead, CanWrite, InsertOk, InsertError);
+            end;
+
+        Obj.Add('verdict', Verdict);
+        Obj.Add('observed', true);
+        Obj.Add('readPermission', CanRead);
+        Obj.Add('writePermission', CanWrite);
+        Obj.Add('insertSucceeded', InsertOk);
+        if Detail <> '' then
+            Obj.Add('detail', Detail);
+        Obj.WriteTo(Out);
+        exit(Out);
+    end;
+
+    /// <summary>The no-observation exit. Carries `observed:false` and NO permission keys — see
+    /// `PermissionCanary`'s doc comment for why they are omitted rather than defaulted.</summary>
+    local procedure BuildCanaryInconclusive(Detail: Text): Text
+    var
+        Obj: JsonObject;
+        Out: Text;
+    begin
+        Obj.Add('verdict', 'inconclusive');
+        Obj.Add('observed', false);
+        Obj.Add('detail', Detail);
+        Obj.WriteTo(Out);
+        exit(Out);
+    end;
+
+    /// <summary>Whichever diagnostic actually exists for a no-observation run: the caught terminal
+    /// error text when `Runner.Run()` returned false, otherwise the runner's own result JSON (which
+    /// carries either the fail-closed {"error": ...} shape or the test line that did not reach the
+    /// recording call). Never both, never an empty string — an inconclusive verdict with no reason
+    /// attached is the thing an operator cannot act on.</summary>
+    local procedure CanaryInconclusiveDetail(RunError: Text; RunnerResults: Text): Text
+    begin
+        if RunError <> '' then
+            exit(StrSubstNo('the canary test recorded no observation; the fenced test run raised a terminal error: %1', RunError));
+        if RunnerResults <> '' then
+            exit(StrSubstNo('the canary test recorded no observation; the fenced test run returned: %1', RunnerResults));
+        exit('the canary test recorded no observation and the fenced test run returned no result at all');
+    end;
+
     /// <summary>Wraps a caught phase-2 terminal error in the SAME {"error": ...} codeunitResults shape
     /// RunOneMethod already uses for its own fail-closed path. Deliberately not a bare string and not a
     /// testResults array: a client parsing codeunitResults finds zero test lines and must classify it
