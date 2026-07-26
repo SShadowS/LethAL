@@ -144,9 +144,69 @@ export interface MutationSetResult {
   /** Every `.al` source file scanned (excluding emitted `Mutation*` artifacts) — the denominator
    *  for judging how much of the project `skipped` represents. */
   readonly totalFiles: number;
+  /**
+   * R41: `.al` files a `--only` glob excluded from spec generation. 0 when no `only` was given.
+   *
+   * A FILE count, not a site count, and deliberately so: knowing how many mutation sites the
+   * excluded files hold would mean generating their specs, which is the work `--only` exists to
+   * avoid. The report says "N files were not considered", never a number it did not measure.
+   */
+  readonly excludedByOnly: number;
 }
 
-export async function generateMutationSet(projectDir: string): Promise<MutationSetResult> {
+export interface MutationSetOptions {
+  /**
+   * R41: glob patterns naming which project files may contribute mutants. Absent (or empty) means
+   * the whole project, the behaviour before `--only` existed.
+   *
+   * Matched against each file's project-relative path with FORWARD slashes, whatever the
+   * platform's own separator is, so one pattern works from a config file or a CI script on any
+   * host. A pattern matching no file throws (see `generateMutationSet`) rather than quietly
+   * selecting nothing.
+   */
+  readonly only?: readonly string[];
+}
+
+/**
+ * R41: which project-relative paths a `--only` pattern set admits, with the "matches nothing"
+ * refusal. Separated from `generateMutationSet` so the decision is testable without parsing AL,
+ * and so the refusal happens BEFORE any file is read.
+ *
+ * Refusing an unmatched pattern is not pedantry. A typo'd `--only` that silently matched zero
+ * files would produce a run with 0 mutants, a null score and no failures — which reads as
+ * "nothing to fix" rather than "you named a directory that does not exist". Empty-vs-empty
+ * agreement is this project's signature silent-wrong-answer shape.
+ */
+function admittedByOnly(
+  relPaths: readonly string[],
+  only: readonly string[],
+): ReadonlySet<string> | undefined {
+  if (only.length === 0) return undefined;
+  const admitted = new Set<string>();
+  const unmatched: string[] = [];
+  for (const pattern of only) {
+    const glob = new Bun.Glob(pattern);
+    let matchedAny = false;
+    for (const rel of relPaths) {
+      if (glob.match(rel.replaceAll("\\", "/"))) {
+        admitted.add(rel);
+        matchedAny = true;
+      }
+    }
+    if (!matchedAny) unmatched.push(pattern);
+  }
+  if (unmatched.length > 0) {
+    throw new Error(
+      `--only matched no .al file for ${unmatched.length === 1 ? "pattern" : "patterns"} ${unmatched.map((p) => `"${p}"`).join(", ")}. Patterns are matched against project-relative paths using forward slashes (e.g. "Al/Codeunit/**"). Refusing rather than running with an empty mutant set, which would report a null score and read as "nothing to fix".`,
+    );
+  }
+  return admitted;
+}
+
+export async function generateMutationSet(
+  projectDir: string,
+  options: MutationSetOptions = {},
+): Promise<MutationSetResult> {
   await initParser();
   const files: InstrumentedFile[] = [];
   /** Files with >=1 spec that no selector var can be injected into — reported once, below. */
@@ -154,9 +214,14 @@ export async function generateMutationSet(projectDir: string): Promise<MutationS
   const entries = (await readdir(projectDir, { recursive: true }))
     .filter((e) => e.toLowerCase().endsWith(".al"))
     .filter((e) => !basename(e).startsWith("Mutation"));
-  // Pass 1: parse every file. Pass 2 (below) walks them against ONE context
-  // built over all of them — see this function's doc comment for why the
-  // context must be project-wide.
+  // R41: resolved BEFORE any file is read, so a typo'd pattern fails immediately rather than
+  // after a full parse. `undefined` means "no narrowing" — distinct from an empty set, which
+  // `admittedByOnly` refuses outright.
+  const admitted = admittedByOnly(entries, options.only ?? []);
+  // Pass 1: parse every file — INCLUDING files `--only` excluded. Pass 2 (below) walks them
+  // against ONE context built over all of them; see this function's doc comment for why the
+  // context must be project-wide, and note that narrowing the PARSE set instead of the
+  // spec-generation set would make `--only` change verdicts rather than just how many run.
   const parsed = await Promise.all(
     entries.sort().map(async (rel) => {
       const source = await readFile(join(projectDir, rel), "utf8");
@@ -165,7 +230,14 @@ export async function generateMutationSet(projectDir: string): Promise<MutationS
   );
   const ctx = buildSemanticContext(parsed.map(({ path, root }) => ({ path, root })));
 
+  let excludedByOnly = 0;
   for (const { path: rel, source, root } of parsed) {
+    // R41: excluded from MUTATION, not from the context above and not from the published app —
+    // `prepareBatchProject` still copies this file into the batch dir verbatim.
+    if (admitted !== undefined && !admitted.has(rel)) {
+      excludedByOnly++;
+      continue;
+    }
     // Built once per file (not per spec): a per-spec tree walk here would be
     // O(specs x nodes) on a file with many mutation sites. See
     // `buildSpanIndex`'s doc comment in @lethal/engine.
@@ -209,7 +281,12 @@ export async function generateMutationSet(projectDir: string): Promise<MutationS
       `[lethal] skipped ${skipped.length} file(s) holding ${total} mutation site(s): ${why}: ${detail}.`,
     );
   }
-  return { files, skipped, totalFiles: entries.length };
+  if (excludedByOnly > 0) {
+    console.warn(
+      `[lethal] --only narrowed this run to ${entries.length - excludedByOnly}/${entries.length} .al file(s); ${excludedByOnly} file(s) contributed no mutants. The score below covers the narrowed set ONLY — it is not a project score.`,
+    );
+  }
+  return { files, skipped, totalFiles: entries.length, excludedByOnly };
 }
 
 export interface SessionConfig {
@@ -221,6 +298,12 @@ export interface SessionConfig {
   readonly selectorIds: SelectorConfig;
   readonly baselineTimeoutMs?: number; // default 120000
   readonly skipKnownSurvivors?: boolean;
+  /**
+   * R41: glob patterns naming which project files may contribute mutants (`--only`). Absent means
+   * the whole project. See `MutationSetOptions.only` — the narrowing applies to spec generation
+   * only; every file is still parsed into the semantic context, still compiled, still published.
+   */
+  readonly only?: readonly string[];
   // createRun placeholder only. For an authoritative (publishing) backend, a successful deploy
   // corrects the run row via store.recordArtifact with the version actually compiled
   // (reserveAppVersion) — this value never survives past that point. For a deploy:"none" backend
@@ -1522,7 +1605,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     files: allFiles,
     skipped: notInstrumentedFiles,
     totalFiles: totalAlFiles,
-  } = await generateMutationSet(cfg.projectDir);
+    excludedByOnly,
+  } = await generateMutationSet(cfg.projectDir, cfg.only !== undefined ? { only: cfg.only } : {});
   const artifacts = planArtifacts(allFiles);
 
   const outcomes: SessionOutcome[] = []; // internal accumulation for the report
@@ -2238,6 +2322,13 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     unsupportedTests: [...unsupportedTestNames].sort(),
     notInstrumented: { totalFiles: totalAlFiles, files: notInstrumentedFiles },
     untargetedTriggerCount,
+    // R41: recorded whenever the run was narrowed, so the `--out` JSON carries the qualifier and
+    // not just the console line. Keyed on the request (`cfg.only`), not on `excludedByOnly > 0`:
+    // a pattern that happens to admit every file still narrowed the run by intent, and a reader
+    // comparing two reports must be able to see that this one was scoped.
+    ...(cfg.only !== undefined && cfg.only.length > 0
+      ? { only: { patterns: cfg.only, excludedFileCount: excludedByOnly } }
+      : {}),
     ...(safety.isUnsafe ? { quarantined: { reason: safety.reason ?? "unknown" } } : {}),
     ...(permissionCanary !== undefined ? { permissionCanary } : {}),
   });

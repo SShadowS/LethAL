@@ -226,6 +226,9 @@ export async function validateSelectorIdsForProject(
 export interface DryRunCliConfig {
   readonly mode: "dry-run";
   readonly projectDir: string;
+  /** R41: `--only` globs, absent when the run was not narrowed — see `RunCliConfig.only`.
+   *  Honoured here too, so the count a dry run reports is the count a real run would produce. */
+  readonly only?: readonly string[];
 }
 
 export interface RunCliConfig {
@@ -251,6 +254,17 @@ export interface RunCliConfig {
    * `lethal.config.json`'s `selectorIds` section and `DEFAULT_SELECTOR_IDS` by `resolveSelectorIds`.
    */
   readonly selectorIdOverrides?: Partial<SelectorConfig>;
+  /**
+   * R41: `--only <glob>` (repeatable) narrows which project files contribute mutants, so a large
+   * project has a cheap first run. Absent — not `[]` — when the flag was not given, matching this
+   * file's `exactOptionalPropertyTypes` convention and leaving every existing `parseCliConfig`
+   * equality test unaffected.
+   *
+   * Narrows MUTATION only. Every file is still parsed into the project-wide semantic context
+   * (without which the Tier-2 shadowing guard goes inert and verdicts change), still compiled, and
+   * still published. A pattern matching no file is refused — see `admittedByOnly`.
+   */
+  readonly only?: readonly string[];
 }
 
 /**
@@ -345,6 +359,8 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
       "selector-id": { type: "string" },
       "control-id": { type: "string" },
       "table-id": { type: "string" },
+      // R41: repeatable — several `--only` patterns union. See `RunCliConfig.only`.
+      only: { type: "string", multiple: true },
     },
   });
 
@@ -386,8 +402,17 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     throw new Error("missing required --project <dir>");
   }
 
+  // R41: an empty `--only ""` is a caller mistake that would otherwise reach `admittedByOnly` as
+  // a pattern matching nothing and be refused there with a less specific message. Reject at parse
+  // time, like every other flag value this file validates.
+  const onlyRaw = values.only;
+  if (onlyRaw?.some((p) => p === "") === true) {
+    throw new Error('--only requires a non-empty glob (e.g. --only "Al/Codeunit/**")');
+  }
+  const only = onlyRaw !== undefined && onlyRaw.length > 0 ? { only: onlyRaw } : {};
+
   if (values["dry-run"] === true) {
-    return { mode: "dry-run", projectDir };
+    return { mode: "dry-run", projectDir, ...only };
   }
 
   const testDir = values.tests;
@@ -481,6 +506,7 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     ...(values.out !== undefined ? { outPath: values.out } : {}),
     ...(compileConcurrency !== undefined ? { compileConcurrency } : {}),
     ...(Object.keys(selectorIdOverrides).length > 0 ? { selectorIdOverrides } : {}),
+    ...only,
   };
 }
 
@@ -1078,14 +1104,24 @@ function sitesOf(files: readonly InstrumentedFile[]) {
  * `runSession` uses to decide how many artifacts to compile and deploy — so
  * this can never report a number `runSession` wouldn't actually produce.
  */
-async function printDryRun(projectDir: string): Promise<void> {
-  const { files, skipped, totalFiles } = await generateMutationSet(projectDir);
+async function printDryRun(projectDir: string, only?: readonly string[]): Promise<void> {
+  // R41: `--only` is honoured here too. A dry run whose whole purpose is "how big is this going to
+  // be" would be worse than useless if it answered for the unnarrowed project.
+  const { files, skipped, totalFiles, excludedByOnly } = await generateMutationSet(
+    projectDir,
+    only !== undefined ? { only } : {},
+  );
   const sites = sitesOf(files);
   const artifacts = planArtifacts(files);
 
   console.log(
     `dry run: ${files.length} file(s), ${sites.length} mutant site(s), ${artifacts.length} batch(es)`,
   );
+  if (only !== undefined && only.length > 0) {
+    console.log(
+      `narrowed by --only ${only.map((p) => `"${p}"`).join(", ")}: ${excludedByOnly} of ${totalFiles} .al file(s) excluded from mutation (still parsed, compiled and published)`,
+    );
+  }
   for (const [i, artifact] of artifacts.entries()) {
     const artifactSites = sitesOf(artifact);
     console.log(`\nbatch ${i} (${artifactSites.length} mutant site(s)):`);
@@ -1362,6 +1398,7 @@ export async function runFromCli(
         selectorIds,
         skipKnownSurvivors: parsed.skipKnownSurvivors,
         workers: parsed.workers,
+        ...(parsed.only !== undefined ? { only: parsed.only } : {}),
         ...(parsed.compileConcurrency !== undefined
           ? { compileConcurrency: parsed.compileConcurrency }
           : {}),
@@ -1574,7 +1611,7 @@ async function forceResetLeaseFromCli(parsed: ForceResetLeaseCliConfig): Promise
 async function main(): Promise<number> {
   const parsed = parseCliConfig(process.argv.slice(2));
   if (parsed.mode === "dry-run") {
-    await printDryRun(parsed.projectDir);
+    await printDryRun(parsed.projectDir, parsed.only);
     return 0;
   }
   if (parsed.mode === "clear-quarantine") {
