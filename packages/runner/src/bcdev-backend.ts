@@ -25,7 +25,7 @@ import type { DeploymentVerifier } from "./deployment-verifier";
 import { CONTROL_APP_ID } from "./harness";
 import type { HarnessVerifier } from "./harness";
 import type { Lease } from "./lease";
-import type { ContainerDeployer } from "./publisher";
+import type { AppPublisher } from "./publisher";
 import type { RunMutantTransport } from "./run-mutant-transport";
 
 export interface BcDevConfig {
@@ -105,7 +105,7 @@ const WIRE_STATUS_TO_OUTCOME = {
  */
 export interface BcDevDeployment {
   readonly compiler: ArtifactCompiler;
-  readonly deployer: ContainerDeployer;
+  readonly deployer: AppPublisher;
   readonly verifier: DeploymentVerifier;
   readonly harnessVerifier: HarnessVerifier;
 }

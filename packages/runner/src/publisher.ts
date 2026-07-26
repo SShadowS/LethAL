@@ -31,6 +31,15 @@ const bunSpawn: SpawnFn = async (argv, opts) => {
 export const defaultSpawn = bunSpawn;
 
 /**
+ * The publish half of a deployment channel. `ContainerDeployer` (altool against a container) and
+ * `EnvToolPublisher` (an external environment CLI) both satisfy it, so `BcDevDeployment` can name
+ * the contract rather than one implementation.
+ */
+export interface AppPublisher {
+  publish(artifact: CompiledArtifact): Promise<void>;
+}
+
+/**
  * Config for `ContainerDeployer.publish()` — only the fields that concern shipping an
  * already-compiled artifact to a BC server (see `ArtifactCompilerConfig` in artifact.ts for
  * the compile-side half), so a publish-only caller doesn't need to know about
@@ -67,7 +76,7 @@ export const defaultDeployerIo: ContainerDeployerIo = {
  * `ArtifactCompiler` produced, not something that changed underneath it between compile and
  * publish.
  */
-export class ContainerDeployer {
+export class ContainerDeployer implements AppPublisher {
   constructor(
     private readonly cfg: ContainerDeployerConfig,
     private readonly io: ContainerDeployerIo,
