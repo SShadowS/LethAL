@@ -11,6 +11,7 @@
     "@lethal/engine": "workspace:*",
     "@lethal/schemata": "workspace:*",
     "@lethal/builtin-tier1": "workspace:*",
+    "@lethal/builtin-tier2": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.12.0"
   },
   "devDependencies": {

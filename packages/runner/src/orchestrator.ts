@@ -2,7 +2,9 @@ import { access, copyFile, readFile, readdir, rm, writeFile } from "node:fs/prom
 import { homedir, hostname } from "node:os";
 import { basename, join } from "node:path";
 import { tier1Operators } from "@lethal/builtin-tier1";
+import { tier2Operators } from "@lethal/builtin-tier2";
 import {
+  type MutationOperator,
   type MutationSpec,
   buildSemanticContext,
   buildSpanIndex,
@@ -70,20 +72,32 @@ const BASELINE_TIMEOUT_DEFAULT = 120_000;
 export const MIN_MUTANT_BUDGET_MS = 30_000;
 
 /**
+ * Every currently registered operator across all tiers, in registration order. The single source
+ * both `operatorTiers` (below) and `generateMutationSet`'s tree walk read, so a Tier-2 operator
+ * registered in `@lethal/builtin-tier2` needs no second wiring edit here when it lands — it is
+ * empty today (docs/superpowers/plans/2026-07-26-tier2-phase1.md, Task 1) and stays a no-op for
+ * both consumers until then.
+ */
+const allOperators: readonly MutationOperator[] = [...tier1Operators, ...tier2Operators];
+
+/**
  * Tier of every currently registered operator, keyed by name — the mapping
  * `writeInstrumentedProject` needs to resolve Tier-2 narrowings of a Tier-1
- * operator (`dedupeSpecs` in `@lethal/schemata`). Built once from the same
- * `tier1Operators` import `generateMutationSet` walks, so a mutant's identity
- * after dedup can never diverge between the two — see `manifestMutants` in
+ * operator (`dedupeSpecs` in `@lethal/schemata`). `dedupeSpecs`'s `TierResolver`
+ * throws on an unregistered operator by design (an unknown tier makes a
+ * collision winner depend on registration order), so every operator whose specs
+ * can reach dedup must have an entry here. Built once from the same
+ * `allOperators` list `generateMutationSet` walks, so a mutant's identity after
+ * dedup can never diverge between the two — see `manifestMutants` in
  * `orchestrator.test.ts` for a caller that leans on that parity.
  */
 export const operatorTiers: ReadonlyMap<string, 1 | 2 | 3 | "custom"> = new Map(
-  tier1Operators.map((op) => [op.name, op.tier]),
+  allOperators.map((op) => [op.name, op.tier]),
 );
 
 /**
  * Parse every `.al` file under `projectDir` (skipping emitted `Mutation*`
- * artifacts) and run the Tier 1 operator set over each. Mirrors the
+ * artifacts) and run every registered operator (all tiers) over each. Mirrors the
  * ops -> compile -> write pipeline exercised by
  * `packages/builtin-tier1/tests/end-to-end.test.ts`: build a per-file
  * semantic context, walk the tree, and collect every spec each operator
@@ -136,7 +150,7 @@ export async function generateMutationSet(projectDir: string): Promise<MutationS
     const spanIndex = buildSpanIndex(root);
     const specs: MutationSpec[] = [];
     visit(root, (node) => {
-      for (const op of tier1Operators) {
+      for (const op of allOperators) {
         if (op.targets(node, ctx)) {
           for (const spec of op.generate(node, ctx)) {
             // Reject specs whose `before` isn't a real node in this file's
