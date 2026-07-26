@@ -63,6 +63,25 @@ export interface PermissionCanaryResult {
   readonly readPermission?: boolean;
   readonly writePermission?: boolean;
   readonly insertSucceeded?: boolean;
+  /**
+   * The ATTRIBUTION context, measured server-side OUTSIDE the fence before the test ran, so it does
+   * not depend on the test having worked and is present on every conclusive verdict (and on any
+   * inconclusive one the server itself produced).
+   *
+   * `baselineWritePermission` is what stops a `"mocked"` verdict being unfalsifiable: the probe
+   * table has no `InherentPermissions`, so ANY reason this session lacks write on it yields a
+   * refused insert. If write is already absent outside the fence, the in-fence refusal says nothing
+   * about the mock — the calling user simply does not hold the extension's permission set (the 5C-A
+   * finding the sibling tables carry `InherentPermissions = RIMD` to work around), and the server
+   * reports `"inconclusive"` rather than a permanently-red `"mocked"`.
+   *
+   * `mockInstalled` answers the question a `"mocked"` verdict actually claims: is codeunit 131006
+   * ("Permissions Mock") even on this server? Read the same way `Test Runner - Mgt`'s own
+   * `StartStopPermissionMock` reads it.
+   */
+  readonly baselineReadPermission?: boolean;
+  readonly baselineWritePermission?: boolean;
+  readonly mockInstalled?: boolean;
   /** The refused-insert error text (on `"mocked"`), or why the verdict is inconclusive. */
   readonly detail?: string;
 }
@@ -199,13 +218,29 @@ function inconclusive(detail: string): PermissionCanaryResult {
  * Runs the canary once and maps the response to a verdict. NEVER throws, and never returns
  * `"not-mocked"` for anything it did not positively measure.
  *
- * The server owns the verdict decision (`ControlApi.Codeunit.al`'s `BuildCanaryResult`) — this
- * does NOT recompute it from the observation, which would be a second copy of the mapping free to
- * drift from the first. What it DOES enforce is internal consistency: a conclusive verdict must
- * arrive with `observed: true` and all three observation booleans present. A response claiming
- * `"not-mocked"` while reporting nothing observed is a protocol violation, and reporting it as a
- * clean result would be precisely the "empty result reads as a good one" failure this module
- * exists to prevent — so it is demoted to inconclusive with the offending payload attached.
+ * The server owns the verdict DECISION (`ControlApi.Codeunit.al`'s `BuildCanaryResult`) — this does
+ * not re-derive a verdict from the observation, and it never converts one verdict into the other.
+ * What it enforces, in two layers, is that the payload actually SUPPORTS the verdict it asserts;
+ * every failure demotes to `"inconclusive"`, nothing else:
+ *
+ * 1. COMPLETENESS — a conclusive verdict must arrive with `observed: true`, all three in-fence
+ *    observation booleans, and the attribution context (`baselineRead/WritePermission`,
+ *    `mockInstalled`). A claim reporting nothing observed is a protocol violation, and reading it
+ *    as a clean result is the "empty result reads as a good one" failure this module exists to
+ *    prevent. (An older control app that predates the attribution keys fails here too, and
+ *    correctly: it cannot substantiate the claim it is making.)
+ * 2. COHERENCE — the values must be the ones that verdict is defined by. Without this, a payload
+ *    saying `{verdict:"not-mocked", readPermission:false, writePermission:false,
+ *    insertSucceeded:false, detail:"Sorry, the current permissions prevented the action."}` sailed
+ *    through and printed "reported read and write permission and a real insert succeeded", dropping
+ *    the refusal on the floor — a reviewer ran exactly that. So `"not-mocked"` must carry
+ *    read && write && insert, `"mocked"` must carry a refused write, an insert that did not
+ *    complete, and an installed mock, and both must sit on a baseline that could write at all.
+ *
+ * This is a re-check of the server's CLAIM, not a second copy of its mapping: it asserts only the
+ * conjunctions `BuildCanaryResult` already gates each verdict on. If the AL rule ever legitimately
+ * loosens, this starts demoting to inconclusive — loud, safe, and covered by tests, rather than
+ * silently disagreeing.
  */
 export async function runPermissionCanary(
   probe: PermissionCanaryProbe,
@@ -237,14 +272,35 @@ export async function runPermissionCanary(
   const readPermission = json.readPermission;
   const writePermission = json.writePermission;
   const insertSucceeded = json.insertSucceeded;
+  const baselineReadPermission = json.baselineReadPermission;
+  const baselineWritePermission = json.baselineWritePermission;
+  const mockInstalled = json.mockInstalled;
   if (
     observed !== true ||
     typeof readPermission !== "boolean" ||
     typeof writePermission !== "boolean" ||
-    typeof insertSucceeded !== "boolean"
+    typeof insertSucceeded !== "boolean" ||
+    typeof baselineReadPermission !== "boolean" ||
+    typeof baselineWritePermission !== "boolean" ||
+    typeof mockInstalled !== "boolean"
   ) {
     return inconclusive(
-      `permission canary reported "${verdict}" without a complete observation (observed/readPermission/writePermission/insertSucceeded): ${JSON.stringify(json)}`,
+      `permission canary reported "${verdict}" without a complete observation (observed/readPermission/writePermission/insertSucceeded/baselineReadPermission/baselineWritePermission/mockInstalled): ${JSON.stringify(json)}`,
+    );
+  }
+
+  // COHERENCE (see this function's doc comment). Only ever demotes to "inconclusive" — a payload
+  // whose values contradict its own verdict is not evidence for the OTHER verdict either.
+  const incoherence = describeIncoherence(verdict, {
+    readPermission,
+    writePermission,
+    insertSucceeded,
+    baselineWritePermission,
+    mockInstalled,
+  });
+  if (incoherence !== undefined) {
+    return inconclusive(
+      `permission canary reported "${verdict}" on a payload that does not support it (${incoherence}): ${JSON.stringify(json)}`,
     );
   }
 
@@ -253,8 +309,53 @@ export async function runPermissionCanary(
     readPermission,
     writePermission,
     insertSucceeded,
+    baselineReadPermission,
+    baselineWritePermission,
+    mockInstalled,
     ...(detail !== undefined ? { detail } : {}),
   };
+}
+
+/**
+ * Names the FIRST way a conclusive payload contradicts its own verdict, or `undefined` when it is
+ * coherent. Returns a reason string rather than a bare boolean so the demotion says what was wrong
+ * — an inconclusive verdict whose detail does not identify the contradiction is one nobody can act
+ * on, and this particular contradiction means either the server or this client is buggy, which an
+ * operator needs to be able to tell.
+ */
+function describeIncoherence(
+  verdict: "mocked" | "not-mocked",
+  o: {
+    readPermission: boolean;
+    writePermission: boolean;
+    insertSucceeded: boolean;
+    baselineWritePermission: boolean;
+    mockInstalled: boolean;
+  },
+): string | undefined {
+  // Both verdicts are only meaningful on a session that could write the probe OUTSIDE the fence;
+  // the server gates on this first, so a conclusive verdict without it is self-contradictory.
+  if (!o.baselineWritePermission) {
+    return "the out-of-fence baseline reports no write permission, so nothing measured inside the fence can be attributed to the test path";
+  }
+
+  if (verdict === "not-mocked") {
+    if (!(o.readPermission && o.writePermission && o.insertSucceeded)) {
+      return `"not-mocked" requires read, write and a completed insert, got read=${o.readPermission} write=${o.writePermission} insert=${o.insertSucceeded}`;
+    }
+    return undefined;
+  }
+  if (o.insertSucceeded) {
+    return '"mocked" requires an insert that did NOT complete, but the payload reports insertSucceeded=true';
+  }
+  if (o.writePermission) {
+    return '"mocked" requires a refused write flag, but the payload reports writePermission=true';
+  }
+  if (!o.mockInstalled) {
+    return '"mocked" names codeunit 131006 as the cause, but the payload reports mockInstalled=false';
+  }
+
+  return undefined;
 }
 
 /**
@@ -268,23 +369,31 @@ export async function runPermissionCanary(
 export function permissionCanaryWarnings(result: PermissionCanaryResult): string[] {
   if (result.verdict === "mocked") {
     const confirmed =
-      "[lethal] permission canary CONFIRMED on this run (R26): Microsoft's Permissions Mock is " +
-      "active on the fenced test path — a test body here runs WITHOUT permission to write its " +
-      "own app's tables. Any test that writes to a table lacking InherentPermissions fails " +
-      "inside the fence only, so its mutant is recorded `error cause=unstable` and is SILENTLY " +
-      "UNSCORED rather than killed. Scores from this server are not comparable with scores " +
-      "from one where the canary reports not-mocked";
+      "[lethal] permission canary CONFIRMED on this run (R26): Microsoft's Permissions Mock " +
+      "(codeunit 131006) is installed on this server AND the fenced test path strips permissions " +
+      "— a test body here runs WITHOUT permission to write its own app's tables, while the same " +
+      "session CAN write them outside the fence. Any test that writes to a table lacking " +
+      "InherentPermissions fails inside the fence only, so its mutant is recorded " +
+      "`error cause=unstable` and is SILENTLY UNSCORED rather than killed. Scores from this " +
+      "server are not comparable with scores from one where the canary reports not-mocked";
     const refusal =
       result.detail !== undefined ? ` (probe insert was refused: ${result.detail})` : "";
     return [`${confirmed}${refusal}`];
   }
   if (result.verdict === "not-mocked") {
-    return [
+    const clean =
       "[lethal] permission canary (R26): the fenced test path does NOT strip permissions on this " +
-        "server — the probe table reported read and write permission and a real insert succeeded " +
-        "inside a test body. Mutants killable only by a test that writes to its own app's tables " +
-        "are scored normally here.",
-    ];
+      "server — the probe table reported read and write permission and a real insert succeeded " +
+      "inside a test body. Mutants killable only by a test that writes to its own app's tables " +
+      "are scored normally here.";
+    // Worth saying out loud: the mock app being PRESENT while the path stays clean is the one
+    // combination that would otherwise look like the canary contradicting itself, and it is the
+    // configuration most likely to change under someone's feet.
+    const installed =
+      result.mockInstalled === true
+        ? " (codeunit 131006 IS installed here but is not stripping this path — if that ever changes, this verdict will flip)"
+        : "";
+    return [`${clean}${installed}`];
   }
   const undetermined =
     "[lethal] permission canary could not determine (R26) whether the fenced test path strips a " +

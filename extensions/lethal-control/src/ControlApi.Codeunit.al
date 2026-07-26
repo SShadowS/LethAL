@@ -1,5 +1,7 @@
 namespace LethAL.Control;
 
+using System.Reflection;
+
 /// <summary>The OData-exposed control surface (registered as a web service by the install codeunit;
 /// procedures are OData V4 unbound actions /ODataV4/LethALControl_&lt;Proc&gt;). Layer 5C-A.</summary>
 codeunit 71003 "LC Control API"
@@ -357,15 +359,40 @@ codeunit 71003 "LC Control API"
     /// two-stage observation on "LC Permission Canary State" is, and the failing line's message is
     /// only used as human-readable `detail`.
     ///
-    /// JSON: {verdict, observed, readPermission?, writePermission?, insertSucceeded?, detail?}.
-    /// `verdict` is one of 'mocked' | 'not-mocked' | 'inconclusive'. The three observation keys are
-    /// present ONLY when `observed` is true — omitted rather than defaulted to false, because
+    /// A REFUSED WRITE IS NOT BY ITSELF EVIDENCE OF THE MOCK, and two extra facts are gathered so
+    /// the verdict can actually mean what it says:
+    ///
+    /// 1. THE OUT-OF-FENCE BASELINE. "LC Permission Probe" has no `InherentPermissions`, so ANY
+    ///    reason this session lacks write on it produces `write=false` + a refused insert. That is
+    ///    not hypothetical on this codebase: `MutationActive.Table.al` and `Lease.Table.al` both
+    ///    record WHY their tables declare `InherentPermissions = RIMD` — the 5C-A live spike found
+    ///    the OData session runs under the CALLING USER, who does not hold this extension's
+    ///    permission set. On such a container the probe is unwritable everywhere, and a canary that
+    ///    only looked inside the fence would become a permanently-RED light: the exact mirror of the
+    ///    permanently-green hazard the probe table's own comment guards against, sending operators
+    ///    hunting for an app that is not installed. So the same two flags are read HERE, outside the
+    ///    fence, in the same session and as the same user, BEFORE the test runs. If the baseline
+    ///    already says no write, the in-fence refusal is unattributable and the answer is
+    ///    'inconclusive' saying precisely that.
+    /// 2. WHETHER THE MOCK IS EVEN INSTALLED. `AllObj` is asked for codeunit 131006, mirroring
+    ///    Microsoft's own `StartStopPermissionMock` guard (and the R1 investigation probe in
+    ///    `scripts/r1-probe/`). A refusal on a server that does not have the mock app is caused by
+    ///    something else, and must not be reported as the mock.
+    ///
+    /// JSON: {verdict, observed, baselineReadPermission, baselineWritePermission, mockInstalled,
+    /// readPermission?, writePermission?, insertSucceeded?, detail?}. `verdict` is one of
+    /// 'mocked' | 'not-mocked' | 'inconclusive'. The three IN-FENCE observation keys are present
+    /// ONLY when `observed` is true — omitted rather than defaulted to false, because
     /// `readPermission:false, writePermission:false, insertSucceeded:false` is byte-identical to a
     /// genuine 'mocked' observation, and a client reading defaults as measurements is exactly the
-    /// empty-result-reads-as-a-clean-one failure this codebase refuses to ship.
+    /// empty-result-reads-as-a-clean-one failure this codebase refuses to ship. The two baseline
+    /// keys and `mockInstalled` are ALWAYS present: they are measured before the test runs and do
+    /// not depend on it having worked, so withholding them would hide the very context that makes an
+    /// inconclusive verdict actionable.
     /// </summary>
     procedure PermissionCanary() ResultJson: Text
     var
+        Probe: Record "LC Permission Probe";
         State: Codeunit "LC Control State";
         Runner: Codeunit "LC Run Method";
         CanaryState: Codeunit "LC Permission Canary State";
@@ -374,20 +401,33 @@ codeunit 71003 "LC Control API"
         TestMessage: Text;
         TestResult: Integer;
         HaveTestLine: Boolean;
+        BaselineRead: Boolean;
+        BaselineWrite: Boolean;
+        MockInstalled: Boolean;
         CanRead: Boolean;
         CanWrite: Boolean;
         InsertOk: Boolean;
     begin
+        // Read OUTSIDE the fence, before anything runs — this is the attribution baseline (see the
+        // doc comment): the same flags, same session, same user, with no test runner involved.
+        BaselineRead := Probe.ReadPermission();
+        BaselineWrite := Probe.WritePermission();
+        MockInstalled := PermissionsMockInstalled();
+
         // Cleared BEFORE dispatch, never after: `HasObservation()` is the proof that THIS run's
         // test body reached its first recording call, and a stale observation from an earlier call
         // in this session would otherwise answer a confident verdict for a run that never happened.
         CanaryState.ClearObservation();
 
-        Runner.SetRequest(State.NextSuiteName(), Codeunit::"LC Permission Canary", 'ProbeInherentPermissions');
-        if not Runner.Run() then
+        Runner.SetRequest(State.NextSuiteName(), Codeunit::"LC Permission Canary", CanaryTestMethodName());
+        // `Results()` is meaningful ONLY when Run() returned true — `LC Run Method` says so
+        // explicitly, and `RunMutant` phase 2 already branches exactly this way. Reading it
+        // unconditionally would quote a stale/blank result as though it were this run's.
+        if Runner.Run() then
+            RunnerResults := Runner.Results()
+        else
             // Read immediately on the failing branch, before any other statement can clear it.
             RunError := GetLastErrorText();
-        RunnerResults := Runner.Results();
         HaveTestLine := ReadCanaryTestLine(RunnerResults, TestMessage, TestResult);
 
         if not CanaryState.HasObservation() then
@@ -396,7 +436,7 @@ codeunit 71003 "LC Control API"
             // never 'not-mocked'. Stage 1 precedes every operation that can fail on permissions, so
             // reaching here means something OTHER than the permission state went wrong, and the
             // caller must be told that rather than handed the reassuring answer.
-            exit(BuildCanaryInconclusive(CanaryInconclusiveDetail(RunError, RunnerResults)));
+            exit(BuildCanaryInconclusive(BaselineRead, BaselineWrite, MockInstalled, CanaryInconclusiveDetail(RunError, RunnerResults)));
 
         CanRead := CanaryState.ReadAllowed();
         CanWrite := CanaryState.WriteAllowed();
@@ -409,21 +449,46 @@ codeunit 71003 "LC Control API"
         // "the canary is not on the path it thinks it is on" defect that produced a confident,
         // meaningless answer last time. Refuse to rule on it.
         if (not InsertOk) and HaveTestLine and (TestResult = TestResultSuccess()) then
-            exit(BuildCanaryInconclusive(
+            exit(BuildCanaryInconclusive(BaselineRead, BaselineWrite, MockInstalled,
                 StrSubstNo('the canary test reported SUCCESS yet never reached its post-insert recording call — the test framework did not execute the body this canary assumes. Runner result: %1', RunnerResults)));
 
-        exit(BuildCanaryResult(CanRead, CanWrite, InsertOk, CanaryRefusalDetail(InsertOk, HaveTestLine, TestMessage, RunnerResults)));
+        exit(BuildCanaryResult(BaselineRead, BaselineWrite, MockInstalled, CanRead, CanWrite, InsertOk,
+            CanaryRefusalDetail(InsertOk, RunError, HaveTestLine, TestMessage, RunnerResults)));
     end;
 
-    /// <summary>The refused-write diagnostic. There is no `GetLastErrorText()` to read — the write
-    /// is plain and aborts the test method — so the text comes from the framework's own record of
-    /// that failure, which is where BC put it. Falls back to the whole runner result rather than to
-    /// an empty string: an inconclusive-looking verdict with no reason attached is the one an
-    /// operator cannot act on.</summary>
-    local procedure CanaryRefusalDetail(InsertOk: Boolean; HaveTestLine: Boolean; TestMessage: Text; RunnerResults: Text): Text
+    /// <summary>Is Microsoft's "Permissions Mock" (codeunit 131006) present on this server? Mirrors
+    /// the guard `Test Runner - Mgt`'s own `StartStopPermissionMock` uses to decide whether to
+    /// toggle it at all, so this answers the same question the platform asks itself — and it is the
+    /// difference between reporting "the write was refused" and reporting "the write was refused AND
+    /// the thing that refuses it is installed here", which is what a 'mocked' verdict claims.</summary>
+    local procedure PermissionsMockInstalled(): Boolean
+    var
+        AllObj: Record AllObj;
+    begin
+        AllObj.SetRange("Object Type", AllObj."Object Type"::Codeunit);
+        AllObj.SetRange("Object ID", PermissionsMockCodeunitId());
+        exit(not AllObj.IsEmpty());
+    end;
+
+    /// <summary>Microsoft's "Permissions Mock" codeunit id. Named rather than written as a bare
+    /// literal so it is greppable against the doc comments that cite it.</summary>
+    local procedure PermissionsMockCodeunitId(): Integer
+    begin
+        exit(131006);
+    end;
+
+    /// <summary>The refused-write diagnostic, in order of how directly it explains the refusal: a
+    /// caught terminal error from the run itself (the ONLY diagnostic that exists on that path —
+    /// `Results()` is meaningless there, so dropping `RunError` here would discard the sole piece of
+    /// evidence for a run that failed AFTER stage 1 recorded), then the framework's own record of
+    /// the failing test line, then the whole runner result. Never an empty string: an inconclusive-
+    /// looking verdict with no reason attached is the one an operator cannot act on.</summary>
+    local procedure CanaryRefusalDetail(InsertOk: Boolean; RunError: Text; HaveTestLine: Boolean; TestMessage: Text; RunnerResults: Text): Text
     begin
         if InsertOk then
             exit('');
+        if RunError <> '' then
+            exit(StrSubstNo('the fenced test run raised a terminal error: %1', RunError));
         if HaveTestLine and (TestMessage <> '') then
             exit(TestMessage);
         exit(StrSubstNo('the probe insert did not complete and the test framework reported no message; runner result: %1', RunnerResults));
@@ -440,10 +505,17 @@ codeunit 71003 "LC Control API"
 
     /// <summary>Reads the single test line out of `LC Run Method`'s result JSON — the SAME
     /// `Test Suite Mgt.TestResultsToJSON` shape `run-mutant-transport.ts` parses for every mutant
-    /// ({testResults:[{method, result, message, stackTrace}]}), not a new format. Returns false,
-    /// leaving the outputs untouched, for anything that is not exactly that shape (including the
-    /// fail-closed {"error": ...} payload `RunOneMethod` produces): a caller that cannot read a
-    /// test line must not act as though it read one.</summary>
+    /// ({testResults:[{method, result, message, stackTrace}]}), not a new format.
+    ///
+    /// It holds itself to that contract's FULL strictness, exactly as the TS side does: EXACTLY ONE
+    /// element, and that element's `method` must be the canary's own. Taking index 0 and trusting it
+    /// is harmless only while codeunit 71010 declares a single [Test]; the moment a second one is
+    /// added, the consistency guard above would read a foreign line and quote the wrong message —
+    /// a fail-closed check today is cheaper than the confusing verdict that would produce.
+    ///
+    /// Returns false, leaving the outputs untouched, for anything that is not exactly that shape
+    /// (including the fail-closed {"error": ...} payload `RunOneMethod` produces): a caller that
+    /// cannot read a test line must not act as though it read one.</summary>
     local procedure ReadCanaryTestLine(ResultsJson: Text; var TestMessage: Text; var TestResult: Integer): Boolean
     var
         Root: JsonObject;
@@ -462,11 +534,21 @@ codeunit 71003 "LC Control API"
             exit(false);
         if not ResultsTok.IsArray() then
             exit(false);
+        // Exactly one — never "at least one". A different count means the suite did not hold only
+        // the method this canary asked for, so no line in it can be trusted to be that method's.
+        if ResultsTok.AsArray().Count() <> 1 then
+            exit(false);
         if not ResultsTok.AsArray().Get(0, LineTok) then
             exit(false);
         if not LineTok.IsObject() then
             exit(false);
         LineObj := LineTok.AsObject();
+        if not LineObj.Get('method', FieldTok) then
+            exit(false);
+        if not FieldTok.IsValue() then
+            exit(false);
+        if FieldTok.AsValue().AsText() <> CanaryTestMethodName() then
+            exit(false);
         if LineObj.Get('result', FieldTok) then
             if FieldTok.IsValue() then
                 TestResult := FieldTok.AsValue().AsInteger();
@@ -474,6 +556,13 @@ codeunit 71003 "LC Control API"
             if FieldTok.IsValue() then
                 TestMessage := FieldTok.AsValue().AsText();
         exit(true);
+    end;
+
+    /// <summary>The one canary test method's name. Defined once so the dispatch above and the
+    /// echoed-line check in `ReadCanaryTestLine` can never name different methods.</summary>
+    local procedure CanaryTestMethodName(): Text
+    begin
+        exit('ProbeInherentPermissions');
     end;
 
     /// <summary>The verdict mapping, from the two MEASURED worlds: under the mock a plain `Insert`
@@ -490,28 +579,49 @@ codeunit 71003 "LC Control API"
     /// `WritePermission` alone would have dodged the platform error rather than fixed it.
     /// 'not-mocked' demands the complete clean picture. Anything in between is a genuinely mixed
     /// signal and is reported INCONCLUSIVE with the observation attached, never rounded to
-    /// whichever verdict is closer.</summary>
-    local procedure BuildCanaryResult(CanRead: Boolean; CanWrite: Boolean; InsertOk: Boolean; RefusalDetail: Text): Text
+    /// whichever verdict is closer.
+    ///
+    /// TWO ATTRIBUTION GATES run BEFORE that mapping, and both can only ever produce 'inconclusive'
+    /// (see this action's doc comment for why each exists):
+    ///
+    /// - No write permission on the probe OUTSIDE the fence either. The refusal then has nothing to
+    ///   do with the test path — the whole session lacks the permission, which is exactly the 5C-A
+    ///   calling-user gap its sibling tables carry `InherentPermissions = RIMD` to work around. The
+    ///   canary cannot measure anything on such a container and says so, instead of reporting a
+    ///   permanent 'mocked'.
+    /// - The mock is not installed. A write refused inside the fence on a server with no codeunit
+    ///   131006 was refused by something else; naming the mock would be a guess.</summary>
+    local procedure BuildCanaryResult(BaselineRead: Boolean; BaselineWrite: Boolean; MockInstalled: Boolean; CanRead: Boolean; CanWrite: Boolean; InsertOk: Boolean; RefusalDetail: Text): Text
     var
         Obj: JsonObject;
         Out: Text;
         Verdict: Text;
         Detail: Text;
     begin
-        if (not CanWrite) and (not InsertOk) then begin
-            Verdict := 'mocked';
-            Detail := RefusalDetail;
+        if not BaselineWrite then begin
+            Verdict := 'inconclusive';
+            Detail := StrSubstNo('unattributable: this session has NO write permission on the probe table OUTSIDE the fence either (baseline read=%1 write=%2), so an in-fence refusal is not evidence of the permission mock — the calling user does not hold this extension''s permission set at all (the 5C-A finding its sibling tables carry InherentPermissions to work around). Grant the OData user that permission set and re-run; until then this server cannot be characterised. In-fence observation was read=%3 write=%4 insert=%5.', BaselineRead, BaselineWrite, CanRead, CanWrite, InsertOk);
         end else
-            if CanRead and CanWrite and InsertOk then begin
-                Verdict := 'not-mocked';
-                Detail := '';
-            end else begin
-                Verdict := 'inconclusive';
-                Detail := StrSubstNo('mixed signal — read=%1 write=%2 insert=%3 detail=%4', CanRead, CanWrite, InsertOk, RefusalDetail);
-            end;
+            if (not CanWrite) and (not InsertOk) then begin
+                if MockInstalled then begin
+                    Verdict := 'mocked';
+                    Detail := RefusalDetail;
+                end else begin
+                    Verdict := 'inconclusive';
+                    Detail := StrSubstNo('unattributable: the in-fence write WAS refused, but codeunit %1 ("Permissions Mock") is not installed on this server, so the refusal was caused by something else and must not be reported as the mock. Refusal was: %2', PermissionsMockCodeunitId(), RefusalDetail);
+                end;
+            end else
+                if CanRead and CanWrite and InsertOk then begin
+                    Verdict := 'not-mocked';
+                    Detail := '';
+                end else begin
+                    Verdict := 'inconclusive';
+                    Detail := StrSubstNo('mixed signal — read=%1 write=%2 insert=%3 detail=%4', CanRead, CanWrite, InsertOk, RefusalDetail);
+                end;
 
         Obj.Add('verdict', Verdict);
         Obj.Add('observed', true);
+        AddCanaryContext(Obj, BaselineRead, BaselineWrite, MockInstalled);
         Obj.Add('readPermission', CanRead);
         Obj.Add('writePermission', CanWrite);
         Obj.Add('insertSucceeded', InsertOk);
@@ -521,18 +631,30 @@ codeunit 71003 "LC Control API"
         exit(Out);
     end;
 
-    /// <summary>The no-observation exit. Carries `observed:false` and NO permission keys — see
-    /// `PermissionCanary`'s doc comment for why they are omitted rather than defaulted.</summary>
-    local procedure BuildCanaryInconclusive(Detail: Text): Text
+    /// <summary>The no-observation exit. Carries `observed:false` and NO in-fence permission keys —
+    /// see `PermissionCanary`'s doc comment for why those are omitted rather than defaulted. The
+    /// attribution context IS carried: it was measured before the test ran and does not depend on
+    /// the test having worked, so it is exactly what makes this inconclusive actionable.</summary>
+    local procedure BuildCanaryInconclusive(BaselineRead: Boolean; BaselineWrite: Boolean; MockInstalled: Boolean; Detail: Text): Text
     var
         Obj: JsonObject;
         Out: Text;
     begin
         Obj.Add('verdict', 'inconclusive');
         Obj.Add('observed', false);
+        AddCanaryContext(Obj, BaselineRead, BaselineWrite, MockInstalled);
         Obj.Add('detail', Detail);
         Obj.WriteTo(Out);
         exit(Out);
+    end;
+
+    /// <summary>The three always-present attribution keys, added in one place so the two builders
+    /// cannot drift into emitting different context for the same measurement.</summary>
+    local procedure AddCanaryContext(var Obj: JsonObject; BaselineRead: Boolean; BaselineWrite: Boolean; MockInstalled: Boolean)
+    begin
+        Obj.Add('baselineReadPermission', BaselineRead);
+        Obj.Add('baselineWritePermission', BaselineWrite);
+        Obj.Add('mockInstalled', MockInstalled);
     end;
 
     /// <summary>Whichever diagnostic actually exists for a no-observation run: the caught terminal

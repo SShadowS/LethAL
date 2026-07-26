@@ -30,9 +30,16 @@ function fakeProbe(answer: Record<string, unknown> | Error): PermissionCanaryPro
   };
 }
 
+// Both wires carry the ATTRIBUTION context the server measures outside the fence before the test
+// runs: a session that could write the probe normally (`baselineWritePermission: true`) and whether
+// codeunit 131006 is installed. Without those, a refused in-fence insert is unattributable — see
+// `PermissionCanaryResult`'s doc comment.
 const MOCKED_WIRE = {
   verdict: "mocked",
   observed: true,
+  baselineReadPermission: true,
+  baselineWritePermission: true,
+  mockInstalled: true,
   readPermission: false,
   writePermission: false,
   insertSucceeded: false,
@@ -42,6 +49,9 @@ const MOCKED_WIRE = {
 const NOT_MOCKED_WIRE = {
   verdict: "not-mocked",
   observed: true,
+  baselineReadPermission: true,
+  baselineWritePermission: true,
+  mockInstalled: false,
   readPermission: true,
   writePermission: true,
   insertSucceeded: true,
@@ -55,6 +65,9 @@ describe("runPermissionCanary — verdict mapping", () => {
     expect(r.writePermission).toBe(false);
     expect(r.insertSucceeded).toBe(false);
     expect(r.detail).toContain("permissions prevented the action");
+    // The attribution context survives onto the result, not just into the server's decision.
+    expect(r.baselineWritePermission).toBe(true);
+    expect(r.mockInstalled).toBe(true);
   });
 
   test('a complete "not-mocked" observation maps to not-mocked', async () => {
@@ -63,6 +76,8 @@ describe("runPermissionCanary — verdict mapping", () => {
     expect(r.readPermission).toBe(true);
     expect(r.writePermission).toBe(true);
     expect(r.insertSucceeded).toBe(true);
+    expect(r.baselineReadPermission).toBe(true);
+    expect(r.mockInstalled).toBe(false);
     // No detail invented where the server sent none.
     expect(r.detail).toBeUndefined();
   });
@@ -182,10 +197,8 @@ describe("runPermissionCanary — inconclusive is never 'not mocked', and never 
   test('a "not-mocked" verdict missing one observation boolean is demoted', async () => {
     const r = await runPermissionCanary(
       fakeProbe({
-        verdict: "not-mocked",
-        observed: true,
-        readPermission: true,
-        writePermission: true,
+        ...NOT_MOCKED_WIRE,
+        insertSucceeded: undefined,
         // insertSucceeded omitted — the decisive fact is exactly the one missing.
       }),
     );
@@ -193,17 +206,105 @@ describe("runPermissionCanary — inconclusive is never 'not mocked', and never 
     expect(r.detail).toContain("insertSucceeded");
   });
 
-  test("a wrong-typed observation boolean (string 'true') is demoted, not coerced", async () => {
+  // An older control app (1.0.0.4 and earlier) answers without the attribution keys. It cannot
+  // substantiate the claim it is making — a refused insert on a session that may never have had
+  // write permission at all is not evidence of the mock — so it is demoted, exactly like a 404.
+  test("a conclusive verdict with no attribution context at all is demoted (older control app)", async () => {
     const r = await runPermissionCanary(
       fakeProbe({
-        verdict: "not-mocked",
+        verdict: "mocked",
         observed: true,
-        readPermission: true,
-        writePermission: true,
-        insertSucceeded: "true",
+        readPermission: false,
+        writePermission: false,
+        insertSucceeded: false,
+        detail: "Sorry, the current permissions prevented the action.",
       }),
     );
     expect(r.verdict).toBe("inconclusive");
+    expect(r.detail).toContain("baselineWritePermission");
+  });
+
+  test("a conclusive verdict missing only mockInstalled is demoted", async () => {
+    const r = await runPermissionCanary(fakeProbe({ ...MOCKED_WIRE, mockInstalled: undefined }));
+    expect(r.verdict).toBe("inconclusive");
+    expect(r.detail).toContain("mockInstalled");
+  });
+
+  test("a wrong-typed observation boolean (string 'true') is demoted, not coerced", async () => {
+    const r = await runPermissionCanary(fakeProbe({ ...NOT_MOCKED_WIRE, insertSucceeded: "true" }));
+    expect(r.verdict).toBe("inconclusive");
+  });
+});
+
+// ————————————————————————————————————————————————————————————————————————
+// COHERENCE. A payload can be complete and still not support the verdict it asserts. Before this
+// guard existed, the first case below sailed through and printed "…reported read and write
+// permission and a real insert succeeded…" while silently dropping a refusal detail that said the
+// exact opposite — a reviewer ran it. Every case here must demote to `inconclusive`, and NONE may
+// be converted into the other verdict: a payload that contradicts itself is not evidence for
+// anything.
+// ————————————————————————————————————————————————————————————————————————
+describe("runPermissionCanary — a verdict its own payload contradicts", () => {
+  test('"not-mocked" with a fully refused observation is DEMOTED, and the refusal is not dropped', async () => {
+    const r = await runPermissionCanary(
+      fakeProbe({
+        ...MOCKED_WIRE,
+        verdict: "not-mocked", // …but every value below still says the write was refused.
+      }),
+    );
+    expect(r.verdict).toBe("inconclusive");
+    expect(r.detail).toContain("does not support it");
+    expect(r.detail).toContain('"not-mocked" requires read, write and a completed insert');
+    // The refusal text the old code discarded is still reachable in the payload echo.
+    expect(r.detail).toContain("permissions prevented the action");
+    // Demoted, never flipped to the opposite verdict.
+    expect(r.verdict).not.toBe("mocked");
+    const line = permissionCanaryWarnings(r)[0] ?? "";
+    expect(line).toContain("could not determine");
+    expect(line).not.toContain("a real insert succeeded");
+  });
+
+  test('"not-mocked" with only insertSucceeded false is demoted (partial contradiction still counts)', async () => {
+    const r = await runPermissionCanary(fakeProbe({ ...NOT_MOCKED_WIRE, insertSucceeded: false }));
+    expect(r.verdict).toBe("inconclusive");
+    expect(r.detail).toContain("insert=false");
+  });
+
+  test('"mocked" claiming insertSucceeded:true is DEMOTED, never flipped to not-mocked', async () => {
+    const r = await runPermissionCanary(fakeProbe({ ...MOCKED_WIRE, insertSucceeded: true }));
+    expect(r.verdict).toBe("inconclusive");
+    expect(r.detail).toContain("did NOT complete");
+    expect(r.verdict).not.toBe("not-mocked");
+  });
+
+  test('"mocked" claiming writePermission:true is demoted', async () => {
+    const r = await runPermissionCanary(fakeProbe({ ...MOCKED_WIRE, writePermission: true }));
+    expect(r.verdict).toBe("inconclusive");
+    expect(r.detail).toContain("requires a refused write flag");
+  });
+
+  // Important 1's whole point, enforced at the client too: naming codeunit 131006 as the cause
+  // while reporting it is not installed is a claim the payload cannot support.
+  test('"mocked" with mockInstalled:false is demoted — the named cause is not present', async () => {
+    const r = await runPermissionCanary(fakeProbe({ ...MOCKED_WIRE, mockInstalled: false }));
+    expect(r.verdict).toBe("inconclusive");
+    expect(r.detail).toContain("131006");
+  });
+
+  // The permanently-red hazard: a session with no write permission ANYWHERE cannot attribute an
+  // in-fence refusal to the test path. The server already refuses to call that `mocked`; the client
+  // refuses to accept it if a server ever did.
+  test("a conclusive verdict on a baseline that cannot write at all is demoted, either way", async () => {
+    const asMocked = await runPermissionCanary(
+      fakeProbe({ ...MOCKED_WIRE, baselineWritePermission: false }),
+    );
+    expect(asMocked.verdict).toBe("inconclusive");
+    expect(asMocked.detail).toContain("out-of-fence baseline");
+    const asNotMocked = await runPermissionCanary(
+      fakeProbe({ ...NOT_MOCKED_WIRE, baselineWritePermission: false }),
+    );
+    expect(asNotMocked.verdict).toBe("inconclusive");
+    expect(asNotMocked.detail).toContain("out-of-fence baseline");
   });
 });
 
@@ -221,6 +322,33 @@ describe("permissionCanaryWarnings", () => {
     expect(lines[0]).toContain("R26");
     expect(lines[0]).toContain("UNSCORED");
     expect(lines[0]).toContain("permissions prevented the action");
+  });
+
+  test("mocked names codeunit 131006 as installed — the attribution the verdict claims", () => {
+    const lines = permissionCanaryWarnings({
+      verdict: "mocked",
+      baselineReadPermission: true,
+      baselineWritePermission: true,
+      mockInstalled: true,
+      readPermission: false,
+      writePermission: false,
+      insertSucceeded: false,
+    });
+    expect(lines[0]).toContain("131006");
+    expect(lines[0]).toContain("outside the fence");
+  });
+
+  test("not-mocked flags a mock that IS installed but is not stripping this path", () => {
+    const lines = permissionCanaryWarnings({
+      verdict: "not-mocked",
+      baselineReadPermission: true,
+      baselineWritePermission: true,
+      mockInstalled: true,
+      readPermission: true,
+      writePermission: true,
+      insertSucceeded: true,
+    });
+    expect(lines[0]).toContain("IS installed here but is not stripping this path");
   });
 
   test("not-mocked still says something — a silent report cannot distinguish 'clean' from 'nobody looked'", () => {
