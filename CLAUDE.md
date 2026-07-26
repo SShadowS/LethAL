@@ -23,6 +23,7 @@ AL extension: `extensions/lethal-control` (the `LethAL Control` BC extension, ru
 ## Integration tests (env-gated, live BC, minutes each — run foreground, never poll)
 - `LETHAL_ITEST_BCDEV=1 bun run itest:bcdev` — authoritative backend. Frozen: killed **3** / survived **10** / no-coverage **3**.
 - `LETHAL_ITEST_ALRUNNER=1 LETHAL_ALRUNNER_PATH="C:/Users/SShadowS/.dotnet/tools/al-runner.exe" bun run itest:alrunner` — frozen: **3 / 13 / 0**.
+- `LETHAL_ITEST_ENVTOOL=1 bun run itest:envtool` — bcdev reached through a config-declared external environment tool (R15/Layer 6C; see `fixtures/README.md` §"Running against an external environment tool") instead of a directly-configured container. **Baseline NOT YET RECORDED** — the gate is committed and wired through the real CLI seams, but has never been run against a real environment: no `packages/runner/itest/envtool.baseline.json` exists. Do not read a frozen count here; there isn't one yet (tracked as `ROADMAP.md` R16). Expected, carried over from `itest:bcdev` on the identical fixture: **3 / 10 / 3**.
 - A differing verdict is a BLOCK (a real regression), never "close enough". Live execution is the authority — unit tests are structurally blind to AL that can't compile or to real BC behavior. Use `/live-gate`.
 
 ## AL has no unit-test harness
