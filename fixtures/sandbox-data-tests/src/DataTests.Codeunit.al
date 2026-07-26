@@ -1,6 +1,12 @@
 codeunit 79310 "Data Tests"
 {
     Subtype = Test;
+    // Measured 2026-07-26: WITHOUT this, a test codeunit defaults to restrictive test permissions and
+    // Microsoft's Permissions Mock refuses every write from its body — on EVERY runner, not just
+    // LethAL's fenced path. That refusal is what the InherentPermissions workaround on the tables was
+    // hiding. A real BC suite declares this (the Continia Document Output suite: 77 of 77 test
+    // codeunits), so a fixture omitting it was testing a shape no real suite has.
+    TestPermissions = Disabled;
 
     [Test]
     procedure BlankNoValidateFails()
