@@ -1,26 +1,43 @@
 import type { ActivationConfig, FetchFn } from "./activation";
 
 /**
- * ROADMAP R26 — a per-session canary that MEASURES, on the server this session is actually
- * running against, whether the fenced test path strips a test body's permissions.
+ * The permissions module. Two halves, one subject:
  *
- * WHAT IT CLOSES. Microsoft's Permissions Mock (codeunit 131006, toggled by `Test Runner - Mgt`
- * 130454's `PlatformBeforeTestRun` -> `StartStopPermissionMock`) strips permissions from a test
- * body — but only on LethAL's FENCED path (`RunMutant` -> `Test Suite Mgt.RunAllTests`), and only
- * when that Microsoft app happens to be installed. The dev-service path used for baseline and
- * coverage runs is unaffected. Both consequences are measured, not theorised:
+ * 1. `runPermissionCanary` / `permissionCanaryWarnings` — ROADMAP R26's per-session canary, a
+ *    PRECONDITION CHECK on the server this session is running against.
+ * 2. `describeTestPermissionsRefusal` — the diagnosis attached when a TARGET suite's own test is
+ *    refused by BC's permission system, which is the condition operators actually hit.
  *
- * - A test that writes to its own app's tables fails INSIDE THE FENCE ONLY, so its mutant lands
- *   `error cause=unstable` and is silently UNSCORED rather than killed.
- * - Because it hinges on whether an app is installed, the same project can score differently on
- *   two servers today, with nothing in the report saying which world it ran in.
+ * WHAT THE CANARY ASKS NOW, AND WHY IT CHANGED. It was built on a diagnosis that direct measurement
+ * has since DISPROVED. The belief was that Microsoft's Permissions Mock (codeunit 131006, toggled
+ * by `Test Runner - Mgt` 130454's `PlatformBeforeTestRun` -> `StartStopPermissionMock`) strips a
+ * test body's permissions specifically on LethAL's FENCED path (`RunMutant` ->
+ * `Test Suite Mgt.RunAllTests`), so a project could score differently on two servers depending on
+ * whether that Microsoft app was installed. It does not.
+ *
+ * MEASURED A/B on ONE property (2026-07-26): two probe codeunits identical except for
+ * `TestPermissions`, same app, same tables, same server, mock running in BOTH arms — omitted (i.e.
+ * Restrictive, the AL default) is REFUSED, `TestPermissions = Disabled` SUCCEEDS. The invocation
+ * path is not the variable; the declaration on the test codeunit is. `continia test run` reaches
+ * the same 130454 runner with the mock started, exactly as `RunMutant` does, and refuses a
+ * Restrictive codeunit there too. So the canary now asks the honest, WEAKER question:
+ *
+ *     CAN A CORRECTLY-DECLARED TEST CODEUNIT (`TestPermissions = Disabled`) WRITE A TABLE OF ITS
+ *     OWN APP ON THIS SERVER?
+ *
+ * Expected answer `"not-mocked"` on every server we have. It is worth asking because it is what
+ * would catch Microsoft changing the rule so that even a `Disabled` codeunit is stripped — the one
+ * future in which fenced runs start losing kills for a reason no target-side declaration can fix.
+ * It is NOT a scoring caveat any more, and the warning lines say so.
  *
  * The server-side probe (`extensions/lethal-control`: table 71008 "LC Permission Probe", codeunit
  * 71010 "LC Permission Canary", carried out on codeunit 71009 "LC Permission Canary State") runs
  * through the SAME `LC Run Method` / `Test Suite Mgt.RunAllTests` mechanism `RunMutant` uses — a
- * canary travelling a different path than the thing it characterises measures nothing. The probe
- * table deliberately has NO `InherentPermissions`, unlike every one of its siblings; see that
- * table's own doc comment before touching it.
+ * canary travelling a different path than the thing it characterises measures nothing. Codeunit
+ * 71010 declares `TestPermissions = Disabled` (without it the canary measures its OWN declaration
+ * and reports `"mocked"` on every server), and the probe table deliberately has NO
+ * `InherentPermissions`, unlike every one of its siblings (with it, the write could never fail and
+ * the light could never turn red). Read both AL doc comments before touching either object.
  *
  * "Same path" has to be true all the way down to the write itself, and that is not free: the first
  * live proof (Cronus282, control app 1.0.0.3) came back `observed:false` because the probe's
@@ -45,10 +62,15 @@ import type { ActivationConfig, FetchFn } from "./activation";
  */
 
 /**
- * `"mocked"` — the fenced path strips permissions here (the probe's write flag is off AND its
- * insert was refused). `"not-mocked"` — it does not (read, write, and a real insert all succeeded).
- * `"inconclusive"` — the measurement did not happen, or came back self-contradictory; `detail`
- * always says which.
+ * `"mocked"` — this server strips a CORRECTLY-DECLARED test codeunit (`TestPermissions = Disabled`)
+ * anyway: the probe's write flag is off AND its insert was refused. No server we have answers this;
+ * it is the precondition-violated case. `"not-mocked"` — it does not (read, write, and a real
+ * insert all succeeded), the expected answer. `"inconclusive"` — the measurement did not happen, or
+ * came back self-contradictory; `detail` always says which.
+ *
+ * The verdict NAMES are historical (they date from the disproved fenced-path-vs-mock diagnosis) and
+ * are deliberately unchanged: they are on the wire in `ControlApi.Codeunit.al`'s JSON, so renaming
+ * them would silently desync a runner from a published control app. What they MEAN is above.
  */
 export type PermissionCanaryVerdict = "mocked" | "not-mocked" | "inconclusive";
 
@@ -362,45 +384,111 @@ function describeIncoherence(
  * Turns a canary result into the `console.warn` lines a session prints — and, via
  * `renderConsole`, repeats after the score.
  *
- * Says something for EVERY verdict, including `"not-mocked"`. A report that goes quiet when the
- * mock is absent leaves a reader unable to tell "measured, and this server is clean" from "nobody
+ * Says something for EVERY verdict, including `"not-mocked"`. A report that goes quiet on the
+ * expected answer leaves a reader unable to tell "measured, and this server is fine" from "nobody
  * looked", which is the same ambiguity the canary was built to remove.
+ *
+ * The lines describe the question the canary actually answers — can a correctly-declared test
+ * codeunit write its own app's tables here — NOT the disproved fenced-path story they used to tell.
+ * They must not claim a target suite's scores are uncharacterised: whether a TARGET test can write
+ * is decided by that codeunit's own `TestPermissions`, which this canary cannot see and which
+ * `describeTestPermissionsRefusal` names when it actually bites.
  */
 export function permissionCanaryWarnings(result: PermissionCanaryResult): string[] {
   if (result.verdict === "mocked") {
     const confirmed =
-      "[lethal] permission canary CONFIRMED on this run (R26): Microsoft's Permissions Mock " +
-      "(codeunit 131006) is installed on this server AND the fenced test path strips permissions " +
-      "— a test body here runs WITHOUT permission to write its own app's tables, while the same " +
-      "session CAN write them outside the fence. Any test that writes to a table lacking " +
-      "InherentPermissions fails inside the fence only, so its mutant is recorded " +
-      "`error cause=unstable` and is SILENTLY UNSCORED rather than killed. Scores from this " +
-      "server are not comparable with scores from one where the canary reports not-mocked";
+      "[lethal] permission canary PRECONDITION VIOLATED on this run (R26): this server strips " +
+      "write permission from a test codeunit that correctly declares `TestPermissions = Disabled` " +
+      "— the probe reported no write permission inside its body AND its insert was refused, while " +
+      "the same session CAN write the same table outside the fence, and Microsoft's Permissions " +
+      "Mock (codeunit 131006) is installed here. This is NOT the ordinary case (a target test " +
+      "codeunit that OMITS the property is refused everywhere, and LethAL names that separately): " +
+      "it means the platform rule itself has changed, so tests that write may fail here for " +
+      "reasons no target-side declaration can fix, and their mutants land `error cause=unstable` " +
+      "and go SILENTLY UNSCORED. Treat this session's score as uncharacterised";
     const refusal =
       result.detail !== undefined ? ` (probe insert was refused: ${result.detail})` : "";
     return [`${confirmed}${refusal}`];
   }
   if (result.verdict === "not-mocked") {
     const clean =
-      "[lethal] permission canary (R26): the fenced test path does NOT strip permissions on this " +
-      "server — the probe table reported read and write permission and a real insert succeeded " +
-      "inside a test body. Mutants killable only by a test that writes to its own app's tables " +
-      "are scored normally here.";
-    // Worth saying out loud: the mock app being PRESENT while the path stays clean is the one
-    // combination that would otherwise look like the canary contradicting itself, and it is the
-    // configuration most likely to change under someone's feet.
+      "[lethal] permission canary (R26): a correctly-declared test codeunit " +
+      "(`TestPermissions = Disabled`) CAN write its own app's tables on this server — the probe " +
+      "reported read and write permission and a real insert succeeded inside a test body. This is " +
+      "the expected answer and confirms the precondition only; it says nothing about any " +
+      "particular target suite, whose own `TestPermissions` declaration decides whether ITS tests " +
+      "may write.";
+    // Worth saying out loud: the mock app being installed while writes still succeed is exactly
+    // what the A/B measurement predicts, and it forestalls the reflex of blaming codeunit 131006
+    // for a refusal that a missing `TestPermissions = Disabled` actually caused.
     const installed =
       result.mockInstalled === true
-        ? " (codeunit 131006 IS installed here but is not stripping this path — if that ever changes, this verdict will flip)"
+        ? " (codeunit 131006 IS installed here and is not the reason any test fails to write — the test codeunit's own TestPermissions is)"
         : "";
     return [`${clean}${installed}`];
   }
   const undetermined =
-    "[lethal] permission canary could not determine (R26) whether the fenced test path strips a " +
-    "test body's permissions on this server";
+    "[lethal] permission canary could not determine (R26) whether a correctly-declared test " +
+    "codeunit (`TestPermissions = Disabled`) can write its own app's tables on this server";
   const consequence =
-    'This is NOT the same as "not mocked": if the mock IS active, mutants killable only by a ' +
-    "test that writes to its own app's tables are recorded `error cause=unstable` and silently " +
+    'This is NOT the same as "not mocked": the precondition every fenced run assumes is simply ' +
+    "unverified here. If it is in fact violated, tests that write fail for reasons no target-side " +
+    "declaration can fix and their mutants are recorded `error cause=unstable` and silently " +
     "unscored. Treat this session's score as uncharacterised.";
   return [`${undetermined} (${result.detail ?? "no detail"}). ${consequence}`];
+}
+
+/**
+ * BC's permission refusal, as it appears in a failing test line's `message`. MEASURED shape:
+ *
+ *     Sorry, the current permissions prevented the action. (TableData 79300 Data Main Insert: LethAL Sandbox Data Tests)
+ *
+ * Anchored on the stable middle clause, so the leading "Sorry, " and the trailing parenthetical
+ * (which names the table, the operation and the suite, and is the most useful part to quote) are
+ * both optional. `[^.\n]*` on the left stops the match at the previous sentence or line, which
+ * matters because `failureMessage` is `message` + "\n" + `stackTrace` — a greedy `.*` would drag a
+ * stack frame into the quote.
+ */
+const PERMISSIONS_REFUSAL_RE =
+  /[^.\n]*\bcurrent permissions prevented the action\b\.?(?:[ \t]*\([^)\n]*\))?/i;
+
+/**
+ * Names the cause when a TARGET suite's test is refused by BC's permission system — the half of
+ * ROADMAP R26 that operators actually hit, and the one the canary cannot answer for them.
+ *
+ * WHY THIS EXISTS. MEASURED A/B (2026-07-26, see this module's header): a test codeunit that omits
+ * `TestPermissions` runs Restrictive (the AL default) and is stripped of write permission on its
+ * own app's tables; one that declares `TestPermissions = Disabled` is not. That is true on every
+ * path that goes through `Test Runner - Mgt` 130454 — LethAL's fenced `RunMutant` and
+ * `continia test run` alike — so it is a property of the target's own declaration, not of LethAL.
+ * Before this, such a test failed under the mutant AND at baseline confirmation, and the mutant was
+ * recorded `error cause=unstable` with a bare "fails at baseline confirmation" note: a
+ * deterministic, fully explicable, one-line-fixable condition reported to the user as flakiness.
+ *
+ * WHAT IT IS AND IS NOT. It is a DIAGNOSIS ATTACHED TO AN EXISTING FAILURE, nothing more. It never
+ * decides a verdict, never suppresses a failure, and is never consulted on a path that could turn
+ * a `killed` into a `survived` or vice versa — a test refused under the mutant that PASSES at
+ * baseline is still a kill, and this function is not asked. It hedges ("most likely") because a
+ * message can carry that text for another reason, and it QUOTES BC verbatim rather than replacing
+ * it, so a reader who disagrees with the diagnosis still has the platform's own words.
+ *
+ * Returns `undefined` when there is nothing to read (`failureText` absent — a legitimate state, a
+ * failing test line need not carry a message) or when the text does not carry the refusal. Both are
+ * honestly "no diagnosis", not a defaulted one; callers append only when a string comes back.
+ */
+export function describeTestPermissionsRefusal(
+  failureText: string | undefined,
+): string | undefined {
+  if (failureText === undefined) return undefined;
+  const match = PERMISSIONS_REFUSAL_RE.exec(failureText);
+  if (match === null) return undefined;
+  const quoted = match[0]?.trim();
+  if (quoted === undefined || quoted === "") return undefined;
+  const diagnosis =
+    "this is BC refusing the write, not a flaky test: the test codeunit most likely omits " +
+    "`TestPermissions = Disabled` — AL defaults to Restrictive, which strips a test body of " +
+    "write permission on its own app's tables on every path through `Test Runner - Mgt` 130454 " +
+    "(LethAL's fenced RunMutant and `continia test run` alike). Declare " +
+    "`TestPermissions = Disabled;` on the test codeunit and re-run. BC's own words:";
+  return `${diagnosis} "${quoted}"`;
 }

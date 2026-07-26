@@ -322,16 +322,25 @@ codeunit 71003 "LC Control API"
 
     /// <summary>
     /// OData action: the permission canary (ROADMAP R26). Answers ONE question about THIS server,
-    /// once per session — does the fenced test path strip a test body's permissions?
+    /// once per session — CAN A CORRECTLY-DECLARED TEST CODEUNIT (`TestPermissions = Disabled`)
+    /// WRITE A TABLE OF ITS OWN APP HERE?
     ///
-    /// WHY IT MATTERS. Microsoft's Permissions Mock (codeunit 131006, toggled by "Test Runner -
-    /// Mgt" 130454's `PlatformBeforeTestRun` -> `StartStopPermissionMock`) strips permissions from
-    /// a test body, but only on the FENCED path below and only when that Microsoft app is
-    /// installed; the dev-service path LethAL uses for baseline/coverage runs is unaffected. A test
-    /// that writes to its own app's tables therefore fails inside the fence only — its mutant lands
-    /// `error cause=unstable` and goes silently UNSCORED instead of killed — and since it depends on
-    /// an app being installed, the same project can score differently on two servers with nothing
-    /// in the report saying which world it ran in. This action is what makes that visible.
+    /// WHY IT ASKS THAT, AND NOT WHAT IT USED TO. The original question was "does the FENCED path
+    /// strip a test body's permissions", on the belief that Microsoft's Permissions Mock (codeunit
+    /// 131006, toggled by "Test Runner - Mgt" 130454's `PlatformBeforeTestRun` ->
+    /// `StartStopPermissionMock`) singled that path out. MEASURED A/B on one property (2026-07-26),
+    /// it does not: two probe codeunits identical except for `TestPermissions`, same app, same
+    /// tables, same server, mock running in both arms — omitted (Restrictive, the AL default) is
+    /// REFUSED, `Disabled` SUCCEEDS. The path is not the variable; the declaration on the test
+    /// codeunit is, and `continia test run` reaches the same 130454 runner and refuses a Restrictive
+    /// codeunit there too. So the canary asks the weaker, honest question above.
+    ///
+    /// WHY IT IS STILL WORTH ASKING. Expected answer 'not-mocked' on every server we have — this is
+    /// a PRECONDITION CHECK, not a scoring caveat. It is what would catch Microsoft changing the
+    /// rule so that even a `Disabled` codeunit is stripped: the one future in which fenced runs
+    /// start losing kills for a reason no target-side declaration can fix. The actionable half of
+    /// the old story now lives in the runner, which names `TestPermissions` when a TARGET suite's
+    /// test is refused (`describeTestPermissionsRefusal`, `packages/runner/src/permission-canary.ts`).
     ///
     /// IT MUST TRAVEL THE SAME PATH IT CHARACTERISES. The canary runs through "LC Run Method"
     /// (71007) — the identical `Test Suite Mgt.RunAllTests` mechanism `RunMutant` phase 2 uses,
@@ -347,8 +356,8 @@ codeunit 71003 "LC Control API"
     /// the platform test runner — is still respected: the CLIENT calls this once per session while
     /// it already holds the lease (design §6 step 1), before any mutant runs.
     ///
-    /// THE CANARY TEST IS ALLOWED TO FAIL, and under the mock it MUST. Its `Insert` is plain and
-    /// unwrapped — the same call shape a real test body uses — so a refused write aborts the method
+    /// THE CANARY TEST IS ALLOWED TO FAIL, and on a server that answers 'mocked' it MUST. Its
+    /// `Insert` is plain and unwrapped — the same call shape a real test body uses — so a refused write aborts the method
     /// rather than returning an error string. That is deliberate and was earned live: the first
     /// version wrapped the `Insert` in a [TryFunction] so it could always return normally, and the
     /// platform answered "Call to the function 'INSERT' is not allowed inside the call to
@@ -565,10 +574,13 @@ codeunit 71003 "LC Control API"
         exit('ProbeInherentPermissions');
     end;
 
-    /// <summary>The verdict mapping, from the two MEASURED worlds: under the mock a plain `Insert`
-    /// in a test body is refused with "Sorry, the current permissions prevented the action" and the
-    /// probe reports read=No write=No; off the mock it reports read=Yes write=Yes and the `Insert`
-    /// succeeds.
+    /// <summary>The verdict mapping, from the two MEASURED worlds: where a test body's permissions
+    /// are stripped, a plain `Insert` is refused with "Sorry, the current permissions prevented the
+    /// action" and the probe reports read=No write=No; where they are not, it reports read=Yes
+    /// write=Yes and the `Insert` succeeds. Since "LC Permission Canary" now declares
+    /// `TestPermissions = Disabled`, the first world is the one no server we have produces — the
+    /// verdict names are kept ('mocked' / 'not-mocked'), and a 'mocked' answer today would mean the
+    /// platform strips even a correctly-declared test codeunit.
     ///
     /// 'mocked' requires BOTH a refused write flag AND an insert that did not complete. The insert
     /// is the operationally decisive fact (it is exactly what makes a real test fail inside the
