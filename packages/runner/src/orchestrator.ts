@@ -34,7 +34,7 @@ import { isRetrySafe, requiresUnsafeLatch } from "./operation-outcome";
 import { Semaphore, shardEvenly } from "./pool";
 import { QuarantineStore } from "./quarantine-store";
 import { buildReport } from "./report";
-import type { SessionOutcome, SessionReport } from "./report";
+import type { NotInstrumentedFile, SessionOutcome, SessionReport } from "./report";
 import { quarantineResourceKey } from "./resource-key";
 import {
   buildCoverageIndex,
@@ -96,12 +96,28 @@ export const operatorTiers: ReadonlyMap<string, 1 | 2 | 3 | "custom"> = new Map(
  * page aborts the whole session at compile time. Dropping the specs costs only those mutants:
  * `prepareBatchProject` copies every project `.al` file the instrumented write did not produce
  * into the batch dir verbatim, so the page still reaches the server, byte-identical to source.
+ *
+ * R5: the console warning alone left no trace in the REPORT — a page-heavy project got a
+ * confident-looking mutation score computed over whatever fraction of its code happened to be
+ * codeunits/tables, with nothing in the output saying so. The skipped-file list and the total
+ * `.al` file count scanned are now returned alongside `files` so `runSession` can thread them
+ * into `SessionReport.notInstrumented` (report.ts) — present in both the console render and the
+ * `--out` JSON, not just stderr.
  */
-export async function generateMutationSet(projectDir: string): Promise<InstrumentedFile[]> {
+export interface MutationSetResult {
+  readonly files: readonly InstrumentedFile[];
+  /** Files with >=1 spec that no selector var could be injected into — see doc comment above. */
+  readonly skipped: readonly NotInstrumentedFile[];
+  /** Every `.al` source file scanned (excluding emitted `Mutation*` artifacts) — the denominator
+   *  for judging how much of the project `skipped` represents. */
+  readonly totalFiles: number;
+}
+
+export async function generateMutationSet(projectDir: string): Promise<MutationSetResult> {
   await initParser();
   const files: InstrumentedFile[] = [];
   /** Files with >=1 spec that no selector var can be injected into — reported once, below. */
-  const skipped: Array<{ file: string; kinds: string; specs: number }> = [];
+  const skipped: NotInstrumentedFile[] = [];
   const entries = (await readdir(projectDir, { recursive: true }))
     .filter((e) => e.toLowerCase().endsWith(".al"))
     .filter((e) => !basename(e).startsWith("Mutation"));
@@ -136,14 +152,14 @@ export async function generateMutationSet(projectDir: string): Promise<Instrumen
     });
     if (specs.length === 0) continue;
     if (!canCarryMutationSelectorVar(root)) {
-      skipped.push({ file: rel, kinds: describeObjectKinds(root), specs: specs.length });
+      skipped.push({ file: rel, kinds: describeObjectKinds(root), sites: specs.length });
       continue;
     }
     files.push({ path: rel, source, root, specs });
   }
   if (skipped.length > 0) {
-    const total = skipped.reduce((n, s) => n + s.specs, 0);
-    const detail = skipped.map((s) => `${s.file} (${s.kinds}, ${s.specs} site(s))`).join(", ");
+    const total = skipped.reduce((n, s) => n + s.sites, 0);
+    const detail = skipped.map((s) => `${s.file} (${s.kinds}, ${s.sites} site(s))`).join(", ");
     const why =
       "only a codeunit or a table can carry the injected " +
       '`var MutationSelector: Codeunit "Mutation Selector";` declaration, so a guard in any ' +
@@ -152,7 +168,7 @@ export async function generateMutationSet(projectDir: string): Promise<Instrumen
       `[lethal] skipped ${skipped.length} file(s) holding ${total} mutation site(s): ${why}: ${detail}.`,
     );
   }
-  return files;
+  return { files, skipped, totalFiles: entries.length };
 }
 
 export interface SessionConfig {
@@ -1445,7 +1461,11 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       "0.0.0.0",
   });
 
-  const allFiles = await generateMutationSet(cfg.projectDir);
+  const {
+    files: allFiles,
+    skipped: notInstrumentedFiles,
+    totalFiles: totalAlFiles,
+  } = await generateMutationSet(cfg.projectDir);
   const artifacts = planArtifacts(allFiles);
 
   const outcomes: SessionOutcome[] = []; // internal accumulation for the report
@@ -2132,6 +2152,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     batches: artifacts.length,
     outcomes,
     unsupportedTests: [...unsupportedTestNames].sort(),
+    notInstrumented: { totalFiles: totalAlFiles, files: notInstrumentedFiles },
     ...(safety.isUnsafe ? { quarantined: { reason: safety.reason ?? "unknown" } } : {}),
   });
 }

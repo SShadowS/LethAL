@@ -96,10 +96,11 @@ const OBJECT_HEADER =
  * Blanks out AL comments, preserving length (so any index computed against the result still
  * addresses the same character of the original).
  *
- * `objectHeaderOf` counts headers with a regex, and the "more than one object" check it added
- * turns a false positive into a refused file. A commented-out object is exactly that false
- * positive, and it is a shape real AL carries: an old `codeunit 50100 "Old Impl"` left inside a
- * block comment above the live `codeunit 50101 "New Impl"`.
+ * `objectHeadersOf` counts headers with a regex, and the mixed-kind check it feeds
+ * (`assertNoUnsupportedObjectMix`) turns a false positive into a refused file. A commented-out
+ * object is exactly that false positive, and it is a shape real AL carries: an old
+ * `codeunit 50100 "Old Impl"` left inside a block comment above the live
+ * `codeunit 50101 "New Impl"`.
  *
  * The regex anchors at line start, so a `//`-commented header never matched — but a block-
  * commented one starts its own line and does. Worse, if the commented object came FIRST it won
@@ -155,54 +156,126 @@ export function stripAlComments(source: string): string {
   return out.join("");
 }
 
+/** One AL object header found in a file: kind (lowercased keyword), id, quote-stripped name,
+ *  and the header's own start offset in the comment-stripped source (see `objectHeadersOf`).
+ *  Exported for `attributeHeader`'s own direct unit tests (project.test.ts), the same pattern
+ *  `stripAlComments` already uses — module-level export, not re-exported through `index.ts`. */
+export interface ObjectHeader {
+  readonly type: string;
+  readonly id: number;
+  readonly name: string;
+  readonly startIndex: number;
+}
+
+/** AL object kinds that can carry the injected `var MutationSelector: Codeunit "Mutation
+ *  Selector";` declaration — mirrors `canCarryMutationSelectorVar` (compile.ts) at object
+ *  granularity: that predicate answers "does this FILE have at least one", this answers
+ *  "is THIS object one". Kept in sync by hand (both are short, stable lists tied to the same
+ *  AL grammar fact — only a codeunit or a table can hold a `var` before/around its members in a
+ *  position `injectSelectorVarIntoObject` can anchor against). */
+const INJECTABLE_OBJECT_TYPES: ReadonlySet<string> = new Set(["codeunit", "table"]);
+
 /**
- * The declared object's kind, id and name. `type` is the matched AL keyword lowercased
- * (`table`, `codeunit`, ...) — a BC object id is unique only WITHIN a type, so every consumer
- * that identifies an object (coverage lookup above all) needs the pair, not the id alone.
+ * Every AL object header this file declares, kind lowercased, in source order. `type` is the
+ * matched AL keyword lowercased (`table`, `codeunit`, ...) — a BC object id is unique only
+ * WITHIN a type, so every consumer that identifies an object (coverage lookup above all) needs
+ * the pair, not the id alone.
  *
- * Exactly ONE object declaration per file is required, and a file with more THROWS. AL permits
- * several objects in one file (rare, but legal), and every layer downstream of here assumes one:
- *
- * - this function labels every mutant in the file with the FIRST header's `(type, id)`, so a
- *   mutant in the second object is looked up under the first object's coverage key — the wrong
- *   test set, hence a verdict that is silently wrong rather than merely imprecise (the exact
- *   failure the (type, id) pair key exists to prevent, see `MutantManifestEntry.objectType`);
- * - `injectMutationSelectorVar` (compile.ts) injects into `findFirst(codeunit) ?? findFirst
- *   (table)`, which for `page X` + `codeunit Y` in one file is the SECOND object, leaving the
- *   guards emitted into the first object with no declaration in scope: AL0118.
- *
- * Refusing the shape is the honest answer; producing verdicts we know can be wrong is not.
+ * AL permits several objects in one file (rare, but legal); this is R6's per-object
+ * attribution seam — `attributeHeader` uses the returned `startIndex`es to find which object a
+ * given mutant actually sits inside, instead of the old behaviour of labelling every mutant in
+ * the file with the FIRST header's `(type, id)` regardless of which object it was really in
+ * (silently wrong coverage-lookup keys, the exact failure `MutantManifestEntry.objectType`'s
+ * doc comment warns about). `assertNoUnsupportedObjectMix` is the remaining refusal: it still
+ * throws for a file that mixes an injectable object with a non-injectable one, since dropping
+ * only the non-injectable object's mutants (rather than the whole file) isn't implemented yet.
  */
-function objectHeaderOf(
-  source: string,
-  filePath: string,
-): { type: string; id: number; name: string } {
-  // Comment-free text, so a commented-out object neither wins the `matches[0]` race nor trips
-  // the "more than one object" refusal — see `stripAlComments`.
+function objectHeadersOf(source: string, filePath: string): readonly ObjectHeader[] {
+  // Comment-free text, so a commented-out object neither appears in the result nor wins any
+  // position race against a live one — see `stripAlComments`.
   // `matchAll` operates on an internal clone, so the shared `g` regex's `lastIndex` never carries
   // between calls (a plain `.exec` loop on OBJECT_HEADER would).
   const matches = [...stripAlComments(source).matchAll(OBJECT_HEADER)];
-  const first = matches[0];
-  if (first === undefined) throw new Error(`${filePath}: file has no AL object header`);
-  if (matches.length > 1) {
-    const found = matches.map((m) => `${m[1]?.toLowerCase()} ${m[2]} ${m[4] ?? m[5] ?? ""}`);
-    const why =
-      "LethAL supports exactly one AL object per file. Every mutant in the file would be " +
-      "attributed to the FIRST object's (objectType, objectId), so mutants in the others would " +
-      "be coverage-matched against the wrong object's tests — wrong verdicts, silently — and " +
-      "the selector var is injected into only one of the objects (AL0118 in the rest). Split " +
-      "them into one file each.";
+  if (matches.length === 0) throw new Error(`${filePath}: file has no AL object header`);
+  return matches.map((m) => {
+    const type = m[1];
+    if (type === undefined) {
+      // Unreachable while OBJECT_HEADER keeps group 1 — asserted rather than defaulted, because a
+      // wrong/absent object type silently merges two objects' coverage (see MutantManifestEntry).
+      throw new Error(`${filePath}: AL object header matched without an object keyword`);
+    }
+    if (m.index === undefined) {
+      // Unreachable: `matchAll` always sets `.index` on every match it yields. Asserted, not
+      // defaulted — a wrong start offset would misattribute every mutant after it.
+      throw new Error(`${filePath}: AL object header matched with no source offset`);
+    }
+    return {
+      type: type.toLowerCase(),
+      id: Number(m[2]),
+      name: m[4] ?? m[5] ?? "",
+      startIndex: m.index,
+    };
+  });
+}
+
+/**
+ * Refuses a file only when it mixes an injectable object (codeunit/table) with a non-injectable
+ * one (page/report/query/xmlport/enum/...). Two-or-more objects that are ALL injectable are
+ * supported (R6): each mutant is attributed to its own enclosing object by `attributeHeader`,
+ * and `injectMutationSelectorVar` (compile.ts) injects a declaration into every object that
+ * actually received a guard, not just the first.
+ *
+ * The mixed-kind shape stays refused. `generateMutationSet` (@lethal/runner) drops a file's
+ * specs only when the WHOLE file has zero injectable objects — a file holding one codeunit and
+ * one page still reaches here with specs generated for both, and there is no per-object
+ * DROPPING of just the page's specs (the same kind-filter `canCarryMutationSelectorVar` already
+ * applies file-wide, applied at object granularity instead) — that is a real capability
+ * extension, not yet built. Refusing the shape is the honest answer until it is.
+ */
+function assertNoUnsupportedObjectMix(headers: readonly ObjectHeader[], filePath: string): void {
+  if (headers.length <= 1) return;
+  const unsupported = headers.filter((h) => !INJECTABLE_OBJECT_TYPES.has(h.type));
+  if (unsupported.length === 0) return; // every object is injectable — R6 per-object path.
+  const found = headers.map((h) => `${h.type} ${h.id} ${h.name}`);
+  const unsupportedKinds = [...new Set(unsupported.map((h) => h.type))].join(", ");
+  const why = `LethAL attributes mutants per object only when every object in the file can carry the injected selector var (a codeunit or a table). This file also declares a ${unsupportedKinds}, and dropping only that object's mutants (rather than refusing the whole file) is not yet implemented. Split them into one file each.`;
+  throw new Error(
+    `writeInstrumentedProject: cannot instrument ${filePath} — it mixes ${found.join("; ")} in one file. ${why}`,
+  );
+}
+
+/**
+ * The object a mutant belongs to: the LAST header at or before the mutant's own start offset.
+ * Headers partition the file left to right — an AL object's body cannot contain another
+ * object's header — so this is exact, not a heuristic; it is the fix for the old "always the
+ * first header" rule that mislabelled every mutant in a file's second-and-later object (R6).
+ *
+ * The boundary is deliberately `<=` (a header AT `spec.before.startIndex` still counts, so the
+ * loop below breaks only on strictly-greater): a mutant whose `before` node starts at the exact
+ * same offset as a header belongs to THAT object, not the previous one — the header's own text
+ * is the first thing at that offset, so "at or after" is "inside this object", never "still
+ * inside the previous one". Exported (module-level, not through `index.ts` — see `ObjectHeader`)
+ * so this exact boundary is unit-testable without constructing a real multi-object AL fixture.
+ */
+export function attributeHeader(
+  headers: readonly ObjectHeader[],
+  spec: MutationSpec,
+  filePath: string,
+): ObjectHeader {
+  let best: ObjectHeader | undefined;
+  for (const header of headers) {
+    if (header.startIndex > spec.before.startIndex) break;
+    best = header;
+  }
+  if (best === undefined) {
+    // Unreachable via the normal pipeline (spec generation walks nodes inside the parsed
+    // objects), but a caller-constructed spec whose `before` sits before every header would
+    // otherwise silently fall through to `undefined` — fail loudly instead.
     throw new Error(
-      `writeInstrumentedProject: cannot instrument ${filePath} — it declares ${matches.length} AL objects (${found.join("; ")}). ${why}`,
+      `${filePath}: mutation site at offset ${spec.before.startIndex} sits before this file's first AL object header — cannot attribute it to an object.`,
     );
   }
-  const type = first[1];
-  if (type === undefined) {
-    // Unreachable while OBJECT_HEADER keeps group 1 — asserted rather than defaulted, because a
-    // wrong/absent object type silently merges two objects' coverage (see MutantManifestEntry).
-    throw new Error(`${filePath}: AL object header matched without an object keyword`);
-  }
-  return { type: type.toLowerCase(), id: Number(first[2]), name: first[4] ?? first[5] ?? "" };
+  return best;
 }
 
 /**
@@ -272,14 +345,20 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
   for (const f of input.files) {
     const ided = idedByFile.get(f.path) ?? [];
     const deduped = specsByFile.get(f.path) ?? [];
-    // Read the header BEFORE instrumenting: both of its throws (no object, several objects) mean
-    // this file can never be attributed correctly, and failing before the write keeps a refused
-    // file from being left behind, half-instrumented, in the artifact dir.
-    const header = objectHeaderOf(f.source, f.path);
+    // Read every object header BEFORE instrumenting: both remaining throws (no object header,
+    // an injectable object mixed with a non-injectable one) mean this file can never be
+    // attributed correctly, and failing before the write keeps a refused file from being left
+    // behind, half-instrumented, in the artifact dir.
+    const headers = objectHeadersOf(f.source, f.path);
+    assertNoUnsupportedObjectMix(headers, f.path);
     const compiled = compileSchemataForFile(f.source, f.root, deduped, ided, f.path);
     await writeFile(join(input.targetDir, basename(f.path)), compiled, "utf8");
     for (const { mutantId, spec } of ided) {
       const triggerName = triggerNameOf(spec);
+      // R6: attributed to ITS OWN enclosing object, not always the file's first header — a file
+      // legally declaring more than one AL object (all codeunit/table, guarded above) now gets
+      // correct per-mutant (objectType, objectId) coverage-lookup keys.
+      const header = attributeHeader(headers, spec, f.path);
       manifest.push({
         mutantId,
         file: f.path,

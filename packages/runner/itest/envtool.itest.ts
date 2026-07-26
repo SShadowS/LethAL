@@ -291,7 +291,7 @@ function assertVerdictTable(report: SessionReport): void {
 }
 
 async function main(): Promise<void> {
-  const files = await generateMutationSet(join(PROJECT_DIR, "src"));
+  const { files } = await generateMutationSet(join(PROJECT_DIR, "src"));
   const total = files.reduce((n, f) => n + f.specs.length, 0);
   assert.equal(
     total,

@@ -46,8 +46,14 @@ import {
   runOnce,
   runSession,
 } from "../src/orchestrator";
-import type { LeaseSessionConfig, LeaseTimers, SessionConfig } from "../src/orchestrator";
+import type {
+  LeaseSessionConfig,
+  LeaseTimers,
+  MutationSetResult,
+  SessionConfig,
+} from "../src/orchestrator";
 import { QuarantineStore } from "../src/quarantine-store";
+import { renderConsole } from "../src/report";
 import type { SessionOutcome } from "../src/report";
 import { SessionSafety, SessionUnsafeError } from "../src/session-safety";
 import { ResultsStore } from "../src/store";
@@ -1262,6 +1268,7 @@ describe("mutation score — timeout-killed contribution", () => {
       baselineGreen: true,
       batches: 1,
       unsupportedTests: [],
+      notInstrumented: { totalFiles: 0, files: [] },
       outcomes: [
         {
           mutant: {
@@ -1316,6 +1323,7 @@ describe("mutation score — timeout-killed contribution", () => {
       baselineGreen: true,
       batches: 1,
       unsupportedTests: [],
+      notInstrumented: { totalFiles: 0, files: [] },
       outcomes: [
         {
           mutant: {
@@ -1408,6 +1416,7 @@ describe("mutation score — timeout-killed contribution", () => {
       baselineGreen: true,
       batches: 1,
       unsupportedTests: [],
+      notInstrumented: { totalFiles: 0, files: [] },
       outcomes: [
         {
           mutant: {
@@ -1540,15 +1549,27 @@ describe("generateMutationSet: object kinds that cannot carry the selector var",
   test("drops the page's specs, keeps the codeunit's, and warns once naming the file and kind", async () => {
     const dirs = await pageProject();
     const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
-    let files: InstrumentedFile[];
+    let files: readonly InstrumentedFile[];
+    let skipped: MutationSetResult["skipped"];
+    let totalFiles: number;
     let messages: string[];
     try {
-      files = await generateMutationSet(dirs.projectDir);
+      ({ files, skipped, totalFiles } = await generateMutationSet(dirs.projectDir));
       messages = warnSpy.mock.calls.map((c) => String(c[0]));
     } finally {
       warnSpy.mockRestore();
     }
     expect(files.map((f) => f.path)).toEqual(["SandboxLogic.Codeunit.al"]);
+
+    // R5: the structured return, not just the console message — this is what `runSession`
+    // threads into `SessionReport.notInstrumented`, so it must survive as DATA, not just text.
+    expect(totalFiles).toBe(2); // SandboxLogic.Codeunit.al + SandboxPage.Page.al
+    expect(skipped).toHaveLength(1);
+    const [skippedFile] = skipped;
+    if (skippedFile === undefined) throw new Error("expected one skipped file");
+    expect(skippedFile.file).toBe("SandboxPage.Page.al");
+    expect(skippedFile.kinds).toContain("page_declaration");
+    expect(skippedFile.sites).toBeGreaterThan(0);
 
     const skips = messages.filter((m) => m.includes("skipped"));
     expect(skips).toHaveLength(1); // once per RUN, not once per file/spec
@@ -1586,6 +1607,65 @@ describe("generateMutationSet: object kinds that cannot carry the selector var",
         "utf8",
       );
       expect(published).toBe(PAGE_AL);
+    } finally {
+      warnSpy.mockRestore();
+      store.close();
+    }
+  });
+
+  // R5: the report itself must say how much of the project was skipped, not just stderr —
+  // `SessionReport.notInstrumented` is what `renderConsole` and `writeJsonReport` (--out) both
+  // read, so this asserts the field survives all the way from `generateMutationSet` through
+  // `runSession`/`buildReport`, not merely that a console warning fired.
+  test("report.notInstrumented names the skipped file and the total file count", async () => {
+    const dirs = await pageProject();
+    const backend = new StubBackend(CAPS_NST, () => "pass", ["IsOverBudget"]);
+    const store = new ResultsStore(":memory:");
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const report = await runSession({ backend, store, ...dirs, selectorIds });
+      expect(report.notInstrumented.totalFiles).toBe(2); // codeunit + page
+      expect(report.notInstrumented.fileCount).toBe(1);
+      expect(report.notInstrumented.siteCount).toBeGreaterThan(0);
+      expect(report.notInstrumented.files).toHaveLength(1);
+      const [skippedFile] = report.notInstrumented.files;
+      if (skippedFile === undefined) throw new Error("expected one skipped file");
+      expect(skippedFile.file).toBe("SandboxPage.Page.al");
+      expect(skippedFile.kinds).toContain("page_declaration");
+      expect(skippedFile.sites).toBeGreaterThan(0);
+
+      // The console render must not let a reader mistake this for a full-project score.
+      const rendered = renderConsole(report);
+      expect(rendered).toContain("NOT INSTRUMENTED");
+      expect(rendered).toContain("SandboxPage.Page.al");
+      expect(rendered).toContain("1/2");
+
+      // And a session with NOTHING skipped must report a genuinely empty account, not omit the
+      // field — a caller reading JSON should never need to null-check `notInstrumented`.
+      const codeunitOnlyDirs = {
+        projectDir: dirs.projectDir,
+        testDir: dirs.testDir,
+        instrumentedDir: join(dirs.projectDir, "..", "instr2"),
+      };
+      // Remove the page so this second run has nothing to skip.
+      await rm(join(dirs.projectDir, "SandboxPage.Page.al"));
+      const backend2 = new StubBackend(CAPS_NST, () => "pass", ["IsOverBudget"]);
+      const store2 = new ResultsStore(":memory:");
+      try {
+        const cleanReport = await runSession({
+          backend: backend2,
+          store: store2,
+          ...codeunitOnlyDirs,
+          selectorIds,
+        });
+        expect(cleanReport.notInstrumented.fileCount).toBe(0);
+        expect(cleanReport.notInstrumented.siteCount).toBe(0);
+        expect(cleanReport.notInstrumented.files).toEqual([]);
+        expect(cleanReport.notInstrumented.totalFiles).toBe(1);
+        expect(renderConsole(cleanReport)).not.toContain("NOT INSTRUMENTED");
+      } finally {
+        store2.close();
+      }
     } finally {
       warnSpy.mockRestore();
       store.close();
@@ -2283,7 +2363,7 @@ async function manifestMutants(
   projectDir: string,
   scratchDir: string,
 ): Promise<readonly MutantManifestEntry[]> {
-  const files = await generateMutationSet(projectDir);
+  const { files } = await generateMutationSet(projectDir);
   await writeInstrumentedProject({
     targetDir: scratchDir,
     files,

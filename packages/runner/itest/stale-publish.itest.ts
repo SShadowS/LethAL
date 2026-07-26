@@ -717,7 +717,7 @@ async function main(): Promise<void> {
     throw new Error(`${PROJECT_DIR}/app.json must carry string "id" and "version" fields`);
   }
 
-  const files = await generateMutationSet(join(PROJECT_DIR, "src"));
+  const { files } = await generateMutationSet(join(PROJECT_DIR, "src"));
   const tests = await discoverTests(TEST_DIR);
   const overBudgetRef = tests.find((t) => t.method === "OverBudgetDetected");
   if (overBudgetRef === undefined) {

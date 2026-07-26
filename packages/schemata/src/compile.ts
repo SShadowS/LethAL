@@ -50,7 +50,10 @@ export function compileSchemataForFile(
   // declaration per codeunit or TABLE that actually has a mutation in it — and throw for any
   // other object kind, since by this point the guard calls are already in `rewrites` and
   // shipping them without a declaration is precisely the AL0118 this injection prevents.
-  if (specs.length > 0) injectMutationSelectorVar(root, rewrites, filePath ?? "<file>");
+  // Per-object (R6): a file may legally declare more than one AL object, so this groups `specs`
+  // by their OWN enclosing object rather than injecting into whichever object the file happens
+  // to declare first — see `injectMutationSelectorVar`'s doc comment.
+  if (specs.length > 0) injectMutationSelectorVar(specs, rewrites, filePath ?? "<file>");
 
   return printWithRewrites(source, root, rewrites);
 }
@@ -187,25 +190,11 @@ export function describeObjectKinds(root: ALSyntaxNode): string {
  * filter — a caller-contract violation, and refusing it loudly beats emitting AL that cannot
  * compile.
  */
-function injectMutationSelectorVar(
-  root: ALSyntaxNode,
+function injectSelectorVarIntoObject(
+  object: ALSyntaxNode,
   rewrites: Map<ALSyntaxNode, string>,
   filePath: string,
 ): void {
-  const object = findFirst(root, ALNodeKind.codeunit) ?? findFirst(root, ALNodeKind.table);
-  if (object === null) {
-    const why =
-      'the `var MutationSelector: Codeunit "Mutation Selector";` declaration can only be ' +
-      "injected into a codeunit or a table. Mutation guards were already emitted for this " +
-      "file, so every `MutationSelector.Active(...)` call would fail to compile with AL0118. " +
-      "Spec generation is supposed to have dropped this file already (`generateMutationSet` " +
-      "filters on `canCarryMutationSelectorVar`); a caller building its own file list must " +
-      "apply the same filter, or add selector-var support for this object kind.";
-    throw new Error(
-      `compileSchemataForFile: cannot instrument ${filePath} — it declares ${describeObjectKinds(root)}, and ${why}`,
-    );
-  }
-
   const isTable = object.kind === ALNodeKind.table;
   const headerKinds = isTable ? TABLE_HEADER_KINDS : CODEUNIT_HEADER_KINDS;
   // Under the current v3 grammar `declarationMembers` already strips the
@@ -264,6 +253,89 @@ function injectMutationSelectorVar(
     insertionNodeAt(lastMember, lastMember.endIndex),
     `\n\n    var\n        MutationSelector: Codeunit "Mutation Selector";`,
   );
+}
+
+/**
+ * Nearest ancestor AL object declaration containing `node` (`codeunit_declaration`,
+ * `table_declaration`, `page_declaration`, ...) — the ancestor whose OWN parent is the
+ * `source_file` root. AL object declarations are always direct top-level children of the file
+ * (never nested inside another declaration), so this is exact regardless of which grammar kind
+ * the object is, unlike matching on a `_declaration`-suffixed rawKind: a TABLE's field-level
+ * trigger sits inside `field_declaration` (itself `_declaration`-suffixed, several levels below
+ * the table), so a "first `_declaration` ancestor" walk stops there instead of at the table —
+ * caught by `compile.test.ts`'s field-level-trigger case. `null` when `node` sits outside any
+ * object — shouldn't happen for AL actually parsed from a file, but a caller-constructed tree
+ * could hit it, and a defensive `null` beats silently walking off the top of the tree.
+ *
+ * This is a pure AST walk, so unlike `project.ts`'s regex-based `objectHeadersOf` it needs no
+ * comment-stripping of its own: a comment is never a syntax node, so a commented-out object
+ * simply isn't part of the tree to walk into.
+ */
+function enclosingObjectDeclaration(node: ALSyntaxNode): ALSyntaxNode | null {
+  let current: ALSyntaxNode | null = node;
+  while (current !== null) {
+    if (current.parent !== null && current.parent.kind === ALNodeKind.source_file) {
+      return current;
+    }
+    current = current.parent;
+  }
+  return null;
+}
+
+/**
+ * Injects `var MutationSelector: Codeunit "Mutation Selector";` into every object this file's
+ * `specs` actually put a guard in — not just the file's first object. A file may legally declare
+ * more than one AL object (rare, but legal AL); the old version of this function picked exactly
+ * one object for the whole file (`findFirst(codeunit) ?? findFirst(table)`), so for `table` +
+ * `codeunit` in one file it injected into the codeunit only, leaving every guard inside the
+ * table with no declaration in scope — AL0118 (R6).
+ *
+ * Per-object attribution here is the AST-accurate half of R6's fix: each spec's OWN enclosing
+ * object is found by walking up from `spec.before` (`enclosingObjectDeclaration`), objects are
+ * deduped by node identity (two specs in the same object must not double-inject), and each
+ * distinct object gets exactly one declaration. The companion half — labelling each manifest
+ * entry with ITS OWN object's `(objectType, objectId)` instead of the file's first header — is
+ * `project.ts`'s `attributeHeader`.
+ *
+ * A spec whose enclosing object is missing, or present but not a codeunit/table, still throws
+ * exactly as the single-object version did: the guard call is already spliced into `rewrites` by
+ * this point, so shipping it without a declaration in scope is the AL0118 this function exists
+ * to prevent. `writeInstrumentedProject` (@lethal/runner-adjacent, `project.ts`) is expected to
+ * have already refused any file mixing an injectable object with a non-injectable one
+ * (`assertNoUnsupportedObjectMix`) before this ever runs — what reaches here from an
+ * unsupported-kind object is therefore either a caller that assembled its own `InstrumentedFile`
+ * list without that check, or a mutation site sitting outside any object at all.
+ */
+function injectMutationSelectorVar(
+  specs: readonly MutationSpec[],
+  rewrites: Map<ALSyntaxNode, string>,
+  filePath: string,
+): void {
+  const objects = new Set<ALSyntaxNode>();
+  for (const spec of specs) {
+    const object = enclosingObjectDeclaration(spec.before);
+    if (
+      object === null ||
+      (object.kind !== ALNodeKind.codeunit && object.kind !== ALNodeKind.table)
+    ) {
+      const why =
+        'the `var MutationSelector: Codeunit "Mutation Selector";` declaration can only be ' +
+        "injected into a codeunit or a table. Mutation guards were already emitted for this " +
+        "file, so every `MutationSelector.Active(...)` call would fail to compile with AL0118. " +
+        "Spec generation is supposed to have dropped this file already (`generateMutationSet` " +
+        "filters on `canCarryMutationSelectorVar`, `writeInstrumentedProject` on " +
+        "`assertNoUnsupportedObjectMix`); a caller building its own file list must apply the " +
+        "same filters, or add selector-var support for this object kind.";
+      const kindText = object === null ? "no enclosing AL object declaration" : object.rawKind;
+      throw new Error(
+        `compileSchemataForFile: cannot instrument ${filePath} — a mutation guard sits inside ${kindText}, and ${why}`,
+      );
+    }
+    objects.add(object);
+  }
+  for (const object of objects) {
+    injectSelectorVarIntoObject(object, rewrites, filePath);
+  }
 }
 
 /**

@@ -453,6 +453,7 @@ const FAKE_REPORT: SessionReport = {
   mutationScore: null,
   mutants: [],
   unsupportedTests: [],
+  notInstrumented: { totalFiles: 0, fileCount: 0, siteCount: 0, files: [] },
 };
 
 const QUARANTINED_FAKE_REPORT: SessionReport = {
