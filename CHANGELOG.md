@@ -16,15 +16,20 @@ each one.
 First distributable build. LethAL has run against live Business Central servers throughout
 development; this is the first release that someone other than its authors can download and run.
 
-Alpha means the tool is honest about its own limits rather than complete: `--help` does not exist
-yet, the al-runner backend is measurably not authoritative, and several classes of AL construct
-are still never mutated. Known gaps are listed at the bottom of this entry.
+Alpha means the tool is honest about its own limits rather than complete: the al-runner backend is
+measurably not authoritative, survivors have never been individually verified on a real project,
+and several classes of AL construct are still never mutated. Known gaps are listed at the bottom of
+this entry.
 
 ### Added
 
 - **Standalone binaries** for Windows x64, Linux x64/arm64 and macOS x64/arm64, built with
   `bun build --compile`. No Bun, Node or npm install required on the target machine. The tree-sitter
   AL grammar and the web-tree-sitter runtime are embedded in the executable.
+- **`lethal --help` and `--version`** (R49), and usage for a bare `lethal`. Both are intercepted
+  before `parseArgs`, which runs in strict mode and previously turned `--help` — the first flag a
+  new user types — into a raw `TypeError` with a stack trace into the bundled binary. The version
+  is bundled by a static JSON import, not read from disk, for the reason R50 measured.
 - **Tier-2 mutation operators** (R10) — `RemoveTestField`, `RemoveSetRange`, `RemoveCalcFields`
   and `SwapModifyFlag`, over a shared `claimsRecordMethod` receiver predicate. These mutate table
   triggers, which Tier 1 never reached.
@@ -124,8 +129,6 @@ are still never mutated. Known gaps are listed at the bottom of this entry.
 
 ### Known limitations
 
-- **`lethal --help` does not exist.** Any unrecognised flag, `--help` included, exits 1 with a
-  `parseArgs` `TypeError`. Subcommands and required flags are documented in `fixtures/README.md`.
 - **The al-runner backend is not authoritative.** `asserterror` never fails a test there (R7), so
   a mutant killable only by an `asserterror` assertion is reported as survived. Under-reporting
   only, never a false kill. A table global written by a trigger is also dropped (R8). Re-confirm
