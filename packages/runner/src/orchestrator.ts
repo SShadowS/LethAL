@@ -1989,6 +1989,12 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         }
         baseline.push({ ref, verdict: v });
       }
+      // Charged BEFORE the early exits below, for the same reason the deploy clock is: both the
+      // quarantine `break` and the no-green-tests `continue` leave this scope without reaching the
+      // success-path accumulation, so a baseline that aborted used to report 0 ms and silently
+      // reattribute its whole cost to "overhead". Measured on a run quarantined mid-baseline:
+      // baseline 0.0s, overhead 70.1s, when essentially all of it was baseline.
+      baselineMs += Date.now() - baselineStartedMs;
       if (safety.isUnsafe) break; // stop the whole session — no mutant scheduling, no next batch
       const greenTests = baseline.filter((b) => b.verdict.outcome === "pass");
       if (greenTests.length < baseline.length) baselineGreenOverall = false;
@@ -2007,7 +2013,6 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         }
         continue;
       }
-      baselineMs += Date.now() - baselineStartedMs;
       const baselineDuration = new Map(
         greenTests.map((b) => [testKeyOf(b.ref), b.verdict.durationMs]),
       );

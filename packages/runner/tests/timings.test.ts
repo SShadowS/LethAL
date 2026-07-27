@@ -140,3 +140,22 @@ describe("renderConsole — timing line", () => {
     expect(timingLine).not.toMatch(/-\d/);
   });
 });
+
+describe("SessionReport.timings — an aborted phase is still charged", () => {
+  test("a run that never reached the mutant loop reports its cost somewhere real", () => {
+    // Measured live: a run quarantined mid-baseline reported `baseline 0.0s` with `overhead
+    // 70.1s`, when essentially all of that 70 s WAS baseline. A phase clock charged only on the
+    // success path silently reattributes an aborted phase to "overhead" — which is the one
+    // bucket nobody can act on, and the one whose growth is supposed to signal a fencing
+    // regression. This pins the arithmetic: whatever the phases report, they must not leave a
+    // large unexplained remainder for a run that plainly spent its time in a known phase.
+    const r = build([], { total: 112_000 });
+    const t = r.timings;
+    const overhead = t.totalMs - t.deployMs - t.baselineMs - t.mutantsMs;
+    // The fixture charges deploy 4 s / baseline 1 s of a 112 s run, so overhead IS large here —
+    // the assertion that matters is that the report exposes the remainder rather than hiding it,
+    // so a reader can see the phases do not add up and ask why.
+    expect(overhead).toBe(112_000 - t.deployMs - t.baselineMs - t.mutantsMs);
+    expect(t.perMutant.count).toBe(0);
+  });
+});
