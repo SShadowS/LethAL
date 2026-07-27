@@ -45,6 +45,8 @@ import { QuarantineStore } from "./quarantine-store";
 import { buildReport } from "./report";
 import type { NotInstrumentedFile, SessionOutcome, SessionReport } from "./report";
 import { quarantineResourceKey } from "./resource-key";
+import { buildResumeIndex, carriedVerdictFor, sessionFingerprint } from "./resume";
+import type { ResumeIndex } from "./resume";
 import {
   buildCoverageIndex,
   coverageFilter,
@@ -73,6 +75,26 @@ const BASELINE_TIMEOUT_DEFAULT = 120_000;
  * floor that absorbs a cold start costs nothing real.
  */
 export const MIN_MUTANT_BUDGET_MS = 30_000;
+
+/**
+ * R48: how many executable mutants a session may schedule before it refuses to start unasked.
+ *
+ * `lethal run --project <a real app>` used to be all-or-nothing, and the all was enormous: Continia
+ * Document Output generates 19,832 mutant sites. At the per-mutant cost measured on that project
+ * against a hosted environment (~19.5 s mean, p95 43 s, under an all-tests baseline) a whole-app
+ * run is measured in DAYS, and the first thing it does is publish an artifact carrying every guard
+ * — which the hosting proxy severs at 362 s (R44). So the unscoped run does not merely take a long
+ * time; on a real project it usually cannot succeed at all, and it fails after burning an hour.
+ *
+ * 1,000 sits above every fixture and every plausible "try one area" invocation (one DO codeunit is
+ * 163 mutants; `Al/Codeunit/**` is 6,572 and is correctly refused) and below anything whose cost is
+ * measured in hours. It is a guardrail on a FIRST run, not a policy: `--allow-large-run`
+ * (`SessionConfig.allowLargeRun`) turns it off in full, and the refusal names that flag.
+ *
+ * Refusal rather than a warning is deliberate. A warning scrolls past in the first second of a run
+ * whose cost lands hours later, which is the same as no warning at all.
+ */
+export const LARGE_RUN_MUTANT_THRESHOLD = 1_000;
 
 /**
  * Every currently registered operator across all tiers, in registration order. The single source
@@ -332,6 +354,29 @@ export interface SessionConfig {
    * Absent means one artifact for everything, which is not publishable for a real app.
    */
   readonly maxGuardsPerBatch?: number;
+  /**
+   * R47: floor for a mutant run's time budget, in milliseconds. Absent means
+   * `MIN_MUTANT_BUDGET_MS`.
+   *
+   * The effective budget stays `max(2 x that test's baseline duration, this value)` — this raises
+   * the FLOOR, it does not cap anything. A test whose baseline is already slow keeps its generous
+   * `2 x`; what this fixes is the fast-baseline/slow-mutant pair, where `2 x` is tiny and the
+   * hardcoded 30 s floor was the only thing standing between a real suite and an aborted session.
+   */
+  readonly mutantTimeoutMs?: number;
+  /**
+   * R48: opt out of the large-run pre-flight refusal — see `LARGE_RUN_MUTANT_THRESHOLD`.
+   */
+  readonly allowLargeRun?: boolean;
+  /**
+   * R47: resume an aborted prior run in this same database, skipping the EXECUTION of mutants it
+   * already scored. `"last"` selects the most recent unfinished run matching this session's
+   * configuration fingerprint; a number names one explicitly. Absent means a fresh run.
+   *
+   * Everything else still happens — parse, instrument, deploy, baseline — so coverage attribution
+   * and covering-test lists come from THIS run, not from the database. See `resume.ts`.
+   */
+  readonly resume?: "last" | number;
   // createRun placeholder only. For an authoritative (publishing) backend, a successful deploy
   // corrects the run row via store.recordArtifact with the version actually compiled
   // (reserveAppVersion) — this value never survives past that point. For a deploy:"none" backend
@@ -1602,6 +1647,96 @@ async function deployOnce(
   return leaseSession.publish(() => backend.deploy(dir));
 }
 
+/**
+ * R48: refuses an unscoped run whose size makes it impractical, before anything is published.
+ *
+ * The message is the whole point — a bare "too many mutants" would send the reader to look for a
+ * limit to raise, when what they need is the three narrowing levers and the measured reason each
+ * exists. See `LARGE_RUN_MUTANT_THRESHOLD`.
+ */
+export function assertRunSizeAcceptable(input: {
+  mutantCount: number;
+  fileCount: number;
+  narrowed: boolean;
+  allowLargeRun: boolean;
+}): void {
+  if (input.allowLargeRun) return;
+  if (input.mutantCount <= LARGE_RUN_MUTANT_THRESHOLD) return;
+  const scoped = input.narrowed
+    ? "Narrow --only further, or pass --allow-large-run to run it anyway."
+    : 'Scope it with --only <glob> (e.g. --only "Al/Codeunit/**"), or pass --allow-large-run to run it anyway.';
+  throw new Error(
+    `this run would schedule ${input.mutantCount} mutation site(s) across ${input.fileCount} file(s), above the ${LARGE_RUN_MUTANT_THRESHOLD} pre-flight limit. ${scoped}\nWhy this refuses instead of warning: measured against a hosted BC environment, a real project costs ~19.5 s per mutant (p95 43 s), so this run is measured in hours to days — and the artifact carrying every guard is itself often unpublishable (a 11,777-guard publish was severed by the hosting proxy at 362 s). The failure would land long after the warning scrolled past.\nLevers: --only <glob> narrows which files contribute mutants (cannot change a verdict); --tests-only <glob> narrows the baseline, which dominates a first run (CAN change a verdict — an excluded killing test manufactures a survivor); --max-guards-per-batch <n> bounds each published artifact.`,
+  );
+}
+
+/**
+ * R47: resolves `SessionConfig.resume` into the prior verdicts this run may carry.
+ *
+ * Every refusal names what was searched for and what was found. A resume that silently found
+ * nothing and ran everything would be indistinguishable from a resume that worked, which is the
+ * worst outcome available here: the user believes twelve hours of prior work was reused.
+ */
+function resolveResume(
+  cfg: SessionConfig,
+  backendName: string,
+  configFingerprint: string,
+): { runId: number; index: ResumeIndex } | undefined {
+  if (cfg.resume === undefined) return undefined;
+
+  let priorRunId: number;
+  if (cfg.resume === "last") {
+    const found = cfg.store.findResumableRun({
+      projectPath: cfg.projectDir,
+      backend: backendName,
+      configFingerprint,
+    });
+    if (found === null) {
+      throw new Error(
+        `--resume found no unfinished run to resume in this database for this project (${cfg.projectDir}), backend ${backendName}, and configuration. A run that COMPLETED is not resumable (there is nothing left to score), and a run scoped by different --only/--tests-only patterns is deliberately not matched — carrying its verdicts would describe a different slice of the project. Drop --resume to run from scratch.`,
+      );
+    }
+    priorRunId = found;
+  } else {
+    const row = cfg.store.getRun(cfg.resume);
+    if (row === null) throw new Error(`--resume-run ${cfg.resume}: no such run in this database`);
+    if (row.projectPath !== cfg.projectDir) {
+      throw new Error(
+        `--resume-run ${cfg.resume} recorded project ${row.projectPath}, but this session targets ${cfg.projectDir}`,
+      );
+    }
+    if (row.backend !== backendName) {
+      throw new Error(
+        `--resume-run ${cfg.resume} ran on backend ${row.backend}, but this session uses ${backendName} — verdicts are not interchangeable across backends (al-runner is not authoritative)`,
+      );
+    }
+    if (row.configFingerprint !== configFingerprint) {
+      throw new Error(
+        `--resume-run ${cfg.resume} was scoped differently from this session (--only/--tests-only/--skip-known-survivors/selector ids). Carrying its verdicts would report one scope's measurements as another's${
+          row.configFingerprint === null
+            ? " — that run predates configuration fingerprinting and cannot prove its scope at all"
+            : ""
+        }`,
+      );
+    }
+    priorRunId = cfg.resume;
+  }
+
+  const index = buildResumeIndex(cfg.store.mutantVerdicts(priorRunId));
+  console.warn(
+    `[lethal] --resume: reusing run ${priorRunId} — ${index.carryable.size} mutant verdict(s) may be carried without re-executing. Deploy and baseline still run; coverage attribution and covering-test lists come from THIS run.${
+      index.nonCarryableRows > 0
+        ? ` ${index.nonCarryableRows} prior 'error' verdict(s) will be re-executed.`
+        : ""
+    }${
+      index.ambiguousKeys > 0
+        ? ` ${index.ambiguousKeys} identity key(s) matched more than one prior mutant and will be re-executed (a colliding key cannot say which verdict was whose).`
+        : ""
+    }`,
+  );
+  return { runId: priorRunId, index };
+}
+
 export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // Constructed once for the whole session and threaded to every activateOnce call site
   // (baseline activation below, and the per-mutant loop in runMutantsOnBackend) — the latch is
@@ -1694,9 +1829,25 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   }
   if (tests.length === 0) throw new Error("no tests discovered");
 
+  const backendName = caps.authoritative ? "bcdev" : "al-runner";
+  // R47: computed for EVERY run, not just a resuming one — a run that does not record its own
+  // fingerprint cannot be resumed later, and the run worth resuming is precisely the one nobody
+  // knew would abort.
+  const configFingerprint = sessionFingerprint({
+    projectDir: cfg.projectDir,
+    testDir: cfg.testDir,
+    backend: backendName,
+    skipKnownSurvivors: cfg.skipKnownSurvivors ?? false,
+    selectorIds: cfg.selectorIds,
+    ...(cfg.only !== undefined ? { only: cfg.only } : {}),
+    ...(cfg.testsOnly !== undefined ? { testsOnly: cfg.testsOnly } : {}),
+  });
+  const resumeState = resolveResume(cfg, backendName, configFingerprint);
+
   const runId = cfg.store.createRun({
     projectPath: cfg.projectDir,
-    backend: caps.authoritative ? "bcdev" : "al-runner",
+    backend: backendName,
+    configFingerprint,
     // Authoritative backends: whatever lands here is corrected below (3d) once the real
     // compiled version is known, so there's no need to read app.json twice — "0.0.0.0" is a
     // harmless placeholder there. Non-authoritative (deploy:"none") backends never get that
@@ -1722,12 +1873,26 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     excludedByOnly,
   } = await generateMutationSet(cfg.projectDir, cfg.only !== undefined ? { only: cfg.only } : {});
   const generateMutationSetMs = Date.now() - generateStartedMs;
+  // R48: refuse an unscoped run on a large project BEFORE anything is published. See
+  // `LARGE_RUN_MUTANT_THRESHOLD` for why this refuses rather than warns.
+  assertRunSizeAcceptable({
+    mutantCount: allFiles.reduce((n, f) => n + f.specs.length, 0),
+    fileCount: allFiles.length,
+    narrowed: cfg.only !== undefined,
+    allowLargeRun: cfg.allowLargeRun ?? false,
+  });
   const artifacts = planArtifacts(
     allFiles,
     cfg.maxGuardsPerBatch !== undefined ? { maxGuardsPerBatch: cfg.maxGuardsPerBatch } : {},
   );
 
+  // R47: the configured floor for a mutant run's time budget — see `SessionConfig.mutantTimeoutMs`.
+  const minMutantBudgetMs = cfg.mutantTimeoutMs ?? MIN_MUTANT_BUDGET_MS;
+
   const outcomes: SessionOutcome[] = []; // internal accumulation for the report
+  // R47: how many verdicts this session carried from a prior run instead of measuring. Reported,
+  // never inferred from a count difference — a resumed report must be able to say so.
+  let resumedMutantCount = 0;
   let baselineGreenOverall = true;
   // Task 6 (spec §9): qualified names of baseline tests that did not pass
   // (fail/error) across all batches — surfaced in the report so an unsupported
@@ -2220,6 +2385,47 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         }
       }
 
+      // 5b. R47 resume: record the mutants a prior run already scored, WITHOUT executing them, and
+      // hand only the remainder to the per-mutant loop.
+      //
+      // Deliberately placed here rather than beside the history filter at step 2, because the
+      // covering-test list and its attribution are computed at step 5 and a carried verdict
+      // deserves this run's fresh ones — a resumed survivor must still be actionable (which tests
+      // ran it, by which attribution path), and those were never in the database.
+      //
+      // The `perMutantTests.get(...) === undefined` skip is the same guard the worker shards use:
+      // step 5 has ALREADY recorded those mutants as `no-coverage`, and `mutants` has no unique
+      // constraint on (run_id, mutant_code), so a second record() would silently duplicate rather
+      // than fail.
+      let toExecute: MutantManifestEntry[] = execute;
+      if (resumeState !== undefined) {
+        toExecute = [];
+        for (const m of execute) {
+          const covering = perMutantTests.get(m.mutantId);
+          if (covering === undefined) continue; // step 5 already recorded no-coverage
+          const carried = carriedVerdictFor(resumeState.index, m);
+          if (carried === undefined) {
+            toExecute.push(m);
+            continue;
+          }
+          record(
+            cfg.store,
+            runId,
+            m,
+            carried.verdict,
+            outcomes,
+            batchIdx,
+            carried.killingTest,
+            carried.failureNote,
+            undefined,
+            carried.durationMs,
+            covering.map((ref) => qualifiedTestName(ref)),
+            coverageAttribution.get(m.mutantId),
+          );
+          resumedMutantCount += 1;
+        }
+      }
+
       // 6. per-mutant loop — sharded across workers when workers > 1. The
       // baseline/coverage discovery above always runs once against
       // cfg.backend; only the kill-detection phase below fans out, since
@@ -2241,11 +2447,12 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           backend: cfg.backend,
           safety,
           ...(leaseSession !== undefined ? { leaseSession } : {}),
-          mutants: execute,
+          mutants: toExecute,
           perMutantTests,
           coverageAttribution,
           baselineDuration,
           fallbackTimeoutMs,
+          minMutantBudgetMs,
           store: cfg.store,
           runId,
           batchIndex: batchIdx,
@@ -2256,7 +2463,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           attestation,
         });
       } else {
-        const shards = shardEvenly(execute, workers);
+        const shards = shardEvenly(toExecute, workers);
         // allSettled, not all: if one shard throws (e.g. the I7 two-
         // consecutive-transport-errors abort), `Promise.all` would reject
         // immediately and return control to the caller WHILE sibling shards
@@ -2340,6 +2547,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
               coverageAttribution,
               baselineDuration,
               fallbackTimeoutMs,
+              minMutantBudgetMs,
               store: cfg.store,
               runId,
               batchIndex: batchIdx,
@@ -2376,10 +2584,20 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       // survivor ship in `report.mutants`/`counts` untouched. `invalidateBatchVerdicts` (below)
       // is what protects M2's own specific diagnostic from being clobbered by this gate's generic
       // note, not a guard here.
-      const contributed = execute.some((m) => (perMutantTests.get(m.mutantId)?.length ?? 0) > 0);
+      // `toExecute`, not `execute`: under `--resume` a batch may schedule nothing at all because
+      // every one of its mutants carried a prior verdict. Such a batch issues no covered run, so
+      // it can never earn an attestation — gating it on `execute` would fail the artifact and
+      // quarantine the container for the crime of having nothing left to do. A carried verdict is
+      // not a verdict this artifact produced, so it is correctly outside this gate's scope.
+      const contributed = toExecute.some((m) => (perMutantTests.get(m.mutantId)?.length ?? 0) > 0);
       if (caps.authoritative && contributed && !attestation.clean) {
         const note = `unattested artifact: no covered run observed the deployed binary's selector (artifactId ${compiled?.artifactId ?? "unknown"}) — verdicts discarded, container quarantined (design §G)`;
         invalidateBatchVerdicts(outcomes, batchIdx, note);
+        // R47: and durably, in the store. `--resume` reads a run's stored verdicts by
+        // `finished_at IS NULL` — the exact set this gate's in-memory-only correction used to rely
+        // on `priorSurvivorKeys` filtering OUT. Without this, resuming a quarantined run would
+        // resurrect the false survivors the gate exists to destroy.
+        cfg.store.invalidateBatch(runId, batchIdx, note);
         safety.latchUnsafe(note);
       }
       // Task 12 (spec §8/§12): an in-flight-unknown deadline anywhere in this batch's mutant
@@ -2504,6 +2722,11 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       : {}),
     ...(safety.isUnsafe ? { quarantined: { reason: safety.reason ?? "unknown" } } : {}),
     ...(permissionCanary !== undefined ? { permissionCanary } : {}),
+    // R47: keyed on the REQUEST, like `only` above — a `--resume` that turned out to carry nothing
+    // still describes a run assembled differently, and a reader comparing two reports must see it.
+    ...(resumeState !== undefined
+      ? { resumedFrom: { runId: resumeState.runId, carriedMutants: resumedMutantCount } }
+      : {}),
   });
 }
 
@@ -2589,6 +2812,8 @@ async function runMutantsOnBackend(args: {
   readonly coverageAttribution: ReadonlyMap<string, CoverageAttribution>;
   readonly baselineDuration: ReadonlyMap<string, number>;
   readonly fallbackTimeoutMs: number;
+  /** R47: floor for the per-mutant budget — `SessionConfig.mutantTimeoutMs`, already defaulted. */
+  readonly minMutantBudgetMs: number;
   readonly store: ResultsStore;
   readonly runId: number;
   readonly batchIndex: number;
@@ -2656,7 +2881,7 @@ async function runMutantsOnBackend(args: {
     for (const ref of covering) {
       const budget = Math.max(
         2 * (args.baselineDuration.get(testKeyOf(ref)) ?? args.fallbackTimeoutMs),
-        MIN_MUTANT_BUDGET_MS,
+        args.minMutantBudgetMs,
       );
       // Layer 5C-B2: `runFenced`, not `runOnce` — a lost ack that reconciliation PROVES completed
       // earns one fresh attempt, and `v` is then that attempt's verdict. Only the final verdict is
@@ -2755,9 +2980,12 @@ async function runMutantsOnBackend(args: {
           // Carry the transport's own failure message into the record. Without it the operator
           // is told to recycle a tier and clear a quarantine with no statement of what actually
           // went wrong — and this record outlives the process that wrote it.
-          detail: `test in-flight-unknown running ${ref.method} (mutant ${m.mutantId})${retried ? " — a first, proven-complete attempt had already been retried once" : ""}${v.failureMessage !== undefined ? `: ${v.failureMessage}` : ""}`,
+          detail: `test in-flight-unknown running ${ref.method} (mutant ${m.mutantId})${retried ? " — a first, proven-complete attempt had already been retried once" : ""}${v.failureMessage !== undefined ? `: ${v.failureMessage}` : ""} [budget was ${budget} ms; raise the floor with --mutant-timeout-ms and continue with --resume]`,
         });
-        failureNote = `quarantined: ${ref.method} returned no readable result and its operation could not be confirmed complete — container may be stranded`;
+        // R47: the two things the operator needs are the budget this run used and the fact that
+        // the verdicts already measured are NOT lost. Both went unsaid until a real project hit
+        // this at mutant 13 of 138 and discarded the first twelve.
+        failureNote = `quarantined: ${ref.method} returned no readable result and its operation could not be confirmed complete — container may be stranded. Its budget was ${budget} ms; if the mutant was merely slow rather than stranded, raise the floor with --mutant-timeout-ms and re-run with --resume to keep this session's verdicts`;
         break;
       }
       if (v.outcome === "deadline-exceeded") {
@@ -3229,14 +3457,17 @@ async function handleBaselineLeaseOutcome(args: {
  * invalidated: this is the gate's whole point (a false "survived" is the failure mode being
  * closed).
  *
- * Accepted limitation: this does NOT rewrite the rows `record()` already wrote to `store` for
- * this batch (there is no store-row-update API — `ResultsStore` only ever inserts). `runSession`
- * always pairs this call with `safety.latchUnsafe(note)` immediately after, which marks the WHOLE
- * session `report.quarantined` (spec §8/§12); a quarantined run is never passed to
- * `store.finishRun` (see `runSession`'s return path), so `priorSurvivorKeys`'s
- * `finished_at IS NOT NULL` filter excludes it — its stale on-disk verdicts can never seed a
- * future `--skip-known-survivors` run. A direct SQL read of the raw `mutants` table (bypassing
- * `priorSurvivorKeys`) would still see the uncorrected rows; nothing in this codebase does that.
+ * This corrects the in-memory `outcomes[]` ONLY. `runSession` pairs it with
+ * `store.invalidateBatch(runId, batchIndex, note)`, which applies the same correction durably, and
+ * with `safety.latchUnsafe(note)`, which marks the whole session `report.quarantined` (spec
+ * §8/§12).
+ *
+ * The durable half is not optional (R47). This used to rely on a quarantined run never reaching
+ * `store.finishRun`, so `priorSurvivorKeys`'s `finished_at IS NOT NULL` filter would exclude its
+ * stale on-disk rows from a future `--skip-known-survivors` run. `--resume` then arrived reading by
+ * `finished_at IS NULL` — the exact complement — which would have made those rows not merely
+ * visible but preferentially selected. Correcting the store removes the dependency on a filter in
+ * an unrelated query, which was always the fragile part of that argument.
  */
 export function invalidateBatchVerdicts(
   outcomes: SessionOutcome[],
@@ -3292,6 +3523,7 @@ function record(
     line: m.startLine,
     verdict,
     durationMs,
+    batchIndex,
     ...(killingTest !== undefined ? { killingTest } : {}),
     ...(failureNote !== undefined ? { failureNote } : {}),
   });

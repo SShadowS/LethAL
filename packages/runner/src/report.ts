@@ -224,6 +224,22 @@ export interface SessionReport {
    */
   readonly staleTestApp?: { readonly missingTests: readonly string[] };
   /**
+   * R47: present when this run was assembled with `--resume`, naming the prior run it drew from and
+   * how many verdicts it carried instead of measuring.
+   *
+   * Recorded because a resumed report is a composite: `carriedMutants` verdicts were measured
+   * against a DIFFERENT published artifact, in a different session, possibly against a differently
+   * behaving environment. Everything that could drift with the source is pinned — a carried verdict
+   * only attaches to a mutant whose `astHash` still matches, and a resume across differing
+   * `--only`/`--tests-only` scopes is refused outright — but "the environment was the same" is not
+   * something LethAL can check, so it says what it did instead of implying one measurement.
+   *
+   * `carriedMutants: 0` with a `runId` present is meaningful and not a bug: the prior run had
+   * nothing carryable (every verdict was an `error`, or every identity key collided), and the
+   * reader should see that the resume bought nothing rather than assume it worked.
+   */
+  readonly resumedFrom?: { readonly runId: number; readonly carriedMutants: number };
+  /**
    * Wall-clock cost of this run, split into the phases that scale differently — the whole point
    * of recording it. `deploy` scales with PROJECT size (every file compiles, whether or not it
    * was mutated); `mutants` scales with MUTANT count; `baseline` is a fixed per-batch toll. A
@@ -445,6 +461,8 @@ export interface BuildReportInput {
   /** R31: tests the source declares that the server had no result for — see
    *  `SessionReport.staleTestApp`. */
   readonly staleTestApp?: { readonly missingTests: readonly string[] };
+  /** R47: the prior run `--resume` drew from — see `SessionReport.resumedFrom`. */
+  readonly resumedFrom?: { readonly runId: number; readonly carriedMutants: number };
   /** Phase wall-clock measured by `runSession` — see `SessionReport.timings`. The per-mutant
    *  distribution is derived here from `outcomes`, so only the phase totals are passed in. */
   readonly timings: {
@@ -605,6 +623,11 @@ export function buildReport(input: BuildReportInput): SessionReport {
   if (input.testsOnly !== undefined && input.testsOnly.length > 0) caveats.push("tests-narrowed");
   if (input.notInstrumented.files.length > 0) caveats.push("uninstrumentable-files");
   if (input.staleTestApp !== undefined) caveats.push("stale-test-app");
+  // R47: a caveat, not a reliability downgrade. The verdicts carried are real measurements taken
+  // over the same source (identity-matched) and the same scope (fingerprint-matched) — calling
+  // that "degraded" would put an honest resume in the same bucket as a red baseline. What it IS
+  // is a composite of two sessions, and the reader is entitled to know before comparing runs.
+  if (input.resumedFrom !== undefined) caveats.push("resumed");
   if (input.untargetedTriggerCount > 0) caveats.push("untargeted-triggers");
   const narrowed =
     input.only !== undefined || (input.testsOnly !== undefined && input.testsOnly.length > 0);
@@ -653,6 +676,7 @@ export function buildReport(input: BuildReportInput): SessionReport {
     ...(input.only !== undefined ? { only: input.only } : {}),
     ...(input.testsOnly !== undefined ? { testsOnly: input.testsOnly } : {}),
     ...(input.staleTestApp !== undefined ? { staleTestApp: input.staleTestApp } : {}),
+    ...(input.resumedFrom !== undefined ? { resumedFrom: input.resumedFrom } : {}),
     timings: {
       totalMs: input.timings.totalMs,
       generateMutationSetMs: input.timings.generateMutationSetMs,
@@ -726,6 +750,18 @@ export function renderConsole(r: SessionReport): string {
     );
     for (const t of r.staleTestApp.missingTests.slice(0, 10)) lines.push(`  ${t}`);
     if (n > 10) lines.push(`  ... ${n - 10} more`);
+  }
+  // R47: its own line rather than relying on the SCOPE line below, which only prints when
+  // `reliability` is not "full" — and a resume does not degrade reliability (see the caveat's
+  // rationale in `buildReport`). Without this a resumed run would look identical to a fresh one.
+  if (r.resumedFrom !== undefined) {
+    lines.push(
+      `RESUMED: ${r.resumedFrom.carriedMutants} verdict(s) carried from run ${r.resumedFrom.runId} without re-executing. They were measured over the same source (identity-matched) and the same scope, but by a different published artifact in an earlier session.${
+        r.resumedFrom.carriedMutants === 0
+          ? " Nothing was actually carried — the prior run had no reusable verdict, so this run measured everything itself."
+          : ""
+      }`,
+    );
   }
   // The score's own limits, immediately after it. A reader quotes `score: 15.7%` long before
   // correlating four separate qualifier fields, so the qualification has to arrive with it.

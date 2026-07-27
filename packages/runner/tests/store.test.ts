@@ -18,6 +18,9 @@ function mutantRow(verdict: MutantVerdict, over: Record<string, unknown> = {}) {
     line: 12,
     verdict,
     durationMs: 40,
+    // R47: every mutant row records the batch that produced it, so `invalidateBatch` can name one
+    // artifact's verdicts (`mutant_code` restarts numbering per batch and cannot).
+    batchIndex: 0,
     ...over,
   };
 }

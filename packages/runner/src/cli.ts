@@ -35,6 +35,7 @@ import type { EnvToolSession } from "./env-tool-session";
 import { HarnessVerifier } from "./harness";
 import { LeaseClient } from "./lease";
 import {
+  LARGE_RUN_MUTANT_THRESHOLD,
   defaultQuarantineDir,
   generateMutationSet,
   planArtifacts,
@@ -286,6 +287,27 @@ export interface RunCliConfig {
    * repeating both — pair it with `--tests-only` (R45) on a large suite.
    */
   readonly maxGuardsPerBatch?: number;
+  /**
+   * R47: `--mutant-timeout-ms <n>` raises the FLOOR of the per-mutant time budget. Absent means
+   * `MIN_MUTANT_BUDGET_MS` (30 s).
+   *
+   * The effective budget stays `max(2 x that test's baseline duration, this)`. It exists because
+   * the floor was a hardcoded constant with no config surface, and exceeding it costs the WHOLE
+   * run: an over-budget run is indistinguishable from one the server may still be executing, so
+   * the session quarantines. Measured on a real project, that discarded 12 scored mutants at
+   * mutant 13 of 138.
+   */
+  readonly mutantTimeoutMs?: number;
+  /**
+   * R47: `--resume` (most recent unfinished run) or `--resume-run <id>` (a named one). Absent means
+   * a fresh run. See `SessionConfig.resume`.
+   */
+  readonly resume?: "last" | number;
+  /**
+   * R48: `--allow-large-run` opts out of the pre-flight size refusal — see
+   * `LARGE_RUN_MUTANT_THRESHOLD`.
+   */
+  readonly allowLargeRun?: boolean;
 }
 
 /**
@@ -386,6 +408,12 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
       "tests-only": { type: "string", multiple: true },
       // R44: see `RunCliConfig.maxGuardsPerBatch`.
       "max-guards-per-batch": { type: "string" },
+      // R47: see `RunCliConfig.mutantTimeoutMs` / `resume`.
+      "mutant-timeout-ms": { type: "string" },
+      resume: { type: "boolean", default: false },
+      "resume-run": { type: "string" },
+      // R48: see `RunCliConfig.allowLargeRun`.
+      "allow-large-run": { type: "boolean", default: false },
     },
   });
 
@@ -454,7 +482,45 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     throw new Error("--max-guards-per-batch must be a positive integer");
   }
 
+  // R47: the per-mutant budget floor. Rejected at parse time like every other numeric flag here.
+  const mutantTimeoutRaw = values["mutant-timeout-ms"];
+  const mutantTimeoutMs = mutantTimeoutRaw === undefined ? undefined : Number(mutantTimeoutRaw);
+  if (
+    mutantTimeoutMs !== undefined &&
+    (!Number.isInteger(mutantTimeoutMs) || mutantTimeoutMs < 1)
+  ) {
+    throw new Error("--mutant-timeout-ms must be a positive integer (milliseconds)");
+  }
+
+  // R47: `--resume` takes the most recent unfinished run; `--resume-run <id>` names one. Both at
+  // once is a contradiction, not a precedence question — refuse rather than silently pick.
+  const resumeLast = values.resume === true;
+  const resumeRunRaw = values["resume-run"];
+  if (resumeLast && resumeRunRaw !== undefined) {
+    throw new Error("--resume and --resume-run <id> are mutually exclusive");
+  }
+  const resumeRunId = resumeRunRaw === undefined ? undefined : Number(resumeRunRaw);
+  if (resumeRunId !== undefined && (!Number.isInteger(resumeRunId) || resumeRunId < 1)) {
+    throw new Error("--resume-run must be a positive integer run id");
+  }
+  const resume: { resume?: "last" | number } = resumeLast
+    ? { resume: "last" }
+    : resumeRunId !== undefined
+      ? { resume: resumeRunId }
+      : {};
+
   if (values["dry-run"] === true) {
+    // A dry run executes nothing, so there is no per-mutant budget to floor and no prior verdict
+    // to reuse. Accepting either silently would imply it had done something — the same reasoning
+    // `--tests-only` gets immediately below.
+    if (mutantTimeoutMs !== undefined) {
+      throw new Error(
+        "--mutant-timeout-ms has no effect with --dry-run (a dry run executes no mutants)",
+      );
+    }
+    if (resumeLast || resumeRunRaw !== undefined) {
+      throw new Error("--resume has no effect with --dry-run (a dry run records no verdicts)");
+    }
     // `--tests-only` narrows the BASELINE, and a dry run executes nothing at all — accepting it
     // silently would imply it had scoped something.
     if (testsOnlyRaw !== undefined && testsOnlyRaw.length > 0) {
@@ -557,6 +623,9 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     ...only,
     ...testsOnly,
     ...(maxGuardsPerBatch !== undefined ? { maxGuardsPerBatch } : {}),
+    ...(mutantTimeoutMs !== undefined ? { mutantTimeoutMs } : {}),
+    ...resume,
+    ...(values["allow-large-run"] === true ? { allowLargeRun: true } : {}),
   };
 }
 
@@ -1192,6 +1261,14 @@ async function printDryRun(projectDir: string, only?: readonly string[]): Promis
   console.log(
     `dry run: ${files.length} file(s), ${sites.length} mutant site(s), ${artifacts.length} batch(es)`,
   );
+  // R48: a dry run exists to answer "how big is this going to be", so it is the right place to say
+  // that the answer is "too big to run". Saying it here — rather than only when `lethal run`
+  // refuses — means the narrowing conversation happens before anything is published.
+  if (sites.length > LARGE_RUN_MUTANT_THRESHOLD) {
+    console.log(
+      `NOTE: ${sites.length} sites is above the ${LARGE_RUN_MUTANT_THRESHOLD} pre-flight limit, so 'lethal run' will refuse this scope. Narrow it with --only <glob>, or pass --allow-large-run.`,
+    );
+  }
   if (only !== undefined && only.length > 0) {
     console.log(
       `narrowed by --only ${only.map((p) => `"${p}"`).join(", ")}: ${excludedByOnly} of ${totalFiles} .al file(s) excluded from mutation (still parsed, compiled and published)`,
@@ -1478,6 +1555,11 @@ export async function runFromCli(
         ...(parsed.maxGuardsPerBatch !== undefined
           ? { maxGuardsPerBatch: parsed.maxGuardsPerBatch }
           : {}),
+        ...(parsed.mutantTimeoutMs !== undefined
+          ? { mutantTimeoutMs: parsed.mutantTimeoutMs }
+          : {}),
+        ...(parsed.resume !== undefined ? { resume: parsed.resume } : {}),
+        ...(parsed.allowLargeRun === true ? { allowLargeRun: true } : {}),
         ...(parsed.compileConcurrency !== undefined
           ? { compileConcurrency: parsed.compileConcurrency }
           : {}),

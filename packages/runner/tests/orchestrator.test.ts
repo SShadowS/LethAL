@@ -2784,6 +2784,7 @@ function seedPriorSurvivor(
     line: target.startLine,
     verdict: "survived",
     durationMs: 0,
+    batchIndex: 0,
   });
   store.finishRun(runId, { batchCount: 1, baselineGreen: true });
 }
@@ -3969,13 +3970,19 @@ describe("runSession — Task 10 fix: a quarantined run never seeds a future ski
       quarantineDir: freshTmpDir(),
     });
     expect(report.quarantined).toBeDefined();
-    // Sanity: the store DOES hold uncorrected "survived" rows for this run (recorded before the
-    // gate ran) — the bug this test guards against is that those rows must never become history.
+    // R47 strengthened this. It used to assert the opposite — that the store still HELD uncorrected
+    // "survived" rows, and that only `finished_at IS NOT NULL` kept them out of history. `--resume`
+    // reads by `finished_at IS NULL`, the exact complement, so that arrangement would have made the
+    // false survivors preferentially readable. `store.invalidateBatch` now applies the gate's
+    // correction durably, and nothing on disk claims "survived" from an unproven binary.
     const rawVerdicts = store.db.query("SELECT verdict FROM mutants").all() as Array<{
       verdict: string;
     }>;
-    expect(rawVerdicts.some((r) => r.verdict === "survived")).toBe(true);
-    // The actual guard: an unfinished run is invisible to priorSurvivorKeys.
+    expect(rawVerdicts.length).toBeGreaterThan(0);
+    expect(rawVerdicts.some((r) => r.verdict === "survived")).toBe(false);
+    expect(rawVerdicts.every((r) => r.verdict === "error")).toBe(true);
+    // The original guard still holds independently: an unfinished run is invisible to
+    // priorSurvivorKeys, so this does not rely on the correction alone.
     const keys = store.priorSurvivorKeys(dirs.projectDir);
     expect(keys.size).toBe(0);
     store.close();
