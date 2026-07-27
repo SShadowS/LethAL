@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll } from "bun:test";
+import { beforeAll, describe, expect, it } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import {
@@ -12,13 +12,12 @@ import {
 import { emptyBlock } from "../src/empty-block";
 
 describe("emptyBlock", () => {
-  beforeAll(async () => { await initParser(); });
+  beforeAll(async () => {
+    await initParser();
+  });
 
   it("generates one spec per non-empty block; skips already-empty blocks", async () => {
-    const src = await readFile(
-      resolve(__dirname, "./fixtures/al/empty-block.al"),
-      "utf8",
-    );
+    const src = await readFile(resolve(__dirname, "./fixtures/al/empty-block.al"), "utf8");
     const root = wrapRoot(parseAL(src));
     const ctx = buildSemanticContext([{ path: "fixture.al", root }]);
 

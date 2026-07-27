@@ -1,11 +1,9 @@
-import { describe, it, expect, beforeAll } from "bun:test";
+import { beforeAll, describe, expect, it } from "bun:test";
 import { initParser } from "@lethal/engine";
 import type { MutationOperator } from "@lethal/engine";
 import { runConformance } from "../src/conformance";
 
-function stubOperator(
-  overrides: Partial<MutationOperator>,
-): MutationOperator {
+function stubOperator(overrides: Partial<MutationOperator>): MutationOperator {
   return {
     name: "stub",
     version: "1.0.0",

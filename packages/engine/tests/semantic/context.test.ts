@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll } from "bun:test";
+import { beforeAll, describe, expect, it } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { initParser, parseAL } from "../../src/ast/parser";
@@ -11,13 +11,8 @@ describe("buildSemanticContext", () => {
   });
 
   it("exposes symbols, types, callers, and cfg-for-procedure", async () => {
-    const src = await readFile(
-      resolve(__dirname, "../fixtures/al/caller-chain.al"),
-      "utf8",
-    );
-    const ctx = buildSemanticContext([
-      { path: "c.al", root: wrapRoot(parseAL(src)) },
-    ]);
+    const src = await readFile(resolve(__dirname, "../fixtures/al/caller-chain.al"), "utf8");
+    const ctx = buildSemanticContext([{ path: "c.al", root: wrapRoot(parseAL(src)) }]);
     expect(ctx.symbols.resolveProcedure("Callers", "Helper")).not.toBeNull();
     expect(ctx.callers.callersOf("Callers", "Helper").length).toBe(2);
 

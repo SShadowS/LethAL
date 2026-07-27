@@ -111,3 +111,38 @@ describe("findLocalProcedureNames", () => {
     }
   });
 });
+
+describe("objectTypeName — BC's numeric object types (R40)", () => {
+  test("maps the extension types measured against a live server", async () => {
+    // MEASURED, not read from documentation: a probe exercising a tableextension's and a
+    // pageextension's own procedures came back as `15:<id>` and `14:<id>` from BC 28
+    // (docs/measurements/tableextension-coverage-probe.al). Before these entries existed,
+    // objectTypeName fell through to String(objectType), so coverage keyed "15:79481" while the
+    // mutant manifest keyed "tableextension:79481" — a mismatch indistinguishable from
+    // "nothing covered this object", which would have reported every extension mutant as
+    // no-coverage.
+    const { objectTypeName } = await import("../src/app-package");
+    expect(objectTypeName(15)).toBe("TableExtension");
+    expect(objectTypeName(14)).toBe("PageExtension");
+    // The pre-existing mappings must be untouched.
+    expect(objectTypeName(1)).toBe("Table");
+    expect(objectTypeName(5)).toBe("Codeunit");
+    expect(objectTypeName(8)).toBe("Page");
+  });
+
+  test("an unmapped type still falls back to its number, but does not do so silently", async () => {
+    // Aborting a run over an object kind that merely appears in coverage would be worse than the
+    // gap. But the SILENT version of this fallback is exactly what hid the extension defect, so
+    // it must announce itself.
+    const { objectTypeName } = await import("../src/app-package");
+    const warnings: string[] = [];
+    const original = console.warn;
+    console.warn = (msg: unknown) => warnings.push(String(msg));
+    try {
+      expect(objectTypeName(9999)).toBe("9999");
+    } finally {
+      console.warn = original;
+    }
+    expect(warnings.join("\n")).toContain("unmapped BC object type 9999");
+  });
+});

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll } from "bun:test";
+import { beforeAll, describe, expect, it } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import {
@@ -13,13 +13,12 @@ import {
 import { negateConditional } from "../src/negate-conditional";
 
 describe("negateConditional", () => {
-  beforeAll(async () => { await initParser(); });
+  beforeAll(async () => {
+    await initParser();
+  });
 
   it("generates specs for =/<> as statement-position, and/or as short-circuit-operand", async () => {
-    const src = await readFile(
-      resolve(__dirname, "./fixtures/al/negate-conditional.al"),
-      "utf8",
-    );
+    const src = await readFile(resolve(__dirname, "./fixtures/al/negate-conditional.al"), "utf8");
     const root = wrapRoot(parseAL(src));
     const ctx = buildSemanticContext([{ path: "fixture.al", root }]);
 

@@ -1,9 +1,11 @@
-import { describe, it, expect, beforeAll } from "bun:test";
+import { beforeAll, describe, expect, it } from "bun:test";
 import { ALNodeKind, findFirst, initParser, parseAL, wrapRoot } from "@lethal/engine";
 import { synthesizeAfter } from "../src/mutate-helpers";
 
 describe("synthesizeAfter", () => {
-  beforeAll(async () => { await initParser(); });
+  beforeAll(async () => {
+    await initParser();
+  });
 
   it("copies before's span + kind but replaces text", () => {
     const src = `codeunit 51200 "S" { procedure P(A: Integer; B: Integer) begin if A > B then exit(1); end; }`;

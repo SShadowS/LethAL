@@ -867,3 +867,44 @@ describe("compileSchemataForFile — selector var injection into pages and repor
     }
   });
 });
+
+describe("compileSchemataForFile — selector var injection into extension objects (R40)", () => {
+  it("injects into a tableextension, after its fields", () => {
+    const source = `tableextension 50300 "TE" extends Customer
+{
+    fields { field(50; "X"; Integer) { } }
+
+    procedure Bump()
+    begin
+        DoThing();
+    end;
+}`;
+    const root = wrapRoot(parseAL(source));
+    const out = compileSchemataForFile(source, root, [specAtFirstCall(root)]);
+    expect(out.indexOf("MutationSelector: Codeunit")).toBeGreaterThan(out.indexOf("fields"));
+  });
+
+  it("injects into a pageextension, after its layout", () => {
+    const source = `pageextension 50301 "PE" extends "Customer Card"
+{
+    layout { addlast(Content) { field(X; 1) { } } }
+
+    procedure Bump()
+    begin
+        DoThing();
+    end;
+}`;
+    const root = wrapRoot(parseAL(source));
+    const out = compileSchemataForFile(source, root, [specAtFirstCall(root)]);
+    expect(out.indexOf("MutationSelector: Codeunit")).toBeGreaterThan(out.indexOf("layout"));
+  });
+
+  it("canCarryMutationSelectorVar accepts both extension kinds", () => {
+    for (const src of [
+      'tableextension 1 "A" extends Customer { fields { } }',
+      'pageextension 2 "B" extends "Customer Card" { layout { } }',
+    ]) {
+      expect(canCarryMutationSelectorVar(wrapRoot(parseAL(src)))).toBe(true);
+    }
+  });
+});

@@ -1,8 +1,8 @@
-import { describe, it, expect, beforeAll } from "bun:test";
-import { initParser, parseAL } from "../../src/ast/parser";
-import { wrapRoot, findFirst, visit } from "../../src/ast/syntax-node";
-import { canonicalize, type CanonicalForm } from "../../src/ast/canonicalization";
+import { beforeAll, describe, expect, it } from "bun:test";
+import { type CanonicalForm, canonicalize } from "../../src/ast/canonicalization";
 import { ALNodeKind, isBinaryExpressionKind } from "../../src/ast/node-kinds";
+import { initParser, parseAL } from "../../src/ast/parser";
+import { findFirst, visit, wrapRoot } from "../../src/ast/syntax-node";
 import type { ALSyntaxNode } from "../../src/ast/syntax-node";
 
 describe("canonicalize", () => {

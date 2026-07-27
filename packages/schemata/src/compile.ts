@@ -140,6 +140,8 @@ const CARRIER_KINDS: readonly ALNodeKind[] = [
   ALNodeKind.table,
   ALNodeKind.page,
   ALNodeKind.report,
+  ALNodeKind.pageextension,
+  ALNodeKind.tableextension,
 ];
 
 /**
@@ -235,7 +237,11 @@ function injectSelectorVarIntoObject(
   // reliably allowed to sit BEFORE. Measured: trailing placement — after every member, including
   // object-level triggers — compiles clean for both kinds with realistic sections present. So they
   // take the same trailing branch a trigger-less table already uses, by having no anchor.
-  const isTrailingOnly = object.kind === ALNodeKind.page || object.kind === ALNodeKind.report;
+  const isTrailingOnly =
+    object.kind === ALNodeKind.page ||
+    object.kind === ALNodeKind.report ||
+    object.kind === ALNodeKind.pageextension ||
+    object.kind === ALNodeKind.tableextension;
   const headerKinds = isTable ? TABLE_HEADER_KINDS : CODEUNIT_HEADER_KINDS;
   // Under the current v3 grammar `declarationMembers` already strips the
   // `declaration_body` container, so header tokens never actually reach

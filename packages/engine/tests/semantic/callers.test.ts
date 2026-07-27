@@ -1,10 +1,10 @@
-import { describe, it, expect, beforeAll } from "bun:test";
+import { beforeAll, describe, expect, it } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { initParser, parseAL } from "../../src/ast/parser";
 import { wrapRoot } from "../../src/ast/syntax-node";
-import { buildSymbolTable } from "../../src/semantic/symbol-table";
 import { buildCallerIndex } from "../../src/semantic/callers";
+import { buildSymbolTable } from "../../src/semantic/symbol-table";
 
 describe("buildCallerIndex", () => {
   beforeAll(async () => {
@@ -12,10 +12,7 @@ describe("buildCallerIndex", () => {
   });
 
   it("indexes direct and indirect callers of Helper", async () => {
-    const src = await readFile(
-      resolve(__dirname, "../fixtures/al/caller-chain.al"),
-      "utf8",
-    );
+    const src = await readFile(resolve(__dirname, "../fixtures/al/caller-chain.al"), "utf8");
     const root = wrapRoot(parseAL(src));
     const symbols = buildSymbolTable([{ path: "c.al", root }]);
     const callers = buildCallerIndex([{ path: "c.al", root }], symbols);
@@ -61,7 +58,10 @@ describe("buildCallerIndex", () => {
     // Same root passed as two file entries — simulating a multi-file project
     // where the caller index must not duplicate per-file.
     const callers = buildCallerIndex(
-      [{ path: "c.al", root }, { path: "c2.al", root }],
+      [
+        { path: "c.al", root },
+        { path: "c2.al", root },
+      ],
       symbols,
     );
     expect(callers.callersOf("Callers", "Helper")).toHaveLength(1);

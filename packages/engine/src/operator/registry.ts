@@ -1,5 +1,5 @@
-import type { MutationOperator } from "./interface";
 import { isALNodeKind } from "../ast/node-kinds";
+import type { MutationOperator } from "./interface";
 
 const SEMVER = /^\d+\.\d+\.\d+(?:-[\w.]+)?(?:\+[\w.]+)?$/;
 
@@ -16,9 +16,7 @@ export function createRegistry(): Registry {
   return {
     register(op) {
       if (!SEMVER.test(op.version)) {
-        throw new Error(
-          `operator ${op.name}: version ${op.version} is not semver`,
-        );
+        throw new Error(`operator ${op.name}: version ${op.version} is not semver`);
       }
       for (const kind of op.targetNodeKinds) {
         if (!isALNodeKind(kind)) {

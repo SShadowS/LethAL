@@ -1,9 +1,9 @@
-// Thin adapter over web-tree-sitter. Returns raw tree-sitter Tree;
-// the ALSyntaxNode facade (Task 4) is where AL semantics live.
-import { Parser, Language, type Tree } from "web-tree-sitter";
 import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+// Thin adapter over web-tree-sitter. Returns raw tree-sitter Tree;
+// the ALSyntaxNode facade (Task 4) is where AL semantics live.
+import { Language, Parser, type Tree } from "web-tree-sitter";
 
 let parser: Parser | null = null;
 let initPromise: Promise<void> | null = null;

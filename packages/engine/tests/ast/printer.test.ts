@@ -1,10 +1,10 @@
-import { describe, it, expect, beforeAll } from "bun:test";
+import { beforeAll, describe, expect, it } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { initParser, parseAL } from "../../src/ast/parser";
-import { wrapRoot, findFirst } from "../../src/ast/syntax-node";
-import { print, printWithRewrites } from "../../src/ast/printer";
 import { ALNodeKind } from "../../src/ast/node-kinds";
+import { initParser, parseAL } from "../../src/ast/parser";
+import { print, printWithRewrites } from "../../src/ast/printer";
+import { findFirst, wrapRoot } from "../../src/ast/syntax-node";
 
 describe("printer", () => {
   beforeAll(async () => {
@@ -12,10 +12,7 @@ describe("printer", () => {
   });
 
   async function loadFixture(name: string): Promise<string> {
-    return readFile(
-      resolve(__dirname, `../fixtures/al/${name}`),
-      "utf8",
-    );
+    return readFile(resolve(__dirname, `../fixtures/al/${name}`), "utf8");
   }
 
   it("round-trips a file byte-identical without rewrites", async () => {
@@ -30,9 +27,7 @@ describe("printer", () => {
     const tree = parseAL(source);
     const root = wrapRoot(tree);
     const exit = findFirst(root, ALNodeKind.exit_statement)!;
-    const output = printWithRewrites(source, root, new Map([
-      [exit, "exit(0);"],
-    ]));
+    const output = printWithRewrites(source, root, new Map([[exit, "exit(0);"]]));
     expect(output).toContain("exit(0);");
     expect(output).not.toContain("Value * 2");
     expect(output.split("\n").length).toBe(source.split("\n").length);
@@ -44,10 +39,14 @@ describe("printer", () => {
     const root = wrapRoot(tree);
     const resultAssign = findFirst(root, ALNodeKind.assignment_statement)!;
     const exit = findFirst(root, ALNodeKind.exit_statement)!;
-    const output = printWithRewrites(source, root, new Map([
-      [resultAssign, "Result := Amount >= 0;"],
-      [exit, "exit(not Result);"],
-    ]));
+    const output = printWithRewrites(
+      source,
+      root,
+      new Map([
+        [resultAssign, "Result := Amount >= 0;"],
+        [exit, "exit(not Result);"],
+      ]),
+    );
     expect(output).toContain("Amount >= 0");
     expect(output).toContain("not Result");
     expect(output).toContain("// trailing comment");

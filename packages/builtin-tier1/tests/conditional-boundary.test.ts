@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll } from "bun:test";
+import { beforeAll, describe, expect, it } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import {
@@ -12,7 +12,9 @@ import {
 import { conditionalBoundary } from "../src/conditional-boundary";
 
 describe("conditionalBoundary", () => {
-  beforeAll(async () => { await initParser(); });
+  beforeAll(async () => {
+    await initParser();
+  });
 
   it("has correct manifest", () => {
     expect(conditionalBoundary.name).toBe("lethal.conditional-boundary");
@@ -22,10 +24,7 @@ describe("conditionalBoundary", () => {
   });
 
   it("generates one spec per >, <, >=, <= site", async () => {
-    const src = await readFile(
-      resolve(__dirname, "./fixtures/al/conditional-boundary.al"),
-      "utf8",
-    );
+    const src = await readFile(resolve(__dirname, "./fixtures/al/conditional-boundary.al"), "utf8");
     const root = wrapRoot(parseAL(src));
     const ctx = buildSemanticContext([{ path: "fixture.al", root }]);
 

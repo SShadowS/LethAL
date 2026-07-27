@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll } from "bun:test";
+import { beforeAll, describe, expect, it } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { initParser, parseAL } from "../../src/ast/parser";
@@ -28,7 +28,7 @@ describe("parser", () => {
   it("is safe to initParser twice (concurrent and sequential)", async () => {
     await Promise.all([initParser(), initParser()]);
     await initParser();
-    const tree = parseAL("codeunit 50999 \"X\" { }");
+    const tree = parseAL('codeunit 50999 "X" { }');
     expect(tree.rootNode.type).toBe("source_file");
   });
 });

@@ -121,8 +121,10 @@ function lineOfIndex(source: string, index: number): number {
 }
 
 /** Global, so `matchAll` can find EVERY object header in the file, not just the first. */
+// Extension kinds first: alternation is tried left to right, so a bare `page`/`table` would
+// engage on `pageextension`/`tableextension` before failing its `\s+\d+`.
 const OBJECT_HEADER =
-  /^\s*(codeunit|table|page|report|query|xmlport|enum)\s+(\d+)\s+("([^"]+)"|(\w+))/gim;
+  /^\s*(codeunit|tableextension|pageextension|table|page|report|query|xmlport|enum)\s+(\d+)\s+("([^"]+)"|(\w+))/gim;
 
 /**
  * Blanks out AL comments, preserving length (so any index computed against the result still

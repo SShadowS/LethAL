@@ -1,6 +1,6 @@
-import { describe, it, expect } from "bun:test";
-import { createRegistry } from "../../src/operator/registry";
+import { describe, expect, it } from "bun:test";
 import type { MutationOperator } from "../../src/operator/interface";
+import { createRegistry } from "../../src/operator/registry";
 
 function op(overrides: Partial<MutationOperator> = {}): MutationOperator {
   return {
@@ -39,11 +39,9 @@ describe("registry", () => {
 
   it("rejects a manifest with unknown ALNodeKind", () => {
     const reg = createRegistry();
-    expect(() =>
-      reg.register(
-        op({ targetNodeKinds: ["not_a_real_kind" as never] }),
-      ),
-    ).toThrow(/unknown ALNodeKind/);
+    expect(() => reg.register(op({ targetNodeKinds: ["not_a_real_kind" as never] }))).toThrow(
+      /unknown ALNodeKind/,
+    );
   });
 
   it("rejects non-semver version", () => {

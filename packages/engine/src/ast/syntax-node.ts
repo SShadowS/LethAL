@@ -1,4 +1,4 @@
-import type { Tree, Node as TSSyntaxNode } from "web-tree-sitter";
+import type { Node as TSSyntaxNode, Tree } from "web-tree-sitter";
 import { type ALNodeKind, isALNodeKind } from "./node-kinds";
 
 export interface ALSyntaxNode {
@@ -64,9 +64,7 @@ class WrappedNode implements ALSyntaxNode {
     for (let i = 0; i < raw.length; i++) {
       const c = raw[i];
       if (c === null || c === undefined) continue;
-      out.push(
-        new WrappedNode(c, this, this.ts.fieldNameForChild(i) ?? null),
-      );
+      out.push(new WrappedNode(c, this, this.ts.fieldNameForChild(i) ?? null));
     }
     return out;
   }
@@ -84,9 +82,7 @@ class WrappedNode implements ALSyntaxNode {
     for (let i = 0; i < raw.length; i++) {
       const c = raw[i];
       if (c === null || c === undefined) continue;
-      out.push(
-        new WrappedNode(c, this, this.ts.fieldNameForNamedChild(i) ?? null),
-      );
+      out.push(new WrappedNode(c, this, this.ts.fieldNameForNamedChild(i) ?? null));
     }
     return out;
   }
@@ -104,10 +100,7 @@ export function wrapRoot(tree: Tree): ALSyntaxNode {
   return new WrappedNode(tree.rootNode, null, null);
 }
 
-export function findFirst(
-  root: ALSyntaxNode,
-  kind: ALNodeKind,
-): ALSyntaxNode | null {
+export function findFirst(root: ALSyntaxNode, kind: ALNodeKind): ALSyntaxNode | null {
   if (root.kind === kind) return root;
   for (const child of root.children) {
     const hit = findFirst(child, kind);
@@ -124,10 +117,7 @@ export function findAll(root: ALSyntaxNode, kind: ALNodeKind): ALSyntaxNode[] {
   return out;
 }
 
-export function visit(
-  root: ALSyntaxNode,
-  fn: (node: ALSyntaxNode) => void,
-): void {
+export function visit(root: ALSyntaxNode, fn: (node: ALSyntaxNode) => void): void {
   fn(root);
   for (const child of root.children) {
     visit(child, fn);

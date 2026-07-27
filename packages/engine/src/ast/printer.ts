@@ -44,9 +44,7 @@ function assertNodeInTree(node: ALSyntaxNode, root: ALSyntaxNode): void {
   }
 }
 
-function assertNoOverlap(
-  edits: ReadonlyArray<{ start: number; end: number }>,
-): void {
+function assertNoOverlap(edits: ReadonlyArray<{ start: number; end: number }>): void {
   for (let i = 1; i < edits.length; i++) {
     const prev = edits[i - 1];
     const curr = edits[i];

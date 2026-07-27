@@ -1,10 +1,10 @@
 import {
+  type MutationOperator,
+  type MutationSpec,
   buildSemanticContext,
   parseAL,
   visit,
   wrapRoot,
-  type MutationOperator,
-  type MutationSpec,
 } from "@lethal/engine";
 
 export interface ConformanceResult {
@@ -22,9 +22,7 @@ export interface ConformanceFailure {
   }>;
 }
 
-export async function runConformance(
-  op: MutationOperator,
-): Promise<ConformanceResult> {
+export async function runConformance(op: MutationOperator): Promise<ConformanceResult> {
   const failures: ConformanceFailure[] = [];
 
   for (const c of op.conformanceTests) {

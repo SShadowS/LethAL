@@ -1,3 +1,4 @@
+import { ALNodeKind } from "../ast/node-kinds";
 /**
  * Caller index (Layer 1).
  *
@@ -15,7 +16,6 @@
  */
 import type { ALSyntaxNode } from "../ast/syntax-node";
 import { findAll } from "../ast/syntax-node";
-import { ALNodeKind } from "../ast/node-kinds";
 import type { SourceFile, SymbolTable } from "./symbol-table";
 
 export interface CallerIndex {

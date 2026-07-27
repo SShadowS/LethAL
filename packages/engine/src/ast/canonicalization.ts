@@ -18,8 +18,8 @@
  * those aren't bound by the grammar, we fall back to scanning `namedChildren`.
  */
 
-import type { ALSyntaxNode } from "./syntax-node";
 import { ALNodeKind, isBinaryExpressionKind } from "./node-kinds";
+import type { ALSyntaxNode } from "./syntax-node";
 
 export interface CanonicalForm {
   readonly form: string;
@@ -49,10 +49,7 @@ function canon(node: ALSyntaxNode): string {
     const operand = findOperand(stripped);
     if (operator === "not" && operand !== null) {
       const inner = stripParens(operand);
-      if (
-        inner.kind === ALNodeKind.unary_expression &&
-        findOperator(inner) === "not"
-      ) {
+      if (inner.kind === ALNodeKind.unary_expression && findOperator(inner) === "not") {
         const innerOperand = findOperand(inner);
         if (innerOperand !== null) return canon(innerOperand);
       }
@@ -115,8 +112,6 @@ function findBinaryOperands(
   const left = node.childForFieldName("left");
   const right = node.childForFieldName("right");
   if (left !== null && right !== null) return [left, right];
-  const nonOperatorChildren = node.namedChildren.filter(
-    (c) => !c.kind.endsWith("_operator"),
-  );
+  const nonOperatorChildren = node.namedChildren.filter((c) => !c.kind.endsWith("_operator"));
   return [nonOperatorChildren[0] ?? null, nonOperatorChildren[1] ?? null];
 }

@@ -1,4 +1,4 @@
-import { describe, it, expect } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import { build } from "../src/build";
 
 describe("build", () => {
@@ -20,11 +20,7 @@ describe("build", () => {
   });
 
   it("emits a binary op", () => {
-    const expr = build.binaryOp(
-      ">",
-      build.identifier("Amount"),
-      build.integerLiteral(0),
-    );
+    const expr = build.binaryOp(">", build.identifier("Amount"), build.integerLiteral(0));
     expect(expr.toAL()).toBe("Amount > 0");
   });
 

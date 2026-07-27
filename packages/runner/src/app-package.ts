@@ -89,6 +89,15 @@ const OBJECT_TYPE_NAME: Record<number, string> = {
   6: "XmlPort",
   8: "Page",
   9: "Query",
+  // MEASURED against a live BC 28 server (2026-07-27,
+  // `docs/measurements/tableextension-coverage-probe.al`), not read from documentation: a probe
+  // exercising a tableextension's and a pageextension's own procedures came back as `15:<id>` and
+  // `14:<id>`, under each EXTENSION's own object id rather than the base object's. Without these
+  // two entries `objectTypeName` fell through to `String(objectType)`, so coverage keyed
+  // `"15:79481"` while the mutant manifest keyed `"tableextension:79481"` — the two never matched
+  // and every extension mutant would have been reported `no-coverage`.
+  14: "PageExtension",
+  15: "TableExtension",
 };
 
 // SymbolReference.json top-level arrays that carry {Id, Name, Methods: [{Id, Name}]}
@@ -164,8 +173,27 @@ export class AppMethodIndex {
   }
 }
 
+const warnedUnknownObjectTypes = new Set<number>();
+
+/**
+ * BC's numeric object type -> the name coverage keys are built from.
+ *
+ * An unmapped type still falls back to its number rather than throwing — aborting a run over an
+ * object kind that merely APPEARS in coverage would be worse than the gap. But it now warns once
+ * per type, because the silent version of this fallback is exactly what hid the extension defect:
+ * coverage keyed `"15:79481"` against a manifest keying `"tableextension:79481"`, which is
+ * indistinguishable from "nothing covered this object" at every downstream layer.
+ */
 export function objectTypeName(objectType: number): string {
-  return OBJECT_TYPE_NAME[objectType] ?? String(objectType);
+  const name = OBJECT_TYPE_NAME[objectType];
+  if (name !== undefined) return name;
+  if (!warnedUnknownObjectTypes.has(objectType)) {
+    warnedUnknownObjectTypes.add(objectType);
+    console.warn(
+      `[lethal] coverage reported unmapped BC object type ${objectType}; its entries key as "${objectType}:<id>" and will not match a mutant manifest that names the kind. Add it to OBJECT_TYPE_NAME (measure it — see docs/measurements/).`,
+    );
+  }
+  return String(objectType);
 }
 
 const NAME_TO_OBJECT_TYPE: Record<string, number> = {
@@ -175,10 +203,14 @@ const NAME_TO_OBJECT_TYPE: Record<string, number> = {
   xmlport: 6,
   page: 8,
   query: 9,
+  pageextension: 14,
+  tableextension: 15,
 };
 
+// Extension kinds are listed BEFORE `page`/`table`: alternation is tried left to right, and a
+// bare `page` alternative would engage on `pageextension` before failing its `\s+\d+`.
 const OBJECT_HEADER_GLOBAL =
-  /^\s*(codeunit|table|page|report|query|xmlport)\s+(\d+)\s+(?:"([^"]+)"|(\w+))/gim;
+  /^\s*(codeunit|tableextension|pageextension|table|page|report|query|xmlport)\s+(\d+)\s+(?:"([^"]+)"|(\w+))/gim;
 const LOCAL_PROCEDURE = /^\s*local\s+procedure\s+(?:"([^"]+)"|(\w+))\s*\(/gim;
 
 /**

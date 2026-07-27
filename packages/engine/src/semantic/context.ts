@@ -1,3 +1,5 @@
+import type { CallerIndex } from "./callers";
+import { buildCallerIndex } from "./callers";
 /**
  * SemanticContext — composition root for Layer 1 semantic services.
  *
@@ -17,8 +19,6 @@
  */
 import type { CFG } from "./cfg";
 import { buildCFG } from "./cfg";
-import type { CallerIndex } from "./callers";
-import { buildCallerIndex } from "./callers";
 import type { ProcedureSymbol, SourceFile, SymbolTable } from "./symbol-table";
 import { buildSymbolTable } from "./symbol-table";
 import type { TypeTable } from "./types";
@@ -31,9 +31,7 @@ export interface SemanticContext {
   cfgFor(procedure: ProcedureSymbol): CFG;
 }
 
-export function buildSemanticContext(
-  files: readonly SourceFile[],
-): SemanticContext {
+export function buildSemanticContext(files: readonly SourceFile[]): SemanticContext {
   const symbols = buildSymbolTable(files);
   const types = buildTypeTable(files, symbols);
   const callers = buildCallerIndex(files, symbols);

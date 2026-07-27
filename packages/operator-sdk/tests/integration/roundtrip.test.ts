@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll } from "bun:test";
+import { beforeAll, describe, expect, it } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import {
@@ -21,10 +21,7 @@ describe("Layer 1 integration", () => {
   });
 
   it("round-trips and rewrites a realistic fixture", async () => {
-    const path = resolve(
-      __dirname,
-      "../../../engine/tests/fixtures/al/comments-and-spacing.al",
-    );
+    const path = resolve(__dirname, "../../../engine/tests/fixtures/al/comments-and-spacing.al");
     const source = await readFile(path, "utf8");
 
     const tree = parseAL(source);
@@ -49,11 +46,7 @@ describe("Layer 1 integration", () => {
       build.identifier(leftText.trim()),
       build.integerLiteral(0),
     );
-    const output = printWithRewrites(
-      source,
-      root,
-      new Map([[binaryExpr, replacement.toAL()]]),
-    );
+    const output = printWithRewrites(source, root, new Map([[binaryExpr, replacement.toAL()]]));
     expect(output).toContain(">=");
     expect(output).not.toBe(source);
 

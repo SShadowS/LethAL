@@ -1,10 +1,10 @@
-import { describe, it, expect, beforeAll } from "bun:test";
+import { beforeAll, describe, expect, it } from "bun:test";
+import { ALNodeKind } from "../../src/ast/node-kinds";
 import { initParser, parseAL } from "../../src/ast/parser";
-import { wrapRoot, findFirst } from "../../src/ast/syntax-node";
+import { findFirst, wrapRoot } from "../../src/ast/syntax-node";
+import type { ALSyntaxNode } from "../../src/ast/syntax-node";
 import { buildSymbolTable } from "../../src/semantic/symbol-table";
 import { buildTypeTable } from "../../src/semantic/types";
-import { ALNodeKind } from "../../src/ast/node-kinds";
-import type { ALSyntaxNode } from "../../src/ast/syntax-node";
 
 async function typeOfExitExpr(codeunitSrc: string): Promise<string | null> {
   const root = wrapRoot(parseAL(codeunitSrc));
@@ -35,26 +35,28 @@ describe("buildTypeTable", () => {
   });
 
   it("types a literal integer expression as Integer", async () => {
-    expect(await typeOfExitExpr(
-      `codeunit 50300 "T" { procedure P(): Integer begin exit(42); end; }`,
-    )).toBe("Integer");
+    expect(
+      await typeOfExitExpr(`codeunit 50300 "T" { procedure P(): Integer begin exit(42); end; }`),
+    ).toBe("Integer");
   });
 
   it("types a decimal literal as Decimal", async () => {
-    expect(await typeOfExitExpr(
-      `codeunit 50301 "T" { procedure P(): Decimal begin exit(1.5); end; }`,
-    )).toBe("Decimal");
+    expect(
+      await typeOfExitExpr(`codeunit 50301 "T" { procedure P(): Decimal begin exit(1.5); end; }`),
+    ).toBe("Decimal");
   });
 
   it("types a comparison as Boolean", async () => {
-    expect(await typeOfExitExpr(
-      `codeunit 50302 "T" { procedure P(): Boolean begin exit(1 > 0); end; }`,
-    )).toBe("Boolean");
+    expect(
+      await typeOfExitExpr(`codeunit 50302 "T" { procedure P(): Boolean begin exit(1 > 0); end; }`),
+    ).toBe("Boolean");
   });
 
   it("returns null for unresolvable identifiers", async () => {
-    expect(await typeOfExitExpr(
-      `codeunit 50303 "T" { procedure P(): Integer begin exit(UnknownVar); end; }`,
-    )).toBeNull();
+    expect(
+      await typeOfExitExpr(
+        `codeunit 50303 "T" { procedure P(): Integer begin exit(UnknownVar); end; }`,
+      ),
+    ).toBeNull();
   });
 });

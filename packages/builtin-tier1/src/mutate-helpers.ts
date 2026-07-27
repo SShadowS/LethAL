@@ -67,10 +67,7 @@ export function replaceOperatorToken(
   return `${text.slice(0, op.start)}${replacement}${text.slice(op.end)}`;
 }
 
-export function synthesizeAfter(
-  before: ALSyntaxNode,
-  text: string,
-): ALSyntaxNode {
+export function synthesizeAfter(before: ALSyntaxNode, text: string): ALSyntaxNode {
   return {
     kind: before.kind,
     rawKind: before.rawKind,

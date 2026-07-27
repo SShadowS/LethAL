@@ -10,17 +10,11 @@ const specSchema = z.object({
   astNodeId: z.string().min(1),
   before: z.object({ kind: z.string() }).passthrough(),
   after: z.object({ kind: z.string() }).passthrough(),
-  parentContext: z.enum([
-    "statement-position",
-    "expression-position",
-    "short-circuit-operand",
-  ]),
+  parentContext: z.enum(["statement-position", "expression-position", "short-circuit-operand"]),
   equivalenceHint: z.enum(["likely-equivalent", "unknown"]).optional(),
 });
 
-export type ValidationResult =
-  | { ok: true }
-  | { ok: false; error: string };
+export type ValidationResult = { ok: true } | { ok: false; error: string };
 
 /** `${startIndex}-${endIndex}` key used by {@link buildSpanIndex} and the
  * indexed branch of {@link validateSpec}. */
@@ -107,7 +101,5 @@ function hasNodeWithSpan(root: ALSyntaxNode, start: number, end: number): boolea
 }
 
 function formatZodError(err: z.ZodError): string {
-  return err.issues
-    .map((i) => `${i.path.join(".")}: ${i.message}`)
-    .join("; ");
+  return err.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
 }

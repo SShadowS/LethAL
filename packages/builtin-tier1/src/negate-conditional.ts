@@ -22,14 +22,8 @@ export const negateConditional: MutationOperator = {
   name: "lethal.negate-conditional",
   version: "1.0.0",
   tier: 1,
-  targetNodeKinds: [
-    ALNodeKind.comparison_expression,
-    ALNodeKind.logical_expression,
-  ],
-  producesNodeKinds: [
-    ALNodeKind.comparison_expression,
-    ALNodeKind.logical_expression,
-  ],
+  targetNodeKinds: [ALNodeKind.comparison_expression, ALNodeKind.logical_expression],
+  producesNodeKinds: [ALNodeKind.comparison_expression, ALNodeKind.logical_expression],
   requiresSemantic: [],
 
   targets(node: ALSyntaxNode, _ctx: SemanticContext): boolean {

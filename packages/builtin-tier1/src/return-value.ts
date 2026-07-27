@@ -1,10 +1,10 @@
 import {
   ALNodeKind,
-  findEnclosingProcedure,
   type ALSyntaxNode,
   type MutationOperator,
   type MutationSpec,
   type SemanticContext,
+  findEnclosingProcedure,
 } from "@lethal/operator-sdk";
 import { synthesizeAfter } from "./mutate-helpers";
 

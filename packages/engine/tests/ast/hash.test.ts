@@ -1,10 +1,10 @@
-import { describe, it, expect, beforeAll } from "bun:test";
+import { beforeAll, describe, expect, it } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { initParser, parseAL } from "../../src/ast/parser";
-import { wrapRoot, findFirst } from "../../src/ast/syntax-node";
 import { astSubtreeHash } from "../../src/ast/hash";
 import { ALNodeKind } from "../../src/ast/node-kinds";
+import { initParser, parseAL } from "../../src/ast/parser";
+import { findFirst, wrapRoot } from "../../src/ast/syntax-node";
 
 describe("astSubtreeHash", () => {
   beforeAll(async () => {
@@ -12,10 +12,7 @@ describe("astSubtreeHash", () => {
   });
 
   async function hashExitExpr(fixture: string): Promise<string> {
-    const source = await readFile(
-      resolve(__dirname, `../fixtures/al/${fixture}`),
-      "utf8",
-    );
+    const source = await readFile(resolve(__dirname, `../fixtures/al/${fixture}`), "utf8");
     const root = wrapRoot(parseAL(source));
     const exit = findFirst(root, ALNodeKind.exit_statement)!;
     const inner = findFirst(exit, ALNodeKind.comparison_expression)!;

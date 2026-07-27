@@ -1,3 +1,4 @@
+import { ALNodeKind, isBinaryExpressionKind } from "../ast/node-kinds";
 /**
  * Type table (Layer 1).
  *
@@ -15,17 +16,13 @@
  *     (mapped via ALNodeKind.integer_literal etc.).
  */
 import type { ALSyntaxNode } from "../ast/syntax-node";
-import { ALNodeKind, isBinaryExpressionKind } from "../ast/node-kinds";
 import type { SourceFile, SymbolTable } from "./symbol-table";
 
 export interface TypeTable {
   typeOf(node: ALSyntaxNode): string | null;
 }
 
-export function buildTypeTable(
-  _files: readonly SourceFile[],
-  symbols: SymbolTable,
-): TypeTable {
+export function buildTypeTable(_files: readonly SourceFile[], symbols: SymbolTable): TypeTable {
   return {
     typeOf(node) {
       return computeType(node, symbols);
@@ -111,16 +108,11 @@ function findBinaryOperands(
   const left = node.childForFieldName("left");
   const right = node.childForFieldName("right");
   if (left !== null && right !== null) return [left, right];
-  const nonOperatorChildren = node.namedChildren.filter(
-    (c) => !c.kind.endsWith("_operator"),
-  );
+  const nonOperatorChildren = node.namedChildren.filter((c) => !c.kind.endsWith("_operator"));
   return [nonOperatorChildren[0] ?? null, nonOperatorChildren[1] ?? null];
 }
 
-function resolveIdentifierType(
-  node: ALSyntaxNode,
-  symbols: SymbolTable,
-): string | null {
+function resolveIdentifierType(node: ALSyntaxNode, symbols: SymbolTable): string | null {
   for (const obj of symbols.objects) {
     const proc = findEnclosingProcedure(node, obj.node);
     if (proc === null) continue;
@@ -137,10 +129,7 @@ function resolveIdentifierType(
   return null;
 }
 
-function findEnclosingProcedure(
-  node: ALSyntaxNode,
-  objectNode: ALSyntaxNode,
-): string | null {
+function findEnclosingProcedure(node: ALSyntaxNode, objectNode: ALSyntaxNode): string | null {
   let current: ALSyntaxNode | null = node;
   while (current !== null && current !== objectNode) {
     if (current.kind === ALNodeKind.procedure) {

@@ -1,7 +1,7 @@
 import { blake3 } from "@noble/hashes/blake3";
 import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils";
-import type { ALSyntaxNode } from "./syntax-node";
 import { ALNodeKind } from "./node-kinds";
+import type { ALSyntaxNode } from "./syntax-node";
 
 export function astSubtreeHash(node: ALSyntaxNode): string {
   const scope = new Map<string, number>();
@@ -9,10 +9,7 @@ export function astSubtreeHash(node: ALSyntaxNode): string {
   return bytesToHex(blake3(utf8ToBytes(canonical)));
 }
 
-function serializeCanonical(
-  node: ALSyntaxNode,
-  scope: Map<string, number>,
-): string {
+function serializeCanonical(node: ALSyntaxNode, scope: Map<string, number>): string {
   if (node.kind === ALNodeKind.identifier) {
     const text = node.text;
     if (!scope.has(text)) {

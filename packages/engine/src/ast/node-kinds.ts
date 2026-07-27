@@ -21,6 +21,10 @@ export const ALNodeKind = {
   table: "table_declaration",
   page: "page_declaration",
   report: "report_declaration",
+  /** Extension objects. Their coverage is reported under the EXTENSION's own object id, measured
+   *  2026-07-27 — see `docs/measurements/tableextension-coverage-probe.al`. */
+  pageextension: "pageextension_declaration",
+  tableextension: "tableextension_declaration",
   procedure: "procedure",
   trigger: "trigger_declaration",
   /**

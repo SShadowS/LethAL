@@ -1,9 +1,9 @@
-import { describe, it, expect, beforeAll } from "bun:test";
+import { beforeAll, describe, expect, it } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { initParser, parseAL } from "../../src/ast/parser";
-import { wrapRoot, findFirst, findAll } from "../../src/ast/syntax-node";
 import { ALNodeKind } from "../../src/ast/node-kinds";
+import { initParser, parseAL } from "../../src/ast/parser";
+import { findAll, findFirst, wrapRoot } from "../../src/ast/syntax-node";
 
 describe("syntax-node", () => {
   beforeAll(async () => {
@@ -11,10 +11,7 @@ describe("syntax-node", () => {
   });
 
   async function load(): Promise<string> {
-    return readFile(
-      resolve(__dirname, "../fixtures/al/simple-codeunit.al"),
-      "utf8",
-    );
+    return readFile(resolve(__dirname, "../fixtures/al/simple-codeunit.al"), "utf8");
   }
 
   it("wraps a tree-sitter root into an ALSyntaxNode", async () => {

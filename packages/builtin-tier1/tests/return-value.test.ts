@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll } from "bun:test";
+import { beforeAll, describe, expect, it } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import {
@@ -12,13 +12,12 @@ import {
 import { returnValue } from "../src/return-value";
 
 describe("returnValue", () => {
-  beforeAll(async () => { await initParser(); });
+  beforeAll(async () => {
+    await initParser();
+  });
 
   it("zeros numeric returns and negates boolean returns; skips bare exit", async () => {
-    const src = await readFile(
-      resolve(__dirname, "./fixtures/al/return-value.al"),
-      "utf8",
-    );
+    const src = await readFile(resolve(__dirname, "./fixtures/al/return-value.al"), "utf8");
     const root = wrapRoot(parseAL(src));
     const ctx = buildSemanticContext([{ path: "fixture.al", root }]);
 

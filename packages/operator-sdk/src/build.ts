@@ -3,9 +3,21 @@ export interface BuiltExpression {
 }
 
 type ALBinaryOp =
-  | "+" | "-" | "*" | "/" | "div" | "mod"
-  | "=" | "<>" | "<" | "<=" | ">" | ">="
-  | "and" | "or" | "xor";
+  | "+"
+  | "-"
+  | "*"
+  | "/"
+  | "div"
+  | "mod"
+  | "="
+  | "<>"
+  | "<"
+  | "<="
+  | ">"
+  | ">="
+  | "and"
+  | "or"
+  | "xor";
 
 type ALUnaryOp = "-" | "+" | "not";
 
@@ -27,7 +39,8 @@ export const build = {
     return literal(`'${value.replace(/'/g, "''")}'`);
   },
   identifier(name: string): BuiltExpression {
-    if (!IDENTIFIER.test(name)) throw new Error(`identifier: "${name}" is not a valid AL identifier`);
+    if (!IDENTIFIER.test(name))
+      throw new Error(`identifier: "${name}" is not a valid AL identifier`);
     return literal(name);
   },
   binaryOp(op: ALBinaryOp, left: BuiltExpression, right: BuiltExpression): BuiltExpression {
@@ -38,7 +51,8 @@ export const build = {
     return literal(`${op}${paren(operand)}`);
   },
   procedureCall(name: string, args: readonly BuiltExpression[]): BuiltExpression {
-    if (!IDENTIFIER.test(name)) throw new Error(`procedureCall: "${name}" is not a valid AL identifier`);
+    if (!IDENTIFIER.test(name))
+      throw new Error(`procedureCall: "${name}" is not a valid AL identifier`);
     const rendered = args.map((a) => a.toAL()).join(", ");
     return literal(`${name}(${rendered})`);
   },
@@ -48,7 +62,11 @@ export const build = {
 } as const;
 
 function literal(rendered: string): BuiltExpression {
-  return { toAL() { return rendered; } };
+  return {
+    toAL() {
+      return rendered;
+    },
+  };
 }
 
 function paren(expr: BuiltExpression): string {

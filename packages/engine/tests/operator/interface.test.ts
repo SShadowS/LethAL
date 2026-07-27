@@ -1,9 +1,5 @@
-import { describe, it, expect } from "bun:test";
-import type {
-  MutationOperator,
-  MutationSpec,
-  ConformanceCase,
-} from "../../src/operator/interface";
+import { describe, expect, it } from "bun:test";
+import type { ConformanceCase, MutationOperator, MutationSpec } from "../../src/operator/interface";
 
 describe("MutationOperator typing", () => {
   it("accepts a minimal valid operator shape", () => {
