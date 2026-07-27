@@ -912,6 +912,16 @@ describe("announceAlRunnerCanary (R7/R8)", () => {
 // ————————————————————————————————————————————————————————————————————————
 describe("withAlRunnerCanary (R7/R8 report persistence)", () => {
   const baseReport = {
+    schemaVersion: 1,
+    validity: {
+      reliability: "full" as const,
+      caveats: [],
+      scoreDescribes: "test fixture",
+      baselineTests: { total: 0, failing: 0 },
+      scoredMutants: { scored: 0, recorded: 0 },
+    },
+    survivorsByProcedure: [],
+    testFiles: {},
     backend: "al-runner",
     authoritative: false,
     baselineGreen: true,
@@ -930,14 +940,14 @@ describe("withAlRunnerCanary (R7/R8 report persistence)", () => {
     mutants: [],
     unsupportedTests: [],
     notInstrumented: { totalFiles: 0, fileCount: 0, siteCount: 0, files: [] },
-      timings: {
-        totalMs: 0,
-        generateMutationSetMs: 0,
-        deployMs: 0,
-        baselineMs: 0,
-        mutantsMs: 0,
-        perMutant: { count: 0, meanMs: 0, medianMs: 0, p95Ms: 0, maxMs: 0 },
-      },
+    timings: {
+      totalMs: 0,
+      generateMutationSetMs: 0,
+      deployMs: 0,
+      baselineMs: 0,
+      mutantsMs: 0,
+      perMutant: { count: 0, meanMs: 0, medianMs: 0, p95Ms: 0, maxMs: 0 },
+    },
     untargetedTriggerCount: 0,
   };
 

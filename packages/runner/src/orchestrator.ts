@@ -50,6 +50,7 @@ import {
   identityKeyOf,
   testKeyOf,
 } from "./selection";
+import type { CoverageAttribution } from "./selection";
 import { SessionSafety, SessionUnsafeError } from "./session-safety";
 import type { ResultsStore } from "./store";
 import type { MutantVerdict } from "./store";
@@ -2023,6 +2024,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
 
       // 5. coverage filter (capability-gated)
       let perMutantTests: ReadonlyMap<string, readonly TestMethodRef[]>;
+      // R-agent-output: which attribution path placed each mutant's covering tests. Empty on the
+      // `coverage: "none"` branch below, where every mutant runs every green test by construction
+      // and no attribution happened at all — distinct from "attributed, then fell back".
+      let coverageAttribution: ReadonlyMap<string, CoverageAttribution> = new Map();
       let uncovered: readonly MutantManifestEntry[] = [];
       if (caps.coverage === "none") {
         perMutantTests = new Map(execute.map((m) => [m.mutantId, greenTests.map((b) => b.ref)]));
@@ -2039,6 +2044,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           greenTests.map((b) => b.ref),
         );
         perMutantTests = split.covered;
+        coverageAttribution = split.attribution;
         uncovered = split.uncovered;
         untargetedTriggerCount += split.untargetedTriggerCount;
       }
@@ -2109,6 +2115,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           ...(leaseSession !== undefined ? { leaseSession } : {}),
           mutants: execute,
           perMutantTests,
+          coverageAttribution,
           baselineDuration,
           fallbackTimeoutMs,
           store: cfg.store,
@@ -2202,6 +2209,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
               safety,
               mutants: shard,
               perMutantTests,
+              coverageAttribution,
               baselineDuration,
               fallbackTimeoutMs,
               store: cfg.store,
@@ -2340,6 +2348,12 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     outcomes,
     unsupportedTests: [...unsupportedTestNames].sort(),
     notInstrumented: { totalFiles: totalAlFiles, files: notInstrumentedFiles },
+    // Every discovered test, so the report can state the denominator behind `unsupportedTests`
+    // and index test files for `SessionReport.testFiles`.
+    baselineTests: tests.map((t) => ({
+      codeunitName: t.codeunitName,
+      ...(t.file !== undefined ? { file: t.file } : {}),
+    })),
     timings: {
       totalMs: Date.now() - sessionStartedMs,
       generateMutationSetMs,
@@ -2437,6 +2451,8 @@ async function runMutantsOnBackend(args: {
   readonly safety: SessionSafety;
   readonly mutants: readonly MutantManifestEntry[];
   readonly perMutantTests: ReadonlyMap<string, readonly TestMethodRef[]>;
+  /** Which attribution path placed each mutant's covering tests — see `CoverageSplit.attribution`. */
+  readonly coverageAttribution: ReadonlyMap<string, CoverageAttribution>;
   readonly baselineDuration: ReadonlyMap<string, number>;
   readonly fallbackTimeoutMs: number;
   readonly store: ResultsStore;
@@ -2741,6 +2757,10 @@ async function runMutantsOnBackend(args: {
       failureNote,
       cause,
       spent,
+      // `covering` is exactly what this loop just ran the mutant against, so a survivor's report
+      // entry names the tests that failed to notice it — see `SessionOutcome.coveringTests`.
+      covering.map((ref) => qualifiedTestName(ref)),
+      args.coverageAttribution.get(m.mutantId),
     );
     for (const t of testResultBuffer) {
       args.store.recordTestResult(
@@ -3110,6 +3130,11 @@ function record(
   failureNote?: string,
   cause?: "deadline-exceeded" | "unstable",
   durationMs = 0,
+  // The tests this mutant was actually run against — see `SessionOutcome.coveringTests`. Defaults
+  // to empty for the call sites that record without executing anything (`no-coverage`, known
+  // survivors, batch-wide failures), where empty is the honest answer rather than a placeholder.
+  coveringTests: readonly string[] = [],
+  coverageAttribution?: CoverageAttribution,
 ): number {
   const key = identityKeyOf(m);
   const mutantRowId = store.recordMutant(runId, {
@@ -3130,6 +3155,8 @@ function record(
     verdict,
     batchIndex,
     durationMs,
+    coveringTests,
+    ...(coverageAttribution !== undefined ? { coverageAttribution } : {}),
     ...(killingTest !== undefined ? { killingTest } : {}),
     ...(failureNote !== undefined ? { failureNote } : {}),
     ...(cause !== undefined ? { cause } : {}),

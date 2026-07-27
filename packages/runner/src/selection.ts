@@ -120,7 +120,33 @@ export interface CoverageSplit {
    * gate that pins it — see `tables.itest.ts`, which asserts 0.
    */
   readonly untargetedTriggerCount: number;
+  /**
+   * Which of the three attribution paths produced each covered mutant's test list, keyed by
+   * mutantId. Absent from the map means the mutant is in `uncovered`.
+   *
+   * `untargetedTriggerCount` above already tallies FALLBACK 2, but only as a session-wide COUNT
+   * and only for table triggers. This is the per-mutant answer, and it changes what a survivor
+   * MEANS:
+   *
+   * - `exact`     — a member-level coverage match. "These tests executed this procedure and did
+   *                 not notice the change" is a real assertion gap.
+   * - `object`    — FALLBACK 1. The tests executed something in this OBJECT; whether they reached
+   *                 the mutated member is unknown. "Covered but survived" here may be no finding
+   *                 at all, and telling an agent to strengthen one of these tests can send it
+   *                 chasing a test that never ran the code.
+   * - `all-green` — FALLBACK 2. Coverage placed it nowhere; every green test was run on the
+   *                 principle that running too much beats hiding a live site. Carries the least
+   *                 information of the three.
+   *
+   * Without this the report presents all three as one undifferentiated `coveringTests` list, i.e.
+   * approximate attribution wearing the costume of an exact one. That is the same shape as R29,
+   * where coverage attribution produced 10 false survivors out of 20.
+   */
+  readonly attribution: ReadonlyMap<string, CoverageAttribution>;
 }
+
+/** How `coverageFilter` placed a mutant's covering tests — see `CoverageSplit.attribution`. */
+export type CoverageAttribution = "exact" | "object" | "all-green";
 
 export function testKeyOf(ref: TestMethodRef): string {
   return `${ref.codeunitId}::${ref.method}`;
@@ -190,6 +216,7 @@ export function coverageFilter(
   // and RETURNED on `CoverageSplit` (see its doc) so a gate can assert it instead of a human
   // having to notice a stderr line.
   let untargetedTriggerCount = 0;
+  const attribution = new Map<string, CoverageAttribution>();
   for (const m of mutants) {
     const context = `mutant ${m.mutantId} (${m.file})`;
     // Member-level first: precise, and correct for every ordinary procedure.
@@ -212,6 +239,10 @@ export function coverageFilter(
     // reported every mutant in a COVERED codeunit's `OnRun` as `no-coverage` and dropped it from
     // the score. Over-running costs time; under-running hides bugs.
     const isTrigger = m.triggerName !== undefined;
+    // Recorded BEFORE fallback 1 can overwrite `testKeys`: after it runs, an exact hit and an
+    // object-level hit are indistinguishable by inspecting `testKeys` alone.
+    const how: CoverageAttribution =
+      testKeys !== undefined && testKeys.size > 0 ? "exact" : "object";
     if ((testKeys === undefined || testKeys.size === 0) && isTrigger) {
       testKeys = index.byObject.get(objectKeyOf(m.objectType, m.codeunitId, context));
     }
@@ -238,6 +269,7 @@ export function coverageFilter(
     const isTableTrigger = isTrigger && normalizeObjectType(m.objectType, context) === "table";
     if ((testKeys === undefined || testKeys.size === 0) && isTableTrigger) {
       covered.set(m.mutantId, [...allTests]);
+      attribution.set(m.mutantId, "all-green");
       untargetedTriggerCount++;
       continue;
     }
@@ -249,11 +281,14 @@ export function coverageFilter(
       m.mutantId,
       [...testKeys].flatMap((k) => byKey.get(k) ?? []),
     );
+    // A non-trigger mutant never reaches fallback 1, so reaching here with no exact hit is
+    // impossible for one; `how` is already "exact" in that case.
+    attribution.set(m.mutantId, how);
   }
   if (untargetedTriggerCount > 0) {
     console.warn(
       `[lethal] ${untargetedTriggerCount} table trigger mutant(s) could not be coverage-matched (no green test reported executing anything in that table, and no trigger is nameable at member level) — running each against all ${allTests.length} green test(s).`,
     );
   }
-  return { covered, uncovered, untargetedTriggerCount };
+  return { covered, uncovered, untargetedTriggerCount, attribution };
 }

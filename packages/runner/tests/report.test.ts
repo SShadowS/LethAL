@@ -13,6 +13,16 @@ import type { SessionReport } from "../src/report";
 // ————————————————————————————————————————————————————————————————————————
 describe("renderConsole — al-runner canary reiteration (R7/R8)", () => {
   const baseReport: SessionReport = {
+    schemaVersion: 1,
+    validity: {
+      reliability: "full" as const,
+      caveats: [],
+      scoreDescribes: "test fixture",
+      baselineTests: { total: 0, failing: 0 },
+      scoredMutants: { scored: 0, recorded: 0 },
+    },
+    survivorsByProcedure: [],
+    testFiles: {},
     backend: "al-runner",
     authoritative: false,
     baselineGreen: true,
@@ -99,6 +109,16 @@ describe("renderConsole — permission canary reiteration (R26)", () => {
   // A bcdev/authoritative base report: unlike the al-runner canary, this one belongs on an
   // AUTHORITATIVE report — the permission mock is a property of the fenced (bcdev) path.
   const bcdevReport: SessionReport = {
+    schemaVersion: 1,
+    validity: {
+      reliability: "full" as const,
+      caveats: [],
+      scoreDescribes: "test fixture",
+      baselineTests: { total: 0, failing: 0 },
+      scoredMutants: { scored: 0, recorded: 0 },
+    },
+    survivorsByProcedure: [],
+    testFiles: {},
     backend: "bcdev",
     authoritative: true,
     baselineGreen: true,

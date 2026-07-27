@@ -2,6 +2,7 @@ import type { MutantManifestEntry } from "@lethal/schemata";
 import { type AlRunnerCanaryResult, alRunnerCanaryWarnings } from "./al-runner-canary";
 import type { BackendCapabilities } from "./backend";
 import { type PermissionCanaryResult, permissionCanaryWarnings } from "./permission-canary";
+import type { CoverageAttribution } from "./selection";
 import { identityKeyOf } from "./selection";
 import type { MutantVerdict } from "./store";
 
@@ -34,6 +35,18 @@ export interface SessionOutcome {
    * deploy and baseline overhead, and that separation cannot be recovered from a wall-clock total.
    */
   readonly durationMs?: number;
+  /**
+   * Qualified names of the tests this mutant was actually RUN against. Absent when nothing ran it
+   * (`no-coverage`, known-survivor skip, a batch-wide failure).
+   *
+   * The other half of an actionable survivor: knowing a mutant survived is only half a finding —
+   * acting on it means knowing which tests already exercise that code and failed to notice, which
+   * is where a new assertion belongs. Without it a consumer has to re-derive coverage selection
+   * from outside, which no report reader can do.
+   */
+  readonly coveringTests?: readonly string[];
+  /** Which attribution path placed `coveringTests` — see `MutantOutcome.coverageAttribution`. */
+  readonly coverageAttribution?: CoverageAttribution;
 }
 
 /**
@@ -49,7 +62,75 @@ export interface NotInstrumentedFile {
   readonly sites: number;
 }
 
+/**
+ * Bumped whenever a field is renamed, removed, or changes meaning. Additive fields do not require
+ * a bump. A machine-consumed contract with no version breaks silently the first time it changes,
+ * and the consumer has no way to notice.
+ */
+export const REPORT_SCHEMA_VERSION = 1;
+
+/**
+ * What the score is a score OF — the report's own limits, synthesized in one place.
+ *
+ * The individual caveats already exist (`only`, `notInstrumented`, `baselineGreen`,
+ * `unsupportedTests`), but scattered across four fields a consumer has to correlate. A reader —
+ * human or agent — quotes `mutationScore` long before it joins four other fields, so the number
+ * has to arrive with its own qualifications attached.
+ */
+export interface ReportValidity {
+  /**
+   * `full` — whole project, green baseline. `narrowed` — `--only` scoped the run. `degraded` —
+   * the baseline was not green, so some mutants could not be scored at all. `narrowed-degraded`
+   * — both. Anything other than `full` means the score does NOT describe the project.
+   */
+  readonly reliability: "full" | "narrowed" | "degraded" | "narrowed-degraded";
+  /** Human- and machine-readable reasons, e.g. `baseline-red`, `narrowed`, `uninstrumentable-files`. */
+  readonly caveats: readonly string[];
+  /** One sentence naming what the score covers. Written for a consumer that will quote it. */
+  readonly scoreDescribes: string;
+  /** Tests that ran at baseline, and how many of them failed. `failing > 0` bounds how much this
+   *  run could measure at all: a mutant covered only by failing tests cannot be scored. */
+  readonly baselineTests: { readonly total: number; readonly failing: number };
+  /** Mutants that produced a scoreable verdict (killed/survived/timeout-killed), out of all
+   *  recorded. The denominator `mutationScore` is actually computed over. */
+  readonly scoredMutants: { readonly scored: number; readonly recorded: number };
+}
+
+/** Per-procedure survivor rollup — see `SessionReport.survivorsByProcedure`. */
+export interface SurvivorGroup {
+  readonly file: string;
+  readonly codeunitName: string;
+  readonly procedureName: string;
+  readonly survived: number;
+  readonly noCoverage: number;
+  readonly killed: number;
+  /** `mutantCode`s of the survivors here — references into `mutants[]`, not copies. */
+  readonly survivorCodes: readonly string[];
+}
+
 export interface SessionReport {
+  readonly schemaVersion: number;
+  /**
+   * The report's own limits, in one place — see `ReportValidity`. Always present.
+   */
+  readonly validity: ReportValidity;
+  /**
+   * Survivors grouped by the procedure they live in, most survivors first.
+   *
+   * 86 survivors in one codeunit is more than anyone fixes at once, and they collapse into far
+   * fewer procedures — one missing assertion commonly explains several. Grouping is the ranking
+   * INPUT the run itself knows and a consumer would have to re-derive; the ordering policy stays
+   * with the consumer, which is why there is no computed priority score here. A number like that
+   * would be wrong for someone's context and trusted uncritically anyway.
+   */
+  readonly survivorsByProcedure: readonly SurvivorGroup[];
+  /**
+   * Test codeunit name → the project-relative file it was discovered in, for every test that ran
+   * at baseline. Acting on a survivor means editing a test file; `coveringTests` carries qualified
+   * `Codeunit.method` names, and this is how a consumer turns one into a path without grepping.
+   * Indexed once at session level rather than repeated on every mutant.
+   */
+  readonly testFiles: Readonly<Record<string, string>>;
   readonly backend: string;
   readonly authoritative: boolean;
   readonly baselineGreen: boolean;
@@ -245,6 +326,42 @@ export interface MutantOutcome {
    */
   readonly durationMs: number;
   /**
+   * The mutation itself and where it lives — added so a consumer (a human reading a diff, or an
+   * agent asked to strengthen a suite) can act on a survivor without re-deriving anything.
+   *
+   * Before this, a survivor read `lethal.empty-block at line 6` and nothing more: which span the
+   * operator chose, what it became, which procedure it sits in, and which tests ran past it were
+   * all absent, so the only way to judge a survivor was to re-open the source at exactly the
+   * mutated revision and guess.
+   *
+   * `mutatedText` is `""` for a deletion operator — the mutation IS the empty string, not a
+   * missing field. `coveringTests` is empty when nothing ran (`no-coverage`), which is itself the
+   * finding: a survivor with no covering tests wants a NEW test, one with covering tests wants a
+   * stronger assertion in an existing one.
+   */
+  readonly procedureName: string;
+  readonly triggerName?: string;
+  readonly startIndex: number;
+  readonly endIndex: number;
+  readonly originalText: string;
+  readonly mutatedText: string;
+  readonly coveringTests: readonly string[];
+  /**
+   * How `coverageFilter` placed `coveringTests`, and therefore how much that list is worth.
+   *
+   * `exact` — a member-level match: these tests executed THIS procedure. "Covered but survived"
+   * is a real assertion gap and the covering tests are where to fix it.
+   * `object` — object-level fallback: the tests executed something in this object, but whether
+   * they reached the mutated member is unknown. Acting on one of these can mean strengthening a
+   * test that never ran the code.
+   * `all-green` — coverage placed it nowhere, so every green test ran. Least informative.
+   * Absent when nothing ran (`no-coverage`).
+   *
+   * Reporting all three as one undifferentiated list is approximate attribution wearing the
+   * costume of an exact one — the shape that produced 10 false survivors out of 20 in R29.
+   */
+  readonly coverageAttribution?: CoverageAttribution;
+  /**
    * Semantic mutant identity components (Layer 5A, `itest/mutant-equality.ts`) — the SAME
    * astHash/codeunitName/operatorMajor triple `identityKeyOf`/`serializeKey` (selection.ts)
    * already use for known-survivor persistence. Unlike `killingTest`/`failureNote`, these are
@@ -284,6 +401,9 @@ export interface BuildReportInput {
     readonly deployMs: number;
     readonly baselineMs: number;
   };
+  /** Every test that ran at baseline — the denominator `unsupportedTests` needs, and the source
+   *  of `SessionReport.testFiles`. "105 failing" means nothing without it. */
+  readonly baselineTests: readonly { readonly codeunitName: string; readonly file?: string }[];
   /** Summed over every batch's `coverageFilter` — see `SessionReport.untargetedTriggerCount`.
    *  Required, not optional: an absent tally and a measured zero must never look alike. */
   readonly untargetedTriggerCount: number;
@@ -357,6 +477,16 @@ export function buildReport(input: BuildReportInput): SessionReport {
       codeunitName: identity.codeunitName,
       operatorMajor: identity.operatorMajor,
       durationMs: o.durationMs ?? 0,
+      procedureName: o.mutant.procedureName,
+      startIndex: o.mutant.startIndex,
+      endIndex: o.mutant.endIndex,
+      originalText: o.mutant.originalText,
+      mutatedText: o.mutant.mutatedText,
+      coveringTests: o.coveringTests ?? [],
+      ...(o.coverageAttribution !== undefined
+        ? { coverageAttribution: o.coverageAttribution }
+        : {}),
+      ...(o.mutant.triggerName !== undefined ? { triggerName: o.mutant.triggerName } : {}),
       ...(o.killingTest !== undefined ? { killingTest: o.killingTest } : {}),
       ...(o.failureNote !== undefined ? { failureNote: o.failureNote } : {}),
       ...(o.cause !== undefined ? { cause: o.cause } : {}),
@@ -373,7 +503,81 @@ export function buildReport(input: BuildReportInput): SessionReport {
     .filter((d) => d > 0)
     .sort((a, b) => a - b);
   const mutantsMs = durations.reduce((n, d) => n + d, 0);
+  // Survivors grouped by the procedure they live in — the ranking INPUT, not a ranking.
+  type MutableGroup = {
+    file: string;
+    codeunitName: string;
+    procedureName: string;
+    survived: number;
+    noCoverage: number;
+    killed: number;
+    survivorCodes: string[];
+  };
+  const groups = new Map<string, MutableGroup>();
+  for (const o of input.outcomes) {
+    const key = `${o.mutant.file}::${o.mutant.procedureName || o.mutant.triggerName || "<object>"}`;
+    let g = groups.get(key);
+    if (g === undefined) {
+      g = {
+        file: o.mutant.file,
+        codeunitName: o.mutant.codeunitName,
+        procedureName: o.mutant.procedureName || o.mutant.triggerName || "",
+        survived: 0,
+        noCoverage: 0,
+        killed: 0,
+        survivorCodes: [],
+      };
+      groups.set(key, g);
+    }
+    if (o.verdict === "survived") {
+      g.survived++;
+      g.survivorCodes.push(o.mutant.mutantId);
+    } else if (o.verdict === "no-coverage") g.noCoverage++;
+    else if (o.verdict === "killed" || o.verdict === "timeout-killed") g.killed++;
+  }
+  const survivorsByProcedure = [...groups.values()]
+    .filter((g) => g.survived > 0)
+    .sort((a, b) => b.survived - a.survived || a.file.localeCompare(b.file));
+
+  const testFiles: Record<string, string> = {};
+  for (const t of input.baselineTests) {
+    if (t.file !== undefined) testFiles[t.codeunitName] = t.file;
+  }
+
+  const scored = counts.killed + counts.timeoutKilled + counts.survived;
+  const caveats: string[] = [];
+  if (!input.baselineGreen) caveats.push("baseline-red");
+  if (input.only !== undefined) caveats.push("narrowed");
+  if (input.notInstrumented.files.length > 0) caveats.push("uninstrumentable-files");
+  if (input.untargetedTriggerCount > 0) caveats.push("untargeted-triggers");
+  const narrowed = input.only !== undefined;
+  const degraded = !input.baselineGreen;
+  const reliability =
+    narrowed && degraded
+      ? "narrowed-degraded"
+      : narrowed
+        ? "narrowed"
+        : degraded
+          ? "degraded"
+          : "full";
+  const scopeText = narrowed
+    ? `${input.only?.patterns.join(", ") ?? ""} (${input.notInstrumented.totalFiles - (input.only?.excludedFileCount ?? 0)} of ${input.notInstrumented.totalFiles} .al files)`
+    : `${input.notInstrumented.totalFiles} .al file(s)`;
+  const baselineText = degraded
+    ? `, with ${input.unsupportedTests.length} of ${input.baselineTests.length} baseline tests failing`
+    : "";
+
   return {
+    schemaVersion: REPORT_SCHEMA_VERSION,
+    validity: {
+      reliability,
+      caveats,
+      scoreDescribes: `${scored} scored mutant(s) in ${scopeText}${baselineText}`,
+      baselineTests: { total: input.baselineTests.length, failing: input.unsupportedTests.length },
+      scoredMutants: { scored, recorded: input.outcomes.length },
+    },
+    survivorsByProcedure,
+    testFiles,
     backend: input.caps.authoritative ? "bcdev" : "al-runner",
     authoritative: input.caps.authoritative,
     baselineGreen: input.baselineGreen,
@@ -454,6 +658,29 @@ export function renderConsole(r: SessionReport): string {
     );
     for (const f of r.notInstrumented.files) {
       lines.push(`  ${f.file} (${f.kinds}, ${f.sites} site(s))`);
+    }
+  }
+  // The score's own limits, immediately after it. A reader quotes `score: 15.7%` long before
+  // correlating four separate qualifier fields, so the qualification has to arrive with it.
+  if (r.validity.reliability !== "full") {
+    lines.push(
+      `SCOPE: ${r.validity.reliability} [${r.validity.caveats.join(", ")}] - ${r.validity.scoreDescribes}`,
+    );
+  }
+  // Where the suite is blind, grouped - the part a reader acts on. Ahead of the per-mutant table
+  // because a codeunit's survivors collapse into far fewer procedures, and one missing assertion
+  // commonly explains several of them.
+  if (r.survivorsByProcedure.length > 0) {
+    const shown = r.survivorsByProcedure.slice(0, 10);
+    lines.push(`SURVIVORS BY PROCEDURE (${r.survivorsByProcedure.length} with survivors):`);
+    for (const g of shown) {
+      const where = g.procedureName === "" ? "<object>" : g.procedureName;
+      lines.push(
+        `  ${g.survived.toString().padStart(3)} survived  ${g.codeunitName}.${where}  (${g.killed} killed, ${g.noCoverage} no-coverage)`,
+      );
+    }
+    if (r.survivorsByProcedure.length > shown.length) {
+      lines.push(`  ... ${r.survivorsByProcedure.length - shown.length} more`);
     }
   }
   // Cost, next to the result: the three phases scale independently, so this is what makes a

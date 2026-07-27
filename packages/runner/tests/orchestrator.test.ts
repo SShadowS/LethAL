@@ -1425,6 +1425,7 @@ describe("mutation score — timeout-killed contribution", () => {
       notInstrumented: { totalFiles: 0, files: [] },
       timings: { totalMs: 0, generateMutationSetMs: 0, deployMs: 0, baselineMs: 0 },
       untargetedTriggerCount: 0,
+      baselineTests: [],
       outcomes: [
         {
           mutant: {
@@ -1440,6 +1441,8 @@ describe("mutation score — timeout-killed contribution", () => {
             codeunitId: 50000,
             codeunitName: "Test",
             procedureName: "TestProc",
+            originalText: "Original();",
+            mutatedText: "",
           },
           verdict: "timeout-killed" as const,
           batchIndex: 0,
@@ -1458,6 +1461,8 @@ describe("mutation score — timeout-killed contribution", () => {
             codeunitId: 50000,
             codeunitName: "Test",
             procedureName: "TestProc",
+            originalText: "Original();",
+            mutatedText: "",
           },
           verdict: "survived" as const,
           batchIndex: 0,
@@ -1482,6 +1487,7 @@ describe("mutation score — timeout-killed contribution", () => {
       notInstrumented: { totalFiles: 0, files: [] },
       timings: { totalMs: 0, generateMutationSetMs: 0, deployMs: 0, baselineMs: 0 },
       untargetedTriggerCount: 0,
+      baselineTests: [],
       outcomes: [
         {
           mutant: {
@@ -1497,6 +1503,8 @@ describe("mutation score — timeout-killed contribution", () => {
             codeunitId: 50000,
             codeunitName: "Test",
             procedureName: "TestProc",
+            originalText: "Original();",
+            mutatedText: "",
           },
           verdict: "killed" as const,
           batchIndex: 0,
@@ -1516,6 +1524,8 @@ describe("mutation score — timeout-killed contribution", () => {
             codeunitId: 50000,
             codeunitName: "Test",
             procedureName: "TestProc",
+            originalText: "Original();",
+            mutatedText: "",
           },
           verdict: "timeout-killed" as const,
           batchIndex: 0,
@@ -1534,6 +1544,8 @@ describe("mutation score — timeout-killed contribution", () => {
             codeunitId: 50000,
             codeunitName: "Test",
             procedureName: "TestProc",
+            originalText: "Original();",
+            mutatedText: "",
           },
           verdict: "survived" as const,
           batchIndex: 0,
@@ -1552,6 +1564,8 @@ describe("mutation score — timeout-killed contribution", () => {
             codeunitId: 50000,
             codeunitName: "Test",
             procedureName: "TestProc",
+            originalText: "Original();",
+            mutatedText: "",
           },
           verdict: "survived" as const,
           batchIndex: 0,
@@ -1577,6 +1591,7 @@ describe("mutation score — timeout-killed contribution", () => {
       notInstrumented: { totalFiles: 0, files: [] },
       timings: { totalMs: 0, generateMutationSetMs: 0, deployMs: 0, baselineMs: 0 },
       untargetedTriggerCount: 0,
+      baselineTests: [],
       outcomes: [
         {
           mutant: {
@@ -1592,6 +1607,8 @@ describe("mutation score — timeout-killed contribution", () => {
             codeunitId: 50000,
             codeunitName: "Test",
             procedureName: "TestProc",
+            originalText: "Original();",
+            mutatedText: "",
           },
           verdict: "no-coverage" as const,
           batchIndex: 0,
@@ -1610,6 +1627,8 @@ describe("mutation score — timeout-killed contribution", () => {
             codeunitId: 50000,
             codeunitName: "Test",
             procedureName: "TestProc",
+            originalText: "Original();",
+            mutatedText: "",
           },
           verdict: "error" as const,
           batchIndex: 0,
@@ -2384,6 +2403,8 @@ describe("narrowFilesToSubset", () => {
       codeunitId: 1,
       codeunitName: "C",
       procedureName: "P",
+      originalText: "Original();",
+      mutatedText: "",
     };
   }
 
@@ -5861,6 +5882,8 @@ function fakeManifestEntry(mutantId: string): MutantManifestEntry {
     codeunitId: 79000,
     codeunitName: "Sandbox Logic",
     procedureName: "IsOverBudget",
+    originalText: "Original();",
+    mutatedText: "",
     astHash: "hash",
   };
 }

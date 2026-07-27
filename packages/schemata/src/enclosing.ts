@@ -20,10 +20,7 @@ export interface ResolvedSite {
  * Throws if `before` has no enclosing statement (malformed input — no
  * legitimate operator should ever emit a spec for a node outside a procedure).
  */
-export function resolveSite(
-  before: ALSyntaxNode,
-  afterText: string,
-): ResolvedSite {
+export function resolveSite(before: ALSyntaxNode, afterText: string): ResolvedSite {
   const statement = findEnclosingStatement(before);
   if (statement === null) {
     throw new Error(
@@ -41,7 +38,6 @@ export function resolveSite(
       `resolveSite: before span ${before.startIndex}..${before.endIndex} is not contained in statement ${statement.startIndex}..${statement.endIndex}`,
     );
   }
-  const mutatedText =
-    stmtText.slice(0, relStart) + afterText + stmtText.slice(relEnd);
+  const mutatedText = stmtText.slice(0, relStart) + afterText + stmtText.slice(relEnd);
   return { statement, mutatedText };
 }

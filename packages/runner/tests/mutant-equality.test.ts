@@ -18,6 +18,12 @@ function outcome(
     codeunitName: "Sandbox Logic",
     operatorMajor: 1,
     durationMs: 0,
+    procedureName: "Post",
+    startIndex: 0,
+    endIndex: 1,
+    originalText: "Original();",
+    mutatedText: "",
+    coveringTests: [],
     ...overrides,
   };
 }
@@ -34,6 +40,16 @@ function report(mutants: readonly MutantOutcome[]): SessionReport {
     deadlineExceeded: mutants.filter((m) => m.cause === "deadline-exceeded").length,
   };
   return {
+    schemaVersion: 1,
+    validity: {
+      reliability: "full" as const,
+      caveats: [],
+      scoreDescribes: "test fixture",
+      baselineTests: { total: 0, failing: 0 },
+      scoredMutants: { scored: 0, recorded: 0 },
+    },
+    survivorsByProcedure: [],
+    testFiles: {},
     backend: "bcdev",
     authoritative: true,
     baselineGreen: true,

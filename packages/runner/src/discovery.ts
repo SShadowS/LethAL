@@ -35,7 +35,7 @@ export async function discoverTests(testDir: string): Promise<TestMethodRef[]> {
 
       // Find test methods in this section only
       for (const m of section.matchAll(TEST_METHOD)) {
-        refs.push({ codeunitId, codeunitName, method: m[2] ?? m[3] ?? "" });
+        refs.push({ codeunitId, codeunitName, method: m[2] ?? m[3] ?? "", file: rel });
       }
     }
   }

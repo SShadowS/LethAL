@@ -22,6 +22,8 @@ function entry(over: Partial<Record<string, unknown>> = {}) {
     codeunitId: 70000,
     codeunitName: "Sample",
     procedureName: "Post",
+    originalText: "Original();",
+    mutatedText: "",
     ...over,
   };
 }
@@ -130,6 +132,8 @@ describe("coverage: trigger fallback", () => {
       objectType: "table",
       codeunitId: 99999,
       procedureName: "",
+      originalText: "Original();",
+      mutatedText: "",
       triggerName: "OnInsert",
     });
     const split = coverageFilter([m], index, [t1, t2]);
@@ -192,6 +196,8 @@ describe("coverage: table trigger mutants run untargeted when coverage cannot se
       objectType: "table",
       codeunitId: 99999,
       procedureName: "",
+      originalText: "Original();",
+      mutatedText: "",
       triggerName: "OnInsert",
     });
     const split = coverageFilter([m], index, allGreen);
@@ -234,6 +240,8 @@ describe("coverage: table trigger mutants run untargeted when coverage cannot se
         objectType: "table",
         codeunitId: 99999,
         procedureName: "",
+        originalText: "Original();",
+        mutatedText: "",
         triggerName: "OnInsert",
       });
       const m2 = entry({
@@ -241,6 +249,8 @@ describe("coverage: table trigger mutants run untargeted when coverage cannot se
         objectType: "table",
         codeunitId: 99998,
         procedureName: "",
+        originalText: "Original();",
+        mutatedText: "",
         triggerName: "OnModify",
       });
       coverageFilter([m1, m2], index, allGreen);
@@ -280,12 +290,16 @@ describe("coverage: table trigger mutants run untargeted when coverage cannot se
         objectType: "table",
         codeunitId: 99999, // nothing in the coverage index at all
         procedureName: "",
+        originalText: "Original();",
+        mutatedText: "",
         triggerName: "OnInsert",
       });
       const attributed = entry({
         mutantId: "M0002",
         objectType: "table", // objectId 70000 — object-level (fallback 1) answers
         procedureName: "",
+        originalText: "Original();",
+        mutatedText: "",
         triggerName: "OnModify",
       });
       const split = coverageFilter([fellBack, attributed], index, allGreen);
@@ -330,6 +344,8 @@ describe("coverage: object id collisions across object types", () => {
       objectType: "table",
       codeunitId: 50100,
       procedureName: "",
+      originalText: "Original();",
+      mutatedText: "",
       triggerName: "OnValidate",
     });
     const split = coverageFilter([m], index, allGreen);
@@ -400,6 +416,8 @@ describe("coverage: fallback 1 applies to any trigger; fallback 2 is TABLE-only"
       objectType: "codeunit",
       codeunitId: 88888, // nothing covers this codeunit at all
       procedureName: "",
+      originalText: "Original();",
+      mutatedText: "",
       triggerName: "OnRun",
     });
     const split = coverageFilter([m], index, allGreen);
@@ -428,6 +446,8 @@ describe("coverage: fallback 1 applies to any trigger; fallback 2 is TABLE-only"
       objectType: "page",
       codeunitId: 70200,
       procedureName: "",
+      originalText: "Original();",
+      mutatedText: "",
       triggerName: "OnOpenPage",
     });
     const split = coverageFilter([m], index, allGreen);
@@ -442,6 +462,8 @@ describe("coverage: fallback 1 applies to any trigger; fallback 2 is TABLE-only"
       objectType: "page",
       codeunitId: 70300, // nothing covers this page
       procedureName: "",
+      originalText: "Original();",
+      mutatedText: "",
       triggerName: "OnOpenPage",
     });
     const split = coverageFilter([m], index, allGreen);
@@ -465,6 +487,8 @@ describe("coverage: fallback 1 applies to any trigger; fallback 2 is TABLE-only"
       objectType: "codeunit",
       codeunitId: 70000,
       procedureName: "",
+      originalText: "Original();",
+      mutatedText: "",
       triggerName: "OnRun",
     });
     const split = coverageFilter([m], index, [t1, t2]);
@@ -487,6 +511,8 @@ describe("coverage: fallback 1 applies to any trigger; fallback 2 is TABLE-only"
         objectType: "codeunit",
         codeunitId: 70000,
         procedureName: "",
+        originalText: "Original();",
+        mutatedText: "",
         triggerName: "OnRun",
       });
       coverageFilter([uncovered, covered], index, allGreen);
@@ -554,6 +580,8 @@ describe("coverage: an observation that names no member credits the object only"
       objectType: "table",
       codeunitId: 79300,
       procedureName: "",
+      originalText: "Original();",
+      mutatedText: "",
       triggerName: "OnValidate",
     });
     const split = coverageFilter([m], index, allGreen);

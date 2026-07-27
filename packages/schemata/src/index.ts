@@ -24,6 +24,8 @@ export {
   CONTROL_SELECTOR_FILENAME,
   CONTROL_REGISTER_FILENAME,
   CONTROL_UPGRADE_FILENAME,
+  MAX_MUTATION_TEXT,
+  clipMutationText,
 } from "./project";
 export type {
   InstrumentedFile,

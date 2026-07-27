@@ -5,6 +5,16 @@ export interface TestMethodRef {
   readonly codeunitId: number;
   readonly codeunitName: string;
   readonly method: string;
+  /**
+   * Project-relative path of the file this test was discovered in. Set by `discoverTests`;
+   * absent on refs a backend or a test constructs, which is why it is optional rather than
+   * required — no execution path reads it.
+   *
+   * Carried so a report can tell a consumer WHERE to edit. A survivor's `coveringTests` are
+   * qualified `Codeunit.method` names, and acting on one means opening the test file; without
+   * this every survivor costs a project-wide grep.
+   */
+  readonly file?: string;
 }
 
 /**

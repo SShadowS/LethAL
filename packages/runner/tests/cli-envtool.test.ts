@@ -436,6 +436,16 @@ describe("resolveEnvToolSession", () => {
 // ————————————————————————————————————————————————————————————————————————
 
 const FAKE_REPORT: SessionReport = {
+  schemaVersion: 1,
+  validity: {
+    reliability: "full",
+    caveats: [],
+    scoreDescribes: "test fixture",
+    baselineTests: { total: 0, failing: 0 },
+    scoredMutants: { scored: 0, recorded: 0 },
+  },
+  survivorsByProcedure: [],
+  testFiles: {},
   backend: "fake",
   authoritative: true,
   baselineGreen: true,
@@ -454,14 +464,14 @@ const FAKE_REPORT: SessionReport = {
   mutants: [],
   unsupportedTests: [],
   notInstrumented: { totalFiles: 0, fileCount: 0, siteCount: 0, files: [] },
-      timings: {
-        totalMs: 0,
-        generateMutationSetMs: 0,
-        deployMs: 0,
-        baselineMs: 0,
-        mutantsMs: 0,
-        perMutant: { count: 0, meanMs: 0, medianMs: 0, p95Ms: 0, maxMs: 0 },
-      },
+  timings: {
+    totalMs: 0,
+    generateMutationSetMs: 0,
+    deployMs: 0,
+    baselineMs: 0,
+    mutantsMs: 0,
+    perMutant: { count: 0, meanMs: 0, medianMs: 0, p95Ms: 0, maxMs: 0 },
+  },
   untargetedTriggerCount: 0,
 };
 

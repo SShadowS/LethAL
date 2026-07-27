@@ -72,6 +72,38 @@ export interface MutantManifestEntry {
   readonly codeunitName: string;
   readonly procedureName: string;
   readonly triggerName?: string;
+  /**
+   * The source text this mutant REPLACED, and what it replaced it with — the mutation itself,
+   * stated rather than implied.
+   *
+   * Without these a consumer sees only `lethal.empty-block at line 6` and has to reverse-engineer
+   * which span an operator chose before it can judge, report, or act on a survivor. `file` +
+   * `startIndex`/`endIndex` technically locate it, but only if the consumer re-reads the source
+   * at exactly the revision that was mutated — a survivor acted on days later, or by an agent
+   * with only the report in hand, has no such guarantee.
+   *
+   * `mutatedText` is `""` for a deletion operator (`lethal.void-method-call`,
+   * `lethal.remove-setrange`, ...), which is meaningful, not missing: the mutation IS the empty
+   * string. Both are truncated at `MAX_MUTATION_TEXT` with a trailing marker — a whole procedure
+   * body can be a single `lethal.empty-block` span, and a manifest is not a source archive.
+   */
+  readonly originalText: string;
+  readonly mutatedText: string;
+}
+
+/**
+ * Cap on `originalText`/`mutatedText`. Generous enough that an ordinary statement-level mutation
+ * survives whole (the common case, and the one a consumer acts on), small enough that a
+ * block-rooted mutation over a long procedure body cannot bloat the manifest.
+ */
+export const MAX_MUTATION_TEXT = 600;
+
+/** Truncates to `MAX_MUTATION_TEXT`, marking the cut so a consumer never mistakes a clipped
+ *  fragment for the complete mutation text. */
+export function clipMutationText(text: string): string {
+  return text.length <= MAX_MUTATION_TEXT
+    ? text
+    : `${text.slice(0, MAX_MUTATION_TEXT)}… [truncated ${text.length - MAX_MUTATION_TEXT} chars]`;
 }
 
 export interface MutantManifest {
@@ -372,6 +404,8 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
         codeunitId: header.id,
         codeunitName: header.name,
         procedureName: procedureNameOf(spec),
+        originalText: clipMutationText(spec.before.text),
+        mutatedText: clipMutationText(spec.after.text),
         ...(triggerName !== undefined ? { triggerName } : {}),
       });
     }
