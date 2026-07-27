@@ -12,7 +12,7 @@ import type {
   TestVerdict,
 } from "../src/backend";
 import { runSession } from "../src/orchestrator";
-import { buildResumeIndex, sessionFingerprint } from "../src/resume";
+import { CARRYABLE_VERDICTS, buildResumeIndex, sessionFingerprint } from "../src/resume";
 import type { SessionFingerprintInput } from "../src/resume";
 import { ResultsStore } from "../src/store";
 import type { MutantVerdictRow } from "../src/store";
@@ -321,6 +321,7 @@ describe("sessionFingerprint (R47)", () => {
 });
 
 describe("ResultsStore resume queries (R47)", () => {
+  const CARRY = [...CARRYABLE_VERDICTS];
   test("findResumableRun matches an unfinished run with the same fingerprint", () => {
     const store = new ResultsStore(":memory:");
     const id = store.createRun({
@@ -329,8 +330,27 @@ describe("ResultsStore resume queries (R47)", () => {
       appVersion: "1.0.0.0",
       configFingerprint: "fp",
     });
+    // R52: a run must also HAVE something to carry, so this fixture records a verdict — otherwise
+    // it would be refused for emptiness and stop testing fingerprint matching at all.
+    store.recordMutant(id, {
+      mutantCode: "M0001",
+      astHash: "h",
+      codeunitName: "C",
+      operatorName: "op",
+      operatorMajor: 1,
+      file: "f.al",
+      line: 1,
+      verdict: "survived",
+      durationMs: 1,
+      batchIndex: 0,
+    });
     expect(
-      store.findResumableRun({ projectPath: "/p", backend: "bcdev", configFingerprint: "fp" }),
+      store.findResumableRun({
+        projectPath: "/p",
+        backend: "bcdev",
+        configFingerprint: "fp",
+        carryableVerdicts: CARRY,
+      }),
     ).toBe(id);
   });
 
@@ -344,7 +364,12 @@ describe("ResultsStore resume queries (R47)", () => {
     });
     store.finishRun(id, { batchCount: 1, baselineGreen: true });
     expect(
-      store.findResumableRun({ projectPath: "/p", backend: "bcdev", configFingerprint: "fp" }),
+      store.findResumableRun({
+        projectPath: "/p",
+        backend: "bcdev",
+        configFingerprint: "fp",
+        carryableVerdicts: CARRY,
+      }),
     ).toBeNull();
   });
 
@@ -357,7 +382,12 @@ describe("ResultsStore resume queries (R47)", () => {
       configFingerprint: "scope-a",
     });
     expect(
-      store.findResumableRun({ projectPath: "/p", backend: "bcdev", configFingerprint: "scope-b" }),
+      store.findResumableRun({
+        projectPath: "/p",
+        backend: "bcdev",
+        configFingerprint: "scope-b",
+        carryableVerdicts: CARRY,
+      }),
     ).toBeNull();
   });
 
@@ -366,8 +396,104 @@ describe("ResultsStore resume queries (R47)", () => {
     const store = new ResultsStore(":memory:");
     store.createRun({ projectPath: "/p", backend: "bcdev", appVersion: "1.0.0.0" });
     expect(
-      store.findResumableRun({ projectPath: "/p", backend: "bcdev", configFingerprint: "fp" }),
+      store.findResumableRun({
+        projectPath: "/p",
+        backend: "bcdev",
+        configFingerprint: "fp",
+        carryableVerdicts: CARRY,
+      }),
     ).toBeNull();
+  });
+
+  test("an unfinished run that recorded NOTHING never shadows an older one that did (R52)", () => {
+    // Measured live: an attempted resume aborted at lease acquisition before scoring a single
+    // mutant, and the next --resume dutifully selected that empty run over the one holding 12 real
+    // verdicts, reporting "0 verdict(s) carried". Recovery is exactly when a run is most likely to
+    // have recorded nothing, so "most recent unfinished" alone is the wrong rule.
+    const store = new ResultsStore(":memory:");
+    const withVerdicts = store.createRun({
+      projectPath: "/p",
+      backend: "bcdev",
+      appVersion: "1",
+      configFingerprint: "fp",
+    });
+    store.recordMutant(withVerdicts, {
+      mutantCode: "M0001",
+      astHash: "h",
+      codeunitName: "C",
+      operatorName: "op",
+      operatorMajor: 1,
+      file: "f.al",
+      line: 1,
+      verdict: "survived",
+      durationMs: 1,
+      batchIndex: 0,
+    });
+    // Newer, but died before recording anything.
+    store.createRun({
+      projectPath: "/p",
+      backend: "bcdev",
+      appVersion: "1",
+      configFingerprint: "fp",
+    });
+    expect(
+      store.findResumableRun({
+        projectPath: "/p",
+        backend: "bcdev",
+        configFingerprint: "fp",
+        carryableVerdicts: CARRY,
+      }),
+    ).toBe(withVerdicts);
+  });
+
+  test("a run holding only NON-carryable verdicts is skipped too (R52)", () => {
+    // An all-error run carries nothing, so selecting it is the same dead end as selecting an empty
+    // one — the SQL filter and CARRYABLE_VERDICTS must agree on that.
+    const store = new ResultsStore(":memory:");
+    const good = store.createRun({
+      projectPath: "/p",
+      backend: "bcdev",
+      appVersion: "1",
+      configFingerprint: "fp",
+    });
+    store.recordMutant(good, {
+      mutantCode: "M0001",
+      astHash: "h",
+      codeunitName: "C",
+      operatorName: "op",
+      operatorMajor: 1,
+      file: "f.al",
+      line: 1,
+      verdict: "killed",
+      durationMs: 1,
+      batchIndex: 0,
+    });
+    const allErrors = store.createRun({
+      projectPath: "/p",
+      backend: "bcdev",
+      appVersion: "1",
+      configFingerprint: "fp",
+    });
+    store.recordMutant(allErrors, {
+      mutantCode: "M0001",
+      astHash: "h2",
+      codeunitName: "C",
+      operatorName: "op",
+      operatorMajor: 1,
+      file: "f.al",
+      line: 2,
+      verdict: "error",
+      durationMs: 1,
+      batchIndex: 0,
+    });
+    expect(
+      store.findResumableRun({
+        projectPath: "/p",
+        backend: "bcdev",
+        configFingerprint: "fp",
+        carryableVerdicts: CARRY,
+      }),
+    ).toBe(good);
   });
 
   test("mutantVerdicts reads back identity, verdict, killing test and duration", () => {
@@ -667,16 +793,26 @@ describe("runSession --resume (R47)", () => {
     expect(first.quarantined?.reason).toMatch(/unattested artifact/);
     expect(first.counts.survived).toBe(0); // invalidated in memory
 
+    // Two independent guarantees, in order of strength.
+    //
+    // R52 made this REFUSE rather than carry nothing: `invalidateBatch` rewrote every row of the
+    // unattested batch to `error`, so the run holds no carryable verdict and can no longer be
+    // selected at all. Stronger than the old behaviour (resume, carry 0) because the false
+    // survivors cannot even be reached.
+    await expect(
+      runSession({
+        backend: new CountingBackend("pass"),
+        store,
+        ...dirs,
+        selectorIds,
+        resume: "last",
+      }),
+    ).rejects.toThrow(/found no unfinished run to resume/);
+
+    // And without --resume, everything is re-measured — identical to a run whose database never
+    // saw the unattested one.
     const second = new CountingBackend("pass");
-    const report = await runSession({
-      backend: second,
-      store,
-      ...dirs,
-      selectorIds,
-      resume: "last",
-    });
-    expect(report.resumedFrom?.carriedMutants).toBe(0);
-    // Everything re-measured — identical to a run whose database never saw the unattested one.
+    await runSession({ backend: second, store, ...dirs, selectorIds });
     const control = new CountingBackend("pass");
     await runSession({
       backend: control,

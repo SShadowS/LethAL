@@ -192,13 +192,24 @@ export class ResultsStore {
     projectPath: string;
     backend: string;
     configFingerprint: string;
+    /** Verdicts a resume may reuse — `CARRYABLE_VERDICTS` (resume.ts), passed in so the SQL and the
+     *  carry rule cannot drift apart. */
+    carryableVerdicts: readonly string[];
   }): number | null {
+    // R52: "most recent unfinished" is NOT sufficient — it must also HAVE something to carry.
+    // Measured 2026-07-27: an attempted resume aborted at lease acquisition before scoring a single
+    // mutant, and the next `--resume` dutifully selected that empty run over the one holding 12 real
+    // verdicts, reporting "0 verdict(s) carried". Not silently wrong (the report says so), but
+    // useless exactly when recovery matters — and an aborted run is precisely the kind most likely
+    // to have recorded nothing.
+    const placeholders = q.carryableVerdicts.map(() => "?").join(", ");
     const row = this.db
       .query(
-        "SELECT id FROM runs WHERE project_path = ? AND backend = ? AND config_fingerprint = ? " +
-          "AND finished_at IS NULL ORDER BY id DESC LIMIT 1",
+        `SELECT id FROM runs WHERE project_path = ? AND backend = ? AND config_fingerprint = ? AND finished_at IS NULL AND EXISTS (SELECT 1 FROM mutants m WHERE m.run_id = runs.id AND m.verdict IN (${placeholders})) ORDER BY id DESC LIMIT 1`,
       )
-      .get(q.projectPath, q.backend, q.configFingerprint) as { id: number } | null;
+      .get(q.projectPath, q.backend, q.configFingerprint, ...q.carryableVerdicts) as {
+      id: number;
+    } | null;
     return row === null ? null : row.id;
   }
 

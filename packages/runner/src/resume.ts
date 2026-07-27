@@ -31,7 +31,7 @@ import type { MutantVerdict, MutantVerdictRow } from "./store";
  * `known-survivor` IS carryable: it is a HISTORY verdict meaning "`--skip-known-survivors` chose
  * not to test this", which is as true on the resumed run as it was on the aborted one.
  */
-const CARRYABLE_VERDICTS: ReadonlySet<MutantVerdict> = new Set<MutantVerdict>([
+export const CARRYABLE_VERDICTS: ReadonlySet<MutantVerdict> = new Set<MutantVerdict>([
   "killed",
   "survived",
   "timeout-killed",

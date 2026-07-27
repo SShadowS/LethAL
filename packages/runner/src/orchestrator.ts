@@ -45,7 +45,12 @@ import { QuarantineStore } from "./quarantine-store";
 import { buildReport } from "./report";
 import type { NotInstrumentedFile, SessionOutcome, SessionReport } from "./report";
 import { quarantineResourceKey } from "./resource-key";
-import { buildResumeIndex, carriedVerdictFor, sessionFingerprint } from "./resume";
+import {
+  CARRYABLE_VERDICTS,
+  buildResumeIndex,
+  carriedVerdictFor,
+  sessionFingerprint,
+} from "./resume";
 import type { ResumeIndex } from "./resume";
 import {
   buildCoverageIndex,
@@ -1690,6 +1695,9 @@ function resolveResume(
       projectPath: cfg.projectDir,
       backend: backendName,
       configFingerprint,
+      // R52: one source of truth for what "resumable" means — a run holding only errors, or nothing
+      // at all, has nothing to carry and must not shadow an older run that does.
+      carryableVerdicts: [...CARRYABLE_VERDICTS],
     });
     if (found === null) {
       throw new Error(
