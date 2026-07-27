@@ -11,7 +11,7 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "../src/backend";
-import { parseCliConfig } from "../src/cli";
+import { LETHAL_VERSION, helpText, parseCliConfig } from "../src/cli";
 import {
   LARGE_RUN_MUTANT_THRESHOLD,
   MIN_MUTANT_BUDGET_MS,
@@ -260,6 +260,80 @@ describe("CLI flags (R47/R48)", () => {
     expect(() => parseCliConfig(["run", "--project", "p", "--dry-run", "--resume"])).toThrow(
       /no effect with --dry-run/,
     );
+  });
+});
+
+describe("--help and --version (R49)", () => {
+  const RUN_ARGS = ["run", "--project", "p", "--tests", "t", "--backend", "al-runner"] as const;
+
+  test("--help and -h are recognised BEFORE strict parseArgs rejects them", () => {
+    // The defect: parseArgs runs in strict mode, so `--help` used to exit 1 with a raw TypeError
+    // and a stack trace into the bundled binary — for the flag a new user types first.
+    expect(parseCliConfig(["--help"]).mode).toBe("help");
+    expect(parseCliConfig(["-h"]).mode).toBe("help");
+    expect(parseCliConfig(["run", "--help"]).mode).toBe("help");
+  });
+
+  test("a bare invocation shows usage rather than 'unknown subcommand: got none'", () => {
+    expect(parseCliConfig([]).mode).toBe("help");
+  });
+
+  test("--version and -V report the bundled release version", () => {
+    expect(parseCliConfig(["--version"]).mode).toBe("version");
+    expect(parseCliConfig(["-V"]).mode).toBe("version");
+    // Bundled by a static JSON import, not read from disk at runtime — R50 measured that a
+    // runtime-computed path resolves against Bun's virtual root under `--compile` and fails.
+    expect(LETHAL_VERSION).toMatch(/^\d+\.\d+\.\d+/);
+  });
+
+  test("an unknown subcommand still errors, and now points at --help", () => {
+    expect(() => parseCliConfig(["frobnicate"])).toThrow(/lethal --help/);
+  });
+
+  test("help text documents every flag `parseCliConfig` accepts", () => {
+    // A flag that exists and is undocumented is invisible to anyone holding only the binary. This
+    // pins the two together so adding a flag without documenting it fails here.
+    const text = helpText("0.0.0");
+    for (const flag of [
+      "--project",
+      "--tests",
+      "--backend",
+      "--db",
+      "--out",
+      "--config",
+      "--skip-known-survivors",
+      "--dry-run",
+      "--workers",
+      "--compile-concurrency",
+      "--server",
+      "--instance",
+      "--keep-env",
+      "--allow-expiring-env",
+      "--selector-id",
+      "--control-id",
+      "--table-id",
+      "--only",
+      "--tests-only",
+      "--max-guards-per-batch",
+      "--mutant-timeout-ms",
+      "--resume",
+      "--resume-run",
+      "--allow-large-run",
+    ]) {
+      expect(text).toContain(flag);
+    }
+  });
+
+  test("help names the quarantine exit code and the verdict-changing narrowing", () => {
+    // The two things a reader cannot infer and will otherwise get wrong: exit 3 is not a crash,
+    // and --tests-only can manufacture a survivor.
+    const text = helpText("0.0.0");
+    expect(text).toContain("quarantined");
+    expect(text).toMatch(/--tests-only[\s\S]*CAN CHANGE A\s+VERDICT/);
+  });
+
+  test("--help wins over an otherwise-valid run invocation", () => {
+    expect(parseCliConfig([...RUN_ARGS, "--help"]).mode).toBe("help");
   });
 });
 

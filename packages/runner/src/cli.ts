@@ -15,6 +15,12 @@ import {
   scanDeclaredObjects,
   validateSelectorIds,
 } from "@lethal/schemata";
+// R49: a STATIC import, not a runtime read of `package.json`. R50 measured what happens to a
+// runtime-computed path under `bun build --compile` — it resolves against Bun's virtual root and
+// fails — so the version has to be bundled the same way the wasm assets are. The root
+// `package.json` is the single source of truth for the release version (see `docs/releasing.md`);
+// workspace packages stay at 0.0.0 and are private.
+import rootPackageJson from "../../../package.json" with { type: "json" };
 import type { ActivationConfig, FetchFn } from "./activation";
 import { AlRunnerBackend } from "./al-runner-backend";
 import {
@@ -36,6 +42,7 @@ import { HarnessVerifier } from "./harness";
 import { LeaseClient } from "./lease";
 import {
   LARGE_RUN_MUTANT_THRESHOLD,
+  MIN_MUTANT_BUDGET_MS,
   defaultQuarantineDir,
   generateMutationSet,
   planArtifacts,
@@ -336,11 +343,31 @@ export interface ForceResetLeaseCliConfig {
   readonly configPath: string;
 }
 
+/**
+ * R49: `lethal --help` / `-h`, and a bare `lethal` with no arguments at all.
+ *
+ * `parseArgs` runs in strict mode, so before this an unknown `--help` exited 1 with a raw
+ * `TypeError: Unknown option '--help'` and a stack trace into the bundled binary. That was
+ * tolerable while the only way to run LethAL was from a checkout next to `fixtures/README.md`;
+ * `v0.1.0-alpha.1` ships a downloadable executable whose user has neither.
+ */
+export interface HelpCliConfig {
+  readonly mode: "help";
+}
+
+/** R49: `lethal --version` / `-V`. A bug report that cannot name the build it came from is a bug
+ *  report about an unknown program. */
+export interface VersionCliConfig {
+  readonly mode: "version";
+}
+
 export type CliConfig =
   | DryRunCliConfig
   | RunCliConfig
   | ClearQuarantineCliConfig
-  | ForceResetLeaseCliConfig;
+  | ForceResetLeaseCliConfig
+  | HelpCliConfig
+  | VersionCliConfig;
 
 const VALID_SUBCOMMANDS = ["run", "clear-quarantine", "force-reset-lease"] as const;
 
@@ -358,8 +385,69 @@ function requireKnownSubcommand(positionals: readonly string[]): string {
   }
   const got = subcommand === undefined ? "none" : `"${subcommand}"`;
   throw new Error(
-    `unknown subcommand: got ${got}, expected one of: ${VALID_SUBCOMMANDS.join(", ")}`,
+    `unknown subcommand: got ${got}, expected one of: ${VALID_SUBCOMMANDS.join(", ")}. Run \`lethal --help\` for usage.`,
   );
+}
+
+/**
+ * R49: usage text. Written for someone holding only the downloaded binary — every flag that changes
+ * what a run MEASURES says so, because those are the ones whose absence produces a confident wrong
+ * number rather than an error.
+ */
+export function helpText(version: string): string {
+  return `lethal ${version} — mutation testing for Business Central AL
+
+USAGE
+  lethal run              --project <dir> --tests <dir> --backend <bcdev|al-runner> [options]
+  lethal run              --project <dir> --dry-run
+  lethal clear-quarantine --server <url> --instance <name>
+  lethal force-reset-lease --server <url> --instance <name> --config <path>
+
+RUN — required
+  --project <dir>            AL project to mutate (the app under test)
+  --tests <dir>              AL test project (omit only with --dry-run)
+  --backend <name>           bcdev (live BC, authoritative) or al-runner (offline, NOT authoritative)
+
+RUN — scope. These bound cost. --tests-only can change a verdict; the others cannot.
+  --only <glob>              only these files contribute mutants (repeatable). Every file is still
+                             parsed, compiled and published — this selects mutants, not sources
+  --tests-only <glob>        only these test files run at baseline (repeatable). CAN CHANGE A
+                             VERDICT: exclude a killing test and its mutant is reported survived.
+                             The report flags it 'tests-narrowed'
+  --skip-known-survivors     skip mutants a prior finished run recorded as survivors
+  --allow-large-run          run more than ${LARGE_RUN_MUTANT_THRESHOLD} mutation sites (refused by default — a whole
+                             real app costs days and usually cannot publish at all)
+  --dry-run                  list what would be mutated; execute nothing
+
+RUN — cost and recovery
+  --max-guards-per-batch <n> cap guards per published artifact. Publish cost scales with guard
+                             count because BC recompiles server-side
+  --mutant-timeout-ms <n>    floor for a mutant's time budget (default ${MIN_MUTANT_BUDGET_MS} ms). The budget is
+                             max(2 x that test's baseline, this). Exceeding it quarantines the run
+  --resume                   continue the most recent unfinished run in --db, reusing its verdicts
+  --resume-run <id>          resume a specific run id
+  --workers <n>              parallel workers (bcdev is limited to 1)
+  --compile-concurrency <n>  concurrent alc processes
+
+RUN — environment
+  --config <path>            lethal.config.json (default: <project>/lethal.config.json)
+  --db <path>                results database (default: <project>/lethal.sqlite)
+  --out <path>               write the JSON report here
+  --selector-id <n>          override the injected selector codeunit id
+  --control-id <n>           override the injected control codeunit id
+  --table-id <n>             override the injected control table id
+  --keep-env                 do not delete an environment the env tool created
+  --allow-expiring-env       proceed against an environment that expires during the run
+
+OTHER
+  -h, --help                 this text
+  -V, --version              print the version
+
+EXIT CODES
+  0 ok   1 error   ${QUARANTINED_EXIT_CODE} quarantined (the run refused to vouch for its own verdicts)
+
+A score is only as good as its caveats: read \`validity\` in the JSON report before quoting
+\`mutationScore\`. A survivor is a lead, not a proven test-suite gap.`;
 }
 
 /**
@@ -381,6 +469,17 @@ function parseObjectIdFlag(value: string | undefined, flagName: string): number 
  * --backend, ...) are directly unit-testable without spawning a process.
  */
 export function parseCliConfig(argv: readonly string[]): CliConfig {
+  // R49: intercepted BEFORE `parseArgs`, which runs in strict mode and would reject `--help` as an
+  // unknown option — a `TypeError` with a stack trace into the bundled binary, for the one flag a
+  // new user is most likely to type first. A bare invocation gets the same treatment: with nothing
+  // to go on, usage is more useful than "unknown subcommand: got none".
+  if (argv.length === 0 || argv.includes("--help") || argv.includes("-h")) {
+    return { mode: "help" };
+  }
+  if (argv.includes("--version") || argv.includes("-V")) {
+    return { mode: "version" };
+  }
+
   const { values, positionals } = parseArgs({
     args: [...argv],
     allowPositionals: true,
@@ -1769,8 +1868,19 @@ async function forceResetLeaseFromCli(parsed: ForceResetLeaseCliConfig): Promise
   return 0;
 }
 
+/** R49: the release version, bundled at build time — see the import at the top of this file. */
+export const LETHAL_VERSION: string = rootPackageJson.version;
+
 async function main(): Promise<number> {
   const parsed = parseCliConfig(process.argv.slice(2));
+  if (parsed.mode === "help") {
+    console.log(helpText(LETHAL_VERSION));
+    return 0;
+  }
+  if (parsed.mode === "version") {
+    console.log(LETHAL_VERSION);
+    return 0;
+  }
   if (parsed.mode === "dry-run") {
     await printDryRun(parsed.projectDir, parsed.only);
     return 0;
