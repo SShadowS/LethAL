@@ -1,15 +1,11 @@
-import { describe, it, expect, beforeAll } from "bun:test";
-import {
-  ALNodeKind,
-  findFirst,
-  initParser,
-  parseAL,
-  wrapRoot,
-} from "@lethal/engine";
+import { beforeAll, describe, expect, it } from "bun:test";
+import { ALNodeKind, findFirst, initParser, parseAL, wrapRoot } from "@lethal/engine";
 import { resolveSite } from "../src/enclosing";
 
 describe("resolveSite", () => {
-  beforeAll(async () => { await initParser(); });
+  beforeAll(async () => {
+    await initParser();
+  });
 
   it("when before is itself a statement, site equals before", () => {
     const src = `codeunit 51800 "E" { procedure P() begin X := 1; end; }`;

@@ -20,6 +20,26 @@ export interface ResolvedSite {
  * Throws if `before` has no enclosing statement (malformed input — no
  * legitimate operator should ever emit a spec for a node outside a procedure).
  */
+/**
+ * True when `before` sits inside executable AL — i.e. `resolveSite` can place it.
+ *
+ * Exists because not every node an operator can pattern-match is CODE. AL page and report
+ * properties are declarative but parse with the same expression shapes as statements: a
+ * `SubPageLink` reads `"No." = field("Customer No.")` and a filter reads
+ * `"Electronic Document Format" = ''`, both of which tree-sitter yields as comparison
+ * expressions. `NegateConditional`/`ConditionalBoundary` therefore claim them, and nothing can
+ * wrap them — there is no statement to rewrite.
+ *
+ * Measured on Continia Document Output the moment R40 admitted pages: 154 such specs across 47
+ * files (152 negate-conditional, 2 conditional-boundary), which aborted the whole session at
+ * `buildComponents`. Checked once here, at spec generation, rather than in each operator: it is a
+ * structural precondition of emitting a mutant at all, and a per-operator fix would have to be
+ * repeated for every operator ever added.
+ */
+export function isMutableSite(before: ALSyntaxNode): boolean {
+  return findEnclosingStatement(before) !== null;
+}
+
 export function resolveSite(before: ALSyntaxNode, afterText: string): ResolvedSite {
   const statement = findEnclosingStatement(before);
   if (statement === null) {

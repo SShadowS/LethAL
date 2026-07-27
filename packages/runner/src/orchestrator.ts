@@ -21,6 +21,7 @@ import {
   type SelectorConfig,
   canCarryMutationSelectorVar,
   describeObjectKinds,
+  isMutableSite,
   writeInstrumentedProject,
 } from "@lethal/schemata";
 import { nextAbove, parseVersionConflict, reserveAppVersion } from "./app-version";
@@ -233,6 +234,8 @@ export async function generateMutationSet(
   const ctx = buildSemanticContext(parsed.map(({ path, root }) => ({ path, root })));
 
   let excludedByOnly = 0;
+  // Sites an operator claimed that are not inside executable AL — see the drop below.
+  let nonExecutableSites = 0;
   for (const { path: rel, source, root } of parsed) {
     // R41: excluded from MUTATION, not from the context above and not from the published app —
     // `prepareBatchProject` still copies this file into the batch dir verbatim.
@@ -253,7 +256,14 @@ export async function generateMutationSet(
             // tree — coalescing (Layer 4.3) relies on mutation sites being
             // laminar, which a synthetic multi-node span could violate.
             const validation = validateSpec(spec, root, spanIndex);
-            if (validation.ok) {
+            if (validation.ok && !isMutableSite(spec.before)) {
+              // The node matched an operator's pattern but is not inside executable AL — an AL
+              // page/report property (`SubPageLink`, a filter) parses as a comparison expression
+              // while being declarative. Nothing can wrap it, and before this guard one such site
+              // aborted the entire session at `buildComponents`. Dropped, and tallied so a silent
+              // shrink of the mutant set is impossible.
+              nonExecutableSites++;
+            } else if (validation.ok) {
               specs.push(spec);
             } else {
               console.warn(
@@ -281,6 +291,11 @@ export async function generateMutationSet(
       "other object kind cannot compile (AL0118). Not mutated; published unchanged";
     console.warn(
       `[lethal] skipped ${skipped.length} file(s) holding ${total} mutation site(s): ${why}: ${detail}.`,
+    );
+  }
+  if (nonExecutableSites > 0) {
+    console.warn(
+      `[lethal] dropped ${nonExecutableSites} matched site(s) that are not inside executable AL (declarative page/report properties such as SubPageLink or a filter, which parse as comparison expressions). They cannot be wrapped and are not mutants.`,
     );
   }
   if (excludedByOnly > 0) {

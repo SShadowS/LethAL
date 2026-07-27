@@ -1,9 +1,11 @@
-import { describe, it, expect, beforeAll } from "bun:test";
+import { beforeAll, describe, expect, it } from "bun:test";
 import { ALNodeKind, findFirst, initParser, parseAL, wrapRoot } from "@lethal/engine";
 import { duplicateEnclosing } from "../src/duplicate";
 
 describe("duplicateEnclosing", () => {
-  beforeAll(async () => { await initParser(); });
+  beforeAll(async () => {
+    await initParser();
+  });
 
   it("wraps the enclosing statement twice with mutated / original bodies", () => {
     const src = `codeunit 51020 "D" { procedure P(A: Boolean; B: Boolean) begin if A and B then DoThing(); end; }`;

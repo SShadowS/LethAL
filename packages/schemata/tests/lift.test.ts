@@ -1,9 +1,11 @@
-import { describe, it, expect, beforeAll } from "bun:test";
+import { beforeAll, describe, expect, it } from "bun:test";
 import { ALNodeKind, findFirst, initParser, parseAL, wrapRoot } from "@lethal/engine";
 import { liftExpression } from "../src/lift";
 
 describe("liftExpression", () => {
-  beforeAll(async () => { await initParser(); });
+  beforeAll(async () => {
+    await initParser();
+  });
 
   it("emits var declaration, conditional assign, and local reference", () => {
     const src = `codeunit 51011 "L" { procedure P(A: Decimal): Decimal begin exit(F(A * 2) + G(A)); end; }`;

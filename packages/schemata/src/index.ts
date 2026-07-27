@@ -33,7 +33,7 @@ export type {
   MutantManifest,
   MutantManifestEntry,
 } from "./project";
-export { resolveSite } from "./enclosing";
+export { resolveSite, isMutableSite } from "./enclosing";
 export type { ResolvedSite } from "./enclosing";
 export { parseIdRanges, validateSelectorIds } from "./id-ranges";
 export type { AppIdRange, DeclaredObject } from "./id-ranges";

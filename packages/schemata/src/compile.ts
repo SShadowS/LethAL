@@ -115,10 +115,32 @@ const NON_OBJECT_DECLARATION_KINDS: ReadonlySet<string> = new Set([
  * (specs generated for a file the injector will then refuse, aborting the session).
  */
 export function canCarryMutationSelectorVar(root: ALSyntaxNode): boolean {
-  return (
-    findFirst(root, ALNodeKind.codeunit) !== null || findFirst(root, ALNodeKind.table) !== null
-  );
+  return CARRIER_KINDS.some((k) => findFirst(root, k) !== null);
 }
+
+/**
+ * Object kinds that can carry the injected selector var.
+ *
+ * The list used to be codeunit + table, on the stated grounds that no other kind could hold the
+ * declaration and a guard in one "cannot compile (AL0118)". **Measured 2026-07-27 and disproven**
+ * (R40): a probe declaring the exact var inside a `page` (with layout, actions and a trigger) and
+ * a `report` (with dataset, requestpage and a trigger) compiles clean — `alc 17.0.29`, exit 0.
+ * The real constraint was never the KIND, it was WHERE the var is anchored, exactly as R38 turned
+ * out to be for codeunits. On Continia Document Output the old refusal cost 41% of the app's
+ * mutation sites; pages and reports are 6,492 of those 8,259.
+ *
+ * `pageextension`/`tableextension` compile with the var too, and are deliberately NOT here yet:
+ * they do not match `objectHeadersOf`'s header regex (project.ts), and it is unmeasured whether BC
+ * attributes an extension's coverage to the extension's own id or the base object's. Guessing
+ * that wrong mis-keys `coverageFilter` and manufactures false survivors — the R29 failure exactly.
+ * Enums stay out for a simpler reason: they hold no code, so they can hold no var.
+ */
+const CARRIER_KINDS: readonly ALNodeKind[] = [
+  ALNodeKind.codeunit,
+  ALNodeKind.table,
+  ALNodeKind.page,
+  ALNodeKind.report,
+];
 
 /**
  * Names the object declaration(s) this file actually contains, for the "cannot instrument this
@@ -208,6 +230,12 @@ function injectSelectorVarIntoObject(
   filePath: string,
 ): void {
   const isTable = object.kind === ALNodeKind.table;
+  // R40: a page/report carries structural sections (`layout`, `actions`, `dataset`,
+  // `requestpage`) that a `var` may not precede, and unlike a table there is no member the var is
+  // reliably allowed to sit BEFORE. Measured: trailing placement — after every member, including
+  // object-level triggers — compiles clean for both kinds with realistic sections present. So they
+  // take the same trailing branch a trigger-less table already uses, by having no anchor.
+  const isTrailingOnly = object.kind === ALNodeKind.page || object.kind === ALNodeKind.report;
   const headerKinds = isTable ? TABLE_HEADER_KINDS : CODEUNIT_HEADER_KINDS;
   // Under the current v3 grammar `declarationMembers` already strips the
   // `declaration_body` container, so header tokens never actually reach
@@ -243,9 +271,11 @@ function injectSelectorVarIntoObject(
   // `var` ahead of `Permissions`/`Access`/`Subtype`, which AL rejects. `undefined` here (a
   // codeunit whose members are all properties) falls through to the trailing branch below, the
   // same one the trigger-less table uses.
-  const anchor = isTable
-    ? members.find((c) => c.kind === ALNodeKind.trigger)
-    : members.find((c) => c.kind !== ALNodeKind.property);
+  const anchor = isTrailingOnly
+    ? undefined
+    : isTable
+      ? members.find((c) => c.kind === ALNodeKind.trigger)
+      : members.find((c) => c.kind !== ALNodeKind.property);
 
   if (anchor !== undefined) {
     rewrites.set(
@@ -255,8 +285,8 @@ function injectSelectorVarIntoObject(
     return;
   }
 
-  // No member to anchor BEFORE: a table with no object-level trigger, or (since R38) a codeunit
-  // whose members are all properties. Appending after the last member is right for both — it
+  // No member to anchor BEFORE: a table with no object-level trigger, a codeunit whose members are
+  // all properties (R38), or a page/report, which is always trailing (R40). Appending after the last member is right for both — it
   // clears every property by construction, and for the table it also clears `fields`/`keys`.
   const lastMember = members.at(-1);
   if (lastMember === undefined) {
@@ -332,13 +362,10 @@ function injectMutationSelectorVar(
   const objects = new Set<ALSyntaxNode>();
   for (const spec of specs) {
     const object = enclosingObjectDeclaration(spec.before);
-    if (
-      object === null ||
-      (object.kind !== ALNodeKind.codeunit && object.kind !== ALNodeKind.table)
-    ) {
+    if (object === null || !CARRIER_KINDS.includes(object.kind)) {
       const why =
         'the `var MutationSelector: Codeunit "Mutation Selector";` declaration can only be ' +
-        "injected into a codeunit or a table. Mutation guards were already emitted for this " +
+        `injected into ${CARRIER_KINDS.join(", ")}. Mutation guards were already emitted for this ` +
         "file, so every `MutationSelector.Active(...)` call would fail to compile with AL0118. " +
         "Spec generation is supposed to have dropped this file already (`generateMutationSet` " +
         "filters on `canCarryMutationSelectorVar`, `writeInstrumentedProject` on " +

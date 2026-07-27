@@ -10,7 +10,7 @@ import {
   wrapRoot,
 } from "@lethal/engine";
 import type { ALSyntaxNode, MutationSpec } from "@lethal/engine";
-import { compileSchemataForFile } from "../src/compile";
+import { canCarryMutationSelectorVar, compileSchemataForFile } from "../src/compile";
 
 /** Builds a MutationSpec matching the shape the existing tests construct by hand. */
 function spec(before: ALSyntaxNode, afterText: string, operatorName: string): MutationSpec {
@@ -742,23 +742,20 @@ describe("compileSchemataForFile — selector var injection into table objects",
   });
 
   it("throws, naming the object kind and the file, for an object kind it cannot instrument", () => {
-    // A page with an `OnAction` body is ordinary AL, `generateMutationSet` walks every `.al`
-    // file with no object-kind filter, and the header regex in project.ts accepts `page`. The
-    // guard calls are emitted before the selector var is injected, so returning silently here
-    // ships `MutationSelector.Active(...)` with no declaration in scope: AL0118 -> AlcCompileError
-    // -> bisection halves the mutant set and blames an innocent mutant. Refuse instead.
-    const source = `page 50100 "My Page"
+    // R40 made page and report legal carriers (measured: the var compiles inside both). An
+    // `xmlport` is still refused — and the property under test is unchanged: the guard calls are
+    // emitted BEFORE the selector var is injected, so returning silently here would ship
+    // `MutationSelector.Active(...)` with no declaration in scope (AL0118 -> AlcCompileError ->
+    // bisection halves the mutant set and blames an innocent mutant). Refuse instead.
+    const source = `xmlport 50100 "My Port"
 {
-    PageType = Card;
-    SourceTable = Customer;
-    layout { area(Content) { field(Name; Rec.Name) { } } }
-    actions
+    schema
     {
-        area(Processing)
+        textelement(Root)
         {
-            action(DoIt)
+            tableelement(Cust; Customer)
             {
-                trigger OnAction()
+                trigger OnAfterGetRecord()
                 begin
                     DoThing();
                 end;
@@ -769,14 +766,13 @@ describe("compileSchemataForFile — selector var injection into table objects",
     const root = wrapRoot(parseAL(source));
     let thrown: unknown;
     try {
-      compileSchemataForFile(source, root, [specAtFirstCall(root)], undefined, "MyPage.Page.al");
+      compileSchemataForFile(source, root, [specAtFirstCall(root)], undefined, "MyPort.XmlPort.al");
     } catch (err) {
       thrown = err;
     }
     expect(thrown).toBeInstanceOf(Error);
     const message = thrown instanceof Error ? thrown.message : "";
-    expect(message).toContain("MyPage.Page.al");
-    expect(message).toContain("page_declaration");
+    expect(message).toContain("MyPort.XmlPort.al");
     expect(message).toContain("AL0118");
   });
 
@@ -800,5 +796,74 @@ describe("compileSchemataForFile — selector var injection into table objects",
     const out = compileSchemataForFile(source, root, [specAtFirstCall(root)]);
     expect(out.match(/^\s*var\s*$/gm)?.length ?? 0).toBe(1);
     expect(countErrorNodes(out)).toBe(0);
+  });
+});
+
+// ————————————————————————————————————————————————————————————————————————
+// R40: pages and reports CAN carry the selector var — measured against `alc 17.0.29`, which
+// accepts the declaration inside both with realistic sections present. The old refusal
+// ("only a codeunit or a table can carry it, AL0118 otherwise") was wrong about the reason, and
+// cost 41% of a real app's mutation sites: on Continia Document Output, 6,492 of the 8,259
+// skipped sites are pages and reports. The real constraint is anchor POSITION, exactly as R38
+// turned out to be — the var must follow the object's structural sections.
+// ————————————————————————————————————————————————————————————————————————
+describe("compileSchemataForFile — selector var injection into pages and reports (R40)", () => {
+  it("injects into a page, after its layout and actions", () => {
+    const source = `page 50200 "P"
+{
+    PageType = Card;
+    SourceTable = Customer;
+    layout { area(Content) { field(Name; Rec.Name) { } } }
+    actions { area(Processing) { action(Go) { trigger OnAction() begin DoThing(); end; } } }
+}`;
+    const root = wrapRoot(parseAL(source));
+    const out = compileSchemataForFile(source, root, [specAtFirstCall(root)]);
+    const varAt = out.indexOf("MutationSelector: Codeunit");
+    expect(varAt).toBeGreaterThan(out.indexOf("layout"));
+    expect(varAt).toBeGreaterThan(out.indexOf("actions"));
+  });
+
+  it("injects into a report, after its dataset", () => {
+    const source = `report 50201 "R"
+{
+    dataset { dataitem(Cust; Customer) { trigger OnAfterGetRecord() begin DoThing(); end; } }
+}`;
+    const root = wrapRoot(parseAL(source));
+    const out = compileSchemataForFile(source, root, [specAtFirstCall(root)]);
+    expect(out.indexOf("MutationSelector: Codeunit")).toBeGreaterThan(out.indexOf("dataset"));
+  });
+
+  it("reuses a page's existing var section rather than adding a second", () => {
+    const source = `page 50202 "Q"
+{
+    PageType = Card;
+    layout { area(Content) { field(F; 1) { } } }
+    actions { area(Processing) { action(Go) { trigger OnAction() begin DoThing(); end; } } }
+
+    var
+        Existing: Integer;
+}`;
+    const root = wrapRoot(parseAL(source));
+    const out = compileSchemataForFile(source, root, [specAtFirstCall(root)]);
+    const outRoot = wrapRoot(parseAL(out));
+    const page = findFirst(outRoot, ALNodeKind.page);
+    if (page === null) throw new Error("no page in output");
+    const varSections = declarationMembers(page).filter((c) => c.kind === ALNodeKind.var_section);
+    expect(varSections).toHaveLength(1);
+    expect(varSections[0]?.text).toContain("Existing: Integer;");
+    expect(varSections[0]?.text).toContain('MutationSelector: Codeunit "Mutation Selector";');
+  });
+
+  it("canCarryMutationSelectorVar accepts page and report, still refuses xmlport", () => {
+    const kinds: Array<[string, boolean]> = [
+      ['page 1 "A" { PageType = Card; }', true],
+      ['report 2 "B" { dataset { } }', true],
+      ['codeunit 3 "C" { }', true],
+      ['table 4 "D" { fields { } }', true],
+      ['xmlport 5 "E" { schema { } }', false],
+    ];
+    for (const [src, expected] of kinds) {
+      expect(canCarryMutationSelectorVar(wrapRoot(parseAL(src)))).toBe(expected);
+    }
   });
 });
