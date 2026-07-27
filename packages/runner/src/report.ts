@@ -23,6 +23,17 @@ export interface SessionOutcome {
    * `String(err)`), which could otherwise collide with a prefix match.
    */
   readonly cause?: "deadline-exceeded" | "unstable";
+  /**
+   * Summed duration of the test runs this mutant was scored by, in ms — the same value
+   * `record()` already persists to `mutants.duration_ms`. 0 for a mutant nothing ran against
+   * (`no-coverage`, known-survivor skip) and for a batch-wide failure that recorded outcomes
+   * without executing them.
+   *
+   * Surfaced so the report can state what a run COST, not only what it found: extrapolating a
+   * narrowed run (`--only`) to a whole project needs per-mutant cost separated from the fixed
+   * deploy and baseline overhead, and that separation cannot be recovered from a wall-clock total.
+   */
+  readonly durationMs?: number;
 }
 
 /**
@@ -105,6 +116,38 @@ export interface SessionReport {
   readonly only?: {
     readonly patterns: readonly string[];
     readonly excludedFileCount: number;
+  };
+  /**
+   * Wall-clock cost of this run, split into the phases that scale differently — the whole point
+   * of recording it. `deploy` scales with PROJECT size (every file compiles, whether or not it
+   * was mutated); `mutants` scales with MUTANT count; `baseline` is a fixed per-batch toll. A
+   * single total cannot be extrapolated because those three move independently: a `--only` run
+   * over 163 mutants pays nearly the same deploy as one over 11,777.
+   *
+   * `mutantsMs` is the summed per-mutant TEST time (`SessionOutcome.durationMs`), so
+   * `totalMs - deployMs - baselineMs - mutantsMs` is the orchestration overhead — activation
+   * calls, lease renewals, coverage filtering, store writes. A rise there with the other three
+   * flat is the signature of a fencing or lease regression, which no verdict count would show.
+   *
+   * All values are milliseconds, always present (0, never absent, when a phase did not run —
+   * an absent tally and a measured zero must never look alike, the same rule
+   * `untargetedTriggerCount` follows).
+   */
+  readonly timings: {
+    readonly totalMs: number;
+    readonly generateMutationSetMs: number;
+    readonly deployMs: number;
+    readonly baselineMs: number;
+    readonly mutantsMs: number;
+    /** Per-mutant test time across every scored mutant, for extrapolating a larger run.
+     *  `count` counts mutants that actually ran (durationMs > 0), not every recorded outcome. */
+    readonly perMutant: {
+      readonly count: number;
+      readonly meanMs: number;
+      readonly medianMs: number;
+      readonly p95Ms: number;
+      readonly maxMs: number;
+    };
   };
   /**
    * Table trigger mutants that took `coverageFilter`'s FALLBACK 2 — "coverage places this
@@ -195,6 +238,13 @@ export interface MutantOutcome {
    */
   readonly cause?: "deadline-exceeded" | "unstable";
   /**
+   * Summed test time this mutant was scored by, in ms. 0 when nothing ran against it
+   * (`no-coverage`, known-survivor skip, or a batch-wide failure recorded without execution) —
+   * always present, so "cost nothing because it did not run" and "field not recorded" cannot be
+   * confused. See `SessionReport.timings` for why per-mutant cost is worth carrying.
+   */
+  readonly durationMs: number;
+  /**
    * Semantic mutant identity components (Layer 5A, `itest/mutant-equality.ts`) — the SAME
    * astHash/codeunitName/operatorMajor triple `identityKeyOf`/`serializeKey` (selection.ts)
    * already use for known-survivor persistence. Unlike `killingTest`/`failureNote`, these are
@@ -226,6 +276,14 @@ export interface BuildReportInput {
     readonly patterns: readonly string[];
     readonly excludedFileCount: number;
   };
+  /** Phase wall-clock measured by `runSession` — see `SessionReport.timings`. The per-mutant
+   *  distribution is derived here from `outcomes`, so only the phase totals are passed in. */
+  readonly timings: {
+    readonly totalMs: number;
+    readonly generateMutationSetMs: number;
+    readonly deployMs: number;
+    readonly baselineMs: number;
+  };
   /** Summed over every batch's `coverageFilter` — see `SessionReport.untargetedTriggerCount`.
    *  Required, not optional: an absent tally and a measured zero must never look alike. */
   readonly untargetedTriggerCount: number;
@@ -236,6 +294,19 @@ export interface BuildReportInput {
   /** R26: the once-per-session permission canary's measured verdict, threaded straight through
    *  from `runSession` — see `SessionReport.permissionCanary`. */
   readonly permissionCanary?: PermissionCanaryResult;
+}
+
+/**
+ * Nearest-rank percentile over an ASCENDING-sorted array, 0 for an empty one.
+ *
+ * Nearest-rank rather than interpolated on purpose: these are observed durations, and reporting a
+ * p95 of a value no mutant actually took invites reading it as a measurement when it is an
+ * average of two. `Math.min` clamps the index so `q = 1` cannot walk off the end.
+ */
+function percentile(sortedAsc: readonly number[], q: number): number {
+  if (sortedAsc.length === 0) return 0;
+  const rank = Math.min(sortedAsc.length - 1, Math.ceil(q * sortedAsc.length) - 1);
+  return sortedAsc[Math.max(0, rank)] ?? 0;
 }
 
 export function buildReport(input: BuildReportInput): SessionReport {
@@ -285,6 +356,7 @@ export function buildReport(input: BuildReportInput): SessionReport {
       astHash: identity.astHash,
       codeunitName: identity.codeunitName,
       operatorMajor: identity.operatorMajor,
+      durationMs: o.durationMs ?? 0,
       ...(o.killingTest !== undefined ? { killingTest: o.killingTest } : {}),
       ...(o.failureNote !== undefined ? { failureNote: o.failureNote } : {}),
       ...(o.cause !== undefined ? { cause: o.cause } : {}),
@@ -293,6 +365,14 @@ export function buildReport(input: BuildReportInput): SessionReport {
 
   const denom = counts.killed + counts.timeoutKilled + counts.survived;
   const notInstrumentedSites = input.notInstrumented.files.reduce((n, f) => n + f.sites, 0);
+  // Only mutants that actually RAN carry a duration; `no-coverage` and known-survivor skips
+  // record 0. Including those zeros would drag the mean toward a cost nothing paid, which is the
+  // opposite of useful when the number exists to extrapolate a bigger run.
+  const durations = input.outcomes
+    .map((o) => o.durationMs ?? 0)
+    .filter((d) => d > 0)
+    .sort((a, b) => a - b);
+  const mutantsMs = durations.reduce((n, d) => n + d, 0);
   return {
     backend: input.caps.authoritative ? "bcdev" : "al-runner",
     authoritative: input.caps.authoritative,
@@ -310,6 +390,20 @@ export function buildReport(input: BuildReportInput): SessionReport {
     },
     untargetedTriggerCount: input.untargetedTriggerCount,
     ...(input.only !== undefined ? { only: input.only } : {}),
+    timings: {
+      totalMs: input.timings.totalMs,
+      generateMutationSetMs: input.timings.generateMutationSetMs,
+      deployMs: input.timings.deployMs,
+      baselineMs: input.timings.baselineMs,
+      mutantsMs,
+      perMutant: {
+        count: durations.length,
+        meanMs: durations.length === 0 ? 0 : Math.round(mutantsMs / durations.length),
+        medianMs: percentile(durations, 0.5),
+        p95Ms: percentile(durations, 0.95),
+        maxMs: durations.at(-1) ?? 0,
+      },
+    },
     ...(input.quarantined !== undefined ? { quarantined: input.quarantined } : {}),
     ...(input.permissionCanary !== undefined ? { permissionCanary: input.permissionCanary } : {}),
   };
@@ -360,6 +454,21 @@ export function renderConsole(r: SessionReport): string {
     );
     for (const f of r.notInstrumented.files) {
       lines.push(`  ${f.file} (${f.kinds}, ${f.sites} site(s))`);
+    }
+  }
+  // Cost, next to the result: the three phases scale independently, so this is what makes a
+  // narrowed run extrapolate to a bigger one — and what makes a later run comparable to this one.
+  {
+    const t = r.timings;
+    const s = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
+    const overheadMs = Math.max(0, t.totalMs - t.deployMs - t.baselineMs - t.mutantsMs);
+    lines.push(
+      `TIMING: total ${s(t.totalMs)} = generate ${s(t.generateMutationSetMs)} + deploy ${s(t.deployMs)} + baseline ${s(t.baselineMs)} + mutants ${s(t.mutantsMs)} + overhead ${s(overheadMs)}`,
+    );
+    if (t.perMutant.count > 0) {
+      lines.push(
+        `  per mutant (n=${t.perMutant.count}): mean ${t.perMutant.meanMs}ms, median ${t.perMutant.medianMs}ms, p95 ${t.perMutant.p95Ms}ms, max ${t.perMutant.maxMs}ms`,
+      );
     }
   }
   // R41: a narrowed run's score describes the slice that was asked for, not the project. Same

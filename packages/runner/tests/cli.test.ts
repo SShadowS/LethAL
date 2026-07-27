@@ -930,6 +930,14 @@ describe("withAlRunnerCanary (R7/R8 report persistence)", () => {
     mutants: [],
     unsupportedTests: [],
     notInstrumented: { totalFiles: 0, fileCount: 0, siteCount: 0, files: [] },
+      timings: {
+        totalMs: 0,
+        generateMutationSetMs: 0,
+        deployMs: 0,
+        baselineMs: 0,
+        mutantsMs: 0,
+        perMutant: { count: 0, meanMs: 0, medianMs: 0, p95Ms: 0, maxMs: 0 },
+      },
     untargetedTriggerCount: 0,
   };
 

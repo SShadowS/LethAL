@@ -519,6 +519,19 @@ export interface BcDevConfigSection {
   readonly username: string;
   readonly password: string;
   readonly packageCachePath: string;
+  /**
+   * R43: absolute path to the `alc.exe` to compile the instrumented artifact with. Absent means
+   * "the newest AL VS Code extension installed" (`defaultAlToolPaths`), the behaviour before this
+   * existed.
+   *
+   * Needed because the compiler BUILD is not interchangeable. Measured 2026-07-27: an artifact
+   * built by `alc 18.0.38.8509` is refused by a hosted BC 28 environment with
+   * `Specified part does not exist in the package.`, while the same source built by `alc 17.x`
+   * (the version matching the target's declared `runtime`) publishes cleanly. With no override, a
+   * project whose server needs a specific compiler could not be run at all — the machine's newest
+   * extension decided, and losing that lottery looked like a packaging bug in LethAL.
+   */
+  readonly alcPath?: string;
   // Absolute path to the compiled `lethal-control.app` — see BcDevConfig.controlSymbolPath
   // (bcdev-backend.ts) for why deploy()/compileCheck() need it (Task 8).
   readonly controlSymbolPath: string;
@@ -949,7 +962,10 @@ export async function buildBackend(
 
   const alToolPaths = deps.alToolPaths ?? defaultAlToolPaths;
   const toolPaths = await alToolPaths();
-  if (!toolPaths) {
+  // R43: a configured `alcPath` also SATISFIES the requirement below — the gate exists to catch
+  // "no AL compiler anywhere", and an explicit path is a compiler. Only the altool-dependent
+  // (non-envTool) publish path still needs the extension install itself.
+  if (!toolPaths && !(c.alcPath !== undefined && envToolDeploy !== undefined)) {
     // R21: the env-tool publish path (`envToolDeploy` defined, `deployerFor` below takes the
     // env-tool branch) never constructs a `ContainerDeployer` and so never touches
     // `toolPaths.altoolPath` — altool.exe is irrelevant there. `alc.exe` is still genuinely
@@ -976,9 +992,15 @@ export async function buildBackend(
   await validateSelectorIdsForProject(parsed.projectDir, selectorIds);
   const outputDir = join(scratchDir, "publish");
   await mkdir(outputDir, { recursive: true });
+  const resolvedAlcPath = c.alcPath ?? toolPaths?.alcPath;
+  if (resolvedAlcPath === undefined) {
+    throw new Error(
+      "no alc.exe available: neither an AL Language VS Code extension install nor a bcdev.alcPath override",
+    );
+  }
   const compiler = new ArtifactCompiler(
     {
-      alcPath: toolPaths.alcPath,
+      alcPath: resolvedAlcPath,
       packageCachePath: c.packageCachePath,
       outputDir,
     },
@@ -991,7 +1013,10 @@ export async function buildBackend(
   // one `canonicalContainerKey` derivation shared with the control-app/`publishApps` publisher —
   // see `makeEnvToolPublisher`'s doc comment. `deployerFor` (Minor 7) is the same function a test
   // exercises directly to prove both publisher constructions share one `serializerKey`.
-  const deployer: AppPublisher = deployerFor(c, toolPaths.altoolPath, envToolDeploy);
+  // `altoolPath` is only ever READ on the non-envTool branch (`deployerFor` builds a
+  // `ContainerDeployer` there); the guard above already refuses a missing extension install on
+  // that path, so an empty string here is unreachable rather than a silent default.
+  const deployer: AppPublisher = deployerFor(c, toolPaths?.altoolPath ?? "", envToolDeploy);
   // One OData config, several consumers on the same LethAL Control / MutationControl web-service
   // endpoints: the RunMutant execution transport, the HarnessInfo prerequisite check, and the
   // (Layer-5A) deployment identity verifier.

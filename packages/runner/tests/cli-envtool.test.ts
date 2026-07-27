@@ -454,6 +454,14 @@ const FAKE_REPORT: SessionReport = {
   mutants: [],
   unsupportedTests: [],
   notInstrumented: { totalFiles: 0, fileCount: 0, siteCount: 0, files: [] },
+      timings: {
+        totalMs: 0,
+        generateMutationSetMs: 0,
+        deployMs: 0,
+        baselineMs: 0,
+        mutantsMs: 0,
+        perMutant: { count: 0, meanMs: 0, medianMs: 0, p95Ms: 0, maxMs: 0 },
+      },
   untargetedTriggerCount: 0,
 };
 
@@ -938,5 +946,65 @@ describe("bcDevBackendConfig (Important 4 — coverageMode config surface)", () 
     const cfg = bcDevBackendConfig(RESOLVED_BCDEV, "C:/proj");
     expect(cfg.coverageMode).toBeUndefined();
     expect("coverageMode" in cfg).toBe(false);
+  });
+});
+
+// ————————————————————————————————————————————————————————————————————————
+// R43: the compiler BUILD is not interchangeable. Measured 2026-07-27 on Continia Document
+// Output: `alc 18` writes OPC part names with single-encoded spaces (`Codeunit%206175272%20...`)
+// where `alc 17` double-encodes them (`Codeunit%25206175272%2520...`), so BC 28 cannot find the
+// parts and refuses the package with "Specified part does not exist in the package." — for any
+// project whose source file names contain spaces. With no override, the machine's newest AL
+// extension decided which compiler ran, and losing that lottery made a real app unpublishable.
+// ————————————————————————————————————————————————————————————————————————
+describe("buildBackend (R43 — bcdev.alcPath selects the compiler)", () => {
+  const deploy = {
+    client: new EnvToolClient(resolveModeCfg("env-4711"), {
+      spawn: async () => ({ exitCode: 0, stdout: "{}", stderr: "" }),
+    }),
+    publishBlock: { command: ["publish"] },
+    envId: "env-4711",
+  };
+  const missingAlToolPaths = async () => undefined;
+
+  it("a configured alcPath satisfies the 'no AL extension installed' gate on the env-tool path", async () => {
+    // The gate exists to catch "no AL compiler anywhere". An explicit path IS a compiler, so it
+    // must not still refuse — otherwise pinning a compiler would require also installing an
+    // extension whose compiler is the wrong one.
+    const configFile: LethalConfigFile = {
+      bcdev: { ...RESOLVED_BCDEV, alcPath: "C:/pinned/alc.exe" },
+      envTool: resolveModeCfg("env-4711"),
+    };
+    const err = await buildBackend(RUN_CONFIG_BCDEV, configFile, "C:/scratch", deploy, {
+      alToolPaths: missingAlToolPaths,
+    }).catch((e: unknown) => (e instanceof Error ? e.message : String(e)));
+    expect(err).not.toContain("could not locate alc.exe");
+  });
+
+  it("without alcPath, a missing AL extension is still refused on the env-tool path", async () => {
+    // The counterweight: without it, the test above would pass just as well if the gate had been
+    // removed outright rather than made satisfiable.
+    const configFile: LethalConfigFile = {
+      bcdev: RESOLVED_BCDEV,
+      envTool: resolveModeCfg("env-4711"),
+    };
+    await expect(
+      buildBackend(RUN_CONFIG_BCDEV, configFile, "C:/scratch", deploy, {
+        alToolPaths: missingAlToolPaths,
+      }),
+    ).rejects.toThrow(/could not locate alc\.exe under/);
+  });
+
+  it("the ContainerDeployer path still requires the extension even with alcPath set (altool comes from it)", async () => {
+    // alcPath names a COMPILER, not a publisher. The non-envTool path publishes with altool.exe,
+    // which only the extension install provides, so pinning alc must not wave that requirement
+    // through and fail later at publish time instead.
+    const configFile: LethalConfigFile = {
+      bcdev: { ...RESOLVED_BCDEV, alcPath: "C:/pinned/alc.exe" },
+    };
+    const err = await buildBackend(RUN_CONFIG_BCDEV, configFile, "C:/scratch", undefined, {
+      alToolPaths: missingAlToolPaths,
+    }).catch((e: unknown) => (e instanceof Error ? e.message : String(e)));
+    expect(err).toContain("alc.exe/altool.exe");
   });
 });
