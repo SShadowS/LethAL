@@ -1,6 +1,12 @@
 namespace LethAL.Control;
 
 using System.Reflection;
+// R58: the Code Coverage API. "Code Coverage" (the table) lives in System.Tooling; the management
+// codeunit in System.TestTools.CodeCoverage. Needed because this file DECLARES a namespace — the
+// R58 probes resolved the same names unqualified only because they declare none and therefore sit
+// in the global namespace.
+using System.Tooling;
+using System.TestTools.CodeCoverage;
 
 /// <summary>The OData-exposed control surface (registered as a web service by the install codeunit;
 /// procedures are OData V4 unbound actions /ODataV4/LethALControl_&lt;Proc&gt;). Layer 5C-A.</summary>
@@ -83,6 +89,75 @@ codeunit 71003 "LC Control API"
         if not NavApp.GetCurrentModuleInfo(Module) then
             exit('');
         exit(Format(Module.AppVersion()));
+    end;
+
+    /// <summary>R58: `RunMutant`, plus per-object code coverage collected AROUND the test run.
+    ///
+    /// A SEPARATE action rather than a parameter on `RunMutant`. Adding a parameter changes the OData
+    /// action signature, and BC validates the request shape before the action's own body runs — which
+    /// is exactly how R25's stale-control-app failure presented (`the parameter 'clientProtocol' ... is
+    /// not a valid parameter`, from a server whose endpoint EXISTED and answered). A new action leaves
+    /// every existing caller untouched.
+    ///
+    /// WHY THIS EXISTS: LethAL's coverage has always come from the bc-dev-mcp hub, so the BASELINE ran
+    /// on one runner while every MUTANT ran on this fenced path. Measured (R55/R57), those two sessions
+    /// differ — `GuiAllowed=Yes/Web` on the hub versus `No/ODataV4` here — and 12 of 56 Continia
+    /// Document Output tests fail on the hub and pass here purely because of it. A test dropped from the
+    /// green set takes its coverage with it, and its mutants are then reported `no-coverage`. Collecting
+    /// coverage HERE lets the green set and the verdicts come from one runner.
+    ///
+    /// Coverage is collected only when asked for, because it is not free and only the baseline needs it.
+    /// Verified (R58) that a fenced ODataV4 session records coverage identically to the hub session.</summary>
+    procedure RunMutantWithCoverage(TargetAppId: Text; ArtifactId: Text; AttemptId: Text; MutantId: Text; TestCodeunitId: Integer; TestMethod: Text; LeaseEpoch: Integer; LeaseToken: Text; ServerGeneration: Text; OpSeq: BigInteger) ResultJson: Text
+    var
+        CodeCoverageMgt: Codeunit "Code Coverage Mgt.";
+        Raw: Text;
+        Obj: JsonObject;
+        Token: JsonToken;
+        Out: Text;
+    begin
+        CodeCoverageMgt.StartApplicationCoverage();
+        Raw := RunMutant(TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, LeaseEpoch, LeaseToken, ServerGeneration, OpSeq);
+        CodeCoverageMgt.StopApplicationCoverage();
+
+        // Re-open the result and attach coverage rather than duplicating RunMutant's phase logic. If
+        // the payload is not an object something is very wrong upstream; return it untouched instead
+        // of masking it with a parse error of our own.
+        if not Obj.ReadFrom(Raw) then
+            exit(Raw);
+        Obj.Add('coverage', CoverageArray());
+        Obj.WriteTo(Out);
+        exit(Out);
+    end;
+
+    /// <summary>The `Code Coverage` table as a JSON array of `{objectType, objectId, lineNo, hits}`.
+    ///
+    /// `Object Type` is an Option (measured — it has no `AsInteger()`), and its integer values are BC's
+    /// own object-type numbering, the same one `app-package.ts` maps: Table=1, Report=3, Codeunit=5,
+    /// XmlPort=6, Page=8, Query=9, PageExtension=14, TableExtension=15.
+    ///
+    /// Line-level, which is FINER than the `procedure` granularity LethAL keys coverage on — mapping
+    /// lines back to procedures is the client's job, and it has the instrumented source to do it with.</summary>
+    local procedure CoverageArray(): JsonArray
+    var
+        CodeCoverage: Record "Code Coverage";
+        Arr: JsonArray;
+        Row: JsonObject;
+    begin
+        if CodeCoverage.FindSet() then
+            repeat
+                // Only executed lines carry information; a zero-hit row is noise on the wire, and a
+                // real project's coverage table is large.
+                if CodeCoverage."No. of Hits" > 0 then begin
+                    Clear(Row);
+                    Row.Add('objectType', CodeCoverage."Object Type");
+                    Row.Add('objectId', CodeCoverage."Object ID");
+                    Row.Add('lineNo', CodeCoverage."Line No.");
+                    Row.Add('hits', CodeCoverage."No. of Hits");
+                    Arr.Add(Row);
+                end;
+            until CodeCoverage.Next() = 0;
+        exit(Arr);
     end;
 
     /// <summary>Read-only: the artifact id the target registered for TargetAppId (empty if none).
