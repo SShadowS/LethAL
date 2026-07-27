@@ -42,6 +42,42 @@ codeunit 79323 "Frame And Reset Probe"
     end;
 
     [Test]
+    procedure AbGapBeforeObject()
+    var
+        CodeCoverageMgt: Codeunit "Code Coverage Mgt.";
+        CodeCoverage: Record "Code Coverage";
+        Three: Codeunit "Probe Obj Three";
+        Lines: Text;
+        Total: Integer;
+    begin
+        // R58: the base-line rule is pinned by two measurements that agree, but BOTH had at most
+        // ONE blank line between objects — where "previous object's end + 1" and "keyword - 1"
+        // coincide. `Probe Obj Three` is preceded by TWO blank lines, which separates them:
+        //
+        //   object two ends file 41, blanks 42-43, keyword 44, `Third` spans file 46-49
+        //     base 42 (prev end + 1)  -> Third at object lines 5..8
+        //     base 43 (keyword - 1)   -> 4..7
+        //     base 44 (keyword)       -> 3..6
+        //
+        // An off-by-one here does not error; it shifts every range onto its neighbour, which on
+        // adjacent procedures means the wrong name with full confidence.
+        CodeCoverageMgt.StartApplicationCoverage();
+        Total := Three.Third(4);
+        CodeCoverageMgt.StopApplicationCoverage();
+
+        CodeCoverage.SetRange("Object Type", 5);
+        CodeCoverage.SetRange("Object ID", 79324);
+        if CodeCoverage.FindSet() then
+            repeat
+                if Lines <> '' then
+                    Lines += ',';
+                Lines += Format(CodeCoverage."Line No.");
+            until CodeCoverage.Next() = 0;
+
+        Error('MEASURED gap obj79324Lines=[%1] exercised=%2', Lines, Total);
+    end;
+
+    [Test]
     procedure ZzResetBetweenRuns()
     var
         CodeCoverageMgt: Codeunit "Code Coverage Mgt.";

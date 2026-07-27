@@ -41,20 +41,24 @@ export interface LineMapEntry {
    * MEASURED, and not what it looks like. BC numbers coverage lines OBJECT-relative, and the base
    * is NOT the `codeunit`/`table` keyword line:
    *
-   * | file | object | keyword at file line | measured base |
-   * |---|---|---|---|
-   * | single-object | 79320 | 1 | 1 |
-   * | two-object | 79322 | 29 | **28** |
+   * | file | object | keyword at file line | blank lines before | measured base |
+   * |---|---|---|---|---|
+   * | single-object | 79320 | 1 | — | 1 |
+   * | two-object | 79322 | 29 | 1 | 28 |
+   * | three-object | 79324 | 44 | **2** | **42** |
    *
-   * Both fit one rule — objects PARTITION the file, each beginning one line after the previous one
-   * ends, with the first beginning at line 1 — and the "keyword line" hypothesis fits neither
-   * jointly. The leading blank line before `codeunit 79322` therefore belongs to that object.
+   * The rule is: objects PARTITION the file — each begins one line after the previous one ends,
+   * with the first beginning at line 1. Leading blank lines belong to the object that FOLLOWS them.
    *
-   * NOT yet discriminated: a gap of TWO or more blank lines between objects, where "previous end
-   * + 1" and "keyword − 1" diverge. This code implements "previous end + 1"; `buildLineMap`
-   * computes it that way rather than from the node's own start position for exactly that reason.
-   * Validate it on the first real session before trusting member-level attribution from a
-   * multi-object file.
+   * The third row is the one that proves it. With a single blank line, "previous end + 1" and
+   * "keyword − 1" coincide, so the first two measurements agreed with each other AND with a wrong
+   * hypothesis. Two blank lines separate them: object 79324's `Third` spans FILE lines 46-49, and
+   * BC reported object lines 5-8 — which is base 42 (previous end + 1), not 43 (keyword − 1) or 44
+   * (keyword). Hence `fileLineMapEntries` tracks the previous object's end rather than reading the
+   * node's own start position.
+   *
+   * An off-by-one here does not error. It shifts every range onto its neighbour, which on adjacent
+   * procedures yields the wrong name with full confidence — the R29 shape.
    */
   readonly baseLine: number;
 }

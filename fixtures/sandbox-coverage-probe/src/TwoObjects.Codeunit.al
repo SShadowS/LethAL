@@ -39,3 +39,12 @@ codeunit 79322 "Probe Obj Two"
                 Sum += I;
     end;
 }
+
+
+codeunit 79324 "Probe Obj Three"
+{
+    procedure Third(N: Integer) Sum: Integer
+    begin
+        Sum := N * 3;
+    end;
+}

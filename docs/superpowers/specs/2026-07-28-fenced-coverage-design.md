@@ -146,10 +146,11 @@ loaded and the batch dir's text is on disk. Parse it; the boundary cases come fr
    at line 1 the two frames coincide exactly, so that probe could not have distinguished them. The
    review that predicted this was right, and it is this project's signature hazard in miniature.
 
-   **Consequence for `line-map.ts`:** the per-object base line must be DERIVED from the parse
-   (the object node's start including leading trivia — equivalently, one past the previous object's
-   closing `}`), never from the declaration keyword, and it must be validated against this probe
-   rather than assumed.
+   **Confirmed 2026-07-28 with a third object preceded by TWO blank lines**, the case that
+   separates "previous end + 1" from "keyword − 1" (with one blank line they coincide, so the
+   first two measurements agreed with each other AND with a wrong hypothesis). Object 79324's
+   `Third` spans FILE lines 46-49 and BC reported object lines **5-8** = base 42 = previous end
+   + 1. Implemented and unit-tested in `line-map.ts`.
 3. ~~**Does `StartApplicationCoverage` CLEAR or ACCUMULATE?**~~ **ANSWERED 2026-07-28 — it
    CLEARS.** `ZzResetBetweenRuns` starts and stops coverage having exercised nothing, then looks
    for object 79322, which only the preceding test touched: `staleRows=0 staleHits=0`. So each
