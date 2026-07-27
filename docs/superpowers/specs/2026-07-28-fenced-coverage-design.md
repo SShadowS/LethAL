@@ -87,9 +87,20 @@ precisely the R29 failure that made 10 of 20 fixture survivors false. Two rules 
 
 Three things are unknown and must be probed, not reasoned about:
 
-1. **What is `"Line No."`?** A 1-based source line of the published object, or an ordinal over
-   executable statements? Everything depends on this. Probe: a codeunit whose executed statement
-   sits on a known line, run it, compare.
+1. ~~**What is `"Line No."`?**~~ **ANSWERED 2026-07-28** — a 1-based SOURCE LINE of the object's
+   source. Measured with `fixtures/sandbox-coverage-probe` reporting its own object's raw line
+   numbers: a 79-line file returned `0, 26..67, 69..78`, where line 26 is
+   `procedure ReportsCoverageCapability()`, line 69 is `local procedure Exercise(...)`, line 78 is
+   its closing `end;`, and the absent 68 is the blank line between the two procedures.
+
+   Three consequences for the mapping, all favourable:
+   - Rows span each procedure **contiguously, including its declaration line and its `end;`**, so a
+     `[declLine, endLine]` range per procedure covers every row that belongs to it. No statement-level
+     reasoning is needed.
+   - Lines between procedures are simply absent, so ranges do not need to be exhaustive.
+   - **Line `0` exists and is object-level.** It maps to rule 1 (emit an object-level entry, never
+     guess) exactly as written — which is reassuring, since that rule was written before this was
+     measured.
 2. **Which objects appear?** The R58 probe confirmed the *test* app's own object. The target app's
    objects must appear too, or fenced coverage cannot attribute anything useful.
 3. **Do lines refer to the INSTRUMENTED source?** Almost certainly — that is what was published —

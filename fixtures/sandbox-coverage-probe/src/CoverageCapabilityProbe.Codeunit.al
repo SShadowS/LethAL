@@ -31,6 +31,7 @@ codeunit 79320 "Coverage Capability Probe"
         Hits: Integer;
         OwnRows: Integer;
         Total: Integer;
+        OwnLines: Text;
     begin
         CodeCoverageMgt.StartApplicationCoverage();
         // Exercise something this extension owns, so there is a KNOWN observation to look for
@@ -43,18 +44,26 @@ codeunit 79320 "Coverage Capability Probe"
                 Rows += 1;
                 Hits += CodeCoverage."No. of Hits";
                 // Codeunit = 5 in BC's object-type numbering (measured under R40).
-                if (CodeCoverage."Object Type" = 5) and (CodeCoverage."Object ID" = 79320) then
+                if (CodeCoverage."Object Type" = 5) and (CodeCoverage."Object ID" = 79320) then begin
                     OwnRows += 1;
+                    if OwnLines <> '' then
+                        OwnLines += ',';
+                    OwnLines += Format(CodeCoverage."Line No.");
+                end;
             until CodeCoverage.Next() = 0;
 
-        // Raised as an error so both transports carry it back verbatim — a passing test reports
-        // nothing a runner surfaces. FAILED here is the transport, not a fault.
+        // R58 unknown #1: what does `"Line No."` DENOTE — a source line of the published object, or
+        // an ordinal over executable statements? The whole line->procedure mapping rests on this,
+        // and it is cheaper to look than to reason. `Exercise` occupies lines 60-69 of this file
+        // and its loop body is lines 64-68, so the reported numbers either land in that window or
+        // they mean something else entirely.
         Error(
-          'MEASURED coverageRows=%1 totalHits=%2 ownObjectRows=%3 exercised=%4',
+          'MEASURED coverageRows=%1 totalHits=%2 ownObjectRows=%3 exercised=%4 ownLines=[%5]',
           Rows,
           Hits,
           OwnRows,
-          Total);
+          Total,
+          OwnLines);
     end;
 
     local procedure Exercise(N: Integer) Sum: Integer
