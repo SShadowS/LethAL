@@ -36,7 +36,12 @@ codeunit 71003 "LC Control API"
     /// is GRANTED — which a still-active op or a live holder's own token refuses. Without it here, a
     /// session killed mid-run (the exact case ForceResetLease exists for) would have no way to obtain
     /// the echo it needs. Read via "LC Control State".CurrentServerGeneration(), never straight off the
-    /// table from this codeunit.</summary>
+    /// table from this codeunit.
+    ///
+    /// `semver` reports this extension's ACTUAL version (see CurrentAppVersion, ROADMAP R28), which
+    /// the client compares against its own minimum — that is what lets a stale control app be named
+    /// as such once, up front, rather than surfacing later as whichever action first needs
+    /// something this build does not have.</summary>
     procedure HarnessInfo(ClientProtocol: Integer) InfoJson: Text
     var
         State: Codeunit "LC Control State";
@@ -50,13 +55,34 @@ codeunit 71003 "LC Control API"
         Isolation.Add('Codeunit');
         TestTypes.Add('codeunit');
         Obj.Add('appId', '5e7a1c00-1111-4c00-8c00-1e7a1c000701');
-        Obj.Add('semver', '1.0.0.0');
+        Obj.Add('semver', CurrentAppVersion());
         Obj.Add('protocolVersion', 2);
         Obj.Add('serverGeneration', State.CurrentServerGeneration());
         Obj.Add('tenantCountReachable', false);
         Obj.Add('isolationModes', Isolation);
         Obj.Add('testTypes', TestTypes);
         Obj.WriteTo(InfoJson);
+    end;
+
+    /// <summary>This extension's REAL version, as the platform records it for the installed module —
+    /// never a literal (ROADMAP R28). `semver` used to be hardcoded '1.0.0.0', so a control app
+    /// several builds behind was byte-identical to a current one in the handshake and nothing could
+    /// date it; every new client action was left to fail its own way instead (a 404 on an endpoint
+    /// that build never had, BC's own 'clientProtocol is not a valid parameter' 400 for one older
+    /// still). `lethal-control.app` is gitignored — a LOCAL build on every machine, which no pull
+    /// refreshes — so what this reports is the only evidence of how old the deployed build is.
+    ///
+    /// A failed GetCurrentModuleInfo returns an EMPTY string, not an invented version: the client
+    /// refuses an absent/unparseable version loudly (see `HarnessVerifier.checkControlVersion`),
+    /// which is the honest outcome when the build cannot be dated. Substituting a plausible literal
+    /// here is the exact defect R28 closed.</summary>
+    local procedure CurrentAppVersion(): Text
+    var
+        Module: ModuleInfo;
+    begin
+        if not NavApp.GetCurrentModuleInfo(Module) then
+            exit('');
+        exit(Format(Module.AppVersion()));
     end;
 
     /// <summary>Read-only: the artifact id the target registered for TargetAppId (empty if none).

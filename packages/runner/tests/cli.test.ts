@@ -22,7 +22,7 @@ import {
   validateSelectorIdsConfig,
   withAlRunnerCanary,
 } from "../src/cli";
-import { CONTROL_APP_ID } from "../src/harness";
+import { CONTROL_APP_ID, MIN_CONTROL_VERSION } from "../src/harness";
 import { LeaseClient } from "../src/lease";
 import { QuarantineStore } from "../src/quarantine-store";
 import { quarantineResourceKey } from "../src/resource-key";
@@ -769,6 +769,10 @@ describe("performForceResetLease (5C-B2)", () => {
           JSON.stringify({
             value: JSON.stringify({
               appId: CONTROL_APP_ID,
+              // R28: tracks the client's own minimum, so this fake never has to be revisited when
+              // the minimum moves — and never fails the version gate for a reason no test here is
+              // about.
+              semver: MIN_CONTROL_VERSION,
               protocolVersion: 2,
               serverGeneration: opts.serverGeneration,
               tenantCountReachable: false,

@@ -50,6 +50,23 @@ function compare(x: readonly number[], y: readonly number[]): number {
 }
 
 /**
+ * Orders two BC four-part versions (`major.minor.build.revision`) NUMERICALLY, component by
+ * component: negative when `a` sorts below `b`, 0 when equal, positive when above.
+ *
+ * Exported because a string compare is wrong in a way that looks right on every version anyone
+ * writes by hand: lexically `"1.0.0.10" < "1.0.0.9"`, and `reserveAppVersion` mints
+ * `<major>.<minor>.<days>.<halfSeconds>` where the last two components are routinely 4-5 digits —
+ * so the components that actually differ are exactly the ones a string compare misreads.
+ *
+ * Throws (via `parse`) on anything that is not four non-negative 16-bit components, rather than
+ * ranking a malformed version as equal or lowest: a caller gating on this needs to know it could
+ * not read the version at all, not receive a plausible ordering for a value it never parsed.
+ */
+export function compareAppVersions(a: string, b: string): number {
+  return compare(parse(a), parse(b));
+}
+
+/**
  * `<sourceMajor>.<sourceMinor>.<daysSinceUnixEpoch>.<secondsOfDay / 2>`.
  *
  * Major/minor come from the project's app.json so a 2.x project is never forced under a 1.0

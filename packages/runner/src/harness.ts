@@ -1,4 +1,5 @@
 import type { ActivationConfig, FetchFn } from "./activation";
+import { compareAppVersions } from "./app-version";
 
 /**
  * The `LethAL Control` extension's own app id and the protocol version this client speaks. A
@@ -17,6 +18,23 @@ export const CONTROL_APP_ID = "5e7a1c00-1111-4c00-8c00-1e7a1c000701";
  */
 export const CLIENT_PROTOCOL_VERSION = 2;
 const MIN_PROTOCOL_VERSION = 2;
+
+/**
+ * R28: the oldest `LethAL Control` BUILD this client will run against, checked against the version
+ * the deployed harness reports for ITSELF (`semver`, read from `NavApp.GetCurrentModuleInfo` —
+ * see `ControlApi.CurrentAppVersion`).
+ *
+ * Why this exists when `MIN_PROTOCOL_VERSION` already does: the protocol version only moves when
+ * the WIRE CONTRACT breaks, and most staleness does not break it. A control app several builds
+ * behind still answers every v2 call correctly, and then fails on whatever it happens to lack —
+ * a 404 on an endpoint it never had (the permission canary, measured 2026-07-26), or BC's own
+ * "clientProtocol is not a valid parameter" 400 for a build older still. Each of those is a
+ * different-looking failure for one cause, which is exactly what R28 was filed for.
+ *
+ * Kept in LOCKSTEP with `extensions/lethal-control/app.json`'s `version`: raising this constant
+ * without bumping that file makes a freshly built control app fail its own gate. Pinned by a test.
+ */
+export const MIN_CONTROL_VERSION = "1.0.0.7";
 
 export class HarnessVerificationError extends Error {
   constructor(message: string) {
@@ -84,6 +102,8 @@ function isStaleControlAppRejection(status: number, bodyText: string): boolean {
 
 interface HarnessInfo {
   readonly appId?: unknown;
+  /** The deployed control app's own four-part version (R28). See `MIN_CONTROL_VERSION`. */
+  readonly semver?: unknown;
   readonly protocolVersion?: unknown;
   readonly serverGeneration?: unknown;
   readonly tenantCountReachable?: unknown;
@@ -129,6 +149,11 @@ export class HarnessVerifier {
         `HarnessInfo reported appId ${JSON.stringify(info.appId)}, expected the LethAL Control app ${CONTROL_APP_ID}`,
       );
     }
+    // R28: dated BEFORE the capability checks below. A build too old to have an endpoint this
+    // client calls passes every one of them and then 404s later, at whichever action happens to
+    // need it first — so the version is what turns a scattering of unrelated-looking failures
+    // into one statement with one fix.
+    this.checkControlVersion(info);
     // Layer 5C-B1 (design §7): v2 or newer only. v1's "forward-compatible, a 5C-A client's
     // empty-lease calls still run" allowance is GONE — a v1 server has no lease fence at all, so
     // every RunMutant this client sends would be unfenced and could interleave with another
@@ -163,6 +188,45 @@ export class HarnessVerifier {
       serverGeneration: info.serverGeneration,
       tenantGate: this.checkSingleTenant(info),
     };
+  }
+
+  /**
+   * R28: refuses a `LethAL Control` build older than this client requires, and refuses just as
+   * loudly a payload whose version cannot be read at all.
+   *
+   * The three outcomes are deliberately distinct, and NONE of them is "probably fine":
+   *   - below `MIN_CONTROL_VERSION` — names both versions and the rebuild. A control app built
+   *     before R28 reports the hardcoded `'1.0.0.0'` whatever its app.json said, so it lands here
+   *     too, which is the point: that literal is precisely the build that could not be dated.
+   *   - absent or non-string — the harness did not report a version. That is a caller-contract
+   *     violation (protocol v2 must report one), not evidence of a current build, and defaulting
+   *     it to "new enough" would restore exactly the blind spot R28 closed.
+   *   - present but unparseable — same refusal, different sentence, carrying the parse error so
+   *     the operator sees WHAT the server sent rather than being told it was "invalid".
+   *
+   * Compared with `compareAppVersions`, never `<` on the strings: this client's minimum has a
+   * single-digit revision and a real build's is routinely multi-digit, so a string compare would
+   * read `"1.0.0.10"` as OLDER than `"1.0.0.7"` and reject the newest builds first.
+   */
+  private checkControlVersion(info: HarnessInfo): void {
+    if (typeof info.semver !== "string" || info.semver === "") {
+      throw new HarnessVerificationError(
+        `HarnessInfo did not report a LethAL Control version (semver ${JSON.stringify(info.semver)}) — protocol v2 must report the deployed control app's own version, as a string, so a stale build can be dated (this client requires ${MIN_CONTROL_VERSION}). Refusing to assume an unreported version is current. Fix: rebuild extensions/lethal-control and republish it to this container.`,
+      );
+    }
+    let older: boolean;
+    try {
+      older = compareAppVersions(info.semver, MIN_CONTROL_VERSION) < 0;
+    } catch (err) {
+      throw new HarnessVerificationError(
+        `HarnessInfo reported LethAL Control version ${JSON.stringify(info.semver)}, which is not a parseable BC four-part version (major.minor.build.revision): ${String(err)}. Refusing to treat an unreadable version as new enough — this client requires ${MIN_CONTROL_VERSION}. Fix: rebuild extensions/lethal-control and republish it to this container.`,
+      );
+    }
+    if (older) {
+      throw new HarnessVerificationError(
+        `The deployed LethAL Control app reports version ${info.semver}, older than the ${MIN_CONTROL_VERSION} this client requires — your control app predates this client. extensions/lethal-control/lethal-control.app is gitignored, so it is a LOCAL build every machine makes for itself and no pull refreshes it. Fix: rebuild extensions/lethal-control and republish it to this container. (A build from before this check reports a hardcoded "1.0.0.0" whatever its app.json says, so that exact value means "older than ${MIN_CONTROL_VERSION}", not necessarily the very first build.)`,
+      );
+    }
   }
 
   /**

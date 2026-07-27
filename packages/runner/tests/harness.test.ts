@@ -1,9 +1,13 @@
 import { beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import type { ActivationConfig } from "../src/activation";
+import { compareAppVersions } from "../src/app-version";
 import {
   CONTROL_APP_ID,
   HarnessVerificationError,
   HarnessVerifier,
+  MIN_CONTROL_VERSION,
   MultiTenantContainerError,
   resetSingleTenantWarningForTests,
 } from "../src/harness";
@@ -26,15 +30,20 @@ const CFG: ActivationConfig = {
 const SERVER_GENERATION = "b".repeat(32);
 
 /**
- * A protocol-v2 `HarnessInfo` payload, shaped exactly like the deployed `LethAL Control` 1.0.0.2
+ * A protocol-v2 `HarnessInfo` payload, shaped exactly like the deployed `LethAL Control`
  * one (`ControlApi.HarnessInfo`): protocolVersion 2, a 32-hex `serverGeneration`, and
  * `tenantCountReachable: false` — AL cannot enumerate tenants from an extension, so the live
  * server never reports a count (design §7).
+ *
+ * `semver` tracks `MIN_CONTROL_VERSION` rather than a frozen literal (R28): it used to be the
+ * hardcoded `"1.0.0.0"` the AL side reported, which the version gate now REJECTS — leaving it
+ * there would make every unrelated test in this file throw at the version check and pass its
+ * `rejects` assertion for entirely the wrong reason.
  */
 function info(over: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     appId: CONTROL_APP_ID,
-    semver: "1.0.0.0",
+    semver: MIN_CONTROL_VERSION,
     protocolVersion: 2,
     serverGeneration: SERVER_GENERATION,
     tenantCountReachable: false,
@@ -236,6 +245,11 @@ describe("HarnessVerifier.verify", () => {
     expect(message).toContain("company");
   });
 
+  test("accepts a control app NEWER than the client's minimum", async () => {
+    const { details } = await verifyQuiet(verifier(okFetch(info({ semver: "9.9.9.9" }))));
+    expect(details.protocolVersion).toBe(2);
+  });
+
   test("POSTs LethALControl_HarnessInfo with company + tenant", async () => {
     let seenUrl = "";
     const capture = (async (url: unknown, _init?: RequestInit) => {
@@ -246,5 +260,109 @@ describe("HarnessVerifier.verify", () => {
     expect(seenUrl).toContain("/ODataV4/LethALControl_HarnessInfo");
     expect(seenUrl).toContain("tenant=default");
     expect(seenUrl).toContain("company=CRONUS");
+  });
+});
+
+/**
+ * R28: the AL side used to report a hardcoded `semver '1.0.0.0'`, so a control app several builds
+ * behind was indistinguishable from a current one in the handshake — and each new client action
+ * was left to fail its own way (a 404 canary line, BC's `clientProtocol` 400) instead of the
+ * harness naming the one cause. `ControlApi.CurrentAppVersion` now reports the module's real
+ * `AppVersion`; these pin the client half of that.
+ */
+describe("HarnessVerifier control-app version gate (R28)", () => {
+  /** Reads back whatever `verify()` threw, so a message can be asserted rather than only a class. */
+  async function messageFrom(payload: Record<string, unknown>): Promise<string> {
+    let err: unknown;
+    try {
+      await verifier(okFetch(payload)).verify();
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(HarnessVerificationError);
+    return err instanceof Error ? err.message : String(err);
+  }
+
+  test("refuses a control app older than the minimum, naming both versions and the fix", async () => {
+    // "1.0.0.0" is exactly what a build from BEFORE this change reports, whatever its app.json said.
+    const message = await messageFrom(info({ semver: "1.0.0.0" }));
+    expect(message).toContain("1.0.0.0");
+    expect(message).toContain(MIN_CONTROL_VERSION);
+    expect(message).toContain("predates this client");
+    expect(message).toMatch(/rebuild extensions\/lethal-control and republish/);
+  });
+
+  test("refuses a payload with no semver at all rather than assuming it is current", async () => {
+    const message = await messageFrom(info({ semver: undefined }));
+    expect(message).toMatch(/did not report a LethAL Control version/);
+    expect(message).toContain(MIN_CONTROL_VERSION);
+    expect(message).toMatch(/rebuild extensions\/lethal-control and republish/);
+  });
+
+  // The AL side returns '' when GetCurrentModuleInfo fails — deliberately, so the client refuses
+  // rather than being handed an invented version. This is the branch that catches that.
+  test("refuses an EMPTY semver (a control app that could not read its own module info)", async () => {
+    const message = await messageFrom(info({ semver: "" }));
+    expect(message).toMatch(/did not report a LethAL Control version/);
+  });
+
+  test("refuses a non-string semver", async () => {
+    const message = await messageFrom(info({ semver: 7 }));
+    // "semver 7", not bare "7" — the required minimum in the same sentence contains a 7, so a
+    // bare substring check would pass without the reported value ever being quoted.
+    expect(message).toContain("semver 7");
+  });
+
+  test("refuses an unparseable semver instead of treating it as new enough", async () => {
+    const message = await messageFrom(info({ semver: "1.0" }));
+    expect(message).toMatch(/not a parseable BC four-part version/);
+    expect(message).toContain("1.0");
+    expect(message).toMatch(/rebuild extensions\/lethal-control and republish/);
+  });
+
+  test("refuses a semver with a non-numeric component", async () => {
+    const message = await messageFrom(info({ semver: "1.0.0.x" }));
+    expect(message).toMatch(/not a parseable BC four-part version/);
+    expect(message).toContain("1.0.0.x");
+  });
+
+  /**
+   * The multi-digit hazard, aimed at the LIVE minimum rather than a frozen literal: give the
+   * minimum's revision a smaller leading digit and one more digit, and the result is numerically
+   * ABOVE the minimum yet lexically BELOW it. A `<` on the strings would therefore reject exactly
+   * the newest builds. The two self-check assertions are load-bearing, not decoration — if a
+   * future `MIN_CONTROL_VERSION` makes the constructed value stop exercising that hazard, this
+   * fails and says so rather than passing vacuously.
+   */
+  test("accepts a multi-digit revision above the minimum — never a string compare", async () => {
+    const [major, minor, build, revision] = MIN_CONTROL_VERSION.split(".");
+    if (
+      major === undefined ||
+      minor === undefined ||
+      build === undefined ||
+      revision === undefined
+    ) {
+      throw new Error(`MIN_CONTROL_VERSION is not four-part: ${MIN_CONTROL_VERSION}`);
+    }
+    const newer = `${major}.${minor}.${build}.1${revision}`;
+    expect(compareAppVersions(newer, MIN_CONTROL_VERSION)).toBeGreaterThan(0); // numerically above
+    expect(newer < MIN_CONTROL_VERSION).toBe(true); // ...yet lexically below: the hazard is live
+
+    const { details } = await verifyQuiet(verifier(okFetch(info({ semver: newer }))));
+    expect(details.protocolVersion).toBe(2);
+  });
+
+  /**
+   * The lockstep the constant's own doc comment claims. A minimum raised without bumping
+   * `app.json` would make a FRESHLY BUILT control app fail its own gate — an unfixable error
+   * telling the operator to rebuild something they just rebuilt — and nothing else in this repo
+   * connects the two files.
+   */
+  test("MIN_CONTROL_VERSION equals extensions/lethal-control/app.json's version", async () => {
+    const appJsonPath = fileURLToPath(
+      new URL("../../../extensions/lethal-control/app.json", import.meta.url),
+    );
+    const appJson = JSON.parse(await readFile(appJsonPath, "utf8")) as { version?: unknown };
+    expect(appJson.version).toBe(MIN_CONTROL_VERSION);
   });
 });

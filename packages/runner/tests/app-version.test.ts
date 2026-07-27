@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import {
   VersionOverflowError,
+  compareAppVersions,
   nextAbove,
   parseVersionConflict,
   reserveAppVersion,
@@ -87,5 +88,49 @@ describe("nextAbove", () => {
 
   it("throws rather than wrapping when no successor exists", () => {
     expect(() => nextAbove("65535.65535.65535.65535")).toThrow(VersionOverflowError);
+  });
+});
+
+describe("compareAppVersions", () => {
+  /**
+   * THE reason this function exists rather than a `<` on the strings, and the case that makes the
+   * bug invisible in review: lexically `"1.0.0.10" < "1.0.0.9"`, because '1' sorts below '9'. Every
+   * hand-written version in this repo is single-digit, so a string compare looks right until a
+   * component reaches two digits — which `reserveAppVersion`'s day/half-second components do on
+   * their first use.
+   */
+  it("orders a multi-digit component numerically, not lexically", () => {
+    expect(compareAppVersions("1.0.0.10", "1.0.0.9")).toBeGreaterThan(0);
+    expect(compareAppVersions("1.0.0.9", "1.0.0.10")).toBeLessThan(0);
+    // Both of these are ALSO lexically inverted, in the build component rather than the revision.
+    expect(compareAppVersions("1.0.20653.0", "1.0.9999.0")).toBeGreaterThan(0);
+    expect(compareAppVersions("1.0.106.0", "1.0.99.0")).toBeGreaterThan(0);
+  });
+
+  it("reports equal versions as 0", () => {
+    expect(compareAppVersions("1.0.0.7", "1.0.0.7")).toBe(0);
+    expect(compareAppVersions("28.0.46665.50383", "28.0.46665.50383")).toBe(0);
+  });
+
+  it("weighs components left to right", () => {
+    // A larger minor/build/revision never outranks a larger major.
+    expect(compareAppVersions("2.0.0.0", "1.65535.65535.65535")).toBeGreaterThan(0);
+    expect(compareAppVersions("1.2.0.0", "1.1.65535.65535")).toBeGreaterThan(0);
+    expect(compareAppVersions("1.1.2.0", "1.1.1.65535")).toBeGreaterThan(0);
+  });
+
+  it("throws on a version that is not four-part, rather than ranking it", () => {
+    expect(() => compareAppVersions("1.0.0", "1.0.0.0")).toThrow(/four-part/);
+    expect(() => compareAppVersions("1.0.0.0", "1.0.0.0.0")).toThrow(/four-part/);
+    expect(() => compareAppVersions("", "1.0.0.0")).toThrow(/four-part/);
+  });
+
+  it("throws on a non-numeric or negative component", () => {
+    expect(() => compareAppVersions("1.0.0.x", "1.0.0.0")).toThrow(/non-negative integer/);
+    expect(() => compareAppVersions("1.0.0.-1", "1.0.0.0")).toThrow(/non-negative integer/);
+  });
+
+  it("throws on a component BC's 16-bit version fields cannot hold", () => {
+    expect(() => compareAppVersions("1.0.0.65536", "1.0.0.0")).toThrow(VersionOverflowError);
   });
 });
