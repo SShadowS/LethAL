@@ -39,6 +39,33 @@ export const CARRYABLE_VERDICTS: ReadonlySet<MutantVerdict> = new Set<MutantVerd
   "known-survivor",
 ]);
 
+/**
+ * R53: prefix every `failureNote` written when a mutant's run stranded the tier carries.
+ *
+ * Producer and detector share this ONE constant, and a test pins it, for the reason R31 needed the
+ * same treatment: a reworded literal would make the diagnosis silently stop firing, which is
+ * indistinguishable from "this never happens".
+ */
+export const STRANDED_NOTE_PREFIX = "quarantined: ";
+
+/**
+ * Whether a prior `error` row records a mutant that STRANDED the tier rather than merely failing.
+ *
+ * The distinction decides whether re-running it is progress or an infinite loop. An ordinary error
+ * is transient and worth retrying — that is why `error` is not carryable. A stranding error means
+ * the mutant's run outlived its budget and could not be confirmed complete, and on Continia
+ * Document Output the cause was measured: mutant M0013 negates `until DOCustSetup.Next() = 0;` into
+ * `<> 0`, which never terminates. Re-running that reproduces the hang, re-quarantines, and blocks
+ * the 125 mutants queued behind it — so a resume that retries it can never finish, no matter how
+ * high `--mutant-timeout-ms` goes.
+ */
+export function isStrandedNote(failureNote: string | undefined): boolean {
+  // `=== true`, not optional chaining alone: `failureNote?.startsWith(...)` is `boolean | undefined`
+  // and an absent note must be FALSE, not undefined. A `biome --unsafe` autofix made exactly that
+  // rewrite and the "an ordinary error is NOT stranded" test caught it.
+  return failureNote?.startsWith(STRANDED_NOTE_PREFIX) === true;
+}
+
 /** A prior verdict this run may record without re-executing the mutant. */
 export interface CarriedVerdict {
   readonly verdict: MutantVerdict;
@@ -54,6 +81,12 @@ export interface ResumeIndex {
   readonly ambiguousKeys: number;
   /** Rows whose verdict is not carryable (today: `error`), and which will be re-executed. */
   readonly nonCarryableRows: number;
+  /**
+   * R53: identity keys whose prior run STRANDED the tier — see `isStrandedNote`. Skipped by
+   * default on resume rather than retried, because retrying a non-terminating mutant re-hangs and
+   * blocks every mutant behind it. `--retry-stranded` overrides.
+   */
+  readonly strandedKeys: ReadonlySet<string>;
 }
 
 /**
@@ -83,9 +116,15 @@ export function buildResumeIndex(rows: readonly MutantVerdictRow[]): ResumeIndex
   }
 
   const carryable = new Map<string, CarriedVerdict>();
+  const strandedKeys = new Set<string>();
   let ambiguousKeys = 0;
   let nonCarryableRows = 0;
   for (const [key, bucket] of seen) {
+    // R53: checked BEFORE the ambiguity and carryability rules, and across every row in the bucket.
+    // A stranding mutant must be recognised even when its identity key collides with a sibling,
+    // because the consequence of missing it is not a lost verdict — it is a resume that hangs on
+    // the same mutant forever and can never reach the ones behind it.
+    if (bucket.some((r) => isStrandedNote(r.failureNote))) strandedKeys.add(key);
     if (bucket.length > 1) {
       ambiguousKeys += 1;
       continue;
@@ -103,7 +142,12 @@ export function buildResumeIndex(rows: readonly MutantVerdictRow[]): ResumeIndex
       ...(row.failureNote !== undefined ? { failureNote: row.failureNote } : {}),
     });
   }
-  return { carryable, ambiguousKeys, nonCarryableRows };
+  return { carryable, ambiguousKeys, nonCarryableRows, strandedKeys };
+}
+
+/** R53: whether THIS run's mutant is one a prior run stranded the tier on — see `strandedKeys`. */
+export function wasStranded(index: ResumeIndex, m: MutantManifestEntry): boolean {
+  return index.strandedKeys.has(serializeKey(identityKeyOf(m)));
 }
 
 /**

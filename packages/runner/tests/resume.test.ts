@@ -12,7 +12,13 @@ import type {
   TestVerdict,
 } from "../src/backend";
 import { runSession } from "../src/orchestrator";
-import { CARRYABLE_VERDICTS, buildResumeIndex, sessionFingerprint } from "../src/resume";
+import {
+  CARRYABLE_VERDICTS,
+  STRANDED_NOTE_PREFIX,
+  buildResumeIndex,
+  isStrandedNote,
+  sessionFingerprint,
+} from "../src/resume";
 import type { SessionFingerprintInput } from "../src/resume";
 import { ResultsStore } from "../src/store";
 import type { MutantVerdictRow } from "../src/store";
@@ -686,7 +692,60 @@ describe("runSession --resume (R47)", () => {
       resume: "last",
     });
     expect(report.counts.survived).toBe(1);
-    expect(report.counts.killed).toBe(report.mutants.length - 1);
+    // R53: the mutant the prior run stranded on is skipped rather than retried, so it is an error
+    // here rather than a kill — everything else this "fail" backend touched is killed.
+    expect(report.resumedFrom?.skippedStranded).toBe(1);
+    expect(report.counts.killed).toBe(report.mutants.length - 2);
+    expect(report.counts.errors).toBe(1);
+  });
+
+  test("a mutant that STRANDED the tier is not retried, and does not block the rest (R53)", async () => {
+    // Measured on Document Output: M0013 negates `until DOCustSetup.Next() = 0;` into `<> 0`, which
+    // never terminates. Retrying it re-hangs and re-quarantines, so the 125 mutants queued behind
+    // it can never run — no --mutant-timeout-ms value helps, because the mutant has no runtime.
+    const dirs = await makeProject();
+    const store = new ResultsStore(":memory:");
+    const first = new CountingBackend("pass", 1);
+    const firstReport = await runSession({ backend: first, store, ...dirs, selectorIds });
+    expect(firstReport.quarantined).toBeDefined();
+
+    const second = new CountingBackend("pass");
+    const report = await runSession({
+      backend: second,
+      store,
+      ...dirs,
+      selectorIds,
+      resume: "last",
+    });
+    // The run COMPLETES rather than quarantining again — that is the whole point.
+    expect(report.quarantined).toBeUndefined();
+    expect(report.resumedFrom?.skippedStranded).toBe(1);
+    // Skipped means NOT MEASURED: recorded as an error and excluded from the score, never counted
+    // as a survivor, which would claim the suite failed to catch something it was never shown.
+    const skipped = report.mutants.filter(
+      (m) => m.failureNote?.includes("not re-run on resume") === true,
+    );
+    expect(skipped).toHaveLength(1);
+    expect(skipped[0]?.verdict).toBe("error");
+  });
+
+  test("--retry-stranded attempts it anyway", async () => {
+    const dirs = await makeProject();
+    const store = new ResultsStore(":memory:");
+    await runSession({ backend: new CountingBackend("pass", 1), store, ...dirs, selectorIds });
+    const second = new CountingBackend("pass");
+    const report = await runSession({
+      backend: second,
+      store,
+      ...dirs,
+      selectorIds,
+      resume: "last",
+      retryStranded: true,
+    });
+    expect(report.resumedFrom?.skippedStranded).toBe(0);
+    expect(
+      report.mutants.some((m) => m.failureNote?.includes("not re-run on resume") === true),
+    ).toBe(false);
   });
 
   test("a resumed survivor keeps THIS run's covering tests, not an empty list", async () => {
@@ -843,5 +902,35 @@ describe("runSession --resume (R47)", () => {
     await expect(
       runSession({ backend: new CountingBackend(), store, ...dirs, selectorIds, resume: 4242 }),
     ).rejects.toThrow(/no such run/);
+  });
+});
+
+describe("stranded-note detection (R53)", () => {
+  test("producer and detector share one constant", () => {
+    // R31's lesson: a reworded literal makes the diagnosis silently stop firing, which is
+    // indistinguishable from "this never happens". This pins the shape the orchestrator writes.
+    expect(isStrandedNote(`${STRANDED_NOTE_PREFIX}SomeTest returned no readable result`)).toBe(
+      true,
+    );
+  });
+
+  test("an ordinary error is NOT treated as stranded — those must still be retried", () => {
+    expect(isStrandedNote("deadline exceeded running SomeTest (infrastructure, not a kill)")).toBe(
+      false,
+    );
+    expect(isStrandedNote("no green baseline tests")).toBe(false);
+    expect(isStrandedNote(undefined)).toBe(false);
+  });
+
+  test("a stranding row is detected even when its identity key collides", () => {
+    // Deliberately checked before the ambiguity rule: missing it does not cost a verdict, it
+    // costs the whole run, because the resume hangs on that mutant forever.
+    const index = buildResumeIndex([
+      row({ verdict: "survived" }),
+      row({ verdict: "error", failureNote: `${STRANDED_NOTE_PREFIX}T stranded the tier` }),
+    ]);
+    expect(index.ambiguousKeys).toBe(1);
+    expect(index.carryable.size).toBe(0);
+    expect(index.strandedKeys.size).toBe(1);
   });
 });

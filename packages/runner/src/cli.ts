@@ -311,6 +311,12 @@ export interface RunCliConfig {
    */
   readonly resume?: "last" | number;
   /**
+   * R53: `--retry-stranded` re-runs mutants a prior run stranded the tier on, instead of skipping
+   * them. Off by default — the measured cause is a non-terminating mutant, which reproduces every
+   * time and blocks every mutant behind it.
+   */
+  readonly retryStranded?: boolean;
+  /**
    * R48: `--allow-large-run` opts out of the pre-flight size refusal — see
    * `LARGE_RUN_MUTANT_THRESHOLD`.
    */
@@ -426,6 +432,8 @@ RUN — cost and recovery
                              max(2 x that test's baseline, this). Exceeding it quarantines the run
   --resume                   continue the most recent unfinished run in --db, reusing its verdicts
   --resume-run <id>          resume a specific run id
+  --retry-stranded           on resume, retry mutants that stranded the tier (skipped by default:
+                             a mutant that never terminates blocks every mutant behind it)
   --workers <n>              parallel workers (bcdev is limited to 1)
   --compile-concurrency <n>  concurrent alc processes
 
@@ -511,6 +519,8 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
       "mutant-timeout-ms": { type: "string" },
       resume: { type: "boolean", default: false },
       "resume-run": { type: "string" },
+      // R53: see `RunCliConfig.retryStranded`.
+      "retry-stranded": { type: "boolean", default: false },
       // R48: see `RunCliConfig.allowLargeRun`.
       "allow-large-run": { type: "boolean", default: false },
     },
@@ -725,6 +735,7 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     ...(mutantTimeoutMs !== undefined ? { mutantTimeoutMs } : {}),
     ...resume,
     ...(values["allow-large-run"] === true ? { allowLargeRun: true } : {}),
+    ...(values["retry-stranded"] === true ? { retryStranded: true } : {}),
   };
 }
 
@@ -1702,6 +1713,7 @@ export async function runFromCli(
           ? { mutantTimeoutMs: parsed.mutantTimeoutMs }
           : {}),
         ...(parsed.resume !== undefined ? { resume: parsed.resume } : {}),
+        ...(parsed.retryStranded === true ? { retryStranded: true } : {}),
         ...(parsed.allowLargeRun === true ? { allowLargeRun: true } : {}),
         ...(parsed.compileConcurrency !== undefined
           ? { compileConcurrency: parsed.compileConcurrency }

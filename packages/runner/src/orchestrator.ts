@@ -47,9 +47,11 @@ import type { NotInstrumentedFile, SessionOutcome, SessionReport } from "./repor
 import { quarantineResourceKey } from "./resource-key";
 import {
   CARRYABLE_VERDICTS,
+  STRANDED_NOTE_PREFIX,
   buildResumeIndex,
   carriedVerdictFor,
   sessionFingerprint,
+  wasStranded,
 } from "./resume";
 import type { ResumeIndex } from "./resume";
 import {
@@ -382,6 +384,14 @@ export interface SessionConfig {
    * and covering-test lists come from THIS run, not from the database. See `resume.ts`.
    */
   readonly resume?: "last" | number;
+  /**
+   * R53: re-run mutants a prior run stranded the tier on, instead of skipping them.
+   *
+   * Off by default because the measured cause is a NON-TERMINATING mutant, which reproduces every
+   * time and blocks every mutant behind it. Worth turning on when the strand is believed to have
+   * been environmental (a network blip, a restarted container) rather than the mutant itself.
+   */
+  readonly retryStranded?: boolean;
   // createRun placeholder only. For an authoritative (publishing) backend, a successful deploy
   // corrects the run row via store.recordArtifact with the version actually compiled
   // (reserveAppVersion) — this value never survives past that point. For a deploy:"none" backend
@@ -1740,6 +1750,13 @@ function resolveResume(
       index.ambiguousKeys > 0
         ? ` ${index.ambiguousKeys} identity key(s) matched more than one prior mutant and will be re-executed (a colliding key cannot say which verdict was whose).`
         : ""
+    }${
+      // R53: stated here because the two counts above would otherwise contradict it — a stranding
+      // mutant is an 'error' row, so it is included in `nonCarryableRows`'s "will be re-executed",
+      // which is exactly what is NOT about to happen to it.
+      index.strandedKeys.size > 0
+        ? ` Of those, ${index.strandedKeys.size} stranded the tier on a prior run and will be SKIPPED rather than re-executed${(cfg.retryStranded ?? false) ? ", except --retry-stranded was given, so they will be attempted" : " (a mutant that never terminates reproduces this every time and blocks every mutant behind it; pass --retry-stranded to attempt them)"}.`
+        : ""
     }`,
   );
   return { runId: priorRunId, index };
@@ -1901,6 +1918,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // R47: how many verdicts this session carried from a prior run instead of measuring. Reported,
   // never inferred from a count difference — a resumed report must be able to say so.
   let resumedMutantCount = 0;
+  // R53: how many mutants were skipped because a prior run stranded the tier on them.
+  let strandedSkippedCount = 0;
   let baselineGreenOverall = true;
   // Task 6 (spec §9): qualified names of baseline tests that did not pass
   // (fail/error) across all batches — surfaced in the report so an unsupported
@@ -2411,6 +2430,29 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         for (const m of execute) {
           const covering = perMutantTests.get(m.mutantId);
           if (covering === undefined) continue; // step 5 already recorded no-coverage
+          // R53: a mutant a prior run STRANDED the tier on is not retried by default. Measured on
+          // Document Output: M0013 negates `until DOCustSetup.Next() = 0;` into `<> 0`, which never
+          // terminates — so re-running it re-hangs, re-quarantines, and blocks the 125 mutants
+          // queued behind it. No `--mutant-timeout-ms` value fixes that (180 s and 330 s both
+          // aborted; 360 s is the hosting proxy's own ceiling), which makes retrying it not a
+          // slow path but an unreachable one.
+          //
+          // Recorded `error` — score-excluded, never a verdict — and stated loudly, because the
+          // honest answer is "this mutant was not measured", not "this mutant survived".
+          if (!(cfg.retryStranded ?? false) && wasStranded(resumeState.index, m)) {
+            record(
+              cfg.store,
+              runId,
+              m,
+              "error",
+              outcomes,
+              batchIdx,
+              undefined,
+              "not re-run on resume: a prior run's execution of this mutant could not be confirmed complete and stranded the tier. A mutant that never terminates (e.g. a negated loop-exit condition) reproduces this every time and blocks every mutant behind it, so it is skipped rather than retried — pass --retry-stranded to attempt it anyway. It is NOT scored either way.",
+            );
+            strandedSkippedCount += 1;
+            continue;
+          }
           const carried = carriedVerdictFor(resumeState.index, m);
           if (carried === undefined) {
             toExecute.push(m);
@@ -2733,7 +2775,13 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     // R47: keyed on the REQUEST, like `only` above — a `--resume` that turned out to carry nothing
     // still describes a run assembled differently, and a reader comparing two reports must see it.
     ...(resumeState !== undefined
-      ? { resumedFrom: { runId: resumeState.runId, carriedMutants: resumedMutantCount } }
+      ? {
+          resumedFrom: {
+            runId: resumeState.runId,
+            carriedMutants: resumedMutantCount,
+            skippedStranded: strandedSkippedCount,
+          },
+        }
       : {}),
   });
 }
@@ -2993,7 +3041,7 @@ async function runMutantsOnBackend(args: {
         // R47: the two things the operator needs are the budget this run used and the fact that
         // the verdicts already measured are NOT lost. Both went unsaid until a real project hit
         // this at mutant 13 of 138 and discarded the first twelve.
-        failureNote = `quarantined: ${ref.method} returned no readable result and its operation could not be confirmed complete — container may be stranded. Its budget was ${budget} ms; if the mutant was merely slow rather than stranded, raise the floor with --mutant-timeout-ms and re-run with --resume to keep this session's verdicts`;
+        failureNote = `${STRANDED_NOTE_PREFIX}${ref.method} returned no readable result and its operation could not be confirmed complete — container may be stranded. Its budget was ${budget} ms; if the mutant was merely slow rather than stranded, raise the floor with --mutant-timeout-ms and re-run with --resume to keep this session's verdicts`;
         break;
       }
       if (v.outcome === "deadline-exceeded") {
@@ -3092,7 +3140,7 @@ async function runMutantsOnBackend(args: {
               nowIso: args.nowIso,
               detail: `test in-flight-unknown confirming ${ref.method} (mutant ${m.mutantId})${confirmRetried ? " — a first, proven-complete attempt had already been retried once" : ""}${confirm.failureMessage !== undefined ? `: ${confirm.failureMessage}` : ""}`,
             });
-            failureNote = `quarantined: ${ref.method} confirm returned no readable result and its operation could not be confirmed complete — container may be stranded`;
+            failureNote = `${STRANDED_NOTE_PREFIX}${ref.method} confirm returned no readable result and its operation could not be confirmed complete — container may be stranded`;
           }
         } else if (confirm.outcome === "pass") {
           verdict = "killed";

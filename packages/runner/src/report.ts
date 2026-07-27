@@ -238,7 +238,16 @@ export interface SessionReport {
    * nothing carryable (every verdict was an `error`, or every identity key collided), and the
    * reader should see that the resume bought nothing rather than assume it worked.
    */
-  readonly resumedFrom?: { readonly runId: number; readonly carriedMutants: number };
+  readonly resumedFrom?: {
+    readonly runId: number;
+    readonly carriedMutants: number;
+    /**
+     * R53: mutants NOT re-run because a prior run's execution of them stranded the tier — a
+     * non-terminating mutant reproduces that every time and blocks every mutant behind it. Recorded
+     * `error` (score-excluded), never a verdict: the honest statement is "not measured".
+     */
+    readonly skippedStranded: number;
+  };
   /**
    * Wall-clock cost of this run, split into the phases that scale differently — the whole point
    * of recording it. `deploy` scales with PROJECT size (every file compiles, whether or not it
@@ -462,7 +471,11 @@ export interface BuildReportInput {
    *  `SessionReport.staleTestApp`. */
   readonly staleTestApp?: { readonly missingTests: readonly string[] };
   /** R47: the prior run `--resume` drew from — see `SessionReport.resumedFrom`. */
-  readonly resumedFrom?: { readonly runId: number; readonly carriedMutants: number };
+  readonly resumedFrom?: {
+    readonly runId: number;
+    readonly carriedMutants: number;
+    readonly skippedStranded: number;
+  };
   /** Phase wall-clock measured by `runSession` — see `SessionReport.timings`. The per-mutant
    *  distribution is derived here from `outcomes`, so only the phase totals are passed in. */
   readonly timings: {
@@ -759,6 +772,12 @@ export function renderConsole(r: SessionReport): string {
       `RESUMED: ${r.resumedFrom.carriedMutants} verdict(s) carried from run ${r.resumedFrom.runId} without re-executing. They were measured over the same source (identity-matched) and the same scope, but by a different published artifact in an earlier session.${
         r.resumedFrom.carriedMutants === 0
           ? " Nothing was actually carried — the prior run had no reusable verdict, so this run measured everything itself."
+          : ""
+      }${
+        // R53: stated separately from the carried count, because it is the opposite kind of fact —
+        // these mutants have NO verdict from either run and must not be read as covered.
+        r.resumedFrom.skippedStranded > 0
+          ? ` ${r.resumedFrom.skippedStranded} mutant(s) were NOT re-run: a prior run's execution of them could not be confirmed complete and stranded the tier, which is what a mutant that never terminates does every time — and it would block every mutant behind it. They are recorded as errors and excluded from the score, NOT scored as survived. Pass --retry-stranded to attempt them.`
           : ""
       }`,
     );
