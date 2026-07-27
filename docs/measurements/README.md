@@ -29,3 +29,36 @@ alc /project:<this dir's parent copy> /packagecachepath:<symbols> /out:probe.app
 
 Note the probe compiles only; it does not prove the guard EXECUTES correctly in those kinds, which
 is a separate live question.
+
+## `tableextension-coverage-probe.al` — where BC attributes an extension's coverage
+
+Answers the blocker that keeps the extensions half of R40 open. `coverageFilter` keys on
+`(objectType, objectId)`; if a `tableextension`'s code were reported under the BASE table's id,
+keying its mutants on the extension id would find no coverage and report every one as
+`no-coverage`, while keying them on the base id would merge two objects' coverage. Guessing wrong
+is the R29 failure — the one that produced 10 false survivors out of 20.
+
+The probe declares a base table with `BaseBump()`, a tableextension with `ExtBump()`, a driver
+codeunit calling both, and one `[Test]` exercising them, then reads the coverage BC returns.
+
+**Result (2026-07-27, hosted Continia BC 28, `coverage: "procedure"`):**
+
+```
+Table:79480      base table       seen
+Codeunit:79482   driver           seen
+15:79481         tableextension   seen, under its OWN object id
+```
+
+Two findings:
+
+1. **Extension code IS attributed to the extension's own id**, not the base object's. Keying
+   extension mutants on the extension id is therefore correct.
+2. **`objectType` arrives as the raw numeric `15`** (BC's TableExtension object-type enum), not a
+   name. LethAL's manifest writes `"tableextension"`, so the two keys would not match and every
+   extension mutant would silently become `no-coverage`. That — not the attribution question — is
+   the real work remaining: `buildCoverageMap`/`normalizeObjectType` must map BC's numeric
+   extension types, and it must be a mapping that FAILS LOUDLY on an unknown type rather than
+   defaulting, since a silent mismatch is indistinguishable from "nothing covered this".
+
+`procedure` came back `undefined` for all three objects, i.e. object-level attribution only, so an
+extension mutant would additionally depend on `coverageFilter`'s object-level fallback.
