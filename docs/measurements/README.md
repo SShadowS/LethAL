@@ -62,3 +62,30 @@ Two findings:
 
 `procedure` came back `undefined` for all three objects, i.e. object-level attribution only, so an
 extension mutant would additionally depend on `coverageFilter`'s object-level fallback.
+
+## `session-capability` — why two runners disagree (R57)
+
+`fixtures/sandbox-probes/src/SessionCapabilityProbe.Codeunit.al` reports `GuiAllowed`,
+`CurrentClientType`, `CompanyName` and `UserId` from inside a `[Test]` body, so whatever the runner
+did to the session is what gets reported.
+
+It exists because R55 measured that 12 of 56 Continia Document Output tests fail through the
+bc-dev-mcp hub and pass through LethAL's fenced `RunMutant`, order-independently, and the most
+informative failure is `Unhandled UI: Confirm ... has not been activated` raised in test codeunits
+that declare no handler functions at all. BC raises `Unhandled UI` for a `Confirm` only in a session
+it treats as INTERACTIVE; a non-GUI session returns the default silently and the caller takes the
+other branch. Session capability is therefore the prime suspect — and unlike the alternatives it can
+be measured directly instead of argued about.
+
+Run it by pointing a session's `--tests` at `fixtures/sandbox-probes` and running the same target
+twice, changing only `bcdev.coverageMode`:
+
+- `"procedure"` routes the BASELINE through the hub
+- `"none"` routes it through the fence
+
+The probe raises its values as an `Error`, so the test shows as FAILED — that is the transport, not
+a broken probe. Compare the two messages.
+
+It lives in `sandbox-probes` deliberately: that fixture is published and driven separately and is
+not part of any frozen mutation baseline, so adding a test to it cannot move `itest:bcdev` or
+`itest:tables`. Adding it to `sandbox-tests` would have.
