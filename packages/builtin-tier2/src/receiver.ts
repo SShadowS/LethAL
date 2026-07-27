@@ -40,6 +40,7 @@ import {
   type SymbolTable,
   type VarSymbol,
   declarationMembers,
+  extensionScopeKey,
   findEnclosingProcedure,
 } from "@lethal/engine";
 
@@ -237,7 +238,13 @@ function resolveReceiver(
   const receiverName = identifierText(receiver);
   if (receiverName === null) return { kind: "unresolved" };
 
-  const declared = lookupVar(receiverName, callNode, objectName, symbols);
+  // R30: inside a `tableextension`, the declaring SCOPE is the extension itself — its locals,
+  // parameters and globals are visible only there. `SymbolTable` indexes them under a namespaced
+  // key so that `resolveProcedure("My Ext", ...)` keeps answering null for a receiver no AL call
+  // can name; scope asks a different question from callability.
+  const scopeOwner =
+    objectNode.kind === ALNodeKind.tableextension ? extensionScopeKey(objectName) : objectName;
+  const declared = lookupVar(receiverName, callNode, scopeOwner, symbols);
   if (declared !== null) return classifyDeclaredType(declared);
 
   // Not declared anywhere the symbol table can see. The cases still PROVABLE from source:

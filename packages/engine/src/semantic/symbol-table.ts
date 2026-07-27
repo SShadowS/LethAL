@@ -114,6 +114,19 @@ const OBJECT_KIND_BY_NODE: Record<string, ObjectSymbol["kind"]> = {
 const TABLEEXTENSION_DECLARATION = "tableextension_declaration";
 const BASE_OBJECT_FIELD = "base_object";
 
+/**
+ * The `procedures`/`globals` key under which a `tableextension`'s own members are indexed for
+ * VARIABLE SCOPE lookup (R30).
+ *
+ * Namespaced on purpose. The bare extension name must keep resolving to nothing, because
+ * `resolveProcedure("My Ext", "SetRange")` would otherwise answer for a receiver no AL expression
+ * can name — the documented reason extensions were skipped in the first place. This lets a caller
+ * that legitimately needs the extension's SCOPE ask for it without weakening that contract.
+ */
+export function extensionScopeKey(extensionName: string): string {
+  return `tableextension:${extensionName}`;
+}
+
 export function buildSymbolTable(files: readonly SourceFile[]): SymbolTable {
   const objects: ObjectSymbol[] = [];
   const procedures = new Map<string, ProcedureSymbol[]>();
@@ -121,40 +134,61 @@ export function buildSymbolTable(files: readonly SourceFile[]): SymbolTable {
 
   const tableExtensions: ExtensionSymbol[] = [];
 
+  /**
+   * Index one declaration's members (globals, procedures with their locals and parameters) under
+   * `ownerName`. Shared by ordinary objects and by `tableextension`s — see the extension branch
+   * below for why an extension owns its members for SCOPE purposes while owning no call target.
+   */
+  const indexMembers = (objectNode: ALSyntaxNode, ownerName: string): void => {
+    // Object members (var_section, procedure) sit inside v3's
+    // declaration_body container rather than being direct namedChildren.
+    const members = declarationMembers(objectNode);
+
+    // Globals: a var_section that's a direct member of the object.
+    const objectVarSection = members.find((c) => c.kind === ALNodeKind.var_section);
+    if (objectVarSection !== undefined) {
+      globals.set(ownerName, collectVarDeclarations(objectVarSection));
+    }
+
+    // Procedures: direct members of kind `procedure`. Avoid a recursive
+    // search so we don't misattribute nested future constructs.
+    const procs: ProcedureSymbol[] = [];
+    for (const child of members) {
+      if (child.kind !== ALNodeKind.procedure) continue;
+      const proc = parseProcedure(child, ownerName);
+      if (proc !== null) procs.push(proc);
+    }
+    procedures.set(ownerName, procs);
+  };
+
   for (const file of files) {
     for (const objectNode of file.root.children) {
       const extension = parseTableExtensionHeader(objectNode);
       if (extension !== null) {
-        // Indexed and then SKIPPED for everything below: an extension's procedures belong to the
-        // extended table, not to an object of its own, so registering them under the extension's
-        // name in `procedures`/`globals` would invent an owner no AL call can name. Consumers
-        // reach them through `ExtensionSymbol.node` instead.
         tableExtensions.push({ ...extension, node: objectNode });
+        // NOT pushed to `objects`: an extension's procedures belong to the EXTENDED table, not to
+        // an object of its own, and registering it as an object would invent a call target no AL
+        // expression can name. `resolveObject` and `types.ts` (which iterates `objects`) therefore
+        // never see it, and procedure SHADOWING keeps going through `tableExtensions` /
+        // `extensionDeclaresProcedure`, keyed on the extended table.
+        //
+        // Its MEMBERS are indexed for VARIABLE SCOPE — R30 — but under a NAMESPACED key, never
+        // under the bare extension name. Scope and callability are different questions: a local,
+        // parameter or global declared inside an extension is visible only there, so for scope the
+        // extension genuinely is the owner; but `resolveProcedure("My Ext", ...)` must keep
+        // answering `null`, because that receiver is one no AL call can name. Keying scope
+        // separately keeps both true, and the test asserting the second is deliberately unchanged.
+        //
+        // Skipping this entirely made `lookupVar` find nothing for a site written in an extension,
+        // so every call on a declared record variable there was refused as unresolvable. Measured
+        // on Continia Document Output: that is the shape its extension code overwhelmingly uses.
+        indexMembers(objectNode, extensionScopeKey(extension.name));
         continue;
       }
       const header = parseObjectHeader(objectNode);
       if (header === null) continue;
       objects.push({ ...header, node: objectNode });
-
-      // Object members (var_section, procedure) sit inside v3's
-      // declaration_body container rather than being direct namedChildren.
-      const members = declarationMembers(objectNode);
-
-      // Globals: a var_section that's a direct member of the object.
-      const objectVarSection = members.find((c) => c.kind === ALNodeKind.var_section);
-      if (objectVarSection !== undefined) {
-        globals.set(header.name, collectVarDeclarations(objectVarSection));
-      }
-
-      // Procedures: direct members of kind `procedure`. Avoid a recursive
-      // search so we don't misattribute nested future constructs.
-      const procs: ProcedureSymbol[] = [];
-      for (const child of members) {
-        if (child.kind !== ALNodeKind.procedure) continue;
-        const proc = parseProcedure(child, header.name);
-        if (proc !== null) procs.push(proc);
-      }
-      procedures.set(header.name, procs);
+      indexMembers(objectNode, header.name);
     }
   }
 

@@ -700,9 +700,12 @@ describe("extension objects (R30)", () => {
     ).toBe(false);
   });
 
-  it("REFUSES a variable declared inside an extension — SymbolTable does not index its members", () => {
-    // Safe direction and the remaining half of R30: extensions are indexed as name + baseObject
-    // only, so `lookupVar` finds nothing and the site is refused rather than guessed at.
+  it("claims a variable DECLARED inside an extension (R30, second half)", () => {
+    // `SymbolTable` used to skip an extension's members entirely, so `lookupVar` found nothing and
+    // every call on a declared record variable inside an extension was refused as unresolvable.
+    // Measured on Continia Document Output: that is the shape its extension code overwhelmingly
+    // uses — its 31 tableextensions contain no `Rec.`-qualified calls at all, so the implicit-Rec
+    // half alone gained just two mutants there.
     const src = `tableextension 50002 "My Ext" extends "Other Table"
 {
     procedure P()
@@ -717,6 +720,36 @@ describe("extension objects (R30)", () => {
       claimsRecordMethod(
         onlyCall(root),
         projectContextFor([root, parseClean(BASE_TABLE)]),
+        "TestField",
+      ),
+    ).toBe(true);
+  });
+
+  it("still guards a declared variable by procedures on ITS table, not the extension's name", () => {
+    // Scope and callability are different questions, and this pins the split: the extension owns
+    // the VARIABLE, while the extended table owns the procedure that may shadow the builtin.
+    const shadowed = `table 50001 "Other Table"
+{
+    fields { field(1; "No."; Code[20]) { } }
+
+    procedure TestField(A: Code[20])
+    begin
+    end;
+}`;
+    const src = `tableextension 50002 "My Ext" extends "Other Table"
+{
+    procedure P()
+    var
+        Other: Record "Other Table";
+    begin
+        Other.TestField("No.");
+    end;
+}`;
+    const root = parseClean(src);
+    expect(
+      claimsRecordMethod(
+        onlyCall(root),
+        projectContextFor([root, parseClean(shadowed)]),
         "TestField",
       ),
     ).toBe(false);
