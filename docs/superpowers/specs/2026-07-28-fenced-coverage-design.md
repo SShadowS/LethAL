@@ -130,15 +130,33 @@ loaded and the batch dir's text is on disk. Parse it; the boundary cases come fr
    contiguously **including its declaration line and `end;`** (a `[declLine, endLine]` range
    suffices, with no statement-level reasoning), gaps between procedures are simply absent, and
    **line `0` is object-level**, landing on rule 1.
-2. **Is numbering file-relative or OBJECT-relative?** Unknown #1 used a single-object file, where
-   the two are indistinguishable — so it proves nothing here, and believing otherwise is this
-   project's signature "passes for the wrong reason". Probe a two-object file, with the second
-   object's procedure at a line that is also a valid line of the first.
-3. **Does `StartApplicationCoverage` CLEAR or ACCUMULATE?** The baseline calls it once per test. If
-   the table accumulates, test N is credited with tests 1..N−1's coverage — over-attribution, which
-   is safe-direction but collapses selection toward all-tests and makes per-test attribution
-   meaningless, **silently**. Arguably the most important unknown; the R58 probe was a single run
-   and could not see it.
+2. ~~**Is numbering file-relative or OBJECT-relative?**~~ **ANSWERED 2026-07-28 — OBJECT-relative,
+   and the base is not where you would guess.** Probed with a two-object file
+   (`TwoObjects.Codeunit.al`): object 79322's `Second` occupies FILE lines 33–40, and BC reported
+   `[0, 6..13]` — offset exactly 27, so reported 6 → file 33 (the `procedure` line) and reported
+   13 → file 40 (its `end;`), consistent with unknown #1's pattern.
+
+   **Object line 1 is file line 28 — the BLANK line before `codeunit 79322`, not the keyword
+   line.** The base includes the object's leading trivia. A map that assumed "the `codeunit`
+   keyword is object line 1" would be off by however much whitespace or comment precedes each
+   object, which varies per object — shifting every range onto its neighbour, which is the
+   wrong-procedure/wrong-verdict failure this whole section exists to prevent.
+
+   This also confirms unknown #1 proved less than it appeared to: in a single-object file starting
+   at line 1 the two frames coincide exactly, so that probe could not have distinguished them. The
+   review that predicted this was right, and it is this project's signature hazard in miniature.
+
+   **Consequence for `line-map.ts`:** the per-object base line must be DERIVED from the parse
+   (the object node's start including leading trivia — equivalently, one past the previous object's
+   closing `}`), never from the declaration keyword, and it must be validated against this probe
+   rather than assumed.
+3. ~~**Does `StartApplicationCoverage` CLEAR or ACCUMULATE?**~~ **ANSWERED 2026-07-28 — it
+   CLEARS.** `ZzResetBetweenRuns` starts and stops coverage having exercised nothing, then looks
+   for object 79322, which only the preceding test touched: `staleRows=0 staleHits=0`. So each
+   fenced call sees only its own execution and per-test attribution is sound.
+
+   This was the unknown most likely to kill the design — accumulation would have credited test N
+   with tests 1..N−1's coverage, silently collapsing selection toward all-tests.
 4. **Payload size and response time on a real DO test.** A DO test executes thousands of Base App
    lines *with hits*, so dropping zero-hit rows does not bound this. The rows are serialized
    row-by-row through `JsonArray` in AL and returned as Text over OData, behind a proxy with a
