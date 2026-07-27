@@ -9,6 +9,7 @@
   "scripts": {
     "test": "bun test",
     "typecheck": "tsc --build --force",
+    "compile:fixtures": "bun scripts/compile-fixtures.ts",
     "lint": "biome check .",
     "build:binary": "bun scripts/build-binary.ts",
     "build:binaries": "bun scripts/build-binary.ts --all",

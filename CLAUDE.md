@@ -18,6 +18,11 @@ AL extension: `extensions/lethal-control` (the `LethAL Control` BC extension, ru
 1. `bun run typecheck` — `tsc --build --force`. SEPARATE from tests; run explicitly.
 2. `rm -rf packages/*/dist` — **AFTER typecheck, BEFORE any `bun test`**. `tsc --build` regenerates `packages/*/dist`, whose stale compiled `*.test.js` get picked up by `bun test` and cause ~21 phantom failures. (A PostToolUse hook auto-cleans dist after a typecheck — see `.claude/settings.json`.)
 3. `bun test` (or `bun test packages/<pkg>`) — full unit suite; does NOT type-check.
+4. `bun run compile:fixtures` — offline `alc` compile of every `fixtures/*` AL project. Run it after
+   touching ANY `.al` under `fixtures/`. Nothing else compiles them: LethAL publishes the target on
+   every run but treats publishing the TEST APP as the user's own workflow, so a broken test fixture
+   leaves the live gate happily measuring the previously published build. That is not hypothetical —
+   a docs-only commit deleted a procedure's body and `itest:tables` stayed green for days (R56).
 - Lint: `biome check .` is noisy (pre-existing organizeImports/format debt in `engine`/`builtin-tier1`). Run biome **only on files you touched**: `bunx biome check <paths>`. (A PostToolUse hook auto-formats touched `*.ts` — see settings.)
 
 ## Integration tests (env-gated, live BC, minutes each — run foreground, never poll)
