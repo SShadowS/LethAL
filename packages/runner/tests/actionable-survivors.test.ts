@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { MutantManifestEntry } from "@lethal/schemata";
 import { MAX_MUTATION_TEXT, clipMutationText } from "@lethal/schemata";
-import { buildReport } from "../src/report";
+import { buildReport, renderConsole } from "../src/report";
 import type { SessionOutcome } from "../src/report";
 
 /**
@@ -300,5 +300,61 @@ describe("SessionReport.testsOnly — the narrowing that can manufacture a survi
     expect(r.validity.caveats).not.toContain("narrowed");
     // And it must degrade reliability on its own, without --only present.
     expect(r.validity.reliability).toBe("narrowed");
+  });
+});
+
+describe("MutantOutcome.guardObserved — was the survivor ever exercised?", () => {
+  test("false marks a survivor that no guard fired for", () => {
+    const r = build([
+      {
+        mutant: entry(),
+        verdict: "survived",
+        batchIndex: 0,
+        coveringTests: ["Tests.A"],
+        guardObserved: false,
+      },
+    ]);
+    expect(r.mutants[0]?.guardObserved).toBe(false);
+  });
+
+  test("absent is NOT the same as false", () => {
+    // Absent means "not measured" — al-runner has no attestation mechanism at all. Collapsing it
+    // to false would accuse every al-runner survivor of never being exercised.
+    const r = build([{ mutant: entry(), verdict: "survived", batchIndex: 0 }]);
+    expect(r.mutants[0]?.guardObserved).toBeUndefined();
+  });
+
+  test("the console calls out unexercised survivors and says they are not suite gaps", () => {
+    // The asymmetry that matters: a survivor no guard fired for was never given a chance to fail,
+    // so reporting it as a test-suite weakness overstates the suite. `IsActive` is a bare string
+    // compare, so an unactivated mutant is byte-identical to baseline and "the test passed"
+    // proves nothing — R32 had to establish this by hand after R29's 10 false survivors.
+    const text = renderConsole(
+      build([
+        {
+          mutant: entry({ mutantId: "M0009" }),
+          verdict: "survived",
+          batchIndex: 0,
+          guardObserved: false,
+        },
+        {
+          mutant: entry({ mutantId: "M0010" }),
+          verdict: "survived",
+          batchIndex: 0,
+          guardObserved: true,
+        },
+      ]),
+    );
+    expect(text).toContain("UNEXERCISED SURVIVORS");
+    expect(text).toContain("M0009");
+    const line = text.split("\n").find((l) => l.startsWith("UNEXERCISED SURVIVORS")) ?? "";
+    expect(line).not.toContain("M0010");
+  });
+
+  test("says nothing when every survivor was observed", () => {
+    const text = renderConsole(
+      build([{ mutant: entry(), verdict: "survived", batchIndex: 0, guardObserved: true }]),
+    );
+    expect(text).not.toContain("UNEXERCISED SURVIVORS");
   });
 });

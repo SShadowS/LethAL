@@ -47,6 +47,10 @@ export interface SessionOutcome {
   readonly coveringTests?: readonly string[];
   /** Which attribution path placed `coveringTests` — see `MutantOutcome.coverageAttribution`. */
   readonly coverageAttribution?: CoverageAttribution;
+  /** Whether any instrumented guard fired while this mutant ran — see
+   *  `MutantOutcome.guardObserved`. Absent when nothing ran it, or on a backend that cannot
+   *  attest (al-runner). */
+  readonly guardObserved?: boolean;
 }
 
 /**
@@ -383,6 +387,28 @@ export interface MutantOutcome {
    */
   readonly coverageAttribution?: CoverageAttribution;
   /**
+   * Whether ANY instrumented guard executed during this mutant's runs (`RunMutant`'s per-run
+   * `observedAny` attestation, OR-ed across the covering tests).
+   *
+   * The asymmetry is the whole value, and it must not be read as "this mutant activated":
+   *
+   * - `false` is DECISIVE and damning for a survivor. No guarded site executed at all, so the
+   *   mutated code was never reached — the mutant cannot have been given a chance to fail, and
+   *   reporting it `survived` overstates the suite. It belongs with `no-coverage`, not with
+   *   findings.
+   * - `true` is WEAK. It says some instrumented selector fired somewhere in the artifact during
+   *   that run, not that THIS mutant's guard did. A survivor with `true` is still unverified.
+   *
+   * This exists because `LC Control State.IsActive` is a bare string compare: an unactivated
+   * mutant behaves byte-identically to baseline, so "the test ran and passed" proves nothing about
+   * whether the mutation was ever in play. R32 had to establish that by hand, one mutant at a
+   * time, after R29 had already produced 10 false survivors out of 20.
+   *
+   * Absent when nothing ran the mutant, and on backends that cannot attest (al-runner has no such
+   * mechanism) — absent therefore means "not measured", never "not observed".
+   */
+  readonly guardObserved?: boolean;
+  /**
    * Semantic mutant identity components (Layer 5A, `itest/mutant-equality.ts`) — the SAME
    * astHash/codeunitName/operatorMajor triple `identityKeyOf`/`serializeKey` (selection.ts)
    * already use for known-survivor persistence. Unlike `killingTest`/`failureNote`, these are
@@ -512,6 +538,7 @@ export function buildReport(input: BuildReportInput): SessionReport {
       ...(o.coverageAttribution !== undefined
         ? { coverageAttribution: o.coverageAttribution }
         : {}),
+      ...(o.guardObserved !== undefined ? { guardObserved: o.guardObserved } : {}),
       ...(o.mutant.triggerName !== undefined ? { triggerName: o.mutant.triggerName } : {}),
       ...(o.killingTest !== undefined ? { killingTest: o.killingTest } : {}),
       ...(o.failureNote !== undefined ? { failureNote: o.failureNote } : {}),
@@ -706,6 +733,21 @@ export function renderConsole(r: SessionReport): string {
     lines.push(
       `SCOPE: ${r.validity.reliability} [${r.validity.caveats.join(", ")}] - ${r.validity.scoreDescribes}`,
     );
+  }
+  // A survivor whose guards never fired was never exercised. Saying so beside the score keeps it
+  // out of the "your suite is weak here" bucket it would otherwise land in.
+  {
+    const unobserved = r.mutants.filter(
+      (m) => m.verdict === "survived" && m.guardObserved === false,
+    );
+    if (unobserved.length > 0) {
+      lines.push(
+        `UNEXERCISED SURVIVORS: ${unobserved.length} mutant(s) reported survived had NO instrumented guard fire during their runs — the mutated code was never reached, so they were never given a chance to fail. Treat them as no-coverage, not as test-suite gaps: ${unobserved
+          .slice(0, 8)
+          .map((m) => m.mutantCode)
+          .join(", ")}${unobserved.length > 8 ? ", ..." : ""}`,
+      );
+    }
   }
   // Where the suite is blind, grouped - the part a reader acts on. Ahead of the per-mutant table
   // because a codeunit's survivors collapse into far fewer procedures, and one missing assertion

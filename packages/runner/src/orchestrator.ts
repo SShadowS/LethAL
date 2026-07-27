@@ -2638,6 +2638,9 @@ async function runMutantsOnBackend(args: {
     let failureNote: string | undefined;
     let cause: "deadline-exceeded" | "unstable" | undefined;
     let spent = 0;
+    // Whether any instrumented guard fired during this mutant's runs — see
+    // `MutantOutcome.guardObserved`. Left undefined on a backend that never attests.
+    let guardObserved: boolean | undefined;
     // mutant_row_id isn't known until recordMutant() runs below (the
     // verdict — and thus the recordMutant call — only lands AFTER this
     // loop finishes), so buffer this mutant's test-result rows here and
@@ -2683,6 +2686,12 @@ async function runMutantsOnBackend(args: {
       // "none" transport path (the only path that ever attests) — feed the artifact's ledger.
       if (v.attestation?.observedAny === true && v.attestation.identityMismatch !== true) {
         args.attestation.clean = true;
+      }
+      // Per-mutant, not just per-artifact: OR-ed across this mutant's covering runs so a survivor
+      // can say whether any guarded code ran at all. `undefined` stays `undefined` on a backend
+      // that cannot attest — see `MutantOutcome.guardObserved`.
+      if (v.attestation !== undefined) {
+        guardObserved = (guardObserved ?? false) || v.attestation.observedAny;
       }
       // Layer 5C-B1 (design §5/§6/§8): classify a lease answer BEFORE the generic
       // `requiresUnsafeLatch` branch below. That branch is right for `in-flight-unknown` and
@@ -2895,6 +2904,7 @@ async function runMutantsOnBackend(args: {
       // entry names the tests that failed to notice it — see `SessionOutcome.coveringTests`.
       covering.map((ref) => qualifiedTestName(ref)),
       args.coverageAttribution.get(m.mutantId),
+      guardObserved,
     );
     for (const t of testResultBuffer) {
       args.store.recordTestResult(
@@ -3269,6 +3279,7 @@ function record(
   // survivors, batch-wide failures), where empty is the honest answer rather than a placeholder.
   coveringTests: readonly string[] = [],
   coverageAttribution?: CoverageAttribution,
+  guardObserved?: boolean,
 ): number {
   const key = identityKeyOf(m);
   const mutantRowId = store.recordMutant(runId, {
@@ -3291,6 +3302,7 @@ function record(
     durationMs,
     coveringTests,
     ...(coverageAttribution !== undefined ? { coverageAttribution } : {}),
+    ...(guardObserved !== undefined ? { guardObserved } : {}),
     ...(killingTest !== undefined ? { killingTest } : {}),
     ...(failureNote !== undefined ? { failureNote } : {}),
     ...(cause !== undefined ? { cause } : {}),
