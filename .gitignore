@@ -1,5 +1,7 @@
 node_modules/
 dist/
+# Compiled standalone binaries (`bun run build:binary`) — ~100 MB each, never committed.
+build/
 *.tsbuildinfo
 .DS_Store
 .bun-cache/

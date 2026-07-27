@@ -1,6 +1,6 @@
 {
   "name": "lethal",
-  "version": "0.0.0",
+  "version": "0.1.0-alpha.1",
   "private": true,
   "type": "module",
   "workspaces": [
@@ -10,6 +10,8 @@
     "test": "bun test",
     "typecheck": "tsc --build --force",
     "lint": "biome check .",
+    "build:binary": "bun scripts/build-binary.ts",
+    "build:binaries": "bun scripts/build-binary.ts --all",
     "itest:alrunner": "bun packages/runner/itest/al-runner.itest.ts",
     "itest:bcdev": "bun packages/runner/itest/bcdev.itest.ts",
     "itest:envtool": "bun packages/runner/itest/envtool.itest.ts",
