@@ -265,6 +265,17 @@ export interface RunCliConfig {
    * still published. A pattern matching no file is refused — see `admittedByOnly`.
    */
   readonly only?: readonly string[];
+  /**
+   * R45: `--tests-only <glob>` (repeatable) narrows which TEST files run at baseline. Absent means
+   * the whole suite.
+   *
+   * Distinct from `only` in kind, not just in target. `--only` selects mutants and cannot change a
+   * verdict. This selects tests and CAN: exclude the test that would have killed a mutant and that
+   * mutant is reported `survived`. It exists because the baseline dominates a real run — 744.8s of
+   * 953.8s on Continia Document Output, all 1,246 tests, for a run scoped to one codeunit — and it
+   * is recorded as a report caveat (`tests-narrowed`) so the trade is never invisible.
+   */
+  readonly testsOnly?: readonly string[];
 }
 
 /**
@@ -361,6 +372,8 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
       "table-id": { type: "string" },
       // R41: repeatable — several `--only` patterns union. See `RunCliConfig.only`.
       only: { type: "string", multiple: true },
+      // R45: repeatable — see `RunCliConfig.testsOnly`.
+      "tests-only": { type: "string", multiple: true },
     },
   });
 
@@ -411,7 +424,21 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
   }
   const only = onlyRaw !== undefined && onlyRaw.length > 0 ? { only: onlyRaw } : {};
 
+  const testsOnlyRaw = values["tests-only"];
+  if (testsOnlyRaw?.some((p) => p === "") === true) {
+    throw new Error(
+      '--tests-only requires a non-empty glob (e.g. --tests-only "Src/Documents/**")',
+    );
+  }
+  const testsOnly =
+    testsOnlyRaw !== undefined && testsOnlyRaw.length > 0 ? { testsOnly: testsOnlyRaw } : {};
+
   if (values["dry-run"] === true) {
+    // `--tests-only` narrows the BASELINE, and a dry run executes nothing at all — accepting it
+    // silently would imply it had scoped something.
+    if (testsOnlyRaw !== undefined && testsOnlyRaw.length > 0) {
+      throw new Error("--tests-only has no effect with --dry-run (a dry run executes no tests)");
+    }
     return { mode: "dry-run", projectDir, ...only };
   }
 
@@ -507,6 +534,7 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     ...(compileConcurrency !== undefined ? { compileConcurrency } : {}),
     ...(Object.keys(selectorIdOverrides).length > 0 ? { selectorIdOverrides } : {}),
     ...only,
+    ...testsOnly,
   };
 }
 
@@ -1424,6 +1452,7 @@ export async function runFromCli(
         skipKnownSurvivors: parsed.skipKnownSurvivors,
         workers: parsed.workers,
         ...(parsed.only !== undefined ? { only: parsed.only } : {}),
+        ...(parsed.testsOnly !== undefined ? { testsOnly: parsed.testsOnly } : {}),
         ...(parsed.compileConcurrency !== undefined
           ? { compileConcurrency: parsed.compileConcurrency }
           : {}),

@@ -253,3 +253,50 @@ describe("parseCliConfig — --only", () => {
     expect(cfg.only).toEqual(["Al/**"]);
   });
 });
+
+describe("parseCliConfig — --tests-only (R45)", () => {
+  const RUN_ARGS = ["run", "--project", "p", "--tests", "t", "--backend", "al-runner"] as const;
+
+  test("parses and is repeatable", () => {
+    const cfg = parseCliConfig([
+      ...RUN_ARGS,
+      "--tests-only",
+      "Src/A/**",
+      "--tests-only",
+      "Src/B/**",
+    ]);
+    if (cfg.mode !== "run") throw new Error("mode drift");
+    expect(cfg.testsOnly).toEqual(["Src/A/**", "Src/B/**"]);
+  });
+
+  test("omitting it leaves the key absent", () => {
+    const cfg = parseCliConfig([...RUN_ARGS]);
+    expect("testsOnly" in cfg).toBe(false);
+  });
+
+  test("an empty pattern is refused at parse time", () => {
+    expect(() => parseCliConfig([...RUN_ARGS, "--tests-only", ""])).toThrow(
+      /--tests-only requires a non-empty/,
+    );
+  });
+
+  test("refused with --dry-run, which executes no tests at all", () => {
+    // Accepting it silently would imply the dry run had been scoped by it.
+    expect(() =>
+      parseCliConfig(["run", "--project", "p", "--dry-run", "--tests-only", "Src/**"]),
+    ).toThrow(/no effect with --dry-run/);
+  });
+
+  test("--only and --tests-only are independent", () => {
+    const cfg = parseCliConfig([
+      ...RUN_ARGS,
+      "--only",
+      "Al/Codeunit/**",
+      "--tests-only",
+      "Src/Documents/**",
+    ]);
+    if (cfg.mode !== "run") throw new Error("mode drift");
+    expect(cfg.only).toEqual(["Al/Codeunit/**"]);
+    expect(cfg.testsOnly).toEqual(["Src/Documents/**"]);
+  });
+});

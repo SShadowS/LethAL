@@ -305,6 +305,12 @@ export interface SessionConfig {
    * only; every file is still parsed into the semantic context, still compiled, still published.
    */
   readonly only?: readonly string[];
+  /**
+   * R45: glob patterns naming which TEST files may run (`--tests-only`). Absent means the whole
+   * suite. Narrows the baseline — the phase `only` does not touch and where a real project's run
+   * time goes. See `DiscoverOptions.only` for why this one can change verdicts and `only` cannot.
+   */
+  readonly testsOnly?: readonly string[];
   // createRun placeholder only. For an authoritative (publishing) backend, a successful deploy
   // corrects the run row via store.recordArtifact with the version actually compiled
   // (reserveAppVersion) — this value never survives past that point. For a deploy:"none" backend
@@ -1585,7 +1591,15 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // tests. Removed; isolation is a TestRunner-side concern verified out of
   // band, not something Layer 4 checks.
 
-  const tests = await discoverTests(cfg.testDir);
+  const tests = await discoverTests(
+    cfg.testDir,
+    cfg.testsOnly !== undefined ? { only: cfg.testsOnly } : {},
+  );
+  if (cfg.testsOnly !== undefined && cfg.testsOnly.length > 0) {
+    console.warn(
+      `[lethal] --tests-only narrowed the baseline to ${tests.length} test(s) from ${cfg.testsOnly.length} pattern(s). A mutant whose killing test was excluded is reported SURVIVED — narrowing tests trades accuracy for speed, unlike --only.`,
+    );
+  }
   if (tests.length === 0) throw new Error("no tests discovered");
 
   const runId = cfg.store.createRun({
@@ -2372,6 +2386,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     // comparing two reports must be able to see that this one was scoped.
     ...(cfg.only !== undefined && cfg.only.length > 0
       ? { only: { patterns: cfg.only, excludedFileCount: excludedByOnly } }
+      : {}),
+    ...(cfg.testsOnly !== undefined && cfg.testsOnly.length > 0
+      ? { testsOnly: cfg.testsOnly }
       : {}),
     ...(safety.isUnsafe ? { quarantined: { reason: safety.reason ?? "unknown" } } : {}),
     ...(permissionCanary !== undefined ? { permissionCanary } : {}),

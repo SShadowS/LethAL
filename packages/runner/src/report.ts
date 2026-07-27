@@ -199,6 +199,16 @@ export interface SessionReport {
     readonly excludedFileCount: number;
   };
   /**
+   * R45: the `--tests-only` narrowing, if any. Absent means the whole suite ran at baseline.
+   *
+   * Carried SEPARATELY from `only`, and flagged in `validity.caveats` as `tests-narrowed`,
+   * because the two narrowings differ in kind: `only` selects which mutants run and cannot change
+   * a verdict, while this one selects which TESTS run and can — a mutant whose killing test was
+   * excluded is reported `survived`. A reader comparing two runs must be able to see that one of
+   * them could not have killed everything the other did.
+   */
+  readonly testsOnly?: readonly string[];
+  /**
    * Wall-clock cost of this run, split into the phases that scale differently — the whole point
    * of recording it. `deploy` scales with PROJECT size (every file compiles, whether or not it
    * was mutated); `mutants` scales with MUTANT count; `baseline` is a fixed per-batch toll. A
@@ -393,6 +403,8 @@ export interface BuildReportInput {
     readonly patterns: readonly string[];
     readonly excludedFileCount: number;
   };
+  /** R45: the `--tests-only` patterns, if any — see `SessionReport.testsOnly`. */
+  readonly testsOnly?: readonly string[];
   /** Phase wall-clock measured by `runSession` — see `SessionReport.timings`. The per-mutant
    *  distribution is derived here from `outcomes`, so only the phase totals are passed in. */
   readonly timings: {
@@ -548,9 +560,12 @@ export function buildReport(input: BuildReportInput): SessionReport {
   const caveats: string[] = [];
   if (!input.baselineGreen) caveats.push("baseline-red");
   if (input.only !== undefined) caveats.push("narrowed");
+  // Listed distinctly from `narrowed`: this is the one narrowing that can manufacture a survivor.
+  if (input.testsOnly !== undefined && input.testsOnly.length > 0) caveats.push("tests-narrowed");
   if (input.notInstrumented.files.length > 0) caveats.push("uninstrumentable-files");
   if (input.untargetedTriggerCount > 0) caveats.push("untargeted-triggers");
-  const narrowed = input.only !== undefined;
+  const narrowed =
+    input.only !== undefined || (input.testsOnly !== undefined && input.testsOnly.length > 0);
   const degraded = !input.baselineGreen;
   const reliability =
     narrowed && degraded
@@ -594,6 +609,7 @@ export function buildReport(input: BuildReportInput): SessionReport {
     },
     untargetedTriggerCount: input.untargetedTriggerCount,
     ...(input.only !== undefined ? { only: input.only } : {}),
+    ...(input.testsOnly !== undefined ? { testsOnly: input.testsOnly } : {}),
     timings: {
       totalMs: input.timings.totalMs,
       generateMutationSetMs: input.timings.generateMutationSetMs,

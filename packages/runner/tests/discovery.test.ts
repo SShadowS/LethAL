@@ -68,3 +68,48 @@ describe("discoverTests", () => {
     expect(thirdSuite).toEqual([]);
   });
 });
+
+// ————————————————————————————————————————————————————————————————————————
+// R45: the baseline runs the WHOLE suite regardless of `--only`. Measured on Continia Document
+// Output: baseline was 744.8s of a 953.8s run — 78% — executing all 1,246 discovered tests for a
+// run scoped to one codeunit. Narrowing the TEST set is the lever, but it is the DANGEROUS
+// direction: excluding the test that would have killed a mutant turns that mutant into a
+// survivor, and a false survivor is the worst output this tool can produce (R29). So the
+// narrowing refuses to match nothing, and the report carries a caveat.
+// ————————————————————————————————————————————————————————————————————————
+describe("discoverTests — test-set narrowing (R45)", () => {
+  test("without narrowing, every discovered test is returned", async () => {
+    const refs = await discoverTests(fixturesDir);
+    expect(refs.length).toBeGreaterThan(2);
+  });
+
+  test("a glob keeps only tests from matching files", async () => {
+    const refs = await discoverTests(fixturesDir, { only: ["SampleTests*"] });
+    expect(refs.length).toBeGreaterThan(0);
+    expect(refs.every((r) => r.file?.includes("SampleTests"))).toBe(true);
+    // The counterweight: the excluded file's tests really are gone, not merely reordered.
+    expect(refs.some((r) => r.file?.includes("MultipleCodeunits"))).toBe(false);
+  });
+
+  test("several patterns union", async () => {
+    const refs = await discoverTests(fixturesDir, {
+      only: ["SampleTests*", "MultipleCodeunits*"],
+    });
+    const all = await discoverTests(fixturesDir);
+    expect(refs.length).toBe(all.length);
+  });
+
+  test("a pattern matching no test file throws, naming it", async () => {
+    // Silently discovering zero tests would make every mutant a `no-coverage` or a survivor
+    // depending on the fallback — a confident-looking run over nothing at all.
+    await expect(discoverTests(fixturesDir, { only: ["NoSuchTests*"] })).rejects.toThrow(
+      /NoSuchTests\*/,
+    );
+  });
+
+  test("throws when ONE of several patterns matches nothing", async () => {
+    await expect(discoverTests(fixturesDir, { only: ["SampleTests*", "Typo*"] })).rejects.toThrow(
+      /Typo\*/,
+    );
+  });
+});

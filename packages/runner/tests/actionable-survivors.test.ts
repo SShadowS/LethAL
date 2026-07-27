@@ -278,3 +278,27 @@ describe("SessionReport.survivorsByProcedure — the ranking input", () => {
     expect(r.survivorsByProcedure).toEqual([]);
   });
 });
+
+describe("SessionReport.testsOnly — the narrowing that can manufacture a survivor (R45)", () => {
+  test("is flagged distinctly from --only, because only this one can change a verdict", () => {
+    const r = buildReport({
+      caps: CAPS,
+      baselineGreen: true,
+      batches: 1,
+      outcomes: [{ mutant: entry(), verdict: "survived", batchIndex: 0 }],
+      unsupportedTests: [],
+      notInstrumented: { totalFiles: 551, files: [] },
+      timings: { totalMs: 0, generateMutationSetMs: 0, deployMs: 0, baselineMs: 0 },
+      untargetedTriggerCount: 0,
+      baselineTests: [],
+      testsOnly: ["Src/Documents/**"],
+    });
+    expect(r.testsOnly).toEqual(["Src/Documents/**"]);
+    // Distinct caveat strings: a reader must be able to tell "fewer mutants ran" from "fewer
+    // TESTS ran", because only the latter means a survivor might have been killable.
+    expect(r.validity.caveats).toContain("tests-narrowed");
+    expect(r.validity.caveats).not.toContain("narrowed");
+    // And it must degrade reliability on its own, without --only present.
+    expect(r.validity.reliability).toBe("narrowed");
+  });
+});
