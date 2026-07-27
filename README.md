@@ -260,6 +260,12 @@ Stated plainly, because a mutation-testing tool that overstates its guarantees i
   killable only that way come back survived there while `bcdev` kills them. Under-reporting only,
   never a false kill; a startup canary measures the actual binary each session and says so. Use it
   for offline smoke-testing, not for a score.
+- **Every verdict describes your app's NON-GUI branch.** Measured: LethAL executes every mutant in a
+  `GuiAllowed=No`, `ClientType=ODataV4` session, while a developer running the same suite from VS
+  Code runs GUI-allowed. Code guarded by `GuiAllowed`, or branching on `Confirm`/`Message`/
+  `Page.RunModal`, therefore takes the non-interactive path — so a mutant inside a GUI-only branch
+  can never be killed, and will be reported `survived` or `no-coverage` when the truth is that
+  LethAL never ran it. How much real AL this affects is not yet measured.
 - **A mutant that never terminates is stepped over, not scored.** AL cannot preempt a running loop,
   so LethAL sees only its own abort and cannot tell it from "the server is still working". Such a
   mutant is recorded as an unmeasured error; `--resume` skips it so the run completes rather than
