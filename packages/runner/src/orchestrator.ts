@@ -1601,12 +1601,20 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       "0.0.0.0",
   });
 
+  // Phase clocks (see `SessionReport.timings`). `deploy` scales with project size, `mutants`
+  // with mutant count, `baseline` is a per-batch toll — recorded separately because a single
+  // total cannot be extrapolated from one run shape to another.
+  const sessionStartedMs = Date.now();
+  let deployMs = 0;
+  let baselineMs = 0;
+  const generateStartedMs = Date.now();
   const {
     files: allFiles,
     skipped: notInstrumentedFiles,
     totalFiles: totalAlFiles,
     excludedByOnly,
   } = await generateMutationSet(cfg.projectDir, cfg.only !== undefined ? { only: cfg.only } : {});
+  const generateMutationSetMs = Date.now() - generateStartedMs;
   const artifacts = planArtifacts(allFiles);
 
   const outcomes: SessionOutcome[] = []; // internal accumulation for the report
@@ -1816,12 +1824,19 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       let compiled: CompiledArtifact | null = null;
       let deployed = false;
       let deployErr: unknown;
+      const deployStartedMs = Date.now();
       try {
         compiled = await deployOnce(cfg.backend, safety, leaseSession, batchDir);
         deployed = true;
       } catch (err) {
         deployErr = err;
       }
+      // Charged here, not on the success path below: every branch of `if (!deployed)` ends in a
+      // `continue`, and a batch that failed to deploy has usually spent MORE time than one that
+      // succeeded (the version-conflict retry recompiles; bisection recompiles repeatedly). Any
+      // later work inside that block is charged too, by the second accumulation below.
+      deployMs += Date.now() - deployStartedMs;
+      const deployRetryStartedMs = Date.now();
       if (!deployed) {
         // 3a. version conflict: BC's downgrade rejection is machine-parseable and names the
         // installed version verbatim. Re-stamp strictly above it, recompile, and retry
@@ -1895,8 +1910,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         });
         for (const m of execute)
           record(cfg.store, runId, m, "error", outcomes, batchIdx, undefined, note);
+        deployMs += Date.now() - deployRetryStartedMs;
         continue; // batch aborted, next batch still attempted
       }
+      deployMs += Date.now() - deployRetryStartedMs;
       // 3d. provenance: correct the run row with what was ACTUALLY compiled and deployed —
       // createRun could only write a placeholder. Backends with no compiled artifact
       // (deploy: "none") have no artifact provenance to record; their run row keeps the
@@ -1915,6 +1932,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       if (leaseSession !== undefined) leaseSession.rebindBackend(cfg.backend);
 
       // 4. baseline
+      const baselineStartedMs = Date.now();
       await activateOnce(cfg.backend, safety, null);
       const baseline: Array<{ ref: TestMethodRef; verdict: TestVerdict }> = [];
       for (const ref of tests) {
@@ -1988,6 +2006,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         }
         continue;
       }
+      baselineMs += Date.now() - baselineStartedMs;
       const baselineDuration = new Map(
         greenTests.map((b) => [testKeyOf(b.ref), b.verdict.durationMs]),
       );
@@ -2321,6 +2340,12 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     outcomes,
     unsupportedTests: [...unsupportedTestNames].sort(),
     notInstrumented: { totalFiles: totalAlFiles, files: notInstrumentedFiles },
+    timings: {
+      totalMs: Date.now() - sessionStartedMs,
+      generateMutationSetMs,
+      deployMs,
+      baselineMs,
+    },
     untargetedTriggerCount,
     // R41: recorded whenever the run was narrowed, so the `--out` JSON carries the qualifier and
     // not just the console line. Keyed on the request (`cfg.only`), not on `excludedByOnly > 0`:
@@ -3104,6 +3129,7 @@ function record(
     mutant: m,
     verdict,
     batchIndex,
+    durationMs,
     ...(killingTest !== undefined ? { killingTest } : {}),
     ...(failureNote !== undefined ? { failureNote } : {}),
     ...(cause !== undefined ? { cause } : {}),
