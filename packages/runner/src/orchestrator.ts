@@ -311,6 +311,11 @@ export interface SessionConfig {
    * time goes. See `DiscoverOptions.only` for why this one can change verdicts and `only` cannot.
    */
   readonly testsOnly?: readonly string[];
+  /**
+   * R44: maximum injected guards per published artifact — see `PlanOptions.maxGuardsPerBatch`.
+   * Absent means one artifact for everything, which is not publishable for a real app.
+   */
+  readonly maxGuardsPerBatch?: number;
   // createRun placeholder only. For an authoritative (publishing) backend, a successful deploy
   // corrects the run row via store.recordArtifact with the version actually compiled
   // (reserveAppVersion) — this value never survives past that point. For a deploy:"none" backend
@@ -397,10 +402,81 @@ type SessionVerdict = MutantVerdict;
  * so `runSession`'s artifact loop must never execute in that case (no
  * pointless deploy, no baseline run, no app.json requirement).
  */
+export interface PlanOptions {
+  /**
+   * R44: maximum injected guards in one batch's artifact. Absent means no limit — every mutant in
+   * one artifact, the behaviour before this existed and the one the frozen live gates run.
+   *
+   * Exists because publish cost scales with GUARD COUNT: BC recompiles the extension server-side
+   * on a dev publish, so the guards are the cost. Measured against a hosted Continia BC 28
+   * environment, same app and publish path, only the guard count differing — 163 guards published
+   * in 28 s (HTTP 200); 11,777 guards were severed by the hosting proxy at 362 s (nginx 504). An
+   * unbounded artifact is therefore not publishable for a real app at all.
+   *
+   * Costed against the OTHER phases before choosing a value: each batch pays its own deploy AND
+   * its own baseline (the baseline sits inside the batch loop), so halving the budget doubles both.
+   * On Document Output that is ~40 s deploy + 25 s baseline per batch once `--tests-only` (R45)
+   * has narrowed the suite — tolerable at ~15 batches, ruinous at 15 x the unnarrowed 745 s.
+   */
+  readonly maxGuardsPerBatch?: number;
+}
+
+/**
+ * Groups instrumented files into batches, one compiled+published artifact each.
+ *
+ * Splits at FILE granularity, which is the long-standing contract `narrowFilesToSubset` and
+ * bisection are written against. A single file whose own guard count exceeds the budget therefore
+ * cannot be subdivided here: it becomes its own oversized batch and says so, because the only
+ * alternative at this granularity is to drop it, and silently losing a file would remove its
+ * mutants from the run with nothing in the report to explain the smaller total.
+ *
+ * Greedy first-fit in declaration order, deliberately not bin-packed for optimality: batch order
+ * stays predictable across runs, which matters because a batch boundary is where mutant ids
+ * restart (`assignMutantIds`) and where a `--out` report's `batchIndex` comes from.
+ */
 export function planArtifacts(
   files: readonly InstrumentedFile[],
+  options: PlanOptions = {},
 ): readonly (readonly InstrumentedFile[])[] {
-  return files.length === 0 ? [] : [files];
+  if (files.length === 0) return [];
+  const budget = options.maxGuardsPerBatch;
+  if (budget === undefined || budget <= 0) return [files];
+
+  const batches: InstrumentedFile[][] = [];
+  let current: InstrumentedFile[] = [];
+  let currentGuards = 0;
+  const oversized: string[] = [];
+
+  for (const f of files) {
+    const guards = f.specs.length;
+    if (guards > budget) {
+      // Cannot be split further at this granularity. Flush what is open, ship it alone, and
+      // report it rather than pretending the budget held.
+      if (current.length > 0) {
+        batches.push(current);
+        current = [];
+        currentGuards = 0;
+      }
+      batches.push([f]);
+      oversized.push(`${f.path} (${guards} guards)`);
+      continue;
+    }
+    if (currentGuards + guards > budget && current.length > 0) {
+      batches.push(current);
+      current = [];
+      currentGuards = 0;
+    }
+    current.push(f);
+    currentGuards += guards;
+  }
+  if (current.length > 0) batches.push(current);
+
+  if (oversized.length > 0) {
+    console.warn(
+      `[lethal] ${oversized.length} file(s) exceed --max-guards-per-batch=${budget} on their own and were each published as a single oversized batch (batches split at file granularity): ${oversized.join(", ")}. If such a batch fails to publish, lower the budget for the rest or split the file.`,
+    );
+  }
+  return batches;
 }
 
 /**
@@ -1630,7 +1706,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     excludedByOnly,
   } = await generateMutationSet(cfg.projectDir, cfg.only !== undefined ? { only: cfg.only } : {});
   const generateMutationSetMs = Date.now() - generateStartedMs;
-  const artifacts = planArtifacts(allFiles);
+  const artifacts = planArtifacts(
+    allFiles,
+    cfg.maxGuardsPerBatch !== undefined ? { maxGuardsPerBatch: cfg.maxGuardsPerBatch } : {},
+  );
 
   const outcomes: SessionOutcome[] = []; // internal accumulation for the report
   let baselineGreenOverall = true;

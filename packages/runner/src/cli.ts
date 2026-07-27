@@ -276,6 +276,16 @@ export interface RunCliConfig {
    * is recorded as a report caveat (`tests-narrowed`) so the trade is never invisible.
    */
   readonly testsOnly?: readonly string[];
+  /**
+   * R44: `--max-guards-per-batch <n>` bounds how many injected guards go into one published
+   * artifact. Absent means no limit.
+   *
+   * Publish cost scales with guard count because BC recompiles the extension server-side: 163
+   * guards published in 28 s, 11,777 were cut off by the hosting proxy at 362 s. Note each batch
+   * pays its own deploy AND baseline, so a smaller budget buys publishability at the price of
+   * repeating both — pair it with `--tests-only` (R45) on a large suite.
+   */
+  readonly maxGuardsPerBatch?: number;
 }
 
 /**
@@ -374,6 +384,8 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
       only: { type: "string", multiple: true },
       // R45: repeatable — see `RunCliConfig.testsOnly`.
       "tests-only": { type: "string", multiple: true },
+      // R44: see `RunCliConfig.maxGuardsPerBatch`.
+      "max-guards-per-batch": { type: "string" },
     },
   });
 
@@ -432,6 +444,15 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
   }
   const testsOnly =
     testsOnlyRaw !== undefined && testsOnlyRaw.length > 0 ? { testsOnly: testsOnlyRaw } : {};
+
+  const maxGuardsRaw = values["max-guards-per-batch"];
+  const maxGuardsPerBatch = maxGuardsRaw === undefined ? undefined : Number(maxGuardsRaw);
+  if (
+    maxGuardsPerBatch !== undefined &&
+    (!Number.isInteger(maxGuardsPerBatch) || maxGuardsPerBatch < 1)
+  ) {
+    throw new Error("--max-guards-per-batch must be a positive integer");
+  }
 
   if (values["dry-run"] === true) {
     // `--tests-only` narrows the BASELINE, and a dry run executes nothing at all — accepting it
@@ -535,6 +556,7 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     ...(Object.keys(selectorIdOverrides).length > 0 ? { selectorIdOverrides } : {}),
     ...only,
     ...testsOnly,
+    ...(maxGuardsPerBatch !== undefined ? { maxGuardsPerBatch } : {}),
   };
 }
 
@@ -1453,6 +1475,9 @@ export async function runFromCli(
         workers: parsed.workers,
         ...(parsed.only !== undefined ? { only: parsed.only } : {}),
         ...(parsed.testsOnly !== undefined ? { testsOnly: parsed.testsOnly } : {}),
+        ...(parsed.maxGuardsPerBatch !== undefined
+          ? { maxGuardsPerBatch: parsed.maxGuardsPerBatch }
+          : {}),
         ...(parsed.compileConcurrency !== undefined
           ? { compileConcurrency: parsed.compileConcurrency }
           : {}),
