@@ -5,7 +5,11 @@ import { join } from "node:path";
 import { EnvToolClient, EnvToolError } from "../src/env-tool";
 import type { EnvToolConfigSection } from "../src/env-tool";
 import { startEnvToolSession } from "../src/env-tool-session";
-import { HarnessVerificationError, MultiTenantContainerError } from "../src/harness";
+import {
+  HarnessAuthError,
+  HarnessVerificationError,
+  MultiTenantContainerError,
+} from "../src/harness";
 
 const FAR_FUTURE = "2099-01-01T00:00:00Z";
 
@@ -192,6 +196,22 @@ describe("startEnvToolSession", () => {
   it("does NOT publish the control app when the harness already answers", async () => {
     const { published } = await start({ verifyHarness: async () => {} });
     expect(published).not.toContain("C:/lethal-control.app");
+  });
+
+  it("does NOT republish the control app on an AUTH failure (R20)", async () => {
+    // The catch here treats a HarnessVerificationError as "the control app is missing" and
+    // republishes. Republishing runs LethAL Control's install/upgrade codeunits, and the
+    // machine-global lease lives in that app's own tables — so answering a transient 401 with a
+    // republish disturbs a concurrent session's lease to fix something a republish cannot fix.
+    // The surrounding comment already named auth as a case it intended to exclude; before R20 the
+    // code could not, because auth failures WERE HarnessVerificationErrors.
+    await expect(
+      start({
+        verifyHarness: async () => {
+          throw new HarnessAuthError("HTTP 401: nope");
+        },
+      }),
+    ).rejects.toBeInstanceOf(HarnessAuthError);
   });
 
   it("publishes publishApps before the control app", async () => {

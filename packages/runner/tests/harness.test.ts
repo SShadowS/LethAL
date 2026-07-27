@@ -5,6 +5,7 @@ import type { ActivationConfig } from "../src/activation";
 import { compareAppVersions } from "../src/app-version";
 import {
   CONTROL_APP_ID,
+  HarnessAuthError,
   HarnessVerificationError,
   HarnessVerifier,
   MIN_CONTROL_VERSION,
@@ -364,5 +365,65 @@ describe("HarnessVerifier control-app version gate (R28)", () => {
     );
     const appJson = JSON.parse(await readFile(appJsonPath, "utf8")) as { version?: unknown };
     expect(appJson.version).toBe(MIN_CONTROL_VERSION);
+  });
+});
+
+describe("HarnessAuthError (R20)", () => {
+  const cfg = {
+    baseUrl: "http://bc:7048/BC",
+    company: "CRONUS",
+    username: "u",
+    password: "p",
+  } as const;
+
+  function respond(status: number, body: string) {
+    return async () => new Response(body, { status });
+  }
+
+  test("a 401 is an auth error, NOT a HarnessVerificationError", async () => {
+    // The distinction is load-bearing, not cosmetic: env-tool-session treats a
+    // HarnessVerificationError as "the control app is missing" and REPUBLISHES it, which runs
+    // install/upgrade codeunits while the machine-global lease lives in that app's own tables.
+    // A transient auth blip must never trigger that.
+    const verifier = new HarnessVerifier(cfg, respond(401, "unauthorized") as never);
+    await expect(verifier.verify()).rejects.toBeInstanceOf(HarnessAuthError);
+    await expect(verifier.verify()).rejects.not.toBeInstanceOf(HarnessVerificationError);
+  });
+
+  test("a 403 is treated the same way", async () => {
+    const verifier = new HarnessVerifier(cfg, respond(403, "forbidden") as never);
+    await expect(verifier.verify()).rejects.toBeInstanceOf(HarnessAuthError);
+  });
+
+  test("it extends Error directly, so instanceof cannot cross-match", () => {
+    // Same rule as MultiTenantContainerError and the AlcCompileError family: a typed error that
+    // extended its sibling would be caught by the very handler it must escape.
+    const err = new HarnessAuthError("x");
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(HarnessVerificationError);
+    expect(err.name).toBe("HarnessAuthError");
+  });
+
+  test("the message says what to check and that no republish will happen", () => {
+    // A bare "HTTP 401" sends the reader to look for a deployment problem, which is exactly the
+    // wrong place and the reason R20 existed.
+    const verifier = new HarnessVerifier(cfg, respond(401, "nope") as never);
+    return verifier.verify().then(
+      () => {
+        throw new Error("expected a rejection");
+      },
+      (err: unknown) => {
+        const m = err instanceof Error ? err.message : String(err);
+        expect(m).toContain("AUTHENTICATION failure");
+        expect(m).toContain("username/password");
+        expect(m).toContain("does NOT republish");
+      },
+    );
+  });
+
+  test("a non-auth failure is still a HarnessVerificationError", () => {
+    // The narrowing must not swallow the general case.
+    const verifier = new HarnessVerifier(cfg, respond(500, "boom") as never);
+    return expect(verifier.verify()).rejects.toBeInstanceOf(HarnessVerificationError);
   });
 });

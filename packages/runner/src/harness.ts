@@ -36,6 +36,28 @@ const MIN_PROTOCOL_VERSION = 2;
  */
 export const MIN_CONTROL_VERSION = "1.0.0.7";
 
+/**
+ * R20: the harness could not be AUTHENTICATED — HTTP 401/403 — as distinct from "the control app is
+ * missing or the wrong build".
+ *
+ * Extends `Error` DIRECTLY, never `HarnessVerificationError`, and that is the entire point:
+ * `env-tool-session` treats a `HarnessVerificationError` as "the control app is missing" and
+ * responds by REPUBLISHING it. Republishing runs `LethAL Control`'s install/upgrade codeunits, and
+ * the machine-global lease lives in that app's own tables — so a transient 401 against a shared
+ * long-lived environment would disturb a concurrent session's lease and serverGeneration to fix a
+ * problem a republish cannot fix. `MultiTenantContainerError` is separated from the same catch for
+ * the same reason.
+ *
+ * Plausible trigger, not hypothetical: a freshly created environment whose admin user 401s briefly
+ * right after start.
+ */
+export class HarnessAuthError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "HarnessAuthError";
+  }
+}
+
 export class HarnessVerificationError extends Error {
   constructor(message: string) {
     super(message);
@@ -316,6 +338,15 @@ export class HarnessVerifier {
         bodyText = await res.text();
       } catch {
         // best-effort — fall through with an empty body rather than losing the status entirely
+      }
+      // R20: checked BEFORE the stale-build shape. A 401/403 says nothing about WHICH build is
+      // deployed — the request never reached `HarnessInfo`'s own logic — so it must not be
+      // answered by republishing the control app.
+      if (res.status === 401 || res.status === 403) {
+        throw new HarnessAuthError(
+          `HarnessInfo failed: HTTP ${res.status}${bodyText ? `: ${bodyText}` : ""}
+This is an AUTHENTICATION failure, not a missing or stale control app: the request was rejected before HarnessInfo ran, so it says nothing about which build is deployed. Check the configured bcdev username/password/tenant and that the user exists on this server. LethAL deliberately does NOT republish the control app for this — republishing runs its install/upgrade codeunits and would disturb a concurrent session's lease.`,
+        );
       }
       if (isStaleControlAppRejection(res.status, bodyText)) {
         throw new HarnessVerificationError(
