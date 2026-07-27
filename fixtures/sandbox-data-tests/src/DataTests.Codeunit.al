@@ -41,6 +41,13 @@ codeunit 79310 "Data Tests"
         // 432 fenced runs. The idempotence is still correct and still cheap; only the stated
         // reason was wrong, and a fixture comment asserting the wrong platform behaviour is how
         // the next person builds on a false premise.
+        if DataMain.Get('X1') then
+            DataMain.Delete(false);
+        DataMain.Init();
+        DataMain."No." := 'X1';
+        DataMain.Amount := 5;
+        DataMain.Insert(true);
+    end;
 
     [Test]
     procedure NoTriggerValidateRunsWeak()
@@ -181,6 +188,24 @@ codeunit 79310 "Data Tests"
         // produce.
         ResetMain('T-REQ', 'B', 0);
         asserterror DataOps.RequireCategoryA('T-REQ');
+
+        // R36: the error TEXT is asserted, not merely that an error occurred.
+        //
+        // `asserterror` alone accepted the WRONG error and hid a real mutant. Deleting
+        // `DataMain.Get(MainNo)` leaves the record blank, and `TestField(Category, 'A')` then still
+        // raises — because '' <> 'A' — so the bare assertion was satisfied by a failure with an
+        // entirely different cause, and the mutant was reported SURVIVED. That is this project's
+        // signature "test passes for the wrong reason", sitting inside the fixture built to catch
+        // exactly that class of bug.
+        //
+        // BC's TestField failure names the record it was called on ("... in Data Main: No.=T-REQ").
+        // A blank record cannot name 'T-REQ', so this discriminates on the one thing the deleted
+        // `Get` is responsible for: whether the record was loaded at all. Asserting the expected
+        // Category instead would NOT discriminate — both the real and the mutated path mention 'A'.
+        if StrPos(GetLastErrorText, 'T-REQ') = 0 then
+            Error(
+              'expected the TestField failure to name the record it loaded (T-REQ), got: %1',
+              GetLastErrorText);
     end;
 
     [Test]

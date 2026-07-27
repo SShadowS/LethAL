@@ -89,16 +89,26 @@ const SELECTOR_IDS = { selectorId: 79199, controlId: 79198, tableId: 79197 };
  * PER-MUTANT: the old `verdicts` map (7 entries, from the superseded 7-mutant fixture) is gone.
  * Asserting a 7-key map against 75 scored mutants cannot pass and proves nothing; the per-mutant
  * regression guard for THIS fixture is `assertMatchesBaseline` against the committed
- * `tables.baseline.json` (semantic-identity keyed, and self-recording when the file is absent —
- * it is absent right now, so the next live run records it and the operator must review + commit
- * it). `assertTriggerKillAndSurvive` below independently pins the trigger claim.
+ * `tables.baseline.json` (semantic-identity keyed, and self-recording when the file is absent).
+ * The file IS committed; delete it to re-record after a deliberate fixture change, and review the
+ * diff before committing — a re-record is the one operation that can silently bless a regression.
+ * `assertTriggerKillAndSurvive` below independently pins the trigger claim.
  */
 const EXPECTED = {
   totalMutantSites: 81,
-  killed: 63,
-  survived: 10,
+  // R36 moved this from 63/10 to 64/9, deliberately and in one direction only.
+  //
+  // `RequireCategoryAFails` used to assert merely that AN error occurred, so deleting
+  // `DataMain.Get(MainNo)` (M0034) was invisible: with no `Get` the record is blank and
+  // `TestField(Category, 'A')` still raises, just for a different reason. The mutant was correctly
+  // reported survived — the fixture genuinely did not catch it — but this fixture exists so that a
+  // BROKEN OPERATOR FAILS, and it was carrying the project's signature "test passes for the wrong
+  // reason" inside itself. The test now asserts the error names the record it loaded, which a
+  // blank record cannot do, so M0034 is killable and killed.
+  killed: 64,
+  survived: 9,
   noCoverage: 2,
-  mutationScore: 63 / (63 + 10),
+  mutationScore: 64 / (64 + 9),
   /**
    * `coverageFilter`'s FALLBACK 2 ("coverage places this table trigger nowhere, run every green
    * test") must fire for NOBODY here. This is the assertion `0a463fd` actually earns: before it,

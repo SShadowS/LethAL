@@ -239,7 +239,7 @@ no table here may reintroduce `InherentPermissions`.**
 The table below is the Phase-0 fixture's frozen result, kept because it is still the clearest
 statement of what the Phase-0 half of the fixture proves. It is NOT this fixture's current
 aggregate: Phase 1 grew it to 75 deployed mutants and the re-record happened —
-`tables.itest.ts`'s `EXPECTED` now asserts the live-measured **63 killed / 10 survived / 2
+`tables.itest.ts`'s `EXPECTED` now asserts the live-measured **64 killed / 9 survived / 2
 no-coverage** (see §Phase 1). The Phase-0 objects and their tests are unchanged inside that
 larger set.
 
@@ -1554,3 +1554,38 @@ bun packages/runner/src/cli.ts run \
 `runSession` passes straight through to `status()` and the session proceeds normally — no special
 "post-quarantine" state persists once cleared; the guard is purely "does a record currently exist
 for this key," and it doesn't.
+
+
+## R36 — the fixture's own `asserterror` accepted the wrong error (2026-07-27)
+
+`RequireCategoryAFails` asserted only that AN error occurred. Deleting `DataMain.Get(MainNo)`
+(M0034, `DataOps.Codeunit.al:44`) leaves the record blank, and `TestField(Category, 'A')` then
+still raises — because `''` is not `'A'` — so the bare `asserterror` was satisfied by a failure
+with a completely different cause and the mutant was reported SURVIVED.
+
+That verdict was *correct* (the fixture genuinely did not catch it) and simultaneously a defect,
+because this fixture exists so that a broken operator FAILS. It was carrying the project's
+signature "test passes for the wrong reason" inside the very thing built to catch that shape.
+
+The test now asserts the error message names the record it loaded (`T-REQ`), which a blank record
+cannot do. It discriminates on exactly what the deleted `Get` is responsible for — whether the
+record was loaded at all. Asserting the expected Category would NOT discriminate: both the real
+and the mutated path mention `'A'`.
+
+Frozen result moved **63 / 10 / 2 → 64 / 9 / 2**, one net verdict, in the safe direction. The
+re-recorded `tables.baseline.json` shows TWO changed lines rather than one: identical statements
+share a semantic identity key (`Data Ops` has a six-deep group), and `diffMutants` sorts each
+group canonically, so one member's verdict changing re-sorts the group. That is the design working
+— see `mutant-equality.ts` on why a within-key ordinal is deliberately not added.
+
+### The test app had not compiled since `76dfe48`
+
+Found while doing the above. A **docs-only** commit rewriting a comment in
+`InsertDoublesAmountWeak` deleted the procedure's body and its closing `end;` along with it. The
+project stopped compiling, and `itest:tables` kept passing — because LethAL publishes the *target*
+on every run and treats publishing the *test app* as the user's own workflow, so the gate ran
+against a stale published build for days.
+
+R31's stale-test-app detector cannot see this shape: it fires when the server has no result for a
+discovered test, and here the server had an OLDER, WORKING build of every test. Nothing diverged
+that R31 measures. See ROADMAP R56.

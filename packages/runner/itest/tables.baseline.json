@@ -485,14 +485,14 @@
   {
     "key": "d9cbca5018b3f77051d8f33a72d7e5f6a971924b158b7413b40f621b238147b8|Data Ops|lethal.void-method-call|1",
     "verdict": "killed",
-    "killingTest": "TouchCategoryWeak",
+    "killingTest": "RequireCategoryAFails",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
     "key": "d9cbca5018b3f77051d8f33a72d7e5f6a971924b158b7413b40f621b238147b8|Data Ops|lethal.void-method-call|1",
-    "verdict": "survived",
-    "killingTest": null,
+    "verdict": "killed",
+    "killingTest": "TouchCategoryWeak",
     "coverageFiltered": false,
     "errorClass": null
   },
