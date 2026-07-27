@@ -46,25 +46,37 @@ import {
 /**
  * Object declaration kinds a call SITE can sit inside.
  *
- * DOCUMENTED LIMIT — extension objects are absent, so every Tier-2 operator refuses every site
- * written INSIDE a `tableextension` or `pageextension`: `enclosingObject` finds no enclosing
- * object and `claimsRecordMethod` returns `false`. This is the safe direction (a missed site costs
- * one operator's signal; Tier-1 `void-method-call` still covers it), but it is a real hole: a lot
- * of BC code lives in extension objects, including the `Rec.TestField(...)` / `Rec.Modify(true)`
- * shapes these operators exist for. Closing it needs `resolveReceiver` to resolve an implicit
- * `Rec` inside an extension to the EXTENDED table (which the header names rather than declares),
- * which is more than this list.
+ * R30: extension objects were absent, so every Tier-2 operator refused every site written INSIDE a
+ * `tableextension` or `pageextension` — `enclosingObject` found no enclosing object and
+ * `claimsRecordMethod` returned `false`. Safe (a missed site costs one operator's signal, and
+ * Tier-1 `void-method-call` still covers it) but a real hole, since a great deal of BC code lives
+ * in extension objects and it is exactly the `Rec.TestField(...)` / `Rec.Modify(true)` shape these
+ * operators exist for.
  *
- * NOT a limit any more, and deliberately not filed here: a `tableextension` that DECLARES a
- * builtin-named procedure on a table a call site elsewhere uses. That was the unsafe direction —
- * the site was wrongly CLAIMED — and rule 3 now consults `symbols.tableExtensions`; see
- * `projectDeclaresProcedureOnTable`.
+ * What admitting them actually buys, and what it does not:
+ *
+ * - `tableextension` — FULL. An implicit `Rec`/`xRec` resolves to the EXTENDED table, which the
+ *   header names in its `base_object` field (`tableextension 50100 "X" extends Customer`, measured
+ *   against the vendored grammar). Rule 3's `projectDeclaresProcedureOnTable` then applies to that
+ *   table exactly as for a site written in the table itself, including the `tableextension`-
+ *   declares-a-builtin guard.
+ * - `pageextension` — PARTIAL, deliberately. A page's `Rec` is its `SourceTable`, declared on the
+ *   EXTENDED PAGE, which is routinely a dependency this project cannot see. Resolving it would mean
+ *   guessing, and a wrong receiver is the direction that CLAIMS a site wrongly — mislabelling the
+ *   mutation and, under §3.2 dedup precedence, suppressing the correct Tier-1 mutant at the same
+ *   site. So `Rec` stays unresolved there and only explicitly-typed record variables can claim.
+ *
+ * Variables DECLARED inside an extension still do not resolve: `SymbolTable` indexes extensions
+ * separately (`tableExtensions`, name + `baseObject` only), not as `objects` with members, so
+ * `lookupVar` finds nothing and the site is refused. Safe direction, and the remaining half of R30.
  */
 const OBJECT_KINDS: ReadonlySet<string> = new Set<string>([
   ALNodeKind.codeunit,
   ALNodeKind.table,
   ALNodeKind.page,
   ALNodeKind.report,
+  ALNodeKind.tableextension,
+  ALNodeKind.pageextension,
 ]);
 
 /**
@@ -135,12 +147,27 @@ export function claimsRecordMethod(
     // and its own methods) `Rec` is implicit — these are precisely the sites
     // Tier 2 exists to mutate. Anywhere else there is no implicit record we
     // can prove, so do not claim.
-    if (objectNode.kind !== ALNodeKind.table) return false;
-    // GUARD: project-declared procedure (rule 3). The enclosing table itself, AND any
-    // `tableextension` of it — an extension's procedure is callable on the implicit `Rec` here
-    // exactly as the table's own is.
+    //
+    // R30: a `tableextension` has the same implicit `Rec`, and it is the EXTENDED table's. This
+    // is the shape that actually occurs — measured on Continia Document Output, whose 31
+    // tableextensions contain ZERO `Rec.`-qualified calls but do contain bare `SetRange(...)` /
+    // `TestField(...)`. Handling only the qualified form gained exactly nothing there.
+    //
+    // A `pageextension` is still refused: its implicit record is the extended PAGE's SourceTable,
+    // declared in an object this project usually cannot see, so claiming would be a guess.
+    const implicitTable =
+      objectNode.kind === ALNodeKind.table
+        ? objectName
+        : objectNode.kind === ALNodeKind.tableextension
+          ? (extendedTableOf(objectNode) ?? null)
+          : null;
+    if (implicitTable === null) return false;
+    // GUARD: project-declared procedure (rule 3). The table itself, AND any `tableextension` of
+    // it — an extension's procedure is callable on the implicit `Rec` here exactly as the table's
+    // own is. Keyed on the EXTENDED table, so a site inside one extension is still guarded by a
+    // procedure another extension declares on the same table.
     if (declaresProcedure(objectNode, target.name)) return false;
-    if (extensionDeclaresProcedure(symbols, objectName, target.name)) return false;
+    if (projectDeclaresProcedureOnTable(symbols, implicitTable, target.name)) return false;
     return true;
   }
 
@@ -213,10 +240,18 @@ function resolveReceiver(
   const declared = lookupVar(receiverName, callNode, objectName, symbols);
   if (declared !== null) return classifyDeclaredType(declared);
 
-  // Not declared anywhere the symbol table can see. The one case that is still
-  // provable from source: a table's implicit `Rec` / `xRec`.
-  if (objectNode.kind === ALNodeKind.table && IMPLICIT_RECORD_NAMES.has(lower(receiverName))) {
-    return { kind: "record", tableRef: objectName };
+  // Not declared anywhere the symbol table can see. The cases still PROVABLE from source:
+  if (IMPLICIT_RECORD_NAMES.has(lower(receiverName))) {
+    // A table's own implicit `Rec` / `xRec`.
+    if (objectNode.kind === ALNodeKind.table) return { kind: "record", tableRef: objectName };
+    // R30: inside a `tableextension`, `Rec`/`xRec` is the EXTENDED table — named by the header's
+    // `base_object` field, not declared anywhere. A `pageextension` is deliberately NOT handled:
+    // its `Rec` is the extended PAGE's `SourceTable`, which lives in an object this project
+    // usually cannot see, and guessing it would claim sites wrongly.
+    if (objectNode.kind === ALNodeKind.tableextension) {
+      const tableRef = extendedTableOf(objectNode);
+      if (tableRef !== null) return { kind: "record", tableRef };
+    }
   }
 
   return { kind: "unresolved" };
@@ -365,6 +400,21 @@ function extensionDeclaresProcedure(
  * table also produces. Callers must not treat it as permission to claim; see
  * `projectDeclaresProcedureOnTable`, which still scans extensions when this returns null.
  */
+/**
+ * The table a `tableextension` extends, from its header's `base_object` field
+ * (`tableextension 50100 "X" extends Customer`), or `null` when the grammar did not supply it.
+ *
+ * Never the extension's OWN name: rule 3 must be able to see a procedure declared on the EXTENDED
+ * table, and a resolution returning the extension's name would look successful while silently
+ * bypassing that guard. A test pins exactly that mistake.
+ */
+function extendedTableOf(objectNode: ALSyntaxNode): string | null {
+  const base = objectNode.childForFieldName("base_object");
+  if (base === null) return null;
+  const name = stripQuotes(base.text);
+  return name === "" ? null : name;
+}
+
 function resolveTable(symbols: SymbolTable, idOrName: string): ObjectSymbol | null {
   const direct = symbols.resolveObject({ kind: "table", idOrName });
   if (direct !== null) return direct;

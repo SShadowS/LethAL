@@ -534,3 +534,191 @@ ${SHADOWING_TABLE}`;
     });
   });
 });
+
+/**
+ * R30 — sites written INSIDE an extension object.
+ *
+ * Every Tier-2 operator used to refuse these outright: `enclosingObject` walked past a
+ * `tableextension`/`pageextension` and found nothing. Safe, but a great deal of real BC code lives
+ * in extensions, and it is exactly the `Rec.TestField(...)` / `Rec.Modify(true)` shape these
+ * operators exist for.
+ */
+describe("extension objects (R30)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  const BASE_TABLE = `table 50001 "Other Table"
+{
+    fields { field(1; "No."; Code[20]) { } }
+}`;
+
+  function extensionSource(stmt: string): string {
+    return `tableextension 50002 "My Ext" extends "Other Table"
+{
+    fields { field(50000; MyField; Integer) { } }
+
+    procedure P()
+    begin
+        ${stmt}
+    end;
+}`;
+  }
+
+  it("claims a qualified Rec method inside a tableextension", () => {
+    const src = extensionSource('Rec.TestField("No.");');
+    const root = parseClean(src);
+    expect(
+      claimsRecordMethod(
+        onlyCall(root),
+        projectContextFor([root, parseClean(BASE_TABLE)]),
+        "TestField",
+      ),
+    ).toBe(true);
+  });
+
+  it("claims xRec too — same implicit-record rule", () => {
+    const src = extensionSource("xRec.Modify(true);");
+    const root = parseClean(src);
+    expect(
+      claimsRecordMethod(
+        onlyCall(root),
+        projectContextFor([root, parseClean(BASE_TABLE)]),
+        "Modify",
+      ),
+    ).toBe(true);
+  });
+
+  it("resolves Rec to the EXTENDED table, so a shadowing procedure THERE still refuses", () => {
+    // The whole point of resolving to `base_object` rather than to the extension's own name: rule
+    // 3 must be able to see a procedure declared on the extended table. A resolution that returned
+    // the extension's name would look successful and silently bypass this guard.
+    const shadowed = `table 50001 "Other Table"
+{
+    fields { field(1; "No."; Code[20]) { } }
+
+    procedure TestField(A: Code[20])
+    begin
+    end;
+}`;
+    const src = extensionSource('Rec.TestField("No.");');
+    const root = parseClean(src);
+    expect(
+      claimsRecordMethod(
+        onlyCall(root),
+        projectContextFor([root, parseClean(shadowed)]),
+        "TestField",
+      ),
+    ).toBe(false);
+  });
+
+  it("claims the RECEIVERLESS form inside a tableextension — the shape that actually occurs", () => {
+    // Measured on Continia Document Output: its 31 tableextensions contain ZERO `Rec.`-qualified
+    // calls, but do contain bare `SetRange(...)` / `TestField(...)`. Handling only the qualified
+    // form gained exactly nothing there — the totals were byte-identical with and without it.
+    const src = `tableextension 50002 "My Ext" extends "Other Table"
+{
+    procedure P()
+    begin
+        TestField("No.");
+    end;
+}`;
+    const root = parseClean(src);
+    expect(
+      claimsRecordMethod(
+        onlyCall(root),
+        projectContextFor([root, parseClean(BASE_TABLE)]),
+        "TestField",
+      ),
+    ).toBe(true);
+  });
+
+  it("guards the receiverless form on the EXTENDED table's procedures, not the extension's name", () => {
+    // Rule 3 keyed on the wrong table would look successful and silently claim a site that is
+    // really a call to a project-declared procedure.
+    const shadowed = `table 50001 "Other Table"
+{
+    fields { field(1; "No."; Code[20]) { } }
+
+    procedure TestField(A: Code[20])
+    begin
+    end;
+}`;
+    const src = `tableextension 50002 "My Ext" extends "Other Table"
+{
+    procedure P()
+    begin
+        TestField("No.");
+    end;
+}`;
+    const root = parseClean(src);
+    expect(
+      claimsRecordMethod(
+        onlyCall(root),
+        projectContextFor([root, parseClean(shadowed)]),
+        "TestField",
+      ),
+    ).toBe(false);
+  });
+
+  it("REFUSES the receiverless form inside a pageextension", () => {
+    const src = `pageextension 50003 "My Page Ext" extends "Customer Card"
+{
+    procedure P()
+    begin
+        TestField("No.");
+    end;
+}`;
+    const root = parseClean(src);
+    expect(
+      claimsRecordMethod(
+        onlyCall(root),
+        projectContextFor([root, parseClean(BASE_TABLE)]),
+        "TestField",
+      ),
+    ).toBe(false);
+  });
+
+  it("REFUSES an implicit Rec inside a pageextension — deliberately, not incidentally", () => {
+    // A page's `Rec` is the extended PAGE's SourceTable, declared in an object this project
+    // routinely cannot see. Guessing it would CLAIM the site wrongly, which mislabels the mutation
+    // and, under the §3.2 dedup precedence, suppresses the correct Tier-1 mutant at that site.
+    const src = `pageextension 50003 "My Page Ext" extends "Customer Card"
+{
+    procedure P()
+    begin
+        Rec.TestField("No.");
+    end;
+}`;
+    const root = parseClean(src);
+    expect(
+      claimsRecordMethod(
+        onlyCall(root),
+        projectContextFor([root, parseClean(BASE_TABLE)]),
+        "TestField",
+      ),
+    ).toBe(false);
+  });
+
+  it("REFUSES a variable declared inside an extension — SymbolTable does not index its members", () => {
+    // Safe direction and the remaining half of R30: extensions are indexed as name + baseObject
+    // only, so `lookupVar` finds nothing and the site is refused rather than guessed at.
+    const src = `tableextension 50002 "My Ext" extends "Other Table"
+{
+    procedure P()
+    var
+        Other: Record "Other Table";
+    begin
+        Other.TestField("No.");
+    end;
+}`;
+    const root = parseClean(src);
+    expect(
+      claimsRecordMethod(
+        onlyCall(root),
+        projectContextFor([root, parseClean(BASE_TABLE)]),
+        "TestField",
+      ),
+    ).toBe(false);
+  });
+});
