@@ -11,7 +11,7 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "../src/backend";
-import { LETHAL_VERSION, helpText, parseCliConfig } from "../src/cli";
+import { LETHAL_VERSION, helpText, parseCliConfig, recoveryBaseUrl } from "../src/cli";
 import {
   LARGE_RUN_MUTANT_THRESHOLD,
   MIN_MUTANT_BUDGET_MS,
@@ -368,5 +368,74 @@ describe("--mutant-timeout-ms (R47)", () => {
     await runSession({ backend, store, ...dirs, selectorIds, mutantTimeoutMs: 1 });
     // Baseline duration is 5 ms in this fake, so `2 x baseline` = 10 ms wins over the 1 ms floor.
     for (const b of backend.mutantBudgets) expect(b).toBe(10);
+  });
+});
+
+describe("recoveryBaseUrl (R51)", () => {
+  test("no configured baseUrl keeps the container behaviour — server + instance on 7048", () => {
+    expect(recoveryBaseUrl("http://Cronus281", "BC", undefined)).toBe("http://cronus281:7048/BC");
+    expect(recoveryBaseUrl("http://Cronus281", "BC", "")).toBe("http://cronus281:7048/BC");
+  });
+
+  test("an explicit baseUrl is used verbatim — port-7048 injection cannot reach a hosted env", () => {
+    // Measured 2026-07-27: force-reset-lease built its URL with odataBaseUrl and reported
+    // `HarnessInfo unreachable: Unable to connect` against a path-routed HTTPS environment on 443
+    // — on the one recovery path a proxy-severed run actually needs.
+    const hosted = "https://portal.example.com/a8f54c93-641a-4eb5-ac16-461e21a7bada";
+    expect(
+      recoveryBaseUrl("https://portal.example.com", "a8f54c93-641a-4eb5-ac16-461e21a7bada", hosted),
+    ).toBe(hosted);
+  });
+
+  test("a trailing slash is trimmed, so the caller's path join cannot double it", () => {
+    expect(
+      recoveryBaseUrl("https://portal.example.com", "env-1", "https://portal.example.com/env-1/"),
+    ).toBe("https://portal.example.com/env-1");
+  });
+
+  test("a baseUrl naming a DIFFERENT tier than --instance is refused, naming both", () => {
+    // The operator's flags decide which tier gets its safety state cleared. Silently preferring
+    // either source would reset a tier nobody named.
+    expect(() =>
+      recoveryBaseUrl(
+        "https://portal.example.com",
+        "env-WANTED",
+        "https://portal.example.com/env-OTHER",
+      ),
+    ).toThrow(/env-WANTED[\s\S]*env-OTHER|env-OTHER[\s\S]*env-WANTED/);
+  });
+
+  test("the refusal says what to do rather than only what is wrong", () => {
+    let message = "";
+    try {
+      recoveryBaseUrl("https://p.example.com", "a", "https://p.example.com/b");
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+    expect(message).toContain("--server/--instance");
+    expect(message).toContain("remove bcdev.baseUrl");
+  });
+});
+
+describe("recoveryBaseUrl — the instance must match a PATH SEGMENT (R51)", () => {
+  test("a one-character instance is not matched by a hostname that merely contains it", () => {
+    // `includes()` on the whole URL looks equivalent and is not: "a" is a substring of
+    // "example.com", so a baseUrl naming a different tier would pass the very check that exists to
+    // catch it. This is the case that found the bug.
+    expect(() => recoveryBaseUrl("https://p.example.com", "a", "https://p.example.com/b")).toThrow(
+      /different tiers/,
+    );
+  });
+
+  test("a matching instance in the path is accepted even when the host also contains it", () => {
+    expect(recoveryBaseUrl("https://bc.example.com", "bc", "https://bc.example.com/bc")).toBe(
+      "https://bc.example.com/bc",
+    );
+  });
+
+  test("an unparseable baseUrl is refused rather than silently falling back to port 7048", () => {
+    expect(() => recoveryBaseUrl("https://p.example.com", "env-1", "not a url")).toThrow(
+      /not a valid URL/,
+    );
   });
 });

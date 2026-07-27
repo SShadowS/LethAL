@@ -881,6 +881,50 @@ export function odataBaseUrl(server: string, serverInstance: string): string {
 }
 
 /**
+ * R51: the OData base URL a RECOVERY command (`force-reset-lease`) should call, given the tier the
+ * operator named and whatever the config declares.
+ *
+ * `odataBaseUrl` injects port 7048, which is right for a container and wrong for an environment
+ * behind a path-routed HTTPS proxy — the env-tool case, where the endpoint is
+ * `https://host/{envId}` on 443. `runFromCli` has always honoured an explicit `bcdev.baseUrl` for
+ * exactly this reason; `force-reset-lease` did not, so it could not reach a hosted environment at
+ * all. Measured 2026-07-27: `HarnessInfo unreachable: Unable to connect`, on the one recovery path
+ * a proxy-severed run actually needs.
+ *
+ * The operator's `--server`/`--instance` stay AUTHORITATIVE for which tier is reset — this command
+ * clears safety state, and resetting the wrong tier is the worst outcome available. So a configured
+ * `baseUrl` is honoured only when it is consistent with the named instance, and a mismatch is
+ * REFUSED naming both rather than resolved by a precedence rule nobody would remember under
+ * pressure. A config with no `baseUrl` keeps the container behaviour untouched.
+ */
+export function recoveryBaseUrl(
+  server: string,
+  serverInstance: string,
+  configuredBaseUrl: string | undefined,
+): string {
+  if (configuredBaseUrl === undefined || configuredBaseUrl === "") {
+    return odataBaseUrl(server, serverInstance);
+  }
+  // A PATH SEGMENT, not a substring. `includes` looked equivalent and is not: an instance named
+  // "a" is a substring of almost any hostname ("example.com"), so a mismatched tier would sail
+  // through the check that exists to catch it. Caught by the test below, not by reading this.
+  let segments: readonly string[];
+  try {
+    segments = new URL(configuredBaseUrl).pathname.split("/").filter((s) => s !== "");
+  } catch {
+    throw new Error(
+      `force-reset-lease: configured bcdev.baseUrl "${configuredBaseUrl}" is not a valid URL`,
+    );
+  }
+  if (!segments.includes(serverInstance)) {
+    throw new Error(
+      `force-reset-lease: --instance "${serverInstance}" does not appear in the configured bcdev.baseUrl "${configuredBaseUrl}", so the two name different tiers. This command clears safety state (op marker, active-mutant row, every outstanding lease credential) and will not guess which one you meant — point --server/--instance at the tier the config describes, or remove bcdev.baseUrl to address a container by server+instance on port 7048.`,
+    );
+  }
+  return configuredBaseUrl.replace(/\/+$/, "");
+}
+
+/**
  * The OData config every bcdev control-surface client built FROM THE LOADED CONFIG FILE is
  * shaped from: `DeploymentVerifier`/`HarnessVerifier` (`buildBackend`) and the lease client's own
  * `HarnessVerifier` (`leaseSessionFor`) both used to build this object inline, independently
@@ -1836,7 +1880,10 @@ async function forceResetLeaseFromCli(parsed: ForceResetLeaseCliConfig): Promise
   const configFile = await loadLethalConfigFile(parsed.configPath);
   const c = validateBcDevConfig(configFile.bcdev);
   const odataCfg = {
-    baseUrl: odataBaseUrl(parsed.server, parsed.serverInstance),
+    // R51: honours an explicit `bcdev.baseUrl` (the env-tool case — a path-routed HTTPS endpoint on
+    // 443, which port-7048 injection can never reach), and refuses one that names a different tier
+    // than --instance. See `recoveryBaseUrl`.
+    baseUrl: recoveryBaseUrl(parsed.server, parsed.serverInstance, c.baseUrl),
     company: c.company,
     username: c.username,
     password: c.password,
