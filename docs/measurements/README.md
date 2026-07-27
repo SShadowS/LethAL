@@ -116,3 +116,32 @@ such code" — and the second reading is the reassuring one, which is how it wou
 Measured on Continia Document Output (554 `.al`, 20,032 sites): **66 guarded (0.3%)** lower bound,
 **1,149 (5.7%)** in procedures mentioning an interactive construct. `fixtures/sandbox-app` reports
 0/0, correctly — it contains no interactive AL.
+
+## `r58-coverage-feasibility-probe.al` — can the fenced path collect its own coverage? (R58)
+
+**Yes.** Compiles clean (3,342-byte artifact) against `LethAL Control`'s existing symbol set, whose
+only declared dependency is Microsoft's `Test Runner`. **No new dependency is required.**
+
+Resolved, all of it:
+
+| API | Verdict |
+|---|---|
+| `Codeunit "Code Coverage Mgt."` | available |
+| `.StartApplicationCoverage()` / `.StopApplicationCoverage()` | available — the start/stop shape `RunMutant` needs around a test invocation |
+| `Record "Code Coverage"` | available |
+| `"Object Type"` (an **Option**, not an enum — no `AsInteger()`), `"Object ID"`, `"Line No."`, `"No. of Hits"` | available — `(objectType, objectId)` plus per-line granularity and a hit count, which is what `buildCoverageMap` keys on |
+
+Two guesses were wrong and are recorded because the next person will make them too: `"Line Type"`
+has no `Function` member, and `"Object Type"` is an Option, so `.AsInteger()` does not compile.
+
+### What this does and does not establish
+
+It establishes that the API is REACHABLE and shaped correctly. It does **not** establish that
+coverage collected inside a `RunMutant` OData session is *complete* — the fenced path runs as
+`GuiAllowed=No`, `ClientType=ODataV4` (R57), and nothing here proves the platform records the same
+observations there as it does on the hub. That is the next measurement, and it should be made
+before any protocol work: an R58 built on an assumption would repeat R55's first framing.
+
+Line-level coverage is also finer than the current `procedure` granularity, so mapping
+`"Line No."` back to a procedure needs the compiled artifact's symbol data the way
+`app-package.ts` already does for the hub payload.
