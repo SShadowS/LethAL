@@ -51,6 +51,9 @@ export interface SessionOutcome {
    *  `MutantOutcome.guardObserved`. Absent when nothing ran it, or on a backend that cannot
    *  attest (al-runner). */
   readonly guardObserved?: boolean;
+  /** R54: this verdict was CARRIED from a prior run by `--resume`, not measured here — see
+   *  `MutantOutcome.carried`. */
+  readonly carried?: boolean;
 }
 
 /**
@@ -434,6 +437,15 @@ export interface MutantOutcome {
    */
   readonly guardObserved?: boolean;
   /**
+   * R54: this verdict was CARRIED from a prior run by `--resume` rather than measured here.
+   *
+   * Provenance a consumer needs and cannot derive: the mutant is real and its verdict is real, but
+   * it was produced by a DIFFERENT published artifact in an earlier session. Its `durationMs` is
+   * therefore excluded from `timings.mutantsMs` and the per-mutant distribution, which describe
+   * what THIS run cost.
+   */
+  readonly carried?: boolean;
+  /**
    * Semantic mutant identity components (Layer 5A, `itest/mutant-equality.ts`) — the SAME
    * astHash/codeunitName/operatorMajor triple `identityKeyOf`/`serializeKey` (selection.ts)
    * already use for known-survivor persistence. Unlike `killingTest`/`failureNote`, these are
@@ -570,6 +582,7 @@ export function buildReport(input: BuildReportInput): SessionReport {
         ? { coverageAttribution: o.coverageAttribution }
         : {}),
       ...(o.guardObserved !== undefined ? { guardObserved: o.guardObserved } : {}),
+      ...(o.carried === true ? { carried: true } : {}),
       ...(o.mutant.triggerName !== undefined ? { triggerName: o.mutant.triggerName } : {}),
       ...(o.killingTest !== undefined ? { killingTest: o.killingTest } : {}),
       ...(o.failureNote !== undefined ? { failureNote: o.failureNote } : {}),
@@ -582,7 +595,15 @@ export function buildReport(input: BuildReportInput): SessionReport {
   // Only mutants that actually RAN carry a duration; `no-coverage` and known-survivor skips
   // record 0. Including those zeros would drag the mean toward a cost nothing paid, which is the
   // opposite of useful when the number exists to extrapolate a bigger run.
+  //
+  // R54: a CARRIED verdict (`--resume`) is excluded too, and for a sharper reason than the zeros.
+  // Its duration is real but was spent in a DIFFERENT run, so counting it here made `mutantsMs`
+  // exceed `totalMs` — measured on a resumed Document Output sweep: 2200.4 s of "mutants" inside a
+  // 2109.7 s run, with `overhead` clamped to 0 to hide the contradiction. These numbers exist to
+  // extrapolate what a bigger run will COST, and time this run never spent is the one thing that
+  // must not be in them.
   const durations = input.outcomes
+    .filter((o) => o.carried !== true)
     .map((o) => o.durationMs ?? 0)
     .filter((d) => d > 0)
     .sort((a, b) => a - b);

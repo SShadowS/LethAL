@@ -748,6 +748,31 @@ describe("runSession --resume (R47)", () => {
     ).toBe(false);
   });
 
+  test("a carried verdict's duration is excluded from this run's cost (R54)", async () => {
+    // Measured on a resumed Document Output sweep: timings reported 2200.4 s of "mutants" inside a
+    // 2109.7 s run, with `overhead` clamped to 0 hiding the contradiction — because a carried
+    // mutant's duration was spent in a DIFFERENT run. These numbers exist to extrapolate what a
+    // bigger run will COST, so time this run never spent must not be in them.
+    const dirs = await makeProject();
+    const store = new ResultsStore(":memory:");
+    await runSession({ backend: new CountingBackend("pass", 1), store, ...dirs, selectorIds });
+    const report = await runSession({
+      backend: new CountingBackend("pass"),
+      store,
+      ...dirs,
+      selectorIds,
+      resume: "last",
+    });
+    expect(report.resumedFrom?.carriedMutants).toBeGreaterThan(0);
+    const carried = report.mutants.filter((m) => m.carried === true);
+    expect(carried.length).toBe(report.resumedFrom?.carriedMutants ?? -1);
+    // NOTE: the wall-clock invariant is NOT asserted here. This fixture's carried durations are
+    // ~5 ms, far too small to breach it, so the assertion passed with the fix reverted — a test
+    // that could not fail. The discriminating version lives in timings.test.ts (R54), where
+    // `buildReport` is driven directly with a carried duration that dwarfs the run.
+    expect(carried.every((m) => m.carried === true)).toBe(true);
+  });
+
   test("a resumed survivor keeps THIS run's covering tests, not an empty list", async () => {
     // Carried verdicts are recorded after coverage attribution precisely so a resumed survivor
     // stays actionable — an agent reading the report needs to know which tests ran it.

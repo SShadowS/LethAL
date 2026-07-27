@@ -2471,6 +2471,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
             carried.durationMs,
             covering.map((ref) => qualifiedTestName(ref)),
             coverageAttribution.get(m.mutantId),
+            undefined,
+            true,
           );
           resumedMutantCount += 1;
         }
@@ -3567,6 +3569,9 @@ function record(
   coveringTests: readonly string[] = [],
   coverageAttribution?: CoverageAttribution,
   guardObserved?: boolean,
+  // R54: this verdict was carried from a prior run by `--resume`, so its duration belongs to that
+  // run's cost, not this one's. See `MutantOutcome.carried`.
+  carried?: boolean,
 ): number {
   const key = identityKeyOf(m);
   const mutantRowId = store.recordMutant(runId, {
@@ -3591,6 +3596,7 @@ function record(
     coveringTests,
     ...(coverageAttribution !== undefined ? { coverageAttribution } : {}),
     ...(guardObserved !== undefined ? { guardObserved } : {}),
+    ...(carried === true ? { carried: true } : {}),
     ...(killingTest !== undefined ? { killingTest } : {}),
     ...(failureNote !== undefined ? { failureNote } : {}),
     ...(cause !== undefined ? { cause } : {}),

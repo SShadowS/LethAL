@@ -159,3 +159,38 @@ describe("SessionReport.timings — an aborted phase is still charged", () => {
     expect(t.perMutant.count).toBe(0);
   });
 });
+
+describe("SessionReport.timings — carried verdicts (R54)", () => {
+  function carriedOutcome(id: string, durationMs: number): SessionOutcome {
+    return { mutant: mutant(id), verdict: "survived", batchIndex: 0, durationMs, carried: true };
+  }
+
+  test("a CARRIED mutant's duration is excluded from mutantsMs", () => {
+    // Measured on a resumed Document Output sweep: 2200.4 s of "mutants" reported inside a 2109.7 s
+    // run, because 10 carried mutants' durations were spent in a DIFFERENT run and counted here
+    // anyway. `overhead` then clamped to 0, hiding the contradiction rather than showing it.
+    const r = build([outcome("M0001", "killed", 1_000), carriedOutcome("M0002", 900_000)]);
+    expect(r.timings.mutantsMs).toBe(1_000);
+  });
+
+  test("the per-mutant distribution describes only mutants THIS run executed", () => {
+    // A carried mutant left in the distribution would drag the mean toward another run's cost,
+    // which is precisely the number someone extrapolates a bigger run from.
+    const r = build([outcome("M0001", "killed", 1_000), carriedOutcome("M0002", 900_000)]);
+    expect(r.timings.perMutant?.meanMs).toBe(1_000);
+    expect(r.timings.perMutant?.maxMs).toBe(1_000);
+  });
+
+  test("phases fit inside the wall clock even when a carried duration dwarfs it", () => {
+    // The live invariant violation, reproduced at unit scale: deploy + baseline + mutants must
+    // never exceed total.
+    const r = build([carriedOutcome("M0001", 900_000), outcome("M0002", "survived", 200)]);
+    const t = r.timings;
+    expect(t.deployMs + t.baselineMs + t.mutantsMs).toBeLessThanOrEqual(t.totalMs);
+  });
+
+  test("a non-carried mutant is still counted — the filter is not a blanket exclusion", () => {
+    const r = build([outcome("M0001", "killed", 300), outcome("M0002", "survived", 700)]);
+    expect(r.timings.mutantsMs).toBe(1_000);
+  });
+});
