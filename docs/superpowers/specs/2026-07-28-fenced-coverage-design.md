@@ -218,10 +218,41 @@ trigger-heavy code or extensions — `itest:tables` differential covers what DO 
 A pure unit-test pass proves nothing: all four frozen gates have green baselines, so the whole
 mechanism is a no-op for them — the same blindness R55's candidate fix had.
 
+### Which unknowns are genuinely pre-build
+
+Unknowns 1–3 could invalidate the DESIGN, and all three are now answered favourably: source lines,
+object-relative frame, and `Start` clears. Nothing left can force a different architecture.
+
+Unknowns 4–6 cannot be probed cheaply, and pretending otherwise would produce a probe that answers
+an easier question than the one asked. Each needs a real test exercising the INSTRUMENTED TARGET
+while coverage is on, and that is the production path itself:
+
+- the probe app cannot reference the target (a test app depending on the target would break on
+  `reserveAppVersion`'s per-run version), and invoking it by literal id runs an empty `OnRun`
+- `sandbox-tests` exercises the target but does not collect coverage
+- `RunMutant` does not collect coverage; only `RunMutantWithCoverage` does, and no client calls it
+  yet
+
+So they are **validation during step 2**, not gates before it: wire the transport to call the new
+action, dump the raw payload, and read the answers off one real session. That ordering is safe
+because none of the three can invalidate the design — they calibrate it:
+
+- **#4 payload size / response time** decides whether server-side filtering by `idRanges` is
+  required, not whether the approach works. It must be measured before the first DO run, because a
+  slow baseline response is an `in-flight-unknown`, i.e. a durable quarantine (R44/R47).
+- **#5 do target objects appear** would, if the answer were no, mean the server half is useless —
+  but the R58 probe already saw a non-test object (its own) recorded, so the mechanism is not
+  test-app-specific.
+- **#6 instrumented vs original lines** is confirmed by construction the moment #5 is answered: the
+  published artifact IS the instrumented source, so any line that resolves to a procedure resolves
+  in that frame. The check is that resolved names are SANE, not that the frame is the other one.
+
 ## Rollout
 
-1. Probe unknowns 2–6.
-2. Build `line-map.ts` + transport + backend + orchestrator routing behind `coverageMode: "fenced"`.
+1. ~~Probe unknowns 1–3~~ **done** — none invalidates the design.
+2. Build `line-map.ts` + transport + backend + orchestrator routing behind `coverageMode: "fenced"`,
+   answering unknowns 4–6 from the first real session's raw payload before wiring the map into
+   `CoverageMap`.
 3. Baseline-only coverage diff (the cheap oracle).
 4. Differential per-mutant gate on DO **and** the table fixture.
 5. **`"fenced"` becomes the default in the release after step 4 passes; the hub is deleted one
