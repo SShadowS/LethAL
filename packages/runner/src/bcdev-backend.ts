@@ -72,6 +72,18 @@ export interface BcDevConfig {
 
 // Verified against a real BC server (2026-07-18) via bc-dev-mcp source
 // (packages test-tools.ts's runTestsOutputSchema / test-runner-hub.ts's RunTestsResult) and a
+/**
+ * R31: the server was asked to run a specific method and returned no result for it, which means
+ * the PUBLISHED test app does not contain that method — the source declares a test the server has
+ * never seen.
+ *
+ * Exported because `runSession` aggregates these into a stale-test-app diagnosis, and a detector
+ * matching a string literal the producer might later reword is a silent regression: the diagnosis
+ * would simply stop firing, and the symptom it explains (red baseline, dozens of no-coverage
+ * mutants) reads as a mutation-scoring problem instead.
+ */
+export const NO_RESULT_FOR_METHOD = "bcdev_test_run returned no result for the requested method";
+
 // direct bcdev_test_run call: the actual payload nests `status`
 // ("passed"|"failed"|"skipped", not "outcome": "pass"|"fail"|"skip") and `output` (combined
 // failure message + AL callstack, not `failureMessage`) per result, and coverage is a
@@ -593,7 +605,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
           ref,
           outcome: "error",
           durationMs: Date.now() - started,
-          failureMessage: "bcdev_test_run returned no result for the requested method",
+          failureMessage: NO_RESULT_FOR_METHOD,
         };
       }
       const outcome = WIRE_STATUS_TO_OUTCOME[r.status];

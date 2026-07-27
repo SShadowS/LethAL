@@ -27,6 +27,7 @@ import { nextAbove, parseVersionConflict, reserveAppVersion } from "./app-versio
 import { AlcCompileError, ArtifactPrepareError, DeploymentError } from "./artifact";
 import type { CompiledArtifact } from "./artifact";
 import type { ExecutionBackend, TestMethodRef, TestVerdict } from "./backend";
+import { NO_RESULT_FOR_METHOD } from "./bcdev-backend";
 import { bisectFailingMutant } from "./bisect";
 import { discoverTests } from "./discovery";
 import { ActivationFailure } from "./failure-classes";
@@ -1717,6 +1718,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // (fail/error) across all batches — surfaced in the report so an unsupported
   // test type (or a broken test) is named, never silently dropped.
   const unsupportedTestNames = new Set<string>();
+  // R31: tests the source declares that the SERVER has no result for — see the baseline loop.
+  const missingFromServer = new Set<string>();
   // Summed across batches — see `SessionReport.untargetedTriggerCount`. Declared out here rather
   // than read off the last batch's split: each batch runs its own coverage filter, and a session
   // whose only untargeted trigger sits in batch 1 must not report 0.
@@ -2120,6 +2123,18 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       const unsupportedBaseline = baseline.filter((b) => didNotPassAtBaseline(b.verdict.outcome));
       for (const b of unsupportedBaseline) unsupportedTestNames.add(qualifiedTestName(b.ref));
 
+      // R31: a test the SOURCE declares but the server returned no result for is a test the
+      // published test app does not contain — i.e. what is deployed is older than the source
+      // being measured. This has cost two debugging sessions, because the symptom is badly
+      // disguised: the baseline goes red and dozens of mutants fall to `no-coverage`, which reads
+      // as a mutation-scoring problem rather than "your published test app is stale". The
+      // evidence was already present per-test; nothing aggregated it into a statement.
+      for (const b of baseline) {
+        if (b.verdict.failureMessage === NO_RESULT_FOR_METHOD) {
+          missingFromServer.add(qualifiedTestName(b.ref));
+        }
+      }
+
       // 5. coverage filter (capability-gated)
       let perMutantTests: ReadonlyMap<string, readonly TestMethodRef[]>;
       // R-agent-output: which attribution path placed each mutant's covering tests. Empty on the
@@ -2448,6 +2463,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     notInstrumented: { totalFiles: totalAlFiles, files: notInstrumentedFiles },
     // Every discovered test, so the report can state the denominator behind `unsupportedTests`
     // and index test files for `SessionReport.testFiles`.
+    ...(missingFromServer.size > 0
+      ? { staleTestApp: { missingTests: [...missingFromServer].sort() } }
+      : {}),
     baselineTests: tests.map((t) => ({
       codeunitName: t.codeunitName,
       ...(t.file !== undefined ? { file: t.file } : {}),

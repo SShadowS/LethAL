@@ -209,6 +209,17 @@ export interface SessionReport {
    */
   readonly testsOnly?: readonly string[];
   /**
+   * R31: tests the source declares that the SERVER returned no result for, meaning the published
+   * test app does not contain them — what is deployed is older than the source being measured.
+   * Absent when every discovered test produced a result.
+   *
+   * Present because the symptom is badly disguised and has cost two debugging sessions: the
+   * baseline goes red, dozens of mutants fall to `no-coverage`, and that reads as a
+   * mutation-scoring problem. Publishing the test app is deliberately the user's own workflow, so
+   * LethAL cannot fix this — but it can name it instead of leaving a scoring puzzle.
+   */
+  readonly staleTestApp?: { readonly missingTests: readonly string[] };
+  /**
    * Wall-clock cost of this run, split into the phases that scale differently — the whole point
    * of recording it. `deploy` scales with PROJECT size (every file compiles, whether or not it
    * was mutated); `mutants` scales with MUTANT count; `baseline` is a fixed per-batch toll. A
@@ -405,6 +416,9 @@ export interface BuildReportInput {
   };
   /** R45: the `--tests-only` patterns, if any — see `SessionReport.testsOnly`. */
   readonly testsOnly?: readonly string[];
+  /** R31: tests the source declares that the server had no result for — see
+   *  `SessionReport.staleTestApp`. */
+  readonly staleTestApp?: { readonly missingTests: readonly string[] };
   /** Phase wall-clock measured by `runSession` — see `SessionReport.timings`. The per-mutant
    *  distribution is derived here from `outcomes`, so only the phase totals are passed in. */
   readonly timings: {
@@ -563,6 +577,7 @@ export function buildReport(input: BuildReportInput): SessionReport {
   // Listed distinctly from `narrowed`: this is the one narrowing that can manufacture a survivor.
   if (input.testsOnly !== undefined && input.testsOnly.length > 0) caveats.push("tests-narrowed");
   if (input.notInstrumented.files.length > 0) caveats.push("uninstrumentable-files");
+  if (input.staleTestApp !== undefined) caveats.push("stale-test-app");
   if (input.untargetedTriggerCount > 0) caveats.push("untargeted-triggers");
   const narrowed =
     input.only !== undefined || (input.testsOnly !== undefined && input.testsOnly.length > 0);
@@ -610,6 +625,7 @@ export function buildReport(input: BuildReportInput): SessionReport {
     untargetedTriggerCount: input.untargetedTriggerCount,
     ...(input.only !== undefined ? { only: input.only } : {}),
     ...(input.testsOnly !== undefined ? { testsOnly: input.testsOnly } : {}),
+    ...(input.staleTestApp !== undefined ? { staleTestApp: input.staleTestApp } : {}),
     timings: {
       totalMs: input.timings.totalMs,
       generateMutationSetMs: input.timings.generateMutationSetMs,
@@ -675,6 +691,14 @@ export function renderConsole(r: SessionReport): string {
     for (const f of r.notInstrumented.files) {
       lines.push(`  ${f.file} (${f.kinds}, ${f.sites} site(s))`);
     }
+  }
+  if (r.staleTestApp !== undefined) {
+    const n = r.staleTestApp.missingTests.length;
+    lines.push(
+      `STALE TEST APP: the server returned no result for ${n} test(s) this project's source declares, so the PUBLISHED test app is older than the source being measured. Republish it before trusting this run — a missing test cannot kill anything, so its mutants land as no-coverage or survived.`,
+    );
+    for (const t of r.staleTestApp.missingTests.slice(0, 10)) lines.push(`  ${t}`);
+    if (n > 10) lines.push(`  ... ${n - 10} more`);
   }
   // The score's own limits, immediately after it. A reader quotes `score: 15.7%` long before
   // correlating four separate qualifier fields, so the qualification has to arrive with it.
