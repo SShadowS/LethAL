@@ -89,3 +89,30 @@ a broken probe. Compare the two messages.
 It lives in `sandbox-probes` deliberately: that fixture is published and driven separately and is
 not part of any frozen mutation baseline, so adding a test to it cannot move `itest:bcdev` or
 `itest:tables`. Adding it to `sandbox-tests` would have.
+
+## `gui-guard-probe.al` — the positive control for `measure-gui-guarded.ts` (R60)
+
+`scripts/measure-gui-guarded.ts` counts mutation sites sitting behind a `GuiAllowed`/`Confirm`
+guard. **Run it against this file before trusting any run that reports a low number.** It must
+report `1` guarded of `3` sites (the `exit(A + 1)` inside the guarded branch) and `3` in a
+GUI-mentioning procedure:
+
+```
+bun scripts/measure-gui-guarded.ts <a project dir containing gui-guard-probe.al>
+```
+
+The control exists because the script reported a confident **0.0% twice** before it was correct,
+for two independent reasons, and neither is visible by reading the output:
+
+1. `children[0]` of an `if_statement` is the `if_keyword` (text `"if"`), not the condition — so no
+   condition ever matched the GUI pattern.
+2. `MutationSpec` carries **no** `startIndex`. Position lives on `spec.before` (whose `astNodeId`
+   is literally `"<start>-<end>"`). Reading `spec.startIndex` yields `undefined`, so every
+   containment test is false.
+
+A zero produced by a broken predicate is indistinguishable from a zero meaning "this project has no
+such code" — and the second reading is the reassuring one, which is how it would have been believed.
+
+Measured on Continia Document Output (554 `.al`, 20,032 sites): **66 guarded (0.3%)** lower bound,
+**1,149 (5.7%)** in procedures mentioning an interactive construct. `fixtures/sandbox-app` reports
+0/0, correctly — it contains no interactive AL.
