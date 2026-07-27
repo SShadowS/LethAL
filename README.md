@@ -20,7 +20,7 @@ Each mutant comes back as one of three verdicts:
 |---------|---------|
 | **killed** | A test failed. That code path is genuinely covered. |
 | **survived** | Every test still passed. Nothing checks that behaviour. |
-| **no-coverage** | No test executes that code at all. |
+| **no-coverage** | No test *reachable by coverage attribution* executes that code. Sometimes an under-report — see [Limits](#limits). |
 
 It compiles **one** instrumented copy of your app with every mutation baked in behind runtime guards, publishes it once, then activates mutants one at a time — instead of one compile-and-publish cycle per mutant.
 
@@ -35,7 +35,7 @@ It compiles **one** instrumented copy of your app with every mutation baked in b
 | Object kinds instrumented | codeunit, table, page, report, pageextension, tableextension |
 | Backends | `bcdev` (live BC, authoritative), `al-runner` (offline, **not** authoritative) |
 | Concurrency safety | Machine-global lease + per-run two-phase fence |
-| Unit tests | 1,223 |
+| Unit tests | 1,243 |
 | Largest project measured | 19,832 mutation sites across 438 files (a real commercial extension) |
 
 ## Features
@@ -151,6 +151,7 @@ Cost and recovery:
 | `--max-guards-per-batch <n>` | *(unbounded)* | Guards per published artifact. Publish cost scales with guard count — BC recompiles server-side |
 | `--mutant-timeout-ms <n>` | `30000` | Floor for a mutant's time budget. The budget is `max(2 × that test's baseline, this)` |
 | `--resume` / `--resume-run <id>` | — | Continue an aborted run, reusing verdicts it already measured |
+| `--retry-stranded` | `false` | On resume, retry mutants that stranded the tier. Skipped by default: a mutant that never terminates blocks every mutant behind it |
 | `--allow-large-run` | `false` | Run more than 1,000 mutation sites |
 | `--workers <n>` | `1` | Parallel shards (rejected for the authoritative backend) |
 
@@ -237,11 +238,18 @@ per-mutant baseline** — a differing verdict is a regression, never "close enou
 
 Stated plainly, because a mutation-testing tool that overstates its guarantees is worse than none.
 
-- **A survivor is a lead, not a proven test-suite gap.** Survivors have been individually verified
-  *on the fixture* — all ten genuine, after an earlier defect made 10 of 20 false. They have **not**
-  been individually verified on a real project. Read `validity` in the JSON report before quoting
-  `mutationScore`, and treat `coverageAttribution: exact` as evidence about coverage, not about
-  killability.
+- **A survivor is a lead, not a proven test-suite gap.** What *has* been established, on a real
+  commercial product: coverage selection does not hide kills. Two runs of one Continia Document
+  Output codeunit, identical except for coverage mode, compared per-mutant across all 138 mutants —
+  **no mutant reported `survived` or `no-coverage` under selection was killable by the full suite.**
+  That is the failure mode that once made 10 of 20 fixture survivors false, and it is empty here.
+  What is still **not** established is that any individual survivor is non-equivalent: some
+  survivors are unkillable by any test. Read `validity` before quoting `mutationScore`.
+- **Some mutants reported `no-coverage` are actually executed.** Measured: 14 of 138 on the run
+  above, because coverage collection made 12 of 56 tests fail and a failing test takes its coverage
+  out of the green set. Safe direction — never a false kill — but `no-coverage` says "write a test"
+  when the truer answer can be "strengthen the test you have". Cross-check a `no-coverage` cluster
+  before acting on it.
 - **Unscoped runs on a real project are refused by default.** 19,832 mutation sites is days of
   execution, and the artifact carrying every guard is typically rejected by a hosting proxy before
   it publishes. Use `--only`; `--allow-large-run` overrides.
@@ -252,6 +260,10 @@ Stated plainly, because a mutation-testing tool that overstates its guarantees i
   killable only that way come back survived there while `bcdev` kills them. Under-reporting only,
   never a false kill; a startup canary measures the actual binary each session and says so. Use it
   for offline smoke-testing, not for a score.
+- **A mutant that never terminates is stepped over, not scored.** AL cannot preempt a running loop,
+  so LethAL sees only its own abort and cannot tell it from "the server is still working". Such a
+  mutant is recorded as an unmeasured error; `--resume` skips it so the run completes rather than
+  dying on it forever.
 - **Tier 3 not built.** Nine operators across two tiers today; the advanced set is designed only.
   Tier-2 operators also do not yet claim sites inside `tableextension`/`pageextension` bodies.
 - **Procedure-level coverage** from the `bcdev` backend, so `no-coverage` means no test calls that

@@ -63,3 +63,16 @@ side by side so that mismatch is visible rather than implied.
 `compare` flags `VERDICTS DIFFER` when killed/survived move between runs. On the same target and
 commit that is a correctness regression, not a performance one, and it outranks any timing change
 in the same output.
+
+## Rows recorded before R54
+
+`do-r37-all-tests` reports `mutants 2200.4s` inside a `total 2109.7s`, with `overhead 0.0s`. That
+is not a measurement error in the run — it is the R54 defect the run exposed. It was resumed, and
+`mutantsMs` summed the durations of 10 verdicts **carried from a prior run**, i.e. time this run
+never spent; `overhead`'s `Math.max(0, ...)` then clamped the negative remainder to zero and hid
+the contradiction.
+
+The row is left as recorded rather than corrected — a ledger that gets edited after the fact is
+worth less than one that occasionally shows its own history. Rows written after R54 exclude carried
+durations, so `deploy + baseline + mutants` fits inside `total`. Treat that inequality as the
+signal for whether a row predates the fix.

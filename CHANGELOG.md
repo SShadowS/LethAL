@@ -17,9 +17,14 @@ First distributable build. LethAL has run against live Business Central servers 
 development; this is the first release that someone other than its authors can download and run.
 
 Alpha means the tool is honest about its own limits rather than complete: the al-runner backend is
-measurably not authoritative, survivors have never been individually verified on a real project,
-and several classes of AL construct are still never mutated. Known gaps are listed at the bottom of
-this entry.
+measurably not authoritative, individual survivors are still not proven non-equivalent, and several
+classes of AL construct are never mutated. Known gaps are listed at the bottom of this entry.
+
+What this release *can* now claim, and could not before: **coverage selection does not hide kills.**
+Two runs of one Continia Document Output codeunit, identical except for `coverageMode`, compared
+per-mutant across all 138 mutants — no mutant reported `survived` or `no-coverage` under selection
+turned out killable by the full suite (R37). That is the failure mode (R29) that once produced 10
+false survivors out of 20 on a fixture, and on a real product it is empty.
 
 ### Added
 
@@ -92,6 +97,25 @@ this entry.
   collisions among `.al` sources are now detected and refused naming both files, instead of silently
   dropping one.
 
+- **`--mutant-timeout-ms`, `--resume` and `--resume-run`** (R47). One slow or hanging
+  (mutant, test) pair used to cost the entire run: the per-mutant budget was a hardcoded floor with
+  no config surface, and exceeding it is indistinguishable from "the server may still be executing
+  this", so the session quarantines. `--resume` recovers an aborted run by skipping only the
+  execution of mutants already scored — verdicts are carried by IDENTITY, so an edited site stops
+  matching and re-batching is survivable, while coverage attribution and covering-test lists still
+  come from the resumed run.
+- **`--retry-stranded`** (R53), and skipping stranded mutants by default. A mutant that never
+  terminates — measured: `until Rec.Next() = 0;` negated to `<> 0` — reproduces its own quarantine
+  on every retry and blocks every mutant behind it. It is now recorded as an unmeasured error and
+  stepped over, so the run completes.
+- **`--allow-large-run`** and a pre-flight size refusal (R48). An unscoped run on a real project
+  costs days and usually cannot publish at all, so it is refused before anything is deployed, naming
+  every narrowing lever. `--dry-run` prints the same limit instead of refusing.
+- **`envTool.requireStatus`** (R34). A reused environment that has idled is refused by name rather
+  than resolving a dead endpoint and failing minutes later inside the transport. The expectation is
+  config-declared; no vendor's status vocabulary lives in LethAL.
+- **`MutantOutcome.carried`** (R54) — provenance for a verdict a resume reused rather than measured.
+
 ### Fixed
 
 - **False survivors from coverage attribution** (R29) — the worst output a mutation tool can
@@ -127,6 +151,27 @@ this entry.
   gates, so cross-run nondeterminism surfaces as a determinism failure rather than a confusing
   per-mutant baseline mismatch.
 
+- **The compiled binary could not parse a single line of AL** (R50). Both wasm assets resolved
+  relative to `import.meta.url`, which under `bun build --compile` is Bun's virtual root. The unit
+  suite is structurally blind to this — it runs interpreted, where the relative resolve is correct —
+  so it was caught by running the produced binary from a foreign cwd, not by a test.
+- **`lethal --help` exited 1 with a `TypeError`** (R49), for the first flag a new user types.
+- **`force-reset-lease` could not reach an env-tool environment** (R51). It built its URL with
+  port-7048 injection and ignored `bcdev.baseUrl`, so the documented recovery procedure was
+  unreachable on the one setup that most needs it — a proxy-severed run. The instance must now match
+  a path SEGMENT of the configured URL, because a substring check passes a one-character instance
+  against almost any hostname.
+- **A stale `LethAL Control` build was undetectable** (R28). `HarnessInfo` reported a hardcoded
+  version, so every new client action failed in its own way instead of the harness saying once that
+  the control app predates the client.
+- **`--resume` preferred an empty aborted run over one holding verdicts** (R52), which is the
+  situation recovery is for.
+- **A resumed run's phase clocks did not add up** (R54): `mutantsMs` counted durations carried from
+  a prior run, and `overhead`'s clamp hid the resulting contradiction as a plausible `0.0s`.
+- **Verdicts from an unattested artifact were corrected in memory only** (R47). The fail-closed
+  attestation gate relied on a quarantined run never being marked finished; `--resume` selects on
+  exactly that condition, so the correction is now durable.
+
 ### Known limitations
 
 - **The al-runner backend is not authoritative.** `asserterror` never fails a test there (R7), so
@@ -141,10 +186,18 @@ this entry.
 - **A file declaring two AL objects** is handled only when every object in it is injectable (R6).
 - **Enums and queries are still never mutated**, and `xmlport` remains uninstrumented (R40 covered
   page, report, `pageextension` and `tableextension`).
-- **A slow (mutant, test) pair can quarantine a whole run** (R47). The per-mutant budget is
-  `2 x that test's baseline duration` floored at 30 s, with no flag reaching it; exceeding it is
-  correctly indistinguishable from "the server may still be executing this", so the session latches
-  unsafe and stops. Measured on Document Output: quarantined at mutant 13 of 138.
+- **A mutant that never terminates is not scored, only stepped over** (R53). AL cannot preempt a
+  running loop, so LethAL sees only its own client-side abort, which it must treat as "the server
+  may still be executing this". Such a mutant arguably SHOULD count as killed (a timeout is
+  observable misbehaviour), but scoring it needs `RunMutant` to return a terminal timed-out result —
+  an AL change plus a protocol bump. Today it is recorded as an unmeasured error, and `--resume`
+  steps over it so the rest of the run completes.
+- **Coverage collection makes some tests fail, which under-reports what the suite exercises**
+  (R55). Measured on Document Output: with the default `coverageMode`, 12 of 56 tests fail and the
+  baseline goes red; with coverage off the same tests on the same environment all pass. The knock-on
+  is that 14 mutants are reported `no-coverage` when the suite does execute them — which tells a
+  reader to write a new test when the real answer is to strengthen an existing one. Safe direction
+  (no false kill, no false survivor), but the mechanism is not yet established.
 - **Hosted environments can time out on publish** (R44). The proxy cap is real and unraisable from
   the client; `--max-guards-per-batch` is what keeps LethAL from asking it to swallow an unbounded
   artifact.
