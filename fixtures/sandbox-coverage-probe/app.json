@@ -1,0 +1,25 @@
+{
+  "id": "c0e7a1b2-3344-4c55-8d66-77e8f9a0b1c2",
+  "name": "LethAL Coverage Probe",
+  "publisher": "LethAL",
+  "version": "1.0.0.0",
+  "brief": "R58 feasibility: does a fenced RunMutant session record code coverage?",
+  "platform": "28.0.0.0",
+  "application": "28.0.0.0",
+  "runtime": "16.0",
+  "target": "OnPrem",
+  "idRanges": [
+    {
+      "from": 79320,
+      "to": 79329
+    }
+  ],
+  "dependencies": [
+    {
+      "id": "23de40a6-dfe8-4f80-80db-d70f83ce8caf",
+      "name": "Test Runner",
+      "publisher": "Microsoft",
+      "version": "28.0.0.0"
+    }
+  ]
+}

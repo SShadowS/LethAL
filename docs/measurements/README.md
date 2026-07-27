@@ -145,3 +145,33 @@ before any protocol work: an R58 built on an assumption would repeat R55's first
 Line-level coverage is also finer than the current `procedure` granularity, so mapping
 `"Line No."` back to a procedure needs the compiled artifact's symbol data the way
 `app-package.ts` already does for the hub payload.
+
+## `sandbox-coverage-probe` — does the FENCED session record coverage? (R58)
+
+**Yes, identically to the hub.** `fixtures/sandbox-coverage-probe` starts application coverage,
+exercises a procedure it owns, stops, and reports what the `Code Coverage` table holds. Run through
+both paths on Cronus281, same target, same config, only `bcdev.coverageMode` differing:
+
+```
+procedure (HUB)  :  coverageRows=262  totalHits=67  ownObjectRows=44
+none      (FENCE):  coverageRows=262  totalHits=67  ownObjectRows=44
+```
+
+Byte-identical, including the 44 rows for the probe's own codeunit 79320. R57 independently
+established that these are genuinely different sessions — `GuiAllowed=Yes/Web` on the hub versus
+`No/ODataV4` on the fence — so this is not the same path measured twice.
+
+This was R58's last open unknown, and it was a real one: the fenced session differs from the hub in
+ways that DO change behaviour (R55's 12 failing tests), so "the API compiles" did not imply "the
+API works there".
+
+### What remains implementation, not feasibility
+
+`Code Coverage` is LINE-level (`"Line No."`), while the hub returns procedure-level. Mapping lines
+back to procedures needs the compiled artifact's symbol data, which `app-package.ts` already does
+for the hub payload — so the machinery exists, but it is work, not a question.
+
+The probe lives in its own app rather than `sandbox-probes` because that fixture declares
+runtime 13.0 with no platform/application, so the `Test Runner` symbol carrying
+`Codeunit "Code Coverage Mgt."` does not resolve there — and it is published for the frozen
+`itest:bcdev` gate, which is not worth perturbing for a probe.
