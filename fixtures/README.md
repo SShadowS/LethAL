@@ -645,7 +645,9 @@ provision a second and third environment.
    from a hang.
 3. **resolve** — each block in `resolve` runs in order; their `reads` outputs merge into one map.
    `baseUrl`, `username` and `password` must end up produced by some block, or validation fails
-   before anything spawns.
+   before anything spawns. If the config declares `requireStatus` (reuse-mode only), the resolved
+   `status` is checked here, before anything is published — see "A reused environment that is not
+   ready" below.
 4. **expiry check** — if `resolve` produced `expiresUtc` and it falls within the next hour, the
    session refuses to start (see "Expiry: refuse, do not warn" below) unless `--allow-expiring-env`
    was given.
@@ -682,6 +684,58 @@ a create-mode run would discover tests from source and then fail every one of th
 session start (step 7 above), before the control app. **Create-mode requires it**: a config with no
 `envId` and no `publishApps` is a validation error naming the reason. Reuse-mode ignores it if
 absent.
+
+### A reused environment that is not ready (R34)
+
+A long-lived environment idles. Observed live 2026-07-26: the gate environment had drifted to
+`Stopped`, and LethAL resolved it perfectly happily — `env get` still answers, the URL is still
+derived from the id — then published into a dead endpoint and died minutes later inside the
+transport with an error that named nothing useful. **LethAL refuses instead of starting it**:
+the environment belongs to whoever configured it, and silently starting someone else's environment
+(billing it, disturbing whoever else is on it) is worse than stopping with a clear message.
+
+Opt in with a `status` read on a `resolve` block plus the value that means ready:
+
+```jsonc
+{
+  "envTool": {
+    "envId": "${CONTINIA_ENV_ID}",
+    "resolve": [
+      { "command": ["env", "get", "{envId}", "--json"],
+        "reads": { "baseUrl": "url", "expiresUtc": "expiresUtc", "status": "status" } },
+      { "command": ["env", "users", "{envId}", "--json"],
+        "reads": { "username": "0.username", "password": "0.password" } }
+    ],
+    "requireStatus": { "equals": "Running" }   // ← the TOOL's word for ready, not LethAL's
+  }
+}
+```
+
+A run against a stopped environment now ends before the first publish with:
+
+```
+environment env-4711 reports status "Stopped", not "Running" (envTool.requireStatus.equals) —
+refusing to publish into an environment that is not ready. LethAL will not start an environment
+it does not own: start it with your own environment tool, wait until it reports "Running", then
+re-run.
+```
+
+Both halves are config, deliberately: `Running` is Continia's vocabulary, and nothing in LethAL's
+source knows it. A tool whose ready state is spelled `Active` writes `"equals": "Active"`, and
+`${VAR}` works here like anywhere else.
+
+Rules `validateEnvToolConfig` enforces up front, before any process is spawned:
+
+- **Entirely optional.** A config with no `requireStatus` behaves exactly as it did before — no
+  status is read, nothing is checked. Every config written before this existed keeps working.
+- **The status must come from `resolve`.** An expectation that nothing feeds is a config error, not
+  a check that silently passes. A `status` read on `readyWhen` does not count: that block never
+  runs for a reused environment, and is rejected naming exactly that.
+- **Reuse-mode only.** In create-mode LethAL starts the environment itself and `readyWhen` already
+  polls it to ready, so `requireStatus` there is rejected rather than silently inert. That also
+  means the dual-purpose config above (create blocks *and* an `envId`) cannot carry both a
+  `readyWhen` status read and a `resolve` status read — one key, one producer — so a config that
+  wants this protection is a reuse-mode config.
 
 ### The measured provisioning facts — why this shape exists
 

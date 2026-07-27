@@ -24,6 +24,21 @@ export interface EnvToolReadyBlock extends EnvToolBlock {
   readonly timeoutSeconds?: number;
 }
 
+/**
+ * R34: what a REUSED environment's status must be before LethAL will touch it. The status VALUE is
+ * read like any other field — an ordinary `resolve[].reads.status` entry — and the value that
+ * counts as ready is declared here. Both sides come from config on purpose: Layer 6C's whole point
+ * is that the external tool is described by the project, so LethAL hardcodes no vendor's status
+ * vocabulary (`Running`, `Active`, `Started`, …) anywhere in its source.
+ *
+ * Deliberately NOT a block of its own: it carries no `command`, because the status must come from
+ * the same call that already produced the endpoint. A second spawn would cost an extra round trip
+ * AND open a window where LethAL checks one snapshot and publishes into another.
+ */
+export interface EnvToolStatusExpectation {
+  readonly equals: string;
+}
+
 export interface EnvToolConfigSection {
   readonly toolPath: string;
   readonly cwd?: string;
@@ -35,6 +50,7 @@ export interface EnvToolConfigSection {
   readonly createEnv?: EnvToolBlock;
   readonly startEnv?: EnvToolBlock;
   readonly readyWhen?: EnvToolReadyBlock;
+  readonly requireStatus?: EnvToolStatusExpectation;
   readonly resolve?: readonly EnvToolBlock[];
   readonly downloadSymbols?: EnvToolBlock;
   readonly publish?: EnvToolBlock;
@@ -186,6 +202,23 @@ function validateRawShape(raw: Partial<EnvToolConfigSection>): void {
       );
     }
   }
+  // R34: `requireStatus` is not a block (no `command` — it reads a value some `resolve` step
+  // already produces), so the block loop above cannot cover it. TYPE only here, same split as
+  // `readyWhen.equals` above: whether the expectation is COHERENT (reuse-mode, and something
+  // actually reads `status`) is `validateEnvToolConfig`'s later semantic check.
+  if (raw.requireStatus !== undefined) {
+    if (!isPlainObject(raw.requireStatus)) {
+      throw new EnvToolError(
+        `envTool.requireStatus must be an object (got ${describeShape(raw.requireStatus)})`,
+      );
+    }
+    const equals = (raw.requireStatus as unknown as Record<string, unknown>).equals;
+    if (equals !== undefined && typeof equals !== "string") {
+      throw new EnvToolError(
+        `envTool.requireStatus.equals must be a string (got ${describeShape(equals)})`,
+      );
+    }
+  }
   if (raw.resolve !== undefined) {
     if (!Array.isArray(raw.resolve)) {
       throw new EnvToolError(
@@ -328,6 +361,42 @@ export function validateEnvToolConfig(
   if (createMode && !produced.has("envId")) {
     throw new EnvToolError("envTool.createEnv.reads must produce envId in create-mode");
   }
+  // R34: a reused environment that has idled to a not-ready status (measured live 2026-07-26 on
+  // the gate environment: `Stopped`) used to resolve perfectly well, hand back a dead endpoint,
+  // and abort minutes later inside the transport with an obscure error. `requireStatus` makes
+  // LethAL refuse up front instead — but only if it can actually SEE a status, which is what these
+  // checks pin down, before any process is spawned.
+  const requireStatus = cfg.requireStatus;
+  if (requireStatus !== undefined) {
+    // Create-mode already starts the environment itself and polls `readyWhen` until it reports
+    // ready, and `readyWhen.reads.status` is mandatory there — so `status` is necessarily produced
+    // by `readyWhen`, and a `resolve` step reading it too would trip the "produced by both" rule
+    // above. Naming that here is the difference between one clear message and a dead end.
+    if (createMode) {
+      throw new EnvToolError(
+        "envTool.requireStatus applies only to a REUSED environment (envTool.envId set) — in " +
+          "create-mode LethAL starts the environment itself and envTool.readyWhen already polls " +
+          "it to ready. Remove requireStatus, or set envId.",
+      );
+    }
+    if (!requireStatus.equals) {
+      throw new EnvToolError(
+        'envTool.requireStatus.equals is required — it names the status a reused environment must report before LethAL will use it (e.g. "Running")',
+      );
+    }
+    // Must come from `resolve` specifically: `readyWhen` is never run for a reused environment, so
+    // a status declared there would leave the check with nothing to compare and silently pass.
+    const statusProducer = produced.get("status");
+    if (statusProducer === undefined || !statusProducer.startsWith("resolve[")) {
+      const where =
+        statusProducer === undefined
+          ? ""
+          : ` (${statusProducer} reads it, but that block never runs for a reused environment)`;
+      throw new EnvToolError(
+        `envTool.requireStatus is declared but no envTool.resolve[] block reads "status"${where} — add a "status" entry to a resolve block's reads, or drop requireStatus: LethAL will not claim to check a status it never reads`,
+      );
+    }
+  }
   // A field env-tool resolves via some block's `reads` must not ALSO be hand-written in the
   // bcdev config section — two sources for one value is how two clients end up pointed at
   // different endpoints (fixtures/README.md's worked example calls this out by name). This is
@@ -430,6 +499,19 @@ function substituteSection(
     ...(raw.startEnv !== undefined ? { startEnv: subBlock(raw.startEnv, "startEnv") } : {}),
     ...(raw.readyWhen !== undefined
       ? { readyWhen: subReadyBlock(raw.readyWhen, "readyWhen") }
+      : {}),
+    ...(raw.requireStatus !== undefined
+      ? {
+          requireStatus: {
+            // Same reason as `subReadyBlock`'s `equals`: the type says `string`, but raw config
+            // text is untrusted — a config that omits it must reach the
+            // "envTool.requireStatus.equals is required" check, not crash here.
+            equals:
+              raw.requireStatus.equals === undefined
+                ? ""
+                : sub(raw.requireStatus.equals, "requireStatus.equals"),
+          },
+        }
       : {}),
     ...(raw.resolve !== undefined
       ? { resolve: raw.resolve.map((b, i) => subBlock(b, `resolve[${i}]`)) }

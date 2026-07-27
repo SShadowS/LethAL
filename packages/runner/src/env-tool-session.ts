@@ -154,6 +154,42 @@ export async function startEnvToolSession(args: {
       Object.assign(resolved, await client.run(block, `resolve[${i}]`, supplied));
     }
 
+    // 2b. R34: a REUSED environment that has idled to a not-ready status resolves perfectly well
+    //     and hands back a DEAD endpoint — observed live 2026-07-26, where the gate environment
+    //     had idled to `Stopped` and the run died minutes later inside the transport with an
+    //     obscure error. Refuse here instead, naming the status the tool actually reported.
+    //     LethAL deliberately does NOT start it: the environment belongs to whoever configured it,
+    //     and starting someone else's environment unasked is worse than refusing. Scoped to the
+    //     reuse path by `createdEnvId === undefined` — an environment THIS call created was
+    //     already started and polled to `readyWhen.equals` above, and re-checking it here would
+    //     compare against a status `resolve` has no reason to read.
+    if (createdEnvId === undefined && cfg.requireStatus !== undefined) {
+      const expected = cfg.requireStatus.equals;
+      const status = resolved.status;
+      // Both of these are caller-contract violations, not user-facing config errors:
+      // `validateEnvToolConfig` rejects an empty `equals` and an expectation no `resolve` block
+      // feeds. Throw rather than skip the check — silently treating "nothing to compare" as
+      // "ready" is exactly the empty-vs-empty match this project treats as its signature bug.
+      if (expected === "") {
+        throw new EnvToolError(
+          "envTool.requireStatus.equals is empty — refusing to compare a reused environment's " +
+            "status against nothing (validateEnvToolConfig rejects this; it was skipped)",
+        );
+      }
+      if (status === undefined) {
+        throw new EnvToolError(
+          'envTool.requireStatus is declared but resolve produced no "status" — refusing to ' +
+            "assume the environment is ready (validateEnvToolConfig rejects this; it was skipped)",
+        );
+      }
+      if (status !== expected) {
+        const want = JSON.stringify(expected);
+        throw new EnvToolError(
+          `environment ${envId} reports status ${JSON.stringify(status)}, not ${want} (envTool.requireStatus.equals) — refusing to publish into an environment that is not ready. LethAL will not start an environment it does not own: start it with your own environment tool, wait until it reports ${want}, then re-run.`,
+        );
+      }
+    }
+
     // 3. expiry — refuse rather than warn: expiring mid-run lands as in-flight-unknown and
     //    durably quarantines the tier, which needs an operator clear-quarantine to undo.
     const expiresUtc = resolved.expiresUtc;

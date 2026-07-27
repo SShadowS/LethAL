@@ -675,6 +675,123 @@ describe("startEnvToolSession", () => {
     expect(startEnvErr).not.toContain("envTool.readyWhen");
   });
 
+  // ————————————————————————————————————————————————————————————————————————
+  // R34: a REUSED environment that has idled to a not-ready status resolved fine, handed back a
+  // dead endpoint, and aborted minutes later inside the transport. Observed live 2026-07-26 on the
+  // gate environment (`Stopped`, needing a manual start plus a ~420s wait). LethAL refuses instead
+  // of starting it: the environment belongs to whoever configured it.
+  // ————————————————————————————————————————————————————————————————————————
+  describe("a reused environment that is not ready (R34)", () => {
+    const statusResolve = [
+      {
+        command: ["env", "get", "{envId}", "--json"],
+        reads: { baseUrl: "url", expiresUtc: "expiresUtc", status: "status" },
+      },
+      {
+        command: ["env", "users", "{envId}", "--json"],
+        reads: { username: "0.username", password: "0.password" },
+      },
+    ];
+    const outWithStatus = (status: string): Record<string, string> => ({
+      ...resolveOut(),
+      "env get": `{"url":"https://host/env-4711","expiresUtc":"${FAR_FUTURE}","status":"${status}"}`,
+    });
+
+    /**
+     * Runs a session against the given config/output and settles it HERE, returning the outcome
+     * either way. The session promise is never handed back unsettled: a rejection that crosses an
+     * `await` boundary before the test attaches its handler surfaces as an unhandled rejection.
+     */
+    async function run(cfgOver: EnvToolConfigOverride, out: Record<string, string>) {
+      const h = harness(cfgOver, out);
+      const outcome = await startEnvToolSession({
+        cfg: h.cfg,
+        bcdevRaw: BCDEV_RAW,
+        projectDir: "C:/proj",
+        testDir: "C:/tests",
+        runId: "r-status",
+        client: h.client,
+        makePublisher: () => ({
+          publishFile: async (p: string) => {
+            h.published.push(p);
+          },
+        }),
+        verifyHarness: async () => {},
+        sleep: async () => {},
+        stateDir: await mkdtemp(join(tmpdir(), "lethal-envstate-")),
+      }).then(
+        (session) => ({ session, error: undefined as unknown }),
+        (error: unknown) => ({ session: undefined, error }),
+      );
+      return { ...h, ...outcome };
+    }
+
+    it("refuses a stopped environment, naming the status, before publishing anything", async () => {
+      const { error, published } = await run(
+        { resolve: statusResolve, requireStatus: { equals: "Running" } },
+        outWithStatus("Stopped"),
+      );
+      expect(error).toBeInstanceOf(EnvToolError);
+      const message = error instanceof Error ? error.message : String(error);
+      // The status the TOOL reported must appear: R34's whole complaint was an obscure transport
+      // error that never said what was actually wrong.
+      expect(message).toContain('"Stopped"');
+      expect(message).toContain('"Running"');
+      expect(message).toMatch(/start it with your own environment tool/);
+      // And the refusal must land BEFORE any publish — the point is not to pay for a deploy into
+      // a dead endpoint.
+      expect(published).toEqual([]);
+    });
+
+    it("proceeds when the reused environment reports the configured ready status", async () => {
+      const { session, error } = await run(
+        { resolve: statusResolve, requireStatus: { equals: "Running" } },
+        outWithStatus("Running"),
+      );
+      expect(error).toBeUndefined();
+      expect(session?.bcdev.baseUrl).toBe("https://host/env-4711");
+    });
+
+    it("uses the CONFIGURED ready value, not a hardcoded vendor string", async () => {
+      // Vendor-agnostic: a tool whose ready status is spelled "Active" must be accepted on
+      // "Active" and refused on "Running" — the exact inverse of Continia's vocabulary. A
+      // hardcoded "Running" anywhere in LethAL fails both halves of this.
+      const ok = await run(
+        { resolve: statusResolve, requireStatus: { equals: "Active" } },
+        outWithStatus("Active"),
+      );
+      expect(ok.error).toBeUndefined();
+      expect(ok.session?.bcdev.baseUrl).toBe("https://host/env-4711");
+
+      const refused = await run(
+        { resolve: statusResolve, requireStatus: { equals: "Active" } },
+        outWithStatus("Running"),
+      );
+      expect(
+        refused.error instanceof Error ? refused.error.message : String(refused.error),
+      ).toMatch(/reports status "Running", not "Active"/);
+    });
+
+    it("does not check a status when no expectation is declared (pre-R34 configs unaffected)", async () => {
+      // The tool reports `Stopped` and a resolve block even reads it — but nothing declared that
+      // it MATTERS, so behaviour is exactly as before R34: resolve, then carry on.
+      const { session, error } = await run({ resolve: statusResolve }, outWithStatus("Stopped"));
+      expect(error).toBeUndefined();
+      expect(session?.bcdev.baseUrl).toBe("https://host/env-4711");
+    });
+
+    it("does not apply to an environment this run created", async () => {
+      // Create-mode already ran startEnv and polled readyWhen to ready; the reuse guard must not
+      // fire a second time against whatever `resolve` happens to report.
+      const { session, error } = await run(
+        { envId: undefined, resolve: statusResolve, requireStatus: { equals: "Running" } },
+        outWithStatus("Stopped"),
+      );
+      expect(error).toBeUndefined();
+      expect(session?.createdEnvId).toBe("env-new");
+    });
+  });
+
   it("throws when the resolved baseUrl has no path segment to use as serverInstance (item 5)", async () => {
     await expect(
       start(
