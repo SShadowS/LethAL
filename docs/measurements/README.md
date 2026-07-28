@@ -340,3 +340,38 @@ quarantines the tier until an environment recycle + `force-reset-lease` + `clear
 - Mutant **M0013** does not terminate (stranded at both 30 s and 120 s budgets, R53's class). Each
   strand leaves an op marker that quarantines the tier, needing an environment recycle +
   `force-reset-lease` + `clear-quarantine` to clear.
+
+## R63 — why the hub credited tests with procedures they cannot execute
+
+Filed first as "`buildCoverageMap` matches coverage by codeunit, never by method" and **measured
+wrong before any fix was written** — the standing warning applied to the roadmap's own hypothesis.
+
+**Probe** (`packages/runner/scripts/probe-r63-hub-payload.ts`, raw `bcdev_test_run` payloads,
+sandbox fixture on Cronus281 and Document Output's codeunit 68929 on the BC28 environment):
+
+- A single-method run returns exactly ONE coverage entry, keyed by a STABLE per-method
+  `testMethodId` (`ClampPercentRuns` = -853933102 across calls and across single/multi-method
+  runs), with per-method-correct content. No multi-entry payload, no cross-call accumulation.
+- On DO, `ChangeAutomaticToManual_WhenNoLastDate_ShouldReturnFalse` — a test that provably exits
+  at its callee's first statement — is credited by the SERVER with 67 procedures, but its
+  target-codeunit (6175297) subset is exactly `ChangeAuatomaticToManual` + one unresolved
+  methodId: correct. The server's per-method attribution is fine.
+- The 11-procedure sets from the differential are EXACTLY `{the one genuinely-executed public} ∪
+  {all ten LOCAL procedures of 6175297}`. The expansion in `buildCoverageMap` — credit EVERY local
+  in the object when one methodId fails to resolve — manufactured them.
+
+**Why locals are unresolvable:** DO's compiled `SymbolReference.json` lists exactly the 5 public
+methods of 6175297 with hash-like ids (`ChangeAuatomaticToManual` = -1870514509). Locals carry the
+same hash-shaped ids (`ChangeAutomaticToManual` = 1921874138, pinned empirically — it is the only
+other 6175297 member in the test's entry) but appear NOWHERE in the symbol file, and the hash did
+not yield to java/djb2/fnv/crc32/dotnet-classic candidates (recorded so nobody re-tries blindly).
+
+**The fix and its own measured trap:** deleting the expansion (emit object-level instead) moved
+the fixture's three `LogAudit` mutants `survived -> no-coverage` live — a frozen-gate failure,
+because `coverageFilter`'s object-level fallback is trigger-only and `LogAudit` IS executed
+(weakly — the fixture's designed survivors). So the manifest now carries `procedureScope` and the
+fallback covers local-procedure mutants at object grain, gated on `=== "local"` so public
+procedures (whose member-miss means genuinely-unexecuted) are never widened. The un-gated version
+went red on three tests including the pre-existing doctrine pin "an ordinary procedure mutant is
+NOT credited by an object-level-only entry". Frozen gates re-verified per-mutant on the shipped
+code: `itest:bcdev` 3/10/3, `itest:tables` 64/9/2 (`untargetedTriggers` 0), `itest:alrunner` 3/13/0.
