@@ -1,4 +1,4 @@
-import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { MutantManifest } from "@lethal/schemata";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -25,8 +25,13 @@ import type { DeploymentVerifier } from "./deployment-verifier";
 import { CONTROL_APP_ID } from "./harness";
 import type { HarnessVerifier } from "./harness";
 import type { Lease } from "./lease";
+import { type LineMap, buildLineMap } from "./line-map";
 import type { AppPublisher } from "./publisher";
-import type { RunMutantTransport } from "./run-mutant-transport";
+import type {
+  FencedCoverageRow,
+  FencedCoverageStats,
+  RunMutantTransport,
+} from "./run-mutant-transport";
 
 export interface BcDevConfig {
   readonly mcpCommand: readonly string[]; // e.g. ["bun", "x", "bc-dev-mcp"] — argv to spawn
@@ -55,9 +60,20 @@ export interface BcDevConfig {
    * for the baseline run. Set to "none" when bc-dev-mcp cannot reach the environment (the env-tool
    * fallback, spec §Coverage): the session then runs every mutant against all green tests, which
    * is slower and never wrong. Per-mutant execution is `coverage: "none"` through the fenced
-   * transport in BOTH modes, so this changes baseline routing and selection only.
+   * transport in ALL modes, so this changes baseline routing and selection only.
+   *
+   * R58 adds `"fenced"`: per-procedure coverage collected on the SAME fenced session the mutants
+   * run on, via `RunMutantWithCoverage`. It exists because `"procedure"` measures the green set on
+   * the hub — a `GuiAllowed=Yes`/`ClientType=Web` session — while every verdict comes from a
+   * `GuiAllowed=No`/`ClientType=ODataV4` one, and the difference is not cosmetic (R55: 12 of 56
+   * Continia Document Output tests fail on the hub and pass on the fence, each taking its coverage
+   * out of the green set with it, for a measured 14 mutants wrongly reported `no-coverage`).
+   *
+   * Opt-in for now. Making it the default is gated on the differential per-mutant gate in
+   * `docs/superpowers/specs/2026-07-28-fenced-coverage-design.md`, not on unit tests: every frozen
+   * gate has a green baseline, so the whole mechanism is a no-op for all four of them.
    */
-  readonly coverageMode?: "procedure" | "none";
+  readonly coverageMode?: "procedure" | "none" | "fenced";
   /**
    * Explicit dev-endpoint port, passed through verbatim to bc-dev-mcp as `port`. Required whenever
    * the server has no port of its own AND the environment does not listen on bc-dev-mcp's OnPrem
@@ -147,6 +163,14 @@ export class BcDevMcpBackend implements ExecutionBackend {
   // artifact (and the source tree) rather than being derivable from the wire payload alone.
   private methodIndex: AppMethodIndex | undefined;
   private localProcedures: Map<string, readonly string[]> | undefined;
+  // R58 (`coverageMode: "fenced"` only): line -> procedure for THIS batch's artifact, built in
+  // deploy() from the same instrumented source alc compiled and scoped by that compiled package's
+  // own SymbolReference.json. Left undefined in every other mode — nothing builds it and nothing
+  // reads it.
+  private lineMap: LineMap | undefined;
+  // R58 (`coverageMode: "fenced"` only): the `SetFilter` expression over `Code Coverage."Object ID"`
+  // this batch's artifact declares — see `coverageObjectIdFilterOf`.
+  private coverageObjectIdFilter: string | undefined;
   // Layer 5C-A: activate() is bookkeeping — it records the intended mutant here, and run()
   // (coverage: "none") passes it to a single RunMutant OData call that activates+runs+clears
   // server-side. The transport is built at deploy() once the target's identity is known.
@@ -248,17 +272,22 @@ export class BcDevMcpBackend implements ExecutionBackend {
   }
 
   async status(): Promise<BackendStatus> {
-    // In "none" mode nothing in this session ever calls bc-dev-mcp — baseline and mutant runs both
-    // go through RunMutantTransport, and discovery is static from source. Probing it here would
-    // fail the session's readiness gate (orchestrator.ts) for a capability it does not use, so the
-    // readiness question becomes "does the control app answer", which is the thing that matters.
-    if ((this.cfg.coverageMode ?? "procedure") === "none") {
+    // In "none" AND "fenced" mode nothing in this session ever calls bc-dev-mcp — baseline and
+    // mutant runs both go through RunMutantTransport, and discovery is static from source. Probing
+    // it here would fail the session's readiness gate (orchestrator.ts) for a capability it does not
+    // use, so the readiness question becomes "does the control app answer", which is the thing that
+    // matters.
+    //
+    // The predicate is `!== "procedure"`, not `=== "none"`: written the other way (which it was),
+    // `"fenced"` fell through and probed bc-dev-mcp — the exact dependency the mode exists to
+    // remove, and a silent one, since the probe succeeds in every environment where the hub works
+    // and the mode would look fine until it met one where it does not.
+    const mode = this.cfg.coverageMode ?? "procedure";
+    if (mode !== "procedure") {
       const harnessVerifier = this.deployment?.harnessVerifier;
       if (harnessVerifier === undefined) {
-        throw new Error(
-          'BcDevMcpBackend: coverageMode "none" requires a harnessVerifier in BcDevDeployment — ' +
-            "it is the readiness probe in that mode",
-        );
+        const why = "requires a harnessVerifier in BcDevDeployment — it is the readiness probe";
+        throw new Error(`BcDevMcpBackend: coverageMode "${mode}" ${why} in that mode`);
       }
       try {
         const details = await harnessVerifier.verify();
@@ -405,6 +434,18 @@ export class BcDevMcpBackend implements ExecutionBackend {
     // run() call, from the exact artifact/source that produced them.
     this.methodIndex = await AppMethodIndex.fromAppFile(artifact.appPath);
     this.localProcedures = await findLocalProcedureNames(instrumentedDir);
+    // R58: same timing and the same two inputs as the hub's own indexes — the artifact that was
+    // just compiled, and the source it was compiled from — because a line number only means
+    // anything in the frame of the bytes that were published. `instrumentedDir`, not `staged`:
+    // `staged` differs from it only in `app.json` (the control dependency injection) and has
+    // already been deleted above.
+    if ((this.cfg.coverageMode ?? "procedure") === "fenced") {
+      this.lineMap = await buildLineMap(instrumentedDir, this.methodIndex.declaredObjects());
+      this.coverageObjectIdFilter = await coverageObjectIdFilterOf(instrumentedDir);
+    } else {
+      this.lineMap = undefined;
+      this.coverageObjectIdFilter = undefined;
+    }
 
     let publishOk = true;
     let publishError: string | undefined;
@@ -496,13 +537,20 @@ export class BcDevMcpBackend implements ExecutionBackend {
   }
 
   /**
-   * One test run. `coverage` discovery stays on the bc-dev hub (`bcdev_test_run`, one method per
-   * call — spec §10); a mutant execution (`coverage: "none"`) goes through the self-contained
-   * RunMutant OData call (activate + run one method + clear), which is 5B-classified and
-   * identity-validated by `RunMutantTransport`.
+   * One test run, ROUTED BY MODE — and the routing is the whole point of this method.
+   *
+   * `"procedure"`/`"line"` are hub modes: coverage discovery goes to bc-dev-mcp (`bcdev_test_run`,
+   * one method per call — spec §10). Everything else goes through the self-contained RunMutant
+   * OData call (activate + run one method + clear), which is 5B-classified and identity-validated
+   * by `RunMutantTransport`: `"none"` without coverage, `"fenced"` (R58) with it.
+   *
+   * The predicate enumerates the HUB modes rather than testing `!== "none"`, which is what it used
+   * to do. That older form sends a fenced baseline — which requests coverage — straight to the hub,
+   * i.e. `coverageMode: "fenced"` would have quietly gone on measuring the green set on exactly the
+   * session it exists to stop using, and every gate would still have passed.
    */
   async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
-    if (opts.coverage !== "none") return this.runOnHub(ref, opts);
+    if (opts.coverage === "procedure" || opts.coverage === "line") return this.runOnHub(ref, opts);
     return this.runViaTransport(ref, opts);
   }
 
@@ -519,10 +567,24 @@ export class BcDevMcpBackend implements ExecutionBackend {
         'BcDevMcpBackend: no lease bound — the orchestrator must call setLease() (Layer 5C-B1) before run(coverage:"none")',
       );
     }
+    const collectCoverage = opts.coverage === "fenced";
+    // Stated rather than assumed (spec §Error handling). A fenced-coverage run is BY CONSTRUCTION a
+    // baseline run — only the baseline passes `caps.coverage` through, every mutant run passes
+    // `"none"` — and the request below sends `this.pendingMutantId ?? ""`. A stale pending id would
+    // therefore run the ENTIRE baseline against a mutant, producing a green set measured on mutated
+    // code: not a crash, not an error verdict, just a wrong answer with full confidence.
+    if (collectCoverage && this.pendingMutantId !== null) {
+      const why =
+        "the orchestrator must activate(null) first, or the whole baseline " +
+        "would be measured against that mutant";
+      throw new Error(
+        `BcDevMcpBackend: a fenced-coverage run is a BASELINE run, but mutant ${this.pendingMutantId} is still pending — ${why}`,
+      );
+    }
     this.attemptSeq += 1;
     const opSeq = this.nextOpSeq;
     this.nextOpSeq += 1;
-    return transport.run({
+    const req = {
       ref,
       mutantId: this.pendingMutantId ?? "",
       attemptId: `a${this.attemptSeq}`,
@@ -533,7 +595,129 @@ export class BcDevMcpBackend implements ExecutionBackend {
         serverGeneration: lease.serverGeneration,
         opSeq,
       },
-    });
+      ...(this.coverageObjectIdFilter !== undefined
+        ? { coverageObjectIdFilter: this.coverageObjectIdFilter }
+        : {}),
+    } as const;
+    if (!collectCoverage) return transport.run(req);
+    const { verdict, coverageRows, coverageStats } = await transport.runWithCoverage(req);
+    if (coverageRows === undefined) return verdict; // non-`ran`: a refusal carries no coverage
+    await dumpFencedCoverage(ref, coverageRows, coverageStats);
+    return { ...verdict, coverage: this.buildFencedCoverageMap(coverageRows, ref, coverageStats) };
+  }
+
+  /**
+   * Collapses BC's LINE rows into the same `CoverageMap` shape the hub path produces (spec
+   * decision 3: no per-statement attribution now — but the raw rows stay available on the
+   * transport's result for the first time a line lands in no known range on a real project).
+   *
+   * Three rules, each chosen to fail toward "say less" rather than "guess" — a line attributed to
+   * the WRONG procedure yields a confident, non-empty, wrong covering set, which is the R29 failure
+   * that made 10 of 20 fixture survivors false:
+   *
+   *  1. A row for an object the artifact does not declare is SKIPPED, not an error and not an
+   *     entry. `CoverageArray` serializes the entire `Code Coverage` table — Base App, System App,
+   *     Test Runner, the test app, Continia Core, LethAL's own control codeunits — so most rows are
+   *     legitimately not ours. (The hub path skips them for the same reason and says so:
+   *     `AppMethodIndex.lookup` is "undefined when the object isn't in this app's own symbol
+   *     reference — callers should skip it.") Emitting them at object level instead would be
+   *     harmless downstream and would bloat every baseline verdict with hundreds of rows.
+   *  2. A row for a DECLARED object whose line falls in no procedure range — BC's line-0
+   *     object-level row, a trigger body, a var section, a blank line — emits an OBJECT-level
+   *     entry with no `procedure`. Never `""` (that key collides with a trigger mutant's own
+   *     `byMember` key) and never dropped: dropping it is precisely what made table triggers false
+   *     survivors.
+   *  3. A declared object with no line map at all THROWS, from `LineMap.lookup`. Its source is
+   *     source LethAL itself wrote and compiled.
+   *
+   * Deduplicated, because a covered procedure produces one row per executed LINE and the same
+   * `(object, procedure)` pair carries no more information the tenth time.
+   */
+  private buildFencedCoverageMap(
+    rows: readonly FencedCoverageRow[],
+    ref: TestMethodRef,
+    stats?: FencedCoverageStats,
+  ): CoverageMap {
+    const lineMap = this.lineMap;
+    if (lineMap === undefined) {
+      throw new Error(
+        "BcDevMcpBackend: no line map — deploy() must run (and succeed) before a fenced-coverage run",
+      );
+    }
+    const entries: CoverageEntry[] = [];
+    const seen = new Set<string>();
+    let declaredRows = 0;
+    let memberEntries = 0;
+    for (const row of rows) {
+      const objectType = objectTypeName(row.objectType);
+      if (!lineMap.declares(objectType, row.objectId)) continue; // rule 1
+      declaredRows += 1;
+      const procedure = lineMap.lookup(objectType, row.objectId, row.lineNo);
+      const key = `${objectType}:${row.objectId}:${procedure ?? ""}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      if (procedure !== undefined) memberEntries += 1;
+      entries.push({
+        objectType,
+        objectId: row.objectId,
+        ...(procedure !== undefined ? { procedure } : {}),
+      });
+    }
+    this.warnOnThinFencedCoverage(ref, rows.length, declaredRows, memberEntries, stats);
+    return { granularity: "procedure", entries };
+  }
+
+  /**
+   * Names the two ways fenced coverage can come back USELESS while every layer reports success.
+   *
+   * Both produce a non-empty, well-formed `CoverageMap` that simply attributes nothing, so their
+   * only downstream symptom is mutants landing `no-coverage` — which reads as "the test suite does
+   * not cover this code", the most reassuring possible misreading. Measured on Continia Document
+   * Output: the fenced baseline was 56/56 GREEN and still attributed just 2 procedures where the
+   * hub attributed 13, i.e. 92 mutants reported `no-coverage` against the hub's 15. Nothing in the
+   * verdicts, the counts or the exit code said anything was wrong.
+   *
+   * The two cases are distinguished on purpose, because they have opposite causes:
+   *
+   * - **rows arrived, but NONE for an object this artifact declares** — the server-side
+   *   `coverageObjectIdFilter` and the artifact's real object ids disagree, or the platform simply
+   *   did not record the target. Nothing about the line map is involved.
+   * - **rows for declared objects arrived, but no line resolved to a member** — the line map is the
+   *   suspect: a wrong base line shifts every range off its procedure, and the observations then
+   *   degrade to object level rather than naming anything.
+   *
+   * Reported per test rather than aggregated: the point is to name WHICH test, and a fenced
+   * baseline is tens of tests, not thousands. Silent when coverage looks healthy.
+   */
+  private warnOnThinFencedCoverage(
+    ref: TestMethodRef,
+    totalRows: number,
+    declaredRows: number,
+    memberEntries: number,
+    stats?: FencedCoverageStats,
+  ): void {
+    if (totalRows === 0 || memberEntries > 0) return;
+    const server =
+      stats !== undefined
+        ? ` (server scanned ${stats.scannedRows}, emitted ${stats.emittedRows} row(s) in ${stats.serializeMs} ms; the run itself took ${stats.runMs} ms)`
+        : "";
+    const where = `${ref.codeunitName}.${ref.method}`;
+    const consequence = "Every mutant covered only by this test will be reported no-coverage.";
+    if (declaredRows === 0) {
+      const blame =
+        "Suspect the object-id filter or the artifact's declared ids — not the line map, " +
+        "which was never consulted.";
+      console.warn(
+        `[lethal] fenced coverage for ${where}: ${totalRows} row(s) came back, NONE of them for an object this artifact declares${server}. ${consequence} ${blame}`,
+      );
+      return;
+    }
+    const blame =
+      "Suspect the line map's base-line frame — a shifted range degrades every observation " +
+      "to object level instead of naming a member.";
+    console.warn(
+      `[lethal] fenced coverage for ${where}: ${declaredRows} row(s) for objects this artifact declares, but NOT ONE line fell inside a known procedure${server}. ${consequence} ${blame}`,
+    );
   }
 
   private async runOnHub(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
@@ -708,6 +892,88 @@ export class BcDevMcpBackend implements ExecutionBackend {
     }
     return { granularity: "procedure", entries };
   }
+}
+
+/**
+ * The artifact's own `idRanges`, as one AL `SetFilter` expression over `Code Coverage."Object ID"`
+ * (e.g. `79000..79199`, or `6175200..6175499|79000..79199` for a multi-range app).
+ *
+ * MEASURED, and the reason this exists at all: unfiltered, `RunMutantWithCoverage` does not return
+ * headers within 300 s even for a fixture whose test body is three lines — the `Code Coverage` table
+ * holds every line the platform recorded during the run, which inside `RunMutant` is the whole Test
+ * Runner and Base App machinery. See `RunMutantRequest.coverageObjectIdFilter`.
+ *
+ * Reads the INSTRUMENTED dir's own `app.json`, which is what alc compiled: `stageForCompile`'s
+ * sibling copy differs from it only in `dependencies`.
+ *
+ * Throws when the manifest declares no range. That is deliberate rather than "fall back to no
+ * filter": the empty filter is precisely the shape that hangs, so degrading to it would turn a
+ * legible manifest problem into a 300 s timeout classified as an in-flight-unknown, i.e. a durable
+ * tier quarantine.
+ */
+async function coverageObjectIdFilterOf(instrumentedDir: string): Promise<string> {
+  const appJsonPath = join(instrumentedDir, "app.json");
+  let manifest: Record<string, unknown>;
+  try {
+    manifest = JSON.parse(await readFile(appJsonPath, "utf8")) as Record<string, unknown>;
+  } catch (err) {
+    throw new ArtifactPrepareError(
+      `cannot read ${appJsonPath} for the fenced-coverage object filter: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  // AL accepts both the plural array and the legacy singular object; a real project may use either.
+  const single = manifest.idRange;
+  const ranges = Array.isArray(manifest.idRanges)
+    ? (manifest.idRanges as unknown[])
+    : single !== undefined
+      ? [single]
+      : [];
+  const parts: string[] = [];
+  for (const r of ranges) {
+    const { from, to } = (r ?? {}) as { from?: unknown; to?: unknown };
+    if (typeof from === "number" && typeof to === "number") parts.push(`${from}..${to}`);
+  }
+  if (parts.length === 0) {
+    const why =
+      'declares no usable idRanges, so coverageMode "fenced" has no object filter to send. ' +
+      "An unfiltered coverage request does not return within 300 s (measured), so this refuses " +
+      "rather than degrading into a timeout that reads as a stranded container.";
+    throw new ArtifactPrepareError(`${appJsonPath} ${why}`);
+  }
+  return parts.join("|");
+}
+
+/**
+ * Spec decision 3: keep the RAW line rows as a diagnostic artifact, not only their collapsed
+ * `CoverageMap` form. Opt-in via `LETHAL_FENCED_COVERAGE_DUMP=<path>` (JSONL, one object per test).
+ *
+ * Earned, not speculative. On Continia Document Output the fenced baseline was 56/56 green, every
+ * test resolved at least one member, no diagnostic fired — and the union across all 56 tests was a
+ * single procedure where the hub named thirteen. Nothing in the verdicts, the counts, the warnings
+ * or the exit code distinguished that from "the suite genuinely covers one procedure", and the only
+ * thing that could have was the line numbers BC actually sent.
+ *
+ * Best-effort by construction: this is a diagnostic, and a failed dump must never change a verdict
+ * or abort a run that is otherwise fine.
+ */
+async function dumpFencedCoverage(
+  ref: TestMethodRef,
+  rows: readonly FencedCoverageRow[],
+  stats: FencedCoverageStats | undefined,
+): Promise<void> {
+  const path = process.env.LETHAL_FENCED_COVERAGE_DUMP;
+  if (path === undefined || path === "") return;
+  const record = {
+    test: `${ref.codeunitName}.${ref.method}`,
+    ...(stats !== undefined ? { stats } : {}),
+    rows,
+  };
+  await appendFile(
+    path,
+    `${JSON.stringify(record)}
+`,
+    "utf8",
+  ).catch(() => {});
 }
 
 function isToolError(res: unknown): boolean {

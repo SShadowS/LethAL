@@ -114,8 +114,25 @@ export interface TestVerdict {
   readonly fencedOp?: { readonly attemptId: string; readonly opSeq: number };
 }
 
+/**
+ * How a backend sources coverage — a ROUTING axis, not a granularity one. `"none"` already meant
+ * "the baseline runs through the fenced RunMutant transport and every mutant runs against all green
+ * tests"; `"fenced"` (R58) is the same runner with coverage collected on it.
+ *
+ * | value | baseline runner | per-procedure coverage |
+ * |---|---|---|
+ * | `"procedure"` | bc-dev-mcp hub (`GuiAllowed=Yes`, `ClientType=Web`) | yes |
+ * | `"fenced"` | fenced `RunMutantWithCoverage` (`GuiAllowed=No`, `ClientType=ODataV4`) | yes |
+ * | `"none"` | fenced `RunMutant` | no |
+ *
+ * `"fenced"` exists because the mutants ALWAYS run fenced, so `"procedure"` measures the green set
+ * on a different session type than the one that produces verdicts (R55: 12 of 56 Continia Document
+ * Output tests fail on the hub and pass on the fence, taking their coverage with them).
+ */
+export type CoverageMode = "none" | "procedure" | "line" | "fenced";
+
 export interface BackendCapabilities {
-  readonly coverage: "none" | "procedure" | "line";
+  readonly coverage: CoverageMode;
   readonly deploy: "publish" | "none";
   readonly isolation: "session" | "full-reset";
   readonly authoritative: boolean;
@@ -127,7 +144,7 @@ export interface BackendStatus {
 }
 
 export interface RunOpts {
-  readonly coverage: "none" | "procedure" | "line";
+  readonly coverage: CoverageMode;
   readonly timeoutMs: number;
 }
 

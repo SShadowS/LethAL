@@ -1,4 +1,6 @@
-import { ALNodeKind, type ALSyntaxNode } from "@lethal/engine";
+import { readFile, readdir } from "node:fs/promises";
+import { join } from "node:path";
+import { ALNodeKind, type ALSyntaxNode, initParser, parseAL, wrapRoot } from "@lethal/engine";
 
 /**
  * R58: maps a BC `Code Coverage` row's `(objectType, objectId, lineNo)` to the procedure that owns
@@ -78,9 +80,19 @@ export class LineMap {
     private readonly declared: ReadonlySet<string>,
   ) {
     for (const e of entries) {
-      this.byObject.set(keyOf(e.objectType, e.objectId), {
-        procedures: procedureSpans(e.root, e.baseLine),
-      });
+      const key = keyOf(e.objectType, e.objectId);
+      // Undeclared objects are not merely unqueried — they are never INDEXED. `buildLineMap` parses
+      // every `.al` in the batch dir, and `prepareBatchProject` deliberately copies Document
+      // Output's 137 `.dependencies` sources (R39) whose objects are published by their own apps.
+      // Indexing those would let a real coverage row resolve to a plausible-but-wrong member name
+      // from text that is not what the server actually runs — R29 with extra steps. Filtering here
+      // rather than at the call site makes that structurally impossible for every future caller.
+      //
+      // AFTER `fileLineMapEntries` computed the base lines, never before: objects PARTITION the
+      // file, so an undeclared object still consumes the lines its declared neighbours are numbered
+      // relative to.
+      if (!declared.has(key)) continue;
+      this.byObject.set(key, { procedures: procedureSpans(e.root, e.baseLine) });
     }
   }
 
@@ -112,10 +124,11 @@ export class LineMap {
     const entry = this.byObject.get(key);
     if (entry === undefined) {
       if (this.declared.has(key)) {
+        const why =
+          "every declared object's source is written by LethAL and must be mappable. " +
+          "This is a LethAL bug, not a problem with the project under test.";
         throw new Error(
-          `line-map: the compiled artifact declares ${key} but no line map was built for it — ` +
-            "every declared object's source is written by LethAL and must be mappable. This is a " +
-            "LethAL bug, not a problem with the project under test.",
+          `line-map: the compiled artifact declares ${key} but no line map was built for it — ${why}`,
         );
       }
       return undefined; // not ours: platform/base-app/test-app code incidentally covered
@@ -190,4 +203,76 @@ export function fileLineMapEntries(
     previousEndLine = node.endPosition.row + 1;
   }
   return entries;
+}
+
+/**
+ * The grammar's object-declaration node kinds, mapped to the type NAMES coverage rows key on.
+ *
+ * The values must match `objectTypeName`'s (app-package.ts) exactly — a coverage row arrives as a
+ * BC integer, is named by that function, and is then looked up here; a spelling that disagrees
+ * would key `"Xmlport:50011"` against `"XmlPort:50011"` and resolve nothing, which is
+ * indistinguishable from "the test covered no member of this object".
+ *
+ * Probed against the vendored tree-sitter-al grammar rather than read off the kind list:
+ * `ALNodeKind` names only six of the eight, but the grammar does produce `query_declaration` and
+ * `xmlport_declaration`, each with the same `object_id` field. Enum/interface/permissionset
+ * declarations are absent deliberately — `AppMethodIndex.declaredObjects()` does not report them
+ * either, so they are never queried and never trip the declared-but-unmapped throw.
+ */
+const OBJECT_KIND_TO_TYPE_NAME: Readonly<Record<string, string>> = {
+  [ALNodeKind.table]: "Table",
+  [ALNodeKind.report]: "Report",
+  [ALNodeKind.codeunit]: "Codeunit",
+  xmlport_declaration: "XmlPort",
+  [ALNodeKind.page]: "Page",
+  query_declaration: "Query",
+  [ALNodeKind.pageextension]: "PageExtension",
+  [ALNodeKind.tableextension]: "TableExtension",
+};
+
+/** The `(objectType, objectId)` of an object declaration node, or null for anything else. */
+export function objectIdentityOf(
+  node: ALSyntaxNode,
+): { objectType: string; objectId: number } | null {
+  const objectType = OBJECT_KIND_TO_TYPE_NAME[node.kind];
+  if (objectType === undefined) return null;
+  const idNode = node.childForFieldName("object_id");
+  if (idNode === null) return null;
+  const objectId = Number.parseInt(idNode.text, 10);
+  if (Number.isNaN(objectId)) return null;
+  return { objectType, objectId };
+}
+
+/**
+ * Builds the line map for one compiled artifact from the source it was compiled FROM.
+ *
+ * `projectDir` is the instrumented batch dir — the exact text `alc` read, so the lines BC reports
+ * are lines of this source. (Unknown #6 in the spec: the published artifact IS the instrumented
+ * source, so any line that resolves at all resolves in the right frame; the check is that the
+ * resolved names are sane, not that the frame might be the original file's.)
+ *
+ * `declared` comes from the compiled package's own `SymbolReference.json`
+ * (`AppMethodIndex.declaredObjects()`) and is the ONLY scope: every other object parsed here —
+ * copied `.dependencies` sources, anything alc ignored — is dropped by the `LineMap` constructor.
+ *
+ * Parses every `.al` in the dir, exactly as `generateMutationSet` already does over the same source
+ * tree, rather than pre-filtering by a regex: a regex that misses an object header would leave a
+ * DECLARED object unmapped, which is rule 2's throw — a loud abort of a real run in exchange for
+ * saving a parse.
+ */
+export async function buildLineMap(
+  projectDir: string,
+  declared: ReadonlySet<string>,
+): Promise<LineMap> {
+  await initParser();
+  const files = (await readdir(projectDir, { recursive: true }))
+    .map((e) => e.toString())
+    .filter((e) => e.toLowerCase().endsWith(".al"))
+    .sort();
+  const entries: LineMapEntry[] = [];
+  for (const rel of files) {
+    const source = await readFile(join(projectDir, rel), "utf8");
+    entries.push(...fileLineMapEntries(wrapRoot(parseAL(source)), objectIdentityOf));
+  }
+  return new LineMap(entries, declared);
 }

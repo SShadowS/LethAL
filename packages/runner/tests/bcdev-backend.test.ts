@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1482,5 +1482,566 @@ describe("port in connectionParams", () => {
     );
     await backend.status();
     expect(seenArgs.port).toBe(443);
+  });
+});
+/**
+ * R58 — `coverageMode: "fenced"`: per-procedure coverage collected on the SAME fenced session the
+ * mutants run on. The three routing bugs these tests pin were all SILENT: each left the mode
+ * looking configured and behaving like the old one.
+ */
+describe('coverageMode "fenced" (R58)', () => {
+  /**
+   * A fenced transport factory: records the URL and body of each call and answers with an
+   * identity-echoing `ran` result carrying `coverageRows`. A REAL `RunMutantTransport` (not a stub)
+   * so the action-name selection and the coverage parsing are both exercised end to end.
+   */
+  function fencedRunMutantFactory(
+    calls: Array<{ url: string; body: Record<string, unknown> }>,
+    coverageRows: unknown,
+  ) {
+    const captureFetch = (async (url: unknown, init?: RequestInit) => {
+      const b = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      calls.push({ url: String(url), body: b });
+      const inner = {
+        status: "ran",
+        targetAppId: b.targetAppId,
+        artifactId: b.artifactId,
+        attemptId: b.attemptId,
+        mutantId: b.mutantId,
+        codeunitId: b.testCodeunitId,
+        method: b.testMethod,
+        codeunitResults: JSON.stringify({ testResults: [{ method: b.testMethod, result: 2 }] }),
+        coverage: coverageRows,
+      };
+      return new Response(JSON.stringify({ value: JSON.stringify(inner) }), { status: 200 });
+    }) as typeof fetch;
+    return (targetAppId: string, artifactId: string) =>
+      new RunMutantTransport(
+        { baseUrl: "http://bc:7048/BC", company: "CRONUS", username: "u", password: "p" },
+        targetAppId,
+        artifactId,
+        captureFetch,
+      );
+  }
+
+  /** One codeunit whose lines are counted out, so the assertions below name real boundaries.
+   *  1 codeunit 79100 "Ours"   2 {   3 procedure Alpha()   4 begin   5 end;   6 } */
+  const OURS_AL = `codeunit 79100 "Ours"
+{
+    procedure Alpha()
+    begin
+    end;
+}
+`;
+
+  /**
+   * A deployed fenced backend over a REAL instrumented dir, so the line map is built from source
+   * the way production builds it, and scoped by the compiled package's own symbol reference.
+   */
+  async function fencedBackend(
+    calls: Array<{ url: string; body: Record<string, unknown> }>,
+    coverageRows: unknown,
+    idRangesOverride?: Record<string, unknown>,
+  ): Promise<{ backend: BcDevMcpBackend; cleanup: () => Promise<void> }> {
+    const outputDir = await mkdtemp(join(tmpdir(), "lethal-fenced-test-"));
+    await writeDeployInputs(outputDir);
+    // The fenced path reads the artifact's OWN idRanges out of this file to build the server-side
+    // `Code Coverage."Object ID"` filter — see `coverageObjectIdFilterOf`.
+    const appJsonPath = join(outputDir, "app.json");
+    const app = JSON.parse(await readFile(appJsonPath, "utf8")) as Record<string, unknown>;
+    await Bun.write(
+      appJsonPath,
+      JSON.stringify({
+        ...app,
+        ...(idRangesOverride ?? { idRanges: [{ from: 79000, to: 79199 }] }),
+      }),
+    );
+    await Bun.write(join(outputDir, "Ours.Codeunit.al"), OURS_AL);
+    const backend = new BcDevMcpBackend(
+      {
+        mcpCommand: ["unused"],
+        project: "/al",
+        server: "http://bc",
+        serverInstance: "BC",
+        coverageMode: "fenced",
+        ...(await controlStaging(outputDir)),
+      },
+      () => {
+        throw new Error("bc-dev-mcp must not be contacted in fenced mode");
+      },
+      makeDeployment(outputDir, { Codeunits: [{ Id: 79100, Name: "Ours" }] }),
+      fencedRunMutantFactory(calls, coverageRows),
+    );
+    await backend.deploy(outputDir);
+    backend.setLease(FAKE_LEASE);
+    await backend.activate(null);
+    return {
+      backend,
+      cleanup: async () => {
+        await rmStaged(outputDir);
+        await rm(outputDir, { recursive: true, force: true });
+      },
+    };
+  }
+
+  test("capabilities() reports the mode verbatim, still authoritative", () => {
+    const backend = new BcDevMcpBackend({ ...baseConfig(), coverageMode: "fenced" });
+    expect(backend.capabilities().coverage).toBe("fenced");
+    expect(backend.capabilities().authoritative).toBe(true);
+  });
+
+  test("status() probes the harness, NEVER bc-dev-mcp — the dependency the mode removes", async () => {
+    // The bug this pins: `status()` branched on `=== "none"`, so fenced fell through and probed the
+    // hub. It would have succeeded everywhere the hub works and failed only where the mode matters.
+    let harnessCalls = 0;
+    const harnessVerifier = {
+      verify: async () => {
+        harnessCalls += 1;
+        return { serverGeneration: "g1" } as never;
+      },
+    };
+    const backend = new BcDevMcpBackend(
+      { ...baseConfig(), coverageMode: "fenced" },
+      () => {
+        throw new Error("bc-dev-mcp must not be contacted in fenced mode");
+      },
+      { ...deploymentStub(), harnessVerifier } as never,
+    );
+    const status = await backend.status();
+    expect(status.ok).toBe(true);
+    expect(harnessCalls).toBe(1);
+  });
+
+  test("a fenced run goes to RunMutantWithCoverage, not the hub", async () => {
+    // The bug this pins: `run()` dispatched on `opts.coverage !== "none"`, so a fenced baseline —
+    // which requests coverage — went to the hub, and the mode measured exactly the session it
+    // exists to stop using. The MCP transport factory above throws if it is ever contacted.
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const { backend, cleanup } = await fencedBackend(calls, []);
+    try {
+      const v = await backend.run(ref, { coverage: "fenced", timeoutMs: 1000 });
+      expect(v.outcome).toBe("pass");
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.url).toContain("LethALControl_RunMutantWithCoverage");
+      expect(calls[0]?.body.mutantId).toBe(""); // baseline
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("maps a line inside a procedure to a member entry, and line 0 to an object entry", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const { backend, cleanup } = await fencedBackend(calls, [
+      { objectType: 5, objectId: 79100, lineNo: 0, hits: 1 },
+      { objectType: 5, objectId: 79100, lineNo: 3, hits: 1 },
+      { objectType: 5, objectId: 79100, lineNo: 5, hits: 2 },
+    ]);
+    try {
+      const v = await backend.run(ref, { coverage: "fenced", timeoutMs: 1000 });
+      expect(v.coverage?.granularity).toBe("procedure");
+      expect(v.coverage?.entries).toEqual([
+        { objectType: "Codeunit", objectId: 79100 },
+        { objectType: "Codeunit", objectId: 79100, procedure: "Alpha" },
+      ]);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("rows for objects the artifact does not declare are SKIPPED, not errors and not entries", async () => {
+    // `CoverageArray` serializes the whole Code Coverage table — Base App, System App, Test Runner,
+    // Continia Core. Treating those as errors aborts every real run; emitting them bloats every
+    // baseline verdict with hundreds of rows that can never match a mutant.
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const { backend, cleanup } = await fencedBackend(calls, [
+      { objectType: 5, objectId: 1, hits: 9, lineNo: 40 }, // Base App codeunit
+      { objectType: 1, objectId: 18, hits: 4, lineNo: 100 }, // Table Customer
+      { objectType: 5, objectId: 79100, lineNo: 4, hits: 1 },
+    ]);
+    try {
+      const v = await backend.run(ref, { coverage: "fenced", timeoutMs: 1000 });
+      expect(v.coverage?.entries).toEqual([
+        { objectType: "Codeunit", objectId: 79100, procedure: "Alpha" },
+      ]);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("a covered procedure's many line rows collapse to ONE entry", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const { backend, cleanup } = await fencedBackend(
+      calls,
+      [3, 4, 5].map((lineNo) => ({ objectType: 5, objectId: 79100, lineNo, hits: 1 })),
+    );
+    try {
+      const v = await backend.run(ref, { coverage: "fenced", timeoutMs: 1000 });
+      expect(v.coverage?.entries).toEqual([
+        { objectType: "Codeunit", objectId: 79100, procedure: "Alpha" },
+      ]);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("no entry ever carries a blank procedure — it would collide with a trigger mutant's key", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const { backend, cleanup } = await fencedBackend(calls, [
+      { objectType: 5, objectId: 79100, lineNo: 2, hits: 1 },
+    ]);
+    try {
+      const v = await backend.run(ref, { coverage: "fenced", timeoutMs: 1000 });
+      for (const e of v.coverage?.entries ?? []) expect(e.procedure).not.toBe("");
+      expect(v.coverage?.entries).toEqual([{ objectType: "Codeunit", objectId: 79100 }]);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("a fenced-coverage run with a mutant still pending REFUSES — it would be a mutated baseline", async () => {
+    // `runViaTransport` sends `pendingMutantId ?? ""`. A stale id runs the ENTIRE baseline against
+    // a mutant: no crash, no error verdict, just a green set measured on mutated code.
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const { backend, cleanup } = await fencedBackend(calls, []);
+    try {
+      await backend.activate("M0007");
+      await expect(backend.run(ref, { coverage: "fenced", timeoutMs: 1000 })).rejects.toThrow(
+        /BASELINE run, but mutant M0007 is still pending/,
+      );
+      expect(calls).toHaveLength(0); // never dispatched
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("mutant runs are unaffected: the plain RunMutant action still carries them", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const { backend, cleanup } = await fencedBackend(calls, []);
+    try {
+      await backend.activate("M0007");
+      const v = await backend.run(ref, { coverage: "none", timeoutMs: 1000 });
+      expect(v.outcome).toBe("pass");
+      expect(v.coverage).toBeUndefined();
+      expect(calls[0]?.url).toContain("LethALControl_RunMutant?");
+      expect(calls[0]?.url).not.toContain("WithCoverage");
+      expect(calls[0]?.body.mutantId).toBe("M0007");
+    } finally {
+      await cleanup();
+    }
+  });
+});
+/**
+ * R58's server-side object filter, and the reason the client half could not ship without it.
+ *
+ * MEASURED 2026-07-28 on Cronus281, `fixtures/sandbox-app`, control app 1.0.0.8: unfiltered,
+ * `RunMutantWithCoverage` did not return HEADERS within 300 s, and the fetch that gave up was
+ * classified `in-flight-unknown`, i.e. a durable tier quarantine. The whole test body is three
+ * lines — the cost is not the target's code, it is the `Code Coverage` table holding every line the
+ * platform recorded during the run (the entire Test Runner and Base App machinery). Filtered to the
+ * artifact's own `idRanges` the same call answered in **126 ms with 1,546 bytes**.
+ *
+ * Only rows for objects the artifact DECLARES can ever be attributed (`buildFencedCoverageMap` rule
+ * 1 skips every other one), so the filter throws away nothing the client could have used. It is not
+ * load-bearing for CORRECTNESS either — the client re-checks each row against the compiled
+ * package's `SymbolReference.json` — which is why a too-wide filter costs only bytes.
+ */
+describe("fenced coverage — the server-side object-id filter", () => {
+  function captureFactory(calls: Array<{ url: string; body: Record<string, unknown> }>) {
+    const captureFetch = (async (url: unknown, init?: RequestInit) => {
+      const b = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      calls.push({ url: String(url), body: b });
+      const inner = {
+        status: "ran",
+        targetAppId: b.targetAppId,
+        artifactId: b.artifactId,
+        attemptId: b.attemptId,
+        mutantId: b.mutantId,
+        codeunitId: b.testCodeunitId,
+        method: b.testMethod,
+        codeunitResults: JSON.stringify({ testResults: [{ method: b.testMethod, result: 2 }] }),
+        coverage: [],
+      };
+      return new Response(JSON.stringify({ value: JSON.stringify(inner) }), { status: 200 });
+    }) as typeof fetch;
+    return (targetAppId: string, artifactId: string) =>
+      new RunMutantTransport(
+        { baseUrl: "http://bc:7048/BC", company: "CRONUS", username: "u", password: "p" },
+        targetAppId,
+        artifactId,
+        captureFetch,
+      );
+  }
+
+  const OURS_AL = `codeunit 79100 "Ours"
+{
+    procedure Alpha()
+    begin
+    end;
+}
+`;
+
+  async function deployFenced(
+    calls: Array<{ url: string; body: Record<string, unknown> }>,
+    appJsonExtra: Record<string, unknown>,
+  ): Promise<{ backend: BcDevMcpBackend; cleanup: () => Promise<void> }> {
+    const outputDir = await mkdtemp(join(tmpdir(), "lethal-fenced-filter-"));
+    await writeDeployInputs(outputDir);
+    const appJsonPath = join(outputDir, "app.json");
+    const app = JSON.parse(await readFile(appJsonPath, "utf8")) as Record<string, unknown>;
+    await Bun.write(appJsonPath, JSON.stringify({ ...app, ...appJsonExtra }));
+    await Bun.write(join(outputDir, "Ours.Codeunit.al"), OURS_AL);
+    const backend = new BcDevMcpBackend(
+      {
+        mcpCommand: ["unused"],
+        project: "/al",
+        server: "http://bc",
+        serverInstance: "BC",
+        coverageMode: "fenced",
+        ...(await controlStaging(outputDir)),
+      },
+      () => {
+        throw new Error("bc-dev-mcp must not be contacted in fenced mode");
+      },
+      makeDeployment(outputDir, { Codeunits: [{ Id: 79100, Name: "Ours" }] }),
+      captureFactory(calls),
+    );
+    await backend.deploy(outputDir);
+    backend.setLease(FAKE_LEASE);
+    await backend.activate(null);
+    return {
+      backend,
+      cleanup: async () => {
+        await rmStaged(outputDir);
+        await rm(outputDir, { recursive: true, force: true });
+      },
+    };
+  }
+
+  test("sends the artifact's own idRanges as an AL SetFilter expression", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const { backend, cleanup } = await deployFenced(calls, {
+      idRanges: [{ from: 79000, to: 79199 }],
+    });
+    try {
+      await backend.run(ref, { coverage: "fenced", timeoutMs: 1000 });
+      expect(calls[0]?.body.coverageObjectIdFilter).toBe("79000..79199");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("joins several ranges with AL's OR separator", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const { backend, cleanup } = await deployFenced(calls, {
+      idRanges: [
+        { from: 6175200, to: 6175499 },
+        { from: 79000, to: 79199 },
+      ],
+    });
+    try {
+      await backend.run(ref, { coverage: "fenced", timeoutMs: 1000 });
+      expect(calls[0]?.body.coverageObjectIdFilter).toBe("6175200..6175499|79000..79199");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("accepts the legacy singular idRange a real project may still declare", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const { backend, cleanup } = await deployFenced(calls, {
+      idRange: { from: 50000, to: 50099 },
+    });
+    try {
+      await backend.run(ref, { coverage: "fenced", timeoutMs: 1000 });
+      expect(calls[0]?.body.coverageObjectIdFilter).toBe("50000..50099");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("a manifest with NO range refuses at deploy rather than sending an empty filter", async () => {
+    // An empty filter is not a benign default — it is the 300 s hang, which the client classifies
+    // `in-flight-unknown` and turns into a durable tier quarantine. Failing here names the manifest.
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    await expect(deployFenced(calls, { idRanges: [] })).rejects.toThrow(
+      /declares no usable idRanges/,
+    );
+  });
+
+  test("the plain RunMutant body never carries the filter — its OData signature has no such param", async () => {
+    // BC validates an action's request shape BEFORE its body runs (R25), so an extra field on the
+    // unchanged action is a request-shape rejection, not an ignored key.
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const { backend, cleanup } = await deployFenced(calls, {
+      idRanges: [{ from: 79000, to: 79199 }],
+    });
+    try {
+      await backend.activate("M0007");
+      await backend.run(ref, { coverage: "none", timeoutMs: 1000 });
+      expect(calls[0]?.url).not.toContain("WithCoverage");
+      expect("coverageObjectIdFilter" in (calls[0]?.body ?? {})).toBe(false);
+    } finally {
+      await cleanup();
+    }
+  });
+});
+/**
+ * The two ways fenced coverage comes back USELESS while every layer reports success.
+ *
+ * Neither is an error, neither changes a count, and both surface downstream only as mutants landing
+ * `no-coverage` — which reads as "the suite does not cover this code", the reassuring misreading.
+ * Measured on Continia Document Output: a 56/56 GREEN fenced baseline attributed 2 procedures where
+ * the hub attributed 13, and nothing anywhere said so.
+ */
+describe("fenced coverage — the thin-coverage diagnostic", () => {
+  function factory(calls: Array<{ url: string; body: Record<string, unknown> }>, inner: unknown) {
+    const captureFetch = (async (url: unknown, init?: RequestInit) => {
+      const b = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      calls.push({ url: String(url), body: b });
+      const payload = {
+        status: "ran",
+        targetAppId: b.targetAppId,
+        artifactId: b.artifactId,
+        attemptId: b.attemptId,
+        mutantId: b.mutantId,
+        codeunitId: b.testCodeunitId,
+        method: b.testMethod,
+        codeunitResults: JSON.stringify({ testResults: [{ method: b.testMethod, result: 2 }] }),
+        ...(inner as Record<string, unknown>),
+      };
+      return new Response(JSON.stringify({ value: JSON.stringify(payload) }), { status: 200 });
+    }) as typeof fetch;
+    return (targetAppId: string, artifactId: string) =>
+      new RunMutantTransport(
+        { baseUrl: "http://bc:7048/BC", company: "CRONUS", username: "u", password: "p" },
+        targetAppId,
+        artifactId,
+        captureFetch,
+      );
+  }
+
+  const OURS_AL = `codeunit 79100 "Ours"
+{
+    procedure Alpha()
+    begin
+    end;
+}
+`;
+
+  async function deployed(inner: unknown): Promise<{
+    backend: BcDevMcpBackend;
+    cleanup: () => Promise<void>;
+  }> {
+    const outputDir = await mkdtemp(join(tmpdir(), "lethal-thin-"));
+    await writeDeployInputs(outputDir);
+    const appJsonPath = join(outputDir, "app.json");
+    const app = JSON.parse(await readFile(appJsonPath, "utf8")) as Record<string, unknown>;
+    await Bun.write(
+      appJsonPath,
+      JSON.stringify({ ...app, idRanges: [{ from: 79000, to: 79199 }] }),
+    );
+    await Bun.write(join(outputDir, "Ours.Codeunit.al"), OURS_AL);
+    const backend = new BcDevMcpBackend(
+      {
+        mcpCommand: ["unused"],
+        project: "/al",
+        server: "http://bc",
+        serverInstance: "BC",
+        coverageMode: "fenced",
+        ...(await controlStaging(outputDir)),
+      },
+      () => {
+        throw new Error("bc-dev-mcp must not be contacted in fenced mode");
+      },
+      makeDeployment(outputDir, { Codeunits: [{ Id: 79100, Name: "Ours" }] }),
+      factory([], inner),
+    );
+    await backend.deploy(outputDir);
+    backend.setLease(FAKE_LEASE);
+    await backend.activate(null);
+    return {
+      backend,
+      cleanup: async () => {
+        await rmStaged(outputDir);
+        await rm(outputDir, { recursive: true, force: true });
+      },
+    };
+  }
+
+  test("rows arrived but NONE for a declared object — blames the filter, not the line map", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const { backend, cleanup } = await deployed({
+      coverage: [
+        { objectType: 5, objectId: 1, lineNo: 40, hits: 3 },
+        { objectType: 1, objectId: 18, lineNo: 100, hits: 1 },
+      ],
+      coverageScannedRows: 2,
+      coverageEmittedRows: 2,
+      coverageRunMs: 900,
+      coverageSerializeMs: 4,
+    });
+    try {
+      await backend.run(ref, { coverage: "fenced", timeoutMs: 1000 });
+      const said = warn.mock.calls.map((c) => String(c[0])).join("\n");
+      expect(said).toContain("NONE of them for an object this artifact declares");
+      expect(said).toContain("server scanned 2, emitted 2");
+      // The distinction is the whole point: the line map was never consulted here.
+      expect(said).toContain("not the line map, which was never consulted");
+    } finally {
+      warn.mockRestore();
+      await cleanup();
+    }
+  });
+
+  test("declared-object rows arrived but nothing resolved to a member — blames the line map", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    // Object-level row (line 0) plus a line past the object: both real, neither nameable.
+    const { backend, cleanup } = await deployed({
+      coverage: [
+        { objectType: 5, objectId: 79100, lineNo: 0, hits: 1 },
+        { objectType: 5, objectId: 79100, lineNo: 999, hits: 1 },
+      ],
+    });
+    try {
+      await backend.run(ref, { coverage: "fenced", timeoutMs: 1000 });
+      const said = warn.mock.calls.map((c) => String(c[0])).join("\n");
+      expect(said).toContain("NOT ONE line fell inside a known procedure");
+      expect(said).toContain("base-line frame");
+    } finally {
+      warn.mockRestore();
+      await cleanup();
+    }
+  });
+
+  test("silent when even one line resolves to a member", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const { backend, cleanup } = await deployed({
+      coverage: [
+        { objectType: 5, objectId: 1, lineNo: 40, hits: 3 },
+        { objectType: 5, objectId: 79100, lineNo: 0, hits: 1 },
+        { objectType: 5, objectId: 79100, lineNo: 4, hits: 1 },
+      ],
+    });
+    try {
+      await backend.run(ref, { coverage: "fenced", timeoutMs: 1000 });
+      const said = warn.mock.calls.map((c) => String(c[0])).join("\n");
+      expect(said).not.toContain("fenced coverage for");
+    } finally {
+      warn.mockRestore();
+      await cleanup();
+    }
+  });
+
+  test("silent when the server sent no rows at all — that is a different, already-loud case", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const { backend, cleanup } = await deployed({ coverage: [] });
+    try {
+      await backend.run(ref, { coverage: "fenced", timeoutMs: 1000 });
+      const said = warn.mock.calls.map((c) => String(c[0])).join("\n");
+      expect(said).not.toContain("fenced coverage for");
+    } finally {
+      warn.mockRestore();
+      await cleanup();
+    }
   });
 });

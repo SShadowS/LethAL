@@ -258,7 +258,10 @@ class StubBackend implements ExecutionBackend {
     await this.onRun?.();
     const active = this.activations.at(-1) ?? null;
     const outcome = this.script(active, ref);
-    const hasCoverage = active === null && this.caps.coverage === "procedure";
+    // Every mode that CLAIMS per-procedure coverage reports it at baseline — `"procedure"` (hub)
+    // and R58's `"fenced"` alike. Written as `!== "none"` so the two stay indistinguishable to the
+    // orchestrator, which is the point of the mode being a routing axis rather than a granularity.
+    const hasCoverage = active === null && this.caps.coverage !== "none";
     // Layer 5C-A Task 8, Task 10 (design §G): this stub represents a healthy, correctly-deployed
     // authoritative backend by default — every coverage:"none" (the transport path) call attests
     // cleanly, mirroring what a real RunMutant `ran` result would report. Only the dedicated
@@ -383,6 +386,43 @@ describe("runSession", () => {
     const report = await runSession({ backend, store, ...dirs, selectorIds });
     expect(report.counts.noCoverage).toBeGreaterThan(0);
     expect(report.counts.survived).toBe(0);
+  });
+
+  // R58: `"fenced"` must land on the coverage-FILTER branch, not the all-green-tests branch. The
+  // orchestrator's only test is `caps.coverage === "none"`, so a mode added without checking it
+  // would silently run every mutant against every green test: slower, never wrong, and completely
+  // invisible in the verdicts — the same "a regression changes no count" shape the
+  // untargetedTriggerCount tests below exist for.
+  test("coverage:fenced capability selects per mutant, exactly like procedure", async () => {
+    const dirs = await makeProject();
+    const covering = new StubBackend(
+      { coverage: "fenced", deploy: "publish", isolation: "session", authoritative: false },
+      () => "pass",
+      ["IsOverBudget"],
+    );
+    const covered = await runSession({
+      backend: covering,
+      store: new ResultsStore(":memory:"),
+      ...dirs,
+      selectorIds,
+    });
+    expect(covered.counts.survived).toBeGreaterThan(0);
+
+    // Same backend, same script, covering NOTHING: under a filtering mode the uncovered mutants
+    // must be reported `no-coverage` rather than run against all green tests.
+    const nothing = new StubBackend(
+      { coverage: "fenced", deploy: "publish", isolation: "session", authoritative: false },
+      () => "pass",
+      [],
+    );
+    const uncovered = await runSession({
+      backend: nothing,
+      store: new ResultsStore(":memory:"),
+      ...dirs,
+      selectorIds,
+    });
+    expect(uncovered.counts.noCoverage).toBeGreaterThan(0);
+    expect(uncovered.counts.survived).toBe(0);
   });
 
   test("coverage:none capability runs all tests per mutant", async () => {
@@ -5523,9 +5563,10 @@ describe("runSession — Layer 5C-B1 fix round 1: op-seq resync at the BASELINE 
     // The first attempt consumed a client-side op-seq the server never saw. Without a resync the
     // retry sends a stale-HIGH opSeq, which `TryBeginRun` refuses with reason "lease-invalid" —
     // indistinguishable at the client from genuine lease loss, so a healthy session would be
-    // quarantined and its batch discarded. Safe today only because bcdev reports
-    // `coverage: "procedure"` (baseline never takes the fenced RunMutant path); nothing at the
-    // call site recorded that dependency, which is exactly what this pins.
+    // quarantined and its batch discarded. This used to be safe-by-accident because bcdev reported
+    // `coverage: "procedure"` and the baseline then never took the fenced RunMutant path; R58's
+    // `coverage: "fenced"` spends that guard and makes the resync load-bearing on every baseline
+    // test. Nothing at the call site recorded that dependency, which is exactly what this pins.
     const log: string[] = [];
     const client = new FakeLeaseClient(log);
     let runs = 0;

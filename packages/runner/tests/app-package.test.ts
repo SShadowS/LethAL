@@ -146,3 +146,59 @@ describe("objectTypeName — BC's numeric object types (R40)", () => {
     expect(warnings.join("\n")).toContain("unmapped BC object type 9999");
   });
 });
+
+/**
+ * R58's scope rule. The fenced coverage payload is the ENTIRE `Code Coverage` table, so the line
+ * map needs a hard "is this row from the artifact we compiled?" before it dares name a procedure.
+ */
+describe("AppMethodIndex.declaredObjects", () => {
+  test("keys every declared object as <lowercase type>:<id>, matching line-map's own key", () => {
+    const index = AppMethodIndex.fromSymbolReference({
+      Tables: [{ Id: 79300, Name: "Data Main" }],
+      Codeunits: [{ Id: 79100, Name: "Sandbox Logic" }],
+      Pages: [{ Id: 79484, Name: "Card" }],
+      Queries: [{ Id: 79302, Name: "Q" }],
+      XmlPorts: [{ Id: 79303, Name: "X" }],
+      Reports: [{ Id: 79304, Name: "R" }],
+    });
+    expect([...index.declaredObjects()].sort()).toEqual([
+      "codeunit:79100",
+      "page:79484",
+      "query:79302",
+      "report:79304",
+      "table:79300",
+      "xmlport:79303",
+    ]);
+  });
+
+  // MEASURED 2026-07-28 by compiling a probe with one tableextension and one pageextension: the
+  // arrays are named `TableExtensions`/`PageExtensions`. Getting these names wrong is silent — the
+  // extension is simply not declared, its coverage rows are skipped, and every mutant in it reads
+  // `no-coverage` with nothing logged anywhere.
+  test("includes the two EXTENSION kinds, whose coverage comes under their own object id", () => {
+    const index = AppMethodIndex.fromSymbolReference({
+      TableExtensions: [{ Id: 79481, Name: "LX Base Ext" }],
+      PageExtensions: [{ Id: 79485, Name: "LX Base Card Ext" }],
+    });
+    expect([...index.declaredObjects()].sort()).toEqual([
+      "pageextension:79485",
+      "tableextension:79481",
+    ]);
+  });
+
+  test("is empty for a symbol reference declaring nothing", () => {
+    expect(AppMethodIndex.fromSymbolReference({}).declaredObjects().size).toBe(0);
+  });
+
+  test("does not leak non-object arrays (enums, interfaces, permission sets) into the scope", () => {
+    // They carry ids too, but no coverage row names them and `line-map.ts` never maps them — a
+    // declared object with no map entry THROWS, so a stray entry here would abort a real run.
+    const index = AppMethodIndex.fromSymbolReference({
+      EnumTypes: [{ Id: 79310, Name: "E" }],
+      Interfaces: [{ Id: 79311, Name: "I" }],
+      PermissionSets: [{ Id: 79312, Name: "P" }],
+      Profiles: [{ Id: 79313, Name: "Pr" }],
+    });
+    expect(index.declaredObjects().size).toBe(0);
+  });
+});
