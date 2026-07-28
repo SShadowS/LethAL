@@ -271,21 +271,38 @@ procedure ranges names exactly the five procedures the run attributed
 bucketing them against the ORIGINAL frame names eleven, none of which match what the run produced.
 The map is doing precisely what the payload supports.
 
-So the 77 are not a mapping failure — the rows for the other eight procedures are **not in the
-payload at all**. Two readings remain, and they have opposite consequences:
+**The 77 are discriminated (2026-07-28), and the answer was already in the dumps — the fence is
+RIGHT, the hub's covering sets were false.** Inverting the hub dump's per-mutant `coveringTests`
+into per-test procedure sets shows the five `ChangeAutomaticToManual_*` tests sharing ONE IDENTICAL
+11-procedure set — the `CreateOrSendAutStatements` call tree plus the two `ChangeAu(t)omaticToManual`
+they genuinely execute. An identical set across five tests with different bodies is not genuine
+per-test coverage, and it is proven false for `...WhenNoLastDate...`: it calls
+`ChangeAuatomaticToManual('CUST001', 0D, ...)`, whose callee's first statement is
+`if LastDate = 0D then exit;`, and its setup library only INSERTs records — so nine of the eleven
+are unreachable from it on ANY runner. The client-side mechanism is precise:
+`buildCoverageMap` (bcdev-backend.ts) selects the payload entry with
+`wireCoverage.find(e => e.testObjectId === testCodeunitId)` and never matches `testMethodId`,
+though the wire protocol keys coverage entries per method — so with a multi-entry payload the
+requested test is credited with another method's coverage (filed as R63).
 
-- **The fenced session genuinely does not execute them** (R60: headless takes the non-GUI branch).
-  Then fenced coverage is CORRECT for the runner that produces verdicts, and the hub's 77
-  `survived` verdicts were the false ones — mutated code that never ran, scored as survived.
-- **Fenced collection loses them.** Then R58 under-reports and must not become the default.
+So the two readings collapse: the hub's 77 `survived` verdicts were **vacuous** — mutants scored on
+the fence against tests that never executed the mutated code — and fenced `no-coverage` is the
+correct verdict. DO's suite genuinely never executes those nine procedures on either runner: every
+test that tries flips the customer to Manual at the `ChangeAuatomaticToManual` early-exit or stops
+at the negative-balance guard. The 77 are a Document Output test-gap finding, not a LethAL defect.
+The fence's per-test attribution is precise everywhere it can be checked: its 13 covered mutants
+are exactly `SendPeriodStatements` (12) plus one object-level entry — the only procedures with
+mutants that any green fence test reaches.
 
-What is established either way: the covering tests for all eight missing procedures pass on BOTH
-runners (`green-on-fence=5/5`, `failed-on-hub=0`), so this is not the R55 red-test mechanism.
-
-The discriminating experiment is named and not yet run: execute one mutant in `CalcBalance` (hub:
-covered by 5 tests, all green on the fence) through the FENCE against those tests. Killed or failing
-means the fence reaches the code and collection is at fault; survived means the branch is genuinely
-not taken.
+**The discriminating experiment previously named here would have been misread, and that is worth
+recording.** The plan was to run mutant M0120 through the fence against its five covering tests and
+read `attestation.observedAny` as mutant-specific: `false` = never executed, `true` = executed.
+But `observedAny` is set by ANY guard (`ControlState.IsActive` sets it before the mutant-id check),
+and M0120's hub-mode runs already carry `guardObserved: true` — because the five tests execute
+`ChangeAutomaticToManual`'s guards whether or not `CalcBalance` runs. Had that experiment been run
+first, `true` would have "confirmed" the fence-loses-collections hypothesis and sent the
+investigation after a defect that does not exist. The call-tree proof above is stronger and was
+cheaper.
 
 **A methodological note worth keeping.** A `--resume` run was briefly used as a gate input and
 appeared to show three lost kills (`M0017`, `M0132`, `M0137`). It showed nothing of the sort:

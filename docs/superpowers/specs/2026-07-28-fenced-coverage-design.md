@@ -4,9 +4,13 @@
 server half needed one more change that only measurement could find — see unknown #4 below: control
 app **1.0.0.8 was unusable**, and 1.0.0.9 takes an object-id filter. The differential gate passes on
 both sandbox fixtures. On Continia Document Output it passes its BLOCKING criterion (0 mutants move
-`killed` -> `survived`) while surfacing an unresolved question: 77 mutants move `survived` ->
-`no-coverage`, and whether that is the fence being right or the fence losing coverage is not yet
-discriminated. `"fenced"` therefore stays opt-in and rollout step 5 does not start.
+`killed` -> `survived`), and the one open question it surfaced — 77 mutants moving `survived` ->
+`no-coverage` — is RESOLVED 2026-07-28 in the fence's favour: the hub's covering sets for those
+mutants were false (`buildCoverageMap` matches coverage by codeunit, never by method — R63), so
+the hub-mode `survived` verdicts were vacuous and fenced `no-coverage` is the correct verdict.
+See `docs/measurements/README.md` for the proof. `"fenced"` stays opt-in; rollout step 5 is now a
+decision the evidence no longer blocks, weighed against the old default being known-broken on
+multi-method test codeunits until R63 is fixed.
 
 Earlier: design, revised after an external review that found a fatal rule, an internal contradiction,
 and three missing unknowns.
