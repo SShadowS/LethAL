@@ -184,6 +184,51 @@ describe("writeInstrumentedProject", () => {
       const manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8"));
       expect(manifest.mutants[0]?.procedureName).toBe("");
       expect(manifest.mutants[0]?.triggerName).toBe("OnValidate");
+      // No enclosing procedure, so no scope — the fallback gate keys on "local" exactly, and a
+      // trigger mutant must never carry it.
+      expect(manifest.mutants[0]?.procedureScope).toBeUndefined();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("manifest entries carry procedureScope — local vs public, absent on triggers", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-"));
+    try {
+      // Two mutants: one in a LOCAL procedure (the shape the hub coverage path can never name),
+      // one in a PUBLIC one. R63: coverageFilter's unnamed-member fallback keys on this field —
+      // emitting it wrong widens public mutants into vacuous coverage.
+      const src = `codeunit 51042 "Scoped" {
+  procedure PublicP() begin
+    X := 1;
+  end;
+  local procedure LocalP() begin
+    Y := 2;
+  end;
+}`;
+      const root = wrapRoot(parseAL(src));
+      const assigns = findAll(root, ALNodeKind.assignment_statement);
+      if (assigns.length !== 2) throw new Error(`expected 2 assignments, got ${assigns.length}`);
+      const specs: MutationSpec[] = assigns.map((a, i) => ({
+        operatorName: "op.flip",
+        operatorVersion: "1.0.0",
+        astNodeId: `${a.startIndex}`,
+        before: a,
+        after: { ...a, text: i === 0 ? "X := 10;" : "Y := 20;" } as never,
+        parentContext: "statement-position" as const,
+      }));
+      await writeInstrumentedProject({
+        targetDir: dir,
+        files: [{ path: "Scoped.Codeunit.al", source: src, root, specs }],
+        selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
+        artifactId: "0123456789abcdef0123456789abcdef",
+        targetAppId: TARGET_APP_ID,
+        operatorTiers: NO_TIERS,
+      });
+      const manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8"));
+      const byProc = new Map(manifest.mutants.map((m) => [m.procedureName, m.procedureScope]));
+      expect(byProc.get("PublicP")).toBe("public");
+      expect(byProc.get("LocalP")).toBe("local");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

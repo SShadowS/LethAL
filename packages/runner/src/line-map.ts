@@ -146,10 +146,11 @@ export class LineMap {
 /**
  * Procedure spans for one object, in OBJECT-relative coordinates.
  *
- * Built from the PARSE, never a regex. `findLocalProcedureNames` is regex-based and its own doc
- * justifies that as a safe over-approximation for a different purpose; here a regex fooled by the
- * word `procedure` inside a comment or a string literal mis-draws a range and produces a wrong
- * member key, which is the wrong-verdict failure this module exists to avoid.
+ * Built from the PARSE, never a regex: a regex fooled by the word `procedure` inside a comment
+ * or a string literal mis-draws a range and produces a wrong member key, which is the
+ * wrong-verdict failure this module exists to avoid. (The pre-R63 `findLocalProcedureNames`
+ * was regex-based; it is gone, and the over-credit it produced is exactly what this module
+ * must not reintroduce.)
  */
 function procedureSpans(objectRoot: ALSyntaxNode, baseLine: number): ProcedureSpan[] {
   const spans: ProcedureSpan[] = [];

@@ -1,5 +1,4 @@
-import { readFile, readdir } from "node:fs/promises";
-import { join } from "node:path";
+import { readFile } from "node:fs/promises";
 import { inflateRawSync } from "node:zlib";
 
 /**
@@ -242,69 +241,4 @@ export function objectTypeName(objectType: number): string {
     );
   }
   return String(objectType);
-}
-
-const NAME_TO_OBJECT_TYPE: Record<string, number> = {
-  table: 1,
-  report: 3,
-  codeunit: 5,
-  xmlport: 6,
-  page: 8,
-  query: 9,
-  pageextension: 14,
-  tableextension: 15,
-};
-
-// Extension kinds are listed BEFORE `page`/`table`: alternation is tried left to right, and a
-// bare `page` alternative would engage on `pageextension` before failing its `\s+\d+`.
-const OBJECT_HEADER_GLOBAL =
-  /^\s*(codeunit|tableextension|pageextension|table|page|report|query|xmlport)\s+(\d+)\s+(?:"([^"]+)"|(\w+))/gim;
-const LOCAL_PROCEDURE = /^\s*local\s+procedure\s+(?:"([^"]+)"|(\w+))\s*\(/gim;
-
-/**
- * `local`/private procedures never appear in a compiled app's
- * `SymbolReference.json` (verified 2026-07-18: `LogAudit`, declared
- * `local procedure` in the fixture, is absent from `Codeunits[].Methods`
- * even though `IsOverBudget`/`ClampPercent`/`ApplyAudit` — all public — are
- * present) — there is no compiled-artifact way to resolve a local
- * procedure's coverage `methodId` to its name. This scans the same AL
- * source `ArtifactCompiler.compile()` just built from for each object's declared
- * local procedure names, so `bcdev-backend.ts` can fall back to "some local
- * procedure in this object was covered" when a coverage methodId doesn't
- * resolve via `AppMethodIndex` — see the fallback's doc comment there for
- * why that's a safe (if imprecise) default.
- *
- * Regex-based, matching the existing pragmatic style of
- * `packages/runner/src/discovery.ts` and bc-dev-mcp's `al-objects.ts` for
- * this exact class of problem, rather than a full tree-sitter parse.
- */
-export async function findLocalProcedureNames(
-  projectDir: string,
-): Promise<Map<string, readonly string[]>> {
-  const result = new Map<string, string[]>();
-  const entries = (await readdir(projectDir, { recursive: true })).filter((e) =>
-    e.toString().toLowerCase().endsWith(".al"),
-  );
-  for (const rel of entries) {
-    const source = await readFile(join(projectDir, rel.toString()), "utf8");
-    const headers = Array.from(source.matchAll(OBJECT_HEADER_GLOBAL));
-    for (let i = 0; i < headers.length; i++) {
-      const header = headers[i];
-      const kind = header?.[1];
-      if (!header || header.index === undefined || kind === undefined) continue;
-      const objectType = NAME_TO_OBJECT_TYPE[kind.toLowerCase()];
-      if (objectType === undefined) continue;
-      const objectId = Number(header[2]);
-      const sectionEnd = headers[i + 1]?.index ?? source.length;
-      const section = source.slice(header.index, sectionEnd);
-      const key = `${objectType}:${objectId}`;
-      const names = result.get(key) ?? [];
-      for (const m of section.matchAll(LOCAL_PROCEDURE)) {
-        const name = m[1] ?? m[2];
-        if (name !== undefined) names.push(name);
-      }
-      if (names.length > 0) result.set(key, names);
-    }
-  }
-  return result;
 }

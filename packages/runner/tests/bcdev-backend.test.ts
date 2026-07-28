@@ -411,7 +411,14 @@ describe("BcDevMcpBackend.run", () => {
     }
   });
 
-  test("falls back to crediting local procedures when a methodId can't be resolved by name", async () => {
+  // R63: the pre-fix behaviour expanded an unresolvable methodId to EVERY local procedure in the
+  // object. Measured on Continia Document Output: one genuinely-executed local credited five
+  // tests with all ten locals of the codeunit, and 77 mutants in procedures those tests cannot
+  // reach were scored `survived` against them — confident, non-empty, WRONG covering sets. The
+  // expansion's doc comment called it safe because it "never hides a real kill"; it manufactures
+  // false survivors instead. An unresolvable member is now emitted at OBJECT level, which lands
+  // in `byObject` (sound, one precision level coarser) and never invents member credit.
+  test("emits an unresolvable methodId at OBJECT level, never expanded to local-procedure guesses", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lethal-bcdev-backend-local-"));
     await Bun.write(
       join(dir, "SandboxLogic.Codeunit.al"),
@@ -466,8 +473,77 @@ describe("BcDevMcpBackend.run", () => {
         { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "ClampPercentRuns" },
         { coverage: "procedure", timeoutMs: 5000 },
       );
-      const procedures = v.coverage?.entries.map((e) => e.procedure).sort();
-      expect(procedures).toEqual(["ApplyAudit", "LogAudit"]);
+      // ApplyAudit names exactly; methodId 999 says only "79000 executed an unnamed member" —
+      // one object-level entry, and crucially NO `LogAudit` member entry.
+      expect(v.coverage?.entries).toEqual([
+        { objectType: "Codeunit", objectId: 79000, procedure: "ApplyAudit" },
+        { objectType: "Codeunit", objectId: 79000 },
+      ]);
+    } finally {
+      await cleanup();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  // R61, measured on `sandbox-data` and again on Document Output: the hub payload covers
+  // everything the platform executed — Base App (`Codeunit:423`), the test framework
+  // (`Codeunit:130011/130012`), LethAL's own control app (`Codeunit:71002`) — and the old code
+  // emitted object-level entries for all of it: byObject credit for code the run does not own,
+  // one manifest-id coincidence away from R29's shape. Objects outside the compiled artifact's
+  // SymbolReference are now skipped, same scope rule the fenced path applies.
+  test("skips coverage for objects the compiled artifact does not declare", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-bcdev-backend-foreign-"));
+    await Bun.write(
+      join(dir, "SandboxLogic.Codeunit.al"),
+      [
+        'codeunit 79000 "Sandbox Logic"',
+        "{",
+        "    procedure ApplyAudit(Amount: Decimal)",
+        "    begin",
+        "    end;",
+        "}",
+        "",
+      ].join("\n"),
+    );
+    const { backend, cleanup } = await makeBackendWithDeploy(
+      () => ({
+        results: [
+          {
+            codeunitId: 79100,
+            method: "ClampPercentRuns",
+            status: "passed",
+            durationMs: 1,
+            output: "",
+          },
+        ],
+        coverage: [
+          {
+            testObjectId: 79100,
+            testMethodId: 111,
+            coveredProcedures: [
+              { objectType: 5, objectId: 79000, methodId: 333 }, // own, resolves
+              { objectType: 5, objectId: 423, methodId: 42 }, // Base App — foreign
+              { objectType: 5, objectId: 71002, methodId: 7 }, // LethAL Control — foreign
+              { objectType: 5, objectId: 130011, methodId: 1 }, // test framework — foreign
+            ],
+          },
+        ],
+      }),
+      {
+        Codeunits: [
+          { Id: 79000, Name: "Sandbox Logic", Methods: [{ Id: 333, Name: "ApplyAudit" }] },
+        ],
+      },
+      dir,
+    );
+    try {
+      const v = await backend.run(
+        { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "ClampPercentRuns" },
+        { coverage: "procedure", timeoutMs: 5000 },
+      );
+      expect(v.coverage?.entries).toEqual([
+        { objectType: "Codeunit", objectId: 79000, procedure: "ApplyAudit" },
+      ]);
     } finally {
       await cleanup();
       await rm(dir, { recursive: true, force: true });
@@ -1039,19 +1115,19 @@ describe("BcDevMcpBackend.compileCheck", () => {
     }
   });
 
-  // The specific clobber the brief warns about: `deploy()` sets `this.methodIndex`/
-  // `this.localProcedures` from whatever it just compiled, so `run()`'s coverage resolution can
-  // map a wire methodId back to a procedure name. A bisection candidate compiled through
-  // compileCheck() must NEVER replace those — they describe the REAL artifact `run()` is about
-  // to execute tests against, not a narrowed, possibly-different candidate subset.
+  // The specific clobber the brief warns about: `deploy()` sets `this.methodIndex` from
+  // whatever it just compiled, so `run()`'s coverage resolution can map a wire methodId back to
+  // a procedure name. A bisection candidate compiled through compileCheck() must NEVER replace
+  // it — it describes the REAL artifact `run()` is about to execute tests against, not a
+  // narrowed, possibly-different candidate subset.
   //
-  // Proven end to end (not by inspecting private fields): deploy(dirA) establishes the real
-  // coverage indexes from a source tree whose local procedure is named "LogAudit". compileCheck
-  // (dirB) then compiles a DIFFERENT source tree — same codeunit id, but its local procedure is
-  // named "OtherHelper" instead. If compileCheck ever reassigned localProcedures, the
-  // methodId-999 fallback below would report "OtherHelper"; it must still report dirA's
-  // "LogAudit".
-  test("a candidate compile does not overwrite the coverage indexes deploy() established", async () => {
+  // Proven end to end (not by inspecting private fields): deploy(dirA) compiles a symbol
+  // reference naming methodId 333 "ApplyAudit". compileCheck(dirB) then compiles a DIFFERENT
+  // candidate whose symbol reference names the SAME methodId "RenamedAudit" — if compileCheck
+  // ever reassigned methodIndex, the run below would resolve 333 to "RenamedAudit"; it must
+  // still report dirA's "ApplyAudit". (The pre-R63 observable was the local-procedure fallback;
+  // that fallback is gone, so the clobber is now observed at the methodIndex itself.)
+  test("a candidate compile does not overwrite the coverage index deploy() established", async () => {
     const dirA = await mkdtemp(join(tmpdir(), "lethal-bcdev-compilecheck-clobber-a-"));
     const dirB = await mkdtemp(join(tmpdir(), "lethal-bcdev-compilecheck-clobber-b-"));
     const outputDir = await mkdtemp(join(tmpdir(), "lethal-bcdev-compilecheck-clobber-out-"));
@@ -1065,11 +1141,6 @@ describe("BcDevMcpBackend.compileCheck", () => {
           "{",
           "    procedure ApplyAudit(Amount: Decimal)",
           "    begin",
-          "        LogAudit(Amount);",
-          "    end;",
-          "",
-          "    local procedure LogAudit(Amount: Decimal)",
-          "    begin",
           "    end;",
           "}",
           "",
@@ -1080,24 +1151,38 @@ describe("BcDevMcpBackend.compileCheck", () => {
         [
           'codeunit 79000 "Sandbox Logic"',
           "{",
-          "    procedure ApplyAudit(Amount: Decimal)",
-          "    begin",
-          "        OtherHelper(Amount);",
-          "    end;",
-          "",
-          "    local procedure OtherHelper(Amount: Decimal)",
+          "    procedure RenamedAudit(Amount: Decimal)",
           "    begin",
           "    end;",
           "}",
           "",
         ].join("\n"),
       );
-      const symbolReference = {
-        Codeunits: [
-          { Id: 79000, Name: "Sandbox Logic", Methods: [{ Id: 333, Name: "ApplyAudit" }] },
-        ],
+      // Each alc invocation writes the NEXT symbol reference: deploy() sees 333=ApplyAudit,
+      // compileCheck() sees 333=RenamedAudit.
+      const symbolReferences = [
+        {
+          Codeunits: [
+            { Id: 79000, Name: "Sandbox Logic", Methods: [{ Id: 333, Name: "ApplyAudit" }] },
+          ],
+        },
+        {
+          Codeunits: [
+            { Id: 79000, Name: "Sandbox Logic", Methods: [{ Id: 333, Name: "RenamedAudit" }] },
+          ],
+        },
+      ];
+      let compiles = 0;
+      const spawn: SpawnFn = async (argv) => {
+        const out = argv.find((a) => a.startsWith("/out:"))?.slice("/out:".length);
+        if (argv[0]?.includes("alc") && out !== undefined) {
+          const ref = symbolReferences[Math.min(compiles, symbolReferences.length - 1)];
+          compiles++;
+          await Bun.write(out, buildFakeApp(ref));
+        }
+        return { exitCode: 0, stdout: "", stderr: "" };
       };
-      const deployment = makeDeployment(outputDir, symbolReference);
+      const deployment = makeDeployment(outputDir, symbolReferences[0] ?? {}, { spawn });
       const server = new McpServer({ name: "fake-bc-dev", version: "0.0.0" });
       server.registerTool("bcdev_test_run", { inputSchema: anyArgs }, async () => ({
         content: [
@@ -1117,13 +1202,9 @@ describe("BcDevMcpBackend.compileCheck", () => {
                 {
                   testObjectId: 79100,
                   testMethodId: 111,
-                  // methodId 333 resolves by name (ApplyAudit); methodId 999 does not (it's
-                  // `local`) and must fall back to crediting whichever local procedures
-                  // `localProcedures` currently lists for codeunit 79000.
-                  coveredProcedures: [
-                    { objectType: 5, objectId: 79000, methodId: 333 },
-                    { objectType: 5, objectId: 79000, methodId: 999 },
-                  ],
+                  // methodId 333 resolves by name through whichever SymbolReference methodIndex
+                  // currently holds — dirA's (correct) or dirB's (the clobber being tested).
+                  coveredProcedures: [{ objectType: 5, objectId: 79000, methodId: 333 }],
                 },
               ],
             }),
@@ -1151,8 +1232,9 @@ describe("BcDevMcpBackend.compileCheck", () => {
         { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "ClampPercentRuns" },
         { coverage: "procedure", timeoutMs: 5000 },
       );
-      const procedures = v.coverage?.entries.map((e) => e.procedure).sort();
-      expect(procedures).toEqual(["ApplyAudit", "LogAudit"]);
+      expect(v.coverage?.entries).toEqual([
+        { objectType: "Codeunit", objectId: 79000, procedure: "ApplyAudit" },
+      ]);
     } finally {
       await rmStaged(dirA); // deploy()'s own staged copy — compileCheck() cleans dirB's internally
       await rm(dirA, { recursive: true, force: true });

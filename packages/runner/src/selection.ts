@@ -66,6 +66,16 @@ export function filterHistory(
 export interface CoverageIndex {
   readonly byMember: ReadonlyMap<string, ReadonlySet<string>>;
   readonly byObject: ReadonlyMap<string, ReadonlySet<string>>;
+  /**
+   * Only the PROCEDURE-LESS observations (`CoverageEntry.procedure` absent): "this test
+   * executed SOME member coverage cannot name" — a local procedure or a trigger, the two
+   * members SymbolReference.json never records. `coverageFilter`'s unnamed-member fallback
+   * consumes it for ordinary-procedure mutants whose member key can never hit (their procedure
+   * is `local`, so it has no public symbol entry), and ONLY there: an ordinary mutant whose
+   * procedure is public simply did not execute when its member key misses, and widening it to
+   * object level would manufacture vacuous `survived` verdicts (R63's measured failure).
+   */
+  readonly byObjectUnnamed: ReadonlyMap<string, ReadonlySet<string>>;
 }
 
 /**
@@ -157,6 +167,7 @@ export function buildCoverageIndex(
 ): CoverageIndex {
   const byMember = new Map<string, Set<string>>();
   const byObject = new Map<string, Set<string>>();
+  const byObjectUnnamed = new Map<string, Set<string>>();
   for (const b of baseline) {
     for (const e of b.coverage?.entries ?? []) {
       const context = `coverage entry from ${testKeyOf(b.ref)} for object id ${e.objectId}`;
@@ -176,7 +187,17 @@ export function buildCoverageIndex(
       // `procedure === undefined`, not a comparison against some sentinel string — so no member
       // key is ever synthesized for an observation that names no member.
       const { procedure } = e;
-      if (procedure === undefined) continue;
+      if (procedure === undefined) {
+        // Unnameable-member observation (a local procedure or a trigger): feed the
+        // ordinary-mutant fallback — see CoverageIndex.byObjectUnnamed.
+        let unnamedSet = byObjectUnnamed.get(objectKey);
+        if (!unnamedSet) {
+          unnamedSet = new Set();
+          byObjectUnnamed.set(objectKey, unnamedSet);
+        }
+        unnamedSet.add(testKeyOf(b.ref));
+        continue;
+      }
       if (procedure.trim() === "") {
         // A blank-but-present name is a producer bug, and a uniquely dangerous one: it would key
         // `byMember` as `<type>:<id>::`, the SAME key `coverageFilter` builds for a trigger
@@ -200,7 +221,7 @@ export function buildCoverageIndex(
       memberSet.add(testKeyOf(b.ref));
     }
   }
-  return { byMember, byObject };
+  return { byMember, byObject, byObjectUnnamed };
 }
 
 export function coverageFilter(
@@ -245,6 +266,29 @@ export function coverageFilter(
       testKeys !== undefined && testKeys.size > 0 ? "exact" : "object";
     if ((testKeys === undefined || testKeys.size === 0) && isTrigger) {
       testKeys = index.byObject.get(objectKeyOf(m.objectType, m.codeunitId, context));
+    }
+    // UNNAMED-MEMBER fallback — ordinary procedure mutants the manifest marks `local`. A
+    // member-level miss for a local-procedure mutant is structural, not evidence of
+    // non-execution: local procedures never appear in SymbolReference.json (verified
+    // 2026-07-18), so `byMember` can never hit for one — the same shape as a trigger, one
+    // visibility level up. When coverage saw SOME unnameable member execute in this object
+    // (`byObjectUnnamed`), that observation may BE the mutant's own procedure, so run those
+    // tests at object grain (attribution "object" — the survivor caveat above applies in
+    // full). Measured on the sandbox fixture: `ApplyAudit` calls the local `LogAudit`;
+    // without this branch its three mutants report `no-coverage` while genuinely executing —
+    // a false "your tests don't reach this" where the honest finding is "your tests don't
+    // ASSERT on this". The `procedureScope === "local"` gate is the whole point: a PUBLIC
+    // procedure whose member key misses DID NOT EXECUTE (a public execution always resolves
+    // by name), and widening it to object level would manufacture a vacuous `survived` —
+    // R63's measured failure on Document Output, where the pre-fix locals EXPANSION credited
+    // every local of a codeunit to any test that executed one, and 77 mutants in procedures
+    // their "covering" tests could not reach were scored `survived`.
+    if (
+      (testKeys === undefined || testKeys.size === 0) &&
+      !isTrigger &&
+      m.procedureScope === "local"
+    ) {
+      testKeys = index.byObjectUnnamed.get(objectKeyOf(m.objectType, m.codeunitId, context));
     }
     // FALLBACK 2 — every green test. TABLE triggers only; that gate is the measured part.
     //

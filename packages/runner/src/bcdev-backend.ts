@@ -7,7 +7,7 @@ import {
   getDefaultEnvironment,
 } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { AppMethodIndex, findLocalProcedureNames, objectTypeName } from "./app-package";
+import { AppMethodIndex, objectTypeName } from "./app-package";
 import { ArtifactPrepareError, DeploymentError } from "./artifact";
 import type { ArtifactCompiler, CompileInput, CompiledArtifact } from "./artifact";
 import type {
@@ -162,7 +162,6 @@ export class BcDevMcpBackend implements ExecutionBackend {
   // methodIds to procedure names — see app-package.ts for why this needs the compiled
   // artifact (and the source tree) rather than being derivable from the wire payload alone.
   private methodIndex: AppMethodIndex | undefined;
-  private localProcedures: Map<string, readonly string[]> | undefined;
   // R58 (`coverageMode: "fenced"` only): line -> procedure for THIS batch's artifact, built in
   // deploy() from the same instrumented source alc compiled and scoped by that compiled package's
   // own SymbolReference.json. Left undefined in every other mode — nothing builds it and nothing
@@ -422,18 +421,16 @@ export class BcDevMcpBackend implements ExecutionBackend {
       // would otherwise accumulate one full instrumented-project copy per batch (the `rm` at
       // the top of stageForCompile only overwrites a re-staged SAME name, never a prior batch's
       // differently-named one). Nothing reads `staged` again after this point: methodIndex
-      // reads `artifact.appPath` (the compiled .app in outputDir) and localProcedures reads the
-      // ORIGINAL instrumentedDir below. Best-effort, same idiom as compileCheck()'s own cleanup —
-      // a compile already decided the outcome by here, so a stray cleanup failure must never
-      // mask it.
+      // reads `artifact.appPath` (the compiled .app in outputDir). Best-effort, same idiom as
+      // compileCheck()'s own cleanup — a compile already decided the outcome by here, so a
+      // stray cleanup failure must never mask it.
       await rm(staged, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }).catch(
         () => {},
       );
     }
     // Must happen before publish(): resolves this batch's coverage methodIds ahead of any
-    // run() call, from the exact artifact/source that produced them.
+    // run() call, from the exact artifact that produced them.
     this.methodIndex = await AppMethodIndex.fromAppFile(artifact.appPath);
-    this.localProcedures = await findLocalProcedureNames(instrumentedDir);
     // R58: same timing and the same two inputs as the hub's own indexes — the artifact that was
     // just compiled, and the source it was compiled from — because a line number only means
     // anything in the frame of the bytes that were published. `instrumentedDir`, not `staged`:
@@ -473,10 +470,10 @@ export class BcDevMcpBackend implements ExecutionBackend {
   /**
    * Bisection's compile-only seam (Task 7b, spec §8/§10): compile the candidate and throw on a
    * compiler rejection, exactly like `deploy()`'s prepare+compile phase — but stop there. No
-   * publish, no verify, no `recordArtifact`, and critically no `this.methodIndex` /
-   * `this.localProcedures` assignment: those describe the REAL artifact's coverage indexes, and
-   * a bisection candidate (a narrowed, possibly-malformed subset) must never clobber them out
-   * from under an in-flight `run()`.
+   * publish, no verify, no `recordArtifact`, and critically no `this.methodIndex`
+   * assignment: it describes the REAL artifact's coverage index, and a bisection candidate
+   * (a narrowed, possibly-malformed subset) must never clobber it out from under an
+   * in-flight `run()`.
    *
    * The compiled `.app` this writes is never published or consumed by anything — deleted
    * immediately so repeated candidate compiles across a bisection search don't accumulate
@@ -835,20 +832,30 @@ export class BcDevMcpBackend implements ExecutionBackend {
    * method `run()` just executed into the name-keyed `CoverageMap` `selection.ts`'s
    * `coverageFilter` matches mutants against.
    *
-   * `methodIndex` (built in deploy() from the compiled app's own SymbolReference.json)
-   * resolves *public* procedures exactly. Local/private procedures are never listed there
-   * (verified 2026-07-18), so an unresolvable methodId falls back to crediting every local
-   * procedure `findLocalProcedureNames` found declared in that same object — an
-   * over-approximation (it can mark a genuinely-uncovered local procedure as covered) but a
-   * SAFE one: it only ever turns a would-be "no-coverage" skip into an actual test run, never
-   * hides a real kill by wrongly skipping a mutant a test could have caught.
+   * Two scope rules, both measured rather than argued:
    *
-   * When even that finds nothing (an unresolvable methodId in an object declaring NO local
-   * procedure — the shape of every table whose procedures are public, and of every trigger,
-   * which SymbolReference.json never records), the observation is emitted at OBJECT level: a
-   * `CoverageEntry` carrying `objectType`/`objectId` and no `procedure`. Same safe direction,
-   * one precision level coarser. See the branch below for the false survivors that emitting
-   * nothing produced.
+   * - **R61: only the artifact's own objects are eligible.** The payload covers everything the
+   *   platform observed — Base App, the test framework, LethAL's own control app — and nothing
+   *   downstream can tell an object-level entry for `Codeunit:71002` from one for the target.
+   *   An object outside the compiled artifact's SymbolReference is SKIPPED, same rule the fenced
+   *   path applies (`line-map.ts`, scoped by `declaredObjects()`).
+   *
+   * - **R63: an unresolvable methodId is emitted at OBJECT level, never expanded to member
+   *   guesses.** `methodIndex` (built in deploy() from the compiled app's own
+   *   SymbolReference.json) resolves *public* procedures exactly. Local procedures and triggers
+   *   are never listed there (verified 2026-07-18; locals confirmed absent from Document
+   *   Output's compiled symbol reference 2026-07-28, method ids an uncracked hash), so an
+   *   unresolved methodId says "this object executed a member we cannot name" — nothing more.
+   *   The pre-R63 fallback expanded that to EVERY local procedure declared in the object: on
+   *   Document Output, one genuinely-executed local credited five tests with all ten locals of
+   *   the codeunit, and 77 mutants in procedures those tests cannot reach were scored
+   *   `survived` against them — confident, non-empty, wrong covering sets (R29's exact shape).
+   *   The doc comment that justified the expansion called it safe because it "never hides a
+   *   real kill"; it manufactures false survivors instead, which is the error class this
+   *   project treats as the worst kind. Object-level credit lands in `byObject`, whose FALLBACK
+   *   1 semantics are sound one precision level coarser — and dropping the observation entirely
+   *   is the false-survivor bug the object-level branch fixed (measured on Cronus282), so
+   *   object-level, not silence.
    */
   private buildCoverageMap(
     wireCoverage: readonly WireCoverageEntry[] | undefined,
@@ -857,6 +864,12 @@ export class BcDevMcpBackend implements ExecutionBackend {
     const entry = wireCoverage?.find((e) => e.testObjectId === testCodeunitId);
     const entries: CoverageEntry[] = [];
     for (const p of entry?.coveredProcedures ?? []) {
+      // R61: skip anything the compiled artifact does not declare (Base App, test framework,
+      // LethAL's own control app) — see the doc comment above.
+      const declaredKey = `${objectTypeName(p.objectType).toLowerCase()}:${p.objectId}`;
+      if (this.methodIndex !== undefined && !this.methodIndex.declaredObjects().has(declaredKey)) {
+        continue;
+      }
       const name = this.methodIndex?.lookup(p.objectType, p.objectId, p.methodId);
       if (name !== undefined) {
         entries.push({
@@ -866,29 +879,11 @@ export class BcDevMcpBackend implements ExecutionBackend {
         });
         continue;
       }
-      const locals = this.localProcedures?.get(`${p.objectType}:${p.objectId}`) ?? [];
-      if (locals.length === 0) {
-        // Neither route can NAME this member — but BC measured it, so the observation is still
-        // hard evidence that this test executed code in this OBJECT. Emit it at object level
-        // (no `procedure`; see CoverageEntry) rather than dropping it.
-        //
-        // Dropping it was the false-survivor bug (measured on Cronus282): BC reports coverage for
-        // table-trigger code, SymbolReference.json records no trigger, and a table whose
-        // procedures are all PUBLIC has no local-procedure fallback either — so the object lost
-        // credit along with the member. `byObject` then held only whichever sibling test happened
-        // to resolve, `coverageFilter`'s FALLBACK 1 returned that non-empty-but-wrong set, its
-        // all-green-tests FALLBACK 2 never fired, and every table-trigger mutant ran against one
-        // irrelevant test. 10 of 20 survivors on the table fixture were false.
-        entries.push({ objectType: objectTypeName(p.objectType), objectId: p.objectId });
-        continue;
-      }
-      for (const localName of locals) {
-        entries.push({
-          objectType: objectTypeName(p.objectType),
-          objectId: p.objectId,
-          procedure: localName,
-        });
-      }
+      // R63: an unresolvable member says only "this object executed something we cannot name"
+      // (a local procedure or a trigger — both are absent from SymbolReference.json). Emit the
+      // observation at OBJECT level; expanding it to member guesses produced Document Output's
+      // 77 false survivors (see the doc comment above).
+      entries.push({ objectType: objectTypeName(p.objectType), objectId: p.objectId });
     }
     return { granularity: "procedure", entries };
   }

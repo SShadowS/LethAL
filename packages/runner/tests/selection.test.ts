@@ -93,6 +93,88 @@ describe("coverage", () => {
   });
 });
 
+// A local procedure never appears in SymbolReference.json, so a mutant in one can never hit
+// `byMember` — the same structural shape as a trigger. When coverage saw SOME unnameable member
+// execute in the same object (an object-level entry), that observation may be the mutant's own
+// procedure: run those tests at object grain. Without the branch, genuinely-executed locals
+// report `no-coverage` (measured on the sandbox fixture's `LogAudit`, frozen `survived`).
+describe("coverage: unnamed-member fallback (locals)", () => {
+  const baseline = [
+    {
+      ref: t1,
+      coverage: {
+        granularity: "procedure" as const,
+        entries: [
+          { objectType: "Codeunit", objectId: 70000, procedure: "ApplyAudit" },
+          // t1 executed SOME member coverage cannot name (here: the local LogAudit) —
+          // the only signal a local-procedure mutant can ever join on.
+          { objectType: "Codeunit", objectId: 70000 },
+        ],
+      },
+    },
+    {
+      ref: t2,
+      coverage: {
+        granularity: "procedure" as const,
+        // t2 executed the object too, but only NAMED members — it never touched anything
+        // unnameable, so it must NOT join the local mutant's covering set.
+        entries: [{ objectType: "Codeunit", objectId: 70000, procedure: "IsOverBudget" }],
+      },
+    },
+  ];
+
+  test("ordinary mutant in a local procedure is covered at object grain by tests with unnamed-member executions", () => {
+    const index = buildCoverageIndex(baseline);
+    const m = entry({ procedureName: "LogAudit", procedureScope: "local" });
+    const split = coverageFilter([m], index, [t1, t2]);
+    expect(split.covered.get("M0001")).toEqual([t1]);
+    expect(split.attribution.get("M0001")).toBe("object");
+    expect(split.uncovered.length).toBe(0);
+  });
+
+  test("ordinary mutant with no member hit and NO unnamed-member observations is no-coverage", () => {
+    const index = buildCoverageIndex(baseline);
+    // A different object whose coverage is entirely member-named: nothing unnameable ever
+    // executed there, so there is no honest object-grain set to run.
+    const m = entry({
+      codeunitId: 70001,
+      procedureName: "DiscountedPrice",
+      procedureScope: "local",
+    });
+    const split = coverageFilter([m], index, [t1, t2]);
+    expect(split.covered.size).toBe(0);
+    expect(split.uncovered.length).toBe(1);
+  });
+
+  test("a PUBLIC procedure mutant is NOT widened by unnamed-member observations — it did not execute", () => {
+    const index = buildCoverageIndex(baseline);
+    // The object-level entry says something UNNAMEABLE ran in 70000 — a local or a trigger —
+    // which is never evidence for a public member: had TouchCount executed, it would have
+    // resolved by name.
+    const m = entry({ procedureName: "TouchCount", procedureScope: "public" });
+    const split = coverageFilter([m], index, [t1, t2]);
+    expect(split.covered.size).toBe(0);
+    expect(split.uncovered.length).toBe(1);
+  });
+
+  test("a mutant whose manifest predates procedureScope is not widened either (fail closed)", () => {
+    const index = buildCoverageIndex(baseline);
+    const m = entry({ procedureName: "LogAudit" }); // no procedureScope — old manifest shape
+    const split = coverageFilter([m], index, [t1, t2]);
+    expect(split.covered.size).toBe(0);
+    expect(split.uncovered.length).toBe(1);
+  });
+
+  test("the fallback does not steal the trigger path: a trigger mutant still takes the full byObject set", () => {
+    const index = buildCoverageIndex(baseline);
+    const m = entry({ procedureName: "", triggerName: "OnRun" });
+    const split = coverageFilter([m], index, [t1, t2]);
+    // Both tests executed the object (named or not) — triggers widen to ALL of byObject.
+    expect(split.covered.get("M0001")).toEqual([t1, t2]);
+    expect(split.attribution.get("M0001")).toBe("object");
+  });
+});
+
 // SymbolReference.json never records a trigger (AppMethodIndex.lookup can never name one), so a
 // table trigger mutant's member-level key can never hit. These prove the object-level fallback: it
 // widens to "any test that covered ANYTHING in this object" only for a TABLE trigger, and never

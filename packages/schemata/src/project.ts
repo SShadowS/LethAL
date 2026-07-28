@@ -71,6 +71,19 @@ export interface MutantManifestEntry {
   readonly codeunitId: number;
   readonly codeunitName: string;
   readonly procedureName: string;
+  /**
+   * `local` when the enclosing procedure is declared `local`, `public` otherwise; ABSENT on
+   * trigger mutants (no enclosing procedure — same shape as `triggerName`'s optionality).
+   *
+   * The hub coverage path cannot resolve a local procedure's coverage `methodId` to a name
+   * (locals never appear in SymbolReference.json — verified 2026-07-18), so `byMember` can
+   * never hit for a local-procedure mutant, while a member-level miss for a PUBLIC procedure
+   * is positive evidence the procedure did not execute. `coverageFilter`'s unnamed-member
+   * fallback (selection.ts) keys on this field to cover the first at object grain WITHOUT
+   * widening the second into a vacuous `survived` — R63's measured failure on Document
+   * Output, where 77 mutants in never-executed procedures were scored `survived`.
+   */
+  readonly procedureScope?: "local" | "public";
   readonly triggerName?: string;
   /**
    * The source text this mutant REPLACED, and what it replaced it with — the mutation itself,
@@ -343,6 +356,20 @@ function procedureNameOf(spec: MutationSpec): string {
   return nameNode === null ? "" : stripQuotes(nameNode.text);
 }
 
+// Leading modifiers of a procedure declaration, tolerating preceding attributes
+// (`[ErrorBehavior(...)]` etc.): AL declares `local` FIRST (`local internal procedure`), so a
+// `local` word ahead of the `procedure` keyword is the scope marker. Text-level, but anchored
+// to the declaration's own start, so a `local` in a preceding comment line cannot match — the
+// parse has already separated comments from the declaration node.
+const LOCAL_SCOPE_PREFIX = /^\s*(?:\[[^\]]*\]\s*)*local\b/;
+
+/** `local`/`public` for the enclosing procedure, or `undefined` outside one (a trigger body). */
+function procedureScopeOf(spec: MutationSpec): "local" | "public" | undefined {
+  const proc = findEnclosingProcedure(spec.before);
+  if (proc === null) return undefined;
+  return LOCAL_SCOPE_PREFIX.test(proc.text) ? "local" : "public";
+}
+
 /**
  * Name of the enclosing `trigger_declaration`, or `undefined` outside one.
  *
@@ -393,6 +420,7 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
       // legally declaring more than one AL object (all codeunit/table, guarded above) now gets
       // correct per-mutant (objectType, objectId) coverage-lookup keys.
       const header = attributeHeader(headers, spec, f.path);
+      const procedureScope = procedureScopeOf(spec);
       manifest.push({
         mutantId,
         file: f.path,
@@ -408,6 +436,7 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
         procedureName: procedureNameOf(spec),
         originalText: clipMutationText(spec.before.text),
         mutatedText: clipMutationText(spec.after.text),
+        ...(procedureScope !== undefined ? { procedureScope } : {}),
         ...(triggerName !== undefined ? { triggerName } : {}),
       });
     }

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AppMethodIndex, findLocalProcedureNames, objectTypeName } from "../src/app-package";
+import { AppMethodIndex, objectTypeName } from "../src/app-package";
 import { buildFakeApp } from "./helpers/fake-app";
 
 describe("objectTypeName", () => {
@@ -53,59 +53,6 @@ describe("AppMethodIndex.fromAppFile", () => {
       const index = await AppMethodIndex.fromAppFile(appPath);
       expect(index.lookup(5, 79000, 42)).toBe("ClampPercent");
       expect(index.lookup(5, 79000, 999)).toBeUndefined();
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
-  });
-});
-
-describe("findLocalProcedureNames", () => {
-  test("finds local procedures per object, skipping public ones", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "lethal-local-proc-test-"));
-    try {
-      await writeFile(
-        join(dir, "SandboxLogic.Codeunit.al"),
-        [
-          'codeunit 79000 "Sandbox Logic"',
-          "{",
-          "    procedure ApplyAudit(Amount: Decimal)",
-          "    begin",
-          "        LogAudit(Amount);",
-          "    end;",
-          "",
-          "    local procedure LogAudit(Amount: Decimal)",
-          "    begin",
-          "    end;",
-          "}",
-          "",
-        ].join("\n"),
-      );
-      const result = await findLocalProcedureNames(dir);
-      expect(result.get("5:79000")).toEqual(["LogAudit"]);
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("keys by object type and id, and returns nothing for an object with no locals", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "lethal-local-proc-test-"));
-    try {
-      await mkdir(dir, { recursive: true });
-      await writeFile(
-        join(dir, "SandboxPricing.Codeunit.al"),
-        [
-          'codeunit 79001 "Sandbox Pricing"',
-          "{",
-          "    procedure DiscountedPrice(Price: Decimal): Decimal",
-          "    begin",
-          "        exit(Price);",
-          "    end;",
-          "}",
-          "",
-        ].join("\n"),
-      );
-      const result = await findLocalProcedureNames(dir);
-      expect(result.has("5:79001")).toBe(false);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
