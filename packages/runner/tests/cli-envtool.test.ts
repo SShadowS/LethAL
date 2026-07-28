@@ -957,6 +957,14 @@ describe("bcDevBackendConfig (Important 4 — coverageMode config surface)", () 
     expect(cfg.coverageMode).toBeUndefined();
     expect("coverageMode" in cfg).toBe(false);
   });
+
+  // R58: the same forwarding, for the mode that actually changes which SESSION measures the green
+  // set. A widened union with no config surface reaching it is how `"none"` spent a release
+  // unselectable.
+  it('forwards coverageMode "fenced" (R58)', () => {
+    const c: BcDevConfigSection = { ...RESOLVED_BCDEV, coverageMode: "fenced" };
+    expect(bcDevBackendConfig(c, "C:/proj").coverageMode).toBe("fenced");
+  });
 });
 
 // ————————————————————————————————————————————————————————————————————————

@@ -111,6 +111,30 @@ const SYMBOL_ARRAYS: ReadonlyArray<{ key: string; objectType: number }> = [
   { key: "Queries", objectType: 9 },
 ];
 
+/**
+ * The arrays above PLUS the two extension kinds — every SymbolReference.json array that declares an
+ * object carrying a numeric id, which is what `declaredObjects()` scopes R58's line map by.
+ *
+ * MEASURED 2026-07-28, not assumed: a probe project with one `tableextension` and one
+ * `pageextension` compiled offline by `alc` 18.0.38.8509 writes `TableExtensions` and
+ * `PageExtensions` arrays, shaped exactly like the rest (`Id`, `Name`, `Methods`) plus a
+ * `TargetObject`. Guessing the names was not an option: an array named wrong means the extension is
+ * silently NOT declared, its fenced coverage rows are skipped, and every mutant in it reports
+ * `no-coverage` — a quiet loss with no error anywhere.
+ *
+ * Deliberately SEPARATE from `SYMBOL_ARRAYS` rather than merged into it: `SYMBOL_ARRAYS` feeds
+ * `AppMethodIndex.lookup`, which the HUB path uses to name a coverage `methodId`, and adding the
+ * extension arrays there would change hub attribution for extension objects (today they fall
+ * through to `findLocalProcedureNames`). That is a real gap — filed as its own roadmap item — but
+ * it is not R58's, and moving it under cover of this change would make the differential gate
+ * compare two things at once.
+ */
+const DECLARED_OBJECT_ARRAYS: ReadonlyArray<{ key: string; objectType: number }> = [
+  ...SYMBOL_ARRAYS,
+  { key: "PageExtensions", objectType: 14 },
+  { key: "TableExtensions", objectType: 15 },
+];
+
 interface SymbolMethod {
   readonly Id: number;
   readonly Name: string;
@@ -140,6 +164,7 @@ interface SymbolObject {
  */
 export class AppMethodIndex {
   private readonly byKey = new Map<string, string>();
+  private readonly declared = new Set<string>();
 
   private constructor() {}
 
@@ -154,7 +179,30 @@ export class AppMethodIndex {
         }
       }
     }
+    for (const { key, objectType } of DECLARED_OBJECT_ARRAYS) {
+      const objects = root[key] as SymbolObject[] | undefined;
+      for (const obj of objects ?? []) {
+        if (typeof obj.Id !== "number") continue;
+        index.declared.add(`${objectTypeName(objectType).toLowerCase()}:${obj.Id}`);
+      }
+    }
     return index;
+  }
+
+  /**
+   * The `(objectType, objectId)` pairs THIS artifact declares, keyed `"<lowercase type>:<id>"` —
+   * the same key `line-map.ts` builds, so the two can be compared directly.
+   *
+   * R58's scope rule. `CoverageArray` serializes the ENTIRE `Code Coverage` table (Base App, System
+   * App, Test Runner, the test app, Continia Core, LethAL's own control codeunits), so the fenced
+   * path needs a hard answer to "is this row from the artifact we compiled?" before it dares name a
+   * procedure. The compiled package's own symbol reference is that answer — and it is the reason
+   * the map must NOT be built by walking the batch dir: `prepareBatchProject` deliberately copies
+   * Document Output's 137 `.dependencies` sources (R39), whose objects are published by their OWN
+   * apps, and naming a member from that copied text would be R29 with extra steps.
+   */
+  declaredObjects(): ReadonlySet<string> {
+    return this.declared;
   }
 
   static async fromAppFile(appPath: string): Promise<AppMethodIndex> {

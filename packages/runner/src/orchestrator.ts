@@ -27,7 +27,7 @@ import {
 import { nextAbove, parseVersionConflict, reserveAppVersion } from "./app-version";
 import { AlcCompileError, ArtifactPrepareError, DeploymentError } from "./artifact";
 import type { CompiledArtifact } from "./artifact";
-import type { ExecutionBackend, TestMethodRef, TestVerdict } from "./backend";
+import type { CoverageMode, ExecutionBackend, TestMethodRef, TestVerdict } from "./backend";
 import { NO_RESULT_FOR_METHOD } from "./bcdev-backend";
 import { bisectFailingMutant } from "./bisect";
 import { discoverTests } from "./discovery";
@@ -1175,7 +1175,7 @@ async function runFenced(
   backend: ExecutionBackend,
   safety: SessionSafety,
   ref: TestMethodRef,
-  opts: { coverage: "none" | "procedure" | "line"; timeoutMs: number },
+  opts: { coverage: CoverageMode; timeoutMs: number },
   leaseSession: LeaseSession | undefined,
   resyncOpSeq?: () => Promise<void>,
 ): Promise<FencedRunOutcome> {
@@ -1980,12 +1980,18 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
    * Layer 5C-B1 (design §5): re-seeds the backend's op-seq counter before the ONE retry a
    * `pre-dispatch-rejected` run earns — see `LeaseSession.resyncOpSeq`. Built here, once, so
    * BOTH `runOnce` call sites that dispatch against `cfg.backend` (the baseline loop and, via
-   * `runMutantsOnBackend`, the per-mutant loop) carry it. A call site without it is safe only
-   * while the backend reports `coverage: "procedure"` (the baseline then never takes the fenced
-   * RunMutant path); the day an authoritative backend reports `coverage: "none"`, a baseline
-   * retry would send a stale-high `opSeq`, be refused `reason:"lease-invalid"`, and be
-   * indistinguishable at the client from genuine lease loss — falsely quarantining a healthy
-   * session. Nothing at the call site would record that dependency, so it is simply passed.
+   * `runMutantsOnBackend`, the per-mutant loop) carry it. A call site without it would send a
+   * stale-high `opSeq` on that retry, be refused `reason:"lease-invalid"`, and be indistinguishable
+   * at the client from genuine lease loss — falsely quarantining a healthy session.
+   *
+   * That used to be a hypothetical for the BASELINE site, guarded by "safe only while the backend
+   * reports `coverage: "procedure"`, since the baseline then never takes the fenced RunMutant
+   * path". **R58 spends that guard.** Under `coverage: "fenced"` the baseline goes through
+   * `RunMutantWithCoverage` — the same fenced action, on the same lease, consuming the same
+   * server-side op-seq sequence — so every baseline test now claims an op, can be refused
+   * `lease-invalid`, and participates in the same reconciliation the mutant loop does
+   * (`classifyLeaseVerdict` -> `handleBaselineLeaseOutcome` immediately below the call).
+   * Nothing at the call site would record that dependency, so it is simply passed.
    */
   let resyncSessionOpSeq: (() => Promise<void>) | undefined;
   if (cfg.lease !== undefined) {
@@ -2316,6 +2322,13 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         }
         continue;
       }
+      // R58, recorded rather than discovered later: under `coverage: "fenced"` these durations
+      // INCLUDE coverage-collection overhead (Start/StopApplicationCoverage plus serializing the
+      // whole `Code Coverage` table) that no mutant run pays. Every mutant's budget is
+      // `2 * baseline` (`MIN_MUTANT_BUDGET_MS`, below), so budgets inflate slightly — the SAFE
+      // direction, since a too-small budget produces a client-side `deadline-exceeded` that strands
+      // a run server-side and quarantines the tier. R47 and R53 were fought over exactly these
+      // numbers, so the shift is stated here rather than left to be re-derived from a timing report.
       const baselineDuration = new Map(
         greenTests.map((b) => [testKeyOf(b.ref), b.verdict.durationMs]),
       );
@@ -3429,7 +3442,7 @@ export async function runOnce(
   backend: ExecutionBackend,
   safety: SessionSafety,
   ref: TestMethodRef,
-  opts: { coverage: "none" | "procedure" | "line"; timeoutMs: number },
+  opts: { coverage: CoverageMode; timeoutMs: number },
   resyncOpSeq?: () => Promise<void>,
 ): Promise<TestVerdict> {
   safety.assertSafe(`run(${ref.codeunitName}.${ref.method})`);

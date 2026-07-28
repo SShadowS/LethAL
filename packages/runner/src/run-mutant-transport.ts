@@ -29,6 +29,17 @@ export interface RunMutantRequest {
    * `bcdev-backend.ts`).
    */
   readonly lease: LeaseTuple & { readonly opSeq: number };
+  /**
+   * R58, `runWithCoverage` only: an AL `SetFilter` expression over the `Code Coverage` table's
+   * `"Object ID"` — the compiled artifact's own `idRanges`, e.g. `79000..79199`.
+   *
+   * Required rather than optional on that path, and NOT defaulted to `""`. Measured 2026-07-28:
+   * unfiltered, `RunMutantWithCoverage` does not return headers within 300 s even for a
+   * three-line fixture test, because the table holds every line the platform recorded during the
+   * run — the whole Test Runner and Base App machinery, not just the target. An accidentally
+   * empty filter is therefore not a benign default, it is a hang.
+   */
+  readonly coverageObjectIdFilter?: string;
 }
 
 /** Parsed `LethALControl_RunMutant` result (the JSON string inside OData's scalar `value`). */
@@ -44,11 +55,139 @@ interface RunMutantResult {
   readonly codeunitResults?: unknown;
   readonly observedAny?: unknown;
   readonly identityMismatch?: unknown;
+  /** R58: present only on the `RunMutantWithCoverage` action — see `FencedCoverageRow`. */
+  readonly coverage?: unknown;
+}
+
+/**
+ * One row of BC's `Code Coverage` table, as `RunMutantWithCoverage` serializes it (control app
+ * 1.0.0.9). Zero-hit rows are dropped server-side, as is every object outside the requested
+ * `coverageObjectIdFilter`.
+ *
+ * `objectType` is BC's own numeric object-type value (`app-package.ts`'s `objectTypeName` maps it);
+ * `lineNo` is a 1-based OBJECT-RELATIVE SOURCE line, and `0` is BC's object-level row (both
+ * measured — see `line-map.ts`).
+ */
+export interface FencedCoverageRow {
+  readonly objectType: number;
+  readonly objectId: number;
+  readonly lineNo: number;
+  readonly hits: number;
+}
+
+/**
+ * A `RunMutantWithCoverage` answer whose `ran` result carried no readable `coverage` array.
+ *
+ * A distinct class, extending `Error` DIRECTLY (never another typed error — see CLAUDE.md), and
+ * THROWN rather than mapped to an `error` verdict. The alternative is the project's signature bug:
+ * a baseline test that silently contributes no coverage looks exactly like a test that genuinely
+ * covered nothing, its mutants fall to `no-coverage`, and the whole thing reads as a mutation-
+ * scoring problem instead of "the server's answer was malformed" — the same disguise R31 cost two
+ * debugging sessions to see through.
+ *
+ * Deliberately NOT raised for absent coverage on a non-`ran` status: a refusal (`lease-invalid`,
+ * `artifact-mismatch`, `reserved-params`) legitimately carries none, and the AL returns `RunMutant`'s
+ * inner payload UNTOUCHED when it cannot re-parse it, so "no coverage key" is a normal shape there.
+ */
+export class FencedCoverageError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "FencedCoverageError";
+  }
+}
+
+/**
+ * What the server says the coverage step COST, and how much the filter removed.
+ *
+ * Reported because the two costs behind a fenced-coverage timeout — the platform RECORDING every
+ * executed line, and the control app SERIALIZING the table — look identical from the client (a
+ * fetch that never returns) and only one of them is fixable by filtering. `scannedRows` versus
+ * `emittedRows` separately distinguishes "the filter correctly matched a small set" from "the
+ * filter matched nothing", which are the same empty array otherwise.
+ */
+export interface FencedCoverageStats {
+  readonly runMs: number;
+  readonly serializeMs: number;
+  readonly scannedRows: number;
+  readonly emittedRows: number;
+}
+
+/** What `runWithCoverage` returns: the verdict, plus the raw rows behind it. */
+export interface RunMutantWithCoverageResult {
+  readonly verdict: TestVerdict;
+  /**
+   * The RAW line rows, kept as a diagnostic artifact rather than only their collapsed
+   * `CoverageMap` form. The first time a line falls in no known procedure range on a real project
+   * — and it will — these are the only evidence of what BC actually said. Absent whenever the run
+   * did not reach a `ran` status.
+   */
+  readonly coverageRows?: readonly FencedCoverageRow[];
+  /** Absent on the same paths `coverageRows` is, and on a server that reports no timing. */
+  readonly coverageStats?: FencedCoverageStats;
 }
 
 /** The BC `Test Method Line.Result` enum ints — confirmed live on Cronus281 (mem:runmutant_odata). */
 const RESULT_SUCCESS = 2;
 const RESULT_FAILURE = 1;
+
+/**
+ * Validates the `coverage` array on a `ran` result, or throws `FencedCoverageError`.
+ *
+ * Every field is checked to be a real number rather than coerced: a row whose `lineNo` arrived as
+ * `"12"` or `null` would silently miss every procedure range and downgrade a member-level
+ * observation to object-level — a quieter, subtler version of the wrong-attribution failure the
+ * whole line map exists to prevent. An EMPTY array is valid and means what it says: this test
+ * executed nothing that BC recorded with a hit.
+ */
+function parseCoverageRows(raw: unknown): readonly FencedCoverageRow[] {
+  if (!Array.isArray(raw)) {
+    const got = raw === undefined ? "absent" : JSON.stringify(raw).slice(0, 200);
+    const why =
+      "the control app must be 1.0.0.9 or newer (MIN_CONTROL_VERSION), and a baseline " +
+      "measured without coverage would silently report every mutant as no-coverage";
+    throw new FencedCoverageError(
+      `RunMutantWithCoverage status=ran but \`coverage\` is ${got}, expected an array — ${why}`,
+    );
+  }
+  const rows: FencedCoverageRow[] = [];
+  for (const [i, r] of raw.entries()) {
+    const row = r as Partial<Record<keyof FencedCoverageRow, unknown>>;
+    const { objectType, objectId, lineNo, hits } = row ?? {};
+    if (
+      typeof objectType !== "number" ||
+      typeof objectId !== "number" ||
+      typeof lineNo !== "number" ||
+      typeof hits !== "number"
+    ) {
+      const expected = "expected {objectType, objectId, lineNo, hits} all numeric";
+      throw new FencedCoverageError(
+        `RunMutantWithCoverage coverage row ${i} is malformed: ${JSON.stringify(r).slice(0, 200)} — ${expected}`,
+      );
+    }
+    rows.push({ objectType, objectId, lineNo, hits });
+  }
+  return rows;
+}
+
+/** Best-effort: a server that reports no timing yields `undefined` rather than fabricated zeros. */
+function parseCoverageStats(result: RunMutantResult): FencedCoverageStats | undefined {
+  const r = result as Record<string, unknown>;
+  const num = (k: string): number | undefined =>
+    typeof r[k] === "number" ? (r[k] as number) : undefined;
+  const runMs = num("coverageRunMs");
+  const serializeMs = num("coverageSerializeMs");
+  const scannedRows = num("coverageScannedRows");
+  const emittedRows = num("coverageEmittedRows");
+  if (
+    runMs === undefined ||
+    serializeMs === undefined ||
+    scannedRows === undefined ||
+    emittedRows === undefined
+  ) {
+    return undefined;
+  }
+  return { runMs, serializeMs, scannedRows, emittedRows };
+}
 
 export class RunMutantTransport {
   constructor(
@@ -58,7 +197,51 @@ export class RunMutantTransport {
     private readonly fetchFn: FetchFn = fetch,
   ) {}
 
+  /** One fenced mutant/baseline execution, no coverage collected — the unchanged Layer 5C-A path. */
   async run(req: RunMutantRequest): Promise<TestVerdict> {
+    return (await this.execute(req, false)).verdict;
+  }
+
+  /**
+   * R58: the same call routed at `LethALControl_RunMutantWithCoverage`, which wraps `RunMutant` in
+   * `StartApplicationCoverage`/`StopApplicationCoverage` and attaches the `Code Coverage` table.
+   *
+   * A SEPARATE OData action rather than a parameter on `RunMutant`, deliberately (control app
+   * 1.0.0.9): BC validates an action's request shape before its body runs, so adding a parameter
+   * would make every stale-control-app failure present as a request-shape rejection — exactly how
+   * R25 presented. Existing callers are untouched.
+   *
+   * `StartApplicationCoverage` CLEARS rather than accumulates (measured), so each call's rows
+   * describe only its own execution and per-test attribution is sound.
+   */
+  async runWithCoverage(req: RunMutantRequest): Promise<RunMutantWithCoverageResult> {
+    return this.execute(req, true);
+  }
+
+  /**
+   * The one dispatch path both entry points share. The coverage rows come back through `sink`
+   * rather than the return type so that every one of `dispatch`'s ~15 classified exits — each of
+   * which encodes a hard-won dispatch/effect distinction — keeps returning a bare `TestVerdict`
+   * and needed no edit to gain a coverage mode it does not participate in.
+   */
+  private async execute(
+    req: RunMutantRequest,
+    collectCoverage: boolean,
+  ): Promise<RunMutantWithCoverageResult> {
+    const sink: { rows?: readonly FencedCoverageRow[]; stats?: FencedCoverageStats } = {};
+    const verdict = await this.dispatch(req, collectCoverage, sink);
+    return {
+      verdict,
+      ...(sink.rows !== undefined ? { coverageRows: sink.rows } : {}),
+      ...(sink.stats !== undefined ? { coverageStats: sink.stats } : {}),
+    };
+  }
+
+  private async dispatch(
+    req: RunMutantRequest,
+    collectCoverage: boolean,
+    sink: { rows?: readonly FencedCoverageRow[]; stats?: FencedCoverageStats },
+  ): Promise<TestVerdict> {
     const { ref, mutantId, attemptId, timeoutMs, lease } = req;
     // Layer 5C-B1: the SAME bound every lease action is held to (`lease.ts`), applied here because
     // `RunMutant` writes the same Text[64] column. Deliberately a THROW, not a `TestVerdict` —
@@ -75,7 +258,10 @@ export class RunMutantTransport {
 
     const params = new URLSearchParams({ company: this.cfg.company });
     if (this.cfg.tenant !== undefined) params.set("tenant", this.cfg.tenant);
-    const url = `${this.cfg.baseUrl}/ODataV4/LethALControl_RunMutant?${params.toString()}`;
+    const action = collectCoverage
+      ? "LethALControl_RunMutantWithCoverage"
+      : "LethALControl_RunMutant";
+    const url = `${this.cfg.baseUrl}/ODataV4/${action}?${params.toString()}`;
 
     // Request construction (auth header encoding, JSON body serialization) is synchronous and
     // can throw (e.g. `btoa` on a credential char with code unit >255) BEFORE fetchFn is ever
@@ -98,6 +284,9 @@ export class RunMutantTransport {
         leaseToken: lease.token,
         serverGeneration: lease.serverGeneration,
         opSeq: lease.opSeq,
+        // Sent ONLY on the coverage action: `RunMutant`'s OData signature has no such parameter,
+        // and BC validates an action's request shape before its body runs (R25).
+        ...(collectCoverage ? { coverageObjectIdFilter: req.coverageObjectIdFilter ?? "" } : {}),
       });
     } catch (err) {
       return {
@@ -271,6 +460,16 @@ export class RunMutantTransport {
         `RunMutant unexpected status: ${JSON.stringify(result.status)}`,
         fencedOp,
       );
+    }
+
+    // Status is `ran`, so the server both executed and cleared. Only NOW is a missing/malformed
+    // `coverage` array a contract violation — every exit above is a refusal or an unreadable
+    // answer, and `RunMutantWithCoverage` returns `RunMutant`'s inner payload untouched when it
+    // cannot re-parse it, so those legitimately carry no coverage at all.
+    if (collectCoverage) {
+      sink.rows = parseCoverageRows(result.coverage);
+      const stats = parseCoverageStats(result);
+      if (stats !== undefined) sink.stats = stats;
     }
 
     return this.mapRanResult(ref, durationMs, result, fencedOp);

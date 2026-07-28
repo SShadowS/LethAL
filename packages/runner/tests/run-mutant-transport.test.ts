@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { ActivationConfig } from "../src/activation";
 import type { TestMethodRef } from "../src/backend";
 import { MAX_ATTEMPT_ID_LENGTH } from "../src/lease";
-import { RunMutantTransport } from "../src/run-mutant-transport";
+import { FencedCoverageError, RunMutantTransport } from "../src/run-mutant-transport";
 
 const CFG: ActivationConfig = {
   baseUrl: "http://bc:7048/BC",
@@ -421,5 +421,165 @@ describe("RunMutantTransport.run — per-run attestation (spec §G)", () => {
     const v = await transport(okFetch(inner)).run(REQ);
     expect(v.outcome).toBe("pass");
     expect(v.attestation).toEqual({ observedAny: false, identityMismatch: false });
+  });
+});
+
+/**
+ * R58: the fenced-coverage variant. The server half is control app 1.0.0.9's
+ * `RunMutantWithCoverage`, which wraps `RunMutant` in Start/StopApplicationCoverage and attaches
+ * the `Code Coverage` table. The client half must reach a DIFFERENT OData action, must tolerate a
+ * refusal carrying no coverage at all, and must refuse to proceed silently when a `ran` result's
+ * coverage is unreadable.
+ */
+describe("RunMutantTransport.runWithCoverage — R58", () => {
+  /** Captures the URL as well as answering, since WHICH action is called is half of this feature. */
+  function urlCapturingFetch(inner: Record<string, unknown>): {
+    fetchFn: typeof fetch;
+    urls: string[];
+  } {
+    const urls: string[] = [];
+    const fetchFn = (async (url: unknown) => {
+      urls.push(String(url));
+      return new Response(JSON.stringify({ value: JSON.stringify(inner) }), { status: 200 });
+    }) as typeof fetch;
+    return { fetchFn, urls };
+  }
+
+  const ROWS = [
+    { objectType: 5, objectId: 79100, lineNo: 12, hits: 3 },
+    { objectType: 1, objectId: 79300, lineNo: 0, hits: 1 },
+  ];
+
+  test("posts to LethALControl_RunMutantWithCoverage, not RunMutant", async () => {
+    const { fetchFn, urls } = urlCapturingFetch(echo({ coverage: ROWS }));
+    await transport(fetchFn).runWithCoverage(REQ);
+    expect(urls).toHaveLength(1);
+    expect(urls[0]).toContain("/ODataV4/LethALControl_RunMutantWithCoverage?");
+  });
+
+  test("run() still posts to the unchanged LethALControl_RunMutant action", async () => {
+    const { fetchFn, urls } = urlCapturingFetch(echo());
+    await transport(fetchFn).run(REQ);
+    expect(urls[0]).toContain("/ODataV4/LethALControl_RunMutant?");
+    expect(urls[0]).not.toContain("WithCoverage");
+  });
+
+  test("a ran result yields the verdict AND the raw rows", async () => {
+    const { verdict, coverageRows } = await transport(
+      okFetch(echo({ coverage: ROWS })),
+    ).runWithCoverage(REQ);
+    expect(verdict.outcome).toBe("pass");
+    expect(coverageRows).toEqual(ROWS);
+  });
+
+  test("an EMPTY coverage array is valid — the test recorded no hits", async () => {
+    const { verdict, coverageRows } = await transport(
+      okFetch(echo({ coverage: [] })),
+    ).runWithCoverage(REQ);
+    expect(verdict.outcome).toBe("pass");
+    expect(coverageRows).toEqual([]);
+  });
+
+  test("a refusal carries no coverage, and that is NORMAL — no throw, no rows", async () => {
+    // `RunMutantWithCoverage` returns RunMutant's inner payload untouched when it cannot re-parse
+    // it, and every refusal status legitimately answers before coverage could be attached.
+    const inner = {
+      status: "lease-invalid",
+      reason: "epoch-mismatch",
+      targetAppId: TA,
+      artifactId: AR,
+      attemptId: "a1",
+      mutantId: "M0003",
+      codeunitId: 79100,
+      method: "OverBudgetDetected",
+    };
+    const { verdict, coverageRows } = await transport(okFetch(inner)).runWithCoverage(REQ);
+    expect(verdict.operation).toBe("lease-lost");
+    expect(coverageRows).toBeUndefined();
+  });
+
+  test("ABSENT coverage on a ran result throws — never a silent empty green set", async () => {
+    // The failure this closes: a baseline that quietly contributes no coverage is indistinguishable
+    // from a baseline that genuinely covered nothing, and every mutant then reads `no-coverage`.
+    await expect(transport(okFetch(echo())).runWithCoverage(REQ)).rejects.toThrow(
+      /status=ran but `coverage` is absent/,
+    );
+  });
+
+  test("a MALFORMED coverage row on a ran result throws, naming the row", async () => {
+    const inner = echo({ coverage: [{ objectType: 5, objectId: 79100, lineNo: "12", hits: 3 }] });
+    await expect(transport(okFetch(inner)).runWithCoverage(REQ)).rejects.toThrow(
+      /coverage row 0 is malformed/,
+    );
+  });
+
+  test("coverage that is not an array at all throws", async () => {
+    const inner = echo({ coverage: { rows: [] } });
+    await expect(transport(okFetch(inner)).runWithCoverage(REQ)).rejects.toThrow(
+      FencedCoverageError,
+    );
+  });
+
+  test("run() ignores a coverage array entirely — the unchanged path stays unchanged", async () => {
+    const v = await transport(okFetch(echo({ coverage: "garbage" }))).run(REQ);
+    expect(v.outcome).toBe("pass");
+  });
+});
+
+/**
+ * R58's object filter and the diagnostics that measure its effect. See
+ * `bcdev-backend.test.ts`'s "the server-side object-id filter" describe for the measurement that
+ * made this mandatory rather than an optimisation (300 s unfiltered vs 126 ms filtered).
+ */
+describe("RunMutantTransport.runWithCoverage — filter + stats", () => {
+  function bodyCapturingFetch(inner: Record<string, unknown>): {
+    fetchFn: typeof fetch;
+    bodies: Array<Record<string, unknown>>;
+  } {
+    const bodies: Array<Record<string, unknown>> = [];
+    const fetchFn = (async (_url: unknown, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return new Response(JSON.stringify({ value: JSON.stringify(inner) }), { status: 200 });
+    }) as typeof fetch;
+    return { fetchFn, bodies };
+  }
+
+  test("sends coverageObjectIdFilter verbatim on the coverage action", async () => {
+    const { fetchFn, bodies } = bodyCapturingFetch(echo({ coverage: [] }));
+    await transport(fetchFn).runWithCoverage({ ...REQ, coverageObjectIdFilter: "79000..79199" });
+    expect(bodies[0]?.coverageObjectIdFilter).toBe("79000..79199");
+  });
+
+  test("run() never sends the field — the unchanged action's OData signature has no such param", async () => {
+    const { fetchFn, bodies } = bodyCapturingFetch(echo());
+    await transport(fetchFn).run({ ...REQ, coverageObjectIdFilter: "79000..79199" });
+    expect("coverageObjectIdFilter" in (bodies[0] ?? {})).toBe(false);
+  });
+
+  test("surfaces the server's cost + row diagnostics", async () => {
+    // scannedRows vs emittedRows is what distinguishes "the filter matched a small set correctly"
+    // from "the filter matched nothing" — the same empty array otherwise.
+    const inner = echo({
+      coverage: [{ objectType: 5, objectId: 79100, lineNo: 4, hits: 1 }],
+      coverageRunMs: 812,
+      coverageSerializeMs: 37,
+      coverageScannedRows: 44,
+      coverageEmittedRows: 41,
+    });
+    const { coverageStats } = await transport(okFetch(inner)).runWithCoverage(REQ);
+    expect(coverageStats).toEqual({
+      runMs: 812,
+      serializeMs: 37,
+      scannedRows: 44,
+      emittedRows: 41,
+    });
+  });
+
+  test("a server reporting no timing yields undefined stats, never fabricated zeros", async () => {
+    const { coverageStats, coverageRows } = await transport(
+      okFetch(echo({ coverage: [] })),
+    ).runWithCoverage(REQ);
+    expect(coverageRows).toEqual([]);
+    expect(coverageStats).toBeUndefined();
   });
 });

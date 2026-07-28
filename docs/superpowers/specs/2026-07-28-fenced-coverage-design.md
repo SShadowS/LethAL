@@ -1,8 +1,15 @@
 # Fenced-path coverage — the client half of R58
 
-**Status:** design, revised 2026-07-28 after an external review that found a fatal rule, an internal
-contradiction, and three missing unknowns. The server half shipped (control app 1.0.0.8,
-`RunMutantWithCoverage`). This specifies the client that consumes it.
+**Status:** BUILT 2026-07-28. The client half ships behind `coverageMode: "fenced"`, opt-in. The
+server half needed one more change that only measurement could find — see unknown #4 below: control
+app **1.0.0.8 was unusable**, and 1.0.0.9 takes an object-id filter. The differential gate passes on
+both sandbox fixtures. On Continia Document Output it passes its BLOCKING criterion (0 mutants move
+`killed` -> `survived`) while surfacing an unresolved question: 77 mutants move `survived` ->
+`no-coverage`, and whether that is the fence being right or the fence losing coverage is not yet
+discriminated. `"fenced"` therefore stays opt-in and rollout step 5 does not start.
+
+Earlier: design, revised after an external review that found a fatal rule, an internal contradiction,
+and three missing unknowns.
 
 **Goal:** collect coverage on the same runner that produces verdicts, so the green set and the
 verdicts stop coming from two different sessions.
@@ -158,18 +165,29 @@ loaded and the batch dir's text is on disk. Parse it; the boundary cases come fr
 
    This was the unknown most likely to kill the design — accumulation would have credited test N
    with tests 1..N−1's coverage, silently collapsing selection toward all-tests.
-4. **Payload size and response time on a real DO test.** A DO test executes thousands of Base App
-   lines *with hits*, so dropping zero-hit rows does not bound this. The rows are serialized
-   row-by-row through `JsonArray` in AL and returned as Text over OData, behind a proxy with a
-   measured 362 s ceiling (R44) that has already quarantined a baseline once — and a slow coverage
-   response during baseline is an `in-flight-unknown`, i.e. a durable tier quarantine (R47/R53).
-   Measure one real test before building; consider passing the target's `idRanges` into
-   `CoverageArray` so the filtering happens server-side.
-5. **Do the TARGET app's objects appear at all?** The R58 probe confirmed only the test app's own
-   object.
-6. **Do lines refer to the INSTRUMENTED source?** Almost certainly — that is what was published —
-   but instrumentation shifts every line, so a map built from the original source would be wrong
-   while still producing plausible procedure names.
+4. ~~**Payload size and response time on a real DO test.**~~ **ANSWERED 2026-07-28, and it was the
+   one that bit.** Unfiltered, `RunMutantWithCoverage` never returned HEADERS within 300 s — not on
+   a DO test, on `fixtures/sandbox-app`, whose entire test body is three lines. The client's fetch
+   gave up, `RunMutantTransport` classified it `in-flight-unknown`, and the session reported
+   `killed=0 survived=0 noCoverage=0` while looking perfectly configured.
+
+   The cost is not the target's code: inside `RunMutant` the platform records every line the Test
+   Runner, Test Suite Mgt and Base App execute, so the table does not shrink with the test. A larger
+   client timeout would therefore not have fixed it, and the "consider passing `idRanges`" hedge in
+   the first draft was too weak — it is mandatory. Control app 1.0.0.9 takes a
+   `CoverageObjectIdFilter` and the same call answers in **126 ms / 1,546 bytes**.
+
+   Two things follow that are worth stating. An EMPTY filter is not a benign default, it is the
+   hang, so a manifest with no `idRanges` is refused rather than sent. And the filter is not
+   load-bearing for correctness — the client re-checks every row against the compiled package's
+   `SymbolReference.json` — so a too-wide filter costs bytes and a too-narrow one loses coverage,
+   which is why it is the artifact's declared ranges verbatim.
+5. ~~**Do the TARGET app's objects appear at all?**~~ **YES** — measured on Continia Document
+   Output: 12 of 13 scored mutants attributed `exact` (member level) to named DO tests.
+6. ~~**Do lines refer to the INSTRUMENTED source?**~~ **YES, confirmed by construction the moment #5
+   was.** The resolved names are real procedures of the target on a 554-file project that also
+   carries 137 `.dependencies` sources the map must not index (R39); a map built in the wrong frame
+   could not produce `exact` attribution against the mutants' own procedure names.
 
 ## Error handling
 
@@ -200,7 +218,10 @@ coverage. Any other member-level entry the fence produces that the hub does not 
 localised to a `(test, object, procedure)` triple instead of laundered through verdicts. Minutes,
 not hours, and it points at the defect rather than its shadow.
 
-**Then the differential per-mutant gate**, the same experiment that answered R37: one project twice,
+**Then the differential per-mutant gate**, the same experiment that answered R37. Implemented as
+`scripts/probe-r58-differential.ts` (runs one fixture through `runSession` twice, dumping per-test
+coverage sets alongside per-mutant verdicts) and `scripts/probe-r58-compare.ts` (applies the rules
+below and exits 1 on a blocking difference): one project twice,
 identical except `coverageMode`, compared per-mutant with `mutantCode` verified as a safe join
 (0 identity mismatches at the same code). Required:
 
@@ -217,7 +238,65 @@ Run it on **two** projects: DO exercises the Confirm-branch shape but not multi-
 trigger-heavy code or extensions — `itest:tables` differential covers what DO does not.
 
 A pure unit-test pass proves nothing: all four frozen gates have green baselines, so the whole
-mechanism is a no-op for them — the same blindness R55's candidate fix had.
+mechanism is a no-op for them — the same blindness R55's candidate fix had. That was not a
+hypothetical: the unit suite was fully green while the unfiltered coverage call was hanging for
+300 s against a live container.
+
+### Result, 2026-07-28
+
+| fixture | verdicts | covering-set changes | attribution changes | identity mismatches |
+|---|---|---|---|---|
+| `sandbox-app` | 3/10/3 both | 0 | 0 | 0 |
+| `sandbox-data` | 64/9/2 both | 0 | 0 | 0 |
+| Document Output | see below | — | — | — |
+
+The per-test oracle found **no member-level entry the fence produces and the hub does not**, which
+is the signal a wrong mapping would give. Every difference ran the other way: the HUB emits
+object-level entries for objects outside the target's own symbol reference (`Codeunit:71002`, and
+fifteen Base App / test-framework objects on the table fixture). Filed as R61.
+
+Read `sandbox-data` carefully, though: it passed on the fixture's SHAPE. Its fenced run named
+exactly one member (`Codeunit:79199::Active`, the emitted selector) plus two object-level entries,
+and its table-trigger mutants matched through `coverageFilter`'s `byObject` fallback. The hub is
+equally memberless there, so the comparison is honest — it simply exercises almost none of the
+line -> procedure mapping. Only `sandbox-app` does, on four members.
+
+### Document Output
+
+Both modes on `U:/Git/do-rel2/Cloud`, 56 baseline tests each. The hub reproduces the R37 benchmark
+exactly (12 fail / 44 pass, 16/86/15/21); the fenced baseline is **56/56 green**. Per-mutant over
+the 105 the fenced run reached, identity verified with 0 mismatches:
+
+```
+  0 x killed -> survived     <- the blocking criterion. HOLDS.
+  0 x killed -> no-coverage
+  4 x error  -> killed       <- gain
+  7 x error  -> survived     <- gain
+ 77 x survived -> no-coverage  <- unresolved
+```
+
+The line map is not the cause, and this time that is measured: the instrumented codeunit is 3,177
+lines (original 364) and BC's rows carry `lineNo` 30..3171, so the lines are in the INSTRUMENTED
+frame — unknown #6, now settled properly rather than "by construction". Bucketing the 410 real rows
+against the instrumented ranges names exactly the five procedures the run attributed; against the
+original frame it names eleven, none of which match. The rows for the other eight procedures are
+absent from the payload.
+
+Two readings remain, with opposite consequences: the fenced session genuinely does not execute them
+(R60 — headless takes the non-GUI branch, and then the hub's 77 `survived` verdicts were mutated
+code that never ran), or fenced collection loses them (and R58 under-reports). All eight missing
+procedures' covering tests pass on BOTH runners, so this is not R55's red-test mechanism. The
+discriminating experiment — run one `CalcBalance` mutant through the fence against its five
+fence-green covering tests — is named and not yet run.
+
+Two process notes worth keeping. A `--resume` run is NOT a valid differential input: it carries
+prior verdicts while recomputing attribution, so each row mixes two runs; used briefly here, it
+manufactured three convincing "lost kills" that the fresh run showed were not real. And no CLEAN
+COMPLETE fenced DO run exists, because mutant M0013 does not terminate (R53's class): each strand
+latches the session unsafe so the tail is never recorded, and leaves an op marker that quarantines
+the tier until an environment recycle + `force-reset-lease` + `clear-quarantine`.
+
+`"fenced"` therefore stays opt-in and rollout step 5 does not start.
 
 ### Which unknowns are genuinely pre-build
 

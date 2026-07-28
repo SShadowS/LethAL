@@ -108,44 +108,89 @@ codeunit 71003 "LC Control API"
     ///
     /// Coverage is collected only when asked for, because it is not free and only the baseline needs it.
     /// Verified (R58) that a fenced ODataV4 session records coverage identically to the hub session.</summary>
-    procedure RunMutantWithCoverage(TargetAppId: Text; ArtifactId: Text; AttemptId: Text; MutantId: Text; TestCodeunitId: Integer; TestMethod: Text; LeaseEpoch: Integer; LeaseToken: Text; ServerGeneration: Text; OpSeq: BigInteger) ResultJson: Text
+    /// <summary>OBJECT-ID FILTER (1.0.0.9, and the reason this action's signature changed): an AL
+    /// `SetFilter` expression over `"Object ID"` — the target artifact's own `idRanges`, e.g.
+    /// `79000..79199` or `6175200..6175499|79000..79199`. Empty means NO filter, which is the
+    /// measurement mode and not a mode any real run should use.
+    ///
+    /// It is not an optimisation. MEASURED 2026-07-28 on Cronus281: unfiltered, this action does not
+    /// return HEADERS within 300 s for a fixture whose whole test body is three lines — the client's
+    /// fetch times out and the baseline test is recorded `error`, which quarantines the tier. The
+    /// `Code Coverage` table holds every line the platform recorded during the run, and inside
+    /// `RunMutant` that is the entire Test Runner + Test Suite Mgt + Base App machinery, not just the
+    /// target. Only rows for objects the artifact DECLARES can ever be attributed anyway (the client
+    /// skips every other row — `AppMethodIndex.declaredObjects`), so filtering here throws away
+    /// nothing the client could have used.
+    ///
+    /// Correctness does NOT depend on this filter being right: the client re-checks every row against
+    /// the compiled package's own `SymbolReference.json`. A too-wide filter only costs bytes; a
+    /// too-narrow one loses coverage, which is why it is the artifact's declared ranges verbatim.</summary>
+    procedure RunMutantWithCoverage(TargetAppId: Text; ArtifactId: Text; AttemptId: Text; MutantId: Text; TestCodeunitId: Integer; TestMethod: Text; LeaseEpoch: Integer; LeaseToken: Text; ServerGeneration: Text; OpSeq: BigInteger; CoverageObjectIdFilter: Text) ResultJson: Text
     var
         CodeCoverageMgt: Codeunit "Code Coverage Mgt.";
         Raw: Text;
         Obj: JsonObject;
-        Token: JsonToken;
+        Coverage: JsonArray;
         Out: Text;
+        RunStarted: DateTime;
+        RunEnded: DateTime;
+        SerializeEnded: DateTime;
+        ScannedRows: Integer;
+        EmittedRows: Integer;
     begin
         CodeCoverageMgt.StartApplicationCoverage();
+        RunStarted := CurrentDateTime();
         Raw := RunMutant(TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, LeaseEpoch, LeaseToken, ServerGeneration, OpSeq);
         CodeCoverageMgt.StopApplicationCoverage();
+        RunEnded := CurrentDateTime();
 
         // Re-open the result and attach coverage rather than duplicating RunMutant's phase logic. If
         // the payload is not an object something is very wrong upstream; return it untouched instead
         // of masking it with a parse error of our own.
         if not Obj.ReadFrom(Raw) then
             exit(Raw);
-        Obj.Add('coverage', CoverageArray());
+        Coverage := CoverageArray(CoverageObjectIdFilter, ScannedRows, EmittedRows);
+        SerializeEnded := CurrentDateTime();
+        Obj.Add('coverage', Coverage);
+        // Diagnostics, and they earn their place: the two costs here — the platform RECORDING every
+        // executed line, and this codeunit SERIALIZING the result — fail identically at the client (a
+        // timed-out fetch), and only one of them is fixable by filtering. Reporting them separately is
+        // what turns "the fenced coverage call hangs" into a number that says which.
+        Obj.Add('coverageRunMs', DurationMs(RunEnded - RunStarted));
+        Obj.Add('coverageSerializeMs', DurationMs(SerializeEnded - RunEnded));
+        Obj.Add('coverageScannedRows', ScannedRows);
+        Obj.Add('coverageEmittedRows', EmittedRows);
         Obj.WriteTo(Out);
         exit(Out);
     end;
 
-    /// <summary>The `Code Coverage` table as a JSON array of `{objectType, objectId, lineNo, hits}`.
+    /// <summary>The `Code Coverage` table as a JSON array of `{objectType, objectId, lineNo, hits}`,
+    /// restricted to `ObjectIdFilter` (see `RunMutantWithCoverage`).
     ///
     /// `Object Type` is an Option (measured — it has no `AsInteger()`), and its integer values are BC's
     /// own object-type numbering, the same one `app-package.ts` maps: Table=1, Report=3, Codeunit=5,
     /// XmlPort=6, Page=8, Query=9, PageExtension=14, TableExtension=15.
     ///
     /// Line-level, which is FINER than the `procedure` granularity LethAL keys coverage on — mapping
-    /// lines back to procedures is the client's job, and it has the instrumented source to do it with.</summary>
-    local procedure CoverageArray(): JsonArray
+    /// lines back to procedures is the client's job, and it has the instrumented source to do it with.
+    ///
+    /// `ScannedRows`/`EmittedRows` are returned by var so the caller can report how much the filter
+    /// actually removed. A filter that silently matched nothing and one that correctly matched a small
+    /// set both produce an empty array, and this project's signature bug is exactly that pair being
+    /// indistinguishable.</summary>
+    local procedure CoverageArray(ObjectIdFilter: Text; var ScannedRows: Integer; var EmittedRows: Integer): JsonArray
     var
         CodeCoverage: Record "Code Coverage";
         Arr: JsonArray;
         Row: JsonObject;
     begin
+        ScannedRows := 0;
+        EmittedRows := 0;
+        if ObjectIdFilter <> '' then
+            CodeCoverage.SetFilter("Object ID", ObjectIdFilter);
         if CodeCoverage.FindSet() then
             repeat
+                ScannedRows += 1;
                 // Only executed lines carry information; a zero-hit row is noise on the wire, and a
                 // real project's coverage table is large.
                 if CodeCoverage."No. of Hits" > 0 then begin
@@ -155,9 +200,17 @@ codeunit 71003 "LC Control API"
                     Row.Add('lineNo', CodeCoverage."Line No.");
                     Row.Add('hits', CodeCoverage."No. of Hits");
                     Arr.Add(Row);
+                    EmittedRows += 1;
                 end;
             until CodeCoverage.Next() = 0;
         exit(Arr);
+    end;
+
+    /// <summary>A Duration as whole milliseconds, for a JSON number. `Format` on a Duration yields
+    /// prose ("2 minutes 3 seconds"), which is not a value any client can compare.</summary>
+    local procedure DurationMs(Elapsed: Duration): Integer
+    begin
+        exit(Elapsed div 1);
     end;
 
     /// <summary>Read-only: the artifact id the target registered for TargetAppId (empty if none).

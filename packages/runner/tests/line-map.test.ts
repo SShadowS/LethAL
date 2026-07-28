@@ -1,7 +1,10 @@
 import { beforeAll, describe, expect, test } from "bun:test";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { ALNodeKind, initParser, parseAL, wrapRoot } from "@lethal/engine";
 import type { ALSyntaxNode } from "@lethal/engine";
-import { LineMap, fileLineMapEntries } from "../src/line-map";
+import { LineMap, buildLineMap, fileLineMapEntries } from "../src/line-map";
 
 /**
  * R58's crux. BC's fenced coverage reports a LINE, and this maps it to the procedure that owns it.
@@ -190,5 +193,161 @@ describe("LineMap — scope and rules", () => {
     const m = mapFor(src, ["codeunit:50000"]);
     expect(m.lookup("Codeunit", 50000, 3)).toBe("InCodeunit");
     expect(m.lookup("Table", 50000, 3)).toBeUndefined();
+  });
+});
+
+describe("LineMap — undeclared objects are never INDEXED (R39/R29)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  const TWO_OBJECTS = `codeunit 50000 "Ours"
+{
+    procedure Ours()
+    begin
+    end;
+}
+
+codeunit 50001 "Theirs"
+{
+    procedure Theirs()
+    begin
+    end;
+}`;
+
+  test("a parsed-but-undeclared object resolves to nothing, not to its own procedure name", () => {
+    // The batch dir contains Document Output's 137 copied `.dependencies` sources, whose objects
+    // are published by their OWN apps: the copied text need not be the bytes BC is running, so a
+    // member name read out of it is plausible and wrong. Passing only `codeunit:50000` as declared
+    // must make 50001 unmappable even though it parsed perfectly.
+    const m = mapFor(TWO_OBJECTS, ["codeunit:50000"]);
+    expect(m.lookup("Codeunit", 50000, 3)).toBe("Ours");
+    expect(m.declares("Codeunit", 50001)).toBe(false);
+    // Object line 4 is where `Theirs` WOULD resolve (50001 bases at file line 7, `Theirs` is at
+    // file line 10). Asserting an out-of-range line instead would pass with or without the scope
+    // filter — the "test passes for the wrong reason" shape this project treats as its own hazard.
+    expect(m.lookup("Codeunit", 50001, 4)).toBeUndefined();
+  });
+
+  test("but an undeclared object still consumes the lines its neighbour is numbered against", () => {
+    // Objects PARTITION the file, so the base line of a declared object depends on where the
+    // PREVIOUS object ended — declared or not. Filtering before that arithmetic would shift every
+    // later object's ranges onto its neighbour, which is the wrong-procedure failure exactly.
+    const m = mapFor(TWO_OBJECTS, ["codeunit:50001"]);
+    // Object 50000 ends at file line 6, so 50001 bases at 7 and `Theirs` (file line 10) is line 4.
+    expect(m.lookup("Codeunit", 50001, 4)).toBe("Theirs");
+  });
+});
+
+describe("buildLineMap — over a real batch dir", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  async function dirWith(files: Record<string, string>): Promise<string> {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-linemap-"));
+    for (const [name, content] of Object.entries(files)) {
+      await writeFile(join(dir, name), content, "utf8");
+    }
+    return dir;
+  }
+
+  test("maps every declared object across files, and skips the rest", async () => {
+    const dir = await dirWith({
+      "Ours.Codeunit.al": `codeunit 79100 "Ours"
+{
+    procedure Alpha()
+    begin
+    end;
+}`,
+      // Stands in for a copied `.dependencies` source: parses fine, is not in our SymbolReference.
+      "Theirs.Codeunit.al": `codeunit 6175297 "Theirs"
+{
+    procedure Beta()
+    begin
+    end;
+}`,
+    });
+    try {
+      const m = await buildLineMap(dir, new Set(["codeunit:79100"]));
+      expect(m.lookup("Codeunit", 79100, 3)).toBe("Alpha");
+      expect(m.lookup("Codeunit", 6175297, 3)).toBeUndefined();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("identifies every object kind coverage can report, extensions included", async () => {
+    // The type NAMES must match `objectTypeName`'s exactly — a coverage row arrives as a BC integer
+    // and is named by that function before it reaches this map, so `"Xmlport"` vs `"XmlPort"` would
+    // resolve nothing while looking like "the test covered no member".
+    const dir = await dirWith({
+      "All.al": `table 79300 "T"
+{
+    procedure TProc()
+    begin
+    end;
+}
+
+tableextension 79301 "TE" extends "T"
+{
+    procedure TeProc()
+    begin
+    end;
+}
+
+query 79302 "Q"
+{
+    elements { dataitem(a; "T") { column(b; "TProc") { } } }
+
+    procedure QProc()
+    begin
+    end;
+}
+
+xmlport 79303 "X"
+{
+    schema { textelement(root) { } }
+
+    procedure XProc()
+    begin
+    end;
+}`,
+    });
+    try {
+      const declared = new Set([
+        "table:79300",
+        "tableextension:79301",
+        "query:79302",
+        "xmlport:79303",
+      ]);
+      const m = await buildLineMap(dir, declared);
+      expect(m.lookup("Table", 79300, 3)).toBe("TProc");
+      // Object 79300 ends at file line 6, so 79301 bases at 7 and `TeProc` (file line 10) is line 4.
+      expect(m.lookup("TableExtension", 79301, 4)).toBe("TeProc");
+      expect(m.lookup("Query", 79302, 6)).toBe("QProc");
+      expect(m.lookup("XmlPort", 79303, 6)).toBe("XProc");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a DECLARED object with no source in the dir throws rather than resolving nothing", async () => {
+    // Rule 2. Every declared object's source is source LethAL wrote and compiled, so this is a
+    // LethAL bug and must say so — the alternative is a confident, quietly incomplete green set.
+    const dir = await dirWith({
+      "Ours.Codeunit.al": `codeunit 79100 "Ours"
+{
+    procedure Alpha()
+    begin
+    end;
+}`,
+    });
+    try {
+      const m = await buildLineMap(dir, new Set(["codeunit:79100", "codeunit:79199"]));
+      expect(() => m.lookup("Codeunit", 79199, 3)).toThrow(/declares codeunit:79199/);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

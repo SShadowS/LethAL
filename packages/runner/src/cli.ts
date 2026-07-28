@@ -787,8 +787,12 @@ export interface BcDevConfigSection {
    * `BcDevMcpBackend`'s own `"procedure"` default in effect. Task 7 review, Important 4: this
    * field did not exist before, so `coverageMode: "none"` could never actually be selected by any
    * `lethal run` — `BcDevConfig.coverageMode` existed but had no config surface reaching it.
+   *
+   * R58 adds `"fenced"`: per-procedure coverage collected on the SAME fenced session the mutants
+   * run on, so the green set and the verdicts stop coming from two different session types. Opt-in
+   * for now; see `BcDevConfig.coverageMode` for the measurement behind it.
    */
-  readonly coverageMode?: "procedure" | "none";
+  readonly coverageMode?: "procedure" | "none" | "fenced";
 }
 
 export interface AlRunnerConfigSection {
