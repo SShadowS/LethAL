@@ -238,6 +238,23 @@ per-mutant baseline** — a differing verdict is a regression, never "close enou
 
 Stated plainly, because a mutation-testing tool that overstates its guarantees is worse than none.
 
+- **Coverage and verdicts come from one runner** (the fenced `RunMutant` session, since the R58
+  rollout made `coverageMode: "fenced"` the default). The older failure this replaces is worth
+  remembering because it is what the legacy `coverageMode: "procedure"` still does if selected:
+  the baseline ran on a different session type than the mutants, 12 of 56 Document Output tests
+  failed on that runner and took their coverage out of the green set (14 mutants misreported
+  `no-coverage`), and a coverage-attribution defect (R63) credited tests with procedures they
+  could not execute — 77 mutants scored `survived` against tests that never ran the mutated
+  code. Under the default, `no-coverage` means exactly "no green test executed this on the
+  runner that produces verdicts".
+- **Every verdict describes the NON-GUI branch** (R60). The fenced session is
+  `GuiAllowed=No`/`ClientType=ODataV4`: a handler-less `Confirm` returns its default silently
+  instead of raising `Unhandled UI`, and code behind `GuiAllowed` checks takes the
+  non-interactive path. A mutant inside a GUI-only branch cannot be killed here — it reads as
+  `survived` or `no-coverage`, and both can mean "never ran". Measured on Document Output: nine
+  statement-generation procedures are executed by NO test on either runner, because the tests
+  flip the customer to Manual at an earlier guard. That is a test-suite finding, not a tool
+  finding — but the tool cannot tell the two apart for you yet.
 - **A survivor is a lead, not a proven test-suite gap.** What *has* been established, on a real
   commercial product: coverage selection does not hide kills. Two runs of one Continia Document
   Output codeunit, identical except for coverage mode, compared per-mutant across all 138 mutants —
@@ -245,11 +262,6 @@ Stated plainly, because a mutation-testing tool that overstates its guarantees i
   That is the failure mode that once made 10 of 20 fixture survivors false, and it is empty here.
   What is still **not** established is that any individual survivor is non-equivalent: some
   survivors are unkillable by any test. Read `validity` before quoting `mutationScore`.
-- **Some mutants reported `no-coverage` are actually executed.** Measured: 14 of 138 on the run
-  above, because coverage collection made 12 of 56 tests fail and a failing test takes its coverage
-  out of the green set. Safe direction — never a false kill — but `no-coverage` says "write a test"
-  when the truer answer can be "strengthen the test you have". Cross-check a `no-coverage` cluster
-  before acting on it.
 - **Unscoped runs on a real project are refused by default.** 19,832 mutation sites is days of
   execution, and the artifact carrying every guard is typically rejected by a hosting proxy before
   it publishes. Use `--only`; `--allow-large-run` overrides.

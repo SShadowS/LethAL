@@ -50,6 +50,10 @@ async function writeDeployInputs(dir: string): Promise<void> {
       name: "Fixture",
       publisher: "LethAL",
       version: "1.0.20653.100",
+      // Real artifact manifests declare their ranges, and the fenced coverage path REFUSES a
+      // manifest without them (the unfiltered 300 s hang, R58 unknown #4) — a shared fixture
+      // that omits them would make every default-mode deploy test fail for the wrong reason.
+      idRanges: [{ from: 79000, to: 79199 }],
     }),
   );
   await Bun.write(
@@ -104,6 +108,11 @@ function baseConfig(): BcDevConfig {
     project: "/al",
     server: "http://bc",
     serverInstance: "BC",
+    // These tests exercise the HUB path almost exclusively, so the shared fixture pins it
+    // explicitly: the session default flipped to "fenced" (R58 rollout, spec step 5), and a
+    // test that means "hub mode" must SAY "hub mode" rather than inherit whichever default is
+    // current. The one test that IS about the default strips this key — see describe below.
+    coverageMode: "procedure",
     ...UNUSED_STAGING_CFG,
   };
 }
@@ -250,6 +259,9 @@ function makeBackend(
       project: "/al",
       server: "http://bc",
       serverInstance: "BC",
+      // Hub-path tests say so explicitly — the session default is "fenced" since the R58
+      // rollout, and these fakes speak `bcdev_test_run`/`bcdev_status`, not RunMutant.
+      coverageMode: "procedure",
       ...UNUSED_STAGING_CFG,
       ...overrides,
     },
@@ -358,6 +370,8 @@ async function makeBackendWithDeploy(
       project: "/al",
       server: "http://bc",
       serverInstance: "BC",
+      // Hub-path fixture — see baseConfig() for why the mode is pinned explicitly.
+      coverageMode: "procedure",
       ...(await controlStaging(outputDir)),
     },
     () => clientTransport,
@@ -727,6 +741,8 @@ describe("BcDevMcpBackend env passthrough", () => {
         project: "/al",
         server: "http://bc",
         serverInstance: "BC",
+        // Hub-shaped test (status goes to bc-dev-mcp) — pinned, since the default is fenced.
+        coverageMode: "procedure",
         env: { BC_DEV_USER: "testuser", BC_DEV_PASSWORD: "testpass" },
         ...UNUSED_STAGING_CFG,
       },
@@ -1473,9 +1489,31 @@ describe("BcDevMcpBackend.run — lease-invalid pass-through (Layer 5C-B1)", () 
 });
 
 describe("coverageMode", () => {
-  test("defaults to procedure and probes status through bc-dev-mcp", () => {
-    const backend = new BcDevMcpBackend(baseConfig());
-    expect(backend.capabilities().coverage).toBe("procedure");
+  // R58 rollout (spec step 5): the default flipped from "procedure" to "fenced" 2026-07-28,
+  // gated on the DO differential — one runner for green set and verdicts, locals resolvable by
+  // line (R63), and no bc-dev-mcp dependency. "procedure" survives one release as an escape
+  // hatch and is then deleted (spec decision 2).
+  test("defaults to fenced and probes status through the harness, never bc-dev-mcp", async () => {
+    let harnessCalls = 0;
+    const harnessVerifier = {
+      verify: async () => {
+        harnessCalls += 1;
+        return { serverGeneration: "g1" } as never;
+      },
+    };
+    // baseConfig() pins "procedure" for the hub tests — the default is only observable without it.
+    const { coverageMode: _pinned, ...withoutMode } = baseConfig();
+    const backend = new BcDevMcpBackend(
+      withoutMode,
+      () => {
+        throw new Error("bc-dev-mcp must not be contacted by a default-configured backend");
+      },
+      { ...deploymentStub(), harnessVerifier } as never,
+    );
+    expect(backend.capabilities().coverage).toBe("fenced");
+    const status = await backend.status();
+    expect(status.ok).toBe(true);
+    expect(harnessCalls).toBe(1);
   });
 
   test('reports coverage "none" when configured, keeping authoritative true', () => {
@@ -1631,6 +1669,13 @@ describe('coverageMode "fenced" (R58)', () => {
     // `Code Coverage."Object ID"` filter — see `coverageObjectIdFilterOf`.
     const appJsonPath = join(outputDir, "app.json");
     const app = JSON.parse(await readFile(appJsonPath, "utf8")) as Record<string, unknown>;
+    if (idRangesOverride !== undefined) {
+      // The override REPLACES the fixture's ranges: `coverageObjectIdFilterOf` prefers the plural
+      // array when both exist, so merely spreading a singular `idRange` over a plural-carrying
+      // fixture would silently test the wrong manifest.
+      delete app.idRanges;
+      delete app.idRange;
+    }
     await Bun.write(
       appJsonPath,
       JSON.stringify({
@@ -1870,6 +1915,11 @@ describe("fenced coverage — the server-side object-id filter", () => {
     await writeDeployInputs(outputDir);
     const appJsonPath = join(outputDir, "app.json");
     const app = JSON.parse(await readFile(appJsonPath, "utf8")) as Record<string, unknown>;
+    // appJsonExtra REPLACES the fixture's range declaration: `coverageObjectIdFilterOf` prefers
+    // the plural array when both exist, so spreading a singular `idRange` (or an empty plural)
+    // over a plural-carrying fixture would silently test the wrong manifest.
+    delete app.idRanges;
+    delete app.idRange;
     await Bun.write(appJsonPath, JSON.stringify({ ...app, ...appJsonExtra }));
     await Bun.write(join(outputDir, "Ours.Codeunit.al"), OURS_AL);
     const backend = new BcDevMcpBackend(

@@ -789,8 +789,9 @@ export interface BcDevConfigSection {
    * `lethal run` — `BcDevConfig.coverageMode` existed but had no config surface reaching it.
    *
    * R58 adds `"fenced"`: per-procedure coverage collected on the SAME fenced session the mutants
-   * run on, so the green set and the verdicts stop coming from two different session types. Opt-in
-   * for now; see `BcDevConfig.coverageMode` for the measurement behind it.
+   * run on, so the green set and the verdicts stop coming from two different session types.
+   * **The default since the R58 rollout (spec step 5)** — see `BcDevConfig.coverageMode` for the
+   * measurement behind it. `"procedure"` (legacy hub) remains selectable for one release.
    */
   readonly coverageMode?: "procedure" | "none" | "fenced";
 }

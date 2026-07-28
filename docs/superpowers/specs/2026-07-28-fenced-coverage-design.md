@@ -1,16 +1,15 @@
 # Fenced-path coverage — the client half of R58
 
-**Status:** BUILT 2026-07-28. The client half ships behind `coverageMode: "fenced"`, opt-in. The
-server half needed one more change that only measurement could find — see unknown #4 below: control
-app **1.0.0.8 was unusable**, and 1.0.0.9 takes an object-id filter. The differential gate passes on
-both sandbox fixtures. On Continia Document Output it passes its BLOCKING criterion (0 mutants move
-`killed` -> `survived`), and the one open question it surfaced — 77 mutants moving `survived` ->
-`no-coverage` — is RESOLVED 2026-07-28 in the fence's favour: the hub's covering sets for those
-mutants were false (`buildCoverageMap` matches coverage by codeunit, never by method — R63), so
-the hub-mode `survived` verdicts were vacuous and fenced `no-coverage` is the correct verdict.
-See `docs/measurements/README.md` for the proof. `"fenced"` stays opt-in; rollout step 5 is now a
-decision the evidence no longer blocks, weighed against the old default being known-broken on
-multi-method test codeunits until R63 is fixed.
+**Status:** SHIPPED 2026-07-28 — `"fenced"` is the DEFAULT (rollout step 5 done). The
+differential gate passed on both sandbox fixtures and passed its blocking criterion on Continia
+Document Output; the one open question it surfaced — 77 mutants moving `survived` -> `no-coverage`
+— resolved in the fence's favour and produced R63/R61 (fixed in the same arc): the hub's covering
+sets were false, so the hub-mode `survived` verdicts were vacuous and fenced `no-coverage` is
+correct. All four frozen gates re-verified per-mutant under the new default (bcdev 3/10/3, tables
+64/9/2, alrunner 3/13/0, envtool 3/10/3 — the last with real coverage for the first time).
+`"procedure"` (legacy hub) survives one release as an escape hatch; its deletion (decision 2) is
+the remaining rollout item, alongside a clean COMPLETE fenced DO run (blocked by M0013, R53's
+class).
 
 Earlier: design, revised after an external review that found a fatal rule, an internal contradiction,
 and three missing unknowns.

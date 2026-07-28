@@ -15,6 +15,7 @@ import type {
   BackendStatus,
   CoverageEntry,
   CoverageMap,
+  CoverageMode,
   ExecutionBackend,
   RunOpts,
   TestMethodRef,
@@ -56,22 +57,24 @@ export interface BcDevConfig {
   // into the exact cache alc reads from via `/packagecachepath:`.
   readonly packageCachePath: string;
   /**
-   * Coverage the backend claims. Default "procedure" — bc-dev-mcp returns per-procedure coverage
-   * for the baseline run. Set to "none" when bc-dev-mcp cannot reach the environment (the env-tool
-   * fallback, spec §Coverage): the session then runs every mutant against all green tests, which
-   * is slower and never wrong. Per-mutant execution is `coverage: "none"` through the fenced
-   * transport in ALL modes, so this changes baseline routing and selection only.
+   * Coverage the backend claims. **Default `"fenced"` (R58 rollout, spec step 5):** per-procedure
+   * coverage collected on the SAME fenced session the mutants run on, via
+   * `RunMutantWithCoverage` — so the green set and the verdicts come from ONE session type, and
+   * the dual-runner asymmetry (R55: 12 of 56 Continia Document Output tests fail on the hub and
+   * pass on the fence, each taking its coverage out of the green set with it, for a measured 14
+   * mutants wrongly reported `no-coverage`) no longer exists on the default path. It is also the
+   * only mode that can name LOCAL procedures (the line map resolves by position; the hub's
+   * SymbolReference route structurally cannot — R63), and the only mode that works where
+   * bc-dev-mcp's SignalR hub cannot reach (path-routed portals — measured).
    *
-   * R58 adds `"fenced"`: per-procedure coverage collected on the SAME fenced session the mutants
-   * run on, via `RunMutantWithCoverage`. It exists because `"procedure"` measures the green set on
-   * the hub — a `GuiAllowed=Yes`/`ClientType=Web` session — while every verdict comes from a
-   * `GuiAllowed=No`/`ClientType=ODataV4` one, and the difference is not cosmetic (R55: 12 of 56
-   * Continia Document Output tests fail on the hub and pass on the fence, each taking its coverage
-   * out of the green set with it, for a measured 14 mutants wrongly reported `no-coverage`).
-   *
-   * Opt-in for now. Making it the default is gated on the differential per-mutant gate in
-   * `docs/superpowers/specs/2026-07-28-fenced-coverage-design.md`, not on unit tests: every frozen
-   * gate has a green baseline, so the whole mechanism is a no-op for all four of them.
+   * `"procedure"` (legacy hub) remains for one release and is then DELETED (spec decision 2:
+   * the hub measures a different session type, so keeping it as a "cross-check" is a
+   * permanently red-noisy R55-shaped misdiagnosis invitation). `"none"` runs every mutant
+   * against all green tests — slower, never wrong. Per-mutant execution is `coverage: "none"`
+   * through the fenced transport in ALL modes, so this changes baseline routing and selection
+   * only. The default flip is gated on the differential in
+   * `docs/superpowers/specs/2026-07-28-fenced-coverage-design.md` — PASSED 2026-07-28, including
+   * the 77-mutant discrimination (R63).
    */
   readonly coverageMode?: "procedure" | "none" | "fenced";
   /**
@@ -85,6 +88,14 @@ export interface BcDevConfig {
    */
   readonly port?: number;
 }
+
+/**
+ * The mode a session takes when config does not say. `"fenced"` since the R58 rollout (spec
+ * step 5); `"procedure"` survives one release for escape-hatch purposes and is then deleted.
+ * A single constant because the previous flip (to `"procedure"` by default) lived as three
+ * separate `?? "procedure"` literals that had to move in lockstep.
+ */
+export const DEFAULT_COVERAGE_MODE: CoverageMode = "fenced";
 
 // Verified against a real BC server (2026-07-18) via bc-dev-mcp source
 // (packages test-tools.ts's runTestsOutputSchema / test-runner-hub.ts's RunTestsResult) and a
@@ -200,7 +211,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
 
   capabilities(): BackendCapabilities {
     return {
-      coverage: this.cfg.coverageMode ?? "procedure",
+      coverage: this.cfg.coverageMode ?? DEFAULT_COVERAGE_MODE,
       deploy: "publish",
       isolation: "session",
       authoritative: true,
@@ -281,7 +292,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
     // `"fenced"` fell through and probed bc-dev-mcp — the exact dependency the mode exists to
     // remove, and a silent one, since the probe succeeds in every environment where the hub works
     // and the mode would look fine until it met one where it does not.
-    const mode = this.cfg.coverageMode ?? "procedure";
+    const mode = this.cfg.coverageMode ?? DEFAULT_COVERAGE_MODE;
     if (mode !== "procedure") {
       const harnessVerifier = this.deployment?.harnessVerifier;
       if (harnessVerifier === undefined) {
@@ -436,7 +447,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
     // anything in the frame of the bytes that were published. `instrumentedDir`, not `staged`:
     // `staged` differs from it only in `app.json` (the control dependency injection) and has
     // already been deleted above.
-    if ((this.cfg.coverageMode ?? "procedure") === "fenced") {
+    if ((this.cfg.coverageMode ?? DEFAULT_COVERAGE_MODE) === "fenced") {
       this.lineMap = await buildLineMap(instrumentedDir, this.methodIndex.declaredObjects());
       this.coverageObjectIdFilter = await coverageObjectIdFilterOf(instrumentedDir);
     } else {

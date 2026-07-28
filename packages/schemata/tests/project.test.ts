@@ -226,7 +226,11 @@ describe("writeInstrumentedProject", () => {
         operatorTiers: NO_TIERS,
       });
       const manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8"));
-      const byProc = new Map(manifest.mutants.map((m) => [m.procedureName, m.procedureScope]));
+      const byProc = new Map<string, string | undefined>(
+        (manifest.mutants as readonly { procedureName: string; procedureScope?: string }[]).map(
+          (m) => [m.procedureName, m.procedureScope],
+        ),
+      );
       expect(byProc.get("PublicP")).toBe("public");
       expect(byProc.get("LocalP")).toBe("local");
     } finally {
