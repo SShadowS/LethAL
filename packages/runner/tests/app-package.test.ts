@@ -35,6 +35,25 @@ describe("AppMethodIndex.fromSymbolReference", () => {
     const index = AppMethodIndex.fromSymbolReference({ Codeunits: [] });
     expect(index.lookup(5, 79000, 123)).toBeUndefined();
   });
+
+  // R62: the extension arrays exist in SymbolReference.json with exactly this shape (measured by
+  // compiling a probe with one of each, alc 18.0.38.8509) — before they were indexed, every
+  // extension procedure fell to object level. 14/15 are BC's numeric extension object types,
+  // measured live under R40.
+  test("resolves tableextension and pageextension methods, and declares both objects", () => {
+    const index = AppMethodIndex.fromSymbolReference({
+      TableExtensions: [
+        { Id: 79481, Name: "My Table Ext", Methods: [{ Id: -111, Name: "OnInsertHelper" }] },
+      ],
+      PageExtensions: [
+        { Id: 79482, Name: "My Page Ext", Methods: [{ Id: 222, Name: "OnActionHelper" }] },
+      ],
+    });
+    expect(index.lookup(15, 79481, -111)).toBe("OnInsertHelper");
+    expect(index.lookup(14, 79482, 222)).toBe("OnActionHelper");
+    expect(index.declaredObjects().has("tableextension:79481")).toBe(true);
+    expect(index.declaredObjects().has("pageextension:79482")).toBe(true);
+  });
 });
 
 describe("AppMethodIndex.fromAppFile", () => {

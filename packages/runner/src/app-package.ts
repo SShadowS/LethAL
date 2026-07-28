@@ -101,6 +101,10 @@ const OBJECT_TYPE_NAME: Record<number, string> = {
 
 // SymbolReference.json top-level arrays that carry {Id, Name, Methods: [{Id, Name}]}
 // entries, keyed by the numeric object type they correspond to.
+// `TableExtensions`/`PageExtensions` are measured to exist and to carry the same shape
+// (probe compiled by alc 18.0.38.8509, 2026-07-28 — guessing the names was not an option: an
+// array named wrong means extension members silently fall to object level). 14/15 are BC's
+// numeric extension object types, measured live under R40.
 const SYMBOL_ARRAYS: ReadonlyArray<{ key: string; objectType: number }> = [
   { key: "Tables", objectType: 1 },
   { key: "Reports", objectType: 3 },
@@ -108,31 +112,10 @@ const SYMBOL_ARRAYS: ReadonlyArray<{ key: string; objectType: number }> = [
   { key: "XmlPorts", objectType: 6 },
   { key: "Pages", objectType: 8 },
   { key: "Queries", objectType: 9 },
-];
-
-/**
- * The arrays above PLUS the two extension kinds — every SymbolReference.json array that declares an
- * object carrying a numeric id, which is what `declaredObjects()` scopes R58's line map by.
- *
- * MEASURED 2026-07-28, not assumed: a probe project with one `tableextension` and one
- * `pageextension` compiled offline by `alc` 18.0.38.8509 writes `TableExtensions` and
- * `PageExtensions` arrays, shaped exactly like the rest (`Id`, `Name`, `Methods`) plus a
- * `TargetObject`. Guessing the names was not an option: an array named wrong means the extension is
- * silently NOT declared, its fenced coverage rows are skipped, and every mutant in it reports
- * `no-coverage` — a quiet loss with no error anywhere.
- *
- * Deliberately SEPARATE from `SYMBOL_ARRAYS` rather than merged into it: `SYMBOL_ARRAYS` feeds
- * `AppMethodIndex.lookup`, which the HUB path uses to name a coverage `methodId`, and adding the
- * extension arrays there would change hub attribution for extension objects (today they fall
- * through to `findLocalProcedureNames`). That is a real gap — filed as its own roadmap item — but
- * it is not R58's, and moving it under cover of this change would make the differential gate
- * compare two things at once.
- */
-const DECLARED_OBJECT_ARRAYS: ReadonlyArray<{ key: string; objectType: number }> = [
-  ...SYMBOL_ARRAYS,
   { key: "PageExtensions", objectType: 14 },
   { key: "TableExtensions", objectType: 15 },
 ];
+
 
 interface SymbolMethod {
   readonly Id: number;
@@ -173,16 +156,11 @@ export class AppMethodIndex {
     for (const { key, objectType } of SYMBOL_ARRAYS) {
       const objects = root[key] as SymbolObject[] | undefined;
       for (const obj of objects ?? []) {
+        if (typeof obj.Id !== "number") continue;
+        index.declared.add(`${objectTypeName(objectType).toLowerCase()}:${obj.Id}`);
         for (const method of obj.Methods ?? []) {
           index.byKey.set(`${objectType}:${obj.Id}:${method.Id}`, method.Name);
         }
-      }
-    }
-    for (const { key, objectType } of DECLARED_OBJECT_ARRAYS) {
-      const objects = root[key] as SymbolObject[] | undefined;
-      for (const obj of objects ?? []) {
-        if (typeof obj.Id !== "number") continue;
-        index.declared.add(`${objectTypeName(objectType).toLowerCase()}:${obj.Id}`);
       }
     }
     return index;
