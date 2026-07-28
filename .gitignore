@@ -28,3 +28,6 @@ lethal.sqlite-wal
 
 # Model-panel review artifacts — agent scratch, not project source
 .panel/
+
+# Agent worktrees — machine-local checkouts, not project source
+.claude/worktrees/
