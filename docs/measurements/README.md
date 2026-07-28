@@ -175,3 +175,151 @@ The probe lives in its own app rather than `sandbox-probes` because that fixture
 runtime 13.0 with no platform/application, so the `Test Runner` symbol carrying
 `Codeunit "Code Coverage Mgt."` does not resolve there — and it is published for the frozen
 `itest:bcdev` gate, which is not worth perturbing for a probe.
+
+## The unfiltered fenced-coverage payload does not return — R58 unknown #4, ANSWERED
+
+`RunMutantWithCoverage` as first shipped (control app 1.0.0.8) serialized the WHOLE `Code Coverage`
+table. Measured 2026-07-28 on Cronus281 against `fixtures/sandbox-app`, whose entire test body is
+three lines:
+
+| control app | object filter | headers returned | payload |
+|---|---|---|---|
+| 1.0.0.8 | none | **never within 300 s** | — |
+| 1.0.0.9 | `79000..79199` (the artifact's `idRanges`) | **126 ms** | **1,546 bytes** |
+
+The failure was not "slow", it was indistinguishable from a hung container: the client's fetch gave
+up, `RunMutantTransport` classified it `in-flight-unknown`, and the baseline test was recorded
+`error` — a durable tier quarantine. The whole session then reported `killed=0 survived=0
+noCoverage=0`, i.e. the mechanism looked configured and produced nothing.
+
+The cost is not the target's code. Inside `RunMutant` the platform records every line it executes,
+which is the entire Test Runner + Test Suite Mgt + Base App machinery, so a three-line test and a
+large one produce comparable tables. That is why the fix is filtering rather than a bigger client
+timeout: the payload does not shrink with the work.
+
+`RunMutantWithCoverage` therefore takes a `CoverageObjectIdFilter` (an AL `SetFilter` expression
+over `"Object ID"`, built from the artifact's own `idRanges` — see `coverageObjectIdFilterOf` in
+`bcdev-backend.ts`). It throws away nothing usable: only rows for objects the artifact DECLARES can
+be attributed at all, and the client re-checks every row against the compiled package's
+`SymbolReference.json` regardless, so a too-wide filter costs only bytes. A manifest with no
+`idRanges` is REFUSED rather than sent as an empty filter — the empty filter is the hang.
+
+The action also reports `coverageRunMs` / `coverageSerializeMs` / `coverageScannedRows` /
+`coverageEmittedRows`. Those exist because the two costs behind the timeout — the platform RECORDING
+and the control app SERIALIZING — look identical from the client, and only one of them is fixable by
+filtering.
+
+## Fenced vs hub coverage, per test and per mutant (R58's differential gate)
+
+`scripts/probe-r58-differential.ts` runs one fixture through `runSession` twice, identical except
+`bcdev.coverageMode`, and dumps per-test coverage sets, per-mutant verdicts, covering-test sets and
+attribution. `scripts/probe-r58-compare.ts` applies the gate rules (blocking: any `killed` ->
+`survived`, any `mutantCode` identity mismatch, a fenced baseline red where the hub's was green).
+
+Measured 2026-07-28, control app 1.0.0.9:
+
+| fixture | verdicts | covering-set changes | attribution changes | identity mismatches | member entries the fence named |
+|---|---|---|---|---|---|
+| `sandbox-app` (Cronus281) | 3/10/3 both | 0 | 0 | 0 | 4, matching the hub |
+| `sandbox-data` (Cronus283) | 64/9/2 both | 0 | 0 | 0 | **1**, and it is LethAL's own selector |
+
+The per-test oracle found **no member-level entry the fence produces and the hub does not** — the
+signal a wrong line -> procedure mapping would show up as. Every difference was the opposite
+direction and object-level: the HUB emits `Codeunit:71002` (LethAL's own control app) and, on the
+table fixture, fifteen more object-level entries for Base App / test-framework objects
+(`Codeunit:198`, `Codeunit:423`, `Codeunit:2000000002`, `Table:5330`, …). Those come from
+`buildCoverageMap`'s object-level fallback firing on objects that are not in the target's symbol
+reference at all; the fenced path drops them by scope. They changed no mutant's covering set, which
+is why they had never been visible. Filed as R61.
+
+**Read the last column before trusting the table.** `sandbox-data` passing proves less than it
+looks: the fenced run named exactly one member (`Codeunit:79199::Active`, the emitted selector
+codeunit) plus two object-level entries, and its verdicts matched because table-trigger mutants
+take `coverageFilter`'s `byObject` fallback, which object-level entries satisfy. The hub is equally
+memberless there — `SymbolReference.json` records no trigger — so the comparison is honest, but it
+exercises almost none of the line -> procedure mapping. Only `sandbox-app` does, on four members.
+
+### Continia Document Output — the differential runs, and the news is mixed
+
+Both modes on `U:/Git/do-rel2/Cloud`, one codeunit in scope, 56 baseline tests each:
+
+| | baseline | killed | survived | no-coverage | error |
+|---|---|---|---|---|---|
+| `procedure` (hub) | **12 fail / 44 pass** | 16 | 86 | 15 | 21 |
+| `fenced` | **56 pass** | 4 | 8 | 92 | 1 |
+
+The hub column reproduces the R37 benchmark exactly, so the reference is sound, and the fenced
+baseline being fully green is R55's premise confirmed on one run pair.
+
+Per-mutant, over the 105 mutants the fenced run reached (identity verified on `mutantCode` + file +
+line + operator, **0 mismatches**):
+
+```
+  0 x killed -> survived        <- the blocking criterion. HOLDS.
+  0 x killed -> no-coverage
+  4 x error  -> killed          <- gain: mutants the hub could only score through a red test
+  7 x error  -> survived        <- gain, same cause
+ 77 x survived -> no-coverage   <- the open question
+```
+
+**The line map is NOT the cause, and that was measured rather than argued.** The instrumented
+`Codeunit 6175297` is 3,177 lines (the original is 364; instrumentation injects a guard per site),
+and BC's rows for that object carry `lineNo` 30..3171 — so the lines ARE in the instrumented frame,
+settling unknown #6 properly this time. Bucketing the 410 real rows against the instrumented
+procedure ranges names exactly the five procedures the run attributed
+(`SendPeriodStatements`, both `ChangeAut*ToManual`, `CreateStatement`, `IsCustomerStatementReport`);
+bucketing them against the ORIGINAL frame names eleven, none of which match what the run produced.
+The map is doing precisely what the payload supports.
+
+So the 77 are not a mapping failure — the rows for the other eight procedures are **not in the
+payload at all**. Two readings remain, and they have opposite consequences:
+
+- **The fenced session genuinely does not execute them** (R60: headless takes the non-GUI branch).
+  Then fenced coverage is CORRECT for the runner that produces verdicts, and the hub's 77
+  `survived` verdicts were the false ones — mutated code that never ran, scored as survived.
+- **Fenced collection loses them.** Then R58 under-reports and must not become the default.
+
+What is established either way: the covering tests for all eight missing procedures pass on BOTH
+runners (`green-on-fence=5/5`, `failed-on-hub=0`), so this is not the R55 red-test mechanism.
+
+The discriminating experiment is named and not yet run: execute one mutant in `CalcBalance` (hub:
+covered by 5 tests, all green on the fence) through the FENCE against those tests. Killed or failing
+means the fence reaches the code and collection is at fault; survived means the branch is genuinely
+not taken.
+
+**A methodological note worth keeping.** A `--resume` run was briefly used as a gate input and
+appeared to show three lost kills (`M0017`, `M0132`, `M0137`). It showed nothing of the sort:
+`--resume` carries prior verdicts while recomputing attribution, so the two halves of each row came
+from different runs. Resumed runs are not valid differential inputs. Caught only because the numbers
+disagreed with the fresh run.
+
+**Why a clean, COMPLETE fenced DO run does not exist:** mutant M0013 does not terminate (stranded at
+both the 30 s and 120 s budgets, R53's class), and each strand latches the session unsafe, so the
+tail of the mutant loop is never recorded — 105 of 138. Each strand also leaves an op marker that
+quarantines the tier until an environment recycle + `force-reset-lease` + `clear-quarantine`.
+
+### Diagnostics added because none of the above was visible
+
+- **`LETHAL_FENCED_COVERAGE_DUMP=<path>`** — spec decision 3's raw-row artifact (JSONL, one record
+  per test), which the first implementation skipped. It is the only thing that can distinguish the
+  two remaining explanations.
+- **A per-test warning** naming the two ways fenced coverage comes back useless while every layer
+  reports success: rows arrived but NONE for a declared object (blame the object-id filter), versus
+  declared-object rows arrived but no line resolved to a member (blame the line map's base frame).
+  Silent on DO, which is itself the finding — the failure there is narrower than either.
+
+### Two blockers that were not what they looked like
+
+- The hub reference first failed with an Azure-token error. **The NST does not require Entra:**
+  `Microsoft.Dynamics.Nav.Service.Dev.dll`'s `DevHostStartup` registers the shared
+  `NavAuthentication` scheme, and `WebServiceCredentialsHelper.ValidAuthenticators`
+  (`Microsoft.Dynamics.Nav.Service.dll`) adds `WebServiceBasicAuthenticator` whenever
+  `ClientServicesCredentialType` is `NavUserPassword`/`AccessControlService`, adding Bearer only
+  when `AppIdUri` **and** `WSFederationMetadataLocation` are both set. On these servers Bearer is
+  never constructed. The real cause: bc-dev-mcp merges `.vscode/launch.json` first, and
+  `U:/Git/DO/Cloud`'s configurations[0] is a Microsoft cloud sandbox (`Sandbox`/`TestAct`) while
+  LethAL never overrides `environmentType`/`environmentName`. `do-rel2` has one OnPrem-shaped
+  portal config and takes Basic.
+- Mutant **M0013** does not terminate (stranded at both 30 s and 120 s budgets, R53's class). Each
+  strand leaves an op marker that quarantines the tier, needing an environment recycle +
+  `force-reset-lease` + `clear-quarantine` to clear.
