@@ -24,7 +24,7 @@ Each mutant comes back as one of three verdicts:
 
 ## A worked example
 
-**1. Your app code.** The code under test, not a test. One procedure, one comparison.
+**1. Your app code** (`--project`). The only thing LethAL ever mutates. One procedure, one comparison:
 
 ```al
 codeunit 50100 "Pricing"
@@ -36,7 +36,31 @@ codeunit 50100 "Pricing"
 }
 ```
 
-**2. Three operators claim a site in it.** That is the whole mutant set for this procedure:
+**2. Your test code** (`--tests`), which LethAL never touches. It is not mutated and not rewritten.
+LethAL does not even publish it: publishing the test app stays your own workflow, and LethAL only
+discovers the tests inside it and asks the server to run them.
+
+```al
+codeunit 50101 "Pricing Tests"
+{
+    Subtype = Test;
+
+    var
+        Pricing: Codeunit "Pricing";
+
+    [Test]
+    procedure TestOverBudget()
+    begin
+        if not Pricing.IsOverBudget(101, 100) then
+            Error('101 vs 100 must be over budget');
+        if Pricing.IsOverBudget(99, 100) then
+            Error('99 vs 100 must not be over budget');
+    end;
+}
+```
+
+**3. Three operators claim a site in the app code.** The test app contributes none. That is the whole
+mutant set for this procedure:
 
 | Mutant | Operator | Change |
 |--------|----------|--------|
@@ -44,7 +68,7 @@ codeunit 50100 "Pricing"
 | `M0002` | `lethal.return-value` | `exit(Amount > Budget)` becomes `exit(not (Amount > Budget))` |
 | `M0003` | `lethal.conditional-boundary` | `Amount > Budget` becomes `Amount >= Budget` |
 
-**3. All three ship in ONE published app**, each behind a runtime guard, not three
+**4. All three ship in ONE published app**, each behind a runtime guard, not three
 compile-and-publish cycles. This is what LethAL emits (reformatted here for reading; the emitter
 does not indent, and nothing human ever has to):
 
@@ -78,7 +102,7 @@ codeunit 50100 "Pricing"
 **You never see this code, and it never enters your repo.** LethAL copies your project into a scratch
 directory under the OS temp dir, mutates the copy there, compiles that, and publishes it. Your source
 tree is not modified and there is nothing to revert. The AL above is a throwaway build artifact, a
-petri dish. The only output you read is the report in step 4. What *does* persist is on the server: the
+petri dish. The only output you read is the report in step 5. What *does* persist is on the server: the
 instrumented build stays published until you republish your own app, which is why LethAL is for a
 sandbox or dev container, never a production tenant.
 
@@ -88,7 +112,7 @@ nested guards: N mutants cost N+1 branches, not 2^N. The `Mutation Selector` cod
 mutant is active from a table the `LethAL Control` extension owns, so activating the next mutant is a
 table write, with no republish.
 
-**4. LethAL activates one mutant at a time** and runs the tests coverage says reach it:
+**5. LethAL activates one mutant at a time** and runs the tests coverage says reach it:
 
 ```
 mutant   file:line                          operator                     verdict          killing test
@@ -100,9 +124,11 @@ SURVIVORS BY PROCEDURE (1 with survivors):
     1 survived  Pricing.IsOverBudget  (2 killed, 0 no-coverage)
 ```
 
-`M0003` is the finding: the test pins the answer above and below the budget but never *at* it, so `>`
-and `>=` are indistinguishable to it. The report carries enough to act on that without re-deriving
-anything:
+`M0003` is the finding, and you can read it straight off the test in step 2. That test pins the answer
+at 101 vs 100 and at 99 vs 100, but never at 100 vs 100, and `>` differs from `>=` only when the two
+are equal. So no assertion it makes can tell the mutant from your code. The other two mutants both
+change the answer at 101 vs 100, where the first `Error` catches them. The report carries enough to act
+on that without re-deriving anything:
 
 ```json
 {
@@ -125,9 +151,18 @@ something in the same object; `guardObserved: true` means an instrumented guard 
 Together they separate "your test reaches this code and does not check it" from "nothing ran it at
 all", which is the distinction the [Limits](#limits) section is about.
 
-*(Steps 1-3 are real emitter output for that snippet. The verdicts in step 4 are illustrative: they
-depend on the test suite, which this example does not ship. The frozen live-gate figures under
-[Testing](#testing) are the measured ones.)*
+Here that first reading is right, so the fix is one more assertion in the test that already covers the
+procedure:
+
+```al
+        if Pricing.IsOverBudget(100, 100) then
+            Error('equal amounts must not be over budget');
+```
+
+*(The AL in steps 1, 2 and 4 is real: both source snippets compile under `alc`, and step 4 is this
+repo's own emitter output for step 1. The step 5 verdicts follow from the step 2 test by inspection
+rather than from a recorded run, so read them as worked through, not measured. The frozen live-gate
+figures under [Testing](#testing) are the measured ones.)*
 
 ## Overview
 
