@@ -51,26 +51,26 @@ does not indent, and nothing human ever has to):
 ```al
 codeunit 50100 "Pricing"
 {
-    var
+  var
     MutationSelector: Codeunit "Mutation Selector";
 
-procedure IsOverBudget(Amount: Decimal; Budget: Decimal): Boolean
+  procedure IsOverBudget(Amount: Decimal; Budget: Decimal): Boolean
     begin
-        if MutationSelector.Active('M0001') then begin
-            begin end;
-        end else if MutationSelector.Active('M0002') then begin
-            begin
-                exit(not (Amount > Budget));
-            end;
-        end else if MutationSelector.Active('M0003') then begin
-            begin
-                exit(Amount >= Budget);
-            end;
-        end else begin
-            begin
-                exit(Amount > Budget);
-            end;
+      if MutationSelector.Active('M0001') then begin
+        begin end;
+      end else if MutationSelector.Active('M0002') then begin
+        begin
+            exit(not (Amount > Budget));
         end;
+      end else if MutationSelector.Active('M0003') then begin
+        begin
+            exit(Amount >= Budget);
+        end;
+      end else begin
+        begin
+            exit(Amount > Budget);
+        end;
+      end;
     end;
 }
 ```
