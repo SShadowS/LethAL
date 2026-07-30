@@ -22,7 +22,104 @@ Each mutant comes back as one of three verdicts:
 | **survived** | Every test still passed. Nothing checks that behaviour. |
 | **no-coverage** | No test *reachable by coverage attribution* executes that code. Sometimes an under-report — see [Limits](#limits). |
 
-It compiles **one** instrumented copy of your app with every mutation baked in behind runtime guards, publishes it once, then activates mutants one at a time — instead of one compile-and-publish cycle per mutant.
+## A worked example
+
+**1. Your code.** One procedure, one comparison.
+
+```al
+codeunit 50100 "Pricing"
+{
+    procedure IsOverBudget(Amount: Decimal; Budget: Decimal): Boolean
+    begin
+        exit(Amount > Budget);
+    end;
+}
+```
+
+**2. Three operators claim a site in it.** That is the whole mutant set for this procedure:
+
+| Mutant | Operator | Change |
+|--------|----------|--------|
+| `M0001` | `lethal.empty-block` | the procedure body becomes `begin end` |
+| `M0002` | `lethal.return-value` | `exit(Amount > Budget)` becomes `exit(not (Amount > Budget))` |
+| `M0003` | `lethal.conditional-boundary` | `Amount > Budget` becomes `Amount >= Budget` |
+
+**3. All three ship in ONE published app**, each behind a runtime guard — not three
+compile-and-publish cycles. This is what LethAL actually emits, verbatim, indentation included:
+
+```al
+codeunit 50100 "Pricing"
+{
+        var
+        MutationSelector: Codeunit "Mutation Selector";
+
+procedure IsOverBudget(Amount: Decimal; Budget: Decimal): Boolean
+    begin
+if MutationSelector.Active('M0001') then begin
+  begin end;
+end else if MutationSelector.Active('M0002') then begin
+  begin
+        exit(not (Amount > Budget));
+    end;
+end else if MutationSelector.Active('M0003') then begin
+  begin
+        exit(Amount >= Budget);
+    end;
+end else begin
+  begin
+        exit(Amount > Budget);
+    end;
+end;
+end;
+}
+```
+
+The final `else` is your original code, so with no mutant active the published app behaves exactly as
+it did before. Mutants that overlap the same statement become **siblings in one flat chain**, never
+nested guards: N mutants cost N+1 branches, not 2^N. The `Mutation Selector` codeunit reads which
+mutant is active from a table the `LethAL Control` extension owns, so activating the next mutant is a
+table write — no republish.
+
+**4. LethAL activates one mutant at a time** and runs the tests coverage says reach it:
+
+```
+mutant   file:line                          operator                     verdict          killing test
+M0001    src/Pricing.Codeunit.al:5          lethal.empty-block           killed           Pricing Tests.TestOverBudget
+M0002    src/Pricing.Codeunit.al:5          lethal.return-value          killed           Pricing Tests.TestOverBudget
+M0003    src/Pricing.Codeunit.al:5          lethal.conditional-boundary  survived
+score: 66.7%  (killed 2, survived 1, no-coverage 0, ...)
+SURVIVORS BY PROCEDURE (1 with survivors):
+    1 survived  Pricing.IsOverBudget  (2 killed, 0 no-coverage)
+```
+
+`M0003` is the finding: the test pins the answer above and below the budget but never *at* it, so `>`
+and `>=` are indistinguishable to it. The report carries enough to act on that without re-deriving
+anything:
+
+```json
+{
+  "mutantCode": "M0003",
+  "operatorName": "lethal.conditional-boundary",
+  "verdict": "survived",
+  "file": "src/Pricing.Codeunit.al",
+  "line": 5,
+  "procedureName": "IsOverBudget",
+  "originalText": "Amount > Budget",
+  "mutatedText": "Amount >= Budget",
+  "coveringTests": ["Pricing Tests.TestOverBudget"],
+  "coverageAttribution": "exact",
+  "guardObserved": true
+}
+```
+
+`coverageAttribution: "exact"` means that test genuinely executed *this* procedure, not merely
+something in the same object; `guardObserved: true` means an instrumented guard fired while it ran.
+Together they separate "your test reaches this code and does not check it" from "nothing ran it at
+all" — the distinction the [Limits](#limits) section is about.
+
+*(Steps 1–3 are real emitter output for that snippet. The verdicts in step 4 are illustrative — they
+depend on the test suite, which this example does not ship. The frozen live-gate figures under
+[Testing](#testing) are the measured ones.)*
 
 ## Overview
 
