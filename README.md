@@ -1,18 +1,18 @@
 # LethAL
 
-Mutation testing for Microsoft Dynamics 365 Business Central AL code — it tells you which of your AL tests actually catch bugs.
+Mutation testing for Microsoft Dynamics 365 Business Central AL code. It tells you which of your AL tests actually catch bugs.
 
 [![Release](https://img.shields.io/badge/release-0.1.0--alpha.1-orange)](CHANGELOG.md)
 [![TypeScript](https://img.shields.io/badge/typescript-5.0-blue)](https://typescriptlang.org)
 [![Bun](https://img.shields.io/badge/runtime-bun-black)](https://bun.sh)
 [![AL](https://img.shields.io/badge/target-Business%20Central-orange)](https://learn.microsoft.com/dynamics365/business-central/dev-itpro/developer/devenv-dev-overview)
 
-> **Alpha.** The tool is honest about its limits rather than complete — see [Limits](#limits) before
+> **Alpha.** The tool is honest about its limits rather than complete. See [Limits](#limits) before
 > quoting a score. Read [`CHANGELOG.md`](CHANGELOG.md) for what shipped and what did not.
 
 ## What it does
 
-LethAL makes small, deliberate breakages in your AL code — flips a `<` to `<=`, empties a block, drops a `TestField`, changes a return value — then runs your tests against each one. A test suite that stays green while the code is broken is not protecting you.
+LethAL makes small, deliberate breakages in your AL code (flips a `<` to `<=`, empties a block, drops a `TestField`, changes a return value), then runs your tests against each one. A test suite that stays green while the code is broken is not protecting you.
 
 Each mutant comes back as one of three verdicts:
 
@@ -20,11 +20,11 @@ Each mutant comes back as one of three verdicts:
 |---------|---------|
 | **killed** | A test failed. That code path is genuinely covered. |
 | **survived** | Every test still passed. Nothing checks that behaviour. |
-| **no-coverage** | No test *reachable by coverage attribution* executes that code. Sometimes an under-report — see [Limits](#limits). |
+| **no-coverage** | No test *reachable by coverage attribution* executes that code. Sometimes an under-report; see [Limits](#limits). |
 
 ## A worked example
 
-**1. Your code.** One procedure, one comparison.
+**1. Your app code.** The code under test, not a test. One procedure, one comparison.
 
 ```al
 codeunit 50100 "Pricing"
@@ -44,41 +44,49 @@ codeunit 50100 "Pricing"
 | `M0002` | `lethal.return-value` | `exit(Amount > Budget)` becomes `exit(not (Amount > Budget))` |
 | `M0003` | `lethal.conditional-boundary` | `Amount > Budget` becomes `Amount >= Budget` |
 
-**3. All three ship in ONE published app**, each behind a runtime guard — not three
-compile-and-publish cycles. This is what LethAL actually emits, verbatim, indentation included:
+**3. All three ship in ONE published app**, each behind a runtime guard, not three
+compile-and-publish cycles. This is what LethAL emits (reformatted here for reading; the emitter
+does not indent, and nothing human ever has to):
 
 ```al
 codeunit 50100 "Pricing"
 {
-        var
-        MutationSelector: Codeunit "Mutation Selector";
+    var
+    MutationSelector: Codeunit "Mutation Selector";
 
 procedure IsOverBudget(Amount: Decimal; Budget: Decimal): Boolean
     begin
-if MutationSelector.Active('M0001') then begin
-  begin end;
-end else if MutationSelector.Active('M0002') then begin
-  begin
-        exit(not (Amount > Budget));
+        if MutationSelector.Active('M0001') then begin
+            begin end;
+        end else if MutationSelector.Active('M0002') then begin
+            begin
+                exit(not (Amount > Budget));
+            end;
+        end else if MutationSelector.Active('M0003') then begin
+            begin
+                exit(Amount >= Budget);
+            end;
+        end else begin
+            begin
+                exit(Amount > Budget);
+            end;
+        end;
     end;
-end else if MutationSelector.Active('M0003') then begin
-  begin
-        exit(Amount >= Budget);
-    end;
-end else begin
-  begin
-        exit(Amount > Budget);
-    end;
-end;
-end;
 }
 ```
 
-The final `else` is your original code, so with no mutant active the published app behaves exactly as
-it did before. Mutants that overlap the same statement become **siblings in one flat chain**, never
+**You never see this code, and it never enters your repo.** LethAL copies your project into a scratch
+directory under the OS temp dir, mutates the copy there, compiles that, and publishes it. Your source
+tree is not modified and there is nothing to revert. The AL above is a throwaway build artifact, a
+petri dish. The only output you read is the report in step 4. What *does* persist is on the server: the
+instrumented build stays published until you republish your own app, which is why LethAL is for a
+sandbox or dev container, never a production tenant.
+
+The final `else` is your original code, so with no mutant active that published app behaves exactly as
+yours does. Mutants that overlap the same statement become **siblings in one flat chain**, never
 nested guards: N mutants cost N+1 branches, not 2^N. The `Mutation Selector` codeunit reads which
 mutant is active from a table the `LethAL Control` extension owns, so activating the next mutant is a
-table write — no republish.
+table write, with no republish.
 
 **4. LethAL activates one mutant at a time** and runs the tests coverage says reach it:
 
@@ -115,9 +123,9 @@ anything:
 `coverageAttribution: "exact"` means that test genuinely executed *this* procedure, not merely
 something in the same object; `guardObserved: true` means an instrumented guard fired while it ran.
 Together they separate "your test reaches this code and does not check it" from "nothing ran it at
-all" — the distinction the [Limits](#limits) section is about.
+all", which is the distinction the [Limits](#limits) section is about.
 
-*(Steps 1–3 are real emitter output for that snippet. The verdicts in step 4 are illustrative — they
+*(Steps 1-3 are real emitter output for that snippet. The verdicts in step 4 are illustrative: they
 depend on the test suite, which this example does not ship. The frozen live-gate figures under
 [Testing](#testing) are the measured ones.)*
 
@@ -128,7 +136,7 @@ depend on the test suite, which this example does not ship. The frozen live-gate
 | Release | 0.1.0-alpha.1 |
 | Language | TypeScript (Bun workspaces) |
 | Target | AL / Business Central, control extension runtime 16 |
-| Mutation operators | 9 — 5 Tier-1 (generic), 4 Tier-2 (AL-specific) |
+| Mutation operators | 9 total: 5 Tier-1 (generic), 4 Tier-2 (AL-specific) |
 | Object kinds instrumented | codeunit, table, page, report, pageextension, tableextension |
 | Backends | `bcdev` (live BC, authoritative), `al-runner` (offline, **not** authoritative) |
 | Concurrency safety | Machine-global lease + per-run two-phase fence |
@@ -139,11 +147,11 @@ depend on the test suite, which this example does not ship. The frozen live-gate
 
 | Feature | Description |
 |---------|-------------|
-| **Mutant schemata** | One instrumented artifact carries every mutation behind runtime guards — not N compiles |
+| **Mutant schemata** | One instrumented artifact carries every mutation behind runtime guards, not N compiles |
 | **AST-based mutation** | Operates on a real AL parse tree (tree-sitter-al), never on text |
 | **Live BC execution** | Runs the covering test headlessly inside Business Central over OData |
 | **Coverage-aware** | Distinguishes "no test caught it" from "no test runs it at all", and records which attribution path decided |
-| **Actionable survivors** | Each survivor carries its original and mutated text, procedure, covering tests, and a per-procedure rollup — enough for a human or an agent to act without re-deriving anything |
+| **Actionable survivors** | Each survivor carries its original and mutated text, procedure, covering tests, and a per-procedure rollup, enough for a human or an agent to act without re-deriving anything |
 | **Scoped runs** | `--only` narrows mutants, `--tests-only` narrows the baseline, `--max-guards-per-batch` bounds each published artifact |
 | **Resumable** | An aborted run is continued with `--resume`; verdicts already measured are not thrown away |
 | **Deployment identity** | Verifies the app under test is the artifact it compiled, and refuses to record a verdict otherwise |
@@ -157,7 +165,7 @@ depend on the test suite, which this example does not ship. The frozen live-gate
 
 Running the released binary needs **no Bun, Node or npm**. You do need:
 
-- A Business Central container, dev server, or hosted sandbox — **single-tenant** (see [Limits](#limits))
+- A Business Central container, dev server, or hosted sandbox, which must be **single-tenant** (see [Limits](#limits))
 - The AL Language VS Code extension, which supplies `alc.exe` and `altool.exe`
   - or a `bcdev.alcPath` in your config pointing at any `alc.exe`, if your server needs a specific compiler build
 - For the `bcdev` backend: a reachable `bc-dev-mcp` endpoint
@@ -189,7 +197,7 @@ See [`docs/releasing.md`](docs/releasing.md) for how a release is cut.
 
 ## Usage
 
-Start with a dry run — it tells you how big the job is without touching a server:
+Start with a dry run. It tells you how big the job is without touching a server:
 
 ```bash
 lethal run --project path/to/your-al-app --dry-run
@@ -236,7 +244,7 @@ From a source checkout, replace `lethal` with `bun packages/runner/src/cli.ts`.
 | `--project` | *(required)* | AL project directory to mutate |
 | `--tests` | *(required)* | Test project directory (omit only with `--dry-run`) |
 | `--backend` | *(required)* | `bcdev` or `al-runner` |
-| `--only <glob>` | *(all files)* | Only these files contribute mutants. Repeatable. Cannot change a verdict — every file is still parsed, compiled and published |
+| `--only <glob>` | *(all files)* | Only these files contribute mutants. Repeatable. Cannot change a verdict, because every file is still parsed, compiled and published |
 | `--tests-only <glob>` | *(whole suite)* | Only these test files run at baseline. Repeatable. **Can change a verdict**: excluding a killing test manufactures a survivor. Flagged `tests-narrowed` in the report |
 | `--skip-known-survivors` | `false` | Skip mutants a prior finished run recorded as survivors |
 | `--dry-run` | `false` | Plan mutants without executing them |
@@ -245,9 +253,9 @@ Cost and recovery:
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--max-guards-per-batch <n>` | *(unbounded)* | Guards per published artifact. Publish cost scales with guard count — BC recompiles server-side |
+| `--max-guards-per-batch <n>` | *(unbounded)* | Guards per published artifact. Publish cost scales with guard count, since BC recompiles server-side |
 | `--mutant-timeout-ms <n>` | `30000` | Floor for a mutant's time budget. The budget is `max(2 × that test's baseline, this)` |
-| `--resume` / `--resume-run <id>` | — | Continue an aborted run, reusing verdicts it already measured |
+| `--resume` / `--resume-run <id>` | *(none)* | Continue an aborted run, reusing verdicts it already measured |
 | `--retry-stranded` | `false` | On resume, retry mutants that stranded the tier. Skipped by default: a mutant that never terminates blocks every mutant behind it |
 | `--allow-large-run` | `false` | Run more than 1,000 mutation sites |
 | `--workers <n>` | `1` | Parallel shards (rejected for the authoritative backend) |
@@ -258,11 +266,11 @@ Environment and output:
 |------|---------|-------------|
 | `--config <path>` | `<project>/lethal.config.json` | Server, company, credentials, optional `envTool` section |
 | `--db <path>` | `<project>/lethal.sqlite` | Results database |
-| `--out <path>` | — | Write the JSON report here |
-| `--selector-id` / `--control-id` / `--table-id` | `79197`–`79199` | Override the injected object ids, e.g. when your `idRanges` exclude the defaults |
+| `--out <path>` | *(none)* | Write the JSON report here |
+| `--selector-id` / `--control-id` / `--table-id` | `79197` to `79199` | Override the injected object ids, e.g. when your `idRanges` exclude the defaults |
 | `--keep-env` / `--allow-expiring-env` | `false` | Env-tool session controls |
 
-Exit codes: `0` ok, `1` error, `3` quarantined — the run refused to vouch for its own verdicts.
+Exit codes: `0` ok, `1` error, `3` quarantined, meaning the run refused to vouch for its own verdicts.
 
 ## Architecture
 
@@ -304,7 +312,7 @@ The `LethAL Control` AL extension owns the state a republish of your app cannot 
 | `packages/builtin-tier1` / `-tier2` | The mutation operators |
 | `packages/schemata` | Instrumentation and compilation into one artifact |
 | `packages/runner/src/orchestrator.ts` | Session lifecycle, lease, verdict recording |
-| `packages/runner/src/lease.ts` | `LeaseClient` — acquire / renew / release / fence ops |
+| `packages/runner/src/lease.ts` | `LeaseClient`: acquire / renew / release / fence ops |
 | `packages/runner/src/resume.ts` | Which prior verdicts a `--resume` may reuse, and why |
 | `extensions/lethal-control` | The BC extension: lease table, two-phase fence, headless runner |
 | `docs/do-trial-runbook.md` | Reproducing the run against a real commercial product |
@@ -320,7 +328,7 @@ bun test                   # unit suite
 ```
 
 Integration suites are env-gated, take minutes, and run against a live server. Each has a **frozen
-per-mutant baseline** — a differing verdict is a regression, never "close enough":
+per-mutant baseline**, where a differing verdict is a regression, never "close enough":
 
 | Command | Proves | Frozen |
 |---------|--------|--------|
@@ -328,12 +336,17 @@ per-mutant baseline** — a differing verdict is a regression, never "close enou
 | `LETHAL_ITEST_TABLES=1 bun run itest:tables` | Tier-2 operators and table-trigger mutation | 64 / 9 / 2 |
 | `LETHAL_ITEST_ENVTOOL=1 bun run itest:envtool` | An externally-owned environment, reached through config | 3 / 10 / 3 |
 | `LETHAL_ITEST_ALRUNNER=1 bun run itest:alrunner` | The al-runner backend | 3 / 13 / 0 |
-| `LETHAL_ITEST_BCDEV=1 bun run itest:lease` | Lease lifecycle, contention, recovery | — |
-| `LETHAL_ITEST_BCDEV=1 bun run itest:stale-publish` | Publish serialization and staleness | — |
+| `LETHAL_ITEST_BCDEV=1 bun run itest:lease` | Lease lifecycle, contention, recovery | n/a |
+| `LETHAL_ITEST_BCDEV=1 bun run itest:stale-publish` | Publish serialization and staleness | n/a |
 
 ## Limits
 
 Stated plainly, because a mutation-testing tool that overstates its guarantees is worse than none.
+
+Several entries below cite measurements taken against one real commercial extension, **Continia
+Document Output** (19,832 mutation sites across 438 files), because that is where these failure modes
+were actually observed rather than reasoned about. "Document Output" always means that app; it is not
+a LethAL feature or a mode.
 
 - **Coverage and verdicts come from one runner** (the fenced `RunMutant` session, since the R58
   rollout made `coverageMode: "fenced"` the default). The older failure this replaces is worth
@@ -341,20 +354,22 @@ Stated plainly, because a mutation-testing tool that overstates its guarantees i
   the baseline ran on a different session type than the mutants, 12 of 56 Document Output tests
   failed on that runner and took their coverage out of the green set (14 mutants misreported
   `no-coverage`), and a coverage-attribution defect (R63) credited tests with procedures they
-  could not execute — 77 mutants scored `survived` against tests that never ran the mutated
+  could not execute, so 77 mutants scored `survived` against tests that never ran the mutated
   code. Under the default, `no-coverage` means exactly "no green test executed this on the
   runner that produces verdicts".
-- **Every verdict describes the NON-GUI branch** (R60). The fenced session is
-  `GuiAllowed=No`/`ClientType=ODataV4`: a handler-less `Confirm` returns its default silently
-  instead of raising `Unhandled UI`, and code behind `GuiAllowed` checks takes the
-  non-interactive path. A mutant inside a GUI-only branch cannot be killed here — it reads as
-  `survived` or `no-coverage`, and both can mean "never ran". Measured on Document Output: nine
-  statement-generation procedures are executed by NO test on either runner, because the tests
-  flip the customer to Manual at an earlier guard. That is a test-suite finding, not a tool
-  finding — but the tool cannot tell the two apart for you yet.
+- **Every verdict describes your app's NON-GUI branch** (R60). LethAL executes every mutant in a
+  `GuiAllowed=No`, `ClientType=ODataV4` session, while a developer running the same suite from VS
+  Code runs GUI-allowed. A handler-less `Confirm` returns its default silently instead of raising
+  `Unhandled UI`, and code guarded by `GuiAllowed` or branching on `Confirm`/`Message`/
+  `Page.RunModal` takes the non-interactive path, so a mutant inside a GUI-only branch can never be
+  killed here, and reads as `survived` or `no-coverage` when the truth is that LethAL never ran it.
+  Measured on Document Output: nine statement-generation procedures are executed by NO test on
+  either runner, because the tests flip the customer to Manual at an earlier guard. That is a
+  test-suite finding, not a tool finding, but the tool cannot tell the two apart for you yet, and
+  how much real AL this affects in general is not measured.
 - **A survivor is a lead, not a proven test-suite gap.** What *has* been established, on a real
   commercial product: coverage selection does not hide kills. Two runs of one Continia Document
-  Output codeunit, identical except for coverage mode, compared per-mutant across all 138 mutants —
+  Output codeunit, identical except for coverage mode, compared per-mutant across all 138 mutants:
   **no mutant reported `survived` or `no-coverage` under selection was killable by the full suite.**
   That is the failure mode that once made 10 of 20 fixture survivors false, and it is empty here.
   What is still **not** established is that any individual survivor is non-equivalent: some
@@ -363,18 +378,12 @@ Stated plainly, because a mutation-testing tool that overstates its guarantees i
   execution, and the artifact carrying every guard is typically rejected by a hosting proxy before
   it publishes. Use `--only`; `--allow-large-run` overrides.
 - **Single-tenant servers only.** App publication is service-instance-wide, so a second tenant
-  publishing to the same instance is outside the lease entirely. Documented, **not enforced** — AL
-  cannot enumerate tenants from an extension. Verify out of band with `Get-BcContainerTenants`.
+  publishing to the same instance is outside the lease entirely. Documented, **not enforced**, since
+  AL cannot enumerate tenants from an extension. Verify out of band with `Get-BcContainerTenants`.
 - **`al-runner` is not authoritative.** Measured: its `asserterror` never fails a test, so mutants
   killable only that way come back survived there while `bcdev` kills them. Under-reporting only,
   never a false kill; a startup canary measures the actual binary each session and says so. Use it
   for offline smoke-testing, not for a score.
-- **Every verdict describes your app's NON-GUI branch.** Measured: LethAL executes every mutant in a
-  `GuiAllowed=No`, `ClientType=ODataV4` session, while a developer running the same suite from VS
-  Code runs GUI-allowed. Code guarded by `GuiAllowed`, or branching on `Confirm`/`Message`/
-  `Page.RunModal`, therefore takes the non-interactive path — so a mutant inside a GUI-only branch
-  can never be killed, and will be reported `survived` or `no-coverage` when the truth is that
-  LethAL never ran it. How much real AL this affects is not yet measured.
 - **A mutant that never terminates is stepped over, not scored.** AL cannot preempt a running loop,
   so LethAL sees only its own abort and cannot tell it from "the server is still working". Such a
   mutant is recorded as an unmeasured error; `--resume` skips it so the run completes rather than
@@ -391,4 +400,4 @@ Stated plainly, because a mutation-testing tool that overstates its guarantees i
 ---
 
 **Author**: Torben Leth (sshadows@sshadows.dk)
-**License**: none declared yet — add a `LICENSE` file before distributing.
+**License**: none declared yet. Add a `LICENSE` file before distributing.
