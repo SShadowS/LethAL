@@ -19,7 +19,8 @@
     "itest:growth": "bun packages/runner/itest/growth.itest.ts",
     "itest:lease": "bun packages/runner/itest/lease.itest.ts",
     "itest:stale-publish": "bun packages/runner/itest/stale-publish.itest.ts",
-    "itest:tables": "bun packages/runner/itest/tables.itest.ts"
+    "itest:tables": "bun packages/runner/itest/tables.itest.ts",
+    "itest:hang": "bun packages/runner/itest/hang.itest.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",

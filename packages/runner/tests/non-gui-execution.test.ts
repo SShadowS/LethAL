@@ -105,3 +105,37 @@ describe("validity.executionContext (R60)", () => {
     expect(text).toContain("SCOPE:");
   });
 });
+
+/**
+ * R53, spec §5: "this verdict is evidentially weaker than every other kill, and the report must
+ * say so."
+ *
+ * A `timeout-killed` scored through `--stop-hung-sessions` rests on BC confirming it stopped the
+ * session — not on a failing assertion, and not on any attestation (`ObservedAny` lives in a
+ * SingleInstance codeunit's memory and dies with the stopped session, so the run cannot even say
+ * whether an instrumented site executed). It is also permanent: the verdict is carryable.
+ */
+describe("validity caveat: stop-hung-sessions (R53)", () => {
+  function withTimeoutKill(over: Record<string, unknown> = {}) {
+    const outcomes: SessionOutcome[] = [
+      { mutant: entry(), verdict: "timeout-killed", batchIndex: 0 },
+    ];
+    return build({ outcomes, ...over });
+  }
+
+  test("fires when the flag actually produced a timeout-killed", () => {
+    expect(withTimeoutKill({ stopHungSessions: true }).validity.caveats).toContain(
+      "stop-hung-sessions",
+    );
+  });
+
+  // The flag alone is a setting; a scored timeout is a CLAIM, and it is the claim that needs
+  // qualifying. A caveat on every flagged run would be noise on the runs that scored nothing.
+  test("does NOT fire when the flag was on but nothing timed out", () => {
+    expect(build({ stopHungSessions: true }).validity.caveats).not.toContain("stop-hung-sessions");
+  });
+
+  test("does NOT fire when a timeout-killed exists without the flag", () => {
+    expect(withTimeoutKill().validity.caveats).not.toContain("stop-hung-sessions");
+  });
+});

@@ -599,10 +599,11 @@ export class BcDevMcpBackend implements ExecutionBackend {
     this.attemptSeq += 1;
     const opSeq = this.nextOpSeq;
     this.nextOpSeq += 1;
+    const attemptId = `a${this.attemptSeq}`;
     const req = {
       ref,
       mutantId: this.pendingMutantId ?? "",
-      attemptId: `a${this.attemptSeq}`,
+      attemptId,
       timeoutMs: opts.timeoutMs,
       lease: {
         epoch: lease.epoch,
@@ -619,8 +620,12 @@ export class BcDevMcpBackend implements ExecutionBackend {
       ...(this.cfg.stopHungSessions === true && (this.pendingMutantId ?? "") !== ""
         ? {
             onBudgetExceeded: async (): Promise<void> => {
-              await transport.stopHungRun({
-                attemptId: `a${this.attemptSeq}`,
+              const stop = await transport.stopHungRun({
+                // Captured at request-build time, not re-read here: `attemptSeq` advances per
+                // call and this closure fires on a TIMER, after the request was built. Equal
+                // today under sequential execution, but a late read could name a different
+                // attempt than the request the hook belongs to.
+                attemptId,
                 lease: {
                   epoch: lease.epoch,
                   token: lease.token,
@@ -628,6 +633,16 @@ export class BcDevMcpBackend implements ExecutionBackend {
                   opSeq,
                 },
               });
+              // A REFUSAL IS AN ANSWER. Discarding it produced a wrong diagnosis: the quarantine
+              // note read "BC never answered this request with its stop confirmation" when BC had
+              // answered and named the reason (`no-session-id` for a marker written before the
+              // field existed, `already-completed` for a lost-ack-after-success). Throwing carries
+              // it through `stopHookError` into the "stop was attempted and FAILED (…)" message.
+              if (!stop.stopped) {
+                throw new Error(
+                  `StopHungRun refused: ${stop.reason ?? "no reason given"} (attempt ${attemptId}, opSeq ${opSeq})`,
+                );
+              }
             },
           }
         : {}),

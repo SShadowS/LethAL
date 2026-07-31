@@ -547,6 +547,10 @@ export interface BuildReportInput {
   /** R35: baseline tests BC refused on permissions — see `SessionReport.permissionsRefused`.
    *  Pass the names only; the diagnosis text is composed here so it cannot drift per caller. */
   readonly permissionsRefusedTests?: readonly string[];
+  /** R53: whether this run was allowed to END BC SESSIONS to score a non-terminating mutant
+   *  (`--stop-hung-sessions`). Drives the `stop-hung-sessions` caveat, but only when the run
+   *  actually scored a `timeout-killed` through it — see the caveat's own comment. */
+  readonly stopHungSessions?: boolean;
   /** R47: the prior run `--resume` drew from — see `SessionReport.resumedFrom`. */
   readonly resumedFrom?: {
     readonly runId: number;
@@ -728,6 +732,18 @@ export function buildReport(input: BuildReportInput): SessionReport {
   // TestPermissions = Disabled and run it again".
   const permissionsRefusedTests = input.permissionsRefusedTests ?? [];
   if (permissionsRefusedTests.length > 0) caveats.push("tests-permission-refused");
+  // R53, spec §5: "this verdict is evidentially weaker than every other kill, and the report must
+  // say so". A `timeout-killed` scored through `--stop-hung-sessions` rests on BC confirming it
+  // stopped the session — NOT on a failing assertion, and not on any attestation: `ObservedAny`
+  // lives in a SingleInstance codeunit's memory and dies with the stopped session. So the run
+  // cannot even say whether an instrumented site executed. It is also permanent: `timeout-killed`
+  // is carryable by `--resume`.
+  //
+  // Only when the flag actually produced one. The flag alone is a setting; a scored timeout is a
+  // claim, and it is the claim that needs qualifying.
+  if (input.stopHungSessions === true && counts.timeoutKilled > 0) {
+    caveats.push("stop-hung-sessions");
+  }
   // R47: a caveat, not a reliability downgrade. The verdicts carried are real measurements taken
   // over the same source (identity-matched) and the same scope (fingerprint-matched) — calling
   // that "degraded" would put an honest resume in the same bucket as a red baseline. What it IS

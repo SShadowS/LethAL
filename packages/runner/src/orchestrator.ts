@@ -1776,7 +1776,10 @@ function resolveResume(
     priorRunId = cfg.resume;
   }
 
-  const index = buildResumeIndex(cfg.store.mutantVerdicts(priorRunId));
+  const index = buildResumeIndex(
+    cfg.store.mutantVerdicts(priorRunId),
+    cfg.stopHungSessions === true,
+  );
   console.warn(
     `[lethal] --resume: reusing run ${priorRunId} — ${index.carryable.size} mutant verdict(s) may be carried without re-executing. Deploy and baseline still run; coverage attribution and covering-test lists come from THIS run.${
       index.nonCarryableRows > 0
@@ -2844,6 +2847,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     ...(permissionRefusedTests.size > 0
       ? { permissionsRefusedTests: [...permissionRefusedTests].sort() }
       : {}),
+    ...(cfg.stopHungSessions === true ? { stopHungSessions: true } : {}),
     baselineTests: tests.map((t) => ({
       codeunitName: t.codeunitName,
       ...(t.file !== undefined ? { file: t.file } : {}),
