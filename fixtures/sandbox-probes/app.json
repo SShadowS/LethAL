@@ -2,7 +2,7 @@
   "id": "a3b1c2d4-7788-4a10-9f3e-0c1122334455",
   "name": "LethAL Sandbox Probes",
   "publisher": "LethAL",
-  "version": "1.0.2.0",
+  "version": "1.0.5.0",
   "brief": "LethAL Layer 5C-A: protocol-invariant probe codeunits.",
   "description": "Test codeunits that witness RunMutant protocol invariants (single-method selection, run-scoped clear) end-to-end. Driven directly by the bcdev itest via RunMutantTransport, NOT discovered by runSession \u2014 kept out of the frozen 3/10/3 sandbox baseline. Not for production use \u2014 see fixtures/README.md.",
   "privacyStatement": "",

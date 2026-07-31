@@ -12,10 +12,15 @@ const EXPECTED_OPERATORS = [
   "lethal.remove-setrange",
   "lethal.remove-calcfields",
   "lethal.swap-modify-flag",
+  // Phase 2 (R33) shipped ONE operator. Two candidates were refused and must not be added back
+  // without new evidence: `SwapRecXRec` (measured 2026-07-31 — `xRec` carries `Rec`'s values when
+  // `Modify(true)` is driven from AL headlessly, `differ=No`) and `RemoveSetLoadFields` (deleting
+  // a load restriction only WIDENS the load, so no real assertion can go from passing to failing).
+  "lethal.remove-commit",
 ] as const;
 
 describe("tier2Operators", () => {
-  it("holds exactly the four Phase-1 operators, in registration order", () => {
+  it("holds exactly the registered operators, in registration order", () => {
     expect(tier2Operators.map((op) => op.name)).toEqual([...EXPECTED_OPERATORS]);
   });
 

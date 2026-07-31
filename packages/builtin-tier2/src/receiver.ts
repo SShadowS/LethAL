@@ -198,6 +198,80 @@ export function claimsRecordMethod(
   return true;
 }
 
+/**
+ * R33: does `node` call the AL SYSTEM function `name` — the receiverless kind, of which `Commit()`
+ * is the case Phase 2 needs — rather than a procedure this project declares under the same name?
+ *
+ * A separate predicate from `claimsRecordMethod`, deliberately. That one asks "is the receiver a
+ * record?"; `Commit()` has no receiver at all, so every part of that question is the wrong one, and
+ * threading a null-receiver special case through it would put the record rules on a path that has
+ * no record.
+ *
+ * The refusals, both in the safe direction:
+ *
+ *   1. Any RECEIVER at all refuses. `Shadow.Commit()` is a call on something, and the AL system
+ *      `Commit` has no qualified form — so a qualified call of that name is by construction a
+ *      project-declared procedure. The fixture has exactly this shape (`Data Shadow` declares
+ *      `Commit`, `Data Ops.ShadowedBuiltins` calls it).
+ *   2. The ENCLOSING object declaring a procedure of that name refuses, and so does a
+ *      `tableextension` of the enclosing table declaring one — an unqualified call binds to the
+ *      object's own procedure before the system function, which is `Data Shadow.BumpViaCommit`'s
+ *      bare `Commit()` in the fixture.
+ *
+ * Arguments are the caller's rule, not this predicate's: `Commit()` takes none, but a shared
+ * predicate that hardcoded that would be wrong for the next system call.
+ *
+ * Shares the parenthesis-less limitation documented on `claimsRecordMethod`: `Commit;` parses as a
+ * `call_statement`, never reaches here, and is silently not claimed.
+ */
+export function claimsSystemCall(node: ALSyntaxNode, ctx: SemanticContext, name: string): boolean {
+  const callKind = (node as ALSyntaxNode | undefined)?.kind;
+  if (callKind === undefined) {
+    throw new Error("claimsSystemCall: node is required (received null/undefined)");
+  }
+  const symbols = (ctx as { symbols?: SymbolTable } | undefined)?.symbols;
+  if (symbols === undefined) {
+    throw new Error("claimsSystemCall: a SemanticContext with a symbol table is required");
+  }
+  if (typeof name !== "string" || name === "" || name.trim() !== name) {
+    throw new Error(
+      `claimsSystemCall: name must be non-empty and free of surrounding whitespace, got ${JSON.stringify(name)}`,
+    );
+  }
+
+  if (callKind !== ALNodeKind.procedure_call) return false;
+  const callee = node.childForFieldName("function");
+  if (callee === null) return false;
+  const target = describeCallee(callee);
+  if (target === null) return false;
+  // GUARD 1: a qualified call of this name is a project procedure, never the system function.
+  if (target.receiver !== null) return false;
+  if (!equalsIgnoreCase(target.name, name)) return false;
+
+  const objectNode = enclosingObject(node);
+  if (objectNode === null) return false;
+  const objectName = objectNameOf(objectNode);
+  if (objectName === null) return false;
+
+  // GUARD 2: the enclosing object's own declaration wins over the system function.
+  if (declaresProcedure(objectNode, target.name)) return false;
+  // …and so does one added to the enclosing TABLE by an extension, which is callable on the
+  // implicit `Rec` here exactly as the table's own is.
+  const enclosingTable =
+    objectNode.kind === ALNodeKind.table
+      ? objectName
+      : objectNode.kind === ALNodeKind.tableextension
+        ? extendedTableOf(objectNode)
+        : null;
+  if (
+    enclosingTable !== null &&
+    projectDeclaresProcedureOnTable(symbols, enclosingTable, target.name)
+  ) {
+    return false;
+  }
+  return true;
+}
+
 // --- callee shape ----------------------------------------------------------
 
 interface CallTarget {
