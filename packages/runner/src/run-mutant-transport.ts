@@ -1,5 +1,6 @@
 import type { ActivationConfig, FetchFn } from "./activation";
 import type { TestMethodRef, TestOutcome, TestVerdict } from "./backend";
+import { describeThrown } from "./describe-error";
 import { assertAttemptId } from "./lease";
 import type { LeaseTuple } from "./lease";
 
@@ -40,6 +41,44 @@ export interface RunMutantRequest {
    * empty filter is therefore not a benign default, it is a hang.
    */
   readonly coverageObjectIdFilter?: string;
+  /**
+   * R53 (opt-in, `--stop-hung-sessions`). Absent ⇒ today's behaviour EXACTLY: abort at `timeoutMs`
+   * and classify `in-flight-unknown`.
+   *
+   * When present, the request is NOT aborted at the budget. Instead this hook fires — the caller
+   * wires it to `StopHungRun` on a SECOND connection — and this request stays open to receive BC's
+   * answer. That inversion is the whole mechanism:
+   *
+   *   MEASURED (`scripts/r53-probe/`): stopping the session makes BC answer the still-open original
+   *   request with HTTP 408 naming the AL `StopSession` call. Aborting first throws that answer
+   *   away and leaves only `StopHungRun`'s own return value — which is worth nothing, because
+   *   `StopSession` returns without throwing for an id that never existed, for 0, and for -1. It
+   *   cannot report failure.
+   *
+   * So the 408 on THIS request is the only signal that proves the session stopped was the session
+   * serving THIS request. It is also what makes the finish-just-after-budget case honest: if the
+   * run completed instead, this request returns the real result and that is what gets scored.
+   */
+  readonly onBudgetExceeded?: () => Promise<void>;
+  /**
+   * How long to keep waiting after `onBudgetExceeded` fires before giving up and aborting. Bounds
+   * the hold-open: if BC answers neither the stop nor this request, the run must still end.
+   * Ignored when `onBudgetExceeded` is absent.
+   */
+  readonly stopGraceMs?: number;
+}
+
+/**
+ * BC's answer on the stopped request. Both halves are required: a bare 408 is an ordinary request
+ * timeout (a proxy emits one), and only the AL-stop wording proves the session was ended by our
+ * own `StopHungRun` rather than by a hosting layer that timed the socket out.
+ */
+const AL_STOP_408 = /stopped the session/i;
+const AL_STOP_408_CAUSE = /StopSession/i;
+
+/** True only for BC's "this session was stopped by an AL StopSession call" 408. */
+export function isAlStopResponse(status: number, body: string): boolean {
+  return status === 408 && AL_STOP_408.test(body) && AL_STOP_408_CAUSE.test(body);
 }
 
 /** Parsed `LethALControl_RunMutant` result (the JSON string inside OData's scalar `value`). */
@@ -301,7 +340,28 @@ export class RunMutantTransport {
     // AbortSignal.timeout() is unreliable in this Bun/Windows env (see activation.ts) — manual
     // AbortController + setTimeout instead.
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    // R53: with the stop hook wired, the budget is a SOFT deadline — fire the stop and keep this
+    // request open for BC's 408 — and the abort moves out to a hard cap so the run still ends if
+    // neither the stop nor the answer arrives. Without the hook this is byte-for-byte the old
+    // behaviour: one timer, abort at the budget.
+    const stopHook = req.onBudgetExceeded;
+    let stopFired = false;
+    let stopHookError: unknown;
+    const timer =
+      stopHook === undefined
+        ? setTimeout(() => controller.abort(), timeoutMs)
+        : setTimeout(() => {
+            stopFired = true;
+            // Deliberately not awaited: this runs off a timer while the request is still open, and
+            // the answer we care about arrives on the request, not from the hook.
+            void stopHook().catch((err: unknown) => {
+              stopHookError = err;
+            });
+          }, timeoutMs);
+    const hardTimer =
+      stopHook === undefined
+        ? undefined
+        : setTimeout(() => controller.abort(), timeoutMs + (req.stopGraceMs ?? 30_000));
     let res: Response;
     try {
       res = await this.fetchFn(url, {
@@ -318,11 +378,19 @@ export class RunMutantTransport {
       // Our own timeout aborted it → the call may have reached the server and left a mutant
       // active (clear unconfirmed): in-flight-unknown, the orchestrator quarantines.
       if (controller.signal.aborted) {
+        // R53: if the stop hook fired and we still ended up aborting, BC never sent the 408 — so
+        // name why. A hook that THREW is the likeliest cause and is otherwise invisible here,
+        // which is R65's lesson: an unexplained quarantine costs a debugging session.
+        const stopDetail = !stopFired
+          ? ""
+          : stopHookError !== undefined
+            ? ` — the server-side stop was attempted and FAILED (${describeThrown(stopHookError)}), so this run could not be scored and is quarantined instead`
+            : " — the server-side stop was attempted but BC never answered this request with its stop confirmation, so this run is quarantined rather than scored";
         return {
           ref,
           outcome: "deadline-exceeded",
           durationMs,
-          failureMessage: `RunMutant timed out: ${String(err)}`,
+          failureMessage: `RunMutant timed out: ${String(err)}${stopDetail}`,
           operation: "in-flight-unknown",
           fencedOp,
         };
@@ -339,6 +407,31 @@ export class RunMutantTransport {
       };
     } finally {
       clearTimeout(timer);
+      if (hardTimer !== undefined) clearTimeout(hardTimer);
+    }
+
+    // R53: BC's answer to the request we deliberately held open. Checked BEFORE the generic
+    // non-2xx branch below, which would otherwise classify this 408 as `in-flight-unknown` — the
+    // exact quarantine this feature exists to replace.
+    //
+    // `outcome: "timeout"` reuses the existing rule (orchestrator: timeout ⇒ `timeout-killed`).
+    // No new verdict is introduced; what is new is having EARNED it — BC states the session was
+    // stopped, so the operation is over and the tier is not stranded. `operation` is deliberately
+    // absent: this is terminal.
+    if (stopFired && res.status === 408) {
+      const body = await res.text().catch(() => "");
+      if (isAlStopResponse(res.status, body)) {
+        return {
+          ref,
+          outcome: "timeout",
+          durationMs: Date.now() - started,
+          failureMessage:
+            `RunMutant exceeded its ${timeoutMs} ms budget and was stopped server-side so it could ` +
+            `be scored rather than strand the tier. BC's own words: ${JSON.stringify(body.slice(0, 400))}`,
+        };
+      }
+      // A 408 that is NOT BC's AL-stop answer (a proxy timing the socket out looks like this).
+      // Falls through to the non-2xx branch → in-flight-unknown → quarantine, unchanged.
     }
 
     if (!res.ok) {
