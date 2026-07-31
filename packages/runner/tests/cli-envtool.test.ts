@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { AlRunnerBackend } from "../src/al-runner-backend";
 import type { BcDevConfigSection, LethalConfigFile, RunCliConfig } from "../src/cli";
 import {
+  afterLeaseAcquiredFor,
   bcDevBackendConfig,
   buildBackend,
   deployerFor,
@@ -221,6 +222,7 @@ describe("resolveEnvToolSession", () => {
     const fakeSession: EnvToolSession = {
       bcdev: RESOLVED_BCDEV,
       envId: RESOLVED_BCDEV.serverInstance,
+      publishTestApps: async () => {},
       async teardown() {},
     };
     const result = await resolveEnvToolSession(RUN_CONFIG_BCDEV, configFile, "run-1", {
@@ -280,6 +282,7 @@ describe("resolveEnvToolSession", () => {
     const fakeSession: EnvToolSession = {
       bcdev: RESOLVED_BCDEV,
       envId: RESOLVED_BCDEV.serverInstance,
+      publishTestApps: async () => {},
       async teardown() {},
     };
     const { effectiveConfig } = await resolveEnvToolSession(RUN_CONFIG_BCDEV, configFile, "run-1", {
@@ -489,6 +492,7 @@ describe("withEnvTeardown", () => {
       bcdev: RESOLVED_BCDEV,
       envId: RESOLVED_BCDEV.serverInstance,
       createdEnvId: "env-created",
+      publishTestApps: async () => {},
       async teardown(opts) {
         teardownCalls.push(opts);
       },
@@ -518,6 +522,7 @@ describe("withEnvTeardown", () => {
         bcdev: RESOLVED_BCDEV,
         envId: RESOLVED_BCDEV.serverInstance,
         createdEnvId: "env-created",
+        publishTestApps: async () => {},
         async teardown() {
           // Mirrors env-tool-session.ts's own failure mode: `deleteEnv` names `{appFile}`, which
           // `renderCommand` cannot supply at teardown time.
@@ -539,6 +544,7 @@ describe("withEnvTeardown", () => {
       bcdev: RESOLVED_BCDEV,
       envId: RESOLVED_BCDEV.serverInstance,
       createdEnvId: "env-created",
+      publishTestApps: async () => {},
       async teardown() {
         throw new Error("deleteEnv boom");
       },
@@ -625,6 +631,7 @@ describe("runFromCli (Task 7 review wiring)", () => {
       bcdev: RESOLVED_BCDEV,
       envId: RESOLVED_BCDEV.serverInstance,
       createdEnvId: "env-created",
+      publishTestApps: async () => {},
       async teardown(opts) {
         teardownCalls.push(opts);
       },
@@ -657,6 +664,7 @@ describe("runFromCli (Task 7 review wiring)", () => {
       bcdev: RESOLVED_BCDEV,
       envId: RESOLVED_BCDEV.serverInstance,
       createdEnvId: "env-created",
+      publishTestApps: async () => {},
       async teardown() {
         throw new EnvToolError("envTool: no value available for placeholder {appFile}");
       },
@@ -721,6 +729,7 @@ describe("runFromCli (Task 7 review wiring)", () => {
       bcdev: RESOLVED_BCDEV,
       envId: RESOLVED_BCDEV.serverInstance,
       createdEnvId: "env-created",
+      publishTestApps: async () => {},
       async teardown(opts) {
         teardownCalls.push(opts);
       },
@@ -1094,5 +1103,38 @@ describe("buildBackend (R64 — bcdev.altoolPath selects the publisher)", () => 
       alToolPaths: missingAlToolPaths,
     }).catch((e: unknown) => (e instanceof Error ? e.message : String(e)));
     expect(err).toContain("could not locate alc.exe/altool.exe");
+  });
+});
+
+/**
+ * R19. Publishing the target's TEST apps moved out of provisioning and under the lease, so a
+ * concurrent session cannot swap one mid-run behind the attestation fence (which covers the TARGET
+ * artifact only).
+ *
+ * These pin the WIRING, which is the part that can silently vanish: if the fragment stops being
+ * produced, the test apps are never published at all — the R31/R56 staleness class, where a gate
+ * happily measures a previously published build. Removing the call site used to change nothing any
+ * test could see.
+ */
+describe("afterLeaseAcquiredFor (R19)", () => {
+  it("produces a hook that publishes the test apps", async () => {
+    let published = 0;
+    const session = {
+      bcdev: RESOLVED_BCDEV,
+      envId: "env-4711",
+      publishTestApps: async () => {
+        published += 1;
+      },
+      teardown: async () => {},
+    } as unknown as EnvToolSession;
+
+    const fragment = afterLeaseAcquiredFor(session);
+    expect(fragment.afterLeaseAcquired).toBeDefined();
+    await fragment.afterLeaseAcquired?.();
+    expect(published).toBe(1);
+  });
+
+  it("produces nothing without an env-tool session — nobody asked LethAL to publish test apps", () => {
+    expect(afterLeaseAcquiredFor(undefined)).toEqual({});
   });
 });

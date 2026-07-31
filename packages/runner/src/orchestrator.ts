@@ -391,6 +391,23 @@ export interface SessionConfig {
    */
   readonly stopHungSessions?: boolean;
   /**
+   * R19: work that must happen AFTER the lease is held and before anything is measured.
+   *
+   * Today that is exactly one thing — publishing the target's test apps (`envTool.publishApps`).
+   * Pre-lease, a concurrent LethAL session can republish one mid-run, and nothing detects it: the
+   * attestation fence covers the TARGET artifact, not the test app, so the swap is invisible to
+   * every verdict the run produces.
+   *
+   * Deliberately a HOOK rather than a `publishApps` field on this config: `runSession` has no
+   * business knowing what an env tool is, and the env-tool session already owns the publisher, its
+   * credentials and its serializer. This is the seam, not the implementation.
+   *
+   * Absent on every path that has no such work (bcdev without an env tool, al-runner, every unit
+   * test), and absent is not the same as "nothing to publish" — the env-tool session always
+   * supplies the callback, which is a no-op when no apps are configured.
+   */
+  readonly afterLeaseAcquired?: () => Promise<void>;
+  /**
    * R48: opt out of the large-run pre-flight refusal — see `LARGE_RUN_MUTANT_THRESHOLD`.
    */
   readonly allowLargeRun?: boolean;
@@ -2055,6 +2072,21 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     // and this is also the fail-loud point for a backend that cannot take one at all.
     bindLeaseToBackend(cfg.backend, lease);
     session.start();
+
+    // R19: the one publish that CAN happen under the lease, happening under it.
+    //
+    // Publishing the target's test apps before the lease leaves a window in which a concurrent
+    // LethAL session republishes one mid-run. Nothing detects that: the attestation fence covers
+    // the TARGET artifact, not the test app, so the swap is invisible to every verdict this run
+    // then produces. Held under the lease, no other session is running at all.
+    //
+    // The CONTROL-APP publish is NOT here and cannot be — `AcquireLease` is an action on the
+    // control app and the lease row lives in its own table, so there is no lease to hold until it
+    // is published. R19's "move both under the lease" is impossible for that half by construction.
+    //
+    // Inside the same try/finally as everything else the lease guards: a publish that throws must
+    // release the lease rather than leave it held for the full ttl.
+    if (cfg.afterLeaseAcquired !== undefined) await cfg.afterLeaseAcquired();
   }
 
   // R26: the permission canary's measured verdict for THIS session, or `undefined` when no canary

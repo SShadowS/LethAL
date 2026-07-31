@@ -17,8 +17,11 @@ const FAR_FUTURE = "2099-01-01T00:00:00Z";
 // `envId?: string` (that type means "absent, or a string", never "explicitly undefined"). Several
 // tests below need exactly that — `{ envId: undefined }` to force create-mode by overriding the
 // harness default — so this widens just that one field to `string | undefined`.
-type EnvToolConfigOverride = Partial<Omit<EnvToolConfigSection, "envId">> & {
+type EnvToolConfigOverride = Partial<Omit<EnvToolConfigSection, "envId" | "publishApps">> & {
   envId?: string | undefined;
+  // Explicit `| undefined` so a test can say "this config has NO publishApps" — the same
+  // override-to-absent affordance `envId` already needed, which R19 made necessary here too.
+  publishApps?: readonly string[] | undefined;
 };
 
 /** Canned tool output, parameterised by expiry so no test mutates shared state. */
@@ -38,12 +41,16 @@ function harness(cfgOver: EnvToolConfigOverride = {}, out: Record<string, string
   // `envId?: string` disallows it, so it's applied via a conditional spread instead — `"envId" in
   // cfgOver` with an undefined value means "override to absent" (create-mode); its total absence
   // from `cfgOver` means "keep the default".
-  const { envId: envIdOverride, ...restOver } = cfgOver;
+  // `publishApps` gets the same treatment as `envId` and for the same reason (R19 added the
+  // override-to-absent case: a config with no test apps at all must still yield a callable
+  // `publishTestApps`).
+  const { envId: envIdOverride, publishApps: publishAppsOverride, ...restOver } = cfgOver;
   const envId = "envId" in cfgOver ? envIdOverride : "env-4711";
+  const publishApps = "publishApps" in cfgOver ? publishAppsOverride : ["tests.app"];
   const cfg: EnvToolConfigSection = {
     toolPath: "tool.exe",
     ...(envId !== undefined ? { envId } : {}),
-    publishApps: ["tests.app"],
+    ...(publishApps !== undefined ? { publishApps } : {}),
     resolve: [
       {
         command: ["env", "get", "{envId}", "--json"],
@@ -214,9 +221,29 @@ describe("startEnvToolSession", () => {
     ).rejects.toBeInstanceOf(HarnessAuthError);
   });
 
-  it("publishes publishApps before the control app", async () => {
+  // R19: provisioning no longer publishes the TEST apps at all. They are deferred to
+  // `publishTestApps`, which the caller runs while HOLDING THE LEASE — pre-lease, a concurrent
+  // session can republish one mid-run and the attestation fence cannot see it (it covers the
+  // TARGET artifact, not the test app).
+  it("does NOT publish publishApps during provisioning", async () => {
     const { published } = await start();
-    expect(published[0]).toBe("tests.app");
+    expect(published).not.toContain("tests.app");
+  });
+
+  it("publishes them when publishTestApps is called, in configured order", async () => {
+    const { session, published } = await start();
+    expect(published).not.toContain("tests.app");
+    await session.publishTestApps();
+    expect(published).toContain("tests.app");
+  });
+
+  // Absent config must still give the caller a callable — otherwise every caller has to branch on
+  // config shape to decide whether the lease window contains a publish.
+  it("publishTestApps is a no-op, not a throw, when no publishApps are configured", async () => {
+    const { session, published } = await start({}, { publishApps: undefined });
+    const before = published.length;
+    await session.publishTestApps();
+    expect(published.length).toBe(before);
   });
 
   it("creates an env when none is configured and records it to state before use", async () => {
@@ -303,6 +330,12 @@ describe("startEnvToolSession", () => {
     expect(seen[0]).toBe("create");
     expect(seen[1]).toBe("start");
     expect(seen.filter((s) => s.startsWith("poll:")).at(-1)).toBe("poll:Running");
+    // R19: the test-app publish is deferred, so provisioning itself publishes nothing here (the
+    // control app is only republished when the harness check FAILS, and it passes in this test).
+    // The property under test survives the move: readiness still gates the publish, it is just
+    // now gated at the point the caller runs it.
+    expect(seen.some((s) => s.startsWith("publish:"))).toBe(false);
+    await session.publishTestApps();
     const firstPublish = seen.findIndex((s) => s.startsWith("publish:"));
     const lastPoll = seen.map((s) => s.startsWith("poll:")).lastIndexOf(true);
     expect(firstPublish).toBeGreaterThan(lastPoll);

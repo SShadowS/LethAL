@@ -48,6 +48,21 @@ export interface EnvToolSession {
    */
   readonly envId: string;
   readonly createdEnvId?: string;
+  /**
+   * R19: publish the configured `publishApps` (the target's TEST apps). Deferred out of the
+   * provisioning lifecycle so the caller can run it WHILE HOLDING THE LEASE.
+   *
+   * Pre-lease, a concurrent LethAL session can republish a test app mid-run, and the attestation
+   * fence cannot see it — that fence covers the TARGET artifact only, so the swap is invisible to
+   * every verdict the run produces. Under the lease, no other session is running.
+   *
+   * The CONTROL-APP publish is NOT deferred and cannot be: `AcquireLease` is an action on the
+   * control app and the lease row lives in its own table, so there is no lease to hold until it is
+   * published. That half of R19 is impossible by construction rather than merely unimplemented.
+   *
+   * Always present; a no-op when no `publishApps` are configured, so callers need not branch.
+   */
+  publishTestApps(): Promise<void>;
   teardown(opts: { keepEnv: boolean; quarantined: boolean }): Promise<void>;
 }
 
@@ -239,12 +254,19 @@ export async function startEnvToolSession(args: {
       });
     }
 
-    // 6. prepublish + control app. Verify FIRST: the machine-global lease lives in the control
-    //    app's own tables, and republishing runs its install/upgrade codeunits, which would
-    //    disturb a concurrent session's lease and serverGeneration on a shared long-lived
-    //    environment.
+    // 6. control app. Verify FIRST: the machine-global lease lives in the control app's own
+    //    tables, and republishing runs its install/upgrade codeunits, which would disturb a
+    //    concurrent session's lease and serverGeneration on a shared long-lived environment.
+    //
+    //    R19: the CONTROL-APP publish deliberately stays here, OUTSIDE the lease, and cannot move
+    //    under it. `AcquireLease` is an action ON the control app and the lease row lives in its
+    //    `LC Lease` table (`ControlApi.AcquireLease` / `Lease.Table.al`), so a lease cannot be
+    //    taken from a control app that is not published and answering. R19's "move BOTH under the
+    //    lease" is therefore impossible for this half by construction — see the roadmap row.
+    //
+    //    The `publishApps` half CAN move, and does: it is returned as `publishTestApps` for the
+    //    caller to run once the lease is held.
     const publisher = args.makePublisher(bcdev, envId);
-    for (const app of cfg.publishApps ?? []) await publisher.publishFile(app);
     const odataCfg: ActivationConfig = {
       baseUrl,
       company: bcdev.company,
@@ -277,6 +299,21 @@ export async function startEnvToolSession(args: {
       bcdev,
       envId,
       ...(createdEnvId !== undefined ? { createdEnvId } : {}),
+      /**
+       * R19: publishing the target's TEST apps, deferred so the caller can run it while HOLDING
+       * the lease.
+       *
+       * Publishing them here (pre-lease, as this step used to) leaves a window in which a
+       * concurrent LethAL session can republish a test app mid-run. The attestation fence does not
+       * cover that — it covers the TARGET artifact only — so the change is invisible to every
+       * verdict this run produces. Under the lease, no other session can be running at all.
+       *
+       * Returned even when `publishApps` is absent, as a no-op, so the caller never has to branch
+       * on config shape to decide whether the lease window has a publish in it.
+       */
+      async publishTestApps(): Promise<void> {
+        for (const app of cfg.publishApps ?? []) await publisher.publishFile(app);
+      },
       async teardown(opts) {
         if (createdEnvId === undefined) return;
         const block = cfg.deleteEnv;
