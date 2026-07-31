@@ -237,6 +237,69 @@ export class RunMutantTransport {
   ) {}
 
   /** One fenced mutant/baseline execution, no coverage collected — the unchanged Layer 5C-A path. */
+  /**
+   * R53: ask the server to end the session running THIS attempt's mutant.
+   *
+   * Called on a SECOND connection while the original RunMutant request is still open — never
+   * instead of it. The answer here is deliberately NOT the evidence a verdict rests on: measured,
+   * `StopSession` returns without throwing for an id that never existed, for 0 and for -1, so the
+   * server cannot tell us it failed. The verdict comes from the 408 BC delivers to the held
+   * request (see `isAlStopResponse`); this call exists to CAUSE that, and its return value is
+   * diagnostic only.
+   *
+   * The "is this op still running?" check lives SERVER-side, in `TryStopHungRun`'s tombstone
+   * branch, rather than as a separate client read-then-act: the server holds the lease lock while
+   * it checks and stops, so there is no window in which the run completes between our check and
+   * our stop. A client-side pre-check would have exactly that window, and the thing it would let
+   * through — stopping a run that already finished, whose recorded session id now names a live
+   * pooled session — is the false kill this feature must not produce.
+   *
+   * Throws on transport failure; the caller surfaces that in the quarantine note.
+   */
+  async stopHungRun(req: {
+    readonly attemptId: string;
+    readonly lease: LeaseTuple & { readonly opSeq: number };
+  }): Promise<{ stopped: boolean; sessionId?: number; reason?: string }> {
+    assertAttemptId(req.attemptId);
+    const params = new URLSearchParams({ company: this.cfg.company });
+    if (this.cfg.tenant !== undefined) params.set("tenant", this.cfg.tenant);
+    const url = `${this.cfg.baseUrl}/ODataV4/LethALControl_StopHungRun?${params.toString()}`;
+    const res = await this.fetchFn(url, {
+      method: "POST",
+      headers: {
+        authorization: `Basic ${btoa(`${this.cfg.username}:${this.cfg.password}`)}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        epoch: req.lease.epoch,
+        token: req.lease.token,
+        generation: req.lease.serverGeneration,
+        attemptId: req.attemptId,
+        opSeq: req.lease.opSeq,
+      }),
+    });
+    if (!res.ok) {
+      throw new Error(`StopHungRun failed: HTTP ${res.status} ${await res.text().catch(() => "")}`);
+    }
+    const outer: unknown = await res.json();
+    const value = (outer as { value?: unknown }).value;
+    if (typeof value !== "string") {
+      throw new Error(`StopHungRun returned no string \`value\`: ${JSON.stringify(outer)}`);
+    }
+    const parsed: unknown = JSON.parse(value);
+    const stopped = (parsed as { stopped?: unknown }).stopped;
+    if (typeof stopped !== "boolean") {
+      throw new Error(`StopHungRun returned no boolean \`stopped\`: ${value}`);
+    }
+    const sessionId = (parsed as { sessionId?: unknown }).sessionId;
+    const reason = (parsed as { reason?: unknown }).reason;
+    return {
+      stopped,
+      ...(typeof sessionId === "number" ? { sessionId } : {}),
+      ...(typeof reason === "string" ? { reason } : {}),
+    };
+  }
+
   async run(req: RunMutantRequest): Promise<TestVerdict> {
     return (await this.execute(req, false)).verdict;
   }

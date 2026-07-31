@@ -372,6 +372,25 @@ export interface SessionConfig {
    */
   readonly mutantTimeoutMs?: number;
   /**
+   * R53 (`--stop-hung-sessions`), OPT-IN, default off.
+   *
+   * A mutant that makes a test never terminate cannot be scored today: the client aborts at its
+   * budget, and an abort is ambiguous (BC may still be executing), so it quarantines the tier and
+   * blocks every mutant behind it — 125 of 138 on Document Output.
+   *
+   * With this on, the request is held open at the budget and the server is asked to STOP THE
+   * SESSION running that mutant; BC then answers the held request with a 408 naming the stop, and
+   * that answer — not the stop call's own return value — is what makes the run scoreable
+   * (`timeout-killed`).
+   *
+   * It is opt-in because it ENDS A SESSION ON THE USER'S BC SERVER. LethAL only ever targets a
+   * session id its own run recorded for its own attempt, under the lease fence and behind a
+   * server-side tombstone check — but the id cannot be independently verified (`Active Session` is
+   * unusable from a web-service session, measured), so accepting that residual risk is the user's
+   * call, not the tool's.
+   */
+  readonly stopHungSessions?: boolean;
+  /**
    * R48: opt out of the large-run pre-flight refusal — see `LARGE_RUN_MUTANT_THRESHOLD`.
    */
   readonly allowLargeRun?: boolean;

@@ -1,4 +1,5 @@
 import { describe, expect, mock, spyOn, test } from "bun:test";
+import type { TestMethodRef } from "../src/backend";
 import { mkdir, mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1710,6 +1711,122 @@ describe('coverageMode "fenced" (R58)', () => {
       },
     };
   }
+  /**
+   * R53's wiring, and the two places it must NOT fire.
+   *
+   * The stop ends a session on the user's BC server, so who gets a hook is a safety property, not a
+   * plumbing detail. A `RunMutantTransport` subclass records whether `onBudgetExceeded` reached the
+   * request — asserting on the REQUEST rather than on a timer firing, so the test says nothing about
+   * timing and everything about which runs are eligible.
+   */
+  describe("BcDevMcpBackend — R53 stop-hung-sessions wiring", () => {
+    const ref: TestMethodRef = {
+      codeunitId: 79100,
+      codeunitName: "Ours",
+      method: "Alpha",
+    };
+
+    /** Captures the hook's presence on each dispatched request. */
+    class HookSpyTransport extends RunMutantTransport {
+      static hooks: Array<boolean> = [];
+      override async run(req: Parameters<RunMutantTransport["run"]>[0]) {
+        HookSpyTransport.hooks.push(req.onBudgetExceeded !== undefined);
+        return await super.run(req);
+      }
+    }
+
+    function spyFactory() {
+      const okFetch = (async (_url: unknown, init?: RequestInit) => {
+        const b = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        const inner = {
+          status: "ran",
+          targetAppId: b.targetAppId,
+          artifactId: b.artifactId,
+          attemptId: b.attemptId,
+          mutantId: b.mutantId,
+          codeunitId: b.testCodeunitId,
+          method: b.testMethod,
+          codeunitResults: JSON.stringify({ testResults: [{ method: b.testMethod, result: 2 }] }),
+        };
+        return new Response(JSON.stringify({ value: JSON.stringify(inner) }), { status: 200 });
+      }) as typeof fetch;
+      return (targetAppId: string, artifactId: string) =>
+        new HookSpyTransport(
+          { baseUrl: "http://bc:7048/BC", company: "CRONUS", username: "u", password: "p" },
+          targetAppId,
+          artifactId,
+          okFetch,
+        );
+    }
+
+    async function backendWith(stopHungSessions: boolean) {
+      const outputDir = await mkdtemp(join(tmpdir(), "lethal-r53-wire-"));
+      await writeDeployInputs(outputDir);
+      await Bun.write(join(outputDir, "Ours.Codeunit.al"), OURS_AL);
+      const backend = new BcDevMcpBackend(
+        {
+          mcpCommand: ["unused"],
+          project: "/al",
+          server: "http://bc",
+          serverInstance: "BC",
+          ...(stopHungSessions ? { stopHungSessions: true } : {}),
+          ...(await controlStaging(outputDir)),
+        },
+        () => {
+          throw new Error("bc-dev-mcp must not be contacted here");
+        },
+        makeDeployment(outputDir, { Codeunits: [{ Id: 79100, Name: "Ours" }] }),
+        spyFactory(),
+      );
+      await backend.deploy(outputDir);
+      backend.setLease(FAKE_LEASE);
+      return {
+        backend,
+        cleanup: async () => {
+          await rmStaged(outputDir);
+          await rm(outputDir, { recursive: true, force: true });
+        },
+      };
+    }
+
+    test("a MUTANT run carries the stop hook when the flag is on", async () => {
+      HookSpyTransport.hooks = [];
+      const { backend, cleanup } = await backendWith(true);
+      try {
+        await backend.activate("M0007");
+        await backend.run(ref, { coverage: "none", timeoutMs: 1000 });
+        expect(HookSpyTransport.hooks).toEqual([true]);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    // The safety property. A baseline overrunning is not a hanging mutant — there is no mutation
+    // active to blame — so stopping its session would end a healthy run and score nothing.
+    test("a BASELINE run never carries the hook, even with the flag on", async () => {
+      HookSpyTransport.hooks = [];
+      const { backend, cleanup } = await backendWith(true);
+      try {
+        await backend.activate(null);
+        await backend.run(ref, { coverage: "none", timeoutMs: 1000 });
+        expect(HookSpyTransport.hooks).toEqual([false]);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    test("with the flag OFF a mutant run carries no hook — the default path is untouched", async () => {
+      HookSpyTransport.hooks = [];
+      const { backend, cleanup } = await backendWith(false);
+      try {
+        await backend.activate("M0007");
+        await backend.run(ref, { coverage: "none", timeoutMs: 1000 });
+        expect(HookSpyTransport.hooks).toEqual([false]);
+      } finally {
+        await cleanup();
+      }
+    });
+  });
 
   test("capabilities() reports the mode verbatim, still authoritative", () => {
     const backend = new BcDevMcpBackend({ ...baseConfig(), coverageMode: "fenced" });

@@ -11,7 +11,7 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "../src/backend";
-import { LETHAL_VERSION, helpText, parseCliConfig, recoveryBaseUrl } from "../src/cli";
+import { LETHAL_VERSION, RUN_FLAGS, helpText, parseCliConfig, recoveryBaseUrl } from "../src/cli";
 import {
   LARGE_RUN_MUTANT_THRESHOLD,
   MIN_MUTANT_BUDGET_MS,
@@ -291,37 +291,15 @@ describe("--help and --version (R49)", () => {
   });
 
   test("help text documents every flag `parseCliConfig` accepts", () => {
-    // A flag that exists and is undocumented is invisible to anyone holding only the binary. This
-    // pins the two together so adding a flag without documenting it fails here.
+    // A flag that exists and is undocumented is invisible to anyone holding only the binary.
+    //
+    // DERIVED from `RUN_FLAGS`, not restated. This test used to hold a hand-maintained array, and
+    // it had already drifted: `--retry-stranded` shipped documented in help but missing from the
+    // list, so the drift the test exists to prevent had happened inside the test itself. A list
+    // that must be updated by hand cannot police a list that must be updated by hand.
     const text = helpText("0.0.0");
-    for (const flag of [
-      "--project",
-      "--tests",
-      "--backend",
-      "--db",
-      "--out",
-      "--config",
-      "--skip-known-survivors",
-      "--dry-run",
-      "--workers",
-      "--compile-concurrency",
-      "--server",
-      "--instance",
-      "--keep-env",
-      "--allow-expiring-env",
-      "--selector-id",
-      "--control-id",
-      "--table-id",
-      "--only",
-      "--tests-only",
-      "--max-guards-per-batch",
-      "--mutant-timeout-ms",
-      "--resume",
-      "--resume-run",
-      "--allow-large-run",
-    ]) {
-      expect(text).toContain(flag);
-    }
+    const undocumented = Object.keys(RUN_FLAGS).filter((flag) => !text.includes(`--${flag}`));
+    expect(undocumented).toEqual([]);
   });
 
   test("help names the quarantine exit code and the verdict-changing narrowing", () => {
