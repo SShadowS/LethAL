@@ -1,0 +1,28 @@
+{
+  "id": "3f9c1d84-2b77-4a10-9e63-5c8d0b41a7e2",
+  "name": "LethAL Sandbox Hang",
+  "brief": "LethAL R53 fixture: a target whose mutant never terminates.",
+  "description": "Carries one loop whose empty-block mutant never terminates \u2014 the shape R53's server-side stop exists to score. Deliberately its OWN app and id range so none of the four frozen baselines move. Not for production use \u2014 see fixtures/README.md.",
+  "dependencies": [],
+  "idRanges": [
+    {
+      "from": 79400,
+      "to": 79449
+    }
+  ],
+  "publisher": "LethAL",
+  "version": "1.0.0.0",
+  "privacyStatement": "",
+  "EULA": "",
+  "help": "",
+  "url": "",
+  "logo": "",
+  "screenshots": [],
+  "resourceExposurePolicy": {
+    "allowDebugging": true,
+    "allowDownloadingSource": true,
+    "includeSourceInSymbolFile": true
+  },
+  "runtime": "13.0",
+  "features": []
+}

@@ -1,0 +1,35 @@
+{
+  "id": "8a41e7b0-6c25-4d93-b1f8-0d2e5a63c914",
+  "name": "LethAL Sandbox Hang Tests",
+  "brief": "LethAL R53 fixture: tests for the non-terminating target.",
+  "description": "Exercises fixtures/sandbox-hang. Asserts via Error() \u2014 no Library Assert dependency. Not for production use.",
+  "dependencies": [
+    {
+      "id": "3f9c1d84-2b77-4a10-9e63-5c8d0b41a7e2",
+      "name": "LethAL Sandbox Hang",
+      "publisher": "LethAL",
+      "version": "1.0.0.0"
+    }
+  ],
+  "idRanges": [
+    {
+      "from": 79450,
+      "to": 79499
+    }
+  ],
+  "publisher": "LethAL",
+  "version": "1.0.0.0",
+  "privacyStatement": "",
+  "EULA": "",
+  "help": "",
+  "url": "",
+  "logo": "",
+  "screenshots": [],
+  "resourceExposurePolicy": {
+    "allowDebugging": true,
+    "allowDownloadingSource": true,
+    "includeSourceInSymbolFile": true
+  },
+  "runtime": "13.0",
+  "features": []
+}
