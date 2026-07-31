@@ -66,10 +66,16 @@ import {
  *   guessing, and a wrong receiver is the direction that CLAIMS a site wrongly — mislabelling the
  *   mutation and, under §3.2 dedup precedence, suppressing the correct Tier-1 mutant at the same
  *   site. So `Rec` stays unresolved there and only explicitly-typed record variables can claim.
+ *   That refusal is now MEASURED rather than argued: on Continia Document Output Cloud there are
+ *   ZERO Tier-2-shaped calls on a `pageextension`'s implicit `Rec`, and zero of its 93
+ *   `pageextension`s extend a page the project declares — so the `SourceTable` needed to resolve
+ *   `Rec` is not available even in principle (`scripts/probe-r30-pageext.ts`).
  *
- * Variables DECLARED inside an extension still do not resolve: `SymbolTable` indexes extensions
- * separately (`tableExtensions`, name + `baseObject` only), not as `objects` with members, so
- * `lookupVar` finds nothing and the site is refused. Safe direction, and the remaining half of R30.
+ * Variables DECLARED inside an extension DO resolve, for both kinds: `buildSymbolTable` indexes an
+ * extension's own members (globals, procedure locals, parameters) under `extensionScopeKey(kind,
+ * name)`, so `lookupVar` finds them here while `resolveProcedure("My Ext", ...)` keeps answering
+ * null. Measured value of that half: +18 mutants on Document Output for the `tableextension` kind,
+ * and 18 more sites for the `pageextension` kind.
  */
 const OBJECT_KINDS: ReadonlySet<string> = new Set<string>([
   ALNodeKind.codeunit,
@@ -238,12 +244,17 @@ function resolveReceiver(
   const receiverName = identifierText(receiver);
   if (receiverName === null) return { kind: "unresolved" };
 
-  // R30: inside a `tableextension`, the declaring SCOPE is the extension itself — its locals,
+  // R30: inside an extension object, the declaring SCOPE is the extension itself — its locals,
   // parameters and globals are visible only there. `SymbolTable` indexes them under a namespaced
   // key so that `resolveProcedure("My Ext", ...)` keeps answering null for a receiver no AL call
-  // can name; scope asks a different question from callability.
+  // can name; scope asks a different question from callability. The key carries the KIND because
+  // AL lets a `tableextension` and a `pageextension` share a name.
   const scopeOwner =
-    objectNode.kind === ALNodeKind.tableextension ? extensionScopeKey(objectName) : objectName;
+    objectNode.kind === ALNodeKind.tableextension
+      ? extensionScopeKey("tableextension", objectName)
+      : objectNode.kind === ALNodeKind.pageextension
+        ? extensionScopeKey("pageextension", objectName)
+        : objectName;
   const declared = lookupVar(receiverName, callNode, scopeOwner, symbols);
   if (declared !== null) return classifyDeclaredType(declared);
 

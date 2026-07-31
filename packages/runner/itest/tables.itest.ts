@@ -26,7 +26,7 @@
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { MutantManifest, MutantManifestEntry } from "@lethal/schemata";
 import type { ActivationConfig } from "../src/activation";
@@ -95,7 +95,12 @@ const SELECTOR_IDS = { selectorId: 79199, controlId: 79198, tableId: 79197 };
  * `assertTriggerKillAndSurvive` below independently pins the trigger claim.
  */
 const EXPECTED = {
-  totalMutantSites: 81,
+  // R30 moved this from 81 to 93. The fixture gained its first EXTENSION objects — a
+  // `tableextension` over `Data Main` and a `page`/`pageextension` pair — so that extension
+  // support, which had only ever run in unit tests, is instrumented, compiled, published and
+  // EXECUTED by a gate. New sites have no frozen baseline entry by construction; every
+  // PRE-EXISTING mutant must keep its verdict, which is what `assertMatchesBaseline` checks.
+  totalMutantSites: 93,
   // R36 moved this from 63/10 to 64/9, deliberately and in one direction only.
   //
   // `RequireCategoryAFails` used to assert merely that AN error occurred, so deleting
@@ -105,10 +110,24 @@ const EXPECTED = {
   // BROKEN OPERATOR FAILS, and it was carrying the project's signature "test passes for the wrong
   // reason" inside itself. The test now asserts the error names the record it loaded, which a
   // blank record cannot do, so M0034 is killable and killed.
-  killed: 64,
+  // R30 moved this from 64/9/2 to 69/9/6, and the delta is entirely NEW sites — every pre-existing
+  // mutant kept its verdict (checked per-mutant against the previous `tables.baseline.json`, not
+  // inferred from the totals).
+  //
+  //   +5 killed  — `tableextension "Data Main Ext"`, all five of its deployed mutants, including
+  //                `remove-testfield` on the IMPLICIT `Rec` (which claims only if `Rec` resolves to
+  //                the EXTENDED table) and `remove-setrange` on a receiver declared INSIDE the
+  //                extension (which claims only if extension members are indexed for scope). These
+  //                are the first Tier-2 extension mutants any gate has EXECUTED.
+  //   +4 no-cov  — `pageextension "Data Main List Ext"`. Its code is reachable only through a
+  //                `TestPage`, and a TestPage HANGS the fenced session (measured 2026-07-31, R69),
+  //                so the object is instrumented, compiled, published and installed live but never
+  //                runs. Deliberately kept: no-coverage is the honest verdict for code no test
+  //                reaches, and the pipeline proof is real even when the execution proof is not.
+  killed: 69,
   survived: 9,
-  noCoverage: 2,
-  mutationScore: 64 / (64 + 9),
+  noCoverage: 6,
+  mutationScore: 69 / (69 + 9),
   /**
    * `coverageFilter`'s FALLBACK 2 ("coverage places this table trigger nowhere, run every green
    * test") must fire for NOBODY here. This is the assertion `0a463fd` actually earns: before it,
@@ -350,10 +369,10 @@ async function readDeployedManifests(
  * check this replaced could not fail (the fixture holds only `DataMain`/`DataNoTrigger`), so it
  * asserted nothing at all.
  */
-function assertTriggerKillAndSurvive(
+async function assertTriggerKillAndSurvive(
   report: SessionReport,
   byId: ReadonlyMap<string, MutantManifestEntry>,
-): void {
+): Promise<void> {
   const sited = report.mutants.map((m) => {
     const entry = byId.get(m.mutantCode);
     if (entry === undefined) {
@@ -383,11 +402,32 @@ function assertTriggerKillAndSurvive(
     "no SURVIVED mutant sits at a trigger site — without one, an all-kill table could equally " +
       "be explained by the whole tier erroring out rather than by real activation",
   );
+  // R30: the fixture now also holds a `pageextension` whose `OnOpenPage` is a trigger site, so
+  // "every trigger here is a table trigger" is no longer true and asserting it would only pin the
+  // fixture's file list. What this loop is FOR is narrower — a trigger mutant must be attributed to
+  // the object that declares it, because a mis-keyed `(objectType, objectId)` sends it at the wrong
+  // object's tests (R29's shape, and the reason `6e89948` keyed coverage on the pair rather than on
+  // the bare id). So the check is now per-mutant: the manifest's objectType must equal the kind the
+  // mutant's own SOURCE FILE declares.
+  //
+  // Read from the source HEADER, not from the file NAME. A name-suffix map (`.PageExt.al` ->
+  // pageextension, everything else -> table) was written first and is wrong in a way that only
+  // shows up later: a codeunit `OnRun` or a plain page trigger is a trigger site too, and the map
+  // would call it `table` and fail a correct run. Reading the header keeps the check independent of
+  // the manifest (which comes from the AL parse) while surviving any object kind the fixture grows.
   for (const t of triggers) {
+    const source = await readFile(join(PROJECT_DIR, "src", basename(t.entry.file)), "utf8");
+    const header = /^\s*(table|codeunit|page|report|tableextension|pageextension)\s+\d+/im.exec(
+      source,
+    );
+    assert.ok(
+      header !== null,
+      `${t.code}: cannot read an object header out of ${t.entry.file}, so its attribution cannot be checked — and passing without checking is what this assertion exists to prevent`,
+    );
     assert.equal(
       t.entry.objectType,
-      "table",
-      `${t.code}: this fixture's trigger sites must all be table triggers, got ${t.entry.objectType}`,
+      header[1]?.toLowerCase(),
+      `${t.code}: trigger site attributed to objectType ${t.entry.objectType}, but ${t.entry.file} declares a ${header[1]}`,
     );
   }
 }
@@ -414,7 +454,7 @@ async function main(): Promise<void> {
     assertVerdictTable(first.report);
     // The trigger claim itself, read off the manifests the run actually deployed (the scratch
     // dir is still on disk here — it is removed in the `finally` below).
-    assertTriggerKillAndSurvive(
+    await assertTriggerKillAndSurvive(
       first.report,
       await readDeployedManifests(join(scratchA, "instrumented")),
     );
@@ -425,7 +465,7 @@ async function main(): Promise<void> {
 
     const second = await runOnce(scratchB);
     assertVerdictTable(second.report);
-    assertTriggerKillAndSurvive(
+    await assertTriggerKillAndSurvive(
       second.report,
       await readDeployedManifests(join(scratchB, "instrumented")),
     );

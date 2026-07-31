@@ -112,19 +112,27 @@ const OBJECT_KIND_BY_NODE: Record<string, ObjectSymbol["kind"]> = {
  * container an ordinary object uses.
  */
 const TABLEEXTENSION_DECLARATION = "tableextension_declaration";
+const PAGEEXTENSION_DECLARATION = "pageextension_declaration";
 const BASE_OBJECT_FIELD = "base_object";
 
+/** The extension object kinds whose members are indexed for variable scope. */
+export type ExtensionKind = "tableextension" | "pageextension";
+
 /**
- * The `procedures`/`globals` key under which a `tableextension`'s own members are indexed for
+ * The `procedures`/`globals` key under which an extension object's own members are indexed for
  * VARIABLE SCOPE lookup (R30).
  *
  * Namespaced on purpose. The bare extension name must keep resolving to nothing, because
  * `resolveProcedure("My Ext", "SetRange")` would otherwise answer for a receiver no AL expression
  * can name — the documented reason extensions were skipped in the first place. This lets a caller
  * that legitimately needs the extension's SCOPE ask for it without weakening that contract.
+ *
+ * Keyed by KIND as well as name: AL permits a `tableextension` and a `pageextension` to carry the
+ * same name, and one namespace for both would let each resolve the other's variables — a receiver
+ * classified from the wrong declaration, which is the direction that CLAIMS a site wrongly.
  */
-export function extensionScopeKey(extensionName: string): string {
-  return `tableextension:${extensionName}`;
+export function extensionScopeKey(kind: ExtensionKind, extensionName: string): string {
+  return `${kind}:${extensionName}`;
 }
 
 export function buildSymbolTable(files: readonly SourceFile[]): SymbolTable {
@@ -163,9 +171,15 @@ export function buildSymbolTable(files: readonly SourceFile[]): SymbolTable {
 
   for (const file of files) {
     for (const objectNode of file.root.children) {
-      const extension = parseTableExtensionHeader(objectNode);
+      const extension = parseExtensionHeader(objectNode);
       if (extension !== null) {
-        tableExtensions.push({ ...extension, node: objectNode });
+        // Only TABLE extensions enter `tableExtensions`. That array is the rule-3 shadowing
+        // guard's input and is keyed on the extended TABLE (`extensionDeclaresProcedure` in
+        // @lethal/builtin-tier2); a `pageextension` extends a PAGE, so an entry there could only
+        // ever match a table name by coincidence.
+        if (extension.kind === "tableextension") {
+          tableExtensions.push({ ...extension, kind: "tableextension", node: objectNode });
+        }
         // NOT pushed to `objects`: an extension's procedures belong to the EXTENDED table, not to
         // an object of its own, and registering it as an object would invent a call target no AL
         // expression can name. `resolveObject` and `types.ts` (which iterates `objects`) therefore
@@ -181,8 +195,10 @@ export function buildSymbolTable(files: readonly SourceFile[]): SymbolTable {
         //
         // Skipping this entirely made `lookupVar` find nothing for a site written in an extension,
         // so every call on a declared record variable there was refused as unresolvable. Measured
-        // on Continia Document Output: that is the shape its extension code overwhelmingly uses.
-        indexMembers(objectNode, extensionScopeKey(extension.name));
+        // on Continia Document Output: that is the shape its extension code overwhelmingly uses —
+        // 17 sites in its `tableextension`s and 18 more in a `pageextension`
+        // (`scripts/probe-r30-pageext.ts`), which is why BOTH kinds are indexed here.
+        indexMembers(objectNode, extensionScopeKey(extension.kind, extension.name));
         continue;
       }
       const header = parseObjectHeader(objectNode);
@@ -221,23 +237,34 @@ export function buildSymbolTable(files: readonly SourceFile[]): SymbolTable {
 }
 
 /**
- * `tableextension <id> "<name>" extends "<base>"` -> its name and its extends target.
+ * `tableextension|pageextension <id> "<name>" extends "<base>"` -> its kind, name and extends
+ * target.
  *
  * `null` for any other node kind, and for an extension missing either name — both are what the
  * matching in `@lethal/builtin-tier2`'s `claimsRecordMethod` keys on, and half an entry could
  * only ever produce a wrong match.
+ *
+ * Both kinds are parsed because both own a variable SCOPE (R30). What the caller does with them
+ * differs: only a `tableextension` declares procedures callable on a record, so only it enters
+ * `tableExtensions`.
  */
-function parseTableExtensionHeader(
+function parseExtensionHeader(
   node: ALSyntaxNode,
-): { kind: "tableextension"; name: string; baseObject: string } | null {
-  if (node.rawKind !== TABLEEXTENSION_DECLARATION) return null;
+): { kind: ExtensionKind; name: string; baseObject: string } | null {
+  const kind =
+    node.rawKind === TABLEEXTENSION_DECLARATION
+      ? "tableextension"
+      : node.rawKind === PAGEEXTENSION_DECLARATION
+        ? "pageextension"
+        : null;
+  if (kind === null) return null;
   const nameNode = node.childForFieldName("object_name");
   const baseNode = node.childForFieldName(BASE_OBJECT_FIELD);
   if (nameNode === null || baseNode === null) return null;
   const name = stripQuotes(nameNode.text);
   const baseObject = stripQuotes(baseNode.text);
   if (name === "" || baseObject === "") return null;
-  return { kind: "tableextension", name, baseObject };
+  return { kind, name, baseObject };
 }
 
 function parseObjectHeader(

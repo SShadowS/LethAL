@@ -31,3 +31,6 @@ lethal.sqlite-wal
 
 # Agent worktrees — machine-local checkouts, not project source
 .claude/worktrees/
+
+# AL Test Runner VS Code extension scratch — machine-local, not project source
+.altestrunner/

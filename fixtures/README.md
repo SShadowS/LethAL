@@ -238,10 +238,10 @@ no table here may reintroduce `InherentPermissions`.**
 
 The table below is the Phase-0 fixture's frozen result, kept because it is still the clearest
 statement of what the Phase-0 half of the fixture proves. It is NOT this fixture's current
-aggregate: Phase 1 grew it to 75 deployed mutants and the re-record happened —
-`tables.itest.ts`'s `EXPECTED` now asserts the live-measured **64 killed / 9 survived / 2
-no-coverage** (see §Phase 1). The Phase-0 objects and their tests are unchanged inside that
-larger set.
+aggregate: Phase 1 grew it to 75 deployed mutants, and R30 grew it again to 84 —
+`tables.itest.ts`'s `EXPECTED` now asserts the live-measured **69 killed / 9 survived / 6
+no-coverage** (see §Phase 1 and §"Extension objects" below). The Phase-0 objects and their tests
+are unchanged inside that larger set.
 
 | Mutant | Site | Operator | Verdict | Why |
 |---|---|---|---|---|
@@ -402,11 +402,12 @@ return-value mutants are unaffected.
 
 ### Tier-2 Phase 1 — the shapes that make a broken operator fail
 
-Phase 1 extends `sandbox-data` from 7 to **75 deployed mutants** — **81 raw specs**, of which
-**6** Tier-1 `void-method-call` specs lose the §3.2 dedup to a Tier-2 deletion at the same site.
-Both numbers are reproducible offline, no server needed: `generateMutationSet` returns 81 (which
-`tables.itest.ts` asserts before it deploys anything), `dedupeSpecs` drops 6, and 63 + 10 + 2 = 75
-scored mutants come back from the live gate. Every shape below exists because its ABSENCE lets a
+Phase 1 extended `sandbox-data` from 7 to **75 deployed mutants** — 81 raw specs, of which **6**
+Tier-1 `void-method-call` specs lose the §3.2 dedup to a Tier-2 deletion at the same site. **R30
+then took it to 84 deployed mutants — 93 raw specs, 9 dropped by dedup** (see §"Extension objects"
+below). Both numbers are reproducible offline, no server needed: `generateMutationSet` returns 93
+(which `tables.itest.ts` asserts before it deploys anything), `dedupeSpecs` drops 9, and
+69 + 9 + 6 = 84 scored mutants come back from the live gate. Every shape below exists because its ABSENCE lets a
 broken operator pass — a fixture that only exercises the happy path tells you nothing. Design
 spec: `docs/superpowers/specs/2026-07-25-tier2-mutation-operators-design.md` §6.
 
@@ -463,6 +464,42 @@ rather than the bug: both halves refuse, every one of `Data Shadow`'s 10 mutants
 no Tier-2 mutant at all. Keep the pair — it is the regression guard that would catch a return to
 per-file contexts, and because Tier 2 outranks Tier 1 in dedup, the symptom would be a changed
 `operatorName` on mutants whose verdicts never move.
+
+### Extension objects (R30) — the first ones any gate executes
+
+Extension support in the Tier-2 receiver predicate shipped 2026-07-28 with unit tests and a
+measurement on Continia Document Output, but **no fixture declared an extension**, so none of it had
+ever been instrumented, compiled by `alc`, published, installed or run. `sandbox-data` now carries
+three objects that close that, and the frozen figures moved 64/9/2 → 69/9/6 because of them.
+
+| Object | What it proves | Verdicts |
+|---|---|---|
+| `tableextension "Data Main Ext"` (`DataMainExt.TableExt.al`) | `TestField(Category)` on the IMPLICIT `Rec` claims only if `Rec` inside a `tableextension` resolves to the EXTENDED table; `Related.SetRange(...)` claims only if the extension's own members are indexed for variable SCOPE. Reached from a test because a `tableextension`'s public procedures are callable on a variable of the extended table's type. | 5 deployed, **all killed** by `ExtRequireCategoryFails` / `ExtCountRelatedIgnoresDecoys` |
+| `page "Data Main List"` (`DataMainList.Page.al`) | Deliberately code-free — it is only a host, and contributes zero mutation sites. | — |
+| `pageextension "Data Main List Ext"` (`DataMainListExt.PageExt.al`) | A `SetRange` on a record declared in the pageextension's own `var` section — the site R30's last half makes claimable — plus live proof that a pageextension-carried guard instruments, compiles, publishes and installs, and that its trigger mutants are attributed to `objectType: pageextension` rather than to the base page. | 4 deployed, **all `no-coverage`** |
+
+**Why the pageextension's mutants are `no-coverage`, and why that is recorded rather than fixed.** A
+pageextension's code is unreachable from a test codeunit — nothing outside the page can name its
+procedures — so the only way in is a `TestPage`. That test was written, published and run against
+Cronus283 on 2026-07-31: the fenced session went `in-flight-unknown` on it at BASELINE and the run
+quarantined the tier, scoring nothing at all (`killed=0 survived=0 noCoverage=0`). Opening a
+TestPage on the fenced `GuiAllowed=No` / `ClientType=ODataV4` path hangs rather than failing. That
+is **R69**, and it is far bigger than this fixture — a real BC suite uses TestPage heavily.
+
+So the `pageextension` half of R30's receiver resolution is **claimed, deployed and unproven live**:
+the operator claims the site, the mutant is compiled into the published artifact, and nothing ever
+executes it. The `tableextension` half is proven end to end.
+
+Two traps worth keeping written down, both hit while building this:
+
+- **A variable declared in a TRIGGER's own `var` section is never resolved**, in any object kind —
+  `lookupVar` handles procedure locals, procedure parameters and object globals only. The first
+  version of the pageextension declared its records inside `OnOpenPage` and generated four specs,
+  none of them `remove-setrange`. Moving them to the object's `var` section fixed it. That gap is
+  **R68**.
+- **The fixture apps are TENANT-scoped.** Republishing the test app with
+  `Publish-BcContainerApp ... -scope Tenant -tenant default` is required; the Global-scope default
+  cannot see the tenant-scoped target and fails its server-side recompile with `AL1024`.
 
 ## Expected verdict table (hand-computed)
 

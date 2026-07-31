@@ -335,6 +335,69 @@ codeunit 79310 "Data Tests"
     end;
 
     // ---------------------------------------------------------------------------------------------
+    // R30 — extension objects. The first extension mutants any LethAL gate has executed: the
+    // mechanism shipped 2026-07-28 with unit tests only, because no fixture declared an extension.
+    // ---------------------------------------------------------------------------------------------
+
+    [Test]
+    procedure ExtRequireCategoryFails()
+    var
+        DataMain: Record "Data Main";
+    begin
+        // Strong, asserterror. Kills the IMPLICIT `TestField(Category)` inside
+        // `tableextension "Data Main Ext"` — which is only claimed if `Rec` there resolves to the
+        // EXTENDED table. Deleting it empties the procedure, nothing is raised, asserterror fails.
+        ResetMain('T-EXTREQ', '', 0);
+        DataMain.Get('T-EXTREQ');
+        asserterror DataMain.ExtRequireCategory();
+        // Assert the error is the one this site raises, not merely SOME error (R36: an asserterror
+        // that accepts any failure hides the mutant it exists to catch). TestField names the field.
+        if StrPos(GetLastErrorText(), 'Category') = 0 then
+            Error('expected a TestField error naming Category, got: %1', GetLastErrorText());
+    end;
+
+    [Test]
+    procedure ExtCountRelatedIgnoresDecoys()
+    var
+        DataMain: Record "Data Main";
+        Actual: Integer;
+    begin
+        // Strong. Kills `Related.SetRange("Main No.", "No.")` inside the tableextension, whose
+        // receiver is declared INSIDE the extension — the site that needs an extension-scoped
+        // symbol index. The three out-of-filter decoys are load-bearing: without them the filtered
+        // and unfiltered counts agree and the mutant is equivalent.
+        ResetMain('T-EXTCNT', 'CA', 0);
+        ClearRelated('T-EXTCNT');
+        ClearRelated('T-EXTDEC');
+        AddRelated(79131, 'T-EXTCNT', 1);
+        AddRelated(79132, 'T-EXTCNT', 2);
+        AddRelated(79133, 'T-EXTDEC', 3);
+        AddRelated(79134, 'T-EXTDEC', 4);
+        AddRelated(79135, 'T-EXTDEC', 5);
+        DataMain.Get('T-EXTCNT');
+        Actual := DataMain.ExtCountRelated();
+        if Actual <> 2 then
+            Error('expected 2 related rows for T-EXTCNT (3 decoys must be excluded), got %1', Actual);
+    end;
+
+    // THERE IS DELIBERATELY NO TEST FOR THE `pageextension` SITE, and the reason is a measurement,
+    // not an omission.
+    //
+    // A pageextension's code is unreachable from a test codeunit — nothing outside the page can
+    // name its procedures — so the only way in is a `TestPage`. That test was written, published
+    // and RUN against Cronus283 on 2026-07-31, and it did not come back: the fenced session went
+    // `in-flight-unknown` on `PageExtCountsMatchingRelated` at baseline and the run quarantined the
+    // tier, scoring nothing (killed=0 survived=0 noCoverage=0). Opening a TestPage on the fenced
+    // `GuiAllowed=No` / `ClientType=ODataV4` path (R57/R60) hangs rather than failing. Filed as R69,
+    // because a real BC suite uses TestPage heavily and that is a much larger problem than this
+    // fixture.
+    //
+    // So `pageextension "Data Main List Ext"`'s mutants stay in the baseline as `no-coverage`. They
+    // still prove what nothing else here does — that a pageextension-carried guard instruments,
+    // compiles, publishes and installs on a live server — but the pageextension half of R30's
+    // receiver resolution is UNPROVEN LIVE, and the roadmap says so.
+
+    // ---------------------------------------------------------------------------------------------
     // Seeding helpers. All idempotent — see InsertDoublesAmountWeak's comment for why that is
     // kept even though the persistence claim behind it was measured false.
     // around every mutant run, so rows PERSIST into the next one.

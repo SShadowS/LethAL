@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { initParser, parseAL } from "../../src/ast/parser";
 import { wrapRoot } from "../../src/ast/syntax-node";
-import { buildSymbolTable } from "../../src/semantic/symbol-table";
+import { buildSymbolTable, extensionScopeKey } from "../../src/semantic/symbol-table";
 
 describe("buildSymbolTable", () => {
   beforeAll(async () => {
@@ -77,6 +77,102 @@ describe("buildSymbolTable", () => {
     it("is an empty array — never absent — for a project with no extensions", async () => {
       const src = await load();
       expect(build(src).tableExtensions).toEqual([]);
+    });
+
+    it("indexes its own members for VARIABLE SCOPE under the kind-namespaced key", () => {
+      const src = `tableextension 50002 "Other Ext" extends "Other Table"
+{
+    var
+        ExtGlobal: Record "Other Table";
+
+    procedure Helper(Param: Record Customer)
+    var
+        ExtLocal: Record Vendor;
+    begin
+    end;
+}`;
+      const table = build(src);
+      const key = extensionScopeKey("tableextension", "Other Ext");
+      expect(table.globalsOf(key).map((g) => g.name)).toEqual(["ExtGlobal"]);
+      expect(table.localsOf(key, "Helper").map((l) => l.name)).toEqual(["ExtLocal"]);
+      expect(table.resolveProcedure(key, "Helper")?.parameters.map((p) => p.name)).toEqual([
+        "Param",
+      ]);
+    });
+  });
+
+  /**
+   * R30: a `pageextension`'s members were indexed NOWHERE — `parseExtensionHeader` matched only
+   * `tableextension_declaration` and the object-kind map omits both extension kinds, so the node
+   * fell through the loop entirely. Every call on a variable DECLARED inside a `pageextension` was
+   * therefore refused as an unresolvable receiver by `claimsRecordMethod` (rule 4). Measured on
+   * Continia Document Output: 18 such sites (`scripts/probe-r30-pageext.ts`).
+   *
+   * Scope only. A `pageextension` declares no object of its own, exactly like a `tableextension`,
+   * and it must NOT enter `tableExtensions` — that array feeds the rule-3 shadowing guard, which is
+   * keyed on the extended TABLE, and a page name compared against a table name can only ever match
+   * by coincidence.
+   */
+  describe("pageextension", () => {
+    const PAGE_EXT = `pageextension 50003 "My Page Ext" extends "Customer Card"
+{
+    var
+        PageGlobal: Record Customer;
+
+    procedure Helper(Param: Record Item)
+    var
+        PageLocal: Record Vendor;
+    begin
+    end;
+}`;
+    const build = (src: string) =>
+      buildSymbolTable([{ path: "pageext.al", root: wrapRoot(parseAL(src)) }]);
+
+    it("indexes its members for VARIABLE SCOPE under the kind-namespaced key", () => {
+      const table = build(PAGE_EXT);
+      const key = extensionScopeKey("pageextension", "My Page Ext");
+      expect(table.globalsOf(key).map((g) => g.name)).toEqual(["PageGlobal"]);
+      expect(table.localsOf(key, "Helper").map((l) => l.name)).toEqual(["PageLocal"]);
+      expect(table.resolveProcedure(key, "Helper")?.parameters.map((p) => p.name)).toEqual([
+        "Param",
+      ]);
+    });
+
+    it("does not register its procedures under the BARE extension name", () => {
+      // Same contract the tableextension half keeps: a receiver named after the extension is one
+      // no AL call can name, so `resolveProcedure` answering for it would invent a call target.
+      expect(build(PAGE_EXT).resolveProcedure("My Page Ext", "Helper")).toBeNull();
+    });
+
+    it("keeps it OUT of `objects` and OUT of `tableExtensions`", () => {
+      const table = build(PAGE_EXT);
+      expect(table.objects).toEqual([]);
+      // `tableExtensions` is the rule-3 shadowing guard's input, keyed on the extended TABLE.
+      // A `pageextension` extends a PAGE; letting it in would compare a page name to a table name.
+      expect(table.tableExtensions).toEqual([]);
+    });
+
+    it("does not share variables with a same-named tableextension", () => {
+      // AL permits a `tableextension` and a `pageextension` to carry the same name. One namespace
+      // for both would let each resolve the other's variables — a receiver classified from the
+      // wrong declaration, which is the direction that CLAIMS a site wrongly.
+      const src = `tableextension 50004 "Dup" extends "Other Table"
+{
+    var
+        FromTableExt: Record "Other Table";
+}
+pageextension 50005 "Dup" extends "Customer Card"
+{
+    var
+        FromPageExt: Record Customer;
+}`;
+      const table = build(src);
+      expect(
+        table.globalsOf(extensionScopeKey("tableextension", "Dup")).map((g) => g.name),
+      ).toEqual(["FromTableExt"]);
+      expect(table.globalsOf(extensionScopeKey("pageextension", "Dup")).map((g) => g.name)).toEqual(
+        ["FromPageExt"],
+      );
     });
   });
 });

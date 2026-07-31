@@ -24,7 +24,7 @@ For every row (`| **R<n>** | ... |`):
    `done` pointing at a commit that touches none of the named files is the strongest signal that
    the claim drifted from what actually landed.
 3. **Frozen gate figures match the itests.** Rows quote figures like `itest:bcdev` 3/10/3,
-   `itest:tables` 64/9/2 with `untargetedTriggers` 0, `itest:alrunner` 3/13/0. Grep the itest
+   `itest:tables` 69/9/6 with `untargetedTriggers` 0, `itest:alrunner` 3/13/0. Grep the itest
    sources (`packages/runner/itest/*.itest.ts`) for their `EXPECTED` constants and compare. A row
    quoting a stale number is worse than one quoting none — it will be believed.
 4. **Status matches the prose.** A row whose narrative says work is blocked, owed or unresolved

@@ -371,7 +371,7 @@ per-mutant baseline**, where a differing verdict is a regression, never "close e
 | Command | Proves | Frozen |
 |---------|--------|--------|
 | `LETHAL_ITEST_BCDEV=1 bun run itest:bcdev` | End-to-end verdicts against real BC | 3 killed / 10 survived / 3 no-coverage |
-| `LETHAL_ITEST_TABLES=1 bun run itest:tables` | Tier-2 operators and table-trigger mutation | 64 / 9 / 2 |
+| `LETHAL_ITEST_TABLES=1 bun run itest:tables` | Tier-2 operators, table-trigger and extension-object mutation | 69 / 9 / 6 |
 | `LETHAL_ITEST_ENVTOOL=1 bun run itest:envtool` | An externally-owned environment, reached through config | 3 / 10 / 3 |
 | `LETHAL_ITEST_ALRUNNER=1 bun run itest:alrunner` | The al-runner backend | 3 / 13 / 0 |
 | `LETHAL_ITEST_BCDEV=1 bun run itest:lease` | Lease lifecycle, contention, recovery | n/a |

@@ -725,6 +725,108 @@ describe("extension objects (R30)", () => {
     ).toBe(true);
   });
 
+  it("claims a variable DECLARED inside a pageextension (R30, third half)", () => {
+    // The `pageextension`'s own `Rec` stays unresolvable (above) — but a variable declared INSIDE
+    // one is declared right there, with an explicit `Record` type, and nothing about it is a guess.
+    // `buildSymbolTable` indexed a `pageextension`'s members nowhere at all, so `lookupVar` found
+    // nothing and every such call was refused as an unresolvable receiver.
+    //
+    // Measured on Continia Document Output Cloud (`scripts/probe-r30-pageext.ts`): 18 such sites,
+    // against ZERO calls on a `pageextension`'s implicit `Rec` — so this is the whole of what is
+    // left to win in a `pageextension`.
+    const src = `pageextension 50003 "My Page Ext" extends "Customer Card"
+{
+    procedure P()
+    var
+        Other: Record "Other Table";
+    begin
+        Other.TestField("No.");
+    end;
+}`;
+    const root = parseClean(src);
+    expect(
+      claimsRecordMethod(
+        onlyCall(root),
+        projectContextFor([root, parseClean(BASE_TABLE)]),
+        "TestField",
+      ),
+    ).toBe(true);
+  });
+
+  it("guards a pageextension's declared variable by procedures on ITS table too", () => {
+    // Rule 3 is not skipped for the new object kind: the receiver names `Other Table`, and the
+    // project declares `TestField` on it, so the call is that procedure and not the builtin.
+    const shadowed = `table 50001 "Other Table"
+{
+    fields { field(1; "No."; Code[20]) { } }
+
+    procedure TestField(A: Code[20])
+    begin
+    end;
+}`;
+    const src = `pageextension 50003 "My Page Ext" extends "Customer Card"
+{
+    procedure P()
+    var
+        Other: Record "Other Table";
+    begin
+        Other.TestField("No.");
+    end;
+}`;
+    const root = parseClean(src);
+    expect(
+      claimsRecordMethod(
+        onlyCall(root),
+        projectContextFor([root, parseClean(shadowed)]),
+        "TestField",
+      ),
+    ).toBe(false);
+  });
+
+  it("does not let a same-named tableextension and pageextension share variables", () => {
+    // AL permits both kinds to carry one name, so the scope key carries the KIND. Collapsing it to
+    // the bare name makes both extensions index their members under ONE key, and `indexMembers`
+    // ends with `procedures.set(owner, procs)` — a wholesale overwrite, so whichever declaration is
+    // processed LAST owns the key and the other's variables vanish.
+    //
+    // The assertion direction is therefore load-bearing, and this test was WRONG the first time:
+    // written with the tableextension first and asserting `false`, it passed under the collapsed
+    // key too — not because the receiver was correctly classified as an Integer, but because the
+    // tableextension's whole procedure had been overwritten and the receiver became UNRESOLVABLE,
+    // which is also `false`. A red-check caught it (the project's signature "passes for the wrong
+    // reason" shape, inside a test written to prevent exactly that).
+    //
+    // Now the PAGEEXTENSION is declared first and the site that must be CLAIMED lives in it, so the
+    // collapsed key hands `tableextension:Dup` to the tableextension's same-named procedure, whose
+    // `Other` is an Integer — a non-record, refused. Correct namespacing claims; a collision does
+    // not. One boolean, two mechanisms, opposite answers.
+    const src = `pageextension 50003 "Dup" extends "Customer Card"
+{
+    procedure P()
+    var
+        Other: Record "Other Table";
+    begin
+        Other.TestField("No.");
+    end;
+}
+tableextension 50002 "Dup" extends "Other Table"
+{
+    procedure P()
+    var
+        Other: Integer;
+    begin
+    end;
+}`;
+    const root = parseClean(src);
+    expect(
+      claimsRecordMethod(
+        onlyCall(root),
+        projectContextFor([root, parseClean(BASE_TABLE)]),
+        "TestField",
+      ),
+    ).toBe(true);
+  });
+
   it("still guards a declared variable by procedures on ITS table, not the extension's name", () => {
     // Scope and callability are different questions, and this pins the split: the extension owns
     // the VARIABLE, while the extended table owns the procedure that may shadow the builtin.
