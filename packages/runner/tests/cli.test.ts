@@ -923,6 +923,8 @@ describe("withAlRunnerCanary (R7/R8 report persistence)", () => {
       scoreDescribes: "test fixture",
       baselineTests: { total: 0, failing: 0 },
       scoredMutants: { scored: 0, recorded: 0 },
+      // R60: every verdict describes the app's non-interactive branch; always present.
+      executionContext: { guiAllowed: false as const, clientType: "ODataV4", basis: "test fixture" },
     },
     survivorsByProcedure: [],
     testFiles: {},

@@ -101,6 +101,47 @@ export interface ReportValidity {
   /** Mutants that produced a scoreable verdict (killed/survived/timeout-killed), out of all
    *  recorded. The denominator `mutationScore` is actually computed over. */
   readonly scoredMutants: { readonly scored: number; readonly recorded: number };
+  /**
+   * R60: the execution mode EVERY verdict in this report describes. Always present, on every
+   * backend and in both coverage modes — this is a property of how LethAL runs, not a per-run
+   * measurement, and it does not vary with the project.
+   *
+   * LethAL executes every mutant headlessly. A developer running the same suite from VS Code runs
+   * GUI-allowed, so the two are not measuring the same branches, and nothing in the report said
+   * so. Consequences, in the order they mislead:
+   *
+   *   (a) A mutant inside a branch reachable only when a user can be prompted never executes, so
+   *       it cannot be killed. It is reported `survived` or `no-coverage` — and BOTH read as
+   *       statements about the test suite ("your tests are weak here") when the truth is that
+   *       LethAL never ran the code.
+   *   (b) `Confirm` does not skip its branch, it FORCES the default answer, so the non-default arm
+   *       is the unreachable one. `Message` is a no-op and changes nothing. `Page.RunModal` is
+   *       different again: it ERRORS, which can fail a test for a reason unrelated to the mutant.
+   *   (c) `mutationScore`'s denominator therefore includes sites that were unreachable by
+   *       construction.
+   *
+   * MEASURED, so the caveat is neither alarmism nor complacency (`scripts/measure-gui-guarded.ts`,
+   * run 2026-07-31 against Continia Document Output `DocumentOutput/Cloud`, 551 `.al` files):
+   * **62 of 19,850 mutation sites — 0.3% — sit lexically inside a `GuiAllowed`- or
+   * `Confirm`-guarded branch.** A lower bound (it does not follow calls), but not one hiding a
+   * large category: the `if not GuiAllowed then exit;` shape that would guard a whole procedure
+   * without any site being lexically inside occurs 3 times in those 551 files. The 5.7% figure the
+   * same script reports as an upper bound is dominated by `Message`, which causes no
+   * unreachability at all.
+   *
+   * That measurement is why this is a STATED LIMIT rather than a per-site `guardObserved` signal:
+   * 0.3% does not justify machinery, and the fact is structural anyway — no backend LethAL has
+   * runs GUI-allowed, so there is nothing to detect per run.
+   */
+  readonly executionContext: {
+    /** Literal `false`: no LethAL execution path is GUI-allowed. A future path that is would have
+     *  to change this type, which is the point — it cannot drift silently. */
+    readonly guiAllowed: false;
+    /** The session kind mutants execute under. */
+    readonly clientType: string;
+    /** How that is known — measured, or inferred from the runner's shape. Never a bare claim. */
+    readonly basis: string;
+  };
 }
 
 /** Per-procedure survivor rollup — see `SessionReport.survivorsByProcedure`. */
@@ -226,6 +267,27 @@ export interface SessionReport {
    * LethAL cannot fix this — but it can name it instead of leaving a scoring puzzle.
    */
   readonly staleTestApp?: { readonly missingTests: readonly string[] };
+  /**
+   * R35: baseline tests BC refused on PERMISSIONS — a strict subset of `unsupportedTests`, split
+   * out because the two demand opposite responses from the reader. "Did not pass at baseline"
+   * sends them to debug a test; this is fixed by declaring one property on the target's own test
+   * codeunit (`TestPermissions = Disabled`), after which the test runs normally.
+   *
+   * Measured A/B, 2026-07-26 (see `permission-canary.ts`): two probe codeunits identical except
+   * that property, same app, same tables, same server — omitted (AL's Restrictive default) is
+   * refused, `Disabled` succeeds, on every path through `Test Runner - Mgt` 130454.
+   *
+   * KNOWN LIMITATION — the detector matches BC's ENGLISH refusal text, so on a non-English server
+   * this field is absent even when refusals occurred, and the affected tests appear only under
+   * `unsupportedTests`. That is a silent MISS, never a wrong answer. See ROADMAP R66.
+   *
+   * Absent when nothing was refused (or when the refusals could not be recognised).
+   */
+  readonly permissionsRefused?: {
+    readonly tests: readonly string[];
+    /** The fix, stated once here rather than repeated per mutant. */
+    readonly diagnosis: string;
+  };
   /**
    * R47: present when this run was assembled with `--resume`, naming the prior run it drew from and
    * how many verdicts it carried instead of measuring.
@@ -482,6 +544,9 @@ export interface BuildReportInput {
   /** R31: tests the source declares that the server had no result for — see
    *  `SessionReport.staleTestApp`. */
   readonly staleTestApp?: { readonly missingTests: readonly string[] };
+  /** R35: baseline tests BC refused on permissions — see `SessionReport.permissionsRefused`.
+   *  Pass the names only; the diagnosis text is composed here so it cannot drift per caller. */
+  readonly permissionsRefusedTests?: readonly string[];
   /** R47: the prior run `--resume` drew from — see `SessionReport.resumedFrom`. */
   readonly resumedFrom?: {
     readonly runId: number;
@@ -657,6 +722,12 @@ export function buildReport(input: BuildReportInput): SessionReport {
   if (input.testsOnly !== undefined && input.testsOnly.length > 0) caveats.push("tests-narrowed");
   if (input.notInstrumented.files.length > 0) caveats.push("uninstrumentable-files");
   if (input.staleTestApp !== undefined) caveats.push("stale-test-app");
+  // R35: distinct from the `baseline-red` caveat these tests also trigger. That one says the
+  // measurement is degraded; this one says the degradation has a known, one-line cause in the
+  // TARGET'S source — which is the difference between "your score is unreliable" and "declare
+  // TestPermissions = Disabled and run it again".
+  const permissionsRefusedTests = input.permissionsRefusedTests ?? [];
+  if (permissionsRefusedTests.length > 0) caveats.push("tests-permission-refused");
   // R47: a caveat, not a reliability downgrade. The verdicts carried are real measurements taken
   // over the same source (identity-matched) and the same scope (fingerprint-matched) — calling
   // that "degraded" would put an honest resume in the same bucket as a red baseline. What it IS
@@ -689,7 +760,40 @@ export function buildReport(input: BuildReportInput): SessionReport {
       scoreDescribes: `${scored} scored mutant(s) in ${scopeText}${baselineText}`,
       baselineTests: { total: input.baselineTests.length, failing: input.unsupportedTests.length },
       scoredMutants: { scored, recorded: input.outcomes.length },
+      // R60. Split by backend rather than asserted once, because only ONE of the two was
+      // measured: R57 measured the fenced `RunMutant` path directly (`GuiAllowed=No`,
+      // `ClientType=ODataV4`). al-runner is a headless CLI, which is not the same evidence, and
+      // saying "measured" of both would be the kind of static claim R7/R8 exist to stop.
+      executionContext: input.caps.authoritative
+        ? {
+            guiAllowed: false,
+            clientType: "ODataV4",
+            basis:
+              "measured on the fenced RunMutant path (R57): every mutant executes in a " +
+              "GuiAllowed=No, ClientType=ODataV4 session",
+          }
+        : {
+            guiAllowed: false,
+            clientType: "al-runner CLI",
+            basis:
+              "al-runner executes headlessly by construction (no client session to prompt from); " +
+              "not separately measured by LethAL the way the fenced path was under R57",
+          },
     },
+    ...(permissionsRefusedTests.length > 0
+      ? {
+          permissionsRefused: {
+            tests: [...permissionsRefusedTests].sort(),
+            diagnosis:
+              "BC's permission system refused these tests, which is neither flakiness nor an " +
+              "unsupported test type: the test codeunit most likely omits " +
+              "`TestPermissions = Disabled`, and AL's Restrictive default strips a test body of " +
+              "write permission on its own app's tables. Declare `TestPermissions = Disabled;` " +
+              "on the test codeunit and re-run. Any mutant covered only by these tests is " +
+              "recorded `error` (score-excluded), never a silent `no-coverage`.",
+          },
+        }
+      : {}),
     survivorsByProcedure,
     testFiles,
     backend: input.caps.authoritative ? "bcdev" : "al-runner",
@@ -785,6 +889,20 @@ export function renderConsole(r: SessionReport): string {
     for (const t of r.staleTestApp.missingTests.slice(0, 10)) lines.push(`  ${t}`);
     if (n > 10) lines.push(`  ... ${n - 10} more`);
   }
+  // R35: printed at the SAME prominence as a stale test app, because it is the same class of
+  // problem — a one-line fix in the user's own source that otherwise reads as a scoring puzzle.
+  // Without this the reader sees only "N of M baseline tests failing" and goes to debug the tests.
+  if (r.permissionsRefused !== undefined) {
+    const n = r.permissionsRefused.tests.length;
+    // The hedge is deliberate and matches the detector's own ("most likely"): this is a diagnosis
+    // read off BC's English refusal text, and the console is the surface readers act on. Stating
+    // it flatly here would be the one place the qualification got dropped.
+    lines.push(
+      `PERMISSIONS REFUSED: ${n} baseline test(s) carry BC's permission-refusal message. ${r.permissionsRefused.diagnosis}`,
+    );
+    for (const t of r.permissionsRefused.tests.slice(0, 10)) lines.push(`  ${t}`);
+    if (n > 10) lines.push(`  ... ${n - 10} more`);
+  }
   // R47: its own line rather than relying on the SCOPE line below, which only prints when
   // `reliability` is not "full" — and a resume does not degrade reliability (see the caveat's
   // rationale in `buildReport`). Without this a resumed run would look identical to a fresh one.
@@ -803,6 +921,18 @@ export function renderConsole(r: SessionReport): string {
       }`,
     );
   }
+  // R60. Printed on EVERY run, including a `full` one — this limit does not depend on scope,
+  // baseline health, or anything else the SCOPE line below is gated on. A reader comparing a
+  // LethAL score against what they see in VS Code is comparing two different branches of their
+  // own app, and until now nothing said so anywhere.
+  lines.push(
+    `NON-GUI EXECUTION: every verdict here describes the app's non-interactive branch ` +
+      `(GuiAllowed=No, ClientType=${r.validity.executionContext.clientType}). Code reachable only ` +
+      `when a user can be prompted never runs, so its mutants cannot be killed and land as ` +
+      `survived or no-coverage — neither of which is a statement about your tests. Confirm() ` +
+      `returns its DEFAULT rather than skipping the branch; Page.RunModal ERRORS. Measured on ` +
+      `Continia Document Output: 0.3% of mutation sites (62 of 19,850).`,
+  );
   // The score's own limits, immediately after it. A reader quotes `score: 15.7%` long before
   // correlating four separate qualifier fields, so the qualification has to arrive with it.
   if (r.validity.reliability !== "full") {

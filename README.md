@@ -382,8 +382,9 @@ per-mutant baseline**, where a differing verdict is a regression, never "close e
 Stated plainly, because a mutation-testing tool that overstates its guarantees is worse than none.
 
 Several entries below cite measurements taken against one real commercial extension, **Continia
-Document Output** (19,832 mutation sites across 438 files), because that is where these failure modes
-were actually observed rather than reasoned about. "Document Output" always means that app; it is not
+Document Output** (438 of its 551 `.al` files carry mutation sites; 19,832 sites when the earlier
+entries below were measured, 19,850 on 2026-07-31 — the app and the grammar both move), because that
+is where these failure modes were actually observed rather than reasoned about. "Document Output" always means that app; it is not
 a LethAL feature or a mode.
 
 - **Coverage and verdicts come from one runner** (the fenced `RunMutant` session, since the R58
@@ -403,8 +404,22 @@ a LethAL feature or a mode.
   killed here, and reads as `survived` or `no-coverage` when the truth is that LethAL never ran it.
   Measured on Document Output: nine statement-generation procedures are executed by NO test on
   either runner, because the tests flip the customer to Manual at an earlier guard. That is a
-  test-suite finding, not a tool finding, but the tool cannot tell the two apart for you yet, and
-  how much real AL this affects in general is not measured.
+  test-suite finding, not a tool finding, but the tool cannot tell the two apart for you yet.
+
+  **How much AL this affects, measured** (`scripts/measure-gui-guarded.ts`, 2026-07-31, whole app):
+  **62 of 19,850 mutation sites — 0.3% — sit lexically inside a `GuiAllowed`- or `Confirm`-guarded
+  branch.** That is a lower bound (it does not follow calls into procedures invoked only from a
+  guarded branch), but it is not hiding a large category: the `if not GuiAllowed then exit;` shape,
+  which guards a whole procedure without any site being lexically inside the `if`, occurs **3 times
+  in 551 files**. The same script reports 5.7% as an upper bound, but that figure counts every site
+  in any procedure merely *mentioning* an interactive construct, and it is dominated by `Message`,
+  which is a no-op under `GuiAllowed=No` and causes no unreachability at all.
+
+  The three constructs are not interchangeable, and the difference decides what you should worry
+  about: `Message` is a no-op; `Confirm` does not skip its branch but **forces the default answer**,
+  so it is the non-default arm that becomes unreachable; `Page.RunModal` **errors**, which can fail
+  a test for a reason unrelated to the mutant (95 uses in Document Output). Every report states the
+  execution context in `validity.executionContext` and on the console, on every run.
 - **A survivor is a lead, not a proven test-suite gap.** What *has* been established, on a real
   commercial product: coverage selection does not hide kills. Two runs of one Continia Document
   Output codeunit, identical except for coverage mode, compared per-mutant across all 138 mutants:

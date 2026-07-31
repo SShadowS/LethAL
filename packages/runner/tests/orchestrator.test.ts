@@ -565,6 +565,56 @@ describe("runSession", () => {
     expect(renderConsole(report)).toContain("TestPermissions = Disabled");
   });
 
+  // R35: the same refusal, recognised on the UNSTABLE path, must also reach the session-level
+  // report. Without this the run contradicts itself — a per-mutant note telling the reader to
+  // declare `TestPermissions = Disabled` while `permissionsRefused` is absent and the
+  // `tests-permission-refused` caveat never fires, so the summary they read first says nothing.
+  test("R35: a refusal found at baseline confirmation reaches the report, not just the note", async () => {
+    const dirs = await makeProject();
+    let inactiveRuns = 0;
+    const backend = new StubBackend(
+      CAPS_NST,
+      (mutant) => {
+        if (mutant !== null) return "fail";
+        inactiveRuns++;
+        return inactiveRuns === 1 ? "pass" : "fail";
+      },
+      ["IsOverBudget"],
+    );
+    backend.failureMessageFor = () => BC_PERMISSION_REFUSAL;
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({ backend, store, ...dirs, selectorIds });
+
+    expect(report.counts.unstable).toBeGreaterThan(0);
+    expect(report.permissionsRefused?.tests.length).toBeGreaterThan(0);
+    expect(report.validity.caveats).toContain("tests-permission-refused");
+    expect(renderConsole(report)).toContain("PERMISSIONS REFUSED");
+  });
+
+  // The control for the above: an unstable failure with no refusal in it must leave the field
+  // absent. A sink that filled on every unstable failure would pass the test above and mean
+  // nothing.
+  test("R35: an unstable failure with no refusal leaves the report field absent", async () => {
+    const dirs = await makeProject();
+    let inactiveRuns = 0;
+    const backend = new StubBackend(
+      CAPS_NST,
+      (mutant) => {
+        if (mutant !== null) return "fail";
+        inactiveRuns++;
+        return inactiveRuns === 1 ? "pass" : "fail";
+      },
+      ["IsOverBudget"],
+    );
+    backend.failureMessageFor = () => "Assert.AreEqual failed: expected 3, got 4";
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({ backend, store, ...dirs, selectorIds });
+
+    expect(report.counts.unstable).toBeGreaterThan(0);
+    expect(report.permissionsRefused).toBeUndefined();
+    expect(report.validity.caveats).not.toContain("tests-permission-refused");
+  });
+
   test("R26: a permissions refusal that PASSES at baseline is still a kill, undiagnosed", async () => {
     const dirs = await makeProject();
     // The kill shape: fails under the mutant (with BC's refusal text, which the diagnosis would
@@ -638,6 +688,10 @@ class QualificationBackend implements ExecutionBackend {
     private readonly baselineFor: (method: string) => {
       outcome: TestVerdict["outcome"];
       procedure: string;
+      /** R35: BC's own words for the failure, when the test's outcome has a cause worth reading. */
+      failureMessage?: string;
+      /** Defaults to the single-carrier fixture's codeunit; set it when a test spans two files. */
+      objectId?: number;
     },
   ) {}
   capabilities() {
@@ -674,11 +728,14 @@ class QualificationBackend implements ExecutionBackend {
       ref,
       outcome: b.outcome,
       durationMs: 5,
+      ...(b.failureMessage !== undefined ? { failureMessage: b.failureMessage } : {}),
       // Baseline coverage is attached regardless of pass/fail — mirrors bcdev
       // runOnHub, which builds the coverage map whenever coverage !== "none".
       coverage: {
         granularity: "procedure" as const,
-        entries: [{ objectType: "Codeunit", objectId: 79000, procedure: b.procedure }],
+        entries: [
+          { objectType: "Codeunit", objectId: b.objectId ?? 79000, procedure: b.procedure },
+        ],
       },
     };
   }
@@ -729,6 +786,246 @@ describe("runSession — Task 6 unsupported-baseline qualification (spec §9)", 
 
     expect(report.unsupportedTests).toContain("Sandbox Tests.UnsupportedTest");
     expect(report.unsupportedTests).not.toContain("Sandbox Tests.GreenTest");
+  });
+
+  // ————————————————————————————————————————————————————————————————————————————————————————
+  // R35, blind spot 1. R27 named the `TestPermissions` cause on the `unstable` path only. A test
+  // BC refuses at BASELINE DISCOVERY never reaches that path: it is dropped from the green set,
+  // and the mutants it alone covered were reported as "unsupported test type" — a WRONG diagnosis
+  // that sends the reader looking for a TestPage when the fix is one property on their own test
+  // codeunit. The refusal text below is BC's measured wording (see permission-canary.ts).
+  // ————————————————————————————————————————————————————————————————————————————————————————
+  describe("R35 — a baseline test BC REFUSED on permissions", () => {
+    const REFUSAL =
+      "Sorry, the current permissions prevented the action. " +
+      "(TableData 79300 Data Main Insert: LethAL Sandbox Data Tests)";
+
+    const refusedBaselineFor = (method: string) =>
+      method === "UnsupportedTest"
+        ? {
+            outcome: "error" as const,
+            procedure: "IsUnderBudget",
+            failureMessage: REFUSAL,
+          }
+        : { outcome: "pass" as const, procedure: "IsOverBudget" };
+
+    async function runRefused() {
+      const dirs = await qualProject();
+      const backend = new QualificationBackend(refusedBaselineFor);
+      const store = new ResultsStore(":memory:");
+      return await runSession({ backend, store, ...dirs, selectorIds });
+    }
+
+    test("names the permissions cause instead of claiming an unsupported test type", async () => {
+      const report = await runRefused();
+      const errored = report.mutants.filter((m) => m.verdict === "error");
+      expect(errored.length).toBe(3);
+      for (const m of errored) {
+        expect(m.failureNote).toContain("permissions refusal");
+        expect(m.failureNote).toContain("TestPermissions = Disabled");
+        expect(m.failureNote).toContain("Sandbox Tests.UnsupportedTest");
+        // The wrong LABEL must be gone, not merely accompanied. (The note's own text does say
+        // "NOT an unsupported test type", so match the label form, not the bare phrase.)
+        expect(m.failureNote).toStartWith("permissions refusal:");
+        expect(m.failureNote).not.toContain("unsupported test type: mutant covered");
+      }
+    });
+
+    test("surfaces the refused test on the report, distinct from the did-not-pass list", async () => {
+      const report = await runRefused();
+      expect(report.permissionsRefused?.tests).toEqual(["Sandbox Tests.UnsupportedTest"]);
+      expect(report.permissionsRefused?.diagnosis).toContain("TestPermissions = Disabled");
+      // Still in `unsupportedTests` — permissionsRefused is a strict subset, not a replacement.
+      expect(report.unsupportedTests).toContain("Sandbox Tests.UnsupportedTest");
+      expect(report.validity.caveats).toContain("tests-permission-refused");
+    });
+
+    test("quotes BC's own words rather than asserting the diagnosis unsupported", async () => {
+      // The detector is a hedged English regex. Its whole design is that it QUOTES the platform,
+      // so a reader who thinks it misread the message can overrule it. A note carrying the
+      // conclusion without the evidence would be worse than the wording it replaced.
+      const report = await runRefused();
+      const errored = report.mutants.filter((m) => m.verdict === "error");
+      expect(errored.length).toBeGreaterThan(0);
+      for (const m of errored) {
+        expect(m.failureNote).toContain("current permissions prevented the action");
+        expect(m.failureNote).toContain("TableData 79300 Data Main Insert");
+      }
+    });
+
+    // Both kinds of non-passing test covering the SAME procedure. The note must not claim the
+    // mutant is covered "only" by refused tests while listing another one alongside — and the
+    // reader needs to know the other one is a different problem, not more of the same.
+    test("distinguishes refused tests from tests that failed for another reason", async () => {
+      const threeTests = `codeunit 79100 "Sandbox Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure GreenTest()
+    begin
+    end;
+
+    [Test]
+    procedure RefusedTest()
+    begin
+    end;
+
+    [Test]
+    procedure BrokenTest()
+    begin
+    end;
+}
+`;
+      const dirs = await makeProject(threeTests);
+      await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
+      const backend = new QualificationBackend((method: string) => {
+        if (method === "RefusedTest")
+          return {
+            outcome: "error" as const,
+            procedure: "IsUnderBudget",
+            failureMessage: REFUSAL,
+          };
+        if (method === "BrokenTest")
+          return {
+            outcome: "error" as const,
+            procedure: "IsUnderBudget",
+            failureMessage: "Assert.AreEqual failed: expected 3, got 4",
+          };
+        return { outcome: "pass" as const, procedure: "IsOverBudget" };
+      });
+      const store = new ResultsStore(":memory:");
+      const report = await runSession({ backend, store, ...dirs, selectorIds });
+
+      const errored = report.mutants.filter((m) => m.verdict === "error");
+      expect(errored.length).toBe(3);
+      for (const m of errored) {
+        expect(m.failureNote).toContain("BC refused at baseline (Sandbox Tests.RefusedTest)");
+        expect(m.failureNote).toContain(
+          "did not pass for another reason (Sandbox Tests.BrokenTest)",
+        );
+        // The contradiction the mixed case invites: claiming "only" while listing another test.
+        expect(m.failureNote).not.toContain("only by test(s) BC refused");
+      }
+      // Only the refused one is named as refused, on the report as well as in the note.
+      expect(report.permissionsRefused?.tests).toEqual(["Sandbox Tests.RefusedTest"]);
+      expect(report.unsupportedTests).toContain("Sandbox Tests.BrokenTest");
+    });
+
+    // Batching re-runs the baseline per batch, so the same test can carry a different failure in
+    // each one. The refusal set the REPORT needs is session-cumulative; the note must NOT use it,
+    // or a test refused in batch 0 and merely broken in batch 1 gets "permissions refusal" in
+    // batch 1 too — the exact mislabel this whole item exists to remove, reintroduced one batch
+    // over. (A permissions refusal is deterministic per the measured A/B, so this is defensive:
+    // pinned rather than assumed, because "shouldn't happen" is not a test.)
+    test("a refusal in one batch does not relabel another batch's note", async () => {
+      const twoTests = `codeunit 79100 "Sandbox Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure GreenTest()
+    begin
+    end;
+
+    [Test]
+    procedure CoveringTest()
+    begin
+    end;
+}
+`;
+      const dirs = await makeProject(twoTests);
+      // Two carrier files so `maxGuardsPerBatch: 1` splits the run — batching is at FILE
+      // granularity, so one file can never be split across batches.
+      await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
+      await Bun.write(
+        join(dirs.projectDir, "SandboxExtra.Codeunit.al"),
+        `codeunit 79002 "Sandbox Extra"
+{
+    procedure UnderLimit(Amount: Decimal; Limit: Decimal): Boolean
+    begin
+        exit(Amount < Limit);
+    end;
+}
+`,
+      );
+
+      // CoveringTest fails at every baseline, but for a DIFFERENT reason each time: BC's refusal
+      // in the first batch, an ordinary assertion failure in the second.
+      let coveringBaselineRuns = 0;
+      const backend = new QualificationBackend((method: string) => {
+        if (method !== "CoveringTest")
+          return { outcome: "pass" as const, procedure: "IsOverBudget" };
+        coveringBaselineRuns++;
+        // Batches split at file granularity and run in filename order, so batch 0 is
+        // SandboxExtra.Codeunit.al (codeunit 79002) and batch 1 is SandboxLogic (79000). Each
+        // batch re-runs the baseline, so this covers the batch it is currently in.
+        return coveringBaselineRuns === 1
+          ? {
+              outcome: "error" as const,
+              procedure: "UnderLimit",
+              objectId: 79002,
+              failureMessage: REFUSAL,
+            }
+          : {
+              outcome: "error" as const,
+              procedure: "IsUnderBudget",
+              objectId: 79000,
+              failureMessage: "Assert.AreEqual failed: expected 3, got 4",
+            };
+      });
+      const store = new ResultsStore(":memory:");
+      const report = await runSession({
+        backend,
+        store,
+        ...dirs,
+        selectorIds,
+        maxGuardsPerBatch: 1,
+      });
+      expect(report.batches).toBe(2);
+
+      const notesIn = (batchIndex: number) =>
+        report.mutants
+          .filter((m) => m.batchIndex === batchIndex && m.failureNote !== undefined)
+          .map((m) => m.failureNote ?? "");
+
+      const batch0 = notesIn(0);
+      const batch1 = notesIn(1);
+      expect(batch0.length).toBeGreaterThan(0);
+      expect(batch1.length).toBeGreaterThan(0);
+      // The batch that was actually refused says so…
+      expect(batch0.some((n) => n.startsWith("permissions refusal:"))).toBe(true);
+      // …and the batch that merely failed does NOT, even though the session-level set — which the
+      // report legitimately uses — names that same test.
+      expect(batch1.some((n) => n.startsWith("permissions refusal:"))).toBe(false);
+      expect(batch1.some((n) => n.startsWith("unsupported test type:"))).toBe(true);
+      // The report still names it once, session-wide: that field is cumulative on purpose.
+      expect(report.permissionsRefused?.tests).toContain("Sandbox Tests.CoveringTest");
+    });
+
+    test("a test that merely fails is NOT diagnosed as a permissions refusal", async () => {
+      // The same shape with an ordinary failure: `permissionsRefused` must be ABSENT, and the
+      // original wording must come back. A diagnosis that fires on every red baseline would be
+      // worse than none — it would send every reader to check a property that is already correct.
+      const dirs = await qualProject();
+      const backend = new QualificationBackend((method: string) =>
+        method === "UnsupportedTest"
+          ? {
+              outcome: "error" as const,
+              procedure: "IsUnderBudget",
+              failureMessage: "Assert.AreEqual failed: expected 3, got 4",
+            }
+          : { outcome: "pass" as const, procedure: "IsOverBudget" },
+      );
+      const store = new ResultsStore(":memory:");
+      const report = await runSession({ backend, store, ...dirs, selectorIds });
+
+      expect(report.permissionsRefused).toBeUndefined();
+      expect(report.validity.caveats).not.toContain("tests-permission-refused");
+      const errored = report.mutants.filter((m) => m.verdict === "error");
+      expect(errored.length).toBe(3);
+      for (const m of errored) expect(m.failureNote).toContain("unsupported test type");
+    });
   });
 
   test("a mutant covered by a green test still runs (no over-exclusion)", async () => {

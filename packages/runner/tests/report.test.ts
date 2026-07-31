@@ -20,6 +20,8 @@ describe("renderConsole — al-runner canary reiteration (R7/R8)", () => {
       scoreDescribes: "test fixture",
       baselineTests: { total: 0, failing: 0 },
       scoredMutants: { scored: 0, recorded: 0 },
+      // R60: every verdict describes the app's non-interactive branch; always present.
+      executionContext: { guiAllowed: false as const, clientType: "ODataV4", basis: "test fixture" },
     },
     survivorsByProcedure: [],
     testFiles: {},
@@ -116,6 +118,8 @@ describe("renderConsole — permission canary reiteration (R26)", () => {
       scoreDescribes: "test fixture",
       baselineTests: { total: 0, failing: 0 },
       scoredMutants: { scored: 0, recorded: 0 },
+      // R60: every verdict describes the app's non-interactive branch; always present.
+      executionContext: { guiAllowed: false as const, clientType: "ODataV4", basis: "test fixture" },
     },
     survivorsByProcedure: [],
     testFiles: {},
