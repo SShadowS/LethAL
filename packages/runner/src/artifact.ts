@@ -2,6 +2,7 @@ import { readFile, rename } from "node:fs/promises";
 import { join } from "node:path";
 import type { MutantManifest } from "@lethal/schemata";
 import type { DeploymentVerification, PublishOutcome } from "./deployment-verifier";
+import { describeThrown } from "./describe-error";
 import { defaultSpawn } from "./publisher";
 import type { SpawnFn } from "./publisher";
 
@@ -122,7 +123,7 @@ export class ArtifactCompiler {
       ]);
     } catch (err) {
       throw new ArtifactPrepareError(
-        `could not run alc (${this.cfg.alcPath}): ${err instanceof Error ? err.message : String(err)}`,
+        `could not run alc (${this.cfg.alcPath}): ${describeThrown(err)}`,
       );
     }
     if (res.exitCode !== 0) {
@@ -137,7 +138,7 @@ export class ArtifactCompiler {
     } catch (err) {
       throw new ArtifactPrepareError(
         `alc reported success but its output could not be read at ${scratch}: ` +
-          `${err instanceof Error ? err.message : String(err)}`,
+          `${describeThrown(err)}`,
       );
     }
     const sha256 = Bun.SHA256.hash(bytes, "hex");
@@ -148,7 +149,7 @@ export class ArtifactCompiler {
       await this.io.writeArtifact(scratch, appPath);
     } catch (err) {
       throw new ArtifactPrepareError(
-        `could not place artifact at ${appPath}: ${err instanceof Error ? err.message : String(err)}`,
+        `could not place artifact at ${appPath}: ${describeThrown(err)}`,
       );
     }
     return {

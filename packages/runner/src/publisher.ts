@@ -2,6 +2,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { CompiledArtifact } from "./artifact";
+import { describeThrown } from "./describe-error";
 import { canonicalContainerKey, serializePublish } from "./publish-serializer";
 
 export type SpawnFn = (
@@ -141,8 +142,12 @@ export class ContainerDeployer implements AppPublisher {
         if (err instanceof Error && err.message.includes("altool publishapp failed")) {
           throw err;
         }
+        // R65: `err.message` ALONE renders an empty-message spawn ENOENT as
+        // "altool publishapp failed:  (altoolPath: …)" — the cause silently blank. `describeThrown`
+        // carries the errno fields, which is where a missing exec bit or a bad path actually says
+        // what it is.
         throw new Error(
-          `altool publishapp failed: ${err instanceof Error ? err.message : String(err)} (altoolPath: ${this.cfg.altoolPath})`,
+          `altool publishapp failed: ${describeThrown(err)} (altoolPath: ${this.cfg.altoolPath})`,
         );
       }
     });

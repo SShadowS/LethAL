@@ -71,6 +71,35 @@ describe("ArtifactCompiler", () => {
     expect(err).not.toBeInstanceOf(AlcCompileError);
   });
 
+  // R65. A Bun spawn ENOENT carries an EMPTY `message`; the diagnosis lives on `code`/`path`/
+  // `syscall`. Stringifying `err.message` alone produced a bare `Error` with no text — which is
+  // how R64's wrong-platform binary presented, and why it took a long external session to trace.
+  // The fake below reproduces that exact shape: message "", errno fields populated.
+  // The configured path ("alc") and the errno path ("/ext/bin/linux/alc") are DELIBERATELY
+  // different — the OS reports what it resolved, the config holds what the user wrote. Asserting
+  // on a path the surrounding message already interpolates would pass whether or not the errno
+  // fields were surfaced at all.
+  it("names the OS error code and the failing binary when the spawn fails with an EMPTY message", async () => {
+    const compiler = new ArtifactCompiler(CFG, {
+      spawn: async () => {
+        throw Object.assign(new Error(""), {
+          code: "ENOENT",
+          syscall: "spawn",
+          path: "/ext/bin/linux/alc",
+        });
+      },
+      readArtifact: async () => new Uint8Array(),
+      writeArtifact: async () => {},
+    });
+    const err = await compiler.compile(BASE_INPUT).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ArtifactPrepareError);
+    const message = (err as Error).message;
+    expect(message).toContain("ENOENT");
+    expect(message).toContain("/ext/bin/linux/alc");
+    // The operation still names itself — the code is added detail, not a replacement.
+    expect(message).toContain("could not run alc");
+  });
+
   it("throws ArtifactPrepareError when the output file is missing", async () => {
     const compiler = new ArtifactCompiler(CFG, {
       spawn: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
@@ -241,6 +270,35 @@ describe("ContainerDeployer.publish", () => {
       readArtifact: async () => bytes,
     });
     await expect(deployer.publish(artifact)).rejects.toThrow("publish rejected");
+  });
+
+  // R65, second catch site. Same empty-message spawn ENOENT, same silent catch — a missing exec
+  // bit on bin/linux/altool, a pinned `bcdev.altoolPath` typo, or a partial install all land here.
+  it("names the OS error code when altool cannot be spawned at all (EMPTY-message ENOENT)", async () => {
+    const bytes = new Uint8Array([1, 2, 3]);
+    const artifact = fakeArtifact({ sha256: Bun.SHA256.hash(bytes, "hex") });
+    // `altoolPath` is overridden to a bare name here so the errno `path` is a DIFFERENT string
+    // from the one the `(altoolPath: …)` suffix already prints — otherwise the path assertion
+    // below passes whether or not the errno fields reach the message.
+    const deployer = new ContainerDeployer(
+      { ...DEPLOY_CFG, altoolPath: "altool.exe" },
+      {
+        spawn: async () => {
+          throw Object.assign(new Error(""), {
+            code: "EACCES",
+            syscall: "spawn",
+            path: "C:/ext/bin/win32/altool.exe",
+          });
+        },
+        readArtifact: async () => bytes,
+      },
+    );
+    const err = await deployer.publish(artifact).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    const message = (err as Error).message;
+    expect(message).toContain("EACCES");
+    expect(message).toContain("C:/ext/bin/win32/altool.exe");
+    expect(message).toContain("altool publishapp failed");
   });
 
   // Regression (Task 8, verified live against Cronus281 2026-07-20): on a real version-conflict
