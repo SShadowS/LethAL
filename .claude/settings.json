@@ -9,6 +9,15 @@
             "command": "bun \"$CLAUDE_PROJECT_DIR/.claude/hooks/no-committed-secrets.ts\""
           }
         ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun \"$CLAUDE_PROJECT_DIR/.claude/hooks/baseline-guard.ts\""
+          }
+        ]
       }
     ],
     "PostToolUse": [
@@ -31,6 +40,15 @@
           {
             "type": "command",
             "command": "bun \"$CLAUDE_PROJECT_DIR/.claude/hooks/compile-fixtures-touched.ts\""
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun \"$CLAUDE_PROJECT_DIR/.claude/hooks/control-app-stale.ts\""
           }
         ]
       }
