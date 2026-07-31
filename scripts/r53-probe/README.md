@@ -34,6 +34,24 @@ Every loop is time-bounded. A negative result must not wedge the container.
 | Does state the hung session `Commit()`ed **before** hanging survive the kill? | **Yes.** The `hanging` row, written and committed before the loop, was still present afterwards. |
 | Can the watchdog find its target in `Active Session` (2000000110)? | **No.** `visibleBefore:No` for a session it then successfully killed. |
 | Is `Active Session` usable from a web-service session at all? | Barely: `total:1 selfVisible:No mySession:3188 rows:-3187/Web Service`. The session cannot see **itself**, and the one visible row carries a **negative** id. |
+| What does `StopSession` do against an id that does not exist? | **Silently nothing.** `stopThrew:No` for `999999` (never existed), for `0`, and for `-1`. |
+
+### The dead-id result is the important one
+
+`StopSession` **cannot report failure**. It no-ops for a nonexistent id, for `0`, and for a negative
+id, all with no error. So *"the stop did not throw"* confirms nothing whatsoever — it is the
+empty-vs-empty confirmation this project treats as its signature bug, and it would have sat at the
+exact centre of a new verdict.
+
+Two consequences, both now measured rather than argued:
+
+1. The verdict must rest on the **408 on the held original request** (below), never on the stop
+   call's own return value.
+2. `Session Id <= 0` must be refused explicitly before calling `StopSession`, because stopping `0`
+   looks exactly like success.
+
+Note the first measurement above was already the hold-open case: that caller never aborted, and the
+408 arrived on the still-open request. The mechanism is proven end to end.
 
 ## What that means for the design
 
