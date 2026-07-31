@@ -11,6 +11,7 @@ import {
   leaseSessionFor,
   makeEnvToolPublisher,
   parseCliConfig,
+  resolveAlToolPaths,
   resolveEnvToolSession,
   resourceIdentityFor,
   runFromCli,
@@ -1013,16 +1014,84 @@ describe("buildBackend (R43 — bcdev.alcPath selects the compiler)", () => {
     ).rejects.toThrow(/could not locate alc\.exe under/);
   });
 
-  it("the ContainerDeployer path still requires the extension even with alcPath set (altool comes from it)", async () => {
-    // alcPath names a COMPILER, not a publisher. The non-envTool path publishes with altool.exe,
-    // which only the extension install provides, so pinning alc must not wave that requirement
-    // through and fail later at publish time instead.
+  it("the ContainerDeployer path still refuses alcPath alone — that names a COMPILER, not a publisher", async () => {
+    // alcPath names a COMPILER, not a publisher. The non-envTool path publishes with altool, so
+    // pinning alc must not wave that requirement through and fail later at publish time instead.
+    // R64 moved WHICH message says so (a pinned alc now satisfies the compiler half, leaving the
+    // publisher half to report itself) but not the refusal.
     const configFile: LethalConfigFile = {
       bcdev: { ...RESOLVED_BCDEV, alcPath: "C:/pinned/alc.exe" },
     };
     const err = await buildBackend(RUN_CONFIG_BCDEV, configFile, "C:/scratch", undefined, {
       alToolPaths: missingAlToolPaths,
     }).catch((e: unknown) => (e instanceof Error ? e.message : String(e)));
-    expect(err).toContain("alc.exe/altool.exe");
+    expect(err).toContain("could not locate altool.exe");
+  });
+});
+
+// ————————————————————————————————————————————————————————————————————————
+// R64: the publish TOOL build is not interchangeable either. The AL extension's bundled altool
+// 17.0.2273547 silently ignores BC_SERVER_USERNAME/BC_SERVER_PASSWORD for `publishapp` (its
+// `auth login` is AAD-only), while the microsoft.dynamics.businesscentral.development.tools 18.x
+// dotnet tool reads them and publishes — so compile and publish must be pinnable independently.
+// ————————————————————————————————————————————————————————————————————————
+describe("resolveAlToolPaths (R43/R64 — config overrides beat the discovered install)", () => {
+  const discovered = { alcPath: "C:/ext/alc.exe", altoolPath: "C:/ext/altool.exe" };
+
+  it("falls back to the discovered install when neither override is set", () => {
+    expect(resolveAlToolPaths({}, discovered)).toEqual(discovered);
+  });
+
+  it("each override wins over the discovered install, independently", () => {
+    // Independence is the point: pinning the compiler must not drag publish onto the same build,
+    // and vice versa — that combination (17.x alc + 18.x altool) is the one measured to work.
+    expect(resolveAlToolPaths({ altoolPath: "C:/dotnet/al.exe" }, discovered)).toEqual({
+      alcPath: "C:/ext/alc.exe",
+      altoolPath: "C:/dotnet/al.exe",
+    });
+    expect(resolveAlToolPaths({ alcPath: "C:/pinned/alc.exe" }, discovered)).toEqual({
+      alcPath: "C:/pinned/alc.exe",
+      altoolPath: "C:/ext/altool.exe",
+    });
+  });
+
+  it("reports undefined for a half neither the config nor an install supplies", () => {
+    expect(resolveAlToolPaths({ altoolPath: "C:/dotnet/al.exe" }, undefined)).toEqual({
+      alcPath: undefined,
+      altoolPath: "C:/dotnet/al.exe",
+    });
+  });
+});
+
+describe("buildBackend (R64 — bcdev.altoolPath selects the publisher)", () => {
+  const missingAlToolPaths = async () => undefined;
+
+  it("alcPath + altoolPath together satisfy the gate with no AL extension installed", async () => {
+    // The whole point of the override pair: a machine with no VS Code AL extension (a CI box, a
+    // Linux host driving a container) can name both tools itself. Before this, the container path
+    // refused with "install the extension" no matter what the config said.
+    const configFile: LethalConfigFile = {
+      bcdev: {
+        ...RESOLVED_BCDEV,
+        alcPath: "C:/pinned/alc.exe",
+        altoolPath: "C:/dotnet/al.exe",
+      },
+    };
+    const err = await buildBackend(RUN_CONFIG_BCDEV, configFile, "C:/scratch", undefined, {
+      alToolPaths: missingAlToolPaths,
+    }).catch((e: unknown) => (e instanceof Error ? e.message : String(e)));
+    expect(err).not.toContain("could not locate");
+  });
+
+  it("altoolPath alone does not satisfy the compiler half", async () => {
+    // Counterweight to the test above: it would pass just as well if the gate had been deleted
+    // rather than made satisfiable. Compilation is local on every path, so alc is still required.
+    const configFile: LethalConfigFile = {
+      bcdev: { ...RESOLVED_BCDEV, altoolPath: "C:/dotnet/al.exe" },
+    };
+    const err = await buildBackend(RUN_CONFIG_BCDEV, configFile, "C:/scratch", undefined, {
+      alToolPaths: missingAlToolPaths,
+    }).catch((e: unknown) => (e instanceof Error ? e.message : String(e)));
+    expect(err).toContain("could not locate alc.exe/altool.exe");
   });
 });

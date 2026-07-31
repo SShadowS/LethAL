@@ -762,9 +762,10 @@ export interface BcDevConfigSection {
    */
   readonly alcPath?: string;
   /**
-   * Absolute path to the `altool`/`altool.exe` to PUBLISH the instrumented artifact with. Absent
-   * means "the newest AL VS Code extension installed" (`defaultAlToolPaths`), same fallback as
-   * `alcPath`.
+   * R64: absolute path to the `altool`/`altool.exe` to PUBLISH the instrumented artifact with.
+   * Absent means "the newest AL VS Code extension installed" (`defaultAlToolPaths`), same fallback
+   * as `alcPath`. Like `alcPath`, a value here also satisfies `buildBackend`'s "no AL extension
+   * installed" gate for the half it names — see `resolveAlToolPaths`.
    *
    * Needed because, like the compiler, the publish TOOL build is not interchangeable: the VS Code
    * AL extension's bundled `altool` (17.0.2273547, measured 2026-07-31) has no working
@@ -1052,6 +1053,33 @@ export function makeEnvToolPublisher(
 }
 
 /**
+ * Resolves which `alc` and `altool` a bcdev session will actually spawn: an explicit
+ * `bcdev.alcPath`/`bcdev.altoolPath` wins over whatever `defaultAlToolPaths()` discovered, and
+ * either half can be absent.
+ *
+ * The two overrides exist for the same reason and are independent on purpose — a tool BUILD is not
+ * interchangeable, and compile and publish can need different ones. `alcPath` came first (R43:
+ * `alc 18` writes OPC part names BC 28 cannot load). `altoolPath` followed (R64): the AL VS Code
+ * extension's bundled `altool` 17.0.2273547 has no working non-interactive `UserPassword` auth for
+ * `publishapp` — `BC_SERVER_USERNAME`/`BC_SERVER_PASSWORD` are ignored and `auth login` is
+ * AAD-only — while the `microsoft.dynamics.businesscentral.development.tools` 18.x dotnet tool
+ * reads those env vars and publishes.
+ *
+ * Its own exported function, and the one `buildBackend` calls, for the reason `deployerFor` below
+ * spells out: a test that re-implements this precedence would stay green even if `buildBackend`
+ * stopped honouring the override, which is precisely the regression worth pinning.
+ */
+export function resolveAlToolPaths(
+  c: Pick<BcDevConfigSection, "alcPath" | "altoolPath">,
+  discovered: { readonly alcPath: string; readonly altoolPath: string } | undefined,
+): { readonly alcPath: string | undefined; readonly altoolPath: string | undefined } {
+  return {
+    alcPath: c.alcPath ?? discovered?.alcPath,
+    altoolPath: c.altoolPath ?? discovered?.altoolPath,
+  };
+}
+
+/**
  * Selects the deployer `buildBackend` uses for the bcdev batch-artifact publisher: through the
  * env-tool publisher when a session resolved one (`envToolDeploy` defined), else the ordinary
  * container/altool deployer. Extracted out of `buildBackend` (Task 7 review, Minor 7) rather than
@@ -1255,10 +1283,13 @@ export async function buildBackend(
 
   const alToolPaths = deps.alToolPaths ?? defaultAlToolPaths;
   const toolPaths = await alToolPaths();
-  // R43: a configured `alcPath` also SATISFIES the requirement below — the gate exists to catch
-  // "no AL compiler anywhere", and an explicit path is a compiler. Only the altool-dependent
-  // (non-envTool) publish path still needs the extension install itself.
-  if (!toolPaths && !(c.alcPath !== undefined && envToolDeploy !== undefined)) {
+  const resolved = resolveAlToolPaths(c, toolPaths);
+  // R43/R64: a configured `alcPath`/`altoolPath` SATISFIES the requirement below — the gate exists
+  // to catch "no AL compiler/publisher anywhere", and an explicit path is one. Which of the two a
+  // session actually needs depends on the publish route, so the gate asks for exactly those:
+  // compilation is always local, so alc is required everywhere; altool is spawned only by
+  // `ContainerDeployer` (the non-envTool branch of `deployerFor`).
+  if (resolved.alcPath === undefined) {
     // R21: the env-tool publish path (`envToolDeploy` defined, `deployerFor` below takes the
     // env-tool branch) never constructs a `ContainerDeployer` and so never touches
     // `toolPaths.altoolPath` — altool.exe is irrelevant there. `alc.exe` is still genuinely
@@ -1269,12 +1300,26 @@ export async function buildBackend(
       throw new Error(
         "could not locate alc.exe under the AL Language VS Code extension install " +
           "(~/.vscode/extensions/ms-dynamics-smb.al-*); alc.exe is required because compilation " +
-          "is always local, even when publishing through envTool — install the AL extension",
+          "is always local, even when publishing through envTool — install the AL extension, or " +
+          "set bcdev.alcPath",
       );
     }
     throw new Error(
       "could not locate alc.exe/altool.exe under the AL Language VS Code extension install " +
-        "(~/.vscode/extensions/ms-dynamics-smb.al-*); install the extension, or run with --backend al-runner",
+        "(~/.vscode/extensions/ms-dynamics-smb.al-*); install the extension, set bcdev.alcPath " +
+        "and bcdev.altoolPath, or run with --backend al-runner",
+    );
+  }
+  // R64: the container publish path spawns altool, so a pinned `alcPath` alone must NOT wave it
+  // through to fail later at publish time — but a pinned `altoolPath` genuinely satisfies it, the
+  // same way `alcPath` satisfies the compiler half. Before that override existed this branch was
+  // unreachable (no extension meant no alc either), which is why the message is separate: "install
+  // the extension" is unhelpful advice for someone who did pin a compiler and nothing else.
+  if (envToolDeploy === undefined && resolved.altoolPath === undefined) {
+    throw new Error(
+      "could not locate altool.exe under the AL Language VS Code extension install " +
+        "(~/.vscode/extensions/ms-dynamics-smb.al-*); publishing to a container spawns altool — " +
+        "install the extension, set bcdev.altoolPath, or run with --backend al-runner",
     );
   }
   // R3/R4: validated here — after alc/altool are confirmed present (so the "could not locate..."
@@ -1285,15 +1330,9 @@ export async function buildBackend(
   await validateSelectorIdsForProject(parsed.projectDir, selectorIds);
   const outputDir = join(scratchDir, "publish");
   await mkdir(outputDir, { recursive: true });
-  const resolvedAlcPath = c.alcPath ?? toolPaths?.alcPath;
-  if (resolvedAlcPath === undefined) {
-    throw new Error(
-      "no alc.exe available: neither an AL Language VS Code extension install nor a bcdev.alcPath override",
-    );
-  }
   const compiler = new ArtifactCompiler(
     {
-      alcPath: resolvedAlcPath,
+      alcPath: resolved.alcPath,
       packageCachePath: c.packageCachePath,
       outputDir,
     },
@@ -1307,13 +1346,9 @@ export async function buildBackend(
   // see `makeEnvToolPublisher`'s doc comment. `deployerFor` (Minor 7) is the same function a test
   // exercises directly to prove both publisher constructions share one `serializerKey`.
   // `altoolPath` is only ever READ on the non-envTool branch (`deployerFor` builds a
-  // `ContainerDeployer` there); the guard above already refuses a missing extension install on
-  // that path, so an empty string here is unreachable rather than a silent default.
-  const deployer: AppPublisher = deployerFor(
-    c,
-    c.altoolPath ?? toolPaths?.altoolPath ?? "",
-    envToolDeploy,
-  );
+  // `ContainerDeployer` there); the second guard above refuses that path outright unless an altool
+  // resolved, so an empty string here is unreachable rather than a silent default.
+  const deployer: AppPublisher = deployerFor(c, resolved.altoolPath ?? "", envToolDeploy);
   // One OData config, several consumers on the same LethAL Control / MutationControl web-service
   // endpoints: the RunMutant execution transport, the HarnessInfo prerequisite check, and the
   // (Layer-5A) deployment identity verifier.
