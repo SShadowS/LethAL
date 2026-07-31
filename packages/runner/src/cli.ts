@@ -761,6 +761,21 @@ export interface BcDevConfigSection {
    * extension decided, and losing that lottery looked like a packaging bug in LethAL.
    */
   readonly alcPath?: string;
+  /**
+   * Absolute path to the `altool`/`altool.exe` to PUBLISH the instrumented artifact with. Absent
+   * means "the newest AL VS Code extension installed" (`defaultAlToolPaths`), same fallback as
+   * `alcPath`.
+   *
+   * Needed because, like the compiler, the publish TOOL build is not interchangeable: the VS Code
+   * AL extension's bundled `altool` (17.0.2273547, measured 2026-07-31) has no working
+   * non-interactive `UserPassword` auth path for `publishapp` (env vars are silently ignored, and
+   * `auth login` is AAD-only per its own description), while the
+   * `microsoft.dynamics.businesscentral.development.tools` 18.x prerelease dotnet tool (`al`
+   * globally installed) reads `BC_SERVER_USERNAME`/`BC_SERVER_PASSWORD` and publishes cleanly.
+   * With no override, `alcPath` alone cannot route publish through a different tool build than
+   * compile.
+   */
+  readonly altoolPath?: string;
   // Absolute path to the compiled `lethal-control.app` — see BcDevConfig.controlSymbolPath
   // (bcdev-backend.ts) for why deploy()/compileCheck() need it (Task 8).
   readonly controlSymbolPath: string;
@@ -1294,7 +1309,11 @@ export async function buildBackend(
   // `altoolPath` is only ever READ on the non-envTool branch (`deployerFor` builds a
   // `ContainerDeployer` there); the guard above already refuses a missing extension install on
   // that path, so an empty string here is unreachable rather than a silent default.
-  const deployer: AppPublisher = deployerFor(c, toolPaths?.altoolPath ?? "", envToolDeploy);
+  const deployer: AppPublisher = deployerFor(
+    c,
+    c.altoolPath ?? toolPaths?.altoolPath ?? "",
+    envToolDeploy,
+  );
   // One OData config, several consumers on the same LethAL Control / MutationControl web-service
   // endpoints: the RunMutant execution transport, the HarnessInfo prerequisite check, and the
   // (Layer-5A) deployment identity verifier.

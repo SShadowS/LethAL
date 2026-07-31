@@ -182,6 +182,12 @@ export async function defaultAlToolPaths(
 
   const al = sorted.at(-1);
   if (!al) return undefined;
-  const bin = join(extensionsDir, al, "bin", "win32");
-  return { alcPath: join(bin, "alc.exe"), altoolPath: join(bin, "altool.exe") };
+  // The AL Language extension ships native alc/altool binaries per-RID under bin/<platform>/,
+  // not just bin/win32/. Hardcoding win32 here made every bcdev run on a Linux or macOS host spawn
+  // a Windows PE binary that cannot execute, surfacing as an opaque empty-message spawn ENOENT
+  // several layers up (ArtifactCompiler.compile's catch stringifies a message-less error).
+  const platformDir = process.platform === "win32" ? "win32" : process.platform === "darwin" ? "darwin" : "linux";
+  const exeSuffix = process.platform === "win32" ? ".exe" : "";
+  const bin = join(extensionsDir, al, "bin", platformDir);
+  return { alcPath: join(bin, `alc${exeSuffix}`), altoolPath: join(bin, `altool${exeSuffix}`) };
 }
