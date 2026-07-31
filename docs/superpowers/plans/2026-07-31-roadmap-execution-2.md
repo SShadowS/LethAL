@@ -266,7 +266,7 @@ is the durable record; this table is only the scheduling view.
 
 | id | item | found during | wave fit |
 |---|---|---|---|
-| _(none yet)_ | | | |
+| **R66** | The `TestPermissions` refusal detector is English-only, so a non-English server gets a silent miss. Split out of R35 rather than bundled into it: closing it needs a language-independent signal **measured** against a localized server (AL-side `GetLastErrorCode()`, or the structural `(TableData …)` parenthetical), and neither can be settled from a unit test. Not a wrong-verdict finding — the direction is a miss, never a false diagnosis — so it queued rather than preempting. | R35 | **W1**, alongside R53: both want an AL-side change and a live measurement, and R53 is already opening `RunMutant` and bumping the protocol. |
 
 **Triage happens at item boundaries, not mid-item.** One preempt class: a finding that makes LethAL emit a
 **wrong verdict** jumps the queue immediately, ahead of whatever is next. Everything else waits its turn and

@@ -1927,6 +1927,13 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   const unsupportedTestNames = new Set<string>();
   // R31: tests the source declares that the SERVER has no result for — see the baseline loop.
   const missingFromServer = new Set<string>();
+  // R35: baseline tests BC REFUSED on permissions — a strict subset of `unsupportedTestNames`,
+  // tracked separately because the two demand opposite responses. "Did not pass at baseline" reads
+  // as "your test is broken or is an unsupported type"; a permissions refusal is neither, and is
+  // fixed by one line in the target's own source (`TestPermissions = Disabled`). R27 named this
+  // cause on the `unstable` path only; a test refused HERE was dropped from the green set with the
+  // wrong explanation attached, or none at all.
+  const permissionRefusedTests = new Set<string>();
   // Summed across batches — see `SessionReport.untargetedTriggerCount`. Declared out here rather
   // than read off the last batch's split: each batch runs its own coverage filter, and a session
   // whose only untargeted trigger sits in batch 1 must not report 0.
@@ -2341,7 +2348,32 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       // one of them. Name every such test in the report; below, distinguish a
       // mutant covered only by one from a genuinely uncovered mutant.
       const unsupportedBaseline = baseline.filter((b) => didNotPassAtBaseline(b.verdict.outcome));
-      for (const b of unsupportedBaseline) unsupportedTestNames.add(qualifiedTestName(b.ref));
+      // R35, blind spot 1. The evidence is already here, per-test, in BC's own words — the same
+      // text R27 reads on the `unstable` path. Nothing looked at it HERE, so a suite whose test
+      // codeunits omit `TestPermissions = Disabled` had its writing tests refused, dropped from
+      // the green set, and reported as "did not pass at baseline" — which sends the reader to
+      // debug their tests rather than declare one property.
+      //
+      // Keyed BATCH-LOCAL, and holding the diagnosis STRING rather than a bare flag:
+      //   - batch-local, because the note below describes THIS batch's baseline. The session-level
+      //     set is cumulative, so consulting it would let a refusal measured in a later batch
+      //     describe an earlier batch's note (impossible — earlier notes are already written) and,
+      //     worse, let a test refused in one batch be labelled "refused" in another where it
+      //     failed for an ordinary reason.
+      //   - the string, because `describeTestPermissionsRefusal` QUOTES BC verbatim, and that
+      //     quote is what lets a reader overrule a hedged English-regex diagnosis. Discarding it
+      //     and keeping only the truthiness would leave the reader with an assertion and no
+      //     evidence — see the unstable path, which appends the same string.
+      const refusedThisBatch = new Map<string, string>();
+      for (const b of unsupportedBaseline) {
+        const name = qualifiedTestName(b.ref);
+        unsupportedTestNames.add(name);
+        const refusal = describeTestPermissionsRefusal(b.verdict.failureMessage);
+        if (refusal !== undefined) {
+          refusedThisBatch.set(name, refusal);
+          permissionRefusedTests.add(name);
+        }
+      }
 
       // R31: a test the SOURCE declares but the server returned no result for is a test the
       // published test app does not contain — i.e. what is deployed is older than the source
@@ -2409,17 +2441,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       for (const m of uncovered) {
         const covering = unsupportedCoverage.get(m.mutantId);
         if (covering !== undefined && covering.length > 0) {
-          const names = [...new Set(covering.map(qualifiedTestName))].sort().join(", ");
-          record(
-            cfg.store,
-            runId,
-            m,
-            "error",
-            outcomes,
-            batchIdx,
-            undefined,
-            `unsupported test type: mutant covered only by test(s) that did not pass at baseline (${names})`,
-          );
+          const qualified = [...new Set(covering.map(qualifiedTestName))].sort();
+          const note = unsupportedCoverageNote(qualified, refusedThisBatch);
+          record(cfg.store, runId, m, "error", outcomes, batchIdx, undefined, note);
         } else {
           record(cfg.store, runId, m, "no-coverage", outcomes, batchIdx);
         }
@@ -2509,6 +2533,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         // per shard, just with all of `execute` as a single "shard" on the
         // one backend already deployed in step 3.
         await runMutantsOnBackend({
+          permissionRefusedTests,
           backend: cfg.backend,
           safety,
           ...(leaseSession !== undefined ? { leaseSession } : {}),
@@ -2605,6 +2630,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
               return;
             }
             await runMutantsOnBackend({
+              permissionRefusedTests,
               backend,
               safety,
               mutants: shard,
@@ -2764,6 +2790,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     ...(missingFromServer.size > 0
       ? { staleTestApp: { missingTests: [...missingFromServer].sort() } }
       : {}),
+    ...(permissionRefusedTests.size > 0
+      ? { permissionsRefusedTests: [...permissionRefusedTests].sort() }
+      : {}),
     baselineTests: tests.map((t) => ({
       codeunitName: t.codeunitName,
       ...(t.file !== undefined ? { file: t.file } : {}),
@@ -2839,6 +2868,41 @@ function didNotPassAtBaseline(o: TestVerdict["outcome"]): boolean {
   return o === "fail" || o === "error";
 }
 
+/**
+ * R35. The note for a mutant covered ONLY by tests that did not pass at baseline.
+ *
+ * Two different facts need two different sentences. "Unsupported test type" is the honest label
+ * when a test could not run in the web-service session — but when BC REFUSED the test on
+ * permissions it is actively WRONG: it points the reader at the test's type when the cause is a
+ * missing `TestPermissions = Disabled`, and a reader who believes it goes looking for a TestPage.
+ *
+ * `refusedThisBatch` maps a qualified test name to BC's own diagnosis text (see
+ * `describeTestPermissionsRefusal`), which is appended verbatim rather than summarised: the
+ * detector is a hedged English regex, and the quote is what lets a reader overrule it.
+ *
+ * Extracted from `runSession` so the mixed case — some covering tests refused, others merely
+ * broken — is reachable from a unit test without standing up a two-batch session.
+ */
+export function unsupportedCoverageNote(
+  qualified: readonly string[],
+  refusedThisBatch: ReadonlyMap<string, string>,
+): string {
+  const refused = qualified.filter((n) => refusedThisBatch.has(n));
+  const firstName = refused[0];
+  const refusalText = firstName === undefined ? undefined : refusedThisBatch.get(firstName);
+  if (refusalText === undefined) {
+    return `unsupported test type: mutant covered only by test(s) that did not pass at baseline (${qualified.join(", ")})`;
+  }
+  const others = qualified.filter((n) => !refusedThisBatch.has(n));
+  // "covered only by refused tests" and "covered by refused tests AND others" are different
+  // facts; saying "only" in both cases contradicts the list that follows it.
+  const alongside =
+    others.length > 0
+      ? `, and by test(s) that did not pass for another reason (${others.join(", ")})`
+      : ", and by no test that passed";
+  return `permissions refusal: mutant covered by test(s) BC refused at baseline (${refused.join(", ")})${alongside} — ${refusalText}`;
+}
+
 /** Human-readable `Codeunit.method` identity for report/notes — unambiguous across codeunits sharing a method name. */
 function qualifiedTestName(ref: TestMethodRef): string {
   return `${ref.codeunitName}.${ref.method}`;
@@ -2899,6 +2963,15 @@ async function runMutantsOnBackend(args: {
   readonly quarantineStore?: QuarantineStore | undefined;
   readonly resourceKey?: string | undefined;
   readonly nowIso: () => string;
+  /**
+   * R35: session-level sink for tests BC refused on permissions, mutated in place like `outcomes`.
+   *
+   * The unstable path below recognises the SAME refusal (R27) and names it per mutant. Without
+   * this, a run whose refusals surface only there emitted a per-mutant note saying "declare
+   * `TestPermissions = Disabled`" while `SessionReport.permissionsRefused` was absent and the
+   * `tests-permission-refused` caveat never fired — the same run disagreeing with itself.
+   */
+  readonly permissionRefusedTests: Set<string>;
   /**
    * Layer 5C-A Task 8, Task 10 (design §G): this batch's artifact-scoped clean-attestation
    * ledger — shared (by reference) across every worker/shard `runSession` fans this batch's
@@ -3180,6 +3253,9 @@ async function runMutantsOnBackend(args: {
           const refusal =
             describeTestPermissionsRefusal(confirm.failureMessage) ??
             describeTestPermissionsRefusal(v.failureMessage);
+          // R35: record it session-wide too, so the report's `permissionsRefused` field and this
+          // note cannot disagree about whether the run hit a permissions refusal.
+          if (refusal !== undefined) args.permissionRefusedTests.add(qualifiedTestName(ref));
           failureNote = `unstable test ${ref.method}: fails at baseline confirmation${
             refusal !== undefined ? ` — ${refusal}` : ""
           }`;

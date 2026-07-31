@@ -13,6 +13,22 @@ each one.
 
 ### Fixed
 
+- **A permissions refusal at baseline discovery no longer reads as an unsupported test type**
+  (R35). R27 taught LethAL to name the `TestPermissions` cause, but only on the `unstable` path.
+  A test BC refused at *baseline discovery* never reaches it: the test was dropped from the green
+  set and the mutants it alone covered were recorded `error` with the note "unsupported test
+  type", pointing the reader at their test's type when the fix is one property
+  (`TestPermissions = Disabled`) in their own source. Those mutants now carry a note naming the
+  permissions cause and quoting BC verbatim, the report gains `permissionsRefused` and a
+  `tests-permission-refused` caveat, and the same refusal recognised on the `unstable` path feeds
+  the same field — so a run can no longer disagree with itself about whether it hit one.
+  **Known limitation:** the detector matches BC's English refusal text, so a non-English server
+  still gets a silent miss (never a wrong answer) — tracked as R66 and pinned by a test.
+- **A failed tool spawn could report nothing at all** (R65). A Bun spawn `ENOENT` arrives with an
+  EMPTY `message`, so catches that stringified `err.message` reported a blank cause — how R64's
+  wrong-platform binary presented, and why it took a long external session to trace. `alc`,
+  `altool` and the configured environment tool now report the OS error code, syscall and path.
+
 - **The bcdev backend on Linux and macOS hosts** (R64). `defaultAlToolPaths()` hardcoded `bin/win32/`
   regardless of `process.platform`, so every non-Windows run spawned a Windows PE `alc.exe`/
   `altool.exe` that cannot execute — including anyone using the released Linux and macOS binaries,

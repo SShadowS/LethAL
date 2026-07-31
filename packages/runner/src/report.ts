@@ -227,6 +227,27 @@ export interface SessionReport {
    */
   readonly staleTestApp?: { readonly missingTests: readonly string[] };
   /**
+   * R35: baseline tests BC refused on PERMISSIONS — a strict subset of `unsupportedTests`, split
+   * out because the two demand opposite responses from the reader. "Did not pass at baseline"
+   * sends them to debug a test; this is fixed by declaring one property on the target's own test
+   * codeunit (`TestPermissions = Disabled`), after which the test runs normally.
+   *
+   * Measured A/B, 2026-07-26 (see `permission-canary.ts`): two probe codeunits identical except
+   * that property, same app, same tables, same server — omitted (AL's Restrictive default) is
+   * refused, `Disabled` succeeds, on every path through `Test Runner - Mgt` 130454.
+   *
+   * KNOWN LIMITATION — the detector matches BC's ENGLISH refusal text, so on a non-English server
+   * this field is absent even when refusals occurred, and the affected tests appear only under
+   * `unsupportedTests`. That is a silent MISS, never a wrong answer. See ROADMAP R66.
+   *
+   * Absent when nothing was refused (or when the refusals could not be recognised).
+   */
+  readonly permissionsRefused?: {
+    readonly tests: readonly string[];
+    /** The fix, stated once here rather than repeated per mutant. */
+    readonly diagnosis: string;
+  };
+  /**
    * R47: present when this run was assembled with `--resume`, naming the prior run it drew from and
    * how many verdicts it carried instead of measuring.
    *
@@ -482,6 +503,9 @@ export interface BuildReportInput {
   /** R31: tests the source declares that the server had no result for — see
    *  `SessionReport.staleTestApp`. */
   readonly staleTestApp?: { readonly missingTests: readonly string[] };
+  /** R35: baseline tests BC refused on permissions — see `SessionReport.permissionsRefused`.
+   *  Pass the names only; the diagnosis text is composed here so it cannot drift per caller. */
+  readonly permissionsRefusedTests?: readonly string[];
   /** R47: the prior run `--resume` drew from — see `SessionReport.resumedFrom`. */
   readonly resumedFrom?: {
     readonly runId: number;
@@ -657,6 +681,12 @@ export function buildReport(input: BuildReportInput): SessionReport {
   if (input.testsOnly !== undefined && input.testsOnly.length > 0) caveats.push("tests-narrowed");
   if (input.notInstrumented.files.length > 0) caveats.push("uninstrumentable-files");
   if (input.staleTestApp !== undefined) caveats.push("stale-test-app");
+  // R35: distinct from the `baseline-red` caveat these tests also trigger. That one says the
+  // measurement is degraded; this one says the degradation has a known, one-line cause in the
+  // TARGET'S source — which is the difference between "your score is unreliable" and "declare
+  // TestPermissions = Disabled and run it again".
+  const permissionsRefusedTests = input.permissionsRefusedTests ?? [];
+  if (permissionsRefusedTests.length > 0) caveats.push("tests-permission-refused");
   // R47: a caveat, not a reliability downgrade. The verdicts carried are real measurements taken
   // over the same source (identity-matched) and the same scope (fingerprint-matched) — calling
   // that "degraded" would put an honest resume in the same bucket as a red baseline. What it IS
@@ -690,6 +720,20 @@ export function buildReport(input: BuildReportInput): SessionReport {
       baselineTests: { total: input.baselineTests.length, failing: input.unsupportedTests.length },
       scoredMutants: { scored, recorded: input.outcomes.length },
     },
+    ...(permissionsRefusedTests.length > 0
+      ? {
+          permissionsRefused: {
+            tests: [...permissionsRefusedTests].sort(),
+            diagnosis:
+              "BC's permission system refused these tests, which is neither flakiness nor an " +
+              "unsupported test type: the test codeunit most likely omits " +
+              "`TestPermissions = Disabled`, and AL's Restrictive default strips a test body of " +
+              "write permission on its own app's tables. Declare `TestPermissions = Disabled;` " +
+              "on the test codeunit and re-run. Any mutant covered only by these tests is " +
+              "recorded `error` (score-excluded), never a silent `no-coverage`.",
+          },
+        }
+      : {}),
     survivorsByProcedure,
     testFiles,
     backend: input.caps.authoritative ? "bcdev" : "al-runner",
@@ -783,6 +827,20 @@ export function renderConsole(r: SessionReport): string {
       `STALE TEST APP: the server returned no result for ${n} test(s) this project's source declares, so the PUBLISHED test app is older than the source being measured. Republish it before trusting this run — a missing test cannot kill anything, so its mutants land as no-coverage or survived.`,
     );
     for (const t of r.staleTestApp.missingTests.slice(0, 10)) lines.push(`  ${t}`);
+    if (n > 10) lines.push(`  ... ${n - 10} more`);
+  }
+  // R35: printed at the SAME prominence as a stale test app, because it is the same class of
+  // problem — a one-line fix in the user's own source that otherwise reads as a scoring puzzle.
+  // Without this the reader sees only "N of M baseline tests failing" and goes to debug the tests.
+  if (r.permissionsRefused !== undefined) {
+    const n = r.permissionsRefused.tests.length;
+    // The hedge is deliberate and matches the detector's own ("most likely"): this is a diagnosis
+    // read off BC's English refusal text, and the console is the surface readers act on. Stating
+    // it flatly here would be the one place the qualification got dropped.
+    lines.push(
+      `PERMISSIONS REFUSED: ${n} baseline test(s) carry BC's permission-refusal message. ${r.permissionsRefused.diagnosis}`,
+    );
+    for (const t of r.permissionsRefused.tests.slice(0, 10)) lines.push(`  ${t}`);
     if (n > 10) lines.push(`  ... ${n - 10} more`);
   }
   // R47: its own line rather than relying on the SCOPE line below, which only prints when
