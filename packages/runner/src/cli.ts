@@ -1423,6 +1423,28 @@ export async function buildBackend(
  * Kept as its own small seam (like `resourceIdentityFor` above, and for the same reason) so a
  * regression that leaves a real CLI-driven bcdev session unfenced is directly testable.
  */
+/**
+ * R19: the post-lease work `runSession` must do, as a `SessionConfig` fragment.
+ *
+ * Publishing the target's TEST apps moved out of provisioning and under the lease. Pre-lease, a
+ * concurrent LethAL session can republish one mid-run, and nothing detects it — the attestation
+ * fence covers the TARGET artifact, not the test app, so the swap is invisible to every verdict
+ * the run produces.
+ *
+ * A seam rather than an inline spread, for the same reason `leaseSessionFor` is one: the wiring is
+ * the part that can silently vanish. If this fragment stops being produced, the test apps are
+ * never published at all — which is the R31/R56 staleness class (a gate measuring a previously
+ * published build), observed twice and badly disguised both times. Inline, nothing could test it.
+ *
+ * Empty when there is no env-tool session: on that path nobody asked LethAL to publish test apps.
+ */
+export function afterLeaseAcquiredFor(envSession: EnvToolSession | undefined): {
+  afterLeaseAcquired?: () => Promise<void>;
+} {
+  if (envSession === undefined) return {};
+  return { afterLeaseAcquired: () => envSession.publishTestApps() };
+}
+
 export function leaseSessionFor(
   parsed: RunCliConfig,
   configFile: LethalConfigFile,
@@ -1806,6 +1828,7 @@ export async function runFromCli(
         ...(parsed.resume !== undefined ? { resume: parsed.resume } : {}),
         ...(parsed.retryStranded === true ? { retryStranded: true } : {}),
         ...(parsed.stopHungSessions === true ? { stopHungSessions: true } : {}),
+        ...afterLeaseAcquiredFor(envSession),
         ...(parsed.allowLargeRun === true ? { allowLargeRun: true } : {}),
         ...(parsed.compileConcurrency !== undefined
           ? { compileConcurrency: parsed.compileConcurrency }
