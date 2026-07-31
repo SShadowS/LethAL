@@ -1,3 +1,4 @@
+import { describeThrown } from "./describe-error";
 import { defaultSpawn } from "./publisher";
 import type { SpawnFn } from "./publisher";
 
@@ -655,11 +656,12 @@ export class EnvToolClient {
         ...(cwd !== undefined ? { cwd } : {}),
       });
     } catch (err) {
+      // R65: `err.message` alone is EMPTY for a spawn ENOENT/EACCES, so a mistyped `envTool.tool`
+      // path reported "failed to run: " and nothing else — on the one path where the tool path is
+      // supplied by the user's own config and therefore most likely to be wrong. Still redacted:
+      // `describeThrown` widens WHAT is reported, never who may read it.
       throw new EnvToolError(
-        `envTool.${name}: ${shown} failed to run: ${redact(
-          err instanceof Error ? err.message : String(err),
-          this.secrets,
-        )}`,
+        `envTool.${name}: ${shown} failed to run: ${redact(describeThrown(err), this.secrets)}`,
       );
     } finally {
       clearTimeout(timer);

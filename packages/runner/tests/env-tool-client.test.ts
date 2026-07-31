@@ -185,6 +185,54 @@ describe("EnvToolClient.run", () => {
     expect(err).toMatch(/withheld/);
   });
 
+  // R65. The env-tool path is where the tool path comes from the USER'S OWN config
+  // (`envTool.toolPath`), so a typo or a non-executable binary is likeliest here of anywhere — and
+  // an empty-message spawn ENOENT rendered as "failed to run: " with nothing after the colon.
+  it("names the OS error code when the configured tool cannot be spawned (EMPTY-message ENOENT)", async () => {
+    // The errno `path` is deliberately NOT `CFG.toolPath` — the rendered argv (`shown`) already
+    // prints that, so asserting on it would pass whether or not the errno fields were surfaced.
+    const io = {
+      spawn: async () => {
+        throw Object.assign(new Error(""), {
+          code: "ENOENT",
+          syscall: "spawn",
+          path: "C:/tools/shim/continia-resolved.exe",
+        });
+      },
+    };
+    const err = await new EnvToolClient(CFG, io)
+      .run(block, "resolve[0]", { envId: "e1" })
+      .catch((e: unknown) => (e instanceof Error ? e.message : String(e)));
+    expect(err).toContain("ENOENT");
+    expect(err).toContain("C:/tools/shim/continia-resolved.exe");
+    expect(err).toContain("failed to run");
+  });
+
+  // R65 widened WHAT a spawn failure reports; it must not widen who may read it. The secret here
+  // is reachable ONLY through the errno `path` — the message is empty — so this goes red if the
+  // `redact()` wrapper is ever dropped from around `describeThrown`. (An earlier version of this
+  // test put the secret in `err.message`, where redaction happened either way: it asserted the
+  // right thing and would have passed whether or not the code was correct.)
+  it("redacts a known secret that reaches the diagnosis ONLY via the errno path", async () => {
+    const io = {
+      spawn: async () => {
+        throw Object.assign(new Error(""), {
+          code: "EACCES",
+          syscall: "spawn",
+          path: "C:/tools/hunter2/continia.exe",
+        });
+      },
+    };
+    const client = new EnvToolClient(CFG, io);
+    client.addSecret("hunter2");
+    const err = await client
+      .run(block, "resolve[0]", { envId: "e1" })
+      .catch((e: unknown) => (e instanceof Error ? e.message : String(e)));
+    expect(err).not.toContain("hunter2");
+    // …and the diagnosis is still useful after redaction, not scrubbed into uselessness.
+    expect(err).toContain("EACCES");
+  });
+
   it("redacts a known secret in a non-zero-exit error", async () => {
     const io = fakeSpawn([{ exitCode: 1, stdout: "", stderr: "auth failed for hunter2" }]);
     const client = new EnvToolClient(CFG, io);
