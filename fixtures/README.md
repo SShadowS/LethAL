@@ -1170,9 +1170,12 @@ CLI flags:
 }
 ```
 
-`alcPath`/`altoolPath` are deliberately not config fields — the CLI locates the newest
-`ms-dynamics-smb.al-*` VS Code extension under `~/.vscode/extensions` automatically
-(`defaultAlToolPaths()`); the bc-dev OData base URL is derived from `server` + `serverInstance`
+`alcPath` (R43) and `altoolPath` (R64) are optional `bcdev` fields, not required ones — with
+neither set, the CLI locates the newest `ms-dynamics-smb.al-*` VS Code extension under
+`~/.vscode/extensions` automatically and takes the `bin/` build matching the host platform
+(`defaultAlToolPaths()`). Set one when the discovered tool is the wrong BUILD for your server
+(`alcPath`) or cannot publish non-interactively (`altoolPath`); set both when there is no
+extension to discover. The bc-dev OData base URL is derived from `server` + `serverInstance`
 rather than being its own field, with port **7048** injected regardless of what (if any) port
 `server` carries (`odataBaseUrl()`, `packages/runner/src/cli.ts`) — verified against a real BC
 server 2026-07-18: `server`/`serverInstance` are also used unqualified for bc-dev-mcp's own

@@ -201,8 +201,11 @@ figures under [Testing](#testing) are the measured ones.)*
 Running the released binary needs **no Bun, Node or npm**. You do need:
 
 - A Business Central container, dev server, or hosted sandbox, which must be **single-tenant** (see [Limits](#limits))
-- The AL Language VS Code extension, which supplies `alc.exe` and `altool.exe`
-  - or a `bcdev.alcPath` in your config pointing at any `alc.exe`, if your server needs a specific compiler build
+- The AL Language VS Code extension, which supplies `alc` and `altool` (LethAL picks the `bin/`
+  build matching your host — Windows, Linux or macOS)
+  - or `bcdev.alcPath` / `bcdev.altoolPath` in your config pointing at any `alc` / `altool`, if
+    your server needs specific tool builds. The two are independent: they may name different
+    builds, and together they replace the extension install entirely
 - For the `bcdev` backend: a reachable `bc-dev-mcp` endpoint
 - The `LethAL Control` extension published on the target server (built from `extensions/lethal-control`)
 
