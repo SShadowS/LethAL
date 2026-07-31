@@ -29,6 +29,21 @@ table 71006 "LC Lease"
         field(10; "Op Started At"; DateTime) { }
         field(11; "Op Seq"; BigInteger) { }
         field(12; "Last Completed Op Seq"; BigInteger) { }
+        /// <summary>R53: the BC session id executing the ACTIVE run marker, recorded by phase 1's
+        /// fresh claim and committed before phase 2 can hang.
+        ///
+        /// This exists because a watchdog cannot discover it any other way. MEASURED (Cronus281,
+        /// `scripts/r53-probe/`): a web-service session cannot see itself in `Active Session`
+        /// (2000000110), and the rows it can see carry ids of the opposite sign — so the session
+        /// about to run a mutant has to write its own `SessionId()` down first, and that committed
+        /// row survives the kill.
+        ///
+        /// 0 means NO RECORDED SESSION, and every reader must refuse on `&lt;= 0` rather than pass it
+        /// to StopSession. AL Integer defaults to 0, so a marker written before this field existed
+        /// is indistinguishable from a recorded 0 — and MEASURED: StopSession(0) returns without
+        /// throwing, exactly like a successful stop. A reader that trusted it would be confirming
+        /// nothing.</summary>
+        field(13; "Op Session Id"; Integer) { }
     }
 
     keys

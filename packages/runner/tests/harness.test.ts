@@ -335,7 +335,20 @@ describe("HarnessVerifier control-app version gate (R28)", () => {
    * future `MIN_CONTROL_VERSION` makes the constructed value stop exercising that hazard, this
    * fails and says so rather than passing vacuously.
    */
-  test("accepts a multi-digit revision above the minimum — never a string compare", async () => {
+  // The hazard is a LEXICAL compare masquerading as a version compare. Pinned on a fixed canonical
+  // pair rather than derived from MIN_CONTROL_VERSION: the derivation used to build its pair by
+  // prefixing "1" to MIN's revision, which only produces the lexical/numeric disagreement while
+  // that revision is a SINGLE DIGIT. Bumping the minimum to 1.0.0.10 silently destroyed the
+  // property the test was named for — no value at that position is both numerically above "10" and
+  // lexically below it — and the test failed rather than quietly passing, which is the only reason
+  // it was noticed. Decoupled so the next bump cannot do it again.
+  test("compares versions numerically, never as strings", () => {
+    expect(compareAppVersions("1.0.0.10", "1.0.0.9")).toBeGreaterThan(0); // numerically above
+    expect("1.0.0.10" < "1.0.0.9").toBe(true); // ...yet lexically below: the hazard is live
+    expect(compareAppVersions("1.0.0.9", "1.0.0.10")).toBeLessThan(0);
+  });
+
+  test("accepts a control app whose version is above the minimum", async () => {
     const [major, minor, build, revision] = MIN_CONTROL_VERSION.split(".");
     if (
       major === undefined ||
@@ -345,9 +358,8 @@ describe("HarnessVerifier control-app version gate (R28)", () => {
     ) {
       throw new Error(`MIN_CONTROL_VERSION is not four-part: ${MIN_CONTROL_VERSION}`);
     }
-    const newer = `${major}.${minor}.${build}.1${revision}`;
-    expect(compareAppVersions(newer, MIN_CONTROL_VERSION)).toBeGreaterThan(0); // numerically above
-    expect(newer < MIN_CONTROL_VERSION).toBe(true); // ...yet lexically below: the hazard is live
+    const newer = `${major}.${minor}.${build}.${Number(revision) + 1}`;
+    expect(compareAppVersions(newer, MIN_CONTROL_VERSION)).toBeGreaterThan(0);
 
     const { details } = await verifyQuiet(verifier(okFetch(info({ semver: newer }))));
     expect(details.protocolVersion).toBe(2);

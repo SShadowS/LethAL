@@ -362,6 +362,38 @@ codeunit 71003 "LC Control API"
         Obj.WriteTo(ResultJson);
     end;
 
+    /// <summary>OData action (R53): end the session running the caller's own hung mutant, so a
+    /// non-terminating mutant can be scored instead of stranding the tier.
+    ///
+    /// CALLED FROM A SECOND CONNECTION, while the original RunMutant request is still OPEN. That is
+    /// the whole mechanism: BC then answers the original request with an HTTP 408 naming the AL
+    /// StopSession call, and THAT is what the client scores on. This action's own answer is not
+    /// sufficient evidence and must not be treated as such — MEASURED (`scripts/r53-probe/`),
+    /// StopSession returns without throwing for an id that never existed, for 0 and for -1, so it
+    /// cannot report failure at all.
+    ///
+    /// Refuses on the same ownership proof as every mutating action, plus a tombstone check that is
+    /// load-bearing rather than formal: without it, a lost ack after a run that already SUCCEEDED
+    /// matches on attempt id alone, and the session it recorded is a live pooled OData session.
+    /// Thin wrapper over "LC Control State".TryStopHungRun.
+    /// JSON: {stopped, sessionId?, reason?}.</summary>
+    procedure StopHungRun(Epoch: Integer; Token: Text; Generation: Text; AttemptId: Text; OpSeq: BigInteger) ResultJson: Text
+    var
+        State: Codeunit "LC Control State";
+        Stopped: Boolean;
+        Refusal: Text;
+        StoppedSessionId: Integer;
+        Obj: JsonObject;
+    begin
+        State.TryStopHungRun(Epoch, Token, Generation, AttemptId, OpSeq, Stopped, Refusal, StoppedSessionId);
+        Obj.Add('stopped', Stopped);
+        if Stopped then
+            Obj.Add('sessionId', StoppedSessionId);
+        if Refusal <> '' then
+            Obj.Add('reason', Refusal);
+        Obj.WriteTo(ResultJson);
+    end;
+
     /// <summary>OData action: the operator recovery reset (design §8). Step 3 of a FOUR-step procedure
     /// that a restart alone does not accomplish — restart the NST, read the current serverGeneration
     /// from a live status/harness call against the restarted instance, call this with that value as
