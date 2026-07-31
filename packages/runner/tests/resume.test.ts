@@ -225,6 +225,47 @@ function row(over: Partial<MutantVerdictRow> = {}): MutantVerdictRow {
   };
 }
 
+/**
+ * R53. A `timeout-killed` exists only because a run was ALLOWED to end a hung BC session. Carrying
+ * one into a session without that permission imports a verdict this run could not have produced
+ * and could not reproduce if challenged — a kill claimed on the strength of a permission it does
+ * not hold.
+ *
+ * Directional on purpose. The fingerprint deliberately excludes the flag, because turning it ON
+ * and resuming is the natural recovery from a stranded run and must keep working; only the OFF
+ * direction drops.
+ */
+describe("buildResumeIndex — timeout-killed across the stop flag (R53)", () => {
+  const timeoutRow = row({ verdict: "timeout-killed", astHash: "hash-timeout" });
+
+  test("carries a timeout-killed into a session that MAY stop sessions", () => {
+    const index = buildResumeIndex([timeoutRow], true);
+    expect(index.carryable.size).toBe(1);
+    expect([...index.carryable.values()][0]?.verdict).toBe("timeout-killed");
+    expect(index.nonCarryableRows).toBe(0);
+  });
+
+  test("REFUSES to carry it into a session that may not — and counts the drop", () => {
+    const index = buildResumeIndex([timeoutRow], false);
+    expect(index.carryable.size).toBe(0);
+    // Counted, never silent: the same treatment every other drop in this function gets.
+    expect(index.nonCarryableRows).toBe(1);
+  });
+
+  test("defaults to refusing — a caller that forgets the flag must not inherit the permission", () => {
+    expect(buildResumeIndex([timeoutRow]).carryable.size).toBe(0);
+  });
+
+  // The control. Without this, "carryable.size === 0" above would also pass if the flag dropped
+  // EVERYTHING, which would be a different and much worse bug.
+  test("drops only timeout-killed — other carryable verdicts are unaffected", () => {
+    const rows = [timeoutRow, row({ verdict: "killed", astHash: "hash-killed" })];
+    const index = buildResumeIndex(rows, false);
+    expect(index.carryable.size).toBe(1);
+    expect([...index.carryable.values()][0]?.verdict).toBe("killed");
+  });
+});
+
 describe("buildResumeIndex (R47)", () => {
   test("carries a scored verdict with its killing test and duration", () => {
     const index = buildResumeIndex([

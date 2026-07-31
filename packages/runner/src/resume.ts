@@ -101,7 +101,22 @@ export interface ResumeIndex {
  * fabricate a measurement — this project's signature bug — so both are re-executed instead. The
  * count is reported, never silent.
  */
-export function buildResumeIndex(rows: readonly MutantVerdictRow[]): ResumeIndex {
+export function buildResumeIndex(
+  rows: readonly MutantVerdictRow[],
+  /**
+   * R53: whether THIS session may end BC sessions (`--stop-hung-sessions`).
+   *
+   * A `timeout-killed` verdict only exists because a prior run was allowed to stop a hung session
+   * and score the result. Carrying one into a session that is NOT allowed to do that would import
+   * a verdict this run could not have produced, and could not reproduce if asked — the resume
+   * would silently claim a kill on the strength of a permission it does not hold.
+   *
+   * The fingerprint deliberately does NOT include the flag, so this is directional rather than a
+   * fingerprint mismatch: turning the flag ON and resuming is the natural recovery from a stranded
+   * run and must keep working. Only the OFF direction drops those verdicts, and they are re-run.
+   */
+  stopHungSessions = false,
+): ResumeIndex {
   const seen = new Map<string, MutantVerdictRow[]>();
   for (const r of rows) {
     const key = serializeKey({
@@ -132,6 +147,12 @@ export function buildResumeIndex(rows: readonly MutantVerdictRow[]): ResumeIndex
     const [row] = bucket;
     if (row === undefined) continue; // unreachable: bucket.length === 1
     if (!CARRYABLE_VERDICTS.has(row.verdict)) {
+      nonCarryableRows += 1;
+      continue;
+    }
+    // R53: a `timeout-killed` is only obtainable by stopping a session. A run forbidden to do that
+    // must re-measure rather than inherit one — counted, never silent, like every other drop here.
+    if (row.verdict === "timeout-killed" && !stopHungSessions) {
       nonCarryableRows += 1;
       continue;
     }
