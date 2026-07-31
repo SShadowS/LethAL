@@ -11,6 +11,31 @@ each one.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The bcdev backend on Linux and macOS hosts** (R64). `defaultAlToolPaths()` hardcoded `bin/win32/`
+  regardless of `process.platform`, so every non-Windows run spawned a Windows PE `alc.exe`/
+  `altool.exe` that cannot execute — including anyone using the released Linux and macOS binaries,
+  for which the bcdev backend could never have worked. The failure surfaced many layers up as an
+  opaque, message-less `Error`. The AL Language extension ships per-RID builds side by side
+  (`bin/win32/{alc,altool}.exe`, `bin/linux/{alc,altool}`, `bin/darwin/{alc,altool}`, verified
+  2026-07-31 against `ms-dynamics-smb.al-18.0.2498801`); LethAL now picks the one matching the host,
+  and refuses loudly on a host the extension ships no build for instead of guessing a RID.
+  Reproduced the frozen `itest:bcdev` baseline exactly — **3 killed / 10 survived / 3 no-coverage**,
+  `authoritative`, `baselineGreen` — against a live Linux Docker BC 28.1 container, with the run
+  costs recorded in `docs/benchmarks/runs.jsonl` (the ledger's first plain-container rows).
+
+### Added
+
+- **`bcdev.altoolPath` config override** (R64) to pin the publish tool, alongside the existing
+  `bcdev.alcPath` (R43) for the compiler. The publish tool build is not interchangeable either: the
+  AL extension's bundled `altool` 17.0.2273547 silently ignores `BC_SERVER_USERNAME`/
+  `BC_SERVER_PASSWORD` for `publishapp` and its `auth login` is AAD-only, while the
+  `microsoft.dynamics.businesscentral.development.tools` 18.x dotnet tool reads them and publishes.
+  The two overrides are independent, so compile and publish can run on different builds — and,
+  set together, they now satisfy the "no AL extension installed" gate on the container path as
+  well, which previously demanded the extension no matter what the config named.
+
 ## [0.1.0-alpha.1] — 2026-07-27
 
 First distributable build. LethAL has run against live Business Central servers throughout

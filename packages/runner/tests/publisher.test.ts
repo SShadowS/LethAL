@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readdir, rmdir } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, rmdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defaultAlToolPaths } from "../src/publisher";
@@ -15,6 +15,63 @@ describe("defaultAlToolPaths", () => {
   test("returns undefined when extensions dir does not exist", async () => {
     const result = await defaultAlToolPaths("/nonexistent/path/that/does/not/exist");
     expect(result).toBeUndefined();
+  });
+
+  // ————————————————————————————————————————————————————————————————————————
+  // R64: the per-RID bin/ layout. `bin/win32/` was hardcoded, so every bcdev run on a Linux or
+  // macOS host — including anyone using the released Linux/macOS binaries — spawned a Windows PE
+  // that cannot execute. Layout verified 2026-07-31 against ms-dynamics-smb.al-18.0.2498801:
+  // bin/win32/{alc,altool}.exe, bin/linux/{alc,altool}, bin/darwin/{alc,altool}, one VSIX.
+  // `platform` is injected rather than read from process.platform precisely so these three cases
+  // are checkable from any host — on Windows alone, the fix is untestable and free to regress.
+  // ————————————————————————————————————————————————————————————————————————
+  describe("per-platform bin/ layout (R64)", () => {
+    async function pathsFor(platform: NodeJS.Platform) {
+      const tmpDir = await mkdtemp(join(tmpdir(), "al-platform-"));
+      try {
+        await mkdir(join(tmpDir, "ms-dynamics-smb.al-18.0.2498801"), { recursive: true });
+        return await defaultAlToolPaths(tmpDir, platform);
+      } finally {
+        await rm(tmpDir, { recursive: true, force: true });
+      }
+    }
+
+    test("win32 keeps bin/win32 and the .exe suffix", async () => {
+      const result = await pathsFor("win32");
+      expect(result?.alcPath).toEndWith(
+        join("ms-dynamics-smb.al-18.0.2498801", "bin", "win32", "alc.exe"),
+      );
+      expect(result?.altoolPath).toEndWith(
+        join("ms-dynamics-smb.al-18.0.2498801", "bin", "win32", "altool.exe"),
+      );
+    });
+
+    test("linux uses bin/linux and no .exe suffix", async () => {
+      const result = await pathsFor("linux");
+      expect(result?.alcPath).toEndWith(
+        join("ms-dynamics-smb.al-18.0.2498801", "bin", "linux", "alc"),
+      );
+      expect(result?.altoolPath).toEndWith(
+        join("ms-dynamics-smb.al-18.0.2498801", "bin", "linux", "altool"),
+      );
+    });
+
+    test("darwin uses bin/darwin and no .exe suffix", async () => {
+      const result = await pathsFor("darwin");
+      expect(result?.alcPath).toEndWith(
+        join("ms-dynamics-smb.al-18.0.2498801", "bin", "darwin", "alc"),
+      );
+      expect(result?.altoolPath).toEndWith(
+        join("ms-dynamics-smb.al-18.0.2498801", "bin", "darwin", "altool"),
+      );
+    });
+
+    test("a platform the extension ships no binaries for throws instead of guessing a RID", async () => {
+      // Guessing `linux` on freebsd yields a path that does not exist, which `buildBackend` then
+      // reports as "install the AL extension" — advice that cannot help. The whole point of the
+      // per-RID fix is to stop producing that class of unactionable error.
+      await expect(pathsFor("freebsd")).rejects.toThrow(/no alc\/altool build for platform/);
+    });
   });
 
   test("returns undefined when no AL extensions found", async () => {

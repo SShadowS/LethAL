@@ -162,9 +162,49 @@ function compareVersions(v1: string, v2: string): number {
   return 0;
 }
 
+/**
+ * Where the AL Language extension puts its native `alc`/`altool` for each host, and what the
+ * executables are called there — measured 2026-07-31 against `ms-dynamics-smb.al-18.0.2498801`,
+ * which ships `bin/win32/{alc,altool}.exe`, `bin/linux/{alc,altool}` and `bin/darwin/{alc,altool}`
+ * side by side in one VSIX. Absent key = a host the extension ships no binaries for; see
+ * `defaultAlToolPaths` for why that throws rather than guessing a RID.
+ */
+const AL_TOOL_BIN_LAYOUT: Partial<
+  Record<NodeJS.Platform, { readonly dir: string; readonly exeSuffix: string }>
+> = {
+  win32: { dir: "win32", exeSuffix: ".exe" },
+  linux: { dir: "linux", exeSuffix: "" },
+  darwin: { dir: "darwin", exeSuffix: "" },
+};
+
+/**
+ * Locates the newest installed AL Language extension's `alc`/`altool`, or `undefined` when no
+ * extension is installed at all.
+ *
+ * `platform` is injected (like `extensionsDir`) so the per-RID selection below is unit-testable
+ * from any host: it is the whole point of this function on a non-Windows machine, and a
+ * `process.platform` read straight from the function body would make the branch untestable and
+ * free to regress silently.
+ *
+ * THROWS on a host the AL extension ships no binaries for (freebsd, aix, …) rather than falling
+ * back to a plausible RID. Guessing `linux` there produces a path that does not exist, and the
+ * caller reports it as "install the AL extension" — advice that cannot possibly help, which is
+ * exactly the opaque-diagnosis failure the per-RID fix exists to remove.
+ */
 export async function defaultAlToolPaths(
   extensionsDir: string = join(homedir(), ".vscode", "extensions"),
+  platform: NodeJS.Platform = process.platform,
 ): Promise<{ alcPath: string; altoolPath: string } | undefined> {
+  const layout = AL_TOOL_BIN_LAYOUT[platform];
+  if (layout === undefined) {
+    throw new Error(
+      [
+        `the AL Language VS Code extension ships no alc/altool build for platform "${platform}"`,
+        `(only ${Object.keys(AL_TOOL_BIN_LAYOUT).join(", ")}) — set bcdev.alcPath and`,
+        "bcdev.altoolPath to tools you supply yourself, or run with --backend al-runner",
+      ].join(" "),
+    );
+  }
   let entries: string[];
   try {
     entries = await readdir(extensionsDir);
@@ -182,12 +222,13 @@ export async function defaultAlToolPaths(
 
   const al = sorted.at(-1);
   if (!al) return undefined;
-  // The AL Language extension ships native alc/altool binaries per-RID under bin/<platform>/,
-  // not just bin/win32/. Hardcoding win32 here made every bcdev run on a Linux or macOS host spawn
-  // a Windows PE binary that cannot execute, surfacing as an opaque empty-message spawn ENOENT
-  // several layers up (ArtifactCompiler.compile's catch stringifies a message-less error).
-  const platformDir = process.platform === "win32" ? "win32" : process.platform === "darwin" ? "darwin" : "linux";
-  const exeSuffix = process.platform === "win32" ? ".exe" : "";
-  const bin = join(extensionsDir, al, "bin", platformDir);
-  return { alcPath: join(bin, `alc${exeSuffix}`), altoolPath: join(bin, `altool${exeSuffix}`) };
+  // Hardcoding bin/win32/ here made every bcdev run on a Linux or macOS host spawn a Windows PE
+  // binary that cannot execute, surfacing as an opaque empty-message spawn ENOENT several layers
+  // up (ArtifactCompiler.compile's catch stringifies a message-less error) — and the released
+  // Linux/macOS binaries advertise the bcdev backend, so that was every non-Windows user.
+  const bin = join(extensionsDir, al, "bin", layout.dir);
+  return {
+    alcPath: join(bin, `alc${layout.exeSuffix}`),
+    altoolPath: join(bin, `altool${layout.exeSuffix}`),
+  };
 }
