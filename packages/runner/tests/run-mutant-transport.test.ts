@@ -2,7 +2,11 @@ import { describe, expect, test } from "bun:test";
 import type { ActivationConfig } from "../src/activation";
 import type { TestMethodRef } from "../src/backend";
 import { MAX_ATTEMPT_ID_LENGTH } from "../src/lease";
-import { FencedCoverageError, RunMutantTransport } from "../src/run-mutant-transport";
+import {
+  FencedCoverageError,
+  RunMutantTransport,
+  isAlStopResponse,
+} from "../src/run-mutant-transport";
 
 const CFG: ActivationConfig = {
   baseUrl: "http://bc:7048/BC",
@@ -581,5 +585,205 @@ describe("RunMutantTransport.runWithCoverage — filter + stats", () => {
     ).runWithCoverage(REQ);
     expect(coverageRows).toEqual([]);
     expect(coverageStats).toBeUndefined();
+  });
+});
+
+/**
+ * R53. A non-terminating mutant makes RunMutant hang. Today the client aborts at its budget and
+ * must classify `in-flight-unknown` — BC may still be executing — which quarantines the tier and
+ * blocks every mutant behind it (125 of 138 on Document Output).
+ *
+ * The mechanism, MEASURED (`scripts/r53-probe/`): a second session can stop the first, and BC then
+ * answers the STILL-OPEN original request with an HTTP 408 naming the AL `StopSession` call. So the
+ * request is deliberately NOT aborted at the budget — that would throw the answer away and leave
+ * only `StopHungRun`'s return value, which is worth nothing, because `StopSession` returns without
+ * throwing for a nonexistent id, for 0, and for -1. It cannot report failure.
+ */
+
+describe("RunMutantTransport.run — R53 server-side stop", () => {
+  const AL_STOP_BODY = JSON.stringify({
+    error: {
+      message:
+        "The server stopped the session (ID: 2683) because of a stop session request.  " +
+        "The session was stopped by an AL StopSession call.",
+    },
+  });
+
+  /**
+   * A fetch that stays open until the test answers it — AND honours the abort signal the way a
+   * real fetch does.
+   *
+   * The abort half is the point. An earlier version of these tests used a fake that ignored
+   * `init.signal`, so "abort immediately after firing the stop hook" — a mutation that defeats the
+   * ENTIRE fix, since the held request is what receives BC's 408 — could not be detected. Those
+   * tests passed whether or not the code held the request open, which is precisely the hazard this
+   * repo keeps finding.
+   */
+  function heldFetch(): { fetchFn: typeof fetch; answer: (r: Response) => void } {
+    let resolveWith: ((r: Response) => void) | undefined;
+    const fetchFn = ((_url: unknown, init?: RequestInit) =>
+      new Promise<Response>((resolve, reject) => {
+        resolveWith = resolve;
+        init?.signal?.addEventListener(
+          "abort",
+          () => reject(new Error("The operation was aborted.")),
+          { once: true },
+        );
+      })) as typeof fetch;
+    return { fetchFn, answer: (r: Response) => resolveWith?.(r) };
+  }
+
+  test("scores a stopped run as `timeout` — terminal, NOT in-flight-unknown", async () => {
+    const { fetchFn, answer } = heldFetch();
+    let stopCalls = 0;
+    const v = await transport(fetchFn).run({
+      ...REQ,
+      timeoutMs: 20,
+      onBudgetExceeded: async () => {
+        stopCalls += 1;
+        answer(new Response(AL_STOP_BODY, { status: 408 }));
+      },
+    });
+    expect(stopCalls).toBe(1);
+    expect(v.outcome).toBe("timeout");
+    expect(v.operation).toBeUndefined();
+    expect(v.failureMessage).toContain("stopped the session");
+  });
+
+  // The half the first draft never reached: a 408 that DOES say "stopped the session" but does not
+  // attribute it to an AL StopSession call. BC emits session-timeout text of that shape, and it
+  // proves nothing about whether OUR stop is what ended it.
+  test("a 408 that says 'stopped the session' but names no AL StopSession call quarantines", async () => {
+    const { fetchFn, answer } = heldFetch();
+    const v = await transport(fetchFn).run({
+      ...REQ,
+      timeoutMs: 20,
+      onBudgetExceeded: async () => {
+        answer(
+          new Response(
+            JSON.stringify({
+              error: { message: "The server stopped the session (ID: 9) due to inactivity." },
+            }),
+            { status: 408 },
+          ),
+        );
+      },
+    });
+    expect(v.outcome).not.toBe("timeout");
+    expect(v.operation).toBe("in-flight-unknown");
+  });
+
+  test("an unrelated 408 (a proxy timing the socket out) quarantines", async () => {
+    const { fetchFn, answer } = heldFetch();
+    const v = await transport(fetchFn).run({
+      ...REQ,
+      timeoutMs: 20,
+      onBudgetExceeded: async () => {
+        answer(new Response("<html>Gateway Timeout</html>", { status: 408 }));
+      },
+    });
+    expect(v.outcome).not.toBe("timeout");
+    expect(v.operation).toBe("in-flight-unknown");
+  });
+
+  // A 408 arriving BEFORE any stop was fired cannot have been caused by our stop. Without the
+  // `stopFired` guard this scores a kill off a response we had nothing to do with.
+  test("an AL-stop 408 arriving before the budget is NOT scored as a stop", async () => {
+    const immediate = (async (_url: unknown, _init?: RequestInit) =>
+      new Response(AL_STOP_BODY, { status: 408 })) as typeof fetch;
+    const v = await transport(immediate).run({
+      ...REQ,
+      timeoutMs: 10_000,
+      onBudgetExceeded: async () => {
+        throw new Error("the budget must not have elapsed in this test");
+      },
+    });
+    expect(v.outcome).not.toBe("timeout");
+    expect(v.operation).toBe("in-flight-unknown");
+  });
+
+  // The regression this guards: if the budget still aborts once the hook is wired, BC's 408 lands
+  // on a destroyed socket and the run quarantines instead of scoring. `heldFetch` honours abort,
+  // so that mutation is visible here — it was not, before.
+  test("the request is HELD OPEN at the budget rather than aborted", async () => {
+    const { fetchFn, answer } = heldFetch();
+    const v = await transport(fetchFn).run({
+      ...REQ,
+      timeoutMs: 20,
+      stopGraceMs: 500,
+      onBudgetExceeded: async () => {
+        // Answer on a LATER tick, so an abort fired alongside the hook wins the race and the
+        // answer arrives too late to be seen.
+        await new Promise((r) => setTimeout(r, 20));
+        answer(new Response(AL_STOP_BODY, { status: 408 }));
+      },
+    });
+    expect(v.outcome).toBe("timeout");
+    expect(v.operation).toBeUndefined();
+  });
+
+  test("with no stop hook, the budget still aborts and quarantines", async () => {
+    const { fetchFn } = heldFetch();
+    const v = await transport(fetchFn).run({ ...REQ, timeoutMs: 20 });
+    expect(v.outcome).toBe("deadline-exceeded");
+    expect(v.operation).toBe("in-flight-unknown");
+  });
+
+  test("names a FAILED stop in the quarantine message", async () => {
+    const { fetchFn } = heldFetch();
+    const v = await transport(fetchFn).run({
+      ...REQ,
+      timeoutMs: 20,
+      stopGraceMs: 30,
+      onBudgetExceeded: async () => {
+        throw Object.assign(new Error(""), { code: "ECONNREFUSED", path: "/StopHungRun" });
+      },
+    });
+    expect(v.outcome).toBe("deadline-exceeded");
+    expect(v.operation).toBe("in-flight-unknown");
+    expect(v.failureMessage).toContain("stop was attempted and FAILED");
+    expect(v.failureMessage).toContain("ECONNREFUSED");
+  });
+
+  test("a run that completes just after the budget is scored on its real result", async () => {
+    const { fetchFn, answer } = heldFetch();
+    const v = await transport(fetchFn).run({
+      ...REQ,
+      timeoutMs: 20,
+      onBudgetExceeded: async () => {
+        answer(new Response(JSON.stringify({ value: JSON.stringify(echo()) }), { status: 200 }));
+      },
+    });
+    // The echoed result is scored, NOT a manufactured timeout — scoring `timeout` here would be a
+    // false kill for a mutant that merely ran slowly.
+    expect(v.outcome).toBe("pass");
+    expect(v.operation).toBeUndefined();
+  });
+});
+
+describe("isAlStopResponse (R53)", () => {
+  const BODY =
+    "The server stopped the session (ID: 2683) because of a stop session request. " +
+    "The session was stopped by an AL StopSession call.";
+
+  test("accepts only BC's AL-stop 408", () => {
+    expect(isAlStopResponse(408, BODY)).toBe(true);
+  });
+
+  // The status half is unreachable through `run` (which gates on 408 first) and was therefore
+  // untested until asserted directly. A 200 carrying that wording is not a stopped session.
+  test("rejects the same wording on a non-408 status", () => {
+    expect(isAlStopResponse(200, BODY)).toBe(false);
+    expect(isAlStopResponse(504, BODY)).toBe(false);
+  });
+
+  test("rejects a 408 that names no AL StopSession call", () => {
+    expect(isAlStopResponse(408, "The server stopped the session (ID: 9) due to inactivity.")).toBe(
+      false,
+    );
+  });
+
+  test("rejects a 408 that mentions StopSession but not a stopped session", () => {
+    expect(isAlStopResponse(408, "StopSession is not permitted for this user.")).toBe(false);
   });
 });

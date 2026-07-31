@@ -306,6 +306,13 @@ export interface RunCliConfig {
    */
   readonly mutantTimeoutMs?: number;
   /**
+   * R53 (`--stop-hung-sessions`), opt-in. Lets LethAL END THE BC SESSION running a mutant that has
+   * exceeded its budget, so a non-terminating mutant scores `timeout-killed` instead of
+   * quarantining the tier and blocking every mutant behind it. Off by default because it stops a
+   * session on the user's server — see `SessionConfig.stopHungSessions`.
+   */
+  readonly stopHungSessions?: boolean;
+  /**
    * R47: `--resume` (most recent unfinished run) or `--resume-run <id>` (a named one). Absent means
    * a fresh run. See `SessionConfig.resume`.
    */
@@ -434,6 +441,11 @@ RUN — cost and recovery
   --resume-run <id>          resume a specific run id
   --retry-stranded           on resume, retry mutants that stranded the tier (skipped by default:
                              a mutant that never terminates blocks every mutant behind it)
+  --stop-hung-sessions       let LethAL END THE BC SESSION running a mutant that exceeds its
+                             budget, so a never-terminating mutant scores timeout-killed instead
+                             of quarantining the run. OFF by default: it stops a session on your
+                             server. LethAL only targets a session its own run recorded, under
+                             the lease fence, but that id cannot be independently verified
   --workers <n>              parallel workers (bcdev is limited to 1)
   --compile-concurrency <n>  concurrent alc processes
 
@@ -476,6 +488,50 @@ function parseObjectIdFlag(value: string | undefined, flagName: string): number 
  * from `main()` so arg-validation errors (missing --project, unknown
  * --backend, ...) are directly unit-testable without spawning a process.
  */
+/**
+ * Every flag `run` accepts, in one place.
+ *
+ * Exported so the help-text test can DERIVE the flag list instead of restating it. That test is
+ * named "documents every flag parseCliConfig accepts" and used to hold a hand-maintained array,
+ * which had already drifted — `--retry-stranded` shipped documented in help but absent from the
+ * list, so the very drift the test exists to prevent had happened inside the test itself.
+ */
+export const RUN_FLAGS = {
+  project: { type: "string" },
+  tests: { type: "string" },
+  backend: { type: "string" },
+  db: { type: "string" },
+  out: { type: "string" },
+  config: { type: "string" },
+  "skip-known-survivors": { type: "boolean", default: false },
+  "dry-run": { type: "boolean", default: false },
+  workers: { type: "string" },
+  "compile-concurrency": { type: "string" },
+  server: { type: "string" },
+  instance: { type: "string" },
+  "keep-env": { type: "boolean", default: false },
+  "allow-expiring-env": { type: "boolean", default: false },
+  "selector-id": { type: "string" },
+  "control-id": { type: "string" },
+  "table-id": { type: "string" },
+  // R41: repeatable — several `--only` patterns union. See `RunCliConfig.only`.
+  only: { type: "string", multiple: true },
+  // R45: repeatable — see `RunCliConfig.testsOnly`.
+  "tests-only": { type: "string", multiple: true },
+  // R44: see `RunCliConfig.maxGuardsPerBatch`.
+  "max-guards-per-batch": { type: "string" },
+  // R47: see `RunCliConfig.mutantTimeoutMs` / `resume`.
+  "mutant-timeout-ms": { type: "string" },
+  resume: { type: "boolean", default: false },
+  "resume-run": { type: "string" },
+  // R53: see `RunCliConfig.retryStranded`.
+  "retry-stranded": { type: "boolean", default: false },
+  // R53: see `RunCliConfig.stopHungSessions`.
+  "stop-hung-sessions": { type: "boolean", default: false },
+  // R48: see `RunCliConfig.allowLargeRun`.
+  "allow-large-run": { type: "boolean", default: false },
+} as const;
+
 export function parseCliConfig(argv: readonly string[]): CliConfig {
   // R49: intercepted BEFORE `parseArgs`, which runs in strict mode and would reject `--help` as an
   // unknown option — a `TypeError` with a stack trace into the bundled binary, for the one flag a
@@ -491,39 +547,7 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
   const { values, positionals } = parseArgs({
     args: [...argv],
     allowPositionals: true,
-    options: {
-      project: { type: "string" },
-      tests: { type: "string" },
-      backend: { type: "string" },
-      db: { type: "string" },
-      out: { type: "string" },
-      config: { type: "string" },
-      "skip-known-survivors": { type: "boolean", default: false },
-      "dry-run": { type: "boolean", default: false },
-      workers: { type: "string" },
-      "compile-concurrency": { type: "string" },
-      server: { type: "string" },
-      instance: { type: "string" },
-      "keep-env": { type: "boolean", default: false },
-      "allow-expiring-env": { type: "boolean", default: false },
-      "selector-id": { type: "string" },
-      "control-id": { type: "string" },
-      "table-id": { type: "string" },
-      // R41: repeatable — several `--only` patterns union. See `RunCliConfig.only`.
-      only: { type: "string", multiple: true },
-      // R45: repeatable — see `RunCliConfig.testsOnly`.
-      "tests-only": { type: "string", multiple: true },
-      // R44: see `RunCliConfig.maxGuardsPerBatch`.
-      "max-guards-per-batch": { type: "string" },
-      // R47: see `RunCliConfig.mutantTimeoutMs` / `resume`.
-      "mutant-timeout-ms": { type: "string" },
-      resume: { type: "boolean", default: false },
-      "resume-run": { type: "string" },
-      // R53: see `RunCliConfig.retryStranded`.
-      "retry-stranded": { type: "boolean", default: false },
-      // R48: see `RunCliConfig.allowLargeRun`.
-      "allow-large-run": { type: "boolean", default: false },
-    },
+    options: { ...RUN_FLAGS },
   });
 
   const subcommand = requireKnownSubcommand(positionals);
@@ -736,6 +760,7 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     ...resume,
     ...(values["allow-large-run"] === true ? { allowLargeRun: true } : {}),
     ...(values["retry-stranded"] === true ? { retryStranded: true } : {}),
+    ...(values["stop-hung-sessions"] === true ? { stopHungSessions: true } : {}),
   };
 }
 
@@ -1120,7 +1145,13 @@ export function deployerFor(
  * Important 4) specifically so `coverageMode`'s forwarding — mirroring `port`'s existing
  * pass-through exactly — has a seam a test can call directly.
  */
-export function bcDevBackendConfig(c: BcDevConfigSection, projectDir: string): BcDevConfig {
+export function bcDevBackendConfig(
+  c: BcDevConfigSection,
+  projectDir: string,
+  /** R53: the opt-in `--stop-hung-sessions`. Threaded here rather than read off the config file —
+   *  it is a run-time choice about acting on the user's server, not a property of the target. */
+  stopHungSessions?: boolean,
+): BcDevConfig {
   return {
     mcpCommand: c.mcpCommand,
     project: projectDir,
@@ -1133,6 +1164,7 @@ export function bcDevBackendConfig(c: BcDevConfigSection, projectDir: string): B
     ...(c.env !== undefined ? { env: c.env } : {}),
     ...(c.port !== undefined ? { port: c.port } : {}),
     ...(c.coverageMode !== undefined ? { coverageMode: c.coverageMode } : {}),
+    ...(stopHungSessions === true ? { stopHungSessions: true } : {}),
   };
 }
 
@@ -1356,7 +1388,7 @@ export async function buildBackend(
   const verifier = new DeploymentVerifier(odataCfg);
   const harnessVerifier = new HarnessVerifier(odataCfg);
   return new BcDevMcpBackend(
-    bcDevBackendConfig(c, parsed.projectDir),
+    bcDevBackendConfig(c, parsed.projectDir, parsed.stopHungSessions),
     undefined,
     { compiler, deployer, verifier, harnessVerifier },
     (targetAppId, artifactId) => new RunMutantTransport(odataCfg, targetAppId, artifactId),
@@ -1773,6 +1805,7 @@ export async function runFromCli(
           : {}),
         ...(parsed.resume !== undefined ? { resume: parsed.resume } : {}),
         ...(parsed.retryStranded === true ? { retryStranded: true } : {}),
+        ...(parsed.stopHungSessions === true ? { stopHungSessions: true } : {}),
         ...(parsed.allowLargeRun === true ? { allowLargeRun: true } : {}),
         ...(parsed.compileConcurrency !== undefined
           ? { compileConcurrency: parsed.compileConcurrency }

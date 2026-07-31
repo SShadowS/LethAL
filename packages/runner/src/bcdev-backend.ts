@@ -51,6 +51,13 @@ export interface BcDevConfig {
   // `stageForCompile` (Task 8) so a private compile copy of the target can resolve its
   // delegating selector's `Codeunit "LC Control State"` reference (schemata/selector.ts).
   readonly controlSymbolPath: string;
+  /**
+   * R53 (`--stop-hung-sessions`), opt-in. When set, a RunMutant that exceeds its budget is HELD
+   * OPEN while `StopHungRun` is issued on a second connection, so BC's 408 can make the run
+   * scoreable instead of quarantining the tier. See `SessionConfig.stopHungSessions` for why this
+   * is opt-in rather than default.
+   */
+  readonly stopHungSessions?: boolean;
   // The `ArtifactCompiler`'s own package-cache directory (mirrors
   // `ArtifactCompilerConfig.packageCachePath`, fixed at compiler construction) — `deploy()`/
   // `compileCheck()` need this SEPARATELY so `stageForCompile` can stage the control symbol
@@ -605,6 +612,24 @@ export class BcDevMcpBackend implements ExecutionBackend {
       },
       ...(this.coverageObjectIdFilter !== undefined
         ? { coverageObjectIdFilter: this.coverageObjectIdFilter }
+        : {}),
+      // R53: wired ONLY for a mutant run. A BASELINE run (mutantId "") that overruns is not a
+      // hanging mutant — there is no mutation active to blame — so stopping its session would end
+      // a healthy run and score nothing. The hook's absence keeps that path byte-for-byte as it was.
+      ...(this.cfg.stopHungSessions === true && (this.pendingMutantId ?? "") !== ""
+        ? {
+            onBudgetExceeded: async (): Promise<void> => {
+              await transport.stopHungRun({
+                attemptId: `a${this.attemptSeq}`,
+                lease: {
+                  epoch: lease.epoch,
+                  token: lease.token,
+                  serverGeneration: lease.serverGeneration,
+                  opSeq,
+                },
+              });
+            },
+          }
         : {}),
     } as const;
     if (!collectCoverage) return transport.run(req);

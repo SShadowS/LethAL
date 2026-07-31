@@ -723,6 +723,12 @@ codeunit 71002 "LC Control State"
             Lease."Op Attempt Id" := CopyStr(AttemptId, 1, MaxStrLen(Lease."Op Attempt Id"));
             Lease."Op Seq" := OpSeq;
             Lease."Op Started At" := CurrentDateTime;
+            // R53: recorded HERE and only here. Phase 2 is where a non-terminating mutant hangs, and
+            // nothing after it will execute — so the id has to be committed by this branch's Commit
+            // below or it does not exist when it is needed. Branch 4 (op-in-flight) deliberately does
+            // NOT record one: that duplicate claim arrives on a DIFFERENT session while the original
+            // is still busy, and recording its id would point a watchdog at the wrong, idle session.
+            Lease."Op Session Id" := SessionId();
             ExtendRunClaim(Lease);
             Lease.Modify();
             WriteActive(TargetAppId, ArtifactId, MutantId);
@@ -777,6 +783,10 @@ codeunit 71002 "LC Control State"
            (Lease."Op Kind" = Lease."Op Kind"::run) and (Lease."Op Attempt Id" = AttemptId) and (Lease."Op Seq" = OpSeq) then begin
             ClearActiveIf(TargetAppId, ArtifactId, MutantId);
             Lease."Op Kind" := Lease."Op Kind"::none;
+            // R53: cleared with the rest of the marker. The other op fields are deliberately left
+            // residual here, but this one must not be: a stale session id outlives the run that
+            // recorded it, and the session it names gets REUSED by the OData pool.
+            Lease."Op Session Id" := 0;
             Lease."Last Completed Op Seq" := OpSeq;
             Lease.Modify();
             Commit();
@@ -839,6 +849,7 @@ codeunit 71002 "LC Control State"
         if (Lease."Op Kind" <> Lease."Op Kind"::none) and (Lease."Op Attempt Id" = AttemptId) and (Lease."Op Seq" = OpSeq) then begin
             ForceClearActive();
             Lease."Op Kind" := Lease."Op Kind"::none;
+            Lease."Op Session Id" := 0;  // R53 — see TryFinishRun.
             Lease."Last Completed Op Seq" := OpSeq;
             Lease.Modify();
             Commit();
@@ -847,6 +858,87 @@ codeunit 71002 "LC Control State"
         end;
 
         // 4. A different attempt's op, an idle marker, or any other non-match -> refuse.
+    end;
+
+    /// <summary>R53: end the session running the caller's OWN hung mutant, so a non-terminating
+    /// mutant becomes a scoreable outcome instead of stranding the tier.
+    ///
+    /// WHY THIS IS NOT `TryRecoverOp`. RecoverOp is permitted only AFTER a parsed terminal response
+    /// proves the AL unwound. This is the opposite case — the AL has NOT unwound and will not — so
+    /// this is the one path that acts on a still-running op. It therefore takes RecoverOp's full
+    /// ownership predicate and adds to it, never less.
+    ///
+    /// THE TOMBSTONE CHECK IS THE SAFETY PROPERTY, not a formality. `TryFinishRun` clears "Op Kind"
+    /// but deliberately leaves "Op Attempt Id"/"Op Seq" residual, so a predicate of "the attempt id
+    /// matches" is ALSO satisfied by an attempt that already COMPLETED and whose ack was merely
+    /// lost. The session id recorded by such a run names a pooled OData session that is alive and
+    /// serving other requests. Stopping it would kill an innocent session and score a test that may
+    /// have PASSED as killed — a false kill, the one error class this project structurally avoids.
+    ///
+    /// "Op Session Id" &lt;= 0 is REFUSED, never passed through. MEASURED (Cronus281,
+    /// `scripts/r53-probe/`): StopSession returns without throwing for an id that never existed,
+    /// for 0, and for -1. It cannot report failure, so a 0 would look exactly like a successful
+    /// stop — and AL Integer defaults to 0, so any marker written before this field existed reads
+    /// as one.
+    ///
+    /// THE STOP DOES NOT PROVE ANYTHING BY ITSELF. Because StopSession cannot fail-report, this
+    /// procedure's success is NOT the client's evidence. The client scores only on the HTTP 408
+    /// that BC delivers to the still-open original request, naming the AL StopSession call. See the
+    /// spec's §4.2 — the ordering below (stop, then clear, then one Commit) exists so that a failed
+    /// stop cannot leave "Op Kind" = none while the hung run is still executing, which would let
+    /// the next claim enter phase 2 concurrently against shared AL Test Suite state.</summary>
+    procedure TryStopHungRun(Epoch: Integer; Token: Text; Generation: Text; AttemptId: Text; OpSeq: BigInteger; var Stopped: Boolean; var Refusal: Text; var StoppedSessionId: Integer)
+    var
+        Lease: Record "LC Lease";
+    begin
+        Stopped := false;
+        Refusal := '';
+        StoppedSessionId := 0;
+
+        ValidateFenceCredentials(Epoch, Token, Generation, AttemptId);
+
+        Lease.LockTable();
+        if not Lease.Get('') then
+            Error(LeaseRowMissingErr());
+
+        // 1. Tuple check — same proof of ownership every mutating action demands.
+        if (Lease.Epoch <> Epoch) or (Lease.Token <> Token) or (Lease."Server Generation" <> Generation) then begin
+            Refusal := 'lease-invalid';
+            exit;
+        end;
+
+        // 2. Tombstone — this op already finished. See the doc comment: this is the branch that
+        // stops a lost-ack-after-success from killing a live session.
+        if OpSeq <= Lease."Last Completed Op Seq" then begin
+            Refusal := 'already-completed';
+            exit;
+        end;
+
+        // 3. The marker must be an ACTIVE RUN, and exactly this attempt's. Kind-specific (unlike
+        // RecoverOp): a publish has no runaway test session to end.
+        if (Lease."Op Kind" <> Lease."Op Kind"::run) or (Lease."Op Attempt Id" <> AttemptId) or (Lease."Op Seq" <> OpSeq) then begin
+            Refusal := 'not-active';
+            exit;
+        end;
+
+        // 4. No recorded session -> refuse. Never hand <= 0 to StopSession.
+        if Lease."Op Session Id" <= 0 then begin
+            Refusal := 'no-session-id';
+            exit;
+        end;
+
+        // 5. Stop FIRST, clear second, one Commit. Clear-then-stop would publish "no op in flight"
+        // while the hung run is still executing.
+        StoppedSessionId := Lease."Op Session Id";
+        StopSession(StoppedSessionId, 'LethAL R53: mutant run exceeded its budget and is being stopped so it can be scored');
+
+        ForceClearActive();
+        Lease."Op Kind" := Lease."Op Kind"::none;
+        Lease."Op Session Id" := 0;
+        Lease."Last Completed Op Seq" := OpSeq;
+        Lease.Modify();
+        Commit();
+        Stopped := true;
     end;
 
     /// <summary>Operator recovery action (design §8). A short LockTable critical section, ONE
@@ -921,6 +1013,7 @@ codeunit 71002 "LC Control State"
         Lease."Op Attempt Id" := '';
         Lease."Op Started At" := 0DT;
         Lease."Op Seq" := 0;
+        Lease."Op Session Id" := 0;  // R53 — see TryFinishRun.
         Lease.Modify();
         ForceClearActive();
         Commit();
