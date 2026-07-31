@@ -482,9 +482,17 @@ three objects that close that, and the frozen figures moved 64/9/2 → 69/9/6 be
 pageextension's code is unreachable from a test codeunit — nothing outside the page can name its
 procedures — so the only way in is a `TestPage`. That test was written, published and run against
 Cronus283 on 2026-07-31: the fenced session went `in-flight-unknown` on it at BASELINE and the run
-quarantined the tier, scoring nothing at all (`killed=0 survived=0 noCoverage=0`). Opening a
-TestPage on the fenced `GuiAllowed=No` / `ClientType=ODataV4` path hangs rather than failing. That
-is **R69**, and it is far bigger than this fixture — a real BC suite uses TestPage heavily.
+quarantined the tier, scoring nothing at all (`killed=0 survived=0 noCoverage=0`).
+
+**The cause first recorded here was wrong.** "Opening a TestPage on the fenced path hangs" did not
+survive its own probe: a code-free page opened the same way (`fixtures/sandbox-probes`,
+`ProbeList.Page.al` + `TestPageProbe.Codeunit.al`) fails on the fenced path in **87 ms** with
+`System.NotSupportedException ... NavSession.CreateNavTestService()`, and the run completes with no
+quarantine — while the same test on the hub opens and closes fine. So `TestPage` is REFUSED in a
+`GuiAllowed=No`/`ClientType=ODataV4` session, not slow, and a suite that uses it loses those tests
+from the green set rather than wedging the run. What hung on Cronus283 remains unexplained. Both
+halves are **R69**, which is sized on a real project: 9 of Document Output's 104 test files declare
+a TestPage.
 
 So the `pageextension` half of R30's receiver resolution is **claimed, deployed and unproven live**:
 the operator claims the site, the mutant is compiled into the published artifact, and nothing ever

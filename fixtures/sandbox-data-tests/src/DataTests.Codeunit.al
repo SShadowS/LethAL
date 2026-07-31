@@ -387,10 +387,14 @@ codeunit 79310 "Data Tests"
     // name its procedures — so the only way in is a `TestPage`. That test was written, published
     // and RUN against Cronus283 on 2026-07-31, and it did not come back: the fenced session went
     // `in-flight-unknown` on `PageExtCountsMatchingRelated` at baseline and the run quarantined the
-    // tier, scoring nothing (killed=0 survived=0 noCoverage=0). Opening a TestPage on the fenced
-    // `GuiAllowed=No` / `ClientType=ODataV4` path (R57/R60) hangs rather than failing. Filed as R69,
-    // because a real BC suite uses TestPage heavily and that is a much larger problem than this
-    // fixture.
+    // tier, scoring nothing (killed=0 survived=0 noCoverage=0).
+    //
+    // The CAUSE first written here — "opening a TestPage on the fenced path hangs" — was WRONG, and
+    // a later probe says so: a code-free page opened the same way on the fenced path fails in 87 ms
+    // with `System.NotSupportedException ... NavSession.CreateNavTestService()`, and the run
+    // completes. `TestPage` is REFUSED on that path, not slow. What hung on Cronus283 is still
+    // unexplained (that page sat over a trigger-carrying table and its extension WROTE a row from
+    // `OnOpenPage`). Both halves are R69.
     //
     // So `pageextension "Data Main List Ext"`'s mutants stay in the baseline as `no-coverage`. They
     // still prove what nothing else here does — that a pageextension-carried guard instruments,
