@@ -375,3 +375,32 @@ procedures (whose member-miss means genuinely-unexecuted) are never widened. The
 went red on three tests including the pre-existing doctrine pin "an ordinary procedure mutant is
 NOT credited by an object-level-only entry". Frozen gates re-verified per-mutant on the shipped
 code: `itest:bcdev` 3/10/3, `itest:tables` 64/9/2 (`untargetedTriggers` 0), `itest:alrunner` 3/13/0.
+
+---
+
+## R59 — the unsafe direction of the runner disagreement, reproduced live (2026-07-31)
+
+R59 predicts a **false kill**: a test the hub passes and the fence fails enters the green set, then
+"fails against every mutant it covers on the verdict path, and each of those reads as a KILL".
+
+**Built the case and ran it.** A throwaway `[Test]` on `fixtures/sandbox-tests`
+(`if not GuiAllowed then Error(...)`, then a call into `Sandbox Pricing.DiscountedPrice`, which no
+other test touches) published to Cronus281, run with `coverageMode: "procedure"`. It is hub-green by
+construction (hub = `GuiAllowed=Yes`/`ClientType=Web`, R57) and fence-red (`GuiAllowed=No`/
+`ClientType=ODataV4`), and it is the SOLE covering test of that procedure's three mutants.
+
+| | measured |
+|---|---|
+| the three `Sandbox Pricing` mutants | **`error`, `cause=unstable`** — never `killed` |
+| score line | `killed 3, survived 10, no-coverage 0, error 3 [unstable 3]` |
+| session report | `RUNNER DISAGREEMENT: 1 test(s) …`, `runnerDisagreement.tests` = the test |
+
+**So the entry's hazard does not exist**, and it has not since Layer 5C-A: a kill requires the
+kill-confirmation rerun — `activate(null)` then the FENCED transport — to PASS, so a fence-red test
+cannot produce one. What was real is the DIAGNOSIS: the run said only "unstable", which reads as
+flakiness in the user's own suite.
+
+**Control, same container, same fixture with the throwaway test removed:** `coverageMode: "procedure"`
+returns **3 killed / 10 survived / 3 no-coverage**, per-mutant identical to the fenced gate across
+all 16 mutants (0 differing), with no disagreement diagnosis emitted — the detector is silent when
+the two runners agree. `itest:bcdev` 3/10/3 and `itest:tables` 69/9/6 both re-verified afterwards.

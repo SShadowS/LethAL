@@ -54,6 +54,7 @@ import {
   wasStranded,
 } from "./resume";
 import type { ResumeIndex } from "./resume";
+import { describeRunnerDisagreement } from "./runner-disagreement";
 import {
   buildCoverageIndex,
   coverageFilter,
@@ -1973,6 +1974,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // cause on the `unstable` path only; a test refused HERE was dropped from the green set with the
   // wrong explanation attached, or none at all.
   const permissionRefusedTests = new Set<string>();
+  const runnerDisagreementTests = new Set<string>();
   // Summed across batches — see `SessionReport.untargetedTriggerCount`. Declared out here rather
   // than read off the last batch's split: each batch runs its own coverage filter, and a session
   // whose only untargeted trigger sits in batch 1 must not report 0.
@@ -2588,6 +2590,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         // one backend already deployed in step 3.
         await runMutantsOnBackend({
           permissionRefusedTests,
+          runnerDisagreementTests,
           backend: cfg.backend,
           safety,
           ...(leaseSession !== undefined ? { leaseSession } : {}),
@@ -2685,6 +2688,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
             }
             await runMutantsOnBackend({
               permissionRefusedTests,
+              runnerDisagreementTests,
               backend,
               safety,
               mutants: shard,
@@ -2846,6 +2850,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       : {}),
     ...(permissionRefusedTests.size > 0
       ? { permissionsRefusedTests: [...permissionRefusedTests].sort() }
+      : {}),
+    ...(runnerDisagreementTests.size > 0
+      ? { runnerDisagreementTests: [...runnerDisagreementTests].sort() }
       : {}),
     ...(cfg.stopHungSessions === true ? { stopHungSessions: true } : {}),
     baselineTests: tests.map((t) => ({
@@ -3027,6 +3034,13 @@ async function runMutantsOnBackend(args: {
    * `tests-permission-refused` caveat never fired — the same run disagreeing with itself.
    */
   readonly permissionRefusedTests: Set<string>;
+  /**
+   * R59: session-level sink for tests that failed their kill-confirmation while the backend runs a
+   * HUB coverage mode — i.e. tests the hub passed and the fence failed. Mutated in place like
+   * `permissionRefusedTests`, and for the same reason: a per-mutant note saying "runner
+   * disagreement" while the report's own field was absent would be one run disagreeing with itself.
+   */
+  readonly runnerDisagreementTests: Set<string>;
   /**
    * Layer 5C-A Task 8, Task 10 (design §G): this batch's artifact-scoped clean-attestation
    * ledger — shared (by reference) across every worker/shard `runSession` fans this batch's
@@ -3311,9 +3325,16 @@ async function runMutantsOnBackend(args: {
           // R35: record it session-wide too, so the report's `permissionsRefused` field and this
           // note cannot disagree about whether the run hit a permissions refusal.
           if (refusal !== undefined) args.permissionRefusedTests.add(qualifiedTestName(ref));
+          // R59: in a HUB coverage mode this test was hub-GREEN by construction — a covering test
+          // comes from the green set, and the green set came from bc-dev-mcp — and it has just
+          // failed unmutated on the FENCE. That is the runner disagreement itself, observed at no
+          // extra cost, and reporting it only as "unstable" sends the reader to debug flakiness.
+          // Strictly a diagnosis: the verdict is already `error cause=unstable` and does not move.
+          const disagreement = describeRunnerDisagreement(args.backend.capabilities().coverage);
+          if (disagreement !== undefined) args.runnerDisagreementTests.add(qualifiedTestName(ref));
           failureNote = `unstable test ${ref.method}: fails at baseline confirmation${
             refusal !== undefined ? ` — ${refusal}` : ""
-          }`;
+          }${disagreement !== undefined ? ` — ${disagreement}` : ""}`;
           cause = "unstable";
         }
         break;

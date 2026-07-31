@@ -289,6 +289,22 @@ export interface SessionReport {
     readonly diagnosis: string;
   };
   /**
+   * R59: tests that PASSED on the bc-dev-mcp hub (they are in the green set, or they would not
+   * have been covering tests) and then FAILED, unmutated, on the fenced runner that produces every
+   * verdict. Present only in a hub coverage mode (`procedure`/`line`); in `fenced`/`none` there is
+   * one runner and the field would be meaningless.
+   *
+   * NOT a wrong-verdict warning. The mutants these tests cover are already `error cause=unstable`,
+   * because a kill requires the unmutated fenced confirmation to PASS — which is why R59's feared
+   * false kill cannot occur. What this field adds is the CAUSE, so the reader stops debugging
+   * flakiness. One confirmation cannot separate a deterministic disagreement from a genuinely
+   * flaky test, and `explanation` says so rather than picking one.
+   */
+  readonly runnerDisagreement?: {
+    readonly tests: readonly string[];
+    readonly explanation: string;
+  };
+  /**
    * R47: present when this run was assembled with `--resume`, naming the prior run it drew from and
    * how many verdicts it carried instead of measuring.
    *
@@ -547,6 +563,9 @@ export interface BuildReportInput {
   /** R35: baseline tests BC refused on permissions — see `SessionReport.permissionsRefused`.
    *  Pass the names only; the diagnosis text is composed here so it cannot drift per caller. */
   readonly permissionsRefusedTests?: readonly string[];
+  /** R59: tests that failed their kill-confirmation under a HUB coverage mode — see
+   *  `SessionReport.runnerDisagreement`. Names only; the explanation is composed here. */
+  readonly runnerDisagreementTests?: readonly string[];
   /** R53: whether this run was allowed to END BC SESSIONS to score a non-terminating mutant
    *  (`--stop-hung-sessions`). Drives the `stop-hung-sessions` caveat, but only when the run
    *  actually scored a `timeout-killed` through it — see the caveat's own comment. */
@@ -732,6 +751,11 @@ export function buildReport(input: BuildReportInput): SessionReport {
   // TestPermissions = Disabled and run it again".
   const permissionsRefusedTests = input.permissionsRefusedTests ?? [];
   if (permissionsRefusedTests.length > 0) caveats.push("tests-permission-refused");
+  // R59: distinct from `baseline-red` and from `tests-permission-refused`. Those describe the
+  // user's tests; this one describes LethAL measuring the green set on a different session type
+  // from the verdicts, which is a property of the CONFIGURATION and is fixed by changing it.
+  const runnerDisagreementTests = input.runnerDisagreementTests ?? [];
+  if (runnerDisagreementTests.length > 0) caveats.push("runner-disagreement");
   // R53, spec §5: "this verdict is evidentially weaker than every other kill, and the report must
   // say so". A `timeout-killed` scored through `--stop-hung-sessions` rests on BC confirming it
   // stopped the session — NOT on a failing assertion, and not on any attestation: `ObservedAny`
@@ -807,6 +831,22 @@ export function buildReport(input: BuildReportInput): SessionReport {
               "write permission on its own app's tables. Declare `TestPermissions = Disabled;` " +
               "on the test codeunit and re-run. Any mutant covered only by these tests is " +
               "recorded `error` (score-excluded), never a silent `no-coverage`.",
+          },
+        }
+      : {}),
+    ...(runnerDisagreementTests.length > 0
+      ? {
+          runnerDisagreement: {
+            tests: [...runnerDisagreementTests].sort(),
+            explanation:
+              "These tests pass on the bc-dev-mcp hub and fail, unmutated, on the fenced runner " +
+              "that produces every verdict — measured session types, not a guess: hub is " +
+              "GuiAllowed=Yes/ClientType=Web, the fence is GuiAllowed=No/ClientType=ODataV4 " +
+              "(R57). Every mutant they cover is recorded `error` (score-excluded), never a kill: " +
+              "a kill requires the unmutated fenced confirmation to PASS. One confirmation cannot " +
+              "tell a deterministic disagreement from an ordinary flaky test — re-run with " +
+              'coverageMode "fenced", where one runner produces both the green set and the ' +
+              "verdicts, and the question disappears.",
           },
         }
       : {}),
@@ -917,6 +957,16 @@ export function renderConsole(r: SessionReport): string {
       `PERMISSIONS REFUSED: ${n} baseline test(s) carry BC's permission-refusal message. ${r.permissionsRefused.diagnosis}`,
     );
     for (const t of r.permissionsRefused.tests.slice(0, 10)) lines.push(`  ${t}`);
+    if (n > 10) lines.push(`  ... ${n - 10} more`);
+  }
+  // R59: same prominence again, and for the same reason — the reader's default reading of
+  // "unstable" is "my tests are flaky", and here the fix is a config key, not a test.
+  if (r.runnerDisagreement !== undefined) {
+    const n = r.runnerDisagreement.tests.length;
+    lines.push(
+      `RUNNER DISAGREEMENT: ${n} test(s) pass on the coverage hub and fail on the fenced runner. ${r.runnerDisagreement.explanation}`,
+    );
+    for (const t of r.runnerDisagreement.tests.slice(0, 10)) lines.push(`  ${t}`);
     if (n > 10) lines.push(`  ... ${n - 10} more`);
   }
   // R47: its own line rather than relying on the SCOPE line below, which only prints when

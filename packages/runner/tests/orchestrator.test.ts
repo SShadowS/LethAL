@@ -213,7 +213,15 @@ class StubBackend implements ExecutionBackend {
   failureMessageFor?: (mutant: string | null, ref: TestMethodRef) => string | undefined;
   constructor(
     private readonly caps: BackendCapabilities,
-    private readonly script: (mutant: string | null, ref: TestMethodRef) => TestVerdict["outcome"],
+    private readonly script: (
+      mutant: string | null,
+      ref: TestMethodRef,
+      // R59: the RUNNER a call goes to, so a fake can model two runners that DISAGREE.
+      // A hub coverage mode sends the baseline to bc-dev-mcp and every verdict through the
+      // fenced transport; without this argument no fake can tell the two apart, and every
+      // test here would be blind to the mechanism R55/R57 measured.
+      opts: RunOpts,
+    ) => TestVerdict["outcome"],
     private readonly coverageProcedures: string[] = [],
     // When set, deploy() throws this value instead of succeeding — lets tests
     // simulate a batch-deploy failure (e.g. to prove the failure text alone
@@ -257,7 +265,7 @@ class StubBackend implements ExecutionBackend {
   async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
     await this.onRun?.();
     const active = this.activations.at(-1) ?? null;
-    const outcome = this.script(active, ref);
+    const outcome = this.script(active, ref, opts);
     // Every mode that CLAIMS per-procedure coverage reports it at baseline — `"procedure"` (hub)
     // and R58's `"fenced"` alike. Written as `!== "none"` so the two stay indistinguishable to the
     // orchestrator, which is the point of the mode being a routing axis rather than a granularity.
@@ -526,6 +534,82 @@ describe("runSession", () => {
   const BC_PERMISSION_REFUSAL =
     "Sorry, the current permissions prevented the action. " +
     "(TableData 79300 Data Main Insert: LethAL Sandbox Data Tests)";
+
+  // ————————————————————————————————————————————————————————————————————————
+  // ROADMAP R59. The entry fears a FALSE KILL: a test the hub passes and the fence fails enters
+  // the green set, then fails against every mutant it covers, "and each of those reads as a KILL".
+  // It cannot. A kill requires the confirmation rerun — unmutated, and on the FENCE — to PASS, so
+  // such a test lands `error cause=unstable`. These two tests pin that, and pin the diagnosis that
+  // WAS missing. The fake is the one R55's own review said any check here needs: two runners that
+  // genuinely disagree. Every frozen gate is blind to this, because all four have a green baseline.
+  // ————————————————————————————————————————————————————————————————————————
+
+  test("R59: a hub-green / fence-red test is an ERROR, never a kill, and is named as a runner disagreement", async () => {
+    const dirs = await makeProject();
+    // CAPS_NST is a HUB mode (`coverage: "procedure"`), so the baseline goes to the hub and every
+    // mutant run and confirmation goes through the fenced transport (`coverage: "none"`).
+    const backend = new StubBackend(
+      CAPS_NST,
+      (_mutant, _ref, opts) => (opts.coverage === "procedure" ? "pass" : "fail"),
+      ["IsOverBudget"],
+    );
+    const store = new ResultsStore(":memory:");
+    try {
+      const report = await runSession({ backend, store, ...dirs, selectorIds });
+
+      // R59's stated fear, pinned as impossible rather than argued as impossible.
+      expect(report.counts.killed).toBe(0);
+      expect(report.counts.unstable).toBeGreaterThan(0);
+
+      const unstable = report.mutants.filter((m) => m.cause === "unstable");
+      expect(unstable.length).toBeGreaterThan(0);
+      for (const m of unstable) {
+        expect(m.verdict).toBe("error");
+        // The original failure survives; the diagnosis is appended, never substituted.
+        expect(m.failureNote).toContain("fails at baseline confirmation");
+        expect(m.failureNote).toContain("runner disagreement");
+        expect(m.failureNote).toContain('coverageMode "fenced"');
+      }
+      expect(report.runnerDisagreement?.tests.length).toBeGreaterThan(0);
+      expect(report.validity.caveats).toContain("runner-disagreement");
+      expect(renderConsole(report)).toContain("RUNNER DISAGREEMENT");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("R59: the same failure in a ONE-RUNNER mode gets no such diagnosis — it would be a lie", async () => {
+    const dirs = await makeProject();
+    // `coverage: "fenced"` routes the baseline through the SAME fenced transport as the verdicts,
+    // so a test failing its confirmation there is flakiness (or a genuinely broken test) and
+    // nothing about session types explains it. Without this control the diagnosis could fire
+    // unconditionally and still pass the test above.
+    const caps: BackendCapabilities = { ...CAPS_NST, coverage: "fenced" };
+    let inactiveRuns = 0;
+    const backend = new StubBackend(
+      caps,
+      (mutant) => {
+        if (mutant !== null) return "fail";
+        inactiveRuns++;
+        return inactiveRuns === 1 ? "pass" : "fail";
+      },
+      ["IsOverBudget"],
+    );
+    const store = new ResultsStore(":memory:");
+    try {
+      const report = await runSession({ backend, store, ...dirs, selectorIds });
+      expect(report.counts.unstable).toBeGreaterThan(0);
+      expect(report.counts.killed).toBe(0);
+      for (const m of report.mutants.filter((x) => x.cause === "unstable")) {
+        expect(m.failureNote).toContain("fails at baseline confirmation");
+        expect(m.failureNote).not.toContain("runner disagreement");
+      }
+      expect(report.runnerDisagreement).toBeUndefined();
+      expect(report.validity.caveats).not.toContain("runner-disagreement");
+    } finally {
+      store.close();
+    }
+  });
 
   test("R26: an unstable failure carrying BC's permission refusal names TestPermissions and quotes BC", async () => {
     const dirs = await makeProject();
