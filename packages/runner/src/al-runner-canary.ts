@@ -222,9 +222,11 @@ async function probe(
     deadlineMs: CANARY_DEADLINE_MS,
   });
   if (res.kind === "deadline") return { kind: "inconclusive", note: "canary probe timed out" };
-  if (res.kind === "skip")
-    return { kind: "inconclusive", note: `al-runner reported a limitation: ${res.detail}` };
-  if (res.kind === "error") return { kind: "inconclusive", note: res.detail };
+  // v2 has no "skip" exit code (al-runner issue #1648) — OneShotTransport now maps both
+  // exit 2 and exit 3 to kind:"error". Narrow on `!== "tests"` rather than `=== "error"`
+  // alone so this still type-checks if AlRunnerResult's "skip" variant is ever reinstated
+  // (both non-"tests", non-"deadline" variants carry the same `detail` shape).
+  if (res.kind !== "tests") return { kind: "inconclusive", note: res.detail };
   const t = res.tests.find((x) => x.name === method);
   if (t === undefined) {
     return { kind: "inconclusive", note: "al-runner output did not include the canary test" };

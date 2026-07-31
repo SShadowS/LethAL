@@ -236,7 +236,7 @@ describe("AlRunnerBackend.activate", () => {
 });
 
 describe("AlRunnerBackend.run", () => {
-  test("spawns al-runner with --run and parses a pass", async () => {
+  test("spawns al-runner v2-dialect: positional dirs, --test, --output-json, isolation=test", async () => {
     const { calls, spawn } = okSpawn({
       tests: [{ name: "PostingUpdatesTotal", status: "pass", durationMs: 3 }],
       passed: 1,
@@ -248,16 +248,18 @@ describe("AlRunnerBackend.run", () => {
     const { backend } = await makeBackend(spawn);
     const v = await backend.run(ref, { coverage: "none", timeoutMs: 5000 });
     expect(v.outcome).toBe("pass");
-    expect(calls[0]).toContain("--run");
-    expect(calls[0]).toContain("PostingUpdatesTotal");
-    expect(calls[0]).toContain("--output-json");
-    // D3: al-runner defaults to `codeunit` isolation — LethAL must force
-    // `method` isolation so behavior matches the advertised `full-reset`
-    // capability.
     const argv = calls[0] ?? [];
+    // v2 has no --run; the method is selected via --test PATTERN.
+    expect(argv).not.toContain("--run");
+    expect(argv).toContain("--test");
+    expect(argv).toContain("PostingUpdatesTotal");
+    expect(argv).toContain("--output-json");
+    // al-runner defaults to `codeunit` isolation. v2's `method` alias wrongly maps
+    // to `codeunit` (al-runner issue #1647), so LethAL must request `test`
+    // directly to get the advertised per-test `full-reset` capability.
     const flagIdx = argv.indexOf("--test-isolation");
     expect(flagIdx).toBeGreaterThanOrEqual(0);
-    expect(argv[flagIdx + 1]).toBe("method");
+    expect(argv[flagIdx + 1]).toBe("test");
   });
 
   test("exit 1 with fail result maps to fail", async () => {
@@ -288,9 +290,12 @@ describe("AlRunnerBackend.run", () => {
     expect(v.failureMessage).toBe("boom");
   });
 
-  test("exit 2 maps to skip, exit 3 maps to error", async () => {
+  // v2 has no "skip" exit code (v1's soft "runner limitations" signal is gone —
+  // al-runner issue #1648/migration doc): 2 is now a process-level execution
+  // error, same severity class as 3 (compile error).
+  test("exit 2 and exit 3 both map to error", async () => {
     for (const [code, outcome] of [
-      [2, "skip"],
+      [2, "error"],
       [3, "error"],
     ] as const) {
       const { backend } = await makeBackend(okSpawn({ tests: [] }, code).spawn);
@@ -327,8 +332,10 @@ describe("AlRunnerBackend.run", () => {
             name: "PostingUpdatesTotal",
             status: "fail",
             durationMs: 0,
-            message:
-              "Test exceeded 3s timeout. Use --test-timeout 0 to disable timeout, or increase with --test-timeout <seconds>.",
+            // v1 said "Test exceeded {N}s timeout"; v2 (2.0.0-preview.1) changed this
+            // to "TIMEOUT after {N}s" (TestExecutor.cs) with a fixed 60s internal
+            // timeout and no CLI override yet (al-runner issue #1648).
+            message: "TIMEOUT after 3s",
           },
         ],
       },
@@ -365,29 +372,13 @@ describe("AlRunnerBackend.run", () => {
     expect(v.outcome).toBe("deadline-exceeded");
   });
 
-  // Regression guard for the timeout-margin bug: the backend's own derivation
-  // of --test-timeout (from opts.timeoutMs) must leave al-runner's internal
-  // timeout comfortably BELOW our client deadline, never >= it. Otherwise our
-  // AbortController always wins the Promise.race and the runner-confirmed
-  // `outcome: "timeout"` path exercised above becomes unreachable in real
-  // execution — every genuine mutant-induced hang would be misclassified as
-  // deadline-exceeded (infrastructure noise). This drives the real
-  // backend.run() path (not a re-implementation of the formula) so a
-  // regression in the derivation itself fails this test.
-  test("--test-timeout leaves real margin below the client deadline", async () => {
-    for (const timeoutMs of [5000, 14000, 120000]) {
-      const { calls, spawn } = okSpawn({
-        tests: [{ name: "PostingUpdatesTotal", status: "pass" }],
-      });
-      const { backend } = await makeBackend(spawn);
-      await backend.run(ref, { coverage: "none", timeoutMs });
-      const argv = calls[0] ?? [];
-      const idx = argv.indexOf("--test-timeout");
-      expect(idx).toBeGreaterThanOrEqual(0);
-      const seconds = Number(argv[idx + 1]);
-      expect(seconds * 1000).toBeLessThan(timeoutMs);
-    }
-  });
+  // v2 accepts no --test-timeout (al-runner issue #1648: its internal per-test
+  // timeout is a fixed, unconfigurable 60s). The margin this test used to
+  // guard — al-runner's own timeout landing below our client deadline so the
+  // runner-confirmed `outcome: "timeout"` path stays reachable — can no
+  // longer be asserted from argv. The "our own deadline is outcome=deadline-
+  // exceeded" test above still covers the client-side AbortController half of
+  // this; revisit once #1648 ships a configurable flag.
 
   // Task 8A (classification parity): al-runner recompiles fresh on every call and
   // strands no shared server, so a transport-level error provably never dispatched

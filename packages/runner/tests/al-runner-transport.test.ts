@@ -35,7 +35,7 @@ describe("parseAlRunnerPayload", () => {
 });
 
 describe("OneShotTransport", () => {
-  test("passes --run, --output-json, --test-isolation method and the timeout", async () => {
+  test("v2 dialect: positional dirs, --test, --output-json, isolation=test, no --run/--test-timeout", async () => {
     const { calls, spawn } = recording({
       tests: [{ name: "PostingUpdatesTotal", status: "pass" }],
     });
@@ -43,23 +43,26 @@ describe("OneShotTransport", () => {
     const res = await t.send(req);
     expect(res.kind).toBe("tests");
     const argv = calls[0] ?? [];
-    expect(argv).toContain("--run");
+    expect(argv).not.toContain("--run");
+    expect(argv).not.toContain("--test-timeout");
+    expect(argv).toContain(req.sourceDir);
+    expect(argv).toContain(req.testDir);
+    expect(argv).toContain("--test");
     expect(argv).toContain("PostingUpdatesTotal");
     expect(argv).toContain("--output-json");
     expect(argv).toContain("--test-isolation");
-    expect(argv).toContain("method");
-    expect(argv).toContain("--test-timeout");
-    expect(argv).toContain("5");
+    expect(argv).toContain("test");
+    expect(argv).not.toContain("method");
   });
 
-  test("exit 2 is a runner limitation (skip), exit 3 is an error", async () => {
-    for (const [code, kind] of [
-      [2, "skip"],
-      [3, "error"],
-    ] as const) {
+  // v2 has no "skip" exit code — 2 is now a process-level execution error
+  // (same severity class as 3, a compile error), not v1's soft "runner
+  // limitations only" signal. See al-runner issue #1648.
+  test("exit 2 and exit 3 are both kind=error", async () => {
+    for (const code of [2, 3] as const) {
       const { spawn } = recording({ tests: [] }, code);
       const res = await new OneShotTransport("al-runner", spawn).send(req);
-      expect(res.kind).toBe(kind);
+      expect(res.kind).toBe("error");
     }
   });
 
@@ -69,36 +72,11 @@ describe("OneShotTransport", () => {
     expect(res.kind).toBe("deadline");
   });
 
-  // The two timers measure different things and must never be equal: `--test-timeout`
-  // bounds only the test body inside al-runner, while `deadlineMs` bounds the WHOLE
-  // invocation (al-runner recompiles the project from scratch every call, which alone
-  // can take several seconds). If al-runner's own timeout were >= our client deadline,
-  // our AbortController would always win the race and the runner-confirmed
-  // `outcome: "timeout"` path would be unreachable in real execution — every genuine
-  // hang would be misclassified as infrastructure noise instead of a real timeout.
-  // Pinned directly from argv (no real-timer race) against several representative
-  // budgets — the same margin formula AlRunnerBackend uses (`Math.max(1,
-  // Math.floor(deadlineMs / 2000))`).
-  test("the runner's --test-timeout always leaves real margin below the client deadline", async () => {
-    for (const deadlineMs of [2000, 5000, 14000, 120000]) {
-      const testTimeoutSeconds = Math.max(1, Math.floor(deadlineMs / 2000));
-      const { calls, spawn } = recording({ tests: [] });
-      await new OneShotTransport("al-runner", spawn).send({
-        ...req,
-        testTimeoutSeconds,
-        deadlineMs,
-      });
-      const argv = calls[0] ?? [];
-      const idx = argv.indexOf("--test-timeout");
-      expect(idx).toBeGreaterThanOrEqual(0);
-      const seconds = Number(argv[idx + 1]);
-      // Sub-second edge case: budgets under ~2000ms clamp to the 1s floor, at which
-      // point the client may still win the race. Acceptable and honest — not
-      // something to engineer around — so this isn't asserted for every budget below
-      // the threshold, only for the representative set above where real margin exists.
-      expect(seconds * 1000).toBeLessThan(deadlineMs);
-    }
-  });
+  // v2 accepts no --test-timeout (al-runner issue #1648: fixed, unconfigurable
+  // 60s internal timeout). The margin this test used to pin from argv no
+  // longer applies at the CLI level; `deadlineMs` (this transport's own
+  // AbortController, see "a hung process yields kind=deadline" above) is now
+  // the only client-side timeout lever. Revisit once #1648 ships a flag.
 });
 
 /** Scripted stand-in for the al-runner server process. */

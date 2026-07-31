@@ -20,8 +20,13 @@ import type {
 import { defaultSpawn } from "./publisher";
 import type { SpawnFn } from "./publisher";
 
-/** al-runner's own per-test timeout message (verified against v1.0.31). */
-const RUNNER_TIMEOUT_MESSAGE = /Test exceeded \d+s timeout/;
+/**
+ * al-runner's own per-test timeout message. v1.0.31 said "Test exceeded {N}s
+ * timeout"; v2 (2.0.0-preview.1, unreleased) changed this to "TIMEOUT after
+ * {N}s" (TestExecutor.cs). v2's timeout is also currently a hardcoded 60s
+ * with no CLI override (al-runner issue #1648).
+ */
+const RUNNER_TIMEOUT_MESSAGE = /TIMEOUT after \d+s/;
 
 /**
  * `mutant-manifest.json` is written by `writeInstrumentedProject` for every
@@ -278,7 +283,11 @@ export class AlRunnerBackend implements ExecutionBackend {
         failureMessage: res.detail,
         operation: "pre-dispatch-rejected",
       };
-    const t = res.tests.find((x) => x.name === ref.method);
+    // v2's --output-json "name" field is the qualified "Codeunit<ID>.<Method>"
+    // (verified empirically: e.g. "Codeunit50101.TestOverBudget"), not the bare
+    // method name ref.method carries. Match on the qualified suffix instead of
+    // exact equality.
+    const t = res.tests.find((x) => x.name === ref.method || x.name.endsWith(`.${ref.method}`));
     if (!t)
       return {
         ref,

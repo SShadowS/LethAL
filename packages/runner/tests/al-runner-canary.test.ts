@@ -10,10 +10,11 @@ import {
 import type { SpawnFn } from "../src/publisher";
 
 /**
- * Scripts a fake al-runner process keyed by the `--run <method>` argument, mirroring
+ * Scripts a fake al-runner process keyed by the `--test <method>` argument (v2 dialect —
+ * v1's `--run <method>` is gone, see al-runner issue #1648), mirroring
  * al-runner-transport.test.ts's/al-runner-backend.test.ts's `recording`/`okSpawn` fakes rather
  * than reinventing the shape. `exitCode`-only entries stand in for al-runner's own
- * skip(2)/error(3) exits; `status` entries stand in for a normal test-run response.
+ * error(2)/error(3) exits; `status` entries stand in for a normal test-run response.
  */
 function scriptedSpawn(
   responses: Record<
@@ -24,7 +25,7 @@ function scriptedSpawn(
   const calls: string[][] = [];
   const spawn: SpawnFn = async (argv) => {
     calls.push([...argv]);
-    const runIdx = argv.indexOf("--run");
+    const runIdx = argv.indexOf("--test");
     const method = argv[runIdx + 1];
     const scripted = method !== undefined ? responses[method] : undefined;
     if (scripted === undefined) {
@@ -113,10 +114,11 @@ describe("runAlRunnerCanary", () => {
     const { calls, spawn } = scriptedSpawn(BOTH_CONFIRMED);
     await runAlRunnerCanary("al-runner", spawn);
     expect(calls.length).toBe(2);
+    // v2 dialect: positional [sourceDir, testDir] precede --test <method> (v1's
+    // --run <method> <sourceDir> <testDir> shape is gone, see al-runner issue #1648).
     for (const argv of calls) {
-      const runIdx = argv.indexOf("--run");
-      const sourceDir = argv[runIdx + 2];
-      const testDir = argv[runIdx + 3];
+      const sourceDir = argv[0];
+      const testDir = argv[1];
       expect(sourceDir).toBeDefined();
       expect(testDir).toBeDefined();
       expect(sourceDir).not.toBe(testDir);
@@ -126,10 +128,7 @@ describe("runAlRunnerCanary", () => {
   test("runs both probes against the SAME scratch project (both calls share sourceDir and testDir)", async () => {
     const { calls, spawn } = scriptedSpawn(BOTH_CONFIRMED);
     await runAlRunnerCanary("al-runner", spawn);
-    const dirs = calls.map((argv) => {
-      const runIdx = argv.indexOf("--run");
-      return [argv[runIdx + 2], argv[runIdx + 3]];
-    });
+    const dirs = calls.map((argv) => [argv[0], argv[1]]);
     expect(dirs[0]).toEqual(dirs[1]);
   });
 
@@ -143,7 +142,7 @@ describe("runAlRunnerCanary", () => {
 
   test('an unrecognized test status (neither exactly "pass" nor "fail") is inconclusive, not read as a confirmed defect either way', async () => {
     const spawn: SpawnFn = async (argv) => {
-      const runIdx = argv.indexOf("--run");
+      const runIdx = argv.indexOf("--test");
       const method = argv[runIdx + 1];
       // A hypothetical future runner-internal status, distinct from both "pass" and "fail".
       return {

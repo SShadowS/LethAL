@@ -13,14 +13,30 @@
  * Expected verdict table is hand-computed in fixtures/README.md — keep the
  * two in sync if the fixture AL or tests change.
  *
- * CLI/JSON contract VERIFIED (2026-07-18) against a real al-runner install:
- * argv shape `--run <method> <instrumentedDir> <testDir> --output-json
- * --test-isolation method [--packages <dir>] [--stubs <dir>]`; JSON stdout
- * envelope `{ tests: [{ name, status, durationMs?, message?, stackTrace?,
- * alSourceLine?, alSourceColumn? }], passed, failed, errors, total,
- * exitCode }` — entry fields are `name`/`status`, not `method`/`result`, and
- * there is no `codeunit` field on an entry. Both confirmed in
- * `src/al-runner-backend.ts`.
+ * CLI/JSON contract VERIFIED (2026-07-18) against a real al-runner v1.0.31
+ * install: argv shape `--run <method> <instrumentedDir> <testDir>
+ * --output-json --test-isolation method [--packages <dir>] [--stubs <dir>]`.
+ *
+ * RE-VERIFIED (2026-07-31) against a locally built al-runner v2
+ * (2.0.0-preview.1, unreleased — NuGet still ships 1.0.31): v2 dropped
+ * `--run`/`--stubs`/`--test-timeout` and renamed `--packages`, so the argv
+ * shape is now positional `<instrumentedDir> <testDir> --test <method>
+ * --output-json --test-isolation test [--package-cache <dir>]` (al-runner
+ * issue #1648). `--test-isolation method` is kept as a v1-compat alias but
+ * wrongly maps to `codeunit` isolation in v2 (al-runner issue #1647) — this
+ * backend now requests `test` directly, the mode that actually resets state
+ * per test. See al-runner-transport.ts/al-runner-backend.ts for the full
+ * dialect diff.
+ *
+ * JSON stdout envelope unchanged: `{ tests: [{ name, status, durationMs?,
+ * message?, stackTrace?, alSourceLine?, alSourceColumn? }], passed, failed,
+ * errors, total, exitCode }` — entry fields are `name`/`status`, not
+ * `method`/`result`, and there is no `codeunit` field on an entry. `name` is
+ * the QUALIFIED `Codeunit<ID>.<Method>` under v2, not the bare method name
+ * (al-runner-backend.ts now matches on the qualified suffix). v2 also does
+ * not purify stdout under `--output-json` as documented — progress banners
+ * precede the JSON blob (al-runner issue #1649); `parseAlRunnerPayload` now
+ * extracts the trailing `{...}` block instead of parsing the whole stream.
  */
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";

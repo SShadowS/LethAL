@@ -28,12 +28,38 @@ export interface AlRunnerTransport {
   close(): Promise<void>;
 }
 
+/**
+ * v2 (2.0.0-preview.1, unreleased) does NOT purify stdout under --output-json
+ * despite the flag's documented promise ("Replace the normal text output
+ * with per-test JSON on stdout") — progress banners ("al-runner — running N
+ * bundle(s)", "[layered] WROTE ...", "[N/M] <dir> — K suites", "-> PP/FF/EE
+ * across ... tests ...") are written to stdout too, BEFORE the final
+ * pretty-printed JSON object. Verified empirically against a local v2 build;
+ * naive `JSON.parse(stdout)` throws "Unexpected identifier" on the banner
+ * text. The JSON blob is always the last top-level `{...}` in the stream, so
+ * extract from the last line that is exactly "{" rather than assuming stdout
+ * is pure JSON. This should be reported upstream (the flag's own docs say it
+ * shouldn't need this), but is a client-side workaround either way.
+ */
 export function parseAlRunnerPayload(stdout: string): readonly AlRunnerRawTest[] {
-  const parsed = JSON.parse(stdout) as { tests?: AlRunnerRawTest[] };
+  const jsonStart = stdout.lastIndexOf("\n{");
+  const jsonText = jsonStart >= 0 ? stdout.slice(jsonStart + 1) : stdout;
+  const parsed = JSON.parse(jsonText) as { tests?: AlRunnerRawTest[] };
   return parsed.tests ?? [];
 }
 
-/** One al-runner process per request. Correct, and pays full compilation each time. */
+/**
+ * v2 dialect (AL Runner 2.0.0-preview.1, unreleased branch): no `--run`, no
+ * `--stubs`, no `--test-timeout`. Test selection is `--test PATTERN`
+ * (substring match on `Codeunit.Method`) plus positional `<sourceDir>
+ * <testDir>`. `--packages` was renamed `--package-cache`. `--test-isolation
+ * method` is a v1-compat alias that (as of v2) wrongly maps to `codeunit`
+ * isolation (al-runner issue #1647) — request `test` instead, which is where
+ * the real per-test reset now lives. There is no `--test-timeout`; v2's
+ * internal per-test timeout is a fixed 60s (al-runner issue #1648) — rely on
+ * this transport's own `deadlineMs` AbortController below as the practical
+ * ceiling instead.
+ */
 export class OneShotTransport implements AlRunnerTransport {
   constructor(
     private readonly alRunnerPath: string,
@@ -43,20 +69,16 @@ export class OneShotTransport implements AlRunnerTransport {
   async send(req: AlRunnerRequest): Promise<AlRunnerResult> {
     const argv = [
       this.alRunnerPath,
-      "--run",
-      req.method,
       req.sourceDir,
       req.testDir,
+      "--test",
+      req.method,
       "--output-json",
-      // al-runner defaults to `codeunit` isolation (state shared within a
-      // codeunit); force `method` to match the advertised full-reset capability.
       "--test-isolation",
-      "method",
-      "--test-timeout",
-      String(req.testTimeoutSeconds),
+      "test",
     ];
-    if (req.packagesDir) argv.push("--packages", req.packagesDir);
-    if (req.stubsDir) argv.push("--stubs", req.stubsDir);
+    if (req.packagesDir) argv.push("--package-cache", req.packagesDir);
+    // v2 has no --stubs; dropped rather than passed (would be an unknown flag -> exit 2).
 
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -71,8 +93,9 @@ export class OneShotTransport implements AlRunnerTransport {
         }),
       ]);
       if (res === "deadline") return { kind: "deadline" };
-      if (res.exitCode === 2) return { kind: "skip", detail: res.stdout || res.stderr };
-      if (res.exitCode === 3 || res.exitCode < 0)
+      // v2 has no "skip" exit code. 2 = process-level execution error, 3 = compile
+      // error — both are real errors now, not soft skips.
+      if (res.exitCode === 2 || res.exitCode === 3 || res.exitCode < 0)
         return { kind: "error", detail: res.stderr || res.stdout };
       return { kind: "tests", tests: parseAlRunnerPayload(res.stdout) };
     } catch (err) {
