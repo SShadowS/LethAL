@@ -101,6 +101,47 @@ export interface ReportValidity {
   /** Mutants that produced a scoreable verdict (killed/survived/timeout-killed), out of all
    *  recorded. The denominator `mutationScore` is actually computed over. */
   readonly scoredMutants: { readonly scored: number; readonly recorded: number };
+  /**
+   * R60: the execution mode EVERY verdict in this report describes. Always present, on every
+   * backend and in both coverage modes — this is a property of how LethAL runs, not a per-run
+   * measurement, and it does not vary with the project.
+   *
+   * LethAL executes every mutant headlessly. A developer running the same suite from VS Code runs
+   * GUI-allowed, so the two are not measuring the same branches, and nothing in the report said
+   * so. Consequences, in the order they mislead:
+   *
+   *   (a) A mutant inside a branch reachable only when a user can be prompted never executes, so
+   *       it cannot be killed. It is reported `survived` or `no-coverage` — and BOTH read as
+   *       statements about the test suite ("your tests are weak here") when the truth is that
+   *       LethAL never ran the code.
+   *   (b) `Confirm` does not skip its branch, it FORCES the default answer, so the non-default arm
+   *       is the unreachable one. `Message` is a no-op and changes nothing. `Page.RunModal` is
+   *       different again: it ERRORS, which can fail a test for a reason unrelated to the mutant.
+   *   (c) `mutationScore`'s denominator therefore includes sites that were unreachable by
+   *       construction.
+   *
+   * MEASURED, so the caveat is neither alarmism nor complacency (`scripts/measure-gui-guarded.ts`,
+   * run 2026-07-31 against Continia Document Output `DocumentOutput/Cloud`, 551 `.al` files):
+   * **62 of 19,850 mutation sites — 0.3% — sit lexically inside a `GuiAllowed`- or
+   * `Confirm`-guarded branch.** A lower bound (it does not follow calls), but not one hiding a
+   * large category: the `if not GuiAllowed then exit;` shape that would guard a whole procedure
+   * without any site being lexically inside occurs 3 times in those 551 files. The 5.7% figure the
+   * same script reports as an upper bound is dominated by `Message`, which causes no
+   * unreachability at all.
+   *
+   * That measurement is why this is a STATED LIMIT rather than a per-site `guardObserved` signal:
+   * 0.3% does not justify machinery, and the fact is structural anyway — no backend LethAL has
+   * runs GUI-allowed, so there is nothing to detect per run.
+   */
+  readonly executionContext: {
+    /** Literal `false`: no LethAL execution path is GUI-allowed. A future path that is would have
+     *  to change this type, which is the point — it cannot drift silently. */
+    readonly guiAllowed: false;
+    /** The session kind mutants execute under. */
+    readonly clientType: string;
+    /** How that is known — measured, or inferred from the runner's shape. Never a bare claim. */
+    readonly basis: string;
+  };
 }
 
 /** Per-procedure survivor rollup — see `SessionReport.survivorsByProcedure`. */
@@ -719,6 +760,25 @@ export function buildReport(input: BuildReportInput): SessionReport {
       scoreDescribes: `${scored} scored mutant(s) in ${scopeText}${baselineText}`,
       baselineTests: { total: input.baselineTests.length, failing: input.unsupportedTests.length },
       scoredMutants: { scored, recorded: input.outcomes.length },
+      // R60. Split by backend rather than asserted once, because only ONE of the two was
+      // measured: R57 measured the fenced `RunMutant` path directly (`GuiAllowed=No`,
+      // `ClientType=ODataV4`). al-runner is a headless CLI, which is not the same evidence, and
+      // saying "measured" of both would be the kind of static claim R7/R8 exist to stop.
+      executionContext: input.caps.authoritative
+        ? {
+            guiAllowed: false,
+            clientType: "ODataV4",
+            basis:
+              "measured on the fenced RunMutant path (R57): every mutant executes in a " +
+              "GuiAllowed=No, ClientType=ODataV4 session",
+          }
+        : {
+            guiAllowed: false,
+            clientType: "al-runner CLI",
+            basis:
+              "al-runner executes headlessly by construction (no client session to prompt from); " +
+              "not separately measured by LethAL the way the fenced path was under R57",
+          },
     },
     ...(permissionsRefusedTests.length > 0
       ? {
@@ -861,6 +921,18 @@ export function renderConsole(r: SessionReport): string {
       }`,
     );
   }
+  // R60. Printed on EVERY run, including a `full` one — this limit does not depend on scope,
+  // baseline health, or anything else the SCOPE line below is gated on. A reader comparing a
+  // LethAL score against what they see in VS Code is comparing two different branches of their
+  // own app, and until now nothing said so anywhere.
+  lines.push(
+    `NON-GUI EXECUTION: every verdict here describes the app's non-interactive branch ` +
+      `(GuiAllowed=No, ClientType=${r.validity.executionContext.clientType}). Code reachable only ` +
+      `when a user can be prompted never runs, so its mutants cannot be killed and land as ` +
+      `survived or no-coverage — neither of which is a statement about your tests. Confirm() ` +
+      `returns its DEFAULT rather than skipping the branch; Page.RunModal ERRORS. Measured on ` +
+      `Continia Document Output: 0.3% of mutation sites (62 of 19,850).`,
+  );
   // The score's own limits, immediately after it. A reader quotes `score: 15.7%` long before
   // correlating four separate qualifier fields, so the qualification has to arrive with it.
   if (r.validity.reliability !== "full") {

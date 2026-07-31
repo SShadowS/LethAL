@@ -11,6 +11,19 @@ each one.
 
 ## [Unreleased]
 
+### Added
+
+- **`validity.executionContext` on every report** (R60). LethAL executes every mutant headlessly,
+  so every verdict describes your app's NON-interactive branch, while a developer running the same
+  suite from VS Code runs GUI-allowed — the two are not measuring the same code, and nothing said
+  so. Required rather than optional, and printed on every run including a clean one, because the
+  reader most likely to quote a score without qualification is the one whose run had no other
+  caveats. Measured before it was written (`scripts/measure-gui-guarded.ts`, Continia Document
+  Output, 551 `.al` files): **62 of 19,850 mutation sites — 0.3% — sit inside a
+  `GuiAllowed`/`Confirm`-guarded branch**, which is why this is a stated limit rather than a
+  per-site signal. Note the three constructs differ: `Message` is a no-op, `Confirm` forces its
+  DEFAULT answer (so the non-default arm is the unreachable one), and `Page.RunModal` errors.
+
 ### Fixed
 
 - **A permissions refusal at baseline discovery no longer reads as an unsupported test type**

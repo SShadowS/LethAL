@@ -444,6 +444,7 @@ const FAKE_REPORT: SessionReport = {
     scoreDescribes: "test fixture",
     baselineTests: { total: 0, failing: 0 },
     scoredMutants: { scored: 0, recorded: 0 },
+    executionContext: { guiAllowed: false as const, clientType: "ODataV4", basis: "test fixture" },
   },
   survivorsByProcedure: [],
   testFiles: {},
