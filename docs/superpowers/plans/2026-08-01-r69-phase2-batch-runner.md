@@ -10,9 +10,9 @@
 
 ## Global Constraints
 
-- **Phase A is a GATE.** If Task 0's negative control fails, Phase B onward is ABANDONED — the routed path stays diagnosis-only and does not score. Do not "approximate" around a failed probe.
+- **Phase A is a GATE.** If **Task 0b**'s negative control fails, Phase B onward is ABANDONED — the routed path stays diagnosis-only and does not score. Do not "approximate" around a failed probe.
 - Control app object IDs: range **71000–71099**; 71000–71014 taken. New objects use **71015+**.
-- Any control AL change bumps `extensions/lethal-control/app.json` **1.0.0.11 → 1.0.0.12** AND `packages/runner/src/harness.ts:37` `MIN_CONTROL_VERSION` in lockstep (pinned by `packages/runner/tests/harness.test.ts:374`), then `/control-app` publishes to **Cronus281 and Cronus283**.
+- Any control AL change bumps `extensions/lethal-control/app.json` AND `packages/runner/src/harness.ts:37` `MIN_CONTROL_VERSION` in lockstep (pinned by `packages/runner/tests/harness.test.ts:374`), then `/control-app` publishes to **Cronus281 and Cronus283**.
 - AL has **no unit-test harness**. Every AL task's test is: offline `alc` compile clean (`/al-compile` or the `al-compiler` subagent), then the live measurement named in the task.
 - TS build order (the dist trap): `bun run typecheck` → `rm -rf packages/*/dist` → `bun test`. NEVER `bun test` straight after a typecheck.
 - Conventions (CI fails otherwise): no `!` non-null assertions; `exactOptionalPropertyTypes` — build optional props with `...(v !== undefined ? { k: v } : {})`; typed error classes extend `Error` **directly**, never each other; fail loudly on caller-contract violations, never return a plausible empty default.
@@ -24,9 +24,72 @@
 
 ---
 
-## PHASE A — Task 0: the probe that gates everything
+## PHASE A — the probe that gates everything
 
-### Task 0: Does the client-services path return CLEAN per-procedure coverage?
+> **AMENDED 2026-08-01, after Task 0's first run.** Task 0 as originally written was DEFECTIVE: it
+> assumed `RunBatch` already collected coverage. It does not — codeunit 71013 never calls
+> `Code Coverage Mgt.`'s `StartApplicationCoverage`/`StopApplicationCoverage`, so the probe measured
+> an UNWIRED INSTRUMENT and returned "no coverage payload", which says nothing about whether a
+> client-services session can record coverage. `RunMutantWithCoverage` shows the pairing is a thin
+> generic wrapper around a platform codeunit, not something fenced-specific.
+>
+> So Phase A becomes two tasks: **Task 0a wires the instrument** (a slice of Task 1 + Task 2, pulled
+> forward because the gate cannot be asked without it), then **Task 0b re-runs the probe** and the
+> GATE is decided on that reading. If Task 0b fails, Tasks 1 and 3–7 are still abandoned; Task 0a's
+> AL is small, useful either way, and would have been built by Task 1 regardless.
+
+### Task 0a: Wire coverage collection into the batch path
+
+**Files:**
+- Modify: `extensions/lethal-control/src/BatchQueue.Table.al`
+- Modify: `extensions/lethal-control/src/ControlApi.Codeunit.al`
+- Modify: `extensions/lethal-control/src/BatchRunner.Codeunit.al`
+- Modify: `extensions/lethal-control/app.json` (`1.0.0.11` → `1.0.0.12`)
+- Modify: `packages/runner/src/harness.ts:37` (`MIN_CONTROL_VERSION` → `"1.0.0.12"`)
+
+**Interfaces:**
+- Consumes: `ControlApi`'s `local procedure CoverageArray(ObjectIdFilter: Text; var ScannedRows: Integer; var EmittedRows: Integer): JsonArray` (line 181) — promote to a PUBLIC procedure so codeunit 71013 can call it. Do not duplicate its body.
+- Produces: `LC Batch Queue` field 8 `Coverage Filter` (Text[250]); `SeedBatchItem` gains a trailing `coverageFilter: Text` parameter; `LC Batch Result` gains field 10 `Coverage Json` (Blob) with `SetCoverageJson`/`GetCoverageJson` mirroring the existing `SetResultJson`/`GetResultJson`; `GetBatchResults` emits `coverage`, `coverageScannedRows`, `coverageEmittedRows`.
+
+- [ ] **Step 1:** Promote `CoverageArray` from `local procedure` to `procedure` in `ControlApi.Codeunit.al`. Add a one-line doc comment saying why it is public: codeunit 71013's batch loop needs the identical serialization, and duplicating it would let the two paths' coverage shapes drift.
+
+- [ ] **Step 2:** Add the queue field and the result blob + accessors.
+
+```al
+        field(8; "Coverage Filter"; Text[250]) { }
+```
+
+```al
+        field(10; "Coverage Json"; Blob) { }
+```
+
+- [ ] **Step 3:** In `RunBatch`, wrap the run in the coverage pairing and attach the array. **The filter is mandatory, not an optimisation:** `RunMutantWithCoverage`'s own comment records that unfiltered, the coverage call does NOT return within 300 s even for a three-line fixture test, because the `Code Coverage` table holds every line the whole Test Runner + Base App machinery executed. An empty filter is measurement-mode only.
+
+```al
+            CodeCoverageMgt.StartApplicationCoverage();
+            Runner.SetRequest(State.NextSuiteName(), Queue."Codeunit ID", Queue.Method);
+            Ok := Runner.Run();
+            CodeCoverageMgt.StopApplicationCoverage();
+```
+
+Then build the coverage array via the now-public `CoverageArray(Queue."Coverage Filter", Scanned, Emitted)`, write it into `Res."Coverage Json"`, and store `Scanned`/`Emitted` so the probe can tell "no rows recorded" from "rows recorded, none matched the filter" — a distinction the gate turns on.
+
+- [ ] **Step 4:** Extend `SeedBatchItem` with `coverageFilter: Text` and store it; extend `GetBatchResults` to emit `coverage`, `coverageScannedRows`, `coverageEmittedRows`.
+
+- [ ] **Step 5:** `/al-compile extensions/lethal-control`. Expected: 0 errors.
+
+- [ ] **Step 6:** Bump `app.json` to `1.0.0.12` and `MIN_CONTROL_VERSION` in lockstep. Then `bun run typecheck` → `rm -rf packages/*/dist` → `bun test packages/runner`. Expected green (`harness.test.ts:374` pins the equality).
+
+- [ ] **Step 7:** `/control-app` — publish to Cronus281 AND Cronus283. Verify both report `1.0.0.12` with `IsInstalled=True`.
+
+- [ ] **Step 8:** Commit.
+
+```bash
+git add extensions/lethal-control/ packages/runner/src/harness.ts
+git commit -m "feat(control): R69 collect coverage in the batch path (1.0.0.12)"
+```
+
+### Task 0b: Does the client-services path return CLEAN per-procedure coverage?
 
 **Files:**
 - Create: `U:/Git/bc-mcp/scripts/r69-coverage-probe.ts` (untracked, matching every other `r69-*.ts` there)
@@ -35,13 +98,15 @@
 **Interfaces:**
 - Consumes: the wiring in `bc-mcp/scripts/r69-batch-spike.ts` (`odataPost`, `odataPostString`, `SessionFactory`, `OpenPageOperation`, `ExecuteActionOperation`) — copy it; it is MEASURED working.
 
-- [ ] **Step 1:** Copy `r69-batch-spike.ts` to `r69-coverage-probe.ts`. Change the seed to run **two** methods in two separate invocations (`ClearBatch` → seed one → run → read, twice), because one method per session is the shipped shape.
+- [ ] **Step 1:** Reuse `r69-coverage-probe.ts` (already written in Task 0's first run). Update it for the 1.0.0.12 surface: `SeedBatchItem` now takes a trailing `coverageFilter`, and `GetBatchResults` now emits `coverage`, `coverageScannedRows`, `coverageEmittedRows`. Pass the sandbox-probes id range as the filter (`79200..79299`) — an EMPTY filter is measurement-mode only and is documented not to return within 300 s.
 
 - [ ] **Step 2: the POSITIVE reading.** Seed a method whose test touches an instrumented procedure in `fixtures/sandbox-probes`. Print the full `result` JSON. Look for any coverage payload naming that procedure.
 
 - [ ] **Step 3: the NEGATIVE CONTROL — the load-bearing one.** Seed a method whose test touches **nothing instrumented** (an empty `[Test]` body). Print the full `result` JSON.
 
-Expected if coverage is usable: the negative control returns **empty** target-app coverage. If it returns coverage for procedures the test never touched, the bracket is absorbing non-test activity and coverage on this path is UNUSABLE — noisy coverage would attribute a genuinely uncovered mutant to a routed test, it would be selected, run, pass because it never reaches the site, and `no-coverage` would become `survived`.
+Read `coverageScannedRows` and `coverageEmittedRows` alongside the array: they separate "the platform recorded nothing" from "rows were recorded, none matched the filter", and the gate turns on that distinction.
+
+Expected if coverage is usable: the negative control returns **empty** target-app coverage (`coverageEmittedRows` 0) while `coverageScannedRows` is non-zero, proving collection ran and simply matched nothing. If it returns coverage for procedures the test never touched, the bracket is absorbing non-test activity and coverage on this path is UNUSABLE — noisy coverage would attribute a genuinely uncovered mutant to a routed test, it would be selected, run, pass because it never reaches the site, and `no-coverage` would become `survived`.
 
 - [ ] **Step 4:** Run both:
 
@@ -217,11 +282,13 @@ git commit -m "feat(control): R69 Phase 2 — nonce, identity mismatch, activate
 
 ### Task 2: Version bump + publish
 
-**Files:**
-- Modify: `extensions/lethal-control/app.json` (`1.0.0.11` → `1.0.0.12`)
-- Modify: `packages/runner/src/harness.ts:37` (`MIN_CONTROL_VERSION` → `"1.0.0.12"`)
+> Task 0a already shipped **1.0.0.12**. Task 1 changes the control AL again, so this task ships **1.0.0.13**.
 
-- [ ] **Step 1:** Bump both in lockstep.
+**Files:**
+- Modify: `extensions/lethal-control/app.json` (`1.0.0.12` → `1.0.0.13`)
+- Modify: `packages/runner/src/harness.ts:37` (`MIN_CONTROL_VERSION` → `"1.0.0.13"`)
+
+- [ ] **Step 1:** Bump both to `1.0.0.13` in lockstep.
 - [ ] **Step 2:** `bun run typecheck` → `rm -rf packages/*/dist` → `bun test packages/runner`. Expected: green (`harness.test.ts:374` asserts the two values are equal).
 - [ ] **Step 3:** `/control-app` — rebuild and publish to Cronus281 AND Cronus283. Verify with:
 
@@ -230,13 +297,13 @@ $env:DOCKER_CONTEXT='desktop-windows'
 Invoke-ScriptInBcContainer -containerName Cronus281 -scriptblock { Get-NAVAppInfo -ServerInstance BC -Tenant default -TenantSpecificProperties -Name "LethAL Control" | Select-Object Version,Scope,IsInstalled }
 ```
 
-Expected: `1.0.0.12`, `IsInstalled=True`. A stale Tenant-scope row with `IsInstalled=False` is inert and expected.
+Expected: `1.0.0.13`, `IsInstalled=True`. A stale Tenant-scope row with `IsInstalled=False` is inert and expected.
 
 - [ ] **Step 4:** Commit.
 
 ```bash
 git add extensions/lethal-control/app.json packages/runner/src/harness.ts
-git commit -m "chore(control): bump LethAL Control 1.0.0.12 (R69 Phase 2)"
+git commit -m "chore(control): bump LethAL Control 1.0.0.13 (R69 Phase 2)"
 ```
 
 ---
