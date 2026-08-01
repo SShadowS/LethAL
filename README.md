@@ -175,7 +175,7 @@ figures under [Testing](#testing) are the measured ones.)*
 | Object kinds instrumented | codeunit, table, page, report, pageextension, tableextension |
 | Backends | `bcdev` (live BC, authoritative), `al-runner` (offline, **not** authoritative) |
 | Concurrency safety | Machine-global lease + per-run two-phase fence |
-| Unit tests | 1,243 |
+| Unit tests | 1,486 |
 | Largest project measured | 19,832 mutation sites across 438 files (a real commercial extension) |
 
 ## Features
@@ -194,6 +194,8 @@ figures under [Testing](#testing) are the measured ones.)*
 | **Two-phase fence** | Every mutant run proves it holds the lease at claim *and* at result-recording, or the result is discarded |
 | **Lost-ack recovery** | An unreadable response is reconciled against the server's own operation marker instead of assuming the worst |
 | **External environments** | A hosted environment owned by a third-party CLI is driven through config-declared commands, with no vendor knowledge in LethAL |
+| **Named refusals** | A test BC refused — permissions, or a `TestPage` the session cannot create — is reported with its cause and BC's own words, not as an unexplained baseline failure |
+| **Runner provenance** | Every verdict records which session type produced it, and the report states each execution context it actually used rather than asserting one |
 | **Operator recovery** | `lethal force-reset-lease` and `lethal clear-quarantine` recover a container stranded by a dead session |
 
 ## Prerequisites
@@ -396,6 +398,10 @@ a LethAL feature or a mode.
   could not execute, so 77 mutants scored `survived` against tests that never ran the mutated
   code. Under the default, `no-coverage` means exactly "no green test executed this on the
   runner that produces verdicts".
+
+  That mode is not dead, though, and the `TestPage` entry below is why: it is currently the only way
+  to keep a run alive when the suite contains a test that opens a real page. Choosing it means
+  accepting the dual-runner disagreement described above — the report names any test that disagrees.
 - **Every verdict describes your app's NON-GUI branch** (R60). LethAL executes every mutant in a
   `GuiAllowed=No`, `ClientType=ODataV4` session, while a developer running the same suite from VS
   Code runs GUI-allowed. A handler-less `Confirm` returns its default silently instead of raising
@@ -442,7 +448,34 @@ a LethAL feature or a mode.
   mutant is recorded as an unmeasured error; `--resume` skips it so the run completes rather than
   dying on it forever.
 - **Tier 3 not built.** Nine operators across two tiers today; the advanced set is designed only.
-  Tier-2 operators also do not yet claim sites inside `tableextension`/`pageextension` bodies.
+  (Tier-2 operators *do* now claim sites inside `tableextension` and `pageextension` bodies — that
+  limit was closed. A `pageextension`'s implicit `Rec` is still refused deliberately: it resolves to
+  the extended page's `SourceTable`, which the project usually cannot see, and guessing would claim
+  sites wrongly. Measured on a real extension: zero sites would have been gained by guessing.)
+- **A test that opens a `TestPage` cannot be scored, and on the default path one can end your whole
+  run.** The default fenced session (`GuiAllowed=No`, `ClientType=ODataV4`) cannot create the test
+  service a `TestPage` needs. What happens next depends on the page, which is the part worth
+  knowing:
+
+  | Page | Fenced (default) | Hub (`coverageMode: "procedure"`) |
+  |------|------------------|-----------------------------------|
+  | Trivial, no logic | refused in ~87 ms; run completes | opens fine |
+  | Real (triggers, FlowFields, a `pageextension` writing on open) | **hangs — the session quarantines and the ENTIRE run scores nothing** | opens and passes in ~451 ms; run completes |
+
+  Both rows are measured, repeatedly, on real containers. The hang is the severe case: one such test
+  at baseline takes every other test and every mutant down with it, not just its own. `--stop-hung-sessions`
+  does **not** rescue it — it makes the failure faster, not survivable, because the baseline loop
+  quarantines on the forced-stop result exactly as it does on a hang.
+
+  **Mitigation that works today:** run with `coverageMode: "procedure"`, which routes baseline
+  discovery to the bcdev hub. Measured: the run completes and everything else gets scored. Note the
+  trade R58 made deliberately when it moved off that mode — the hub runs `GuiAllowed=Yes`, so it can
+  disagree with the fenced runner about a test's outcome.
+
+  **What is still not recovered:** mutant *verdicts* always execute on the fenced path regardless of
+  coverage mode, so a mutant covered only by `TestPage` tests still receives no verdict — it is
+  reported unscoreable with the refusal named, never guessed at. Recovering those verdicts is built
+  but deliberately not wired; see ROADMAP R69/R74/R75.
 - **Procedure-level coverage** from the `bcdev` backend, so `no-coverage` means no test calls that
   procedure. Coverage for extension objects is object-level only.
 - **A red baseline bounds what any run can measure.** Tests that fail before mutation are named in
