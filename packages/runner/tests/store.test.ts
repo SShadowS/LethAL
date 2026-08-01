@@ -270,4 +270,33 @@ CREATE TABLE IF NOT EXISTS mutants (
       }
     });
   });
+
+  // Final whole-branch review Item 3: `mutantVerdicts` used to cast the `runner` column straight
+  // to `RunnerKind` with no validation — a corrupt DB string would silently flow into
+  // `executionContexts` grouping and `MutantOutcome.runner` instead of failing loudly.
+  describe("runner column validation", () => {
+    test("a NULL runner column maps to the documented default: absent, not thrown", () => {
+      const store = new ResultsStore(":memory:");
+      const runId = store.createRun({ projectPath: "/p", backend: "bcdev", appVersion: "1" });
+      // No `runner` on the row — the pre-Task-5 shape every call site used before R69 Phase 2.
+      store.recordMutant(runId, mutantRow("survived"));
+      const verdicts = store.mutantVerdicts(runId);
+      expect(verdicts).toHaveLength(1);
+      expect(verdicts[0]?.runner).toBeUndefined();
+      store.close();
+    });
+
+    test("a corrupt runner column value throws, naming the value and the mutant row", () => {
+      const store = new ResultsStore(":memory:");
+      const runId = store.createRun({ projectPath: "/p", backend: "bcdev", appVersion: "1" });
+      store.recordMutant(runId, mutantRow("survived"));
+      // No code path ever writes anything but "fenced" / "client-services" / NULL — simulate a
+      // corrupt row directly, the way a hand-edited or foreign-tool-written DB could produce one.
+      store.db.query("UPDATE mutants SET runner = ? WHERE run_id = ?").run("hub", runId);
+      expect(() => store.mutantVerdicts(runId)).toThrow(
+        /astHash=abc123.*codeunitName=Sample.*corrupt "runner" column value "hub"/,
+      );
+      store.close();
+    });
+  });
 });

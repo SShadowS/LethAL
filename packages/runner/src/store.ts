@@ -276,6 +276,27 @@ export class ResultsStore {
     };
   }
 
+  /**
+   * Validates a `runner` column value read back from SQLite. NULL is the documented default (the
+   * column is nullable — pre-Task-5 rows predate it, and `migrate()` widens existing tables without
+   * backfilling a value) and callers read that absence as `"fenced"` exactly once, in `buildReport`
+   * (report.ts) — see `RunnerKind`'s own doc comment above. Anything else that is not one of the two
+   * known literals is a corrupt row, not a plausible third state: per this project's convention
+   * (CLAUDE.md "fail loudly on caller-contract violations"), a corrupt DB value must throw naming
+   * itself and the offending row, never get coerced into a guessed default.
+   */
+  private parseRunnerKind(
+    value: string,
+    row: { astHash: string; codeunitName: string; operatorName: string; operatorMajor: number },
+  ): RunnerKind {
+    if (value === "fenced" || value === "client-services") return value;
+    throw new Error(
+      `store.ts: mutant row (astHash=${row.astHash}, codeunitName=${row.codeunitName}, ` +
+        `operatorName=${row.operatorName}, operatorMajor=${row.operatorMajor}) has a corrupt ` +
+        `"runner" column value ${JSON.stringify(value)} — expected "fenced", "client-services", or NULL`,
+    );
+  }
+
   /** R47: every mutant verdict a prior run recorded, keyed by identity rather than mutant code —
    *  see `MutantVerdictRow`. */
   mutantVerdicts(runId: number): MutantVerdictRow[] {
@@ -304,7 +325,16 @@ export class ResultsStore {
       durationMs: r.duration_ms,
       ...(r.killing_test !== null ? { killingTest: r.killing_test } : {}),
       ...(r.failure_note !== null ? { failureNote: r.failure_note } : {}),
-      ...(r.runner !== null ? { runner: r.runner as RunnerKind } : {}),
+      ...(r.runner !== null
+        ? {
+            runner: this.parseRunnerKind(r.runner, {
+              astHash: r.ast_hash,
+              codeunitName: r.codeunit_name,
+              operatorName: r.operator_name,
+              operatorMajor: r.operator_major,
+            }),
+          }
+        : {}),
     }));
   }
 

@@ -1374,8 +1374,16 @@ describe("R69 Phase 2 Task 6 — routing gate-2-passing tests through the client
     // `quarantined` is an OBJECT `{ reason }`, absent on an ordinary session — not a boolean.
     expect(report.quarantined).toBeDefined();
     expect(report.quarantined?.reason).toContain("M0001");
-    // M0002/M0003 are never even scheduled once M0001 wedges (mirrors the fenced path: nothing
-    // after a quarantine gets a row at all), so this also proves scheduling stopped.
+    // The REAL proof that scheduling stopped: `runRoutedMutantsOnBackend`'s loop checks
+    // `args.safety.isUnsafe` both before starting the next candidate and again right after
+    // `record()`-ing the wedged one, so M0002/M0003 are never `record()`-ed at all once M0001
+    // wedges — not recorded-then-not-killed, simply absent (mirrors the fenced path: nothing
+    // after a quarantine gets a row at all). `report.mutants` must therefore carry ONLY M0001.
+    expect(report.mutants.map((m) => m.mutantCode)).toEqual(["M0001"]);
+    // Belt-and-braces on M0001's own verdict — NOT by itself proof that scheduling stopped: a
+    // wedge always resolves to "error", never "killed", so this alone would still pass even if
+    // M0002/M0003 had also been recorded with some non-"killed" verdict. The assertion above is
+    // what actually rules that out.
     expect(report.mutants.every((m) => m.verdict !== "killed")).toBe(true);
     expect(transport.seq).toBe(2);
   });
