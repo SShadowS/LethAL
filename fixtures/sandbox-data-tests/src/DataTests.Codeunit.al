@@ -455,7 +455,11 @@ codeunit 79310 "Data Tests"
 
     // ---------------------------------------------------------------------------------------------
     // R78: the ONLY TestPage test in this fixture, and the only route to
-    // `"Data Value Source"` (object 79308) procedure `GetValue`.
+    // `codeunit 79308 "Data Value Source".GetValue`.
+    //
+    // That comment is deliberate, not incidental: written this way it USED to delete every [Test]
+    // below it from discovery (R79, fixed in `packages/runner/src/discovery.ts`), silently. It
+    // stays in its natural wording so the fixture keeps exercising the fix.
     //
     // What it is for: `GetValue`'s `exit(42)` carries exactly one Tier-1 mutant
     // (`lethal.return-value` rewrites a non-zero numeric exit to `exit(0)`), and nothing else in the
