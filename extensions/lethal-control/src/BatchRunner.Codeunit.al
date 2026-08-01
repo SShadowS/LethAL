@@ -35,6 +35,10 @@ codeunit 71013 "LC Batch Runner"
         if not Queue.FindSet() then
             exit;
         repeat
+            // Activate EVERY row, baseline included (blank Mutant Id). See ActivateForBatch: the
+            // "LC Mutation Active" row outlives the session, so a baseline that skips this inherits
+            // the PREVIOUS row's mutant via EnsureLoaded and runs mutated.
+            State.ActivateForBatch(Queue."Target App Id", Queue."Artifact Id", Queue."Mutant Id");
             // R69 Task 0a: same StartApplicationCoverage/.../StopApplicationCoverage pairing as
             // RunMutantWithCoverage — proven in production on the fenced path. The filter is
             // mandatory, not an optimisation (see "LC Batch Queue"."Coverage Filter"'s doc comment).
@@ -71,10 +75,16 @@ codeunit 71013 "LC Batch Runner"
             Res.Method := Queue.Method;
             Res.Ok := Ok;
             Res.Attested := State.AttestationObservedAny();
+            Res."Identity Mismatch" := State.AttestationMismatch();
+            Res.Nonce := Queue.Nonce;
             Res."Error Text" := ErrText;
             Res.SetResultJson(Json);
             Res.SetCoverageJson(CoverageJson);
             Res.Insert(true);
+            Commit();
+            // Clear on EVERY terminal path — including the error path above. The active row outlives
+            // the session, so a miss here runs the NEXT invocation's baseline mutated.
+            State.ClearForBatch(Queue."Target App Id", Queue."Artifact Id", Queue."Mutant Id");
             Commit();
         until Queue.Next() = 0;
     end;

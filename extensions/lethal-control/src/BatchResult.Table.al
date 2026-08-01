@@ -21,6 +21,8 @@ table 71012 "LC Batch Result"
         field(5; Attested; Boolean) { }
         field(6; "Result Json"; Blob) { }
         field(7; "Error Text"; Text[2048]) { }
+        field(8; "Identity Mismatch"; Boolean) { }
+        field(9; Nonce; Text[64]) { }
         // R69 Task 0a: the per-row coverage payload — {coverage, coverageScannedRows,
         // coverageEmittedRows}, written by "LC Batch Runner".RunBatch — mirroring "Result Json" as
         // a Blob because the serialized coverage array can exceed Text[2048], exposed only through

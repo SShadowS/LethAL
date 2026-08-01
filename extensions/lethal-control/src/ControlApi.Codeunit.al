@@ -538,6 +538,8 @@ codeunit 71003 "LC Control API"
                 Obj.Add('method', Res.Method);
                 Obj.Add('ok', Res.Ok);
                 Obj.Add('attested', Res.Attested);
+                Obj.Add('identityMismatch', Res."Identity Mismatch");
+                Obj.Add('nonce', Res.Nonce);
                 Obj.Add('errorText', Res."Error Text");
                 if Inner.ReadFrom(Res.GetResultJson()) then
                     Obj.Add('result', Inner)
@@ -573,10 +575,18 @@ codeunit 71003 "LC Control API"
     /// <summary>R69: seed one work item into the batch queue over OData. LethAL calls this before
     /// driving the page action over the client-services WebSocket.
     ///
+    /// R69 Phase 2: `mutantId`/`targetAppId`/`artifactId` are what "LC Batch Runner".RunBatch passes
+    /// to ActivateForBatch/ClearForBatch for this row (a blank `mutantId` seeds an unmutated gate-2
+    /// baseline — see ActivateForBatch's doc comment for why baselines must still activate). `nonce`
+    /// is load-bearing — it proves a result row came from THIS invocation, closing the stale-row
+    /// hazard R69's own history demonstrated. It proves nothing about WHAT ran; that is the client's
+    /// result-JSON validation (spec §3.3).
+    ///
     /// `coverageFilter` (Task 0a) is the same mandatory object-id filter `RunMutantWithCoverage`
-    /// takes as `CoverageObjectIdFilter` — a trailing parameter, so no existing caller (positional
-    /// or named) that omits it breaks.</summary>
-    procedure SeedBatchItem(codeunitId: Integer; method: Text; coverageFilter: Text) LineNo: Integer
+    /// takes as `CoverageObjectIdFilter` — kept as the trailing parameter per its own doc comment, so
+    /// this task's new activation/identity parameters are inserted ahead of it rather than displacing
+    /// it.</summary>
+    procedure SeedBatchItem(codeunitId: Integer; method: Text; mutantId: Text; targetAppId: Text; artifactId: Text; nonce: Text; coverageFilter: Text) LineNo: Integer
     var
         Queue: Record "LC Batch Queue";
     begin
@@ -588,6 +598,10 @@ codeunit 71003 "LC Control API"
         Queue."Line No." := LineNo;
         Queue."Codeunit ID" := codeunitId;
         Queue.Method := CopyStr(method, 1, MaxStrLen(Queue.Method));
+        Queue."Mutant Id" := CopyStr(mutantId, 1, MaxStrLen(Queue."Mutant Id"));
+        Queue."Target App Id" := CopyStr(targetAppId, 1, MaxStrLen(Queue."Target App Id"));
+        Queue."Artifact Id" := CopyStr(artifactId, 1, MaxStrLen(Queue."Artifact Id"));
+        Queue.Nonce := CopyStr(nonce, 1, MaxStrLen(Queue.Nonce));
         Queue."Coverage Filter" := CopyStr(coverageFilter, 1, MaxStrLen(Queue."Coverage Filter"));
         Queue.Insert(true);
         Commit();
