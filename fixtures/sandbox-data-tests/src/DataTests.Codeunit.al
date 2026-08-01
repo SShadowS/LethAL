@@ -381,7 +381,7 @@ codeunit 79310 "Data Tests"
     end;
 
     // THERE IS DELIBERATELY NO TEST FOR THE `pageextension` SITE, and the reason is a measurement,
-    // not an omission — twice over now.
+    // not an omission — three times over now.
     //
     // A pageextension's code is unreachable from a test codeunit — nothing outside the page can
     // name its procedures — so the only way in is a `TestPage`. The first such test was written,
@@ -429,6 +429,29 @@ codeunit 79310 "Data Tests"
     // test-free here on purpose: a live-hanging test in this file wedges `itest:tables` for
     // EVERY future run (not just this object's), which is a strictly worse regression detector
     // than the honest no-coverage bucket it would replace.
+    //
+    // R76 (2026-08-01) closed the one open question the analysis above left dangling: does R53's
+    // `--stop-hung-sessions` convert this BASELINE hang into a scored/failed test rather than a
+    // quarantine? Reinstated this exact test again, published to Cronus283, and ran the CLI
+    // directly (`bun packages/runner/src/cli.ts run --project fixtures/sandbox-data --tests
+    // fixtures/sandbox-data-tests --backend bcdev --config
+    // fixtures/sandbox-data/lethal.config.local.json --selector-id 79199 --control-id 79198
+    // --table-id 79197 --stop-hung-sessions`, since `tables.itest.ts` does not thread the flag
+    // through. Answer: QUARANTINED — same as without the flag. The armed run resolved in 34.3s
+    // total (not an indefinite hang): `PageExtCountsMatchingRelated` came back `outcome: "error"`,
+    // `"RunMutant 2xx body could not be read: ... socket connection was closed unexpectedly"` —
+    // strong evidence the flag DID reach in and kill the BC session under the open connection, far
+    // faster than the un-flagged hang. But that forced-stop outcome is still classified by
+    // `requiresUnsafeLatch` as ambiguous, so the SAME baseline-discovery loop
+    // (`packages/runner/src/orchestrator.ts` ~:2418-2431) still calls `quarantineInFlight` and
+    // `break`s — `quarantined: {"reason":"baseline test in-flight-unknown running
+    // PageExtCountsMatchingRelated"}`, byte-identical to the no-flag message, killed=0 survived=0
+    // noCoverage=0. R53's stop path, proven only on MUTANT runs before this, does not generalise to
+    // a BASELINE hang: it changes latency, not outcome. One genuine improvement over the two
+    // pre-R76 reproductions: the container did NOT wedge this time (NST stayed `Running`
+    // throughout, confirmed responsive before and after) — recovery was `force-reset-lease` +
+    // `clear-quarantine` only, no Docker-level restart needed. Full transcript:
+    // .superpowers/sdd/2026-08-01-r69-phase2-batch-runner/r76-containment-report.md
 
     // ---------------------------------------------------------------------------------------------
     // Seeding helpers. All idempotent — see InsertDoublesAmountWeak's comment for why that is
