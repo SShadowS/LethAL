@@ -17,6 +17,7 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "../src/backend";
+import type { BatchOdata, BatchWebSocket } from "../src/batch-transport";
 import { DeploymentVerifier, decidePublishOutcome } from "../src/deployment-verifier";
 import { ActivationFailure } from "../src/failure-classes";
 import { LeaseUnavailableError } from "../src/lease";
@@ -1112,6 +1113,96 @@ describe("runSession — Task 6 unsupported-baseline qualification (spec §9)", 
     });
   });
 
+  // ————————————————————————————————————————————————————————————————————————————————————————
+  // R69. The mirror image of R35, and separate for exactly that reason. A test that opens a
+  // `TestPage` is refused by the fenced session R58 made the default — MEASURED 2026-07-31 on
+  // Cronus281 (`fixtures/sandbox-probes` codeunit 79218), and measured to be a FAST refusal
+  // (87 ms), correcting the "hangs" this row was originally filed as. Where R35's cause has a
+  // one-line fix in the reader's own source, this one has NO target-side fix at all, so the two
+  // must never share a heading: each would tell the other's reader something false.
+  // ————————————————————————————————————————————————————————————————————————————————————————
+  describe("R69 — a baseline test refused for opening a TestPage", () => {
+    const TESTPAGE_REFUSAL =
+      "Unexpected CLR exception thrown.: System.NotSupportedException: Specified method is not " +
+      "supported. at Microsoft.Dynamics.Nav.Runtime.NavSession.CreateNavTestService()";
+
+    async function runTestPageRefused() {
+      const dirs = await qualProject();
+      const backend = new QualificationBackend((method: string) =>
+        method === "UnsupportedTest"
+          ? {
+              outcome: "error" as const,
+              procedure: "IsUnderBudget",
+              failureMessage: TESTPAGE_REFUSAL,
+            }
+          : { outcome: "pass" as const, procedure: "IsOverBudget" },
+      );
+      const store = new ResultsStore(":memory:");
+      return await runSession({ backend, store, ...dirs, selectorIds });
+    }
+
+    test("names the TestPage cause instead of the bare unsupported-test-type wording", async () => {
+      const report = await runTestPageRefused();
+      const errored = report.mutants.filter((m) => m.verdict === "error");
+      expect(errored.length).toBe(3);
+      for (const m of errored) {
+        expect(m.failureNote).toStartWith("testpage unsupported on this path:");
+        expect(m.failureNote).toContain("Sandbox Tests.UnsupportedTest");
+        expect(m.failureNote).not.toContain("unsupported test type: mutant covered");
+      }
+    });
+
+    test("surfaces the affected test on the report, distinct from the did-not-pass list", async () => {
+      const report = await runTestPageRefused();
+      expect(report.testPageUnsupported?.tests).toEqual(["Sandbox Tests.UnsupportedTest"]);
+      expect(report.testPageUnsupported?.diagnosis).toContain("TestPage");
+      // A strict subset, not a replacement — same contract as `permissionsRefused`.
+      expect(report.unsupportedTests).toContain("Sandbox Tests.UnsupportedTest");
+      expect(report.validity.caveats).toContain("tests-testpage-unsupported");
+    });
+
+    // The two causes demand opposite responses. Cross-labelling either way is the failure mode
+    // this whole split exists to prevent.
+    test("is never labelled a permissions refusal, and vice versa", async () => {
+      const report = await runTestPageRefused();
+      expect(report.permissionsRefused).toBeUndefined();
+      expect(report.validity.caveats).not.toContain("tests-permission-refused");
+      for (const m of report.mutants.filter((m) => m.verdict === "error")) {
+        expect(m.failureNote).not.toContain("permissions refusal");
+        expect(m.failureNote).not.toContain("TestPermissions = Disabled");
+      }
+    });
+
+    test("quotes BC's own words rather than asserting the diagnosis unsupported", async () => {
+      const report = await runTestPageRefused();
+      const errored = report.mutants.filter((m) => m.verdict === "error");
+      expect(errored.length).toBeGreaterThan(0);
+      for (const m of errored) expect(m.failureNote).toContain("CreateNavTestService");
+    });
+
+    // The direction that matters for safety: this must not fire on every red baseline, or every
+    // reader is told their tests cannot run here when they simply failed.
+    test("a test that merely fails is NOT diagnosed as a TestPage refusal", async () => {
+      const dirs = await qualProject();
+      const backend = new QualificationBackend((method: string) =>
+        method === "UnsupportedTest"
+          ? {
+              outcome: "error" as const,
+              procedure: "IsUnderBudget",
+              failureMessage: "Assert.AreEqual failed: expected 3, got 4",
+            }
+          : { outcome: "pass" as const, procedure: "IsOverBudget" },
+      );
+      const store = new ResultsStore(":memory:");
+      const report = await runSession({ backend, store, ...dirs, selectorIds });
+
+      expect(report.testPageUnsupported).toBeUndefined();
+      expect(report.validity.caveats).not.toContain("tests-testpage-unsupported");
+      for (const m of report.mutants.filter((m) => m.verdict === "error"))
+        expect(m.failureNote).toContain("unsupported test type");
+    });
+  });
+
   test("a mutant covered by a green test still runs (no over-exclusion)", async () => {
     const dirs = await qualProject();
     const backend = new QualificationBackend(baselineFor);
@@ -1123,6 +1214,279 @@ describe("runSession — Task 6 unsupported-baseline qualification (spec §9)", 
     // Only those 3 ever ran under activation — the unsupported-covered mutants
     // were excluded, not executed.
     expect(backend.ranActive).toBe(3);
+  });
+});
+
+/**
+ * Fake `BatchOdata`+`BatchWebSocket` pair driving `orchestrator.ts`'s routed-mutant path
+ * (`batch-transport.ts`'s `runOneBatchMethod`) — the client-services twin of `QualificationBackend`
+ * above. Scripted by CALL SEQUENCE NUMBER (never wall-clock timing, per project convention): the
+ * Nth `GetBatchResults` this fake answers gets whatever `resultFor(N, seeded)` returns, where
+ * `seeded` is the row `SeedBatchItem` most recently wrote (so a script can tell a gate-2 baseline
+ * call apart from a mutant-active one by `seeded.mutantId`, or just by call order).
+ */
+class FakeBatchTransport implements BatchOdata, BatchWebSocket {
+  seq = 0;
+  private seeded:
+    | { codeunitId: number; method: string; mutantId: string; nonce: string }
+    | undefined;
+
+  constructor(
+    private readonly resultFor: (
+      seq: number,
+      seeded: { method: string; mutantId: string },
+    ) => { rows: 0 } | { rows: 1; outcome: "pass" | "fail" },
+  ) {}
+
+  async post(action: string, body: unknown): Promise<unknown> {
+    if (action === "ClearBatch") return {};
+    if (action === "SeedBatchItem") {
+      const b = body as { codeunitId: number; method: string; mutantId: string; nonce: string };
+      this.seeded = {
+        codeunitId: b.codeunitId,
+        method: b.method,
+        mutantId: b.mutantId,
+        nonce: b.nonce,
+      };
+      return {};
+    }
+    if (action === "GetBatchResults") {
+      const seeded = this.seeded;
+      if (seeded === undefined) throw new Error("GetBatchResults called before SeedBatchItem");
+      this.seq++;
+      const scripted = this.resultFor(this.seq, seeded);
+      if (scripted.rows === 0) {
+        return { value: JSON.stringify([]) }; // the wedge shape: never comes back
+      }
+      const row = {
+        nonce: seeded.nonce,
+        ok: scripted.outcome === "pass",
+        attested: true,
+        identityMismatch: false,
+        errorText: "",
+        result: {
+          testResults: [{ method: seeded.method, result: scripted.outcome === "pass" ? 2 : 1 }],
+        },
+        coverage: [],
+        coverageScannedRows: 0,
+        coverageEmittedRows: 0,
+      };
+      return { value: JSON.stringify([row]) };
+    }
+    throw new Error(`FakeBatchTransport: unexpected action ${action}`);
+  }
+
+  async runBatchAction(): Promise<void> {}
+}
+
+describe("R69 Phase 2 Task 6 — routing gate-2-passing tests through the client-services batch path", () => {
+  const TESTPAGE_REFUSAL =
+    "Unexpected CLR exception thrown.: System.NotSupportedException: Specified method is not " +
+    "supported. at Microsoft.Dynamics.Nav.Runtime.NavSession.CreateNavTestService()";
+
+  // IsUnderBudget is the ONLY mutable procedure — its 3 mutants (M0001-M0003) are covered ONLY
+  // by UnsupportedTest (TestPage-refused at the fenced baseline, per TESTPAGE_REFUSAL above).
+  // GreenTest exists (a batch needs >=1 green baseline test to reach coverage filtering at all —
+  // see runSession's "no green baseline tests" early exit) but names NoOp, a procedure with no
+  // mutable sites, so it contributes real GREEN COVERAGE OF NOTHING: no mutant anywhere in this
+  // fixture has fenced-green coverage, which is what makes "every mutant not killed" a meaningful
+  // assertion below rather than an accident of some unrelated procedure's legitimate kill.
+  const ROUTED_ONLY_AL = `codeunit 79000 "Sandbox Logic"
+{
+    procedure IsUnderBudget(Amount: Decimal; Budget: Decimal): Boolean
+    begin
+        exit(Amount < Budget);
+    end;
+
+    procedure NoOp()
+    begin
+    end;
+}
+`;
+
+  async function routedProject() {
+    const dirs = await makeProject(TWO_TEST_AL);
+    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), ROUTED_ONLY_AL);
+    return dirs;
+  }
+
+  const routedBaselineFor = (method: string) =>
+    method === "UnsupportedTest"
+      ? { outcome: "error" as const, procedure: "IsUnderBudget", failureMessage: TESTPAGE_REFUSAL }
+      : { outcome: "pass" as const, procedure: "NoOp" };
+
+  // The fenced path never turns one failure into `killed` without a baseline confirmation
+  // (R27/R59). The routed path is the MOST nondeterministic session LethAL has — GuiAllowed=Yes
+  // lets dialogs raise — so it needs that defence more, not less.
+  test("a routed failure is confirmed before it becomes a kill", async () => {
+    const dirs = await routedProject();
+    const backend = new QualificationBackend(routedBaselineFor);
+    const store = new ResultsStore(":memory:");
+    // seq 1: gate-2 baseline (unmutated) — passes, so UnsupportedTest routes at all.
+    // seq 2+: every mutant-active run AND its confirmation rerun fails — every one of
+    // IsUnderBudget's 3 mutants looks like a kill under the mutant, then proves unstable at
+    // confirmation (fails unmutated too).
+    const transport = new FakeBatchTransport((seq) => ({
+      rows: 1,
+      outcome: seq === 1 ? "pass" : "fail",
+    }));
+    const report = await runSession({
+      backend,
+      store,
+      ...dirs,
+      selectorIds,
+      routedTransport: { odata: transport, ws: transport },
+    });
+    const m = report.mutants.find((x) => x.mutantCode === "M0001");
+    expect(m?.verdict).toBe("error");
+    expect(m?.cause).toBe("unstable");
+    expect(m?.runner).toBe("client-services");
+    // gate-2 (1) + 3 mutants x (mutant-active + confirmation) = 7, never fewer: a bare
+    // mutant-active failure alone must never be enough to decide anything.
+    expect(transport.seq).toBe(7);
+    // Finding 1 (spec §3.1, REQUIRED mitigation): gate 1 matches BC's refusal text ANYWHERE in a
+    // failure's message + stack trace, so a false positive would silently mislabel a routed
+    // mutant as "opens a TestPage" when it does not. The verbatim quote is the only thing that
+    // lets a reader overrule that — it must survive onto the routed verdict's note, not just be
+    // consumed internally by `selectRoutedTests` and discarded.
+    expect(m?.failureNote).toContain("CreateNavTestService");
+  });
+
+  // A wedged RunBatch may still be executing WITH A MUTANT ACTIVE, holding locks. Recording a
+  // per-mutant error and continuing would let a fenced mutant's covering test fail on contention
+  // and be falsely killed once the wedged run eventually finishes.
+  test("a wedge quarantines the tier rather than recording a per-mutant error and continuing", async () => {
+    const dirs = await routedProject();
+    const backend = new QualificationBackend(routedBaselineFor);
+    const store = new ResultsStore(":memory:");
+    // seq 1: gate-2 baseline — passes, so UnsupportedTest routes.
+    // seq 2: mutant-active run for M0001 — the batch never comes back (0 rows): a wedge.
+    const transport = new FakeBatchTransport((seq) =>
+      seq === 1 ? { rows: 1, outcome: "pass" } : { rows: 0 },
+    );
+    const report = await runSession({
+      backend,
+      store,
+      ...dirs,
+      selectorIds,
+      routedTransport: { odata: transport, ws: transport },
+    });
+    // `quarantined` is an OBJECT `{ reason }`, absent on an ordinary session — not a boolean.
+    expect(report.quarantined).toBeDefined();
+    expect(report.quarantined?.reason).toContain("M0001");
+    // The REAL proof that scheduling stopped: `runRoutedMutantsOnBackend`'s loop checks
+    // `args.safety.isUnsafe` both before starting the next candidate and again right after
+    // `record()`-ing the wedged one, so M0002/M0003 are never `record()`-ed at all once M0001
+    // wedges — not recorded-then-not-killed, simply absent (mirrors the fenced path: nothing
+    // after a quarantine gets a row at all). `report.mutants` must therefore carry ONLY M0001.
+    expect(report.mutants.map((m) => m.mutantCode)).toEqual(["M0001"]);
+    // Belt-and-braces on M0001's own verdict — NOT by itself proof that scheduling stopped: a
+    // wedge always resolves to "error", never "killed", so this alone would still pass even if
+    // M0002/M0003 had also been recorded with some non-"killed" verdict. The assertion above is
+    // what actually rules that out.
+    expect(report.mutants.every((m) => m.verdict !== "killed")).toBe(true);
+    expect(transport.seq).toBe(2);
+  });
+
+  // The router must not leak: a mutant with ANY fenced-green coverage keeps its fenced verdict,
+  // unexamined — even when the SAME procedure is also named by a gate-1/gate-2-eligible test.
+  test("a mutant with any fenced-green coverage is not routed", async () => {
+    // TARGET_AL (written by makeProject by default) has exactly one procedure, IsOverBudget —
+    // both GreenTest and UnsupportedTest name it, so its 3 mutants (M0001-M0003) have BOTH a
+    // fenced-green covering test and a gate-1/gate-2-eligible one.
+    const dirs = await makeProject(TWO_TEST_AL);
+    const backend = new QualificationBackend((method) =>
+      method === "UnsupportedTest"
+        ? { outcome: "error" as const, procedure: "IsOverBudget", failureMessage: TESTPAGE_REFUSAL }
+        : { outcome: "pass" as const, procedure: "IsOverBudget" },
+    );
+    const store = new ResultsStore(":memory:");
+    const transport = new FakeBatchTransport(() => ({ rows: 1, outcome: "pass" }));
+    const report = await runSession({
+      backend,
+      store,
+      ...dirs,
+      selectorIds,
+      routedTransport: { odata: transport, ws: transport },
+    });
+    const overBudgetMutants = report.mutants.filter((m) =>
+      ["M0001", "M0002", "M0003"].includes(m.mutantCode),
+    );
+    expect(overBudgetMutants.length).toBe(3);
+    for (const m of overBudgetMutants) expect(m.runner).toBe("fenced");
+    // Never even examined: IsOverBudget's mutants are green-covered, so they never reach the
+    // router and the transport is never called.
+    expect(transport.seq).toBe(0);
+  });
+
+  // Three tests, so a candidate's `covering` list can hold TWO non-green tests at once: one that
+  // passes both routing gates, one that fails for an ordinary reason. Requirement 3 says
+  // "EXCLUSIVELY" — `resolveRoutedCandidates` enforces it with `covering.every(...)`, and this is
+  // the only test in the suite where `.every` and `.some` disagree: `.some` would route this
+  // mutant off the strength of UnsupportedTest alone, even though BrokenTest — which never comes
+  // near a TestPage, and covers the exact same procedure — also failed and was never examined.
+  const THREE_TEST_AL = `codeunit 79100 "Sandbox Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure GreenTest()
+    begin
+    end;
+
+    [Test]
+    procedure UnsupportedTest()
+    begin
+    end;
+
+    [Test]
+    procedure BrokenTest()
+    begin
+    end;
+}
+`;
+
+  test("a mutant covered by both a routable test and an ordinary failing test is NOT routed (exclusivity)", async () => {
+    const dirs = await makeProject(THREE_TEST_AL);
+    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), ROUTED_ONLY_AL);
+    const backend = new QualificationBackend((method) => {
+      if (method === "UnsupportedTest") {
+        return {
+          outcome: "error" as const,
+          procedure: "IsUnderBudget",
+          failureMessage: TESTPAGE_REFUSAL,
+        };
+      }
+      if (method === "BrokenTest") {
+        return {
+          outcome: "error" as const,
+          procedure: "IsUnderBudget",
+          failureMessage: "Assert.AreEqual failed: expected 3, got 4",
+        };
+      }
+      return { outcome: "pass" as const, procedure: "NoOp" }; // GreenTest
+    });
+    const store = new ResultsStore(":memory:");
+    // Gate 1 is checked locally before any live call, so BrokenTest (an ordinary assertion
+    // failure, no TestPage refusal) never reaches the transport at all — only UnsupportedTest's
+    // gate-2 baseline check does. If that single call is the only one ever made, `.every` never
+    // even got a chance to matter; the assertions below are what actually pin the behaviour down.
+    const transport = new FakeBatchTransport(() => ({ rows: 1, outcome: "pass" }));
+    const report = await runSession({
+      backend,
+      store,
+      ...dirs,
+      selectorIds,
+      routedTransport: { odata: transport, ws: transport },
+    });
+    const m = report.mutants.find((x) => x.mutantCode === "M0001");
+    expect(m?.verdict).toBe("error");
+    expect(m?.runner ?? "fenced").not.toBe("client-services");
+    expect(m?.failureNote).toContain("Sandbox Tests.UnsupportedTest");
+    expect(m?.failureNote).toContain("Sandbox Tests.BrokenTest");
+    // Exactly the gate-2 baseline check for UnsupportedTest — never a mutant-active run, because
+    // this candidate was never routed.
+    expect(transport.seq).toBe(1);
   });
 });
 

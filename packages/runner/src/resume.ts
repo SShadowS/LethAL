@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { MutantManifestEntry } from "@lethal/schemata";
 import { identityKeyOf, serializeKey } from "./selection";
-import type { MutantVerdict, MutantVerdictRow } from "./store";
+import type { MutantVerdict, MutantVerdictRow, RunnerKind } from "./store";
 
 /**
  * R47 — resuming an aborted run.
@@ -72,6 +72,16 @@ export interface CarriedVerdict {
   readonly killingTest?: string;
   readonly failureNote?: string;
   readonly durationMs: number;
+  /**
+   * R69 Phase 2 Task 5 — the runner that actually produced this verdict, carried through from
+   * `MutantVerdictRow.runner` unchanged. THE RESUME HOLE this closes: without this field, a mutant
+   * killed under `GuiAllowed=Yes` (client-services) in run 1 is re-recorded on `--resume` with no
+   * runner tag at all, and a report defined as "the execution contexts used in THIS run" would
+   * truthfully report fenced-only — silently telling the reader an interactive kill was fenced.
+   * Absent when the source row predates this column (read as "fenced", never as unknown — see
+   * `RunnerKind`).
+   */
+  readonly runner?: RunnerKind;
 }
 
 export interface ResumeIndex {
@@ -161,6 +171,7 @@ export function buildResumeIndex(
       durationMs: row.durationMs,
       ...(row.killingTest !== undefined ? { killingTest: row.killingTest } : {}),
       ...(row.failureNote !== undefined ? { failureNote: row.failureNote } : {}),
+      ...(row.runner !== undefined ? { runner: row.runner } : {}),
     });
   }
   return { carryable, ambiguousKeys, nonCarryableRows, strandedKeys };

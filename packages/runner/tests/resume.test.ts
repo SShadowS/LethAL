@@ -814,6 +814,47 @@ describe("runSession --resume (R47)", () => {
     expect(carried.every((m) => m.carried === true)).toBe(true);
   });
 
+  // R69 Phase 2 Task 5 — THE RESUME HOLE, end to end through `runSession` rather than just the
+  // isolated `buildResumeIndex`/`buildReport` units. Task 6 (not this one) wires the router that
+  // would produce a client-services verdict live; this test stands in for that by tagging run 1's
+  // verdict directly in the store — proving the RESUME/RECORD plumbing itself carries the tag,
+  // independent of how it got there. Without this fix, `record()`'s carried-verdict call site
+  // dropped the tag on the floor and the resumed report's `executionContexts` would report
+  // fenced-only, silently misdescribing an interactive kill as fenced.
+  test("a verdict tagged client-services keeps that tag through --resume, all the way into the report (R69 Phase 2)", async () => {
+    const dirs = await makeProject();
+    const store = new ResultsStore(":memory:");
+    await runSession({ backend: new CountingBackend("pass", 1), store, ...dirs, selectorIds });
+    // Stands in for Task 6's live router: tag run 1's recorded verdict(s) as having come from the
+    // client-services path, directly against the store `record()` already wrote to.
+    store.db.exec(
+      "UPDATE mutants SET runner = 'client-services' WHERE run_id = (SELECT MAX(id) FROM runs) AND verdict != 'error'",
+    );
+
+    const report = await runSession({
+      backend: new CountingBackend("pass"),
+      store,
+      ...dirs,
+      selectorIds,
+      resume: "last",
+    });
+
+    const carriedMutant = report.mutants.find((m) => m.carried === true);
+    expect(carriedMutant).toBeDefined();
+    expect(carriedMutant?.runner).toBe("client-services");
+
+    const carriedCtx = report.validity.executionContexts.find(
+      (c) => c.runner === "client-services",
+    );
+    expect(carriedCtx).toBeDefined();
+    expect(carriedCtx?.basis).toContain("carried");
+    // The stranded row was deliberately excluded from the UPDATE (still `error`, never carryable),
+    // so it must NOT show up tagged client-services anywhere in this report.
+    expect(
+      report.mutants.some((m) => m.verdict === "error" && m.runner === "client-services"),
+    ).toBe(false);
+  });
+
   test("a resumed survivor keeps THIS run's covering tests, not an empty list", async () => {
     // Carried verdicts are recorded after coverage attribution precisely so a resumed survivor
     // stays actionable — an agent reading the report needs to know which tests ran it.
