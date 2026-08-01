@@ -13,15 +13,23 @@ import type { SessionReport } from "../src/report";
 // ————————————————————————————————————————————————————————————————————————
 describe("renderConsole — al-runner canary reiteration (R7/R8)", () => {
   const baseReport: SessionReport = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     validity: {
       reliability: "full" as const,
       caveats: [],
       scoreDescribes: "test fixture",
       baselineTests: { total: 0, failing: 0 },
       scoredMutants: { scored: 0, recorded: 0 },
-      // R60: every verdict describes the app's non-interactive branch; always present.
-      executionContext: { guiAllowed: false as const, clientType: "ODataV4", basis: "test fixture" },
+      // R60/R69 Phase 2: one entry per execution path actually used; always non-empty.
+      executionContexts: [
+        {
+          runner: "fenced",
+          guiAllowed: false,
+          clientType: "ODataV4",
+          basis: "test fixture",
+          verdictCount: 0,
+        },
+      ],
     },
     survivorsByProcedure: [],
     testFiles: {},
@@ -111,15 +119,23 @@ describe("renderConsole — permission canary reiteration (R26)", () => {
   // A bcdev/authoritative base report: unlike the al-runner canary, this one belongs on an
   // AUTHORITATIVE report — the permission mock is a property of the fenced (bcdev) path.
   const bcdevReport: SessionReport = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     validity: {
       reliability: "full" as const,
       caveats: [],
       scoreDescribes: "test fixture",
       baselineTests: { total: 0, failing: 0 },
       scoredMutants: { scored: 0, recorded: 0 },
-      // R60: every verdict describes the app's non-interactive branch; always present.
-      executionContext: { guiAllowed: false as const, clientType: "ODataV4", basis: "test fixture" },
+      // R60/R69 Phase 2: one entry per execution path actually used; always non-empty.
+      executionContexts: [
+        {
+          runner: "fenced",
+          guiAllowed: false,
+          clientType: "ODataV4",
+          basis: "test fixture",
+          verdictCount: 0,
+        },
+      ],
     },
     survivorsByProcedure: [],
     testFiles: {},

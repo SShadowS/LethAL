@@ -10,6 +10,26 @@ export type MutantVerdict =
   | "known-survivor"
   | "error";
 
+/**
+ * Which execution path produced a verdict — R69 Phase 2's second measured path alongside the one
+ * every verdict has come from until now. `"fenced"` is the `GuiAllowed=No`, `ClientType=ODataV4`
+ * `RunMutant` path (measured, R57). `"client-services"` is the `GuiAllowed=Yes`, `ClientType=Web`
+ * batch-runner path (R69) — under it an UNHANDLED `Confirm` RAISES rather than returning its
+ * default, so a mutant inside a `Confirm` branch can genuinely reach a different verdict than it
+ * would on the fenced path. That is why this is not cosmetic: a report that cannot say which path
+ * produced a verdict cannot tell a reader whether two differing verdicts are a regression or two
+ * different, both-correct measurements.
+ *
+ * Optional everywhere it is threaded (`MutantVerdictRow`, `MutantRow`): every verdict recorded
+ * before this type existed, and every verdict recorded by a call site that does not yet route
+ * through client-services (Task 6 wires that), has no tag at all. `undefined` there means
+ * `"fenced"` — the only path that ever existed before R69 Phase 2 — and callers must read the
+ * absence that way rather than as a third, unknown state. `MutantOutcome.runner` (report.ts) is
+ * deliberately NOT optional, precisely so a report consumer performs that "absent means fenced"
+ * translation exactly once, in `buildReport`, rather than at every read site downstream.
+ */
+export type RunnerKind = "fenced" | "client-services";
+
 export interface MutantRow {
   readonly mutantCode: string;
   readonly astHash: string;
@@ -36,6 +56,9 @@ export interface MutantRow {
    * identify them.
    */
   readonly batchIndex: number;
+  /** R69 Phase 2 Task 5 — see `RunnerKind`. Absent means fenced (every call site that predates
+   *  Task 6's routing). */
+  readonly runner?: RunnerKind;
 }
 
 /**
@@ -57,6 +80,13 @@ export interface MutantVerdictRow {
   readonly killingTest?: string;
   readonly failureNote?: string;
   readonly durationMs: number;
+  /**
+   * R69 Phase 2 Task 5 — see `RunnerKind`. Threaded through so `--resume` can carry it: without
+   * this, a mutant killed under `GuiAllowed=Yes` in run 1 is re-recorded with no tag on `--resume`,
+   * and a report defined as "contexts used in THIS run" would truthfully — and wrongly — report
+   * fenced-only. Absent on every row recorded before this column existed.
+   */
+  readonly runner?: RunnerKind;
 }
 
 /** A run row, as `--resume` reads it back to check the candidate is actually resumable. */
@@ -97,7 +127,8 @@ CREATE TABLE IF NOT EXISTS mutants (
   killing_test TEXT,
   failure_note TEXT,
   duration_ms INTEGER NOT NULL,
-  batch_index INTEGER
+  batch_index INTEGER,
+  runner TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_mutants_identity
   ON mutants(ast_hash, codeunit_name, operator_name, operator_major);
@@ -143,6 +174,13 @@ export class ResultsStore {
     // are also unresumable (their run row has no `config_fingerprint`), so the two gaps line up.
     if (!cols.some((c) => c.name === "batch_index")) {
       this.db.exec("ALTER TABLE mutants ADD COLUMN batch_index INTEGER");
+    }
+    // R69 Phase 2 Task 5: `mutants` gained `runner` (see `RunnerKind`). A pre-Task-5 lethal.sqlite
+    // has a `mutants` table without it, against which `recordMutant`'s INSERT would throw mid-run.
+    // Pre-existing rows keep NULL, which `mutantVerdicts` reports as "no tag" — the honest answer,
+    // since those verdicts were recorded before LethAL had a second execution path to distinguish.
+    if (!cols.some((c) => c.name === "runner")) {
+      this.db.exec("ALTER TABLE mutants ADD COLUMN runner TEXT");
     }
     // Layer 5A: runs gained deployment provenance. A pre-5A lethal.sqlite has a runs table
     // without these, against which recordArtifact's UPDATE would throw mid-run.
@@ -244,7 +282,7 @@ export class ResultsStore {
     const rows = this.db
       .query(
         "SELECT ast_hash, codeunit_name, operator_name, operator_major, verdict, killing_test, " +
-          "failure_note, duration_ms FROM mutants WHERE run_id = ?",
+          "failure_note, duration_ms, runner FROM mutants WHERE run_id = ?",
       )
       .all(runId) as Array<{
       ast_hash: string;
@@ -255,6 +293,7 @@ export class ResultsStore {
       killing_test: string | null;
       failure_note: string | null;
       duration_ms: number;
+      runner: string | null;
     }>;
     return rows.map((r) => ({
       astHash: r.ast_hash,
@@ -265,6 +304,7 @@ export class ResultsStore {
       durationMs: r.duration_ms,
       ...(r.killing_test !== null ? { killingTest: r.killing_test } : {}),
       ...(r.failure_note !== null ? { failureNote: r.failure_note } : {}),
+      ...(r.runner !== null ? { runner: r.runner as RunnerKind } : {}),
     }));
   }
 
@@ -300,8 +340,8 @@ export class ResultsStore {
     const r = this.db
       .query(
         `INSERT INTO mutants (run_id, mutant_code, ast_hash, codeunit_name, operator_name,
-         operator_major, file, line, verdict, killing_test, failure_note, duration_ms, batch_index)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+         operator_major, file, line, verdict, killing_test, failure_note, duration_ms, batch_index, runner)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
       )
       .get(
         runId,
@@ -317,6 +357,7 @@ export class ResultsStore {
         row.failureNote ?? null,
         row.durationMs,
         row.batchIndex,
+        row.runner ?? null,
       ) as { id: number };
     return r.id;
   }

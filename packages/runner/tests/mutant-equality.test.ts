@@ -17,6 +17,7 @@ function outcome(
     astHash: `hash-${overrides.mutantCode}`,
     codeunitName: "Sandbox Logic",
     operatorMajor: 1,
+    runner: "fenced",
     durationMs: 0,
     procedureName: "Post",
     startIndex: 0,
@@ -40,15 +41,23 @@ function report(mutants: readonly MutantOutcome[]): SessionReport {
     deadlineExceeded: mutants.filter((m) => m.cause === "deadline-exceeded").length,
   };
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     validity: {
       reliability: "full" as const,
       caveats: [],
       scoreDescribes: "test fixture",
       baselineTests: { total: 0, failing: 0 },
       scoredMutants: { scored: 0, recorded: 0 },
-      // R60: every verdict describes the app's non-interactive branch; always present.
-      executionContext: { guiAllowed: false as const, clientType: "ODataV4", basis: "test fixture" },
+      // R60/R69 Phase 2: one entry per execution path actually used; always non-empty.
+      executionContexts: [
+        {
+          runner: "fenced",
+          guiAllowed: false,
+          clientType: "ODataV4",
+          basis: "test fixture",
+          verdictCount: mutants.length,
+        },
+      ],
     },
     survivorsByProcedure: [],
     testFiles: {},

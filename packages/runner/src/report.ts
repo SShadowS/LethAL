@@ -4,7 +4,7 @@ import type { BackendCapabilities } from "./backend";
 import { type PermissionCanaryResult, permissionCanaryWarnings } from "./permission-canary";
 import type { CoverageAttribution } from "./selection";
 import { identityKeyOf } from "./selection";
-import type { MutantVerdict } from "./store";
+import type { MutantVerdict, RunnerKind } from "./store";
 import { TESTPAGE_DIAGNOSIS } from "./testpage-unsupported";
 
 /**
@@ -55,6 +55,13 @@ export interface SessionOutcome {
   /** R54: this verdict was CARRIED from a prior run by `--resume`, not measured here — see
    *  `MutantOutcome.carried`. */
   readonly carried?: boolean;
+  /**
+   * R69 Phase 2 Task 5 — which execution path produced this verdict (see `RunnerKind`, store.ts).
+   * `undefined` means fenced: every call site that predates Task 6's client-services routing, and
+   * every verdict recorded before this field existed. `buildReport` is where that reading happens
+   * — see `MutantOutcome.runner`, which is never left ambiguous the way this input field is.
+   */
+  readonly runner?: RunnerKind;
 }
 
 /**
@@ -75,7 +82,7 @@ export interface NotInstrumentedFile {
  * a bump. A machine-consumed contract with no version breaks silently the first time it changes,
  * and the consumer has no way to notice.
  */
-export const REPORT_SCHEMA_VERSION = 1;
+export const REPORT_SCHEMA_VERSION = 2;
 
 /**
  * What the score is a score OF — the report's own limits, synthesized in one place.
@@ -103,23 +110,33 @@ export interface ReportValidity {
    *  recorded. The denominator `mutationScore` is actually computed over. */
   readonly scoredMutants: { readonly scored: number; readonly recorded: number };
   /**
-   * R60: the execution mode EVERY verdict in this report describes. Always present, on every
-   * backend and in both coverage modes — this is a property of how LethAL runs, not a per-run
-   * measurement, and it does not vary with the project.
+   * R60, widened by R69 Phase 2 Task 5: one entry per execution path that ACTUALLY produced a
+   * verdict in this report — never a static claim about every path LethAL could ever use.
    *
-   * LethAL executes every mutant headlessly. A developer running the same suite from VS Code runs
-   * GUI-allowed, so the two are not measuring the same branches, and nothing in the report said
-   * so. Consequences, in the order they mislead:
+   * Until R69 Phase 2 there was exactly one path, so this used to be a single object asserted
+   * unconditionally: `{ guiAllowed: false, clientType: "ODataV4", ... }` on EVERY authoritative
+   * run. That is why it became an array rather than staying a bare object with an added case —
+   * the single-object shape could only ever describe "the one path LethAL has", and the moment a
+   * SECOND path exists (client-services, R69: `GuiAllowed=Yes`, `ClientType=Web`) the old sentence
+   * is simply false for any run that used it even once. `REPORT_SCHEMA_VERSION` bumped to 2 for
+   * exactly this: the field was renamed AND its cardinality changed, which is not a compatible
+   * evolution for a machine-read report.
    *
-   *   (a) A mutant inside a branch reachable only when a user can be prompted never executes, so
-   *       it cannot be killed. It is reported `survived` or `no-coverage` — and BOTH read as
-   *       statements about the test suite ("your tests are weak here") when the truth is that
-   *       LethAL never ran the code.
-   *   (b) `Confirm` does not skip its branch, it FORCES the default answer, so the non-default arm
-   *       is the unreachable one. `Message` is a no-op and changes nothing. `Page.RunModal` is
-   *       different again: it ERRORS, which can fail a test for a reason unrelated to the mutant.
+   * LethAL's original (and still default) path executes every mutant headlessly. A developer
+   * running the same suite from VS Code runs GUI-allowed, so plain headless execution is not
+   * measuring the same branches as the developer would see, and nothing in the report used to say
+   * so. Consequences, in the order they mislead, on the FENCED path specifically:
+   *
+   *   (a) A mutant inside a branch reachable only when a user can be prompted never executes
+   *       fenced, so it cannot be killed there. It is reported `survived` or `no-coverage` — and
+   *       BOTH read as statements about the test suite ("your tests are weak here") when the truth
+   *       is that the fenced path never ran the code.
+   *   (b) `Confirm` does not skip its branch on the fenced path, it FORCES the default answer, so
+   *       the non-default arm is the unreachable one there. `Message` is a no-op and changes
+   *       nothing. `Page.RunModal` is different again: it ERRORS, which can fail a test for a
+   *       reason unrelated to the mutant.
    *   (c) `mutationScore`'s denominator therefore includes sites that were unreachable by
-   *       construction.
+   *       construction on the fenced path.
    *
    * MEASURED, so the caveat is neither alarmism nor complacency (`scripts/measure-gui-guarded.ts`,
    * run 2026-07-31 against Continia Document Output `DocumentOutput/Cloud`, 551 `.al` files):
@@ -130,19 +147,44 @@ export interface ReportValidity {
    * same script reports as an upper bound is dominated by `Message`, which causes no
    * unreachability at all.
    *
-   * That measurement is why this is a STATED LIMIT rather than a per-site `guardObserved` signal:
-   * 0.3% does not justify machinery, and the fact is structural anyway — no backend LethAL has
-   * runs GUI-allowed, so there is nothing to detect per run.
+   * On the client-services path (R69) the SAME `Confirm` site behaves differently: an unhandled
+   * `Confirm` RAISES rather than returning its default, so a mutant inside a `Confirm` branch can
+   * genuinely reach a different verdict there than it would fenced. That divergence is exactly why
+   * this became a per-path array instead of one asserted fact — a reader comparing two verdicts
+   * for the same mutant needs to know they may legitimately differ, not just that one of them is
+   * "the" execution mode.
+   *
+   * A CARRIED verdict (`--resume`) gets its own entry too, even when its runner matches one this
+   * run also measured directly — see `buildReport`'s grouping. It was not produced by this run, so
+   * folding it into this run's own measured entry would understate what a resumed report actually
+   * is: a composite of (at least) two sessions.
+   *
+   * Always non-empty, even on a run with zero outcomes (e.g. quarantined before scoring anything)
+   * — this remains, in the ordinary case, a property of how LethAL runs rather than a per-run
+   * measurement, so a run that measured nothing still reports its default (fenced) context with a
+   * `verdictCount` of 0.
    */
-  readonly executionContext: {
-    /** Literal `false`: no LethAL execution path is GUI-allowed. A future path that is would have
-     *  to change this type, which is the point — it cannot drift silently. */
-    readonly guiAllowed: false;
-    /** The session kind mutants execute under. */
-    readonly clientType: string;
-    /** How that is known — measured, or inferred from the runner's shape. Never a bare claim. */
-    readonly basis: string;
-  };
+  readonly executionContexts: readonly ExecutionContext[];
+}
+
+/** One entry in `ReportValidity.executionContexts` — see that field for the full rationale. */
+export interface ExecutionContext {
+  /** Which path produced these verdicts — see `RunnerKind` (store.ts). */
+  readonly runner: RunnerKind;
+  /**
+   * Whether this path can prompt a user. No longer a literal `false`: R69 Phase 2 is the "future
+   * path" the old single-object comment predicted, and the type had to change exactly because that
+   * happened — a `boolean` cannot drift silently the way widening a comment alone could have.
+   */
+  readonly guiAllowed: boolean;
+  /** The session kind mutants execute under on this path. */
+  readonly clientType: string;
+  /** How that is known — measured, inferred from the runner's shape, or (for a carried verdict)
+   *  named as coming from an earlier run. Never a bare claim. */
+  readonly basis: string;
+  /** How many of this report's verdicts were produced under this context — the denominator a
+   *  reader needs to judge how much of the score this context actually accounts for. */
+  readonly verdictCount: number;
 }
 
 /** Per-procedure survivor rollup — see `SessionReport.survivorsByProcedure`. */
@@ -546,6 +588,14 @@ export interface MutantOutcome {
    */
   readonly carried?: boolean;
   /**
+   * R69 Phase 2 Task 5 — which execution path produced this verdict (see `RunnerKind`, store.ts).
+   * Unlike `SessionOutcome.runner`, this is NOT optional: every mutant row states it plainly,
+   * defaulting an absent input to `"fenced"` here in `buildReport` so a report consumer never has
+   * to repeat that translation. A carried verdict keeps the runner IT was produced under, which may
+   * differ from what this run itself measured elsewhere — see `ReportValidity.executionContexts`.
+   */
+  readonly runner: RunnerKind;
+  /**
    * Semantic mutant identity components (Layer 5A, `itest/mutant-equality.ts`) — the SAME
    * astHash/codeunitName/operatorMajor triple `identityKeyOf`/`serializeKey` (selection.ts)
    * already use for known-survivor persistence. Unlike `killingTest`/`failureNote`, these are
@@ -637,6 +687,99 @@ function percentile(sortedAsc: readonly number[], q: number): number {
   return sortedAsc[Math.max(0, rank)] ?? 0;
 }
 
+/**
+ * `guiAllowed`/`clientType`/`basis` for a runner that was MEASURED in this run — i.e. every
+ * verdict `buildReport` is grouping here reflects THIS run actually executing on that path.
+ * Carried verdicts (`--resume`) never call this directly for their own `basis` — see the caller,
+ * which overrides `basis` for those with one naming the prior run instead.
+ */
+function measuredExecutionContext(
+  runner: RunnerKind,
+  caps: BackendCapabilities,
+): { guiAllowed: boolean; clientType: string; basis: string } {
+  if (runner === "client-services") {
+    return {
+      guiAllowed: true,
+      clientType: "Web",
+      basis:
+        "measured on the client-services batch-runner path (R69 Phase 2): GuiAllowed=Yes, " +
+        "ClientType=Web — under this path an unhandled Confirm RAISES rather than returning its " +
+        "default, so a mutant inside a Confirm branch can genuinely reach a different verdict " +
+        "here than it would on the fenced path",
+    };
+  }
+  // R60. Split by backend rather than asserted once, because only ONE of the two was measured:
+  // R57 measured the fenced `RunMutant` path directly (`GuiAllowed=No`, `ClientType=ODataV4`).
+  // al-runner is a headless CLI, which is not the same evidence, and saying "measured" of both
+  // would be the kind of static claim R7/R8 exist to stop.
+  return caps.authoritative
+    ? {
+        guiAllowed: false,
+        clientType: "ODataV4",
+        basis:
+          "measured on the fenced RunMutant path (R57): every mutant executes in a " +
+          "GuiAllowed=No, ClientType=ODataV4 session",
+      }
+    : {
+        guiAllowed: false,
+        clientType: "al-runner CLI",
+        basis:
+          "al-runner executes headlessly by construction (no client session to prompt from); " +
+          "not separately measured by LethAL the way the fenced path was under R57",
+      };
+}
+
+/**
+ * Groups this run's outcomes into `ReportValidity.executionContexts` — one entry per (runner,
+ * carried) combination ACTUALLY present, in first-seen order.
+ *
+ * `carried` is part of the grouping key, not folded into `runner` alone: a carried verdict was NOT
+ * measured by this run even when its runner is "fenced" too (this run may ALSO have measured
+ * fenced verdicts directly), so conflating the two would let a resumed report understate itself as
+ * a single, uniform measurement rather than the composite it actually is — see
+ * `ReportValidity.executionContexts` for the full rationale, and the resume-hole note on
+ * `CarriedVerdict.runner` (resume.ts) for why this specifically must not regress.
+ *
+ * Falls back to one zero-count "fenced" entry when there are no outcomes at all, so the field
+ * stays non-empty on a run that quarantined before scoring anything — see
+ * `ReportValidity.executionContexts`.
+ */
+function buildExecutionContexts(
+  outcomes: readonly SessionOutcome[],
+  caps: BackendCapabilities,
+  resumedFrom: { readonly runId: number } | undefined,
+): ExecutionContext[] {
+  const groups = new Map<string, { runner: RunnerKind; carried: boolean; verdictCount: number }>();
+  for (const o of outcomes) {
+    const runner: RunnerKind = o.runner ?? "fenced";
+    const carried = o.carried === true;
+    const key = `${runner}|${carried}`;
+    const existing = groups.get(key);
+    if (existing === undefined) groups.set(key, { runner, carried, verdictCount: 1 });
+    else existing.verdictCount += 1;
+  }
+  if (groups.size === 0) {
+    return [{ runner: "fenced", ...measuredExecutionContext("fenced", caps), verdictCount: 0 }];
+  }
+  return [...groups.values()].map((g) => {
+    const measured = measuredExecutionContext(g.runner, caps);
+    if (!g.carried) return { runner: g.runner, ...measured, verdictCount: g.verdictCount };
+    // A carried verdict's basis names the run it actually came from, never this run's own
+    // measurement claim — see the resume-hole rationale above.
+    const basis =
+      resumedFrom !== undefined
+        ? `carried from run ${resumedFrom.runId} by --resume: not measured in this run — the prior run's own report is the authority on how it was produced`
+        : "carried from a prior run by --resume: not measured in this run";
+    return {
+      runner: g.runner,
+      guiAllowed: measured.guiAllowed,
+      clientType: measured.clientType,
+      basis,
+      verdictCount: g.verdictCount,
+    };
+  });
+}
+
 export function buildReport(input: BuildReportInput): SessionReport {
   const counts = {
     killed: 0,
@@ -684,6 +827,9 @@ export function buildReport(input: BuildReportInput): SessionReport {
       astHash: identity.astHash,
       codeunitName: identity.codeunitName,
       operatorMajor: identity.operatorMajor,
+      // R69 Phase 2 Task 5: the one place an absent input `runner` is read as "fenced" — see
+      // `MutantOutcome.runner`.
+      runner: o.runner ?? "fenced",
       durationMs: o.durationMs ?? 0,
       procedureName: o.mutant.procedureName,
       startIndex: o.mutant.startIndex,
@@ -822,6 +968,11 @@ export function buildReport(input: BuildReportInput): SessionReport {
   const baselineText = degraded
     ? `, with ${input.unsupportedTests.length} of ${input.baselineTests.length} baseline tests failing`
     : "";
+  const executionContexts = buildExecutionContexts(
+    input.outcomes,
+    input.caps,
+    input.resumedFrom !== undefined ? { runId: input.resumedFrom.runId } : undefined,
+  );
 
   return {
     schemaVersion: REPORT_SCHEMA_VERSION,
@@ -831,25 +982,7 @@ export function buildReport(input: BuildReportInput): SessionReport {
       scoreDescribes: `${scored} scored mutant(s) in ${scopeText}${baselineText}`,
       baselineTests: { total: input.baselineTests.length, failing: input.unsupportedTests.length },
       scoredMutants: { scored, recorded: input.outcomes.length },
-      // R60. Split by backend rather than asserted once, because only ONE of the two was
-      // measured: R57 measured the fenced `RunMutant` path directly (`GuiAllowed=No`,
-      // `ClientType=ODataV4`). al-runner is a headless CLI, which is not the same evidence, and
-      // saying "measured" of both would be the kind of static claim R7/R8 exist to stop.
-      executionContext: input.caps.authoritative
-        ? {
-            guiAllowed: false,
-            clientType: "ODataV4",
-            basis:
-              "measured on the fenced RunMutant path (R57): every mutant executes in a " +
-              "GuiAllowed=No, ClientType=ODataV4 session",
-          }
-        : {
-            guiAllowed: false,
-            clientType: "al-runner CLI",
-            basis:
-              "al-runner executes headlessly by construction (no client session to prompt from); " +
-              "not separately measured by LethAL the way the fenced path was under R57",
-          },
+      executionContexts,
     },
     ...(permissionsRefusedTests.length > 0
       ? {
@@ -1038,18 +1171,30 @@ export function renderConsole(r: SessionReport): string {
       }`,
     );
   }
-  // R60. Printed on EVERY run, including a `full` one — this limit does not depend on scope,
+  // R60, scoped by R69 Phase 2 Task 5 to FENCED verdicts only — printed on EVERY run that measured
+  // or carried at least one, including a `full` one, because this limit does not depend on scope,
   // baseline health, or anything else the SCOPE line below is gated on. A reader comparing a
   // LethAL score against what they see in VS Code is comparing two different branches of their
   // own app, and until now nothing said so anywhere.
-  lines.push(
-    `NON-GUI EXECUTION: every verdict here describes the app's non-interactive branch ` +
-      `(GuiAllowed=No, ClientType=${r.validity.executionContext.clientType}). Code reachable only ` +
-      `when a user can be prompted never runs, so its mutants cannot be killed and land as ` +
-      `survived or no-coverage — neither of which is a statement about your tests. Confirm() ` +
-      `returns its DEFAULT rather than skipping the branch; Page.RunModal ERRORS. Measured on ` +
-      `Continia Document Output: 0.3% of mutation sites (62 of 19,850).`,
-  );
+  //
+  // Deliberately NOT "every verdict here" any more: since a client-services (interactive) path now
+  // exists, that claim would be false the moment ONE verdict came from it — see the companion
+  // block below, which states the opposite fact for that runner.
+  const fencedCtx = r.validity.executionContexts.find((c) => c.runner === "fenced");
+  if (fencedCtx !== undefined && fencedCtx.verdictCount > 0) {
+    lines.push(
+      `NON-GUI EXECUTION: ${fencedCtx.verdictCount} verdict(s) here describe the app's non-interactive branch (GuiAllowed=No, ClientType=${fencedCtx.clientType}). Code reachable only when a user can be prompted never runs on this path, so its mutants cannot be killed here and land as survived or no-coverage — neither of which is a statement about your tests. Confirm() returns its DEFAULT rather than skipping the branch; Page.RunModal ERRORS. Measured on Continia Document Output: 0.3% of mutation sites (62 of 19,850).`,
+    );
+  }
+  // The companion fact, for the opposite path. Without this a reader who knows the fenced caveat
+  // above would wrongly extend it to an interactive verdict too — the two paths disagree on
+  // exactly the code the fenced caveat says is unreachable.
+  const interactiveCtx = r.validity.executionContexts.find((c) => c.runner === "client-services");
+  if (interactiveCtx !== undefined && interactiveCtx.verdictCount > 0) {
+    lines.push(
+      `INTERACTIVE EXECUTION (client-services): ${interactiveCtx.verdictCount} verdict(s) here come from the GuiAllowed=Yes, ClientType=${interactiveCtx.clientType} path (R69 Phase 2) instead. This is NOT the fenced branch above: under GuiAllowed=Yes an UNHANDLED Confirm RAISES rather than returning its default, so a mutant inside a Confirm branch can genuinely reach a different verdict here than it would fenced — a disagreement between the two paths on such a mutant is not necessarily a bug in either measurement. ${interactiveCtx.basis}.`,
+    );
+  }
   // The score's own limits, immediately after it. A reader quotes `score: 15.7%` long before
   // correlating four separate qualifier fields, so the qualification has to arrive with it.
   if (r.validity.reliability !== "full") {

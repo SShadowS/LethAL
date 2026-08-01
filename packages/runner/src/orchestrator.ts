@@ -65,7 +65,7 @@ import {
 import type { CoverageAttribution } from "./selection";
 import { SessionSafety, SessionUnsafeError } from "./session-safety";
 import type { ResultsStore } from "./store";
-import type { MutantVerdict } from "./store";
+import type { MutantVerdict, RunnerKind } from "./store";
 import { describeTestPageUnsupported } from "./testpage-unsupported";
 
 const BASELINE_TIMEOUT_DEFAULT = 120_000;
@@ -2581,6 +2581,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
             coverageAttribution.get(m.mutantId),
             undefined,
             true,
+            carried.runner,
           );
           resumedMutantCount += 1;
         }
@@ -3785,6 +3786,12 @@ function record(
   // R54: this verdict was carried from a prior run by `--resume`, so its duration belongs to that
   // run's cost, not this one's. See `MutantOutcome.carried`.
   carried?: boolean,
+  // R69 Phase 2 Task 5: which execution path produced this verdict — see `RunnerKind` (store.ts).
+  // Every call site in THIS file predates client-services routing (Task 6 wires that) except the
+  // `--resume` replay path, which passes `carried.runner` through unchanged so a verdict carried
+  // from an interactive run keeps its tag instead of silently reading as fenced — the resume hole
+  // this task closes. Absent elsewhere, which `buildReport` reads as `"fenced"`.
+  runner?: RunnerKind,
 ): number {
   const key = identityKeyOf(m);
   const mutantRowId = store.recordMutant(runId, {
@@ -3800,6 +3807,7 @@ function record(
     batchIndex,
     ...(killingTest !== undefined ? { killingTest } : {}),
     ...(failureNote !== undefined ? { failureNote } : {}),
+    ...(runner !== undefined ? { runner } : {}),
   });
   outcomes.push({
     mutant: m,
@@ -3813,6 +3821,7 @@ function record(
     ...(killingTest !== undefined ? { killingTest } : {}),
     ...(failureNote !== undefined ? { failureNote } : {}),
     ...(cause !== undefined ? { cause } : {}),
+    ...(runner !== undefined ? { runner } : {}),
   });
   return mutantRowId;
 }

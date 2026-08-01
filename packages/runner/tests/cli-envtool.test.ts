@@ -440,14 +440,22 @@ describe("resolveEnvToolSession", () => {
 // ————————————————————————————————————————————————————————————————————————
 
 const FAKE_REPORT: SessionReport = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   validity: {
     reliability: "full",
     caveats: [],
     scoreDescribes: "test fixture",
     baselineTests: { total: 0, failing: 0 },
     scoredMutants: { scored: 0, recorded: 0 },
-    executionContext: { guiAllowed: false as const, clientType: "ODataV4", basis: "test fixture" },
+    executionContexts: [
+      {
+        runner: "fenced",
+        guiAllowed: false,
+        clientType: "ODataV4",
+        basis: "test fixture",
+        verdictCount: 0,
+      },
+    ],
   },
   survivorsByProcedure: [],
   testFiles: {},

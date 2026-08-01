@@ -60,14 +60,15 @@ function build(over: Record<string, unknown> = {}) {
   });
 }
 
-describe("validity.executionContext (R60)", () => {
+describe("validity.executionContexts (R60, widened by R69 Phase 2 Task 5)", () => {
   // The whole point: this is not conditional on anything. A clean, full-reliability run is exactly
   // the one whose reader is most likely to quote the score without qualification.
   test("is present on a FULL-reliability run, not only a degraded one", () => {
     const r = build();
     expect(r.validity.reliability).toBe("full");
-    expect(r.validity.executionContext.guiAllowed).toBe(false);
-    expect(r.validity.executionContext.clientType).toBe("ODataV4");
+    const ctx = r.validity.executionContexts.find((c) => c.runner === "fenced");
+    expect(ctx?.guiAllowed).toBe(false);
+    expect(ctx?.clientType).toBe("ODataV4");
   });
 
   // The two backends are known by DIFFERENT evidence. R57 measured the fenced path directly;
@@ -75,15 +76,17 @@ describe("validity.executionContext (R60)", () => {
   // R7/R8 exist to stop, so the basis has to differ.
   test("names the fenced path's MEASURED basis on the authoritative backend", () => {
     const r = build();
-    expect(r.validity.executionContext.basis).toContain("measured");
-    expect(r.validity.executionContext.basis).toContain("R57");
+    const ctx = r.validity.executionContexts.find((c) => c.runner === "fenced");
+    expect(ctx?.basis).toContain("measured");
+    expect(ctx?.basis).toContain("R57");
   });
 
   test("does not claim al-runner was measured the same way", () => {
     const r = build({ caps: CAPS_AL_RUNNER });
-    expect(r.validity.executionContext.guiAllowed).toBe(false);
-    expect(r.validity.executionContext.clientType).toBe("al-runner CLI");
-    expect(r.validity.executionContext.basis).toContain("not separately measured");
+    const ctx = r.validity.executionContexts.find((c) => c.runner === "fenced");
+    expect(ctx?.guiAllowed).toBe(false);
+    expect(ctx?.clientType).toBe("al-runner CLI");
+    expect(ctx?.basis).toContain("not separately measured");
   });
 
   test("the console states it on every run, including a clean one", () => {
