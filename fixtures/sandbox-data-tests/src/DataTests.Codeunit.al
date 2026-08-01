@@ -381,25 +381,54 @@ codeunit 79310 "Data Tests"
     end;
 
     // THERE IS DELIBERATELY NO TEST FOR THE `pageextension` SITE, and the reason is a measurement,
-    // not an omission.
+    // not an omission — twice over now.
     //
     // A pageextension's code is unreachable from a test codeunit — nothing outside the page can
-    // name its procedures — so the only way in is a `TestPage`. That test was written, published
-    // and RUN against Cronus283 on 2026-07-31, and it did not come back: the fenced session went
-    // `in-flight-unknown` on `PageExtCountsMatchingRelated` at baseline and the run quarantined the
-    // tier, scoring nothing (killed=0 survived=0 noCoverage=0).
+    // name its procedures — so the only way in is a `TestPage`. The first such test was written,
+    // published and RUN against Cronus283 on 2026-07-31, and it did not come back: the fenced
+    // session went `in-flight-unknown` on `PageExtCountsMatchingRelated` at baseline and the run
+    // quarantined the tier, scoring nothing (killed=0 survived=0 noCoverage=0).
     //
-    // The CAUSE first written here — "opening a TestPage on the fenced path hangs" — was WRONG, and
-    // a later probe says so: a code-free page opened the same way on the fenced path fails in 87 ms
-    // with `System.NotSupportedException ... NavSession.CreateNavTestService()`, and the run
-    // completes. `TestPage` is REFUSED on that path, not slow. What hung on Cronus283 is still
-    // unexplained (that page sat over a trigger-carrying table and its extension WROTE a row from
-    // `OnOpenPage`). Both halves are R69.
+    // The CAUSE first written here — "opening a TestPage on the fenced path hangs" — looked WRONG
+    // after a later probe: a CODE-FREE page (`fixtures/sandbox-probes/ProbeList.Page.al` +
+    // `TestPageProbe.Codeunit.al`, no triggers, no FlowFields, no pageextension) opened the same
+    // way on the fenced path fails in 87 ms with `System.NotSupportedException ...
+    // NavSession.CreateNavTestService()`, and the run completes. `TestPage` is REFUSED on that
+    // path, not slow — for THAT page. R69 Phase 2 (2026-08-01) built a second execution path
+    // (client-services, `GuiAllowed=Yes`) plus a two-gate router on that finding: gate 1
+    // recognises the fence-refusal text on a baseline run, gate 2 confirms the same test passes
+    // unmutated on client-services, and only a mutant covered exclusively by such tests is
+    // examined there.
     //
-    // So `pageextension "Data Main List Ext"`'s mutants stay in the baseline as `no-coverage`. They
-    // still prove what nothing else here does — that a pageextension-carried guard instruments,
-    // compiles, publishes and installs on a live server — but the pageextension half of R30's
-    // receiver resolution is UNPROVEN LIVE, and the roadmap says so.
+    // RE-MEASURED LIVE 2026-08-01, against THIS page (not the probe): `PageExtCountsMatchingRelated`
+    // was reinstated, seeded to kill `Related.SetRange("Main No.", 'P-EXT')`, and run against
+    // Cronus283 via `itest:tables` — TWICE, with a full container recovery (Docker-level restart;
+    // the NST was stuck `StopPending` after the first attempt) and `force-reset-lease` between
+    // them. Both runs reproduced the IDENTICAL 2026-07-31 outcome byte-for-byte: `in-flight-unknown`
+    // on `PageExtCountsMatchingRelated` at baseline, `quarantined: {"reason":"baseline test
+    // in-flight-unknown running PageExtCountsMatchingRelated"}`, killed=0 survived=0 noCoverage=0
+    // for the ENTIRE 84-mutant run, not just this object's four. So the 87 ms fast-refusal finding
+    // does NOT generalise past the code-free probe: a page whose `SourceTable` carries real
+    // triggers/a FlowField, extended by a pageextension that WRITES a row from `OnOpenPage`, still
+    // wedges the fenced session — deterministically, reproducibly, on the exact page R30 built.
+    //
+    // This also means Phase 2's router structurally CANNOT rescue this test, independent of
+    // whether it would pass on client-services: `runSession`'s baseline-discovery loop
+    // (`packages/runner/src/orchestrator.ts`, the `for (const ref of tests)` loop that calls
+    // `quarantineInFlight` on `in-flight-unknown`) runs every discovered test once, sequentially,
+    // on the fenced path, and quarantines the WHOLE session unconditionally the moment ANY one of
+    // them comes back `in-flight-unknown` — before gate 1's routing logic (which only pattern-
+    // matches a FAST, completed baseline failure) ever runs. A hang during baseline discovery
+    // takes the entire suite down with it, not just the mutants the hanging test would have
+    // covered. Filed as a refinement to R69, not a fix — no packages/ change was made pursuing
+    // this; a packages/ change (e.g. isolating TestPage-suspected baseline tests behind their own,
+    // shorter deadline, run separately from the rest of baseline discovery) is what closing this
+    // would need, and is out of this task's scope.
+    //
+    // So `pageextension "Data Main List Ext"`'s mutants stay `no-coverage`, and the fixture stays
+    // test-free here on purpose: a live-hanging test in this file wedges `itest:tables` for
+    // EVERY future run (not just this object's), which is a strictly worse regression detector
+    // than the honest no-coverage bucket it would replace.
 
     // ---------------------------------------------------------------------------------------------
     // Seeding helpers. All idempotent — see InsertDoublesAmountWeak's comment for why that is
