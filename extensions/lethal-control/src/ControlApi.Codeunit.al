@@ -528,6 +528,7 @@ codeunit 71003 "LC Control API"
         CoverageTok: JsonToken;
         CoverageObj: JsonObject;
         FieldTok: JsonToken;
+        CoverageOk: Boolean;
     begin
         if Res.FindSet() then
             repeat
@@ -542,7 +543,19 @@ codeunit 71003 "LC Control API"
                     Obj.Add('result', Inner)
                 else
                     Obj.Add('resultRaw', Res.GetResultJson());
-                if CoverageTok.ReadFrom(Res.GetCoverageJson()) and CoverageTok.IsObject() then begin
+                // Nested rather than `ReadFrom(...) and CoverageTok.IsObject()` (same house pattern
+                // as ControlState.Codeunit.al's ClearActiveIf): AL does not guarantee short-circuit
+                // evaluation of `and`, so a flat compound could evaluate IsObject() against the
+                // STALE token a previous row's successful parse left behind when THIS row's
+                // ReadFrom fails — misattributing that row's coverage payload. Clear() below removes
+                // the staleness outright, independent of evaluation order; CoverageOk then gates on
+                // both calls having actually succeeded, in order.
+                Clear(CoverageTok);
+                CoverageOk := false;
+                if CoverageTok.ReadFrom(Res.GetCoverageJson()) then
+                    if CoverageTok.IsObject() then
+                        CoverageOk := true;
+                if CoverageOk then begin
                     CoverageObj := CoverageTok.AsObject();
                     if CoverageObj.Get('coverage', FieldTok) then
                         Obj.Add('coverage', FieldTok);
