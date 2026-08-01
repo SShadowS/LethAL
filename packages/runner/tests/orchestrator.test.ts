@@ -39,6 +39,7 @@ import type {
 import * as orchestratorModule from "../src/orchestrator";
 import {
   MIN_MUTANT_BUDGET_MS,
+  ROUTED_TRANSPORT_ACK,
   activateOnce,
   generateMutationSet,
   invalidateBatchVerdicts,
@@ -1315,6 +1316,29 @@ describe("R69 Phase 2 Task 6 — routing gate-2-passing tests through the client
       ? { outcome: "error" as const, procedure: "IsUnderBudget", failureMessage: TESTPAGE_REFUSAL }
       : { outcome: "pass" as const, procedure: "NoOp" };
 
+  // R74/R75 tripwire, exercised THROUGH `runSession` rather than by calling the guard directly.
+  // A red-check proved this was necessary: deleting the `assertRoutedTransportAllowed(...)` call
+  // from the batch loop was invisible to the whole suite, because every other routed test supplies
+  // the correct token, and the guard's own unit tests never go through `runSession`. So nothing
+  // proved the guard was actually INVOKED at the one place production would reach it — the guard
+  // worked in isolation and was wired to nothing, which is the shape it exists to prevent.
+  test("runSession refuses a routed transport that has not acknowledged R74/R75", async () => {
+    const dirs = await routedProject();
+    const backend = new QualificationBackend(routedBaselineFor);
+    const store = new ResultsStore(":memory:");
+    const transport = new FakeBatchTransport(() => ({ rows: 1, outcome: "pass" }));
+    await expect(
+      runSession({
+        backend,
+        store,
+        ...dirs,
+        selectorIds,
+        // Deliberately WRONG token: a caller that wired the path without reading the blockers.
+        routedTransport: { odata: transport, ws: transport, blockersAcknowledged: "sure" },
+      }),
+    ).rejects.toThrow(/R74/);
+  });
+
   // The fenced path never turns one failure into `killed` without a baseline confirmation
   // (R27/R59). The routed path is the MOST nondeterministic session LethAL has — GuiAllowed=Yes
   // lets dialogs raise — so it needs that defence more, not less.
@@ -1335,7 +1359,13 @@ describe("R69 Phase 2 Task 6 — routing gate-2-passing tests through the client
       store,
       ...dirs,
       selectorIds,
-      routedTransport: { odata: transport, ws: transport },
+      routedTransport: {
+        odata: transport,
+        ws: transport,
+        // R74/R75 tripwire: these tests exercise the routed path deliberately, and this token IS
+        // the acknowledgement. Production has no caller — see `assertRoutedTransportAllowed`.
+        blockersAcknowledged: ROUTED_TRANSPORT_ACK,
+      },
     });
     const m = report.mutants.find((x) => x.mutantCode === "M0001");
     expect(m?.verdict).toBe("error");
@@ -1369,7 +1399,13 @@ describe("R69 Phase 2 Task 6 — routing gate-2-passing tests through the client
       store,
       ...dirs,
       selectorIds,
-      routedTransport: { odata: transport, ws: transport },
+      routedTransport: {
+        odata: transport,
+        ws: transport,
+        // R74/R75 tripwire: these tests exercise the routed path deliberately, and this token IS
+        // the acknowledgement. Production has no caller — see `assertRoutedTransportAllowed`.
+        blockersAcknowledged: ROUTED_TRANSPORT_ACK,
+      },
     });
     // `quarantined` is an OBJECT `{ reason }`, absent on an ordinary session — not a boolean.
     expect(report.quarantined).toBeDefined();
@@ -1407,7 +1443,13 @@ describe("R69 Phase 2 Task 6 — routing gate-2-passing tests through the client
       store,
       ...dirs,
       selectorIds,
-      routedTransport: { odata: transport, ws: transport },
+      routedTransport: {
+        odata: transport,
+        ws: transport,
+        // R74/R75 tripwire: these tests exercise the routed path deliberately, and this token IS
+        // the acknowledgement. Production has no caller — see `assertRoutedTransportAllowed`.
+        blockersAcknowledged: ROUTED_TRANSPORT_ACK,
+      },
     });
     const overBudgetMutants = report.mutants.filter((m) =>
       ["M0001", "M0002", "M0003"].includes(m.mutantCode),
@@ -1477,7 +1519,13 @@ describe("R69 Phase 2 Task 6 — routing gate-2-passing tests through the client
       store,
       ...dirs,
       selectorIds,
-      routedTransport: { odata: transport, ws: transport },
+      routedTransport: {
+        odata: transport,
+        ws: transport,
+        // R74/R75 tripwire: these tests exercise the routed path deliberately, and this token IS
+        // the acknowledgement. Production has no caller — see `assertRoutedTransportAllowed`.
+        blockersAcknowledged: ROUTED_TRANSPORT_ACK,
+      },
     });
     const m = report.mutants.find((x) => x.mutantCode === "M0001");
     expect(m?.verdict).toBe("error");

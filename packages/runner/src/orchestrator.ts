@@ -511,7 +511,48 @@ export interface SessionConfig {
   readonly routedTransport?: {
     readonly odata: BatchOdata;
     readonly ws: BatchWebSocket;
+    /**
+     * R74/R75 tripwire — REQUIRED, and its only legal value is
+     * `ROUTED_TRANSPORT_ACK`. See `assertRoutedTransportAllowed`.
+     */
+    readonly blockersAcknowledged: string;
   };
+}
+
+/**
+ * The exact token `SessionConfig.routedTransport.blockersAcknowledged` must carry. A constant
+ * rather than a bare boolean because a boolean is trivially set by accident (or by a default);
+ * a caller writing this string has been made to read why.
+ */
+export const ROUTED_TRANSPORT_ACK = "R74/R75-acknowledged";
+
+/**
+ * R74/R75 GUARD. The client-services routed path is built, unit-tested and red-checked, and is
+ * deliberately NOT WIRED — nothing in production constructs `routedTransport`. Two filed blockers
+ * must close before anything does, and R74 is this project's signature bug in a new coat:
+ *
+ * routed survivors discard the `attested` signal, AND `LC Control State` sets
+ * `ObservedIdentityMismatch` only INSIDE its `ObservedAny := true` branch — so the transport's
+ * fail-closed `identityMismatch !== false` check passes TRIVIALLY when no guard ever fired.
+ * Nothing compared to nothing. A routed test that passes without reaching the mutated site is
+ * recorded `survived`, counted in the score, and excluded from the UNEXERCISED SURVIVORS callout
+ * because its `guardObserved` is absent rather than `false`.
+ *
+ * The realistic hazard is DRIFT — a later session wiring this without re-reading the blockers —
+ * so the guard is a TRIPWIRE, not a security boundary: it cannot stop a determined caller, only
+ * an unwitting one. That is the point. Throwing rather than silently degrading is the same
+ * fail-loudly rule this codebase applies to every other caller-contract violation.
+ *
+ * Delete this guard, the `blockersAcknowledged` field and the ack constant together when R74 and
+ * R75 close — leaving a disarmed tripwire in place is worse than none, because it reads as a
+ * check that passed.
+ */
+export function assertRoutedTransportAllowed(blockersAcknowledged: string | undefined): void {
+  if (blockersAcknowledged === ROUTED_TRANSPORT_ACK) return;
+  const ack = JSON.stringify(ROUTED_TRANSPORT_ACK);
+  throw new Error(
+    `SessionConfig.routedTransport was supplied without acknowledging its open blockers. The client-services routed path is BUILT BUT NOT WIRED, and must not be wired until ROADMAP R74 and R75 close. R74: routed survivors discard the attestation, and because \`LC Control State\` sets ObservedIdentityMismatch only inside its \`ObservedAny := true\` branch, the transport's fail-closed \`identityMismatch !== false\` check passes trivially when no instrumented site ever executed — so a routed test that passes WITHOUT REACHING the mutated site is recorded \`survived\` and counted in the score (a false survive, and it is excluded from the UNEXERCISED SURVIVORS callout because guardObserved is absent rather than false). R75: routed verdicts discard coverageAttribution, so an object-attributed routed survivor is indistinguishable from an exact one. To proceed deliberately, set ${ack}.`,
+  );
 }
 
 /** Alias kept for readability at call sites within this module. */
@@ -2815,6 +2856,12 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       // in this function).
       if (routableCandidates.length > 0 && !safety.isUnsafe) {
         const { routedTransport } = cfg;
+        // R74/R75 tripwire. Checked HERE — at first use, inside the batch loop — rather than at
+        // session start, so a run that never reaches routable candidates is never refused for a
+        // path it was not going to take.
+        if (routedTransport !== undefined) {
+          assertRoutedTransportAllowed(routedTransport.blockersAcknowledged);
+        }
         const resolved =
           routedTransport === undefined
             ? {
