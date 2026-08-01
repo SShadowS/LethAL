@@ -506,6 +506,61 @@ codeunit 71003 "LC Control API"
         exit(BuildStatus('ran', TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, CodeunitResults, ObservedAny, IdentityMismatch, ''));
     end;
 
+    /// <summary>R69: read every batch result row back as one JSON array. The per-method result JSON
+    /// (which carries a raised `MEASURED …` / `CreateNavTestService` message) is embedded per row.</summary>
+    procedure GetBatchResults() ResultsJson: Text
+    var
+        Res: Record "LC Batch Result";
+        Arr: JsonArray;
+        Obj: JsonObject;
+        Inner: JsonToken;
+    begin
+        if Res.FindSet() then
+            repeat
+                Clear(Obj);
+                Obj.Add('lineNo', Res."Line No.");
+                Obj.Add('codeunitId', Res."Codeunit ID");
+                Obj.Add('method', Res.Method);
+                Obj.Add('ok', Res.Ok);
+                Obj.Add('attested', Res.Attested);
+                Obj.Add('errorText', Res."Error Text");
+                if Inner.ReadFrom(Res.GetResultJson()) then
+                    Obj.Add('result', Inner)
+                else
+                    Obj.Add('resultRaw', Res.GetResultJson());
+                Arr.Add(Obj);
+            until Res.Next() = 0;
+        Arr.WriteTo(ResultsJson);
+    end;
+
+    /// <summary>R69: seed one work item into the batch queue over OData. LethAL calls this before
+    /// driving the page action over the client-services WebSocket.</summary>
+    procedure SeedBatchItem(codeunitId: Integer; method: Text) LineNo: Integer
+    var
+        Queue: Record "LC Batch Queue";
+    begin
+        if Queue.FindLast() then
+            LineNo := Queue."Line No." + 1
+        else
+            LineNo := 1;
+        Queue.Init();
+        Queue."Line No." := LineNo;
+        Queue."Codeunit ID" := codeunitId;
+        Queue.Method := CopyStr(method, 1, MaxStrLen(Queue.Method));
+        Queue.Insert(true);
+        Commit();
+    end;
+
+    procedure ClearBatch()
+    var
+        Queue: Record "LC Batch Queue";
+        Res: Record "LC Batch Result";
+    begin
+        Queue.DeleteAll(true);
+        Res.DeleteAll(true);
+        Commit();
+    end;
+
     /// <summary>
     /// OData action: the permission canary (ROADMAP R26). Answers ONE question about THIS server,
     /// once per session — CAN A CORRECTLY-DECLARED TEST CODEUNIT (`TestPermissions = Disabled`)
