@@ -113,7 +113,7 @@ bc-mcp client-services WebSocket.
 Sequence per method:
 
 1. `ClearBatch()`, then `SeedBatchItem(codeunitId, method, mutantId, targetAppId, artifactId,
-   nonce)` over OData — derived OData port (7048), HTTP Basic auth, `company` + `tenant` required.
+   nonce, coverageFilter)` over OData — SEVEN arguments as built (AL has no default parameters) — derived OData port (7048), HTTP Basic auth, `company` + `tenant` required.
    This wiring is MEASURED working (spike, 2026-08-01), not assumed.
 2. Open page 71014 over the WebSocket; `executeAction({action: "Run Batch"})`.
 3. `GetBatchResults()` over OData; validate (below); read the row.

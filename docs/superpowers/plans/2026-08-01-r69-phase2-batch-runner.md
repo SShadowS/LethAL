@@ -319,8 +319,8 @@ git commit -m "chore(control): bump LethAL Control 1.0.0.13 (R69 Phase 2)"
 **Interfaces:**
 - Produces:
   - `export class BatchProtocolError extends Error` — extends `Error` DIRECTLY (never another typed error; CLAUDE.md).
-  - `export interface BatchRunRequest { codeunitId: number; method: string; mutantId: string; targetAppId: string; artifactId: string; nonce: string; }`
-  - `export interface BatchRunResult { ok: boolean; attested: boolean; identityMismatch: boolean; errorText: string; resultJson: unknown; }`
+  - `export interface BatchRunRequest { codeunitId: number; method: string; mutantId: string; targetAppId: string; artifactId: string; nonce: string; coverageFilter: string; }`
+  - `export interface BatchRunResult { ok: boolean; attested: boolean; identityMismatch: boolean; errorText: string; resultJson: unknown; coverage: unknown; coverageScannedRows: number; coverageEmittedRows: number; }`
   - `export interface BatchOdata { post(action: string, body: unknown): Promise<unknown>; }`
   - `export interface BatchWebSocket { runBatchAction(): Promise<void>; }`
   - `export async function runOneBatchMethod(odata: BatchOdata, ws: BatchWebSocket, req: BatchRunRequest): Promise<BatchRunResult>`
