@@ -66,6 +66,7 @@ import type { CoverageAttribution } from "./selection";
 import { SessionSafety, SessionUnsafeError } from "./session-safety";
 import type { ResultsStore } from "./store";
 import type { MutantVerdict } from "./store";
+import { describeTestPageUnsupported } from "./testpage-unsupported";
 
 const BASELINE_TIMEOUT_DEFAULT = 120_000;
 
@@ -1974,6 +1975,12 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // cause on the `unstable` path only; a test refused HERE was dropped from the green set with the
   // wrong explanation attached, or none at all.
   const permissionRefusedTests = new Set<string>();
+  // R69: baseline tests refused for opening a `TestPage` — also a strict subset of
+  // `unsupportedTestNames`, and tracked apart from `permissionRefusedTests` because it is the
+  // OPPOSITE finding. A permissions refusal has a one-line fix in the target's own source; this has
+  // none — the fenced session (`GuiAllowed=No`, `ClientType=ODataV4`) cannot create a test service
+  // at all. Sharing a bucket would tell one of the two readers something false.
+  const testPageUnsupportedTests = new Set<string>();
   const runnerDisagreementTests = new Set<string>();
   // Summed across batches — see `SessionReport.untargetedTriggerCount`. Declared out here rather
   // than read off the last batch's split: each batch runs its own coverage filter, and a session
@@ -2421,6 +2428,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       //     and keeping only the truthiness would leave the reader with an assertion and no
       //     evidence — see the unstable path, which appends the same string.
       const refusedThisBatch = new Map<string, string>();
+      // R69: batch-local for exactly the reasons the R35 map above documents — this batch's note
+      // must describe THIS batch's baseline, and the session-level set is cumulative.
+      const testPageThisBatch = new Map<string, string>();
       for (const b of unsupportedBaseline) {
         const name = qualifiedTestName(b.ref);
         unsupportedTestNames.add(name);
@@ -2428,6 +2438,11 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         if (refusal !== undefined) {
           refusedThisBatch.set(name, refusal);
           permissionRefusedTests.add(name);
+        }
+        const testPage = describeTestPageUnsupported(b.verdict.failureMessage);
+        if (testPage !== undefined) {
+          testPageThisBatch.set(name, testPage);
+          testPageUnsupportedTests.add(name);
         }
       }
 
@@ -2498,7 +2513,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         const covering = unsupportedCoverage.get(m.mutantId);
         if (covering !== undefined && covering.length > 0) {
           const qualified = [...new Set(covering.map(qualifiedTestName))].sort();
-          const note = unsupportedCoverageNote(qualified, refusedThisBatch);
+          const note = unsupportedCoverageNote(qualified, refusedThisBatch, testPageThisBatch);
           record(cfg.store, runId, m, "error", outcomes, batchIdx, undefined, note);
         } else {
           record(cfg.store, runId, m, "no-coverage", outcomes, batchIdx);
@@ -2848,6 +2863,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     ...(missingFromServer.size > 0
       ? { staleTestApp: { missingTests: [...missingFromServer].sort() } }
       : {}),
+    ...(testPageUnsupportedTests.size > 0
+      ? { testPageUnsupportedTests: [...testPageUnsupportedTests].sort() }
+      : {}),
     ...(permissionRefusedTests.size > 0
       ? { permissionsRefusedTests: [...permissionRefusedTests].sort() }
       : {}),
@@ -2948,21 +2966,51 @@ function didNotPassAtBaseline(o: TestVerdict["outcome"]): boolean {
 export function unsupportedCoverageNote(
   qualified: readonly string[],
   refusedThisBatch: ReadonlyMap<string, string>,
+  testPageThisBatch: ReadonlyMap<string, string> = new Map(),
 ): string {
+  // "Covered by refused tests AND others" and "covered ONLY by refused tests" are different facts;
+  // saying "only" in both cases contradicts the list that follows it. Shared by both named causes.
+  const describe = (
+    lead: string,
+    named: readonly string[],
+    diagnosis: string,
+    subject: string,
+  ): string => {
+    const others = qualified.filter((n) => !named.includes(n));
+    const alongside =
+      others.length > 0
+        ? `, and by test(s) that did not pass for another reason (${others.join(", ")})`
+        : ", and by no test that passed";
+    return `${lead}: mutant covered by test(s) ${subject} (${named.join(", ")})${alongside} — ${diagnosis}`;
+  };
+
+  // R35 FIRST, deliberately. A permissions refusal has a one-line fix in the reader's own source; a
+  // R69 TestPage refusal has none. When a mutant is covered by one of each, leading with the
+  // TestPage cause would tell a reader whose problem IS fixable that nothing can be done.
   const refused = qualified.filter((n) => refusedThisBatch.has(n));
-  const firstName = refused[0];
-  const refusalText = firstName === undefined ? undefined : refusedThisBatch.get(firstName);
-  if (refusalText === undefined) {
-    return `unsupported test type: mutant covered only by test(s) that did not pass at baseline (${qualified.join(", ")})`;
+  const refusedFirst = refused[0];
+  const refusalText = refusedFirst === undefined ? undefined : refusedThisBatch.get(refusedFirst);
+  if (refusalText !== undefined) {
+    return describe("permissions refusal", refused, refusalText, "BC refused at baseline");
   }
-  const others = qualified.filter((n) => !refusedThisBatch.has(n));
-  // "covered only by refused tests" and "covered by refused tests AND others" are different
-  // facts; saying "only" in both cases contradicts the list that follows it.
-  const alongside =
-    others.length > 0
-      ? `, and by test(s) that did not pass for another reason (${others.join(", ")})`
-      : ", and by no test that passed";
-  return `permissions refusal: mutant covered by test(s) BC refused at baseline (${refused.join(", ")})${alongside} — ${refusalText}`;
+
+  // R69: the platform cannot run these tests on this path at all — a fact about the SESSION TYPE,
+  // not about the test. Named separately from the generic wording below, which sends a reader to
+  // debug a test that is already correct.
+  const testPage = qualified.filter((n) => testPageThisBatch.has(n));
+  const testPageFirst = testPage[0];
+  const testPageText =
+    testPageFirst === undefined ? undefined : testPageThisBatch.get(testPageFirst);
+  if (testPageText !== undefined) {
+    return describe(
+      "testpage unsupported on this path",
+      testPage,
+      testPageText,
+      "that cannot run on this session type",
+    );
+  }
+
+  return `unsupported test type: mutant covered only by test(s) that did not pass at baseline (${qualified.join(", ")})`;
 }
 
 /** Human-readable `Codeunit.method` identity for report/notes — unambiguous across codeunits sharing a method name. */

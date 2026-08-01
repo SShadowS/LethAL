@@ -5,6 +5,7 @@ import { type PermissionCanaryResult, permissionCanaryWarnings } from "./permiss
 import type { CoverageAttribution } from "./selection";
 import { identityKeyOf } from "./selection";
 import type { MutantVerdict } from "./store";
+import { TESTPAGE_DIAGNOSIS } from "./testpage-unsupported";
 
 /**
  * Internal accumulation record produced while `runSession` walks batches and
@@ -289,6 +290,27 @@ export interface SessionReport {
     readonly diagnosis: string;
   };
   /**
+   * R69: baseline tests refused because they open a `TestPage`, which the fenced session
+   * (`GuiAllowed=No`, `ClientType=ODataV4`) cannot create a test service for. Also a strict subset
+   * of `unsupportedTests`, and split out for the same reason as `permissionsRefused` — but it is
+   * the OPPOSITE kind of finding, which is why it is a separate field rather than another entry
+   * there. A permissions refusal is fixed by one property in the reader's own source; this one has
+   * NO target-side fix at all, and reporting them together would tell one of the two readers
+   * something false.
+   *
+   * MEASURED 2026-07-31 on Cronus281 (`fixtures/sandbox-probes`, codeunit 79218), and the
+   * measurement corrected the original filing: the platform REFUSES in 87 ms rather than hanging.
+   * Sized on a real project: 9 of Continia Document Output's 104 test files declare a `TestPage`.
+   *
+   * Direction is safe — the affected tests leave the green set and mutants covered only by them are
+   * score-excluded, never scored against tests that never ran. Absent when no test hit the refusal.
+   */
+  readonly testPageUnsupported?: {
+    readonly tests: readonly string[];
+    /** The explanation, stated once here rather than repeated per mutant. */
+    readonly diagnosis: string;
+  };
+  /**
    * R59: tests that PASSED on the bc-dev-mcp hub (they are in the green set, or they would not
    * have been covering tests) and then FAILED, unmutated, on the fenced runner that produces every
    * verdict. Present only in a hub coverage mode (`procedure`/`line`); in `fenced`/`none` there is
@@ -563,6 +585,9 @@ export interface BuildReportInput {
   /** R35: baseline tests BC refused on permissions — see `SessionReport.permissionsRefused`.
    *  Pass the names only; the diagnosis text is composed here so it cannot drift per caller. */
   readonly permissionsRefusedTests?: readonly string[];
+  /** R69: baseline tests refused for opening a `TestPage` — see `SessionReport.testPageUnsupported`.
+   *  Names only; the diagnosis text is composed here so it cannot drift per caller. */
+  readonly testPageUnsupportedTests?: readonly string[];
   /** R59: tests that failed their kill-confirmation under a HUB coverage mode — see
    *  `SessionReport.runnerDisagreement`. Names only; the explanation is composed here. */
   readonly runnerDisagreementTests?: readonly string[];
@@ -751,6 +776,12 @@ export function buildReport(input: BuildReportInput): SessionReport {
   // TestPermissions = Disabled and run it again".
   const permissionsRefusedTests = input.permissionsRefusedTests ?? [];
   if (permissionsRefusedTests.length > 0) caveats.push("tests-permission-refused");
+  // R69: distinct from `baseline-red` AND from `tests-permission-refused`. The first says the
+  // measurement is degraded; the second says the degradation has a one-line fix in the user's own
+  // source. This one says the degradation has NO target-side fix — these tests cannot run on this
+  // execution path — which is a different instruction to the reader, not a shade of the same one.
+  const testPageUnsupportedTests = input.testPageUnsupportedTests ?? [];
+  if (testPageUnsupportedTests.length > 0) caveats.push("tests-testpage-unsupported");
   // R59: distinct from `baseline-red` and from `tests-permission-refused`. Those describe the
   // user's tests; this one describes LethAL measuring the green set on a different session type
   // from the verdicts, which is a property of the CONFIGURATION and is fixed by changing it.
@@ -831,6 +862,14 @@ export function buildReport(input: BuildReportInput): SessionReport {
               "write permission on its own app's tables. Declare `TestPermissions = Disabled;` " +
               "on the test codeunit and re-run. Any mutant covered only by these tests is " +
               "recorded `error` (score-excluded), never a silent `no-coverage`.",
+          },
+        }
+      : {}),
+    ...(testPageUnsupportedTests.length > 0
+      ? {
+          testPageUnsupported: {
+            tests: [...testPageUnsupportedTests].sort(),
+            diagnosis: TESTPAGE_DIAGNOSIS,
           },
         }
       : {}),
@@ -957,6 +996,18 @@ export function renderConsole(r: SessionReport): string {
       `PERMISSIONS REFUSED: ${n} baseline test(s) carry BC's permission-refusal message. ${r.permissionsRefused.diagnosis}`,
     );
     for (const t of r.permissionsRefused.tests.slice(0, 10)) lines.push(`  ${t}`);
+    if (n > 10) lines.push(`  ... ${n - 10} more`);
+  }
+  // R69: same prominence, opposite instruction. Without this the reader sees only "N of M baseline
+  // tests failing" for tests that are correct and will never pass here, and goes looking for a bug
+  // in them. The line says what LethAL knows: it is the path, and there is nothing to fix in the
+  // test. Deliberately NOT folded into the permissions block above — see `testPageUnsupported`.
+  if (r.testPageUnsupported !== undefined) {
+    const n = r.testPageUnsupported.tests.length;
+    lines.push(
+      `TESTPAGE UNSUPPORTED ON THIS PATH: ${n} baseline test(s) were refused for opening a TestPage. ${r.testPageUnsupported.diagnosis}`,
+    );
+    for (const t of r.testPageUnsupported.tests.slice(0, 10)) lines.push(`  ${t}`);
     if (n > 10) lines.push(`  ... ${n - 10} more`);
   }
   // R59: same prominence again, and for the same reason — the reader's default reading of

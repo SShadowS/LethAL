@@ -1112,6 +1112,96 @@ describe("runSession — Task 6 unsupported-baseline qualification (spec §9)", 
     });
   });
 
+  // ————————————————————————————————————————————————————————————————————————————————————————
+  // R69. The mirror image of R35, and separate for exactly that reason. A test that opens a
+  // `TestPage` is refused by the fenced session R58 made the default — MEASURED 2026-07-31 on
+  // Cronus281 (`fixtures/sandbox-probes` codeunit 79218), and measured to be a FAST refusal
+  // (87 ms), correcting the "hangs" this row was originally filed as. Where R35's cause has a
+  // one-line fix in the reader's own source, this one has NO target-side fix at all, so the two
+  // must never share a heading: each would tell the other's reader something false.
+  // ————————————————————————————————————————————————————————————————————————————————————————
+  describe("R69 — a baseline test refused for opening a TestPage", () => {
+    const TESTPAGE_REFUSAL =
+      "Unexpected CLR exception thrown.: System.NotSupportedException: Specified method is not " +
+      "supported. at Microsoft.Dynamics.Nav.Runtime.NavSession.CreateNavTestService()";
+
+    async function runTestPageRefused() {
+      const dirs = await qualProject();
+      const backend = new QualificationBackend((method: string) =>
+        method === "UnsupportedTest"
+          ? {
+              outcome: "error" as const,
+              procedure: "IsUnderBudget",
+              failureMessage: TESTPAGE_REFUSAL,
+            }
+          : { outcome: "pass" as const, procedure: "IsOverBudget" },
+      );
+      const store = new ResultsStore(":memory:");
+      return await runSession({ backend, store, ...dirs, selectorIds });
+    }
+
+    test("names the TestPage cause instead of the bare unsupported-test-type wording", async () => {
+      const report = await runTestPageRefused();
+      const errored = report.mutants.filter((m) => m.verdict === "error");
+      expect(errored.length).toBe(3);
+      for (const m of errored) {
+        expect(m.failureNote).toStartWith("testpage unsupported on this path:");
+        expect(m.failureNote).toContain("Sandbox Tests.UnsupportedTest");
+        expect(m.failureNote).not.toContain("unsupported test type: mutant covered");
+      }
+    });
+
+    test("surfaces the affected test on the report, distinct from the did-not-pass list", async () => {
+      const report = await runTestPageRefused();
+      expect(report.testPageUnsupported?.tests).toEqual(["Sandbox Tests.UnsupportedTest"]);
+      expect(report.testPageUnsupported?.diagnosis).toContain("TestPage");
+      // A strict subset, not a replacement — same contract as `permissionsRefused`.
+      expect(report.unsupportedTests).toContain("Sandbox Tests.UnsupportedTest");
+      expect(report.validity.caveats).toContain("tests-testpage-unsupported");
+    });
+
+    // The two causes demand opposite responses. Cross-labelling either way is the failure mode
+    // this whole split exists to prevent.
+    test("is never labelled a permissions refusal, and vice versa", async () => {
+      const report = await runTestPageRefused();
+      expect(report.permissionsRefused).toBeUndefined();
+      expect(report.validity.caveats).not.toContain("tests-permission-refused");
+      for (const m of report.mutants.filter((m) => m.verdict === "error")) {
+        expect(m.failureNote).not.toContain("permissions refusal");
+        expect(m.failureNote).not.toContain("TestPermissions = Disabled");
+      }
+    });
+
+    test("quotes BC's own words rather than asserting the diagnosis unsupported", async () => {
+      const report = await runTestPageRefused();
+      const errored = report.mutants.filter((m) => m.verdict === "error");
+      expect(errored.length).toBeGreaterThan(0);
+      for (const m of errored) expect(m.failureNote).toContain("CreateNavTestService");
+    });
+
+    // The direction that matters for safety: this must not fire on every red baseline, or every
+    // reader is told their tests cannot run here when they simply failed.
+    test("a test that merely fails is NOT diagnosed as a TestPage refusal", async () => {
+      const dirs = await qualProject();
+      const backend = new QualificationBackend((method: string) =>
+        method === "UnsupportedTest"
+          ? {
+              outcome: "error" as const,
+              procedure: "IsUnderBudget",
+              failureMessage: "Assert.AreEqual failed: expected 3, got 4",
+            }
+          : { outcome: "pass" as const, procedure: "IsOverBudget" },
+      );
+      const store = new ResultsStore(":memory:");
+      const report = await runSession({ backend, store, ...dirs, selectorIds });
+
+      expect(report.testPageUnsupported).toBeUndefined();
+      expect(report.validity.caveats).not.toContain("tests-testpage-unsupported");
+      for (const m of report.mutants.filter((m) => m.verdict === "error"))
+        expect(m.failureNote).toContain("unsupported test type");
+    });
+  });
+
   test("a mutant covered by a green test still runs (no over-exclusion)", async () => {
     const dirs = await qualProject();
     const backend = new QualificationBackend(baselineFor);
