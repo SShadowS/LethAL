@@ -1344,6 +1344,12 @@ describe("R69 Phase 2 Task 6 — routing gate-2-passing tests through the client
     // gate-2 (1) + 3 mutants x (mutant-active + confirmation) = 7, never fewer: a bare
     // mutant-active failure alone must never be enough to decide anything.
     expect(transport.seq).toBe(7);
+    // Finding 1 (spec §3.1, REQUIRED mitigation): gate 1 matches BC's refusal text ANYWHERE in a
+    // failure's message + stack trace, so a false positive would silently mislabel a routed
+    // mutant as "opens a TestPage" when it does not. The verbatim quote is the only thing that
+    // lets a reader overrule that — it must survive onto the routed verdict's note, not just be
+    // consumed internally by `selectRoutedTests` and discarded.
+    expect(m?.failureNote).toContain("CreateNavTestService");
   });
 
   // A wedged RunBatch may still be executing WITH A MUTANT ACTIVE, holding locks. Recording a
@@ -1403,6 +1409,76 @@ describe("R69 Phase 2 Task 6 — routing gate-2-passing tests through the client
     // Never even examined: IsOverBudget's mutants are green-covered, so they never reach the
     // router and the transport is never called.
     expect(transport.seq).toBe(0);
+  });
+
+  // Three tests, so a candidate's `covering` list can hold TWO non-green tests at once: one that
+  // passes both routing gates, one that fails for an ordinary reason. Requirement 3 says
+  // "EXCLUSIVELY" — `resolveRoutedCandidates` enforces it with `covering.every(...)`, and this is
+  // the only test in the suite where `.every` and `.some` disagree: `.some` would route this
+  // mutant off the strength of UnsupportedTest alone, even though BrokenTest — which never comes
+  // near a TestPage, and covers the exact same procedure — also failed and was never examined.
+  const THREE_TEST_AL = `codeunit 79100 "Sandbox Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure GreenTest()
+    begin
+    end;
+
+    [Test]
+    procedure UnsupportedTest()
+    begin
+    end;
+
+    [Test]
+    procedure BrokenTest()
+    begin
+    end;
+}
+`;
+
+  test("a mutant covered by both a routable test and an ordinary failing test is NOT routed (exclusivity)", async () => {
+    const dirs = await makeProject(THREE_TEST_AL);
+    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), ROUTED_ONLY_AL);
+    const backend = new QualificationBackend((method) => {
+      if (method === "UnsupportedTest") {
+        return {
+          outcome: "error" as const,
+          procedure: "IsUnderBudget",
+          failureMessage: TESTPAGE_REFUSAL,
+        };
+      }
+      if (method === "BrokenTest") {
+        return {
+          outcome: "error" as const,
+          procedure: "IsUnderBudget",
+          failureMessage: "Assert.AreEqual failed: expected 3, got 4",
+        };
+      }
+      return { outcome: "pass" as const, procedure: "NoOp" }; // GreenTest
+    });
+    const store = new ResultsStore(":memory:");
+    // Gate 1 is checked locally before any live call, so BrokenTest (an ordinary assertion
+    // failure, no TestPage refusal) never reaches the transport at all — only UnsupportedTest's
+    // gate-2 baseline check does. If that single call is the only one ever made, `.every` never
+    // even got a chance to matter; the assertions below are what actually pin the behaviour down.
+    const transport = new FakeBatchTransport(() => ({ rows: 1, outcome: "pass" }));
+    const report = await runSession({
+      backend,
+      store,
+      ...dirs,
+      selectorIds,
+      routedTransport: { odata: transport, ws: transport },
+    });
+    const m = report.mutants.find((x) => x.mutantCode === "M0001");
+    expect(m?.verdict).toBe("error");
+    expect(m?.runner ?? "fenced").not.toBe("client-services");
+    expect(m?.failureNote).toContain("Sandbox Tests.UnsupportedTest");
+    expect(m?.failureNote).toContain("Sandbox Tests.BrokenTest");
+    // Exactly the gate-2 baseline check for UnsupportedTest — never a mutant-active run, because
+    // this candidate was never routed.
+    expect(transport.seq).toBe(1);
   });
 });
 

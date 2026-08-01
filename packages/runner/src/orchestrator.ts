@@ -2817,7 +2817,11 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         const { routedTransport } = cfg;
         const resolved =
           routedTransport === undefined
-            ? { toRoute: [], toFallback: routableCandidates }
+            ? {
+                toRoute: [],
+                toFallback: routableCandidates,
+                gate1Evidence: new Map<string, string>(),
+              }
             : await resolveRoutedCandidates({
                 transport: routedTransport,
                 candidates: routableCandidates,
@@ -2831,8 +2835,26 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
               });
         for (const c of resolved.toFallback) {
           const qualified = [...new Set(c.covering.map(qualifiedTestName))].sort();
-          const note = unsupportedCoverageNote(qualified, refusedThisBatch, testPageThisBatch);
-          record(cfg.store, runId, c.mutant, "error", outcomes, batchIdx, undefined, note);
+          // Finding 3: a gate-2 wedge is a DIFFERENT fact from "the router looked and said no" —
+          // every candidate fell back unrouted because routing itself could not be evaluated, not
+          // because it failed to qualify. Name it explicitly instead of the generic
+          // `unsupportedCoverageNote`, and tag `cause` the same way the per-mutant wedge below
+          // does, so a reader (and `report.counts.deadlineExceeded`) can tell the two apart.
+          const note =
+            resolved.gate2WedgeDetail === undefined
+              ? unsupportedCoverageNote(qualified, refusedThisBatch, testPageThisBatch)
+              : `routed gate-2 baseline check wedged (${resolved.gate2WedgeDetail}) — this batch's routed work is quarantined (see report.quarantined) before it could examine mutant covered by test(s) ${qualified.join(", ")} for routing; left unscored`;
+          record(
+            cfg.store,
+            runId,
+            c.mutant,
+            "error",
+            outcomes,
+            batchIdx,
+            undefined,
+            note,
+            resolved.gate2WedgeDetail === undefined ? undefined : "deadline-exceeded",
+          );
         }
         if (resolved.toRoute.length > 0 && routedTransport !== undefined) {
           await runRoutedMutantsOnBackend({
@@ -2848,6 +2870,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
             quarantineStore,
             resourceKey,
             nowIso,
+            gate1Evidence: resolved.gate1Evidence,
           });
         }
       }
@@ -3622,6 +3645,25 @@ async function resolveRoutedCandidates(args: {
 }): Promise<{
   toRoute: readonly RoutableCandidate[];
   toFallback: readonly RoutableCandidate[];
+  /**
+   * Finding 1 (spec §3.1, REQUIRED mitigation): qualified test name -> `RoutedTest.gate1Evidence`
+   * verbatim, for every test that actually routed. Gate 1 (`describeTestPageUnsupported`) matches
+   * BC's `CreateNavTestService()` refusal ANYWHERE in a failure's message + stack trace — including
+   * inside a test's OWN assertion text, if it happens to quote that platform string. A false
+   * positive there would silently mislabel a routed mutant as "opens a TestPage" when it does not;
+   * surfacing the verbatim quote on every routed verdict (see `runRoutedMutantsOnBackend`) is the
+   * only thing that lets a human reader overrule the routing decision, the same escape hatch R35's
+   * design gives its own permissions diagnosis. Empty (never consulted) when nothing routed.
+   */
+  gate1Evidence: ReadonlyMap<string, string>;
+  /**
+   * Finding 3: set ONLY when gate 2 itself wedged (the catch branch below) — the reason EVERY
+   * candidate fell back unrouted, distinct from an ordinary "did not qualify" fallback. The call
+   * site names it explicitly in the fallback note instead of the generic `unsupportedCoverageNote`,
+   * so a reader can tell "the router never got to look at this" from "the router looked and said
+   * no".
+   */
+  gate2WedgeDetail?: string;
 }> {
   const gate1Candidates: TestMethodRef[] = [];
   const seen = new Set<string>();
@@ -3673,14 +3715,25 @@ async function resolveRoutedCandidates(args: {
       (t) => gate2.get(`${t.codeunitName}.${t.method}`) ?? false,
     );
     const routedNames = new Set(routed.map((r) => `${r.codeunitName}.${r.method}`));
+    // Finding 1: carry `gate1Evidence` through by the SAME key `routedNames` uses, so a caller
+    // that only has a `TestMethodRef` can look its routing reason up the same way it checks
+    // whether the test routed at all.
+    const gate1Evidence = new Map(
+      routed.map((r) => [`${r.codeunitName}.${r.method}`, r.gate1Evidence]),
+    );
     const toRoute = args.candidates.filter((c) =>
       c.covering.every((ref) => routedNames.has(qualifiedTestName(ref))),
     );
     const toFallback = args.candidates.filter((c) => !toRoute.includes(c));
-    return { toRoute, toFallback };
+    return { toRoute, toFallback, gate1Evidence };
   } catch (err) {
     if (!(err instanceof RoutedWedgeSignal)) throw err;
-    return { toRoute: [], toFallback: args.candidates };
+    return {
+      toRoute: [],
+      toFallback: args.candidates,
+      gate1Evidence: new Map(),
+      gate2WedgeDetail: err.message,
+    };
   }
 }
 
@@ -3704,6 +3757,27 @@ async function resolveRoutedCandidates(args: {
  * every covering test passed both routing gates" — a mutant with ANY fenced-green coverage never
  * reaches this function; it keeps its fenced verdict, unexamined (requirement 3).
  */
+/**
+ * Finding 1 (spec §3.1, REQUIRED mitigation): composes the "why was this routed" note every
+ * routed mutant's record carries, quoting `gate1Evidence` VERBATIM rather than summarising it —
+ * the quote is what lets a reader overrule a mislabelled routing decision, so paraphrasing it
+ * would defeat the mitigation. Returns `undefined` only when `covering` names no test this batch
+ * actually routed (should not happen for a `RoutableCandidate` in `toRoute`, but this function
+ * must not fabricate a reason it cannot show evidence for).
+ */
+function routedReasonNote(
+  covering: readonly TestMethodRef[],
+  gate1Evidence: ReadonlyMap<string, string>,
+): string | undefined {
+  const reasons: string[] = [];
+  for (const ref of covering) {
+    const evidence = gate1Evidence.get(qualifiedTestName(ref));
+    if (evidence !== undefined) reasons.push(`${qualifiedTestName(ref)}: "${evidence}"`);
+  }
+  if (reasons.length === 0) return undefined;
+  return `routed to client-services — gate 1 matched ${reasons.join("; ")}`;
+}
+
 async function runRoutedMutantsOnBackend(args: {
   readonly transport: { readonly odata: BatchOdata; readonly ws: BatchWebSocket };
   readonly safety: SessionSafety;
@@ -3717,6 +3791,8 @@ async function runRoutedMutantsOnBackend(args: {
   readonly quarantineStore: QuarantineStore | undefined;
   readonly resourceKey: string | undefined;
   readonly nowIso: () => string;
+  /** Finding 1 — see `resolveRoutedCandidates`'s return doc comment. */
+  readonly gate1Evidence: ReadonlyMap<string, string>;
 }): Promise<void> {
   for (const { mutant: m, covering } of args.candidates) {
     if (args.safety.isUnsafe) return; // an earlier candidate's wedge already latched — stop
@@ -3785,6 +3861,16 @@ async function runRoutedMutantsOnBackend(args: {
       cause = "deadline-exceeded";
       failureNote = `${err.message} — this session is quarantined; the tier may still be executing with a mutant active (design §8/§9)`;
     }
+    // Finding 1: EVERY routed mutant's record — killed, survived, or error, wedge included —
+    // names why the covering test was routed, quoting gate 1's evidence verbatim. Prepended
+    // (never substituted) ahead of whatever verdict-specific note this mutant already earned.
+    const routedNote = routedReasonNote(covering, args.gate1Evidence);
+    failureNote =
+      routedNote === undefined
+        ? failureNote
+        : failureNote === undefined
+          ? routedNote
+          : `${routedNote} — ${failureNote}`;
     record(
       args.store,
       args.runId,
