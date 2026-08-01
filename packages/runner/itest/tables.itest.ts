@@ -100,7 +100,13 @@ const EXPECTED = {
   // support, which had only ever run in unit tests, is instrumented, compiled, published and
   // EXECUTED by a gate. New sites have no frozen baseline entry by construction; every
   // PRE-EXISTING mutant must keep its verdict, which is what `assertMatchesBaseline` checks.
-  totalMutantSites: 93,
+  // R78 moved this from 93 to 96. The fixture gained `codeunit 79308 "Data Value Source"` and
+  // `page 79323 "Data Value Card"` — a deliberately minimal pair whose only route in is a
+  // `TestPage` test, built to answer whether a mutant covered EXCLUSIVELY by a TestPage test can be
+  // scored at all. The three new sites are `empty-block` on the page's OnAction, `empty-block` on
+  // `GetValue`'s body, and `return-value` on its `exit(42)`; all three flip the value the test
+  // asserts, so all three are killable by that one test and by nothing else.
+  totalMutantSites: 96,
   // R36 moved this from 63/10 to 64/9, deliberately and in one direction only.
   //
   // `RequireCategoryAFails` used to assert merely that AN error occurred, so deleting
@@ -126,7 +132,12 @@ const EXPECTED = {
   //                reaches, and the pipeline proof is real even when the execution proof is not.
   killed: 69,
   survived: 9,
-  noCoverage: 6,
+  // R78 moved this from 6 to 9. The three new sites all belong to the TestPage-only pair
+  // (`Data Value Source` / `Data Value Card`), and all three land `no-coverage` because the one
+  // test that reaches them is refused on the fenced path. That is the measured statement of the
+  // gap R69 exists for: the mutants are excluded from the score rather than scored against a test
+  // that never ran. If the routed path is ever wired, THESE THREE are what must flip to scored.
+  noCoverage: 9,
   mutationScore: 69 / (69 + 9),
   /**
    * `coverageFilter`'s FALLBACK 2 ("coverage places this table trigger nowhere, run every green
@@ -304,10 +315,25 @@ function assertVerdictTable(report: SessionReport): void {
     console.log(`  quarantined: ${JSON.stringify(report.quarantined)}`);
   }
 
+  // R78 turned this from a blanket `baselineGreen === true` into an EXACT statement of the one
+  // expected failure. Flipping it to `false` would have been the lazy update and would have gutted
+  // the guard: any newly-broken fixture test would then pass unnoticed. The fixture now contains
+  // exactly one test that CANNOT run on the fenced path — `PageActionComputesNonZero` opens a
+  // TestPage, which this session type refuses — so the honest assertion is "exactly that one fails,
+  // by name, for that reason", which still catches every other regression.
   assert.equal(
-    report.baselineGreen,
-    true,
-    "baseline must be green (every sandbox-data test passes unmutated)",
+    report.unsupportedTests.length,
+    1,
+    `expected exactly 1 baseline failure (the TestPage test), got ${report.unsupportedTests.length}: ${report.unsupportedTests.join(", ")}`,
+  );
+  assert.equal(
+    report.unsupportedTests[0],
+    "Data Tests.PageActionComputesNonZero",
+    "the only permitted baseline failure is the TestPage test",
+  );
+  assert.ok(
+    report.validity.caveats.includes("tests-testpage-unsupported"),
+    "the TestPage refusal must be NAMED in the report, not left as an unexplained baseline failure",
   );
   assert.equal(report.counts.killed, EXPECTED.killed, "killed count mismatch");
   assert.equal(report.counts.survived, EXPECTED.survived, "survived count mismatch");

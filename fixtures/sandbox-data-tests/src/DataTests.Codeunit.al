@@ -454,6 +454,43 @@ codeunit 79310 "Data Tests"
     // .superpowers/sdd/2026-08-01-r69-phase2-batch-runner/r76-containment-report.md
 
     // ---------------------------------------------------------------------------------------------
+    // R78: the ONLY TestPage test in this fixture, and the only route to
+    // `"Data Value Source"` (object 79308) procedure `GetValue`.
+    //
+    // What it is for: `GetValue`'s `exit(42)` carries exactly one Tier-1 mutant
+    // (`lethal.return-value` rewrites a non-zero numeric exit to `exit(0)`), and nothing else in the
+    // fixture calls it. So that mutant is reachable ONLY through a TestPage — a purpose-built
+    // instance of the case R69/R78 argue about, with a known-correct answer. Under the mutant the
+    // action computes 0 instead of 42 and this test MUST fail; if it ever reports `survived` or
+    // `no-coverage` while the fixture is intact, the routing pipeline is broken, not the fixture.
+    //
+    // Deliberately a SIMPLE page (no SourceTable, no triggers, nothing on open). R76 measured the
+    // split: a page like this is REFUSED fast on the fenced path (87 ms), where a page over a
+    // trigger-carrying table with a pageextension writing from `OnOpenPage` HANGS and quarantines
+    // the entire run. Fast refusal is the signal the router's gate 1 detects, so this test exercises
+    // the pipeline in the configuration that CAN work and does not re-open the hang — which stays
+    // filed, unfixed, and is a different problem.
+    //
+    // Plain `Error` rather than an Assert library: this app depends only on `LethAL Sandbox Data`,
+    // matching every other test here.
+    // ---------------------------------------------------------------------------------------------
+
+    [Test]
+    procedure PageActionComputesNonZero()
+    var
+        ValueCard: TestPage "Data Value Card";
+        Shown: Integer;
+    begin
+        ValueCard.OpenView();
+        ValueCard.Compute.Invoke();
+        Shown := ValueCard.ComputedValue.AsInteger();
+        ValueCard.Close();
+
+        if Shown <> 42 then
+            Error('expected the Compute action to show 42 from Data Value Source.GetValue, got %1', Shown);
+    end;
+
+    // ---------------------------------------------------------------------------------------------
     // Seeding helpers. All idempotent — see InsertDoublesAmountWeak's comment for why that is
     // kept even though the persistence claim behind it was measured false.
     // around every mutant run, so rows PERSIST into the next one.

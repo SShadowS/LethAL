@@ -70,6 +70,13 @@
     "errorClass": null
   },
   {
+    "key": "14fab705edac4ef282586b95d12c047ee9255789bcbec5a19b0d9b87c8373246|Data Value Card|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
     "key": "1bcb6635da772f46d15716e02d340179867b2d4964009615ae23815b482c9ef3|Data Main|lethal.remove-setrange|1",
     "verdict": "killed",
     "killingTest": "CountInCategoryUppercaseSetRange",
@@ -81,6 +88,13 @@
     "verdict": "killed",
     "killingTest": "ClearingMainFilterCountsEverything",
     "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "20aee8f9773c9ea9a8e7b90bd1b338ea9a6c871e10f9b4ec8af5b0204f201da4|Data Value Source|lethal.return-value|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
     "errorClass": null
   },
   {
@@ -417,6 +431,13 @@
     "verdict": "killed",
     "killingTest": "UserDefinedBuiltinsRun",
     "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "c418f4efb9e88904a396ba326ed4e788592cd0b41c807f2df0eda67c887d28b3|Data Value Source|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
     "errorClass": null
   },
   {
