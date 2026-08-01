@@ -158,9 +158,13 @@ export async function runOneBatchMethod(
       `batch result nonce ${JSON.stringify(row.nonce)} does not match this invocation's ${JSON.stringify(req.nonce)} — stale row`,
     );
   }
-  if (row.identityMismatch === true) {
+  // `!== false` (not `=== true`): an identity mismatch means the mutation may never have been
+  // applied, so an unreadable value (`undefined`, a string, a missing key — the same shape a
+  // schema change could produce) must NOT be read as "fine" and fall through to a scored verdict.
+  // Fail closed, matching the nonce check right above it rather than being more lenient than it.
+  if (row.identityMismatch !== false) {
     throw new BatchProtocolError(
-      "batch result attestation identity mismatch: a non-matching (targetAppId, artifactId) ran during this session — wrong/stale binary",
+      `batch result attestation identity mismatch: ${JSON.stringify(row.identityMismatch)} (expected exactly \`false\`) — a non-matching (targetAppId, artifactId) may have run during this session, or the field is unreadable; either way, wrong/stale binary is not ruled out`,
     );
   }
   const resultJson = row.result !== undefined ? row.result : row.resultRaw;

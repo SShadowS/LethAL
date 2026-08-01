@@ -6,10 +6,15 @@ function resultJson(method: string, result = 1, message = "") {
   return { name: "T", codeUnit: 79218, testResults: [{ method, result, message }] };
 }
 
-function fakes(row: Record<string, unknown> | undefined, calls: string[] = []) {
+function fakes(
+  row: Record<string, unknown> | undefined,
+  calls: string[] = [],
+  bodies: { action: string; body: unknown }[] = [],
+) {
   const odata = {
-    post: async (action: string) => {
+    post: async (action: string, body: unknown) => {
       calls.push(action);
+      bodies.push({ action, body });
       if (action !== "GetBatchResults") return undefined;
       return { value: JSON.stringify(row === undefined ? [] : [row]) };
     },
@@ -19,7 +24,7 @@ function fakes(row: Record<string, unknown> | undefined, calls: string[] = []) {
       calls.push("RunBatch");
     },
   };
-  return { odata, ws, calls };
+  return { odata, ws, calls, bodies };
 }
 
 const REQ = {
@@ -93,6 +98,37 @@ describe("runOneBatchMethod (R69 §3.2/§3.3)", () => {
     expect(calls).toEqual(["ClearBatch", "SeedBatchItem", "RunBatch", "GetBatchResults"]);
   });
 
+  // AL has no default parameters: SeedBatchItem is a hard server-side seven-argument call, and a
+  // future edit that silently drops one (e.g. coverageFilter) passes typecheck (the body is
+  // `unknown` on the wire) and every OTHER test here, which only inspects call NAMES. Assert the
+  // actual VALUES sent, not just that the keys exist.
+  test("seeds SeedBatchItem with all seven fields, values from the request", async () => {
+    const bodies: { action: string; body: unknown }[] = [];
+    const { odata, ws } = fakes(
+      {
+        nonce: "N1",
+        ok: true,
+        attested: true,
+        identityMismatch: false,
+        errorText: "",
+        result: resultJson("TestFoo", 2),
+      },
+      [],
+      bodies,
+    );
+    await runOneBatchMethod(odata, ws, REQ);
+    const seed = bodies.find((b) => b.action === "SeedBatchItem");
+    expect(seed?.body).toEqual({
+      codeunitId: REQ.codeunitId,
+      method: REQ.method,
+      mutantId: REQ.mutantId,
+      targetAppId: REQ.targetAppId,
+      artifactId: REQ.artifactId,
+      nonce: REQ.nonce,
+      coverageFilter: REQ.coverageFilter,
+    });
+  });
+
   test("throws when no result row came back — never an empty default", async () => {
     const { odata, ws } = fakes(undefined);
     await expect(runOneBatchMethod(odata, ws, REQ)).rejects.toThrow(BatchProtocolError);
@@ -117,6 +153,21 @@ describe("runOneBatchMethod (R69 §3.2/§3.3)", () => {
       ok: true,
       attested: true,
       identityMismatch: true,
+      errorText: "",
+      result: resultJson("TestFoo"),
+    });
+    await expect(runOneBatchMethod(odata, ws, REQ)).rejects.toThrow(BatchProtocolError);
+  });
+
+  // Fail closed, symmetric with the nonce check right above it in the source: identity mismatch
+  // means the mutation may never have been applied, so an unreadable value (missing key here,
+  // `undefined` once JSON round-trips) must NOT be read as "no mismatch" and scored as fine.
+  test("throws when identityMismatch is missing/malformed, not just when it is true", async () => {
+    const { odata, ws } = fakes({
+      nonce: "N1",
+      ok: true,
+      attested: true,
+      // identityMismatch deliberately omitted — the shape a schema change could produce.
       errorText: "",
       result: resultJson("TestFoo"),
     });
