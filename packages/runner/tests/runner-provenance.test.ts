@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { MutantManifestEntry } from "@lethal/schemata";
-import { REPORT_SCHEMA_VERSION, buildReport } from "../src/report";
+import { REPORT_SCHEMA_VERSION, buildReport, renderConsole } from "../src/report";
 import type { SessionOutcome } from "../src/report";
 import { buildResumeIndex } from "../src/resume";
 import { ResultsStore } from "../src/store";
@@ -149,6 +149,44 @@ describe("validity.executionContexts (R69 Phase 2)", () => {
     const r = build([]);
     expect(r.validity.executionContexts.length).toBeGreaterThan(0);
     expect(r.validity.executionContexts[0]?.runner).toBe("fenced");
+  });
+});
+
+// Review fix, round 1: `buildExecutionContexts` legitimately emits TWO "fenced" entries on an
+// ordinary `--resume` run that both carries some prior fenced verdicts AND freshly measures other
+// mutants on that same fenced path — no client-services involvement required. `renderConsole` used
+// to read only the FIRST match (`.find`), so the printed "NON-GUI EXECUTION: N verdict(s)" silently
+// undercounted whichever group came second. This pins the fix: the printed total must be the SUM
+// across every context sharing a runner, not just one of them.
+describe("renderConsole aggregates ALL contexts sharing a runner (resume undercount fix)", () => {
+  test("a fresh-fenced + carried-fenced report prints the SUMMED verdict count, not just one group's", () => {
+    const outcomes: SessionOutcome[] = [
+      { mutant: entry(), verdict: "killed", batchIndex: 0 }, // fresh, fenced, not carried
+      { mutant: entry({ mutantId: "M0002" }), verdict: "survived", batchIndex: 0 }, // fresh, fenced
+      {
+        mutant: entry({ mutantId: "M0003" }),
+        verdict: "killed",
+        batchIndex: 0,
+        carried: true, // carried, fenced too (no runner override — carried verdicts default fenced)
+      },
+    ];
+    const r = build(outcomes, {
+      resumedFrom: { runId: 3, carriedMutants: 1, skippedStranded: 0 },
+    });
+    // The underlying array is correct: two DISTINCT fenced entries, 2 + 1.
+    const fencedEntries = r.validity.executionContexts.filter((c) => c.runner === "fenced");
+    expect(fencedEntries).toHaveLength(2);
+    expect(fencedEntries.reduce((n, c) => n + c.verdictCount, 0)).toBe(3);
+
+    const text = renderConsole(r);
+    const line = text.split("\n").find((l) => l.startsWith("NON-GUI EXECUTION"));
+    expect(line).toBeDefined();
+    // The printed count must be the SUM (3), not one group's count (2 or 1) — this is the bug the
+    // review caught: a `.find()` silently reported only the first-seen group.
+    expect(line).toContain("NON-GUI EXECUTION: 3 verdict(s)");
+    // And the basis must name BOTH groups (or otherwise state that some were carried) — a single
+    // basis string describing only one group would reintroduce the same problem one level down.
+    expect(line).toContain("carried");
   });
 });
 

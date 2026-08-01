@@ -1066,6 +1066,42 @@ function pad(s: string, n: number): string {
   return s.length >= n ? s : s + " ".repeat(n - s.length);
 }
 
+/**
+ * Sums `verdictCount` across EVERY `executionContexts` entry sharing `runner`, and composes a
+ * basis sentence naming all of them — never just the first.
+ *
+ * `buildExecutionContexts` legitimately emits more than one entry per runner. The ordinary case
+ * needs no client-services involvement at all: a `--resume` run that both carries some prior
+ * FENCED verdicts and freshly executes other mutants on that SAME fenced path produces two
+ * `runner: "fenced"` entries with DIFFERENT `basis` text — one naming this run's own measurement,
+ * one naming the prior run it was carried from. A naive `.find()` reads only the first match and
+ * silently drops the other group's count from the printed total; a reader reconciling that number
+ * against the mutant table would find it does not add up, which is the exact failure class this
+ * project treats as its signature bug — an undercount in a report that exists to say what was
+ * measured.
+ */
+function summarizeRunnerContexts(
+  contexts: readonly ExecutionContext[],
+  runner: RunnerKind,
+):
+  | { readonly verdictCount: number; readonly clientType: string; readonly basisText: string }
+  | undefined {
+  const matches = contexts.filter((c) => c.runner === runner);
+  if (matches.length === 0) return undefined;
+  const [first] = matches;
+  if (first === undefined) return undefined; // unreachable: matches.length > 0 just checked
+  const verdictCount = matches.reduce((n, c) => n + c.verdictCount, 0);
+  // A single contributing group: its own basis stands alone, same wording as before this fix.
+  // More than one: name EACH group's count and basis rather than picking one — every group's
+  // `basis` already says plainly whether it was measured this run or carried from an earlier one
+  // (see `buildExecutionContexts`), so reusing it here needs no extra flag to disambiguate.
+  const basisText =
+    matches.length === 1
+      ? first.basis
+      : matches.map((c) => `${c.verdictCount} verdict(s) ${c.basis}`).join("; ");
+  return { verdictCount, clientType: first.clientType, basisText };
+}
+
 export function renderConsole(r: SessionReport): string {
   const lines: string[] = [];
   if (!r.authoritative) {
@@ -1180,19 +1216,20 @@ export function renderConsole(r: SessionReport): string {
   // Deliberately NOT "every verdict here" any more: since a client-services (interactive) path now
   // exists, that claim would be false the moment ONE verdict came from it — see the companion
   // block below, which states the opposite fact for that runner.
-  const fencedCtx = r.validity.executionContexts.find((c) => c.runner === "fenced");
-  if (fencedCtx !== undefined && fencedCtx.verdictCount > 0) {
+  // Aggregated across EVERY "fenced" entry, not just the first — see `summarizeRunnerContexts`.
+  const fenced = summarizeRunnerContexts(r.validity.executionContexts, "fenced");
+  if (fenced !== undefined && fenced.verdictCount > 0) {
     lines.push(
-      `NON-GUI EXECUTION: ${fencedCtx.verdictCount} verdict(s) here describe the app's non-interactive branch (GuiAllowed=No, ClientType=${fencedCtx.clientType}). Code reachable only when a user can be prompted never runs on this path, so its mutants cannot be killed here and land as survived or no-coverage — neither of which is a statement about your tests. Confirm() returns its DEFAULT rather than skipping the branch; Page.RunModal ERRORS. Measured on Continia Document Output: 0.3% of mutation sites (62 of 19,850).`,
+      `NON-GUI EXECUTION: ${fenced.verdictCount} verdict(s) here describe the app's non-interactive branch (GuiAllowed=No, ClientType=${fenced.clientType}) — ${fenced.basisText}. Code reachable only when a user can be prompted never runs on this path, so its mutants cannot be killed here and land as survived or no-coverage — neither of which is a statement about your tests. Confirm() returns its DEFAULT rather than skipping the branch; Page.RunModal ERRORS. Measured on Continia Document Output: 0.3% of mutation sites (62 of 19,850).`,
     );
   }
   // The companion fact, for the opposite path. Without this a reader who knows the fenced caveat
   // above would wrongly extend it to an interactive verdict too — the two paths disagree on
-  // exactly the code the fenced caveat says is unreachable.
-  const interactiveCtx = r.validity.executionContexts.find((c) => c.runner === "client-services");
-  if (interactiveCtx !== undefined && interactiveCtx.verdictCount > 0) {
+  // exactly the code the fenced caveat says is unreachable. Aggregated the same way as `fenced`.
+  const interactive = summarizeRunnerContexts(r.validity.executionContexts, "client-services");
+  if (interactive !== undefined && interactive.verdictCount > 0) {
     lines.push(
-      `INTERACTIVE EXECUTION (client-services): ${interactiveCtx.verdictCount} verdict(s) here come from the GuiAllowed=Yes, ClientType=${interactiveCtx.clientType} path (R69 Phase 2) instead. This is NOT the fenced branch above: under GuiAllowed=Yes an UNHANDLED Confirm RAISES rather than returning its default, so a mutant inside a Confirm branch can genuinely reach a different verdict here than it would fenced — a disagreement between the two paths on such a mutant is not necessarily a bug in either measurement. ${interactiveCtx.basis}.`,
+      `INTERACTIVE EXECUTION (client-services): ${interactive.verdictCount} verdict(s) here come from the GuiAllowed=Yes, ClientType=${interactive.clientType} path (R69 Phase 2) instead — ${interactive.basisText}. This is NOT the fenced branch above: under GuiAllowed=Yes an UNHANDLED Confirm RAISES rather than returning its default, so a mutant inside a Confirm branch can genuinely reach a different verdict here than it would fenced — a disagreement between the two paths on such a mutant is not necessarily a bug in either measurement.`,
     );
   }
   // The score's own limits, immediately after it. A reader quotes `score: 15.7%` long before
