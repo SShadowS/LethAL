@@ -404,3 +404,77 @@ flakiness in the user's own suite.
 returns **3 killed / 10 survived / 3 no-coverage**, per-mutant identical to the fenced gate across
 all 16 mutants (0 differing), with no disagreement diagnosis emitted — the detector is silent when
 the two runners agree. `itest:bcdev` 3/10/3 and `itest:tables` 69/9/6 both re-verified afterwards.
+
+---
+
+## R69's go/no-go — how many mutants are covered ONLY by TestPage tests? **2.30%**
+
+`scripts/measure-testpage-exclusive.ts` (denominator + census) plus the two live coverage runs
+described below. The threshold — **>= 5% continues R69, < 5% closes it** — was written into
+`ROADMAP.md` at `49c2ec0` **before the number existed**, because this row had already produced five
+retracted over-generalisations and a pre-commitment is the only thing that stops a result being
+rationalised afterwards.
+
+**Measured 2026-08-02** on Continia Document Output (`U:/Git/do-rel2`, Cloud at 28.4.0.0 — the
+version the environment actually runs), through the hub (`bcdev_test_run`, `coverage: "procedure"`),
+on the `lethal-do-trial` Continia environment `f19aca88`:
+
+| | mutants | share of 19,081 |
+|---|---|---|
+| covered by a TestPage test (generous bound) | 980 | 5.14% |
+| covered by some other test | 5,975 | 31.31% |
+| covered by no test at all | 12,667 | 66.39% |
+| **covered EXCLUSIVELY by TestPage tests** | **439** | **2.30%** |
+
+Variants, none of which reach 5%: excluding the 137 `.dependencies` files whose objects belong to
+other apps, **370 of 15,331 = 2.41%**; adding every mutant of the one page whose TestPage test could
+not run (below), **452 = 2.37%**.
+
+### Method
+
+1. **Denominator** — `generateMutationSet` then `writeInstrumentedProject`, the same path a real run
+   takes, so the count is post-dedup: **19,081 deployable mutants** over 554 `.al`
+   (codeunit 7,328 · page 5,556 · table 3,908 · pageextension 1,228 · report 572 ·
+   tableextension 489).
+2. **Numerator** — two hub runs, one MCP session per test codeunit: the 19 TestPage tests, then
+   every other test (1,197 executed). Coverage classified with `coverageFilter`'s own precedence
+   (public procedure = member hit only; local = member else object-with-unresolvable-member;
+   trigger = member else object-touched), so the figure means what a run would report.
+3. Exclusive = covered by (1) and not by (2).
+
+### What bounds it, stated because it bounds the result rather than decorating it
+
+- **The suite is not complete.** One of 76 test codeunits (68961) died with `Connection closed`, so
+  its tests contributed no coverage. That can only make the exclusive set LOOK BIGGER — the missing
+  direction is safe for a "close it" decision.
+- **One of the 19 TestPage tests does not exist on the server.** The environment runs test app
+  29.0.0.0 while the source tree is 28.4-era, and `EMailJobsPage_QueueScheduleNotEditable_WhenFlagOn`
+  is absent from the server's codeunit 68945 (24 methods, none of them that one). Bounded above by
+  giving it every mutant of the page it drives (`page 6175294`, 13 mutants) — 2.37%, still below.
+- **Locals are invisible at member level** (R63): 219,904 of 227,143 coverage rows could not resolve
+  to a name. Handled by mirroring the byObjectUnnamed fallback rather than ignored.
+- A first attempt at the non-TestPage run was **invalid and looked fine**: one long-lived MCP client,
+  whose first call timed out, after which every call returned instantly with an empty payload. That
+  reads downstream as "these 1,200 tests cover nothing" — indistinguishable from a real zero. It was
+  caught only because `covered by some other test: 0 (0.00%)` is impossible. Hence one session per
+  codeunit, and a per-codeunit `ran N, coverage entries M` line in the log.
+
+### Reproducing
+
+```sh
+# denominator only
+bun scripts/measure-testpage-exclusive.ts U:/Git/do-rel2/Cloud
+```
+
+The live half needs a running environment with the app under test published, credentials from
+`continia env users <id> --json`, and `bc-dev-mcp` spawned with `BC_DEV_USER`/`BC_DEV_PASSWORD`
+(see `env-tool-session.ts:246`). Its per-test coverage feeds the same script.
+
+### A side finding worth keeping
+
+**R76's "cannot be reproduced against any checkout on this machine" was wrong.** The
+"9 of 104 test files" figure reproduces EXACTLY against `U:/Git/do-rel2/Test`
+(`grep -rl TestPage` = 9, `.al` files = 104) — R76 was looking at `U:/Git/DO`, a different and much
+smaller checkout (38 files, 146 tests). The figure was still misleading, but for a different reason
+than "unreproducible": only **5** of those 9 files contain a TestPage TEST; the other 4 mention
+`TestPage` elsewhere. Per test, it is 19 of 1,287 — **1.5%**, not 9%.
