@@ -21,6 +21,11 @@ table 71012 "LC Batch Result"
         field(5; Attested; Boolean) { }
         field(6; "Result Json"; Blob) { }
         field(7; "Error Text"; Text[2048]) { }
+        // R69 Task 0a: the per-row coverage payload — {coverage, coverageScannedRows,
+        // coverageEmittedRows}, written by "LC Batch Runner".RunBatch — mirroring "Result Json" as
+        // a Blob because the serialized coverage array can exceed Text[2048], exposed only through
+        // SetCoverageJson/GetCoverageJson rather than the field directly.
+        field(10; "Coverage Json"; Blob) { }
     }
 
     keys
@@ -45,6 +50,27 @@ table 71012 "LC Batch Result"
         if not "Result Json".HasValue then
             exit('');
         "Result Json".CreateInStream(IStr, TextEncoding::UTF8);
+        IStr.ReadText(Result);
+        exit(Result);
+    end;
+
+    procedure SetCoverageJson(NewJson: Text)
+    var
+        OStr: OutStream;
+    begin
+        "Coverage Json".CreateOutStream(OStr, TextEncoding::UTF8);
+        OStr.WriteText(NewJson);
+    end;
+
+    procedure GetCoverageJson(): Text
+    var
+        IStr: InStream;
+        Result: Text;
+    begin
+        CalcFields("Coverage Json");
+        if not "Coverage Json".HasValue then
+            exit('');
+        "Coverage Json".CreateInStream(IStr, TextEncoding::UTF8);
         IStr.ReadText(Result);
         exit(Result);
     end;

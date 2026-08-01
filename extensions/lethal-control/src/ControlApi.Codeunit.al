@@ -177,8 +177,13 @@ codeunit 71003 "LC Control API"
     /// `ScannedRows`/`EmittedRows` are returned by var so the caller can report how much the filter
     /// actually removed. A filter that silently matched nothing and one that correctly matched a small
     /// set both produce an empty array, and this project's signature bug is exactly that pair being
-    /// indistinguishable.</summary>
-    local procedure CoverageArray(ObjectIdFilter: Text; var ScannedRows: Integer; var EmittedRows: Integer): JsonArray
+    /// indistinguishable.
+    ///
+    /// PUBLIC (R69): codeunit 71013 "LC Batch Runner"'s batch loop needs this identical
+    /// serialization for its own coverage attach. Duplicating the body into that codeunit would let
+    /// the fenced path's and the batch path's coverage shapes drift apart, so it is promoted rather
+    /// than copied.</summary>
+    procedure CoverageArray(ObjectIdFilter: Text; var ScannedRows: Integer; var EmittedRows: Integer): JsonArray
     var
         CodeCoverage: Record "Code Coverage";
         Arr: JsonArray;
@@ -507,13 +512,22 @@ codeunit 71003 "LC Control API"
     end;
 
     /// <summary>R69: read every batch result row back as one JSON array. The per-method result JSON
-    /// (which carries a raised `MEASURED …` / `CreateNavTestService` message) is embedded per row.</summary>
+    /// (which carries a raised `MEASURED …` / `CreateNavTestService` message) is embedded per row.
+    ///
+    /// Task 0a: `coverage`/`coverageScannedRows`/`coverageEmittedRows` are unpacked from "Coverage
+    /// Json" (which stores an object carrying all three, per "LC Batch Runner".RunBatch's doc
+    /// comment) onto this same per-row object — the identical three keys `RunMutantWithCoverage`
+    /// attaches to its own result, so the fenced path and the batch path report coverage in the
+    /// same shape.</summary>
     procedure GetBatchResults() ResultsJson: Text
     var
         Res: Record "LC Batch Result";
         Arr: JsonArray;
         Obj: JsonObject;
         Inner: JsonToken;
+        CoverageTok: JsonToken;
+        CoverageObj: JsonObject;
+        FieldTok: JsonToken;
     begin
         if Res.FindSet() then
             repeat
@@ -528,14 +542,28 @@ codeunit 71003 "LC Control API"
                     Obj.Add('result', Inner)
                 else
                     Obj.Add('resultRaw', Res.GetResultJson());
+                if CoverageTok.ReadFrom(Res.GetCoverageJson()) and CoverageTok.IsObject() then begin
+                    CoverageObj := CoverageTok.AsObject();
+                    if CoverageObj.Get('coverage', FieldTok) then
+                        Obj.Add('coverage', FieldTok);
+                    if CoverageObj.Get('coverageScannedRows', FieldTok) then
+                        Obj.Add('coverageScannedRows', FieldTok);
+                    if CoverageObj.Get('coverageEmittedRows', FieldTok) then
+                        Obj.Add('coverageEmittedRows', FieldTok);
+                end else
+                    Obj.Add('coverageRaw', Res.GetCoverageJson());
                 Arr.Add(Obj);
             until Res.Next() = 0;
         Arr.WriteTo(ResultsJson);
     end;
 
     /// <summary>R69: seed one work item into the batch queue over OData. LethAL calls this before
-    /// driving the page action over the client-services WebSocket.</summary>
-    procedure SeedBatchItem(codeunitId: Integer; method: Text) LineNo: Integer
+    /// driving the page action over the client-services WebSocket.
+    ///
+    /// `coverageFilter` (Task 0a) is the same mandatory object-id filter `RunMutantWithCoverage`
+    /// takes as `CoverageObjectIdFilter` — a trailing parameter, so no existing caller (positional
+    /// or named) that omits it breaks.</summary>
+    procedure SeedBatchItem(codeunitId: Integer; method: Text; coverageFilter: Text) LineNo: Integer
     var
         Queue: Record "LC Batch Queue";
     begin
@@ -547,6 +575,7 @@ codeunit 71003 "LC Control API"
         Queue."Line No." := LineNo;
         Queue."Codeunit ID" := codeunitId;
         Queue.Method := CopyStr(method, 1, MaxStrLen(Queue.Method));
+        Queue."Coverage Filter" := CopyStr(coverageFilter, 1, MaxStrLen(Queue."Coverage Filter"));
         Queue.Insert(true);
         Commit();
     end;

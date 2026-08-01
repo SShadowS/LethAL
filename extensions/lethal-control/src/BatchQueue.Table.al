@@ -19,6 +19,12 @@ table 71011 "LC Batch Queue"
         field(3; Method; Text[128]) { }
         field(4; "Mutant Id"; Text[64]) { }
         field(5; "Target App Id"; Text[40]) { }
+        // R69 Task 0a: the target artifact's own idRanges expression (e.g. "79000..79199"), the
+        // same mandatory-not-optional filter RunMutantWithCoverage's own doc comment requires —
+        // unfiltered, the Code Coverage table's FindSet does not return within 300s even for a
+        // three-line fixture test, because it holds every line the whole Test Runner + Base App
+        // machinery executed, not just the target.
+        field(8; "Coverage Filter"; Text[250]) { }
     }
 
     keys
