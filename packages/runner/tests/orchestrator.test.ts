@@ -17,6 +17,7 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "../src/backend";
+import type { BatchOdata, BatchWebSocket } from "../src/batch-transport";
 import { DeploymentVerifier, decidePublishOutcome } from "../src/deployment-verifier";
 import { ActivationFailure } from "../src/failure-classes";
 import { LeaseUnavailableError } from "../src/lease";
@@ -1213,6 +1214,195 @@ describe("runSession — Task 6 unsupported-baseline qualification (spec §9)", 
     // Only those 3 ever ran under activation — the unsupported-covered mutants
     // were excluded, not executed.
     expect(backend.ranActive).toBe(3);
+  });
+});
+
+/**
+ * Fake `BatchOdata`+`BatchWebSocket` pair driving `orchestrator.ts`'s routed-mutant path
+ * (`batch-transport.ts`'s `runOneBatchMethod`) — the client-services twin of `QualificationBackend`
+ * above. Scripted by CALL SEQUENCE NUMBER (never wall-clock timing, per project convention): the
+ * Nth `GetBatchResults` this fake answers gets whatever `resultFor(N, seeded)` returns, where
+ * `seeded` is the row `SeedBatchItem` most recently wrote (so a script can tell a gate-2 baseline
+ * call apart from a mutant-active one by `seeded.mutantId`, or just by call order).
+ */
+class FakeBatchTransport implements BatchOdata, BatchWebSocket {
+  seq = 0;
+  private seeded:
+    | { codeunitId: number; method: string; mutantId: string; nonce: string }
+    | undefined;
+
+  constructor(
+    private readonly resultFor: (
+      seq: number,
+      seeded: { method: string; mutantId: string },
+    ) => { rows: 0 } | { rows: 1; outcome: "pass" | "fail" },
+  ) {}
+
+  async post(action: string, body: unknown): Promise<unknown> {
+    if (action === "ClearBatch") return {};
+    if (action === "SeedBatchItem") {
+      const b = body as { codeunitId: number; method: string; mutantId: string; nonce: string };
+      this.seeded = {
+        codeunitId: b.codeunitId,
+        method: b.method,
+        mutantId: b.mutantId,
+        nonce: b.nonce,
+      };
+      return {};
+    }
+    if (action === "GetBatchResults") {
+      const seeded = this.seeded;
+      if (seeded === undefined) throw new Error("GetBatchResults called before SeedBatchItem");
+      this.seq++;
+      const scripted = this.resultFor(this.seq, seeded);
+      if (scripted.rows === 0) {
+        return { value: JSON.stringify([]) }; // the wedge shape: never comes back
+      }
+      const row = {
+        nonce: seeded.nonce,
+        ok: scripted.outcome === "pass",
+        attested: true,
+        identityMismatch: false,
+        errorText: "",
+        result: {
+          testResults: [{ method: seeded.method, result: scripted.outcome === "pass" ? 2 : 1 }],
+        },
+        coverage: [],
+        coverageScannedRows: 0,
+        coverageEmittedRows: 0,
+      };
+      return { value: JSON.stringify([row]) };
+    }
+    throw new Error(`FakeBatchTransport: unexpected action ${action}`);
+  }
+
+  async runBatchAction(): Promise<void> {}
+}
+
+describe("R69 Phase 2 Task 6 — routing gate-2-passing tests through the client-services batch path", () => {
+  const TESTPAGE_REFUSAL =
+    "Unexpected CLR exception thrown.: System.NotSupportedException: Specified method is not " +
+    "supported. at Microsoft.Dynamics.Nav.Runtime.NavSession.CreateNavTestService()";
+
+  // IsUnderBudget is the ONLY mutable procedure — its 3 mutants (M0001-M0003) are covered ONLY
+  // by UnsupportedTest (TestPage-refused at the fenced baseline, per TESTPAGE_REFUSAL above).
+  // GreenTest exists (a batch needs >=1 green baseline test to reach coverage filtering at all —
+  // see runSession's "no green baseline tests" early exit) but names NoOp, a procedure with no
+  // mutable sites, so it contributes real GREEN COVERAGE OF NOTHING: no mutant anywhere in this
+  // fixture has fenced-green coverage, which is what makes "every mutant not killed" a meaningful
+  // assertion below rather than an accident of some unrelated procedure's legitimate kill.
+  const ROUTED_ONLY_AL = `codeunit 79000 "Sandbox Logic"
+{
+    procedure IsUnderBudget(Amount: Decimal; Budget: Decimal): Boolean
+    begin
+        exit(Amount < Budget);
+    end;
+
+    procedure NoOp()
+    begin
+    end;
+}
+`;
+
+  async function routedProject() {
+    const dirs = await makeProject(TWO_TEST_AL);
+    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), ROUTED_ONLY_AL);
+    return dirs;
+  }
+
+  const routedBaselineFor = (method: string) =>
+    method === "UnsupportedTest"
+      ? { outcome: "error" as const, procedure: "IsUnderBudget", failureMessage: TESTPAGE_REFUSAL }
+      : { outcome: "pass" as const, procedure: "NoOp" };
+
+  // The fenced path never turns one failure into `killed` without a baseline confirmation
+  // (R27/R59). The routed path is the MOST nondeterministic session LethAL has — GuiAllowed=Yes
+  // lets dialogs raise — so it needs that defence more, not less.
+  test("a routed failure is confirmed before it becomes a kill", async () => {
+    const dirs = await routedProject();
+    const backend = new QualificationBackend(routedBaselineFor);
+    const store = new ResultsStore(":memory:");
+    // seq 1: gate-2 baseline (unmutated) — passes, so UnsupportedTest routes at all.
+    // seq 2+: every mutant-active run AND its confirmation rerun fails — every one of
+    // IsUnderBudget's 3 mutants looks like a kill under the mutant, then proves unstable at
+    // confirmation (fails unmutated too).
+    const transport = new FakeBatchTransport((seq) => ({
+      rows: 1,
+      outcome: seq === 1 ? "pass" : "fail",
+    }));
+    const report = await runSession({
+      backend,
+      store,
+      ...dirs,
+      selectorIds,
+      routedTransport: { odata: transport, ws: transport },
+    });
+    const m = report.mutants.find((x) => x.mutantCode === "M0001");
+    expect(m?.verdict).toBe("error");
+    expect(m?.cause).toBe("unstable");
+    expect(m?.runner).toBe("client-services");
+    // gate-2 (1) + 3 mutants x (mutant-active + confirmation) = 7, never fewer: a bare
+    // mutant-active failure alone must never be enough to decide anything.
+    expect(transport.seq).toBe(7);
+  });
+
+  // A wedged RunBatch may still be executing WITH A MUTANT ACTIVE, holding locks. Recording a
+  // per-mutant error and continuing would let a fenced mutant's covering test fail on contention
+  // and be falsely killed once the wedged run eventually finishes.
+  test("a wedge quarantines the tier rather than recording a per-mutant error and continuing", async () => {
+    const dirs = await routedProject();
+    const backend = new QualificationBackend(routedBaselineFor);
+    const store = new ResultsStore(":memory:");
+    // seq 1: gate-2 baseline — passes, so UnsupportedTest routes.
+    // seq 2: mutant-active run for M0001 — the batch never comes back (0 rows): a wedge.
+    const transport = new FakeBatchTransport((seq) =>
+      seq === 1 ? { rows: 1, outcome: "pass" } : { rows: 0 },
+    );
+    const report = await runSession({
+      backend,
+      store,
+      ...dirs,
+      selectorIds,
+      routedTransport: { odata: transport, ws: transport },
+    });
+    // `quarantined` is an OBJECT `{ reason }`, absent on an ordinary session — not a boolean.
+    expect(report.quarantined).toBeDefined();
+    expect(report.quarantined?.reason).toContain("M0001");
+    // M0002/M0003 are never even scheduled once M0001 wedges (mirrors the fenced path: nothing
+    // after a quarantine gets a row at all), so this also proves scheduling stopped.
+    expect(report.mutants.every((m) => m.verdict !== "killed")).toBe(true);
+    expect(transport.seq).toBe(2);
+  });
+
+  // The router must not leak: a mutant with ANY fenced-green coverage keeps its fenced verdict,
+  // unexamined — even when the SAME procedure is also named by a gate-1/gate-2-eligible test.
+  test("a mutant with any fenced-green coverage is not routed", async () => {
+    // TARGET_AL (written by makeProject by default) has exactly one procedure, IsOverBudget —
+    // both GreenTest and UnsupportedTest name it, so its 3 mutants (M0001-M0003) have BOTH a
+    // fenced-green covering test and a gate-1/gate-2-eligible one.
+    const dirs = await makeProject(TWO_TEST_AL);
+    const backend = new QualificationBackend((method) =>
+      method === "UnsupportedTest"
+        ? { outcome: "error" as const, procedure: "IsOverBudget", failureMessage: TESTPAGE_REFUSAL }
+        : { outcome: "pass" as const, procedure: "IsOverBudget" },
+    );
+    const store = new ResultsStore(":memory:");
+    const transport = new FakeBatchTransport(() => ({ rows: 1, outcome: "pass" }));
+    const report = await runSession({
+      backend,
+      store,
+      ...dirs,
+      selectorIds,
+      routedTransport: { odata: transport, ws: transport },
+    });
+    const overBudgetMutants = report.mutants.filter((m) =>
+      ["M0001", "M0002", "M0003"].includes(m.mutantCode),
+    );
+    expect(overBudgetMutants.length).toBe(3);
+    for (const m of overBudgetMutants) expect(m.runner).toBe("fenced");
+    // Never even examined: IsOverBudget's mutants are green-covered, so they never reach the
+    // router and the transport is never called.
+    expect(transport.seq).toBe(0);
   });
 });
 
