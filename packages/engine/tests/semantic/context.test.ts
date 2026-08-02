@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { initParser, parseAL } from "../../src/ast/parser";
 import { wrapRoot } from "../../src/ast/syntax-node";
 import { buildSemanticContext } from "../../src/semantic/context";
+import { objectScopeKey } from "../../src/semantic/symbol-table";
 
 describe("buildSemanticContext", () => {
   beforeAll(async () => {
@@ -13,10 +14,13 @@ describe("buildSemanticContext", () => {
   it("exposes symbols, types, callers, and cfg-for-procedure", async () => {
     const src = await readFile(resolve(__dirname, "../fixtures/al/caller-chain.al"), "utf8");
     const ctx = buildSemanticContext([{ path: "c.al", root: wrapRoot(parseAL(src)) }]);
-    expect(ctx.symbols.resolveProcedure("Callers", "Helper")).not.toBeNull();
+    // R70: scope is keyed by (kind, name).
+    expect(
+      ctx.symbols.resolveProcedure(objectScopeKey("codeunit", "Callers"), "Helper"),
+    ).not.toBeNull();
     expect(ctx.callers.callersOf("Callers", "Helper").length).toBe(2);
 
-    const helper = ctx.symbols.resolveProcedure("Callers", "Helper");
+    const helper = ctx.symbols.resolveProcedure(objectScopeKey("codeunit", "Callers"), "Helper");
     if (helper === null) throw new Error("Helper not found");
     const cfg = ctx.cfgFor(helper);
     expect(cfg.entry).toBeDefined();

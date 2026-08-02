@@ -135,6 +135,39 @@ export function extensionScopeKey(kind: ExtensionKind, extensionName: string): s
   return `${kind}:${extensionName}`;
 }
 
+/**
+ * The `procedures`/`globals` key under which an ORDINARY object's members are indexed for VARIABLE
+ * SCOPE lookup (R70) — the same shape `extensionScopeKey` uses one namespace over.
+ *
+ * Keyed by KIND because BC object ids and names are unique PER TYPE, and the single most ordinary
+ * convention in the platform — a card page named after its table — puts `table 50000 "CDO Setup"`
+ * and `page 50000 "CDO Setup"` in one project. Under a bare-name key whichever parsed LAST won
+ * WHOLESALE: `globalsOf("CDO Setup")` returned the page's variables and the table's were simply
+ * gone. Measured on Continia Document Output Cloud: 13 names shared across kinds, 12 of them
+ * page+table.
+ *
+ * The consumer is `claimsRecordMethod`'s `lookupVar`, and the direction is the unsafe one — a
+ * receiver that should be UNRESOLVABLE inside the table can resolve through the page's declaration
+ * and be CLAIMED, and a receiver resolving to a DIFFERENT table sends rule 3's shadowing guard at
+ * the wrong table. A wrong claim mislabels the mutation and, under §3.2 dedup precedence, DELETES
+ * the correct Tier-1 mutant at that site.
+ *
+ * `resolveObject` never had this defect and is deliberately untouched: it already filters on kind.
+ */
+export function objectScopeKey(kind: ObjectSymbol["kind"], objectName: string): string {
+  return `${kind}:${objectName}`;
+}
+
+/**
+ * `objectScopeKey` for a parsed object NODE — the form a mutation operator has in hand, where the
+ * kind is an `ALNodeKind` rather than an `ObjectSymbol["kind"]`. Returns `null` for a node that is
+ * not an object declaration this table indexes, so a caller cannot silently key on a guess.
+ */
+export function objectScopeKeyOfNode(node: ALSyntaxNode, objectName: string): string | null {
+  const kind = OBJECT_KIND_BY_NODE[node.kind];
+  return kind === undefined ? null : objectScopeKey(kind, objectName);
+}
+
 export function buildSymbolTable(files: readonly SourceFile[]): SymbolTable {
   const objects: ObjectSymbol[] = [];
   const procedures = new Map<string, ProcedureSymbol[]>();
@@ -204,7 +237,9 @@ export function buildSymbolTable(files: readonly SourceFile[]): SymbolTable {
       const header = parseObjectHeader(objectNode);
       if (header === null) continue;
       objects.push({ ...header, node: objectNode });
-      indexMembers(objectNode, header.name);
+      // R70: scope is keyed by (kind, name). A bare-name key let a page named after its table
+      // overwrite the table's variables wholesale.
+      indexMembers(objectNode, objectScopeKey(header.kind, header.name));
     }
   }
 

@@ -857,3 +857,74 @@ tableextension 50002 "Dup" extends "Other Table"
     ).toBe(false);
   });
 });
+
+// ————————————————————————————————————————————————————————————————————————
+// R70, AT THE LAYER THAT ACTUALLY CLAIMS. `symbol-table.test.ts` proves the scope key is
+// kind-namespaced; this proves the consequence the row was filed for, through
+// `claimsRecordMethod` itself.
+//
+// Added because a red-check found the gap: reverting the fix in `receiver.ts` reddened 23 tests,
+// but every one of them was a generic "can it find a variable at all" test that would break for
+// ANY key mismatch. None constructed two objects of different kinds sharing a name, so none was
+// evidence for the property. A test that goes red for the wrong reason is this project's signature
+// failure, and it applies to red-checks too.
+// ————————————————————————————————————————————————————————————————————————
+describe("claimsRecordMethod — a page named after its table (R70)", () => {
+  // The ordinary BC convention: a card page named after its table. Measured on Continia Document
+  // Output Cloud as 13 shared names, 12 of them page+table.
+  const TABLE = `table 50000 "CDO Setup"
+{
+    fields
+    {
+        field(1; "No."; Code[20]) { }
+    }
+
+    trigger OnInsert()
+    begin
+        Helper.SetRange("No.", 'X');
+    end;
+}`;
+
+  // Same name, different kind, and `Helper` here IS a Record — so a lookup that crossed the two
+  // would find a plausible-looking declaration and CLAIM the table's site.
+  const PAGE = `page 50000 "CDO Setup"
+{
+    SourceTable = "CDO Setup";
+
+    var
+        Helper: Record Customer;
+}`;
+
+  it("refuses a receiver the TABLE never declares, even though the same-named PAGE declares it", () => {
+    // The unsafe direction, stated as a test: the table declares no `Helper` at all, so rule 4
+    // must refuse. Under a bare-name scope key the page's `Helper: Record Customer` answered for
+    // the table and the site was CLAIMED — a wrong claim that, under §3.2 dedup precedence,
+    // DELETES the correct Tier-1 mutant at that site.
+    const table = parseClean(TABLE);
+    const ctx = projectContextFor([table, parseClean(PAGE)]);
+    expect(claimsRecordMethod(onlyCall(table), ctx, "SetRange")).toBe(false);
+  });
+
+  it("still claims when the TABLE itself declares the receiver, page or no page", () => {
+    // The counterweight: kind-namespacing must not cost a legitimate claim. Without this, the
+    // test above would pass just as well if scope lookup were broken outright.
+    const withVar = `table 50000 "CDO Setup"
+{
+    fields
+    {
+        field(1; "No."; Code[20]) { }
+    }
+
+    var
+        Helper: Record Customer;
+
+    trigger OnInsert()
+    begin
+        Helper.SetRange("No.", 'X');
+    end;
+}`;
+    const table = parseClean(withVar);
+    const ctx = projectContextFor([table, parseClean(PAGE)]);
+    expect(claimsRecordMethod(onlyCall(table), ctx, "SetRange")).toBe(true);
+  });
+});

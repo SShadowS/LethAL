@@ -16,6 +16,7 @@ import { ALNodeKind, isBinaryExpressionKind } from "../ast/node-kinds";
  *     (mapped via ALNodeKind.integer_literal etc.).
  */
 import type { ALSyntaxNode } from "../ast/syntax-node";
+import { objectScopeKey } from "./symbol-table";
 import type { SourceFile, SymbolTable } from "./symbol-table";
 
 export interface TypeTable {
@@ -116,13 +117,15 @@ function resolveIdentifierType(node: ALSyntaxNode, symbols: SymbolTable): string
   for (const obj of symbols.objects) {
     const proc = findEnclosingProcedure(node, obj.node);
     if (proc === null) continue;
-    const procSym = symbols.resolveProcedure(obj.name, proc);
+    // R70: scope is keyed by (kind, name) — a page named after its table used to answer here.
+    const scope = objectScopeKey(obj.kind, obj.name);
+    const procSym = symbols.resolveProcedure(scope, proc);
     if (procSym === null) continue;
     const local = procSym.locals.find((v) => v.name === node.text);
     if (local !== undefined) return extractType(local.typeText);
     const param = procSym.parameters.find((p) => p.name === node.text);
     if (param !== undefined) return extractType(param.typeText);
-    const global = symbols.globalsOf(obj.name).find((g) => g.name === node.text);
+    const global = symbols.globalsOf(scope).find((g) => g.name === node.text);
     if (global !== undefined) return extractType(global.typeText);
     return null;
   }

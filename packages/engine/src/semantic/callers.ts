@@ -16,6 +16,7 @@ import { ALNodeKind } from "../ast/node-kinds";
  */
 import type { ALSyntaxNode } from "../ast/syntax-node";
 import { findAll } from "../ast/syntax-node";
+import { objectScopeKey } from "./symbol-table";
 import type { SourceFile, SymbolTable } from "./symbol-table";
 
 export interface CallerIndex {
@@ -40,7 +41,9 @@ export function buildCallerIndex(
   for (const obj of symbols.objects) {
     const calls = findAll(obj.node, ALNodeKind.procedure_call);
     for (const call of calls) {
-      const target = resolveCallTarget(call, obj.name, symbols);
+      // R70: `resolveCallTarget` looks the procedure up in SCOPE (kind-keyed), but the caller
+      // index itself stays keyed on the bare owner name — that is `callersOf`'s public contract.
+      const target = resolveCallTarget(call, obj.name, objectScopeKey(obj.kind, obj.name), symbols);
       if (target === null) continue;
       const enclosing = enclosingProcedureName(call);
       if (enclosing === null) continue;
@@ -70,6 +73,7 @@ function siteKey(owner: string, proc: string): string {
 function resolveCallTarget(
   call: ALSyntaxNode,
   fallbackOwner: string,
+  fallbackOwnerScope: string,
   symbols: SymbolTable,
 ): { owner: string; procedure: string } | null {
   const fn = call.childForFieldName("function");
@@ -77,7 +81,7 @@ function resolveCallTarget(
   // Qualified calls (member_expression) are deferred to Layer 6.
   if (fn === null || fn.kind !== ALNodeKind.identifier) return null;
   const procName = fn.text;
-  if (symbols.resolveProcedure(fallbackOwner, procName) === null) return null;
+  if (symbols.resolveProcedure(fallbackOwnerScope, procName) === null) return null;
   return { owner: fallbackOwner, procedure: procName };
 }
 

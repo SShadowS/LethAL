@@ -42,6 +42,7 @@ import {
   declarationMembers,
   extensionScopeKey,
   findEnclosingProcedure,
+  objectScopeKeyOfNode,
 } from "@lethal/engine";
 
 /**
@@ -323,12 +324,20 @@ function resolveReceiver(
   // key so that `resolveProcedure("My Ext", ...)` keeps answering null for a receiver no AL call
   // can name; scope asks a different question from callability. The key carries the KIND because
   // AL lets a `tableextension` and a `pageextension` share a name.
+  //
+  // R70: the non-extension branch is kind-keyed for the same reason. `table 50000 "CDO Setup"` and
+  // `page 50000 "CDO Setup"` — a card page named after its table, the ordinary BC convention —
+  // shared one scope key, so whichever parsed last supplied the variables for BOTH. A receiver that
+  // should be refused here could then resolve through the other object's declaration and be
+  // CLAIMED. `objectScopeKeyOfNode` returns null for a node this table does not index; falling back
+  // to the bare name there would reintroduce exactly the collision.
   const scopeOwner =
     objectNode.kind === ALNodeKind.tableextension
       ? extensionScopeKey("tableextension", objectName)
       : objectNode.kind === ALNodeKind.pageextension
         ? extensionScopeKey("pageextension", objectName)
-        : objectName;
+        : objectScopeKeyOfNode(objectNode, objectName);
+  if (scopeOwner === null) return { kind: "unresolved" };
   const declared = lookupVar(receiverName, callNode, scopeOwner, symbols);
   if (declared !== null) return classifyDeclaredType(declared);
 

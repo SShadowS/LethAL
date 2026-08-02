@@ -25,7 +25,12 @@ export type {
   ProcedureSymbol,
   VarSymbol,
 } from "./semantic/symbol-table";
-export { buildSymbolTable, extensionScopeKey } from "./semantic/symbol-table";
+export {
+  buildSymbolTable,
+  extensionScopeKey,
+  objectScopeKey,
+  objectScopeKeyOfNode,
+} from "./semantic/symbol-table";
 export type { CFG, BasicBlock } from "./semantic/cfg";
 export { buildCFG } from "./semantic/cfg";
 export type { TypeTable } from "./semantic/types";

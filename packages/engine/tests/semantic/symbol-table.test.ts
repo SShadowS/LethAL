@@ -3,7 +3,11 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { initParser, parseAL } from "../../src/ast/parser";
 import { wrapRoot } from "../../src/ast/syntax-node";
-import { buildSymbolTable, extensionScopeKey } from "../../src/semantic/symbol-table";
+import {
+  buildSymbolTable,
+  extensionScopeKey,
+  objectScopeKey,
+} from "../../src/semantic/symbol-table";
 
 describe("buildSymbolTable", () => {
   beforeAll(async () => {
@@ -26,7 +30,10 @@ describe("buildSymbolTable", () => {
   it("registers a procedure within a codeunit", async () => {
     const src = await load();
     const table = buildSymbolTable([{ path: "vars.al", root: wrapRoot(parseAL(src)) }]);
-    const proc = table.resolveProcedure("Vars Test", "Compute");
+    // R70: scope lookups are keyed by (kind, name). The bare name must NOT answer — that is
+    // what let a page named after its table return the table's procedures.
+    expect(table.resolveProcedure("Vars Test", "Compute")).toBeNull();
+    const proc = table.resolveProcedure(objectScopeKey("codeunit", "Vars Test"), "Compute");
     expect(proc).not.toBeNull();
     expect(proc?.parameters.map((p) => p.name)).toEqual(["Input"]);
   });
@@ -34,9 +41,9 @@ describe("buildSymbolTable", () => {
   it("distinguishes global vars from procedure-local vars", async () => {
     const src = await load();
     const table = buildSymbolTable([{ path: "vars.al", root: wrapRoot(parseAL(src)) }]);
-    const globals = table.globalsOf("Vars Test");
+    const globals = table.globalsOf(objectScopeKey("codeunit", "Vars Test"));
     expect(globals.map((g) => g.name)).toEqual(["GlobalCount"]);
-    const locals = table.localsOf("Vars Test", "Compute");
+    const locals = table.localsOf(objectScopeKey("codeunit", "Vars Test"), "Compute");
     expect(locals.map((l) => l.name)).toEqual(["Local"]);
   });
 
@@ -174,5 +181,77 @@ pageextension 50005 "Dup" extends "Customer Card"
         ["FromPageExt"],
       );
     });
+  });
+});
+
+// ————————————————————————————————————————————————————————————————————————
+// R70: scope was keyed on the BARE object name, so `table 50000 "CDO Setup"` and
+// `page 50000 "CDO Setup"` shared one key and whichever parsed LAST won WHOLESALE. That naming is
+// the ordinary BC convention, not an edge case — measured on Continia Document Output Cloud: 13
+// names shared across kinds, 12 of them page+table.
+//
+// The direction is the dangerous one. `claimsRecordMethod`'s `lookupVar` is the consumer: a
+// receiver that SHOULD be unresolvable inside the table (a rule-4 refusal) can resolve through the
+// page's declaration and be CLAIMED, and a receiver resolving to a DIFFERENT table sends rule 3's
+// shadowing guard at the wrong table. A wrong claim mislabels the mutation and, under §3.2 dedup
+// precedence, DELETES the correct Tier-1 mutant at that site.
+// ————————————————————————————————————————————————————————————————————————
+describe("buildSymbolTable — a page named after its table (R70)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  const CROSS_KIND = `table 50000 "CDO Setup"
+{
+    var
+        Helper: Integer;
+
+    procedure Configure()
+    var
+        TableLocal: Record "CDO Setup";
+    begin
+    end;
+}
+page 50000 "CDO Setup"
+{
+    SourceTable = "CDO Setup";
+
+    var
+        Helper: Record Customer;
+
+    procedure Configure()
+    var
+        PageLocal: Record Vendor;
+    begin
+    end;
+}`;
+
+  const build = (src: string) =>
+    buildSymbolTable([{ path: "crosskind.al", root: wrapRoot(parseAL(src)) }]);
+
+  it("keeps the table's globals separate from the same-named page's", () => {
+    const table = build(CROSS_KIND);
+    expect(table.globalsOf(objectScopeKey("table", "CDO Setup")).map((g) => g.typeText)).toEqual([
+      "Integer",
+    ]);
+    expect(table.globalsOf(objectScopeKey("page", "CDO Setup")).map((g) => g.typeText)).toEqual([
+      "Record Customer",
+    ]);
+  });
+
+  it("keeps the table's locals separate from the same-named page's", () => {
+    const table = build(CROSS_KIND);
+    expect(
+      table.localsOf(objectScopeKey("table", "CDO Setup"), "Configure").map((v) => v.name),
+    ).toEqual(["TableLocal"]);
+    expect(
+      table.localsOf(objectScopeKey("page", "CDO Setup"), "Configure").map((v) => v.name),
+    ).toEqual(["PageLocal"]);
+  });
+
+  it("resolveObject is unaffected — it was already kind-aware", () => {
+    const table = build(CROSS_KIND);
+    expect(table.resolveObject({ kind: "table", idOrName: "CDO Setup" })?.kind).toBe("table");
+    expect(table.resolveObject({ kind: "page", idOrName: "CDO Setup" })?.kind).toBe("page");
   });
 });
