@@ -136,13 +136,16 @@ Operators that exploit AL/BC semantics to surface weak tests.
 | EmptyTrigger | empty `OnValidate`, `OnInsert`, `OnModify` | Missing validation coverage |
 | SwapRecXRec | swap `Rec`/`xRec` in triggers | Before-value assertion gaps |
 
-### Tier 3 · Advanced
+### Tier 3 · Advanced — **not built; the category was measured away (R13)**
 
-| Operator | Example |
-|---|---|
-| PermissionReduce | `TableData X = RIMD` to reduced sets |
-| IsolationLevelSwap | change `LockTable` behavior |
-| EventPublisherSignature | mutate event arg types/order |
+| Operator | Example | outcome |
+|---|---|---|
+| PermissionReduce | `TableData X = RIMD` to reduced sets | **refused on cost** — the only genuinely declarative one; 423 grant sites (2.21%) against the 5% bar for a new activation mechanism. It IS killable (measured), but only in a session a test has lowered itself, which is 10 of 1,290 tests on the project censused. |
+| IsolationLevelSwap | change `LockTable` behavior | **refused on footprint** — not metadata at all: `LockTable()` is a `call_expression` in statement position, and 25 of its 36 sites already carry a shipped `void-method-call` mutant, leaving 11 marginal sites against a bar of 13. |
+| EventPublisherSignature | mutate event arg types/order | **refused as specified** — a signature is fixed at compile time and the only emittable form is a duplicate publisher no subscriber binds to. The observable version is an argument swap at the raise site: a different, non-event-specific operator, filed as ROADMAP R82. |
+
+Full reasoning, census and live measurements:
+`docs/superpowers/specs/2026-08-02-r13-tier3-decision.md` and `docs/measurements/README.md` §R13.
 
 ### Operator Interface
 
@@ -202,9 +205,11 @@ Rejected operators emit actionable errors; the run proceeds with the remaining o
 
 Each operator runs in a Bun Worker with budgets: 256 MB memory, 500 ms per AST file scanned. Blown budget skips that file's mutations from that operator and logs it. Chronic blown budgets (>5% of files) disable the operator for the run with a warning. A buggy custom operator cannot take the tool down.
 
-### Tier 3 emit path (noted)
+### Tier 3 emit path (noted) — **the premise was measured false (R13, 2026-08-02)**
 
-Tier 3 operators (`PermissionReduce`, `IsolationLevelSwap`, `EventPublisherSignature`) mutate AL object metadata rather than expressions/statements. They need a distinct emit path and a narrower interface. Treated as a separate operator category; custom operators of this kind are out of scope for the initial SDK.
+~~Tier 3 operators (`PermissionReduce`, `IsolationLevelSwap`, `EventPublisherSignature`) mutate AL object metadata rather than expressions/statements. They need a distinct emit path and a narrower interface.~~
+
+Measured against the grammar, **only `PermissionReduce` is declarative**: it parses as a `property` under `declaration_body`, so `isMutableSite` refuses it and `generateMutationSet` drops it as a non-executable site. `IsolationLevelSwap` targets `call_expression`/`assignment_statement` in statement position — the emit path Tier 2 already uses — and `EventPublisherSignature`'s observable effect sits at the executable raise site. There is therefore **no distinct Tier-3 emit path to specify**, and none is built. See `docs/superpowers/specs/2026-08-02-r13-tier3-decision.md`.
 
 ### Distribution
 
@@ -488,12 +493,12 @@ Layered, each layer production-quality:
 - **Equivalence detection policy** · sound techniques filter, unsound techniques advise. AST canonicalization filters; dataflow and kill-diversity annotate. Developer feedback loop stored in results DB closes project-specific FPs. No binary diff (incompatible with schemata). Detail in §7.
 - **Test isolation** · `TestIsolation = Function` enforced; per-test fresh runner invocation throughout; pre-flight flakiness detection 3×; DB snapshot between mutants; kill confirmation re-run. Detail in §6.
 - **History identity key** · `(ast_subtree_hash(node), enclosing_codeunit_object_name, operator_name, operator_major_version)`. `file` and `line` are display metadata only. Git-assisted migration for codeunit renames/splits/moves. Detail in §5.1.
-- **Custom operator API** · typed TypeScript plugin via `@lethal/operator-sdk`, with mandatory conformance suite + corpus fuzz + worker budgets at load time. SDK's typed `build.*` constructors enforce AL-level well-formedness at authoring time; operators cannot mint AL syntax AL doesn't have. Tier 3 metadata mutations use a distinct emit path not yet specified for custom authors. Detail in §4.
+- **Custom operator API** · typed TypeScript plugin via `@lethal/operator-sdk`, with mandatory conformance suite + corpus fuzz + worker budgets at load time. SDK's typed `build.*` constructors enforce AL-level well-formedness at authoring time; operators cannot mint AL syntax AL doesn't have. ~~Tier 3 metadata mutations use a distinct emit path not yet specified for custom authors.~~ (R13 measured that no distinct Tier-3 emit path is needed or built — see §4.) Detail in §4.
 
 ## 13. Open Questions
 
 Narrower items deferred:
 
-- **Tier 3 custom-operator interface** · `PermissionReduce`, `IsolationLevelSwap`, `EventPublisherSignature` mutate AL object metadata, not expressions/statements. Built-in implementation proceeds with a distinct emit path; the surface for *custom* Tier 3 operators is out of scope for the initial SDK and deferred until the built-in path stabilizes.
+- ~~**Tier 3 custom-operator interface**~~ · **CLOSED by R13, 2026-08-02: there is no built-in Tier-3 path to stabilize.** Two of the three operators are not metadata operators, and the one that is (`PermissionReduce`) is refused on cost. A custom-operator surface for metadata mutation would be a surface for a category the product does not have; revisit only if a built-in tier-3 operator is ever justified. `MutationOperator.tier` still admits `3` (`packages/engine/src/operator/interface.ts`) and `tierRank` deliberately refuses to order it — see R11.
 - **Pre-flight cost envelope on very large suites** · 3× per-test-invocation baseline runs may be prohibitive on suites of ~50k+ tests. Possible mitigation: sample a stable-history subset instead of full baseline. Revisit once real-project data exists.
 - **Results DB format versioning** · SQLite schema versioning strategy for LethAL's own schema evolution (distinct from user-project schema evolution in §5.1). Conventional forward-only migrations expected; noted here for tracking.
