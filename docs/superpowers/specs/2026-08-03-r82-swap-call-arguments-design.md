@@ -1,6 +1,11 @@
 # R82 — `SwapCallArguments`: operator, fixture, and what the live run may and may not conclude
 
-Status: design, pre-implementation. Supersedes nothing. Reviewed by Fable 2026-08-03 (three
+Status: **IMPLEMENTED AND MEASURED 2026-08-03. All 30 pre-committed per-mutant predictions in §5
+matched the live run, exactly** — `itest:tables` 84/12/10 over 106 to 109/17/10 over 136, twice.
+Results and the arm-E artifact text: `docs/measurements/README.md` §"R82 live". Two things the run
+added that this document did not anticipate: the arm-E kill text is PROSE that will localise (R66's
+class of problem), and **no kill records its cause at all** — `failure_note` is NULL for all 109 —
+filed as R86, which makes it R85's precondition. Original status line: design, pre-implementation. Supersedes nothing. Reviewed by Fable 2026-08-03 (three
 amendments adopted: the pre-committed prediction table, the false-kill and R84-refusal and
 expression-position arms, and "mechanism proven / rate open" as the closure wording).
 

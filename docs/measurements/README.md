@@ -803,3 +803,79 @@ mutants per component, so both mutants survive at one site. **Marginal == gross 
   are a style artifact as much as a language one.
 - **The pair choice is deterministic, not exhaustive.** One mutant per site, on the first qualifying
   (i, j). A site with three same-typed arguments admits more swaps than are counted here.
+
+## R82 live — the operator measured through the pipeline: **30 of 30 predicted verdicts, exactly**
+
+The census (§R82 above) settled cost. This settles the mechanism. Every per-mutant verdict was
+pre-committed in `docs/superpowers/specs/2026-08-03-r82-swap-call-arguments-design.md` §5 and
+committed as `f9e055c` BEFORE the run, so the run could contradict its author — R73's
+`remove-commit` prediction was contradicted by its run, and that contradiction was the finding.
+
+`LETHAL_ITEST_TABLES=1 bun run itest:tables`, Cronus283, 2026-08-03. The gate moved from
+84 killed / 12 survived / 10 no-coverage over 106 deployed to **109 / 17 / 10 over 136**
+(148 raw specs), `untargetedTriggerCount` 0, and the session ran TWICE with identical verdicts (R9).
+
+| arm | site | predicted | measured |
+|---|---|---|---|
+| A — `var` writeback, statement position | `DataSwapOps:46` | killed | **killed**, by `SwapRedirectsTheAccumulatorWriteback` |
+| B — EXPRESSION position | `:69` | killed | **killed**, by `SwapReversesTheRangeComparison` |
+| C — equivalent survivor (`or` is commutative) | `:92` | survived | **survived** |
+| D — undertested survivor | `:116` | survived | **survived** |
+| E — false kill (length overflow) | `:146` | killed by a platform error | **killed**, by `NarrowParameterOverflowsUnderTheSwap`, which asserts nothing |
+| F — R84 refusal (two different record types) | `:178` | NO swap mutant | **no swap mutant**; the site's `void-method-call` is killed |
+
+The 24 collateral Tier-1 mutants also matched, one for one. Nothing was reconciled after the fact.
+
+### What that proves, stated narrowly
+
+- **The two-point edit survives the pipeline.** A swap is the first mutation in this product that
+  moves two spans, collapsed into one `before`/`after` pair whose replacement text carries the
+  bytes between the arguments through untouched. It emits, compiles, deploys and scores.
+- **Both mutants live at one site.** `:46`, `:92`, `:116` and `:146` each carry a swap AND a
+  `void-method-call` mutant, and both were scored. R82's "marginal == gross" is now measured, not
+  argued — it is what makes the census's 340 an addition rather than a reshuffle.
+- **The compile-safety argument holds against a real compiler.** Arm A's swapped call puts a
+  different variable into a `var` parameter and `alc` accepts it, as the argument in the spec
+  §2.2 says it must. A hand-swapped copy of the whole fixture also compiled with zero warnings.
+- **Both survivor flavours are distinguishable in the report.** C is unkillable; D is a test gap.
+
+### Arm E — the false kill, with its artifact text
+
+Measured directly, because the product does not record it (see the gap below). A target carrying
+ONLY arm E's swap was published (1.0.20669.0) and the two tests run through `bcdev_test_run`:
+
+```
+The length of the string is 18, but it must be less than or equal to 10 characters.
+Value: LONGCODE1234567890
+AL Callstack:
+"Data Swap Ops"(CodeUnit 79311).StampWithNarrow line 2 - LethAL Sandbox Data by LethAL version 1.0.20669.0
+"Data Tests"(CodeUnit 79310).NarrowParameterOverflowsUnderTheSwap line 14 - ...
+```
+
+`WeakStampAssertionMissesTheSwap` PASSED on that same publish, which is the control: the failure is
+arm E's shape, not a broken deployment. The clean target was republished afterwards (1.0.20670.0)
+and all five R82 tests pass again.
+
+Two properties of that text worth keeping for whoever builds the detector R72's discipline defers:
+the top callstack frame is in the TARGET app (`Data Swap Ops.StampWithNarrow`), not the test, and
+the message is prose that WILL localise — R66 already measured that BC translates this class of
+message while a structural parenthetical survives. A detector matching the English sentence would
+be another English-only detector.
+
+### The gap arm E found, which was not what it was aimed at
+
+**Not one of the 109 kills records WHY it died.** `failure_note` is `NULL` for every killed mutant
+in the run's database — so in the stored record, arm E's platform overflow is indistinguishable
+from arm A's genuine assertion kill. The distinction exists only because the fixture was
+constructed to make it inferable (arm E's test asserts nothing). On a real project nobody can infer
+it. Filed as **R86**; it is the precondition for R85's "split kills by cause".
+
+### What this does NOT establish
+
+- **Not a rate.** Six arms on a fixture written for them cannot say how often a real suite notices a
+  real swap. That is R85, and its instrument must not be this fixture.
+- **Not that the survivors generalise.** C and D are one commutative callee and one weak assertion,
+  chosen to be readable apart. Their RATIO on a real project is unmeasured.
+- **Not equivalence detection.** Nothing here tags arm C's mutant as equivalent; a reader still has
+  to work that out. The operator deliberately sets no `equivalenceHint`.
+- One container, one company, one BC 28 server.
