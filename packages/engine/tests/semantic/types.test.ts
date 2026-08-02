@@ -52,6 +52,44 @@ describe("buildTypeTable", () => {
     ).toBe("Boolean");
   });
 
+  // R84. These four pin the WHOLE declared type as the type identity. Reverting `extractType` to
+  // its first-token form turns the first three red and leaves the fourth green — the fourth is
+  // here to prove the collapse is about SUBTYPES and not about text equality.
+  it("keeps a Record's subtype, so two different records are two different types", async () => {
+    expect(
+      await typeOfExitExpr(
+        `codeunit 50304 "T" { procedure P() var SalesHeader: Record "Sales Header"; begin exit(SalesHeader); end; }`,
+      ),
+    ).toBe('Record "Sales Header"');
+  });
+
+  it("keeps a Codeunit's subtype", async () => {
+    expect(
+      await typeOfExitExpr(
+        `codeunit 50305 "T" { procedure P() var Mgt: Codeunit "Sales-Post"; begin exit(Mgt); end; }`,
+      ),
+    ).toBe('Codeunit "Sales-Post"');
+  });
+
+  it("keeps a generic type's parameter, so List of [Text] is not List of [Integer]", async () => {
+    expect(
+      await typeOfExitExpr(
+        `codeunit 50306 "T" { procedure P() var Names: List of [Text]; begin exit(Names); end; }`,
+      ),
+    ).toBe("List of [Text]");
+  });
+
+  it("answers `Label` for a label, whatever its constant text", async () => {
+    // Not a special case in `extractType`: the grammar's `type` field for a label declaration is
+    // the bare word, and the constant is a sibling. Two labels with different text are the same
+    // type, and this pins that they compare equal.
+    expect(
+      await typeOfExitExpr(
+        `codeunit 50307 "T" { procedure P() var Msg: Label 'Posting...'; begin exit(Msg); end; }`,
+      ),
+    ).toBe("Label");
+  });
+
   it("returns null for unresolvable identifiers", async () => {
     expect(
       await typeOfExitExpr(

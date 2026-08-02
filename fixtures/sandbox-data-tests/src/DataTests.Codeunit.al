@@ -621,6 +621,113 @@ codeunit 79310 "Data Tests"
     end;
 
     // ---------------------------------------------------------------------------------------------
+    // R82 — `lethal.swap-call-arguments`, six arms. Target: codeunit 79311 "Data Swap Ops", which
+    // documents each arm and its PREDICTED verdict. The predictions are pre-committed in
+    // docs/superpowers/specs/2026-08-03-r82-swap-call-arguments-design.md §5 before the live run,
+    // so a contradiction is a finding (R73's `remove-commit` prediction was contradicted, and that
+    // WAS the finding) rather than something to reconcile quietly afterwards.
+    //
+    // Two of these tests are deliberately weak, and one asserts nothing at all. That is not
+    // sloppiness — a survivor is only informative when the site is genuinely COVERED, and a false
+    // kill is by definition one a weak test still produces.
+    // ---------------------------------------------------------------------------------------------
+
+    [Test]
+    procedure SwapRedirectsTheAccumulatorWriteback()
+    var
+        SwapOps: Codeunit "Data Swap Ops";
+        Actual: Decimal;
+    begin
+        // ARM A. Strong. `Accumulate(Total, Delta)` swapped writes the sum into `Delta`, so
+        // `Total` comes back as the untouched starting value: 10 instead of 15. The same
+        // assertion kills the site's `void-method-call` deletion (10), `empty-block` on either
+        // body, and `return-value`'s `exit(0)`.
+        Actual := SwapOps.RunningTotal(10.0, 5.0);
+        if Actual <> 15.0 then
+            Error('expected RunningTotal(10, 5) = 15, got %1', Actual);
+    end;
+
+    [Test]
+    procedure SwapReversesTheRangeComparison()
+    var
+        SwapOps: Codeunit "Data Swap Ops";
+    begin
+        // ARM B, expression position — the majority shape (452 of the 893 measured sites).
+        // Three assertions, each earning its keep: the first two kill the swap and both
+        // `return-value` flips, the third (equal values) kills `conditional-boundary`'s
+        // `<=` -> `<`, which the other two cannot see.
+        if not SwapOps.AmountWithinCap(5, 10) then
+            Error('expected 5 to be within a cap of 10');
+        if SwapOps.AmountWithinCap(10, 5) then
+            Error('expected 10 NOT to be within a cap of 5');
+        if not SwapOps.AmountWithinCap(7, 7) then
+            Error('expected 7 to be within a cap of 7 — the boundary case');
+    end;
+
+    [Test]
+    procedure CommutativeCalleeMakesTheSwapEquivalent()
+    var
+        SwapOps: Codeunit "Data Swap Ops";
+    begin
+        // ARM C. The swap here is EQUIVALENT and must survive: `or` cannot tell its operands
+        // apart, so no assertion can ever kill this mutant. The assertion is still strong, and
+        // deliberately so — it kills the deletion at the same site, which is what proves the
+        // survivor is equivalence rather than missing coverage.
+        SwapOps.NoteFlags(true, false);
+        if not SwapOps.AnyFlagSeen() then
+            Error('expected NoteFlags(true, false) to record a flag');
+    end;
+
+    [Test]
+    procedure WeakStampAssertionMissesTheSwap()
+    var
+        SwapOps: Codeunit "Data Swap Ops";
+    begin
+        // ARM D. Weak ON PURPOSE, and the weakness is the measurement. Asserting that a stamp
+        // HAPPENED is true under the swap ('S1' instead of 'P1' is still non-blank) and false
+        // under the deletion — so this one assertion spares the swap and kills
+        // `void-method-call`. That discrimination is what tells a report reader "your test is
+        // weak here" apart from arm C's "this mutant is unkillable".
+        SwapOps.StampFromPair('P1', 'S1');
+        if SwapOps.PrimaryStamp() = '' then
+            Error('expected StampFromPair to leave a primary stamp');
+    end;
+
+    [Test]
+    procedure NarrowParameterOverflowsUnderTheSwap()
+    var
+        SwapOps: Codeunit "Data Swap Ops";
+    begin
+        // ARM E — the FALSE-KILL arm, and it asserts NOTHING by design. Both arguments are
+        // Code[20] so the operator claims the site and the swapped call compiles; the callee's
+        // second parameter is Code[10], so the swap sends 18 characters into it and BC raises at
+        // runtime. A kill here is credited to no assertion, which is this repo's sharpest
+        // definition of a false kill: one a weak test still produces.
+        //
+        // The verdict STAYS killed (R72: a diagnosis must not move a verdict). What this arm is
+        // for is producing the artifact TEXT a future detector would have to match — and the
+        // site's `void-method-call` survivor is the control proving the kill came from the swap's
+        // runtime effect rather than from anything this test does.
+        SwapOps.StampWithNarrow('LONGCODE1234567890', 'S1');
+    end;
+
+    [Test]
+    procedure LinkedPairIsStamped()
+    var
+        SwapOps: Codeunit "Data Swap Ops";
+    begin
+        // ARM F — the R84 refusal negative. `Link(MainRow, RelatedRow)` takes two records whose
+        // truncated type heads both read `Record` and whose real types differ; the operator must
+        // NOT claim it. An absence is a weak thing to assert, so the site's `void-method-call`
+        // mutant is pinned here instead: a wrong Tier-1/R82 claim surfaces as an operatorName
+        // change on a KILLED mutant, the detector shape R70 established. (The louder failure comes
+        // first: a wrongly claimed swap does not compile, and `alc` rejects the artifact.)
+        SwapOps.LinkPair('M1', 42);
+        if SwapOps.PrimaryStamp() <> 'M1' then
+            Error('expected LinkPair to stamp the main record no., got %1', SwapOps.PrimaryStamp());
+    end;
+
+    // ---------------------------------------------------------------------------------------------
     // Seeding helpers. All idempotent — see InsertDoublesAmountWeak's comment for why that is
     // kept even though the persistence claim behind it was measured false.
     // around every mutant run, so rows PERSIST into the next one.

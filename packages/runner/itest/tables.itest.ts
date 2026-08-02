@@ -119,7 +119,14 @@ const EXPECTED = {
   // `Data Scope Probe.OnInsert`'s receiver claimable, so Tier 2 gained a `remove-setrange` spec
   // there. DEPLOYED is unchanged at 106 — §3.2 precedence deletes the Tier-1 `void-method-call`
   // that used to hold that site, which is the dedup mechanism working, not a lost mutant.
-  totalMutantSites: 118,
+  // R82 moved this from 118 to 148: `codeunit 79311 "Data Swap Ops"` and its six arms, which are
+  // the live measurement of `lethal.swap-call-arguments` (spec
+  // docs/superpowers/specs/2026-08-03-r82-swap-call-arguments-design.md, per-mutant predictions
+  // pre-committed in its §5 BEFORE this run). All 30 new specs DEPLOY — the five swap mutants
+  // coexist with `void-method-call` at their sites rather than displacing it, because dedup keys on
+  // replacement TEXT and a swap's is never a deletion's empty string. That coexistence is R82's
+  // "marginal == gross" claim, and it is now a measurement rather than an argument.
+  totalMutantSites: 148,
   // R36 moved this from 63/10 to 64/9, deliberately and in one direction only.
   //
   // `RequireCategoryAFails` used to assert merely that AN error occurred, so deleting
@@ -155,7 +162,12 @@ const EXPECTED = {
   // `lethal.swap-rec-xrec` mutant, KILLED by `Data Tests.ScopeProbeTracksFieldChange`. The operator
   // ships with its claim proven live rather than only its refusals — the gap R73 had just closed
   // for `RemoveCommit`, not reopened one operator later.
-  killed: 84,
+  // R82 moved this from 84 to 109. 25 of the 30 new mutants are predicted killed; the three that
+  // matter are the swap mutants at DataSwapOps:46 (arm A — the `var` writeback redirected, which is
+  // also the live proof that a swapped call COMPILES with a `var` parameter), :69 (arm B —
+  // EXPRESSION position, the shape 452 of the 893 real sites have) and :146 (arm E — killed by a
+  // platform length overflow under a test that asserts NOTHING, this repo's sharpest false kill).
+  killed: 109,
   // R73 moved this from 9 to 12, and TWO of the three additions are worth reading rather than
   // accepting:
   //
@@ -171,7 +183,19 @@ const EXPECTED = {
   //   M0005 / M0010 `void-method-call` on `DataMain.Init()` survive because deleting `Init()` is
   //     harmless when every field is assigned immediately after. Honest survivors, left as they
   //     are: manufacturing an assertion that kills them would test the fixture, not the operator.
-  survived: 12,
+  // R82 moved this from 12 to 17, and FOUR of the five are the point rather than the cost.
+  //
+  //   DataSwapOps:92 `swap-call-arguments` (arm C) — EQUIVALENT. `or` cannot tell its operands
+  //     apart, so no assertion can ever kill it. The covering test is strong (it kills the deletion
+  //     at the same site), which is what proves this is equivalence and not missing coverage.
+  //   DataSwapOps:116 `swap-call-arguments` (arm D) — UNDERTESTED, and deliberately readable APART
+  //     from arm C: the mutant IS observable, the assertion just does not look. One says "your test
+  //     is weak here", the other says "this mutant is unkillable", and a real-project report is
+  //     full of both.
+  //   DataSwapOps:145 / :150 `empty-block` and :146 `void-method-call` — the arm E controls. Its
+  //     test asserts nothing, so deleting that call is genuinely unobservable. They are what proves
+  //     arm E's KILL came from the swap's runtime overflow and not from anything the test does.
+  survived: 17,
   // R78 moved this from 6 to 9. The three new sites all belong to the TestPage-only pair
   // (`Data Value Source` / `Data Value Card`), and all three land `no-coverage` because the one
   // test that reaches them is refused on the fenced path. That is the measured statement of the
@@ -180,8 +204,12 @@ const EXPECTED = {
   // R70 moved this from 9 to 10: `page 79324 "Data Scope Probe"`'s OnOpenPage `empty-block`. Nothing
   // opens that page — deliberately, R76 measured that a page over a trigger-carrying table can HANG
   // a fenced session — so no-coverage is the honest verdict for it.
+  // R82 leaves this at 10 — every one of its 30 new mutants sits in a codeunit the test bodies call
+  // directly, so procedure-level attribution should reach all of them. If any arrives `no-coverage`
+  // that is an ATTRIBUTION finding, named as one in the spec's §5, and must not be absorbed by
+  // adjusting the fixture until it is understood.
   noCoverage: 10,
-  mutationScore: 84 / (84 + 12),
+  mutationScore: 109 / (109 + 17),
   /**
    * `coverageFilter`'s FALLBACK 2 ("coverage places this table trigger nowhere, run every green
    * test") must fire for NOBODY here. This is the assertion `0a463fd` actually earns: before it,

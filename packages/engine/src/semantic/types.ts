@@ -143,7 +143,28 @@ function findEnclosingProcedure(node: ALSyntaxNode, objectNode: ALSyntaxNode): s
   return null;
 }
 
+/**
+ * The type identity of a declaration — the WHOLE declared type, not its first token (R84).
+ *
+ * This function used to keep only the first whitespace-delimited token, so `Record "Sales Header"`
+ * and `Record "Purchase Header"` both answered `Record`, as did two different `Codeunit`s, two
+ * `List of [...]`s, two `Option`s and two `Enum`s. MEASURED on Continia Document Output while
+ * counting R82 (`scripts/census-swap-call-arguments.ts`): of 893 call sites whose two arguments the
+ * truncated head called same-typed, **135 (15.1%) are not** — 118 `Record`, 9 `Codeunit`, 4 `List`,
+ * 2 `Option`, 2 `Enum`. An operator that trusted the head would emit an artifact that does not
+ * compile, and the failure would arrive as an `AlcCompileError` on a whole project, i.e. after the
+ * expensive part.
+ *
+ * Two things the grammar already gets right, so they need no handling here: the declaration's
+ * `type` field carries the full text (`Record "Data Main"`), and a `Label` declaration's `type`
+ * field is the bare word `Label` — its constant lives in a sibling `string_literal`. So two labels
+ * with different text compare EQUAL, which is correct: they are the same type.
+ *
+ * `Code[20]` and `Code[10]` stay DISTINCT, and that is deliberate rather than incidental. It
+ * refuses some swaps that would compile, and the conservative direction is the right one: a
+ * `Code[20]` value moved into a `Code[10]` position compiles and then fails at RUNTIME on a length
+ * overflow, which for a mutation operator is a kill nobody's assertion earned.
+ */
 function extractType(typeText: string): string {
-  const first = typeText.split(/\s+/)[0];
-  return first ?? typeText;
+  return typeText.replace(/\s+/g, " ").trim();
 }
