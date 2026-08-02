@@ -4,6 +4,8 @@ export { ALNodeKind, isALNodeKind } from "./ast/node-kinds";
 export { BINARY_EXPRESSION_KINDS, isBinaryExpressionKind } from "./ast/node-kinds";
 export type { ALSyntaxNode } from "./ast/syntax-node";
 export { wrapRoot, findFirst, findAll, visit } from "./ast/syntax-node";
+export { maskAlNonCode } from "./ast/mask";
+export type { AlMaskOptions } from "./ast/mask";
 export { print, printWithRewrites } from "./ast/printer";
 export { astSubtreeHash } from "./ast/hash";
 export { canonicalize } from "./ast/canonicalization";

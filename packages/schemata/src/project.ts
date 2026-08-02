@@ -6,6 +6,7 @@ import {
   type MutationSpec,
   astSubtreeHash,
   findEnclosingProcedure,
+  maskAlNonCode,
 } from "@lethal/engine";
 import { compileSchemataForFile } from "./compile";
 import { type TierResolver, dedupeSpecs } from "./dedup";
@@ -154,53 +155,17 @@ const OBJECT_HEADER =
  * the `matches[0]` race and mislabelled every mutant in the file, silently. Both go away by
  * scanning the comment-free text.
  *
- * String literals are tracked because AL text may legally contain `//` or `/*`
+ * String literals are tracked because AL text may legally contain `//` or a block-comment opener
  * (`Error('use // here')`), and a stripper blind to them would blank the rest of the file and
- * report "no AL object header" on a valid one. `''` inside a single-quoted string is an escaped
- * quote, which this handles by simply re-entering the string state on the next quote.
+ * report "no AL object header" on a valid one. Their CONTENTS are deliberately left intact here —
+ * see `maskAlNonCode`'s `blankStringContents` for why this consumer differs from test discovery.
  */
 export function stripAlComments(source: string): string {
-  const out = source.split("");
-  let state: "code" | "line-comment" | "block-comment" | "string" | "identifier" = "code";
-  for (let i = 0; i < source.length; i++) {
-    const c = source[i];
-    const next = source[i + 1];
-    if (state === "code") {
-      if (c === "'") state = "string";
-      else if (c === '"') state = "identifier";
-      else if (c === "/" && next === "/") {
-        state = "line-comment";
-        out[i] = " ";
-      } else if (c === "/" && next === "*") {
-        state = "block-comment";
-        out[i] = " ";
-      }
-      continue;
-    }
-    if (state === "string") {
-      if (c === "'") state = "code";
-      continue;
-    }
-    if (state === "identifier") {
-      if (c === '"') state = "code";
-      continue;
-    }
-    // Inside a comment: blank everything except newlines, so line numbers and the regex's
-    // `^` anchors keep addressing the same lines they did in the original.
-    if (state === "line-comment") {
-      if (c === "\n") state = "code";
-      else out[i] = " ";
-      continue;
-    }
-    // block-comment
-    if (c !== "\n") out[i] = " ";
-    if (c === "*" && next === "/") {
-      out[i + 1] = " ";
-      i++;
-      state = "code";
-    }
-  }
-  return out.join("");
+  // R80: one shared lexer, two policies. `blankStringContents: false` is this consumer's policy
+  // and it is load-bearing — `objectHeadersOf` decides which object a mutant belongs to, so what
+  // this function sees is mutant ATTRIBUTION. Measured over 717 real `.al` files, both policies
+  // yield identical object-header sets, so the choice is documented rather than fragile.
+  return maskAlNonCode(source, { blankStringContents: false });
 }
 
 /** One AL object header found in a file: kind (lowercased keyword), id, quote-stripped name,

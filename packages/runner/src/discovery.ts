@@ -1,5 +1,6 @@
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
+import { maskAlNonCode } from "@lethal/engine";
 import type { TestMethodRef } from "./backend";
 
 const CODEUNIT_HEADER_GLOBAL = /codeunit\s+(\d+)\s+("([^"]+)"|(\w+))/gi;
@@ -7,7 +8,7 @@ const SUBTYPE_TEST = /Subtype\s*=\s*Test\s*;/i;
 const TEST_METHOD = /\[Test\]\s*(?:\[[^\]]*\]\s*)*procedure\s+("([^"]+)"|(\w+))\s*\(/gi;
 
 /**
- * R79: blank out everything the AL compiler does not read as code — comments and string
+ * R79: blank out everything the AL compiler does not read as code — comments AND string
  * literals — preserving every offset, so the sectioning regexes below see only code.
  *
  * Without this, PROSE of the shape `codeunit 50100 "Sales Post"` (ordinary AL commenting) opened
@@ -20,79 +21,13 @@ const TEST_METHOD = /\[Test\]\s*(?:\[[^\]]*\]\s*)*procedure\s+("([^"]+)"|(\w+))\
  * carries the same shape mid-line. Masking fixes the class, and it fixes the other direction too:
  * a commented-out `Subtype = Test;` no longer promotes a helper codeunit into a test suite.
  *
- * Replacement is space-for-character (newlines kept) so every index into the masked source is
- * also an index into the original.
- *
- * DOUBLE quotes are AL's QUOTED IDENTIFIER, not a string — `codeunit 79210 "First Suite"` needs
- * its name — so they are stepped over intact, never blanked.
- *
- * Unterminated `'` or `"` are stopped at end of line rather than run to EOF: neither compiles in
- * AL, and blanking the remainder of a file would recreate exactly the silent-drop this fixes.
+ * R80: the state machine itself now lives in `@lethal/engine` (`maskAlNonCode`), shared with
+ * schemata's `stripAlComments`, which had grown a second copy of it. Discovery keeps the
+ * blank-string-contents policy — that is the half this bug turned on — while attribution keeps
+ * the other; the flag records the difference instead of two lexers drifting apart.
  */
 function maskNonCode(source: string): string {
-  const out = Array.from(source);
-  const blank = (from: number, to: number): void => {
-    for (let k = from; k < to; k++) {
-      const ch = out[k];
-      if (ch !== "\n" && ch !== "\r") out[k] = " ";
-    }
-  };
-  const endOfLine = (from: number): number => {
-    const nl = source.indexOf("\n", from);
-    return nl === -1 ? source.length : nl;
-  };
-
-  let i = 0;
-  while (i < source.length) {
-    const c = source[i];
-    const next = source[i + 1];
-
-    if (c === "/" && next === "/") {
-      const end = endOfLine(i);
-      blank(i, end);
-      i = end;
-      continue;
-    }
-    if (c === "/" && next === "*") {
-      const close = source.indexOf("*/", i + 2);
-      const end = close === -1 ? source.length : close + 2;
-      blank(i, end);
-      i = end;
-      continue;
-    }
-    if (c === "'") {
-      const lineEnd = endOfLine(i);
-      let j = i + 1;
-      let closed = false;
-      while (j < lineEnd) {
-        if (source[j] === "'") {
-          if (source[j + 1] === "'") {
-            j += 2;
-            continue;
-          }
-          j += 1;
-          closed = true;
-          break;
-        }
-        j += 1;
-      }
-      if (!closed) {
-        i += 1;
-        continue;
-      }
-      blank(i, j);
-      i = j;
-      continue;
-    }
-    if (c === '"') {
-      const lineEnd = endOfLine(i);
-      const close = source.indexOf('"', i + 1);
-      i = close === -1 || close >= lineEnd ? i + 1 : close + 1;
-      continue;
-    }
-    i += 1;
-  }
-  return out.join("");
+  return maskAlNonCode(source, { blankStringContents: true });
 }
 
 /**
