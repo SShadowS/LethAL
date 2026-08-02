@@ -106,7 +106,16 @@ const EXPECTED = {
   // scored at all. The three new sites are `empty-block` on the page's OnAction, `empty-block` on
   // `GetValue`'s body, and `return-value` on its `exit(42)`; all three flip the value the test
   // asserts, so all three are killable by that one test and by nothing else.
-  totalMutantSites: 96,
+  // R70 moved this from 96 to 99. The fixture gained the cross-kind NAME COLLISION every gate was
+  // blind to: `table 79309 "Data Scope Probe"` and `page 79324 "Data Scope Probe"`, same name,
+  // different kind — the ordinary "card page named after its table" convention. The table's
+  // OnInsert filters through a receiver declared in the TRIGGER'S OWN var section, invisible to the
+  // symbol table (R68), so Tier 2 must REFUSE it and Tier 1 claims the statement. Under the R70 bug
+  // the same-named page's `Helper: Record "Data Main"` answered for the table and Tier 2 CLAIMED
+  // the site, whose §3.2 precedence then DELETED the Tier-1 mutant — measured offline on this
+  // fixture as raw specs 99 -> 100 with DEPLOYED unchanged at 90. So the regression shows up as an
+  // OPERATOR NAME at a fixed file:line, which `assertMatchesBaseline` compares per mutant.
+  totalMutantSites: 99,
   // R36 moved this from 63/10 to 64/9, deliberately and in one direction only.
   //
   // `RequireCategoryAFails` used to assert merely that AN error occurred, so deleting
@@ -130,15 +139,22 @@ const EXPECTED = {
   //                so the object is instrumented, compiled, published and installed live but never
   //                runs. Deliberately kept: no-coverage is the honest verdict for code no test
   //                reaches, and the pipeline proof is real even when the execution proof is not.
-  killed: 69,
+  // R70 moved this from 69 to 71. Both new killed mutants are in `table 79309 "Data Scope Probe"`'s
+  // OnInsert — `empty-block` on the trigger body and `void-method-call` on the `SetRange` — and
+  // `Data Tests.ScopeProbeCountsOnlyFilteredRelated` kills both by seeding out-of-filter decoys, so
+  // deleting either widens the count the test asserts.
+  killed: 71,
   survived: 9,
   // R78 moved this from 6 to 9. The three new sites all belong to the TestPage-only pair
   // (`Data Value Source` / `Data Value Card`), and all three land `no-coverage` because the one
   // test that reaches them is refused on the fenced path. That is the measured statement of the
   // gap R69 exists for: the mutants are excluded from the score rather than scored against a test
   // that never ran. If the routed path is ever wired, THESE THREE are what must flip to scored.
-  noCoverage: 9,
-  mutationScore: 69 / (69 + 9),
+  // R70 moved this from 9 to 10: `page 79324 "Data Scope Probe"`'s OnOpenPage `empty-block`. Nothing
+  // opens that page — deliberately, R76 measured that a page over a trigger-carrying table can HANG
+  // a fenced session — so no-coverage is the honest verdict for it.
+  noCoverage: 10,
+  mutationScore: 71 / (71 + 9),
   /**
    * `coverageFilter`'s FALLBACK 2 ("coverage places this table trigger nowhere, run every green
    * test") must fire for NOBODY here. This is the assertion `0a463fd` actually earns: before it,

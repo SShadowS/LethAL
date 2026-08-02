@@ -495,6 +495,52 @@ codeunit 79310 "Data Tests"
     end;
 
     // ---------------------------------------------------------------------------------------------
+    // R70: the cross-kind name collision, made live.
+    //
+    // `table 79309 "Data Scope Probe"` and `page 79324 "Data Scope Probe"` differ only in KIND —
+    // the ordinary "card page named after its table" convention. The table's OnInsert filters
+    // `Data Related` through a receiver declared in the TRIGGER'S OWN var section, which the symbol
+    // table cannot see (R68), so the receiver is correctly unresolvable and Tier 2 must REFUSE the
+    // site: `lethal.void-method-call` is the only mutant there.
+    //
+    // Under the R70 bug the same-named PAGE's `Helper: Record "Data Main"` answered for the table,
+    // the receiver resolved to the WRONG table, and Tier 2 claimed the site as
+    // `lethal.remove-setrange` — which under §3.2 dedup precedence DELETES the Tier-1 mutant.
+    // Measured offline on this exact fixture: raw specs 99 -> 100 while DEPLOYED stayed 90, i.e.
+    // one claim gained and one correct mutant lost. The regression is therefore visible as an
+    // OPERATOR NAME at a fixed file:line, which `tables.baseline.json` compares per mutant.
+    //
+    // This test exists so that site is SCORED rather than no-coverage: the decoys mean deleting
+    // either the `SetRange` or the whole statement widens the count and the mutant dies. A
+    // no-coverage site would still catch the operator flip but would not also prove the site runs.
+    // ---------------------------------------------------------------------------------------------
+
+    [Test]
+    procedure ScopeProbeCountsOnlyFilteredRelated()
+    var
+        ScopeProbe: Record "Data Scope Probe";
+    begin
+        ClearRelated('T-SCOPE');
+        ClearRelated('T-SCOPEDECOY');
+        AddRelated(79141, 'T-SCOPE', 10);
+        AddRelated(79142, 'T-SCOPE', 20);
+        AddRelated(79143, 'T-SCOPEDECOY', 30);
+        AddRelated(79144, 'T-SCOPEDECOY', 40);
+        AddRelated(79145, 'T-SCOPEDECOY', 50);
+
+        if ScopeProbe.Get('SCOPE-1') then
+            ScopeProbe.Delete(false);
+        ScopeProbe.Init();
+        ScopeProbe."No." := 'SCOPE-1';
+        ScopeProbe."Main No. Filter" := 'T-SCOPE';
+        ScopeProbe.Insert(true);
+
+        ScopeProbe.Get('SCOPE-1');
+        if ScopeProbe."Related Count" <> 2 then
+            Error('expected OnInsert to count only the 2 T-SCOPE rows, got %1', ScopeProbe."Related Count");
+    end;
+
+    // ---------------------------------------------------------------------------------------------
     // Seeding helpers. All idempotent — see InsertDoublesAmountWeak's comment for why that is
     // kept even though the persistence claim behind it was measured false.
     // around every mutant run, so rows PERSIST into the next one.

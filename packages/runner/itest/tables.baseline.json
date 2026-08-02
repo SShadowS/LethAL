@@ -133,6 +133,13 @@
     "errorClass": null
   },
   {
+    "key": "2fe754c87ec545118683960d6bfce5d25d4103be21b9b6d2a0034e025a5e1a71|Data Scope Probe|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
     "key": "30bba5bb3b24ff3a1397f185bd4d5eb6567a87106024106a023b39a6ead33cfc|Data Main Ext|lethal.remove-setrange|1",
     "verdict": "killed",
     "killingTest": "ExtCountRelatedIgnoresDecoys",
@@ -213,6 +220,13 @@
     "key": "63bbaccc92ed756efb44d86e0512890978e0198784eb988ffa91ee87478b8246|Data Ops|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "MarkProcessedFiresModifyTrigger",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "65b62a6991a3b0d2f21f84681eb37e25ace5e6038a7829d2b6c8ff6372249fce|Data Scope Probe|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "ScopeProbeCountsOnlyFilteredRelated",
     "coverageFiltered": false,
     "errorClass": null
   },
@@ -361,6 +375,13 @@
     "verdict": "no-coverage",
     "killingTest": null,
     "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "95fb55a7abb8334172699b68d5b7ba52d98c4ece7b606e0ad788687e94829326|Data Scope Probe|lethal.void-method-call|1",
+    "verdict": "killed",
+    "killingTest": "ScopeProbeCountsOnlyFilteredRelated",
+    "coverageFiltered": false,
     "errorClass": null
   },
   {
