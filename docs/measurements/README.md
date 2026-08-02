@@ -524,3 +524,47 @@ precedent: a diagnosis must not move a verdict), and the note is worded best-eff
 That detector cannot be PROVEN until a `remove-commit` mutant exists in a gate, which is R73's job —
 no fixture has ever generated one. So R73 comes first, and R72's detector is written against a real
 mutant rather than a constructed string.
+
+---
+
+## R73 — does a committed write survive a later uncaught error? **Yes**, and that is `RemoveCommit`'s kill mechanism
+
+`fixtures/sandbox-probes/src/CommitProbe.Codeunit.al`. Measured 2026-08-02, Cronus281, identical on
+the hub and the fenced path:
+
+| test | shape | result |
+|---|---|---|
+| `CommittedWriteSurvivesLaterError` | write, `Commit`, raise | `committedWriteSurvived=Yes` |
+| `UncommittedWriteIsRolledBack` | write, raise (no `Commit`) | `uncommittedWriteSurvived=No` |
+
+The control is the point: the second shape is exactly what a `remove-commit` mutant produces, so a
+transaction-boundary test that asserts the row survived CAN kill one. Measured before the fixture
+was written, because if the isolation runner had rolled back committed writes too, that fixture
+would have failed unmutated and the red baseline would have been blamed on the wrong thing.
+
+Live result: `fixtures/sandbox-data`'s `Data Commit Ops.CommitThenFail` now carries the first
+`lethal.remove-commit` mutant any gate has **killed** (`itest:tables`, killed by
+`Data Tests.CommittedWriteSurvivesFailure`).
+
+### The surprise, and it contradicts R72
+
+The SECOND site — `CommitThenRun`, a `Commit()` immediately before a `Codeunit.Run` — was predicted
+to die of the platform's write-transaction refusal measured under §R72. **It SURVIVED.**
+
+The two measurements are both real and they disagree because the SHAPE differs:
+
+| where the write and the `Codeunit.Run` sit | refused? |
+|---|---|
+| both in a `[Test]` method (`sandbox-probes`) | **yes** — "An error occurred and the transaction is stopped." |
+| both in an ordinary codeunit called from a test (`sandbox-data`) | **no** — the call goes through, the callee flags the row, both assertions pass |
+
+So R72's premise — "deleting a `Commit()` before a `Codeunit.Run` makes the platform refuse the
+call" — is TRUE in one shape and FALSE in another, and the probe's shape did not generalise. That is
+the same over-generalisation pattern this file exists to catch, caught this time by a fixture
+disagreeing with a probe rather than by review.
+
+**Consequence: R72's detector is still not built, and should not be.** There is no reproduction of
+the artifact in a mutant a gate generates, so a detector would again be proven only against a
+constructed string. What is needed first is a measurement of WHICH shape triggers the refusal —
+call depth, `TableNo`, the test runner's own transaction, or something else — because a diagnosis
+that fires on the wrong shape mislabels genuine kills as platform noise.

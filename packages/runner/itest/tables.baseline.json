@@ -1,5 +1,19 @@
 [
   {
+    "key": "042be415edc59abb702f4d7528565491209ee3cabab9141ccc70756474f3ecd1|Data Commit Ops|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "042be415edc59abb702f4d7528565491209ee3cabab9141ccc70756474f3ecd1|Data Commit Ops|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "042be415edc59abb702f4d7528565491209ee3cabab9141ccc70756474f3ecd1|Data Main List Ext|lethal.void-method-call|1",
     "verdict": "no-coverage",
     "killingTest": null,
@@ -24,6 +38,27 @@
     "key": "053e0e18f28dfd74178ac5b5bbd30aba7d77f20e3d327d0ad709e8a0decba693|Data Ops|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "ShadowedBuiltinsRun",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "0a4aa6ba624a968a10ed0a7f498acecfcece91cce81f92a0459538ca3df0b35c|Data Commit Ops|lethal.void-method-call|1",
+    "verdict": "killed",
+    "killingTest": "CommitBeforeCodeunitRunSucceeds",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "0a4aa6ba624a968a10ed0a7f498acecfcece91cce81f92a0459538ca3df0b35c|Data Commit Ops|lethal.void-method-call|1",
+    "verdict": "killed",
+    "killingTest": "CommittedWriteSurvivesFailure",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "0a4aa6ba624a968a10ed0a7f498acecfcece91cce81f92a0459538ca3df0b35c|Data Commit Target|lethal.void-method-call|1",
+    "verdict": "killed",
+    "killingTest": "CommitBeforeCodeunitRunSucceeds",
     "coverageFiltered": false,
     "errorClass": null
   },
@@ -77,6 +112,20 @@
     "errorClass": null
   },
   {
+    "key": "17c8792888d8cec7ee12808b313164f66200873cb174d6110ca4cbdaa89efcf9|Data Commit Ops|lethal.void-method-call|1",
+    "verdict": "killed",
+    "killingTest": "CommittedWriteSurvivesFailure",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "18ead5c83d5f7d37b4843e2992283f806eacc11bac7b0f0e88be59bb5d8c4f2a|Data Commit Ops|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "CommittedWriteSurvivesFailure",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "1bcb6635da772f46d15716e02d340179867b2d4964009615ae23815b482c9ef3|Data Main|lethal.remove-setrange|1",
     "verdict": "killed",
     "killingTest": "CountInCategoryUppercaseSetRange",
@@ -87,6 +136,13 @@
     "key": "1be2b6647b505954513975dba37be8715e2bdb7a35d4aa1dbfafb4b3b5d21055|Data Ops|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "ClearingMainFilterCountsEverything",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "1e18bfc851afb5552fd146f0c402e1488d3705536c2733f70f98c304f42ceb24|Data Commit Target|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "CommitBeforeCodeunitRunSucceeds",
     "coverageFiltered": false,
     "errorClass": null
   },
@@ -259,6 +315,20 @@
     "errorClass": null
   },
   {
+    "key": "73729b51b143cadec3b1131ca39fded2ad1ac6fa2dbd3aa19e742efd744da304|Data Commit Ops|lethal.remove-commit|1",
+    "verdict": "killed",
+    "killingTest": "CommittedWriteSurvivesFailure",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "73729b51b143cadec3b1131ca39fded2ad1ac6fa2dbd3aa19e742efd744da304|Data Commit Ops|lethal.remove-commit|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "73729b51b143cadec3b1131ca39fded2ad1ac6fa2dbd3aa19e742efd744da304|Data Shadow|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "ShadowedBuiltinsRun",
@@ -413,6 +483,13 @@
     "errorClass": null
   },
   {
+    "key": "9c8abda5a0be3cf4ee319a5d2801b47ff4a85342e89e50ccfa326d9e03028fda|Data Commit Ops|lethal.void-method-call|1",
+    "verdict": "killed",
+    "killingTest": "CommitBeforeCodeunitRunSucceeds",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "a4329869c73e3205338b102922376dccba68be6427a1c28b6cbbf31dc75c044b|Data No Trigger|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "TooLongNoValidateFails",
@@ -437,6 +514,13 @@
     "key": "b1f8d37229dc8335ae14f7ee9d7da052fd08c17862337ce980053ec608121738|Data Main|lethal.remove-calcfields|1",
     "verdict": "killed",
     "killingTest": "CategoryGuardNeedsCalcFields",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "b898f8e974882cd7bcc7f039f7b1a277ef6964239c11c44244b4c026e9b43110|Data Commit Ops|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "CommitBeforeCodeunitRunSucceeds",
     "coverageFiltered": false,
     "errorClass": null
   },
@@ -493,6 +577,13 @@
     "key": "d36581a980ee091d62faf54b2a4512ee7cb1db33aea2a4f417a5edde7ef9d79f|Data Builder|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "UserDefinedBuiltinsRun",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "d36581a980ee091d62faf54b2a4512ee7cb1db33aea2a4f417a5edde7ef9d79f|Data Commit Target|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "CommitBeforeCodeunitRunSucceeds",
     "coverageFiltered": false,
     "errorClass": null
   },

@@ -115,7 +115,7 @@ const EXPECTED = {
   // the site, whose §3.2 precedence then DELETED the Tier-1 mutant — measured offline on this
   // fixture as raw specs 99 -> 100 with DEPLOYED unchanged at 90. So the regression shows up as an
   // OPERATOR NAME at a fixed file:line, which `assertMatchesBaseline` compares per mutant.
-  totalMutantSites: 99,
+  totalMutantSites: 114,
   // R36 moved this from 63/10 to 64/9, deliberately and in one direction only.
   //
   // `RequireCategoryAFails` used to assert merely that AN error occurred, so deleting
@@ -143,8 +143,27 @@ const EXPECTED = {
   // OnInsert — `empty-block` on the trigger body and `void-method-call` on the `SetRange` — and
   // `Data Tests.ScopeProbeCountsOnlyFilteredRelated` kills both by seeding out-of-filter decoys, so
   // deleting either widens the count the test asserts.
-  killed: 71,
-  survived: 9,
+  // R73 moved this from 71 to 81, and R73's whole point is ONE of those: M0007, the first
+  // `lethal.remove-commit` mutant any gate has ever KILLED. Until now the operator shipped proven
+  // on its refusals and unproven on its claims — both pre-existing `Commit` sites are shadowed
+  // negatives, correctly refused, so no gate had ever generated one.
+  killed: 81,
+  // R73 moved this from 9 to 12, and TWO of the three additions are worth reading rather than
+  // accepting:
+  //
+  //   M0012 `remove-commit` in `CommitThenRun` SURVIVED, and that CONTRADICTS R72's premise.
+  //     R72 says deleting a `Commit()` before a `Codeunit.Run` makes the platform refuse the call.
+  //     Measured on `sandbox-probes` it does — write, then `Codeunit.Run`, in a test method, aborts
+  //     with "An error occurred and the transaction is stopped." Measured HERE, with the write and
+  //     the `Codeunit.Run` inside an ordinary codeunit called from a test, it does NOT: the call
+  //     goes through, the callee flags the row, and both assertions pass. So the artifact is
+  //     shape-dependent and the probe's shape did not generalise. Filed on R72; the detector is NOT
+  //     built, because there is still nothing real for it to fire on.
+  //
+  //   M0005 / M0010 `void-method-call` on `DataMain.Init()` survive because deleting `Init()` is
+  //     harmless when every field is assigned immediately after. Honest survivors, left as they
+  //     are: manufacturing an assertion that kills them would test the fixture, not the operator.
+  survived: 12,
   // R78 moved this from 6 to 9. The three new sites all belong to the TestPage-only pair
   // (`Data Value Source` / `Data Value Card`), and all three land `no-coverage` because the one
   // test that reaches them is refused on the fenced path. That is the measured statement of the
@@ -154,7 +173,7 @@ const EXPECTED = {
   // opens that page — deliberately, R76 measured that a page over a trigger-carrying table can HANG
   // a fenced session — so no-coverage is the honest verdict for it.
   noCoverage: 10,
-  mutationScore: 71 / (71 + 9),
+  mutationScore: 81 / (81 + 12),
   /**
    * `coverageFilter`'s FALLBACK 2 ("coverage places this table trigger nowhere, run every green
    * test") must fire for NOBODY here. This is the assertion `0a463fd` actually earns: before it,

@@ -495,6 +495,60 @@ codeunit 79310 "Data Tests"
     end;
 
     // ---------------------------------------------------------------------------------------------
+    // R73 + R72: the first POSITIVE `lethal.remove-commit` sites any fixture has ever carried, and
+    // the two kill mechanisms R72 exists to tell apart.
+    //
+    // Both mechanisms were MEASURED on `fixtures/sandbox-probes` before this was written:
+    // a committed write SURVIVES a later uncaught error (`survived=Yes`) while an uncommitted one
+    // is rolled back (`survived=No`), and `Codeunit.Run` with a write transaction open is REFUSED
+    // by the platform ("An error occurred and the transaction is stopped.", identical on the hub
+    // and the fenced path). See `docs/measurements/README.md`. Neither test below would mean
+    // anything if either measurement had come out the other way.
+    // ---------------------------------------------------------------------------------------------
+
+    [Test]
+    procedure CommittedWriteSurvivesFailure()
+    var
+        CommitOps: Codeunit "Data Commit Ops";
+        DataMain: Record "Data Main";
+    begin
+        // ASSERTION QUALITY, not platform noise: deleting the `Commit()` makes the write roll back
+        // with the error, and this assertion notices. That is what a `remove-commit` mutant SHOULD
+        // die of.
+        DeleteMain('T-CMTFAIL');
+        // Durable clean start. Without this the delete would itself roll back and a row left by an
+        // earlier run would answer `survived` for the wrong reason.
+        Commit();
+
+        asserterror CommitOps.CommitThenFail('T-CMTFAIL');
+
+        if not DataMain.Get('T-CMTFAIL') then
+            Error('expected the row committed before the error to survive it, but it is gone');
+    end;
+
+    [Test]
+    procedure CommitBeforeCodeunitRunSucceeds()
+    var
+        CommitOps: Codeunit "Data Commit Ops";
+        Target: Codeunit "Data Commit Target";
+        DataMain: Record "Data Main";
+    begin
+        // PLATFORM ARTIFACT: deleting the `Commit()` leaves a write transaction open across
+        // `Codeunit.Run`, which BC refuses outright — the call never returns, this test dies, and
+        // the mutant is scored `killed` for a reason that says nothing about the assertions below.
+        // R72's diagnosis is what keeps that honest; the verdict deliberately stays `killed`.
+        DeleteMain(Target.CommitRunNo());
+        Commit();
+
+        CommitOps.CommitThenRun();
+
+        if not DataMain.Get(Target.CommitRunNo()) then
+            Error('expected CommitThenRun to have inserted %1', Target.CommitRunNo());
+        if not DataMain.Flagged then
+            Error('expected the Codeunit.Run callee to have flagged %1', Target.CommitRunNo());
+    end;
+
+    // ---------------------------------------------------------------------------------------------
     // R70: the cross-kind name collision, made live.
     //
     // `table 79309 "Data Scope Probe"` and `page 79324 "Data Scope Probe"` differ only in KIND —
