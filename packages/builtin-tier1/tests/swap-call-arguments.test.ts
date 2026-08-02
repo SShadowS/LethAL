@@ -119,6 +119,27 @@ describe("swapCallArguments", () => {
     expect(specsFor(inProc("A: Integer;", "Foo(Unknown1, Unknown2);"))).toHaveLength(0);
   });
 
+  // The two shapes that falsify the doc comment's "two variables are lvalues" wording, pinned
+  // because the operator is safe here by a DIFFERENT argument than the one written down, and an
+  // adversarial review pointed out that nothing was holding the difference in place.
+  //
+  // A parameterless procedure called bare is not an lvalue, so it must never enter a `var` slot.
+  // It is refused today only because the type table declines to type procedure names — a natural
+  // future "improvement" would silently start claiming these. Then this goes red.
+  it("refuses two bare parameterless procedure calls — not lvalues, whatever their type", () => {
+    const src = `codeunit 50170 "T" { procedure P() begin Foo(GetA, GetB); end; procedure GetA(): Integer begin exit(1); end; procedure GetB(): Integer begin exit(2); end; }`;
+    expect(specsFor(src)).toHaveLength(0);
+  });
+
+  // A Label is NOT assignable, so it is not an lvalue either — and it IS claimed (labels are 9.7%
+  // of the sites the operator claims on a real project). That is correct, by the other half of the
+  // safety argument: equal declared types plus "the call compiles today" means neither argument can
+  // be sitting in a `var` slot to begin with, since AL would already have rejected the original.
+  it("claims two labels, which are not lvalues — safe by the equal-types argument, not by lvalue-ness", () => {
+    const src = `codeunit 50171 "T" { procedure P() var MsgA: Label 'Alpha'; MsgB: Label 'Beta'; begin Foo(MsgA, MsgB); end; }`;
+    expect(specsFor(src)[0]?.after.text).toBe("Foo(MsgB, MsgA)");
+  });
+
   it("resolves parameters and globals, not just locals", () => {
     const src = `codeunit 50161 "T" { var G: Integer; procedure P(Param: Integer) begin Foo(Param, G); end; }`;
     expect(specsFor(src)[0]?.after.text).toBe("Foo(G, Param)");

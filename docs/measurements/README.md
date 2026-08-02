@@ -856,24 +856,57 @@ AL Callstack:
 arm E's shape, not a broken deployment. The clean target was republished afterwards (1.0.20670.0)
 and all five R82 tests pass again.
 
-Two properties of that text worth keeping for whoever builds the detector R72's discipline defers:
-the top callstack frame is in the TARGET app (`Data Swap Ops.StampWithNarrow`), not the test, and
+One property of that text is worth keeping for whoever builds the detector R72's discipline defers:
 the message is prose that WILL localise — R66 already measured that BC translates this class of
-message while a structural parenthetical survives. A detector matching the English sentence would
+message while a structural parenthetical survives, so a detector matching the English sentence would
 be another English-only detector.
+
+An earlier version of this section also offered "the top callstack frame is in the TARGET app
+(`Data Swap Ops.StampWithNarrow`), not the test" as a discriminator. **That is false, and it is
+falsified by this very run** — see the correction below. Three ordinary kills in the same run have a
+target-app top frame.
 
 ### The gap arm E found, which was not what it was aimed at
 
-**Not one of the 109 kills records WHY it died.** `failure_note` is `NULL` for every killed mutant
-in the run's database — so in the stored record, arm E's platform overflow is indistinguishable
-from arm A's genuine assertion kill. The distinction exists only because the fixture was
-constructed to make it inferable (arm E's test asserts nothing). On a real project nobody can infer
-it. Filed as **R86**; it is the precondition for R85's "split kills by cause".
+**Not one of the 109 kills records WHY it died** in `mutants.failure_note` — it is `NULL` for every
+one — so in that record, arm E's platform overflow is indistinguishable from arm A's genuine
+assertion kill. The distinction exists here only because the fixture was constructed to make it
+inferable (arm E's test asserts nothing). On a real project nobody can infer it. Filed as **R86**,
+the precondition for R85's "split kills by cause".
+
+**Two corrections to that paragraph, both found by an adversarial review of the landed work and
+re-measured independently. They are recorded rather than silently fixed, because each was written
+here as measured and neither was.**
+
+1. **The text is NOT missing — it is unread.** `test_results.failure_message` is NOT NULL for
+   **110 of 110** failing rows in the same run, carrying the message plus a `;`-separated AL
+   callstack, written by `RunMutantTransport.failureTextOf` on the fenced path and stored against a
+   `mutantRowId`. The gap is one JOIN into `MutantOutcome`, not a capture to re-plumb from the
+   backend. The first version of this section sent the reader to the wrong layer.
+2. **"The top callstack frame is in the TARGET app" does NOT discriminate a false kill**, and that
+   sentence appeared below as though it did. Classifying all 109 mutant-attributed failing rows by
+   the top frame: **4 are in the target app, and only one is arm E.** The other three are ordinary
+   kills where the target's own validation raised — M0059 *"Category must have a value in Data
+   Main"*, M0062 and M0066 *"The Data Main does not exist"*. That is a **75% false-positive rate**
+   on the only run the rule has been checked against, and it misfires on exactly the class §4 of the
+   spec says must be read apart from arm E, since production validation catching a bad state is a
+   REAL kill. A candidate the data supports — the failing frame's statement is not the mutated
+   statement, and the message is a platform-class error — needs its own measurement, and there are
+   three ready-made counterexamples in `test_results` to red-check it against.
+
+   Worth knowing before anyone builds on this fixture: all 22 of its tests raise via bare
+   `Error(...)`, so every assertion kill here puts the TEST app on top. Continia Document Output's
+   suite uses Microsoft's Library Assert ~1,886 times, which puts a THIRD app on top. The fixture is
+   structurally blind to the shape real assertion kills have.
 
 ### What this does NOT establish
 
 - **Not a rate.** Six arms on a fixture written for them cannot say how often a real suite notices a
-  real swap. That is R85, and its instrument must not be this fixture.
+  real swap. That is R85, and its instrument must not be this fixture. Note for whoever runs it: the
+  population is **390** — what `swapCallArguments.targets` actually claims on `do-rel2/Cloud` — not
+  the census's 340. The census pairs over all arguments and then checks whether the chosen pair was
+  two identifiers; the operator filters to identifiers first and then pairs, so it finds pairs the
+  census skipped. Sampling 340 would describe something the product does not emit.
 - **Not that the survivors generalise.** C and D are one commutative callee and one weak assertion,
   chosen to be readable apart. Their RATIO on a real project is unmeasured.
 - **Not equivalence detection.** Nothing here tags arm C's mutant as equivalent; a reader still has

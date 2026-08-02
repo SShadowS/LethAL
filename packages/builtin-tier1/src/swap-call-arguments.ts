@@ -25,8 +25,17 @@ import { synthesizeAfter } from "./mutate-helpers";
  *
  *   1. Two arguments that are both BARE IDENTIFIERS. This is the `var`-parameter guard. AL matches
  *      a `var` parameter by EXACT type and refuses a non-lvalue, and whether a parameter is `var`
- *      is the callee's business — which this operator never resolves. Two variables are lvalues of
- *      one exact type, so the swap type-checks whatever the callee's signature turns out to be.
+ *      is the callee's business — which this operator never resolves.
+ *      THE REAL INVARIANT IS NARROWER THAN "TWO VARIABLES ARE LVALUES", and an adversarial review
+ *      caught this comment overstating it. A bare identifier is not necessarily an lvalue: a
+ *      parameterless procedure call is written the same way, and a `Label` is not assignable
+ *      either. What actually holds is (a) the type table types ONLY declared variables, so a bare
+ *      procedure call answers `null` and is refused below, and (b) for everything it DOES type,
+ *      equal declared types plus "the call compiles today" is enough on its own — if either
+ *      argument sat in a `var` slot, AL would already have rejected the ORIGINAL call, so the swap
+ *      cannot introduce a `var` violation. Both shapes are pinned in the tests; labels are ~9.7%
+ *      of the sites this operator claims on a real project, so the second half is load-bearing,
+ *      not academic.
  *      A `quoted_identifier` argument is not claimed: conservative, and the census measured the
  *      shape to be rare.
  *   2. The SAME declared type, compared on the FULL declaration. `Record "Sales Header"` and
