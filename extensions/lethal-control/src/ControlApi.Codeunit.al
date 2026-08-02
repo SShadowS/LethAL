@@ -179,10 +179,9 @@ codeunit 71003 "LC Control API"
     /// set both produce an empty array, and this project's signature bug is exactly that pair being
     /// indistinguishable.
     ///
-    /// PUBLIC (R69): codeunit 71013 "LC Batch Runner"'s batch loop needs this identical
-    /// serialization for its own coverage attach. Duplicating the body into that codeunit would let
-    /// the fenced path's and the batch path's coverage shapes drift apart, so it is promoted rather
-    /// than copied.</summary>
+    /// Public rather than local: it was promoted for R69's client-services batch runner, which has
+    /// since been deleted (measured unprofitable — ROADMAP R69). Left public because the fenced
+    /// path is its only caller either way and narrowing it buys nothing.</summary>
     procedure CoverageArray(ObjectIdFilter: Text; var ScannedRows: Integer; var EmittedRows: Integer): JsonArray
     var
         CodeCoverage: Record "Code Coverage";
@@ -509,112 +508,6 @@ codeunit 71003 "LC Control API"
             exit(BuildStatus('lease-invalid', TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, '', false, false, ''));
 
         exit(BuildStatus('ran', TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, CodeunitResults, ObservedAny, IdentityMismatch, ''));
-    end;
-
-    /// <summary>R69: read every batch result row back as one JSON array. The per-method result JSON
-    /// (which carries a raised `MEASURED …` / `CreateNavTestService` message) is embedded per row.
-    ///
-    /// Task 0a: `coverage`/`coverageScannedRows`/`coverageEmittedRows` are unpacked from "Coverage
-    /// Json" (which stores an object carrying all three, per "LC Batch Runner".RunBatch's doc
-    /// comment) onto this same per-row object — the identical three keys `RunMutantWithCoverage`
-    /// attaches to its own result, so the fenced path and the batch path report coverage in the
-    /// same shape.</summary>
-    procedure GetBatchResults() ResultsJson: Text
-    var
-        Res: Record "LC Batch Result";
-        Arr: JsonArray;
-        Obj: JsonObject;
-        Inner: JsonToken;
-        CoverageTok: JsonToken;
-        CoverageObj: JsonObject;
-        FieldTok: JsonToken;
-        CoverageOk: Boolean;
-    begin
-        if Res.FindSet() then
-            repeat
-                Clear(Obj);
-                Obj.Add('lineNo', Res."Line No.");
-                Obj.Add('codeunitId', Res."Codeunit ID");
-                Obj.Add('method', Res.Method);
-                Obj.Add('ok', Res.Ok);
-                Obj.Add('attested', Res.Attested);
-                Obj.Add('identityMismatch', Res."Identity Mismatch");
-                Obj.Add('nonce', Res.Nonce);
-                Obj.Add('errorText', Res."Error Text");
-                if Inner.ReadFrom(Res.GetResultJson()) then
-                    Obj.Add('result', Inner)
-                else
-                    Obj.Add('resultRaw', Res.GetResultJson());
-                // Nested rather than `ReadFrom(...) and CoverageTok.IsObject()` (same house pattern
-                // as ControlState.Codeunit.al's ClearActiveIf): AL does not guarantee short-circuit
-                // evaluation of `and`, so a flat compound could evaluate IsObject() against the
-                // STALE token a previous row's successful parse left behind when THIS row's
-                // ReadFrom fails — misattributing that row's coverage payload. Clear() below removes
-                // the staleness outright, independent of evaluation order; CoverageOk then gates on
-                // both calls having actually succeeded, in order.
-                Clear(CoverageTok);
-                CoverageOk := false;
-                if CoverageTok.ReadFrom(Res.GetCoverageJson()) then
-                    if CoverageTok.IsObject() then
-                        CoverageOk := true;
-                if CoverageOk then begin
-                    CoverageObj := CoverageTok.AsObject();
-                    if CoverageObj.Get('coverage', FieldTok) then
-                        Obj.Add('coverage', FieldTok);
-                    if CoverageObj.Get('coverageScannedRows', FieldTok) then
-                        Obj.Add('coverageScannedRows', FieldTok);
-                    if CoverageObj.Get('coverageEmittedRows', FieldTok) then
-                        Obj.Add('coverageEmittedRows', FieldTok);
-                end else
-                    Obj.Add('coverageRaw', Res.GetCoverageJson());
-                Arr.Add(Obj);
-            until Res.Next() = 0;
-        Arr.WriteTo(ResultsJson);
-    end;
-
-    /// <summary>R69: seed one work item into the batch queue over OData. LethAL calls this before
-    /// driving the page action over the client-services WebSocket.
-    ///
-    /// R69 Phase 2: `mutantId`/`targetAppId`/`artifactId` are what "LC Batch Runner".RunBatch passes
-    /// to ActivateForBatch/ClearForBatch for this row (a blank `mutantId` seeds an unmutated gate-2
-    /// baseline — see ActivateForBatch's doc comment for why baselines must still activate). `nonce`
-    /// is load-bearing — it proves a result row came from THIS invocation, closing the stale-row
-    /// hazard R69's own history demonstrated. It proves nothing about WHAT ran; that is the client's
-    /// result-JSON validation (spec §3.3).
-    ///
-    /// `coverageFilter` (Task 0a) is the same mandatory object-id filter `RunMutantWithCoverage`
-    /// takes as `CoverageObjectIdFilter` — kept as the trailing parameter per its own doc comment, so
-    /// this task's new activation/identity parameters are inserted ahead of it rather than displacing
-    /// it.</summary>
-    procedure SeedBatchItem(codeunitId: Integer; method: Text; mutantId: Text; targetAppId: Text; artifactId: Text; nonce: Text; coverageFilter: Text) LineNo: Integer
-    var
-        Queue: Record "LC Batch Queue";
-    begin
-        if Queue.FindLast() then
-            LineNo := Queue."Line No." + 1
-        else
-            LineNo := 1;
-        Queue.Init();
-        Queue."Line No." := LineNo;
-        Queue."Codeunit ID" := codeunitId;
-        Queue.Method := CopyStr(method, 1, MaxStrLen(Queue.Method));
-        Queue."Mutant Id" := CopyStr(mutantId, 1, MaxStrLen(Queue."Mutant Id"));
-        Queue."Target App Id" := CopyStr(targetAppId, 1, MaxStrLen(Queue."Target App Id"));
-        Queue."Artifact Id" := CopyStr(artifactId, 1, MaxStrLen(Queue."Artifact Id"));
-        Queue.Nonce := CopyStr(nonce, 1, MaxStrLen(Queue.Nonce));
-        Queue."Coverage Filter" := CopyStr(coverageFilter, 1, MaxStrLen(Queue."Coverage Filter"));
-        Queue.Insert(true);
-        Commit();
-    end;
-
-    procedure ClearBatch()
-    var
-        Queue: Record "LC Batch Queue";
-        Res: Record "LC Batch Result";
-    begin
-        Queue.DeleteAll(true);
-        Res.DeleteAll(true);
-        Commit();
     end;
 
     /// <summary>

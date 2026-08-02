@@ -28,8 +28,6 @@ import { nextAbove, parseVersionConflict, reserveAppVersion } from "./app-versio
 import { AlcCompileError, ArtifactPrepareError, DeploymentError } from "./artifact";
 import type { CompiledArtifact } from "./artifact";
 import type { CoverageMode, ExecutionBackend, TestMethodRef, TestVerdict } from "./backend";
-import { BatchProtocolError, runOneBatchMethod, validateResultJson } from "./batch-transport";
-import type { BatchOdata, BatchRunRequest, BatchWebSocket } from "./batch-transport";
 import { NO_RESULT_FOR_METHOD } from "./bcdev-backend";
 import { bisectFailingMutant } from "./bisect";
 import { discoverTests } from "./discovery";
@@ -68,7 +66,6 @@ import type { CoverageAttribution } from "./selection";
 import { SessionSafety, SessionUnsafeError } from "./session-safety";
 import type { ResultsStore } from "./store";
 import type { MutantVerdict, RunnerKind } from "./store";
-import { selectRoutedTests } from "./testpage-router";
 import { describeTestPageUnsupported } from "./testpage-unsupported";
 
 const BASELINE_TIMEOUT_DEFAULT = 120_000;
@@ -492,67 +489,6 @@ export interface SessionConfig {
    *  this exists purely so tests can assert against a fixed, deterministic `recordedAtIso`
    *  instead of racing the real clock. Defaults to `() => new Date().toISOString()`. */
   readonly nowIso?: () => string;
-  /**
-   * R69 Phase 2 Task 6: the client-services batch transport (`batch-transport.ts`) this session
-   * routes fence-refused `TestPage` tests through — see `selectRoutedTests` (testpage-router.ts).
-   *
-   * Absent means routing never activates: a mutant covered only by a test the fenced session
-   * cannot run stays `error` (score-excluded) with the pre-Task-6 `unsupportedCoverageNote`,
-   * exactly the behaviour every test that predates this field still exercises. Present only for a
-   * real bcdev session wired to the client-services WebSocket + OData surface — every in-memory
-   * unit test that omits it keeps the old path unconditionally.
-   *
-   * Routed work is SERIALIZED against fenced work: `runSession` only ever calls into this after
-   * this batch's fenced mutant loop (and its attestation gate) has fully finished, never
-   * concurrently with it — the two are different sessions on the SAME BC tier (`GuiAllowed=No`
-   * vs `GuiAllowed=Yes`), and interleaving them would let one's dispatch race the other's lease
-   * bookkeeping or record locks.
-   */
-  readonly routedTransport?: {
-    readonly odata: BatchOdata;
-    readonly ws: BatchWebSocket;
-    /**
-     * R74/R75 tripwire — REQUIRED, and its only legal value is
-     * `ROUTED_TRANSPORT_ACK`. See `assertRoutedTransportAllowed`.
-     */
-    readonly blockersAcknowledged: string;
-  };
-}
-
-/**
- * The exact token `SessionConfig.routedTransport.blockersAcknowledged` must carry. A constant
- * rather than a bare boolean because a boolean is trivially set by accident (or by a default);
- * a caller writing this string has been made to read why.
- */
-export const ROUTED_TRANSPORT_ACK = "R74/R75-acknowledged";
-
-/**
- * R74/R75 GUARD. The client-services routed path is built, unit-tested and red-checked, and is
- * deliberately NOT WIRED — nothing in production constructs `routedTransport`. Two filed blockers
- * must close before anything does, and R74 is this project's signature bug in a new coat:
- *
- * routed survivors discard the `attested` signal, AND `LC Control State` sets
- * `ObservedIdentityMismatch` only INSIDE its `ObservedAny := true` branch — so the transport's
- * fail-closed `identityMismatch !== false` check passes TRIVIALLY when no guard ever fired.
- * Nothing compared to nothing. A routed test that passes without reaching the mutated site is
- * recorded `survived`, counted in the score, and excluded from the UNEXERCISED SURVIVORS callout
- * because its `guardObserved` is absent rather than `false`.
- *
- * The realistic hazard is DRIFT — a later session wiring this without re-reading the blockers —
- * so the guard is a TRIPWIRE, not a security boundary: it cannot stop a determined caller, only
- * an unwitting one. That is the point. Throwing rather than silently degrading is the same
- * fail-loudly rule this codebase applies to every other caller-contract violation.
- *
- * Delete this guard, the `blockersAcknowledged` field and the ack constant together when R74 and
- * R75 close — leaving a disarmed tripwire in place is worse than none, because it reads as a
- * check that passed.
- */
-export function assertRoutedTransportAllowed(blockersAcknowledged: string | undefined): void {
-  if (blockersAcknowledged === ROUTED_TRANSPORT_ACK) return;
-  const ack = JSON.stringify(ROUTED_TRANSPORT_ACK);
-  throw new Error(
-    `SessionConfig.routedTransport was supplied without acknowledging its open blockers. The client-services routed path is BUILT BUT NOT WIRED, and must not be wired until ROADMAP R74 and R75 close. R74: routed survivors discard the attestation, and because \`LC Control State\` sets ObservedIdentityMismatch only inside its \`ObservedAny := true\` branch, the transport's fail-closed \`identityMismatch !== false\` check passes trivially when no instrumented site ever executed — so a routed test that passes WITHOUT REACHING the mutated site is recorded \`survived\` and counted in the score (a false survive, and it is excluded from the UNEXERCISED SURVIVORS callout because guardObserved is absent rather than false). R75: routed verdicts discard coverageAttribution, so an object-attributed routed survivor is indistinguishable from an exact one. To proceed deliberately, set ${ack}.`,
-  );
 }
 
 /** Alias kept for readability at call sites within this module. */
@@ -2854,43 +2790,15 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       // the fenced loop or the attestation gate just latched for a reason of their own, and a
       // batch already abandoned records nothing further (matches every other post-latch branch
       // in this function).
+      // R69 CLOSED (measured 2026-08-02): a mutant covered ONLY by a test the fenced session
+      // cannot run is NAMED and left unscored. It is not recovered, and nothing here tries — the
+      // client-services routed path that would have recovered it was measured to be worth 2.30%
+      // of a real app's mutants and deleted (see ROADMAP R69, docs/measurements §"R69's go/no-go").
+      // Naming it is the shipped value: `unsupportedCoverageNote` quotes BC's own refusal, so a
+      // reader sees "your TestPage test cannot run on this path", not a silent `no-coverage`.
       if (routableCandidates.length > 0 && !safety.isUnsafe) {
-        const { routedTransport } = cfg;
-        // R74/R75 tripwire. Checked HERE — at first use, inside the batch loop — rather than at
-        // session start, so a run that never reaches routable candidates is never refused for a
-        // path it was not going to take.
-        if (routedTransport !== undefined) {
-          assertRoutedTransportAllowed(routedTransport.blockersAcknowledged);
-        }
-        const resolved =
-          routedTransport === undefined
-            ? {
-                toRoute: [],
-                toFallback: routableCandidates,
-                gate1Evidence: new Map<string, string>(),
-              }
-            : await resolveRoutedCandidates({
-                transport: routedTransport,
-                candidates: routableCandidates,
-                baselineFailureMessages,
-                targetAppId: targetAppIdOf(projectManifest),
-                artifactId: compiled?.artifactId ?? artifactId,
-                safety,
-                quarantineStore,
-                resourceKey,
-                nowIso,
-              });
-        for (const c of resolved.toFallback) {
+        for (const c of routableCandidates) {
           const qualified = [...new Set(c.covering.map(qualifiedTestName))].sort();
-          // Finding 3: a gate-2 wedge is a DIFFERENT fact from "the router looked and said no" —
-          // every candidate fell back unrouted because routing itself could not be evaluated, not
-          // because it failed to qualify. Name it explicitly instead of the generic
-          // `unsupportedCoverageNote`, and tag `cause` the same way the per-mutant wedge below
-          // does, so a reader (and `report.counts.deadlineExceeded`) can tell the two apart.
-          const note =
-            resolved.gate2WedgeDetail === undefined
-              ? unsupportedCoverageNote(qualified, refusedThisBatch, testPageThisBatch)
-              : `routed gate-2 baseline check wedged (${resolved.gate2WedgeDetail}) — this batch's routed work is quarantined (see report.quarantined) before it could examine mutant covered by test(s) ${qualified.join(", ")} for routing; left unscored`;
           record(
             cfg.store,
             runId,
@@ -2899,26 +2807,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
             outcomes,
             batchIdx,
             undefined,
-            note,
-            resolved.gate2WedgeDetail === undefined ? undefined : "deadline-exceeded",
+            unsupportedCoverageNote(qualified, refusedThisBatch, testPageThisBatch),
           );
-        }
-        if (resolved.toRoute.length > 0 && routedTransport !== undefined) {
-          await runRoutedMutantsOnBackend({
-            transport: routedTransport,
-            safety,
-            candidates: resolved.toRoute,
-            targetAppId: targetAppIdOf(projectManifest),
-            artifactId: compiled?.artifactId ?? artifactId,
-            store: cfg.store,
-            runId,
-            batchIndex: batchIdx,
-            outcomes,
-            quarantineStore,
-            resourceKey,
-            nowIso,
-            gate1Evidence: resolved.gate1Evidence,
-          });
         }
       }
       // Task 12 (spec §8/§12): an in-flight-unknown deadline anywhere in this batch's mutant
@@ -3586,356 +3476,6 @@ async function runMutantsOnBackend(args: {
     // returns normally and `runSession` can still assemble a `quarantined` report instead of
     // rejecting.
     if (args.safety.isUnsafe) break;
-  }
-}
-
-/**
- * R69 Phase 2 Task 6: control-flow-only signal — thrown inside `callRouted` after a wedge has
- * ALREADY been latched+durably-quarantined via `quarantineInFlight`, and caught (never rethrown)
- * at the two internal boundaries that need to unwind their own nested loops without a manual
- * break-flag threaded through every level (`resolveRoutedCandidates`'s gate-2 loop,
- * `runRoutedMutantsOnBackend`'s per-mutant/per-covering-test loops). Mirrors
- * `SessionUnsafeError`'s role as a latch-carrying signal; unlike that one, this never crosses this
- * module's boundary, so it is not exported.
- */
-class RoutedWedgeSignal extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "RoutedWedgeSignal";
-  }
-}
-
-/** Nonce generation shares `newArtifactId`'s random-hex shape (128 random bits as 32 lowercase
- *  hex characters) — same anti-collision requirement, a different tuple element (the stale-row
- *  check in batch-transport.ts's `runOneBatchMethod`, not artifact identity). */
-function newBatchNonce(): string {
-  return newArtifactId();
-}
-
-/**
- * One live client-services call, wrapped so a `BatchProtocolError` — the SAME fault class for a
- * missing result row as for a stale nonce as for an unrecognised result enum (see
- * batch-transport.ts's module doc comment) — is treated the way requirement 2 (design notes)
- * demands: QUARANTINE THE TIER via the existing `quarantineInFlight`, never a per-call error
- * swallowed so the caller can retry or move on. A batch that faults may still be executing
- * server-side WITH A MUTANT ACTIVE, holding record locks; recording an error and continuing would
- * let a FENCED mutant's covering test fail on that contention and be falsely killed once the
- * wedged run eventually finishes and its own confirmation passes.
- *
- * Every caller in this module — the gate-2 baseline check and both routed-mutant transport calls
- * (mutated, confirmation) — goes through this one function, so the quarantine-on-wedge behaviour
- * lives in exactly one place.
- */
-async function callRouted(
-  transport: { readonly odata: BatchOdata; readonly ws: BatchWebSocket },
-  req: BatchRunRequest,
-  quarantine: {
-    readonly safety: SessionSafety;
-    readonly quarantineStore: QuarantineStore | undefined;
-    readonly resourceKey: string | undefined;
-    readonly nowIso: () => string;
-    readonly detail: string;
-  },
-): Promise<{ outcome: "pass" | "fail"; message?: string }> {
-  try {
-    const result = await runOneBatchMethod(transport.odata, transport.ws, req);
-    // `runOneBatchMethod` already validated `result.resultJson` as a protocol matter (throwing on
-    // any fault) — `validateResultJson` is called again here, on the same already-valid value, to
-    // read the actual pass/fail verdict it carries. Pure and idempotent; the module exports it
-    // for exactly this reuse (see run-mutant-transport.ts's `mapRanResult` for the fenced-path
-    // analogue of this split between "protocol validation" and "verdict classification").
-    return validateResultJson(result.resultJson, req.method);
-  } catch (err) {
-    if (!(err instanceof BatchProtocolError)) throw err;
-    await quarantineInFlight({
-      safety: quarantine.safety,
-      quarantineStore: quarantine.quarantineStore,
-      resourceKey: quarantine.resourceKey,
-      nowIso: quarantine.nowIso,
-      detail: `${quarantine.detail}: ${err.message}`,
-    });
-    throw new RoutedWedgeSignal(quarantine.detail);
-  }
-}
-
-/** One mutant this batch is routing, paired with the (already gate-1/gate-2-qualified, or about
- *  to be checked) tests that cover it exclusively — see `resolveRoutedCandidates`. */
-interface RoutableCandidate {
-  readonly mutant: MutantManifestEntry;
-  readonly covering: readonly TestMethodRef[];
-}
-
-/**
- * R69 Phase 2 Task 6: resolves this batch's routing candidates into `toRoute` (every covering
- * test passed BOTH of `selectRoutedTests`' gates — requirement 3: "covered EXCLUSIVELY by
- * gate-2-passing tests") and `toFallback` (everything else, including EVERY candidate when gate 2
- * itself wedges — a wedge here is exactly as ambiguous about server-side state as one during a
- * mutant run, so nothing gets routed rather than risk running against a tier of unknown state).
- *
- * Gate 1 (`describeTestPageUnsupported`) is checked locally, from `baselineFailureMessages`,
- * before issuing a single live call — cheap and load-bearing: a test that cannot possibly pass
- * gate 1 must never spend a real client-services round trip finding that out.
- * `targetAppId`/`artifactId` are threaded straight through to every gate-2 call's
- * `BatchRunRequest` — the SAME identity a routed mutant run itself uses below, so a gate-2 pass
- * proves the test passes against the artifact THIS batch actually deployed, not some other one.
- */
-async function resolveRoutedCandidates(args: {
-  readonly transport: { readonly odata: BatchOdata; readonly ws: BatchWebSocket };
-  readonly candidates: readonly RoutableCandidate[];
-  readonly baselineFailureMessages: ReadonlyMap<string, string | undefined>;
-  readonly targetAppId: string;
-  readonly artifactId: string;
-  readonly safety: SessionSafety;
-  readonly quarantineStore: QuarantineStore | undefined;
-  readonly resourceKey: string | undefined;
-  readonly nowIso: () => string;
-}): Promise<{
-  toRoute: readonly RoutableCandidate[];
-  toFallback: readonly RoutableCandidate[];
-  /**
-   * Finding 1 (spec §3.1, REQUIRED mitigation): qualified test name -> `RoutedTest.gate1Evidence`
-   * verbatim, for every test that actually routed. Gate 1 (`describeTestPageUnsupported`) matches
-   * BC's `CreateNavTestService()` refusal ANYWHERE in a failure's message + stack trace — including
-   * inside a test's OWN assertion text, if it happens to quote that platform string. A false
-   * positive there would silently mislabel a routed mutant as "opens a TestPage" when it does not;
-   * surfacing the verbatim quote on every routed verdict (see `runRoutedMutantsOnBackend`) is the
-   * only thing that lets a human reader overrule the routing decision, the same escape hatch R35's
-   * design gives its own permissions diagnosis. Empty (never consulted) when nothing routed.
-   */
-  gate1Evidence: ReadonlyMap<string, string>;
-  /**
-   * Finding 3: set ONLY when gate 2 itself wedged (the catch branch below) — the reason EVERY
-   * candidate fell back unrouted, distinct from an ordinary "did not qualify" fallback. The call
-   * site names it explicitly in the fallback note instead of the generic `unsupportedCoverageNote`,
-   * so a reader can tell "the router never got to look at this" from "the router looked and said
-   * no".
-   */
-  gate2WedgeDetail?: string;
-}> {
-  const gate1Candidates: TestMethodRef[] = [];
-  const seen = new Set<string>();
-  for (const c of args.candidates) {
-    for (const ref of c.covering) {
-      const name = qualifiedTestName(ref);
-      if (seen.has(name)) continue;
-      seen.add(name);
-      if (describeTestPageUnsupported(args.baselineFailureMessages.get(name)) === undefined) {
-        continue; // fails gate 1 locally — no live call needed
-      }
-      gate1Candidates.push(ref);
-    }
-  }
-  try {
-    const gate2 = new Map<string, boolean>();
-    for (const ref of gate1Candidates) {
-      const outcome = await callRouted(
-        args.transport,
-        {
-          codeunitId: ref.codeunitId,
-          method: ref.method,
-          mutantId: "", // blank = unmutated, per BatchRunner.Codeunit.al's "Activate EVERY row,
-          // baseline included (blank Mutant Id)"
-          targetAppId: args.targetAppId,
-          artifactId: args.artifactId,
-          nonce: newBatchNonce(),
-          coverageFilter: "",
-        },
-        {
-          safety: args.safety,
-          quarantineStore: args.quarantineStore,
-          resourceKey: args.resourceKey,
-          nowIso: args.nowIso,
-          detail: `routed gate-2 baseline wedged running ${ref.method}`,
-        },
-      );
-      gate2.set(qualifiedTestName(ref), outcome.outcome === "pass");
-    }
-    const routed = selectRoutedTests(
-      gate1Candidates.map((ref) => {
-        const failureMessage = args.baselineFailureMessages.get(qualifiedTestName(ref));
-        return {
-          codeunitName: ref.codeunitName,
-          method: ref.method,
-          ...(failureMessage !== undefined ? { failureMessage } : {}),
-        };
-      }),
-      (t) => gate2.get(`${t.codeunitName}.${t.method}`) ?? false,
-    );
-    const routedNames = new Set(routed.map((r) => `${r.codeunitName}.${r.method}`));
-    // Finding 1: carry `gate1Evidence` through by the SAME key `routedNames` uses, so a caller
-    // that only has a `TestMethodRef` can look its routing reason up the same way it checks
-    // whether the test routed at all.
-    const gate1Evidence = new Map(
-      routed.map((r) => [`${r.codeunitName}.${r.method}`, r.gate1Evidence]),
-    );
-    const toRoute = args.candidates.filter((c) =>
-      c.covering.every((ref) => routedNames.has(qualifiedTestName(ref))),
-    );
-    const toFallback = args.candidates.filter((c) => !toRoute.includes(c));
-    return { toRoute, toFallback, gate1Evidence };
-  } catch (err) {
-    if (!(err instanceof RoutedWedgeSignal)) throw err;
-    return {
-      toRoute: [],
-      toFallback: args.candidates,
-      gate1Evidence: new Map(),
-      gate2WedgeDetail: err.message,
-    };
-  }
-}
-
-/**
- * R69 Phase 2 Task 6: runs every `resolveRoutedCandidates`-qualified mutant through the
- * client-services batch path (`batch-transport.ts`), tagging each verdict
- * `runner: "client-services"`. Mirrors `runMutantsOnBackend`'s two hardest invariants on the
- * fenced path above, because the routed session (`GuiAllowed=Yes`) is the MOST nondeterministic
- * one LethAL has and needs them more, not less:
- *
- *   - a routed FAILURE is never itself a kill — the SAME test is re-run unmutated (same
- *     seed/run/readback, via `callRouted` with `mutantId: ""`) before a kill is recorded; failing
- *     again is `error cause="unstable"`, never `killed` (mirrors the fenced kill-confirmation
- *     rerun above, ~L3276-3390 in `runMutantsOnBackend`).
- *   - a wedge (any `BatchProtocolError`, surfaced here as `RoutedWedgeSignal`) QUARANTINES THE
- *     TIER via `callRouted`'s shared `quarantineInFlight` call and stops scheduling further
- *     routed mutants — it does not record a per-mutant error and continue (mirrors the fenced
- *     op-in-flight/in-flight-unknown branches above).
- *
- * Only ever called with candidates already filtered to "no fenced-green coverage at all, and
- * every covering test passed both routing gates" — a mutant with ANY fenced-green coverage never
- * reaches this function; it keeps its fenced verdict, unexamined (requirement 3).
- */
-/**
- * Finding 1 (spec §3.1, REQUIRED mitigation): composes the "why was this routed" note every
- * routed mutant's record carries, quoting `gate1Evidence` VERBATIM rather than summarising it —
- * the quote is what lets a reader overrule a mislabelled routing decision, so paraphrasing it
- * would defeat the mitigation. Returns `undefined` only when `covering` names no test this batch
- * actually routed (should not happen for a `RoutableCandidate` in `toRoute`, but this function
- * must not fabricate a reason it cannot show evidence for).
- */
-function routedReasonNote(
-  covering: readonly TestMethodRef[],
-  gate1Evidence: ReadonlyMap<string, string>,
-): string | undefined {
-  const reasons: string[] = [];
-  for (const ref of covering) {
-    const evidence = gate1Evidence.get(qualifiedTestName(ref));
-    if (evidence !== undefined) reasons.push(`${qualifiedTestName(ref)}: "${evidence}"`);
-  }
-  if (reasons.length === 0) return undefined;
-  return `routed to client-services — gate 1 matched ${reasons.join("; ")}`;
-}
-
-async function runRoutedMutantsOnBackend(args: {
-  readonly transport: { readonly odata: BatchOdata; readonly ws: BatchWebSocket };
-  readonly safety: SessionSafety;
-  readonly candidates: readonly RoutableCandidate[];
-  readonly targetAppId: string;
-  readonly artifactId: string;
-  readonly store: ResultsStore;
-  readonly runId: number;
-  readonly batchIndex: number;
-  readonly outcomes: SessionOutcome[];
-  readonly quarantineStore: QuarantineStore | undefined;
-  readonly resourceKey: string | undefined;
-  readonly nowIso: () => string;
-  /** Finding 1 — see `resolveRoutedCandidates`'s return doc comment. */
-  readonly gate1Evidence: ReadonlyMap<string, string>;
-}): Promise<void> {
-  for (const { mutant: m, covering } of args.candidates) {
-    if (args.safety.isUnsafe) return; // an earlier candidate's wedge already latched — stop
-    let verdict: SessionVerdict = "survived";
-    let killingTest: string | undefined;
-    let failureNote: string | undefined;
-    let cause: "deadline-exceeded" | "unstable" | undefined;
-    const startedMs = Date.now();
-    try {
-      for (const ref of covering) {
-        const active = await callRouted(
-          args.transport,
-          {
-            codeunitId: ref.codeunitId,
-            method: ref.method,
-            mutantId: m.mutantId,
-            targetAppId: args.targetAppId,
-            artifactId: args.artifactId,
-            nonce: newBatchNonce(),
-            coverageFilter: "",
-          },
-          {
-            safety: args.safety,
-            quarantineStore: args.quarantineStore,
-            resourceKey: args.resourceKey,
-            nowIso: args.nowIso,
-            detail: `routed run wedged running ${ref.method} (mutant ${m.mutantId})`,
-          },
-        );
-        if (active.outcome === "pass") continue; // this test did not notice the mutant
-        // Requirement 1: a routed FAILURE alone is never a kill. Confirm by re-running the SAME
-        // test unmutated (same seed/run/readback) before recording anything — a second failure
-        // says the test is unstable, not that the mutant was caught.
-        const confirm = await callRouted(
-          args.transport,
-          {
-            codeunitId: ref.codeunitId,
-            method: ref.method,
-            mutantId: "",
-            targetAppId: args.targetAppId,
-            artifactId: args.artifactId,
-            nonce: newBatchNonce(),
-            coverageFilter: "",
-          },
-          {
-            safety: args.safety,
-            quarantineStore: args.quarantineStore,
-            resourceKey: args.resourceKey,
-            nowIso: args.nowIso,
-            detail: `routed confirmation wedged running ${ref.method} (mutant ${m.mutantId})`,
-          },
-        );
-        if (confirm.outcome === "pass") {
-          verdict = "killed";
-          killingTest = ref.method;
-        } else {
-          verdict = "error";
-          cause = "unstable";
-          failureNote = `unstable test ${ref.method}: fails at baseline confirmation on the client-services path (mutant ${m.mutantId})`;
-        }
-        break;
-      }
-    } catch (err) {
-      if (!(err instanceof RoutedWedgeSignal)) throw err;
-      verdict = "error";
-      cause = "deadline-exceeded";
-      failureNote = `${err.message} — this session is quarantined; the tier may still be executing with a mutant active (design §8/§9)`;
-    }
-    // Finding 1: EVERY routed mutant's record — killed, survived, or error, wedge included —
-    // names why the covering test was routed, quoting gate 1's evidence verbatim. Prepended
-    // (never substituted) ahead of whatever verdict-specific note this mutant already earned.
-    const routedNote = routedReasonNote(covering, args.gate1Evidence);
-    failureNote =
-      routedNote === undefined
-        ? failureNote
-        : failureNote === undefined
-          ? routedNote
-          : `${routedNote} — ${failureNote}`;
-    record(
-      args.store,
-      args.runId,
-      m,
-      verdict,
-      args.outcomes,
-      args.batchIndex,
-      killingTest,
-      failureNote,
-      cause,
-      Date.now() - startedMs,
-      covering.map((ref) => qualifiedTestName(ref)),
-      undefined,
-      undefined,
-      undefined,
-      "client-services",
-    );
-    if (args.safety.isUnsafe) return; // just quarantined — no further routed mutant runs
   }
 }
 

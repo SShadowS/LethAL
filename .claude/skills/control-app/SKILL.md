@@ -92,6 +92,27 @@ publish went to the wrong container or the wrong context.
   already said to build and publish.
 - Removal (rare) needs `UnPublish-BcContainerApp` under the Windows Docker context, naming
   `-publisher` AND `-version` once two versions exist.
+- **`-unInstall -force` UNINSTALLS EVERY DEPENDENT APP, silently, and the gate that follows blames
+  something else.** Measured 2026-08-02 removing 1.0.0.13: `LethAL Sandbox Tests` came off Cronus281
+  and `LethAL Sandbox Data` + `LethAL Sandbox Data Tests` came off Cronus283. They stay PUBLISHED, so
+  `Get-BcContainerAppInfo` still lists them and only `IsInstalled` flips. `itest:bcdev` then reported
+  `baselineGreen=false` with **0 of 2 baseline tests failing** — a contradiction that is the actual
+  signature — and the store held `RunMutant returned 0 test lines, expected exactly 1`. Before
+  unpublishing, record what is installed, and reinstall it afterwards:
+  ```powershell
+  Get-BcContainerAppInfo -containerName <name> -tenantSpecificProperties |
+    Where-Object { $_.Name -like "LethAL*" -and $_.IsInstalled } | Select-Object Name,Version
+  # ... then, after the control app is back ...
+  Install-BcContainerApp -containerName <name> -appName "<name>" -appVersion "<ver>"
+  ```
+- **Deleting a TABLE from the control app cannot ship as an upgrade.** BC refuses:
+  *"Table 71011 LC Batch Queue :: The table cannot be located. Removing tables is not allowed unless
+  they are temporary or are being moved by migration to another app."* `Publish-BcContainerApp
+  -sync -upgrade` publishes the new version but leaves it UNINSTALLED. The sequence that works on a
+  dev container, whose tenant data is disposable: unpublish the old version (see the cascade warning
+  above), `Sync-BcContainerApp -Mode ForceSync -Force`, then — because the tenant still records an
+  earlier version — `Start-BcContainerAppDataUpgrade`, not `Install-BcContainerApp`, which refuses
+  with *"an earlier version was already installed"*.
 - If a publish fails with *"already synchronized … different set of tables"*, the tenant kept a
   schema ghost. Unpublish first, THEN `Sync-NAVApp -ServerInstance BC -Name "LethAL Control" -Mode
   Clean -Force` inside the container, then publish. Order matters — cleaning while it is still

@@ -78,31 +78,6 @@ codeunit 71002 "LC Control State"
         Loaded := true;
     end;
 
-    /// <summary>R69 Phase 2: the batch path's ONLY route to activation. WriteActive is `local` by
-    /// construction — under the fence the only legitimate writer of "LC Mutation Active" is a phase 1
-    /// that has just proven it holds the lease. This wrapper does NOT repeal that: the batch path is
-    /// serialized against fenced work and never runs while a lease is held (spec §3.4(c)), and the
-    /// runner is responsible for that ordering. Exposed because the batch loop runs in-session, where
-    /// no phase-1 transaction exists to do it.
-    ///
-    /// Called for EVERY batch row, including unmutated gate-2 baselines (with a blank MutantId).
-    /// Skipping it for baselines is the bug spec §3.4(b) exists to prevent: the "LC Mutation Active"
-    /// row OUTLIVES the session, so a baseline that does not re-activate inherits the PREVIOUS row's
-    /// mutant via EnsureLoaded and runs mutated.</summary>
-    procedure ActivateForBatch(TargetAppId: Text; ArtifactId: Text; MutantId: Text)
-    begin
-        WriteActive(TargetAppId, ArtifactId, MutantId);
-    end;
-
-    /// <summary>R69 Phase 2: clears what ActivateForBatch wrote, on EVERY terminal path. The fenced
-    /// primitive clears on every terminal path and design.md §6.2 states that as a guarantee; the
-    /// batch path owes the same. Delegates to ClearActiveIf so a row written by someone else is
-    /// never cleared by this path.</summary>
-    procedure ClearForBatch(TargetAppId: Text; ArtifactId: Text; MutantId: Text)
-    begin
-        ClearActiveIf(TargetAppId, ArtifactId, MutantId);
-    end;
-
     /// <summary>Replaces 5C-A's ClearActive (design §5). Two deliberately DIFFERENT scopes:
     ///
     /// The TABLE write is CONDITIONAL — it blanks "LC Mutation Active" only when the row still holds
