@@ -115,7 +115,11 @@ const EXPECTED = {
   // the site, whose §3.2 precedence then DELETED the Tier-1 mutant — measured offline on this
   // fixture as raw specs 99 -> 100 with DEPLOYED unchanged at 90. So the regression shows up as an
   // OPERATOR NAME at a fixed file:line, which `assertMatchesBaseline` compares per mutant.
-  totalMutantSites: 117,
+  // R68 moved this from 117 to 118: resolving a trigger's own `var` section made
+  // `Data Scope Probe.OnInsert`'s receiver claimable, so Tier 2 gained a `remove-setrange` spec
+  // there. DEPLOYED is unchanged at 106 — §3.2 precedence deletes the Tier-1 `void-method-call`
+  // that used to hold that site, which is the dedup mechanism working, not a lost mutant.
+  totalMutantSites: 118,
   // R36 moved this from 63/10 to 64/9, deliberately and in one direction only.
   //
   // `RequireCategoryAFails` used to assert merely that AN error occurred, so deleting

@@ -27,6 +27,7 @@ export type {
 } from "./semantic/symbol-table";
 export {
   buildSymbolTable,
+  collectVarDeclarations,
   extensionScopeKey,
   objectScopeKey,
   objectScopeKeyOfNode,

@@ -462,7 +462,7 @@
     "errorClass": null
   },
   {
-    "key": "95fb55a7abb8334172699b68d5b7ba52d98c4ece7b606e0ad788687e94829326|Data Scope Probe|lethal.void-method-call|1",
+    "key": "95fb55a7abb8334172699b68d5b7ba52d98c4ece7b606e0ad788687e94829326|Data Scope Probe|lethal.remove-setrange|1",
     "verdict": "killed",
     "killingTest": "ScopeProbeCountsOnlyFilteredRelated",
     "coverageFiltered": false,

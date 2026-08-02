@@ -404,7 +404,7 @@ return-value mutants are unaffected.
 
 Phase 1 extended `sandbox-data` from 7 to **75 deployed mutants** — 81 raw specs, of which **6**
 Tier-1 `void-method-call` specs lose the §3.2 dedup to a Tier-2 deletion at the same site. **R30
-then took it to 84 deployed mutants — 93 raw specs, 9 dropped by dedup; R78 then to 87 deployed / 96 raw; R70 then to 90 deployed / 99 raw; R73 then to 103 deployed / 114 raw; R71 then to 106 deployed / 117 raw** (see §"Extension objects"
+then took it to 84 deployed mutants — 93 raw specs, 9 dropped by dedup; R78 then to 87 deployed / 96 raw; R70 then to 90 deployed / 99 raw; R73 then to 103 deployed / 114 raw; R71 then to 106 deployed / 117 raw; R68 then to 106 deployed / 118 raw (a Tier-2 claim gained, its Tier-1 twin deduped away)** (see §"Extension objects"
 below). Both numbers are reproducible offline, no server needed: `generateMutationSet` returns 93
 (which `tables.itest.ts` asserts before it deploys anything), `dedupeSpecs` drops 9, and
 84 + 12 + 10 = 106 recorded mutants come back from the live gate (96 of them SCORED; the 10 no-coverage are excluded from the score). Every shape below exists because its ABSENCE lets a

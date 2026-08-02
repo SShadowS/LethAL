@@ -39,6 +39,7 @@ import {
   type SemanticContext,
   type SymbolTable,
   type VarSymbol,
+  collectVarDeclarations,
   declarationMembers,
   extensionScopeKey,
   findEnclosingProcedure,
@@ -374,6 +375,16 @@ function lookupVar(
 ): VarSymbol | null {
   const matches = (v: VarSymbol): boolean => equalsIgnoreCase(v.name, name);
 
+  // R68: a TRIGGER's own `var` section, resolved from the AST node rather than from a name-keyed
+  // map. `buildSymbolTable` indexes `procedure` members only — deliberately, because trigger names
+  // repeat across an object (every field may declare its own `OnValidate`) and a name key would be
+  // ambiguous. The enclosing node is the unambiguous identity, and the call site already has it.
+  //
+  // Checked FIRST, ahead of globals: a trigger-local shadows an object global of the same name, the
+  // same way a procedure local does below.
+  const triggerLocal = triggerScopeVar(name, callNode, matches);
+  if (triggerLocal !== null) return triggerLocal;
+
   const procedure = findEnclosingProcedure(callNode);
   if (procedure !== null) {
     const nameNode = procedure.childForFieldName("name");
@@ -387,6 +398,36 @@ function lookupVar(
   }
 
   return symbols.globalsOf(objectName).find(matches) ?? null;
+}
+
+/**
+ * The declaration of `name` in the nearest enclosing TRIGGER's own `var` section, or `null`.
+ *
+ * Stops at the FIRST enclosing trigger and does not keep walking: an outer trigger cannot be an
+ * enclosing scope for an inner one in AL, and continuing would invent a nesting the language does
+ * not have. A call in no trigger at all returns `null` and the ordinary procedure/global path
+ * below handles it unchanged.
+ *
+ * `collectVarDeclarations` is shared with `buildSymbolTable` rather than reimplemented here, so a
+ * grammar change moves both together — a second parser for the same node shape is exactly what
+ * drifts (see ROADMAP R80 for the version of this mistake that is already in the tree).
+ */
+function triggerScopeVar(
+  name: string,
+  callNode: ALSyntaxNode,
+  matches: (v: VarSymbol) => boolean,
+): VarSymbol | null {
+  void name;
+  let current: ALSyntaxNode | null = callNode.parent;
+  while (current !== null) {
+    if (current.kind === ALNodeKind.trigger) {
+      const varSection = declarationMembers(current).find((c) => c.kind === ALNodeKind.var_section);
+      if (varSection === undefined) return null;
+      return collectVarDeclarations(varSection).find(matches) ?? null;
+    }
+    current = current.parent;
+  }
+  return null;
 }
 
 /**

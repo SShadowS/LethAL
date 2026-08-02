@@ -5,18 +5,31 @@
 // Cloud as 13 names shared across kinds, 12 of them page+table. `buildSymbolTable` used to key
 // variable scope on the bare name, so whichever parsed LAST supplied the globals for BOTH.
 //
-// WHAT MAKES THIS A DETECTOR, and why the receiver is declared where it is:
+// WHAT THIS IS NOW, AND WHAT IT USED TO BE.
 //
-// `Helper` is declared in the TRIGGER'S OWN var section. The symbol table indexes `procedure`
-// members only, so a trigger-local is invisible to `lookupVar` (that is R68, filed and open) and
-// the receiver is correctly UNRESOLVABLE here. Tier 2 must therefore refuse this site, and Tier 1
-// claims the statement as `lethal.void-method-call`.
+// It was the R70 REGRESSION DETECTOR: `Helper` was declared in the trigger's own var section,
+// which the symbol table did not index (R68, then open), so the receiver was unresolvable, Tier 2
+// refused, Tier 1 claimed `void-method-call` — and under a regressed R70 the same-named page's
+// global answered instead, Tier 2 claimed, and §3.2 precedence DELETED the Tier-1 mutant. The
+// observable was an operator-name flip.
 //
-// Under the R70 bug the same-named PAGE's global `Helper: Record "Data Main"` answered for this
-// table, the receiver resolved — to the WRONG table, which is the second half of the hazard — and
-// Tier 2 CLAIMED the site as `lethal.remove-setrange`. Under §3.2 dedup precedence the Tier-2
-// claim wins and DELETES the Tier-1 mutant. So the regression is visible as an OPERATOR NAME
-// CHANGE at a fixed file:line, which is exactly what `tables.baseline.json` compares per mutant.
+// THAT PREMISE WAS R68 STAYING OPEN, and R68 has now landed: trigger-local vars resolve, this site
+// claims `remove-setrange` either way, and the flip is gone. The loss was NOT discovered by a gate
+// — a detector losing its discriminating power changes no verdict — it was caught by an executable
+// premise test written for exactly this moment (`packages/builtin-tier2/tests/receiver.test.ts`).
+// An adversarial review then found that the obvious repair (give the table an object global, let
+// the page supply a rule-3-refusing table) ALSO fails, for an unrelated reason: files are parsed in
+// sorted order, `...Page.al` sorts before `...Table.al`, and the globals map is last-write-wins, so
+// the table would win its own key regardless of R70.
+//
+// So the alarm moved OFFLINE, where it belongs — claiming is deterministic and needs no live gate.
+// `packages/engine/tests/semantic/symbol-table.test.ts` asserts ORDER INVARIANCE (same files
+// permuted, identical answers), the property R70 actually violated.
+//
+// This pair's job is now to be the MEASURED STATEMENT that the shape exists and executes: a
+// same-named page and table live in a real instrumented app, and the table's site is scored rather
+// than theoretical. It also carries the fixture's only proof that R68's fix CLAIMS — the site
+// resolves through a trigger-local declaration, which nothing else here exercises.
 //
 // The site is deliberately SCORED rather than no-coverage: `OnInsert` writes a count the test
 // asserts, and `Data Scope Probe Tests` seeds out-of-filter decoy rows so that deleting either the

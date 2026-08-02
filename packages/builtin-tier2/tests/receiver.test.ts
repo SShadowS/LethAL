@@ -930,25 +930,27 @@ describe("claimsRecordMethod — a page named after its table (R70)", () => {
 });
 
 // ————————————————————————————————————————————————————————————————————————
-// THE R70 LIVE DETECTOR'S PREMISE, MADE EXECUTABLE.
+// R68 — a receiver declared in a TRIGGER's own `var` section now resolves.
 //
-// `fixtures/sandbox-data/src/DataScopeProbe.Table.al` detects an R70 regression on the live gate
-// ONLY because its receiver is declared in the TRIGGER'S OWN var section and is therefore
-// unresolvable: Tier 2 refuses, Tier 1 claims `void-method-call`, and a regression flips the
-// operator. That premise is R68 — an OPEN item — staying open.
+// `buildSymbolTable` indexes `procedure` members only, so a trigger's `var` section used to be
+// invisible in EVERY object kind — table triggers, page triggers, `OnRun`, field `OnValidate` —
+// and Tier 2 refused every site whose receiver lived there. Safe direction (Tier-1
+// `void-method-call` still covered the site) but a real coverage loss, and trigger bodies are
+// where a great deal of BC logic lives. Measured incidentally under R30: moving a pageextension's
+// declarations out of `OnOpenPage` into the object's `var` section turned four specs into a
+// claimable `remove-setrange` site.
 //
-// It was written as a source COMMENT first, and a comment did not stop the premise from nearly
-// being deleted: fixing R68 makes the trigger-local resolve, the site claims identically either
-// way, and the live gate keeps passing while detecting nothing. A detector whose premise is prose
-// has no alarm; this test is the alarm.
+// Trigger scope is resolved from the AST NODE, not from a name-keyed map, and that is forced
+// rather than stylistic: trigger names repeat across an object (every field may declare its own
+// `OnValidate`), so a name key would be ambiguous. The node is the unambiguous identity.
 //
-// WHEN THIS GOES RED, R68 HAS LANDED AND THE R70 LIVE DETECTOR IS DEAD. Do not "fix" this test —
-// re-house the trigger-local shape in an object with no name collision, and give the R70 fixture a
-// discriminant that does not route through the ABSENCE of a capability.
+// THIS TEST REPLACES the R68-is-open premise pin that guarded the R70 live detector. That pin did
+// its job — it named, in advance and in an executable form, that landing R68 would silently
+// disarm that detector. The alarm now lives offline in `symbol-table.test.ts`'s order-invariance
+// property, which does not depend on R68 either way.
 // ————————————————————————————————————————————————————————————————————————
-describe("R68 is still open — the R70 live detector depends on it", () => {
-  it("refuses a receiver declared in the trigger's own var section", () => {
-    const src = `table 50160 "Scope Probe"
+describe("a receiver declared in a trigger's own var section (R68)", () => {
+  const TRIGGER_LOCAL = `table 50160 "Scope Probe"
 {
     fields
     {
@@ -962,7 +964,49 @@ describe("R68 is still open — the R70 live detector depends on it", () => {
         Helper.SetRange("No.", 'X');
     end;
 }`;
-    const root = parseClean(src);
+
+  it("claims it — the declaration is right there in the trigger", () => {
+    const root = parseClean(TRIGGER_LOCAL);
+    expect(claimsRecordMethod(onlyCall(root), contextFor(root), "SetRange")).toBe(true);
+  });
+
+  it("still refuses a receiver declared nowhere at all", () => {
+    // The counterweight. Without it, "resolve trigger vars" could be satisfied by resolving
+    // anything, and rule 4's refusal — the thing that keeps an unprovable site out of Tier 2 —
+    // would be gone with no test noticing.
+    const undeclared = `table 50161 "Scope Probe 2"
+{
+    fields
+    {
+        field(1; "No."; Code[20]) { }
+    }
+
+    trigger OnInsert()
+    begin
+        Ghost.SetRange("No.", 'X');
+    end;
+}`;
+    const root = parseClean(undeclared);
     expect(claimsRecordMethod(onlyCall(root), contextFor(root), "SetRange")).toBe(false);
+  });
+
+  it("a field OnValidate's own var section resolves too, not just table-level triggers", () => {
+    const fieldTrigger = `table 50162 "Scope Probe 3"
+{
+    fields
+    {
+        field(1; Amount; Decimal)
+        {
+            trigger OnValidate()
+            var
+                Helper: Record "Data Related";
+            begin
+                Helper.SetRange("No.", 'X');
+            end;
+        }
+    }
+}`;
+    const root = parseClean(fieldTrigger);
+    expect(claimsRecordMethod(onlyCall(root), contextFor(root), "SetRange")).toBe(true);
   });
 });

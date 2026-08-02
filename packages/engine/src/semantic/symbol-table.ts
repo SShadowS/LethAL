@@ -356,7 +356,16 @@ function collectParameters(paramsNode: ALSyntaxNode): VarSymbol[] {
   return out;
 }
 
-function collectVarDeclarations(varSection: ALSyntaxNode): VarSymbol[] {
+/**
+ * R68: exported so `lookupVar` (@lethal/builtin-tier2) can read a TRIGGER's own `var` section.
+ *
+ * Trigger-local scope is deliberately NOT indexed in the maps above: a `var` section belongs to
+ * one trigger, and trigger names repeat across an object (every field can have its own
+ * `OnValidate`), so a name-keyed entry would be ambiguous. The AST node is the unambiguous
+ * identity, so the consumer resolves from the node it already has and shares this parser rather
+ * than growing a second one that would drift.
+ */
+export function collectVarDeclarations(varSection: ALSyntaxNode): VarSymbol[] {
   const out: VarSymbol[] = [];
   for (const decl of varDeclarations(varSection)) {
     if (decl.kind !== ALNodeKind.variable_declaration) continue;
