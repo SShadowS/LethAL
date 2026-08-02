@@ -453,6 +453,36 @@ const PERMISSIONS_REFUSAL_RE =
   /[^.\n]*\bcurrent permissions prevented the action\b\.?(?:[ \t]*\([^)\n]*\))?/i;
 
 /**
+ * R66: the same refusal in ANY language, matched on the part BC does not translate.
+ *
+ * MEASURED on Cronus281 through the fenced path, one session, only `GlobalLanguage` differing
+ * (`fixtures/sandbox-probes/src/LangRefusalProbe.Codeunit.al`):
+ *
+ *     1033  Sorry, the current permissions prevented the action. (TableData 79201 Rec XRec Probe Insert: LethAL Sandbox Probes)
+ *     1030  De aktuelle rettigheder forhindrede handlingen.      (TableData 79201 Rec XRec Probe Insert: LethAL Sandbox Probes)
+ *
+ * The prose translates; the parenthetical is byte-identical, because its tokens are AL keywords
+ * and object names rather than prose. That also settled the row's premise — no localized SERVER is
+ * needed, BC selects message resources by SESSION language, and the DK containers already carry
+ * the resources.
+ *
+ * MATCHED STRICTLY, and the strictness is the point. `TableData`, a numeric id, a name, one of the
+ * five AL permission operations, then `: <suite>` — all of it, or no match. A looser matcher (the
+ * bare word `TableData`, say) would tell a user to declare a property they already have, sending
+ * them to change working code. A miss costs a diagnosis; a false hit costs trust, so the direction
+ * is chosen deliberately.
+ *
+ * Case-SENSITIVE, unlike the English clause above: these are AL keywords, and BC emits them in one
+ * casing. If some locale ever lowercases them the result is a miss, which is the safe direction.
+ *
+ * `[^\n]*` on the left takes the message line and stops there — `failureMessage` is `message` plus
+ * a newline plus `stackTrace`, and quoting a stack frame back at the reader as if BC had said it is
+ * exactly the sloppiness the English regex's own left-anchor exists to prevent.
+ */
+const PERMISSIONS_REFUSAL_STRUCTURAL_RE =
+  /[^\n]*\(TableData\s+\d+\s+[^():\n]*?\s(?:Read|Insert|Modify|Delete|Execute):\s[^)\n]+\)/;
+
+/**
  * Names the cause when a TARGET suite's test is refused by BC's permission system — the half of
  * ROADMAP R26 that operators actually hit, and the one the canary cannot answer for them.
  *
@@ -480,7 +510,11 @@ export function describeTestPermissionsRefusal(
   failureText: string | undefined,
 ): string | undefined {
   if (failureText === undefined) return undefined;
-  const match = PERMISSIONS_REFUSAL_RE.exec(failureText);
+  // English first, so the quote keeps the shape it has always had on an English server; the
+  // structural matcher (R66) is what carries every other language, and matches the English text
+  // too — trying it second changes nothing about an English run.
+  const match =
+    PERMISSIONS_REFUSAL_RE.exec(failureText) ?? PERMISSIONS_REFUSAL_STRUCTURAL_RE.exec(failureText);
   if (match === null) return undefined;
   const quoted = match[0]?.trim();
   if (quoted === undefined || quoted === "") return undefined;
