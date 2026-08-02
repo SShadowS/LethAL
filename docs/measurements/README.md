@@ -703,3 +703,103 @@ variable, not the established one, and R73's question stays open.
   bound on reachability, not its intersection with the sites carrying grants.
 - One BC 28 container, two tables (79201 and `Item`), one company, one SUPER OData user before
   lowering.
+
+## R82 — how many call sites admit a type-safe argument swap? **340 provable, 893 by the looser rule**
+
+R13 refused `EventPublisherSignature` as sketched and re-filed the observable half as R82
+(`SwapCallArguments`), with the general footprint explicitly UNMEASURED — only the event-scoped
+slice (44 raise sites reaching a two-same-typed-param publisher, 21 of them subscribed anywhere)
+had been counted, by a name census. This is the general count, and it needs the semantic layer:
+a call's arguments carry no declared types at the site.
+
+**Counting rule pre-committed at `ef28f58`, before this ran** (R13's discipline at `349901a`).
+Script: `scripts/census-swap-call-arguments.ts`. Corpus: `U:/Git/do-rel2/Cloud` — Continia Document
+Output 28.4.0.0, 417 `.al` files after excluding `.dependencies/` and `Mutation*`. Denominator
+19,132, R13's shipped-mutant count on the same project.
+
+### The funnel
+
+| step | sites |
+|---|---|
+| call sites with >=1 argument | 9,798 |
+| call sites with >=2 arguments | 4,573 |
+| ...where >=2 arguments TYPE at all through `buildTypeTable` | 1,884 (41.20%) |
+| ...with a same-typed pair whose members differ in text | 893 |
+| ...and `isMutableSite` (has an enclosing statement) | **893** |
+| excluded: same-typed pair but IDENTICAL text — a no-op swap | 43 |
+| dropped as non-executable (page/report property position) | 0 |
+
+893 is **4.67%** of 19,132, against bar (a)'s >= 13. The zero in the last row is worth naming: unlike
+`NegateConditional`, which R40 measured claiming 154 declarative page-property sites, every
+argument-swap site is already executable — the operator inherits none of that problem.
+
+### 893 is the LOOSE number, and 135 of those would not compile
+
+`buildTypeTable`'s `extractType` keeps only the first whitespace-delimited token of a declaration,
+so `Record "Sales Header"` and `Record "Purchase Header"` both answer `Record`. Re-checking each
+chosen pair against its FULL declared type:
+
+| | sites |
+|---|---|
+| both members declared, full declared type EQUAL | **340** (38.07%) |
+| both members declared, full types DIFFER — the head matched, the type does not | **135** |
+| at least one member is a literal or expression, so has no declaration to read | 418 |
+
+The 135 break down as 118 `Record`, 9 `Codeunit`, 4 `List`, 2 `Option`, 2 `Enum` — every
+subtype-bearing AL type. **An operator built on `buildTypeTable` as it stands would emit an
+artifact that does not compile at 15% of its sites.** Filed as R84: nothing shipped reads the type
+table today (`ctx.types` has no consumer outside its own tests), so this is a precondition of the
+first operator that does, not a live defect.
+
+### Type safety provable from source alone: **yes, for 340 sites, with no callee resolution**
+
+R82 asked whether a same-typed swap can be proven type-safe from source. It can, and the argument
+is about the ARGUMENTS rather than the callee: if the call compiles today, argument A fits
+parameter *i* and B fits *j*; when A and B have the same declared type, A fits *j* and B fits *i*
+too. The one hazard the arguments cannot settle is a **`var` parameter**, which AL matches by exact
+type and refuses for a non-lvalue — and whether parameter *i* is `var` is the callee's business.
+
+That hazard disappears when both members are bare variable references, since both are then lvalues
+of one exact type:
+
+| | sites |
+|---|---|
+| both pair members are bare identifiers | 475 (53.19%) |
+| at least one is a literal or expression — a callee `var` parameter there is a compile error | 418 |
+| **both bare variables AND equal full declared type — provable without resolving the callee** | **340** = 1.78% of 19,132 |
+
+340 is 26x bar (a). **The footprint question is settled: R82 is not refusable on cost**, on the
+strictest reading available, on this project.
+
+### What is being swapped, and the equivalence risk
+
+Of the 893: Text 416, Record 126, Integer 96, **Boolean 86**, Label 50, Date 38, `Code[20]` 24,
+RecordRef 15, InStream 13, Codeunit 9. Within the provable 340, Boolean/Boolean is **40 (11.76%)** —
+the slice carrying `swap-modify-flag`'s equivalence problem, where a callee frequently cannot
+distinguish its two Boolean arguments. It is a minority, which is the news: the event-scoped census
+could not say this, and the fear that an argument swap is mostly Booleans is measured false.
+
+### Overlap with a shipped operator is NOT subtracted, and that is a difference from `IsolationLevelSwap`
+
+441 of the 893 sit in statement position, where `lethal.void-method-call` already emits. R13
+subtracted the equivalent overlap for `IsolationLevelSwap` (25 of 36) because a `LockTable()`
+DELETION emits byte-identical text to that operator's. A swap does not: dedup identity is
+`kind:start:end:after.text` (`packages/schemata/src/dedup.ts:23`) and `emitDispatch` chains multiple
+mutants per component, so both mutants survive at one site. **Marginal == gross here.**
+
+### What this does NOT establish
+
+- **Not killability.** Whether a swapped call changes a verdict is unmeasured, and it is now the
+  only gate left on R82. A callee that ignores the distinction between its two arguments yields an
+  equivalent mutant, exactly as `swap-modify-flag` does at a smaller site count.
+- **Not a measurement any current fixture can extend.** `fixtures/sandbox-data` has 3 loose sites
+  and **0** provable ones; `fixtures/sandbox-app` has none at all. A live kill measurement needs a
+  new fixture site, the way R30, R70 and R78 each grew the table fixture.
+- **A lower bound, and the bound is large.** 2,689 of 4,573 two-argument call sites (58.80%) have
+  fewer than two arguments the type table can type at all — member expressions (`Rec."No."`), call
+  results, and anything declared outside `symbols.objects`. The true footprint is larger than 893
+  by an unknown amount; nothing here estimates it.
+- **One project.** Document Output is one codebase with one house style. Argument-heavy call sites
+  are a style artifact as much as a language one.
+- **The pair choice is deterministic, not exhaustive.** One mutant per site, on the first qualifying
+  (i, j). A site with three same-typed arguments admits more swaps than are counted here.
