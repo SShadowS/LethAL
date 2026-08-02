@@ -478,3 +478,49 @@ The live half needs a running environment with the app under test published, cre
 smaller checkout (38 files, 146 tests). The figure was still misleading, but for a different reason
 than "unreproducible": only **5** of those 9 files contain a TestPage TEST; the other 4 mention
 `TestPage` elsewhere. Per test, it is 19 of 1,287 — **1.5%**, not 9%.
+
+---
+
+## R72 — what BC actually does when `Codeunit.Run` is called in a write transaction
+
+`fixtures/sandbox-probes/src/WriteTxnProbe.Codeunit.al` (+ `WriteTxnTarget.Codeunit.al`). Three
+tests, not one: the first attempt used a single test and produced a message at an AL-callstack line
+that maps ambiguously onto the source, so the failing statement could not be named. Decoding AL's
+line numbering would have been a guess; isolating the variable by A/B is cheaper and conclusive.
+
+**Measured 2026-08-02, Cronus281, BC 28, both runners:**
+
+| test | shape | result |
+|---|---|---|
+| `WriteOnly` | write, no `Codeunit.Run` | reaches its own `Error` — the write alone is fine |
+| `RunOnly` | `Codeunit.Run`, no preceding write | `ran=Yes` — the call alone is fine |
+| `WriteThenRun` | write, then `Codeunit.Run` | **aborts**, `An error occurred and the transaction is stopped. Contact your administrator or partner for further assistance.` |
+
+Identical text on the HUB (`bcdev_test_run`) and on the FENCED `RunMutant` path — the per-runner
+pin R72 asked for, and the two agree.
+
+### Three findings, two of which change the detector R72 proposed
+
+1. **The refusal is real.** BC does stop the transaction when `Codeunit.Run` is called with a write
+   open. That much of R72's premise holds, and it had never been observed on this platform.
+2. **It is NOT catchable, and that REFUTES half the stated hazard.** `Ran := Codeunit.Run(...)` does
+   not return `false` — the error escapes and the test dies before the next statement. So the
+   adversarial hole R72 was written to survive — `if not Codeunit.Run(...) then Error(PostFailedErr,
+   GetLastErrorText())` re-wrapping the artifact in the caller's own message — **cannot occur for
+   this artifact**: the caller never regains control to re-wrap anything.
+3. **The text is BC's GENERIC transaction message**, not a specific "cannot run a codeunit in a
+   write transaction". It names neither `Codeunit.Run` nor the rule. A detector keyed on that string
+   alone would therefore fire on any platform-stopped transaction, and would mislabel genuine kills
+   as platform noise — the unsafe direction for a diagnosis whose whole purpose is to tell the two
+   apart.
+
+### What the detector must therefore be
+
+Condition on the OPERATOR, not on the text alone: for a `lethal.remove-commit` mutant whose deleted
+`Commit()` precedes a `Codeunit.Run`, this message is strong evidence of the platform artifact; for
+anything else it is not evidence at all. Verdict stays `killed` regardless (design §6.7's timeout
+precedent: a diagnosis must not move a verdict), and the note is worded best-effort.
+
+That detector cannot be PROVEN until a `remove-commit` mutant exists in a gate, which is R73's job —
+no fixture has ever generated one. So R73 comes first, and R72's detector is written against a real
+mutant rather than a constructed string.
