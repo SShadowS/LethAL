@@ -928,3 +928,41 @@ describe("claimsRecordMethod — a page named after its table (R70)", () => {
     expect(claimsRecordMethod(onlyCall(table), ctx, "SetRange")).toBe(true);
   });
 });
+
+// ————————————————————————————————————————————————————————————————————————
+// THE R70 LIVE DETECTOR'S PREMISE, MADE EXECUTABLE.
+//
+// `fixtures/sandbox-data/src/DataScopeProbe.Table.al` detects an R70 regression on the live gate
+// ONLY because its receiver is declared in the TRIGGER'S OWN var section and is therefore
+// unresolvable: Tier 2 refuses, Tier 1 claims `void-method-call`, and a regression flips the
+// operator. That premise is R68 — an OPEN item — staying open.
+//
+// It was written as a source COMMENT first, and a comment did not stop the premise from nearly
+// being deleted: fixing R68 makes the trigger-local resolve, the site claims identically either
+// way, and the live gate keeps passing while detecting nothing. A detector whose premise is prose
+// has no alarm; this test is the alarm.
+//
+// WHEN THIS GOES RED, R68 HAS LANDED AND THE R70 LIVE DETECTOR IS DEAD. Do not "fix" this test —
+// re-house the trigger-local shape in an object with no name collision, and give the R70 fixture a
+// discriminant that does not route through the ABSENCE of a capability.
+// ————————————————————————————————————————————————————————————————————————
+describe("R68 is still open — the R70 live detector depends on it", () => {
+  it("refuses a receiver declared in the trigger's own var section", () => {
+    const src = `table 50160 "Scope Probe"
+{
+    fields
+    {
+        field(1; "No."; Code[20]) { }
+    }
+
+    trigger OnInsert()
+    var
+        Helper: Record "Data Related";
+    begin
+        Helper.SetRange("No.", 'X');
+    end;
+}`;
+    const root = parseClean(src);
+    expect(claimsRecordMethod(onlyCall(root), contextFor(root), "SetRange")).toBe(false);
+  });
+});

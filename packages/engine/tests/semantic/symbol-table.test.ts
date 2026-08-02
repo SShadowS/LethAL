@@ -254,4 +254,39 @@ page 50000 "CDO Setup"
     expect(table.resolveObject({ kind: "table", idOrName: "CDO Setup" })?.kind).toBe("table");
     expect(table.resolveObject({ kind: "page", idOrName: "CDO Setup" })?.kind).toBe("page");
   });
+
+  // ORDER INVARIANCE — the property the R70 bug actually violated, asserted directly.
+  //
+  // The bug was `globals.set(bareName, ...)` overwriting WHOLESALE, so the answer depended on which
+  // file parsed last. `generateMutationSet` sorts its entries, so the tie was resolved by FILENAME
+  // — a fact no test asserted and no reader would guess. Permuting the inputs and demanding the
+  // same answers is stronger than any single-order assertion, because it cannot be satisfied by a
+  // detector that merely happens to win the sort.
+  it("answers identically whichever file parses last", () => {
+    const TABLE = `table 50000 "CDO Setup"
+{
+    var
+        Helper: Integer;
+}`;
+    const PAGE = `page 50000 "CDO Setup"
+{
+    var
+        Helper: Record Customer;
+}`;
+    const build2 = (a: string, b: string) =>
+      buildSymbolTable([
+        { path: "a.al", root: wrapRoot(parseAL(a)) },
+        { path: "b.al", root: wrapRoot(parseAL(b)) },
+      ]);
+
+    for (const table of [build2(TABLE, PAGE), build2(PAGE, TABLE)]) {
+      expect(table.globalsOf(objectScopeKey("table", "CDO Setup")).map((g) => g.typeText)).toEqual([
+        "Integer",
+      ]);
+      expect(table.globalsOf(objectScopeKey("page", "CDO Setup")).map((g) => g.typeText)).toEqual([
+        "Record Customer",
+      ]);
+    }
+  });
 });
+
