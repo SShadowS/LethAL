@@ -115,7 +115,7 @@ const EXPECTED = {
   // the site, whose §3.2 precedence then DELETED the Tier-1 mutant — measured offline on this
   // fixture as raw specs 99 -> 100 with DEPLOYED unchanged at 90. So the regression shows up as an
   // OPERATOR NAME at a fixed file:line, which `assertMatchesBaseline` compares per mutant.
-  totalMutantSites: 114,
+  totalMutantSites: 117,
   // R36 moved this from 63/10 to 64/9, deliberately and in one direction only.
   //
   // `RequireCategoryAFails` used to assert merely that AN error occurred, so deleting
@@ -147,7 +147,11 @@ const EXPECTED = {
   // `lethal.remove-commit` mutant any gate has ever KILLED. Until now the operator shipped proven
   // on its refusals and unproven on its claims — both pre-existing `Commit` sites are shadowed
   // negatives, correctly refused, so no gate had ever generated one.
-  killed: 81,
+  // R71 moved this from 81 to 84, and one of the three is the point: M0088, the fixture's only
+  // `lethal.swap-rec-xrec` mutant, KILLED by `Data Tests.ScopeProbeTracksFieldChange`. The operator
+  // ships with its claim proven live rather than only its refusals — the gap R73 had just closed
+  // for `RemoveCommit`, not reopened one operator later.
+  killed: 84,
   // R73 moved this from 9 to 12, and TWO of the three additions are worth reading rather than
   // accepting:
   //
@@ -173,7 +177,7 @@ const EXPECTED = {
   // opens that page — deliberately, R76 measured that a page over a trigger-carrying table can HANG
   // a fenced session — so no-coverage is the honest verdict for it.
   noCoverage: 10,
-  mutationScore: 81 / (81 + 12),
+  mutationScore: 84 / (84 + 12),
   /**
    * `coverageFilter`'s FALLBACK 2 ("coverage places this table trigger nowhere, run every green
    * test") must fire for NOBODY here. This is the assertion `0a463fd` actually earns: before it,

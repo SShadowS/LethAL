@@ -32,6 +32,23 @@ table 79309 "Data Scope Probe"
         field(1; "No."; Code[20]) { }
         field(2; "Main No. Filter"; Code[20]) { }
         field(3; "Related Count"; Integer) { }
+        // R71: the first `lethal.swap-rec-xrec` site any fixture carries. `xRec` was MEASURED to
+        // differ from `Rec` in a field `OnValidate` (rec=250, xrec=100, differ=YES on Cronus281,
+        // fenced path) and NOT to differ in `OnModify` — so the operator is scoped to this trigger
+        // kind, and this is the shape that proves the claim rather than the refusal.
+        //
+        // Change detection, the idiom `OnValidate` exists for. Under the mutant `xRec.Tracked`
+        // becomes `Rec.Tracked`, the comparison is a value against itself, the branch never fires
+        // and `Bumped` stays false — which `ScopeProbeTracksFieldChange` asserts.
+        field(4; Tracked; Integer)
+        {
+            trigger OnValidate()
+            begin
+                if Tracked <> xRec.Tracked then
+                    Bumped := true;
+            end;
+        }
+        field(5; Bumped; Boolean) { }
     }
 
     keys

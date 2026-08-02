@@ -252,6 +252,20 @@
     "errorClass": null
   },
   {
+    "key": "4fc76233fca69ba828352f38ce14ea3000f68d406c41f0f6018fed277384b292|Data Scope Probe|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "ScopeProbeTracksFieldChange",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "517d85b41308aeab225aed8d8c4e3571a608613672998fbbbbcf61ca589ef1c6|Data Scope Probe|lethal.negate-conditional|1",
+    "verdict": "killed",
+    "killingTest": "ScopeProbeTracksFieldChange",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "5854fe0497f4647b12262f503fb187cbf16a34529940b7f502900e1344968be9|Data Main Ext|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "ExtCountRelatedIgnoresDecoys",
@@ -689,6 +703,13 @@
     "key": "d9cbca5018b3f77051d8f33a72d7e5f6a971924b158b7413b40f621b238147b8|Data Ops|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "TouchCategoryWeak",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "e5b15255cbe70b491c2654702e10d77415bce552bf1162bf7e68fc1cbb63b3c2|Data Scope Probe|lethal.swap-rec-xrec|1",
+    "verdict": "killed",
+    "killingTest": "ScopeProbeTracksFieldChange",
     "coverageFiltered": false,
     "errorClass": null
   },

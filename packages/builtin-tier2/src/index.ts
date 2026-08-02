@@ -4,12 +4,14 @@ import { removeCommit } from "./remove-commit";
 import { removeSetRange } from "./remove-setrange";
 import { removeTestField } from "./remove-testfield";
 import { swapModifyFlag } from "./swap-modify-flag";
+import { swapRecXRec } from "./swap-rec-xrec";
 
 export { removeTestField } from "./remove-testfield";
 export { removeSetRange } from "./remove-setrange";
 export { removeCalcFields } from "./remove-calcfields";
 export { swapModifyFlag } from "./swap-modify-flag";
 export { removeCommit } from "./remove-commit";
+export { swapRecXRec } from "./swap-rec-xrec";
 export { claimsRecordMethod, claimsSystemCall } from "./receiver";
 
 /**
@@ -59,4 +61,8 @@ export const tier2Operators: readonly MutationOperator[] = [
   removeCalcFields,
   swapModifyFlag,
   removeCommit,
+  // R71: scoped to field `OnValidate` / table `OnRename`, the two trigger kinds where `xRec` was
+  // MEASURED to differ from `Rec` headlessly. `OnModify` is excluded by measurement, not by
+  // caution — see `swap-rec-xrec.ts`.
+  swapRecXRec,
 ];

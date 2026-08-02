@@ -12,11 +12,16 @@ const EXPECTED_OPERATORS = [
   "lethal.remove-setrange",
   "lethal.remove-calcfields",
   "lethal.swap-modify-flag",
-  // Phase 2 (R33) shipped ONE operator. Two candidates were refused and must not be added back
-  // without new evidence: `SwapRecXRec` (measured 2026-07-31 — `xRec` carries `Rec`'s values when
-  // `Modify(true)` is driven from AL headlessly, `differ=No`) and `RemoveSetLoadFields` (deleting
-  // a load restriction only WIDENS the load, so no real assertion can go from passing to failing).
+  // Phase 2 (R33) shipped ONE operator. `RemoveSetLoadFields` was refused and must not be added
+  // back without new evidence (deleting a load restriction only WIDENS the load, so no real
+  // assertion can go from passing to failing).
   "lethal.remove-commit",
+  // R71. `SwapRecXRec` was ALSO refused in Phase 2, on a measurement that turned out not to
+  // support the refusal: `differ=No` was measured for `Modify(true)` alone, and the conclusion
+  // generalised to every `xRec` site. Follow-up probes measured `differ=YES` for field
+  // `OnValidate` and for `OnRename`, so the operator ships scoped to exactly those two trigger
+  // kinds — and it must NOT re-acquire `OnModify`, which stays measured-equivalent.
+  "lethal.swap-rec-xrec",
 ] as const;
 
 describe("tier2Operators", () => {

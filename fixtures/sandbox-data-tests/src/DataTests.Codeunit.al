@@ -494,6 +494,32 @@ codeunit 79310 "Data Tests"
             Error('expected the Compute action to show 42 from Data Value Source.GetValue, got %1', Shown);
     end;
 
+    [Test]
+    procedure ScopeProbeTracksFieldChange()
+    var
+        ScopeProbe: Record "Data Scope Probe";
+    begin
+        // R71: kills the fixture's only `lethal.swap-rec-xrec` mutant. `Data Scope Probe.Tracked`'s
+        // OnValidate does the change detection `OnValidate` exists for — `if Tracked <> xRec.Tracked`
+        // — and the mutant rewrites `xRec.Tracked` to `Rec.Tracked`, comparing a value with itself.
+        // The branch then never fires and `Bumped` stays false.
+        //
+        // `Validate` is what makes this observable: assigning the field directly would not run the
+        // trigger at all, and the mutant would survive against a test that never exercised it.
+        if ScopeProbe.Get('SCOPE-TRACK') then
+            ScopeProbe.Delete(false);
+        ScopeProbe.Init();
+        ScopeProbe."No." := 'SCOPE-TRACK';
+        ScopeProbe."Main No. Filter" := 'T-SCOPE';
+        ScopeProbe.Tracked := 1;
+        ScopeProbe.Insert(false);
+
+        ScopeProbe.Validate(Tracked, 2);
+
+        if not ScopeProbe.Bumped then
+            Error('expected OnValidate to see xRec.Tracked=1 differ from Tracked=2 and set Bumped');
+    end;
+
     // ---------------------------------------------------------------------------------------------
     // R73 + R72: the first POSITIVE `lethal.remove-commit` sites any fixture has ever carried, and
     // the two kill mechanisms R72 exists to tell apart.
