@@ -20,7 +20,21 @@ import { objectScopeKey } from "./symbol-table";
 import type { SourceFile, SymbolTable } from "./symbol-table";
 
 export interface CallerIndex {
-  callersOf(ownerName: string, procName: string): readonly CallSite[];
+  /**
+   * Callers of `<ownerScope>.<procName>`, where `ownerScope` is an `objectScopeKey(kind, name)` —
+   * NOT a bare object name.
+   *
+   * R81: the index used to key on the bare name, so `table 50000 "CDO Setup".Configure` and
+   * `page 50000 "CDO Setup".Configure` landed in ONE bucket and each was reported as a caller of
+   * the other. R70 fixed the same defect in the scope maps and deliberately left this one, on the
+   * stated grounds that the bare-name key was this method's public contract and widening it would
+   * change a second consumer under the same commit. R81's measurement is that **there is no second
+   * consumer**: no package's `src` reads `callersOf`, `SemanticCapability` has no value an
+   * operator could use to request it, and its only reader in the repo is a test. So the merge could
+   * never reach a claim or a verdict — and the key was fixed while that was still free, rather than
+   * left for the first real consumer to inherit silently.
+   */
+  callersOf(ownerScope: string, procName: string): readonly CallSite[];
 }
 
 export interface CallSite {
@@ -41,9 +55,12 @@ export function buildCallerIndex(
   for (const obj of symbols.objects) {
     const calls = findAll(obj.node, ALNodeKind.procedure_call);
     for (const call of calls) {
-      // R70: `resolveCallTarget` looks the procedure up in SCOPE (kind-keyed), but the caller
-      // index itself stays keyed on the bare owner name — that is `callersOf`'s public contract.
-      const target = resolveCallTarget(call, obj.name, objectScopeKey(obj.kind, obj.name), symbols);
+      // R70 keyed the SCOPE lookup by (kind, name); R81 keys the INDEX the same way, so two
+      // same-named objects of different kinds no longer share one bucket. `fromOwner` on the
+      // emitted site stays the bare display name — it is what a reader wants to see, and it is
+      // not a lookup key.
+      const ownerScope = objectScopeKey(obj.kind, obj.name);
+      const target = resolveCallTarget(call, ownerScope, symbols);
       if (target === null) continue;
       const enclosing = enclosingProcedureName(call);
       if (enclosing === null) continue;
@@ -60,20 +77,25 @@ export function buildCallerIndex(
   }
 
   return {
-    callersOf(ownerName, procName) {
-      return index.get(siteKey(ownerName, procName)) ?? [];
+    callersOf(ownerScope, procName) {
+      return index.get(siteKey(ownerScope, procName)) ?? [];
     },
   };
 }
 
-function siteKey(owner: string, proc: string): string {
-  return `${owner}::${proc}`;
+/** `<objectScopeKey(kind, name)>::<procedure>` — see `CallerIndex.callersOf` for why the kind. */
+function siteKey(ownerScope: string, proc: string): string {
+  return `${ownerScope}::${proc}`;
 }
 
+/**
+ * Layer 1 resolves only UNQUALIFIED calls, against the enclosing object's own scope — so the
+ * target's owner IS that scope. One parameter, not two: the lookup scope and the recorded owner
+ * were the same value passed twice, which invited a future edit to diverge them silently.
+ */
 function resolveCallTarget(
   call: ALSyntaxNode,
-  fallbackOwner: string,
-  fallbackOwnerScope: string,
+  ownerScope: string,
   symbols: SymbolTable,
 ): { owner: string; procedure: string } | null {
   const fn = call.childForFieldName("function");
@@ -81,8 +103,8 @@ function resolveCallTarget(
   // Qualified calls (member_expression) are deferred to Layer 6.
   if (fn === null || fn.kind !== ALNodeKind.identifier) return null;
   const procName = fn.text;
-  if (symbols.resolveProcedure(fallbackOwnerScope, procName) === null) return null;
-  return { owner: fallbackOwner, procedure: procName };
+  if (symbols.resolveProcedure(ownerScope, procName) === null) return null;
+  return { owner: ownerScope, procedure: procName };
 }
 
 function enclosingProcedureName(node: ALSyntaxNode): string | null {

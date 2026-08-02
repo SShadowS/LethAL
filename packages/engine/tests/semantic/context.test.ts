@@ -18,7 +18,7 @@ describe("buildSemanticContext", () => {
     expect(
       ctx.symbols.resolveProcedure(objectScopeKey("codeunit", "Callers"), "Helper"),
     ).not.toBeNull();
-    expect(ctx.callers.callersOf("Callers", "Helper").length).toBe(2);
+    expect(ctx.callers.callersOf(objectScopeKey("codeunit", "Callers"), "Helper").length).toBe(2);
 
     const helper = ctx.symbols.resolveProcedure(objectScopeKey("codeunit", "Callers"), "Helper");
     if (helper === null) throw new Error("Helper not found");
