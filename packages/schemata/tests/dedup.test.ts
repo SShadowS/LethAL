@@ -56,6 +56,10 @@ const TIERS = new Map<string, 1 | 2 | 3 | "custom">([
   ["lethal.b", 2],
   ["vendor.custom", "custom"],
   ["vendor.custom-two", "custom"],
+  // R11/R13: a REGISTERED tier-3 operator. No such operator exists, and the R13 decision
+  // (docs/superpowers/specs/2026-08-02-r13-tier3-decision.md) is that none should be built — so
+  // this entry exists only to keep that decision executable rather than commented.
+  ["lethal.hypothetical-tier3", 3],
 ]);
 const tierOf = (name: string) => TIERS.get(name);
 
@@ -113,6 +117,42 @@ describe("dedupeSpecs", () => {
     const known = spec({ operatorName: "lethal.void-method-call", start: 10, end: 20, after: "" });
     const unknown = spec({ operatorName: "lethal.not-registered", start: 10, end: 20, after: "" });
     expect(() => dedupeSpecs([known, unknown], tierOf)).toThrow(/lethal\.not-registered/);
+  });
+
+  it("refuses to order a REGISTERED tier-3 operator against a tier-1 one (R11 stays two-tier)", () => {
+    // R11 filed `tierRank`'s missing tier-3 rank as a defect to fix "when tier 3 becomes real".
+    // R13 measured that it does not become real, so the throw is the DECISION, not a gap: a third
+    // rank with no operator behind it would silently resolve a collision nobody has reasoned about.
+    //
+    // The collision is concrete rather than hypothetical. The one Tier-3 candidate that fits the
+    // existing emit path — `IsolationLevelSwap` deleting `LockTable()` — emits a byte-identical
+    // identity to the `void-method-call` mutant already shipped at 25 sites of Continia Document
+    // Output, so registering it as tier 3 would abort those sessions HERE, loudly, which is the
+    // designed behaviour. This test is that decision as an executable assertion (R70's rule: a
+    // premise written only in prose stops being true without anyone noticing).
+    const tier1 = spec({ operatorName: "lethal.void-method-call", start: 10, end: 20, after: "" });
+    const tier3 = spec({
+      operatorName: "lethal.hypothetical-tier3",
+      start: 10,
+      end: 20,
+      after: "",
+    });
+    expect(() => dedupeSpecs([tier1, tier3], tierOf)).toThrow(/hypothetical-tier3/);
+    // Names BOTH tiers, so the reader sees which pair has no defined precedence rather than
+    // being sent to the registry for a missing registration.
+    expect(() => dedupeSpecs([tier1, tier3], tierOf)).toThrow(/tier 1/);
+    expect(() => dedupeSpecs([tier1, tier3], tierOf)).toThrow(/tier 3/);
+    expect(() => dedupeSpecs([tier1, tier3], tierOf)).not.toThrow(/registration order/);
+    // A tier-3 spec tagged `likely-equivalent` must not slip past the ordering check by winning
+    // the hint tiebreak: the NaN throw precedes it, and that ordering is the guarantee.
+    const hinted = spec({
+      operatorName: "lethal.hypothetical-tier3",
+      start: 10,
+      end: 20,
+      after: "",
+      equivalenceHint: "likely-equivalent",
+    });
+    expect(() => dedupeSpecs([tier1, hinted], tierOf)).toThrow(/hypothetical-tier3/);
   });
 
   it("reports two UNREGISTERED operators as unorderable, not as a same-tier collision", () => {

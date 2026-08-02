@@ -27,6 +27,13 @@ function tierRank(spec: MutationSpec, tierOf: TierResolver): number {
   // Specificity, not registration order. `custom` has no defined position and an
   // unregistered operator has no tier at all; both are caller-contract
   // violations rather than precedence questions — see the throws below.
+  //
+  // TIER 3 IS DELIBERATELY ABSENT, and this is a decision rather than a gap (R11, closed by R13:
+  // `docs/superpowers/specs/2026-08-02-r13-tier3-decision.md`). Tier 3 was measured and none of
+  // its three sketched operators is built, so a third rank would be an ordering nobody has
+  // reasoned about, sitting ready to resolve a collision silently. Adding one is only correct
+  // together with the first tier-3 operator that ships — never before it. Pinned by
+  // "refuses to order a REGISTERED tier-3 operator against a tier-1 one" in tests/dedup.test.ts.
   const tier = tierOf(spec.operatorName);
   return tier === 2 ? 2 : tier === 1 ? 1 : Number.NaN;
 }

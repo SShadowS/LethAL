@@ -568,3 +568,138 @@ the artifact in a mutant a gate generates, so a detector would again be proven o
 constructed string. What is needed first is a measurement of WHICH shape triggers the refusal —
 call depth, `TableNo`, the test runner's own transaction, or something else — because a diagnosis
 that fires on the wrong shape mislabels genuine kills as platform noise.
+
+---
+
+## R13 — can a `Permissions` property refuse anything, and is a `LockTable` deletion observable?
+
+`fixtures/sandbox-probes/src/Tier3{Probe,RestrictiveProbe,RestrictiveGranted,PermReduced,PermGrant,PermNone}.*.al`.
+Measured 2026-08-02 on **Cronus281** (BC 28.0.46665.49944, `LethAL Control` 1.0.0.14, probes
+1.0.12.0) through the **fenced** path — `LethALControl_RunMutant` at baseline (`mutantId: ""`), one
+call per method, which is where every verdict this tool issues is produced.
+
+Both questions decide whether a sketched Tier-3 operator can ever kill a mutant.
+
+### `PermissionReduce` — seven arms, one variable each
+
+The operator weakens an object's `Permissions` property. It can only kill if that property can
+REFUSE something. R1 had already measured that the fenced runner's user is SUPER and that a test
+declaring `TestPermissions = Disabled` writes freely; what nobody had measured is whether a
+PRODUCTION object's own reduced grant refuses anyway.
+
+| arm | test codeunit | the called object's `Permissions` | result |
+|---|---|---|---|
+| A1 | `TestPermissions = Disabled` | `tabledata 79201 = r` (a `PermissionReduce` mutant) | **inserted** |
+| A2 | `TestPermissions = Disabled` | `tabledata 79201 = rimd` (the unmutated form) | inserted |
+| A3 | `TestPermissions = Disabled` | none at all | inserted |
+| A4 | omits `TestPermissions` (→ Restrictive) | `= r` | refused — `(TableData 79201 Rec XRec Probe **Insert**: …)` |
+| A5 | Restrictive | `= rimd` | refused — `(TableData 79201 Rec XRec Probe **IndirectInsert**: …)` |
+| A6 | Restrictive | none | refused — `…Insert: …` |
+| A7 | Restrictive, declaring `Permissions = tabledata 79201 = rimd` **on itself**, writing directly | — | refused — `…IndirectInsert: …` |
+
+Verbatim refusal text, all four refusing arms:
+`Sorry, the current permissions prevented the action. (TableData 79201 Rec XRec Probe <op>: LethAL Sandbox Probes)`.
+
+**Two findings from these seven arms — and a third mode they do not cover, measured below.**
+
+1. **Under `TestPermissions = Disabled` with a SUPER session the property is inert.** A1, A2 and A3
+   are indistinguishable. That is the mode real suites declare — Continia Document Output: **76 of
+   76** test codeunits (the 77th object matching `Subtype = Test` is a `TestRunner`, which declares
+   no `TestPermissions`; `ROADMAP.md` R1's "77 of 77" is off by that one).
+2. **Under Restrictive the property IS read — and it still cannot produce a kill.** A5 differs from
+   A4/A6 in one token: BC demands `IndirectInsert` instead of `Insert`, which is the object's grant
+   doing real work (an object property grants *indirect* rights; the caller must still hold at least
+   indirect permission). But every restrictive arm is refused, mutated or not, so such a suite fails
+   at BASELINE and its mutants never reach a verdict.
+
+### The third mode — the suite lowers its OWN session, and there the mutant KILLS
+
+The seven arms above supported the sentence *"there is no third mode"*, which an adversarial review
+of the R13 decision refuted by pointing at the censused project itself:
+`U:/Git/do-rel2/Test/Src/E-Seal/CDOESealSetupTests.Codeunit.al` declares `TestPermissions =
+Disabled` — so it is inside finding 1's evidence — and then calls
+`LibraryLowerPermissions.SetO365Basic()` in its own `Initialize()`. Permission checks are then ON
+and the session is not SUPER while production code runs.
+
+`scripts/r13-probe/` (a standalone probe app, ids 71500–71510, depending on `Tests-TestLibraries`
+and `Permissions Mock`) reproduces exactly that shape. The table is Microsoft's `Item` (27), not a
+probe-owned table: a table this probe invented would sit outside every stock permission set and all
+arms would be refused for a reason unrelated to the variable. Measured on Cronus281, fenced:
+
+| arm | what runs the write | callee's `Permissions` | result |
+|---|---|---|---|
+| A8-direct **(control)** | the test body itself | — | **refused** — `(TableData 27 Item Modify: LethAL R13 Probe)` |
+| A8-grant | callee 71500 | `tabledata Item = rm` | **`modified=Yes`** |
+| A8-reduced | callee 71501 | `tabledata Item = r` | **refused** |
+| A8-none | callee 71502 | none | refused |
+| A9 | caller 71503 grants `rm`, callee 71501 grants `r` and performs the write | — | **refused** |
+
+**A8 is decisive: reducing `rm` to `r` — exactly what a `PermissionReduce` mutant emits — turns a
+succeeding write into a refusal.** The operator IS killable. The A8-direct control is what makes
+that readable: the same lowered session cannot write from the test body, so the grant arm's success
+is the property doing work rather than the lowering silently failing (R26's "probe measures itself"
+mistake, written as an arm instead of assumed away).
+
+**A9 answers a second question: a caller's grant does NOT cover a write performed by a callee.** The
+grant is scoped to the object whose own code performs the operation. So routing a write through a
+shadow object carrying a reduced grant genuinely reduces — which is why the R13 decision refuses
+`PermissionReduce` on cost and on the reachability figures below, rather than on an impossibility
+claim about the emit path.
+
+**Reachability, which is what bounds the operator's value:** a kill needs both a grant at the site
+and a covering test that lowers permissions. In Continia Document Output that is **10 of 1,290
+tests (0.78%), in 2 of 104 test files**, against **423** `tabledata` grants in 38 `Permissions`
+properties.
+
+A3 and A6 exist because without them A1 succeeding would only show that nothing in this fixture can
+be refused, and A4 failing would only show that restrictive tests fail. The pair of pairs is what
+separates "the property did it" from "the mode did it".
+
+**A7 also refines R1.** R1's rule — "a test codeunit that does not declare `TestPermissions =
+Disabled` cannot write, on any runner" — stands, and now has a mechanism: declaring the needed
+permissions ON THE TEST CODEUNIT does not rescue it, it only converts the demanded permission from
+`Insert` to `IndirectInsert`, which the restrictive session also lacks. Worth knowing before telling
+a user with a refused suite to "add the permissions".
+
+### `IsolationLevelSwap` — `LockTable()` alone opens a write transaction
+
+| arm | shape | result |
+|---|---|---|
+| M2a | `LockTable()`, `FindFirst`, then `Codeunit.Run` | **"An error occurred and the transaction is stopped. Contact your administrator or partner for further assistance."** — the test dies and never reaches its own `Error` |
+| M2b | the same read and the same call, **no** `LockTable()` (the shape a deletion leaves) | `ran=Yes` |
+
+So a `LockTable` deletion **is** observable in a single session — through R72's platform artifact,
+and only through it. In THIS frame the artifact appears on the unmutated side, so a site shaped like
+M2a fails at baseline and never yields a verdict.
+
+**Read the scope of that carefully.** Both arms sit in the `[Test]` method's own frame, and LethAL
+instruments the target app, never the test app — so this is not the frame mutants occupy. R73
+already measured the same artifact NOT appearing when the write and the `Codeunit.Run` sit in an
+ordinary codeunit called from a test. Nothing here measures a `LockTable` deletion at a
+production-frame site, and no claim is made about one.
+
+**One thing this does add to R72's open question** (§R73: *which* shape triggers the refusal): the
+opener need not be a WRITE. A bare `LockTable()` — no insert, no modify — is enough in the `[Test]`
+frame. R13 varied the opener; it did not vary the frame, so the frame remains a **candidate**
+variable, not the established one, and R73's question stays open.
+
+### What this does NOT establish
+
+- **Not** that `LockTable`'s removal is unobservable in general, and specifically not at
+  production-frame sites, where nothing was measured. One single-session observable was looked for
+  and found in the `[Test]` frame; the search was not exhaustive. What IS established is that the
+  operator's textbook mechanism — contention between concurrent transactions — is unreachable here,
+  because the platform test runner refuses a test's `StartSession` outright (*"Sessions can only be
+  started in tests that are run by a TestRunner that has TestIsolation set to Disabled"*).
+- **Not** anything about the operator's *strengthening* direction. A swap that ADDS a transaction
+  opener (`ReadIsolation := …UpdLock`) would put the abort on the MUTATED side — baseline green,
+  mutant aborts, scored `killed`, an R72-class false kill. Only deletion was measured.
+- **Not** a statement about `InherentPermissions`. The additivity finding is about `Permissions`.
+  `InherentPermissions` constrains rather than grants and applies irrespective of the user's
+  permission sets, so it is the one object-level permission property that could refuse a SUPER
+  session — a different mutation target, untouched here. Continia Document Output carries 2 of them
+  across 554 files.
+- **Not** a kill *rate*. 0.78% is the share of a suite's tests that lower permissions — an upper
+  bound on reachability, not its intersection with the sites carrying grants.
+- One BC 28 container, two tables (79201 and `Item`), one company, one SUPER OData user before
+  lowering.
