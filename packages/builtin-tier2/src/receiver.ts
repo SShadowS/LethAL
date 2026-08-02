@@ -162,14 +162,18 @@ export function claimsRecordMethod(
     // tableextensions contain ZERO `Rec.`-qualified calls but do contain bare `SetRange(...)` /
     // `TestField(...)`. Handling only the qualified form gained exactly nothing there.
     //
-    // A `pageextension` is still refused: its implicit record is the extended PAGE's SourceTable,
-    // declared in an object this project usually cannot see, so claiming would be a guess.
+    // R67: a plain `page`'s implicit `Rec` is its own `SourceTable`, declared in the same file.
+    // Reading a property that is PRESENT is resolution; a `pageextension` is still refused because
+    // ITS implicit record is the EXTENDED page's SourceTable, in an object this project usually
+    // cannot see, and guessing that would be the R29 shape.
     const implicitTable =
       objectNode.kind === ALNodeKind.table
         ? objectName
         : objectNode.kind === ALNodeKind.tableextension
           ? (extendedTableOf(objectNode) ?? null)
-          : null;
+          : objectNode.kind === ALNodeKind.page
+            ? sourceTableOf(objectNode)
+            : null;
     if (implicitTable === null) return false;
     // GUARD: project-declared procedure (rule 3). The table itself, AND any `tableextension` of
     // it — an extension's procedure is callable on the implicit `Rec` here exactly as the table's
@@ -264,7 +268,12 @@ export function claimsSystemCall(node: ALSyntaxNode, ctx: SemanticContext, name:
       ? objectName
       : objectNode.kind === ALNodeKind.tableextension
         ? extendedTableOf(objectNode)
-        : null;
+        : // R67: same resolution as the implicit-receiver branch above, so rule 3 reaches the
+          // page's SourceTable exactly as it reaches a tableextension's base object. Omitting it
+          // here would bypass the shadowing guard for a whole object kind.
+          objectNode.kind === ALNodeKind.page
+          ? sourceTableOf(objectNode)
+          : null;
   if (
     enclosingTable !== null &&
     projectDeclaresProcedureOnTable(symbols, enclosingTable, target.name)
@@ -555,6 +564,35 @@ function extendedTableOf(objectNode: ALSyntaxNode): string | null {
   if (base === null) return null;
   const name = stripQuotes(base.text);
   return name === "" ? null : name;
+}
+
+/**
+ * R67: the table a plain `page` is sourced on, from its own `SourceTable = "X";` property.
+ *
+ * A page's implicit `Rec` is that table, named in the same file with nothing to guess — which is
+ * why this is RESOLUTION and not the inference `resolveReceiver` refuses elsewhere. Measured with
+ * `scripts/probe-r30-pageext.ts` on Continia Document Output Cloud: 66 Tier-2-shaped calls sit on
+ * a page's implicit `Rec` (against 210 on record vars declared in the same page, which already
+ * claimed).
+ *
+ * `SourceTable` is a PROPERTY, not a grammar field of the header, so it is read from the object's
+ * members. The grammar exposes `name`/`value` fields on a `property` node (measured against the
+ * vendored tree-sitter-al v3.0.1 wasm, not assumed), so this does not scrape text.
+ *
+ * Returns `null` when the page declares no `SourceTable` — a real shape (a card page over no
+ * record) and the honest answer is "no implicit record", not a default.
+ */
+function sourceTableOf(objectNode: ALSyntaxNode): string | null {
+  for (const member of declarationMembers(objectNode)) {
+    if (member.kind !== ALNodeKind.property) continue;
+    const name = member.childForFieldName("name");
+    if (name === null || !equalsIgnoreCase(name.text, "SourceTable")) continue;
+    const value = member.childForFieldName("value");
+    if (value === null) return null;
+    const table = stripQuotes(value.text);
+    return table === "" ? null : table;
+  }
+  return null;
 }
 
 function resolveTable(symbols: SymbolTable, idOrName: string): ObjectSymbol | null {

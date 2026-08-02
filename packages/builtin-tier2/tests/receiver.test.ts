@@ -1010,3 +1010,76 @@ describe("a receiver declared in a trigger's own var section (R68)", () => {
     expect(claimsRecordMethod(onlyCall(root), contextFor(root), "SetRange")).toBe(true);
   });
 });
+
+// ————————————————————————————————————————————————————————————————————————
+// R67 — a plain `page`'s implicit `Rec` is its own `SourceTable`.
+//
+// `resolveReceiver` resolved the implicit `Rec`/`xRec` for a `table` (its own name) and for a
+// `tableextension` (the header's `base_object`) and refused every other kind — including `page`,
+// whose record is named by its own `SourceTable = "X";` property, in the same file, with nothing
+// to guess. Measured with `scripts/probe-r30-pageext.ts` on Continia Document Output Cloud: 66
+// Tier-2-shaped calls on a page's implicit `Rec`, against 210 on record vars declared in the same
+// page which already claimed.
+//
+// A `pageextension` stays refused, and the distinction is the whole point: ITS implicit record is
+// the EXTENDED page's SourceTable, declared in an object this project usually cannot see. Reading
+// a property that is present is resolution; guessing one that is absent is the R29 shape.
+// ————————————————————————————————————————————————————————————————————————
+describe("a plain page's implicit Rec (R67)", () => {
+  it("claims a bare call on the implicit Rec, resolved through SourceTable", () => {
+    const src = `page 50170 "Cust List"
+{
+    SourceTable = "Data Related";
+
+    trigger OnOpenPage()
+    begin
+        SetRange("Main No.", 'X');
+    end;
+}`;
+    const root = parseClean(src);
+    expect(claimsRecordMethod(onlyCall(root), contextFor(root), "SetRange")).toBe(true);
+  });
+
+  it("refuses when the page declares no SourceTable — there is nothing to resolve", () => {
+    const src = `page 50171 "No Source"
+{
+    trigger OnOpenPage()
+    begin
+        SetRange("Main No.", 'X');
+    end;
+}`;
+    const root = parseClean(src);
+    expect(claimsRecordMethod(onlyCall(root), contextFor(root), "SetRange")).toBe(false);
+  });
+
+  // The guard R67's row insists on: rule 3 must reach the RESOLVED table exactly as the
+  // `tableextension` path does, or the shadowing guard is bypassed for a whole object kind.
+  // `Data Shadow` declares its own `SetRange`, so a page sourced on it must be refused.
+  it("applies rule 3 to the resolved table, not just to the page", () => {
+    const shadow = `table 50172 "Shadowy" { fields { field(1; "No."; Code[20]) { } } procedure SetRange(FromNo: Code[20]; ToNo: Code[20]) begin end; }`;
+    const page = `page 50173 "Shadow List"
+{
+    SourceTable = "Shadowy";
+
+    trigger OnOpenPage()
+    begin
+        SetRange("No.", 'X');
+    end;
+}`;
+    const pageRoot = parseClean(page);
+    const ctx = projectContextFor([pageRoot, parseClean(shadow)]);
+    expect(claimsRecordMethod(onlyCall(pageRoot), ctx, "SetRange")).toBe(false);
+  });
+
+  it("still refuses a pageextension's implicit Rec — the extended page is not visible", () => {
+    const src = `pageextension 50174 "Ext" extends "Cust List"
+{
+    trigger OnOpenPage()
+    begin
+        SetRange("Main No.", 'X');
+    end;
+}`;
+    const root = parseClean(src);
+    expect(claimsRecordMethod(onlyCall(root), contextFor(root), "SetRange")).toBe(false);
+  });
+});
