@@ -27,11 +27,12 @@ import {
   type CompileOnlyArgs,
   parseCompileOnlyArgs,
 } from "../../packages/runner/src/compile-only-args";
-import { CONTROL_APP_ID } from "../../packages/runner/src/harness";
+import { injectControlDependency } from "../../packages/runner/src/harness";
 import {
   generateMutationSet,
   operatorTiers,
   prepareBatchProject,
+  targetAppIdOf,
 } from "../../packages/runner/src/orchestrator";
 import { writeInstrumentedProject } from "../../packages/schemata/src/project";
 
@@ -53,6 +54,10 @@ export async function compileOnly(args: CompileOnlyArgs): Promise<void> {
   const appManifest = JSON.parse(
     await readFile(join(args.projectDir, "app.json"), "utf8"),
   ) as Record<string, unknown>;
+  // Throws naming the missing field rather than letting `String(appManifest.id)` silently
+  // coerce an absent id into the literal string "undefined" (orchestrator.ts's own
+  // `prepareArtifactDir` validates the same way, for the same reason).
+  const targetAppId = targetAppIdOf(appManifest);
   const artifactId = randomBytes(16).toString("hex");
   const target = await mkdtemp(join(tmpdir(), "lethal-compile-only-"));
   const outputDir = await mkdtemp(join(tmpdir(), "lethal-compile-only-out-"));
@@ -63,7 +68,7 @@ export async function compileOnly(args: CompileOnlyArgs): Promise<void> {
       files: set.files,
       selectorIds: args.selectorIds,
       artifactId,
-      targetAppId: String(appManifest.id),
+      targetAppId,
       operatorTiers,
     });
     // `writeInstrumentedProject` only wrote the files carrying >=1 mutant spec. `alc` needs the
@@ -75,28 +80,18 @@ export async function compileOnly(args: CompileOnlyArgs): Promise<void> {
     // The delegating selector schemata/project.ts just wrote always references
     // `Codeunit "LC Control State"` (packages/schemata/src/selector.ts), which resolves only
     // through a declared dependency on the LethAL Control app — never implied by the symbol
-    // merely being present in the package cache. BcDevMcpBackend.stageForCompile
-    // (bcdev-backend.ts) injects this same entry into a throwaway sibling copy for exactly this
-    // reason; `target` here is already our own private temp dir, so the injection lands directly
-    // on it. Requires the caller's --package-cache to already carry a staged `lethal-control.app`
-    // (the same requirement any real `lethal run` against a bcdev backend has).
+    // merely being present in the package cache. `injectControlDependency` (harness.ts) is the
+    // same injection `BcDevMcpBackend.stageForCompile` (bcdev-backend.ts) applies to its own
+    // throwaway sibling copy, for exactly this reason; `target` here is already our own private
+    // temp dir, so the injection lands directly on it. Requires the caller's --package-cache to
+    // already carry a staged `lethal-control.app` (the same requirement any real `lethal run`
+    // against a bcdev backend has).
     const targetAppJsonPath = join(target, "app.json");
     const stagedManifest = JSON.parse(await readFile(targetAppJsonPath, "utf8")) as Record<
       string,
       unknown
     >;
-    const deps = Array.isArray(stagedManifest.dependencies)
-      ? (stagedManifest.dependencies as Array<Record<string, unknown>>)
-      : [];
-    if (!deps.some((d) => d.id === CONTROL_APP_ID)) {
-      deps.push({
-        id: CONTROL_APP_ID,
-        name: "LethAL Control",
-        publisher: "LethAL",
-        version: "1.0.0.0",
-      });
-    }
-    const compiledManifest = { ...stagedManifest, dependencies: deps };
+    const compiledManifest = injectControlDependency(stagedManifest);
     await writeFile(targetAppJsonPath, `${JSON.stringify(compiledManifest, null, 2)}\n`, "utf8");
 
     const mutantManifest = JSON.parse(await readFile(join(target, "mutant-manifest.json"), "utf8"));
@@ -114,7 +109,7 @@ export async function compileOnly(args: CompileOnlyArgs): Promise<void> {
     const artifact = await compiler.compile({
       projectDir: target,
       artifactId,
-      appId: String(compiledManifest.id),
+      appId: targetAppId,
       appVersion: String(compiledManifest.version),
       mutantManifest,
       appManifest: compiledManifest,

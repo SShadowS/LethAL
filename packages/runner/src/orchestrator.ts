@@ -686,8 +686,12 @@ function messageOf(err: unknown): string {
  * 5C-A). A target with no string `id` is structurally uncompilable and cannot register its
  * artifact, so this fails loudly rather than baking an empty first tuple element into every
  * guard (an empty-vs-empty match is this project's signature silent-wrong-verdict shape).
+ *
+ * Exported so `scripts/campaign/compile-only.ts` shares this exact check instead of its own
+ * `String(appManifest.id)`, which would silently coerce a missing id into the literal string
+ * "undefined" — precisely the plausible-empty-default shape this function exists to refuse.
  */
-function targetAppIdOf(projectManifest: Readonly<Record<string, unknown>>): string {
+export function targetAppIdOf(projectManifest: Readonly<Record<string, unknown>>): string {
   const id = projectManifest.id;
   if (typeof id !== "string" || id === "") {
     throw new Error(

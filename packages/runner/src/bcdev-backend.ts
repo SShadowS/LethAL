@@ -23,7 +23,7 @@ import type {
 } from "./backend";
 import { decidePublishOutcome } from "./deployment-verifier";
 import type { DeploymentVerifier } from "./deployment-verifier";
-import { CONTROL_APP_ID } from "./harness";
+import { injectControlDependency } from "./harness";
 import type { HarnessVerifier } from "./harness";
 import type { Lease } from "./lease";
 import { type LineMap, buildLineMap } from "./line-map";
@@ -397,20 +397,9 @@ export class BcDevMcpBackend implements ExecutionBackend {
     // Inject the dependency into the STAGED app.json only (never the shared instrumented dir).
     const appJsonPath = join(staging, "app.json");
     const app = JSON.parse(await readFile(appJsonPath, "utf8")) as Record<string, unknown>;
-    const deps = Array.isArray(app.dependencies)
-      ? (app.dependencies as Array<Record<string, unknown>>)
-      : [];
-    if (!deps.some((d) => d.id === CONTROL_APP_ID)) {
-      deps.push({
-        id: CONTROL_APP_ID,
-        name: "LethAL Control",
-        publisher: "LethAL",
-        version: "1.0.0.0",
-      });
-    }
     await writeFile(
       appJsonPath,
-      `${JSON.stringify({ ...app, dependencies: deps }, null, 2)}\n`,
+      `${JSON.stringify(injectControlDependency(app), null, 2)}\n`,
       "utf8",
     );
     // Stage the control symbol into the compiler's package cache (safe to share: al-runner's

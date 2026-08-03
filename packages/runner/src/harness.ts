@@ -8,6 +8,46 @@ import { compareAppVersions } from "./app-version";
  * every verdict.
  */
 export const CONTROL_APP_ID = "5e7a1c00-1111-4c00-8c00-1e7a1c000701";
+
+/**
+ * Returns a copy of `appJson` with the `LethAL Control` app declared as a dependency, adding it
+ * only if absent. The delegating selector `schemata/project.ts` writes into every instrumented
+ * target always references `Codeunit "LC Control State"` (`schemata/selector.ts`'s doc comment),
+ * which `alc` resolves by unqualified name across a declared dependency on this app — never
+ * implied merely by the symbol's presence in the package cache. Every caller that compiles an
+ * instrumented target from outside the shared, dependency-free `instrumentedDir`
+ * (`BcDevMcpBackend.stageForCompile`'s throwaway sibling copy; `scripts/campaign/compile-only.ts`'s
+ * own private temp dir) needs this same injection, so it lives here as the one place both agree
+ * with.
+ *
+ * The `id`/`some` guard is idempotent: re-running this against an app.json that already declares
+ * the dependency (a re-staged copy, or a caller's app.json that already lists it by hand) must
+ * not append a second copy — `alc` treats two dependency entries for the same app id as a real
+ * conflict, not a harmless duplicate.
+ *
+ * `version: "1.0.0.0"` is a FLOOR, not a pin: AL resolves a dependency's declared version as a
+ * minimum the actual symbol package must meet or exceed, so this stays below every real `LethAL
+ * Control` build (`MIN_CONTROL_VERSION` above tracks the actual minimum this client accepts at
+ * runtime — a separate, stricter check made against the deployed harness, not against `alc`).
+ */
+export function injectControlDependency(
+  appJson: Readonly<Record<string, unknown>>,
+): Record<string, unknown> {
+  const deps = Array.isArray(appJson.dependencies)
+    ? (appJson.dependencies as ReadonlyArray<Record<string, unknown>>)
+    : [];
+  if (deps.some((d) => d.id === CONTROL_APP_ID)) {
+    return { ...appJson, dependencies: deps };
+  }
+  return {
+    ...appJson,
+    dependencies: [
+      ...deps,
+      { id: CONTROL_APP_ID, name: "LethAL Control", publisher: "LethAL", version: "1.0.0.0" },
+    ],
+  };
+}
+
 /**
  * Layer 5C-B1 (design §7): protocol v2 is incompatible BY CONSTRUCTION in both directions.
  * `HarnessInfo` takes a REQUIRED `clientProtocol` argument on the v2 server, so a v1 client

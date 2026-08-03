@@ -10,6 +10,7 @@ import {
   HarnessVerifier,
   MIN_CONTROL_VERSION,
   MultiTenantContainerError,
+  injectControlDependency,
   resetSingleTenantWarningForTests,
 } from "../src/harness";
 
@@ -437,5 +438,52 @@ describe("HarnessAuthError (R20)", () => {
     // The narrowing must not swallow the general case.
     const verifier = new HarnessVerifier(cfg, respond(500, "boom") as never);
     return expect(verifier.verify()).rejects.toBeInstanceOf(HarnessVerificationError);
+  });
+});
+
+describe("injectControlDependency", () => {
+  // The shared injection BcDevMcpBackend.stageForCompile and scripts/campaign/compile-only.ts
+  // both apply to an instrumented target's app.json before compiling it — see harness.ts's doc
+  // comment on why the delegating selector cannot resolve `Codeunit "LC Control State"` without
+  // this dependency declared.
+
+  test("adds the dependency when absent", () => {
+    const appJson = { id: "target-app-id", version: "1.0.0.0", dependencies: [] };
+    const result = injectControlDependency(appJson);
+    expect(result.dependencies).toEqual([
+      { id: CONTROL_APP_ID, name: "LethAL Control", publisher: "LethAL", version: "1.0.0.0" },
+    ]);
+  });
+
+  test("adds the dependency when the app.json declares no dependencies array at all", () => {
+    const appJson = { id: "target-app-id", version: "1.0.0.0" };
+    const result = injectControlDependency(appJson);
+    expect(result.dependencies).toEqual([
+      { id: CONTROL_APP_ID, name: "LethAL Control", publisher: "LethAL", version: "1.0.0.0" },
+    ]);
+  });
+
+  test("does not duplicate the dependency when already present", () => {
+    // Re-staging an already-injected app.json (or a caller's app.json that already lists it by
+    // hand) must not produce a SECOND entry for the same app id — alc treats two dependency
+    // entries for one app id as a real conflict, not a harmless duplicate.
+    const existing = {
+      id: CONTROL_APP_ID,
+      name: "LethAL Control",
+      publisher: "LethAL",
+      version: "1.0.0.0",
+    };
+    const appJson = { id: "target-app-id", version: "1.0.0.0", dependencies: [existing] };
+    const result = injectControlDependency(appJson);
+    expect(result.dependencies).toEqual([existing]);
+  });
+
+  test("leaves every other field untouched", () => {
+    const appJson = { id: "target-app-id", version: "1.0.0.0", name: "Target App", idRanges: [] };
+    const result = injectControlDependency(appJson);
+    expect(result.id).toBe("target-app-id");
+    expect(result.version).toBe("1.0.0.0");
+    expect(result.name).toBe("Target App");
+    expect(result.idRanges).toEqual([]);
   });
 });
