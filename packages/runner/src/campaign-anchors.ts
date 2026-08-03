@@ -53,6 +53,14 @@ function inAnyRange(line: number, ranges: readonly ProcedureRange[]): boolean {
   return ranges.some((r) => line >= r.startLine && line <= r.endLine);
 }
 
+/**
+ * Precondition: callers MUST call `assertCardinality` on `report` first. These anchors are a
+ * payload evaluated against a report already known to be the pre-committed size — they do NOT
+ * re-derive that guarantee. `coverage-location` and `killed-at-least-one` both fail explicitly
+ * on a report with zero mutants, but that is a courtesy against a caller printing a single
+ * anchor in isolation, not a substitute for the cardinality check: `baseline-green` is
+ * cardinality-independent and would still read as a real pass on an empty report.
+ */
 export function checkAnchors(report: SessionReport, cfg: AnchorConfig): readonly AnchorResult[] {
   const results: AnchorResult[] = [];
 
@@ -67,22 +75,34 @@ export function checkAnchors(report: SessionReport, cfg: AnchorConfig): readonly
   });
 
   // Anchor 2 — every covered mutant is inside a covered procedure, or carries object-level
-  // attribution. This is the R29/R63 false-survivor tripwire on real code.
-  const offenders = report.mutants.filter(
-    (m) =>
-      COVERED_VERDICTS.has(m.verdict) &&
-      m.coverageAttribution !== "object" &&
-      !inAnyRange(m.line, cfg.coveredProcedureRanges),
-  );
-  results.push({
-    id: "coverage-location",
-    passed: offenders.length === 0,
-    detail:
+  // attribution. This is the R29/R63 false-survivor tripwire on real code. Guarded explicitly
+  // against an empty report: `[].filter(...).length === 0` is vacuously true, and "every covered
+  // mutant lies inside a covered procedure" is a meaningless claim over zero mutants, not a
+  // satisfied one.
+  let coverageLocationPassed: boolean;
+  let coverageLocationDetail: string;
+  if (report.mutants.length === 0) {
+    coverageLocationPassed = false;
+    coverageLocationDetail = "report holds no mutants — the claim is vacuous, not satisfied";
+  } else {
+    const offenders = report.mutants.filter(
+      (m) =>
+        COVERED_VERDICTS.has(m.verdict) &&
+        m.coverageAttribution !== "object" &&
+        !inAnyRange(m.line, cfg.coveredProcedureRanges),
+    );
+    coverageLocationPassed = offenders.length === 0;
+    coverageLocationDetail =
       offenders.length === 0
         ? "every covered mutant is inside a covered procedure or object-attributed"
         : `covered mutants outside the covered procedures: ${offenders
             .map((m) => `${m.mutantCode}@${m.line}`)
-            .join(", ")}`,
+            .join(", ")}`;
+  }
+  results.push({
+    id: "coverage-location",
+    passed: coverageLocationPassed,
+    detail: coverageLocationDetail,
   });
 
   // Anchor 4 — something was killed. (Anchor 3, M0013's branch, is asserted by the rung-1

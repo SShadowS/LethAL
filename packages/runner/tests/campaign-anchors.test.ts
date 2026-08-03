@@ -96,9 +96,14 @@ describe("checkAnchors", () => {
     expect(r.find((a) => a.id === "killed-at-least-one")?.passed).toBe(false);
   });
 
-  test("every anchor fails on an EMPTY report rather than passing vacuously", () => {
+  test("the empty-report guards: coverage-location and killed-at-least-one both fail on an empty report", () => {
+    // baseline-green is deliberately excluded here: "was the baseline green" is genuinely
+    // independent of mutant count, so an empty report with baselineGreen: true is a real state
+    // and this anchor legitimately passes on it. assertCardinality is the actual empty-report
+    // gate — these two anchors just fail explicitly too, as a courtesy, rather than passing
+    // vacuously via filter/every-on-empty.
     const r = checkAnchors(reportWith([]), CFG);
-    expect(r.every((a) => a.passed)).toBe(false);
+    expect(r.find((a) => a.id === "coverage-location")?.passed).toBe(false);
     expect(r.find((a) => a.id === "killed-at-least-one")?.passed).toBe(false);
   });
 });
