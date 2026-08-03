@@ -2,6 +2,12 @@
 
 Date: 2026-08-03. Status: design, approved for planning.
 
+Revised after an adversarial review that found the first version **not safe to implement**: both
+pre-committed numbers at the base of the ladder were wrong, the per-mutant reference rung 1's
+primary gate consumed does not exist on this machine, and rung 1 as written tripped its own
+two-quarantine abort deterministically. The architecture survived unchanged; the gates did not.
+Every number below was re-derived or re-verified against the repository on 2026-08-03.
+
 ## What this is
 
 Four rungs of increasing scope against a real app, each with a pre-committed gate, ending with a
@@ -42,9 +48,9 @@ rule `CLAUDE.md` already applies to a differing live-gate verdict.
 
 | rung | goal | gate |
 |---|---|---|
-| **0 — plumbing** | Fresh Continia environment running DO; LethAL Control published and harness-verified; DO's test app published; the target parses | `--dry-run` on the differential-run codeunit reproduces **105** deployable mutants; harness verification passes; compiler resolves to alc 17 |
-| **1 — smoke** | Reproduce the one sweep that already happened | `4 killed / 8 survived / 92 no-coverage / 1 error` over 105 mutants — the **fenced** column of the 2026-07-28 differential. Compared **per mutant**, not on aggregates |
-| **2 — module** | One real DO module, several publish batches | Completes without a second quarantine; report caveats numerically correct; **every survivor has `guardObserved === true`** |
+| **0 — plumbing** | Fresh Continia environment running DO; LethAL Control published and harness-verified; DO's test app published; the target parses **and compiles instrumented** | `--dry-run` reports **176** mutant sites; the instrumented project compiles offline under the chosen in-range selector ids; harness verification passes; compiler resolves to alc 17 |
+| **1 — smoke** | Establish a per-mutant baseline on real code that later rungs can be compared against | **Two runs, verdict-identical per mutant**, aggregate frozen from run 1. This is a determinism gate, not a regression gate — see below for why the historical anchor cannot serve |
+| **2 — module** | One real DO module, several publish batches | Completes without an unexplained quarantine; **survivor count > 0**; every survivor has `guardObserved === true`; `notInstrumented` accounting reconciles against a stated oracle |
 | **3 — agent** | A real agent reads the rung-2 report and tries to kill survivors | Pre-committed prediction of what it should attack and what it should refuse, diffed against the transcript; **every claimed kill red-checked** |
 
 ## Rung 0 — provisioning
@@ -57,10 +63,17 @@ Then:
 
 ```bash
 git -C U:/Git/do-rel2 worktree add U:/Git/do-lethal -b lethal/campaign-2026-08-03
+git -C U:/Git/do-lethal rev-parse HEAD    # RECORD THIS
 ```
 
 LethAL runs `--project U:/Git/do-lethal/Cloud`; the test app builds from `U:/Git/do-lethal/Test`.
 Undo for the entire experiment is `git worktree remove`.
+
+**The worktree commit is pinned in the rung-0 record**, because the ladder's first step is a user
+`git pull` and every later "did a verdict change?" question is unanswerable if the source underneath
+it moved. (As of 2026-08-03 no commit has touched `Cloud/` or `Test/` since 2026-07-27, and
+`Codeunit 6175297` last changed 2025-12-01 — so pinning costs nothing today and is the only thing
+that keeps it costing nothing tomorrow.)
 
 ### Environment
 
@@ -73,9 +86,11 @@ cd U:/Git && ./CLI/continia.exe env create --name lethal-do-campaign \
 ```
 
 **Fresh rather than reusing `f19aca88`.** That environment still carries whatever the R69 coverage
-work published, and R31 records that nothing detects a stale published test app — a failure mode
-that has already cost two debugging sessions. A new environment is a known state; that is worth the
-creation wait.
+work published. R31 is **done** — `staleTestApp.missingTests` now detects a published test app
+missing tests the source declares — but the shape it cannot see is **R56's**: an older-but-COMPLETE
+published build, where nothing diverges and the run measures the wrong binary while looking healthy.
+A fresh environment is the only mitigation for that shape, which is what makes the creation wait
+worth paying.
 
 `continia.exe` holds its own login: `env list` and `env get --json` both answered on 2026-08-03 with
 no `CONTINIA_API_TOKEN` set in the shell. Whether LethAL's `envTool.env` block still needs the token
@@ -84,10 +99,18 @@ passed through is **unmeasured** and rung 0 settles it.
 ### Selector ids — a blocker, not a detail
 
 DO's `Cloud/app.json` declares `idRanges: [{ from: 6175271, to: 6175468 }]`. `DEFAULT_SELECTOR_IDS`
-(79197–79199) is outside it, so `validateSelectorIdsForProject` refuses before any compile is
-attempted. This is exactly the scenario R3 was closed for, which also means the earlier DO sweeps
-already solved it — **recover the config those runs used before re-deriving three ids**, then
-validate the chosen ids against the range and against the codeunit ids DO already declares.
+(79197–79199, `cli.ts:80-84`) is outside it, so `validateSelectorIdsForProject` refuses. This is
+exactly the scenario R3 was closed for, which also means the earlier DO sweeps already solved it —
+**recover the config those runs used before re-deriving three ids**, then validate the chosen ids
+against the range and against the codeunit ids DO already declares (all three injected objects are
+codeunits, so the declared-codeunit set is the right collision set — `id-ranges.ts:65-90`; there is
+no separate table-id hole).
+
+**`--dry-run` does NOT exercise this.** It returns at `cli.ts:2058-2060`, before `resolveSession`
+reaches `validateSelectorIdsForProject` at `cli.ts:1704` — a DO dry-run today runs happily under the
+out-of-range default ids and is not refused. So a gate 0 built only from a dry-run would declare the
+plumbing sound and hand rung 1 the first execution of the id path. Gate 0 therefore carries an
+explicit instrumented-compile item; see below.
 
 ### Compiler
 
@@ -103,59 +126,146 @@ it is standing. Shape per `fixtures/README.md` §"Running against an external en
 
 ### Gate 0
 
-Blocks rung 1. All four must hold:
+Blocks rung 1. All five must hold:
 
 1. LethAL Control publishes to the new environment and harness-verifies (R25/R28: a stale local
    `lethal-control.app` fails with a confusing `clientProtocol` rejection — build it, do not assume).
-2. DO's test app publishes.
-3. The resolved compiler is alc 17.
-4. `lethal run --dry-run` on the rung-1 codeunit reports **105** deployable mutants.
+2. DO's test app compiles and publishes. **Known exclusion:** the 2026-07-27 run record notes the
+   test app excludes `CDOTelemetryTests` (pre-existing source/dependency mismatch, cited again in
+   R53's DO-route rejection). Building `Test/` as-is may not compile; the exclusion is applied
+   deliberately and recorded, not rediscovered mid-run.
+3. The resolved compiler is alc 17. **Observable:** the resolved `alcPath` is read back from the
+   run's own config resolution (`resolveToolPaths`, `cli.ts:1098-1102`) and its version confirmed by
+   invoking it — not inferred from the fact that a path was configured.
+4. `lethal run --dry-run --only "Al/Codeunit/Codeunit 6175297 CDO Send Cust. Statement Mgt.al"`
+   reports **176 mutant sites**, 1 file, 1 batch.
+5. The instrumented project **compiles offline** under the chosen in-range selector ids. This is the
+   item that actually exercises `validateSelectorIdsForProject` and the AL0297 class; without it
+   nothing in gate 0 touches the id path at all.
+
+**176 is today's number and is re-derived at plan time.** It is not the historical 138 or 105: the
+codeunit now carries 13 mutants from operators that shipped after the 2026-07-28 differential
+(`swap-call-arguments` 10, `remove-commit` 3) plus the Tier-2 record-method set (`remove-setrange`
+19, `remove-testfield` 3, `remove-calcfields` 3). Any operator landing between this spec and the run
+moves it, and a pre-commit that silently drifts is worse than none — so the number is regenerated
+and re-committed as the plan's first action, with its composition recorded.
 
 ## Rung 1 — smoke
 
-**Target: the configuration the 2026-07-28 differential ran** — `U:/Git/do-rel2/Cloud`, one codeunit
-in scope (instrumented object `Codeunit 6175297`), 56 baseline tests, default coverage mode.
+**Target, recovered from the run record rather than reconstructed:**
 
-**Pre-commit: `4 killed / 8 survived / 92 no-coverage / 1 error`, 105 mutants.** That is the
-**fenced** column, and the fenced path is what R58 made the default — so it is what a run today
-should produce. Identity was verified there on `mutantCode` + file + line + operator with **0
-mismatches**, and the fenced baseline was fully green (56 pass), so the anchor does not depend on a
-red baseline.
+```
+--project U:/Git/do-lethal/Cloud
+--only "Al/Codeunit/Codeunit 6175297 CDO Send Cust. Statement Mgt.al"
+--tests-only "Src/AutomaticDocuments/**"          # narrows 1,246 tests -> 56
+--stop-hung-sessions                              # see M0013 below
+```
 
-**Do not anchor on `16 / 86 / 15 / 21`.** Those are the same codeunit's **hub** numbers
-(`coverageMode: "procedure"`, the legacy escape hatch), taken against a **red baseline of 12 fail /
-44 pass** — and R63 established that 77 of those 86 survivors were **vacuous**, scored against tests
-that never executed the mutated code. R45's "verdicts identical, 16/86/15/21" measurement of
-`--tests-only` was made in that mode. Reproducing the hub column would reproduce a known-wrong
-answer.
+Note the project path is the **worktree**, not `U:/Git/do-rel2` — the whole point of rung 0's
+worktree is that no run touches the user's checkout.
 
-Compared **per mutant**. A deviation means something that shipped since 2026-07-28 changed a verdict
-on real code, which is a regression, not a curiosity.
+### The gate is determinism, and the historical anchor cannot replace it
 
-**Fallback if the exact scoping cannot be recovered.** The `--only` glob and test scoping of that
-run must come from its record. If they cannot be recovered exactly, rung 1 degrades to a weaker but
-still real gate: two runs of whatever scoping is used, **verdict-identical per mutant** (what
-`itest:bcdev` does), with the aggregate frozen from run 1. That is a determinism gate, not a
-regression gate, and the difference is recorded rather than glossed.
+**The primary gate: two runs, verdict-identical per mutant, aggregate frozen from run 1.** Same
+comparison `itest:bcdev` and `itest:alrunner` make.
+
+This is a demotion from what the first draft of this spec asserted, and the reason is not a
+preference:
+
+- **`4 / 8 / 92 / 1` over 105 is not a complete run's result.** It is what the 2026-07-28 fenced run
+  *reached* before M0013 latched the session and the tail was lost — "105 of 138"
+  (`docs/measurements/README.md:313-316`). The deployed count that day was 138. `docs/measurements`
+  says outright: *a clean, COMPLETE fenced DO run does not exist*.
+- **Today the same scope generates 176.** Neither 105 nor 138 is comparable to it.
+- **The per-mutant record is gone.** The 2026-07-28 differential was never bench-recorded
+  (`docs/benchmarks/runs.jsonl` jumps 07-27 → 07-31), `scripts/probe-r58-differential.ts` wrote its
+  dumps to a scratch `--out` and its store to a `mkdtemp` sqlite, and no surviving temp dir holds a
+  DO run. Only the aggregate and the transition counts survive, in prose.
+
+So a "compare per mutant against 2026-07-28" gate consumes a reference that does not exist — and its
+natural implementation (*join today's run to the reference by identity, count mismatches*) reports
+**0 mismatches against a missing reference and PASSES**. That is this repo's signature bug, written
+into a gate whose entire job is to prevent it.
+
+**Therefore, a hard rule for any comparator built for this campaign:** it asserts it loaded exactly
+*N* reference verdicts, with *N* pre-committed, and **throws** otherwise. Never `if (!ref) return
+ok`. This applies to rung 1's run-to-run comparator and to every later one.
+
+**Do not anchor on `16 / 86 / 15 / 21` either.** Those are the same codeunit's **hub** numbers
+(`coverageMode: "procedure"`, the legacy escape hatch), against a **red baseline of 12 fail / 44
+pass**, and R63 established 77 of the 86 survivors were **vacuous** — scored against tests that
+never executed the mutated code. They are reproducible (the run record shows them reproduced exactly
+on a rebuilt environment), which makes them tempting and no less wrong.
+
+### Deviation taxonomy, pre-committed
+
+"A deviation is a regression" is a wrong diagnosis by construction — it points the reader at LethAL
+when three benign causes come first. Every deviation is classified before it is acted on:
+
+| class | meaning | is it a signal? |
+|---|---|---|
+| **new-mutant** | identity has no 2026-07-28 counterpart (post-differential operators) | no |
+| **no-reference** | identity existed but the severed run never scored it (33 of 138) | no |
+| **source-drift** | worktree commit ≠ pinned rung-0 commit | no — fix the pin |
+| **shared-identity-changed** | identity present in both, verdict differs | **yes — this alone is a regression signal** |
+
+### M0013 will hang, and the spec must plan for it rather than be surprised
+
+M0013 is `negate-conditional` on `until DOCustSetup.Next() = 0`; it is covered by the
+`SendPeriodStatements` tests, which are inside the 56. It stranded at both the 30 s and 120 s
+budgets. Left alone the sequence is deterministic: hang → `in-flight-unknown` → quarantine; recover;
+`--resume`; `error` is not a carryable verdict so M0013 **re-executes**; hang again → quarantine #2 →
+the two-quarantine rule stops the ladder at rung 1, every time.
+
+So:
+
+- Rung 1 runs with **`--stop-hung-sessions`** — the flag R53 built for exactly this mutant.
+- **M0013's verdict is pre-committed as `timeout-killed`**, an explicit named divergence from the
+  2026-07-28 column's `error` for that identity.
+- **"The same mutant re-hanging after a resume" does not count as the second quarantine.** Counting
+  one deterministic behaviour twice would abort the ladder on a known, named thing.
+- `--stop-hung-sessions` is **unmeasured on the hosted topology** (R53's own caveat; it was measured
+  against a container). At a ~30–60 s budget the held request resolves well inside the proxy's ~362 s
+  window, so it plausibly works — *plausibly* is the operative word, and rung 0 gets a one-mutant
+  probe of it rather than the ladder resting on an assumption.
+
+Expect more of this at rung 2, not less: 19 `remove-setrange` mutants now sit in this loop-heavy
+codeunit, and deleting a `SetRange` that bounds a `repeat … until Next() = 0` is a near-hang shape on
+real data.
 
 Cost anchors for planning, all measured on DO: total 1065 s unnarrowed (generate 0.7 + deploy 40.8 +
 baseline 863.8 + mutants 151.9 + overhead 8.5), 231.2 s with `--tests-only` (baseline 744.8 → 25.0
-s); publish 36.8 s per batch.
+s); publish 36.8 s per batch. Rung 1 pays that twice.
 
 ## Rung 2 — one module
 
 **The module is chosen by measurement, not by name.** Candidates are ranked offline from R69's
 per-test coverage data by sites × test-coverage density, so survivors have a real chance of being
-findings rather than dead code. Target size ~500–1500 mutants, several publish batches.
+findings rather than dead code. **First confirm that data still exists on disk** — it is another
+uncommitted live-run artifact, and if it is gone the ranking silently costs hours of hub
+re-measurement. If it is gone, rank on a cheaper offline proxy (sites per file × whether any test
+file names the object) and record that the ranking is weaker.
+
+Target size ~500–1500 mutants, several publish batches. **Above 1,000 sites the run is refused by
+default** — `LARGE_RUN_MUTANT_THRESHOLD = 1_000` (`orchestrator.ts:106`), R48 — so a module in the
+upper half of that band needs `--allow-large-run`, deliberately and recorded.
 
 Gate:
 
-- Completes without a second quarantine (see recovery below).
-- The report's caveats are numerically correct — `notInstrumented` counts, `only`/`testsOnly`
-  narrowing, `validity.reliability`.
+- Completes without an **unexplained** quarantine — a hang traced to a named mutant with
+  `--stop-hung-sessions` scoring it `timeout-killed` is an expected outcome, not a gate failure.
+- **Survivor count > 0.** Otherwise the survivor gate below passes vacuously, and on a module chosen
+  for coverage density zero survivors is itself an anomaly worth stopping for.
 - **Every survivor carries `guardObserved === true`.** R46 exists because a survivor no instrumented
   guard fired for is not a finding at all, and R29 produced ten false survivors before anything
-  distinguished them.
+  distinguished them. **State the weakness at the same time:** `true` is the weak direction —
+  `ControlState.IsActive` sets `observedAny` for *any* guard in the artifact, not this mutant's, so
+  `true` does not prove *this* mutation was in play. `false` is the strong signal, and it is the one
+  that must never appear on a survivor.
+- **`notInstrumented` reconciles against a stated oracle** — the file/site counts recomputed
+  independently from the same project scan — rather than "looks right". R40 left a recorded
+  ambiguity in exactly this accounting under `--only`, which rung 2 uses, so the oracle is named in
+  the plan before the run rather than negotiated after it.
 
 The rung-2 report is the input to rung 3 and is archived verbatim.
 
@@ -208,6 +318,12 @@ prove the report is good.
 - Bounded by `--max-budget-usd`.
 - Works in `U:/Git/do-lethal`, which is a worktree; the user's checkout is never touched.
 
+**These fences are a rung-3 BUILD item, not an existing capability.** No hook enforcing them exists
+today. `--allowedTools`/`--disallowedTools` give the coarse cut; anything finer (rejecting a
+`lethal run` that omits `--only`) needs a `PreToolUse` hook written and supplied via `--settings`,
+and it must be tested against a deliberately-violating prompt before the real run — an unenforced
+fence that is *assumed* enforced is worse than none.
+
 ### The pre-commitment
 
 Before the agent starts, written to a file: which survivors are genuine targets, which are
@@ -225,6 +341,14 @@ When the agent says its new test kills a survivor, revert that test, confirm the
 - This repo's signature bug is a test that passes for the wrong reason. An unverified kill claim is
   that bug wearing a success costume.
 
+**Budget the red-check explicitly, because unbudgeted cost is pressure to skip the leg that
+matters.** Each confirmation runs twice — once at the agent's own scoping, once **unnarrowed** —
+and the unnarrowed leg pays the full 1,246-test baseline (~750 s hosted, inside R44's flakiness
+window). At three claimed kills that is roughly an hour of live time. If that is not affordable at
+run time, the correct response is to **cap the number of claimed kills accepted for verification**
+and say so in the result — never to drop the unnarrowed leg, which is the exact false-kill door this
+section exists to close.
+
 ## Recovery and abort
 
 **A quarantine is expected, not a surprise.** R53 is live on DO: `negate-conditional` on
@@ -235,7 +359,11 @@ piece of state: the quarantine record is a local file, the op marker is a row in
 database.
 
 **Rule: one quarantine per rung is normal; a second at the same rung stops the ladder** and gets an
-`R<n>` row.
+`R<n>` row — **except that the same mutant re-hanging after a `--resume` does not count twice.**
+`error` is not a carryable verdict, so a resumed run re-executes the hung mutant and re-strands
+deterministically; counting that as a second, independent quarantine would abort the ladder on a
+known named behaviour. Rung 1 runs `--stop-hung-sessions` specifically so this path is rare rather
+than certain.
 
 Watched, not fixable in flight:
 
