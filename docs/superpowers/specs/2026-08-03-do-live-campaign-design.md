@@ -49,7 +49,7 @@ rule `CLAUDE.md` already applies to a differing live-gate verdict.
 | rung | goal | gate |
 |---|---|---|
 | **0 — plumbing** | Fresh Continia environment running DO; LethAL Control published and harness-verified; DO's test app published; the target parses **and compiles instrumented** | `--dry-run` reports **176** mutant sites; the instrumented project compiles offline under the chosen in-range selector ids; harness verification passes; compiler resolves to alc 17 |
-| **1 — smoke** | Establish a per-mutant baseline on real code that later rungs can be compared against | **Two runs, verdict-identical per mutant**, aggregate frozen from run 1. This is a determinism gate, not a regression gate — see below for why the historical anchor cannot serve |
+| **1 — smoke** | Establish a per-mutant baseline on real code that later rungs can be compared against | **Two runs, verdict-identical per mutant**, run 1 frozen per-mutant to a committed file, plus four falsifiable prose anchors. Determinism *and* a coarse regression payload — see below for why the historical per-mutant anchor cannot serve |
 | **2 — module** | One real DO module, several publish batches | Completes without an unexplained quarantine; **survivor count > 0**; every survivor has `guardObserved === true`; `notInstrumented` accounting reconciles against a stated oracle |
 | **3 — agent** | A real agent reads the rung-2 report and tries to kill survivors | Pre-committed prediction of what it should attack and what it should refuse, diffed against the transcript; **every claimed kill red-checked** |
 
@@ -143,12 +143,40 @@ Blocks rung 1. All five must hold:
    item that actually exercises `validateSelectorIdsForProject` and the AL0297 class; without it
    nothing in gate 0 touches the id path at all.
 
-**176 is today's number and is re-derived at plan time.** It is not the historical 138 or 105: the
-codeunit now carries 13 mutants from operators that shipped after the 2026-07-28 differential
-(`swap-call-arguments` 10, `remove-commit` 3) plus the Tier-2 record-method set (`remove-setrange`
-19, `remove-testfield` 3, `remove-calcfields` 3). Any operator landing between this spec and the run
-moves it, and a pre-commit that silently drifts is worse than none — so the number is regenerated
-and re-committed as the plan's first action, with its composition recorded.
+   **This is a BUILD item, not a checkbox — no single invocation does it today.** `--dry-run`
+   returns before validation, a real `lethal run` compiles but cannot stop before publish, and there
+   is no `--compile-only` (verified: zero occurrences in `cli.ts`). It needs a ~40-line script
+   gluing four pieces that are already exported and already driven standalone elsewhere:
+   `validateSelectorIdsForProject` (`cli.ts:224`), `generateMutationSet` + `writeInstrumentedProject`
+   (driven outside the CLI by `scripts/measure-testpage-exclusive.ts`), `ArtifactCompiler` +
+   `defaultArtifactIo` (driven outside the CLI by `scripts/probe-r58-differential.ts:222-289`), and
+   alc resolution via `resolveToolPaths`. Left as a bare checkbox it gets "verified" by running
+   something that does not exercise the path — which is this finding's original disease.
+
+6. **The hosted hang-stop probe.** `--stop-hung-sessions` decides M0013's pre-committed branch and is
+   unmeasured on the hosted topology, so it is measured **in gate 0**, not in rung-1 prose — a probe
+   outside the gate is a probe that gets skipped. Implementation: publish `fixtures/sandbox-hang`
+   (committed, own app id and id range, collides with nothing) to the fresh environment and run
+   `itest:hang`'s ON leg through an envtool config. That is committed machinery measuring exactly
+   "does the held-request stop survive the hosted proxy", and it touches no DO code. Note this is
+   **not** implementable against DO itself with existing flags: `--only` selects files, not mutants,
+   so scoping to the codeunit runs every covered mutant.
+
+**176 is today's number and is re-derived at plan time.** It is not the historical 138 or 105. Its
+composition against 138 is **partly unexplained, and that is stated rather than smoothed over**:
+
+- **13 are certainly new by operator name** — `swap-call-arguments` 10 (`f9e055c`, 2026-08-03) and
+  `remove-commit` 3 (`9b541cf`, 2026-07-31), both after the differential.
+- **The remaining 25 are unreconciled.** The obvious explanation — "the Tier-2 record-method set is
+  new" — is **false**: the Tier-2 scaffold registered at `fbda298` and `RemoveSetRange` landed at
+  `50a7118`, both on **2026-07-26**, before the 2026-07-28 differential. So those mutants were, or
+  should have been, inside the 138. The gap is roster or behaviour drift between 2026-07-26 and
+  today, and **reconciling it exactly is impossible without the lost per-mutant record** — which is
+  one more reason per-identity comparison to 07-28 is dead rather than merely inconvenient.
+
+Any operator landing between this spec and the run moves the number again, and a pre-commit that
+silently drifts is worse than none — so it is regenerated and re-committed as the plan's first
+action, with its per-operator composition recorded.
 
 ## Rung 1 — smoke
 
@@ -166,8 +194,10 @@ worktree is that no run touches the user's checkout.
 
 ### The gate is determinism, and the historical anchor cannot replace it
 
-**The primary gate: two runs, verdict-identical per mutant, aggregate frozen from run 1.** Same
-comparison `itest:bcdev` and `itest:alrunner` make.
+**The primary gate: two runs, verdict-identical per mutant, run 1's PER-MUTANT verdicts frozen to a
+committed file.** `itest:bcdev` and `itest:alrunner` do both halves — they run twice *and* compare
+against a committed frozen baseline file — and this campaign needs both for the reason in
+"Preserve the record" below.
 
 This is a demotion from what the first draft of this spec asserted, and the reason is not a
 preference:
@@ -197,37 +227,70 @@ pass**, and R63 established 77 of the 86 survivors were **vacuous** — scored a
 never executed the mutated code. They are reproducible (the run record shows them reproduced exactly
 on a rebuilt environment), which makes them tempting and no less wrong.
 
-### Deviation taxonomy, pre-committed
+### The regression payload: four falsifiable anchors, not a taxonomy
 
-"A deviation is a regression" is a wrong diagnosis by construction — it points the reader at LethAL
-when three benign causes come first. Every deviation is classified before it is acted on:
+An earlier revision put a four-class "deviation taxonomy" here, keyed to the 2026-07-28 reference.
+**That was a rationalization door and mostly dead text**: two of its classes (*no-reference*,
+*shared-identity-changed*) require per-identity 07-28 verdicts, which the section above establishes
+are gone — so nobody can prove any given identity was among the 105, and any inconvenient deviation
+could be filed as "no reference for that one". Unfalsifiable. It was also orphaned: under a
+run-1-vs-run-2 gate the other classes are impossible by construction.
 
-| class | meaning | is it a signal? |
+Source drift survives, promoted to what it actually is: **a validity precondition**, asserted before
+the run (worktree commit == the pinned rung-0 commit), not a way to explain a result afterwards.
+
+The regression payload comes instead from four anchors that **survive in committed prose**, need no
+per-mutant reference, and are each falsifiable:
+
+| # | anchor | catches |
 |---|---|---|
-| **new-mutant** | identity has no 2026-07-28 counterpart (post-differential operators) | no |
-| **no-reference** | identity existed but the severed run never scored it (33 of 138) | no |
-| **source-drift** | worktree commit ≠ pinned rung-0 commit | no — fix the pin |
-| **shared-identity-changed** | identity present in both, verdict differs | **yes — this alone is a regression signal** |
+| 1 | **Fenced baseline is 56/56 green** | session/runner regressions; binary, stated in the record |
+| 2 | **Coverage split by LOCATION**: every covered (non-`no-coverage`) mutant's site lies inside `SendPeriodStatements` or carries object-level attribution; every mutant outside it is `no-coverage` | the R29/R63 false-survivor class, on real code. The record pins it exactly — *"its 13 covered mutants are exactly `SendPeriodStatements` (12) plus one object-level entry"* |
+| 3 | **M0013's identity scores per the branch above** | the hosted-stop question |
+| 4 | **killed >= 1** | a total collapse of scoring; the 07-28 fence killed 4 in that procedure |
+
+Anchor 2 is deliberately **location-based, not count-based**, so it survives roster growth: a mutant
+from a new operator landing inside `SendPeriodStatements` is allowed to be covered. Every anchor is
+a committed constant, so the throw-on-missing-reference rule above is trivially satisfiable for all
+four.
+
+Determinism plus these four is a genuine, if coarse, regression gate. It is weaker than a per-mutant
+reference and the spec says so rather than implying otherwise.
 
 ### M0013 will hang, and the spec must plan for it rather than be surprised
 
 M0013 is `negate-conditional` on `until DOCustSetup.Next() = 0`; it is covered by the
 `SendPeriodStatements` tests, which are inside the 56. It stranded at both the 30 s and 120 s
-budgets. Left alone the sequence is deterministic: hang → `in-flight-unknown` → quarantine; recover;
-`--resume`; `error` is not a carryable verdict so M0013 **re-executes**; hang again → quarantine #2 →
-the two-quarantine rule stops the ladder at rung 1, every time.
+budgets.
+
+**Resume does NOT re-execute it.** `buildResumeIndex` marks stranded identities (`resume.ts:62,95-97,152`)
+and the mutant loop skips them, recording `error` with the note *"not re-run on resume … It is NOT
+scored either way"* (`orchestrator.ts:2566-2578`); `--retry-stranded` is the explicit opt-in to
+attempt them anyway, and the resume banner states all of it (`orchestrator.ts:1799`). So the flagless
+sequence is: strand → quarantine **#1** → recover → `--resume` → M0013 **skipped and unscored** →
+tail completes. One quarantine, not two.
+
+**Never pass `--retry-stranded` mid-gate.** It converts the safe skip back into the re-strand loop.
 
 So:
 
-- Rung 1 runs with **`--stop-hung-sessions`** — the flag R53 built for exactly this mutant.
-- **M0013's verdict is pre-committed as `timeout-killed`**, an explicit named divergence from the
-  2026-07-28 column's `error` for that identity.
-- **"The same mutant re-hanging after a resume" does not count as the second quarantine.** Counting
-  one deterministic behaviour twice would abort the ladder on a known, named thing.
+- Rung 1 runs with **`--stop-hung-sessions`** — the flag R53 built for exactly this mutant — and
+  therefore **no quarantine is expected at rung 1 at all**. There is no exemption and no allowance:
+  a quarantine at M0013's identity means the hosted stop did not work, which is a finding, not an
+  expected cost.
+- **M0013's verdict is pre-committed as a BRANCH**, decided by gate 0's probe, not assumed:
+  - *stop confirmed on hosted* → `timeout-killed`, and the determinism comparison covers all 176.
+  - *stop unconfirmable* → an `R<n>` row is filed, each fresh run strands once at M0013's identity,
+    recovery is `--resume` (auto-skip, unscored), and the comparison covers **175 plus exactly one
+    named excluded identity, with that cardinality asserted**.
+- **Identity is the code's own key** — `astHash` + codeunit + operator (`resume.ts:106`) — never an
+  eyeballed M-number. M-numbers shift across re-batching (R47 deliberately excludes
+  `maxGuardsPerBatch` from the resume fingerprint), so an M-number match can both false-match a
+  genuinely new hang and false-miss a real repeat.
 - `--stop-hung-sessions` is **unmeasured on the hosted topology** (R53's own caveat; it was measured
   against a container). At a ~30–60 s budget the held request resolves well inside the proxy's ~362 s
-  window, so it plausibly works — *plausibly* is the operative word, and rung 0 gets a one-mutant
-  probe of it rather than the ladder resting on an assumption.
+  window, so it plausibly works — *plausibly* is the operative word, which is why gate 0 probes it
+  (item 6) instead of the ladder resting on it.
 
 Expect more of this at rung 2, not less: 19 `remove-setrange` mutants now sit in this loop-heavy
 codeunit, and deleting a `SetRange` that bounds a `repeat … until Next() = 0` is a near-hang shape on
@@ -252,8 +315,15 @@ upper half of that band needs `--allow-large-run`, deliberately and recorded.
 
 Gate:
 
-- Completes without an **unexplained** quarantine — a hang traced to a named mutant with
-  `--stop-hung-sessions` scoring it `timeout-killed` is an expected outcome, not a gate failure.
+- **A BASELINE quarantine is a gate failure, period.** Only mutant-phase strands have a recovery
+  story: a baseline `in-flight-unknown` quarantines unconditionally (`orchestrator.ts:2360-2365`)
+  and the stop machinery does not reach the baseline at all — there is no per-test budget there, and
+  R69 Task 7 measured the R30-shape `TestPage` baseline hang as deterministic and unrescuable,
+  twice. "We can explain it, it's the R30 shape" is precisely the rationalisation this rules out.
+  **Screen candidate modules during selection** for covering tests that declare a `TestPage` — a
+  cheap grep; the corrected figure is 5 files carrying `TestPage` tests in `do-rel2/Test`.
+- A mutant-phase strand scored `timeout-killed` by `--stop-hung-sessions` is an expected outcome and
+  not a gate failure. A mutant-phase *quarantine* is one, on the same terms as rung 1.
 - **Survivor count > 0.** Otherwise the survivor gate below passes vacuously, and on a module chosen
   for coverage density zero survivors is itself an anomaly worth stopping for.
 - **Every survivor carries `guardObserved === true`.** R46 exists because a survivor no instrumented
@@ -262,10 +332,12 @@ Gate:
   `ControlState.IsActive` sets `observedAny` for *any* guard in the artifact, not this mutant's, so
   `true` does not prove *this* mutation was in play. `false` is the strong signal, and it is the one
   that must never appear on a survivor.
-- **`notInstrumented` reconciles against a stated oracle** — the file/site counts recomputed
-  independently from the same project scan — rather than "looks right". R40 left a recorded
-  ambiguity in exactly this accounting under `--only`, which rung 2 uses, so the oracle is named in
-  the plan before the run rather than negotiated after it.
+- **`notInstrumented` reconciles against a genuinely INDEPENDENT oracle.** Not the dry-run: that
+  deliberately mirrors the session's own accounting (R5, same producer), so comparing them is a
+  producer against itself. The oracle is a file-kind census taken by object-header scan over the
+  module's files, computed outside LethAL's spec pipeline. R40 left a recorded ambiguity in exactly
+  this accounting under `--only`, which rung 2 uses, so the oracle is named in the plan before the
+  run rather than negotiated after it.
 
 The rung-2 report is the input to rung 3 and is archived verbatim.
 
@@ -349,21 +421,53 @@ run time, the correct response is to **cap the number of claimed kills accepted 
 and say so in the result — never to drop the unnarrowed leg, which is the exact false-kill door this
 section exists to close.
 
+## Preserve the record, or this campaign becomes the next one's dead anchor
+
+The 2026-07-28 anchor died because its per-mutant record lived only in a scratch `--out` and a
+`mkdtemp` sqlite, and only its aggregate survived in prose. **This campaign is set up to repeat that
+exactly** — the run store and reports live in the worktree, and the stated undo is
+`git worktree remove`, which deletes them.
+
+So, per rung, before any teardown:
+
+- Every run uses **`--out <json>`** to a path **outside** the worktree.
+- **Run 1's per-mutant verdicts are frozen to a committed campaign-records file**, the pattern the
+  itest gates already use — not an aggregate in prose.
+- The rung's report is archived **before** environment deletion or `git worktree remove`.
+- The pinned worktree commit, the resolved selector ids, the alc version, the flag set, and the
+  environment id are recorded alongside, since a verdict file without its configuration is another
+  unreproducible aggregate.
+
+**Decide up front, not after:** whether a quarantine-resumed completion is an admissible input to
+the determinism comparison. `docs/measurements` bars resumed runs from *differential* inputs; a
+verdict-only run-vs-run comparison is defensible, but the decision is pre-committed either way.
+
 ## Recovery and abort
 
-**A quarantine is expected, not a surprise.** R53 is live on DO: `negate-conditional` on
+**The hang is known; the quarantine is not licensed by it.** R53 is live on DO: `negate-conditional` on
 `until DOCustSetup.Next() = 0` becomes `<> 0` and never terminates, quarantining the tier and
 blocking every mutant behind it. Recovery is the `recover-tier` skill — `env stop`, `env start`,
 **wait for `Running`**, `force-reset-lease`, `clear-quarantine`. A restart alone clears neither
 piece of state: the quarantine record is a local file, the op marker is a row in the environment's
 database.
 
-**Rule: one quarantine per rung is normal; a second at the same rung stops the ladder** and gets an
-`R<n>` row — **except that the same mutant re-hanging after a `--resume` does not count twice.**
-`error` is not a carryable verdict, so a resumed run re-executes the hung mutant and re-strands
-deterministically; counting that as a second, independent quarantine would abort the ladder on a
-known named behaviour. Rung 1 runs `--stop-hung-sessions` specifically so this path is rare rather
-than certain.
+**Rule: with `--stop-hung-sessions` on, NO quarantine is expected. Any quarantine is a finding.**
+
+An earlier revision carried an exemption here — "the same mutant re-hanging after a `--resume` does
+not count twice" — and it is **deleted**, for three reasons, all verified against the code:
+
+- **Its premise was false.** Resume does not re-execute a stranded identity; it skips it and records
+  it unscored (`orchestrator.ts:2566-2578`, `resume.ts:62,95-97,152`). The flagless sequence is one
+  quarantine, not two, so nothing needed excusing.
+- **It excused the wrong thing.** With `--stop-hung-sessions` active, a quarantine at M0013 means
+  the hosted stop was unconfirmable — R53's own named caveat, and the single most valuable
+  measurement rung 1 can produce. Filing that as "expected" swallows it.
+- **It had no identity predicate and no iteration cap**, so it converted a hard stop into an
+  unbounded recover-resume loop keyed on an eyeballed M-number that can shift across re-batching.
+
+Recovery, when a quarantine does happen: the `recover-tier` skill, then `--resume`, which skips the
+stranded identity and records it unscored. **Never `--retry-stranded` mid-gate.** Each quarantine
+gets an `R<n>` row; a second one at the same rung stops the ladder.
 
 Watched, not fixable in flight:
 
