@@ -2,11 +2,14 @@
 
 This is what the DO campaign's rung-3 `claude -p` agent gets, what it does not get, and — this is
 the part that matters — **which guarantee comes from where, and how strong each one actually is**.
-Three fix rounds went into this (full detail in `task-4-report.md`): round 1 hardened a hook that
+Four fix rounds went into this (full detail, probe matrix and bypass history in
+`fence-probe-matrix.md`, committed alongside this file): round 1 hardened a hook that
 an adversarial review then defeated with shell-level obfuscation; round 2 hardened it again and the
 same review defeated it a second time, with a different obfuscation class. Round 3 is a course
 correction, not another hardening pass — see the threat model below for why, and read this document
-as the honest version of the claims, not the aspirational one.
+as the honest version of the claims, not the aspirational one. Round 4 fixed a fault in the other
+direction: the hook was denying the agent's OWN workspace, because `\blethal\b` matches inside
+`do-lethal`.
 
 ## Threat model
 
@@ -17,8 +20,13 @@ values work fine and are what the task actually calls for.
 
 What that buys: protection against the ordinary ways a legitimate agent could go wrong by mistake —
 misreading a path, running `lethal run` without narrowing because it forgot, reaching for a
-plausible-looking shell idiom that happens to touch the wrong tree. Round 3's probe matrix in
-`task-4-report.md` covers this class and the hook denies all of it.
+plausible-looking shell idiom that happens to touch the wrong tree. The probe matrix in
+`fence-probe-matrix.md` covers this class and the hook denies all of it.
+
+**And the fence must not fire on ordinary work.** A false deny is not the harmless direction here:
+rung 3 files a roadmap row for every agent confusion (plan Task 8 step 4), so a fence that refuses
+`cd U:/Git/do-lethal && bun run ...` manufactures the exact signal the campaign is trying to
+measure. Cases 26–34 of the matrix hold that line, from both sides.
 
 What it does NOT buy: any assurance against deliberate evasion. Three rounds produced three bypass
 classes of the same underlying shape — text-matching a Bash command string is not a parser, and
@@ -74,7 +82,8 @@ bypasses; round 2: git-bash mount form, `..` traversal, quote-splitting, split-f
 fourth class (shell substitution) found and deliberately left open in round 3 — not because it
 couldn't be described, but because the campaign owner decided closing it isn't worth what it costs
 against a threat model that doesn't include deliberate evasion. Full detail and the probe matrix
-proving both the closed classes and the accepted residual: `task-4-report.md`.
+proving both the closed classes and the accepted residuals: `fence-probe-matrix.md`, whose every
+row is a live case in `packages/runner/tests/campaign-fence.test.ts`.
 
 ## The preflight requirement
 
@@ -112,4 +121,4 @@ answers is itself a fail-open case). It exits non-zero the moment any of that do
 Verified: it fails against the settings file as currently committed (pre-merge — the real bug, not
 a synthetic one), passes against a settings file naming a hook copy that actually exists, and fails
 within the timeout against a deliberately hanging hook rather than hanging itself. See
-`task-4-report.md` for the full transcripts of all three.
+`fence-probe-matrix.md` for what preflight does and does not prove.

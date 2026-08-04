@@ -15,8 +15,9 @@
  * actually use, extracts every configured PreToolUse hook command from it (never hardcodes a
  * path — a wrong path in settings.json is exactly the failure mode this exists to catch), runs
  * each one exactly as the harness would (a JSON event piped to the command on stdin, the
- * command's own stdout read back), feeds it a small set of probes that must always be denied, and
- * exits non-zero the moment any of them is not. Rung 3 must not start unless this exits 0.
+ * command's own stdout read back), feeds it a small set of probes whose correct answer is already
+ * known — two that must be denied and one that must be ALLOWED — and exits non-zero the moment
+ * any of them answers differently. Rung 3 must not start unless this exits 0.
  *
  * FIX ROUND 3: a hook command that reads stdin and then awaits something that never resolves
  * (a bug in the configured hook itself, not in this script) used to hang this preflight forever —
@@ -47,16 +48,24 @@ interface SettingsShape {
   };
 }
 
-// Every probe here is expected to be denied under BOTH fix rounds' logic — one exercises rule 1
-// (the write fence), one exercises the escape-hatch flag introduced in round 2 for rule 2. If the
-// configured hook command can't be run at all, or answers anything other than a well-formed deny
-// to either, that is the fail-open scenario this script exists to catch.
-const KNOWN_DENY_PROBES: ReadonlyArray<{
+// Probes whose answer we already know. Two must be DENIED — one exercises rule 1 (the write
+// fence), one the escape-hatch flag rule — and one must be ALLOWED. If the configured hook command
+// can't be run at all, or answers anything other than the known-correct decision, that is the
+// scenario this script exists to catch.
+//
+// The allow probe is not symmetry for its own sake. A hook that denies everything passes a
+// deny-only preflight and then makes rung 3 unrunnable, one refused tool call at a time — and
+// under plan Task 8 step 4 each of those refusals looks like an agent confusion worth a roadmap
+// row. That is exactly what round 4's `\blethal\b`-matches-`do-lethal` bug did, and a deny-only
+// preflight could not see it.
+const KNOWN_PROBES: ReadonlyArray<{
   readonly label: string;
+  readonly expect: "deny" | "allow";
   readonly event: Record<string, unknown>;
 }> = [
   {
     label: "Write under U:/Git/LethAL",
+    expect: "deny",
     event: {
       tool_name: "Write",
       tool_input: { file_path: "U:/Git/LethAL/PROBE.txt", content: "x" },
@@ -64,12 +73,21 @@ const KNOWN_DENY_PROBES: ReadonlyArray<{
   },
   {
     label: "Bash `lethal run --allow-large-run` (opts out of the product's own size refusal)",
+    expect: "deny",
     event: {
       tool_name: "Bash",
       tool_input: {
         command:
           'lethal run --project U:/Git/do-lethal/Cloud --only "x" --tests-only "y" --allow-large-run',
       },
+    },
+  },
+  {
+    label: "Bash inside the agent's OWN workspace (`cd U:/Git/do-lethal && bun run ...`)",
+    expect: "allow",
+    event: {
+      tool_name: "Bash",
+      tool_input: { command: "cd U:/Git/do-lethal && bun run scripts/x.ts" },
     },
   },
 ];
@@ -166,7 +184,7 @@ async function runProbe(command: string, event: Record<string, unknown>): Promis
 
 let anyFailure = false;
 for (const command of commands) {
-  for (const probe of KNOWN_DENY_PROBES) {
+  for (const probe of KNOWN_PROBES) {
     const outcome = await runProbe(command, probe.event);
 
     if (outcome.kind === "timeout") {
@@ -195,23 +213,26 @@ for (const command of commands) {
     const permissionDecision = (
       decision as { hookSpecificOutput?: { permissionDecision?: string } }
     ).hookSpecificOutput?.permissionDecision;
-    if (permissionDecision !== "deny") {
+    const actual = permissionDecision === "deny" ? "deny" : "allow";
+    if (actual !== probe.expect) {
       console.error(
-        `PROBE FAILED [${probe.label}] via \`${command}\`: expected a "deny" decision, got ${JSON.stringify(decision)}`,
+        probe.expect === "deny"
+          ? `PROBE FAILED [${probe.label}] via \`${command}\`: expected a "deny" decision, got ${JSON.stringify(decision)}`
+          : `PROBE FAILED [${probe.label}] via \`${command}\`: expected this to be ALLOWED and the hook denied it — ${JSON.stringify(decision)}. A fence that refuses the agent's ordinary work makes rung 3 unrunnable and manufactures the confusions the rung is measuring.`,
       );
       anyFailure = true;
       continue;
     }
-    console.log(`PROBE OK [${probe.label}] via \`${command}\`: denied.`);
+    console.log(`PROBE OK [${probe.label}] via \`${command}\`: ${actual}.`);
   }
 }
 
 if (anyFailure) {
-  fail("one or more known-deny probes did not produce a well-formed deny — see above.");
+  fail("one or more known-answer probes did not produce the expected decision — see above.");
 }
 
 console.log(
-  `PREFLIGHT PASSED: ${commands.length} hook command(s) in ${settingsPath}, all ${KNOWN_DENY_PROBES.length} probe(s) denied as expected.`,
+  `PREFLIGHT PASSED: ${commands.length} hook command(s) in ${settingsPath}, all ${KNOWN_PROBES.length} probe(s) answered as expected.`,
 );
 // Explicit exit, belt-and-braces alongside the clearTimeout above: nothing about a normal
 // successful run should be able to leave this process waiting around.
