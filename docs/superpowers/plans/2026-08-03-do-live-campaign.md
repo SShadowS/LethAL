@@ -967,9 +967,38 @@ Restate the reading rule so it cannot be forgotten at interpretation time: the a
 
 - [ ] **Step 2: Run the agent**
 
+**Preflight FIRST — rung 3 does not start without it.** `PreToolUse` hooks **fail open**: only exit
+code 2 blocks, so a spawn failure, a missing hook file, or malformed output all let the tool call
+proceed. A settings file naming a hook that does not exist gives **no fence at all, silently**. So:
+
+```bash
+bun U:/Git/LethAL/fixtures/do-campaign/preflight.ts U:/Git/LethAL/fixtures/do-campaign/settings.json || exit 1
+```
+
+Abort the rung on any non-zero exit. Note what a pass does and does not prove: it is a **wiring and
+fail-open check**, confirming the configured hook answers two known probes correctly. It is not a
+proof of correctness — a hook special-cased to exactly those two probes would also pass.
+
+**Threat model, decided 2026-08-04: accident, not adversary.** The hook denies every accidental
+route (absolute paths, the Git-Bash `/<drive>/` mount form, `..` traversal, plain
+`--allow-large-run`). It does **not** survive deliberate evasion: `--allow-large-ru$()n` and
+`leth$()al ru$()n` are demonstrated, documented residuals, and `--allow-large-run` is precisely the
+flag that disables the product's own `assertRunSizeAcceptable` refusal. Closing that would need
+OS-level isolation, which this campaign does not have — `U:/Git/LethAL` and `U:/Git/do-lethal` are
+siblings on one filesystem under one account. See `fixtures/do-campaign/README.md`.
+
+**The real guarantees are structural and product-level, not the hook:**
+- The agent's workspace holds the DO worktree and the **standalone compiled binary**
+  (`build/lethal-0.1.0-alpha.1-windows-x64.exe`) — **not** the LethAL source tree. There is no
+  accidental path into the tool's own source.
+- An unnarrowed run is refused by LethAL itself: `assertRunSizeAcceptable`
+  (`LARGE_RUN_MUTANT_THRESHOLD = 1_000`, `orchestrator.ts:106`) is a default-on pre-flight refusal,
+  and DO's default invocation schedules 19,832 sites.
+
 ```bash
 cd U:/Git/do-lethal && claude -p "<task authored from the rung-2 report>" \
   --settings U:/Git/LethAL/fixtures/do-campaign/settings.json \
+  --disallowedTools Task \
   --output-format stream-json --verbose \
   --session-id <fixed-uuid> \
   --max-budget-usd <n> \
