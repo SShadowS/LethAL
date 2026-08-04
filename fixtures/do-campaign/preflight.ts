@@ -18,8 +18,18 @@
  * command's own stdout read back), feeds it a small set of probes that must always be denied, and
  * exits non-zero the moment any of them is not. Rung 3 must not start unless this exits 0.
  *
+ * FIX ROUND 3: a hook command that reads stdin and then awaits something that never resolves
+ * (a bug in the configured hook itself, not in this script) used to hang this preflight forever —
+ * `proc.exited` never resolves, nothing prints, a launcher doing
+ * `bun preflight.ts settings.json && start-rung-3` just sits there with zero diagnostic. Each
+ * probe now races against `HOOK_TIMEOUT_MS`; hitting it kills the child and fails loudly, because
+ * a hook that never answers is itself a fail-open case — this script (and Claude Code) cannot
+ * distinguish "still thinking" from "will never respond," so it must be treated as no fence.
+ *
  * Usage: bun fixtures/do-campaign/preflight.ts <settings-file-path>
  */
+
+const HOOK_TIMEOUT_MS = 10_000;
 
 interface HookCommandEntry {
   readonly type?: string;
@@ -107,25 +117,69 @@ if (commands.length === 0) {
   fail(`settings file's hooks.PreToolUse has no command hooks: ${settingsPath}`);
 }
 
+type ProbeOutcome =
+  | {
+      readonly kind: "completed";
+      readonly stdout: string;
+      readonly stderr: string;
+      readonly exitCode: number;
+    }
+  | { readonly kind: "timeout" };
+
+async function runProbe(command: string, event: Record<string, unknown>): Promise<ProbeOutcome> {
+  // Run the hook command through a shell, the same way Claude Code invokes a "command"-type
+  // hook — not a naive whitespace split, so quoting/env-var expansion in the command string
+  // (e.g. "$CLAUDE_PROJECT_DIR/...") behaves the same way it would for the real harness.
+  const proc = Bun.spawn(["bash", "-c", command], {
+    stdin: "pipe",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  proc.stdin.write(JSON.stringify(event));
+  proc.stdin.end();
+
+  const collected = Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  // The timer must be cleared once the race settles either way — an uncleared setTimeout keeps
+  // the process alive until it fires, which would make every NORMAL, fast-completing probe add
+  // up to HOOK_TIMEOUT_MS of pure dead time at the end of the script for no reason.
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<"timeout">((resolveTimeout) => {
+    timer = setTimeout(() => resolveTimeout("timeout"), HOOK_TIMEOUT_MS);
+  });
+
+  try {
+    const race = await Promise.race([collected, timeout]);
+    if (race === "timeout") {
+      proc.kill();
+      return { kind: "timeout" };
+    }
+    const [stdout, stderr, exitCode] = race;
+    return { kind: "completed", stdout, stderr, exitCode };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 let anyFailure = false;
 for (const command of commands) {
   for (const probe of KNOWN_DENY_PROBES) {
-    // Run the hook command through a shell, the same way Claude Code invokes a "command"-type
-    // hook — not a naive whitespace split, so quoting/env-var expansion in the command string
-    // (e.g. "$CLAUDE_PROJECT_DIR/...") behaves the same way it would for the real harness.
-    const proc = Bun.spawn(["bash", "-c", command], {
-      stdin: "pipe",
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    proc.stdin.write(JSON.stringify(probe.event));
-    proc.stdin.end();
-    const [stdout, stderr, exitCode] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-      proc.exited,
-    ]);
+    const outcome = await runProbe(command, probe.event);
 
+    if (outcome.kind === "timeout") {
+      console.error(
+        `PROBE FAILED [${probe.label}] via \`${command}\`: hook did not respond within ${HOOK_TIMEOUT_MS}ms and was killed. A hook that never answers IS a fail-open: neither this script nor Claude Code can tell "still thinking" from "will never respond," so it must be treated as no fence.`,
+      );
+      anyFailure = true;
+      // Don't burn another HOOK_TIMEOUT_MS proving the SAME broken command hangs on a second
+      // probe too — it will. Move on to the next configured command, if any.
+      break;
+    }
+
+    const { stdout, stderr, exitCode } = outcome;
     let decision: unknown;
     try {
       decision = JSON.parse(stdout.trim());
@@ -159,3 +213,6 @@ if (anyFailure) {
 console.log(
   `PREFLIGHT PASSED: ${commands.length} hook command(s) in ${settingsPath}, all ${KNOWN_DENY_PROBES.length} probe(s) denied as expected.`,
 );
+// Explicit exit, belt-and-braces alongside the clearTimeout above: nothing about a normal
+// successful run should be able to leave this process waiting around.
+process.exit(0);

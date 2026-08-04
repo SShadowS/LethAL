@@ -1,45 +1,47 @@
 /**
  * Rung-3 fence for the DO campaign's `claude -p` agent.
  *
- * FIX ROUND 2 (task-4-report.md documents the full history). An adversarial review defeated
- * round 1's hook with shell-level obfuscation: the git-bash `/<drive>/` mount idiom, `..`
- * traversal, empty-string quote-splitting (`Leth""AL`), and a value deliberately split across two
- * adjacent JSON fields. That review also found the fence FAILS OPEN: Claude Code only treats exit
- * code 2 (or a well-formed JSON deny) as a block — a hook spawn failure, malformed JSON, or (as
- * shipped) a settings.json naming a hook path that does not exist pre-merge, all let the tool call
- * through SILENTLY. `preflight.ts` is the fix for that half; this file is hardened where doing so
- * is cheap and honest, but it is no longer the sole guarantee for either rule:
+ * FIX ROUND 3 (task-4-report.md documents the full history, including rounds 1 and 2). Round 2's
+ * hardening was itself defeated by a second adversarial review, using shell substitution this text
+ * matcher cannot see: `Leth$()AL`, `A=/u/git/leth; B=al; echo x > $A$B/x`, `--allow-large-ru$()n`.
+ * The campaign owner made a threat-model decision at that point, and it governs everything below:
  *
- *   Rule 1 (no writes under U:/Git/LethAL) is now actually guaranteed by WORKSPACE STRUCTURE, not
- *   this hook: the rung-3 agent's workspace is the DO worktree plus the standalone compiled binary
- *   (build/lethal-0.1.0-alpha.1-windows-x64.exe) — it never receives the LethAL source checkout,
- *   so there is nothing under U:/Git/LethAL to write into regardless of what this hook catches or
- *   misses. See fixtures/do-campaign/README.md for the full workspace contract.
+ *   **The threat model for rung 3 is ACCIDENT, not adversary.** The agent is a Claude agent doing
+ *   a legitimate measurement task with no motive to evade a fence it isn't even told about. Three
+ *   rounds produced three bypass classes of the same kind — text-matching a Bash command string is
+ *   not a parser, and only OS-level isolation (a container, a VM, a restricted account) would
+ *   actually hold against deliberate evasion, which this campaign does not have. So round 3 does
+ *   NOT attempt to close the `$()`/`$VAR` class. It is the accepted residual, tested and left open
+ *   on purpose (see the probe matrix in task-4-report.md, cases marked "accepted residual") —
+ *   closing it would just produce a fourth bypass class next review, at real cost, for a threat
+ *   this design was never trying to hold against in the first place.
  *
- *   Rule 2 (no unnarrowed run) is now mostly guaranteed by THE PRODUCT ITSELF:
- *   `assertRunSizeAcceptable` (packages/runner/src/orchestrator.ts, `LARGE_RUN_MUTANT_THRESHOLD =
- *   1_000`) is a pre-flight REFUSAL, on by default, before anything is published — an unnarrowed DO
- *   run (19,832 sites) is refused by `lethal` itself. This hook's job for rule 2 narrows to denying
- *   the two flags that opt out of the product's own safety nets: `--allow-large-run` (opts out of
- *   the size refusal) and `--retry-stranded` (opts out of skipping mutants that stranded a prior
- *   run's tier, R53). Unlike a path, there is no innocent idiom that produces either flag by
- *   accident, so denying their mere presence is safe. The original --only/--tests-only requirement
- *   is kept too, unchanged — this hook's job shrank, it did not disappear.
+ * What guarantees what, restated plainly (see fixtures/do-campaign/README.md's "threat model" and
+ * "which guarantee comes from where" sections for the full, honest version — this file's job is to
+ * not contradict that document):
  *
- * HONESTY CHECK, not a guarantee: the hardening below (path resolution, mount-form recognition,
- * quote-stripping, pairwise-concatenation check) measurably raises the bar against the specific
- * bypasses the reviewer demonstrated, but text-matching against a Bash command string is
- * fundamentally not a parser. A capable adversary with enough shell tricks (variable indirection,
- * base64, a wrapper script written by a prior command) can still defeat substring matching in
- * principle. Deliberately NOT attempted here: resolving a bare relative traversal
- * (`../LethAL/PROBE.txt`, no drive letter, no mount prefix) against the hook subprocess's own cwd —
- * that cwd is not guaranteed to equal the agent's actual (possibly `cd`-advanced) shell cwd, and
- * guessing wrong in the other direction would false-deny a legitimate relative `--tests-only`
- * glob (e.g. "Src/**") depending on nothing more meaningful than where the hook happened to be
- * invoked from. The real guarantees are the absent source tree and the product's own refusal;
- * this hook is defence-in-depth on top of those, not instead of them.
+ *   Rule 1 (no writes under U:/Git/LethAL): the rung-3 agent's workspace does not CONTAIN the
+ *   LethAL source tree (it gets the DO worktree plus the standalone compiled binary,
+ *   build/lethal-0.1.0-alpha.1-windows-x64.exe, instead) — this removes the ACCIDENTAL-reference
+ *   path, which is the actual threat model. It does NOT make the tree unreachable: `U:/Git/LethAL`
+ *   and the DO worktree are sibling directories on the same drive, same filesystem, same OS
+ *   account, with no container/VM/ACL boundary anywhere in this design, so any absolute or
+ *   resolvable path still reaches it. This hook is what stands in that gap, and it is demonstrably
+ *   defeatable by deliberate shell obfuscation — it is not claimed to be more than that.
  *
- * Three tiers, checked in order, unchanged in shape from round 1 (see task-4-report.md for the
+ *   Rule 2 (no unnarrowed run): `assertRunSizeAcceptable` (packages/runner/src/orchestrator.ts,
+ *   `LARGE_RUN_MUTANT_THRESHOLD = 1_000`) is a pre-flight REFUSAL in the product itself, on by
+ *   default, before anything publishes — an unnarrowed DO run (19,832 sites) is refused by
+ *   `lethal` regardless of this hook. `--allow-large-run` is precisely the flag that disables that
+ *   refusal, and `--retry-stranded` (R53) opts out of skipping a mutant that stranded a prior run's
+ *   tier; this hook denies both by literal-text match, which shell substitution can defeat (see
+ *   above) — the product's own refusal is what actually holds when it does. The original
+ *   --only/--tests-only requirement is kept too, unchanged.
+ *
+ * `preflight.ts` closes the fail-open half (a hook that can't run gives no fence, silently) and,
+ * as of round 3, no longer hangs forever if the configured hook itself never answers.
+ *
+ * Three tiers, checked in order, unchanged in shape since round 1 (see task-4-report.md for the
  * round-1 MCP-tool-bypass rationale behind tier (b) and the generic backstop in tier (c)):
  *   (a) Precise rules for Write/Edit/NotebookEdit's file_path and Bash's command text.
  *   (b) A fixed name-block for serena MCP tools whose target isn't visible in their own tool_input.
@@ -143,17 +145,25 @@ function normalizePathLike(token: string): string {
  * Does any of `texts` reference LETHAL_ROOT? Three passes, cheapest first:
  *   1. plain substring, backslash/case normalized only;
  *   2. per-token real path resolution (collapses "..", rewrites the mount form) for tokens that
- *      are already absolute or mount-form — closes `U:/Git/Other/../LethAL/x` and `/u/git/lethal/x`;
+ *      are already absolute or mount-form — closes `U:/Git/Other/../LethAL/x` and `/u/git/lethal/x`.
+ *      `resolveBareRelative` additionally resolves a token with NO drive letter and no mount
+ *      prefix against the hook's own cwd — see the call site for why this is only ever passed
+ *      `true` for Write/Edit/NotebookEdit's `file_path`, never for Bash's freeform command text;
  *   3. pairwise-adjacent concatenation across `texts` — closes a value deliberately split across
  *      two adjacent fields (e.g. {"a":"u:/git/leth","b":"al/PROBE.txt"}), which a per-string scan
  *      or a separator-joined scan both miss.
  */
-function pathHits(texts: readonly string[]): boolean {
+function pathHits(
+  texts: readonly string[],
+  options?: { readonly resolveBareRelative?: boolean },
+): boolean {
+  const resolveBareRelative = options?.resolveBareRelative ?? false;
   const normalized = texts.map(normalize);
   if (normalized.join("\n").includes(LETHAL_ROOT)) return true;
   for (const t of texts) {
     for (const token of extractTokens(t)) {
-      if (looksAbsoluteOrMounted(token) && normalizePathLike(token).includes(LETHAL_ROOT)) {
+      const shouldResolve = resolveBareRelative || looksAbsoluteOrMounted(token);
+      if (shouldResolve && normalizePathLike(token).includes(LETHAL_ROOT)) {
         return true;
       }
     }
@@ -195,9 +205,13 @@ const tool = event.tool_name ?? "";
 const input = event.tool_input ?? {};
 
 if (tool === "Write" || tool === "Edit" || tool === "NotebookEdit") {
-  // (a) precise: the write target is this field, full stop.
+  // (a) precise: the write target is this field, full stop. resolveBareRelative: true here
+  // because these tools' file_path is session-scoped, not agent-`cd`-scoped — there is no
+  // freeform shell for the agent to have moved the effective base directory out from under this
+  // hook's own process.cwd() the way there is for Bash, so resolving a bare relative path here
+  // doesn't carry Bash's false-denial risk on a legitimate relative glob.
   const p = stripQuotes(String(input.file_path ?? ""));
-  if (pathHits([p])) {
+  if (pathHits([p], { resolveBareRelative: true })) {
     deny(`campaign fence: writes under ${LETHAL_ROOT} are refused — work in the worktree.`);
   }
 } else if (tool === "Bash") {

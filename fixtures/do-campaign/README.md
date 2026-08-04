@@ -1,10 +1,34 @@
 # Rung-3 workspace contract
 
 This is what the DO campaign's rung-3 `claude -p` agent gets, what it does not get, and — this is
-the part that matters — **which guarantee comes from where**. Fix round 2 replaced a hook-only
-fence (defeated by an adversarial review, see `task-4-report.md`) with this contract: violations
-become impossible by construction where that's achievable, and the hook is defence-in-depth on top
-of that, not the sole guarantee.
+the part that matters — **which guarantee comes from where, and how strong each one actually is**.
+Three fix rounds went into this (full detail in `task-4-report.md`): round 1 hardened a hook that
+an adversarial review then defeated with shell-level obfuscation; round 2 hardened it again and the
+same review defeated it a second time, with a different obfuscation class. Round 3 is a course
+correction, not another hardening pass — see the threat model below for why, and read this document
+as the honest version of the claims, not the aspirational one.
+
+## Threat model
+
+**The threat model for rung 3 is ACCIDENT, not adversary.** The agent is a Claude agent doing a
+legitimate measurement task. It has no motive to evade a fence it isn't even told about, and no
+reason to construct `Leth$()AL` or `$A$B` when `LethAL` and its own narrowed `--only`/`--tests-only`
+values work fine and are what the task actually calls for.
+
+What that buys: protection against the ordinary ways a legitimate agent could go wrong by mistake —
+misreading a path, running `lethal run` without narrowing because it forgot, reaching for a
+plausible-looking shell idiom that happens to touch the wrong tree. Round 3's probe matrix in
+`task-4-report.md` covers this class and the hook denies all of it.
+
+What it does NOT buy: any assurance against deliberate evasion. Three rounds produced three bypass
+classes of the same underlying shape — text-matching a Bash command string is not a parser, and
+every review that tried found a new way to make text that says one thing execute as another
+(`$()`, `$VAR`, quote-splitting, path traversal, mount-form aliasing). The reviewer is right that
+only OS-level isolation — a container, a VM, a locked-down account with no access to
+`U:/Git/LethAL` at the filesystem layer — would actually hold against an adversarial actor, and this
+campaign does not have that. If the threat model ever needs to include "the agent, or something
+prompting it, is trying to get around the fence," this design is not sufficient and should not be
+treated as if it were.
 
 ## What the agent gets
 
@@ -21,51 +45,56 @@ of that, not the sole guarantee.
 
 ## What the agent does NOT get
 
-- **The LethAL source checkout.** Not `U:/Git/LethAL`, not a clone of it, not a worktree of it
-  other than the one named above. The agent's workspace has nothing under that path to write into.
+- **A copy of the LethAL source checkout in its own workspace.** Not `U:/Git/LethAL`, not a clone
+  of it, not a worktree of it other than the DO one named above. This removes the *accidental*
+  path to touching it — nothing in the agent's normal working set references it, so it would have
+  to go out of its way. It does **not** make the tree unreachable: read the guarantee table below
+  before assuming more than that.
 - **A raw, unnarrowed `lethal run`.** The product refuses one on its own — see below.
-- **`--allow-large-run` or `--retry-stranded`.** These exist in the product (R48, R53) for
-  legitimate operator use outside this campaign; inside it, they are exactly the two flags that
-  turn a safe default into an unsafe or costly one, so the hook denies them unconditionally.
+- **`--allow-large-run` or `--retry-stranded`, under the accident threat model.** These exist in
+  the product (R48, R53) for legitimate operator use outside this campaign; inside it, they are
+  exactly the two flags that turn a safe default into an unsafe or costly one, and the hook denies
+  their plain-text appearance. A deliberately obfuscated invocation defeats this — see below.
 
 ## Which guarantee comes from where
 
-Do not read the fence hook as "the thing that stops the agent." Read it as the last of three
-layers, and know which layer is actually load-bearing for each rule:
+Do not read the fence hook as "the thing that stops the agent." Read it as the last of several
+layers, and know — honestly, not optimistically — which layer is actually load-bearing for each
+rule:
 
-| Rule | Real guarantee | What layer it is |
+| Rule | Real guarantee | Strength |
 |---|---|---|
-| No writes under `U:/Git/LethAL` | **Workspace structure.** The tree isn't there. | Structural — nothing to defeat |
-| No unnarrowed `lethal run` (>1000 sites) | **The product itself.** `assertRunSizeAcceptable` (`packages/runner/src/orchestrator.ts`, `LARGE_RUN_MUTANT_THRESHOLD = 1_000`) is a pre-flight refusal, on by default, before anything publishes. | Product-level — independent of this fixture entirely |
-| No `--allow-large-run` / `--retry-stranded` | **`fence-hook.ts`'s Bash rule.** Text-matching on the command string. | Best-effort hook — see the honesty check below |
-| No writes via other tools (Bash redirect, MCP tools, unknown future tools) | **`fence-hook.ts`**, tiers (a)/(b)/(c). | Best-effort hook |
+| No writes under `U:/Git/LethAL` | The workspace does not **contain** the tree, removing the accidental-reference path. `fence-hook.ts`'s write/Bash rules are the remaining layer. | **Partial, not structural.** `U:/Git/LethAL` and `U:/Git/do-lethal` are sibling directories on one drive, one filesystem, one OS account — no container, VM, or ACL boundary anywhere in this design. `ls ..` from the agent's cwd shows `LethAL` sitting right there, reachable by any absolute or resolvable path. The hook is what stands in that gap, and it is demonstrably defeatable by shell obfuscation (see below) — it was NOT, and should not be described as, "nothing to defeat." |
+| No unnarrowed `lethal run` (>1000 sites) | **The product itself.** `assertRunSizeAcceptable` (`packages/runner/src/orchestrator.ts`, `LARGE_RUN_MUTANT_THRESHOLD = 1_000`) is a pre-flight refusal, on by default, before anything publishes. | **Strong, and independent of this fixture entirely.** This is the one row where the real guarantee doesn't run through `fence-hook.ts` at all. |
+| No `--allow-large-run` / `--retry-stranded` | `fence-hook.ts`'s Bash rule, literal-text matching. | **Defeated by shell substitution, demonstrated.** `--allow-large-ru$()n` and `leth$()al ru$()n --project .` both pass the hook unchanged — `$()` (and `$VAR` indirection generally) is exactly the class this text matcher cannot see, because by the time the shell has evaluated it the literal text the hook read never existed. `--allow-large-run` is precisely the flag that disables `assertRunSizeAcceptable` above, so this is the row where the hook's weakness and the stakes intersect most directly. Accepted as residual per the threat model — not attempted to close in round 3. |
+| No writes via other tools (Bash redirect, MCP tools, unknown future tools) | `fence-hook.ts`, tiers (a)/(b)/(c). | **Best-effort, same shell-substitution ceiling as above.** |
 
-The hook is real and has been hardened twice (round 1: MCP-tool and multi-line-regex bypasses;
-round 2: the git-bash mount form, `..` traversal, quote-splitting, and split-field bypasses an
-adversarial review demonstrated — full detail in `task-4-report.md`). It is **not** claimed
-airtight. Text-matching a Bash command string is not a parser; a capable-enough adversary with
-shell tricks (variable indirection, a wrapper script built by a prior command, base64) can defeat
-substring matching in principle. `fence-hook.ts`'s own header comment says this plainly and names
-the one bypass deliberately left open (a bare relative `..` traversal with no drive letter or
-mount prefix — closing it reliably would mean trusting the hook subprocess's own cwd to match the
-agent's actual shell cwd, which is not guaranteed, and guessing wrong risked false-denying a
-legitimate relative `--tests-only` glob instead).
-
-This is why the write rule's REAL guarantee is structural (no tree to write into) rather than the
-hook, and why the run-size rule's REAL guarantee is the product's own refusal rather than the
-`--only`/`--tests-only` presence check. The hook still matters — it is what turns a mistake into an
-immediate, legible denial instead of a run that fails 40 minutes later for a reason the agent has
-to go dig for — but nothing here is designed to depend on it being unbeatable.
+Three review rounds, three different bypass classes closed (round 1: MCP-tool and multi-line-regex
+bypasses; round 2: git-bash mount form, `..` traversal, quote-splitting, split-field JSON), and a
+fourth class (shell substitution) found and deliberately left open in round 3 — not because it
+couldn't be described, but because the campaign owner decided closing it isn't worth what it costs
+against a threat model that doesn't include deliberate evasion. Full detail and the probe matrix
+proving both the closed classes and the accepted residual: `task-4-report.md`.
 
 ## The preflight requirement
 
 **Rung 3 must not start until `bun fixtures/do-campaign/preflight.ts <settings-file>` exits 0.**
 
-Reason: Claude Code's `PreToolUse` hooks **fail open**. Only exit code 2 (or a well-formed JSON
-`deny`) blocks a tool call — a hook subprocess that fails to spawn, crashes, emits malformed JSON,
-or is named by a settings file pointing at a script that doesn't exist, all let the tool call
-through **silently**. There is no error, no warning, nothing in the transcript that says the fence
-was never there.
+**What a passing preflight actually proves, stated plainly:** the configured hook command responds
+with a well-formed `deny` to the small, specific set of known probes `preflight.ts` sends it — one
+exercising the write rule, one exercising the `--allow-large-run` flag rule. That is a **wiring and
+fail-open check** ("is a hook configured, does it run, does it answer correctly to a case we know
+the answer to") — it is **not** a proof that the hook is correct in general, and it is specifically
+not evidence against the shell-substitution residual above (a hook that special-cased exactly these
+two probe strings and nothing else would also pass preflight; the review that found the
+shell-substitution class made this point directly). Preflight's job is narrower than "prove the
+fence works," and its README entry should not be read as claiming more.
+
+Reason it exists at all: Claude Code's `PreToolUse` hooks **fail open**. Only exit code 2 (or a
+well-formed JSON `deny`) blocks a tool call — a hook subprocess that fails to spawn, crashes, emits
+malformed JSON, never responds at all, or is named by a settings file pointing at a script that
+doesn't exist, all let the tool call through **silently**. There is no error, no warning, nothing
+in the transcript that says the fence was never there.
 
 That is not hypothetical: it is exactly what `fixtures/do-campaign/settings.json`, as committed,
 does **right now**. It names `bun U:/Git/LethAL/fixtures/do-campaign/fence-hook.ts` — the
@@ -76,7 +105,11 @@ fence at all**, and the agent (and anyone watching) would have no way to know fr
 `preflight.ts` closes this by reading the same settings file rung 3 will use, extracting every
 configured hook command from it (never hardcoding a path — a wrong path is exactly what it needs
 to catch), running each one exactly as the harness would (a probe event piped to it on stdin), and
-requiring a well-formed `deny` back. It exits non-zero the moment that doesn't happen. Verified
-both directions: it fails against the settings file as currently committed (pre-merge — the real
-bug, not a synthetic one), and passes against a settings file naming a hook copy that actually
-exists. See `task-4-report.md` for the full transcript of both runs.
+requiring a well-formed `deny` back within a bounded timeout (10s per probe — round 3 also fixed a
+real bug where a hook that reads stdin and then hangs forever used to make `preflight.ts` hang
+forever too, with zero diagnostic; it now kills the child and fails loudly, since a hook that never
+answers is itself a fail-open case). It exits non-zero the moment any of that doesn't happen.
+Verified: it fails against the settings file as currently committed (pre-merge — the real bug, not
+a synthetic one), passes against a settings file naming a hook copy that actually exists, and fails
+within the timeout against a deliberately hanging hook rather than hanging itself. See
+`task-4-report.md` for the full transcripts of all three.
