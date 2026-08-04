@@ -1,0 +1,8 @@
+{
+  "expectedMutantCount": 176,
+  "expectedBaselineTests": 56,
+  "coveredProcedureRanges": [
+    { "name": "SendPeriodStatements", "startLine": 17, "endLine": 43 }
+  ],
+  "reconcileNotInstrumented": false
+}

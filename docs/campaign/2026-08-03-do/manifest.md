@@ -62,8 +62,8 @@ Verified free against the 116 codeunit ids `Cloud/` declares, and inside the app
 |---|---|
 | profile | `c803cb93-a8e4-4fb1-b61f-e5f60f17b43a` (BC 28.0.0.0, NavUserPassword, demoportaldev) |
 | name | `lethal-do-campaign` |
-| environment id | _(gate 0)_ |
-| `expiresUtc` | _(gate 0)_ |
+| environment id | `f5f11bf2-4b02-48f1-9707-2bd49f81bf2b` |
+| `expiresUtc` | `2026-08-18T08:09:48` (created `2026-08-04T08:09:48`) |
 | created fresh? | Yes — **not** reusing `f19aca88`. R31 detects a test app missing tests, but R56's shape (an older-but-COMPLETE published build) is invisible, and a fresh environment is its only mitigation. |
 
 ## Flag sets
