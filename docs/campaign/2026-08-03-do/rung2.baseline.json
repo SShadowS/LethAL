@@ -1,0 +1,3313 @@
+[
+  {
+    "key": "00312634c98ededebd5e2dd629eb582ea8953ad88ec1c82514a16ceddb06a95b|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "009467ff7eb0727ae1303863310507989d9b187fba99cad89461e8f98d10894c|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "03fb8d28c545f76560c29f2729b4c1cec207f38c6481a222a58828c5c75167cb|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "042be415edc59abb702f4d7528565491209ee3cabab9141ccc70756474f3ecd1|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "killed",
+    "killingTest": "MergeAndReplacePDF_BatchMerge_TerminatesWithoutInfiniteRecursion",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "042be415edc59abb702f4d7528565491209ee3cabab9141ccc70756474f3ecd1|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "killed",
+    "killingTest": "MergeAndReplacePDF_BatchMerge_TerminatesWithoutInfiniteRecursion",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "042be415edc59abb702f4d7528565491209ee3cabab9141ccc70756474f3ecd1|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "042be415edc59abb702f4d7528565491209ee3cabab9141ccc70756474f3ecd1|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "042be415edc59abb702f4d7528565491209ee3cabab9141ccc70756474f3ecd1|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "042be415edc59abb702f4d7528565491209ee3cabab9141ccc70756474f3ecd1|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "042be415edc59abb702f4d7528565491209ee3cabab9141ccc70756474f3ecd1|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "042be415edc59abb702f4d7528565491209ee3cabab9141ccc70756474f3ecd1|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "042be415edc59abb702f4d7528565491209ee3cabab9141ccc70756474f3ecd1|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "042be415edc59abb702f4d7528565491209ee3cabab9141ccc70756474f3ecd1|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "042be415edc59abb702f4d7528565491209ee3cabab9141ccc70756474f3ecd1|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "042be415edc59abb702f4d7528565491209ee3cabab9141ccc70756474f3ecd1|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "042be415edc59abb702f4d7528565491209ee3cabab9141ccc70756474f3ecd1|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "042be415edc59abb702f4d7528565491209ee3cabab9141ccc70756474f3ecd1|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "042be415edc59abb702f4d7528565491209ee3cabab9141ccc70756474f3ecd1|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "042be415edc59abb702f4d7528565491209ee3cabab9141ccc70756474f3ecd1|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "042be415edc59abb702f4d7528565491209ee3cabab9141ccc70756474f3ecd1|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "042be415edc59abb702f4d7528565491209ee3cabab9141ccc70756474f3ecd1|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "042be415edc59abb702f4d7528565491209ee3cabab9141ccc70756474f3ecd1|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "042be415edc59abb702f4d7528565491209ee3cabab9141ccc70756474f3ecd1|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "042be415edc59abb702f4d7528565491209ee3cabab9141ccc70756474f3ecd1|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "042be415edc59abb702f4d7528565491209ee3cabab9141ccc70756474f3ecd1|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "042be415edc59abb702f4d7528565491209ee3cabab9141ccc70756474f3ecd1|CDO Core Event Handler|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "042be415edc59abb702f4d7528565491209ee3cabab9141ccc70756474f3ecd1|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "killed",
+    "killingTest": "UpdateLastUpload_ShouldSetLastTelemetryUploadToToday",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "042be415edc59abb702f4d7528565491209ee3cabab9141ccc70756474f3ecd1|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "042be415edc59abb702f4d7528565491209ee3cabab9141ccc70756474f3ecd1|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "042be415edc59abb702f4d7528565491209ee3cabab9141ccc70756474f3ecd1|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "042be415edc59abb702f4d7528565491209ee3cabab9141ccc70756474f3ecd1|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "042be415edc59abb702f4d7528565491209ee3cabab9141ccc70756474f3ecd1|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "042be415edc59abb702f4d7528565491209ee3cabab9141ccc70756474f3ecd1|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "0565276da55a78c3362f21da200f66e9089afdd96638b997b79a13204aaa4718|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "07cca8831176297ea4b26af1588bad4a2badb7afc8ef560f8e22c9cccd4a867e|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "0853775f95fd32de8415593826dd04b1b387282cfe6f3d5b8ef24bdbc7637323|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "092548a043cb3e67e2ab18152bbea2900cbbc79f5557a1712c63294d8f34e531|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "0a3ffc810e543b9f186631c2e0975197aa280e5974659d431ce2f8bcc0937f46|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "0a4aa6ba624a968a10ed0a7f498acecfcece91cce81f92a0459538ca3df0b35c|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "0a4aa6ba624a968a10ed0a7f498acecfcece91cce81f92a0459538ca3df0b35c|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "0a9360b1bff62ba582366f5fea754ece9239f536b25bd95e1ec51730eb3fdaea|CDO Telemetry|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "0ba8f563be965e00f99d60cc4b86c9b03149ccde3577c1529ae6e79c37a477ea|CDO Telemetry|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "0c267ac924ec858c6afb03124c26a1b147aad61bb8eade2ae3aeead1aea43f58|CDO Contnia Online PDF Mgt.|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "MergeAndReplacePDF_BatchMerge_TerminatesWithoutInfiniteRecursion",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "0ecfafcc240b370aa7588d0faadd78e170a31d5a67ec8b3d04712717c285d9f7|CDO Core Event Handler|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "0f942ab8c1337b6bf9829405bed3dfad17b66ae81c2b41fe13e39ddafbfa58c6|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "100977a1ee4f5295e2d839cf3c614ffa4cdb10873867a16e6c38ea8bb425c39e|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "100977a1ee4f5295e2d839cf3c614ffa4cdb10873867a16e6c38ea8bb425c39e|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "100977a1ee4f5295e2d839cf3c614ffa4cdb10873867a16e6c38ea8bb425c39e|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "12256d29771400d295eb77f5d5abaefc25294faf2c9f07600aa0c1d3031e188c|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "1296c04935cce298546aa7618ec66e4628927a0d8ddc86167ccaf4892a6649a1|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "148566d42a4422ee1030ccbcc9f094da36782bef0e20605b300eec88c7e72e53|CDO Telemetry|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "162a089732cc2917449f50b39dbc76115d229f8a78660c749130fc3f08aba8c2|CDO Core Event Handler|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "171a9699d0ba7212fd64b2ee9973d9044a119c2b95542ada32f1172522dd6aab|CDO Core Event Handler|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "173fe450b19221165977e44382bd55bd9be3421a334ab8e89fb782b0c6633e5d|CDO Contnia Online PDF Mgt.|lethal.empty-block|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "19c68787865aab22ca5ad86c5fe689b4f7a5d100df33b8be8c1bcc6d0c39b1f9|CDO Contnia Online PDF Mgt.|lethal.return-value|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "19c68787865aab22ca5ad86c5fe689b4f7a5d100df33b8be8c1bcc6d0c39b1f9|CDO Merge Field Cache|lethal.return-value|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "19c68787865aab22ca5ad86c5fe689b4f7a5d100df33b8be8c1bcc6d0c39b1f9|CDO Telemetry|lethal.return-value|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "19c68787865aab22ca5ad86c5fe689b4f7a5d100df33b8be8c1bcc6d0c39b1f9|CDO Telemetry|lethal.return-value|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "19c68787865aab22ca5ad86c5fe689b4f7a5d100df33b8be8c1bcc6d0c39b1f9|CDO Telemetry|lethal.return-value|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "19d1eae77596e0222e956131c637daf87a3e013642b3dfd170dbd6a87eb5542b|CDO Telemetry|lethal.return-value|1",
+    "verdict": "killed",
+    "killingTest": "IsItTimeForUpload_WhenLastUploadIsToday_ReturnsFalse",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "1b339ff94b5ecbf6acb6dcb969d93bedca8271b8ee7e69c26a20a812fd7c6c0c|CDO Contnia Online PDF Mgt.|lethal.negate-conditional|1",
+    "verdict": "killed",
+    "killingTest": "MergeAndReplacePDF_BatchMerge_TerminatesWithoutInfiniteRecursion",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "1b339ff94b5ecbf6acb6dcb969d93bedca8271b8ee7e69c26a20a812fd7c6c0c|CDO Contnia Online PDF Mgt.|lethal.negate-conditional|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "1bcb6635da772f46d15716e02d340179867b2d4964009615ae23815b482c9ef3|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "1bcb6635da772f46d15716e02d340179867b2d4964009615ae23815b482c9ef3|CDO Merge Field Cache|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "1bf0ed03147a58e0db0a46eac2c60d4ad7fe1b9363356dff4d2c9c3fc04de46f|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "1c2fcb12e2d24e72380970f76e61ae014173c289319472bbf1dc4cf3def4e504|CDO Core Event Handler|lethal.conditional-boundary|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "1c2fcb12e2d24e72380970f76e61ae014173c289319472bbf1dc4cf3def4e504|CDO Core Event Handler|lethal.conditional-boundary|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "1d7e62c4c01da9766b9fb7c691b2781435751696c535077873199130b0c7ff8d|CDO Contnia Online PDF Mgt.|lethal.empty-block|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "1e85a22a5a33261734d58a7de53d6fbe58225c39245ffd08a633505303238128|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "1eb419c4cc1f5ca0ab95cd792c1f2c5f01eb2c70ed59518e4985c9415d365d69|CDO Contnia Online PDF Mgt.|lethal.conditional-boundary|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "1ec979b9b033ad16e1028326d64be697b112314ca4dda251180d192c35489ccc|CDO Contnia Online PDF Mgt.|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "1ec979b9b033ad16e1028326d64be697b112314ca4dda251180d192c35489ccc|CDO Contnia Online PDF Mgt.|lethal.negate-conditional|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "1f8af8e21b17fc33bcccbb1eacbb7976b4d7c3bb6e74313f004bf11aca643a50|CDO Contnia Online PDF Mgt.|lethal.empty-block|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "2166b87d314b35313bb339ba6bd12a101aa48513fb49986ee2cee3578787cbf4|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "21e41ff7d02571eaf034da8439eb2d6e79c81c7b169d4db73f47f27162f3cc39|CDO Telemetry|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "22cdff4b8d7e1be82e6cfed143a1e4882ca0d6608371c089ff41c28742eeb898|CDO Telemetry|lethal.conditional-boundary|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "23e2e533d50c586d392da202cead99b5c873401cc427eb75aec38ce61e31ec73|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "24faf699650276c066a08d669ab1f053e5ab626397969819f2033d060d349b6f|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "26559ef31b8b894004fa9fd7bc0064ac92e4efdc20a9dcc92e1b8d798461e1fc|CDO Telemetry|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "26c7c5712f332847eca52588fc546812a5be7b371996c20b8a40ff32883ab21b|CDO Telemetry|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "2812e4d1bfa122143cf3804396c04876e96f469a334902123075828d017c7acf|CDO Telemetry|lethal.return-value|1",
+    "verdict": "killed",
+    "killingTest": "IsItTimeForUpload_WhenLastUploadIs35DaysAgo_ReturnsTrue",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "28d504176a80d574a04be9f5825d1348da2ff50b404e3d81e54a697b92093cf4|CDO Contnia Online PDF Mgt.|lethal.remove-calcfields|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "28d504176a80d574a04be9f5825d1348da2ff50b404e3d81e54a697b92093cf4|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "29368956fa71267e1bbbfb0f8e727c77140a642bcdf313676b373fe62259d015|CDO Telemetry|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "2b7f1c339b80a4a34bcd73f9cb345edd018c1ffbfba260cc1915a7dd5f8ac6ae|CDO Core Event Handler|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "2c0845d6c3b407d2485e94fedc24d94a9626d1f70200c00fcfeb5dceb2cbf53d|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "2c08fd2977b9a09b3f46d7374f91ced35f17c1b29ae453ab96e96cb0a8258741|CDO Contnia Online PDF Mgt.|lethal.empty-block|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "2cfe5231dbeceb50cf0661365286060fd5b97302650d91c3689e893749d81913|CDO Telemetry|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "UpdateLastUpload_ShouldSetLastTelemetryUploadToToday",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "2d3847073edb2a8f9a3ea54e61a74696695c9221c3822906dc0a9c5c0b0d50f3|CDO Core Event Handler|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "2d639814fabef5fa1fdb7279dca8b52cf2751937499c2b3f3176a627c754d3c6|CDO Telemetry|lethal.conditional-boundary|1",
+    "verdict": "killed",
+    "killingTest": "IsItTimeForUpload_WhenExactly30DaysAgo_ReturnsFalse",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "2d7234cf892e314ca4d1b45ee4fe3da651cba788b9cbf3dfa030c85c53a8c006|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "2d7cb5568cfd61e851cc5ab6f2ea387b91224cd82ff603ba579000fba5694c04|CDO Contnia Online PDF Mgt.|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "MergeAndReplacePDF_NonPdfFiles_ErrorPropagates",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "2dda5a617a28d233e5a4ecd3e44a056cf4037af26ff185ff61e16ef892d4eb2b|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "2e3916ca8042669130d76bf4ac2489027cbc4959f04598ffcff0583f5c10d9f9|CDO Core Event Handler|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "2e3916ca8042669130d76bf4ac2489027cbc4959f04598ffcff0583f5c10d9f9|CDO Core Event Handler|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "30333c38576aee49fade4a422b8b27bab4546abd3211a30b26858341baa51f4f|CDO Contnia Online PDF Mgt.|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "3088c51a175e502d4cd417b0757643613e6d1b910694591b15f2d64780db8883|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "308d946990082e3e171c2ba8bab020cd82ff9f2d330ccb7bcd08e978442bc7fc|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "326ff72ac66c81e59e3d1dca5d999e965826fe9ebc7ed922b1a3c38e54ec3f87|CDO Contnia Online PDF Mgt.|lethal.conditional-boundary|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "3270df5af92a7cc99b25f670583b95317e5df7883a1dc74f09ba1c0ce56baa27|CDO Contnia Online PDF Mgt.|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "333f2f3c783b0bbc4063a57e43e97decc9adb8cc38cd55a329143f129cfa6be4|CDO Telemetry|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "3422dd15edb06e15d61b2a2d24de110b03c083232bf102eb4373044e74933c16|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "34a3a95ebc12440c1784dad1471c7dac324873102ab0691caad699adf050b04d|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "34fd20a4a0e574d6b6448d07c3f89e7046f024a6a95865143852a0e0ae0648fc|CDO Contnia Online PDF Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "34fd20a4a0e574d6b6448d07c3f89e7046f024a6a95865143852a0e0ae0648fc|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "350265636d54b2fe0a73f6f3aa8f74f755c3ce6114c8995f072769388227080f|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "3526edbbac0c16bb6aa3843e57ad0528e2c67094c3787818bd21687f973f5740|CDO Core Event Handler|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "35a31893501f25e4aa4afbd918f3e85069321090627d49de494f9079975c38bf|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "3662f15e7c52cce095197edaf48e0656be75229c77e566647b116a1e1d87e147|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "3698ff851a992a62e11c27f832a75bd2252a6ed7332f7d87543dfb5f8d337646|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "37baf720b0a86916819c6e11ff55d2e655434f0d2078898bf76efa7f2586fea9|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "384cdf0c59279bbd30bf18890b1daa383f86066bcc15e9749f7376d7a5b24842|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "3936e901ce5ab5908468336628f97db006810ba2f6e83399d5b28d8772838968|CDO Telemetry|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "393f8adad05da19b8f7deec3e32971df5858509547605106894e480b160ef9c8|CDO Telemetry|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "39b451315a43c305da6ef101e90fede7ae0102777587c500e2a06fafe52fcd06|CDO Contnia Online PDF Mgt.|lethal.empty-block|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "39d2e01fa5726756db778b9ca8728d0b93044506e9b699d3f4c603b2c034af36|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "killed",
+    "killingTest": "StorageType_WhenDatabase_AddsFieldWithDatabaseValue",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "3a12d6b30c94ba2c932e99cf017aff994216da40754c00344cb80d310162ce74|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "3a12d6b30c94ba2c932e99cf017aff994216da40754c00344cb80d310162ce74|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "3a12d6b30c94ba2c932e99cf017aff994216da40754c00344cb80d310162ce74|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "3b244b82f9bf882ca264c0857d83e85177e1a9719bd8c3b52bb9a73df2e01743|CDO Contnia Online PDF Mgt.|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "3b6f8c88c2b6a5f5dfb5b62e01e60d359254e728995ccb8010a3db817bb30cda|CDO Telemetry|lethal.empty-block|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "3c3363c65415295654230f9c2f04e06832cb5f0cba6768751cc695eec22a915d|CDO Contnia Online PDF Mgt.|lethal.negate-conditional|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "3dd272db9d70ecbd30e01af356b45569897aa3da8c9cfb62abb550ebe2a72c6e|CDO Contnia Online PDF Mgt.|lethal.empty-block|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "3e3690557ad2a872a94218c213ee8fd518b59cc12c35de00fb58f775e6c2e0ca|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "3ec946ce27a33f24a95ed92804196c4210251fa056d094a61161e705c0c8b325|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "3f09e04459aa44273195c75ec30d6bd24a388414417988f5d3fa18b83224cc3d|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "3fe449050a133a7ab7b8851eb62e6955cbb73ba08c3d6d2da4a9752391e543fb|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "40277aa121cd95030531672f906db4dc1f238ef3179b8c58d7815e6a8fe957f5|CDO Contnia Online PDF Mgt.|lethal.return-value|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "403b8e90be8b71bc3561536435aadc22eaa5178a56abd92d4d21d20b1a62d1b4|CDO Core Event Handler|lethal.empty-block|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "40b6dba47316a87665df66a2a221f2116fda8cacfcf0e29abafdf95373668fce|CDO Contnia Online PDF Mgt.|lethal.negate-conditional|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "42f68336d7f5f4bb912933f79469151a69593901d5c5ac53b5cbe17f9261cbff|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "4512f6b024196bb8db32fb95ec304fb373e7d4e1386519d3dc13af625084c93b|CDO Contnia Online PDF Mgt.|lethal.empty-block|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "45ba84a6c74fea6584fc1c36ed792933b0e9cb7c713f07981b5e493a6dbf1247|CDO Contnia Online PDF Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "4833aec500697931c142de786aa88b3860f666e0e853316b59ac28b8f5ca013f|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "48a9ae4a9a77a3afb9bc0c5332711a616a74787cdc7188ea017e79485eb8de9c|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "4ad3c70c9ac194e1a0f44ed733c324b243ae23da2b88bac06e2f4c045b96c0b3|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "4b172231808cc93d0ca8199b551e8275081499356a299936b6b3a538679ca975|CDO Telemetry|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "IsItTimeForUpload_WhenLastUploadIs35DaysAgo_ReturnsTrue",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "4b2b6ba9ac5f1b199334f8ab82130cdc062bc88d421ebd871c6b23625ef1acda|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "4b2f7a2a6d188bcbad1446c038e4c268631743994f9071851edaac2c708833ff|CDO Merge Field Cache|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "4b436208960f45e647423b3ff5ac676d2c3774d449f8b8c80222a37d8c43c693|CDO Core Event Handler|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "4bba43c78b1727d53db9d9383f948a3f2189ddc166b97a01f654734ca2592acf|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "4c4739cf57c770cc790738891f744c1ddf1e34c9d519542bf2a9ad0dc652dd4c|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "4d1940f235d7950ab0a87e89005221d73a0af6933f277259fb13f5f0099a80bc|CDO Telemetry|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "50599d1b848423b971702b02ea93c46d9d0f02a99beb4f19cb71a441b070c363|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "5120bdff4bbb744ff3ac51a0bcc0aa50f5d8ba230d5a25f8b16e13e314af6c18|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "513bb57e27d46095779e18daf0975b0d87aac80f75d6e9856c8caf3555adba84|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "5214e8fcf734ede346582d239e65d8001d0034e97eb6c113a81a98bc0ff1bb3b|CDO Contnia Online PDF Mgt.|lethal.empty-block|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "5302ea519bd44dc26c6298275dcef8403a8b6c968b49f9956c9eccc36eb222f5|CDO Telemetry|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "53e94270be3e962effe798f2d2cce33bc73196ec1117f245cbd4e6197e600bfd|CDO Contnia Online PDF Mgt.|lethal.negate-conditional|1",
+    "verdict": "killed",
+    "killingTest": "MergeAndReplacePDF_BatchMerge_TerminatesWithoutInfiniteRecursion",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "53e94270be3e962effe798f2d2cce33bc73196ec1117f245cbd4e6197e600bfd|CDO Contnia Online PDF Mgt.|lethal.negate-conditional|1",
+    "verdict": "killed",
+    "killingTest": "MergeAndReplacePDF_BatchMerge_TerminatesWithoutInfiniteRecursion",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "53e94270be3e962effe798f2d2cce33bc73196ec1117f245cbd4e6197e600bfd|CDO Contnia Online PDF Mgt.|lethal.negate-conditional|1",
+    "verdict": "killed",
+    "killingTest": "MergeAndReplacePDF_BatchMerge_TerminatesWithoutInfiniteRecursion",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "53e94270be3e962effe798f2d2cce33bc73196ec1117f245cbd4e6197e600bfd|CDO Contnia Online PDF Mgt.|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "53e94270be3e962effe798f2d2cce33bc73196ec1117f245cbd4e6197e600bfd|CDO Contnia Online PDF Mgt.|lethal.negate-conditional|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "53e94270be3e962effe798f2d2cce33bc73196ec1117f245cbd4e6197e600bfd|CDO Contnia Online PDF Mgt.|lethal.negate-conditional|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "53e94270be3e962effe798f2d2cce33bc73196ec1117f245cbd4e6197e600bfd|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "5493bf3951315f9e3031ebd5f0989a989e2145f1dada5ba3d47956ba79782250|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "56695a705dfeb7714b89cc52e493c14e97e38f87b93b7e87e2e49f168e1247a4|CDO Contnia Online PDF Mgt.|lethal.empty-block|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "5695e8a6070b7d017cc43b119b2c5c0394d992befb9a9dc9e1ec481ce65e864d|CDO Telemetry|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "UsesCustomWarehouseSetup_WhenDefaultReports_AddsFieldWithFalse",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "5706d728b38802bb80d6882103ac4e2589ff8dafd64ddfff0f9ba7015babc7b3|CDO Contnia Online PDF Mgt.|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "58431b46e0c3c60e7099ef656be1ca7aeead05c004075e578df1073efc15bb9a|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "5a16c3c1c20f0cbfa264200d4c01adeef747582fdab79586321f3965e16d27d5|CDO Contnia Online PDF Mgt.|lethal.empty-block|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "5aab35d00e34e9c43c465ff7098c7006699ca4e29ccf0ce00eecdd6e54f34b1b|CDO Contnia Online PDF Mgt.|lethal.empty-block|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "5ba57e102ff7caf674d8c358adeaa4b86f21bd5f09d70ac392b1b9a5088fe568|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "5bd1ae068fbdf002b204abc14d378030129f17f8784449b352db76b6102421e1|CDO Merge Field Cache|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "5bdec4611d5675b2b947f33e49a02ccc822fe9fccec63fb31a09e21f0ea93dd9|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "5c6d4ba835de7459ec24695bab3c70ee8874f21f95bcc620848196de21666f54|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "5cfdb9522301830688a4995d6cad59294c6076c4e870b494f660a31a793a697e|CDO Contnia Online PDF Mgt.|lethal.conditional-boundary|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "5cfdb9522301830688a4995d6cad59294c6076c4e870b494f660a31a793a697e|CDO Contnia Online PDF Mgt.|lethal.conditional-boundary|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "5d1686f5252e6b2413ec4a2a6919dda8e3773199ec040979c15cffacff17d53e|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "5e1c438dad38172a0e65502c9382ea378862b33089e0830cc7f7689dbfaffa81|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "5e919fd1661b0ad03e9b6701325c5c715d24d6c61572d43798895905d522da2d|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "5edb8107b0ac9b17202793dcffc8758ac045e6363f97ebbad6aef2fa5d341294|CDO Telemetry|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "5ee1820848ec1879eebb501659f7f9f70616a2b10637012346cf72f452c06f05|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "5ee1820848ec1879eebb501659f7f9f70616a2b10637012346cf72f452c06f05|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "5ee1820848ec1879eebb501659f7f9f70616a2b10637012346cf72f452c06f05|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "5ee7f7a755f70457739117e28e22a569425e4ec5145e7cc47344d6070a2693b2|CDO Telemetry|lethal.conditional-boundary|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "5f55c28624504ad32cc3660214bedff4617b863e662a897ef455c87c1cb0acb4|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "5ff3a8882c774b4056ba2d99d880719ba1e962cb43f8829cc788bcd85eceb02b|CDO Core Event Handler|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "616bc154b87f805778a7945bcb654ce869de0486825b3f75a4c05a2b19659311|CDO Telemetry|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "UsesBetaFeatureFlag_WhenBetaEnabled_AddsFieldWithTrue",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "634092128e828c14ed3dd56cc62d8cf74afcbe8c487b0ab7574cc454fae7e7ba|CDO Telemetry|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "634bd896433ab72e569db2b7d5f8fb2c0a4c083c54cad41b1f90e34980fb572d|CDO Telemetry|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "63d67c24ed3e0cd31528b2c9f4be7a9c12fe7d57731e4ccc4de821248e4432b5|CDO Core Event Handler|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "6574160bac1aacaa32e5f7e6f386ddc5fcdeb9a565c61abd32c193840a84e513|CDO Merge Field Cache|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "66e82dd1a96fe61542aee75291ceafcff394ad11fe62226f5b5e8bbe5de32951|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "67e29e262b9737e14f3954f16f1d8ed67861921e2456c62afdd9c3a619fa215f|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "681a72f9fe66d4b3d748857dc1fc2a2ca1788bc6c8852eeebc5a842e6479105a|CDO Telemetry|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "689e388301f527d09409548355c1d80d1a1a452a6044971fa6becc7d7b94bbe0|CDO Contnia Online PDF Mgt.|lethal.conditional-boundary|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "68fec7a3eb938d540ff749aaf4daf1dfb795308b37ab20dee1d03b5e036eed4e|CDO Core Event Handler|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "6a16187b4fb42f2e6181a904674f0c097dd1ea74cf5dd6525b88165f9cfb1727|CDO Contnia Online PDF Mgt.|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "MergeAndReplacePDF_BatchMerge_TerminatesWithoutInfiniteRecursion",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "6a60d784772d1d9e19cc4f95751d8cc082e6d203201ab6d4fd57c4a367b328d6|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "6af07c83fbe02b735b6b370e69c209e93a9fc2b06ee9e2b817827993803bfa1b|CDO Contnia Online PDF Mgt.|lethal.empty-block|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "6b5ef7db855495790e0ceb5f9386337f700cdce5d3ee31027b9c5ee752d8c586|CDO Core Event Handler|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "6b821d842fc2180c8e0dd136cdc32588ac14653634b624b1b914092599ffde27|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "6c7df11e1b6f9e98a2afabffa68578f6b6a372af9e44256c2dc1a046d6fc34b2|CDO Contnia Online PDF Mgt.|lethal.conditional-boundary|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "6ce123af792772bdee6f4d8699586726e0dee094c1cea2087a1ddb2236aed531|CDO Contnia Online PDF Mgt.|lethal.empty-block|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "6f647207c9dc8735955dae88e0542d106d30e8329f8499c4eafecd2916a7063f|CDO Contnia Online PDF Mgt.|lethal.empty-block|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "7006c04f34adc223964da7c52ab2171b7b0518bbd82a21d70b429fce7a43756b|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "708bc3b4054f211564d3f5c814d3c650d36750f513783cf7dd8edaea62959ba0|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "70993be9460f11f627bea4cde4e72869d30dd118c368cf01bb46f13117f4559c|CDO Contnia Online PDF Mgt.|lethal.empty-block|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "70b5c5a9d5301b20682d8f6f6548af748411319c130431f2992cb601970b91a5|CDO Telemetry|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "72955f15d1e468086a53aaded5ade9211e01c6512ea8aa8fff8c4eea2a4553ff|CDO Telemetry|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "IsItTimeForUpload_WhenLastUploadIs35DaysAgo_ReturnsTrue",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "72eb0b548f8d410aeb178e5c3498bf9d93687f693a40ac8cd05d8e2bf36b3548|CDO Core Event Handler|lethal.return-value|1",
+    "verdict": "killed",
+    "killingTest": "IsModuleFeatureEnabled_WhenFeatureNotEnabled_ReturnsFalse",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "72ed175bcca51db224482d2b8822ed0bfb9565d66376afe76c971a5eb9c1ae96|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "731dda0dcba10c5c85871f64caefb2f56c7949834ea53c8b0b20a95853021d27|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "733058c73130dcd03da7bb6e9ddac3e1aad3e3c309e0bf54e94950e157a9078b|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "73729b51b143cadec3b1131ca39fded2ad1ac6fa2dbd3aa19e742efd744da304|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "75f80d765608e275954d1a1dd223af1a438209dfe4a411dab8f5edee790d0c49|CDO Core Event Handler|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "IsModuleFeatureEnabled_WhenModuleAndFeatureEnabled_ReturnsTrue",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "76aa31f45831573916c3b4e2bffd91cbb37afab3f8038864d68131af73482d59|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "770ff2a6ae6c566f85db4b168946a812a7a6f7b7cd7aff62692528a3e324d4fd|CDO Core Event Handler|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "775a7b9b5dbee9db428ccfbcc06d2cbb52939dbb329b11741090ee86e1d9a909|CDO Telemetry|lethal.return-value|1",
+    "verdict": "killed",
+    "killingTest": "IsItTimeForUpload_WhenLastUploadIs35DaysAgo_ReturnsTrue",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "775a7b9b5dbee9db428ccfbcc06d2cbb52939dbb329b11741090ee86e1d9a909|CDO Telemetry|lethal.return-value|1",
+    "verdict": "killed",
+    "killingTest": "IsItTimeForUpload_WhenNoSetupExists_ReturnsFalse",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "775a7b9b5dbee9db428ccfbcc06d2cbb52939dbb329b11741090ee86e1d9a909|CDO Telemetry|lethal.return-value|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "785dc3656c4ad94f308a387b8ba880aca26f13dd1dddf5da0bb435a981936207|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "793dc211b7378b8803383fc551e2897f0a34cb35315408d8d0a85ee198d26978|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "79980326a1fc5b342b33181a709d03ff118902738bd9c6ba597b8a8adc08a487|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "79bced9e77a56eb86924c89133c5e48e1734cd867f21187afaca45cec19d652d|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "7a811c645d5a8aa3308a2b3199ddfdbc6fd5c9e0eec7670f2a1186130a829534|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "7b52fd300396a02b072c98685f69307fb1511690995b10b2e484179311c5e187|CDO Contnia Online PDF Mgt.|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "7ba0615d2a3c0f6e47c6f823d053bf267f8ddafdd0f83c47908166c4fd936658|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "7c62c4bb2f8bc1c477da8eba351ad0fccd3d4d29ca85070f114033e395781aa2|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "7c8964491de6d2f706c35612ab901de13407af07ed0d9f203adbfb27eccf6f4a|CDO Telemetry|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "IsItTimeForUpload_WhenLastUploadIs35DaysAgo_ReturnsTrue",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "7e8867ecaab7d0c52b1eda4b89404bd8a65e25f0faffe3b30c5322808149f3cd|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "7ec10d27961fbfca2f8ec03826dcd53dff156d41da37a12235d7ec22465dbd87|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "7f2912bb72b537d436888102f65de5ae93d286076358ffbc625402027e7f418b|CDO Core Event Handler|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "7f9598a6e5967d4f80e59cb2e93f397782a77e8b3f13df55547e612cae4b2610|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "7f9598a6e5967d4f80e59cb2e93f397782a77e8b3f13df55547e612cae4b2610|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "7f9598a6e5967d4f80e59cb2e93f397782a77e8b3f13df55547e612cae4b2610|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "7f9598a6e5967d4f80e59cb2e93f397782a77e8b3f13df55547e612cae4b2610|CDO Merge Field Cache|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "7f9598a6e5967d4f80e59cb2e93f397782a77e8b3f13df55547e612cae4b2610|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "7f9598a6e5967d4f80e59cb2e93f397782a77e8b3f13df55547e612cae4b2610|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "7f9598a6e5967d4f80e59cb2e93f397782a77e8b3f13df55547e612cae4b2610|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "7f9598a6e5967d4f80e59cb2e93f397782a77e8b3f13df55547e612cae4b2610|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "7f9598a6e5967d4f80e59cb2e93f397782a77e8b3f13df55547e612cae4b2610|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "7f9598a6e5967d4f80e59cb2e93f397782a77e8b3f13df55547e612cae4b2610|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "7f9598a6e5967d4f80e59cb2e93f397782a77e8b3f13df55547e612cae4b2610|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "7f9598a6e5967d4f80e59cb2e93f397782a77e8b3f13df55547e612cae4b2610|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "7f9598a6e5967d4f80e59cb2e93f397782a77e8b3f13df55547e612cae4b2610|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "7f9598a6e5967d4f80e59cb2e93f397782a77e8b3f13df55547e612cae4b2610|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "7f9598a6e5967d4f80e59cb2e93f397782a77e8b3f13df55547e612cae4b2610|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "7f9598a6e5967d4f80e59cb2e93f397782a77e8b3f13df55547e612cae4b2610|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "7f9598a6e5967d4f80e59cb2e93f397782a77e8b3f13df55547e612cae4b2610|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "7f9598a6e5967d4f80e59cb2e93f397782a77e8b3f13df55547e612cae4b2610|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "7f9598a6e5967d4f80e59cb2e93f397782a77e8b3f13df55547e612cae4b2610|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "7f9598a6e5967d4f80e59cb2e93f397782a77e8b3f13df55547e612cae4b2610|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "7f9598a6e5967d4f80e59cb2e93f397782a77e8b3f13df55547e612cae4b2610|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "7f9598a6e5967d4f80e59cb2e93f397782a77e8b3f13df55547e612cae4b2610|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "7f9598a6e5967d4f80e59cb2e93f397782a77e8b3f13df55547e612cae4b2610|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "8025fe0f15a48df006acd5429503a3b3b5c86f39f8862463d7c93be2d2a5f033|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "killed",
+    "killingTest": "IsItTimeForUpload_WhenLastUploadIs15DaysAgo_ReturnsFalse",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "8033c12f804fed9e13292d4156793b7fd8ccf43f22182742ce180e5a51870dad|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "813af965915f0f31e2b781ecb68a3ea8af03fcf8fcc6fc5dee1ec3e251aaf11c|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "815966be1dc3d66a3d2f93c7dfaad3086d259fe56f445f9f5b175d3414404e7a|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "81f3173897cbe1538bb1bf3340facbb0d65c8db6b8cbd746fa9f7a844ccf0b97|CDO Contnia Online PDF Mgt.|lethal.empty-block|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "82a4e8cdc7d778f59a18c466f804560d0466ec8b3f4dd931b811182926b0554e|CDO Contnia Online PDF Mgt.|lethal.empty-block|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "8437a84bb473ccb4cdccb65d8bcf6b40c341af0a5c6a106dfe8ba875cf9a13dd|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8479d3a0e072587a373e7258bb257c8713405df23b1b50335209de7a9a38783b|CDO Contnia Online PDF Mgt.|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "85038df2b7025fef5c092554fd29833f5c73c828382ac0859e73e2e5c7afcc8e|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "86eed7c9107e18b05388a5f97ef22cd5fb2c836f5791c53d27e89859d5f58dcb|CDO Contnia Online PDF Mgt.|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "891278b06c43866dd854cdb2fd73510ba13a3e4ad3a59e3259f727246b658ba8|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "894c50acd096e9e09fe7bbea05bf6ec8a58c0bc2ba29781db91dfa7189c7c70d|CDO Telemetry|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8a05e97ce7f999d13d6b2639fc184b1b6a11d4beea32339984a887179e548c1e|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8b42ae4db0f829af91898f1710d99bec8ce64decdcd2ab1d8b240d343686bd0e|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8c0e76521965b9a3e0fe4cb9b5a3e830ff7e3e6b4164fa4c186d92dbf85d8209|CDO Core Event Handler|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8c1ffae33605bd5895735b201049d0c3371044f555e0fc469e60f5b3fda04ffc|CDO Telemetry|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8c4dabe626618b9d5915412e8211299dcf67b97173dfd6ddc6dbe55556dce98c|CDO Core Event Handler|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8d392db4b99682a455d55b395667087beccfdbecd1631bc8994c35680f08ce37|CDO Contnia Online PDF Mgt.|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8dad019cf3651aa05181df392112238bc995f3dc98f6b8922b1c0190d5e074ee|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO Contnia Online PDF Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO Contnia Online PDF Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO Contnia Online PDF Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO Contnia Online PDF Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "killed",
+    "killingTest": "MergeAndReplacePDF_BatchMerge_TerminatesWithoutInfiniteRecursion",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "8ef4d8812f197081f6f9c2d30333d80fb3c4891afd8405bf410e606236374d6a|CDO Telemetry|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8f089aebe1d0bc389cf223dd46017679f1ba880e53d51e55724376d9cbdfd577|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "908e2458ab5a3bc382a0ce072913c5e2be99a73dfa7a1f8cb20652ba98216eb4|CDO Contnia Online PDF Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "90a2a49cdb97fd7514133ccdffea6cb485d9f5dcfad410fc1bda909092585571|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "910046e00216ffb76799e19fd33d85c461392115f66d08385a764d42ed9ae6c1|CDO Contnia Online PDF Mgt.|lethal.empty-block|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "91451e0b3f30ef6e06de49ec863d2099668bb4c7939b179b3b1ab207ef4454f5|CDO Telemetry|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "91f779978e76ca56ec40548029faaba81d96a7681af8cd03d7fa44a788d48f38|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "9223e82ad7544c25083f5b08316d3c99343c1fd6ff40da16b8d09c55a9a1a837|CDO Contnia Online PDF Mgt.|lethal.conditional-boundary|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "9223e82ad7544c25083f5b08316d3c99343c1fd6ff40da16b8d09c55a9a1a837|CDO Telemetry|lethal.conditional-boundary|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "9223e82ad7544c25083f5b08316d3c99343c1fd6ff40da16b8d09c55a9a1a837|CDO Telemetry|lethal.conditional-boundary|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "9243344156573f559ca208f9148c78d25e92790126ddcbc6f7635fca8bb63dc5|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "93237c9f6f92bc44b48b78613520b7934cc28bb359d7904ef967f34f698b0234|CDO Contnia Online PDF Mgt.|lethal.conditional-boundary|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "9353edbc6751cdb19078bd07aa8f5983f546fdd64499083b2f578dfab046438a|CDO Contnia Online PDF Mgt.|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "MergeAndReplacePDF_BatchMerge_TerminatesWithoutInfiniteRecursion",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "93feff00d0e62a91c2544f82cabbc4236bef238259e729d776dbfe5097304620|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "94273cf7798025cbcf0dda7bd91a7cbc1e2dff742743a75896b1588ac60194db|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "97f8793fc3de5ca4b3ca3b63ce0b05d1ae0b908d419a1bf22ed92dde661962d2|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "983aa31ab82cb9c807fdebc19a498da28435faa45ba9f67eb1f17cb260811ef3|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "99412ce14c026abdec84ad9bbf98d8e054b0e283d3c72fe6ffc42fe79fae39e6|CDO Core Event Handler|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "99412ce14c026abdec84ad9bbf98d8e054b0e283d3c72fe6ffc42fe79fae39e6|CDO Core Event Handler|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "994485dcefc3043020f33e317fdd18450bdfc0b6308063887c2aeeddb34f2955|CDO Telemetry|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "998fdcf7ee6178f74a326bd527833286c5c5fe1e7f480197985d2f07219ffa3f|CDO Contnia Online PDF Mgt.|lethal.empty-block|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "99fa618ade763613f0c06fd61b353a8372baab0c504465f69e2a980d0305ee7d|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "99fd5e31ccbc675a9dd7c299956e0fc4656475829e5abf9955969f450db18b47|CDO Contnia Online PDF Mgt.|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "9a6b1678dfc5668064636a27bf78a6f61b560074915f5383f519993a59bcc971|CDO Telemetry|lethal.empty-block|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "9b2b73d547574885cca1fec7554a4798a094ab5a1496bd434729cc5ad5877b45|CDO Telemetry|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "9c5d5911f1cf7f35e4de2df60af3a84ef37be2ab34c604589f983e0becd50cd0|CDO Contnia Online PDF Mgt.|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "MergeAndReplacePDF_BatchMerge_TerminatesWithoutInfiniteRecursion",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "9ca9f8f683f0ff22dfc3298da42e6656c56098151c14564ec54e1b519cd9e901|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "9cebe52a610dfe85f2594917ef3314da58fc1da0fbcaa245ab5c96a24d41b47a|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "9d72bb3d8f1699ae6ee149a3145d72c294028b1e5ae27fd899367ca0f9f9ce78|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "9e061f0b253d1a741d6dc545bda11fdf53722e7a441759fabb8ea1e03f6fb2f9|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "a05696e490cb03c3292e5384e952ab6176c3273c1c9f05be7602eb4711de5877|CDO Telemetry|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "StorageType_WhenDatabase_AddsFieldWithDatabaseValue",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "a17ddec685d872a53de81f4df57f599c505624c4a7dcac128dd51e307e9edde0|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "a183d7b462774c43c7b24a36e627bb457fde0692f48791851c6afafebe48f92d|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "a1c991e8388f383f20d2aaea429ece5500a327096fc58b6f2cca1556bc4fe6dd|CDO Core Event Handler|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "a205fccda31032aca85f72909ec5b385b2b1de11e0ce0519011b073a0a100c0d|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "a22445ff2842966e67c6ea9b5ac40270a678c214cc0851b15dee61484a6188b4|CDO Contnia Online PDF Mgt.|lethal.conditional-boundary|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "a35b4f22252e7b13c2c2f133b1b393357fa75bb6876c9f7abae77eb3e0e277eb|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "a35b4f22252e7b13c2c2f133b1b393357fa75bb6876c9f7abae77eb3e0e277eb|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "a35b4f22252e7b13c2c2f133b1b393357fa75bb6876c9f7abae77eb3e0e277eb|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "a653256563c4c6b3b367bee11ae31ebef68c44b75bf459bfefde159806a0370a|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "a6c2f7a6625ecfeaa167d998af8bdfccdb1ae5913d8df0381c3075b8e5abc368|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "a72241a2557dcaf2c1a3e67330c9f8123362d032e79ce549e18788952e9d6250|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "a8ee39646a0ad5ea316601ac48a3c045788c3cc8ecc8ae493c84c6a56093ded2|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "aa8299c4c89c00ded4b49ba3b4c0764fca2d44399963627d518af104aa37e9e4|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "aa8299c4c89c00ded4b49ba3b4c0764fca2d44399963627d518af104aa37e9e4|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ab02cb6966041fa1da40bd1df4478158a83d753439390506b94550cdab38cb07|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "ace69524dab7ab8e0ab2d3a5df2b9869e0112c2e8a0da4113c884b55fba2cebb|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "killed",
+    "killingTest": "MergeAndReplacePDF_BatchMerge_TerminatesWithoutInfiniteRecursion",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "killed",
+    "killingTest": "MergeAndReplacePDF_BatchMerge_TerminatesWithoutInfiniteRecursion",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "ad2e611c670716a07c881fd5872cd8ff9fea8f309932b4b03ab7de8945c3f49a|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "ad42140026e7a2aadb592b4161aebdf1b433966ad14570856ce2800cc2683786|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "ad5e290712455e462bff26eb14c7a11a29cffe74ee8b4d1b97356738e91e13e6|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "addfead3bd875cdb5b276ee46c0b6762268fcabe0e0d1688cb2d6207f8b90e62|CDO Contnia Online PDF Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "adf7848dfb4072dd7992199cbc0c447cb14d2e5818bc7c20634bdc86604e1d9b|CDO Contnia Online PDF Mgt.|lethal.negate-conditional|1",
+    "verdict": "killed",
+    "killingTest": "MergeAndReplacePDF_NonPdfFiles_ErrorPropagates",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "b0b1fc2b9e48c012196916b543c6c2346c475d9e164e1835229a825035cf73da|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "b12b9e383c93424e63b25178a1549bee0ebec06bad6f6d779f8789890200ac75|CDO Core Event Handler|lethal.conditional-boundary|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "b28ca30bd5c316fe382ecdd6f4ebdc09e739ec0085ac4b753f8446e6a60d22e9|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "b3854fdf435087efa407207ce25e2b0eaa46c45f1c203a86dfa546081f34b11a|CDO Contnia Online PDF Mgt.|lethal.empty-block|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "b46f888d8f20f784a262a9a526c65221ce1598643a6769264a26a44205846c6c|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "b470e55335745a98da7341b5ae4035b7eb7277bd010a3b0625289979566ad4b4|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "b50594ab04a9a4d00765a724a734499a9861c6d40609edb016f6c2c180fc8794|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "b53bc7ea484d10e9c4207bf8503120b71714928f9c3209026aae3f8c165b21e3|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "b7595d35b79fcaf527a164cc52620a7d973271d04d970edb1a19ab5defd90fae|CDO Telemetry|lethal.return-value|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "b797e665cfabf80482358092a64531323709326053e7c90cbdc2d03aab0fdded|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "ba0f54db3265c9a26162026cee6b9b50a65e1a1bfafd9de8f2a859b30f07793c|CDO Telemetry|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "bae5515266972eabc0c2948bde70f7f7f52eefff197342ed126f5161b0b215b9|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "bb1cb74482f8c2251a55777fdc8b808955701c0b11a840c7bcddecdc7133ff76|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "bb3bfbf88ef1172b9e53bcc2a0e6b3dc159b70825c89bac8a41a46e25341d4a6|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "bb9d285004c29f653b28d5182105cb955adfcab65326c8384cc0156093966373|CDO Core Event Handler|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "bbc96a8d441c21d718d107bd6db9cbf927f236cf4ce12165ce8a66e3a5351ba8|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "bd92d969321d8e2a58fa06f2e6f1b5d45198182d04a2442dc2df48a2306fc0b6|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "bfd2c770afdae04acbcf4de4311c2cda62ccdac7bcb1835261370b25266111d5|CDO Telemetry|lethal.remove-setrange|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "c05004514aa351c6335999c410c9ab4cacfafc815e87461d7d2b2d8b46156950|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "c11836d24562a2f88b3847b51d7d00ca89c94bae96d235667d65420fa8f3b5e2|CDO Contnia Online PDF Mgt.|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "c11836d24562a2f88b3847b51d7d00ca89c94bae96d235667d65420fa8f3b5e2|CDO Contnia Online PDF Mgt.|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "c11836d24562a2f88b3847b51d7d00ca89c94bae96d235667d65420fa8f3b5e2|CDO Contnia Online PDF Mgt.|lethal.negate-conditional|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "c20de26ffa703ac054fc2177ea86375c09481043cc890e403fb27ab6c80330fe|CDO Contnia Online PDF Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "c2442de58fb131ba0bb7fe4149a676d77129a1370ac7b91bde8fdd09b641575e|CDO Telemetry|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "c2470caca7788807cf8c745eb7bc2c5dfa03ee4dad3ffe8b0d4c74f639d84cc4|CDO Contnia Online PDF Mgt.|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "c31fe58e7c70df83c29c153ebd52115cb15c6eeb065eaccd386ba0f238f0c92b|CDO Contnia Online PDF Mgt.|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "c333e25426f489d4236454b3a5d02755335f4b1e4963796dc0cadd3d6ccba23e|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "c47ad12a3775e8dcf76ebb06b32b27f9928d40a7cf7a663b25fdbd62ada5f599|CDO Core Event Handler|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "c4ac5ac2712e9e02ebf4672c0897abc4844bf3a5f80452a0e22ac554b031274f|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "c573b1f3edaf9975323bcd36669e1cfe76c1e7b5dc54eff781e6db5349d5ff2c|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "c7901258925b2c4226402f8dc913ceefa2e77025a5bd25cb33eb6c67d054880c|CDO Contnia Online PDF Mgt.|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "c7efd39033d10d29aa81274b9241dc6b71674b03d1498904b9261cdbfc04b028|CDO Telemetry|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "c87c577da7001319d4d7f76fcd7be34bd84435c92f0cb26b6bb21fbcfb99f671|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "c95eb6249158aa6f17597fb731a56720eb1105b0c32dde63ea7e5776d61f7168|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "c9982d52921e8113ba12ef8338cd7785fa0bde0b4574d71d56447a4f0928a6a6|CDO Core Event Handler|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "c9d1ad636d46548b94c9331de8b474c588f269acbe2b5fa7d27c7b3e2f87e40e|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "cad60002a929395ebe0465039042b02c19bd248c0c4700e8ce6bb243bc94b84b|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "cb9000945be50b76c3d54a4934af57a9e6dabc72674ae8cbb288e52adfd248d0|CDO Contnia Online PDF Mgt.|lethal.return-value|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "cb9000945be50b76c3d54a4934af57a9e6dabc72674ae8cbb288e52adfd248d0|CDO Contnia Online PDF Mgt.|lethal.return-value|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "cb9000945be50b76c3d54a4934af57a9e6dabc72674ae8cbb288e52adfd248d0|CDO Merge Field Cache|lethal.return-value|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "cc74e5c4b6bf91e8d7a6e8840f1ad2023fbd9c4cae58cfdca6c7cb2f04a15f6f|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "cd24c2502fe827b4fb428a86fb134ba7522f73382bc5039eae1d983ad6fbe5f3|CDO Core Event Handler|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "cf5d9d6747f8f97198e5ef8bc0cebb44763a533a03bef77c5257dc953c8d64fd|CDO Contnia Online PDF Mgt.|lethal.negate-conditional|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "d02336bcb8798a687f072499319036c2286ea7c7396311120251ddf81e023100|CDO Telemetry|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "d0707321fa2883e80825b598bb5b80e84a4fed32ff7fccb46e473771b190a728|CDO Contnia Online PDF Mgt.|lethal.empty-block|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "d36581a980ee091d62faf54b2a4512ee7cb1db33aea2a4f417a5edde7ef9d79f|CDO Core Event Handler|lethal.empty-block|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "d36581a980ee091d62faf54b2a4512ee7cb1db33aea2a4f417a5edde7ef9d79f|CDO Core Event Handler|lethal.empty-block|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "d36581a980ee091d62faf54b2a4512ee7cb1db33aea2a4f417a5edde7ef9d79f|CDO Core Event Handler|lethal.empty-block|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "d36581a980ee091d62faf54b2a4512ee7cb1db33aea2a4f417a5edde7ef9d79f|CDO Core Event Handler|lethal.empty-block|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "d39d46c9b49043981da87f2565a1a52a6140e8f6a3074d9ba56945dfc5586d0a|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "d3a2bc3323225466314f306a0d61eaf76c74d8b3ad004fe6bad593b934707584|CDO Contnia Online PDF Mgt.|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "d43406b746b8c29daa37d002b10534c1690ecba4eac0955a5f195a6500fdb0da|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "d56533fee7d3d9dfb8e7d8dabf29dce0f2353e86999d9e4bf03408e944d63c0e|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "d6d7c841b87a010f8f0358d942a2bc43e0ebba8a8440d9e0743cbd6bffe1fb9b|CDO Telemetry|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "d741e873f9e7166e5e07a29b00af729003e7dd6ead87bc8e7c187a2f1a401f69|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "d7c13a3f33327394aa17a2bed8f8dfcea0fa32939f39723b05ac826e89620812|CDO Contnia Online PDF Mgt.|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "d7f0cd90defea29dd3f7d1d92eccde219b5c9295e3397a480d3028e2005f8bdc|CDO Core Event Handler|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "d87ef23e53a7b4e7d68b66e17595b19c7ff95bf8af729d5c7d03a6963aafa903|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "d9cbca5018b3f77051d8f33a72d7e5f6a971924b158b7413b40f621b238147b8|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "d9cbca5018b3f77051d8f33a72d7e5f6a971924b158b7413b40f621b238147b8|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "d9cbca5018b3f77051d8f33a72d7e5f6a971924b158b7413b40f621b238147b8|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "d9cbca5018b3f77051d8f33a72d7e5f6a971924b158b7413b40f621b238147b8|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "d9cbca5018b3f77051d8f33a72d7e5f6a971924b158b7413b40f621b238147b8|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "d9cbca5018b3f77051d8f33a72d7e5f6a971924b158b7413b40f621b238147b8|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "d9cbca5018b3f77051d8f33a72d7e5f6a971924b158b7413b40f621b238147b8|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "d9cbca5018b3f77051d8f33a72d7e5f6a971924b158b7413b40f621b238147b8|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "d9cbca5018b3f77051d8f33a72d7e5f6a971924b158b7413b40f621b238147b8|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "d9cbca5018b3f77051d8f33a72d7e5f6a971924b158b7413b40f621b238147b8|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "d9cbca5018b3f77051d8f33a72d7e5f6a971924b158b7413b40f621b238147b8|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "d9cbca5018b3f77051d8f33a72d7e5f6a971924b158b7413b40f621b238147b8|CDO Core Event Handler|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "d9cbca5018b3f77051d8f33a72d7e5f6a971924b158b7413b40f621b238147b8|CDO Core Event Handler|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "d9cbca5018b3f77051d8f33a72d7e5f6a971924b158b7413b40f621b238147b8|CDO Core Event Handler|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "d9cbca5018b3f77051d8f33a72d7e5f6a971924b158b7413b40f621b238147b8|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "killed",
+    "killingTest": "IsItTimeForUpload_WhenNoSetupExists_ReturnsFalse",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "d9cbca5018b3f77051d8f33a72d7e5f6a971924b158b7413b40f621b238147b8|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "da60df4573d083b1628f8d8a7cd842bbd6e4812a5a0e981d5dab63fd685b55b0|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "da8abc504c9d9a065f38e070808888d9adf8e1d075465d4da9beb11ce20c3e1b|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "dd05c9f8fa648bb8f25f4162f5720a3a1ae69ee6c3538b10a6fb97f3f2bb9fa1|CDO Core Event Handler|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "dd82e0e68d729b14b54b513d75ebedbcac4dfe880f89e4f507742fe9ae73f279|CDO Contnia Online PDF Mgt.|lethal.negate-conditional|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "dd82e0e68d729b14b54b513d75ebedbcac4dfe880f89e4f507742fe9ae73f279|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "e06848f2c5e321cc71256bb0c894a0346625e09b40fd0854fc847151880a7a8b|CDO Contnia Online PDF Mgt.|lethal.negate-conditional|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "e10206f55cef4f4b6b59368948e3f9bd11cb1af1dded2ec9cfae3d308a9e6319|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "e232644732d31ba37323cd31965d14edc9fe5342ad9c4a212944ab4fa77df048|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "e232644732d31ba37323cd31965d14edc9fe5342ad9c4a212944ab4fa77df048|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "e232644732d31ba37323cd31965d14edc9fe5342ad9c4a212944ab4fa77df048|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "e232644732d31ba37323cd31965d14edc9fe5342ad9c4a212944ab4fa77df048|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "e232644732d31ba37323cd31965d14edc9fe5342ad9c4a212944ab4fa77df048|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "e232644732d31ba37323cd31965d14edc9fe5342ad9c4a212944ab4fa77df048|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "e24a9e0ad1052f13fec4f2965c63cb54c344089d48e0e4d1e55dfbbc0c1c2286|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "e5a620c26578b73a02c8462843a5c31c4e9dc285bc698cda7bf431bee0ce97e7|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "e93228be3c05f1de0527b27342380b33ce59584de1b70b09471eebd3305af91f|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "e972108b68edc7a6f8c35e673fc583665f334c45398fb152e745bc10ead2ea0f|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "e972108b68edc7a6f8c35e673fc583665f334c45398fb152e745bc10ead2ea0f|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "e972108b68edc7a6f8c35e673fc583665f334c45398fb152e745bc10ead2ea0f|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "ea909777aaba8b6b78f2c51e812f6c81ae6b90b0a958d6f27ca6f35ad69799a0|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "eaa3d22d7ebd0efe494abd4f3ffa8faa8b8fd084886c5b30fc13dc51e42beb35|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "ec61225085d3721ca20e8ed5463eb75983c51ddde1652915311f9ef4a7b0b8b2|CDO Contnia Online PDF Mgt.|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "ec684123f382f1e8e57d1fec4069479a1ceea5b0f8da7fe1e9a70fedb6c790ed|CDO Telemetry|lethal.remove-setrange|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "ec802cdf13ba1cab9b8015798495b8fef3c2de1da41d6a8d8e701678946582b2|CDO Contnia Online PDF Mgt.|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "MergeAndReplacePDF_BatchMerge_TerminatesWithoutInfiniteRecursion",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ed947c3f2efff80e65cc34ee58a8207be6c5d579a30f9c6e32528a8291396532|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "eda3e392e4a5249e977f0109bccfd4bda7b16d8a749d7278200e319a1575eb8e|CDO Telemetry|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "eeeaaefcad9038770385ff2727a7e72e0021921cbca936256903d1a7019a0609|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "eeff756aa6c3dbee10da30e0a7984a57e9f51f4a16d6cfa5eeb08445e8261cf7|CDO Core Event Handler|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "effa4b53bbfb43ffc8f622325d3db3c9992714a4eafbee6226dbc537880368be|CDO Contnia Online PDF Mgt.|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "MergeAndReplacePDF_BatchMerge_TerminatesWithoutInfiniteRecursion",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "f1883ab48a987a1eb1331cc0cbffeb5c5ffa0f23e58744310186e36ffa5933cc|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "f2e7382137d634eb514c6fcc6b787171f100d49564f77d9b47d7379ca7fb3ab3|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "f4638c15e87c4797d096e998f06db1a5f9dbfda299553b288393ce22a6fbf0f6|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "f6250086d3b872af57ff0c48077e2a5353f99557cc9c49feda75740b0143cc0a|CDO Telemetry|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "f62883671accd14c34a2447798bc23018f139625b20adb91fd729669bed4751d|CDO Merge Field Cache|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "f6392e54808217f89fabe7dd85ef9e6f14cb9bdac37c16b9801aa58933870ebc|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "f6405ce7854b88ccbfc7a826e6b3d28f508a3ca84553097002ae69621cdff31e|CDO Contnia Online PDF Mgt.|lethal.conditional-boundary|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "f6405ce7854b88ccbfc7a826e6b3d28f508a3ca84553097002ae69621cdff31e|CDO Contnia Online PDF Mgt.|lethal.conditional-boundary|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "f84aa1dee6267d511184b97de9b03515c68f208a20ac4a87a35def2f530f3a60|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "f99e733d792a4abfaae493c0cfd7caa718bc888fd455c4b10c314d9740fa87f4|CDO Contnia Online PDF Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "f99e733d792a4abfaae493c0cfd7caa718bc888fd455c4b10c314d9740fa87f4|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "f9f0dad4d904f5bb222cc080f6555fd7f3b062be0043219284a03a46ef651458|CDO Contnia Online PDF Mgt.|lethal.empty-block|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "fa66699db4fbd8f938a3d6650cd6e42094753abf959d94b9501bb2d44705a142|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "fb89619202d22492c3972ad522bc54bb43faf756b9deb11306040272fcf13bb4|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "fbad72dfc2ddbf1dfd6f3f326873c176e5f79372bb5022ad3e0ee635bf12f524|CDO Core Event Handler|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "fbb0e7a2c56b01a73f069bac30a1c141430427aad61e664b8ae42d5e77fcc40d|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "fc85060c8ec2798d28728b05233b4b4a43c3e627a0a3c4d462007dfa82e45909|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "fcb0e5c24890e891a5897dd67a34f03c2e49f2ee50824aa6e3880b6f74cd63ca|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "fcb0e5c24890e891a5897dd67a34f03c2e49f2ee50824aa6e3880b6f74cd63ca|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "fcecbaa7e978b0f9d26bf38543bc5ddaf25287ecbb90e747460e09b3fde72efc|CDO Core Event Handler|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "fd55f44b0950097867c9cceee0e53c7b3eec7049e6fd5e2f13182a3dc34084e2|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "fd55f44b0950097867c9cceee0e53c7b3eec7049e6fd5e2f13182a3dc34084e2|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "fd55f44b0950097867c9cceee0e53c7b3eec7049e6fd5e2f13182a3dc34084e2|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "fd55f44b0950097867c9cceee0e53c7b3eec7049e6fd5e2f13182a3dc34084e2|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "fd55f44b0950097867c9cceee0e53c7b3eec7049e6fd5e2f13182a3dc34084e2|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "fd55f44b0950097867c9cceee0e53c7b3eec7049e6fd5e2f13182a3dc34084e2|CDO Contnia Online PDF Mgt.|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ffd276543ae71f663720a7d7780015e197fcce83adc2e85fb42f95e5d861787c|CDO Telemetry|lethal.negate-conditional|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  }
+]
