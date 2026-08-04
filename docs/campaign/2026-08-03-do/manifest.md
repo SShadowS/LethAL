@@ -33,10 +33,10 @@ live:
 
 | field | value |
 |---|---|
-| binary source commit | _(rung 3)_ |
-| sha256 | _(rung 3)_ |
-| build timestamp | _(rung 3)_ |
-| operator presence check | _(rung 3 — non-zero `grep -ac` required for every operator the rung-1 set depends on; a zero is a rung-3 abort)_ |
+| binary source commit | `0c7a6b083eac29abe5f4f3386596647aef95bf46` |
+| sha256 | `75d1124520e683cf83f5742eb96add9edf8edbd691ea285f66552c62a879088d` |
+| build timestamp | `2026-08-05 00:46:19` |
+| operator presence check | **PASS** — `grep -ac` returns 3 for each of `swap-call-arguments`, `remove-commit`, `remove-setrange`, `negate-conditional`, `void-method-call`. The superseded 2026-07-27 build returned **0** for the first two. Filename is byte-identical between the two builds (R88). |
 
 ## Selector ids
 
