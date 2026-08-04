@@ -85,3 +85,50 @@ branch.
 Carried from rung 1 as a thing to watch rather than a gate: **88 of 133 covered mutants there were
 `object`-attributed vs 45 `exact`**. Object attribution runs every green test for the object instead
 of a precise covering set, so a survivor under it is a weaker statement than one under `exact`.
+
+---
+
+# SUPERSEDED — module changed, and why
+
+The module above (`CDO E-Mail Template Management` 660 + `CDO E-MailTemplateImportExport` 331)
+**cannot be published to a hosted environment at all.** Measured 2026-08-05:
+
+- Single batch, 991 guards → `continia publish` returned `{"success": false, "message": "The
+  operation timed out."}`, and the deployment verifier then correctly reported an identity mismatch
+  (`server reports artifact 5310a359…`). R44's proxy-timeout class, at a new scale.
+- Retried with `--max-guards-per-batch 200`. The runner reported honestly that **batches split at
+  FILE granularity**, so each of the two files became its own oversized batch (331 and 660 guards)
+  and the budget could not help. Publish failed again.
+- That second failure surfaced as a **bare `Error` with no message** — R65's class ("a failed tool
+  spawn can report nothing at all"), here on the publish path.
+
+**So `--max-guards-per-batch` cannot rescue a single large file.** A file whose instrumented form
+exceeds the proxy's publish budget is unmeasurable on a hosted environment, full stop. The
+publishable ceiling is bounded by measurement between **176 guards (rung 1, published in 36–97 s)**
+and **331 (fails)**.
+
+## The replacement module
+
+Four codeunits, each individually at or below rung 1's proven-publishable size, all exercised by
+`Src/Utilities` (**409 tests, zero `TestPage` files** — the largest clean test area in the suite):
+
+| codeunit | sites |
+|---|---|
+| 6175362 `CDO Telemetry` | 229 |
+| 6175274 `CDO Continia Online PDF Mgt` | 196 |
+| 6175317 `CDO Core Event Handler` | 43 |
+| 6175370 `CDO Merge Field Cache` | 8 |
+| **total** | **476** |
+
+Below the 500–1500 band the plan named. That band was my invention and is not what rung 2 is for:
+the rung exists to run a real module through every gate with several publish batches, and 476 sites
+across 4 files does that. Inflating it by re-adding an unpublishable file would fail the rung for a
+reason that has nothing to do with what it measures.
+
+**`CDO Telemetry` at 229 is deliberately included.** It sits in the unmeasured gap between 176 and
+331, so this run bounds the publish ceiling as a side effect of measuring the module. If its batch
+fails, the ceiling is < 229 and the run is repeated with the remaining three files (247 sites) —
+that outcome is recorded, not hidden.
+
+Invocation adds `--max-guards-per-batch 200`; everything else (gates, `--mutant-timeout-ms 180000`,
+the cardinality rule, the TestPage screen) is unchanged from above.
