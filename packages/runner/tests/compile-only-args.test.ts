@@ -21,6 +21,8 @@ describe("parseCompileOnlyArgs", () => {
       "C:/alc/alc.exe",
       "--package-cache",
       "U:/Git/do-lethal/Cloud/.alpackages",
+      "--control-symbol",
+      "U:/Git/LethAL/extensions/lethal-control/lethal-control.app",
     ]);
     expect(a.projectDir).toBe("U:/Git/do-lethal/Cloud");
     expect(a.selectorIds).toEqual({
@@ -28,9 +30,34 @@ describe("parseCompileOnlyArgs", () => {
       controlId: 6175467,
       tableId: 6175468,
     });
+    expect(a.controlSymbolPath).toBe("U:/Git/LethAL/extensions/lethal-control/lethal-control.app");
   });
 
   test("throws naming the missing flag rather than defaulting", () => {
     expect(() => parseCompileOnlyArgs(["--project", "x"])).toThrow(/--selector-id/);
+  });
+
+  /**
+   * The driver stages this symbol into the package cache itself. Making the flag optional would
+   * put the operator back in front of an alc symbol-resolution failure on a hard gate, with
+   * nothing naming the cause — so a missing `--control-symbol` has to be refused at parse time.
+   */
+  test("refuses an invocation with no --control-symbol", () => {
+    expect(() =>
+      parseCompileOnlyArgs([
+        "--project",
+        "P",
+        "--selector-id",
+        "1",
+        "--control-id",
+        "2",
+        "--table-id",
+        "3",
+        "--alc",
+        "alc.exe",
+        "--package-cache",
+        ".alpackages",
+      ]),
+    ).toThrow(/--control-symbol/);
   });
 });

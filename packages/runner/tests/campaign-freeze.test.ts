@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 // Imports from packages/runner/src, not scripts/campaign/freeze.ts directly — see that file's
@@ -151,5 +151,84 @@ describe("freezeRungTo", () => {
     await expect(freezeRungTo(reportPath, "rung1", 1, recordsDir)).rejects.toThrow(
       /per-mutant regression/,
     );
+  });
+
+  /**
+   * The property the archive is supposed to have: `<rung>.report.json` and `<rung>.baseline.json`
+   * describe the SAME run. With the copy before the comparison, a failing second freeze left run
+   * 2's report next to run 1's baseline — a mismatched evidence pair, produced by the component
+   * whose whole purpose is durable evidence.
+   */
+  test("a FAILING second freeze leaves the archived report and the baseline describing the same run", async () => {
+    const first = report([
+      outcome({ mutantCode: "M0001", astHash: "hash-X", verdict: "killed", killingTest: "T1" }),
+    ]);
+    await writeFile(reportPath, JSON.stringify(first), "utf8");
+    await freezeRungTo(reportPath, "rung1", 1, recordsDir);
+
+    const regressed = report([
+      outcome({ mutantCode: "M0001", astHash: "hash-X", verdict: "survived" }),
+    ]);
+    await writeFile(reportPath, JSON.stringify(regressed), "utf8");
+    await expect(freezeRungTo(reportPath, "rung1", 1, recordsDir)).rejects.toThrow();
+
+    const archived = JSON.parse(
+      await readFile(join(recordsDir, "rung1.report.json"), "utf8"),
+    ) as SessionReport;
+    // The baseline file is a bare array of semantic-identity-keyed records (baseline-guard.ts).
+    const baseline = JSON.parse(
+      await readFile(join(recordsDir, "rung1.baseline.json"), "utf8"),
+    ) as readonly { verdict: string }[];
+    // Run 1 was killed; the regressed run 2 was survived. The archived report must still be run 1
+    // — the run its neighbouring baseline was recorded from.
+    expect(archived.mutants[0]?.verdict).toBe("killed");
+    expect(baseline[0]?.verdict).toBe("killed");
+    // ...and run 2's report is not discarded either: it is the finding.
+    const mismatched = JSON.parse(
+      await readFile(join(recordsDir, "rung1.mismatch.report.json"), "utf8"),
+    ) as SessionReport;
+    expect(mismatched.mutants[0]?.verdict).toBe("survived");
+  });
+
+  test("a second failing freeze does not overwrite the first failure's archived report", async () => {
+    const first = report([
+      outcome({ mutantCode: "M0001", astHash: "hash-X", verdict: "killed", killingTest: "T1" }),
+    ]);
+    await writeFile(reportPath, JSON.stringify(first), "utf8");
+    await freezeRungTo(reportPath, "rung1", 1, recordsDir);
+
+    for (const verdict of ["survived", "no-coverage"] as const) {
+      await writeFile(
+        reportPath,
+        JSON.stringify(report([outcome({ mutantCode: "M0001", astHash: "hash-X", verdict })])),
+        "utf8",
+      );
+      await expect(freezeRungTo(reportPath, "rung1", 1, recordsDir)).rejects.toThrow();
+    }
+
+    const files = (await readdir(recordsDir)).sort();
+    expect(files).toEqual([
+      "rung1.baseline.json",
+      "rung1.mismatch-2.report.json",
+      "rung1.mismatch.report.json",
+      "rung1.report.json",
+    ]);
+  });
+
+  test("the SUCCESS path archives the report the baseline was just recorded from", async () => {
+    const r = report([outcome({ mutantCode: "M0001", verdict: "killed", killingTest: "T1" })]);
+    await writeFile(reportPath, JSON.stringify(r), "utf8");
+    await freezeRungTo(reportPath, "rung1", 1, recordsDir);
+
+    const archived = JSON.parse(
+      await readFile(join(recordsDir, "rung1.report.json"), "utf8"),
+    ) as SessionReport;
+    const baseline = JSON.parse(
+      await readFile(join(recordsDir, "rung1.baseline.json"), "utf8"),
+    ) as readonly { verdict: string; key: string }[];
+    expect(archived.mutants.map((m) => String(m.verdict))).toEqual(baseline.map((m) => m.verdict));
+    // The baseline is keyed on semantic identity (astHash|codeunitName|operatorName|major), so
+    // "the same run" is checkable field by field, not merely by count.
+    expect(baseline[0]?.key).toContain(archived.mutants[0]?.astHash ?? "MISSING");
   });
 });

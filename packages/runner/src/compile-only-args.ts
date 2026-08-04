@@ -19,6 +19,14 @@ export interface CompileOnlyArgs {
   };
   readonly alcPath: string;
   readonly packageCachePath: string;
+  /**
+   * Absolute path to the compiled `lethal-control.app` — the same `BcDevConfig.controlSymbolPath`
+   * a real run reads from its config. Required, not optional: the driver stages it into the
+   * package cache itself (exactly as `BcDevMcpBackend.stageForCompile` does), so that an operator
+   * running gate 0 never meets the missing symbol as an unexplained alc resolution failure. An
+   * optional flag would reinstate that trap for anyone who left it off.
+   */
+  readonly controlSymbolPath: string;
 }
 
 function req(map: Map<string, string>, flag: string): string {
@@ -43,5 +51,6 @@ export function parseCompileOnlyArgs(argv: readonly string[]): CompileOnlyArgs {
     },
     alcPath: req(map, "--alc"),
     packageCachePath: req(map, "--package-cache"),
+    controlSymbolPath: req(map, "--control-symbol"),
   };
 }

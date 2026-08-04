@@ -9,12 +9,18 @@
  *
  *   bun scripts/campaign/compile-only.ts --project <dir> \
  *     --selector-id <n> --control-id <n> --table-id <n> \
- *     --alc <path/to/alc.exe> --package-cache <dir>
+ *     --alc <path/to/alc.exe> --package-cache <dir> \
+ *     --control-symbol <path/to/lethal-control.app>
+ *
+ * `--control-symbol` is staged into `--package-cache` here, exactly as
+ * `BcDevMcpBackend.stageForCompile` does for a real run — so gate 0 imposes no setup step that a
+ * real `lethal run` does not.
  *
  * Exit 0 = validation passed AND alc produced an artifact. Any other exit is a gate-0 failure.
  */
 import { randomBytes } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ArtifactCompiler, defaultArtifactIo } from "../../packages/runner/src/artifact";
@@ -83,9 +89,24 @@ export async function compileOnly(args: CompileOnlyArgs): Promise<void> {
     // merely being present in the package cache. `injectControlDependency` (harness.ts) is the
     // same injection `BcDevMcpBackend.stageForCompile` (bcdev-backend.ts) applies to its own
     // throwaway sibling copy, for exactly this reason; `target` here is already our own private
-    // temp dir, so the injection lands directly on it. Requires the caller's --package-cache to
-    // already carry a staged `lethal-control.app` (the same requirement any real `lethal run`
-    // against a bcdev backend has).
+    // temp dir, so the injection lands directly on it.
+    //
+    // The DEPENDENCY needs the SYMBOL: alc resolves the declared dependency out of the package
+    // cache, so both halves have to be present. `stageForCompile` does both (`cp(controlSymbolPath,
+    // join(packageCachePath, "lethal-control.app"))`, bcdev-backend.ts), so this driver does too —
+    // an earlier version injected the dependency and left the staging to the caller, described as
+    // "the same requirement any real `lethal run` has". It is not: no other path imposes it, and
+    // on a hard gate the operator would have met it as an unexplained alc symbol-resolution
+    // failure.
+    if (!existsSync(args.controlSymbolPath)) {
+      throw new Error(
+        `compile-only: --control-symbol ${args.controlSymbolPath} does not exist. Build the LethAL Control extension first (the /control-app skill); a missing symbol would surface as an alc symbol-resolution error with no hint about its cause.`,
+      );
+    }
+    await mkdir(args.packageCachePath, { recursive: true });
+    await cp(args.controlSymbolPath, join(args.packageCachePath, "lethal-control.app"));
+    console.log(`[compile-only] staged lethal-control.app into ${args.packageCachePath}`);
+
     const targetAppJsonPath = join(target, "app.json");
     const stagedManifest = JSON.parse(await readFile(targetAppJsonPath, "utf8")) as Record<
       string,

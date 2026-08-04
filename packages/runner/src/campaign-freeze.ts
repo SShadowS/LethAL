@@ -15,7 +15,11 @@
  * does, keyed on semantic identity (astHash/codeunitName/operatorName/operatorMajor), never on
  * mutantCode or file:line — which is the identity a re-batching run can shift.
  *
- * `assertCardinality` (`./campaign-anchors.ts`) runs FIRST and independently of any I/O against
+ * Order matters twice over. `assertMatchesBaseline` runs BEFORE the report is archived, so the
+ * archived `<rung>.report.json` and `<rung>.baseline.json` always describe the same per-mutant
+ * verdicts; a mismatching report is archived under `<rung>.mismatch[-n].report.json` instead of
+ * over the corresponding pair. And `assertCardinality` (`./campaign-anchors.ts`) runs FIRST of
+ * all, independently of any I/O against
  * the records directory, because `assertMatchesBaseline` self-records when its target file is
  * absent: a cardinality check that ran AFTER the copy/baseline step would let an empty or
  * truncated report freeze itself as its own baseline on the very first rung, and every later rung
@@ -87,9 +91,48 @@ export async function freezeRungTo(
   // written against `recordsDir` until this passes.
   assertCardinality(report, expectedCount, `${rung} freeze`);
   await mkdir(recordsDir, { recursive: true });
+  // COMPARE BEFORE ARCHIVING. Plan Task 6 step 3 calls this twice with the same label, so with
+  // the copy first, run 2's report overwrote `<rung>.report.json` while `<rung>.baseline.json`
+  // still came from run 1 — and on a FAILING second run the overwrite had already happened when
+  // the throw fired, leaving a mismatched pair in the component whose entire purpose is durable
+  // evidence. With the compare first, `<rung>.report.json` is only ever written after
+  // `assertMatchesBaseline` has returned, so the archived report and the baseline provably
+  // describe the same per-mutant verdicts: either the baseline was just minted FROM this report,
+  // or this report matched it exactly.
+  try {
+    await assertMatchesBaseline(report, join(recordsDir, `${rung}.baseline.json`), rung);
+  } catch (err) {
+    // The failing report is the most interesting artifact this campaign can produce, and the
+    // `--out` file it came from lives outside the worktree precisely because that location is not
+    // durable. Archive it under a name that can never be mistaken for the corresponding pair,
+    // then rethrow — the caller must still fail.
+    const dest = mismatchDestination(recordsDir, rung);
+    await copyFile(reportPath, dest);
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `${rung} freeze: the report does not match the committed baseline. ${rung}.report.json was NOT overwritten (it still holds the run the baseline was recorded from); the mismatching report is archived at ${dest}.\n${detail}`,
+      { cause: err },
+    );
+  }
   await copyFile(reportPath, join(recordsDir, `${rung}.report.json`));
-  await assertMatchesBaseline(report, join(recordsDir, `${rung}.baseline.json`), rung);
   console.log(`[freeze] ${rung}: ${report.mutants.length} mutants archived and frozen`);
+}
+
+/**
+ * First free `<rung>.mismatch[-n].report.json`. A fixed name would let a second failing run
+ * destroy the first one's evidence — the exact loss this module exists to prevent, one level down.
+ */
+function mismatchDestination(recordsDir: string, rung: string): string {
+  for (let n = 1; n <= 100; n++) {
+    const p = join(
+      recordsDir,
+      n === 1 ? `${rung}.mismatch.report.json` : `${rung}.mismatch-${n}.report.json`,
+    );
+    if (!existsSync(p)) return p;
+  }
+  throw new Error(
+    `campaign-freeze: 100 mismatching ${rung} reports are already archived in ${recordsDir}. Refusing to overwrite evidence — clear them out deliberately.`,
+  );
 }
 
 /** Archive `reportPath` and freeze its per-mutant verdicts under this campaign's committed

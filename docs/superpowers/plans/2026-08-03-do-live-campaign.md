@@ -35,6 +35,20 @@
 | `docs/campaign/2026-08-03-do/` | **New dir.** Committed campaign records: pre-commitments, frozen baselines, archived reports, the run manifest. |
 | `fixtures/do-campaign/settings.json` | **New.** `claude -p` settings carrying the rung-3 `PreToolUse` fence hook. |
 | `fixtures/do-campaign/fence-hook.ts` | **New.** The fence itself: deny writes outside the worktree, deny `lethal run` without `--only` **and** `--tests-only`. |
+| `packages/runner/src/campaign-anchors-run.ts` | **New (review fix C3).** The I/O half of the anchor gate: strict config parsing, cardinality, anchors, the rung-2 reconciliation. |
+| `scripts/campaign/anchors.ts` | **New (review fix C3).** The missing driver. Prints every anchor and **exits non-zero if any fails**. |
+| `packages/runner/src/campaign-fence.ts` | **New (review fix C2/I4).** The fence's decision logic, pure and `cwd`-injectable, so the probe matrix is a committed test. |
+| `packages/runner/tests/campaign-fence.test.ts` | **New (review fix C2/I4).** The 44-case probe matrix, executable. |
+| `fixtures/do-campaign/fence-probe-matrix.md` | **New (review fix I4).** The matrix, bypass history and accepted residuals, in git rather than in a gitignored session ledger. |
+
+**As landed — where the code differs from the snippets below.** Tasks 1–4 shipped, then a
+whole-branch review changed four of them. The embedded snippets are the plan as written, not the
+code as it exists; read the files, and treat these four as the authority:
+
+1. **Task 1 — `checkAnchors(verified, cfg)`.** Its first parameter is now a `CardinalityVerifiedReport`, which only `assertCardinality` can produce (it throws instead of returning one on a mismatch), plus a runtime re-check for callers who cast or mutate. The precondition was a doc comment, and a documented precondition is enforced by whoever reads it. `reconcileNotInstrumented` is new; see Task 7 step 3.
+2. **Task 2 — `--control-symbol` is required** and the driver stages it into the package cache itself.
+3. **Task 3 — freeze compares BEFORE it archives.** `<rung>.report.json` is written only after `assertMatchesBaseline` returns; a mismatching report goes to `<rung>.mismatch[-n].report.json`. Archiving first left run 2's report beside run 1's baseline.
+4. **Task 4 — the rules live in `packages/runner/src/campaign-fence.ts`**, the hook is a stdin/stdout shell over them, and the probe matrix is a committed test plus `fixtures/do-campaign/fence-probe-matrix.md`. The invocation pattern is `(?<![\w-])lethal\b`: `\blethal\b` matched inside `do-lethal`, the agent's own workspace, so the fence denied the agent's ordinary work.
 
 Everything else is existing library code the tasks call: `validateSelectorIdsForProject` (`packages/runner/src/cli.ts`), `generateMutationSet` + `operatorTiers` (`packages/runner/src/orchestrator.ts`), `writeInstrumentedProject` (`packages/schemata/src/project.ts`), `ArtifactCompiler` + `defaultArtifactIo` (`packages/runner/src/artifact.ts`), `resolveAlToolPaths` (`packages/runner/src/cli.ts` — note the spec calls this `resolveToolPaths`; the exported name is `resolveAlToolPaths`), `assertMatchesBaseline` (`packages/runner/itest/baseline-guard.ts`), `normalizeForComparison`/`diffMutants` (`packages/runner/itest/mutant-equality.ts`).
 
@@ -855,7 +869,7 @@ Record here whether `envTool.env` still needs `CONTINIA_API_TOKEN`: `continia en
 2. **DO's test app compiles and publishes.** Apply the known `CDOTelemetryTests` exclusion (pre-existing source/dependency mismatch, recorded in the 2026-07-27 run notes and again in R53's DO-route rejection) deliberately, not by rediscovery.
 3. **The resolved compiler is alc 17.** Observable: read the resolved `alcPath` back (`resolveAlToolPaths`, `cli.ts:1098-1102`) and invoke it to print its version. Not inferred from "a path was configured".
 4. **`--dry-run` reports the step-2 pre-committed count.**
-5. **`compile-only` passes** (Task 2), with the step-3 in-range ids against `U:/Git/do-lethal/Cloud`.
+5. **`compile-only` passes** (Task 2), with the step-3 in-range ids against `U:/Git/do-lethal/Cloud`. Pass `--control-symbol <path to the lethal-control.app built in item 1>`: the driver stages it into `--package-cache` itself, exactly as `BcDevMcpBackend.stageForCompile` does, so this item imposes no setup step a real run does not. Without the flag it refuses at parse time rather than letting alc fail to resolve `Codeunit "LC Control State"` with no hint about why.
 6. **The hosted hang-stop probe.** Publish `fixtures/sandbox-hang` (committed, own app id and id range, collides with nothing) to the new environment and run `itest:hang`'s ON leg through an envtool config. This decides M0013's rung-1 branch and touches no DO code. It is **not** implementable against DO itself — `--only` selects files, not mutants, so scoping to the codeunit runs every covered mutant.
 
 - [ ] **Step 7: Commit the rung-0 record**
@@ -909,9 +923,30 @@ bun scripts/campaign/freeze.ts <rung1-run2.json> rung1 <N>
 
 The first call records the baseline; the second throws on any per-mutant difference. `assertCardinality` runs first in both, so a truncated or empty report fails loudly rather than self-recording something meaningless.
 
-- [ ] **Step 4: Check the four anchors**
+- [ ] **Step 4: Check the anchors — through the driver, not by hand**
 
-Run `checkAnchors` (Task 1) over `rung1.report.json` with the `AnchorConfig` from step 1. Every anchor must pass. Record each result — including the passing ones — in `rung1.precommit.md`'s result section.
+Write the step-1 pre-commitment's machine half to `docs/campaign/2026-08-03-do/rung1.anchors.json` and commit it BEFORE the run:
+
+```json
+{
+  "expectedMutantCount": <N>,
+  "expectedBaselineTests": <T>,
+  "coveredProcedureRanges": [{ "name": "SendPeriodStatements", "startLine": <a>, "endLine": <b> }],
+  "reconcileNotInstrumented": false
+}
+```
+
+Then:
+
+```bash
+cd U:/Git/LethAL && bun scripts/campaign/anchors.ts \
+  --report docs/campaign/2026-08-03-do/rung1.report.json \
+  --config docs/campaign/2026-08-03-do/rung1.anchors.json
+```
+
+**The exit code is the gate.** Non-zero = rung 1 failed; do not proceed on the printed text. Every field of the config is required and none has a default — in particular `expectedMutantCount` is never derived from the report being checked, which would make the cardinality assertion compare a report against itself. `checkAnchors` cannot be called at all without the token `assertCardinality` returns, so the cardinality precondition cannot be skipped by an operator running this ad hoc.
+
+The driver prints every anchor, including the passing ones — paste that output into `rung1.precommit.md`'s result section verbatim. It also prints, by name, that **anchor 3 (M0013's branch) is NOT checked**: it is not derivable from the report, and step 1 decides it against the gate-0 item-6 probe result. A clean exit from this driver is three anchors, not four.
 
 - [ ] **Step 5: Commit the record**
 
@@ -942,7 +977,18 @@ Target ~500–1500 mutants. **Above 1,000 sites the run is refused by default** 
 - **A baseline quarantine is a gate failure, period.** A mutant-phase strand scored `timeout-killed` is expected; a mutant-phase quarantine is a failure on rung 1's terms.
 - **Survivor count > 0** — otherwise the survivor gate below passes vacuously, and on a module chosen for coverage density zero survivors is itself an anomaly.
 - **Every survivor has `guardObserved === true`.** State the weakness alongside: `true` is the weak direction (`ControlState.IsActive` sets `observedAny` for *any* guard in the artifact, not this mutant's), so it does not prove this mutation was in play. `false` on a survivor is the strong signal and must never appear.
-- **`notInstrumented` reconciles against the independent oracle** — `notInstrumentedOracle` (Task 1), a header-kind census, **not** the dry-run, which mirrors the same producer.
+- **`notInstrumented` reconciles against the independent oracle**, with this exact identity: **run the oracle over the report's OWN `notInstrumented.files` paths and require `instrumentable === 0`** — every file the report calls uninstrumentable really is, read independently from its object header. Do **not** compare counts: the two quantities are unequal by construction and a count comparison would fail on a healthy project. The report lists only files with >=1 spec that cannot carry the selector var; the oracle classifies every file handed to it; so a zero-spec page is uninstrumentable to the oracle and absent from the report, and a zero-spec codeunit inverts it. The report's candidate set also drops `Mutation*` basenames, which the oracle knows nothing about. Feeding the oracle the report's own list removes every one of those asymmetries — what is compared is the CLASSIFICATION (a header regex) against the session's (a tree-sitter parse), not the population.
+
+  Run it through the same driver, with the rung-2 config setting `"reconcileNotInstrumented": true`:
+
+  ```bash
+  cd U:/Git/LethAL && bun scripts/campaign/anchors.ts \
+    --report docs/campaign/2026-08-03-do/rung2.report.json \
+    --config docs/campaign/2026-08-03-do/rung2.anchors.json \
+    --project U:/Git/do-lethal/Cloud
+  ```
+
+  With the flag set, `--project` is **required** and its absence is a hard error — a gate item that can silently not run is not a gate. A missing source for any listed file is also a hard error rather than a smaller reconciliation, and an empty list is reported as NOT passed (`instrumentable === 0` over zero files is vacuous). `--dry-run` remains excluded: same producer, so it would agree with the session even if both were wrong.
 
 - [ ] **Step 4: Freeze and commit**
 
@@ -964,6 +1010,34 @@ git commit -m "measure(campaign): rung 2 — <module>, <N> mutants, <k> survivor
 From the rung-2 report, into `rung3.precommit.md`, committed first: which survivors are genuine targets, which are equivalent-mutant or `no-coverage` traps, and what a correct reaction to each looks like.
 
 Restate the reading rule so it cannot be forgotten at interpretation time: the agent runs **without `--bare`**, so it inherits this machine's global `CLAUDE.md`, plugins and skills, making it a stronger-than-typical reader. **Confusion is a hard finding; success is weak evidence.** Rung 3 can prove the report is bad. It cannot prove it is good.
+
+- [ ] **Step 1b: REBUILD the standalone binary from the pinned campaign commit — before anything else in this rung**
+
+Rungs 0–2 run from source (`bun packages/runner/src/cli.ts`). Rung 3 runs
+`build/lethal-0.1.0-alpha.1-windows-x64.exe`, which is a **different artifact** and, as committed,
+a stale one: it was built 2026-07-27 and is dozens of package-commits behind. Measured on the
+committed binary, `grep -c` returns **0** for both `swap-call-arguments` and `remove-commit` — the
+two operators rung 0 step 2 records as contributing 13 of the ~176 rung-1 mutants. An agent handed
+that binary would be reading a rung-2 report describing mutants its own tool cannot generate.
+
+The filename carries only `0.1.0-alpha.1`, so stale is indistinguishable from fresh by inspection —
+and `build/` is **gitignored** (`.gitignore:4`), so the binary is an untracked local artifact that
+exists only in the main checkout: git records nothing about which commit produced it. The manifest
+entry below is the only place that fact can live. Rebuild and verify:
+
+```bash
+cd U:/Git/LethAL && git rev-parse HEAD          # record this in manifest.md as lethalCommit
+bun run build:binary
+for op in swap-call-arguments remove-commit; do
+  printf '%s: ' "$op"; grep -ac "$op" build/lethal-0.1.0-alpha.1-windows-x64.exe
+done
+sha256sum build/lethal-0.1.0-alpha.1-windows-x64.exe
+```
+
+Every operator the rung-1/rung-2 mutant set depends on must report a **non-zero** count. Record the
+LethAL commit, the sha256 and the build timestamp in `manifest.md`. A zero on any operator, or a
+binary whose recorded commit is not the commit the campaign ran from, is a rung-3 abort: the agent's
+tool and the report it is reading would describe different products.
 
 - [ ] **Step 2: Run the agent**
 
