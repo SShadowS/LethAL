@@ -141,8 +141,8 @@
   },
   {
     "key": "19c68787865aab22ca5ad86c5fe689b4f7a5d100df33b8be8c1bcc6d0c39b1f9|CDO Send Cust. Statement Mgt.|lethal.return-value|1",
-    "verdict": "killed",
-    "killingTest": "IsCustomerStatementReport_WithNonCustomerTable_ShouldReturnFalse",
+    "verdict": "survived",
+    "killingTest": null,
     "coverageFiltered": false,
     "errorClass": null
   },
@@ -687,17 +687,17 @@
   },
   {
     "key": "9fcf90700db320059fe826f5b52424df421f1077a9cb9cf3ed4139a7fa959d5b|CDO Send Cust. Statement Mgt.|lethal.void-method-call|1",
-    "verdict": "survived",
+    "verdict": "error",
     "killingTest": null,
     "coverageFiltered": false,
-    "errorClass": null
+    "errorClass": "other"
   },
   {
     "key": "9fcf90700db320059fe826f5b52424df421f1077a9cb9cf3ed4139a7fa959d5b|CDO Send Cust. Statement Mgt.|lethal.void-method-call|1",
-    "verdict": "survived",
+    "verdict": "error",
     "killingTest": null,
     "coverageFiltered": false,
-    "errorClass": null
+    "errorClass": "other"
   },
   {
     "key": "a8ee39646a0ad5ea316601ac48a3c045788c3cc8ecc8ae493c84c6a56093ded2|CDO Send Cust. Statement Mgt.|lethal.negate-conditional|1",
@@ -855,15 +855,15 @@
   },
   {
     "key": "cb9000945be50b76c3d54a4934af57a9e6dabc72674ae8cbb288e52adfd248d0|CDO Send Cust. Statement Mgt.|lethal.return-value|1",
-    "verdict": "killed",
-    "killingTest": "DirectCreateStatementCall_ZeroBalanceCustomer_ShouldNotCreateJournalLineWhenNoPDF",
+    "verdict": "survived",
+    "killingTest": null,
     "coverageFiltered": false,
     "errorClass": null
   },
   {
     "key": "cb9000945be50b76c3d54a4934af57a9e6dabc72674ae8cbb288e52adfd248d0|CDO Send Cust. Statement Mgt.|lethal.return-value|1",
-    "verdict": "killed",
-    "killingTest": "IsCustomerStatementReport_WithEmailTemplateForStatements_ShouldReturnTrue",
+    "verdict": "survived",
+    "killingTest": null,
     "coverageFiltered": false,
     "errorClass": null
   },

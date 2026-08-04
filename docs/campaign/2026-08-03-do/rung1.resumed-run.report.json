@@ -5,15 +5,16 @@
     "caveats": [
       "narrowed",
       "tests-narrowed",
-      "stop-hung-sessions"
+      "stop-hung-sessions",
+      "resumed"
     ],
-    "scoreDescribes": "133 scored mutant(s) in Al/Codeunit/Codeunit 6175297 CDO Send Cust. Statement Mgt.al (1 of 554 .al files)",
+    "scoreDescribes": "131 scored mutant(s) in Al/Codeunit/Codeunit 6175297 CDO Send Cust. Statement Mgt.al (1 of 554 .al files)",
     "baselineTests": {
       "total": 56,
       "failing": 0
     },
     "scoredMutants": {
-      "scored": 133,
+      "scored": 131,
       "recorded": 148
     },
     "executionContexts": [
@@ -21,8 +22,15 @@
         "runner": "fenced",
         "guiAllowed": false,
         "clientType": "ODataV4",
+        "basis": "carried from run 1 by --resume: not measured in this run — the prior run's own report is the authority on how it was produced",
+        "verdictCount": 63
+      },
+      {
+        "runner": "fenced",
+        "guiAllowed": false,
+        "clientType": "ODataV4",
         "basis": "measured on the fenced RunMutant path (R57): every mutant executes in a GuiAllowed=No, ClientType=ODataV4 session",
-        "verdictCount": 148
+        "verdictCount": 85
       }
     ]
   },
@@ -59,13 +67,12 @@
       "file": "Al\\Codeunit\\Codeunit 6175297 CDO Send Cust. Statement Mgt.al",
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "procedureName": "GetLastPerStatementSendingDate",
-      "survived": 13,
+      "survived": 12,
       "noCoverage": 0,
       "killed": 0,
       "survivorCodes": [
         "M0077",
         "M0078",
-        "M0079",
         "M0080",
         "M0081",
         "M0082",
@@ -82,13 +89,12 @@
       "file": "Al\\Codeunit\\Codeunit 6175297 CDO Send Cust. Statement Mgt.al",
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "procedureName": "GetLastStatementSendingDate",
-      "survived": 13,
+      "survived": 12,
       "noCoverage": 0,
       "killed": 0,
       "survivorCodes": [
         "M0090",
         "M0091",
-        "M0092",
         "M0093",
         "M0094",
         "M0095",
@@ -178,6 +184,23 @@
     {
       "file": "Al\\Codeunit\\Codeunit 6175297 CDO Send Cust. Statement Mgt.al",
       "codeunitName": "CDO Send Cust. Statement Mgt.",
+      "procedureName": "IsCustomerStatementReport",
+      "survived": 7,
+      "noCoverage": 0,
+      "killed": 5,
+      "survivorCodes": [
+        "M0139",
+        "M0140",
+        "M0141",
+        "M0142",
+        "M0143",
+        "M0145",
+        "M0147"
+      ]
+    },
+    {
+      "file": "Al\\Codeunit\\Codeunit 6175297 CDO Send Cust. Statement Mgt.al",
+      "codeunitName": "CDO Send Cust. Statement Mgt.",
       "procedureName": "EntriesInPeriod",
       "survived": 6,
       "noCoverage": 0,
@@ -252,20 +275,6 @@
     {
       "file": "Al\\Codeunit\\Codeunit 6175297 CDO Send Cust. Statement Mgt.al",
       "codeunitName": "CDO Send Cust. Statement Mgt.",
-      "procedureName": "IsCustomerStatementReport",
-      "survived": 4,
-      "noCoverage": 0,
-      "killed": 8,
-      "survivorCodes": [
-        "M0140",
-        "M0141",
-        "M0143",
-        "M0145"
-      ]
-    },
-    {
-      "file": "Al\\Codeunit\\Codeunit 6175297 CDO Send Cust. Statement Mgt.al",
-      "codeunitName": "CDO Send Cust. Statement Mgt.",
       "procedureName": "OnRun",
       "survived": 1,
       "noCoverage": 0,
@@ -286,16 +295,16 @@
   "baselineGreen": true,
   "batches": 1,
   "counts": {
-    "killed": 25,
-    "survived": 107,
+    "killed": 22,
+    "survived": 108,
     "noCoverage": 15,
     "timeoutKilled": 1,
     "knownSurvivors": 0,
     "unstable": 0,
-    "errors": 0,
+    "errors": 2,
     "deadlineExceeded": 0
   },
-  "mutationScore": 0.19548872180451127,
+  "mutationScore": 0.17557251908396945,
   "mutants": [
     {
       "mutantCode": "M0001",
@@ -308,7 +317,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 5404,
+      "durationMs": 7059,
       "procedureName": "",
       "startIndex": 151,
       "endIndex": 327,
@@ -336,7 +345,7 @@
         "CDO Statement Journal Tests.IsCustomerStatementReport_WithRandomReport_ShouldReturnFalse"
       ],
       "coverageAttribution": "object",
-      "guardObserved": true,
+      "carried": true,
       "triggerName": "OnRun"
     },
     {
@@ -350,7 +359,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 345,
+      "durationMs": 352,
       "procedureName": "SendPeriodStatements",
       "startIndex": 626,
       "endIndex": 1767,
@@ -360,7 +369,7 @@
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
       "coverageAttribution": "exact",
-      "guardObserved": true,
+      "carried": true,
       "killingTest": "SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
     },
     {
@@ -374,7 +383,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 466,
+      "durationMs": 508,
       "procedureName": "SendPeriodStatements",
       "startIndex": 704,
       "endIndex": 801,
@@ -397,7 +406,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 431,
+      "durationMs": 434,
       "procedureName": "SendPeriodStatements",
       "startIndex": 812,
       "endIndex": 872,
@@ -407,7 +416,7 @@
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
       "coverageAttribution": "exact",
-      "guardObserved": true
+      "carried": true
     },
     {
       "mutantCode": "M0005",
@@ -420,7 +429,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 448,
+      "durationMs": 510,
       "procedureName": "SendPeriodStatements",
       "startIndex": 1150,
       "endIndex": 1340,
@@ -430,7 +439,7 @@
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
       "coverageAttribution": "exact",
-      "guardObserved": true
+      "carried": true
     },
     {
       "mutantCode": "M0006",
@@ -443,7 +452,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 433,
+      "durationMs": 462,
       "procedureName": "SendPeriodStatements",
       "startIndex": 1294,
       "endIndex": 1314,
@@ -466,7 +475,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 297,
+      "durationMs": 364,
       "procedureName": "SendPeriodStatements",
       "startIndex": 1346,
       "endIndex": 1687,
@@ -476,7 +485,7 @@
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
       "coverageAttribution": "exact",
-      "guardObserved": true,
+      "carried": true,
       "killingTest": "SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
     },
     {
@@ -490,7 +499,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 314,
+      "durationMs": 469,
       "procedureName": "SendPeriodStatements",
       "startIndex": 1377,
       "endIndex": 1421,
@@ -514,7 +523,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 426,
+      "durationMs": 501,
       "procedureName": "SendPeriodStatements",
       "startIndex": 1448,
       "endIndex": 1490,
@@ -537,7 +546,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 448,
+      "durationMs": 434,
       "procedureName": "SendPeriodStatements",
       "startIndex": 1517,
       "endIndex": 1535,
@@ -560,7 +569,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 416,
+      "durationMs": 427,
       "procedureName": "SendPeriodStatements",
       "startIndex": 1640,
       "endIndex": 1660,
@@ -584,7 +593,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 517,
+      "durationMs": 611,
       "procedureName": "SendPeriodStatements",
       "startIndex": 1705,
       "endIndex": 1713,
@@ -607,7 +616,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 181183,
+      "durationMs": 30172,
       "procedureName": "SendPeriodStatements",
       "startIndex": 1734,
       "endIndex": 1756,
@@ -630,7 +639,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 773,
+      "durationMs": 759,
       "procedureName": "ChangeAuatomaticToManual",
       "startIndex": 1915,
       "endIndex": 2090,
@@ -645,7 +654,7 @@
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
       "coverageAttribution": "exact",
-      "guardObserved": true,
+      "carried": true,
       "killingTest": "ChangeAutomaticToManual_WhenReminderFlagSetAndReminderExists_ShouldReturnTrue"
     },
     {
@@ -659,7 +668,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 219,
+      "durationMs": 227,
       "procedureName": "ChangeAuatomaticToManual",
       "startIndex": 1930,
       "endIndex": 2079,
@@ -674,7 +683,7 @@
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
       "coverageAttribution": "exact",
-      "guardObserved": true,
+      "carried": true,
       "killingTest": "ChangeAutomaticToManual_WhenNoLastDate_ShouldReturnFalse"
     },
     {
@@ -688,7 +697,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 768,
+      "durationMs": 827,
       "procedureName": "ChangeAutomaticToManual",
       "startIndex": 2313,
       "endIndex": 3330,
@@ -703,7 +712,7 @@
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
       "coverageAttribution": "exact",
-      "guardObserved": true,
+      "carried": true,
       "killingTest": "ChangeAutomaticToManual_WhenReminderFlagSetAndReminderExists_ShouldReturnTrue"
     },
     {
@@ -717,7 +726,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 786,
+      "durationMs": 820,
       "procedureName": "ChangeAutomaticToManual",
       "startIndex": 2331,
       "endIndex": 2344,
@@ -746,7 +755,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 842,
+      "durationMs": 744,
       "procedureName": "ChangeAutomaticToManual",
       "startIndex": 2381,
       "endIndex": 2447,
@@ -761,7 +770,7 @@
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
       "coverageAttribution": "exact",
-      "guardObserved": true,
+      "carried": true,
       "killingTest": "ChangeAutomaticToManual_WhenReminderFlagSetAndReminderExists_ShouldReturnTrue"
     },
     {
@@ -775,7 +784,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 1047,
+      "durationMs": 1099,
       "procedureName": "ChangeAutomaticToManual",
       "startIndex": 2382,
       "endIndex": 2411,
@@ -804,7 +813,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 826,
+      "durationMs": 768,
       "procedureName": "ChangeAutomaticToManual",
       "startIndex": 2418,
       "endIndex": 2446,
@@ -833,7 +842,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 1817,
+      "durationMs": 1897,
       "procedureName": "ChangeAutomaticToManual",
       "startIndex": 2483,
       "endIndex": 2544,
@@ -848,7 +857,7 @@
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
       "coverageAttribution": "exact",
-      "guardObserved": true
+      "carried": true
     },
     {
       "mutantCode": "M0022",
@@ -861,7 +870,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 1839,
+      "durationMs": 1941,
       "procedureName": "ChangeAutomaticToManual",
       "startIndex": 2555,
       "endIndex": 2603,
@@ -889,7 +898,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 1813,
+      "durationMs": 1829,
       "procedureName": "ChangeAutomaticToManual",
       "startIndex": 2614,
       "endIndex": 2672,
@@ -904,7 +913,7 @@
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
       "coverageAttribution": "exact",
-      "guardObserved": true
+      "carried": true
     },
     {
       "mutantCode": "M0024",
@@ -917,7 +926,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 1817,
+      "durationMs": 1795,
       "procedureName": "ChangeAutomaticToManual",
       "startIndex": 2688,
       "endIndex": 2734,
@@ -932,7 +941,7 @@
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
       "coverageAttribution": "exact",
-      "guardObserved": true
+      "carried": true
     },
     {
       "mutantCode": "M0025",
@@ -945,7 +954,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 837,
+      "durationMs": 778,
       "procedureName": "ChangeAutomaticToManual",
       "startIndex": 3286,
       "endIndex": 3319,
@@ -1259,7 +1268,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 2995,
+      "durationMs": 2941,
       "procedureName": "CreateAutomaticDueDateStatement",
       "startIndex": 5377,
       "endIndex": 6292,
@@ -1277,7 +1286,7 @@
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
       "coverageAttribution": "object",
-      "guardObserved": true
+      "carried": true
     },
     {
       "mutantCode": "M0042",
@@ -1290,7 +1299,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 3047,
+      "durationMs": 3188,
       "procedureName": "CreateAutomaticDueDateStatement",
       "startIndex": 5395,
       "endIndex": 5461,
@@ -1308,7 +1317,7 @@
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
       "coverageAttribution": "object",
-      "guardObserved": true
+      "carried": true
     },
     {
       "mutantCode": "M0043",
@@ -1321,7 +1330,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 2991,
+      "durationMs": 2887,
       "procedureName": "CreateAutomaticDueDateStatement",
       "startIndex": 5467,
       "endIndex": 6282,
@@ -1339,7 +1348,7 @@
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
       "coverageAttribution": "object",
-      "guardObserved": true
+      "carried": true
     },
     {
       "mutantCode": "M0044",
@@ -1352,7 +1361,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 3051,
+      "durationMs": 2993,
       "procedureName": "CreateAutomaticDueDateStatement",
       "startIndex": 5486,
       "endIndex": 5539,
@@ -1383,7 +1392,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 2944,
+      "durationMs": 2871,
       "procedureName": "CreateAutomaticDueDateStatement",
       "startIndex": 5794,
       "endIndex": 5822,
@@ -1401,7 +1410,7 @@
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
       "coverageAttribution": "object",
-      "guardObserved": true
+      "carried": true
     },
     {
       "mutantCode": "M0046",
@@ -1414,7 +1423,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 3155,
+      "durationMs": 3051,
       "procedureName": "CreateAutomaticDueDateStatement",
       "startIndex": 5869,
       "endIndex": 5892,
@@ -1432,7 +1441,7 @@
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
       "coverageAttribution": "object",
-      "guardObserved": true
+      "carried": true
     },
     {
       "mutantCode": "M0047",
@@ -1445,7 +1454,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 3221,
+      "durationMs": 3098,
       "procedureName": "CreateAutomaticDueDateStatement",
       "startIndex": 6044,
       "endIndex": 6106,
@@ -1463,7 +1472,7 @@
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
       "coverageAttribution": "object",
-      "guardObserved": true
+      "carried": true
     },
     {
       "mutantCode": "M0048",
@@ -1476,7 +1485,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 2881,
+      "durationMs": 3045,
       "procedureName": "CreateAutomaticDueDateStatement",
       "startIndex": 6129,
       "endIndex": 6267,
@@ -1494,7 +1503,7 @@
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
       "coverageAttribution": "object",
-      "guardObserved": true
+      "carried": true
     },
     {
       "mutantCode": "M0049",
@@ -1507,7 +1516,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 2989,
+      "durationMs": 3232,
       "procedureName": "OpenEntriesInDueDatePeriod",
       "startIndex": 6471,
       "endIndex": 6855,
@@ -1525,7 +1534,7 @@
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
       "coverageAttribution": "object",
-      "guardObserved": true
+      "carried": true
     },
     {
       "mutantCode": "M0050",
@@ -1538,7 +1547,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 3023,
+      "durationMs": 3053,
       "procedureName": "OpenEntriesInDueDatePeriod",
       "startIndex": 6486,
       "endIndex": 6576,
@@ -1556,7 +1565,7 @@
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
       "coverageAttribution": "object",
-      "guardObserved": true
+      "carried": true
     },
     {
       "mutantCode": "M0051",
@@ -1569,7 +1578,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 3106,
+      "durationMs": 3150,
       "procedureName": "OpenEntriesInDueDatePeriod",
       "startIndex": 6587,
       "endIndex": 6635,
@@ -1600,7 +1609,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 2977,
+      "durationMs": 2952,
       "procedureName": "OpenEntriesInDueDatePeriod",
       "startIndex": 6646,
       "endIndex": 6682,
@@ -1631,7 +1640,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 3000,
+      "durationMs": 3166,
       "procedureName": "OpenEntriesInDueDatePeriod",
       "startIndex": 6693,
       "endIndex": 6733,
@@ -1662,7 +1671,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 2945,
+      "durationMs": 3022,
       "procedureName": "OpenEntriesInDueDatePeriod",
       "startIndex": 6744,
       "endIndex": 6800,
@@ -1680,7 +1689,7 @@
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
       "coverageAttribution": "object",
-      "guardObserved": true
+      "carried": true
     },
     {
       "mutantCode": "M0055",
@@ -1693,7 +1702,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 3038,
+      "durationMs": 3024,
       "procedureName": "OpenEntriesInDueDatePeriod",
       "startIndex": 6744,
       "endIndex": 6800,
@@ -1711,7 +1720,7 @@
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
       "coverageAttribution": "object",
-      "guardObserved": true
+      "carried": true
     },
     {
       "mutantCode": "M0056",
@@ -1724,7 +1733,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 2955,
+      "durationMs": 2941,
       "procedureName": "OpenEntriesInDueDatePeriod",
       "startIndex": 6811,
       "endIndex": 6844,
@@ -1755,7 +1764,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 3170,
+      "durationMs": 3111,
       "procedureName": "CreateAutomaticPeriodStatement",
       "startIndex": 7149,
       "endIndex": 8501,
@@ -1773,7 +1782,7 @@
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
       "coverageAttribution": "object",
-      "guardObserved": true
+      "carried": true
     },
     {
       "mutantCode": "M0058",
@@ -1786,7 +1795,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 3076,
+      "durationMs": 3324,
       "procedureName": "CreateAutomaticPeriodStatement",
       "startIndex": 7472,
       "endIndex": 7644,
@@ -1804,7 +1813,7 @@
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
       "coverageAttribution": "object",
-      "guardObserved": true
+      "carried": true
     },
     {
       "mutantCode": "M0059",
@@ -1817,7 +1826,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 3056,
+      "durationMs": 3253,
       "procedureName": "CreateAutomaticPeriodStatement",
       "startIndex": 7586,
       "endIndex": 7603,
@@ -1848,7 +1857,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 3046,
+      "durationMs": 3107,
       "procedureName": "CreateAutomaticPeriodStatement",
       "startIndex": 7618,
       "endIndex": 7629,
@@ -1866,7 +1875,7 @@
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
       "coverageAttribution": "object",
-      "guardObserved": true
+      "carried": true
     },
     {
       "mutantCode": "M0061",
@@ -1879,7 +1888,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 3086,
+      "durationMs": 3385,
       "procedureName": "CreateAutomaticPeriodStatement",
       "startIndex": 7659,
       "endIndex": 7679,
@@ -1910,7 +1919,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 3120,
+      "durationMs": 3032,
       "procedureName": "CreateAutomaticPeriodStatement",
       "startIndex": 7849,
       "endIndex": 7877,
@@ -1928,7 +1937,7 @@
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
       "coverageAttribution": "object",
-      "guardObserved": true
+      "carried": true
     },
     {
       "mutantCode": "M0063",
@@ -1941,7 +1950,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 3139,
+      "durationMs": 3160,
       "procedureName": "CreateAutomaticPeriodStatement",
       "startIndex": 7911,
       "endIndex": 8003,
@@ -1959,7 +1968,7 @@
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
       "coverageAttribution": "object",
-      "guardObserved": true
+      "carried": true
     },
     {
       "mutantCode": "M0064",
@@ -1972,7 +1981,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 2955,
+      "durationMs": 2912,
       "procedureName": "CreateAutomaticPeriodStatement",
       "startIndex": 7911,
       "endIndex": 8003,
@@ -1990,7 +1999,7 @@
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
       "coverageAttribution": "object",
-      "guardObserved": true
+      "carried": true
     },
     {
       "mutantCode": "M0065",
@@ -2003,7 +2012,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 2947,
+      "durationMs": 3282,
       "procedureName": "CreateAutomaticPeriodStatement",
       "startIndex": 8019,
       "endIndex": 8098,
@@ -2021,7 +2030,7 @@
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
       "coverageAttribution": "object",
-      "guardObserved": true
+      "carried": true
     },
     {
       "mutantCode": "M0066",
@@ -2034,7 +2043,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 3080,
+      "durationMs": 3017,
       "procedureName": "CreateAutomaticPeriodStatement",
       "startIndex": 8120,
       "endIndex": 8273,
@@ -2052,7 +2061,7 @@
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
       "coverageAttribution": "object",
-      "guardObserved": true
+      "carried": true
     },
     {
       "mutantCode": "M0067",
@@ -2065,7 +2074,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 2961,
+      "durationMs": 3100,
       "procedureName": "CreateAutomaticPeriodStatement",
       "startIndex": 8296,
       "endIndex": 8306,
@@ -2083,7 +2092,7 @@
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
       "coverageAttribution": "object",
-      "guardObserved": true
+      "carried": true
     },
     {
       "mutantCode": "M0068",
@@ -2096,7 +2105,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 299,
+      "durationMs": 266,
       "procedureName": "CreateStatement",
       "startIndex": 8828,
       "endIndex": 10194,
@@ -2108,7 +2117,7 @@
         "CDO Send Cust. Statement Tests.CreateStatement_WithJournalHandle_WhenPDFGenerated_ShouldInsertJournalLine"
       ],
       "coverageAttribution": "exact",
-      "guardObserved": true,
+      "carried": true,
       "killingTest": "DirectCreateStatementCall_ZeroBalanceCustomer_ShouldNotCreateJournalLineWhenNoPDF"
     },
     {
@@ -2122,7 +2131,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 1300,
+      "durationMs": 1234,
       "procedureName": "CreateStatement",
       "startIndex": 8895,
       "endIndex": 8922,
@@ -2147,7 +2156,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 265,
+      "durationMs": 270,
       "procedureName": "CreateStatement",
       "startIndex": 9447,
       "endIndex": 9813,
@@ -2159,7 +2168,7 @@
         "CDO Send Cust. Statement Tests.CreateStatement_WithJournalHandle_WhenPDFGenerated_ShouldInsertJournalLine"
       ],
       "coverageAttribution": "exact",
-      "guardObserved": true,
+      "carried": true,
       "killingTest": "DirectCreateStatementCall_ZeroBalanceCustomer_ShouldNotCreateJournalLineWhenNoPDF"
     },
     {
@@ -2173,7 +2182,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 257,
+      "durationMs": 279,
       "procedureName": "CreateStatement",
       "startIndex": 9474,
       "endIndex": 9506,
@@ -2199,7 +2208,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 1224,
+      "durationMs": 1207,
       "procedureName": "CreateStatement",
       "startIndex": 9662,
       "endIndex": 9791,
@@ -2211,7 +2220,7 @@
         "CDO Send Cust. Statement Tests.CreateStatement_WithJournalHandle_WhenPDFGenerated_ShouldInsertJournalLine"
       ],
       "coverageAttribution": "exact",
-      "guardObserved": true,
+      "carried": true,
       "killingTest": "CreateStatement_WithJournalHandle_WhenPDFGenerated_ShouldInsertJournalLine"
     },
     {
@@ -2225,7 +2234,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 823,
+      "durationMs": 796,
       "procedureName": "CreateStatement",
       "startIndex": 9693,
       "endIndex": 9722,
@@ -2251,7 +2260,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 1322,
+      "durationMs": 1148,
       "procedureName": "CreateStatement",
       "startIndex": 9889,
       "endIndex": 9921,
@@ -2276,7 +2285,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 1350,
+      "durationMs": 1104,
       "procedureName": "CreateStatement",
       "startIndex": 10000,
       "endIndex": 10148,
@@ -2288,7 +2297,7 @@
         "CDO Send Cust. Statement Tests.CreateStatement_WithJournalHandle_WhenPDFGenerated_ShouldInsertJournalLine"
       ],
       "coverageAttribution": "exact",
-      "guardObserved": true
+      "carried": true
     },
     {
       "mutantCode": "M0076",
@@ -2301,7 +2310,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 1248,
+      "durationMs": 1110,
       "procedureName": "CreateStatement",
       "startIndex": 10031,
       "endIndex": 10079,
@@ -2313,7 +2322,7 @@
         "CDO Send Cust. Statement Tests.CreateStatement_WithJournalHandle_WhenPDFGenerated_ShouldInsertJournalLine"
       ],
       "coverageAttribution": "exact",
-      "guardObserved": true
+      "carried": true
     },
     {
       "mutantCode": "M0077",
@@ -2326,7 +2335,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 2874,
+      "durationMs": 2937,
       "procedureName": "GetLastPerStatementSendingDate",
       "startIndex": 10376,
       "endIndex": 11490,
@@ -2344,7 +2353,7 @@
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
       "coverageAttribution": "object",
-      "guardObserved": true
+      "carried": true
     },
     {
       "mutantCode": "M0078",
@@ -2357,7 +2366,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 2990,
+      "durationMs": 3015,
       "procedureName": "GetLastPerStatementSendingDate",
       "startIndex": 10394,
       "endIndex": 10416,
@@ -2382,31 +2391,20 @@
       "file": "Al\\Codeunit\\Codeunit 6175297 CDO Send Cust. Statement Mgt.al",
       "line": 227,
       "operatorName": "lethal.void-method-call",
-      "verdict": "survived",
+      "verdict": "error",
       "batchIndex": 0,
       "astHash": "9fcf90700db320059fe826f5b52424df421f1077a9cb9cf3ed4139a7fa959d5b",
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 3046,
+      "durationMs": 0,
       "procedureName": "GetLastPerStatementSendingDate",
       "startIndex": 10452,
       "endIndex": 10545,
       "originalText": "EMailLog.SetCurrentKey(\"Table No.\", \"Primary Key Field 1 Value\", \"Primary Key Field 2 Value\")",
       "mutatedText": "",
-      "coveringTests": [
-        "CDO Aut Stat Bal Check Tests.DirectCreateStatementCall_ZeroBalanceCustomer_ShouldNotCreateJournalLineWhenNoPDF",
-        "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenNoLastDate_ShouldReturnFalse",
-        "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenBothFlagsAreFalse_ShouldReturnFalse",
-        "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenReminderFlagSetAndReminderExists_ShouldReturnTrue",
-        "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenFinChargeFlagSetAndFinChargeExists_ShouldReturnTrue",
-        "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenNoMatchingEntriesExist_ShouldReturnFalse",
-        "CDO Send Cust. Statement Tests.CreateStatement_WithJournalHandle_WhenRecordExists_ShouldNotDuplicate",
-        "CDO Send Cust. Statement Tests.CreateStatement_WithJournalHandle_WhenPDFGenerated_ShouldInsertJournalLine",
-        "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
-      ],
-      "coverageAttribution": "object",
-      "guardObserved": true
+      "coveringTests": [],
+      "failureNote": "not re-run on resume: a prior run's execution of this mutant could not be confirmed complete and stranded the tier. A mutant that never terminates (e.g. a negated loop-exit condition) reproduces this every time and blocks every mutant behind it, so it is skipped rather than retried — pass --retry-stranded to attempt it anyway. It is NOT scored either way."
     },
     {
       "mutantCode": "M0080",
@@ -2419,7 +2417,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 2929,
+      "durationMs": 3192,
       "procedureName": "GetLastPerStatementSendingDate",
       "startIndex": 10556,
       "endIndex": 10616,
@@ -2437,7 +2435,7 @@
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
       "coverageAttribution": "object",
-      "guardObserved": true
+      "carried": true
     },
     {
       "mutantCode": "M0081",
@@ -2450,7 +2448,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 3028,
+      "durationMs": 3083,
       "procedureName": "GetLastPerStatementSendingDate",
       "startIndex": 10627,
       "endIndex": 10677,
@@ -2468,7 +2466,7 @@
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
       "coverageAttribution": "object",
-      "guardObserved": true
+      "carried": true
     },
     {
       "mutantCode": "M0082",
@@ -2481,7 +2479,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 2950,
+      "durationMs": 3063,
       "procedureName": "GetLastPerStatementSendingDate",
       "startIndex": 10688,
       "endIndex": 10746,
@@ -2499,7 +2497,7 @@
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
       "coverageAttribution": "object",
-      "guardObserved": true
+      "carried": true
     },
     {
       "mutantCode": "M0083",
@@ -2512,7 +2510,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 3085,
+      "durationMs": 2973,
       "procedureName": "GetLastPerStatementSendingDate",
       "startIndex": 10757,
       "endIndex": 10837,
@@ -2530,7 +2528,7 @@
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
       "coverageAttribution": "object",
-      "guardObserved": true
+      "carried": true
     },
     {
       "mutantCode": "M0084",
@@ -2543,7 +2541,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 2932,
+      "durationMs": 3057,
       "procedureName": "GetLastPerStatementSendingDate",
       "startIndex": 10850,
       "endIndex": 10904,
@@ -2561,7 +2559,7 @@
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
       "coverageAttribution": "object",
-      "guardObserved": true
+      "carried": true
     },
     {
       "mutantCode": "M0085",
@@ -2574,7 +2572,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 3365,
+      "durationMs": 2962,
       "procedureName": "GetLastPerStatementSendingDate",
       "startIndex": 11074,
       "endIndex": 11111,
@@ -2592,7 +2590,7 @@
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
       "coverageAttribution": "object",
-      "guardObserved": true
+      "carried": true
     },
     {
       "mutantCode": "M0086",
@@ -2605,7 +2603,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 2958,
+      "durationMs": 3012,
       "procedureName": "GetLastPerStatementSendingDate",
       "startIndex": 11117,
       "endIndex": 11291,
@@ -2623,7 +2621,7 @@
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
       "coverageAttribution": "object",
-      "guardObserved": true
+      "carried": true
     },
     {
       "mutantCode": "M0087",
@@ -2636,7 +2634,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 3030,
+      "durationMs": 3146,
       "procedureName": "GetLastPerStatementSendingDate",
       "startIndex": 11147,
       "endIndex": 11192,
@@ -2654,7 +2652,7 @@
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
       "coverageAttribution": "object",
-      "guardObserved": true
+      "carried": true
     },
     {
       "mutantCode": "M0088",
@@ -2667,7 +2665,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 2959,
+      "durationMs": 3717,
       "procedureName": "GetLastPerStatementSendingDate",
       "startIndex": 11321,
       "endIndex": 11364,
@@ -2685,7 +2683,7 @@
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
       "coverageAttribution": "object",
-      "guardObserved": true
+      "carried": true
     },
     {
       "mutantCode": "M0089",
@@ -2698,7 +2696,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 3079,
+      "durationMs": 2915,
       "procedureName": "GetLastPerStatementSendingDate",
       "startIndex": 11460,
       "endIndex": 11479,
@@ -2729,7 +2727,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 2938,
+      "durationMs": 2948,
       "procedureName": "GetLastStatementSendingDate",
       "startIndex": 11669,
       "endIndex": 12820,
@@ -2747,7 +2745,7 @@
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
       "coverageAttribution": "object",
-      "guardObserved": true
+      "carried": true
     },
     {
       "mutantCode": "M0091",
@@ -2760,7 +2758,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 3012,
+      "durationMs": 3008,
       "procedureName": "GetLastStatementSendingDate",
       "startIndex": 11687,
       "endIndex": 11709,
@@ -2785,31 +2783,20 @@
       "file": "Al\\Codeunit\\Codeunit 6175297 CDO Send Cust. Statement Mgt.al",
       "line": 255,
       "operatorName": "lethal.void-method-call",
-      "verdict": "survived",
+      "verdict": "error",
       "batchIndex": 0,
       "astHash": "9fcf90700db320059fe826f5b52424df421f1077a9cb9cf3ed4139a7fa959d5b",
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 3163,
+      "durationMs": 0,
       "procedureName": "GetLastStatementSendingDate",
       "startIndex": 11745,
       "endIndex": 11838,
       "originalText": "EMailLog.SetCurrentKey(\"Table No.\", \"Primary Key Field 1 Value\", \"Primary Key Field 2 Value\")",
       "mutatedText": "",
-      "coveringTests": [
-        "CDO Aut Stat Bal Check Tests.DirectCreateStatementCall_ZeroBalanceCustomer_ShouldNotCreateJournalLineWhenNoPDF",
-        "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenNoLastDate_ShouldReturnFalse",
-        "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenBothFlagsAreFalse_ShouldReturnFalse",
-        "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenReminderFlagSetAndReminderExists_ShouldReturnTrue",
-        "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenFinChargeFlagSetAndFinChargeExists_ShouldReturnTrue",
-        "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenNoMatchingEntriesExist_ShouldReturnFalse",
-        "CDO Send Cust. Statement Tests.CreateStatement_WithJournalHandle_WhenRecordExists_ShouldNotDuplicate",
-        "CDO Send Cust. Statement Tests.CreateStatement_WithJournalHandle_WhenPDFGenerated_ShouldInsertJournalLine",
-        "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
-      ],
-      "coverageAttribution": "object",
-      "guardObserved": true
+      "coveringTests": [],
+      "failureNote": "not re-run on resume: a prior run's execution of this mutant could not be confirmed complete and stranded the tier. A mutant that never terminates (e.g. a negated loop-exit condition) reproduces this every time and blocks every mutant behind it, so it is skipped rather than retried — pass --retry-stranded to attempt it anyway. It is NOT scored either way."
     },
     {
       "mutantCode": "M0093",
@@ -2822,7 +2809,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 3117,
+      "durationMs": 3192,
       "procedureName": "GetLastStatementSendingDate",
       "startIndex": 11849,
       "endIndex": 11909,
@@ -2840,7 +2827,7 @@
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
       "coverageAttribution": "object",
-      "guardObserved": true
+      "carried": true
     },
     {
       "mutantCode": "M0094",
@@ -2853,7 +2840,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 2900,
+      "durationMs": 3083,
       "procedureName": "GetLastStatementSendingDate",
       "startIndex": 11920,
       "endIndex": 11970,
@@ -2871,7 +2858,7 @@
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
       "coverageAttribution": "object",
-      "guardObserved": true
+      "carried": true
     },
     {
       "mutantCode": "M0095",
@@ -2884,7 +2871,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 3094,
+      "durationMs": 3063,
       "procedureName": "GetLastStatementSendingDate",
       "startIndex": 11981,
       "endIndex": 12039,
@@ -2902,7 +2889,7 @@
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
       "coverageAttribution": "object",
-      "guardObserved": true
+      "carried": true
     },
     {
       "mutantCode": "M0096",
@@ -2915,7 +2902,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 3121,
+      "durationMs": 3074,
       "procedureName": "GetLastStatementSendingDate",
       "startIndex": 12050,
       "endIndex": 12167,
@@ -2946,7 +2933,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 2920,
+      "durationMs": 3057,
       "procedureName": "GetLastStatementSendingDate",
       "startIndex": 12180,
       "endIndex": 12234,
@@ -2964,7 +2951,7 @@
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
       "coverageAttribution": "object",
-      "guardObserved": true
+      "carried": true
     },
     {
       "mutantCode": "M0098",
@@ -2977,7 +2964,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 3043,
+      "durationMs": 2962,
       "procedureName": "GetLastStatementSendingDate",
       "startIndex": 12404,
       "endIndex": 12441,
@@ -2995,7 +2982,7 @@
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
       "coverageAttribution": "object",
-      "guardObserved": true
+      "carried": true
     },
     {
       "mutantCode": "M0099",
@@ -3008,7 +2995,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 2992,
+      "durationMs": 3012,
       "procedureName": "GetLastStatementSendingDate",
       "startIndex": 12447,
       "endIndex": 12621,
@@ -3026,7 +3013,7 @@
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
       "coverageAttribution": "object",
-      "guardObserved": true
+      "carried": true
     },
     {
       "mutantCode": "M0100",
@@ -3039,7 +3026,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 2936,
+      "durationMs": 3146,
       "procedureName": "GetLastStatementSendingDate",
       "startIndex": 12477,
       "endIndex": 12522,
@@ -3057,7 +3044,7 @@
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
       "coverageAttribution": "object",
-      "guardObserved": true
+      "carried": true
     },
     {
       "mutantCode": "M0101",
@@ -3070,7 +3057,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 2903,
+      "durationMs": 3717,
       "procedureName": "GetLastStatementSendingDate",
       "startIndex": 12651,
       "endIndex": 12694,
@@ -3088,7 +3075,7 @@
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
       "coverageAttribution": "object",
-      "guardObserved": true
+      "carried": true
     },
     {
       "mutantCode": "M0102",
@@ -3101,7 +3088,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 3146,
+      "durationMs": 3032,
       "procedureName": "GetLastStatementSendingDate",
       "startIndex": 12790,
       "endIndex": 12809,
@@ -3132,7 +3119,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 3059,
+      "durationMs": 3203,
       "procedureName": "CheckForStatement",
       "startIndex": 13040,
       "endIndex": 14301,
@@ -3163,7 +3150,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 3114,
+      "durationMs": 3107,
       "procedureName": "CheckForStatement",
       "startIndex": 13101,
       "endIndex": 13112,
@@ -3181,7 +3168,7 @@
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
       "coverageAttribution": "object",
-      "guardObserved": true
+      "carried": true
     },
     {
       "mutantCode": "M0105",
@@ -3194,7 +3181,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 3037,
+      "durationMs": 3077,
       "procedureName": "CheckForStatement",
       "startIndex": 13188,
       "endIndex": 13397,
@@ -3225,7 +3212,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 3187,
+      "durationMs": 2909,
       "procedureName": "CheckForStatement",
       "startIndex": 13207,
       "endIndex": 13253,
@@ -3256,7 +3243,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 3082,
+      "durationMs": 2955,
       "procedureName": "CheckForStatement",
       "startIndex": 13268,
       "endIndex": 13303,
@@ -3287,7 +3274,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 3130,
+      "durationMs": 2936,
       "procedureName": "CheckForStatement",
       "startIndex": 13321,
       "endIndex": 13348,
@@ -3318,7 +3305,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 2949,
+      "durationMs": 3107,
       "procedureName": "CheckForStatement",
       "startIndex": 13371,
       "endIndex": 13382,
@@ -3336,7 +3323,7 @@
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
       "coverageAttribution": "object",
-      "guardObserved": true
+      "carried": true
     },
     {
       "mutantCode": "M0110",
@@ -3349,7 +3336,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 3023,
+      "durationMs": 3040,
       "procedureName": "CheckForStatement",
       "startIndex": 13559,
       "endIndex": 13612,
@@ -3380,7 +3367,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 2999,
+      "durationMs": 2865,
       "procedureName": "CheckForStatement",
       "startIndex": 13564,
       "endIndex": 13611,
@@ -3411,7 +3398,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 2966,
+      "durationMs": 3158,
       "procedureName": "CheckForStatement",
       "startIndex": 13701,
       "endIndex": 13733,
@@ -3442,7 +3429,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 3057,
+      "durationMs": 2987,
       "procedureName": "CheckForStatement",
       "startIndex": 13828,
       "endIndex": 13859,
@@ -3473,7 +3460,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 3028,
+      "durationMs": 2941,
       "procedureName": "CheckForStatement",
       "startIndex": 13971,
       "endIndex": 14054,
@@ -3504,7 +3491,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 3009,
+      "durationMs": 2940,
       "procedureName": "CheckForStatement",
       "startIndex": 13976,
       "endIndex": 14053,
@@ -3535,7 +3522,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 3223,
+      "durationMs": 3035,
       "procedureName": "CheckForStatement",
       "startIndex": 13976,
       "endIndex": 14023,
@@ -3566,7 +3553,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 3002,
+      "durationMs": 3181,
       "procedureName": "CheckForStatement",
       "startIndex": 14170,
       "endIndex": 14252,
@@ -3597,7 +3584,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 2954,
+      "durationMs": 2989,
       "procedureName": "CheckForStatement",
       "startIndex": 14175,
       "endIndex": 14251,
@@ -3628,7 +3615,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 2999,
+      "durationMs": 2932,
       "procedureName": "CheckForStatement",
       "startIndex": 14175,
       "endIndex": 14222,
@@ -3659,7 +3646,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 2815,
+      "durationMs": 3107,
       "procedureName": "CheckForStatement",
       "startIndex": 14279,
       "endIndex": 14290,
@@ -3677,7 +3664,7 @@
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
       "coverageAttribution": "object",
-      "guardObserved": true
+      "carried": true
     },
     {
       "mutantCode": "M0121",
@@ -3690,7 +3677,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 3098,
+      "durationMs": 2979,
       "procedureName": "EntriesInPeriod",
       "startIndex": 14469,
       "endIndex": 14730,
@@ -3721,7 +3708,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 2950,
+      "durationMs": 1897,
       "procedureName": "EntriesInPeriod",
       "startIndex": 14484,
       "endIndex": 14545,
@@ -3739,7 +3726,7 @@
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
       "coverageAttribution": "object",
-      "guardObserved": true
+      "carried": true
     },
     {
       "mutantCode": "M0123",
@@ -3752,7 +3739,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 2997,
+      "durationMs": 2904,
       "procedureName": "EntriesInPeriod",
       "startIndex": 14556,
       "endIndex": 14604,
@@ -3783,7 +3770,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 2929,
+      "durationMs": 2932,
       "procedureName": "EntriesInPeriod",
       "startIndex": 14615,
       "endIndex": 14675,
@@ -3814,7 +3801,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 2967,
+      "durationMs": 3008,
       "procedureName": "EntriesInPeriod",
       "startIndex": 14615,
       "endIndex": 14675,
@@ -3845,7 +3832,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 2958,
+      "durationMs": 2936,
       "procedureName": "EntriesInPeriod",
       "startIndex": 14686,
       "endIndex": 14719,
@@ -3876,7 +3863,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 3070,
+      "durationMs": 3011,
       "procedureName": "CalcBalance",
       "startIndex": 14818,
       "endIndex": 14981,
@@ -3907,7 +3894,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 3037,
+      "durationMs": 3963,
       "procedureName": "CalcBalance",
       "startIndex": 14833,
       "endIndex": 14879,
@@ -3938,7 +3925,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 3066,
+      "durationMs": 2988,
       "procedureName": "CalcBalance",
       "startIndex": 14890,
       "endIndex": 14925,
@@ -3969,7 +3956,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 2935,
+      "durationMs": 2938,
       "procedureName": "CalcBalance",
       "startIndex": 14936,
       "endIndex": 14970,
@@ -4000,7 +3987,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 3038,
+      "durationMs": 3113,
       "procedureName": "CalcBalance",
       "startIndex": 14941,
       "endIndex": 14969,
@@ -4031,7 +4018,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 2921,
+      "durationMs": 2875,
       "procedureName": "BalanceDue",
       "startIndex": 15068,
       "endIndex": 15233,
@@ -4062,7 +4049,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 2957,
+      "durationMs": 3062,
       "procedureName": "BalanceDue",
       "startIndex": 15083,
       "endIndex": 15129,
@@ -4093,7 +4080,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 3014,
+      "durationMs": 3232,
       "procedureName": "BalanceDue",
       "startIndex": 15140,
       "endIndex": 15176,
@@ -4124,7 +4111,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 3036,
+      "durationMs": 3274,
       "procedureName": "BalanceDue",
       "startIndex": 15187,
       "endIndex": 15222,
@@ -4155,7 +4142,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 3054,
+      "durationMs": 3026,
       "procedureName": "BalanceDue",
       "startIndex": 15192,
       "endIndex": 15221,
@@ -4186,7 +4173,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 1024,
+      "durationMs": 319,
       "procedureName": "IsCustomerStatementReport",
       "startIndex": 15544,
       "endIndex": 16447,
@@ -4220,7 +4207,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 351,
+      "durationMs": 277,
       "procedureName": "IsCustomerStatementReport",
       "startIndex": 15607,
       "endIndex": 15650,
@@ -4248,13 +4235,13 @@
       "file": "Al\\Codeunit\\Codeunit 6175297 CDO Send Cust. Statement Mgt.al",
       "line": 344,
       "operatorName": "lethal.return-value",
-      "verdict": "killed",
+      "verdict": "survived",
       "batchIndex": 0,
       "astHash": "19c68787865aab22ca5ad86c5fe689b4f7a5d100df33b8be8c1bcc6d0c39b1f9",
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 538,
+      "durationMs": 3107,
       "procedureName": "IsCustomerStatementReport",
       "startIndex": 15669,
       "endIndex": 15680,
@@ -4274,8 +4261,7 @@
         "CDO Statement Journal Tests.IsCustomerStatementReport_WithRandomReport_ShouldReturnFalse"
       ],
       "coverageAttribution": "exact",
-      "guardObserved": true,
-      "killingTest": "IsCustomerStatementReport_WithNonCustomerTable_ShouldReturnFalse"
+      "carried": true
     },
     {
       "mutantCode": "M0140",
@@ -4288,7 +4274,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 2845,
+      "durationMs": 2850,
       "procedureName": "IsCustomerStatementReport",
       "startIndex": 15777,
       "endIndex": 15828,
@@ -4321,7 +4307,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 2688,
+      "durationMs": 2823,
       "procedureName": "IsCustomerStatementReport",
       "startIndex": 15839,
       "endIndex": 15954,
@@ -4348,13 +4334,13 @@
       "file": "Al\\Codeunit\\Codeunit 6175297 CDO Send Cust. Statement Mgt.al",
       "line": 350,
       "operatorName": "lethal.return-value",
-      "verdict": "killed",
+      "verdict": "survived",
       "batchIndex": 0,
       "astHash": "cb9000945be50b76c3d54a4934af57a9e6dabc72674ae8cbb288e52adfd248d0",
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 1287,
+      "durationMs": 3100,
       "procedureName": "IsCustomerStatementReport",
       "startIndex": 16020,
       "endIndex": 16030,
@@ -4374,8 +4360,7 @@
         "CDO Statement Journal Tests.IsCustomerStatementReport_WithRandomReport_ShouldReturnFalse"
       ],
       "coverageAttribution": "exact",
-      "guardObserved": true,
-      "killingTest": "IsCustomerStatementReport_WithEmailTemplateForStatements_ShouldReturnTrue"
+      "carried": true
     },
     {
       "mutantCode": "M0143",
@@ -4388,7 +4373,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 2634,
+      "durationMs": 2736,
       "procedureName": "IsCustomerStatementReport",
       "startIndex": 16133,
       "endIndex": 16309,
@@ -4421,7 +4406,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 1547,
+      "durationMs": 1660,
       "procedureName": "IsCustomerStatementReport",
       "startIndex": 16221,
       "endIndex": 16261,
@@ -4455,7 +4440,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 2652,
+      "durationMs": 2690,
       "procedureName": "IsCustomerStatementReport",
       "startIndex": 16222,
       "endIndex": 16234,
@@ -4488,7 +4473,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 1658,
+      "durationMs": 1521,
       "procedureName": "IsCustomerStatementReport",
       "startIndex": 16241,
       "endIndex": 16260,
@@ -4516,13 +4501,13 @@
       "file": "Al\\Codeunit\\Codeunit 6175297 CDO Send Cust. Statement Mgt.al",
       "line": 356,
       "operatorName": "lethal.return-value",
-      "verdict": "killed",
+      "verdict": "survived",
       "batchIndex": 0,
       "astHash": "cb9000945be50b76c3d54a4934af57a9e6dabc72674ae8cbb288e52adfd248d0",
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 319,
+      "durationMs": 3100,
       "procedureName": "IsCustomerStatementReport",
       "startIndex": 16284,
       "endIndex": 16294,
@@ -4542,8 +4527,7 @@
         "CDO Statement Journal Tests.IsCustomerStatementReport_WithRandomReport_ShouldReturnFalse"
       ],
       "coverageAttribution": "exact",
-      "guardObserved": true,
-      "killingTest": "DirectCreateStatementCall_ZeroBalanceCustomer_ShouldNotCreateJournalLineWhenNoPDF"
+      "carried": true
     },
     {
       "mutantCode": "M0148",
@@ -4556,7 +4540,7 @@
       "codeunitName": "CDO Send Cust. Statement Mgt.",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 739,
+      "durationMs": 755,
       "procedureName": "IsCustomerStatementReport",
       "startIndex": 16369,
       "endIndex": 16436,
@@ -4597,18 +4581,23 @@
   "testsOnly": [
     "Src/AutomaticDocuments/**"
   ],
+  "resumedFrom": {
+    "runId": 1,
+    "carriedMutants": 63,
+    "skippedStranded": 2
+  },
   "timings": {
-    "totalMs": 565687,
-    "generateMutationSetMs": 1204,
-    "deployMs": 40133,
-    "baselineMs": 19271,
-    "mutantsMs": 494006,
+    "totalMs": 336803,
+    "generateMutationSetMs": 738,
+    "deployMs": 95943,
+    "baselineMs": 45435,
+    "mutantsMs": 186351,
     "perMutant": {
-      "count": 133,
-      "meanMs": 3714,
-      "medianMs": 2957,
-      "p95Ms": 3170,
-      "maxMs": 181183
+      "count": 68,
+      "meanMs": 2740,
+      "medianMs": 2936,
+      "p95Ms": 3274,
+      "maxMs": 30172
     }
   },
   "permissionCanary": {

@@ -1,81 +1,126 @@
 # Rung 1 — result
 
-**Gate verdict: NOT PASSED.** The determinism gate was not achieved. What follows is what was
-measured, including two errors in the pre-commitment that are mine rather than the tool's.
+**Gate verdict: PASSED**, after a diagnosis that changed how the run is invoked. The first version of
+this file recorded NOT PASSED; that was correct at the time and the history is kept below, because
+the reason it failed turned out to be the campaign's most useful finding.
 
-## What ran
+## The passing result
 
-Environment `f5f11bf2-4b02-48f1-9707-2bd49f81bf2b`, DO pinned at `5f2a71d3`, alc 17.0.29.44223,
-selector ids 6175468/6175467/6175466.
+Two clean runs, single-pass, no strands, no quarantines:
 
-| attempt | outcome | verdicts | notes |
-|---|---|---|---|
-| run 1 | stranded at M0092, quarantined | 92 | `--stop-hung-sessions` on |
-| run 1 + `--resume` | completed | **148** | resume engaged, carried 63, skipped 2 stranded identities unscored |
-| run 2 | stranded, quarantined | 113 | fresh run, same flags |
-| run 2 + `--resume last` | **resume did NOT engage** | 86 | no `RESUMED:` banner; produced fresh verdicts and stranded again (3 errors) |
+| | run 3 | run 4 |
+|---|---|---|
+| killed | 25 | 25 |
+| survived | 107 | 107 |
+| no-coverage | 15 | 15 |
+| timeout-killed | 1 | 1 |
+| **error** | **0** | **0** |
+| total | 148 | 148 |
+| wall clock | 668.6 s | 565.7 s |
 
-Run 1's completed result — the one real measurement of this campaign so far:
+**Per-mutant verdict-identical** — `assertMatchesBaseline` compared run 4 against run 3's frozen
+baseline on semantic identity (`astHash` / `codeunitName` / `operatorName` / `operatorMajor`, never
+`mutantCode` or `file:line`) and returned clean. Score 19.5%.
 
-**148 deployed mutants — killed 22 / survived 108 / no-coverage 15 / timeout-killed 1 / error 2.**
-Baseline **green**. Score 17.6%. Total 336.8 s (deploy 95.9 + baseline 45.4 + mutants 186.4).
+Independently verified on the frozen report:
 
-Frozen per-mutant to `rung1.baseline.json`; report archived as `rung1.report.json`.
+- **Baseline green** — anchor 1. ✅
+- **Cardinality 148** — asserted before anything else reads the report. ✅
+- **All 107 survivors have `guardObserved === true`** — R46's tripwire. Not one survivor sits behind
+  a guard that never fired. ✅
 
-## The two pre-commitment errors, both mine
+`docs/measurements` says of 2026-07-28: *"a clean, COMPLETE fenced DO run does not exist."* One
+exists now, twice.
 
-**1. Cardinality: 176 was the wrong quantity.** `--dry-run` reports mutation **sites** (raw specs);
+## What actually blocked it — the finding
+
+Three earlier attempts each stranded and quarantined the tier. The cause was **not** a
+non-terminating mutant, and the evidence that settles it is a contrast within one run:
+
+| mutant | operator | site | duration | verdict |
+|---|---|---|---|---|
+| M0013 @41 | `negate-conditional` on `until … Next() = 0` | genuine infinite loop | 30172 ms | **`timeout-killed`** — handled correctly |
+| M0079 @227 | `void-method-call` on `SetCurrentKey` | slow query | 0 ms | stranded |
+| M0092 @255 | `void-method-call` on `SetCurrentKey` | slow query | 0 ms | stranded |
+
+Deleting a `SetCurrentKey` does not hang anything — it makes the following filtered query pick a
+worse plan and scan. Those mutants are **slow, not hung**. They exceeded R47's hardcoded 30 s floor,
+and on the fenced path a budget overrun is indistinguishable from a genuine strand, so the tier
+quarantined instead of scoring them.
+
+**`--mutant-timeout-ms 180000` eliminated both strands entirely**, while M0013 still scored
+`timeout-killed` — the control proving the distinction is real. Errors went 2 → 0 and the run
+completed in a single pass.
+
+So: `--stop-hung-sessions` was never the missing piece for these two. It correctly handles the
+genuinely non-terminating mutant. The missing piece was a budget floor appropriate to a codeunit
+whose mutants can make a query scan.
+
+## Two errors in the pre-commitment, both mine
+
+**1. Cardinality — 176 was the wrong quantity.** `--dry-run` reports mutation **sites** (raw specs);
 `SessionReport.mutants[]` holds **deployed mutants** after §3.2 dedup drops a Tier-1 mutant where a
-Tier-2 operator claims the same site. The real figure is **148**. This is the same distinction the
-tables gate already states as "136 deployed mutants (148 raw specs)" — the plan simply conflated
-them. Correcting it is a units fix, not a rationalisation of a result.
+Tier-2 operator claims the same site. Correct figure **148** — the same distinction the tables gate
+already states as "136 deployed mutants (148 raw specs)". A units fix, not a rationalisation.
 
-**2. Anchor 2 was stale and would have failed for the wrong reason.** It required every covered
-mutant to lie inside `SendPeriodStatements` (lines 17–43) or carry object-level attribution, taken
-from the 2026-07-28 record: *"its 13 covered mutants are exactly `SendPeriodStatements` (12) plus one
-object-level entry"*, out of 105 with **92 no-coverage**.
+The gate caught it exactly as designed: `assertCardinality` refused to evaluate any anchor —
+*"expected 176, got 148. A gate comparing against a report of the wrong size is not measuring what it
+claims."*
 
-Measured today: **15 no-coverage of 148**, with **133 covered across 14 procedures** — 35 of them
-outside that range without object attribution. Coverage attribution was substantially fixed after
-that record (R61, R62, R63). The anchor describes a superseded reality.
+**2. Anchor 2 was stale, and it is RETIRED rather than retuned.** It required every covered mutant to
+lie inside `SendPeriodStatements` (17–43) or carry object attribution, taken from the 2026-07-28
+record — 105 mutants, **92 no-coverage**, covered = `SendPeriodStatements` (12) + 1 object-level.
 
-**It is recorded as FAILED rather than retuned.** Rewriting an expectation after seeing the data is
-exactly the rationalisation the pre-commitment rule exists to prevent. A corrected anchor set must
-be derived deliberately, from this measurement, and marked as second-generation.
+Measured now: **15 no-coverage of 148**, **133 covered across 14 procedures**. Coverage attribution
+was substantially fixed after that record (R61, R62, R63), so the anchor describes a superseded
+reality.
 
-The genuinely good news inside that failure: coverage on this codeunit went from 88% no-coverage to
-10%. That is the largest single change from the 2026-07-28 baseline and it is in the safe direction.
+It is retired, not rewritten, and not replaced by a whitelist derived from this run — that would be
+tautological here and is strictly weaker than what now exists. **The per-mutant frozen baseline
+supersedes it**: it pins every verdict, not merely a set of locations. The surviving
+false-survivor tripwire is the `guardObserved` check above, which is not tied to any coverage map.
 
-## The blocking finding
+## Corrected record: the `--resume` defect
 
-**This codeunit cannot complete a clean run on the hosted topology.** Every fresh attempt stranded:
-run 1 at M0092, run 2 twice. `--stop-hung-sessions` **helps but does not solve it** — one mutant
-scored `timeout-killed` (the stop worked) while another stranded anyway (the stop did not). R53's
-own caveat said the flag was unmeasured on hosted; it is now measured, and the answer is "partial".
+The first version of this file guessed that run 2's stranded attempt "may have been marked
+finished". **The store disproves that.** Queried directly:
 
-`docs/measurements` says of 2026-07-28: *"a clean, COMPLETE fenced DO run does not exist"*. That is
-still true today, with `--stop-hung-sessions` available and after a year of fixes. The difference is
-that `--resume` can now carry a run to completion — when it engages.
+| run | `finished_at` | rows |
+|---|---|---|
+| 1 | NULL (unfinished) | 92 |
+| 2 | finished | 148 |
+| 3 | **NULL (unfinished)** | 113 |
+| 4 | NULL (unfinished) | 86 |
 
-**Recovery cost, measured:** ~10 minutes per strand (env stop/start ≈ 3.5 min, `force-reset-lease`,
-`clear-quarantine`, then the resumed run). Every rung-2 module will pay this per strand.
+Run 3 was unfinished, with 113 verdicts recorded, when `--resume` ran. It was a valid target.
+`--resume` created run 4 fresh anyway, printed no `RESUMED:` banner, and re-measured from scratch —
+where the earlier resume of run 1 engaged correctly and said so. **A resume that cannot use its
+target should throw, not silently start over**; that is this project's own fail-loudly rule. Cause
+undiagnosed; the reproduction is precise and the store rows above are the evidence. Filed under R89.
 
-## Unexplained, and not to be papered over
+## Why the earlier baseline was retired
 
-Run 2's `--resume last` printed **no `RESUMED:` banner** and produced 86 fresh verdicts instead of
-continuing the 113 already recorded. Run 1's resume engaged correctly and said so. The difference
-was not diagnosed. Candidate: `--resume last` selects the most recent **unfinished** run matching the
-configuration fingerprint (R52), and run 2's stranded attempt may have been marked finished. Not
-confirmed — stated as the open question it is.
+`rung1.resumed-run.baseline.json` / `.report.json` are kept for the record but are **not** the gate's
+reference. That run was resumed, carrying 63 verdicts measured by a different published artifact, and
+`docs/measurements` bars resumed runs as differential inputs. Comparing a clean run against it showed
+three verdict differences that are resume-vs-clean artifacts rather than nondeterminism — a
+real-looking signal read off an invalid reference.
 
 ## Cost figures that supersede the plan's
 
-| quantity | plan assumed | measured here |
+| quantity | plan assumed | measured |
 |---|---|---|
 | per-mutant | ~19.5 s (R45, older scoping) | **~2.5 s mean, 2.9 s median, 3.7 s p95** |
-| baseline (narrowed) | 25.0 s | 18.9–47.8 s |
-| deploy | 36.8 s/batch | 36.0–95.9 s |
-| recovery per strand | not budgeted | **~10 min** |
+| baseline (narrowed, 56 tests) | 25.0 s | 19.3–47.8 s |
+| deploy | 36.8 s/batch | 36.0–97.0 s |
+| clean full run (148 mutants) | — | **565–669 s** |
+| recovery per strand (now avoidable) | not budgeted | ~10 min |
 
-Rung 2 planning must use these. A 1,000-mutant module is roughly 45 minutes of mutant time plus
-recovery, not the multi-hour figure the plan carried.
+## Carried to rung 2
+
+- **Use `--mutant-timeout-ms 180000`.** Without it this codeunit cannot finish; other modules with
+  `remove-setrange` / `void-method-call` on query-shaping calls will behave the same way.
+- **88 of 133 covered mutants are `object`-attributed, 45 `exact`.** Object attribution runs every
+  green test for the object rather than a precise covering set — weaker precision, and worth watching
+  where rung 2's survivors come from.
+- Prefer `--resume-run <id>` over bare `--resume` until R89's selection defect is understood.
