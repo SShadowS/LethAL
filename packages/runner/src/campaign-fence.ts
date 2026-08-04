@@ -51,8 +51,9 @@ export const LETHAL_ROOT = "u:/git/lethal";
  * agent invokes the standalone binary by its versioned filename,
  * `lethal-0.1.0-alpha.1-windows-x64.exe`. A trailing `(?![\w-])` would refuse to match a hyphen
  * after "lethal" and would therefore switch this rule OFF for the exact invocation form the
- * campaign uses — a silent fail-open on the campaign's own happy path. Probe cases 26–29 pin
- * both directions.
+ * campaign uses — a silent fail-open on the campaign's own happy path. Probe cases 26–29 and 34
+ * pin the LEADING side (the workspace must not be denied, a real unnarrowed run still must be);
+ * cases 32 and 33 pin the TRAILING side (versioned-binary invocation, unnarrowed vs narrowed).
  */
 const LETHAL_RUN_PATTERN = /(?<![\w-])lethal\b[\s\S]*\brun\b/i;
 const HAS_ONLY_PATTERN = /--only\b/i;

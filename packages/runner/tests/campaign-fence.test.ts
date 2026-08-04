@@ -359,19 +359,91 @@ describe("fence probe matrix", () => {
   test("case ids are unique", () => {
     expect(new Set(CASES.map((c) => c.id)).size).toBe(CASES.length);
   });
+});
 
-  /**
-   * The finding this whole file answers was "the evidence is gitignored". A committed markdown
-   * table that silently falls behind the executable matrix is the same failure one step later, so
-   * the two are joined: every case id here must appear as a row in the document.
-   */
-  test("matrix doc and probe matrix do not drift", async () => {
-    const doc = await readFile(
-      join(import.meta.dir, "..", "..", "..", "fixtures", "do-campaign", "fence-probe-matrix.md"),
-      "utf8",
+const MATRIX_DOC = join(
+  import.meta.dir,
+  "..",
+  "..",
+  "..",
+  "fixtures",
+  "do-campaign",
+  "fence-probe-matrix.md",
+);
+
+/**
+ * The probe rows of `fence-probe-matrix.md`, as `id -> expected decision`.
+ *
+ * Two things this deliberately does NOT do, both of which were real holes in the first version of
+ * the drift guard (`doc.includes("| <id> |")`):
+ *
+ *   1. **It reads the expectation, not just the id.** A row left in place with `deny` flipped to
+ *      `allow` satisfied a presence check completely — and a stale expectation is precisely the rot
+ *      this guard exists to prevent, one step later. A guard that reports fine while checking
+ *      nothing is this project's signature bug wearing a test's clothes.
+ *   2. **It is scoped to the matrix section.** The document has other tables whose rows also start
+ *      `| <n> |` — the bypass history numbers its ROUNDS 1–4 — so `| 4 |` was satisfied by
+ *      `## Bypass history` even with the probe row for case 4 deleted. The slice runs from
+ *      `## The matrix` to the next `##` heading, and a row only counts if its LAST cell is exactly
+ *      `allow` or `deny` (bold or not), which is the probe tables' shape and nothing else's.
+ *
+ * Throws rather than returning something plausible when the section is missing or a row repeats:
+ * a drift guard that cannot find its own input must fail loudly, not pass vacuously.
+ */
+function parseMatrixDoc(doc: string): Map<string, "allow" | "deny"> {
+  const heading = "## The matrix";
+  const start = doc.indexOf(heading);
+  if (start < 0) {
+    throw new Error(
+      `fence-probe-matrix.md: no "${heading}" section. The drift guard cannot tell probe tables from the document's other tables without it.`,
     );
-    const missing = CASES.filter((c) => !doc.includes(`| ${c.id} |`)).map((c) => c.id);
-    expect(missing).toEqual([]);
+  }
+  const after = doc.indexOf("\n## ", start + heading.length);
+  const section = after < 0 ? doc.slice(start) : doc.slice(start, after);
+
+  const rows = new Map<string, "allow" | "deny">();
+  for (const line of section.split("\n")) {
+    const m = /^\|\s*([A-Za-z0-9]+)\s*\|.*\|\s*\*{0,2}(allow|deny)\*{0,2}\s*\|\s*$/.exec(line);
+    if (m === null) continue;
+    const [, id, expect] = m;
+    if (id === undefined || expect === undefined) continue;
+    if (rows.has(id)) {
+      throw new Error(
+        `fence-probe-matrix.md: two probe rows carry id ${id}. One of them is describing a case that does not exist.`,
+      );
+    }
+    rows.set(id, expect === "allow" ? "allow" : "deny");
+  }
+  return rows;
+}
+
+/**
+ * The finding this whole file answers was "the evidence is gitignored". A committed markdown table
+ * that silently falls behind the executable matrix is the same failure one step later, so the two
+ * are joined in both directions: every case here has a row asserting the SAME decision, and the
+ * document holds no row for a case this file no longer has.
+ */
+describe("matrix doc and probe matrix do not drift", () => {
+  test("every probe case has a row stating the same expected decision", async () => {
+    const documented = parseMatrixDoc(await readFile(MATRIX_DOC, "utf8"));
+    const wrong = CASES.filter((c) => documented.get(c.id) !== c.expect).map(
+      (c) => `${c.id}: doc says ${documented.get(c.id) ?? "(no row)"}, test asserts ${c.expect}`,
+    );
+    expect(wrong).toEqual([]);
+  });
+
+  test("the document holds no orphan row for a case this file no longer has", async () => {
+    const documented = parseMatrixDoc(await readFile(MATRIX_DOC, "utf8"));
+    const ids = new Set(CASES.map((c) => c.id));
+    expect([...documented.keys()].filter((id) => !ids.has(id))).toEqual([]);
+  });
+
+  test("the parsed rows are exactly the probe cases, one each", async () => {
+    // Redundant with the two above only while both hold; it is what makes a silent parser
+    // regression (a scoping change that suddenly swallows the bypass-history table, say) visible
+    // as a count rather than as an absence of failures.
+    const documented = parseMatrixDoc(await readFile(MATRIX_DOC, "utf8"));
+    expect(documented.size).toBe(CASES.length);
   });
 });
 

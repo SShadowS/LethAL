@@ -4,7 +4,8 @@
  * Every rule, and the reasoning behind each, lives in `packages/runner/src/campaign-fence.ts`
  * (`evaluateFenceEvent`). It is there rather than here so the rules are typechecked by
  * `tsc --build` and probed by a committed test that runs in the ordinary `bun test` suite —
- * `packages/runner/tests/campaign-fence.test.ts`, whose 34-case matrix is mirrored for human
+ * `packages/runner/tests/campaign-fence.test.ts`, whose 44-case matrix (34 numbered + A–J) is
+ * mirrored for human
  * readers in `fixtures/do-campaign/fence-probe-matrix.md`. The earlier arrangement kept the rules
  * here and the probe matrix in a scratch script whose report was gitignored: the evidence for the
  * campaign's threat-model decision could not be committed.
