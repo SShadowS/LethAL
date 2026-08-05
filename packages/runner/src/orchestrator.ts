@@ -2450,6 +2450,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
             ceiling,
             clearCommand: clearCeilingCommand({
               projectDir: cfg.projectDir,
+              // Fix round 2: the database the measurement was actually recorded in, not the one
+              // `--project` would default to. A run with `--db X` must not hand the operator a
+              // command that clears something else and reports success.
+              dbPath: cfg.store.dbPath,
               server: cfg.resourceServer,
               serverInstance: cfg.resourceServerInstance,
               file,

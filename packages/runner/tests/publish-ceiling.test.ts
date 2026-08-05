@@ -17,7 +17,7 @@ import type {
   TestVerdict,
 } from "../src/backend";
 import { PublishFailedError } from "../src/bcdev-backend";
-import { helpText, parseCliConfig, printDryRun } from "../src/cli";
+import { clearCeilingFromCli, helpText, parseCliConfig, printDryRun } from "../src/cli";
 import { DeploymentVerifier, decidePublishOutcome } from "../src/deployment-verifier";
 import { generateMutationSet, operatorTiers, runSession } from "../src/orchestrator";
 import {
@@ -148,6 +148,7 @@ describe("publish ceiling — the refusal message names the levers, not a law", 
           ceiling: { smallestFailure: 331 },
           clearCommand: clearCeilingCommand({
             projectDir: "C:/app",
+            dbPath: "C:/elsewhere/run.sqlite",
             server: "http://cronus281",
             serverInstance: "BC",
             file: "Big.al",
@@ -158,9 +159,12 @@ describe("publish ceiling — the refusal message names the levers, not a law", 
         return String((e as Error).message);
       }
     })();
-    // Copy-pasteable, not a command name to go look up.
+    // Copy-pasteable, not a command name to go look up — and fix round 2: it names the DATABASE
+    // the measurement was recorded in. Without `--db` the command resolves to
+    // `<project>/lethal.sqlite`, so a run made with `--db elsewhere` would hand the operator an
+    // invocation that clears a different file and reports a successful-looking clear.
     expect(withCommand).toContain(
-      'lethal clear-ceiling --project "C:/app" --server "http://cronus281" --instance "BC" --file "Big.al"',
+      'lethal clear-ceiling --project "C:/app" --db "C:/elsewhere/run.sqlite" --server "http://cronus281" --instance "BC" --file "Big.al"',
     );
   });
 });
@@ -1060,6 +1064,25 @@ describe("lethal clear-ceiling (CLI)", () => {
     ).toThrow(/--project/);
   });
 
+  test("an EMPTY --file throws instead of silently widening to a blanket clear", () => {
+    // Fix round 2: `--file "$F"` with an unset shell variable used to widen the scope from one
+    // file to the whole tier — destroying every measurement on it while the operator believed
+    // they had named one. Empty `--server`/`--instance` already threw; this now matches.
+    expect(() =>
+      parseCliConfig([
+        "clear-ceiling",
+        "--project",
+        "p",
+        "--server",
+        "http://bc",
+        "--instance",
+        "BC",
+        "--file",
+        "",
+      ]),
+    ).toThrow(/--file/);
+  });
+
   test("help documents the subcommand and both of its non-obvious properties", () => {
     const text = helpText("0.0.0");
     expect(text).toContain("lethal clear-ceiling");
@@ -1069,5 +1092,104 @@ describe("lethal clear-ceiling (CLI)", () => {
     expect(text).toMatch(/evidence loss/i);
     // Minor 2: a "dry" run that migrates an existing schema is a surprise unless it is documented.
     expect(text).toMatch(/OPENED FOR WRITING/);
+  });
+});
+
+describe("clear-ceiling reports a no-op AS a no-op (fix round 2)", () => {
+  async function runClear(args: {
+    dbPath: string;
+    file?: string;
+    server?: string;
+  }): Promise<{ code: number; out: string }> {
+    const lines: string[] = [];
+    const log = spyOn(console, "log").mockImplementation((...a: unknown[]) => {
+      lines.push(a.map(String).join(" "));
+    });
+    try {
+      const code = await clearCeilingFromCli({
+        mode: "clear-ceiling",
+        projectDir: "proj",
+        dbPath: args.dbPath,
+        server: args.server ?? RESOURCE_SERVER,
+        serverInstance: RESOURCE_INSTANCE,
+        ...(args.file !== undefined ? { file: args.file } : {}),
+      });
+      return { code, out: lines.join("\n") };
+    } finally {
+      log.mockRestore();
+    }
+  }
+
+  async function seededDb(): Promise<{ root: string; dbPath: string }> {
+    const root = await mkdtemp(join(tmpdir(), "lethal-clearcli-"));
+    const dbPath = join(root, "lethal.sqlite");
+    const store = new ResultsStore(dbPath);
+    recordPublishOutcome(store, TIER, 229, "accepted", "Mid.Codeunit.al");
+    recordPublishOutcome(store, TIER, 331, "failed", "Big.Codeunit.al");
+    store.close();
+    return { root, dbPath };
+  }
+
+  test("a mistyped --file cannot be mistaken for a clear that worked: it says so, names the rows that DO exist, and exits nonzero", async () => {
+    const { root, dbPath } = await seededDb();
+    try {
+      const { code, out } = await runClear({ dbPath, file: "Bug.Codeunit.al" });
+      // The consequence, not the code — and asserted in the order a HUMAN meets it. What a person
+      // reads is the first line, so that is checked first: `cleared: … removed 0 row(s)` was the
+      // misreading, and it must be impossible to produce. The exit code (what a script reads)
+      // follows.
+      expect(out).not.toMatch(/^cleared:/m);
+      expect(out).toMatch(/^nothing-matched:/m);
+      expect(out).toMatch(/NOTHING WAS CLEARED/);
+      expect(out).toMatch(/refused identically/);
+      expect(code).not.toBe(0);
+      // …and it turns the dead end into a next step by naming what the tier does hold.
+      expect(out).toContain("Big.Codeunit.al");
+      expect(out).toContain("Mid.Codeunit.al");
+      // The measurement really is still there.
+      const store = new ResultsStore(dbPath);
+      expect(knownCeiling(store, TIER).smallestFailure).toBe(331);
+      store.close();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a tier with no rows at all says which tiers the database DOES hold — the wrong-db/wrong-tier diagnosis", async () => {
+    const { root, dbPath } = await seededDb();
+    try {
+      const { code, out } = await runClear({ dbPath, server: "http://some-other-host" });
+      expect(code).not.toBe(0);
+      expect(out).toMatch(/^nothing-recorded:/m);
+      expect(out).toContain(TIER);
+      expect(out).toMatch(/--server\/--instance/);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a real clear still exits 0 and opens with `cleared`", async () => {
+    const { root, dbPath } = await seededDb();
+    try {
+      const { code, out } = await runClear({ dbPath, file: "Big.Codeunit.al" });
+      expect(code).toBe(0);
+      expect(out).toMatch(/^cleared:/m);
+      expect(out).toContain("removed 1 row(s)");
+      expect(out).toContain("ceiling before:");
+      expect(out).toContain("ceiling after:");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a missing database throws rather than being created and reported as a clean clear", async () => {
+    const root = await mkdtemp(join(tmpdir(), "lethal-clearcli-missing-"));
+    try {
+      const dbPath = join(root, "absent.sqlite");
+      await expect(runClear({ dbPath })).rejects.toThrow(/no results database/);
+      expect(existsSync(dbPath)).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

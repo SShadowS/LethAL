@@ -283,9 +283,18 @@ export function clearPublishCeiling(
  * The exact `lethal clear-ceiling` invocation for one refusal, so the message a user reads at the
  * moment they are blocked is copy-pasteable rather than a command name to go look up. Lives here,
  * next to the refusal that quotes it, so the command's shape has ONE definition.
+ *
+ * Fix round 2: `dbPath` is REQUIRED and `--db` is emitted UNCONDITIONALLY — never "only when it
+ * differs from the default". The failure it prevents is quiet: a session run with `--db X` records
+ * the measurement in X, while the command would resolve to `<project>/lethal.sqlite`, so if a stale
+ * default database happens to exist beside the explicit one the operator clears the WRONG file,
+ * sees a report of a successful-looking clear, and is refused identically on the next run. A
+ * conditional would work only as long as the comparison stayed in step with `parseCliConfig`'s
+ * defaulting; emitting it always removes the comparison, and with it the thing that could drift.
  */
 export function clearCeilingCommand(args: {
   readonly projectDir: string;
+  readonly dbPath: string;
   readonly server: string;
   readonly serverInstance: string;
   readonly file?: string;
@@ -293,7 +302,7 @@ export function clearCeilingCommand(args: {
   const quoted = (s: string) => `"${s}"`;
   const fileArg = args.file === undefined ? "" : ` --file ${quoted(args.file)}`;
   return (
-    `lethal clear-ceiling --project ${quoted(args.projectDir)} ` +
+    `lethal clear-ceiling --project ${quoted(args.projectDir)} --db ${quoted(args.dbPath)} ` +
     `--server ${quoted(args.server)} --instance ${quoted(args.serverInstance)}${fileArg}`
   );
 }

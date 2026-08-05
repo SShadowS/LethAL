@@ -176,8 +176,20 @@ CREATE INDEX IF NOT EXISTS idx_publish_outcomes_tier ON publish_outcomes(tier);
 
 export class ResultsStore {
   readonly db: Database;
+  /**
+   * The path this store was opened at, verbatim.
+   *
+   * R90 fix round 2: `clear-ceiling`'s pre-filled command must name the database the measurement
+   * was actually recorded in. Without it the command renders the DEFAULT `<project>/lethal.sqlite`,
+   * and a session run with `--db X` would hand the operator an invocation that clears a different
+   * file — printing "removed 0 row(s)", exiting 0, and leaving the refusal exactly where it was.
+   * Captured here rather than read back off `db.filename` so it is the caller's own string, not
+   * SQLite's normalization of it.
+   */
+  readonly dbPath: string;
 
   constructor(dbPath: string) {
+    this.dbPath = dbPath;
     this.db = new Database(dbPath, { create: true });
     this.db.exec("PRAGMA journal_mode = WAL;");
     this.db.exec(SCHEMA);
@@ -588,6 +600,22 @@ export class ResultsStore {
     }
     const r = this.db.query("SELECT changes() AS n").get() as { n: number };
     return r.n;
+  }
+
+  /**
+   * R90 fix round 2: every tier this database has publish outcomes for, sorted.
+   *
+   * Exists so a `clear-ceiling` that matched NOTHING can say what the database does contain
+   * instead of stopping at "removed 0 row(s)". That listing is the actual diagnosis for the two
+   * ways to reach a no-op — the wrong database, or a tier identity that does not match how the
+   * run recorded it (case and trailing slash are normalized by `quarantineResourceKey`, the host
+   * spelling is not) — and it turns a dead end into a next step.
+   */
+  publishOutcomeTiers(): string[] {
+    const rows = this.db
+      .query("SELECT DISTINCT tier FROM publish_outcomes ORDER BY tier ASC")
+      .all() as Array<{ tier: string }>;
+    return rows.map((r) => r.tier);
   }
 
   /** R90: every publish attempt recorded against one tier, oldest first. */

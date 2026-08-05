@@ -68,6 +68,7 @@ import type { SessionReport } from "./report";
 import { quarantineResourceKey } from "./resource-key";
 import { RunMutantTransport } from "./run-mutant-transport";
 import { ResultsStore } from "./store";
+import type { PublishOutcomeRow } from "./store";
 
 /**
  * `cli.ts` is argument marshaling only — everything that decides pass/fail
@@ -480,7 +481,7 @@ USAGE
   lethal run              --project <dir> --tests <dir> --backend <bcdev|al-runner> [options]
   lethal run              --project <dir> --dry-run
   lethal clear-quarantine --server <url> --instance <name>
-  lethal clear-ceiling    --project <dir> --server <url> --instance <name> [--file <name>]
+  lethal clear-ceiling    --project <dir> --server <url> --instance <name> [--db <path>] [--file <name>]
   lethal force-reset-lease --server <url> --instance <name> --config <path>
 
 RUN — required
@@ -499,8 +500,9 @@ RUN — scope. These bound cost. --tests-only can change a verdict; the others c
                              real app costs days and usually cannot publish at all)
   --dry-run                  list what would be mutated; execute nothing. Reports both the raw
                              mutation-site count and the DEPLOYED count (they differ), plus this
-                             tier's measured publish bracket. It never creates a results database,
-                             but if one already exists it is OPENED FOR WRITING and its schema
+                             tier's measured publish bracket. It never creates a results database;
+                             when one already exists AND the config names a bcdev tier to look the
+                             bracket up for, that database is OPENED FOR WRITING and its schema
                              brought up to date, exactly as a real run would
 
 RUN — cost and recovery
@@ -547,9 +549,13 @@ CLEAR-CEILING — undo a publish-ceiling measurement (R90)
                              tier — the right choice when the TOPOLOGY changed (container
                              recycled, proxy reconfigured), and the only way to reach rows from a
                              multi-file artifact, which carry no filename at all
-  --db <path>                results database (default: <project>/lethal.sqlite)
+  --db <path>                results database (default: <project>/lethal.sqlite). A refusal
+                             message pre-fills this with the database the measurement was
+                             actually recorded in — copy it rather than retyping
   Every row removed is printed, with the bracket before and after: discarding a genuine failure
-  is real evidence loss, and it cost a live publish failure to learn.
+  is real evidence loss, and it cost a live publish failure to learn. A clear that removes NOTHING
+  reports 'nothing-matched'/'nothing-recorded' and exits 1 — it did not undo anything, and the
+  next run will be refused identically.
 
 OTHER
   -h, --help                 this text
@@ -677,14 +683,24 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
           "database, not in the machine-global quarantine directory)",
       );
     }
+    // Fix round 2: an EMPTY `--file` throws rather than silently widening the scope from one file
+    // to the entire tier — `--file "$F"` with an unset shell variable would otherwise destroy every
+    // measurement on the tier while the operator believed they had named one. Same treatment its
+    // two neighbours above already get, for the same reason.
     const file = values.file;
+    if (file === "") {
+      throw new Error(
+        "--file was given as an empty string. Omit --file entirely to clear the whole tier; an " +
+          "empty value would silently widen the scope from one file to every measurement on it.",
+      );
+    }
     return {
       mode: "clear-ceiling",
       projectDir: project,
       dbPath: values.db ?? join(project, "lethal.sqlite"),
       server,
       serverInstance,
-      ...(file !== undefined && file !== "" ? { file } : {}),
+      ...(file !== undefined ? { file } : {}),
     };
   }
 
@@ -2305,8 +2321,22 @@ async function clearQuarantineFromCli(parsed: ClearQuarantineCliConfig): Promise
  * Prints every row it destroyed and the ceiling on both sides of the clear. Discarding a `failed`
  * row that was genuine is real evidence loss — it cost a live publish failure to learn — so the
  * loss is made visible rather than forbidden (see `clearPublishCeiling`).
+ *
+ * **Fix round 2: a clear that removed NOTHING is never reported as success.** It opens with a
+ * machine-readable outcome word, mirroring `clear-quarantine`'s single-word line — `cleared`,
+ * `nothing-matched` (the tier has rows, but none the requested scope named) or `nothing-recorded`
+ * (this tier has no rows at all) — and both zero cases list what the database DOES hold, which is
+ * the real diagnosis for the two ways to get here: the wrong database, or a tier identity spelled
+ * differently from the one the run recorded under.
+ *
+ * The exit code DIVERGES from `clear-quarantine`, deliberately. There, `not-quarantined` exits 0
+ * because the state the operator wanted (not quarantined) is the state they have. Here it is not:
+ * an operator runs this because a file was refused, and a clear that removed nothing leaves that
+ * refusal exactly where it was — the next run fails identically. Exiting 0 would tell a human and
+ * a script that the escape hatch worked when it did nothing, which is the failure this command
+ * exists to prevent, committed by the command itself. So: removed nothing, exit 1.
  */
-async function clearCeilingFromCli(parsed: ClearCeilingCliConfig): Promise<number> {
+export async function clearCeilingFromCli(parsed: ClearCeilingCliConfig): Promise<number> {
   if (!existsSync(parsed.dbPath)) {
     throw new Error(
       `no results database at ${parsed.dbPath} — nothing has ever been measured against this project, so there is no publish ceiling to clear. Pass --db <path> if the run used a database elsewhere.`,
@@ -2320,12 +2350,31 @@ async function clearCeilingFromCli(parsed: ClearCeilingCliConfig): Promise<numbe
   try {
     const result = clearPublishCeiling(store, tier, parsed.file);
     const scope = parsed.file === undefined ? "" : ` file ${parsed.file}`;
-    console.log(`clear-ceiling: tier ${tier}${scope} — removed ${result.removed.length} row(s)`);
-    for (const row of result.removed) {
+    if (result.removed.length === 0) {
+      // Everything still on this tier, so a mistyped `--file` is answerable rather than a dead end.
+      const remaining = store.publishOutcomes(tier);
+      const outcome = remaining.length === 0 ? "nothing-recorded" : "nothing-matched";
       console.log(
-        `  ${row.recordedAt}  ${row.outcome}  ${row.guardCount} guard(s)  ${row.file ?? "(multi-file artifact)"}`,
+        `${outcome}: clear-ceiling removed 0 row(s) for tier ${tier}${scope}. NOTHING WAS CLEARED — whatever refused this project is still recorded, and the next run will be refused identically.`,
       );
+      if (remaining.length > 0) {
+        console.log(`  tier ${tier} does hold ${remaining.length} row(s):`);
+        for (const row of remaining) console.log(`  ${describePublishRow(row)}`);
+        console.log(
+          "  Re-run naming one of those files with --file, or omit --file to clear the tier.",
+        );
+      } else {
+        const tiers = store.publishOutcomeTiers();
+        console.log(
+          tiers.length === 0
+            ? `  ${parsed.dbPath} holds no publish outcomes for ANY tier — this is probably not the database the run recorded into (check --db).`
+            : `  ${parsed.dbPath} holds outcomes only for: ${tiers.join(", ")} — check --server/--instance against how the run recorded the tier.`,
+        );
+      }
+      return 1;
     }
+    console.log(`cleared: tier ${tier}${scope} — removed ${result.removed.length} row(s)`);
+    for (const row of result.removed) console.log(`  ${describePublishRow(row)}`);
     console.log(
       `  ceiling before: ${describeCeiling(result.before)}\n  ceiling after:  ${describeCeiling(result.after)}`,
     );
@@ -2333,6 +2382,11 @@ async function clearCeilingFromCli(parsed: ClearCeilingCliConfig): Promise<numbe
   } finally {
     store.close();
   }
+}
+
+/** One recorded publish outcome, as `clear-ceiling` lists it — removed, or still present. */
+function describePublishRow(row: PublishOutcomeRow): string {
+  return `${row.recordedAt}  ${row.outcome}  ${row.guardCount} guard(s)  ${row.file ?? "(multi-file artifact)"}`;
 }
 
 /** One-line rendering of a bracket, for `clear-ceiling`'s before/after report. */
