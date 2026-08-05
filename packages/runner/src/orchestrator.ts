@@ -32,6 +32,7 @@ import type { CompiledArtifact } from "./artifact";
 import type { CoverageMode, ExecutionBackend, TestMethodRef, TestVerdict } from "./backend";
 import { NO_RESULT_FOR_METHOD, PublishFailedError } from "./bcdev-backend";
 import { bisectFailingMutant } from "./bisect";
+import type { PublishOutcome } from "./deployment-verifier";
 import { discoverTests } from "./discovery";
 import {
   type BaselineClassification,
@@ -51,6 +52,12 @@ import {
   permissionCanaryWarnings,
 } from "./permission-canary";
 import { Semaphore, shardEvenly } from "./pool";
+import {
+  assertUnderCeiling,
+  guardsPerFile,
+  knownCeiling,
+  recordPublishOutcome,
+} from "./publish-ceiling";
 import { QuarantineStore } from "./quarantine-store";
 import { buildReport } from "./report";
 import type { NotInstrumentedFile, SessionOutcome, SessionReport } from "./report";
@@ -1803,6 +1810,31 @@ function isConfirmedTerminalPublishFailure(err: unknown): boolean {
 }
 
 /**
+ * R90: which `PublishOutcome` a failed deploy demonstrated, or `undefined` when it demonstrated
+ * nothing about publishing at all.
+ *
+ * Only errors that CARRY a decided outcome are classified — `PublishFailedError` (always
+ * `decidePublishOutcome`'s `"failed"`, see `isConfirmedTerminalPublishFailure` above) and
+ * `DeploymentError` (whose `outcome` field is that decision verbatim). Everything else records
+ * NOTHING, which is the safe direction in both of the ways that matter:
+ *
+ * - `AlcCompileError` / `ArtifactPrepareError` happen BEFORE any publish. Recording them would
+ *   invent a publish failure at that guard count and refuse every later file that size — a
+ *   permanent false refusal caused by a syntax error.
+ * - A VERSION CONFLICT is BC naming the installed version verbatim; the caller retries it once,
+ *   above that version, and usually succeeds. It is a deterministic rejection of this artifact's
+ *   VERSION, not evidence about its SIZE. It never reaches this function on the retry-success
+ *   path (the accepted outcome is recorded instead), and this guard keeps it from being recorded
+ *   as a size failure on the path where the retry then fails for some other reason.
+ */
+function classifyDeployFailure(err: unknown): PublishOutcome | undefined {
+  if (parseVersionConflict(messageOf(err)) !== null) return undefined;
+  if (err instanceof PublishFailedError) return "failed";
+  if (err instanceof DeploymentError) return err.outcome;
+  return undefined;
+}
+
+/**
  * One deploy dispatch: latch-guarded (design §6: `deploy`, `activate` AND `run` are all guarded)
  * and, when a lease is held, wrapped in the BeginPublish/EndPublish fence.
  */
@@ -2385,6 +2417,29 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         await readFile(join(batchDir, "mutant-manifest.json"), "utf8"),
       ) as MutantManifest;
 
+      // 1c. R90 pre-flight: refuse a FILE this tier has already MEASURED to be unpublishable,
+      // before the cost. This is the earliest point the DEPLOYED per-file guard counts exist
+      // (post-§3.2 dedup — the raw spec count is 16% higher on real code, R92), and it is still
+      // ahead of compile and publish, which is where the whole value is: a refusal that fires
+      // after publishing has saved nothing.
+      //
+      // Per FILE, because `planArtifacts` splits at file granularity — see `assertUnderCeiling`.
+      // `resourceKey === undefined` (a backend with no tier identity: al-runner, or an
+      // authoritative backend that omitted the identity fields, which is warned about above) makes
+      // the ceiling inert in BOTH directions: nothing is consulted and nothing is recorded, since
+      // a ceiling keyed to no tier could only mix measurements from unrelated topologies.
+      const perFileGuards = guardsPerFile(manifest.mutants);
+      if (resourceKey !== undefined) {
+        const ceiling = knownCeiling(cfg.store, resourceKey);
+        for (const [file, guardCount] of perFileGuards) {
+          assertUnderCeiling({ file, guardCount, ceiling });
+        }
+      }
+      // The ONE file this artifact's guards came from, when there is one — recorded alongside the
+      // outcome so a `failed` row can say what was too big. `undefined` for a multi-file artifact,
+      // never an empty string standing in for "unknown" (mirrors `soleFileOf`, bcdev-backend.ts).
+      const soleBatchFile = perFileGuards.size === 1 ? [...perFileGuards.keys()][0] : undefined;
+
       // 2. history filter
       const prior = cfg.store.priorSurvivorKeys(cfg.projectDir);
       const { execute, knownSurvivors } = filterHistory([...manifest.mutants], prior, {
@@ -2439,6 +2494,28 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         }
       }
       if (!deployed) {
+        // 3a'. R90: learn the ceiling from what just happened, BEFORE the throw below carries the
+        // error out of the session — this is the only place the outcome and the guard count that
+        // produced it are both in hand. The stored value is the outcome CATEGORY, not a boolean:
+        // R90's own measured reproduction (an external publish tool exiting 0 while its JSON body
+        // reports `{"success": false, "message": "The operation timed out."}`) arrives here as
+        // `indeterminate`, not `failed` (env-tool.ts has no `success` handling — R107). Recording
+        // the category means that failure still lands a row, tagged for what it was, instead of
+        // being silently indistinguishable from "this tier has never failed"; `knownCeiling`
+        // counts only `failed` rows, so it cannot become a refusal. See `classifyDeployFailure`
+        // for what is deliberately NOT recorded.
+        if (resourceKey !== undefined) {
+          const failureOutcome = classifyDeployFailure(deployErr);
+          if (failureOutcome !== undefined) {
+            recordPublishOutcome(
+              cfg.store,
+              resourceKey,
+              manifest.mutants.length,
+              failureOutcome,
+              soleBatchFile,
+            );
+          }
+        }
         // 3b. A publish/verification failure is environmental: catalog conflict, schema sync,
         // dependency mismatch, license, transport, NST limits. Attributing it to a mutant would
         // be unsound, and republishing subset artifacts to diagnose it can leave a narrowed
@@ -2495,6 +2572,20 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           artifactId: compiled.artifactId,
           sha256: compiled.sha256,
         });
+      }
+      // 3e. R90: the OTHER half of the measurement. A ceiling recorded only from failures is a
+      // ceiling that can never quote what DOES publish, and the refusal's whole job is to state a
+      // bracket ("331 timed out; 229 published") rather than a limit. Recorded only for a backend
+      // that actually publishes: `deploy: "none"` backends prove nothing about any tier's publish
+      // cost, and `compiled === null` is exactly that case.
+      if (resourceKey !== undefined && compiled !== null) {
+        recordPublishOutcome(
+          cfg.store,
+          resourceKey,
+          manifest.mutants.length,
+          "accepted",
+          soleBatchFile,
+        );
       }
       // Layer 5C-B1 (design §5): this batch's publish consumed an op seq from the SAME
       // server-side sequence every RunMutant claims against, so the backend's counter must

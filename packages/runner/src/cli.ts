@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { closeSync, openSync, writeSync } from "node:fs";
+import { closeSync, existsSync, openSync, writeSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
@@ -12,6 +12,8 @@ import {
   type DeclaredObject,
   type InstrumentedFile,
   type SelectorConfig,
+  type TierResolver,
+  dedupeSpecs,
   parseIdRanges,
   scanDeclaredObjects,
   validateSelectorIds,
@@ -47,6 +49,7 @@ import {
   MIN_MUTANT_BUDGET_MS,
   defaultQuarantineDir,
   generateMutationSet,
+  operatorTiers,
   planArtifacts,
   runSession,
 } from "./orchestrator";
@@ -54,6 +57,8 @@ import type { SessionConfig } from "./orchestrator";
 import { PermissionCanaryClient, runPermissionCanary } from "./permission-canary";
 import { createNdjsonSink } from "./progress-ndjson";
 import { createProgressRenderer } from "./progress-renderer";
+import { knownCeiling } from "./publish-ceiling";
+import type { PublishCeiling } from "./publish-ceiling";
 import { canonicalContainerKey } from "./publish-serializer";
 import { ContainerDeployer, defaultAlToolPaths, defaultDeployerIo } from "./publisher";
 import type { AppPublisher } from "./publisher";
@@ -252,6 +257,15 @@ export interface DryRunCliConfig {
   /** R41: `--only` globs, absent when the run was not narrowed — see `RunCliConfig.only`.
    *  Honoured here too, so the count a dry run reports is the count a real run would produce. */
   readonly only?: readonly string[];
+  /**
+   * R90: same defaults as `RunCliConfig`, because a dry run is where the publish ceiling is worth
+   * knowing — before anything is generated, instrumented, compiled or published. Both are read
+   * BEST-EFFORT and never created: a dry run must work in a project that has no config file and
+   * has never been run (see `printDryRun`), so a missing file means "no bracket to report", not
+   * an error.
+   */
+  readonly dbPath: string;
+  readonly configPath: string;
 }
 
 export interface RunCliConfig {
@@ -689,7 +703,13 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     if (testsOnlyRaw !== undefined && testsOnlyRaw.length > 0) {
       throw new Error("--tests-only has no effect with --dry-run (a dry run executes no tests)");
     }
-    return { mode: "dry-run", projectDir, ...only };
+    return {
+      mode: "dry-run",
+      projectDir,
+      dbPath: values.db ?? join(projectDir, "lethal.sqlite"),
+      configPath: values.config ?? join(projectDir, "lethal.config.json"),
+      ...only,
+    };
   }
 
   const testDir = values.tests;
@@ -1532,21 +1552,92 @@ function lineOfIndex(source: string, index: number): number {
 }
 
 function sitesOf(files: readonly InstrumentedFile[]) {
-  return files.flatMap((f) =>
-    f.specs.map((spec) => ({
+  return files.flatMap((f) => {
+    // R92: `dedupeSpecs` returns the SURVIVING spec objects themselves, so reference identity is
+    // the exact "does this site ship" answer — no second implementation of §3.2 precedence to
+    // drift from the real one. A site listed without this flag reads as a mutant that will be
+    // measured, and for a Tier-1 mutant a Tier-2 operator displaces, that is simply false.
+    const kept = new Set(dedupeSpecs(f.specs, dryRunTierOf));
+    return f.specs.map((spec) => ({
       file: f.path,
       operatorName: spec.operatorName,
       line: lineOfIndex(f.source, spec.before.startIndex),
-    })),
-  );
+      deployed: kept.has(spec),
+    }));
+  });
+}
+
+/**
+ * R92: the DEPLOYED mutant count per file — what actually ships after §3.2 dedup drops a Tier-1
+ * mutant wherever a Tier-2 operator claims the same site. Measured on Document Output: 176 sites
+ * -> 148 deployed (-16%), 991 -> 973, 476 -> 473. The gap is not a constant; it depends on the
+ * operator mix of the specific file, so it cannot be estimated from the site count.
+ *
+ * Runs the SAME `dedupeSpecs` `writeInstrumentedProject` runs at compile time (project.ts), bound
+ * to the SAME `operatorTiers` map `runSession` uses — a dry run that reported a number produced by
+ * a second implementation of the rule would be exactly the drift this exists to prevent.
+ */
+const dryRunTierOf: TierResolver = (name) => operatorTiers.get(name);
+
+/**
+ * R90: the measured publish bracket for the tier this project is configured against, if there is
+ * one to report.
+ *
+ * Deliberately BEST-EFFORT and read-only. `--dry-run` is the one mode that requires neither a
+ * config file nor a results database — its whole point is answering "how big is this going to be"
+ * before committing to anything — so a missing file yields `undefined` and prints nothing, and a
+ * config that cannot be read yields a NOTE rather than killing the dry run. `existsSync` guards
+ * the database because `new ResultsStore(path)` would otherwise CREATE one, and a dry run must
+ * leave no artifacts behind.
+ *
+ * An EXISTING database is opened read-WRITE, not read-only: `ResultsStore`'s constructor ensures
+ * the schema (see its `migrate`), and going around it to read `publish_outcomes` directly would
+ * mean a second implementation of the row parsing — including the corrupt-value guard — which is
+ * exactly the drift this file avoids elsewhere. The writes it can perform are idempotent, additive
+ * and identical to the ones `lethal run` performs on the same file moments later.
+ */
+async function dryRunCeiling(
+  dbPath: string,
+  configPath: string,
+): Promise<{ tier: string; ceiling: PublishCeiling } | { note: string } | undefined> {
+  if (!existsSync(configPath) || !existsSync(dbPath)) return undefined;
+  let server: string | undefined;
+  let serverInstance: string | undefined;
+  try {
+    const configFile = await loadLethalConfigFile(configPath);
+    server = configFile.bcdev?.server;
+    serverInstance = configFile.bcdev?.serverInstance;
+  } catch (err) {
+    return {
+      note:
+        `could not read the configured tier from ${configPath}: ` +
+        `${err instanceof Error ? err.message : String(err)} — no publish ceiling to report`,
+    };
+  }
+  if (server === undefined || serverInstance === undefined) return undefined;
+  const tier = quarantineResourceKey({ server, serverInstance });
+  const store = new ResultsStore(dbPath);
+  try {
+    return { tier, ceiling: knownCeiling(store, tier) };
+  } finally {
+    store.close();
+  }
 }
 
 /**
  * Batch count here is derived from `planArtifacts` — the exact same seam
  * `runSession` uses to decide how many artifacts to compile and deploy — so
  * this can never report a number `runSession` wouldn't actually produce.
+ *
+ * Exported for test: R92's whole point is that the two counts are NAMED and distinguishable in the
+ * output, and R90's is that the bracket reads as measurement — neither is checkable by inspecting
+ * the numbers this function is handed, only by reading the lines it prints.
  */
-async function printDryRun(projectDir: string, only?: readonly string[]): Promise<void> {
+export async function printDryRun(
+  projectDir: string,
+  only: readonly string[] | undefined,
+  paths: { readonly dbPath: string; readonly configPath: string },
+): Promise<void> {
   // R41: `--only` is honoured here too. A dry run whose whole purpose is "how big is this going to
   // be" would be worse than useless if it answered for the unnarrowed project.
   const { files, skipped, totalFiles, excludedByOnly } = await generateMutationSet(
@@ -1555,9 +1646,21 @@ async function printDryRun(projectDir: string, only?: readonly string[]): Promis
   );
   const sites = sitesOf(files);
   const artifacts = planArtifacts(files);
+  // R92: the two numbers are NAMED, never left to be told apart by position — the campaign's own
+  // rung-1 gate pre-committed the site count as the expected mutant count and `assertCardinality`
+  // correctly refused every anchor until it was corrected. The tool was right and the plan was
+  // wrong, and nothing in the tool's output would have prevented the mistake.
+  const perFile = files
+    .map((f) => ({
+      file: f.path,
+      sites: f.specs.length,
+      deployed: dedupeSpecs(f.specs, dryRunTierOf).length,
+    }))
+    .sort((a, b) => b.deployed - a.deployed || a.file.localeCompare(b.file));
+  const deployedTotal = perFile.reduce((n, f) => n + f.deployed, 0);
 
   console.log(
-    `dry run: ${files.length} file(s), ${sites.length} mutant site(s), ${artifacts.length} batch(es)`,
+    `dry run: ${files.length} file(s), ${sites.length} mutant site(s), ${deployedTotal} deployed mutant(s), ${artifacts.length} batch(es)`,
   );
   // R48: a dry run exists to answer "how big is this going to be", so it is the right place to say
   // that the answer is "too big to run". Saying it here — rather than only when `lethal run`
@@ -1572,11 +1675,62 @@ async function printDryRun(projectDir: string, only?: readonly string[]): Promis
       `narrowed by --only ${only.map((p) => `"${p}"`).join(", ")}: ${excludedByOnly} of ${totalFiles} .al file(s) excluded from mutation (still parsed, compiled and published)`,
     );
   }
+  // R92/R90: per-file guard counts, largest DEPLOYED first — the ordering that matters, since the
+  // publish ceiling bites per file (batches split at file granularity, so `--max-guards-per-batch`
+  // cannot rescue a file that alone exceeds it) and the biggest file is the one to split or
+  // exclude. Both counts are labelled: `sites=` is raw mutation sites, `deployed=` is what actually
+  // ships. They differ, and by an amount no one can estimate from the other.
+  if (perFile.length > 0) {
+    console.log(
+      "\nper-file guard counts (largest deployed first) — 'sites' is raw mutation sites, 'deployed' is what ships after tier-precedence dedup:",
+    );
+    for (const f of perFile) {
+      console.log(`  ${f.file}  sites=${f.sites}  deployed=${f.deployed}`);
+    }
+  }
+  // R90: what this project's configured tier has actually MEASURED about publishing, stated as a
+  // bracket with its date, never as a limit. A tier with no recorded failure refuses nothing —
+  // discovering the ceiling costs exactly one honest failure, and this is where a user learns
+  // whether that price has already been paid here.
+  const measured = await dryRunCeiling(paths.dbPath, paths.configPath);
+  if (measured !== undefined && "note" in measured) {
+    console.log(`\nNOTE: ${measured.note}`);
+  } else if (measured !== undefined) {
+    const { smallestFailure, largestSuccess, failureObservedOn } = measured.ceiling;
+    if (smallestFailure === undefined && largestSuccess === undefined) {
+      console.log(
+        `\npublish ceiling for tier ${measured.tier}: nothing measured yet. Nothing will be refused — a fresh topology discovers its own ceiling by failing once.`,
+      );
+    } else {
+      const failurePart =
+        smallestFailure === undefined
+          ? "no publish failure has been recorded here yet"
+          : `${smallestFailure} guards failed to publish${failureObservedOn === undefined ? "" : ` on ${failureObservedOn}`}`;
+      const successPart =
+        largestSuccess === undefined
+          ? "no successful publish has been recorded here yet"
+          : `${largestSuccess} guards published successfully`;
+      const refusalPart =
+        smallestFailure === undefined
+          ? "Nothing will be refused."
+          : `Any single file at or above ${smallestFailure} deployed guards will be REFUSED by 'lethal run' before anything is compiled or published.`;
+      console.log(
+        `\npublish ceiling MEASURED on tier ${measured.tier}: ${failurePart}; ${successPart}. ${refusalPart} This is a recorded observation of this topology, not a fixed limit.`,
+      );
+    }
+  }
   for (const [i, artifact] of artifacts.entries()) {
     const artifactSites = sitesOf(artifact);
-    console.log(`\nbatch ${i} (${artifactSites.length} mutant site(s)):`);
+    const artifactDeployed = artifactSites.filter((s) => s.deployed).length;
+    console.log(
+      `\nbatch ${i} (${artifactSites.length} mutant site(s), ${artifactDeployed} deployed):`,
+    );
     for (const s of artifactSites) {
-      console.log(`  ${s.file}:${s.line}  ${s.operatorName}`);
+      // R92 again, at the finest granularity there is: a site the tier-precedence rule drops is
+      // NOT a mutant this run will measure, and a list that renders it identically to one that
+      // will is how a site count gets pre-committed as a mutant count.
+      const suffix = s.deployed ? "" : "  [not deployed — displaced by a higher-tier operator]";
+      console.log(`  ${s.file}:${s.line}  ${s.operatorName}${suffix}`);
     }
   }
   // R5: dry-run mirrors the session report's "not instrumented" accounting so it's visible
@@ -2166,7 +2320,10 @@ async function main(): Promise<number> {
     return 0;
   }
   if (parsed.mode === "dry-run") {
-    await printDryRun(parsed.projectDir, parsed.only);
+    await printDryRun(parsed.projectDir, parsed.only, {
+      dbPath: parsed.dbPath,
+      configPath: parsed.configPath,
+    });
     return 0;
   }
   if (parsed.mode === "clear-quarantine") {

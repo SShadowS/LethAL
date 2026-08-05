@@ -38,7 +38,15 @@ describe("parseCliConfig", () => {
 
   test("--dry-run only requires --project (no --tests/--backend)", () => {
     const parsed = parseCliConfig(["run", "--project", "proj", "--dry-run"]);
-    expect(parsed).toEqual({ mode: "dry-run", projectDir: "proj" });
+    // R90: `dbPath`/`configPath` default exactly as they do for a real run, so a dry run can
+    // report the tier's MEASURED publish bracket. Both are read best-effort and never created —
+    // a dry run in a project with neither file still works, it just has no bracket to report.
+    expect(parsed).toEqual({
+      mode: "dry-run",
+      projectDir: "proj",
+      dbPath: join("proj", "lethal.sqlite"),
+      configPath: join("proj", "lethal.config.json"),
+    });
   });
 
   test("missing --tests (non-dry-run) throws a clear error", () => {
