@@ -203,6 +203,41 @@ export class HarnessVerifier {
     private readonly fetchFn: FetchFn = fetch,
   ) {}
 
+  /**
+   * R109: reads the deployed control app's raw `semver`, WITHOUT `verify()`'s other gates
+   * (appId identity, protocol version, isolation/test-type capabilities, the single-tenant
+   * check) — `lethal doctor`'s control-version check reports that ONE concern independently, so
+   * an appId mismatch or a tenant-gate warning does not get folded into "control-version" under a
+   * name that would mislead a reader about which of several unrelated things is actually wrong.
+   * Reuses `fetchHarnessInfo()` (the same OData call and error handling `verify()` itself uses —
+   * stale-build detection, auth-vs-missing distinction, all of it) rather than a second HTTP call
+   * with its own, possibly-drifted error handling.
+   */
+  async fetchControlVersion(): Promise<string> {
+    const info = await this.fetchHarnessInfo();
+    if (typeof info.semver !== "string" || info.semver === "") {
+      throw new HarnessVerificationError(
+        `HarnessInfo did not report a LethAL Control version (semver ${JSON.stringify(info.semver)}) — protocol v2 must report the deployed control app's own version, as a string, so a stale build can be dated (this client requires ${MIN_CONTROL_VERSION}). Fix: rebuild extensions/lethal-control and republish it to this container.`,
+      );
+    }
+    return info.semver;
+  }
+
+  /**
+   * R109 review round 1 (Minor): pure reachability — calls `fetchHarnessInfo()` and discards the
+   * parsed result entirely, reusing its transport/error handling (auth-vs-missing, stale-build
+   * detection) without interpreting the response CONTENT at all. `lethal doctor`'s environment
+   * check uses this for a directly-configured container, which has no separate "status" concept
+   * of its own — HarnessInfo answering IS the readiness signal there. Deliberately narrower than
+   * both `verify()` (appId/protocol/isolation/tenant gates) and `fetchControlVersion()` (semver
+   * presence): a response missing any of those would otherwise surface under the name
+   * "environment", mis-attributing a different check's concern — the same failure class
+   * `fetchControlVersion()` was added to avoid for control-version specifically.
+   */
+  async checkReachable(): Promise<void> {
+    await this.fetchHarnessInfo();
+  }
+
   async verify(): Promise<HarnessDetails> {
     const info = await this.fetchHarnessInfo();
 

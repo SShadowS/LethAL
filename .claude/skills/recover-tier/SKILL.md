@@ -70,21 +70,20 @@ until ./CLI/continia.exe env get <envId> | grep -qE "Status:\s+Running"; do slee
 
 ### 3. Force-reset the lease
 
-`force-reset-lease` reads the `bcdev` section DIRECTLY and does no environment-tool resolution, so
-it needs `server`, `serverInstance`, `username` and `password` spelled out. For an env-tool config
-those are resolved at runtime and absent from the file on disk.
-
-`scripts/materialize-config.ts` (bundled with this skill) writes a resolved copy **outside the
-repo**, prints nothing sensitive, and is deleted immediately after use:
+`force-reset-lease` resolves an env-tool config the same read-only way `lethal run`/`lethal doctor`
+do — pass your real config straight through, no materialised copy needed:
 
 ```bash
-bun .claude/skills/recover-tier/scripts/materialize-config.ts <envId> <base-config.json> U:/Git/.tier-recover.json
-bun packages/runner/src/cli.ts force-reset-lease --server <server> --instance <instance> --config U:/Git/.tier-recover.json
-rm -f U:/Git/.tier-recover.json
+bun packages/runner/src/cli.ts force-reset-lease --server <server> --instance <instance> --config <base-config.json>
 ```
 
-Never write that file inside the repository — the `no-committed-secrets` PreToolUse hook blocks it,
-and the rule it enforces is the standing one about plaintext credentials.
+Credentials never touch disk or a log: resolution happens in-process against the config's own
+`envTool.resolve` blocks and is never printed or written out (`resolveForceResetLeaseConfig`,
+`packages/runner/src/cli.ts`). For a directly-configured container (no `envTool` section), this is
+unchanged from before — `server`/`serverInstance`/`username`/`password` are already in the file.
+
+If a `resolve` block references `{projectDir}` and the command refuses with "no value available
+for placeholder {projectDir}", add `--project <dir>` (same flag `lethal doctor` takes).
 
 ### 4. Clear the quarantine
 

@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
 import type { TestMethodRef, TestOutcome } from "./backend";
+import type { PublishOutcome } from "./deployment-verifier";
 import { type IdentityKey, serializeKey } from "./selection";
 
 export type MutantVerdict =
@@ -89,6 +90,25 @@ export interface MutantVerdictRow {
   readonly runner?: RunnerKind;
 }
 
+/**
+ * One recorded publish attempt on one tier — R90's measured publish ceiling (publish-ceiling.ts).
+ *
+ * `outcome` is `decidePublishOutcome`'s CATEGORY, not a boolean: see `recordPublishOutcome`
+ * (publish-ceiling.ts) for why the distinction between `failed` and `indeterminate` is the whole
+ * point of the table.
+ */
+export interface PublishOutcomeRow {
+  readonly tier: string;
+  readonly guardCount: number;
+  /** The one file this artifact's guards came from, when there was one — diagnostic only, so a
+   *  `failed` row can say WHAT was too big. Absent for a multi-file artifact. */
+  readonly file?: string;
+  readonly outcome: PublishOutcome;
+  /** SQLite's `datetime('now')` stamp (UTC, `YYYY-MM-DD HH:MM:SS`). A refusal dates its evidence
+   *  from this. */
+  readonly recordedAt: string;
+}
+
 /** A run row, as `--resume` reads it back to check the candidate is actually resumable. */
 export interface RunRow {
   readonly id: number;
@@ -143,12 +163,33 @@ CREATE TABLE IF NOT EXISTS test_results (
   duration_ms INTEGER NOT NULL,
   failure_message TEXT
 );
+CREATE TABLE IF NOT EXISTS publish_outcomes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  recorded_at TEXT NOT NULL DEFAULT (datetime('now')),
+  tier TEXT NOT NULL,
+  guard_count INTEGER NOT NULL,
+  file TEXT,
+  outcome TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_publish_outcomes_tier ON publish_outcomes(tier);
 `;
 
 export class ResultsStore {
   readonly db: Database;
+  /**
+   * The path this store was opened at, verbatim.
+   *
+   * R90 fix round 2: `clear-ceiling`'s pre-filled command must name the database the measurement
+   * was actually recorded in. Without it the command renders the DEFAULT `<project>/lethal.sqlite`,
+   * and a session run with `--db X` would hand the operator an invocation that clears a different
+   * file — printing "removed 0 row(s)", exiting 0, and leaving the refusal exactly where it was.
+   * Captured here rather than read back off `db.filename` so it is the caller's own string, not
+   * SQLite's normalization of it.
+   */
+  readonly dbPath: string;
 
   constructor(dbPath: string) {
+    this.dbPath = dbPath;
     this.db = new Database(dbPath, { create: true });
     this.db.exec("PRAGMA journal_mode = WAL;");
     this.db.exec(SCHEMA);
@@ -194,6 +235,13 @@ export class ResultsStore {
         this.db.exec(`ALTER TABLE runs ADD COLUMN ${col} TEXT`);
       }
     }
+    // R90's `publish_outcomes` needs NOTHING here, and that is a property of it being a whole new
+    // TABLE rather than a new column: `SCHEMA` runs `CREATE TABLE IF NOT EXISTS` on every open, so
+    // a `lethal.sqlite` created before this table existed simply gains it — empty — the next time
+    // it is opened. An empty ceiling table is also the correct starting state (see
+    // `assertUnderCeiling`: with no recorded failure, nothing is refused), so there is no
+    // backfill to get wrong either. This method exists only because `CREATE TABLE IF NOT EXISTS`
+    // never reconciles an EXISTING table's columns.
   }
 
   createRun(info: {
@@ -482,6 +530,115 @@ export class ResultsStore {
         } satisfies IdentityKey),
       ),
     );
+  }
+
+  /**
+   * R90: records one publish attempt's outcome against a physical BC service TIER.
+   *
+   * Deliberately NOT keyed to `run_id`. The publish ceiling is a property of the topology, not of
+   * a run: it must survive every run that measured it, be readable by `--dry-run` (which creates
+   * no run row at all), and be consulted by the NEXT session's pre-flight before its own run row
+   * has done anything. Tying it to a run would make it invisible exactly when it is needed.
+   *
+   * Call through `recordPublishOutcome` (publish-ceiling.ts) rather than directly — that is where
+   * the caller-contract validation lives.
+   */
+  recordPublishOutcome(row: {
+    readonly tier: string;
+    readonly guardCount: number;
+    readonly file: string | undefined;
+    readonly outcome: PublishOutcome;
+  }): void {
+    this.db
+      .query("INSERT INTO publish_outcomes (tier, guard_count, file, outcome) VALUES (?, ?, ?, ?)")
+      .run(row.tier, row.guardCount, row.file ?? null, row.outcome);
+  }
+
+  /**
+   * Validates an `outcome` column value read back from SQLite. Unlike `runner`, this column is NOT
+   * nullable and has no documented absence to translate — every row was written by
+   * `recordPublishOutcome` with one of `decidePublishOutcome`'s four values. Anything else is a
+   * corrupt row, and per CLAUDE.md must throw naming itself rather than be coerced into a guess:
+   * silently treating an unknown value as (say) `indeterminate` would drop a real `failed`
+   * measurement and leave the ceiling permanently blind.
+   */
+  private parsePublishOutcome(value: string, tier: string, guardCount: number): PublishOutcome {
+    if (
+      value === "accepted" ||
+      value === "indeterminate" ||
+      value === "anomalous" ||
+      value === "failed"
+    ) {
+      return value;
+    }
+    throw new Error(
+      `store.ts: publish_outcomes row (tier=${tier}, guardCount=${guardCount}) has a corrupt ` +
+        `"outcome" column value ${JSON.stringify(value)} — expected "accepted", "indeterminate", "anomalous" or "failed"`,
+    );
+  }
+
+  /**
+   * R90 fix round 1: the operator escape. Removes recorded publish outcomes for one tier —
+   * every row, or only the rows recorded against one FILE.
+   *
+   * Necessary because the ceiling is a RATCHET that only ever tightens: `knownCeiling` takes the
+   * minimum over `failed` rows, and a file once refused can never publish, so it can never produce
+   * the counter-evidence that would widen the bracket again. Any throw out of
+   * `deployer.publish()` — including a Bun spawn `ENOENT`, which R65 measured for real — records a
+   * `failed` row at that artifact's guard count, and without this there is no way back but sqlite
+   * surgery. This is the same hazard `knownCeiling` deliberately excludes `indeterminate` for; the
+   * exclusion closed one door in, and a transient spawn failure walks through the other.
+   *
+   * Returns the number of rows deleted so the caller can state what it destroyed. Deleting real
+   * measurements is real evidence loss, so the CLI wrapper names every row it removes.
+   */
+  deletePublishOutcomes(tier: string, file: string | undefined): number {
+    if (file === undefined) {
+      this.db.query("DELETE FROM publish_outcomes WHERE tier = ?").run(tier);
+    } else {
+      this.db.query("DELETE FROM publish_outcomes WHERE tier = ? AND file = ?").run(tier, file);
+    }
+    const r = this.db.query("SELECT changes() AS n").get() as { n: number };
+    return r.n;
+  }
+
+  /**
+   * R90 fix round 2: every tier this database has publish outcomes for, sorted.
+   *
+   * Exists so a `clear-ceiling` that matched NOTHING can say what the database does contain
+   * instead of stopping at "removed 0 row(s)". That listing is the actual diagnosis for the two
+   * ways to reach a no-op — the wrong database, or a tier identity that does not match how the
+   * run recorded it (case and trailing slash are normalized by `quarantineResourceKey`, the host
+   * spelling is not) — and it turns a dead end into a next step.
+   */
+  publishOutcomeTiers(): string[] {
+    const rows = this.db
+      .query("SELECT DISTINCT tier FROM publish_outcomes ORDER BY tier ASC")
+      .all() as Array<{ tier: string }>;
+    return rows.map((r) => r.tier);
+  }
+
+  /** R90: every publish attempt recorded against one tier, oldest first. */
+  publishOutcomes(tier: string): PublishOutcomeRow[] {
+    const rows = this.db
+      .query(
+        "SELECT tier, guard_count, file, outcome, recorded_at FROM publish_outcomes " +
+          "WHERE tier = ? ORDER BY id ASC",
+      )
+      .all(tier) as Array<{
+      tier: string;
+      guard_count: number;
+      file: string | null;
+      outcome: string;
+      recorded_at: string;
+    }>;
+    return rows.map((r) => ({
+      tier: r.tier,
+      guardCount: r.guard_count,
+      outcome: this.parsePublishOutcome(r.outcome, r.tier, r.guard_count),
+      recordedAt: r.recorded_at,
+      ...(r.file !== null ? { file: r.file } : {}),
+    }));
   }
 
   close(): void {

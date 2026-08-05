@@ -19,8 +19,12 @@ const EXPIRY_MARGIN_MS = 60 * 60_000;
  * `as BcDevConfigSection` cast below, so a config missing one of these fails LOUDLY right here —
  * instead of producing a `BcDevConfigSection` whose string-typed field is `undefined` at runtime
  * and propagating silently into an OData call or backend construction.
+ *
+ * R109: exported (unchanged) so `cli.ts`'s `buildDoctorDeps` can eagerly fail the SAME way, on the
+ * SAME three fields, for an env-tool-configured project — matching `startEnvToolSession`'s own
+ * fail-fast (this call is its very first statement) instead of a doctor-only reimplementation.
  */
-function requireBcDevRawFields(bcdevRaw: Partial<BcDevConfigSection>): void {
+export function requireBcDevRawFields(bcdevRaw: Partial<BcDevConfigSection>): void {
   const missing: string[] = [];
   if (!Array.isArray(bcdevRaw.mcpCommand) || bcdevRaw.mcpCommand.length === 0) {
     missing.push("mcpCommand");
@@ -410,7 +414,12 @@ async function waitUntilReady(
   }
 }
 
-function splitBaseUrl(
+/**
+ * R109: exported (unchanged) so `cli.ts`'s `buildDoctorDeps` can derive the SAME `server`/
+ * `serverInstance` an env-tool-configured `lethal run` would, rather than a second, hand-rolled
+ * derivation that could drift from this one. Read-only and pure — no reason not to share it.
+ */
+export function splitBaseUrl(
   baseUrl: string,
   serverOverride: string | undefined,
   instanceOverride: string | undefined,
@@ -444,7 +453,8 @@ function splitBaseUrl(
  * `bc-dev-mcp/src/core/urls.ts:12`) would fire instead, which is unreachable on a path-routed
  * HTTPS portal.
  */
-function deriveMcpPort(baseUrl: string): number {
+/** R109: exported alongside `splitBaseUrl` — see that export's doc comment for why. */
+export function deriveMcpPort(baseUrl: string): number {
   const url = new URL(baseUrl);
   if (url.port !== "") return Number(url.port);
   return url.protocol === "https:" ? 443 : 80;

@@ -1,5 +1,4 @@
 import { describe, expect, mock, spyOn, test } from "bun:test";
-import type { TestMethodRef } from "../src/backend";
 import { mkdir, mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,7 +14,8 @@ import {
   defaultArtifactIo,
 } from "../src/artifact";
 import type { ArtifactIo, CompileInput } from "../src/artifact";
-import { BcDevMcpBackend } from "../src/bcdev-backend";
+import type { TestMethodRef } from "../src/backend";
+import { BcDevMcpBackend, PublishFailedError } from "../src/bcdev-backend";
 import type { BcDevConfig, BcDevDeployment } from "../src/bcdev-backend";
 import { DeploymentVerifier } from "../src/deployment-verifier";
 import { CONTROL_APP_ID, HarnessVerificationError } from "../src/harness";
@@ -785,6 +785,46 @@ describe("BcDevMcpBackend.status", () => {
   });
 });
 
+describe("PublishFailedError (R65/R90)", () => {
+  test("extends Error DIRECTLY, never another typed error", () => {
+    const e = new PublishFailedError("timed out", {
+      guardCount: 660,
+      file: "X.al",
+      tier: "t",
+      detail: "d",
+    });
+    expect(Object.getPrototypeOf(PublishFailedError)).toBe(Error);
+    expect(e).toBeInstanceOf(Error);
+  });
+
+  test("carries the guard count and file so the ceiling can be learned", () => {
+    const e = new PublishFailedError("timed out", {
+      guardCount: 660,
+      file: "X.al",
+      tier: "t",
+      detail: "d",
+    });
+    expect(e.guardCount).toBe(660);
+    expect(e.file).toBe("X.al");
+  });
+
+  test("its message is never empty — R65's failure was a bare Error with no text", () => {
+    const e = new PublishFailedError("timed out", {
+      guardCount: 1,
+      file: undefined,
+      tier: "t",
+      detail: "raw",
+    });
+    expect(e.message.length).toBeGreaterThan(0);
+    expect(e.message).toContain("timed out");
+  });
+
+  test("guards against an empty message from the caller too — never just relies on the caller's fallback", () => {
+    const e = new PublishFailedError("", { guardCount: 1, file: undefined, tier: "t", detail: "" });
+    expect(e.message.length).toBeGreaterThan(0);
+  });
+});
+
 describe("BcDevMcpBackend.deploy", () => {
   test("invokes compiler then deployer in order and returns the verified CompiledArtifact", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lethal-bcdev-deploy-test-"));
@@ -848,6 +888,86 @@ describe("BcDevMcpBackend.deploy", () => {
       expect(err).toBeInstanceOf(DeploymentError);
       expect((err as DeploymentError).outcome).toBe("indeterminate");
       expect(String(err)).toMatch(/identity mismatch/);
+    } finally {
+      await rmStaged(dir);
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("throws a typed PublishFailedError — never DeploymentError — when the publish call itself demonstrably fails (R65/R90)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-bcdev-deploy-publish-fail-"));
+    try {
+      await writeDeployInputs(dir);
+      // Overwrite the shared fixture's empty manifest: three guards, all in ONE file, so
+      // PublishFailedError.guardCount/file have something real to carry.
+      const mutantEntry = (mutantId: string) => ({
+        mutantId,
+        file: "Foo.Codeunit.al",
+        startIndex: 0,
+        endIndex: 1,
+        startLine: 1,
+        operatorName: "lethal.void-method-call",
+        operatorVersion: "1",
+        astHash: "h",
+        objectType: "codeunit",
+        codeunitId: 79100,
+        codeunitName: "Foo",
+        procedureName: "P1",
+        originalText: "a",
+        mutatedText: "",
+      });
+      await Bun.write(
+        join(dir, "mutant-manifest.json"),
+        JSON.stringify({
+          selectorIds: { selectorId: 1, controlId: 2, tableId: 3 },
+          artifactId: TEST_ARTIFACT_ID,
+          mutants: [mutantEntry("m1"), mutantEntry("m2"), mutantEntry("m3")],
+        }),
+      );
+      // alc "compiles" normally; altool "runs" but reports exit 1, so
+      // ContainerDeployer.publish() THROWS — a genuine, observed publish failure, not merely an
+      // identity puzzle. reportedIdentity is pinned to a well-formed but WRONG id regardless of
+      // whether publishapp was ever called, so verification never confirms either —
+      // decidePublishOutcome(false, mismatch) = "failed".
+      const failingSpawn: SpawnFn = async (argv) => {
+        const out = argv.find((a) => a.startsWith("/out:"))?.slice("/out:".length);
+        if (argv[0]?.includes("alc") && out !== undefined) {
+          await Bun.write(out, buildFakeApp({ Codeunits: [] }));
+          return { exitCode: 0, stdout: "", stderr: "" };
+        }
+        if (argv[1] === "publishapp") {
+          return { exitCode: 1, stdout: "", stderr: "simulated altool failure" };
+        }
+        return { exitCode: 0, stdout: "", stderr: "" };
+      };
+      const backend = new BcDevMcpBackend(
+        {
+          mcpCommand: ["unused"],
+          project: "/al",
+          server: "http://bc",
+          serverInstance: "BC",
+          ...(await controlStaging(dir)),
+        },
+        undefined,
+        makeDeployment(
+          dir,
+          { Codeunits: [] },
+          {
+            spawn: failingSpawn,
+            reportedIdentity: "f".repeat(32),
+          },
+        ),
+      );
+      const err = await backend.deploy(dir).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(PublishFailedError);
+      expect(err).not.toBeInstanceOf(DeploymentError);
+      const pfe = err as PublishFailedError;
+      expect(pfe.guardCount).toBe(3);
+      expect(pfe.file).toBe("Foo.Codeunit.al");
+      expect(pfe.tier).toBe("http://bc|BC");
+      expect(pfe.message.length).toBeGreaterThan(0);
+      expect(pfe.message).toContain("altool publishapp failed");
+      expect(pfe.detail).toBe(pfe.message);
     } finally {
       await rmStaged(dir);
       await rm(dir, { recursive: true, force: true });

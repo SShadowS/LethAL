@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { closeSync, openSync, writeSync } from "node:fs";
+import { closeSync, existsSync, openSync, writeSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
@@ -12,6 +12,8 @@ import {
   type DeclaredObject,
   type InstrumentedFile,
   type SelectorConfig,
+  type TierResolver,
+  dedupeSpecs,
   parseIdRanges,
   scanDeclaredObjects,
   validateSelectorIds,
@@ -34,10 +36,17 @@ import type { ExecutionBackend } from "./backend";
 import { BcDevMcpBackend } from "./bcdev-backend";
 import type { BcDevConfig } from "./bcdev-backend";
 import { DeploymentVerifier } from "./deployment-verifier";
+import { ENV_STATUS_REACHABLE_NO_VENDOR_STATUS, runDoctor } from "./doctor";
+import type { DoctorConfig, DoctorDeps, DoctorReport } from "./doctor";
 import { EnvToolClient, EnvToolError, READS_KEYS, validateEnvToolConfig } from "./env-tool";
 import type { EnvToolBlock, EnvToolConfigSection } from "./env-tool";
 import { EnvToolPublisher } from "./env-tool-publisher";
-import { startEnvToolSession } from "./env-tool-session";
+import {
+  deriveMcpPort,
+  requireBcDevRawFields,
+  splitBaseUrl,
+  startEnvToolSession,
+} from "./env-tool-session";
 import type { EnvToolSession } from "./env-tool-session";
 import type { EventSubscriber } from "./events";
 import { HarnessVerifier } from "./harness";
@@ -47,6 +56,7 @@ import {
   MIN_MUTANT_BUDGET_MS,
   defaultQuarantineDir,
   generateMutationSet,
+  operatorTiers,
   planArtifacts,
   runSession,
 } from "./orchestrator";
@@ -54,6 +64,8 @@ import type { SessionConfig } from "./orchestrator";
 import { PermissionCanaryClient, runPermissionCanary } from "./permission-canary";
 import { createNdjsonSink } from "./progress-ndjson";
 import { createProgressRenderer } from "./progress-renderer";
+import { clearPublishCeiling, knownCeiling } from "./publish-ceiling";
+import type { PublishCeiling } from "./publish-ceiling";
 import { canonicalContainerKey } from "./publish-serializer";
 import { ContainerDeployer, defaultAlToolPaths, defaultDeployerIo } from "./publisher";
 import type { AppPublisher } from "./publisher";
@@ -63,6 +75,7 @@ import type { SessionReport } from "./report";
 import { quarantineResourceKey } from "./resource-key";
 import { RunMutantTransport } from "./run-mutant-transport";
 import { ResultsStore } from "./store";
+import type { PublishOutcomeRow } from "./store";
 
 /**
  * `cli.ts` is argument marshaling only — everything that decides pass/fail
@@ -252,6 +265,15 @@ export interface DryRunCliConfig {
   /** R41: `--only` globs, absent when the run was not narrowed — see `RunCliConfig.only`.
    *  Honoured here too, so the count a dry run reports is the count a real run would produce. */
   readonly only?: readonly string[];
+  /**
+   * R90: same defaults as `RunCliConfig`, because a dry run is where the publish ceiling is worth
+   * knowing — before anything is generated, instrumented, compiled or published. Both are read
+   * BEST-EFFORT and never created: a dry run must work in a project that has no config file and
+   * has never been run (see `printDryRun`), so a missing file means "no bracket to report", not
+   * an error.
+   */
+  readonly dbPath: string;
+  readonly configPath: string;
 }
 
 export interface RunCliConfig {
@@ -311,7 +333,7 @@ export interface RunCliConfig {
   readonly maxGuardsPerBatch?: number;
   /**
    * R47: `--mutant-timeout-ms <n>` raises the FLOOR of the per-mutant time budget. Absent means
-   * `MIN_MUTANT_BUDGET_MS` (30 s).
+   * `MIN_MUTANT_BUDGET_MS` (180 s, R91).
    *
    * The effective budget stays `max(2 x that test's baseline duration, this)`. It exists because
    * the floor was a hardcoded constant with no config surface, and exceeding it costs the WHOLE
@@ -365,18 +387,62 @@ export interface ClearQuarantineCliConfig {
 }
 
 /**
- * `lethal force-reset-lease --server <url> --instance <name> --config <path>` (design §8 step 2
- * of the operator recovery procedure — see fixtures/README.md's "Recovering from
- * container-needs-recycle" and `performForceResetLease` below). Unlike `clear-quarantine`, this
- * needs a `--config` too: it authenticates a LIVE `HarnessInfo`/`ForceResetLease` OData call
+ * `lethal clear-ceiling --project <dir> --server <url> --instance <name> [--file <name>]`
+ * (R90 fix round 1): discards recorded publish outcomes for one tier, so a TRANSIENT publish
+ * failure stops permanently refusing files that size. Mirrors `clear-quarantine` — this project's
+ * other sticky refusal state — in shape, in that the real clearing logic is an exported function
+ * (`clearPublishCeiling`, publish-ceiling.ts) and this is only the wrapper.
+ *
+ * It needs `--project`/`--db` where `clear-quarantine` needs neither, because the ceiling lives in
+ * the RESULTS database (`<project>/lethal.sqlite`), not in the machine-global `~/.lethal`
+ * quarantine directory — and `--db` is honoured, resolved exactly as `run` resolves it, so an
+ * operator who ran with `--db X` clears the same file that run wrote.
+ */
+export interface ClearCeilingCliConfig {
+  readonly mode: "clear-ceiling";
+  readonly projectDir: string;
+  readonly dbPath: string;
+  readonly server: string;
+  readonly serverInstance: string;
+  /** Narrows the clear to rows recorded against this file. Absent means the whole tier — see
+   *  `clearPublishCeiling` for why the blanket clear is the default rather than the exception. */
+  readonly file?: string;
+}
+
+/**
+ * `lethal force-reset-lease --server <url> --instance <name> --config <path> [--project <dir>]`
+ * (design §8 step 2 of the operator recovery procedure — see fixtures/README.md's "Recovering
+ * from container-needs-recycle" and `performForceResetLease` below). Unlike `clear-quarantine`,
+ * this needs a `--config` too: it authenticates a LIVE `HarnessInfo`/`ForceResetLease` OData call
  * against the server, which needs the bcdev section's company/username/password/tenant — nothing
  * clear-quarantine's purely-local quarantine-record clear requires.
+ *
+ * `--project` mirrors `DoctorCliConfig`'s own optional field below (R109): used only to satisfy a
+ * `{projectDir}` placeholder an `envTool.resolve` block's command might reference — this command
+ * runs no session, so it has no `testDir`/`runId` of its own the way `lethal run` does. Without
+ * it, `resolveForceResetLeaseConfig` supplies `""` (`renderCommand` then throws BY NAME on the
+ * unresolved placeholder, which is correct, but leaves an operator whose config needs it with no
+ * flag to unblock themselves mid-recovery — this closes that gap).
  */
 export interface ForceResetLeaseCliConfig {
   readonly mode: "force-reset-lease";
   readonly server: string;
   readonly serverInstance: string;
   readonly configPath: string;
+  readonly projectDir?: string;
+}
+
+/**
+ * R109: `lethal doctor --config <path> [--project <dir>]` — every pre-flight refusal `lethal run`
+ * would otherwise discover ONE AT A TIME, run READ-ONLY and reported all at once. `--project` is
+ * optional and used only to satisfy `{projectDir}` placeholders an `envTool.resolve` block's
+ * command might reference (env-tool.ts's `renderCommand`) — doctor runs no session, so it has no
+ * `testDir`/`runId` of its own the way `lethal run` does.
+ */
+export interface DoctorCliConfig {
+  readonly mode: "doctor";
+  readonly configPath: string;
+  readonly projectDir?: string;
 }
 
 /**
@@ -401,11 +467,19 @@ export type CliConfig =
   | DryRunCliConfig
   | RunCliConfig
   | ClearQuarantineCliConfig
+  | ClearCeilingCliConfig
   | ForceResetLeaseCliConfig
+  | DoctorCliConfig
   | HelpCliConfig
   | VersionCliConfig;
 
-const VALID_SUBCOMMANDS = ["run", "clear-quarantine", "force-reset-lease"] as const;
+const VALID_SUBCOMMANDS = [
+  "run",
+  "clear-quarantine",
+  "clear-ceiling",
+  "force-reset-lease",
+  "doctor",
+] as const;
 
 /**
  * `lethal` is invoked as `lethal run --project ...`, `lethal clear-quarantine --server ...
@@ -434,10 +508,12 @@ export function helpText(version: string): string {
   return `lethal ${version} — mutation testing for Business Central AL
 
 USAGE
-  lethal run              --project <dir> --tests <dir> --backend <bcdev|al-runner> [options]
-  lethal run              --project <dir> --dry-run
-  lethal clear-quarantine --server <url> --instance <name>
-  lethal force-reset-lease --server <url> --instance <name> --config <path>
+  lethal run               --project <dir> --tests <dir> --backend <bcdev|al-runner> [options]
+  lethal run               --project <dir> --dry-run
+  lethal clear-quarantine  --server <url> --instance <name>
+  lethal clear-ceiling     --project <dir> --server <url> --instance <name> [--db <path>] [--file <name>]
+  lethal force-reset-lease --server <url> --instance <name> --config <path> [--project <dir>]
+  lethal doctor            --config <path> [--project <dir>]
 
 RUN — required
   --project <dir>            AL project to mutate (the app under test)
@@ -453,7 +529,12 @@ RUN — scope. These bound cost. --tests-only can change a verdict; the others c
   --skip-known-survivors     skip mutants a prior finished run recorded as survivors
   --allow-large-run          run more than ${LARGE_RUN_MUTANT_THRESHOLD} mutation sites (refused by default — a whole
                              real app costs days and usually cannot publish at all)
-  --dry-run                  list what would be mutated; execute nothing
+  --dry-run                  list what would be mutated; execute nothing. Reports both the raw
+                             mutation-site count and the DEPLOYED count (they differ), plus this
+                             tier's measured publish bracket. It never creates a results database;
+                             when one already exists AND the config names a bcdev tier to look the
+                             bracket up for, that database is OPENED FOR WRITING and its schema
+                             brought up to date, exactly as a real run would
 
 RUN — cost and recovery
   --max-guards-per-batch <n> cap guards per published artifact. Publish cost scales with guard
@@ -486,6 +567,40 @@ RUN — environment
   --table-id <n>             override the injected control table id
   --keep-env                 do not delete an environment the env tool created
   --allow-expiring-env       proceed against an environment that expires during the run
+
+CLEAR-CEILING — undo a publish-ceiling measurement (R90)
+  A file at or above a guard count MEASURED to fail on a tier is refused before anything is
+  compiled or published. That bracket is a ratchet: a refused file can never publish, so it can
+  never widen the bracket back. Any throw out of the publish call records a failure, including a
+  transient one (a spawn failure, a restarting server), so this is the way back.
+  --project <dir>            project whose results database holds the measurement
+  --server <url>             tier identity, same pair a run uses
+  --instance <name>
+  --file <name>              clear only rows recorded against this file. Omit to clear the whole
+                             tier — the right choice when the TOPOLOGY changed (container
+                             recycled, proxy reconfigured), and the only way to reach rows from a
+                             multi-file artifact, which carry no filename at all
+  --db <path>                results database (default: <project>/lethal.sqlite). A refusal
+                             message pre-fills this with the database the measurement was
+                             actually recorded in — copy it rather than retyping
+  Every row removed is printed, with the bracket before and after: discarding a genuine failure
+  is real evidence loss, and it cost a live publish failure to learn. A clear that removes NOTHING
+  reports 'nothing-matched'/'nothing-recorded' and exits 1 — it did not undo anything, and the
+  next run will be refused identically.
+
+DOCTOR — every pre-flight refusal, read-only, all at once (R109)
+  'lethal run' discovers a stopped environment, a stale control app, a quarantined tier, or a
+  missing alc/altool ONE AT A TIME, each after whatever ran before it. 'lethal doctor' runs every
+  one of those checks read-only and reports them all in a single pass, so a user with several
+  problems finds all of them in one round-trip instead of one slow retry per fix.
+  --config <path>            lethal.config.json (the bcdev/envTool sections every check reads)
+  --project <dir>            optional; only used to satisfy {projectDir} placeholders an
+                             envTool.resolve command might reference
+  Does NOT check: the per-file publish ceiling (needs a generated mutation manifest), baseline
+  test health (needs an actual run), or the machine-global lease/op-marker (no read-only peek
+  exists on the control app today, R110) — all three are printed as an explicit caveat on every
+  invocation, never silently implied as covered.
+  Exits 0 when every check passes, 1 otherwise, naming each failing check.
 
 OTHER
   -h, --help                 this text
@@ -537,6 +652,9 @@ export const RUN_FLAGS = {
   "compile-concurrency": { type: "string" },
   server: { type: "string" },
   instance: { type: "string" },
+  // R90 fix round 1: `clear-ceiling`'s optional per-file narrowing. Lives in the shared flag table
+  // because `parseArgs` runs in strict mode over ONE option set for every subcommand.
+  file: { type: "string" },
   "keep-env": { type: "boolean", default: false },
   "allow-expiring-env": { type: "boolean", default: false },
   "selector-id": { type: "string" },
@@ -594,6 +712,43 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     return { mode: "clear-quarantine", server, serverInstance };
   }
 
+  if (subcommand === "clear-ceiling") {
+    const server = values.server;
+    if (server === undefined || server === "") {
+      throw new Error("missing required --server <url>");
+    }
+    const serverInstance = values.instance;
+    if (serverInstance === undefined || serverInstance === "") {
+      throw new Error("missing required --instance <name>");
+    }
+    const project = values.project;
+    if (project === undefined || project === "") {
+      throw new Error(
+        "missing required --project <dir> (the publish ceiling lives in that project's results " +
+          "database, not in the machine-global quarantine directory)",
+      );
+    }
+    // Fix round 2: an EMPTY `--file` throws rather than silently widening the scope from one file
+    // to the entire tier — `--file "$F"` with an unset shell variable would otherwise destroy every
+    // measurement on the tier while the operator believed they had named one. Same treatment its
+    // two neighbours above already get, for the same reason.
+    const file = values.file;
+    if (file === "") {
+      throw new Error(
+        "--file was given as an empty string. Omit --file entirely to clear the whole tier; an " +
+          "empty value would silently widen the scope from one file to every measurement on it.",
+      );
+    }
+    return {
+      mode: "clear-ceiling",
+      projectDir: project,
+      dbPath: values.db ?? join(project, "lethal.sqlite"),
+      server,
+      serverInstance,
+      ...(file !== undefined ? { file } : {}),
+    };
+  }
+
   if (subcommand === "force-reset-lease") {
     const server = values.server;
     if (server === undefined || server === "") {
@@ -610,7 +765,29 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
           "credentials this recovery action authenticates the live OData calls with)",
       );
     }
-    return { mode: "force-reset-lease", server, serverInstance, configPath };
+    const project = values.project;
+    return {
+      mode: "force-reset-lease",
+      server,
+      serverInstance,
+      configPath,
+      ...(project !== undefined && project !== "" ? { projectDir: project } : {}),
+    };
+  }
+
+  if (subcommand === "doctor") {
+    const configPath = values.config;
+    if (configPath === undefined || configPath === "") {
+      throw new Error(
+        "missing required --config <path> (the bcdev/envTool sections every check reads)",
+      );
+    }
+    const project = values.project;
+    return {
+      mode: "doctor",
+      configPath,
+      ...(project !== undefined && project !== "" ? { projectDir: project } : {}),
+    };
   }
 
   const projectDir = values.project;
@@ -689,7 +866,13 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     if (testsOnlyRaw !== undefined && testsOnlyRaw.length > 0) {
       throw new Error("--tests-only has no effect with --dry-run (a dry run executes no tests)");
     }
-    return { mode: "dry-run", projectDir, ...only };
+    return {
+      mode: "dry-run",
+      projectDir,
+      dbPath: values.db ?? join(projectDir, "lethal.sqlite"),
+      configPath: values.config ?? join(projectDir, "lethal.config.json"),
+      ...only,
+    };
   }
 
   const testDir = values.tests;
@@ -1532,21 +1715,101 @@ function lineOfIndex(source: string, index: number): number {
 }
 
 function sitesOf(files: readonly InstrumentedFile[]) {
-  return files.flatMap((f) =>
-    f.specs.map((spec) => ({
+  return files.flatMap((f) => {
+    // R92: `dedupeSpecs` returns the SURVIVING spec objects themselves, so reference identity is
+    // the exact "does this site ship" answer — no second implementation of §3.2 precedence to
+    // drift from the real one. A site listed without this flag reads as a mutant that will be
+    // measured, and for a Tier-1 mutant a Tier-2 operator displaces, that is simply false.
+    const kept = new Set(dedupeSpecs(f.specs, dryRunTierOf));
+    return f.specs.map((spec) => ({
       file: f.path,
       operatorName: spec.operatorName,
       line: lineOfIndex(f.source, spec.before.startIndex),
-    })),
-  );
+      deployed: kept.has(spec),
+    }));
+  });
+}
+
+/**
+ * R92: the DEPLOYED mutant count per file — what actually ships after §3.2 dedup drops a Tier-1
+ * mutant wherever a Tier-2 operator claims the same site. Measured on Document Output: 176 sites
+ * -> 148 deployed (-16%), 991 -> 973, 476 -> 473. The gap is not a constant; it depends on the
+ * operator mix of the specific file, so it cannot be estimated from the site count.
+ *
+ * Runs the SAME `dedupeSpecs` `writeInstrumentedProject` runs at compile time (project.ts), bound
+ * to the SAME `operatorTiers` map `runSession` uses — a dry run that reported a number produced by
+ * a second implementation of the rule would be exactly the drift this exists to prevent.
+ */
+const dryRunTierOf: TierResolver = (name) => operatorTiers.get(name);
+
+/**
+ * R90: the measured publish bracket for the tier this project is configured against, if there is
+ * one to report.
+ *
+ * **What is tolerated and what is not** — fix round 1 corrected this comment, which previously
+ * claimed a blanket "best-effort" the code does not implement:
+ *  - An ABSENT config file or ABSENT database: tolerated, returns `undefined`, prints nothing.
+ *    `--dry-run` is the one mode that requires neither, so their absence is a normal state rather
+ *    than a failure. `existsSync` also keeps `new ResultsStore(path)` (`create: true`) from
+ *    CREATING a database a dry run was never asked to make.
+ *  - An UNREADABLE or malformed config file: tolerated, returns a `note` the caller prints. The
+ *    dry run's own answer (how many mutants, in which files) does not depend on the config at all,
+ *    so killing it over a config it did not need would be the wrong trade.
+ *  - A locked, corrupt or unreadable DATABASE, and a corrupt `outcome` value in it: **NOT
+ *    tolerated — these throw**, deliberately. `new ResultsStore(...)` and `knownCeiling(...)` sit
+ *    outside the `try` above on purpose. A database that exists but cannot be read is a real
+ *    problem with the file this project's verdicts live in, and reporting "no ceiling measured"
+ *    for it would be indistinguishable from a tier that has genuinely never failed — the
+ *    empty-vs-empty confusion this project treats as its signature bug.
+ *
+ * An EXISTING database is opened read-WRITE, not read-only: `ResultsStore`'s constructor ensures
+ * the schema (see its `migrate`), and going around it to read `publish_outcomes` directly would
+ * mean a second implementation of the row parsing — including the corrupt-value guard — which is
+ * exactly the drift this file avoids elsewhere. The writes it can perform are idempotent, additive
+ * and identical to the ones `lethal run` performs on the same file moments later. `--help` says so.
+ */
+async function dryRunCeiling(
+  dbPath: string,
+  configPath: string,
+): Promise<{ tier: string; ceiling: PublishCeiling } | { note: string } | undefined> {
+  if (!existsSync(configPath) || !existsSync(dbPath)) return undefined;
+  let server: string | undefined;
+  let serverInstance: string | undefined;
+  try {
+    const configFile = await loadLethalConfigFile(configPath);
+    server = configFile.bcdev?.server;
+    serverInstance = configFile.bcdev?.serverInstance;
+  } catch (err) {
+    return {
+      note:
+        `could not read the configured tier from ${configPath}: ` +
+        `${err instanceof Error ? err.message : String(err)} — no publish ceiling to report`,
+    };
+  }
+  if (server === undefined || serverInstance === undefined) return undefined;
+  const tier = quarantineResourceKey({ server, serverInstance });
+  const store = new ResultsStore(dbPath);
+  try {
+    return { tier, ceiling: knownCeiling(store, tier) };
+  } finally {
+    store.close();
+  }
 }
 
 /**
  * Batch count here is derived from `planArtifacts` — the exact same seam
  * `runSession` uses to decide how many artifacts to compile and deploy — so
  * this can never report a number `runSession` wouldn't actually produce.
+ *
+ * Exported for test: R92's whole point is that the two counts are NAMED and distinguishable in the
+ * output, and R90's is that the bracket reads as measurement — neither is checkable by inspecting
+ * the numbers this function is handed, only by reading the lines it prints.
  */
-async function printDryRun(projectDir: string, only?: readonly string[]): Promise<void> {
+export async function printDryRun(
+  projectDir: string,
+  only: readonly string[] | undefined,
+  paths: { readonly dbPath: string; readonly configPath: string },
+): Promise<void> {
   // R41: `--only` is honoured here too. A dry run whose whole purpose is "how big is this going to
   // be" would be worse than useless if it answered for the unnarrowed project.
   const { files, skipped, totalFiles, excludedByOnly } = await generateMutationSet(
@@ -1555,9 +1818,21 @@ async function printDryRun(projectDir: string, only?: readonly string[]): Promis
   );
   const sites = sitesOf(files);
   const artifacts = planArtifacts(files);
+  // R92: the two numbers are NAMED, never left to be told apart by position — the campaign's own
+  // rung-1 gate pre-committed the site count as the expected mutant count and `assertCardinality`
+  // correctly refused every anchor until it was corrected. The tool was right and the plan was
+  // wrong, and nothing in the tool's output would have prevented the mistake.
+  const perFile = files
+    .map((f) => ({
+      file: f.path,
+      sites: f.specs.length,
+      deployed: dedupeSpecs(f.specs, dryRunTierOf).length,
+    }))
+    .sort((a, b) => b.deployed - a.deployed || a.file.localeCompare(b.file));
+  const deployedTotal = perFile.reduce((n, f) => n + f.deployed, 0);
 
   console.log(
-    `dry run: ${files.length} file(s), ${sites.length} mutant site(s), ${artifacts.length} batch(es)`,
+    `dry run: ${files.length} file(s), ${sites.length} mutant site(s), ${deployedTotal} deployed mutant(s), ${artifacts.length} batch(es)`,
   );
   // R48: a dry run exists to answer "how big is this going to be", so it is the right place to say
   // that the answer is "too big to run". Saying it here — rather than only when `lethal run`
@@ -1572,11 +1847,62 @@ async function printDryRun(projectDir: string, only?: readonly string[]): Promis
       `narrowed by --only ${only.map((p) => `"${p}"`).join(", ")}: ${excludedByOnly} of ${totalFiles} .al file(s) excluded from mutation (still parsed, compiled and published)`,
     );
   }
+  // R92/R90: per-file guard counts, largest DEPLOYED first — the ordering that matters, since the
+  // publish ceiling bites per file (batches split at file granularity, so `--max-guards-per-batch`
+  // cannot rescue a file that alone exceeds it) and the biggest file is the one to split or
+  // exclude. Both counts are labelled: `sites=` is raw mutation sites, `deployed=` is what actually
+  // ships. They differ, and by an amount no one can estimate from the other.
+  if (perFile.length > 0) {
+    console.log(
+      "\nper-file guard counts (largest deployed first) — 'sites' is raw mutation sites, 'deployed' is what ships after tier-precedence dedup:",
+    );
+    for (const f of perFile) {
+      console.log(`  ${f.file}  sites=${f.sites}  deployed=${f.deployed}`);
+    }
+  }
+  // R90: what this project's configured tier has actually MEASURED about publishing, stated as a
+  // bracket with its date, never as a limit. A tier with no recorded failure refuses nothing —
+  // discovering the ceiling costs exactly one honest failure, and this is where a user learns
+  // whether that price has already been paid here.
+  const measured = await dryRunCeiling(paths.dbPath, paths.configPath);
+  if (measured !== undefined && "note" in measured) {
+    console.log(`\nNOTE: ${measured.note}`);
+  } else if (measured !== undefined) {
+    const { smallestFailure, largestSuccess, failureObservedOn } = measured.ceiling;
+    if (smallestFailure === undefined && largestSuccess === undefined) {
+      console.log(
+        `\npublish ceiling for tier ${measured.tier}: nothing measured yet. Nothing will be refused — a fresh topology discovers its own ceiling by failing once.`,
+      );
+    } else {
+      const failurePart =
+        smallestFailure === undefined
+          ? "no publish failure has been recorded here yet"
+          : `${smallestFailure} guards failed to publish${failureObservedOn === undefined ? "" : ` on ${failureObservedOn}`}`;
+      const successPart =
+        largestSuccess === undefined
+          ? "no successful publish has been recorded here yet"
+          : `${largestSuccess} guards published successfully`;
+      const refusalPart =
+        smallestFailure === undefined
+          ? "Nothing will be refused."
+          : `Any single file at or above ${smallestFailure} deployed guards will be REFUSED by 'lethal run' before anything is compiled or published.`;
+      console.log(
+        `\npublish ceiling MEASURED on tier ${measured.tier}: ${failurePart}; ${successPart}. ${refusalPart} This is a recorded observation of this topology, not a fixed limit.`,
+      );
+    }
+  }
   for (const [i, artifact] of artifacts.entries()) {
     const artifactSites = sitesOf(artifact);
-    console.log(`\nbatch ${i} (${artifactSites.length} mutant site(s)):`);
+    const artifactDeployed = artifactSites.filter((s) => s.deployed).length;
+    console.log(
+      `\nbatch ${i} (${artifactSites.length} mutant site(s), ${artifactDeployed} deployed):`,
+    );
     for (const s of artifactSites) {
-      console.log(`  ${s.file}:${s.line}  ${s.operatorName}`);
+      // R92 again, at the finest granularity there is: a site the tier-precedence rule drops is
+      // NOT a mutant this run will measure, and a list that renders it identically to one that
+      // will is how a site count gets pre-committed as a mutant count.
+      const suffix = s.deployed ? "" : "  [not deployed — displaced by a higher-tier operator]";
+      console.log(`  ${s.file}:${s.line}  ${s.operatorName}${suffix}`);
     }
   }
   // R5: dry-run mirrors the session report's "not instrumented" accounting so it's visible
@@ -2051,6 +2377,492 @@ async function clearQuarantineFromCli(parsed: ClearQuarantineCliConfig): Promise
 }
 
 /**
+ * `lethal clear-ceiling --project ... --server ... --instance ... [--file ...]` (R90 fix round 1).
+ *
+ * Refuses a MISSING database loudly rather than creating an empty one and reporting a cheerful
+ * "cleared 0 rows": `new ResultsStore(path)` has `create: true`, so without this guard the one
+ * command whose entire job is undoing a recorded measurement would answer identically whether the
+ * measurement was removed or the operator mistyped the path. That is this project's signature bug
+ * (empty-vs-empty "matches"), on the command least able to afford it.
+ *
+ * Prints every row it destroyed and the ceiling on both sides of the clear. Discarding a `failed`
+ * row that was genuine is real evidence loss — it cost a live publish failure to learn — so the
+ * loss is made visible rather than forbidden (see `clearPublishCeiling`).
+ *
+ * **Fix round 2: a clear that removed NOTHING is never reported as success.** It opens with a
+ * machine-readable outcome word, mirroring `clear-quarantine`'s single-word line — `cleared`,
+ * `nothing-matched` (the tier has rows, but none the requested scope named) or `nothing-recorded`
+ * (this tier has no rows at all) — and both zero cases list what the database DOES hold, which is
+ * the real diagnosis for the two ways to get here: the wrong database, or a tier identity spelled
+ * differently from the one the run recorded under.
+ *
+ * The exit code DIVERGES from `clear-quarantine`, deliberately. There, `not-quarantined` exits 0
+ * because the state the operator wanted (not quarantined) is the state they have. Here it is not:
+ * an operator runs this because a file was refused, and a clear that removed nothing leaves that
+ * refusal exactly where it was — the next run fails identically. Exiting 0 would tell a human and
+ * a script that the escape hatch worked when it did nothing, which is the failure this command
+ * exists to prevent, committed by the command itself. So: removed nothing, exit 1.
+ */
+export async function clearCeilingFromCli(parsed: ClearCeilingCliConfig): Promise<number> {
+  if (!existsSync(parsed.dbPath)) {
+    throw new Error(
+      `no results database at ${parsed.dbPath} — nothing has ever been measured against this project, so there is no publish ceiling to clear. Pass --db <path> if the run used a database elsewhere.`,
+    );
+  }
+  const tier = quarantineResourceKey({
+    server: parsed.server,
+    serverInstance: parsed.serverInstance,
+  });
+  const store = new ResultsStore(parsed.dbPath);
+  try {
+    const result = clearPublishCeiling(store, tier, parsed.file);
+    const scope = parsed.file === undefined ? "" : ` file ${parsed.file}`;
+    if (result.removed.length === 0) {
+      // Everything still on this tier, so a mistyped `--file` is answerable rather than a dead end.
+      const remaining = store.publishOutcomes(tier);
+      const outcome = remaining.length === 0 ? "nothing-recorded" : "nothing-matched";
+      console.log(
+        `${outcome}: clear-ceiling removed 0 row(s) for tier ${tier}${scope}. NOTHING WAS CLEARED — whatever refused this project is still recorded, and the next run will be refused identically.`,
+      );
+      if (remaining.length > 0) {
+        console.log(`  tier ${tier} does hold ${remaining.length} row(s):`);
+        for (const row of remaining) console.log(`  ${describePublishRow(row)}`);
+        console.log(
+          "  Re-run naming one of those files with --file, or omit --file to clear the tier.",
+        );
+      } else {
+        const tiers = store.publishOutcomeTiers();
+        console.log(
+          tiers.length === 0
+            ? `  ${parsed.dbPath} holds no publish outcomes for ANY tier — this is probably not the database the run recorded into (check --db).`
+            : `  ${parsed.dbPath} holds outcomes only for: ${tiers.join(", ")} — check --server/--instance against how the run recorded the tier.`,
+        );
+      }
+      return 1;
+    }
+    console.log(`cleared: tier ${tier}${scope} — removed ${result.removed.length} row(s)`);
+    for (const row of result.removed) console.log(`  ${describePublishRow(row)}`);
+    console.log(
+      `  ceiling before: ${describeCeiling(result.before)}\n  ceiling after:  ${describeCeiling(result.after)}`,
+    );
+    return 0;
+  } finally {
+    store.close();
+  }
+}
+
+/** One recorded publish outcome, as `clear-ceiling` lists it — removed, or still present. */
+function describePublishRow(row: PublishOutcomeRow): string {
+  return `${row.recordedAt}  ${row.outcome}  ${row.guardCount} guard(s)  ${row.file ?? "(multi-file artifact)"}`;
+}
+
+/** One-line rendering of a bracket, for `clear-ceiling`'s before/after report. */
+function describeCeiling(c: PublishCeiling): string {
+  if (c.smallestFailure === undefined && c.largestSuccess === undefined) return "nothing measured";
+  const fail =
+    c.smallestFailure === undefined
+      ? "no recorded failure"
+      : `smallest recorded failure ${c.smallestFailure} guard(s)${c.failureObservedOn === undefined ? "" : ` (${c.failureObservedOn})`}`;
+  const ok =
+    c.largestSuccess === undefined
+      ? "no recorded success"
+      : `largest recorded success ${c.largestSuccess} guard(s)`;
+  return `${fail}; ${ok}`;
+}
+
+/**
+ * R109: printed on every `lethal doctor` invocation, success or failure — what the checks do NOT
+ * cover, so a clean report is never misread as "everything `lethal run` might refuse on was
+ * checked". The per-file publish ceiling (`publish-ceiling.ts`) needs a generated mutation
+ * manifest's per-file guard counts, which doctor — deliberately read-only, no instrumentation
+ * step — never produces. Baseline test health needs an actual run against the target. Both are
+ * measured gaps, not oversights (see `roadmap-auditor`'s standard for what "done" needs to mean
+ * here): stating them plainly is this project's answer to exactly this shape of omission.
+ *
+ * Review round 1 (Critical) added the lease/op-marker: it shipped as a fifth CHECK in round 0,
+ * always reporting `"clear"` — a check that structurally could not fail, counted as a pass in the
+ * one report a user in exactly that stuck state would read. `ControlApi` (extensions/lethal-
+ * control) exposes no read-only peek at the machine-global lease/op-marker row today —
+ * `GetOperationStatus` requires an ALREADY-HELD `(epoch, token, generation)` tuple, and doctor
+ * must not acquire one just to check (acquiring, even to release immediately after, is a
+ * mutation). This is a "not implemented yet" gap, not a platform limit: `ControlState.Codeunit.al`
+ * already has the precedent (`CurrentServerGeneration()`, documented as a plain read-only
+ * accessor) for surfacing `Owner`/`Op Kind`/`Expires At` the same way — filed as R110, out of this
+ * task's scope. The lease belongs here, in what doctor admits it cannot check, not in `checks`
+ * pretending it can.
+ */
+export const DOCTOR_NOT_CHECKED =
+  "Not checked: the per-file publish ceiling (needs a generated mutation manifest), baseline " +
+  "test health (needs an actual run), and the machine-global lease/op-marker (no read-only peek " +
+  "exists on the control app today — R110). A clean report here does not mean `lethal run` " +
+  "cannot still refuse for any of these reasons.";
+
+/**
+ * Final review: printed ONLY for a create-mode envTool config (`envTool.envId` absent) —
+ * `environment`/`quarantine`/`control-version` are all omitted from `checks` entirely for exactly
+ * this config shape (see `buildDoctorDeps`'s `isCreateMode`), so a reader needs to know WHY those
+ * three are simply missing rather than passing, failing, or silently forgotten.
+ */
+export const DOCTOR_CREATE_MODE_CAVEAT =
+  "envTool.envId is absent (create-mode): this config creates a NEW environment on every " +
+  "`lethal run`, so environment status, the quarantine record, and the control-app version have " +
+  "nothing to check yet — none exists until a run provisions one. Only tool-paths is checked here.";
+
+/**
+ * The `packageCachePath` `validateBcDevConfig` requires (it is `BcDevConfigSection`'s shared
+ * shape) when a read-only resolver has nothing else to offer for it — a config that leaves
+ * `packageCachePath` to `downloadSymbols` (no static path declared — legal per
+ * `validateEnvToolConfig`'s `hasPackageCachePath` option) genuinely has no value for this field
+ * until a real session runs `downloadSymbols`, which a read-only resolver must never do.
+ *
+ * Computes the SAME default `startEnvToolSession` does (env-tool-session.ts:240,
+ * `args.bcdevRaw.packageCachePath ?? join(args.projectDir, ".alpackages")`) WITHOUT running
+ * `downloadSymbols` — one place, so `buildDoctorDeps`'s `resolvedBcdev` and
+ * `resolveForceResetLeaseConfig` cannot drift apart on it the way doctor already drifted from
+ * `run` twice before this task (the `altool` requirement, R21; the `requireStatus` comparison,
+ * R34's parity fix) — this is the THIRD instance of the same defect class, caught only because a
+ * fix round tried the same env-tool config against doctor and it threw on a field neither command
+ * dereferences. Shared here rather than copy-pasted a second time.
+ */
+function packageCachePathDefault(
+  bcdevRaw: Partial<BcDevConfigSection> | undefined,
+  projectDir: string | undefined,
+): string {
+  return bcdevRaw?.packageCachePath ?? join(projectDir ?? ".", ".alpackages");
+}
+
+/**
+ * R109 ruling, honesty constraint 2: `requireStatus` is `Pick`ed straight off `EnvToolConfigSection`
+ * (env-tool.ts) rather than re-declared — a future rename/reshape of that field breaks THIS
+ * function at compile time instead of silently leaving `DoctorConfig.envReady` derived from a
+ * field that no longer means what it says.
+ */
+function doctorConfigFromEnvTool(
+  envTool: Pick<EnvToolConfigSection, "requireStatus"> | undefined,
+): DoctorConfig {
+  const equals = envTool?.requireStatus?.equals;
+  return equals !== undefined ? { envReady: equals } : {};
+}
+
+/**
+ * R109 ruling, honesty constraint 1: builds `DoctorDeps`/`DoctorConfig` through the SAME
+ * load-and-validate path `lethal run` uses — `validateBcDevConfig`/`validateEnvToolConfig`, the
+ * identical calls `resolveEnvToolSession`/`buildBackend` make — never a second, hand-rolled parse.
+ * A config `run` would reject (a missing `bcdev` section, a malformed `envTool` block, an
+ * `envTool.resolve` producing no `baseUrl`, …) throws HERE too, identically: that is a
+ * caller-contract violation (a broken invocation), not a "failing check" `runDoctor` could report
+ * — the split CLAUDE.md asks for between "throw on a bad call" and "report a bad state".
+ *
+ * Constraint 3 (every check calls the refusal's own machinery): `HarnessVerifier.fetchControlVersion`
+ * (harness.ts) for control-version, `HarnessVerifier.checkReachable` (harness.ts — pure reachability,
+ * deliberately narrower than `verify()`/`fetchControlVersion()` so a content problem is never
+ * mis-attributed under the name "environment", review round 1's Minor finding) for a directly-
+ * configured container's environment probe, `QuarantineStore`/`quarantineResourceKey`/
+ * `defaultQuarantineDir` (quarantine-store.ts/resource-key.ts/orchestrator.ts — the SAME three
+ * `runSession`'s quarantine consult and `clearQuarantineFromCli` use) for quarantine,
+ * `defaultAlToolPaths`/`resolveAlToolPaths` (publisher.ts/cli.ts — the SAME pair `buildBackend`
+ * uses) for tool-paths, and `EnvToolClient` (env-tool.ts) for an env-tool-configured environment.
+ * `altoolRequired` mirrors `buildBackend`'s own `envToolDeploy !== undefined` leniency
+ * (cli.ts:1548, R21) rather than a doctor-only opinion — an env-tool project never spawns altool,
+ * so doctor must not fail one for lacking it (review round 1, Important).
+ *
+ * Constraint 4 (read-only hard boundary): the environment probe below spawns ONLY the configured
+ * `envTool.resolve` blocks — never `createEnv`/`startEnv`/`publish`/`downloadSymbols`, which
+ * provision, bill, or mutate. This is the one place in `lethal doctor`'s whole call graph that
+ * spawns an external process at all, and it is scoped to that one array on purpose.
+ *
+ * No `leaseState` here (review round 1, Critical): it shipped in round 0 always returning
+ * `"clear"` — a check that structurally could not fail, counted as a pass. See `DOCTOR_NOT_CHECKED`
+ * (which now names it, and R110) rather than a fifth entry in `DoctorDeps` pretending to observe
+ * something no read-only call can.
+ *
+ * Create-mode envTool configs (final review): `environment`/`quarantine`/`control-version` are
+ * omitted from the returned `deps` entirely (not merely made to throw a friendlier error) when
+ * `envTool.envId` is absent — `isCreateMode` below. Those three all need an environment that does
+ * not exist yet; the honest failure mode is "nothing to check", and `runDoctor` already skips a
+ * check whose dep is absent (doctor.ts) rather than reporting it. `createModeCaveat` names WHY, so
+ * a reader sees the reason rather than three checks silently missing.
+ */
+export async function buildDoctorDeps(
+  configFile: LethalConfigFile,
+  opts: {
+    readonly projectDir?: string;
+    readonly quarantineDir?: string;
+    readonly alToolPaths?: typeof defaultAlToolPaths;
+    readonly fetchFn?: FetchFn;
+    readonly makeEnvToolClient?: (cfg: EnvToolConfigSection) => EnvToolClient;
+  } = {},
+): Promise<{
+  readonly cfg: DoctorConfig;
+  readonly deps: DoctorDeps;
+  readonly createModeCaveat?: string;
+}> {
+  let envCfg: EnvToolConfigSection | undefined;
+  if (configFile.envTool !== undefined) {
+    const bcdevRaw = configFile.bcdev ?? {};
+    const bcdevDeclaredKeys = (READS_KEYS as readonly string[]).filter((key) => {
+      const v = (bcdevRaw as Record<string, unknown>)[key];
+      return typeof v === "string" && v !== "";
+    });
+    // SAME validator, SAME opts shape `resolveEnvToolSession` builds — a malformed envTool
+    // section throws here identically to `run` (constraint 1).
+    envCfg = validateEnvToolConfig(configFile.envTool, {
+      env: process.env,
+      hasPackageCachePath: Boolean(configFile.bcdev?.packageCachePath),
+      bcdevDeclaredKeys,
+    });
+    // Fail fast on the three fields the env tool itself can never supply — the SAME check
+    // `startEnvToolSession` runs as its very first statement, exported for exactly this reuse
+    // (env-tool-session.ts). `server`/`serverInstance`/credentials are deliberately NOT required
+    // here: in env-tool mode they don't exist yet (resolved later — see `resolvedBcdev` below).
+    requireBcDevRawFields(bcdevRaw);
+  } else if (configFile.bcdev === undefined) {
+    // Final review (Minor): `validateBcDevConfig`'s own message says `...(required for --backend
+    // bcdev)` — accurate for `run`, which HAS a --backend flag to name; doctor has none. An
+    // al-runner-only project (no `bcdev` section at all — `run --backend al-runner` never touches
+    // `configFile.bcdev`, so this is a perfectly valid config) hit that message and read it as
+    // "your config is broken", when the honest answer is narrower: doctor's checks are all live-BC
+    // concerns and none of them apply here yet. Scoped to `bcdev` being FULLY ABSENT — a `bcdev`
+    // section that IS present but missing a required field is a genuine typo, and
+    // `validateBcDevConfig`'s own field-listing message below is the right one for that.
+    throw new Error(
+      'lethal doctor only checks a bcdev-configured project — environment, quarantine, control-app version and alc/altool are all live-BC concerns. This config has no "bcdev" section; if this is an al-runner project (--backend al-runner), there is nothing here for doctor to check today.',
+    );
+  } else {
+    // No envTool, `bcdev` present: this IS exactly what `run` validates (`buildBackend`/
+    // `resourceIdentityFor`/`leaseSessionFor` all call this on the SAME `configFile.bcdev`) — fail
+    // here, eagerly, rather than lazily inside whichever check happens to touch it first.
+    validateBcDevConfig(configFile.bcdev);
+  }
+  const makeClient =
+    opts.makeEnvToolClient ??
+    ((cfg: EnvToolConfigSection) => new EnvToolClient(cfg, undefined, opts.projectDir));
+  // Snapshot into a `const` so a closure below can narrow it — TS will not narrow a captured
+  // `let` across a nested arrow function even after an `!== undefined` check, since it cannot
+  // prove nothing reassigns it before the closure runs.
+  const resolvedEnvCfg = envCfg;
+
+  // Final review: a CREATE-MODE envTool config (`envId` absent — `validateEnvToolConfig`'s own
+  // create-mode branch, env-tool.ts:288-306; `requireStatus` is REFUSED there, env-tool.ts:378)
+  // is structurally valid and `lethal run` provisions it. But `environment`/`quarantine`/
+  // `control-version` all need an environment that does not exist yet — `resolveEnvToolOnce`
+  // would substitute `{envId}` into a `resolve` block's command with nothing supplied, and
+  // `renderCommand` throws BY NAME on that (env-tool.ts): "no value available for placeholder
+  // {envId}". That message names an INTERNAL placeholder, reads as a bug in the user's config,
+  // and would send someone editing a file that is correct. Detected here, once, and used below to
+  // omit those three deps entirely (never define them as failing checks) rather than widen the
+  // read-only boundary to make an environment exist to check.
+  const isCreateMode =
+    resolvedEnvCfg !== undefined &&
+    (resolvedEnvCfg.envId === undefined || resolvedEnvCfg.envId === "");
+
+  // Spawns ONLY `envTool.resolve` — never createEnv/startEnv/publish/downloadSymbols (constraint
+  // 4, the hard read-only boundary). Memoized: `environment`/`quarantine`/`control-version` all
+  // need the identity this produces (server/serverInstance/credentials, for an env-tool-configured
+  // project — see `resolvedBcdev` below), and `runDoctor` may call them concurrently; this ensures
+  // the external tool is spawned at most once per `lethal doctor` invocation, not once per check.
+  let resolvePromise: Promise<Record<string, string>> | undefined;
+  const resolveEnvToolOnce = (): Promise<Record<string, string>> => {
+    if (resolvedEnvCfg === undefined) return Promise.resolve({});
+    if (resolvePromise === undefined) {
+      resolvePromise = (async () => {
+        const client = makeClient(resolvedEnvCfg);
+        const supplied: Record<string, string> = {
+          envId: resolvedEnvCfg.envId ?? "",
+          projectDir: opts.projectDir ?? "",
+          testDir: "",
+          runId: "doctor",
+        };
+        const resolved: Record<string, string> = {};
+        for (const [i, block] of (resolvedEnvCfg.resolve ?? []).entries()) {
+          Object.assign(resolved, await client.run(block, `resolve[${i}]`, supplied));
+        }
+        return resolved;
+      })();
+    }
+    return resolvePromise;
+  };
+
+  /**
+   * The `BcDevConfigSection` `quarantine`/`control-version` need — `server`/`serverInstance` and
+   * OData credentials. For a directly-configured bcdev section this is exactly `run`'s own
+   * `validateBcDevConfig(configFile.bcdev)` (unchanged). For an env-tool-configured project those
+   * fields are legitimately ABSENT from the raw file (the tool supplies them) — mirrors
+   * `startEnvToolSession`'s own step 4 derivation (`splitBaseUrl`/`deriveMcpPort`, exported from
+   * env-tool-session.ts for exactly this reuse) so doctor's identity can never drift from a real
+   * run's, rather than a second, hand-rolled derivation.
+   */
+  const resolvedBcdev = async (): Promise<BcDevConfigSection> => {
+    if (resolvedEnvCfg === undefined) return validateBcDevConfig(configFile.bcdev);
+    const resolved = await resolveEnvToolOnce();
+    const baseUrl = resolved.baseUrl;
+    if (baseUrl === undefined) throw new EnvToolError("envTool.resolve produced no baseUrl");
+    const { server, serverInstance } = splitBaseUrl(
+      baseUrl,
+      resolved.server,
+      resolved.serverInstance,
+    );
+    const port = deriveMcpPort(baseUrl);
+    const username = resolved.username;
+    const password = resolved.password;
+    if (username === undefined || password === undefined) {
+      throw new EnvToolError("envTool.resolve produced no username/password");
+    }
+    // See `packageCachePathDefault`'s doc comment — doctor never compiles or publishes either, but
+    // `validateBcDevConfig`'s shared shape still requires the field. Fix round 1 (Important 2):
+    // this was previously omitted here, so `lethal doctor` against an env-tool config that legally
+    // leaves `packageCachePath` to `downloadSymbols` threw "missing required field(s):
+    // packageCachePath" and never ran a single check — doctor stricter than `run` for the third
+    // time in this subsystem.
+    const packageCachePath = packageCachePathDefault(configFile.bcdev, opts.projectDir);
+    return validateBcDevConfig({
+      ...(configFile.bcdev ?? {}),
+      baseUrl,
+      server,
+      serverInstance,
+      port,
+      username,
+      password,
+      packageCachePath,
+    });
+  };
+
+  const harnessVerifierFor = async (): Promise<HarnessVerifier> =>
+    new HarnessVerifier(odataCfgFor(await resolvedBcdev()), opts.fetchFn ?? fetch);
+
+  const envStatus = async (): Promise<string> => {
+    const resolveBlocks = resolvedEnvCfg?.resolve;
+    if (resolvedEnvCfg !== undefined && resolveBlocks !== undefined && resolveBlocks.length > 0) {
+      const resolved = await resolveEnvToolOnce();
+      // Review round 1 (bonus fix alongside the Minor below): only compare a REAL status when
+      // `requireStatus` is actually declared — R34/`validateEnvToolConfig`'s own posture ("does
+      // not check a status when no expectation is declared… pre-R34 configs unaffected"). A
+      // `resolve` block reading `status` without `requireStatus` set is legal (nothing forces the
+      // two together), and comparing it against the hardcoded default anyway would apply an
+      // expectation this config never declared.
+      if (resolvedEnvCfg.requireStatus !== undefined && resolved.status !== undefined) {
+        return resolved.status;
+      }
+      // No `requireStatus` declared, or resolve declared no `status` read — resolve succeeding is
+      // itself the only signal available; fall through to the reachability probe below rather
+      // than reporting a status this config never asked to observe.
+    }
+    // No envTool, or one with nothing to say about status: a directly-configured container has no
+    // separate "status" concept LethAL can read, and neither does an envTool config with no
+    // `requireStatus` — HarnessInfo answering IS the readiness signal. `checkReachable()`, not
+    // `verify()`: review round 1 (Minor) — `verify()`'s appId/protocol/isolation/tenant/version
+    // gates would surface OTHER checks' concerns under the name "environment". The sentinel says
+    // exactly what was established, rather than inventing a vendor status word ("Running") nothing
+    // reported.
+    await (await harnessVerifierFor()).checkReachable();
+    return ENV_STATUS_REACHABLE_NO_VENDOR_STATUS;
+  };
+
+  const quarantine = async (): Promise<string> => {
+    const bcdev = await resolvedBcdev();
+    const key = quarantineResourceKey({
+      server: bcdev.server,
+      serverInstance: bcdev.serverInstance,
+    });
+    const store = new QuarantineStore(opts.quarantineDir ?? defaultQuarantineDir());
+    const rec = await store.read(key);
+    return rec === null
+      ? "clear"
+      : `${rec.opKind}: ${rec.detail}, recorded ${rec.recordedAtIso}, generation ${rec.generation}`;
+  };
+
+  const controlVersion = async (): Promise<string> =>
+    (await harnessVerifierFor()).fetchControlVersion();
+
+  // Deliberately independent of `resolvedBcdev`: `alcPath`/`altoolPath` overrides are always
+  // hand-written LOCAL machine paths (never env-tool-derived), so this check must not fail just
+  // because server identity is unresolvable — it is testing something else entirely.
+  const toolPaths = async (): Promise<{ readonly alc: string; readonly altool: string }> => {
+    const discover = opts.alToolPaths ?? defaultAlToolPaths;
+    const discovered = await discover();
+    const alcPath = configFile.bcdev?.alcPath;
+    const altoolPath = configFile.bcdev?.altoolPath;
+    const resolved = resolveAlToolPaths(
+      {
+        ...(alcPath !== undefined ? { alcPath } : {}),
+        ...(altoolPath !== undefined ? { altoolPath } : {}),
+      },
+      discovered,
+    );
+    return { alc: resolved.alcPath ?? "", altool: resolved.altoolPath ?? "" };
+  };
+
+  return {
+    cfg: {
+      ...doctorConfigFromEnvTool(envCfg),
+      // Review round 1 (Important): an env-tool-configured project publishes through the tool and
+      // never spawns altool at all (`deployerFor`/`buildBackend`'s `envToolDeploy !== undefined`
+      // branch, cli.ts:1548, R21) — mirror `run`'s own leniency rather than being stricter than it.
+      ...(configFile.envTool !== undefined ? { altoolRequired: false } : {}),
+    },
+    // Create mode: omit the three deps ENTIRELY (not merely make them throw a friendlier error) —
+    // `runDoctor` skips a check whose dep is absent, rather than reporting a failure for a
+    // question that has no answer yet. See `DOCTOR_CREATE_MODE_CAVEAT` and `doctorFromCli` below.
+    deps: isCreateMode ? { toolPaths } : { envStatus, quarantine, controlVersion, toolPaths },
+    ...(isCreateMode ? { createModeCaveat: DOCTOR_CREATE_MODE_CAVEAT } : {}),
+  };
+}
+
+/** Renders a `DoctorReport` the same way every other subcommand renders its own outcome — one
+ *  named line per check, then the machine-readable summary word `clear-quarantine`/`clear-ceiling`
+ *  already use for their own top line. `createModeCaveat` (final review) is an ADDITIONAL,
+ *  config-shape-specific line appended after `DOCTOR_NOT_CHECKED` — see `buildDoctorDeps`'s
+ *  `isCreateMode` for what triggers it and why it is not merged into that fixed constant (it is
+ *  conditional; `DOCTOR_NOT_CHECKED` is universal). */
+export function renderDoctorReport(report: DoctorReport, createModeCaveat?: string): string {
+  const lines = report.checks.map((c) => `  [${c.ok ? "ok" : "FAIL"}] ${c.name}: ${c.detail}`);
+  return [
+    report.ok ? "ok: every check passed" : "FAIL: at least one check failed",
+    ...lines,
+    "",
+    DOCTOR_NOT_CHECKED,
+    ...(createModeCaveat !== undefined ? [createModeCaveat] : []),
+  ].join("\n");
+}
+
+/**
+ * Final review (Important 1): ALWAYS calls the real `buildDoctorDeps` — never a swappable
+ * top-level resolver. R51 review round 1 found and reverted exactly that shape on
+ * `forceResetLeaseFromCli` (`deps.resolveConfig ?? resolveForceResetLeaseConfig`): a test could
+ * pin "calls whatever it was handed" while the REAL production default, reached by every actual
+ * invocation via `main()`'s bare call, stayed completely unpinned. The fix kept there — and the
+ * one repeated here — is injection ONE LAYER DEEPER: the low-level I/O seams `buildDoctorDeps`
+ * itself already accepts (`fetchFn`/`quarantineDir`/`alToolPaths`/`makeEnvToolClient`), threaded
+ * through unchanged, so a test exercises the REAL `buildDoctorDeps` and the real `renderDoctorReport`/
+ * exit-code logic, with only the network/filesystem swapped out underneath it.
+ */
+export async function doctorFromCli(
+  parsed: DoctorCliConfig,
+  deps: {
+    readonly quarantineDir?: string;
+    readonly alToolPaths?: typeof defaultAlToolPaths;
+    readonly fetchFn?: FetchFn;
+    readonly makeEnvToolClient?: (cfg: EnvToolConfigSection) => EnvToolClient;
+  } = {},
+): Promise<number> {
+  const configFile = await loadLethalConfigFile(parsed.configPath);
+  const {
+    cfg,
+    deps: doctorDeps,
+    createModeCaveat,
+  } = await buildDoctorDeps(configFile, {
+    ...(parsed.projectDir !== undefined ? { projectDir: parsed.projectDir } : {}),
+    ...(deps.quarantineDir !== undefined ? { quarantineDir: deps.quarantineDir } : {}),
+    ...(deps.alToolPaths !== undefined ? { alToolPaths: deps.alToolPaths } : {}),
+    ...(deps.fetchFn !== undefined ? { fetchFn: deps.fetchFn } : {}),
+    ...(deps.makeEnvToolClient !== undefined ? { makeEnvToolClient: deps.makeEnvToolClient } : {}),
+  });
+  const report = await runDoctor(cfg, doctorDeps);
+  console.log(renderDoctorReport(report, createModeCaveat));
+  return report.ok ? 0 : 1;
+}
+
+/**
  * What `performForceResetLease` (design §8 step 2) reports back: a real reset (with the old and
  * new generation, and the new epoch), or a well-formed refusal — the generation read live from
  * `HarnessInfo` no longer matched the row's current one by the time the reset actually ran (a
@@ -2100,22 +2912,139 @@ export async function performForceResetLease(
 }
 
 /**
+ * force-reset-lease's own envTool resolution. Before this existed, `forceResetLeaseFromCli` called
+ * `validateBcDevConfig(configFile.bcdev)` DIRECTLY — which throws on an envTool config, because
+ * `server`/`serverInstance`/`username`/`password` are legitimately absent from the file on disk
+ * (the tool supplies them at runtime). Every recovery against a hosted Layer-6C environment needed
+ * a hand-materialised copy of the config with those fields injected —
+ * `.claude/skills/recover-tier`'s bundled `materialize-config.ts` (now deleted) existed only to
+ * paper over this; before THAT script existed, a real campaign paid for the gap with a manual,
+ * mid-recovery python-injection step. The fix belongs in the tool, not in a skill's workaround
+ * script.
+ *
+ * Mirrors `buildDoctorDeps`'s `resolvedBcdev` (R109) rather than re-deriving the algorithm: the
+ * SAME `validateEnvToolConfig`/`requireBcDevRawFields` calls, the SAME `splitBaseUrl`/
+ * `deriveMcpPort` derivation (env-tool-session.ts, exported for exactly this reuse), and the SAME
+ * `validateBcDevConfig` on the assembled result — never a second, hand-rolled parse that could
+ * drift from what `run` accepts.
+ *
+ * Deliberately NOT `resolveEnvToolSession`: its own doc comment (above, `cli.ts:246`) says it "can
+ * provision a real, billed Layer-6C environment" — create-mode's `createEnv`/`startEnv`. A
+ * recovery command is reached for AFTER a session already died and left a tier stranded; it must
+ * never be able to spend money or mutate infrastructure as a side effect of resolving a config at
+ * the exact moment an operator is trying to clean up. This function spawns ONLY the configured
+ * `envTool.resolve` blocks — the identical hard boundary `buildDoctorDeps` documents as its own
+ * constraint 4 — and its body never references `startEnvToolSession`, `createEnv`, `startEnv`,
+ * `publish` or `downloadSymbols`.
+ */
+export async function resolveForceResetLeaseConfig(
+  configFile: LethalConfigFile,
+  opts: {
+    readonly projectDir?: string;
+    readonly makeEnvToolClient?: (cfg: EnvToolConfigSection) => EnvToolClient;
+  } = {},
+): Promise<BcDevConfigSection> {
+  if (configFile.envTool === undefined) return validateBcDevConfig(configFile.bcdev);
+
+  const bcdevRaw = configFile.bcdev ?? {};
+  const bcdevDeclaredKeys = (READS_KEYS as readonly string[]).filter((key) => {
+    const v = (bcdevRaw as Record<string, unknown>)[key];
+    return typeof v === "string" && v !== "";
+  });
+  // SAME validator `run`/`buildDoctorDeps` use — a malformed envTool section throws here
+  // identically to both.
+  const envCfg = validateEnvToolConfig(configFile.envTool, {
+    env: process.env,
+    hasPackageCachePath: Boolean(bcdevRaw.packageCachePath),
+    bcdevDeclaredKeys,
+  });
+  // Fails fast on the three fields the env tool itself can never supply — the SAME check
+  // `startEnvToolSession` runs as its very first statement and `buildDoctorDeps` runs identically.
+  requireBcDevRawFields(bcdevRaw);
+
+  const makeClient =
+    opts.makeEnvToolClient ??
+    ((cfg: EnvToolConfigSection) => new EnvToolClient(cfg, undefined, opts.projectDir));
+  const client = makeClient(envCfg);
+  const supplied: Record<string, string> = {
+    envId: envCfg.envId ?? "",
+    projectDir: opts.projectDir ?? "",
+    testDir: "",
+    runId: "force-reset-lease",
+  };
+  // The hard read-only boundary: ONLY `resolve` blocks are ever run here.
+  const resolved: Record<string, string> = {};
+  for (const [i, block] of (envCfg.resolve ?? []).entries()) {
+    Object.assign(resolved, await client.run(block, `resolve[${i}]`, supplied));
+  }
+
+  const baseUrl = resolved.baseUrl;
+  if (baseUrl === undefined) throw new EnvToolError("envTool.resolve produced no baseUrl");
+  const { server, serverInstance } = splitBaseUrl(
+    baseUrl,
+    resolved.server,
+    resolved.serverInstance,
+  );
+  const port = deriveMcpPort(baseUrl);
+  const username = resolved.username;
+  const password = resolved.password;
+  if (username === undefined || password === undefined) {
+    throw new EnvToolError("envTool.resolve produced no username/password");
+  }
+  // See `packageCachePathDefault`'s doc comment — this recovery command never compiles or
+  // publishes, so the value is never dereferenced on this path, but `validateBcDevConfig`'s shared
+  // shape still requires it.
+  const packageCachePath = packageCachePathDefault(bcdevRaw, opts.projectDir);
+  return validateBcDevConfig({
+    ...bcdevRaw,
+    baseUrl,
+    server,
+    serverInstance,
+    port,
+    username,
+    password,
+    packageCachePath,
+  });
+}
+
+/**
  * `lethal force-reset-lease --server ... --instance ... --config ...` (design §8 step 2). Reads
  * the bcdev credentials (company/username/password/tenant) from the SAME config file `lethal
- * run` uses via `validateBcDevConfig`, but the operator's `--server`/`--instance` flags — not
- * whatever the config file's own `bcdev.server`/`bcdev.serverInstance` happen to hold — pick the
- * target, mirroring `clear-quarantine`'s identity source: an operator recovering a specific
- * wedged container names it explicitly, rather than trusting a possibly shared/stale config
- * file to point at the right one.
+ * run` uses — via `resolveForceResetLeaseConfig`, which resolves an envTool config the same
+ * read-only way `lethal doctor` does (see that function's doc comment) — but the operator's
+ * `--server`/`--instance` flags — not whatever the config file's own `bcdev.server`/
+ * `bcdev.serverInstance` happen to hold — pick the target, mirroring `clear-quarantine`'s identity
+ * source: an operator recovering a specific wedged container names it explicitly, rather than
+ * trusting a possibly shared/stale config file to point at the right one.
  *
  * This is a recovery tool that clears safety state (the op marker, the committed active-mutant
  * row, and every outstanding lease credential) — it prints exactly what it is about to reset
  * BEFORE doing it, and (via `performForceResetLease`) never accepts a generation from anywhere
  * but a live `HarnessInfo` read.
+ *
+ * `deps` is deliberately narrower than `runFromCli`'s own `deps.resolveEnvToolSession`/
+ * `deps.buildBackend` seam: it does NOT let a caller swap out `resolveForceResetLeaseConfig`
+ * itself (that was round 1's shape, and review caught that it let a test pin "calls whatever it
+ * was handed" while leaving the actual PRODUCTION default — `deps.resolveConfig ??
+ * resolveForceResetLeaseConfig`, reached by every real invocation via `main()`'s bare
+ * `forceResetLeaseFromCli(parsed)` — completely unpinned; reverting the default to the pre-fix
+ * `validateBcDevConfig(configFile.bcdev)` passed the whole suite). This command ALWAYS calls the
+ * real `resolveForceResetLeaseConfig`; only HOW it talks to the env tool (`makeEnvToolClient`) and
+ * HOW it talks to BC (`fetchFn`) are injectable, so a test exercises the genuine resolution
+ * algorithm — including its own default `EnvToolClient` construction — end to end.
  */
-async function forceResetLeaseFromCli(parsed: ForceResetLeaseCliConfig): Promise<number> {
+export async function forceResetLeaseFromCli(
+  parsed: ForceResetLeaseCliConfig,
+  deps: {
+    readonly makeEnvToolClient?: (cfg: EnvToolConfigSection) => EnvToolClient;
+    readonly fetchFn?: FetchFn;
+  } = {},
+): Promise<number> {
   const configFile = await loadLethalConfigFile(parsed.configPath);
-  const c = validateBcDevConfig(configFile.bcdev);
+  const c = await resolveForceResetLeaseConfig(configFile, {
+    ...(parsed.projectDir !== undefined ? { projectDir: parsed.projectDir } : {}),
+    ...(deps.makeEnvToolClient !== undefined ? { makeEnvToolClient: deps.makeEnvToolClient } : {}),
+  });
   const odataCfg = {
     // R51: honours an explicit `bcdev.baseUrl` (the env-tool case — a path-routed HTTPS endpoint on
     // 443, which port-7048 injection can never reach), and refuses one that names a different tier
@@ -2133,7 +3062,7 @@ async function forceResetLeaseFromCli(parsed: ForceResetLeaseCliConfig): Promise
 
   let result: ForceResetLeaseResult;
   try {
-    result = await performForceResetLease(odataCfg);
+    result = await performForceResetLease(odataCfg, deps.fetchFn ?? fetch);
   } catch (err) {
     throw new Error(
       `force-reset-lease: could not complete the reset — the HarnessInfo/ForceResetLease call failed. Is the "LethAL Control" extension deployed and the NST at ${parsed.server}/${parsed.serverInstance} reachable? If you have not already, restart the NST/container first (design §8 step 1), then retry. Underlying error: ${err instanceof Error ? err.message : String(err)}`,
@@ -2166,14 +3095,23 @@ async function main(): Promise<number> {
     return 0;
   }
   if (parsed.mode === "dry-run") {
-    await printDryRun(parsed.projectDir, parsed.only);
+    await printDryRun(parsed.projectDir, parsed.only, {
+      dbPath: parsed.dbPath,
+      configPath: parsed.configPath,
+    });
     return 0;
   }
   if (parsed.mode === "clear-quarantine") {
     return await clearQuarantineFromCli(parsed);
   }
+  if (parsed.mode === "clear-ceiling") {
+    return await clearCeilingFromCli(parsed);
+  }
   if (parsed.mode === "force-reset-lease") {
     return await forceResetLeaseFromCli(parsed);
+  }
+  if (parsed.mode === "doctor") {
+    return await doctorFromCli(parsed);
   }
   const report = await runFromCli(parsed);
   console.log(renderConsole(report));

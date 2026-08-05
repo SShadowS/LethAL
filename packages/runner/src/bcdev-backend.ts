@@ -23,11 +23,13 @@ import type {
 } from "./backend";
 import { decidePublishOutcome } from "./deployment-verifier";
 import type { DeploymentVerifier } from "./deployment-verifier";
+import { describeThrown } from "./describe-error";
 import { injectControlDependency } from "./harness";
 import type { HarnessVerifier } from "./harness";
 import type { Lease } from "./lease";
 import { type LineMap, buildLineMap } from "./line-map";
 import type { AppPublisher } from "./publisher";
+import { quarantineResourceKey } from "./resource-key";
 import type {
   FencedCoverageRow,
   FencedCoverageStats,
@@ -172,6 +174,59 @@ export interface BcDevDeployment {
   readonly deployer: AppPublisher;
   readonly verifier: DeploymentVerifier;
   readonly harnessVerifier: HarnessVerifier;
+}
+
+/**
+ * A publish attempt that demonstrably failed: `deployment.deployer.publish()` threw AND identity
+ * verification found nothing to redeem it (`decidePublishOutcome`'s `"failed"` outcome — see
+ * deploy() below). Deliberately NOT `DeploymentError` (CLAUDE.md's typed-error separation rule:
+ * extend `Error` directly, never another typed error) — `anomalous`/`indeterminate` outcomes are
+ * an IDENTITY puzzle (the deployer reports one thing, verification reports another) and stay
+ * `DeploymentError`; this is reserved for the one case where the publish call itself is the
+ * demonstrated cause.
+ *
+ * **What this actually reaches** (anything that makes `deployment.deployer.publish()` THROW): a
+ * non-zero `altool publishapp` exit (`ContainerDeployer`), a spawn failure on either publisher,
+ * and `EnvToolClient`'s OWN `envTool.timeoutSeconds` budget expiring. It does NOT reach, and by
+ * construction CANNOT reach, R90's actually-measured reproduction: an external publish tool
+ * (`continia publish`) that EXITS 0 while its JSON body reports `{success: false, ...}`.
+ * `env-tool.ts` has no `success`-field handling today, so that shape resolves as `publishOk ===
+ * true` followed by a verification mismatch — `decidePublishOutcome`'s `"indeterminate"`, not
+ * `"failed"` — so `DeploymentError` is thrown there instead, not this class. Closing that gap is
+ * a separate, filed concern (env-tool.ts), out of scope here.
+ *
+ * `guardCount`/`file` name WHAT was too big to publish, `tier` names WHERE (so one container's
+ * measured ceiling is never confused with another's), and `detail` is the raw diagnosis. R90's
+ * per-tier publish ceiling (Task 3) can learn from these for the failure modes above.
+ *
+ * R65: the message is guaranteed non-empty NO MATTER WHAT the caller passes — a Bun spawn
+ * failure can arrive with an EMPTY `.message`, and reporting that empty string here would
+ * reproduce the exact defect this class exists to close. The guarantee lives in the constructor
+ * itself, not at the call site, so it holds even against a future caller that forgets
+ * `describeThrown`.
+ */
+export class PublishFailedError extends Error {
+  readonly guardCount: number;
+  readonly file: string | undefined;
+  readonly tier: string;
+  readonly detail: string;
+
+  constructor(
+    message: string,
+    info: {
+      readonly guardCount: number;
+      readonly file: string | undefined;
+      readonly tier: string;
+      readonly detail: string;
+    },
+  ) {
+    const trimmed = message.trim();
+    super(trimmed.length > 0 ? trimmed : "publish failed with no detail");
+    this.guardCount = info.guardCount;
+    this.file = info.file;
+    this.tier = info.tier;
+    this.detail = info.detail;
+  }
 }
 
 export class BcDevMcpBackend implements ExecutionBackend {
@@ -457,13 +512,29 @@ export class BcDevMcpBackend implements ExecutionBackend {
       await deployment.deployer.publish(artifact);
     } catch (err) {
       publishOk = false;
-      publishError = err instanceof Error ? err.message : String(err);
+      // R65: `err instanceof Error ? err.message : String(err)` is the idiom that let a Bun
+      // spawn ENOENT arrive with an EMPTY message and surface as a bare, textless failure —
+      // `describeThrown` is guaranteed non-empty and carries the errno fields when there is no
+      // message at all.
+      publishError = describeThrown(err);
     }
     // Verification runs whether or not publish succeeded: decidePublishOutcome needs it to
     // tell a plain `failed` publish apart from an `anomalous` one (publish failed yet the
     // server claims to run our artifact — a deployment we cannot explain).
     const verification = await deployment.verifier.verify(artifact);
     const outcome = decidePublishOutcome(publishOk, verification);
+    if (outcome === "failed") {
+      // A demonstrated publish failure, not merely an identity puzzle — PublishFailedError
+      // (never DeploymentError, see its doc comment), so Task 3's per-tier publish ceiling
+      // (R90) can catch it specifically and learn from guardCount/file/tier.
+      const detail = publishError ?? "publish failed with no detail";
+      throw new PublishFailedError(detail, {
+        guardCount: artifact.mutantManifest.mutants.length,
+        file: soleFileOf(artifact.mutantManifest),
+        tier: tierIdentityOf(this.cfg),
+        detail,
+      });
+    }
     if (outcome !== "accepted") {
       throw new DeploymentError(outcome, publishError, verification);
     }
@@ -1009,6 +1080,42 @@ async function dumpFencedCoverage(
 `,
     "utf8",
   ).catch(() => {});
+}
+
+/**
+ * `PublishFailedError.file` (R90/Task 3): the ONE file this batch's guards came from, when there
+ * is one. `undefined` for a multi-file batch (nothing single to name) or an empty manifest —
+ * `file` is `string | undefined` for exactly this reason, never an empty string standing in for
+ * "unknown".
+ */
+function soleFileOf(manifest: MutantManifest): string | undefined {
+  const [first, ...rest] = manifest.mutants;
+  if (first === undefined) return undefined;
+  return rest.every((m) => m.file === first.file) ? first.file : undefined;
+}
+
+/**
+ * `PublishFailedError.tier` (R90/Task 3): the same physical-BC-service-tier identity quarantine
+ * already keys on (`quarantineResourceKey` — server + serverInstance, tenant deliberately
+ * excluded, since the publish ceiling is a proxy/container property shared across every tenant on
+ * one tier, same reasoning as the quarantine consult).
+ *
+ * The `"unconfigured-tier"` fallback is DEFENSIVE, not a live production gap — measured: both
+ * known production factories of `BcDevConfig` always populate `server`/`serverInstance` or throw
+ * first. `bcDevBackendConfig` (cli.ts) sources them from `BcDevConfigSection.server`/
+ * `serverInstance`, which are non-optional required `string` fields (cli.ts), so a directly
+ * configured container always has them. The env-tool-routed path
+ * (`resolveEnvToolSession` -> `splitBaseUrl`, env-tool-session.ts) always derives both from the
+ * resolved `baseUrl` or throws (`EnvToolError`) before a `BcDevConfig` is ever constructed — it
+ * does NOT leave them undefined either. `server`/`serverInstance` are merely optional on the
+ * `BcDevConfig` TYPE (a test, or a future caller, can construct one without them); `tier` is
+ * required and non-optional on `PublishFailedError`, so this fallback exists to keep that
+ * contract honest against such a config, never to describe a reachable production path.
+ */
+function tierIdentityOf(cfg: BcDevConfig): string {
+  const { server, serverInstance } = cfg;
+  if (server === undefined || serverInstance === undefined) return "unconfigured-tier";
+  return quarantineResourceKey({ server, serverInstance });
 }
 
 function isToolError(res: unknown): boolean {

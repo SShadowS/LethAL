@@ -1,21 +1,23 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SelectorConfig } from "@lethal/schemata";
 import type { ActivationConfig } from "../src/activation";
 import type { AlRunnerCanaryResult } from "../src/al-runner-canary";
-import type { BcDevConfigSection } from "../src/cli";
+import type { BcDevConfigSection, LethalConfigFile } from "../src/cli";
 import {
   announceAlRunnerCanary,
   clearQuarantine,
   fanOutEmit,
+  forceResetLeaseFromCli,
   leaseSessionFor,
   odataBaseUrl,
   odataCfgFor,
   parseCliConfig,
   performForceResetLease,
   permissionCanaryFor,
+  resolveForceResetLeaseConfig,
   resolveSelectorIds,
   resourceIdentityFor,
   validateAlRunnerConfig,
@@ -23,6 +25,8 @@ import {
   validateSelectorIdsConfig,
   withAlRunnerCanary,
 } from "../src/cli";
+import { EnvToolClient } from "../src/env-tool";
+import type { EnvToolConfigSection } from "../src/env-tool";
 import type { RunEvent } from "../src/events";
 import { CONTROL_APP_ID, MIN_CONTROL_VERSION } from "../src/harness";
 import { LeaseClient } from "../src/lease";
@@ -38,7 +42,15 @@ describe("parseCliConfig", () => {
 
   test("--dry-run only requires --project (no --tests/--backend)", () => {
     const parsed = parseCliConfig(["run", "--project", "proj", "--dry-run"]);
-    expect(parsed).toEqual({ mode: "dry-run", projectDir: "proj" });
+    // R90: `dbPath`/`configPath` default exactly as they do for a real run, so a dry run can
+    // report the tier's MEASURED publish bracket. Both are read best-effort and never created —
+    // a dry run in a project with neither file still works, it just has no bracket to report.
+    expect(parsed).toEqual({
+      mode: "dry-run",
+      projectDir: "proj",
+      dbPath: join("proj", "lethal.sqlite"),
+      configPath: join("proj", "lethal.config.json"),
+    });
   });
 
   test("missing --tests (non-dry-run) throws a clear error", () => {
@@ -568,6 +580,43 @@ describe("parseCliConfig — force-reset-lease subcommand (5C-B2)", () => {
     });
   });
 
+  // Minor 3, fix round 1: without a --project flag, an operator whose envTool.resolve command
+  // references {projectDir} had no way to unblock themselves mid-recovery — resolveForceResetLeaseConfig
+  // fell back to "" and renderCommand throws. Mirrors doctor's own optional --project (cli.ts).
+  test("parses an optional --project, threaded as projectDir", () => {
+    const parsed = parseCliConfig([
+      "force-reset-lease",
+      "--server",
+      "http://Cronus281",
+      "--instance",
+      "BC",
+      "--config",
+      "lethal.config.json",
+      "--project",
+      "C:/proj",
+    ]);
+    expect(parsed).toEqual({
+      mode: "force-reset-lease",
+      server: "http://Cronus281",
+      serverInstance: "BC",
+      configPath: "lethal.config.json",
+      projectDir: "C:/proj",
+    });
+  });
+
+  test("omitting --project leaves projectDir absent, not an empty string", () => {
+    const parsed = parseCliConfig([
+      "force-reset-lease",
+      "--server",
+      "http://Cronus281",
+      "--instance",
+      "BC",
+      "--config",
+      "lethal.config.json",
+    ]);
+    expect(parsed).not.toHaveProperty("projectDir");
+  });
+
   test("missing --server throws a clear error", () => {
     expect(() =>
       parseCliConfig(["force-reset-lease", "--instance", "BC", "--config", "c.json"]),
@@ -836,6 +885,369 @@ describe("performForceResetLease (5C-B2)", () => {
       oldGeneration: liveGen,
       reason: "generation-changed",
     });
+  });
+});
+
+// ————————————————————————————————————————————————————————————————————————
+// R51 follow-on: `resolveForceResetLeaseConfig` — `forceResetLeaseFromCli` used to call
+// `validateBcDevConfig(configFile.bcdev)` DIRECTLY, which throws on an envTool config (server/
+// serverInstance/username/password are legitimately absent — the tool resolves them at runtime).
+// A real campaign had to hand-materialise a resolved copy with a one-off script mid-recovery.
+// Mirrors `buildDoctorDeps`'s `resolvedBcdev` (doctor-cli.test.ts) — same algorithm, same hard
+// read-only boundary (ONLY `envTool.resolve` blocks; never create/start/publish/downloadSymbols).
+// ————————————————————————————————————————————————————————————————————————
+describe("resolveForceResetLeaseConfig (R51 follow-on)", () => {
+  const BCDEV_RAW = {
+    mcpCommand: ["bun", "mcp"],
+    company: "CRONUS",
+    controlSymbolPath: "C:/lethal-control.app",
+    // Deliberately NO server/username/password/packageCachePath — an env-tool config never
+    // spells these out on disk; the tool resolves them at runtime.
+  };
+
+  function envToolConfigFixture(): LethalConfigFile {
+    return {
+      bcdev: BCDEV_RAW,
+      envTool: {
+        toolPath: "tool.exe",
+        envId: "env-4711",
+        resolve: [
+          { command: ["env", "get", "{envId}", "--json"], reads: { baseUrl: "url" } },
+          {
+            command: ["env", "users", "{envId}", "--json"],
+            reads: { username: "u", password: "p" },
+          },
+        ],
+        publish: { command: ["publish", "{envId}", "{appFile}"] },
+        // No packageCachePath declared above, so validateEnvToolConfig requires this.
+        downloadSymbols: { command: ["env", "download-symbols", "{envId}"] },
+      },
+    };
+  }
+
+  function fakeSpawn(spawned: string[]) {
+    return async (argv: readonly string[]) => {
+      const line = argv.join(" ");
+      spawned.push(line);
+      if (line.includes("env get")) {
+        return { exitCode: 0, stdout: '{"url":"https://host/env-4711"}', stderr: "" };
+      }
+      if (line.includes("env users")) {
+        return { exitCode: 0, stdout: '{"u":"admin","p":"hunter2"}', stderr: "" };
+      }
+      return { exitCode: 0, stdout: "{}", stderr: "" };
+    };
+  }
+
+  // The task brief's own Step 1 pinning test.
+  test("force-reset-lease resolves an envTool config the way run does", async () => {
+    const cfg = envToolConfigFixture();
+    const spawned: string[] = [];
+    await expect(
+      resolveForceResetLeaseConfig(cfg, {
+        makeEnvToolClient: (c) => new EnvToolClient(c, { spawn: fakeSpawn(spawned) }),
+      }),
+    ).resolves.toMatchObject({
+      server: expect.any(String),
+      serverInstance: expect.any(String),
+    });
+  });
+
+  test("resolves the actual connection fields, not placeholders", async () => {
+    const cfg = envToolConfigFixture();
+    const spawned: string[] = [];
+    const resolved = await resolveForceResetLeaseConfig(cfg, {
+      makeEnvToolClient: (c) => new EnvToolClient(c, { spawn: fakeSpawn(spawned) }),
+    });
+    expect(resolved.server).toBe("https://host");
+    expect(resolved.serverInstance).toBe("env-4711");
+    expect(resolved.username).toBe("admin");
+    expect(resolved.password).toBe("hunter2");
+    expect(resolved.baseUrl).toBe("https://host/env-4711");
+  });
+
+  // The provisioning-boundary claim, proven rather than asserted: spawns EXACTLY the two
+  // configured `resolve` blocks and nothing shaped like create/start/publish/downloadSymbols —
+  // this function must never be able to provision or bill as a side effect of a recovery command.
+  test("spawns ONLY the configured resolve blocks — never create/start/publish/downloadSymbols", async () => {
+    const cfg = envToolConfigFixture();
+    const spawned: string[] = [];
+    await resolveForceResetLeaseConfig(cfg, {
+      makeEnvToolClient: (c) => new EnvToolClient(c, { spawn: fakeSpawn(spawned) }),
+    });
+    expect(spawned).toEqual([
+      "tool.exe env get env-4711 --json",
+      "tool.exe env users env-4711 --json",
+    ]);
+    for (const cmd of spawned) {
+      expect(cmd).not.toMatch(/download-symbols|publish|create|start/);
+    }
+  });
+
+  // A direct (non-envTool) config is unchanged — delegates straight to the SAME validator `run`
+  // uses, never a second parse.
+  test("a config with no envTool section delegates straight to validateBcDevConfig", async () => {
+    const resolvedBcdev: BcDevConfigSection = {
+      mcpCommand: ["bun", "mcp"],
+      server: "http://Cronus281",
+      serverInstance: "BC",
+      company: "CRONUS",
+      username: "admin",
+      password: "hunter2",
+      packageCachePath: "C:/pkg",
+      controlSymbolPath: "C:/lethal-control.app",
+    };
+    const configFile: LethalConfigFile = { bcdev: resolvedBcdev };
+    await expect(resolveForceResetLeaseConfig(configFile)).resolves.toEqual(resolvedBcdev);
+  });
+
+  test("a bcdev section missing required fields (no envTool) throws exactly as validateBcDevConfig does", async () => {
+    const configFile: LethalConfigFile = {};
+    await expect(resolveForceResetLeaseConfig(configFile)).rejects.toThrow(
+      /missing the "bcdev" section/,
+    );
+  });
+
+  // Important 2, fix round 1: `packageCachePath` is structurally required by `validateBcDevConfig`
+  // but this recovery command never dereferences it — the fixture above already omits a static
+  // `packageCachePath` (legal, since `downloadSymbols` is declared), so every test in this
+  // describe block already exercises the default. Pinned explicitly here so a future change to
+  // `packageCachePathDefault` (shared with `buildDoctorDeps`'s `resolvedBcdev`) is caught by name.
+  test("packageCachePath defaults to <projectDir>/.alpackages when the config leaves it to downloadSymbols", async () => {
+    const cfg = envToolConfigFixture();
+    const spawned: string[] = [];
+    const resolved = await resolveForceResetLeaseConfig(cfg, {
+      projectDir: "C:/proj",
+      makeEnvToolClient: (c) => new EnvToolClient(c, { spawn: fakeSpawn(spawned) }),
+    });
+    expect(resolved.packageCachePath).toBe(join("C:/proj", ".alpackages"));
+  });
+
+  // Minor 3, fix round 1: without --project, {projectDir} placeholders in a resolve block have no
+  // value and `renderCommand` throws BY NAME — proven here, then proven UNBLOCKED once a
+  // projectDir is supplied, so the flag genuinely closes the gap rather than merely parsing.
+  test("--project unblocks a resolve block that references {projectDir}; omitting it throws by name", async () => {
+    const cfg: LethalConfigFile = {
+      bcdev: {
+        mcpCommand: ["bun", "mcp"],
+        company: "CRONUS",
+        controlSymbolPath: "C:/lethal-control.app",
+      },
+      envTool: {
+        toolPath: "tool.exe",
+        envId: "env-4711",
+        resolve: [
+          {
+            command: ["env", "get", "{envId}", "--json", "--cwd", "{projectDir}"],
+            reads: { baseUrl: "url", username: "u", password: "p" },
+          },
+        ],
+        publish: { command: ["publish", "{envId}", "{appFile}"] },
+        downloadSymbols: { command: ["env", "download-symbols", "{envId}"] },
+      },
+    };
+    const spawn = async () => ({
+      exitCode: 0,
+      stdout: '{"url":"https://host/env-4711","u":"admin","p":"hunter2"}',
+      stderr: "",
+    });
+
+    await expect(
+      resolveForceResetLeaseConfig(cfg, {
+        makeEnvToolClient: (c) => new EnvToolClient(c, { spawn }),
+      }),
+    ).rejects.toThrow(/no value available for placeholder \{projectDir\}/);
+
+    await expect(
+      resolveForceResetLeaseConfig(cfg, {
+        projectDir: "C:/proj",
+        makeEnvToolClient: (c) => new EnvToolClient(c, { spawn }),
+      }),
+    ).resolves.toMatchObject({ server: expect.any(String) });
+  });
+
+  // Minor 4, fix round 1: the two fail-loudly EnvToolError guards had no test of their own.
+  //
+  // Reaching them is not as simple as omitting a `reads` key: `EnvToolClient.run` itself throws
+  // if a block's DECLARED `reads` key fails to resolve to a non-empty string/number
+  // (env-tool.ts's `run`), and `validateEnvToolConfig`'s "envTool.resolve must produce X" check
+  // (env-tool.ts, `blocksOf`) already refuses a config where NO block anywhere — including
+  // `createEnv`/`startEnv`/`readyWhen`, which count toward "produced" but are never spawned by
+  // this READ-ONLY resolver — declares a `reads` for it. So the only way `resolveForceResetLeaseConfig`'s
+  // OWN post-loop `undefined` check can fire is a create-mode config (`envId` absent) where the
+  // key is declared as produced by `createEnv` (a block this resolver correctly never spawns,
+  // by design — the provisioning boundary) rather than by any `resolve[]` block: structurally
+  // valid per `validateEnvToolConfig`, genuinely unresolved by a resolver that spawns ONLY
+  // `resolve`.
+  describe("fail-loudly guards", () => {
+    const CREATE_MODE_BCDEV = {
+      mcpCommand: ["bun", "mcp"],
+      company: "CRONUS",
+      controlSymbolPath: "C:/lethal-control.app",
+      packageCachePath: "C:/pkg", // sidesteps the unrelated downloadSymbols requirement
+    };
+
+    test("baseUrl declared as produced by createEnv (never spawned here) throws 'produced no baseUrl'", async () => {
+      const cfg: LethalConfigFile = {
+        bcdev: CREATE_MODE_BCDEV,
+        envTool: {
+          toolPath: "tool.exe",
+          // No envId => create mode, which is what makes createEnv/startEnv/readyWhen/
+          // publishApps/deleteEnv all required below — none of them is ever spawned by
+          // resolveForceResetLeaseConfig; only the fixture needs them, to pass validateEnvToolConfig.
+          createEnv: { command: ["env", "create"], reads: { envId: "id", baseUrl: "url" } },
+          startEnv: { command: ["env", "start", "{envId}"] },
+          readyWhen: {
+            command: ["env", "get", "{envId}"],
+            reads: { status: "status" },
+            equals: "Running",
+          },
+          publishApps: ["TestApp"],
+          deleteEnv: { command: ["env", "delete", "{envId}"] },
+          // The ONLY block this resolver actually spawns — produces username/password, not baseUrl.
+          resolve: [{ command: ["fetch-creds"], reads: { username: "u", password: "p" } }],
+          publish: { command: ["publish", "{envId}", "{appFile}"] },
+        },
+      };
+      const spawn = async () => ({
+        exitCode: 0,
+        stdout: '{"u":"admin","p":"hunter2"}',
+        stderr: "",
+      });
+      await expect(
+        resolveForceResetLeaseConfig(cfg, {
+          makeEnvToolClient: (c) => new EnvToolClient(c, { spawn }),
+        }),
+      ).rejects.toThrow(/envTool\.resolve produced no baseUrl/);
+    });
+
+    test("username/password declared as produced by createEnv (never spawned here) throws 'produced no username/password'", async () => {
+      const cfg: LethalConfigFile = {
+        bcdev: CREATE_MODE_BCDEV,
+        envTool: {
+          toolPath: "tool.exe",
+          createEnv: {
+            command: ["env", "create"],
+            reads: { envId: "id", username: "u", password: "p" },
+          },
+          startEnv: { command: ["env", "start", "{envId}"] },
+          readyWhen: {
+            command: ["env", "get", "{envId}"],
+            reads: { status: "status" },
+            equals: "Running",
+          },
+          publishApps: ["TestApp"],
+          deleteEnv: { command: ["env", "delete", "{envId}"] },
+          // The ONLY block this resolver actually spawns — produces baseUrl, not credentials.
+          resolve: [{ command: ["fetch-url"], reads: { baseUrl: "url" } }],
+          publish: { command: ["publish", "{envId}", "{appFile}"] },
+        },
+      };
+      const spawn = async () => ({
+        exitCode: 0,
+        stdout: '{"url":"https://host/env-4711"}',
+        stderr: "",
+      });
+      await expect(
+        resolveForceResetLeaseConfig(cfg, {
+          makeEnvToolClient: (c) => new EnvToolClient(c, { spawn }),
+        }),
+      ).rejects.toThrow(/envTool\.resolve produced no username\/password/);
+    });
+  });
+});
+
+// ————————————————————————————————————————————————————————————————————————
+// R51 follow-on, continued: `forceResetLeaseFromCli`'s OWN wiring. The tests above call
+// `resolveForceResetLeaseConfig` DIRECTLY and never exercise the one line inside
+// `forceResetLeaseFromCli` that actually calls it — a red-check on that call site alone found
+// zero test coverage. This closes the gap: a REAL config file on disk (envTool-shaped, no
+// server/username/password), a fake env-tool spawn, and a fake HarnessInfo/ForceResetLease
+// router — driving the exact path `lethal force-reset-lease --config <envtool.json>` takes.
+// Reverting `forceResetLeaseFromCli`'s `resolveConfig(configFile)` call back to the old direct
+// `validateBcDevConfig(configFile.bcdev)` makes THIS test reject with "missing required
+// field(s): server, serverInstance, username, password" instead of completing the reset.
+// ————————————————————————————————————————————————————————————————————————
+describe("forceResetLeaseFromCli — the wiring (R51 follow-on)", () => {
+  test("resolves an envTool config file end-to-end and completes the reset", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-force-reset-envtool-"));
+    const configPath = join(dir, "lethal.config.json");
+    const configFile: LethalConfigFile = {
+      bcdev: {
+        mcpCommand: ["bun", "mcp"],
+        company: "CRONUS",
+        controlSymbolPath: "C:/lethal-control.app",
+      },
+      envTool: {
+        toolPath: "tool.exe",
+        envId: "env-4711",
+        resolve: [
+          { command: ["env", "get", "{envId}", "--json"], reads: { baseUrl: "url" } },
+          {
+            command: ["env", "users", "{envId}", "--json"],
+            reads: { username: "u", password: "p" },
+          },
+        ],
+        publish: { command: ["publish", "{envId}", "{appFile}"] },
+        downloadSymbols: { command: ["env", "download-symbols", "{envId}"] },
+      },
+    };
+    await writeFile(configPath, JSON.stringify(configFile), "utf8");
+
+    const spawn = async (argv: readonly string[]) => {
+      const line = argv.join(" ");
+      if (line.includes("env get")) {
+        return { exitCode: 0, stdout: '{"url":"https://host/env-4711"}', stderr: "" };
+      }
+      if (line.includes("env users")) {
+        return { exitCode: 0, stdout: '{"u":"admin","p":"hunter2"}', stderr: "" };
+      }
+      return { exitCode: 0, stdout: "{}", stderr: "" };
+    };
+
+    const liveGen = "d".repeat(32);
+    const fetchFn = (async (url: unknown) => {
+      const u = String(url);
+      if (u.includes("LethALControl_HarnessInfo")) {
+        return new Response(
+          JSON.stringify({
+            value: JSON.stringify({
+              appId: CONTROL_APP_ID,
+              semver: MIN_CONTROL_VERSION,
+              protocolVersion: 2,
+              serverGeneration: liveGen,
+              tenantCountReachable: false,
+              isolationModes: ["Codeunit"],
+              testTypes: ["codeunit"],
+            }),
+          }),
+          { status: 200 },
+        );
+      }
+      if (u.includes("LethALControl_ForceResetLease")) {
+        return new Response(
+          JSON.stringify({
+            value: JSON.stringify({ reset: true, serverGeneration: "e".repeat(32), epoch: 3 }),
+          }),
+          { status: 200 },
+        );
+      }
+      throw new Error(`forceResetLeaseFromCli wiring test: unexpected URL ${u}`);
+    }) as typeof fetch;
+
+    const exitCode = await forceResetLeaseFromCli(
+      {
+        mode: "force-reset-lease",
+        server: "https://host",
+        serverInstance: "env-4711",
+        configPath,
+      },
+      {
+        makeEnvToolClient: (c) => new EnvToolClient(c, { spawn }),
+        fetchFn,
+      },
+    );
+    expect(exitCode).toBe(0);
   });
 });
 
