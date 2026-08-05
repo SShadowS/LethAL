@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { BcDevConfigSection, LethalConfigFile } from "../src/cli";
 import { buildBackend, buildDoctorDeps, validateBcDevConfig } from "../src/cli";
-import { runDoctor } from "../src/doctor";
+import { ENV_STATUS_REACHABLE_NO_VENDOR_STATUS, runDoctor } from "../src/doctor";
 import { EnvToolClient } from "../src/env-tool";
 import type { EnvToolConfigSection } from "../src/env-tool";
 import { startEnvToolSession } from "../src/env-tool-session";
@@ -61,6 +61,11 @@ function okFetch(inner: Record<string, unknown>): typeof fetch {
     })) as typeof fetch;
 }
 
+function errorFetch(status: number, body: string): typeof fetch {
+  return (async (_url: unknown, _init?: RequestInit) =>
+    new Response(body, { status })) as typeof fetch;
+}
+
 describe("lethal doctor CLI wiring — config-level parity", () => {
   test("a config `run` would reject for a missing bcdev section also makes doctor's config-building step refuse", async () => {
     const configFile: LethalConfigFile = {};
@@ -69,6 +74,59 @@ describe("lethal doctor CLI wiring — config-level parity", () => {
     // independent assertions that happen to agree, it is one piece of shared machinery exercised
     // twice. Covers every remaining check's shared prerequisite.
     await expect(buildDoctorDeps(configFile)).rejects.toThrow(/missing the "bcdev" section/);
+  });
+});
+
+/**
+ * Review round 2 (Open 2, Minor 6): the direct-container `environment` behaviour was correct but
+ * unpinned — every OTHER describe block in this file uses a direct-bcdev (no `envTool`) config,
+ * which exercises this code path on every run, but none of them asserts on the `environment`
+ * check's own outcome. Reverting the whole fix to round 0's `await verify(); return "Running";`
+ * left the suite green. These three probes are exactly the ones the fix exists for.
+ */
+describe("lethal doctor CLI wiring — environment (direct container)", () => {
+  test("a healthy direct container reports the reachable sentinel, never an invented status word", async () => {
+    const configFile: LethalConfigFile = { bcdev: RESOLVED_BCDEV };
+    const dir = await mkdtemp(join(tmpdir(), "lethal-doctor-env-direct-ok-"));
+    const { cfg, deps } = await buildDoctorDeps(configFile, {
+      quarantineDir: dir,
+      fetchFn: okFetch(info()),
+    });
+    const report = await runDoctor(cfg, deps);
+    const check = report.checks.find((c) => c.name === "environment");
+    expect(check?.ok).toBe(true);
+    expect(check?.detail).toBe(ENV_STATUS_REACHABLE_NO_VENDOR_STATUS);
+  });
+
+  test("an unreachable container fails the environment check with the real HTTP detail, not an invented one", async () => {
+    const configFile: LethalConfigFile = { bcdev: RESOLVED_BCDEV };
+    const dir = await mkdtemp(join(tmpdir(), "lethal-doctor-env-direct-500-"));
+    const { cfg, deps } = await buildDoctorDeps(configFile, {
+      quarantineDir: dir,
+      fetchFn: errorFetch(500, "boom"),
+    });
+    const report = await runDoctor(cfg, deps);
+    const check = report.checks.find((c) => c.name === "environment");
+    expect(check?.ok).toBe(false);
+    expect(check?.detail).toMatch(/HTTP 500/);
+    expect(check?.detail).toMatch(/boom/);
+  });
+
+  // The mis-attribution `checkReachable()` exists to avoid: `verify()` would refuse THIS response
+  // (wrong appId), but that is `verify()`'s concern (and no check here reports it — a genuine,
+  // separately-tracked gap, not this test's subject). `environment` must stay GREEN, because
+  // reachability — the one thing it claims to observe — genuinely succeeded.
+  test("a wrong appId does not fail the environment check — that mis-attribution is what checkReachable() exists to avoid", async () => {
+    const configFile: LethalConfigFile = { bcdev: RESOLVED_BCDEV };
+    const dir = await mkdtemp(join(tmpdir(), "lethal-doctor-env-direct-wrongid-"));
+    const { cfg, deps } = await buildDoctorDeps(configFile, {
+      quarantineDir: dir,
+      fetchFn: okFetch(info({ appId: "not-the-control-app" })),
+    });
+    const report = await runDoctor(cfg, deps);
+    const check = report.checks.find((c) => c.name === "environment");
+    expect(check?.ok).toBe(true);
+    expect(check?.detail).toBe(ENV_STATUS_REACHABLE_NO_VENDOR_STATUS);
   });
 });
 
@@ -305,15 +363,33 @@ describe("lethal doctor CLI wiring — tool-paths", () => {
       ],
       publish: publishBlock,
     };
-    const bcdevWithAlc = { ...BCDEV_RAW, alcPath: "C:/alc.exe" };
-    const configFile: LethalConfigFile = { bcdev: bcdevWithAlc, envTool: envCfg };
+    const spawn = async () => ({ exitCode: 0, stdout: "{}", stderr: "" });
+
+    // Review round 2 fix: TWO config shapes, matching the TWO different pipeline stages `run`
+    // and doctor each actually see. `buildBackend` is called (both in real `run`, via
+    // `runFromCli`, and here) with the config `resolveEnvToolSession` has ALREADY resolved —
+    // `server`/`serverInstance`/`username`/`password` filled in from the tool, not read fresh —
+    // so it needs `RESOLVED_BCDEV`'s shape. `buildDoctorDeps` does its OWN resolution (it has no
+    // upstream `resolveEnvToolSession` step), so it must see the RAW, pre-resolution section,
+    // where `username`/`password` are legitimately absent (the tool supplies them) — declaring
+    // them there too would collide with `envCfg.resolve`'s own reads of the same keys
+    // (`validateEnvToolConfig`'s "two sources, one value" guard, env-tool.ts). Round 1's fixture
+    // used `BCDEV_RAW` for BOTH, which is neither: `buildBackend`'s `validateBcDevConfig` threw
+    // on the missing server/serverInstance/username/password BEFORE ever reaching the altool
+    // gate, so `not.toMatch(/alc\.exe|altool\.exe/)` passed on a config-validation error that
+    // would have read identically whether `run` was lenient or strict about altool — the
+    // assertion was inert. Verified below with the exact mutation the second review round used
+    // to prove it (`cli.ts`'s altool gate made unconditional): see the red-check in the report.
+    const resolvedRunBcdev: BcDevConfigSection = { ...RESOLVED_BCDEV, alcPath: "C:/alc.exe" };
+    const runConfigFile: LethalConfigFile = { bcdev: resolvedRunBcdev };
+    const rawDoctorBcdev = { ...BCDEV_RAW, alcPath: "C:/alc.exe" };
+    const doctorConfigFile: LethalConfigFile = { bcdev: rawDoctorBcdev, envTool: envCfg };
 
     // What `lethal run` does: `buildBackend` given a real envToolDeploy (never invoked below —
     // `buildBackend` only checks it is DEFINED before the altool gate) must not refuse for a
     // missing altool. `parsed.projectDir` is fake, so this rejects LATER for an unrelated reason
     // (validating selector ids against a project that does not exist) — the assertion is
     // specifically that the rejection is NOT about alc/altool.
-    const spawn = async () => ({ exitCode: 0, stdout: "{}", stderr: "" });
     const envToolDeploy = {
       client: new EnvToolClient(envCfg, { spawn }),
       publishBlock,
@@ -331,17 +407,21 @@ describe("lethal doctor CLI wiring — tool-paths", () => {
       keepEnv: false,
       allowExpiringEnv: false,
     };
-    const runErr = await buildBackend(parsed, configFile, "C:/scratch", envToolDeploy, {
+    const runErr = await buildBackend(parsed, runConfigFile, "C:/scratch", envToolDeploy, {
       alToolPaths: noExtension,
     }).then(
       () => null,
       (e: unknown) => e,
     );
     expect(runErr).not.toBeNull();
+    // Positive control for the negative assertion below: reaching a DIFFERENT, expected failure
+    // (selector-id validation against a project that does not exist) proves the altool gate was
+    // actually passed through, not merely never reached for some other unrelated reason.
+    expect(String(runErr)).toMatch(/validate selector ids/);
     expect(String(runErr)).not.toMatch(/alc\.exe|altool\.exe/);
 
     const dir = await mkdtemp(join(tmpdir(), "lethal-doctor-tools-envtool-"));
-    const { cfg, deps } = await buildDoctorDeps(configFile, {
+    const { cfg, deps } = await buildDoctorDeps(doctorConfigFile, {
       quarantineDir: dir,
       fetchFn: okFetch(info()),
       alToolPaths: noExtension,
