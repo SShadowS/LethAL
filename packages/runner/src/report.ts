@@ -97,6 +97,24 @@ export interface NotInstrumentedFile {
 export const REPORT_SCHEMA_VERSION = 2;
 
 /**
+ * The closed set of reasons `buildReport` can attach to a run — see the 11 `caveats.push(...)`
+ * call sites below, which are the only producers. A free `string[]` let a typo silently never
+ * match a consumer's check; this union turns that into a compile error at the push site instead.
+ */
+export type Caveat =
+  | "baseline-red"
+  | "narrowed"
+  | "tests-narrowed"
+  | "uninstrumentable-files"
+  | "stale-test-app"
+  | "tests-permission-refused"
+  | "tests-testpage-unsupported"
+  | "runner-disagreement"
+  | "stop-hung-sessions"
+  | "resumed"
+  | "untargeted-triggers";
+
+/**
  * What the score is a score OF — the report's own limits, synthesized in one place.
  *
  * The individual caveats already exist (`only`, `notInstrumented`, `baselineGreen`,
@@ -111,8 +129,8 @@ export interface ReportValidity {
    * — both. Anything other than `full` means the score does NOT describe the project.
    */
   readonly reliability: "full" | "narrowed" | "degraded" | "narrowed-degraded";
-  /** Human- and machine-readable reasons, e.g. `baseline-red`, `narrowed`, `uninstrumentable-files`. */
-  readonly caveats: readonly string[];
+  /** Human- and machine-readable reasons — see `Caveat` for the closed set. */
+  readonly caveats: readonly Caveat[];
   /** One sentence naming what the score covers. Written for a consumer that will quote it. */
   readonly scoreDescribes: string;
   /** Tests that ran at baseline, and how many of them failed. `failing > 0` bounds how much this
@@ -874,7 +892,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
   }
 
   const scored = counts.killed + counts.timeoutKilled + counts.survived;
-  const caveats: string[] = [];
+  const caveats: Caveat[] = [];
   if (!input.baselineGreen) caveats.push("baseline-red");
   if (input.only !== undefined) caveats.push("narrowed");
   // Listed distinctly from `narrowed`: this is the one narrowing that can manufacture a survivor.
