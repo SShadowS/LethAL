@@ -22,12 +22,14 @@ export interface SessionOutcome {
   readonly failureNote?: string;
   /**
    * Structural reason for an "error" verdict, set only at the two call
-   * sites in orchestrator.ts that actually know it. Deliberately NOT
-   * derived from `failureNote` text: `failureNote` also carries arbitrary
-   * backend-thrown text (e.g. the batch-deploy-failure handler's
-   * `String(err)`), which could otherwise collide with a prefix match.
+   * sites in orchestrator.ts that actually know it — see
+   * `ERROR_CAUSE_INTERPRETATIONS` for what each value means to a reader.
+   * Deliberately NOT derived from `failureNote` text: `failureNote` also
+   * carries arbitrary backend-thrown text (e.g. the batch-deploy-failure
+   * handler's `String(err)`), which could otherwise collide with a prefix
+   * match.
    */
-  readonly cause?: "deadline-exceeded" | "unstable";
+  readonly cause?: MutantErrorCause;
   /**
    * Summed duration of the test runs this mutant was scored by, in ms — the same value
    * `record()` already persists to `mutants.duration_ms`. 0 for a mutant nothing ran against
@@ -241,6 +243,56 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
       "everything rather than be dropped as `no-coverage`. It is a number to pin, and a rise " +
       "in it is the thing to explain.",
     basis: "R29",
+  },
+};
+
+/**
+ * The closed set of STRUCTURAL reasons an `error` verdict can name — see `MutantOutcome.cause`.
+ *
+ * A named type rather than the inline union it replaces at both declaration sites, for the same
+ * reason `Caveat` is one: `ERROR_CAUSE_INTERPRETATIONS`'s `Record<>` below then makes adding a
+ * third cause a COMPILE error until its interpretation exists. An inline union at each site could
+ * grow a variant that no reader of the report has any way to interpret.
+ */
+export type MutantErrorCause = "deadline-exceeded" | "unstable";
+
+/**
+ * What each `MutantErrorCause` MEANS for a reader, and — because both are facts about LethAL's OWN
+ * machinery rather than about the target's code — what to do about it. Co-located with
+ * `MutantErrorCause` for the same reason `CAVEAT_INTERPRETATIONS` sits next to `Caveat`.
+ *
+ * Prescription is admissible here and NOT admissible for, say, an equivalence guess about a
+ * survivor, and the line is not taste: a `cause` is a machine value this report already carries, so
+ * the claim is keyed and checkable, and its subject is LethAL's timeout/confirmation machinery,
+ * which LethAL is the authority on. A claim about whether the customer's mutated expression is
+ * semantically equivalent has no field to key on and no measurement behind it.
+ */
+export const ERROR_CAUSE_INTERPRETATIONS: Record<MutantErrorCause, Interpretation> = {
+  "deadline-exceeded": {
+    meaning:
+      "LethAL's OWN client-side timer expired — infrastructure, so this mutant was NOT measured. " +
+      "R91 measured what this usually is on real AL: mutants that are SLOW, not hung (deleting a " +
+      "`SetCurrentKey` makes the following filtered query pick a worse plan and scan). Re-run " +
+      "with `--mutant-timeout-ms` raised — 180000 took three consecutive stranding runs to zero " +
+      "— together with `--resume`, which keeps the verdicts already measured.",
+    entailedNegative:
+      "Not a verdict, and in particular not `timeout-killed`, which IS one. R91's control is that " +
+      "a genuinely non-terminating mutant still scored `timeout-killed` at 30172 ms in the same " +
+      "run where raising the floor eliminated every one of these: the machinery separates the two " +
+      "correctly once the budget is honest.",
+    basis: "R91",
+  },
+  unstable: {
+    meaning:
+      "The killing test ALSO failed unmutated, at baseline confirmation, so the kill could not be " +
+      "confirmed and the mutant is recorded `error` (score-excluded) rather than `killed`.",
+    entailedNegative:
+      'Says nothing about the mutant by construction — neither killed nor survived. "Unstable" is ' +
+      "a guess about flakiness, and two named diagnoses replace it when either applies: see " +
+      '`CAVEAT_INTERPRETATIONS["tests-permission-refused"]` (a one-line fix in the target\'s own ' +
+      'test codeunit) and `CAVEAT_INTERPRETATIONS["runner-disagreement"]` (a configuration ' +
+      "property, not flakiness at all).",
+    basis: "R27",
   },
 };
 
@@ -534,9 +586,8 @@ export interface SessionReport {
     readonly runId: number;
     readonly carriedMutants: number;
     /**
-     * R53: mutants NOT re-run because a prior run's execution of them stranded the tier — a
-     * non-terminating mutant reproduces that every time and blocks every mutant behind it. Recorded
-     * `error` (score-excluded), never a verdict: the honest statement is "not measured".
+     * R53: mutants NOT re-run because a prior run's execution of them stranded the tier. See
+     * `STRANDED_SKIP_INTERPRETATION` for what a non-zero value means to a reader.
      */
     readonly skippedStranded: number;
   };
@@ -591,13 +642,13 @@ export interface SessionReport {
    */
   readonly untargetedTriggerCount: number;
   /**
-   * Set only when the session latched unsafe (spec §8/§12) — a test run came back
-   * in-flight-unknown (the server may still be executing it) and the session recorded a
-   * durable tier quarantine and stopped scheduling further mutants. `reason` is
-   * `SessionSafety.reason` verbatim: it names the stranded op (method + mutant id) that
-   * tripped the latch. Absent on every ordinary session, including one with plain (non-
-   * in-flight-unknown) `deadline-exceeded` errors — those stay `counts.errors`/
-   * `counts.deadlineExceeded` only, no quarantine.
+   * Set only when the session latched unsafe (spec §8/§12) — see `QUARANTINE_INTERPRETATION` for
+   * what its presence means to a reader and how to recover. `reason` is `SessionSafety.reason`
+   * verbatim: it names the stranded op (method + mutant id) that tripped the latch.
+   *
+   * Absent on every ordinary session, including one with plain (non-in-flight-unknown)
+   * `deadline-exceeded` errors — those stay `counts.errors`/`counts.deadlineExceeded` only, no
+   * quarantine.
    */
   readonly quarantined?: {
     readonly reason: string;
@@ -633,6 +684,45 @@ export interface SessionReport {
   readonly permissionCanary?: PermissionCanaryResult;
 }
 
+/**
+ * What the PRESENCE of `SessionReport.quarantined` means to a reader, and the operator procedure
+ * that clears it (design §8). Keyed on a field that is either there or not, so — unlike the
+ * `Record<>`s above — it is a single value rather than a map.
+ *
+ * Prescriptive, and admissibly so: every step below is a LethAL command acting on LethAL's own
+ * lease/quarantine state, which is deterministic and this tool's own domain.
+ */
+export const QUARANTINE_INTERPRETATION: Interpretation = {
+  meaning:
+    "The session latched UNSAFE: a test run came back in-flight-unknown (the server may still be " +
+    "executing it), so LethAL recorded a durable tier quarantine and STOPPED scheduling further " +
+    "mutants. Recovery, in order: restart the NST/container, `lethal force-reset-lease --server " +
+    "<url> --instance <name> --config <path>`, a clean-state probe, then `lethal clear-quarantine " +
+    "--server <url> --instance <name>` — after which `--resume` keeps every verdict this run had " +
+    "already measured.",
+  entailedNegative:
+    "The mutants after the latch were never scheduled: they are ABSENT from this report, not " +
+    "`survived`. The counts below describe a run that stopped early, not a project that was " +
+    "measured through.",
+  basis: "R53",
+};
+
+/**
+ * What a non-zero `SessionReport.resumedFrom.skippedStranded` means to a reader (R53), and the
+ * flag that changes it. Same shape and same reasoning as `QUARANTINE_INTERPRETATION` above.
+ */
+export const STRANDED_SKIP_INTERPRETATION: Interpretation = {
+  meaning:
+    "These mutants were NOT re-run on resume: a prior run's execution of them could not be " +
+    "confirmed complete and stranded the tier — which is what a mutant that never terminates does " +
+    "every time, and it would block every mutant behind it. Pass `--retry-stranded` to attempt " +
+    "them anyway.",
+  entailedNegative:
+    "They are recorded `error` (score-excluded), never `survived`: the honest statement is `not " +
+    "measured`, by either run.",
+  basis: "R53",
+};
+
 export interface MutantOutcome {
   readonly mutantCode: string;
   readonly file: string;
@@ -652,11 +742,13 @@ export interface MutantOutcome {
    */
   readonly failureNote?: string;
   /**
-   * Structural reason for an "error" verdict — mirrors `SessionOutcome.cause`. Present only
-   * for the two call sites that actually know it (deadline/unstable); other `error` verdicts
-   * (e.g. a bisected compile failure) leave this undefined.
+   * Structural reason for an "error" verdict — mirrors `SessionOutcome.cause`, and see
+   * `ERROR_CAUSE_INTERPRETATIONS` for what each value means to a reader. Present only for the two
+   * call sites that actually know it (deadline/unstable); other `error` verdicts (e.g. a bisected
+   * compile failure, or a stranded operation) leave this undefined, and NOTHING interprets those —
+   * `failureNote` is their only account, and it is free text.
    */
-  readonly cause?: "deadline-exceeded" | "unstable";
+  readonly cause?: MutantErrorCause;
   /**
    * Summed test time this mutant was scored by, in ms. 0 when nothing ran against it
    * (`no-coverage`, known-survivor skip, or a batch-wide failure recorded without execution) —
@@ -702,16 +794,10 @@ export interface MutantOutcome {
   readonly coverageAttribution?: CoverageAttribution;
   /**
    * Whether ANY instrumented guard executed during this mutant's runs (`RunMutant`'s per-run
-   * `observedAny` attestation, OR-ed across the covering tests).
-   *
-   * The asymmetry is the whole value, and it must not be read as "this mutant activated":
-   *
-   * - `false` is DECISIVE and damning for a survivor. No guarded site executed at all, so the
-   *   mutated code was never reached — the mutant cannot have been given a chance to fail, and
-   *   reporting it `survived` overstates the suite. It belongs with `no-coverage`, not with
-   *   findings.
-   * - `true` is WEAK. It says some instrumented selector fired somewhere in the artifact during
-   *   that run, not that THIS mutant's guard did. A survivor with `true` is still unverified.
+   * `observedAny` attestation, OR-ed across the covering tests). See
+   * `GUARD_EVIDENCE_INTERPRETATIONS` for what each of its three states means to a reader — the
+   * asymmetry between `true` and `false` is the whole value, and it must not be read as "this
+   * mutant activated".
    *
    * This exists because `LC Control State.IsActive` is a bare string compare: an unactivated
    * mutant behaves byte-identically to baseline, so "the test ran and passed" proves nothing about
@@ -719,7 +805,7 @@ export interface MutantOutcome {
    * time, after R29 had already produced 10 false survivors out of 20.
    *
    * Absent when nothing ran the mutant, and on backends that cannot attest (al-runner has no such
-   * mechanism) — absent therefore means "not measured", never "not observed".
+   * mechanism).
    */
   readonly guardObserved?: boolean;
   /**
@@ -752,6 +838,66 @@ export interface MutantOutcome {
   readonly codeunitName: string;
   readonly operatorMajor: number;
 }
+
+/**
+ * The three states of `MutantOutcome.guardObserved`, as a closed set.
+ *
+ * `boolean | undefined` cannot key a `Record<>`, and the absent case carries a THIRD meaning ("not
+ * measured") that is not a synonym for `false` — collapsing the two is precisely the confusion the
+ * interpretations below exist to prevent. Naming the tri-state is what lets the `Record<>` force an
+ * interpretation to exist for each.
+ */
+export type GuardEvidence = "observed" | "not-observed" | "not-measured";
+
+/**
+ * The single translation point from `MutantOutcome.guardObserved` to `GuardEvidence`. Exported so
+ * a projection (`explain.ts`) reads the tri-state through the same function rather than
+ * re-deriving `undefined` handling of its own, which is where the two states would drift back into
+ * one.
+ */
+export function guardEvidenceOf(guardObserved: boolean | undefined): GuardEvidence {
+  if (guardObserved === undefined) return "not-measured";
+  return guardObserved ? "observed" : "not-observed";
+}
+
+/**
+ * What each `GuardEvidence` state MEANS for a reader — promoted from `MutantOutcome.guardObserved`'s
+ * own doc comment, which now points here, so there is one copy. Co-located with the field for the
+ * same reason `CAVEAT_INTERPRETATIONS` sits next to `Caveat`.
+ *
+ * Every one of these states what is PROVEN about the target and what is not. None of them says what
+ * to do about the target's tests: `not-observed` is a statement that the mutated code did not run,
+ * which is a fact this report measured; "so write a test for it" would be a claim about the value of
+ * a test LethAL has never seen.
+ */
+export const GUARD_EVIDENCE_INTERPRETATIONS: Record<GuardEvidence, Interpretation> = {
+  observed: {
+    meaning:
+      "WEAK. Some instrumented selector fired somewhere in the artifact during that run — nothing " +
+      "more.",
+    entailedNegative:
+      "Does NOT say that THIS mutant's guard fired, so a survivor carrying it is still unverified: " +
+      "the mutation may never have been in play.",
+    basis: "R32",
+  },
+  "not-observed": {
+    meaning:
+      "DECISIVE. No guarded site executed at all, so the mutated code was never reached and the " +
+      "mutant cannot have been given a chance to fail. It belongs with `no-coverage`.",
+    entailedNegative:
+      "Reporting such a mutant `survived` overstates the suite — this is not a finding about the " +
+      "tests, and treating it as one attributes to the test suite something the execution path did.",
+    basis: "R32",
+  },
+  "not-measured": {
+    meaning:
+      "No attestation exists: either nothing ran the mutant, or the backend cannot attest " +
+      "(al-runner has no such mechanism).",
+    entailedNegative:
+      'Absent means "not measured", never "not observed" — it is not evidence in either direction.',
+    basis: "R32",
+  },
+};
 
 /**
  * Nearest-rank percentile over an ASCENDING-sorted array, 0 for an empty one.

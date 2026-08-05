@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { ADMISSIBLE_INTERPRETATIONS } from "../src/explain";
 import { type BasisResolutionDeps, assertBasisResolves } from "../src/interpretation";
 import { CAVEAT_INTERPRETATIONS } from "../src/report";
 import { ATTRIBUTION_INTERPRETATIONS } from "../src/selection";
@@ -36,10 +37,14 @@ test("every caveat has an interpretation", () => {
 
 test("every shipped interpretation's basis resolves", () => {
   const deps = realDeps(); // read ROADMAP.md once, not once per interpretation
-  for (const i of [
-    ...Object.values(ATTRIBUTION_INTERPRETATIONS),
-    ...Object.values(CAVEAT_INTERPRETATIONS),
-  ]) {
+  // `ADMISSIBLE_INTERPRETATIONS` (explain.ts) is the closed set the projection may emit, so it is
+  // also the complete list of interpretations this repo ships — iterating it rather than naming
+  // the registries here means a NEW registry cannot be added to the projection while staying
+  // outside this check.
+  expect(ADMISSIBLE_INTERPRETATIONS.length).toBeGreaterThan(
+    Object.keys(ATTRIBUTION_INTERPRETATIONS).length + Object.keys(CAVEAT_INTERPRETATIONS).length,
+  );
+  for (const i of ADMISSIBLE_INTERPRETATIONS) {
     expect(() => assertBasisResolves(i.basis, deps)).not.toThrow();
   }
 });

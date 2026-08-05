@@ -1,0 +1,469 @@
+import type { Interpretation } from "./interpretation";
+import {
+  CAVEAT_INTERPRETATIONS,
+  ERROR_CAUSE_INTERPRETATIONS,
+  GUARD_EVIDENCE_INTERPRETATIONS,
+  QUARANTINE_INTERPRETATION,
+  REPORT_SCHEMA_VERSION,
+  STRANDED_SKIP_INTERPRETATION,
+  guardEvidenceOf,
+} from "./report";
+import type {
+  Caveat,
+  GuardEvidence,
+  MutantErrorCause,
+  MutantOutcome,
+  ReportValidity,
+  SessionReport,
+} from "./report";
+import { ATTRIBUTION_INTERPRETATIONS } from "./selection";
+import type { CoverageAttribution } from "./selection";
+
+/**
+ * `lethal explain <report.json>` — a projection of a finished `SessionReport` that says what the
+ * data MEANS, next to the machine values the meaning is keyed to.
+ *
+ * WHY THIS EXISTS, measured: during a real campaign an agent handed a mutation report derived, by
+ * hand and at a cost of $18.56, the sentence *"'survived' here means 'some test touched the
+ * codeunit', not 'a test executed this line'. Do not read those 87 as weak assertions."* That
+ * sentence already existed, in `CoverageSplit.attribution`'s doc comment; the report simply could
+ * not emit it. A weaker reader would have written ~87 pointless tests instead of paying to
+ * re-derive it. (The run is `docs/campaign/2026-08-03-do/rung1.report.json`: 107 survivors, 88
+ * `object` and 19 `exact`.)
+ *
+ * ── THE ADMISSIBILITY RULE ────────────────────────────────────────────────────────────────────
+ *
+ * An interpretation may appear in this output ONLY if it is (1) keyed to a machine value the
+ * report already carries, (2) co-located in source with that value, and (3) carries a `basis` that
+ * resolves (`assertBasisResolves`, interpretation.ts). This module therefore contains NO prose of
+ * its own about a report's contents: every `Interpretation` it emits is a reference to a shared
+ * constant in `report.ts` or `selection.ts`. `ADMISSIBLE_INTERPRETATIONS` below is that closed set,
+ * and `explain.test.ts` asserts by object IDENTITY that nothing else reaches the output — so prose
+ * written inline here cannot ship, whatever it says.
+ *
+ * If a useful thing to say has no field to hang on, the fix is to add the FIELD to the report
+ * first, as its own change with its own justification — never to let this projection assert
+ * something free-floating.
+ *
+ * ── THE LINE: TARGET SEMANTICS vs TOOL MECHANICS ──────────────────────────────────────────────
+ *
+ * About the TARGET's code, this says what is PROVEN, what is NOT, and what the data cannot
+ * support — never what test to write. Both halves of that are measured. The weak reader's failure
+ * (~87 pointless tests) is prevented by a meaning statement carrying its entailed negative. But the
+ * strong reader's WIN was reframing the task entirely, and a projection saying "strengthen these
+ * 19" would have anchored against it: the campaign's own pre-commitment framed "kill survivors",
+ * and the agent did better by ignoring that frame.
+ *
+ * About the TOOL, it is fully prescriptive, because those steps are deterministic and LethAL's own
+ * domain: `ERROR_CAUSE_INTERPRETATIONS["deadline-exceeded"]` names `--mutant-timeout-ms` (R91),
+ * `QUARANTINE_INTERPRETATION` names the whole design-§8 recovery (R53).
+ *
+ * The line is target-semantics vs tool-mechanics, and it is NOT "no operator-specific advice". An
+ * equivalence guess ("a surviving `remove-setrange` is often equivalent") is a claim about the
+ * customer's code that no LethAL machinery measures — there is no field to key it on, so rule (1)
+ * excludes it without anyone needing taste. That matters concretely: the campaign's own
+ * pre-commitment carried exactly that guess and rung 3 DISPROVED it, killing those mutants
+ * legitimately with decoy rows. R91's slow-not-hung finding, by contrast, is a claim about LethAL's
+ * own timeout machinery, keyed on a `cause` the report carries, with a basis. Future proposals get
+ * decided by the mechanism, not by whoever remembers that.
+ *
+ * ── THE SPLIT CONTRACT ────────────────────────────────────────────────────────────────────────
+ *
+ * STRUCTURE (field names, nesting, value domains) is versioned and stable under
+ * `EXPLAIN_SCHEMA_VERSION`; the header also records the `REPORT_SCHEMA_VERSION` it was derived
+ * from — the same two-version pattern the event stream uses. PROSE is explicitly non-contractual
+ * and may improve without a version bump. The keying rule is what makes that safe rather than
+ * aspirational: every machine-usable atom appears as a structured field BY CONSTRUCTION, so no
+ * consumer has a reason to regex prose. `EXPLAIN_CONTRACT` states all of this inside the output.
+ */
+
+/**
+ * Bumped whenever a field of `ExplainOutput` is renamed, removed, or changes meaning, or a value
+ * domain shrinks. Additive fields do not require a bump. Prose changes NEVER do — see
+ * `EXPLAIN_CONTRACT`.
+ */
+export const EXPLAIN_SCHEMA_VERSION = 1;
+
+/**
+ * Thrown when the input is not an explainable `SessionReport` — a caller-contract violation, not a
+ * normal refusal. Extends `Error` DIRECTLY, never another typed error class (CLAUDE.md's
+ * typed-error-classes convention); in particular it is unrelated to `BasisResolutionError`, which
+ * is about this repo's own shipped constants rather than about a consumer's input.
+ */
+export class MalformedReportError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "MalformedReportError";
+  }
+}
+
+/**
+ * Every `Interpretation` this projection is allowed to emit — the closed set rule (1) of the
+ * admissibility rule above resolves to. Membership is by object IDENTITY, not by text: a copy of a
+ * registry member's prose is NOT a member, which is what makes "emit the shared constant, never
+ * restate it" checkable rather than a convention.
+ *
+ * Also the list `interpretation.test.ts` resolves every `basis` against the real `ROADMAP.md`.
+ */
+export const ADMISSIBLE_INTERPRETATIONS: readonly Interpretation[] = [
+  ...Object.values(ATTRIBUTION_INTERPRETATIONS),
+  ...Object.values(CAVEAT_INTERPRETATIONS),
+  ...Object.values(GUARD_EVIDENCE_INTERPRETATIONS),
+  ...Object.values(ERROR_CAUSE_INTERPRETATIONS),
+  QUARANTINE_INTERPRETATION,
+  STRANDED_SKIP_INTERPRETATION,
+];
+
+/** The split contract, stated in the output itself — see this module's doc comment. */
+export interface ExplainContract {
+  /** The field whose value versions this output's STRUCTURE. */
+  readonly structureStableUnder: "explainSchemaVersion";
+  /** Always `false`. A consumer branches on this rather than reading `note`. */
+  readonly proseIsContractual: boolean;
+  /** The statement itself. Non-contractual, like every other prose string here. */
+  readonly note: string;
+}
+
+/** One caveat, with the shared constant that says what it means. */
+export interface ExplainCaveat {
+  readonly caveat: Caveat;
+  readonly interpretation: Interpretation;
+}
+
+/**
+ * The score, with the qualifications that decide whether it may be quoted at all.
+ *
+ * `excludedFromScore` is DERIVED, not restated: `mutationScore`'s denominator is
+ * killed + timeoutKilled + survived, so these three counts are outcomes the number does not
+ * describe. A reader who adds them to the survivors would be double-counting; one who ignores them
+ * would think the run measured more than it did.
+ */
+export interface ExplainScore {
+  readonly mutationScore: number | null;
+  readonly reliability: ReportValidity["reliability"];
+  /** Verbatim from `ReportValidity.scoreDescribes` — the report's own sentence, not a new one. */
+  readonly scoreDescribes: string;
+  readonly scored: number;
+  readonly recorded: number;
+  readonly excludedFromScore: {
+    readonly errors: number;
+    readonly noCoverage: number;
+    readonly knownSurvivors: number;
+  };
+}
+
+/**
+ * One survivor: the machine fields a consumer acts on, each beside the shared constant that says
+ * what it is worth.
+ *
+ * `executionProven` is the atom the $18.56 sentence had to be derived to obtain. It is `true` only
+ * for `exact` attribution — a MEMBER-level coverage match, i.e. a test measured to have executed
+ * this procedure. `object` and `all-green` mean some test touched the object, or nothing placed the
+ * mutant at all; neither proves the mutated code ran.
+ */
+export interface ExplainSurvivor {
+  readonly mutantCode: string;
+  readonly file: string;
+  readonly line: number;
+  readonly codeunitName: string;
+  readonly procedureName: string;
+  readonly operatorName: string;
+  /** Verbatim from the report. `mutatedText` is `""` for a deletion operator. */
+  readonly originalText: string;
+  readonly mutatedText: string;
+  readonly attribution: CoverageAttribution;
+  readonly executionProven: boolean;
+  readonly coveringTests: readonly string[];
+  readonly guardEvidence: GuardEvidence;
+  /** `ATTRIBUTION_INTERPRETATIONS[attribution]`, by reference. */
+  readonly interpretation: Interpretation;
+  /** `GUARD_EVIDENCE_INTERPRETATIONS[guardEvidence]`, by reference. */
+  readonly guardInterpretation: Interpretation;
+}
+
+/**
+ * One `error`-verdict mutant: recorded, score-excluded, and NOT a verdict about the mutant.
+ *
+ * `interpretation` is present only when the report recorded a structural `cause`. LethAL sets that
+ * at the two call sites that actually know it; a stranded operation or a bisected compile failure
+ * arrives with `cause` absent, and this projection then says nothing rather than inventing a
+ * meaning nothing keys. The absence is itself readable: `failureNote` is that row's only account,
+ * and it is free text.
+ *
+ * `no-coverage` and `known-survivor` outcomes are deliberately NOT listed here — they are counted
+ * in `score.excludedFromScore` instead. Listing them adds no interpretation (nothing keys them
+ * beyond the verdict word itself) while, on a real report, burying the rows that do: rung2 has 313
+ * of them against 125 survivors.
+ */
+export interface ExplainNotMeasured {
+  readonly mutantCode: string;
+  readonly file: string;
+  readonly line: number;
+  readonly operatorName: string;
+  readonly cause?: MutantErrorCause;
+  /** Verbatim from the report. Free text, and the only account of a cause-less error. */
+  readonly failureNote?: string;
+  /** `ERROR_CAUSE_INTERPRETATIONS[cause]`, by reference. Absent exactly when `cause` is. */
+  readonly interpretation?: Interpretation;
+}
+
+/**
+ * A session-level condition about LethAL's OWN state — the half of the line this projection is
+ * fully prescriptive about. Each is keyed 1:1 to a report field: `quarantined` to
+ * `SessionReport.quarantined`'s presence, `stranded-skips` to a non-zero
+ * `SessionReport.resumedFrom.skippedStranded`.
+ */
+export type ToolCondition = "quarantined" | "stranded-skips";
+
+export interface ExplainToolCondition {
+  readonly condition: ToolCondition;
+  /** How many mutants the condition accounts for. 0 for `quarantined`, which is not a tally: the
+   *  mutants it cost were never scheduled, so the report cannot count them. */
+  readonly count: number;
+  /** Verbatim from the report (`quarantined.reason`). Absent when the field carries no text. */
+  readonly detail?: string;
+  readonly interpretation: Interpretation;
+}
+
+export interface ExplainOutput {
+  readonly explainSchemaVersion: number;
+  /** The `REPORT_SCHEMA_VERSION` the input declared — always equal to this build's, because
+   *  `assertExplainableReport` refuses anything else. Recorded so the output is self-describing
+   *  once it has been written to a file and outlived the binary that made it. */
+  readonly derivedFromReportSchemaVersion: number;
+  readonly contract: ExplainContract;
+  readonly score: ExplainScore;
+  readonly caveats: readonly ExplainCaveat[];
+  readonly survivors: readonly ExplainSurvivor[];
+  readonly notMeasured: readonly ExplainNotMeasured[];
+  readonly toolConditions: readonly ExplainToolCondition[];
+}
+
+/** The contract text, as one constant so redeploys of the same `EXPLAIN_SCHEMA_VERSION` say the
+ *  identical thing. */
+const EXPLAIN_CONTRACT: ExplainContract = {
+  structureStableUnder: "explainSchemaVersion",
+  proseIsContractual: false,
+  note:
+    "STRUCTURE is contractual: field names, nesting and value domains are stable under " +
+    "`explainSchemaVersion`, which bumps when one is renamed, removed, or changes meaning. " +
+    "`derivedFromReportSchemaVersion` records the report schema this was projected from, so a " +
+    "stored output stays self-describing. PROSE is NOT contractual — do not parse `meaning`, " +
+    "`entailedNegative`, `note`, `scoreDescribes`, `detail` or `failureNote`; they may be reworded " +
+    "at any time without a version bump. That is safe rather than merely asked-for, because every " +
+    "machine-usable atom already appears as a structured field beside the prose that explains it " +
+    "(`attribution`/`executionProven`/`guardEvidence`/`cause`/`caveat`/`condition`), so there is " +
+    "nothing a consumer would need to recover from a sentence. `basis` points at the evidence for " +
+    "a claim (a ROADMAP id, or a file) and IS stable enough to key on.",
+};
+
+/** The closed sets a report's values must belong to for this projection to key on them. */
+const KNOWN_CAVEATS: ReadonlySet<string> = new Set(Object.keys(CAVEAT_INTERPRETATIONS));
+const KNOWN_ATTRIBUTIONS: ReadonlySet<string> = new Set(Object.keys(ATTRIBUTION_INTERPRETATIONS));
+const KNOWN_ERROR_CAUSES: ReadonlySet<string> = new Set(Object.keys(ERROR_CAUSE_INTERPRETATIONS));
+
+function refuse(what: string, got: unknown, closedSet?: ReadonlySet<string>): never {
+  const set =
+    closedSet === undefined ? "" : ` Expected one of: ${[...closedSet].sort().join(", ")}.`;
+  const why =
+    "This report cannot be explained as it stands. It is refused rather than projected with the " +
+    "unrecognised value dropped: a caveat this build cannot interpret is exactly the case where a " +
+    "consumer must NOT be told there is nothing to qualify.";
+  throw new MalformedReportError(
+    `lethal explain: ${what} — got ${JSON.stringify(got)}.${set} ${why}`,
+  );
+}
+
+/**
+ * Turns an untrusted value — the parse of a report file — into a `SessionReport`, or throws.
+ *
+ * R113: two existing sites (`campaign-freeze.ts`, `campaign-anchors-run.ts`) do
+ * `JSON.parse(await readFile(...)) as SessionReport`, a blind cast that would carry a corrupted or
+ * foreign caveat string straight past the `Caveat` union with no check, compile-time or runtime.
+ * That is dormant for those callers; `lethal explain` reads a committed report off disk and is the
+ * consumer that meets it first, so this is where it stops.
+ *
+ * WHAT IS CHECKED, and only this: the values this projection KEYS ON. `schemaVersion`, every
+ * `validity.caveats` member, every mutant's `coverageAttribution` and `cause`, and the presence of
+ * `coverageAttribution` on a `survived` mutant (without it `executionProven` cannot be computed,
+ * and defaulting it in either direction would be a claim the data does not support). It is NOT a
+ * full structural validator: fields this projection only copies through are trusted, because a
+ * wrong value there produces a visibly wrong copy rather than a confidently wrong MEANING.
+ *
+ * Every failure THROWS. The alternative — skipping the unrecognised value — would produce a
+ * projection whose empty `caveats` is indistinguishable from a genuinely unqualified run, which is
+ * this project's signature bug (empty-vs-empty "matches") in the one place it does most damage.
+ */
+export function assertExplainableReport(value: unknown): SessionReport {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    refuse("input is not a JSON object", value);
+  }
+  const record = value as Record<string, unknown>;
+  if (record.schemaVersion !== REPORT_SCHEMA_VERSION) {
+    const why =
+      "A REPORT_SCHEMA_VERSION bump means a field was renamed, removed, or changed meaning (v1 -> " +
+      "v2 renamed `executionContext` and changed its cardinality), so projecting a report of " +
+      "another version would attach this build's meanings to another build's fields — the one " +
+      "error a projection must not make.";
+    throw new MalformedReportError(
+      `lethal explain: report schemaVersion is ${JSON.stringify(record.schemaVersion)}, but this build explains ${REPORT_SCHEMA_VERSION}. ${why}`,
+    );
+  }
+  const validity = record.validity;
+  if (typeof validity !== "object" || validity === null) {
+    refuse("report has no `validity` object", validity);
+  }
+  const caveats = (validity as Record<string, unknown>).caveats;
+  if (!Array.isArray(caveats)) {
+    refuse("`validity.caveats` is not an array", caveats);
+  }
+  for (const c of caveats) {
+    if (typeof c !== "string" || !KNOWN_CAVEATS.has(c)) {
+      refuse("`validity.caveats` contains a value this build cannot interpret", c, KNOWN_CAVEATS);
+    }
+  }
+  const mutants = record.mutants;
+  if (!Array.isArray(mutants)) {
+    refuse("`mutants` is not an array", mutants);
+  }
+  for (const m of mutants) {
+    if (typeof m !== "object" || m === null) refuse("`mutants` contains a non-object entry", m);
+    const mutant = m as Record<string, unknown>;
+    const where = `mutant ${JSON.stringify(mutant.mutantCode)}`;
+    const attribution = mutant.coverageAttribution;
+    if (
+      attribution !== undefined &&
+      (typeof attribution !== "string" || !KNOWN_ATTRIBUTIONS.has(attribution))
+    ) {
+      refuse(
+        `${where} has a coverageAttribution this build cannot interpret`,
+        attribution,
+        KNOWN_ATTRIBUTIONS,
+      );
+    }
+    if (mutant.verdict === "survived" && attribution === undefined) {
+      refuse(
+        `${where} is \`survived\` with no coverageAttribution, so whether any test is measured to have executed it cannot be decided`,
+        mutant.coverageAttribution,
+        KNOWN_ATTRIBUTIONS,
+      );
+    }
+    const cause = mutant.cause;
+    if (cause !== undefined && (typeof cause !== "string" || !KNOWN_ERROR_CAUSES.has(cause))) {
+      refuse(`${where} has an error cause this build cannot interpret`, cause, KNOWN_ERROR_CAUSES);
+    }
+  }
+  return value as SessionReport;
+}
+
+/** Looks up a keyed interpretation, throwing rather than substituting one. `assertExplainableReport`
+ *  has already checked the value, so reaching the throw means the two drifted apart. */
+function keyed<K extends string>(
+  registry: Record<K, Interpretation>,
+  key: K,
+  what: string,
+): Interpretation {
+  const found: Interpretation | undefined = registry[key];
+  if (found === undefined) refuse(`${what} has no interpretation`, key);
+  return found;
+}
+
+function survivorOf(m: MutantOutcome): ExplainSurvivor {
+  const attribution = m.coverageAttribution;
+  if (attribution === undefined) {
+    // Unreachable via `explain` (validated above); kept because this function is where the claim
+    // `executionProven` makes would otherwise be fabricated.
+    refuse(`survivor ${JSON.stringify(m.mutantCode)} has no coverageAttribution`, undefined);
+  }
+  const guardEvidence = guardEvidenceOf(m.guardObserved);
+  return {
+    mutantCode: m.mutantCode,
+    file: m.file,
+    line: m.line,
+    codeunitName: m.codeunitName,
+    procedureName: m.procedureName,
+    operatorName: m.operatorName,
+    originalText: m.originalText,
+    mutatedText: m.mutatedText,
+    attribution,
+    // The one derivation this projection makes about the TARGET, and it is a restatement of a
+    // measurement rather than a judgement: `exact` is a member-level coverage match.
+    executionProven: attribution === "exact",
+    coveringTests: m.coveringTests,
+    guardEvidence,
+    interpretation: keyed(ATTRIBUTION_INTERPRETATIONS, attribution, "coverageAttribution"),
+    guardInterpretation: keyed(GUARD_EVIDENCE_INTERPRETATIONS, guardEvidence, "guardObserved"),
+  };
+}
+
+function notMeasuredOf(m: MutantOutcome): ExplainNotMeasured {
+  const { cause } = m;
+  return {
+    mutantCode: m.mutantCode,
+    file: m.file,
+    line: m.line,
+    operatorName: m.operatorName,
+    ...(cause !== undefined ? { cause } : {}),
+    ...(m.failureNote !== undefined ? { failureNote: m.failureNote } : {}),
+    ...(cause !== undefined
+      ? { interpretation: keyed(ERROR_CAUSE_INTERPRETATIONS, cause, "cause") }
+      : {}),
+  };
+}
+
+function toolConditionsOf(report: SessionReport): ExplainToolCondition[] {
+  const conditions: ExplainToolCondition[] = [];
+  const { quarantined, resumedFrom } = report;
+  if (quarantined !== undefined) {
+    conditions.push({
+      condition: "quarantined",
+      count: 0,
+      ...(quarantined.reason !== "" ? { detail: quarantined.reason } : {}),
+      interpretation: QUARANTINE_INTERPRETATION,
+    });
+  }
+  // Non-zero only. A zero here is an honest "the resume skipped nothing", and emitting a condition
+  // for it would put a clean resume in the same shape as a stranded one.
+  if (resumedFrom !== undefined && resumedFrom.skippedStranded > 0) {
+    conditions.push({
+      condition: "stranded-skips",
+      count: resumedFrom.skippedStranded,
+      interpretation: STRANDED_SKIP_INTERPRETATION,
+    });
+  }
+  return conditions;
+}
+
+/**
+ * Projects a finished `SessionReport`. Validates first (`assertExplainableReport`) even though the
+ * parameter is typed: the callers that reach a report off disk get there through a cast, so the
+ * type is a promise this function must not take on trust.
+ */
+export function explain(report: SessionReport): ExplainOutput {
+  const validated = assertExplainableReport(report);
+  const { counts, validity } = validated;
+  return {
+    explainSchemaVersion: EXPLAIN_SCHEMA_VERSION,
+    derivedFromReportSchemaVersion: validated.schemaVersion,
+    contract: EXPLAIN_CONTRACT,
+    score: {
+      mutationScore: validated.mutationScore,
+      reliability: validity.reliability,
+      scoreDescribes: validity.scoreDescribes,
+      scored: validity.scoredMutants.scored,
+      recorded: validity.scoredMutants.recorded,
+      excludedFromScore: {
+        errors: counts.errors,
+        noCoverage: counts.noCoverage,
+        knownSurvivors: counts.knownSurvivors,
+      },
+    },
+    caveats: validity.caveats.map((caveat) => ({
+      caveat,
+      interpretation: keyed(CAVEAT_INTERPRETATIONS, caveat, "caveat"),
+    })),
+    survivors: validated.mutants.filter((m) => m.verdict === "survived").map(survivorOf),
+    notMeasured: validated.mutants.filter((m) => m.verdict === "error").map(notMeasuredOf),
+    toolConditions: toolConditionsOf(validated),
+  };
+}
