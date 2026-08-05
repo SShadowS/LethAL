@@ -60,20 +60,32 @@ export interface DoctorDeps {
    *  read `envTool.requireStatus` consults (env-tool-session.ts); or
    *  `ENV_STATUS_REACHABLE_NO_VENDOR_STATUS` when no vendor status concept applies (a directly-
    *  configured container, or an envTool config with no `requireStatus` declared) — see that
-   *  constant's doc comment for why this must be a distinct sentinel, never an invented "Running". */
-  readonly envStatus: () => Promise<string>;
+   *  constant's doc comment for why this must be a distinct sentinel, never an invented "Running".
+   *
+   *  Absent (not merely a dep that throws) for a CREATE-MODE envTool config — final review: there
+   *  is no environment to probe yet (it does not exist until `lethal run` provisions one), and the
+   *  only "raw signal" a create-mode resolve can produce is an internal placeholder-substitution
+   *  error (`{envId}` has no value before creation), which read as a bug in the user's config. An
+   *  absent dep is how `runDoctor` skips a check ENTIRELY (see below) rather than reporting a
+   *  confusing failure for a question that has no answer yet — `cli.ts`'s `buildDoctorDeps` routes
+   *  the reason into a caveat instead. */
+  readonly envStatus?: () => Promise<string>;
   /** The local durable quarantine record for this tier: `"clear"` when absent, otherwise its
    *  detail — the same record `runSession`'s quarantine consult (orchestrator.ts) reads via
-   *  `QuarantineStore.read`. */
-  readonly quarantine: () => Promise<string>;
+   *  `QuarantineStore.read`. Absent for a create-mode envTool config — same reasoning as
+   *  `envStatus`: there is no tier identity (server/serverInstance) to key a quarantine record on
+   *  until a real environment exists. */
+  readonly quarantine?: () => Promise<string>;
   /** The deployed `LethAL Control` app's raw reported `semver` (R28's `HarnessInfo.semver`) —
    *  NOT pre-compared; `runDoctor` does that itself against `MIN_CONTROL_VERSION` via the same
    *  `compareAppVersions` `HarnessVerifier.checkControlVersion` uses (harness.ts), so the two
-   *  never drift onto different comparison rules. */
-  readonly controlVersion: () => Promise<string>;
+   *  never drift onto different comparison rules. Absent for a create-mode envTool config — same
+   *  reasoning as `envStatus`: no control app is published anywhere yet to ask. */
+  readonly controlVersion?: () => Promise<string>;
   /** Resolved `alc`/`altool` paths (`defaultAlToolPaths`/`resolveAlToolPaths`, publisher.ts/
    *  cli.ts) — an empty string means "not found". Whether an empty `altool` is a FAILURE depends
-   *  on `DoctorConfig.altoolRequired` — see that field. */
+   *  on `DoctorConfig.altoolRequired` — see that field. Always present, including in create mode:
+   *  resolving a local compiler/publisher path needs no environment to exist. */
   readonly toolPaths: () => Promise<{ readonly alc: string; readonly altool: string }>;
 }
 
@@ -204,20 +216,39 @@ function checkToolPaths(
 }
 
 /**
- * Runs EVERY check before reporting — never stops at the first failure. That is the entire point
- * over `lethal run`'s own pre-flight refusals, which each fire (correctly) but one at a time,
- * across however many slow round-trips it takes a user to fix one problem and discover the next.
- * Read-only: nothing here calls a mutating dependency, and nothing here retries a dep that
+ * Runs EVERY AVAILABLE check before reporting — never stops at the first failure. That is the
+ * entire point over `lethal run`'s own pre-flight refusals, which each fire (correctly) but one at
+ * a time, across however many slow round-trips it takes a user to fix one problem and discover the
+ * next. Read-only: nothing here calls a mutating dependency, and nothing here retries a dep that
  * answered — see `DoctorDeps`'s doc comment.
+ *
+ * "Available" — final review: `envStatus`/`quarantine`/`controlVersion` are each OPTIONAL on
+ * `DoctorDeps`, and a check whose dep is absent is skipped entirely (never run, never reported —
+ * not even as a failure), for a create-mode envTool config where none of the three has an answer
+ * yet (see each dep's own doc comment). `tool-paths` is never conditional — resolving a local
+ * `alc`/`altool` path needs no environment to exist, in any mode.
  */
 export async function runDoctor(cfg: DoctorConfig, deps: DoctorDeps): Promise<DoctorReport> {
   const envReady = cfg.envReady ?? DEFAULT_ENV_READY;
   const altoolRequired = cfg.altoolRequired ?? DEFAULT_ALTOOL_REQUIRED;
-  const checks = await Promise.all([
-    runCheck("environment", async () => checkEnvironment(await deps.envStatus(), envReady)),
-    runCheck("quarantine", async () => checkQuarantine(await deps.quarantine())),
-    runCheck("control-version", async () => checkControlVersion(await deps.controlVersion())),
-    runCheck("tool-paths", async () => checkToolPaths(await deps.toolPaths(), altoolRequired)),
-  ]);
+  const { envStatus, quarantine, controlVersion, toolPaths } = deps;
+  const checkPromises: Promise<DoctorCheck>[] = [];
+  if (envStatus !== undefined) {
+    checkPromises.push(
+      runCheck("environment", async () => checkEnvironment(await envStatus(), envReady)),
+    );
+  }
+  if (quarantine !== undefined) {
+    checkPromises.push(runCheck("quarantine", async () => checkQuarantine(await quarantine())));
+  }
+  if (controlVersion !== undefined) {
+    checkPromises.push(
+      runCheck("control-version", async () => checkControlVersion(await controlVersion())),
+    );
+  }
+  checkPromises.push(
+    runCheck("tool-paths", async () => checkToolPaths(await toolPaths(), altoolRequired)),
+  );
+  const checks = await Promise.all(checkPromises);
   return { checks, ok: checks.every((c) => c.ok) };
 }

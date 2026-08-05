@@ -508,10 +508,10 @@ export function helpText(version: string): string {
   return `lethal ${version} — mutation testing for Business Central AL
 
 USAGE
-  lethal run              --project <dir> --tests <dir> --backend <bcdev|al-runner> [options]
-  lethal run              --project <dir> --dry-run
-  lethal clear-quarantine --server <url> --instance <name>
-  lethal clear-ceiling    --project <dir> --server <url> --instance <name> [--db <path>] [--file <name>]
+  lethal run               --project <dir> --tests <dir> --backend <bcdev|al-runner> [options]
+  lethal run               --project <dir> --dry-run
+  lethal clear-quarantine  --server <url> --instance <name>
+  lethal clear-ceiling     --project <dir> --server <url> --instance <name> [--db <path>] [--file <name>]
   lethal force-reset-lease --server <url> --instance <name> --config <path> [--project <dir>]
   lethal doctor            --config <path> [--project <dir>]
 
@@ -2498,6 +2498,17 @@ export const DOCTOR_NOT_CHECKED =
   "cannot still refuse for any of these reasons.";
 
 /**
+ * Final review: printed ONLY for a create-mode envTool config (`envTool.envId` absent) —
+ * `environment`/`quarantine`/`control-version` are all omitted from `checks` entirely for exactly
+ * this config shape (see `buildDoctorDeps`'s `isCreateMode`), so a reader needs to know WHY those
+ * three are simply missing rather than passing, failing, or silently forgotten.
+ */
+export const DOCTOR_CREATE_MODE_CAVEAT =
+  "envTool.envId is absent (create-mode): this config creates a NEW environment on every " +
+  "`lethal run`, so environment status, the quarantine record, and the control-app version have " +
+  "nothing to check yet — none exists until a run provisions one. Only tool-paths is checked here.";
+
+/**
  * The `packageCachePath` `validateBcDevConfig` requires (it is `BcDevConfigSection`'s shared
  * shape) when a read-only resolver has nothing else to offer for it — a config that leaves
  * `packageCachePath` to `downloadSymbols` (no static path declared — legal per
@@ -2564,6 +2575,13 @@ function doctorConfigFromEnvTool(
  * `"clear"` — a check that structurally could not fail, counted as a pass. See `DOCTOR_NOT_CHECKED`
  * (which now names it, and R110) rather than a fifth entry in `DoctorDeps` pretending to observe
  * something no read-only call can.
+ *
+ * Create-mode envTool configs (final review): `environment`/`quarantine`/`control-version` are
+ * omitted from the returned `deps` entirely (not merely made to throw a friendlier error) when
+ * `envTool.envId` is absent — `isCreateMode` below. Those three all need an environment that does
+ * not exist yet; the honest failure mode is "nothing to check", and `runDoctor` already skips a
+ * check whose dep is absent (doctor.ts) rather than reporting it. `createModeCaveat` names WHY, so
+ * a reader sees the reason rather than three checks silently missing.
  */
 export async function buildDoctorDeps(
   configFile: LethalConfigFile,
@@ -2574,7 +2592,11 @@ export async function buildDoctorDeps(
     readonly fetchFn?: FetchFn;
     readonly makeEnvToolClient?: (cfg: EnvToolConfigSection) => EnvToolClient;
   } = {},
-): Promise<{ readonly cfg: DoctorConfig; readonly deps: DoctorDeps }> {
+): Promise<{
+  readonly cfg: DoctorConfig;
+  readonly deps: DoctorDeps;
+  readonly createModeCaveat?: string;
+}> {
   let envCfg: EnvToolConfigSection | undefined;
   if (configFile.envTool !== undefined) {
     const bcdevRaw = configFile.bcdev ?? {};
@@ -2594,10 +2616,22 @@ export async function buildDoctorDeps(
     // (env-tool-session.ts). `server`/`serverInstance`/credentials are deliberately NOT required
     // here: in env-tool mode they don't exist yet (resolved later — see `resolvedBcdev` below).
     requireBcDevRawFields(bcdevRaw);
+  } else if (configFile.bcdev === undefined) {
+    // Final review (Minor): `validateBcDevConfig`'s own message says `...(required for --backend
+    // bcdev)` — accurate for `run`, which HAS a --backend flag to name; doctor has none. An
+    // al-runner-only project (no `bcdev` section at all — `run --backend al-runner` never touches
+    // `configFile.bcdev`, so this is a perfectly valid config) hit that message and read it as
+    // "your config is broken", when the honest answer is narrower: doctor's checks are all live-BC
+    // concerns and none of them apply here yet. Scoped to `bcdev` being FULLY ABSENT — a `bcdev`
+    // section that IS present but missing a required field is a genuine typo, and
+    // `validateBcDevConfig`'s own field-listing message below is the right one for that.
+    throw new Error(
+      'lethal doctor only checks a bcdev-configured project — environment, quarantine, control-app version and alc/altool are all live-BC concerns. This config has no "bcdev" section; if this is an al-runner project (--backend al-runner), there is nothing here for doctor to check today.',
+    );
   } else {
-    // No envTool: this IS exactly what `run` validates (`buildBackend`/`resourceIdentityFor`/
-    // `leaseSessionFor` all call this on the SAME `configFile.bcdev`) — fail here, eagerly, rather
-    // than lazily inside whichever check happens to touch it first.
+    // No envTool, `bcdev` present: this IS exactly what `run` validates (`buildBackend`/
+    // `resourceIdentityFor`/`leaseSessionFor` all call this on the SAME `configFile.bcdev`) — fail
+    // here, eagerly, rather than lazily inside whichever check happens to touch it first.
     validateBcDevConfig(configFile.bcdev);
   }
   const makeClient =
@@ -2607,6 +2641,20 @@ export async function buildDoctorDeps(
   // `let` across a nested arrow function even after an `!== undefined` check, since it cannot
   // prove nothing reassigns it before the closure runs.
   const resolvedEnvCfg = envCfg;
+
+  // Final review: a CREATE-MODE envTool config (`envId` absent — `validateEnvToolConfig`'s own
+  // create-mode branch, env-tool.ts:288-306; `requireStatus` is REFUSED there, env-tool.ts:378)
+  // is structurally valid and `lethal run` provisions it. But `environment`/`quarantine`/
+  // `control-version` all need an environment that does not exist yet — `resolveEnvToolOnce`
+  // would substitute `{envId}` into a `resolve` block's command with nothing supplied, and
+  // `renderCommand` throws BY NAME on that (env-tool.ts): "no value available for placeholder
+  // {envId}". That message names an INTERNAL placeholder, reads as a bug in the user's config,
+  // and would send someone editing a file that is correct. Detected here, once, and used below to
+  // omit those three deps entirely (never define them as failing checks) rather than widen the
+  // read-only boundary to make an environment exist to check.
+  const isCreateMode =
+    resolvedEnvCfg !== undefined &&
+    (resolvedEnvCfg.envId === undefined || resolvedEnvCfg.envId === "");
 
   // Spawns ONLY `envTool.resolve` — never createEnv/startEnv/publish/downloadSymbols (constraint
   // 4, the hard read-only boundary). Memoized: `environment`/`quarantine`/`control-version` all
@@ -2752,30 +2800,65 @@ export async function buildDoctorDeps(
       // branch, cli.ts:1548, R21) — mirror `run`'s own leniency rather than being stricter than it.
       ...(configFile.envTool !== undefined ? { altoolRequired: false } : {}),
     },
-    deps: { envStatus, quarantine, controlVersion, toolPaths },
+    // Create mode: omit the three deps ENTIRELY (not merely make them throw a friendlier error) —
+    // `runDoctor` skips a check whose dep is absent, rather than reporting a failure for a
+    // question that has no answer yet. See `DOCTOR_CREATE_MODE_CAVEAT` and `doctorFromCli` below.
+    deps: isCreateMode ? { toolPaths } : { envStatus, quarantine, controlVersion, toolPaths },
+    ...(isCreateMode ? { createModeCaveat: DOCTOR_CREATE_MODE_CAVEAT } : {}),
   };
 }
 
 /** Renders a `DoctorReport` the same way every other subcommand renders its own outcome — one
  *  named line per check, then the machine-readable summary word `clear-quarantine`/`clear-ceiling`
- *  already use for their own top line. */
-export function renderDoctorReport(report: DoctorReport): string {
+ *  already use for their own top line. `createModeCaveat` (final review) is an ADDITIONAL,
+ *  config-shape-specific line appended after `DOCTOR_NOT_CHECKED` — see `buildDoctorDeps`'s
+ *  `isCreateMode` for what triggers it and why it is not merged into that fixed constant (it is
+ *  conditional; `DOCTOR_NOT_CHECKED` is universal). */
+export function renderDoctorReport(report: DoctorReport, createModeCaveat?: string): string {
   const lines = report.checks.map((c) => `  [${c.ok ? "ok" : "FAIL"}] ${c.name}: ${c.detail}`);
   return [
     report.ok ? "ok: every check passed" : "FAIL: at least one check failed",
     ...lines,
     "",
     DOCTOR_NOT_CHECKED,
+    ...(createModeCaveat !== undefined ? [createModeCaveat] : []),
   ].join("\n");
 }
 
-export async function doctorFromCli(parsed: DoctorCliConfig): Promise<number> {
+/**
+ * Final review (Important 1): ALWAYS calls the real `buildDoctorDeps` — never a swappable
+ * top-level resolver. R51 review round 1 found and reverted exactly that shape on
+ * `forceResetLeaseFromCli` (`deps.resolveConfig ?? resolveForceResetLeaseConfig`): a test could
+ * pin "calls whatever it was handed" while the REAL production default, reached by every actual
+ * invocation via `main()`'s bare call, stayed completely unpinned. The fix kept there — and the
+ * one repeated here — is injection ONE LAYER DEEPER: the low-level I/O seams `buildDoctorDeps`
+ * itself already accepts (`fetchFn`/`quarantineDir`/`alToolPaths`/`makeEnvToolClient`), threaded
+ * through unchanged, so a test exercises the REAL `buildDoctorDeps` and the real `renderDoctorReport`/
+ * exit-code logic, with only the network/filesystem swapped out underneath it.
+ */
+export async function doctorFromCli(
+  parsed: DoctorCliConfig,
+  deps: {
+    readonly quarantineDir?: string;
+    readonly alToolPaths?: typeof defaultAlToolPaths;
+    readonly fetchFn?: FetchFn;
+    readonly makeEnvToolClient?: (cfg: EnvToolConfigSection) => EnvToolClient;
+  } = {},
+): Promise<number> {
   const configFile = await loadLethalConfigFile(parsed.configPath);
-  const { cfg, deps } = await buildDoctorDeps(configFile, {
+  const {
+    cfg,
+    deps: doctorDeps,
+    createModeCaveat,
+  } = await buildDoctorDeps(configFile, {
     ...(parsed.projectDir !== undefined ? { projectDir: parsed.projectDir } : {}),
+    ...(deps.quarantineDir !== undefined ? { quarantineDir: deps.quarantineDir } : {}),
+    ...(deps.alToolPaths !== undefined ? { alToolPaths: deps.alToolPaths } : {}),
+    ...(deps.fetchFn !== undefined ? { fetchFn: deps.fetchFn } : {}),
+    ...(deps.makeEnvToolClient !== undefined ? { makeEnvToolClient: deps.makeEnvToolClient } : {}),
   });
-  const report = await runDoctor(cfg, deps);
-  console.log(renderDoctorReport(report));
+  const report = await runDoctor(cfg, doctorDeps);
+  console.log(renderDoctorReport(report, createModeCaveat));
   return report.ok ? 0 : 1;
 }
 

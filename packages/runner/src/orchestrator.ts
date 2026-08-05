@@ -1824,9 +1824,20 @@ function isConfirmedTerminalPublishFailure(err: unknown): boolean {
  *   permanent false refusal caused by a syntax error.
  * - A VERSION CONFLICT is BC naming the installed version verbatim; the caller retries it once,
  *   above that version, and usually succeeds. It is a deterministic rejection of this artifact's
- *   VERSION, not evidence about its SIZE. It never reaches this function on the retry-success
- *   path (the accepted outcome is recorded instead), and this guard keeps it from being recorded
- *   as a size failure on the path where the retry then fails for some other reason.
+ *   VERSION, not evidence about its SIZE.
+ *
+ * Final review: the `parseVersionConflict` guard below is UNREACHABLE from its only caller today
+ * (`runSession`'s deploy step, ~orchestrator.ts:2547) — a prior comment here claimed it protected
+ * "the path where the retry then fails for some other reason", which asserts a mechanism the code
+ * does not implement (the class of defect Task 2 already took two Importants for; do not repeat
+ * it a third time). The caller pre-filters: it calls `parseVersionConflict` on `deployErr` BEFORE
+ * ever reaching this function, and only ever hands this function an error already PROVEN not to
+ * be one — either the first attempt's error, once confirmed non-conflict (the retry block is
+ * skipped entirely), or the retry's error, once confirmed non-conflict (a second conflict throws
+ * immediately instead of falling through). Verified: deleting the line below leaves the full
+ * suite green (212 tests at time of writing). Kept anyway, as defence-in-depth against a FUTURE
+ * caller that does not pre-filter the way this one does — a version conflict reaching this
+ * function through some other path must still not be misrecorded as a SIZE failure.
  */
 function classifyDeployFailure(err: unknown): PublishOutcome | undefined {
   if (parseVersionConflict(messageOf(err)) !== null) return undefined;

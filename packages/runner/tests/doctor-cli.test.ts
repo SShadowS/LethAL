@@ -1,11 +1,20 @@
-import { describe, expect, test } from "bun:test";
-import { mkdtemp } from "node:fs/promises";
+import { describe, expect, spyOn, test } from "bun:test";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { BcDevConfigSection, LethalConfigFile } from "../src/cli";
-import { buildBackend, buildDoctorDeps, validateBcDevConfig } from "../src/cli";
+import {
+  DOCTOR_CREATE_MODE_CAVEAT,
+  DOCTOR_NOT_CHECKED,
+  buildBackend,
+  buildDoctorDeps,
+  doctorFromCli,
+  renderDoctorReport,
+  validateBcDevConfig,
+} from "../src/cli";
 import { ENV_STATUS_REACHABLE_NO_VENDOR_STATUS, runDoctor } from "../src/doctor";
-import { EnvToolClient } from "../src/env-tool";
+import type { DoctorReport } from "../src/doctor";
+import { EnvToolClient, validateEnvToolConfig } from "../src/env-tool";
 import type { EnvToolConfigSection } from "../src/env-tool";
 import { startEnvToolSession } from "../src/env-tool-session";
 import {
@@ -67,13 +76,32 @@ function errorFetch(status: number, body: string): typeof fetch {
 }
 
 describe("lethal doctor CLI wiring — config-level parity", () => {
-  test("a config `run` would reject for a missing bcdev section also makes doctor's config-building step refuse", async () => {
+  // Final review (Minor 4): an EMPTY config (`bcdev` fully absent) is exactly the shape a valid
+  // al-runner-only project has — `run --backend al-runner` never touches `configFile.bcdev` at
+  // all, so `validateBcDevConfig`'s own "...required for --backend bcdev" message is confusing
+  // for a command with no --backend flag. `run --backend bcdev` still refuses this config (same
+  // as before — parity holds), but doctor's OWN message is now scoped to what doctor actually
+  // needs, not a copy of `run`'s.
+  test("an empty config (the al-runner shape) refuses with doctor's own scoped message, not run's --backend one", async () => {
     const configFile: LethalConfigFile = {};
     expect(() => validateBcDevConfig(configFile.bcdev)).toThrow(/missing the "bcdev" section/);
+    await expect(buildDoctorDeps(configFile)).rejects.toThrow(
+      /doctor only checks a bcdev-configured project/,
+    );
+    await expect(buildDoctorDeps(configFile)).rejects.toThrow(/al-runner/);
+  });
+
+  // A `bcdev` section that IS present but missing a required field is a genuine typo, not the
+  // al-runner-ambiguous case above — `validateBcDevConfig`'s own field-listing message is the
+  // right one here, and doctor must still surface it (not the al-runner-scoped message, which
+  // would be wrong: this config clearly intends a bcdev/live-BC project).
+  test("a present-but-incomplete bcdev section still refuses with validateBcDevConfig's own field-listing message", async () => {
+    const configFile: LethalConfigFile = { bcdev: { company: "CRONUS" } };
+    expect(() => validateBcDevConfig(configFile.bcdev)).toThrow(/missing required field/);
     // `buildDoctorDeps` calls the SAME validator internally, not a second parse — this is not two
     // independent assertions that happen to agree, it is one piece of shared machinery exercised
     // twice. Covers every remaining check's shared prerequisite.
-    await expect(buildDoctorDeps(configFile)).rejects.toThrow(/missing the "bcdev" section/);
+    await expect(buildDoctorDeps(configFile)).rejects.toThrow(/missing required field/);
   });
 });
 
@@ -189,9 +217,17 @@ describe("lethal doctor CLI wiring — environment (R34)", () => {
     ).rejects.toThrow(/reports status "Stopped", not "Running"/);
 
     // What `lethal doctor` does against the IDENTICAL cfg/spawn: same resolve, same comparison.
+    // Final review (Minor 5): `fetchFn`/`quarantineDir` injected so `quarantine`/`control-version`
+    // — which `runDoctor` also runs, this is not create-mode — never touch the real network or the
+    // real machine-global quarantine dir; this test asserts only `environment`, so what those two
+    // report does not matter, but a REAL outbound `fetch` to `https://host/env-4711` cost ~2.7s
+    // per run before this, relying on DNS failing fast.
     const configFile: LethalConfigFile = { bcdev: BCDEV_RAW, envTool: cfg };
+    const dir = await mkdtemp(join(tmpdir(), "lethal-doctor-envtool-stopped-"));
     const { cfg: doctorCfg, deps } = await buildDoctorDeps(configFile, {
       makeEnvToolClient: (c) => new EnvToolClient(c, { spawn }),
+      fetchFn: okFetch(info()),
+      quarantineDir: dir,
     });
     const report = await runDoctor(doctorCfg, deps);
     const check = report.checks.find((c) => c.name === "environment");
@@ -220,11 +256,117 @@ describe("lethal doctor CLI wiring — environment (R34)", () => {
     expect(session.bcdev.baseUrl).toBe("https://host/env-4711");
 
     const configFile: LethalConfigFile = { bcdev: BCDEV_RAW, envTool: cfg };
+    // Final review (Minor 5): same fix as the Stopped test above — no real network/quarantine dir.
+    const dir = await mkdtemp(join(tmpdir(), "lethal-doctor-envtool-running-"));
     const { cfg: doctorCfg, deps } = await buildDoctorDeps(configFile, {
       makeEnvToolClient: (c) => new EnvToolClient(c, { spawn }),
+      fetchFn: okFetch(info()),
+      quarantineDir: dir,
     });
     const report = await runDoctor(doctorCfg, deps);
     expect(report.checks.find((c) => c.name === "environment")?.ok).toBe(true);
+  });
+});
+
+/**
+ * Final review (Important 4): a create-mode envTool config (`envId` absent, `createEnv`/
+ * `startEnv`/`readyWhen`/`publishApps`/`deleteEnv` declared — `validateEnvToolConfig`'s dedicated
+ * create-mode branch, env-tool.ts:288-306) is structurally valid, and `lethal run` provisions it.
+ * `requireStatus` is REFUSED in create mode (env-tool.ts:378), so it is never configured here.
+ * Round-0/1 `buildDoctorDeps` supplied `envId: resolvedEnvCfg.envId ?? ""` unconditionally, and a
+ * `resolve` block's `{envId}` placeholder then had nothing to substitute — `renderCommand` throws
+ * BY NAME: `envTool: no value available for placeholder {envId} while building "env get ...`. That
+ * message names an INTERNAL placeholder, reads as a bug in the user's (correct) config, and would
+ * send someone editing a file that needs no edit. The fix omits `environment`/`quarantine`/
+ * `control-version` from `deps` entirely for this config shape, leaving only `tool-paths` (still
+ * meaningful — resolving a local compiler path needs no environment).
+ */
+describe("lethal doctor CLI wiring — create-mode envTool config (final review, Important 4)", () => {
+  function createModeCfg(): EnvToolConfigSection {
+    return {
+      toolPath: "tool.exe",
+      // envId deliberately absent — this IS the create-mode trigger.
+      resolve: [
+        { command: ["env", "get", "{envId}", "--json"], reads: { baseUrl: "url" } },
+        { command: ["env", "users", "{envId}", "--json"], reads: { username: "u", password: "p" } },
+      ],
+      publish: { command: ["publish", "{envId}", "{appFile}"] },
+      createEnv: { command: ["env", "create", "--json"], reads: { envId: "id" } },
+      startEnv: { command: ["env", "start", "{envId}"] },
+      readyWhen: {
+        command: ["env", "status", "{envId}", "--json"],
+        reads: { status: "status" },
+        equals: "Running",
+      },
+      deleteEnv: { command: ["env", "delete", "{envId}"] },
+      publishApps: ["tests.app"],
+    };
+  }
+
+  test("`run` accepts a create-mode config structurally (validateEnvToolConfig, the same validator `resolveEnvToolSession` calls)", () => {
+    // `hasPackageCachePath: true` matches `BCDEV_RAW.packageCachePath` being set, exactly what
+    // `buildDoctorDeps`/`resolveEnvToolSession` derive from `configFile.bcdev` in the tests below.
+    expect(() =>
+      validateEnvToolConfig(createModeCfg(), {
+        env: {},
+        hasPackageCachePath: true,
+        bcdevDeclaredKeys: [],
+      }),
+    ).not.toThrow();
+  });
+
+  test("doctor omits environment/quarantine/control-version for create mode, keeps tool-paths, and names why", async () => {
+    const cfg = createModeCfg();
+    const configFile: LethalConfigFile = { bcdev: BCDEV_RAW, envTool: cfg };
+    const {
+      cfg: doctorCfg,
+      deps,
+      createModeCaveat,
+    } = await buildDoctorDeps(configFile, {
+      alToolPaths: async () => ({ alcPath: "C:/alc.exe", altoolPath: "C:/altool.exe" }),
+    });
+    expect(createModeCaveat).toBe(DOCTOR_CREATE_MODE_CAVEAT);
+    const report = await runDoctor(doctorCfg, deps);
+    expect(report.checks.map((c) => c.name)).toEqual(["tool-paths"]);
+    expect(report.checks[0]?.ok).toBe(true);
+    expect(report.ok).toBe(true);
+  });
+
+  test("buildDoctorDeps never calls resolveEnvToolOnce for create mode — no {envId} placeholder crash", async () => {
+    // A spawn that THROWS if ever invoked: proves the create-mode omission means "never resolve",
+    // not merely "resolve, then discard the result" — the exact machinery a real create-mode
+    // `resolve` would fail inside (an unsubstitutable {envId} placeholder) never runs at all.
+    const spawnThatMustNotRun = async (): Promise<{
+      exitCode: number;
+      stdout: string;
+      stderr: string;
+    }> => {
+      throw new Error("spawn must not be called for a create-mode config's omitted checks");
+    };
+    const cfg = createModeCfg();
+    const configFile: LethalConfigFile = { bcdev: BCDEV_RAW, envTool: cfg };
+    const { cfg: doctorCfg, deps } = await buildDoctorDeps(configFile, {
+      makeEnvToolClient: (c) => new EnvToolClient(c, { spawn: spawnThatMustNotRun }),
+      alToolPaths: async () => ({ alcPath: "C:/alc.exe", altoolPath: "C:/altool.exe" }),
+    });
+    const report = await runDoctor(doctorCfg, deps);
+    expect(report.ok).toBe(true);
+  });
+
+  test("the caveat appears in the rendered report", async () => {
+    const cfg = createModeCfg();
+    const configFile: LethalConfigFile = { bcdev: BCDEV_RAW, envTool: cfg };
+    const {
+      cfg: doctorCfg,
+      deps,
+      createModeCaveat,
+    } = await buildDoctorDeps(configFile, {
+      alToolPaths: async () => ({ alcPath: "C:/alc.exe", altoolPath: "C:/altool.exe" }),
+    });
+    const report = await runDoctor(doctorCfg, deps);
+    const rendered = renderDoctorReport(report, createModeCaveat);
+    expect(rendered).toContain(DOCTOR_CREATE_MODE_CAVEAT);
+    expect(rendered).not.toContain("{envId}");
   });
 });
 
@@ -489,5 +631,139 @@ describe("lethal doctor CLI wiring — tool-paths", () => {
     const report = await runDoctor(cfg, deps);
     const check = report.checks.find((c) => c.name === "tool-paths");
     expect(check?.ok).toBe(true);
+  });
+});
+
+/**
+ * Final review (Important 1) — "the sixth 'cannot fail'": `renderDoctorReport` and `doctorFromCli`
+ * had ZERO tests. The reviewer replaced `renderDoctorReport`'s entire body with a constant string
+ * and ran `doctor.test.ts` + `doctor-cli.test.ts` + `cli.test.ts`: 107 pass / 0 fail. Three things
+ * rode on it, all unpinned: `DOCTOR_NOT_CHECKED` (this branch's ENTIRE answer to the round-1
+ * Critical — the lease check was withdrawn into a caveat "printed on every invocation", and
+ * deleting that printing broke nothing), the `[ok]`/`[FAIL]` per-check rendering, and
+ * `doctorFromCli`'s documented exit code (the one thing the README tells a user/script to rely
+ * on). Pinned below, both as a pure-function unit test (`renderDoctorReport`) and end-to-end
+ * (`doctorFromCli`, real config file on disk, real `buildDoctorDeps` with only the low-level I/O
+ * seams swapped — see `doctorFromCli`'s own doc comment for why NOT a top-level swap).
+ */
+describe("renderDoctorReport (final review, Important 1)", () => {
+  function reportOf(checks: DoctorReport["checks"]): DoctorReport {
+    return { checks, ok: checks.every((c) => c.ok) };
+  }
+
+  test("renders [ok] for a passing check and [FAIL] for a failing one, by name", () => {
+    const rendered = renderDoctorReport(
+      reportOf([
+        { name: "environment", ok: true, detail: "reachable (no vendor status reported)" },
+        { name: "quarantine", ok: false, detail: "run: activation deadline exceeded" },
+      ]),
+    );
+    expect(rendered).toMatch(/\[ok\] environment: reachable \(no vendor status reported\)/);
+    expect(rendered).toMatch(/\[FAIL\] quarantine: run: activation deadline exceeded/);
+  });
+
+  test("the top line says ok only when every check passed", () => {
+    const allOk = renderDoctorReport(reportOf([{ name: "tool-paths", ok: true, detail: "x" }]));
+    expect(allOk).toMatch(/^ok: every check passed/);
+    const oneFailed = renderDoctorReport(
+      reportOf([{ name: "tool-paths", ok: false, detail: "x" }]),
+    );
+    expect(oneFailed).toMatch(/^FAIL: at least one check failed/);
+  });
+
+  test("always includes DOCTOR_NOT_CHECKED — this IS the round-1 Critical's whole answer", () => {
+    const rendered = renderDoctorReport(reportOf([{ name: "tool-paths", ok: true, detail: "x" }]));
+    expect(rendered).toContain(DOCTOR_NOT_CHECKED);
+  });
+
+  test("appends the create-mode caveat only when given — genuinely conditional, not always present", () => {
+    const report = reportOf([{ name: "tool-paths", ok: true, detail: "x" }]);
+    expect(renderDoctorReport(report)).not.toContain(DOCTOR_CREATE_MODE_CAVEAT);
+    expect(renderDoctorReport(report, DOCTOR_CREATE_MODE_CAVEAT)).toContain(
+      DOCTOR_CREATE_MODE_CAVEAT,
+    );
+  });
+});
+
+describe("doctorFromCli (final review, Important 1)", () => {
+  async function writeConfig(configFile: LethalConfigFile): Promise<string> {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-doctor-fromcli-"));
+    const path = join(dir, "lethal.config.json");
+    await writeFile(path, JSON.stringify(configFile), "utf8");
+    return path;
+  }
+
+  async function run(
+    configFile: LethalConfigFile,
+    deps: Parameters<typeof doctorFromCli>[1],
+  ): Promise<{ code: number; out: string }> {
+    const configPath = await writeConfig(configFile);
+    const lines: string[] = [];
+    const log = spyOn(console, "log").mockImplementation((...a: unknown[]) => {
+      lines.push(a.map(String).join(" "));
+    });
+    try {
+      const code = await doctorFromCli({ mode: "doctor", configPath }, deps);
+      return { code, out: lines.join("\n") };
+    } finally {
+      log.mockRestore();
+    }
+  }
+
+  test("returns 0 and prints ok when every check passes — the REAL buildDoctorDeps, only I/O swapped", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-doctor-fromcli-quarantine-"));
+    const { code, out } = await run(
+      { bcdev: RESOLVED_BCDEV },
+      {
+        quarantineDir: dir,
+        fetchFn: okFetch(info()),
+        alToolPaths: async () => ({ alcPath: "C:/alc.exe", altoolPath: "C:/altool.exe" }),
+      },
+    );
+    expect(code).toBe(0);
+    expect(out).toMatch(/^ok: every check passed/);
+    expect(out).toContain(DOCTOR_NOT_CHECKED);
+  });
+
+  test("returns 1 and prints FAIL when a check fails — the exit code the README tells users to rely on", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-doctor-fromcli-quarantine-fail-"));
+    const { code, out } = await run(
+      { bcdev: RESOLVED_BCDEV },
+      {
+        quarantineDir: dir,
+        fetchFn: okFetch(info({ semver: "1.0.0.0" })),
+        alToolPaths: async () => ({ alcPath: "C:/alc.exe", altoolPath: "C:/altool.exe" }),
+      },
+    );
+    expect(code).toBe(1);
+    expect(out).toMatch(/^FAIL: at least one check failed/);
+    expect(out).toMatch(/\[FAIL\] control-version:/);
+  });
+
+  test("prints the create-mode caveat for a create-mode config, end to end", async () => {
+    const envCfg: EnvToolConfigSection = {
+      toolPath: "tool.exe",
+      resolve: [
+        { command: ["env", "get", "{envId}", "--json"], reads: { baseUrl: "url" } },
+        { command: ["env", "users", "{envId}", "--json"], reads: { username: "u", password: "p" } },
+      ],
+      publish: { command: ["publish", "{envId}", "{appFile}"] },
+      createEnv: { command: ["env", "create", "--json"], reads: { envId: "id" } },
+      startEnv: { command: ["env", "start", "{envId}"] },
+      readyWhen: {
+        command: ["env", "status", "{envId}", "--json"],
+        reads: { status: "status" },
+        equals: "Running",
+      },
+      deleteEnv: { command: ["env", "delete", "{envId}"] },
+      publishApps: ["tests.app"],
+    };
+    const { code, out } = await run(
+      { bcdev: BCDEV_RAW, envTool: envCfg },
+      { alToolPaths: async () => ({ alcPath: "C:/alc.exe", altoolPath: "C:/altool.exe" }) },
+    );
+    expect(code).toBe(0);
+    expect(out).toContain(DOCTOR_CREATE_MODE_CAVEAT);
+    expect(out).not.toContain("{envId}");
   });
 });
