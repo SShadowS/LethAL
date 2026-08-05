@@ -3103,9 +3103,11 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // Layer 5C-A Task 8, Task 10 (design §G): a quarantined run must NEVER be marked finished.
   // `priorSurvivorKeys` (store.ts) selects the most recent run with `finished_at IS NOT NULL` and
   // treats its "survived"/"known-survivor" mutant rows as a future session's skip-list
-  // (skipKnownSurvivors). `invalidateBatchVerdicts` only corrects the in-memory `outcomes[]` — the
-  // `mutants` rows this session already wrote to `store` keep whatever verdict they had at
-  // `record()` time (no store-row-update API exists). Leaving `finished_at` NULL for a quarantined
+  // (skipKnownSurvivors). The fold's own in-memory `batch-invalidated` handling (report-fold.ts)
+  // corrects only the folded report, not the store — the `mutants` rows this session already wrote
+  // to `store` keep whatever verdict they had at `record()` time (no store-row-update API exists;
+  // `store.invalidateBatch`, called just above, is the SEPARATE durable correction for that).
+  // Leaving `finished_at` NULL for a quarantined
   // run excludes it from `priorSurvivorKeys` entirely, so those uncorrected on-disk rows (which
   // may include a false "survived" from an unproven binary) can never seed a future skip-list.
   // Verified no other consumer reads `finished_at`/`batch_count`/`baseline_green` (grepped

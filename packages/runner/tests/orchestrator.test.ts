@@ -4501,9 +4501,12 @@ describe("runSession — Task 10 workers=1 assertion + per-artifact clean-attest
   });
 });
 
-// Coordinator review, Fix 2 (Important): `invalidateBatchVerdicts` only corrects the in-memory
-// `outcomes[]` the report is built from — the `mutants` rows already written to `store` during
-// the batch keep whatever verdict they had at `record()` time (no store-row-update API exists).
+// Coordinator review, Fix 2 (Important): the design §G attestation gate's in-memory correction
+// (originally `invalidateBatchVerdicts`, now the fold's own `batch-invalidated` handling —
+// event-stream refactor, spec 2026-08-05 §A deleted the orchestrator copy once `buildReport`
+// stopped reading `outcomes[]`) corrects only the folded REPORT — the `mutants` rows already
+// written to `store` during the batch keep whatever verdict they had at `record()` time (no
+// store-row-update API exists).
 // `priorSurvivorKeys` (store.ts) treats the most recent FINISHED run's "survived"/"known-survivor"
 // rows as a future session's `skipKnownSurvivors` skip-list. Without a guard, a quarantined run's
 // uncorrected on-disk "survived" rows (from a NEVER-attested, unproven binary) would become that

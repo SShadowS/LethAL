@@ -332,10 +332,13 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
   }
 
   // `batch-invalidated` rewrites history: applied in a SECOND pass, over every outcome folded so
-  // far, mirroring `invalidateBatchVerdicts` (orchestrator.ts) exactly — including its two
-  // deliberately-untouched cases (an already-specifically-classified error, and a known-survivor,
-  // which was never re-tested against this batch's binary at all). Applying invalidations in
-  // emission order after full accumulation (rather than inline, mid-loop) is what makes this
+  // far. This is the ONLY implementation of the rule now — `orchestrator.ts`'s own in-memory
+  // correction (formerly `invalidateBatchVerdicts`) was deleted (Fix round 1, Important 5; see
+  // that function's commit for the reasoning) once confirmed dead for the report, so there is
+  // nothing left here to mirror. The two deliberately-untouched cases (an already-specifically-
+  // classified error, and a known-survivor, which was never re-tested against this batch's binary
+  // at all) are this function's own rule, pinned by `report-fold.test.ts`. Applying invalidations
+  // in emission order after full accumulation (rather than inline, mid-loop) is what makes this
   // correct regardless of whether a `batch-invalidated` event happens to arrive before or after the
   // mutant events it invalidates — see the order-independence note on the doc comment above.
   for (const inv of invalidations) {

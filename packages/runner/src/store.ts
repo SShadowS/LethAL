@@ -394,11 +394,15 @@ export class ResultsStore {
 
   /**
    * Rewrites one batch's stored verdicts to `error` — the durable half of the attestation gate
-   * (`invalidateBatchVerdicts`, orchestrator.ts).
+   * (design §G, `orchestrator.ts`'s `contributed && !attestation.clean` check).
    *
    * That gate fires when no covered run ever proved the deployed binary was actually the
-   * instrumented one, which means every verdict the batch produced may be a false `survived`. It
-   * used to correct only the in-memory `outcomes[]`, on the stated grounds that a quarantined run
+   * instrumented one, which means every verdict the batch produced may be a false `survived`. The
+   * in-memory half now lives in the fold's own `batch-invalidated` handling (report-fold.ts),
+   * which corrects the folded REPORT; this method is the SEPARATE durable half. The in-memory
+   * correction used to be a same-process function (`invalidateBatchVerdicts`, deleted once the
+   * report stopped reading the array it corrected — event-stream refactor, spec 2026-08-05 §A) that
+   * corrected only that in-memory array, on the stated grounds that a quarantined run
    * is never `finishRun`-ed and `priorSurvivorKeys` therefore skips it. **R47's `--resume` reads by
    * `finished_at IS NULL` — the exact complement** — so it would have read precisely the rows that
    * argument relied on nobody reading. Persisting the correction closes that, and removes the

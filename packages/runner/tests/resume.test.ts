@@ -623,8 +623,9 @@ describe("ResultsStore.invalidateBatch (R47)", () => {
   });
 
   test("preserves a known-survivor and an already-classified error", () => {
-    // Mirrors `invalidateBatchVerdicts`: a known survivor was never run against this binary, and an
-    // existing error carries a more specific diagnosis than this generic note.
+    // Mirrors the in-memory rule (the fold's own `batch-invalidated` handling, report-fold.ts): a
+    // known survivor was never run against this binary, and an existing error carries a more
+    // specific diagnosis than this generic note.
     const store = new ResultsStore(":memory:");
     const id = store.createRun({ projectPath: "/p", backend: "bcdev", appVersion: "1.0.0.0" });
     seed(store, id, 0, { astHash: "a", verdict: "known-survivor" });
