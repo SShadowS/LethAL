@@ -123,9 +123,35 @@ export type RunEventInput =
       readonly verdicts: readonly {
         readonly name: string;
         readonly outcome: TestOutcome;
-        /** Short tag, e.g. a permissions refusal or a stale-test-app diagnosis — the composed,
-         *  human-facing text stays downstream so it cannot drift per caller. */
-        readonly classification?: string;
+        /**
+         * Fix round 2: narrowed from a bare `string`. `permissionsRefusedTests` and
+         * `testPageUnsupportedTests` are only safely reconstructable if Task 3's emit side and
+         * Task 4's fold side agree on the exact tag spelling — a bare `string` lets that drift
+         * silently (`"permission-refused"` vs `"permissions-refused"`), the same way
+         * `staleTestApp` is already safe because it keys on an exact sentinel
+         * (`failureMessage === NO_RESULT_FOR_METHOD`, `bcdev-backend.ts`/`orchestrator.ts:2460`)
+         * rather than a hand-typed string.
+         *
+         * These three are not invented: they are the SAME identifiers `report.ts`'s own
+         * `caveats` array already pushes (`report.ts:918,924,930`) for exactly these three
+         * conditions, derived from the orchestrator's classification code
+         * (`orchestrator.ts:2438-2463`) — `describeTestPermissionsRefusal`/
+         * `describeTestPageUnsupported` each match against `b.verdict.failureMessage` and route
+         * a test's name into `permissionRefusedTests`/`testPageUnsupportedTests`; a separate loop
+         * over ALL baseline tests routes any `failureMessage === NO_RESULT_FOR_METHOD` test into
+         * `missingFromServer`. Reusing `report.ts`'s own strings, rather than inventing new ones,
+         * is what makes emit and fold agree by construction instead of by convention.
+         *
+         * NOTE (not fixed here, flagged for Task 3): the two `describeTestPermissionsRefusal`/
+         * `describeTestPageUnsupported` checks are independent `if`s over the same
+         * `failureMessage`, not mutually exclusive by construction — a test could in principle
+         * match both. This field carries only one tag; Task 3 needs a priority rule for that
+         * (unobserved in practice, but not structurally impossible).
+         */
+        readonly classification?:
+          | "tests-permission-refused"
+          | "tests-testpage-unsupported"
+          | "stale-test-app";
         readonly failureMessage?: string;
       }[];
     }
@@ -173,9 +199,24 @@ export type RunEventInput =
       readonly coverageAttribution?: CoverageAttribution;
       readonly guardObserved?: boolean;
       readonly runner?: RunnerKind;
-      /** Observed during this mutant's kill-confirmation (orchestrator.ts:3433), same call site
-       *  that sets `cause: "unstable"` — see `describeRunnerDisagreement`. */
+      /**
+       * The constant diagnosis note — `describeRunnerDisagreement(coverageMode)` (
+       * `runner-disagreement.ts:72-74`) is keyed ONLY on coverage mode, so this alone cannot
+       * identify WHICH test disagreed. Kept because it is still useful prose for a reader.
+       */
       readonly runnerDisagreement?: string;
+      /**
+       * Fix round 2, residual 1: added because `runnerDisagreement` above cannot supply test
+       * identity, and `BuildReportInput.runnerDisagreementTests` (report.ts) is a set of
+       * qualified TEST NAMES, not coverage-mode notes. `coveringTests` above is the mutant's
+       * FULL covering list, not the one test whose kill-confirmation actually disagreed — for a
+       * mutant with 2+ covering tests, `coveringTests` alone cannot say which one. The real
+       * value: `qualifiedTestName(ref)`, where `ref` is the exact loop variable
+       * `orchestrator.ts:3433`'s `args.runnerDisagreementTests.add(qualifiedTestName(ref))` adds
+       * (the `for (const ref of covering)` loop, `orchestrator.ts:3193`), captured at the same
+       * call site, same instant, as `runnerDisagreement` and `cause: "unstable"` above.
+       */
+      readonly runnerDisagreementTest?: string;
     }
   | {
       /**

@@ -128,7 +128,7 @@ describe("createEmitter", () => {
         {
           name: "Sales Helper Tests.RefusedByPermissions",
           outcome: "fail",
-          classification: "permissions-refused",
+          classification: "tests-permission-refused",
           failureMessage: "You do not have permission to insert...",
         },
       ],
@@ -140,9 +140,47 @@ describe("createEmitter", () => {
     // to fall back to, and each row names its own test and outcome.
     expect(e.verdicts).toHaveLength(2);
     expect(e.verdicts[0]).toMatchObject({ outcome: "pass" });
-    expect(e.verdicts[1]).toMatchObject({ outcome: "fail", classification: "permissions-refused" });
+    expect(e.verdicts[1]).toMatchObject({
+      outcome: "fail",
+      classification: "tests-permission-refused",
+    });
     expect("testCount" in e).toBe(false);
     expect("failingCount" in e).toBe(false);
+  });
+
+  // Fix round 2, residual 2: `classification` was narrowed from a bare `string` to the literal
+  // union `report.ts`'s own `caveats` array already uses (`report.ts:918,924,930`). This pins
+  // that all three real tags — permission-refused, testpage-unsupported, and stale — type-check
+  // as `classification` values, so a typo on either the emit or the fold side is now a compile
+  // error instead of a silent mismatch.
+  test("baseline-batch-finished's classification accepts exactly the three real orchestrator tags", () => {
+    const { events, sub } = collect();
+    const emit = createEmitter([sub]);
+    emit({
+      type: "baseline-batch-finished",
+      batchIndex: 2,
+      verdicts: [
+        {
+          name: "Suite.PermissionRefused",
+          outcome: "fail",
+          classification: "tests-permission-refused",
+        },
+        {
+          name: "Suite.OpensTestPage",
+          outcome: "fail",
+          classification: "tests-testpage-unsupported",
+        },
+        { name: "Suite.NoResultForMethod", outcome: "error", classification: "stale-test-app" },
+      ],
+    });
+    const e = events[0];
+    if (e === undefined) throw new Error("no event recorded");
+    if (e.type !== "baseline-batch-finished") throw new Error("expected baseline-batch-finished");
+    expect(e.verdicts.map((v) => v.classification)).toEqual([
+      "tests-permission-refused",
+      "tests-testpage-unsupported",
+      "stale-test-app",
+    ]);
   });
 
   // Fix round 1: the "given vs learned" rule says a static (caps/only/testsOnly/stopHungSessions)
@@ -267,5 +305,34 @@ describe("createEmitter", () => {
     }
     expect(warnings).toHaveLength(1);
     expect(good.events).toHaveLength(3);
+  });
+
+  // Fix round 2, residual 1: `runnerDisagreement` alone (a constant note keyed on coverage mode)
+  // cannot identify WHICH covering test disagreed, and `coveringTests` carries the mutant's whole
+  // list. This pins that `runnerDisagreementTest` names exactly one test — the one that actually
+  // disagreed — even when the mutant has several covering tests.
+  test("mutant-scored with 3 covering tests and a disagreement identifies exactly one of them", () => {
+    const { events, sub } = collect();
+    const emit = createEmitter([sub]);
+    emit({
+      type: "mutant-scored",
+      mutant: sampleMutant(),
+      verdict: "error",
+      batchIndex: 0,
+      durationMs: 300,
+      cause: "unstable",
+      coveringTests: ["Suite.TestA", "Suite.TestB", "Suite.TestC"],
+      runnerDisagreement: "hub-green test failed unmutated on the fence",
+      runnerDisagreementTest: "Suite.TestB",
+    });
+    const e = events[0];
+    if (e === undefined) throw new Error("no event recorded");
+    if (e.type !== "mutant-scored") throw new Error("expected mutant-scored");
+    expect(e.coveringTests).toHaveLength(3);
+    const disagreeing = e.runnerDisagreementTest;
+    if (disagreeing === undefined) throw new Error("expected runnerDisagreementTest to be set");
+    expect(disagreeing).toBe("Suite.TestB");
+    // The disagreeing test is a member of the covering list, not some other name entirely.
+    expect(e.coveringTests).toContain(disagreeing);
   });
 });
