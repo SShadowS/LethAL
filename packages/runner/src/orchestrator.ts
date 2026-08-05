@@ -19,7 +19,9 @@ import {
   type MutantManifest,
   type MutantManifestEntry,
   type SelectorConfig,
+  type TierResolver,
   canCarryMutationSelectorVar,
+  dedupeSpecs,
   describeObjectKinds,
   isMutableSite,
   writeInstrumentedProject,
@@ -31,6 +33,7 @@ import type { CoverageMode, ExecutionBackend, TestMethodRef, TestVerdict } from 
 import { NO_RESULT_FOR_METHOD } from "./bcdev-backend";
 import { bisectFailingMutant } from "./bisect";
 import { discoverTests } from "./discovery";
+import { type BaselineClassification, type RunEmitter, createEmitter } from "./events";
 import { ActivationFailure } from "./failure-classes";
 import { LeaseUnavailableError, MAX_ATTEMPT_ID_LENGTH, MAX_TTL_SECONDS } from "./lease";
 import type { AcquireOutcome, Lease, LeaseApi } from "./lease";
@@ -129,6 +132,11 @@ export const operatorTiers: ReadonlyMap<string, 1 | 2 | 3 | "custom"> = new Map(
   allOperators.map((op) => [op.name, op.tier]),
 );
 
+/** `TierResolver` bound to `operatorTiers` — the same lookup `writeInstrumentedProject` builds
+ *  locally (project.ts) for the identical purpose, shared here so `runSession` can pre-compute a
+ *  post-dedup mutant count (R92's `mutation-set-generated.deployedCount`) without redefining it. */
+const tierOf: TierResolver = (name) => operatorTiers.get(name);
+
 /**
  * Parse every `.al` file under `projectDir` (skipping emitted `Mutation*`
  * artifacts) and run every registered operator (all tiers) over each: parse the
@@ -199,6 +207,15 @@ export interface MutationSetOptions {
    * selecting nothing.
    */
   readonly only?: readonly string[];
+  /**
+   * When present, this function's four `console.warn` calls emit `{ type: "warning" }` events on
+   * it instead — `runSession` always passes one (defaulting to a no-op emitter). Absent for the
+   * other ~15 call sites across scripts/itests/`cli.ts --dry-run` that call `generateMutationSet`
+   * with no event stream of their own: those keep printing to the console exactly as before, so
+   * this task does not have to change their unrelated call sites to carry a real-or-no-op emitter
+   * just to preserve their existing console output.
+   */
+  readonly emit?: RunEmitter;
 }
 
 /**
@@ -242,6 +259,17 @@ export async function generateMutationSet(
   options: MutationSetOptions = {},
 ): Promise<MutationSetResult> {
   await initParser();
+  // See `MutationSetOptions.emit`'s doc comment: only the `runSession` call site ever passes a
+  // real emitter here, so every OTHER caller (scripts, itests, `cli.ts --dry-run`) keeps printing
+  // to the console exactly as before.
+  const emitOpt = options.emit;
+  const warn = (code: string, message: string): void => {
+    if (emitOpt !== undefined) {
+      emitOpt({ type: "warning", code, message });
+    } else {
+      console.warn(message);
+    }
+  };
   const files: InstrumentedFile[] = [];
   /** Files with >=1 spec that no selector var can be injected into — reported once, below. */
   const skipped: NotInstrumentedFile[] = [];
@@ -297,7 +325,8 @@ export async function generateMutationSet(
             } else if (validation.ok) {
               specs.push(spec);
             } else {
-              console.warn(
+              warn(
+                "mutation-spec-rejected",
                 `[lethal] rejected mutation spec from operator "${spec.operatorName}" ` +
                   `(before span ${spec.before.startIndex}..${spec.before.endIndex}): ${validation.error}`,
               );
@@ -320,17 +349,20 @@ export async function generateMutationSet(
       "only a codeunit or a table can carry the injected " +
       '`var MutationSelector: Codeunit "Mutation Selector";` declaration, so a guard in any ' +
       "other object kind cannot compile (AL0118). Not mutated; published unchanged";
-    console.warn(
+    warn(
+      "not-instrumentable-files-skipped",
       `[lethal] skipped ${skipped.length} file(s) holding ${total} mutation site(s): ${why}: ${detail}.`,
     );
   }
   if (nonExecutableSites > 0) {
-    console.warn(
+    warn(
+      "non-executable-sites-dropped",
       `[lethal] dropped ${nonExecutableSites} matched site(s) that are not inside executable AL (declarative page/report properties such as SubPageLink or a filter, which parse as comparison expressions). They cannot be wrapped and are not mutants.`,
     );
   }
   if (excludedByOnly > 0) {
-    console.warn(
+    warn(
+      "only-narrowed-run",
       `[lethal] --only narrowed this run to ${entries.length - excludedByOnly}/${entries.length} .al file(s); ${excludedByOnly} file(s) contributed no mutants. The score below covers the narrowed set ONLY — it is not a project score.`,
     );
   }
@@ -489,6 +521,16 @@ export interface SessionConfig {
    *  this exists purely so tests can assert against a fixed, deterministic `recordedAtIso`
    *  instead of racing the real clock. Defaults to `() => new Date().toISOString()`. */
   readonly nowIso?: () => string;
+  /**
+   * The event stream's emitter (spec 2026-08-05 §A, events.ts). Optional at this level ONLY —
+   * a caller that does not care about events (every test that predates this field, a one-off
+   * script) pays nothing. Once inside `runSession`, `record()`'s own `emit` parameter is
+   * REQUIRED: `runSession` defaults an absent `cfg.emit` to a no-op emitter
+   * (`createEmitter([])`) exactly once, at the top of the function, so every internal call site
+   * always has a real (if inert) emitter to pass — there is no second place in this file where
+   * "no emitter configured" can be rediscovered and quietly skipped.
+   */
+  readonly emit?: RunEmitter;
 }
 
 /** Alias kept for readability at call sites within this module. */
@@ -533,6 +575,9 @@ export interface PlanOptions {
    * has narrowed the suite — tolerable at ~15 batches, ruinous at 15 x the unnarrowed 745 s.
    */
   readonly maxGuardsPerBatch?: number;
+  /** Same rule as `MutationSetOptions.emit`: only the `runSession` call site passes a real one;
+   *  every other caller (tests, `cli.ts --dry-run`) keeps its existing console output. */
+  readonly emit?: RunEmitter;
 }
 
 /**
@@ -586,9 +631,12 @@ export function planArtifacts(
   if (current.length > 0) batches.push(current);
 
   if (oversized.length > 0) {
-    console.warn(
-      `[lethal] ${oversized.length} file(s) exceed --max-guards-per-batch=${budget} on their own and were each published as a single oversized batch (batches split at file granularity): ${oversized.join(", ")}. If such a batch fails to publish, lower the budget for the rest or split the file.`,
-    );
+    const message = `[lethal] ${oversized.length} file(s) exceed --max-guards-per-batch=${budget} on their own and were each published as a single oversized batch (batches split at file granularity): ${oversized.join(", ")}. If such a batch fails to publish, lower the budget for the rest or split the file.`;
+    if (options.emit !== undefined) {
+      options.emit({ type: "warning", code: "oversized-batch", message });
+    } else {
+      console.warn(message);
+    }
   }
   return batches;
 }
@@ -1219,6 +1267,7 @@ async function runFenced(
   ref: TestMethodRef,
   opts: { coverage: CoverageMode; timeoutMs: number },
   leaseSession: LeaseSession | undefined,
+  emit: RunEmitter,
   resyncOpSeq?: () => Promise<void>,
 ): Promise<FencedRunOutcome> {
   const first = await runOnce(backend, safety, ref, opts, resyncOpSeq);
@@ -1226,15 +1275,19 @@ async function runFenced(
   // Announce it. A lost ack is rare, it means a result really was thrown away, and a silent
   // recovery is indistinguishable from the fault never happening — which is exactly the ambiguity
   // that made this intermittent expensive to diagnose in the first place.
-  console.warn(
-    `[lethal] ${ref.method}: unreadable answer from RunMutant (${first.failureMessage ?? "no detail"}) — reconciling against the operation marker before deciding anything`,
-  );
+  emit({
+    type: "warning",
+    code: "lost-ack-unreadable",
+    message: `[lethal] ${ref.method}: unreadable answer from RunMutant (${first.failureMessage ?? "no detail"}) — reconciling against the operation marker before deciding anything`,
+  });
   if ((await reconcileFencedLostAck(leaseSession, first)) === "unresolved") {
     return { verdict: first, lostAck: "unresolved", retried: false };
   }
-  console.warn(
-    `[lethal] ${ref.method}: the operation was confirmed COMPLETE server-side, so the container is clean and only the result was lost — retrying once as a fresh attempt`,
-  );
+  emit({
+    type: "warning",
+    code: "lost-ack-retry",
+    message: `[lethal] ${ref.method}: the operation was confirmed COMPLETE server-side, so the container is clean and only the result was lost — retrying once as a fresh attempt`,
+  });
   if (resyncOpSeq !== undefined) await resyncOpSeq();
   const retry = await runOnce(backend, safety, ref, opts, resyncOpSeq);
   if (!isLostAck(retry)) return { verdict: retry, lostAck: "none", retried: true };
@@ -1308,6 +1361,7 @@ class LeaseSession {
       readonly resourceKey: string | undefined;
       readonly nowIso: () => string;
       readonly runId: number;
+      readonly emit: RunEmitter;
     },
   ) {}
 
@@ -1351,9 +1405,11 @@ class LeaseSession {
         try {
           outcome = await this.d.client.renew(this.d.lease, this.d.ttlSeconds);
         } catch (second) {
-          console.warn(
-            `[lethal] lease renew could not be answered twice in a row (${messageOf(first)}; ${messageOf(second)}) — not treated as lease loss (design §6: only renewed:false is loss); the next tick retries`,
-          );
+          this.d.emit({
+            type: "warning",
+            code: "lease-renew-unanswered",
+            message: `[lethal] lease renew could not be answered twice in a row (${messageOf(first)}; ${messageOf(second)}) — not treated as lease loss (design §6: only renewed:false is loss); the next tick retries`,
+          });
           return;
         }
       }
@@ -1543,9 +1599,11 @@ class LeaseSession {
     try {
       status = await this.d.client.getOperationStatus(this.d.lease, op.attemptId, op.opSeq);
     } catch (err) {
-      console.warn(
-        `[lethal] could not reconcile the lost RunMutant ack for op ${op.opSeq} (attemptId ${op.attemptId}): ${messageOf(err)} — treating the operation as unresolved`,
-      );
+      this.d.emit({
+        type: "warning",
+        code: "lease-reconcile-failed",
+        message: `[lethal] could not reconcile the lost RunMutant ack for op ${op.opSeq} (attemptId ${op.attemptId}): ${messageOf(err)} — treating the operation as unresolved`,
+      });
       return "unresolved";
     }
     // `completed` is the server's own `opSeq <= Last Completed Op Seq`; the second term repeats it
@@ -1574,7 +1632,11 @@ class LeaseSession {
       try {
         status = await this.d.client.getOperationStatus(this.d.lease, "", 0);
       } catch (err) {
-        console.warn(`[lethal] polling the in-flight operation failed: ${messageOf(err)}`);
+        this.d.emit({
+          type: "warning",
+          code: "lease-poll-failed",
+          message: `[lethal] polling the in-flight operation failed: ${messageOf(err)}`,
+        });
         return false;
       }
       if (status.opKind === OP_KIND_IDLE) return true;
@@ -1599,9 +1661,11 @@ class LeaseSession {
       const outcome = await this.d.client.renew(this.d.lease, this.d.ttlSeconds);
       return !outcome.renewed;
     } catch (err) {
-      console.warn(
-        `[lethal] could not confirm lease ownership at session end (${messageOf(err)}) — treating the marker as possibly ours`,
-      );
+      this.d.emit({
+        type: "warning",
+        code: "lease-ownership-unconfirmed",
+        message: `[lethal] could not confirm lease ownership at session end (${messageOf(err)}) — treating the marker as possibly ours`,
+      });
       return false;
     }
   }
@@ -1634,9 +1698,11 @@ class LeaseSession {
     try {
       status = await this.d.client.getOperationStatus(this.d.lease, "", 0);
     } catch (err) {
-      console.warn(
-        `[lethal] could not read the operation marker at session end (${messageOf(err)}) — leaving the lease to expire rather than releasing over a possibly-live operation`,
-      );
+      this.d.emit({
+        type: "warning",
+        code: "lease-marker-read-failed",
+        message: `[lethal] could not read the operation marker at session end (${messageOf(err)}) — leaving the lease to expire rather than releasing over a possibly-live operation`,
+      });
       return;
     }
     if (status.opKind !== OP_KIND_IDLE) {
@@ -1648,9 +1714,11 @@ class LeaseSession {
       // proof of ownership there is: it re-validates the same (epoch, token, generation) tuple the
       // op marker was claimed under. `renewed:false` proves the row moved on without us.
       if (await this.leaseProvablyNotOurs()) {
-        console.warn(
-          `[lethal] session ended with a non-idle operation marker (opKind ${status.opKind}, opAttemptId ${status.opAttemptId}, opSeq ${status.opSeq}) that belongs to ANOTHER session — RenewLease answered renewed:false, so our lease had already been taken over and this marker is not ours to quarantine. No durable container-needs-recycle recorded; the container is healthy and the other session owns it.`,
-        );
+        this.d.emit({
+          type: "warning",
+          code: "lease-marker-foreign",
+          message: `[lethal] session ended with a non-idle operation marker (opKind ${status.opKind}, opAttemptId ${status.opAttemptId}, opSeq ${status.opSeq}) that belongs to ANOTHER session — RenewLease answered renewed:false, so our lease had already been taken over and this marker is not ours to quarantine. No durable container-needs-recycle recorded; the container is healthy and the other session owns it.`,
+        });
         return;
       }
       await this.recordRecycle(
@@ -1661,12 +1729,18 @@ class LeaseSession {
     try {
       const released = await this.d.client.release(this.d.lease);
       if (!released.released) {
-        console.warn(
-          `[lethal] ReleaseLease refused (${released.reason}) — the lease will expire on its own`,
-        );
+        this.d.emit({
+          type: "warning",
+          code: "lease-release-refused",
+          message: `[lethal] ReleaseLease refused (${released.reason}) — the lease will expire on its own`,
+        });
       }
     } catch (err) {
-      console.warn(`[lethal] ReleaseLease failed: ${messageOf(err)} — the lease will expire`);
+      this.d.emit({
+        type: "warning",
+        code: "lease-release-failed",
+        message: `[lethal] ReleaseLease failed: ${messageOf(err)} — the lease will expire`,
+      });
     }
   }
 }
@@ -1738,6 +1812,7 @@ function resolveResume(
   cfg: SessionConfig,
   backendName: string,
   configFingerprint: string,
+  emit: RunEmitter,
 ): { runId: number; index: ResumeIndex } | undefined {
   if (cfg.resume === undefined) return undefined;
 
@@ -1786,8 +1861,10 @@ function resolveResume(
     cfg.store.mutantVerdicts(priorRunId),
     cfg.stopHungSessions === true,
   );
-  console.warn(
-    `[lethal] --resume: reusing run ${priorRunId} — ${index.carryable.size} mutant verdict(s) may be carried without re-executing. Deploy and baseline still run; coverage attribution and covering-test lists come from THIS run.${
+  emit({
+    type: "warning",
+    code: "resume-reusing-run",
+    message: `[lethal] --resume: reusing run ${priorRunId} — ${index.carryable.size} mutant verdict(s) may be carried without re-executing. Deploy and baseline still run; coverage attribution and covering-test lists come from THIS run.${
       index.nonCarryableRows > 0
         ? ` ${index.nonCarryableRows} prior 'error' verdict(s) will be re-executed.`
         : ""
@@ -1803,7 +1880,19 @@ function resolveResume(
         ? ` Of those, ${index.strandedKeys.size} stranded the tier on a prior run and will be SKIPPED rather than re-executed${(cfg.retryStranded ?? false) ? ", except --retry-stranded was given, so they will be attempted" : " (a mutant that never terminates reproduces this every time and blocks every mutant behind it; pass --retry-stranded to attempt them)"}.`
         : ""
     }`,
-  );
+  });
+  // resume-resolved: emitted before any mutant event (this function runs before the batch loop
+  // starts). `carryable`/`strandedKeys` are the LEARNED half of `--resume` — see events.ts's doc
+  // comment. Final `carriedMutants`/`skippedStranded` deliberately do NOT ride here; the fold
+  // counts those 1:1 from `mutant-carried`/`mutant-skipped-stranded` events instead.
+  emit({
+    type: "resume-resolved",
+    fromRunId: priorRunId,
+    mode: cfg.resume,
+    carryableCount: index.carryable.size,
+    strandedKeyCount: index.strandedKeys.size,
+    retryStranded: cfg.retryStranded ?? false,
+  });
   return { runId: priorRunId, index };
 }
 
@@ -1817,6 +1906,22 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   const safety = new SessionSafety();
   const caps = cfg.backend.capabilities();
   const nowIso = cfg.nowIso ?? (() => new Date().toISOString());
+  // `record()`'s own `emit` parameter is REQUIRED (see its doc comment) so no call site can write
+  // a store row without emitting — this is the one place an absent `cfg.emit` is allowed to
+  // become a real (if inert) emitter. `createEmitter([])` fans out to zero subscribers, so every
+  // `emit(...)` call below is a genuine no-op when nobody is listening, not a special case.
+  const emit: RunEmitter = cfg.emit ?? createEmitter([]);
+  // run-configured (spec 2026-08-05 §A, AMENDED): the closed statics set `{ caps, only, testsOnly,
+  // stopHungSessions }`, echoed once from the same values `buildReport` still reads directly from
+  // `cfg` at the end of this function — one source, two carriages. No later event may repeat or
+  // update any of these.
+  emit({
+    type: "run-configured",
+    caps,
+    ...(cfg.only !== undefined ? { only: { patterns: cfg.only } } : {}),
+    ...(cfg.testsOnly !== undefined ? { testsOnly: cfg.testsOnly } : {}),
+    ...(cfg.stopHungSessions === true ? { stopHungSessions: true } : {}),
+  });
   // Layer 5C-B1 (design §6): an authoritative backend that CAN be fenced — it exposes `setLease`,
   // as bcdev does — MUST be given a lease. Without one every RunMutant runs unfenced, and a
   // `lease-lost` answer could then only be latched, never scoped: the current batch's
@@ -1870,11 +1975,14 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     // whatever wires `resourceServer`/`resourceServerInstance` from config (cli.ts sources them
     // from the bcdev config section's `server`/`serverInstance`) would otherwise leave quarantine
     // permanently inert against a real BC server without any signal.
-    console.warn(
-      "runSession: authoritative backend but SessionConfig.resourceServer/resourceServerInstance " +
+    emit({
+      type: "warning",
+      code: "quarantine-consult-disabled",
+      message:
+        "runSession: authoritative backend but SessionConfig.resourceServer/resourceServerInstance " +
         "are not set — the quarantine consult is DISABLED for this session (a prior strand on this " +
         "tier will not be detected, and this session cannot durably record a new one).",
-    );
+    });
   }
   const status = await cfg.backend.status();
   if (!status.ok) throw new Error(`backend not ready: ${status.details}`);
@@ -1892,10 +2000,15 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     cfg.testDir,
     cfg.testsOnly !== undefined ? { only: cfg.testsOnly } : {},
   );
+  // Discovery returns the whole list in one parse — 1,000+ per-item events at one instant would
+  // be false granularity, not liveness (see events.ts's doc comment on `tests-discovered`).
+  emit({ type: "tests-discovered", tests });
   if (cfg.testsOnly !== undefined && cfg.testsOnly.length > 0) {
-    console.warn(
-      `[lethal] --tests-only narrowed the baseline to ${tests.length} test(s) from ${cfg.testsOnly.length} pattern(s). A mutant whose killing test was excluded is reported SURVIVED — narrowing tests trades accuracy for speed, unlike --only.`,
-    );
+    emit({
+      type: "warning",
+      code: "tests-only-narrowed-baseline",
+      message: `[lethal] --tests-only narrowed the baseline to ${tests.length} test(s) from ${cfg.testsOnly.length} pattern(s). A mutant whose killing test was excluded is reported SURVIVED — narrowing tests trades accuracy for speed, unlike --only.`,
+    });
   }
   if (tests.length === 0) throw new Error("no tests discovered");
 
@@ -1912,7 +2025,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     ...(cfg.only !== undefined ? { only: cfg.only } : {}),
     ...(cfg.testsOnly !== undefined ? { testsOnly: cfg.testsOnly } : {}),
   });
-  const resumeState = resolveResume(cfg, backendName, configFingerprint);
+  const resumeState = resolveResume(cfg, backendName, configFingerprint, emit);
 
   const runId = cfg.store.createRun({
     projectPath: cfg.projectDir,
@@ -1935,26 +2048,50 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   const sessionStartedMs = Date.now();
   let deployMs = 0;
   let baselineMs = 0;
+  emit({ type: "phase-entered", phase: "generate" });
   const generateStartedMs = Date.now();
   const {
     files: allFiles,
     skipped: notInstrumentedFiles,
     totalFiles: totalAlFiles,
     excludedByOnly,
-  } = await generateMutationSet(cfg.projectDir, cfg.only !== undefined ? { only: cfg.only } : {});
+  } = await generateMutationSet(cfg.projectDir, {
+    ...(cfg.only !== undefined ? { only: cfg.only } : {}),
+    emit,
+  });
   const generateMutationSetMs = Date.now() - generateStartedMs;
+  // R92: raw site count (every spec that made it into an instrumentable file) vs the DEPLOYED
+  // count once per-file dedup (`dedupeSpecs`) collapses same-site operator collisions into one
+  // winner — the same collapse `writeInstrumentedProject` runs at compile time, per file (identity
+  // is per-file, never project-wide — see `dedupeSpecs`'s doc comment). Computed once, up front,
+  // rather than summed from each batch's manifest as batches compile: batches are file-disjoint
+  // (`planArtifacts` splits at file granularity), so a project-wide per-file dedup here yields the
+  // exact same total dedup would produce per batch, and it is available at the moment this phase
+  // ends rather than only after every artifact has compiled.
+  const siteCount = allFiles.reduce((n, f) => n + f.specs.length, 0);
+  const deployedCount = allFiles.reduce((n, f) => n + dedupeSpecs(f.specs, tierOf).length, 0);
+  emit({
+    type: "mutation-set-generated",
+    siteCount,
+    deployedCount,
+    totalFiles: totalAlFiles,
+    instrumentableFiles: allFiles.length,
+    notInstrumentedFiles,
+    excludedByOnly,
+  });
+  emit({ type: "phase-left", phase: "generate", elapsedMs: generateMutationSetMs });
   // R48: refuse an unscoped run on a large project BEFORE anything is published. See
   // `LARGE_RUN_MUTANT_THRESHOLD` for why this refuses rather than warns.
   assertRunSizeAcceptable({
-    mutantCount: allFiles.reduce((n, f) => n + f.specs.length, 0),
+    mutantCount: siteCount,
     fileCount: allFiles.length,
     narrowed: cfg.only !== undefined,
     allowLargeRun: cfg.allowLargeRun ?? false,
   });
-  const artifacts = planArtifacts(
-    allFiles,
-    cfg.maxGuardsPerBatch !== undefined ? { maxGuardsPerBatch: cfg.maxGuardsPerBatch } : {},
-  );
+  const artifacts = planArtifacts(allFiles, {
+    ...(cfg.maxGuardsPerBatch !== undefined ? { maxGuardsPerBatch: cfg.maxGuardsPerBatch } : {}),
+    emit,
+  });
 
   // R47: the configured floor for a mutant run's time budget — see `SessionConfig.mutantTimeoutMs`.
   const minMutantBudgetMs = cfg.mutantTimeoutMs ?? MIN_MUTANT_BUDGET_MS;
@@ -2081,6 +2218,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       resourceKey,
       nowIso,
       runId,
+      emit,
     });
     leaseSession = session;
     resyncSessionOpSeq = () => session.resyncOpSeq(cfg.backend);
@@ -2119,7 +2257,14 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     // `finally` below whatever happens here.
     if (cfg.permissionCanary !== undefined) {
       permissionCanary = await runPermissionCanaryQuietly(cfg.permissionCanary);
-      for (const line of permissionCanaryWarnings(permissionCanary)) console.warn(line);
+      // permission-canary: the once-per-session measured verdict, as data — see events.ts's doc
+      // comment. The prose lines below are ADDITIONALLY converted to `warning` events, unchanged,
+      // because a reader following the stream should not lose them; the two are not redundant
+      // representations of the same fact competing to win, they are structure and prose together.
+      emit({ type: "permission-canary", result: permissionCanary });
+      for (const line of permissionCanaryWarnings(permissionCanary)) {
+        emit({ type: "warning", code: "permission-canary", message: line });
+      }
     }
     if (workers > 1) {
       const factory = cfg.backendFactory;
@@ -2199,12 +2344,13 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         skipKnownSurvivors: cfg.skipKnownSurvivors ?? false,
       });
       for (const m of knownSurvivors)
-        record(cfg.store, runId, m, "known-survivor", outcomes, batchIdx);
+        record(cfg.store, runId, m, "known-survivor", outcomes, batchIdx, emit);
 
       // 3. deploy — always, even for in-memory backends: they need the
       // per-batch instrumented dir just as much as a publishing backend
       // needs the compiled app. `capabilities().deploy` still describes
       // publish cost for callers, it just no longer gates this call.
+      emit({ type: "phase-entered", phase: "deploy" });
       let compiled: CompiledArtifact | null = null;
       let deployed = false;
       let deployErr: unknown;
@@ -2293,8 +2439,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           originalErr: deployErr,
         });
         for (const m of execute)
-          record(cfg.store, runId, m, "error", outcomes, batchIdx, undefined, note);
+          record(cfg.store, runId, m, "error", outcomes, batchIdx, emit, undefined, note);
         deployMs += Date.now() - deployRetryStartedMs;
+        emit({ type: "phase-left", phase: "deploy", elapsedMs: Date.now() - deployStartedMs });
         continue; // batch aborted, next batch still attempted
       }
       deployMs += Date.now() - deployRetryStartedMs;
@@ -2314,8 +2461,24 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       // server-side sequence every RunMutant claims against, so the backend's counter must
       // continue after it — not from the acquire grant's now-stale `lastCompletedOpSeq`.
       if (leaseSession !== undefined) leaseSession.rebindBackend(cfg.backend);
+      {
+        const deployElapsedMs = Date.now() - deployStartedMs;
+        emit({
+          type: "batch-published",
+          batchIndex: batchIdx,
+          guardCount: manifest.mutants.length,
+          elapsedMs: deployElapsedMs,
+        });
+        emit({ type: "phase-left", phase: "deploy", elapsedMs: deployElapsedMs });
+      }
 
       // 4. baseline
+      emit({
+        type: "phase-entered",
+        phase: "baseline",
+        testCount: tests.length,
+        batchIndex: batchIdx,
+      });
       const baselineStartedMs = Date.now();
       await activateOnce(cfg.backend, safety, null);
       const baseline: Array<{ ref: TestMethodRef; verdict: TestVerdict }> = [];
@@ -2377,8 +2540,42 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       // success-path accumulation, so a baseline that aborted used to report 0 ms and silently
       // reattribute its whole cost to "overhead". Measured on a run quarantined mid-baseline:
       // baseline 0.0s, overhead 70.1s, when essentially all of it was baseline.
-      baselineMs += Date.now() - baselineStartedMs;
+      const baselineElapsedMs = Date.now() - baselineStartedMs;
+      baselineMs += baselineElapsedMs;
+      emit({ type: "phase-left", phase: "baseline", elapsedMs: baselineElapsedMs });
       if (safety.isUnsafe) break; // stop the whole session — no mutant scheduling, no next batch
+      // baseline-batch-finished: the moment of observation IS the batch's baseline RETURNING (see
+      // events.ts's doc comment) — emitted here, unconditionally, so it still fires on the
+      // all-red path below (`greenTests.length === 0`) rather than only on the happy path.
+      // Classification is computed directly against `describeTestPermissionsRefusal`/
+      // `describeTestPageUnsupported`/the stale-test-app sentinel — the SAME pure checks the
+      // `refusedThisBatch`/`testPageThisBatch`/`missingFromServer` loops below also run, kept
+      // independent here so this event's correctness never depends on reaching code after the
+      // early `continue`.
+      emit({
+        type: "baseline-batch-finished",
+        batchIndex: batchIdx,
+        verdicts: baseline.map((b) => {
+          const classification: BaselineClassification[] = [];
+          if (describeTestPermissionsRefusal(b.verdict.failureMessage) !== undefined) {
+            classification.push("tests-permission-refused");
+          }
+          if (describeTestPageUnsupported(b.verdict.failureMessage) !== undefined) {
+            classification.push("tests-testpage-unsupported");
+          }
+          if (b.verdict.failureMessage === NO_RESULT_FOR_METHOD) {
+            classification.push("stale-test-app");
+          }
+          return {
+            name: qualifiedTestName(b.ref),
+            outcome: b.verdict.outcome,
+            classification,
+            ...(b.verdict.failureMessage !== undefined
+              ? { failureMessage: b.verdict.failureMessage }
+              : {}),
+          };
+        }),
+      });
       const greenTests = baseline.filter((b) => b.verdict.outcome === "pass");
       if (greenTests.length < baseline.length) baselineGreenOverall = false;
       if (greenTests.length === 0) {
@@ -2390,6 +2587,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
             "error",
             outcomes,
             batchIdx,
+            emit,
             undefined,
             "no green baseline tests",
           );
@@ -2487,6 +2685,15 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         coverageAttribution = split.attribution;
         uncovered = split.uncovered;
         untargetedTriggerCount += split.untargetedTriggerCount;
+        // coverage-split: accumulated per batch AT SPLIT TIME — see events.ts's doc comment on
+        // why this is the strongest single argument for events over the old end-of-run bag.
+        emit({
+          type: "coverage-split",
+          batchIndex: batchIdx,
+          untargetedTriggerCount: split.untargetedTriggerCount,
+          coveredCount: split.covered.size,
+          noCoverageCount: split.uncovered.length,
+        });
       }
       // A mutant uncovered by any GREEN test but covered by a non-passing
       // baseline test is `error` (score-excluded) with a named note — never a
@@ -2528,7 +2735,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         if (covering !== undefined && covering.length > 0) {
           routableCandidates.push({ mutant: m, covering });
         } else {
-          record(cfg.store, runId, m, "no-coverage", outcomes, batchIdx);
+          record(cfg.store, runId, m, "no-coverage", outcomes, batchIdx, emit);
         }
       }
       // R69 Phase 2 Task 6: qualified test name -> BC's own baseline failure text, the input
@@ -2575,8 +2782,16 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
               "error",
               outcomes,
               batchIdx,
+              emit,
               undefined,
               "not re-run on resume: a prior run's execution of this mutant could not be confirmed complete and stranded the tier. A mutant that never terminates (e.g. a negated loop-exit condition) reproduces this every time and blocks every mutant behind it, so it is skipped rather than retried — pass --retry-stranded to attempt it anyway. It is NOT scored either way.",
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              true, // strandedSkip
             );
             strandedSkippedCount += 1;
             continue;
@@ -2593,6 +2808,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
             carried.verdict,
             outcomes,
             batchIdx,
+            emit,
             carried.killingTest,
             carried.failureNote,
             undefined,
@@ -2600,8 +2816,15 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
             covering.map((ref) => qualifiedTestName(ref)),
             coverageAttribution.get(m.mutantId),
             undefined,
-            true,
+            true, // carried
+            undefined,
             carried.runner,
+            undefined,
+            undefined,
+            // R47/R54: NOT `runId` (this session's own id) — see record()'s `fromRunId` doc
+            // comment. `resumeState` is defined in this branch (`if (resumeState !== undefined)`
+            // above), so its `runId` — the PRIOR run this verdict was carried from — is in scope.
+            resumeState.runId,
           );
           resumedMutantCount += 1;
         }
@@ -2619,6 +2842,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       // `contributed` right after the mutant work below finishes, before the next batch (or the
       // final `buildReport`) ever sees this batch's verdicts.
       const attestation = { clean: false };
+      emit({ type: "phase-entered", phase: "mutants" });
+      const mutantsStartedMs = Date.now();
       if (workers === 1) {
         // Sequential IS the parallel path with a pool of one: this is the
         // exact same runMutantsOnBackend call the fan-out branch below makes
@@ -2644,6 +2869,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           resourceKey,
           nowIso,
           attestation,
+          emit,
         });
       } else {
         const shards = shardEvenly(toExecute, workers);
@@ -2718,7 +2944,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
               });
               for (const m of shard) {
                 if (perMutantTests.get(m.mutantId) === undefined) continue; // already recorded no-coverage
-                record(cfg.store, runId, m, "error", outcomes, batchIdx, undefined, note);
+                record(cfg.store, runId, m, "error", outcomes, batchIdx, emit, undefined, note);
               }
               return;
             }
@@ -2741,6 +2967,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
               resourceKey,
               nowIso,
               attestation,
+              emit,
             });
           }),
         );
@@ -2749,6 +2976,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         );
         if (firstRejection !== undefined) throw firstRejection.reason;
       }
+      emit({ type: "phase-left", phase: "mutants", elapsedMs: Date.now() - mutantsStartedMs });
       // Layer 5C-A Task 8, Task 10 (design §G): per-artifact fail-closed attestation gate. A
       // batch "contributed verdicts" if any mutant it scheduled had >=1 covering test (a batch
       // with nothing but no-coverage/unsupported mutants has nothing a wrong binary could fake).
@@ -2778,6 +3006,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       if (caps.authoritative && contributed && !attestation.clean) {
         const note = `unattested artifact: no covered run observed the deployed binary's selector (artifactId ${compiled?.artifactId ?? "unknown"}) — verdicts discarded, container quarantined (design §G)`;
         invalidateBatchVerdicts(outcomes, batchIdx, note);
+        emit({ type: "batch-invalidated", batchIndex: batchIdx, reason: note });
         // R47: and durably, in the store. `--resume` reads a run's stored verdicts by
         // `finished_at IS NULL` — the exact set this gate's in-memory-only correction used to rely
         // on `priorSurvivorKeys` filtering OUT. Without this, resuming a quarantined run would
@@ -2810,6 +3039,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
             "error",
             outcomes,
             batchIdx,
+            emit,
             undefined,
             unsupportedCoverageNote(qualified, refusedThisBatch, testPageThisBatch),
           );
@@ -2833,7 +3063,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     // retrying activation calls above) since this only runs to leave every
     // backend deactivated on exit, and a failure here must not mask/replace
     // whatever real error is already propagating.
-    //
+    emit({ type: "phase-entered", phase: "teardown" });
+    const teardownStartedMs = Date.now();
     // After an unsafe latch, NO work-plane call — not even the deactivating ClearActive, which is
     // itself a mutating op on the stranded tier (spec §8). Only local teardown runs.
     if (!safety.isUnsafe) {
@@ -2854,6 +3085,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     // handed to the next session. Last in the teardown so the backend's own deactivating
     // ClearActive (above) still runs under the lease it was taken with.
     if (leaseSession !== undefined) await leaseSession.finish();
+    emit({ type: "phase-left", phase: "teardown", elapsedMs: Date.now() - teardownStartedMs });
   }
 
   // Layer 5C-B1 (design §6, verbatim): "at session end — after the batch loop breaks, before
@@ -2866,11 +3098,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // already earned a clean attestation, which a batch can do moments before the lease is lost.
   const lostBatchIndex = leaseSession?.lostBatchIndex;
   if (lostBatchIndex !== undefined) {
-    invalidateBatchVerdicts(
-      outcomes,
-      lostBatchIndex,
-      `lease-lost: this batch's artifact was deployed under a lease this session could no longer prove it held (${safety.reason ?? "unknown"}) — verdicts discarded (design §6)`,
-    );
+    const lostBatchNote = `lease-lost: this batch's artifact was deployed under a lease this session could no longer prove it held (${safety.reason ?? "unknown"}) — verdicts discarded (design §6)`;
+    invalidateBatchVerdicts(outcomes, lostBatchIndex, lostBatchNote);
+    emit({ type: "batch-invalidated", batchIndex: lostBatchIndex, reason: lostBatchNote });
   }
 
   // Layer 5C-A Task 8, Task 10 (design §G): a quarantined run must NEVER be marked finished.
@@ -2891,6 +3121,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       batchCount: artifacts.length,
       baselineGreen: baselineGreenOverall,
     });
+  } else {
+    emit({ type: "quarantined", reason: safety.reason ?? "unknown" });
   }
   // Sort accumulated outcomes so report ordering never depends on which
   // worker finished first — determinism must not hinge on scheduling.
@@ -2902,6 +3134,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     (a, b) =>
       a.mutant.file.localeCompare(b.mutant.file) || a.mutant.startIndex - b.mutant.startIndex,
   );
+  const totalMs = Date.now() - sessionStartedMs;
+  emit({ type: "session-finished", elapsedMs: totalMs });
   return buildReport({
     caps,
     baselineGreen: baselineGreenOverall,
@@ -2929,7 +3163,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       ...(t.file !== undefined ? { file: t.file } : {}),
     })),
     timings: {
-      totalMs: Date.now() - sessionStartedMs,
+      totalMs,
       generateMutationSetMs,
       deployMs,
       baselineMs,
@@ -3154,6 +3388,7 @@ async function runMutantsOnBackend(args: {
    * invalidation.
    */
   readonly leaseSession?: LeaseSession | undefined;
+  readonly emit: RunEmitter;
 }): Promise<void> {
   const leaseSession = args.leaseSession;
   const resyncOpSeq =
@@ -3166,7 +3401,7 @@ async function runMutantsOnBackend(args: {
       // coverage index key whose tests no longer exist in `greenTests`).
       // Treat it the same as "no coverage" rather than silently
       // reporting "survived" for a mutant nothing actually ran against.
-      record(args.store, args.runId, m, "no-coverage", args.outcomes, args.batchIndex);
+      record(args.store, args.runId, m, "no-coverage", args.outcomes, args.batchIndex, args.emit);
       continue;
     }
     await activateOnce(args.backend, args.safety, m.mutantId);
@@ -3174,6 +3409,12 @@ async function runMutantsOnBackend(args: {
     let killingTest: string | undefined;
     let failureNote: string | undefined;
     let cause: "deadline-exceeded" | "unstable" | undefined;
+    // Fix round 2, residual 1 (events.ts doc comment): the exact instant the kill-confirmation
+    // loop below decides `cause: "unstable"` because a HUB-green test failed on the FENCE is also
+    // the exact instant it knows WHICH test disagreed — captured here so the eventual `record()`
+    // call (after this loop) can carry both, matching `runnerDisagreementTests.add(...)` below.
+    let runnerDisagreement: string | undefined;
+    let runnerDisagreementTest: string | undefined;
     let spent = 0;
     // Whether any instrumented guard fired during this mutant's runs — see
     // `MutantOutcome.guardObserved`. Left undefined on a backend that never attests.
@@ -3209,6 +3450,7 @@ async function runMutantsOnBackend(args: {
         ref,
         { coverage: "none", timeoutMs: budget },
         leaseSession,
+        args.emit,
         resyncOpSeq,
       );
       testResultBuffer.push({
@@ -3338,6 +3580,7 @@ async function runMutantsOnBackend(args: {
           ref,
           { coverage: "none", timeoutMs: budget },
           leaseSession,
+          args.emit,
           resyncOpSeq,
         );
         testResultBuffer.push({
@@ -3430,7 +3673,11 @@ async function runMutantsOnBackend(args: {
           // extra cost, and reporting it only as "unstable" sends the reader to debug flakiness.
           // Strictly a diagnosis: the verdict is already `error cause=unstable` and does not move.
           const disagreement = describeRunnerDisagreement(args.backend.capabilities().coverage);
-          if (disagreement !== undefined) args.runnerDisagreementTests.add(qualifiedTestName(ref));
+          if (disagreement !== undefined) {
+            args.runnerDisagreementTests.add(qualifiedTestName(ref));
+            runnerDisagreement = disagreement;
+            runnerDisagreementTest = qualifiedTestName(ref);
+          }
           failureNote = `unstable test ${ref.method}: fails at baseline confirmation${
             refusal !== undefined ? ` — ${refusal}` : ""
           }${disagreement !== undefined ? ` — ${disagreement}` : ""}`;
@@ -3446,6 +3693,7 @@ async function runMutantsOnBackend(args: {
       verdict,
       args.outcomes,
       args.batchIndex,
+      args.emit,
       killingTest,
       failureNote,
       cause,
@@ -3455,6 +3703,11 @@ async function runMutantsOnBackend(args: {
       covering.map((ref) => qualifiedTestName(ref)),
       args.coverageAttribution.get(m.mutantId),
       guardObserved,
+      undefined, // carried
+      undefined, // strandedSkip
+      undefined, // runner — every call site in this loop predates client-services routing
+      runnerDisagreement,
+      runnerDisagreementTest,
     );
     for (const t of testResultBuffer) {
       args.store.recordTestResult(
@@ -3815,14 +4068,32 @@ export function invalidateBatchVerdicts(
  * `assignMutantIds` restarts numbering per batch — so `mutant_row_id` is the
  * only unambiguous way to tie a `test_results` row back to a specific mutant
  * across a whole run (see I5).
+ *
+ * `emit` is REQUIRED — placed right after the other required parameters, not literally last,
+ * because TypeScript rejects a required parameter following an optional one (TS1016) and every
+ * parameter from `killingTest` onward is optional/defaulted. Required-and-early achieves the same
+ * invariant the design calls for ("no call site can write a store row without emitting") as
+ * required-and-last would: every one of the ten call sites in this file must pass it, or the
+ * build fails. `record` is the single choke point that writes both the store row and the
+ * `outcomes[]` entry `buildReport` still reads today; this emits the SAME facts a third way,
+ * immediately after `store.recordMutant` returns, so the two can never drift apart from a missed
+ * call site.
+ *
+ * Exported ONLY for `tests/events-orchestrator.test.ts`, which drives this choke point directly
+ * (against a real in-memory `ResultsStore` — the same "construct `new ResultsStore(":memory:")`
+ * and call its methods directly" pattern `resume.test.ts`/`runner-provenance.test.ts` already use)
+ * to prove events agree with recorded outcomes without needing a full `runSession`. No other
+ * caller outside this file may use it — `runSession` and `runMutantsOnBackend` are the only real
+ * callers, and both live here.
  */
-function record(
+export function record(
   store: ResultsStore,
   runId: number,
   m: MutantManifestEntry,
   verdict: MutantVerdict,
   outcomes: SessionOutcome[],
   batchIndex: number,
+  emit: RunEmitter,
   killingTest?: string,
   failureNote?: string,
   cause?: "deadline-exceeded" | "unstable",
@@ -3836,12 +4107,31 @@ function record(
   // R54: this verdict was carried from a prior run by `--resume`, so its duration belongs to that
   // run's cost, not this one's. See `MutantOutcome.carried`.
   carried?: boolean,
+  // R53: this "error" recording is a mutant a PRIOR run stranded the tier on, skipped rather than
+  // re-executed — the one call site (`runSession` step 5b) that always passes `verdict: "error"`
+  // alongside this flag. Emits `mutant-skipped-stranded` instead of `mutant-scored`: that event's
+  // own type already implies "error" (see events.ts's doc comment), so `verdict` is not repeated
+  // on it, only `mutant`/`batchIndex`/`note`.
+  strandedSkip?: boolean,
   // R69 Phase 2 Task 5: which execution path produced this verdict — see `RunnerKind` (store.ts).
   // Every call site in THIS file predates client-services routing (Task 6 wires that) except the
   // `--resume` replay path, which passes `carried.runner` through unchanged so a verdict carried
   // from an interactive run keeps its tag instead of silently reading as fenced — the resume hole
   // this task closes. Absent elsewhere, which `buildReport` reads as `"fenced"`.
   runner?: RunnerKind,
+  // The two fields below ride ONLY on `mutant-scored` (never on `mutant-carried`) — see
+  // events.ts's doc comment on `mutant-scored.runnerDisagreement`/`runnerDisagreementTest`. Set
+  // only by the kill-confirmation call site (runMutantsOnBackend), which observes them at the
+  // exact instant it also decides `cause: "unstable"`.
+  runnerDisagreement?: string,
+  runnerDisagreementTest?: string,
+  // The prior run a carried verdict came FROM — required when `carried === true` (see the throw
+  // below), never used otherwise. This is NOT `runId` (the CURRENT run being recorded into): the
+  // brief's own sketch used `runId` here, but that would report a carried verdict as carried from
+  // itself. The correct value is the resume's resolved prior run id, known to the ONE call site
+  // that ever passes `carried: true` (`runSession`'s step 5b, which has `resumeState.runId` in
+  // scope) — flagged here for the task report since it corrects rather than follows the brief.
+  fromRunId?: number,
 ): number {
   const key = identityKeyOf(m);
   const mutantRowId = store.recordMutant(runId, {
@@ -3873,5 +4163,49 @@ function record(
     ...(cause !== undefined ? { cause } : {}),
     ...(runner !== undefined ? { runner } : {}),
   });
+  if (carried === true) {
+    if (fromRunId === undefined) {
+      throw new Error(
+        "record(): carried=true requires fromRunId (the prior run this verdict was carried from) — caller-contract violation",
+      );
+    }
+    emit({
+      type: "mutant-carried",
+      mutant: m,
+      verdict,
+      fromRunId,
+      batchIndex,
+      priorDurationMs: durationMs,
+      ...(killingTest !== undefined ? { killingTest } : {}),
+      ...(failureNote !== undefined ? { failureNote } : {}),
+      coveringTests,
+      ...(coverageAttribution !== undefined ? { coverageAttribution } : {}),
+      ...(runner !== undefined ? { runner } : {}),
+    });
+  } else if (strandedSkip === true) {
+    if (failureNote === undefined) {
+      throw new Error(
+        "record(): strandedSkip=true requires failureNote (used as mutant-skipped-stranded.note) — caller-contract violation",
+      );
+    }
+    emit({ type: "mutant-skipped-stranded", mutant: m, batchIndex, note: failureNote });
+  } else {
+    emit({
+      type: "mutant-scored",
+      mutant: m,
+      verdict,
+      batchIndex,
+      durationMs,
+      ...(killingTest !== undefined ? { killingTest } : {}),
+      ...(failureNote !== undefined ? { failureNote } : {}),
+      ...(cause !== undefined ? { cause } : {}),
+      coveringTests,
+      ...(coverageAttribution !== undefined ? { coverageAttribution } : {}),
+      ...(guardObserved !== undefined ? { guardObserved } : {}),
+      ...(runner !== undefined ? { runner } : {}),
+      ...(runnerDisagreement !== undefined ? { runnerDisagreement } : {}),
+      ...(runnerDisagreementTest !== undefined ? { runnerDisagreementTest } : {}),
+    });
+  }
   return mutantRowId;
 }

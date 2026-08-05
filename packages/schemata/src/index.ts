@@ -37,3 +37,9 @@ export { resolveSite, isMutableSite } from "./enclosing";
 export type { ResolvedSite } from "./enclosing";
 export { parseIdRanges, validateSelectorIds } from "./id-ranges";
 export type { AppIdRange, DeclaredObject } from "./id-ranges";
+// R92: exported so `runSession` (packages/runner) can compute the post-dedup "deployed" count
+// alongside `generateMutationSet`'s raw site count for `mutation-set-generated` — the same
+// per-file dedup `writeInstrumentedProject` runs at compile time (see `dedupeSpecs`'s own doc
+// comment for why identity is per-file, not project-wide).
+export { dedupeSpecs } from "./dedup";
+export type { TierResolver } from "./dedup";

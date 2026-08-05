@@ -18,6 +18,8 @@ import type {
   TestVerdict,
 } from "../src/backend";
 import { DeploymentVerifier, decidePublishOutcome } from "../src/deployment-verifier";
+import { createEmitter } from "../src/events";
+import type { RunEvent } from "../src/events";
 import { ActivationFailure } from "../src/failure-classes";
 import { LeaseUnavailableError } from "../src/lease";
 import type {
@@ -4069,21 +4071,19 @@ describe("runSession — Task 13 folded fix: warn when authoritative but no tier
   test("warns when an authoritative backend omits resourceServer/resourceServerInstance", async () => {
     const dirs = await makeProject();
     const store = new ResultsStore(":memory:");
-    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
-    let messages: string[] = [];
-    try {
-      // Deliberately the RAW runSession call (not runSessionForTest, which always fills in
-      // resourceServer/resourceServerInstance) — this is exactly the shape of the ~30
-      // pre-existing authoritative tests elsewhere in this file.
-      await runSession({ backend: authoritativeNoCoverage(), store, ...dirs, selectorIds });
-      // Captured INSIDE the try, before `finally`'s mockRestore() — bun:test's mockRestore()
-      // also resets `.mock.calls` (like Jest's), so reading it after restore would always see
-      // zero calls regardless of what actually happened.
-      messages = warnSpy.mock.calls.map((call) => String(call[0]));
-    } finally {
-      warnSpy.mockRestore();
-    }
-    expect(messages.some((m) => m.includes("quarantine consult is DISABLED"))).toBe(true);
+    // Events, not console.warn: this warning is now emitted as `{ type: "warning", code:
+    // "quarantine-consult-disabled" }` (see orchestrator.ts's `runSession`) rather than printed —
+    // events.ts §A converts every internal `console.warn` call `runSession` owns exclusively.
+    const events: RunEvent[] = [];
+    const emit = createEmitter([(e) => events.push(e)]);
+    // Deliberately the RAW runSession call (not runSessionForTest, which always fills in
+    // resourceServer/resourceServerInstance) — this is exactly the shape of the ~30
+    // pre-existing authoritative tests elsewhere in this file.
+    await runSession({ backend: authoritativeNoCoverage(), store, ...dirs, selectorIds, emit });
+    const warnings = events.filter(
+      (e): e is Extract<RunEvent, { type: "warning" }> => e.type === "warning",
+    );
+    expect(warnings.some((e) => e.code === "quarantine-consult-disabled")).toBe(true);
   });
 
   test("does NOT warn when resourceServer/resourceServerInstance are both set", async () => {
