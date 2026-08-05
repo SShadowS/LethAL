@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { closeSync, openSync, writeSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
@@ -38,7 +39,7 @@ import type { EnvToolBlock, EnvToolConfigSection } from "./env-tool";
 import { EnvToolPublisher } from "./env-tool-publisher";
 import { startEnvToolSession } from "./env-tool-session";
 import type { EnvToolSession } from "./env-tool-session";
-import type { RunEvent } from "./events";
+import type { EventSubscriber } from "./events";
 import { HarnessVerifier } from "./harness";
 import { LeaseClient } from "./lease";
 import {
@@ -51,6 +52,7 @@ import {
 } from "./orchestrator";
 import type { SessionConfig } from "./orchestrator";
 import { PermissionCanaryClient, runPermissionCanary } from "./permission-canary";
+import { createNdjsonSink } from "./progress-ndjson";
 import { createProgressRenderer } from "./progress-renderer";
 import { canonicalContainerKey } from "./publish-serializer";
 import { ContainerDeployer, defaultAlToolPaths, defaultDeployerIo } from "./publisher";
@@ -341,6 +343,14 @@ export interface RunCliConfig {
    * `LARGE_RUN_MUTANT_THRESHOLD`.
    */
   readonly allowLargeRun?: boolean;
+  /**
+   * Task 6 (event-stream refactor, spec 2026-08-05 §A): `--progress-out <path>` streams the event
+   * stream to this path as NDJSON, one JSON object per line, flushed as each event arrives — the
+   * crash diagnostic a finished-only report cannot be, and a structured stream an agent/CI consumer
+   * can read without shelling out to `jq` against rendered prose. See `progress-ndjson.ts`'s module
+   * doc for the header-line and provisional-verdict contract. Absent means no file is written.
+   */
+  readonly progressOutPath?: string;
 }
 
 /**
@@ -461,6 +471,11 @@ RUN — cost and recovery
                              the lease fence, but that id cannot be independently verified
   --workers <n>              parallel workers (bcdev is limited to 1)
   --compile-concurrency <n>  concurrent alc processes
+  --progress-out <path>      stream events to this file as NDJSON, one JSON object per line,
+                             flushed as each event arrives — a crash diagnostic and a structured
+                             feed for agents/CI. VERDICT LINES ARE PROVISIONAL UNTIL
+                             'session-finished': a later 'batch-invalidated' event can supersede
+                             a verdict this file already wrote
 
 RUN — environment
   --config <path>            lethal.config.json (default: <project>/lethal.config.json)
@@ -543,6 +558,8 @@ export const RUN_FLAGS = {
   "stop-hung-sessions": { type: "boolean", default: false },
   // R48: see `RunCliConfig.allowLargeRun`.
   "allow-large-run": { type: "boolean", default: false },
+  // Task 6 (event-stream refactor): see `RunCliConfig.progressOutPath`.
+  "progress-out": { type: "string" },
 } as const;
 
 export function parseCliConfig(argv: readonly string[]): CliConfig {
@@ -774,6 +791,7 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     ...(values["allow-large-run"] === true ? { allowLargeRun: true } : {}),
     ...(values["retry-stranded"] === true ? { retryStranded: true } : {}),
     ...(values["stop-hung-sessions"] === true ? { stopHungSessions: true } : {}),
+    ...(values["progress-out"] !== undefined ? { progressOutPath: values["progress-out"] } : {}),
   };
 }
 
@@ -1677,6 +1695,35 @@ export function withAlRunnerCanary(
   return canary !== undefined ? { ...report, alRunnerCanary: canary } : report;
 }
 
+/**
+ * Fans one already-stamped `RunEvent` out to several independent `SessionConfig.emit` subscribers
+ * — today, the stderr progress renderer (Task 5) and, when `--progress-out` is given, the NDJSON
+ * sink (Task 6). Isolates a throwing subscriber from its siblings, same shape as `events.ts`'s own
+ * `createEmitter`, but WITHOUT re-stamping `seq`: every event reaching this function already
+ * carries its real `seq` from `runSession`'s canonical stream, and re-running it through
+ * `createEmitter` would silently overwrite that with a second, locally-recomputed counter — numerically
+ * identical only by the accident that this function happens to see every event with none filtered
+ * out. Reusing `createEmitter` here would make that coincidence load-bearing without a compiler
+ * catching it if it ever stopped holding.
+ */
+function fanOutEmit(subs: readonly EventSubscriber[]): EventSubscriber {
+  const broken = new Set<number>();
+  return (event) => {
+    subs.forEach((sub, i) => {
+      try {
+        sub(event);
+      } catch (err) {
+        if (!broken.has(i)) {
+          broken.add(i);
+          process.stderr.write(
+            `[lethal] progress subscriber ${i} threw and will keep receiving events: ${String(err)}\n`,
+          );
+        }
+      }
+    });
+  };
+}
+
 export async function runFromCli(
   parsed: RunCliConfig,
   deps: {
@@ -1776,6 +1823,10 @@ export async function runFromCli(
   return await withEnvTeardown(envSession, parsed.keepEnv, async () => {
     let backend: ExecutionBackend | undefined;
     let store: ResultsStore | undefined;
+    // Task 6: opened before `runTheSession` (below) so a killed process still leaves whatever was
+    // written to the OS. Closed in the `finally` below, best-effort, same posture as `store`/
+    // `backend`.
+    let progressOutFd: number | undefined;
     // Task 7 review, wave 2 (Important — the restructure itself introduced this): `report` MUST be
     // captured in a local BEFORE the `finally` runs, and returned AFTER it — never
     // `return await runSession(...)` directly inside the `try`. Per JS `try/finally` semantics, a
@@ -1830,6 +1881,19 @@ export async function runFromCli(
       const progress = createProgressRenderer((line) => process.stderr.write(`${line}\n`), {
         heartbeatMs: PROGRESS_HEARTBEAT_MS,
       });
+      // Task 6 (event-stream refactor, spec 2026-08-05 §A): `--progress-out <path>` streams the
+      // SAME events to an NDJSON file, one JSON object per line, flushed synchronously per event
+      // so a killed process still leaves whatever was written to the OS — see progress-ndjson.ts's
+      // module doc, including the header-line and provisional-verdict contract. `fs.writeSync`
+      // (not a `WriteStream`) because a buffered stream can lose whatever sits in its in-process
+      // buffer when the process is killed rather than exiting cleanly, which is exactly the case
+      // this flag exists to survive.
+      const emitSubscribers: EventSubscriber[] = [progress];
+      if (parsed.progressOutPath !== undefined) {
+        progressOutFd = openSync(parsed.progressOutPath, "w");
+        const fd = progressOutFd;
+        emitSubscribers.push(createNdjsonSink((chunk) => writeSync(fd, chunk)));
+      }
       report = await runTheSession({
         backend,
         store,
@@ -1839,14 +1903,12 @@ export async function runFromCli(
         selectorIds,
         skipKnownSurvivors: parsed.skipKnownSurvivors,
         workers: parsed.workers,
-        // `SessionConfig.emit`'s declared parameter type is `RunEventInput` (events.ts) —
-        // narrower than what it is actually invoked with. `runSession`'s internal emitter always
-        // stamps `seq` before forwarding to a caller-supplied `emit` (orchestrator.ts: the
-        // `collectedEvents`/`cfg.emit` wiring inside `runSession`), so every event this renderer
-        // receives IS a full `RunEvent`. The cast makes that existing, already-relied-upon
-        // contract explicit here rather than widening `RunEmitter` itself, which is a
-        // cross-cutting type change outside this task's scope.
-        emit: (event) => progress(event as RunEvent),
+        // `SessionConfig.emit` is typed `EventSubscriber` (events.ts) precisely because
+        // `runSession` splices it in as an additional subscriber of its own canonical,
+        // seq-stamped stream — every event this receives IS a full `RunEvent`, no cast required.
+        // A single subscriber even when `--progress-out` adds a second one: `fanOutEmit` isolates
+        // either from a throw in the other, and from re-stamping `seq` (see its own doc comment).
+        emit: emitSubscribers.length > 1 ? fanOutEmit(emitSubscribers) : progress,
         ...(parsed.only !== undefined ? { only: parsed.only } : {}),
         ...(parsed.testsOnly !== undefined ? { testsOnly: parsed.testsOnly } : {}),
         ...(parsed.maxGuardsPerBatch !== undefined
@@ -1904,6 +1966,19 @@ export async function runFromCli(
         } catch (err) {
           console.warn(
             `[lethal] backend.close() failed during cleanup (best-effort; the session's report/exit code is unaffected): ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
+      // Task 6: closes the `--progress-out` file descriptor, if one was opened. Best-effort, same
+      // posture as `store`/`backend` above — a close failure here must not mask a real error
+      // already unwinding through this `finally`, and every event that mattered was already
+      // flushed synchronously by `writeSync` at emit time, not buffered here waiting for a close.
+      if (progressOutFd !== undefined) {
+        try {
+          closeSync(progressOutFd);
+        } catch (err) {
+          console.warn(
+            `[lethal] closing --progress-out file failed during cleanup (best-effort; the session's report/exit code is unaffected): ${err instanceof Error ? err.message : String(err)}`,
           );
         }
       }

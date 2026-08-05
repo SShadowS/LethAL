@@ -35,6 +35,7 @@ import { bisectFailingMutant } from "./bisect";
 import { discoverTests } from "./discovery";
 import {
   type BaselineClassification,
+  type EventSubscriber,
   type RunEmitter,
   type RunEvent,
   STREAM_SCHEMA_VERSION,
@@ -529,15 +530,25 @@ export interface SessionConfig {
    *  instead of racing the real clock. Defaults to `() => new Date().toISOString()`. */
   readonly nowIso?: () => string;
   /**
-   * The event stream's emitter (spec 2026-08-05 §A, events.ts). Optional at this level ONLY —
-   * a caller that does not care about events (every test that predates this field, a one-off
-   * script) pays nothing. Once inside `runSession`, `record()`'s own `emit` parameter is
+   * A subscriber spliced into the event stream (spec 2026-08-05 §A, events.ts). Optional at this
+   * level ONLY — a caller that does not care about events (every test that predates this field,
+   * a one-off script) pays nothing. Once inside `runSession`, `record()`'s own `emit` parameter is
    * REQUIRED: `runSession` defaults an absent `cfg.emit` to a no-op emitter
    * (`createEmitter([])`) exactly once, at the top of the function, so every internal call site
    * always has a real (if inert) emitter to pass — there is no second place in this file where
    * "no emitter configured" can be rediscovered and quietly skipped.
+   *
+   * Typed `EventSubscriber`, not `RunEmitter`: `runSession` splices this in as an ADDITIONAL
+   * SUBSCRIBER of its own canonical, seq-stamped stream (see the `emit` construction below), so
+   * it actually receives fully-stamped `RunEvent`s, never a bare `RunEventInput`. `RunEvent
+   * extends RunEventInput` and both are plain arrow-function types, so parameter checking is
+   * contravariant and every existing caller that passes a `createEmitter(...)`-returned
+   * `RunEmitter` here (which is callable with a `RunEventInput`, a supertype of `RunEvent`)
+   * remains valid under this narrower type. This is the general `RunEmitter` alias's one
+   * exception — `MutationSetOptions.emit`/`PlanOptions.emit` above are real construct-and-stamp
+   * call sites and stay `RunEmitter`.
    */
-  readonly emit?: RunEmitter;
+  readonly emit?: EventSubscriber;
 }
 
 /** Alias kept for readability at call sites within this module. */
@@ -1924,7 +1935,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   const collectedEvents: RunEvent[] = [];
   const emit: RunEmitter = createEmitter([
     (e) => collectedEvents.push(e),
-    ...(cfg.emit !== undefined ? [(e: RunEvent): void => cfg.emit?.(e)] : []),
+    ...(cfg.emit !== undefined ? [cfg.emit] : []),
   ]);
   // run-configured (spec 2026-08-05 §A, AMENDED): the closed statics set `{ caps, only, testsOnly,
   // stopHungSessions }`, echoed once from the same `cfg` values the `statics` object built at the
