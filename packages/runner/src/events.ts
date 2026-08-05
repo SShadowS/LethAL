@@ -32,6 +32,16 @@ export const STREAM_SCHEMA_VERSION = 1;
 
 export type RunPhase = "generate" | "deploy" | "baseline" | "mutants" | "teardown";
 
+/**
+ * Why a baseline test did not pass — see `baseline-batch-finished`'s `verdicts[].classification`.
+ * Not invented: these are the SAME identifiers `report.ts`'s own `caveats` array already pushes
+ * (`report.ts:918,924,930`) for exactly the three conditions `orchestrator.ts:2438-2463` assigns.
+ */
+export type BaselineClassification =
+  | "tests-permission-refused"
+  | "tests-testpage-unsupported"
+  | "stale-test-app";
+
 interface Base {
   /** Monotonic, starting at 1. A gap means the stream was truncated. */
   readonly seq: number;
@@ -124,34 +134,29 @@ export type RunEventInput =
         readonly name: string;
         readonly outcome: TestOutcome;
         /**
-         * Fix round 2: narrowed from a bare `string`. `permissionsRefusedTests` and
-         * `testPageUnsupportedTests` are only safely reconstructable if Task 3's emit side and
-         * Task 4's fold side agree on the exact tag spelling — a bare `string` lets that drift
-         * silently (`"permission-refused"` vs `"permissions-refused"`), the same way
-         * `staleTestApp` is already safe because it keys on an exact sentinel
-         * (`failureMessage === NO_RESULT_FOR_METHOD`, `bcdev-backend.ts`/`orchestrator.ts:2460`)
-         * rather than a hand-typed string.
+         * Fix round 2: narrowed from a bare `string` to `BaselineClassification` so an emit-side
+         * or fold-side spelling drift is a compile error, not a silent mismatch — the same
+         * safety `staleTestApp` already had by keying on an exact sentinel
+         * (`failureMessage === NO_RESULT_FOR_METHOD`, `orchestrator.ts:2460`) rather than a
+         * hand-typed string.
          *
-         * These three are not invented: they are the SAME identifiers `report.ts`'s own
-         * `caveats` array already pushes (`report.ts:918,924,930`) for exactly these three
-         * conditions, derived from the orchestrator's classification code
-         * (`orchestrator.ts:2438-2463`) — `describeTestPermissionsRefusal`/
-         * `describeTestPageUnsupported` each match against `b.verdict.failureMessage` and route
-         * a test's name into `permissionRefusedTests`/`testPageUnsupportedTests`; a separate loop
-         * over ALL baseline tests routes any `failureMessage === NO_RESULT_FOR_METHOD` test into
-         * `missingFromServer`. Reusing `report.ts`'s own strings, rather than inventing new ones,
-         * is what makes emit and fold agree by construction instead of by convention.
-         *
-         * NOTE (not fixed here, flagged for Task 3): the two `describeTestPermissionsRefusal`/
-         * `describeTestPageUnsupported` checks are independent `if`s over the same
-         * `failureMessage`, not mutually exclusive by construction — a test could in principle
-         * match both. This field carries only one tag; Task 3 needs a priority rule for that
-         * (unobserved in practice, but not structurally impossible).
+         * Fix round 3: widened from an optional SINGLE tag to a LIST, zero or more.
+         * `orchestrator.ts:2441-2449` runs `describeTestPermissionsRefusal` and
+         * `describeTestPageUnsupported` as two INDEPENDENT, unconditional `if`s over the same
+         * `b.verdict.failureMessage` — nothing stops a test matching both, and a single optional
+         * field can only ever record one, silently dropping the other membership. Measured to be
+         * low-probability (`describeTestPageUnsupported`'s pattern matches the literal
+         * `CreateNavTestService()`; the permission regexes match "you do not have
+         * permission"-shaped text — co-occurrence needs BC to concatenate two unrelated
+         * exceptions into one `failureMessage`) but expressible, so the list loses nothing where
+         * the scalar could. The third member, `"stale-test-app"`, comes from a SEPARATE loop over
+         * ALL baseline tests (not just the two `if`s above) checking the exact sentinel
+         * `failureMessage === NO_RESULT_FOR_METHOD` — structurally it could in principle
+         * co-occur with either of the other two as well, for the same reason (nothing prevents a
+         * concatenated `failureMessage` from matching more than one pattern), so the list covers
+         * that combination too rather than special-casing only the two `if`s.
          */
-        readonly classification?:
-          | "tests-permission-refused"
-          | "tests-testpage-unsupported"
-          | "stale-test-app";
+        readonly classification: readonly BaselineClassification[];
         readonly failureMessage?: string;
       }[];
     }

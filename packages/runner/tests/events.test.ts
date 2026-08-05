@@ -124,11 +124,15 @@ describe("createEmitter", () => {
       type: "baseline-batch-finished",
       batchIndex: 1,
       verdicts: [
-        { name: "Sales Helper Tests.ComputeTotalMultipliesQtyByPrice", outcome: "pass" },
+        {
+          name: "Sales Helper Tests.ComputeTotalMultipliesQtyByPrice",
+          outcome: "pass",
+          classification: [],
+        },
         {
           name: "Sales Helper Tests.RefusedByPermissions",
           outcome: "fail",
-          classification: "tests-permission-refused",
+          classification: ["tests-permission-refused"],
           failureMessage: "You do not have permission to insert...",
         },
       ],
@@ -142,7 +146,7 @@ describe("createEmitter", () => {
     expect(e.verdicts[0]).toMatchObject({ outcome: "pass" });
     expect(e.verdicts[1]).toMatchObject({
       outcome: "fail",
-      classification: "tests-permission-refused",
+      classification: ["tests-permission-refused"],
     });
     expect("testCount" in e).toBe(false);
     expect("failingCount" in e).toBe(false);
@@ -163,24 +167,54 @@ describe("createEmitter", () => {
         {
           name: "Suite.PermissionRefused",
           outcome: "fail",
-          classification: "tests-permission-refused",
+          classification: ["tests-permission-refused"],
         },
         {
           name: "Suite.OpensTestPage",
           outcome: "fail",
-          classification: "tests-testpage-unsupported",
+          classification: ["tests-testpage-unsupported"],
         },
-        { name: "Suite.NoResultForMethod", outcome: "error", classification: "stale-test-app" },
+        { name: "Suite.NoResultForMethod", outcome: "error", classification: ["stale-test-app"] },
       ],
     });
     const e = events[0];
     if (e === undefined) throw new Error("no event recorded");
     if (e.type !== "baseline-batch-finished") throw new Error("expected baseline-batch-finished");
     expect(e.verdicts.map((v) => v.classification)).toEqual([
-      "tests-permission-refused",
-      "tests-testpage-unsupported",
-      "stale-test-app",
+      ["tests-permission-refused"],
+      ["tests-testpage-unsupported"],
+      ["stale-test-app"],
     ]);
+  });
+
+  // Fix round 3: the case a single scalar `classification` could not express. Two of the three
+  // conditions (`describeTestPermissionsRefusal`/`describeTestPageUnsupported`,
+  // `orchestrator.ts:2441-2449`) are independent `if`s over the same `failureMessage`, so a test
+  // matching both must round-trip with BOTH tags intact — a scalar field would have to silently
+  // drop one.
+  test("a verdict row carrying both tags round-trips with both intact", () => {
+    const { events, sub } = collect();
+    const emit = createEmitter([sub]);
+    emit({
+      type: "baseline-batch-finished",
+      batchIndex: 3,
+      verdicts: [
+        {
+          name: "Suite.RefusedAndOpensTestPage",
+          outcome: "fail",
+          classification: ["tests-permission-refused", "tests-testpage-unsupported"],
+          failureMessage: "concatenated BC exception carrying both diagnoses",
+        },
+      ],
+    });
+    const e = events[0];
+    if (e === undefined) throw new Error("no event recorded");
+    if (e.type !== "baseline-batch-finished") throw new Error("expected baseline-batch-finished");
+    const [row] = e.verdicts;
+    if (row === undefined) throw new Error("expected one verdict row");
+    expect(row.classification).toHaveLength(2);
+    expect(row.classification).toContain("tests-permission-refused");
+    expect(row.classification).toContain("tests-testpage-unsupported");
   });
 
   // Fix round 1: the "given vs learned" rule says a static (caps/only/testsOnly/stopHungSessions)
@@ -229,7 +263,7 @@ describe("createEmitter", () => {
       {
         type: "baseline-batch-finished",
         batchIndex: 0,
-        verdicts: [{ name: "Sales Helper Tests.T1", outcome: "pass" }],
+        verdicts: [{ name: "Sales Helper Tests.T1", outcome: "pass", classification: [] }],
       },
       {
         type: "coverage-split",
