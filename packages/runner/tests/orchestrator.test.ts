@@ -4087,15 +4087,19 @@ describe("runSession — Task 13 folded fix: warn when authoritative but no tier
   });
 
   test("does NOT warn when resourceServer/resourceServerInstance are both set", async () => {
-    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
-    let callCount = 0;
-    try {
-      await runSessionForTest(authoritativeNoCoverage(), { quarantineDir: freshTmpDir() });
-      callCount = warnSpy.mock.calls.length; // see note above: read before mockRestore()
-    } finally {
-      warnSpy.mockRestore();
-    }
-    expect(callCount).toBe(0);
+    // Events, not console.warn — see the "warns when..." test above. Asserting `callCount === 0`
+    // on a console spy would be true unconditionally now (this code path never calls
+    // console.warn at all, regardless of resourceServer/resourceServerInstance), which is the
+    // "test passes for the wrong reason" hazard CLAUDE.md names: it would pass whether or not the
+    // quarantine-consult-disabled warning is correctly gated. Asserting on the EVENT'S absence
+    // keeps the test tied to the actual condition under test.
+    const events: RunEvent[] = [];
+    const emit = createEmitter([(e) => events.push(e)]);
+    await runSessionForTest(authoritativeNoCoverage(), { quarantineDir: freshTmpDir(), emit });
+    const warnings = events.filter(
+      (e): e is Extract<RunEvent, { type: "warning" }> => e.type === "warning",
+    );
+    expect(warnings.some((e) => e.code === "quarantine-consult-disabled")).toBe(false);
   });
 
   test("does NOT warn for a non-authoritative (al-runner) backend either", async () => {
@@ -4109,15 +4113,62 @@ describe("runSession — Task 13 folded fix: warn when authoritative but no tier
         authoritative: false,
       }),
     });
-    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
-    let callCount = 0;
-    try {
-      await runSession({ backend, store, ...dirs, selectorIds });
-      callCount = warnSpy.mock.calls.length; // see note above: read before mockRestore()
-    } finally {
-      warnSpy.mockRestore();
+    const events: RunEvent[] = [];
+    const emit = createEmitter([(e) => events.push(e)]);
+    await runSession({ backend, store, ...dirs, selectorIds, emit });
+    const warnings = events.filter(
+      (e): e is Extract<RunEvent, { type: "warning" }> => e.type === "warning",
+    );
+    expect(warnings.some((e) => e.code === "quarantine-consult-disabled")).toBe(false);
+  });
+});
+
+// ————————————————————————————————————————————————————————————————————————
+// Fix round 1: stream-started was in the union (events.ts) and in the generic emitter tests
+// (events.test.ts) but nothing in runSession ever emitted it — the only event carrying the run's
+// own runId, unemitted anywhere. Added here, immediately after cfg.store.createRun() (the only
+// point with both runId and STREAM_SCHEMA_VERSION in scope).
+// ————————————————————————————————————————————————————————————————————————
+describe("runSession — fix round 1: stream-started carries the run's own id", () => {
+  test("emitted with the session's own runId, and precedes every phase/mutant event", async () => {
+    const dirs = await makeProject();
+    const store = new ResultsStore(":memory:");
+    const backend = fakeBackend({
+      capabilities: () => ({
+        coverage: "none",
+        deploy: "none",
+        isolation: "full-reset",
+        authoritative: false,
+      }),
+    });
+    const events: RunEvent[] = [];
+    const emit = createEmitter([(e) => events.push(e)]);
+    await runSession({ backend, store, ...dirs, selectorIds, emit });
+
+    const streamStarted = events.find((e) => e.type === "stream-started");
+    if (streamStarted === undefined || streamStarted.type !== "stream-started") {
+      throw new Error("no stream-started event was emitted");
     }
-    expect(callCount).toBe(0);
+    // Cross-checked against the store, not just "some number": the id stream-started carries must
+    // be the SAME run createRun() actually created, not a stray placeholder.
+    expect(store.getRun(streamStarted.runId)).not.toBeNull();
+
+    // NOT literally events[0] — see the doc comment at its emit call site in orchestrator.ts.
+    // `run-configured` and `tests-discovered` are both emitted BEFORE `createRun()` runs (they
+    // don't need a runId, and the "no tests discovered" refusal must fire before any run row
+    // exists at all), so in this minimal scenario — no --resume, no --only/--tests-only, a
+    // non-authoritative backend (skips the quarantine-consult warning) — those two are exactly
+    // what precedes it, and nothing else does.
+    const precedingTypes = events.slice(0, events.indexOf(streamStarted)).map((e) => e.type);
+    expect(precedingTypes).toEqual(["run-configured", "tests-discovered"]);
+
+    // The property that actually matters for a consumer: neither of the two pre-runId statics
+    // repeats after it — each declares its fact exactly once, and stream-started is the boundary.
+    const afterTypes = events.slice(events.indexOf(streamStarted) + 1).map((e) => e.type);
+    expect(afterTypes).not.toContain("run-configured");
+    expect(afterTypes).not.toContain("tests-discovered");
+    // And the phase/batch machinery that DOES need a runId to make sense of only starts here.
+    expect(afterTypes[0]).toBe("phase-entered");
   });
 });
 

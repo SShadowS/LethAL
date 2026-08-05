@@ -33,7 +33,12 @@ import type { CoverageMode, ExecutionBackend, TestMethodRef, TestVerdict } from 
 import { NO_RESULT_FOR_METHOD } from "./bcdev-backend";
 import { bisectFailingMutant } from "./bisect";
 import { discoverTests } from "./discovery";
-import { type BaselineClassification, type RunEmitter, createEmitter } from "./events";
+import {
+  type BaselineClassification,
+  type RunEmitter,
+  STREAM_SCHEMA_VERSION,
+  createEmitter,
+} from "./events";
 import { ActivationFailure } from "./failure-classes";
 import { LeaseUnavailableError, MAX_ATTEMPT_ID_LENGTH, MAX_TTL_SECONDS } from "./lease";
 import type { AcquireOutcome, Lease, LeaseApi } from "./lease";
@@ -2041,6 +2046,21 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       (caps.authoritative ? undefined : await readAppVersionBestEffort(cfg.projectDir)) ??
       "0.0.0.0",
   });
+  // stream-started: the header event, carrying the run's own id. Emitted HERE, immediately after
+  // `createRun()`, because this is the only point in the function with both `runId` and
+  // `STREAM_SCHEMA_VERSION` in scope — `runId` does not exist before this line.
+  //
+  // NOT literally `events[0]` in every session: `run-configured` and `tests-discovered` (and,
+  // when `--resume` is given, `resolveResume`'s own warning/`resume-resolved`) are ALL emitted
+  // earlier, deliberately — they are facts this session already has (the config it was given, the
+  // tests it found) that do not depend on `runId`, and the `tests.length === 0` / a bad `--resume`
+  // throw BEFORE `createRun()` runs at all, i.e. before a run row — and so before a real `runId` —
+  // exists. Making `stream-started` truly first would mean creating the run row before those
+  // checks, which would leave an orphaned, resumable-but-empty run row in the store for a session
+  // that never got past "no tests discovered" — a real, if narrow, behavioural change with
+  // `--resume` consequences, not a pure event-ordering one. Deferred to the team rather than made
+  // unilaterally; see the test below for exactly what precedes it in the minimal case.
+  emit({ type: "stream-started", streamSchemaVersion: STREAM_SCHEMA_VERSION, runId });
 
   // Phase clocks (see `SessionReport.timings`). `deploy` scales with project size, `mutants`
   // with mutant count, `baseline` is a per-batch toll — recorded separately because a single
