@@ -307,6 +307,7 @@ Environment and output:
 | `--config <path>` | `<project>/lethal.config.json` | Server, company, credentials, optional `envTool` section |
 | `--db <path>` | `<project>/lethal.sqlite` | Results database |
 | `--out <path>` | *(none)* | Write the JSON report here |
+| `--progress-out <path>` | *(none)* | Stream events to this file as NDJSON, one object per line, flushed as each arrives — a crash diagnostic and a structured feed for agents/CI. Verdict lines are provisional until `session-finished`: a later `batch-invalidated` event can supersede one already written |
 | `--selector-id` / `--control-id` / `--table-id` | `79197` to `79199` | Override the injected object ids, e.g. when your `idRanges` exclude the defaults |
 | `--keep-env` / `--allow-expiring-env` | `false` | Env-tool session controls |
 

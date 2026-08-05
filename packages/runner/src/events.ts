@@ -141,20 +141,27 @@ export type RunEventInput =
          * hand-typed string.
          *
          * Fix round 3: widened from an optional SINGLE tag to a LIST, zero or more.
-         * `orchestrator.ts:2441-2449` runs `describeTestPermissionsRefusal` and
-         * `describeTestPageUnsupported` as two INDEPENDENT, unconditional `if`s over the same
-         * `b.verdict.failureMessage` — nothing stops a test matching both, and a single optional
-         * field can only ever record one, silently dropping the other membership. Measured to be
-         * low-probability (`describeTestPageUnsupported`'s pattern matches the literal
-         * `CreateNavTestService()`; the permission regexes match "you do not have
-         * permission"-shaped text — co-occurrence needs BC to concatenate two unrelated
-         * exceptions into one `failureMessage`) but expressible, so the list loses nothing where
-         * the scalar could. The third member, `"stale-test-app"`, comes from a SEPARATE loop over
-         * ALL baseline tests (not just the two `if`s above) checking the exact sentinel
-         * `failureMessage === NO_RESULT_FOR_METHOD` — structurally it could in principle
-         * co-occur with either of the other two as well, for the same reason (nothing prevents a
-         * concatenated `failureMessage` from matching more than one pattern), so the list covers
-         * that combination too rather than special-casing only the two `if`s.
+         * `orchestrator.ts`'s `baseline-batch-finished` emit runs `describeTestPermissionsRefusal`
+         * and `describeTestPageUnsupported` as two INDEPENDENT `if`s over the same
+         * `b.verdict.failureMessage`, both now gated on `didNotPassAtBaseline(b.verdict.outcome)`
+         * (coordinator review, final wave, Fix 1 — an earlier version ran them unconditionally,
+         * widening `permissionsRefused`/`testPageUnsupported` beyond what a `pass`/`skip`/`timeout`
+         * verdict could ever produce pre-refactor) — nothing stops a test matching both, and a
+         * single optional field can only ever record one, silently dropping the other membership.
+         * Measured to be low-probability (`describeTestPageUnsupported`'s pattern matches the
+         * literal `CreateNavTestService()`; the permission regexes match "you do not have
+         * permission"-shaped text — co-occurrence needs BC to concatenate two unrelated exceptions
+         * into one `failureMessage`) but expressible, so the list loses nothing where the scalar
+         * could. The third member, `"stale-test-app"`, is checked in the SAME `baseline.map(...)`
+         * as the other two now (not a separate loop — all three classifications for one verdict are
+         * computed together), UNCONDITIONALLY (no `didNotPassAtBaseline` gate: the pre-refactor
+         * loop this mirrors, `missingFromServer`, also ran over every baseline verdict, not just the
+         * non-passing ones). It uses EXACT equality against `NO_RESULT_FOR_METHOD`
+         * (`orchestrator.ts`), not a substring pattern, so — unlike the other two — it structurally
+         * CANNOT co-occur with them via concatenation: a `failureMessage` built by concatenating two
+         * unrelated exceptions is, by construction, longer than and different from the bare sentinel
+         * string, so it can never be `=== NO_RESULT_FOR_METHOD`. The list still covers all three
+         * uniformly rather than special-casing the one member that cannot realistically co-occur.
          */
         readonly classification: readonly BaselineClassification[];
         readonly failureMessage?: string;

@@ -701,6 +701,71 @@ describe("runSession", () => {
     expect(report.validity.caveats).not.toContain("tests-permission-refused");
   });
 
+  // Coordinator review, final wave, Fix 1: `describeTestPermissionsRefusal`/
+  // `describeTestPageUnsupported` used to run over EVERY baseline verdict, not just the ones that
+  // `didNotPassAtBaseline` (fail/error). `StubBackend` cannot produce this shape — its
+  // `failureMessageFor` is consulted ONLY when the scripted outcome is `"fail"` — because that
+  // coupling IS the real bcdev shape (every `failureMessage` there pairs with outcome
+  // "error"/"fail"). The gap is reachable on al-runner, where a `pass`/`skip` outcome can still
+  // carry a `failureMessage` (`al-runner-backend.ts`). A minimal custom backend models exactly that:
+  // baseline PASSES, but the verdict carries BC's permission-refusal text anyway.
+  test("R35 Fix 1: a PASSING baseline verdict with a permission-shaped failureMessage does NOT land in permissionsRefused", async () => {
+    const dirs = await makeProject();
+    class PassWithFailureMessageBackend implements ExecutionBackend {
+      activations: Array<string | null> = [];
+      capabilities() {
+        return CAPS_NST;
+      }
+      async status(): Promise<BackendStatus> {
+        return { ok: true, details: "stub" };
+      }
+      async deploy(): Promise<CompiledArtifact | null> {
+        return null;
+      }
+      async compileCheck(): Promise<void> {}
+      async activate(id: string | null) {
+        this.activations.push(id);
+      }
+      async run(ref: TestMethodRef): Promise<TestVerdict> {
+        const active = this.activations.at(-1) ?? null;
+        if (active !== null) {
+          // Mutant run (fenced transport, coverage:"none") — survives; clean attestation so
+          // design §G's fail-closed gate does not quarantine the session. The mutation score is
+          // not what this test is about.
+          return {
+            ref,
+            outcome: "pass",
+            durationMs: 5,
+            attestation: { observedAny: true, identityMismatch: false },
+          };
+        }
+        // Baseline (hub transport, coverage:"procedure"): outcome PASS, but the verdict carries a
+        // permission-refusal-shaped `failureMessage` anyway — the al-runner-reachable combination
+        // Fix 1 exists for. `didNotPassAtBaseline(outcome)` must gate this out.
+        return {
+          ref,
+          outcome: "pass",
+          durationMs: 5,
+          failureMessage: BC_PERMISSION_REFUSAL,
+          coverage: {
+            granularity: "procedure",
+            entries: [{ objectType: "Codeunit", objectId: 79000, procedure: "IsOverBudget" }],
+          },
+        };
+      }
+    }
+    const backend = new PassWithFailureMessageBackend();
+    const store = new ResultsStore(":memory:");
+    try {
+      const report = await runSession({ backend, store, ...dirs, selectorIds });
+      expect(report.baselineGreen).toBe(true); // the test PASSED
+      expect(report.permissionsRefused).toBeUndefined();
+      expect(report.validity.caveats).not.toContain("tests-permission-refused");
+    } finally {
+      store.close();
+    }
+  });
+
   test("R26: a permissions refusal that PASSES at baseline is still a kill, undiagnosed", async () => {
     const dirs = await makeProject();
     // The kill shape: fails under the mutant (with BC's refusal text, which the diagnosis would

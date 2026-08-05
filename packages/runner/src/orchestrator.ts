@@ -2566,20 +2566,35 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       // all-red path below (`greenTests.length === 0`) rather than only on the happy path.
       // Classification is computed directly against `describeTestPermissionsRefusal`/
       // `describeTestPageUnsupported`/the stale-test-app sentinel — the SAME pure checks the
-      // `refusedThisBatch`/`testPageThisBatch` loop below also runs, kept independent here so this
-      // event's correctness never depends on reaching code after the early `continue`. This is also
-      // the ONLY place `unsupportedTests`/`staleTestApp`/`testPageUnsupported` are now sourced from
-      // — report-fold.ts folds them from `classification` here, not from a session-level
-      // accumulator in this function (event-stream refactor, spec 2026-08-05 §A).
+      // `refusedThisBatch`/`testPageThisBatch` loop below also runs, over the SAME domain: the
+      // permission/testpage regexes are gated on `didNotPassAtBaseline(b.verdict.outcome)` here for
+      // exactly the reason that loop is scoped to `unsupportedBaseline` (its own
+      // `didNotPassAtBaseline`-filtered view of `baseline`) — a `pass`/`skip`/`timeout` verdict
+      // cannot be a permissions refusal or a TestPage refusal by construction (coordinator review,
+      // final wave, Fix 1: an earlier version of this gate ran the regexes over EVERY verdict, which
+      // widened `SessionReport.permissionsRefused`/`.testPageUnsupported` beyond what the pre-refactor
+      // bag could ever contain — unreachable on bcdev, where every regex-matching `failureMessage` is
+      // paired with `outcome:"error"`/`"fail"`, but reachable on al-runner). `stale-test-app` stays
+      // UNCONDITIONAL: the pre-refactor loop for it (`missingFromServer`) already ran over ALL of
+      // `baseline`, not just `unsupportedBaseline` — this event correctly mirrors both domains, not
+      // one. This is also the ONLY place `unsupportedTests`/`staleTestApp`/`testPageUnsupported` are
+      // now sourced from — report-fold.ts folds them from `classification` here, not from a
+      // session-level accumulator in this function (event-stream refactor, spec 2026-08-05 §A).
       emit({
         type: "baseline-batch-finished",
         batchIndex: batchIdx,
         verdicts: baseline.map((b) => {
           const classification: BaselineClassification[] = [];
-          if (describeTestPermissionsRefusal(b.verdict.failureMessage) !== undefined) {
+          if (
+            didNotPassAtBaseline(b.verdict.outcome) &&
+            describeTestPermissionsRefusal(b.verdict.failureMessage) !== undefined
+          ) {
             classification.push("tests-permission-refused");
           }
-          if (describeTestPageUnsupported(b.verdict.failureMessage) !== undefined) {
+          if (
+            didNotPassAtBaseline(b.verdict.outcome) &&
+            describeTestPageUnsupported(b.verdict.failureMessage) !== undefined
+          ) {
             classification.push("tests-testpage-unsupported");
           }
           if (b.verdict.failureMessage === NO_RESULT_FOR_METHOD) {
