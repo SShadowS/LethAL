@@ -2783,22 +2783,137 @@ export async function performForceResetLease(
 }
 
 /**
+ * force-reset-lease's own envTool resolution. Before this existed, `forceResetLeaseFromCli` called
+ * `validateBcDevConfig(configFile.bcdev)` DIRECTLY — which throws on an envTool config, because
+ * `server`/`serverInstance`/`username`/`password` are legitimately absent from the file on disk
+ * (the tool supplies them at runtime). Every recovery against a hosted Layer-6C environment needed
+ * a hand-materialised copy of the config with those fields injected —
+ * `.claude/skills/recover-tier`'s bundled `materialize-config.ts` (now deleted) existed only to
+ * paper over this; before THAT script existed, a real campaign paid for the gap with a manual,
+ * mid-recovery python-injection step. The fix belongs in the tool, not in a skill's workaround
+ * script.
+ *
+ * Mirrors `buildDoctorDeps`'s `resolvedBcdev` (R109) rather than re-deriving the algorithm: the
+ * SAME `validateEnvToolConfig`/`requireBcDevRawFields` calls, the SAME `splitBaseUrl`/
+ * `deriveMcpPort` derivation (env-tool-session.ts, exported for exactly this reuse), and the SAME
+ * `validateBcDevConfig` on the assembled result — never a second, hand-rolled parse that could
+ * drift from what `run` accepts.
+ *
+ * Deliberately NOT `resolveEnvToolSession`: its own doc comment (above, `cli.ts:246`) says it "can
+ * provision a real, billed Layer-6C environment" — create-mode's `createEnv`/`startEnv`. A
+ * recovery command is reached for AFTER a session already died and left a tier stranded; it must
+ * never be able to spend money or mutate infrastructure as a side effect of resolving a config at
+ * the exact moment an operator is trying to clean up. This function spawns ONLY the configured
+ * `envTool.resolve` blocks — the identical hard boundary `buildDoctorDeps` documents as its own
+ * constraint 4 — and its body never references `startEnvToolSession`, `createEnv`, `startEnv`,
+ * `publish` or `downloadSymbols`.
+ */
+export async function resolveForceResetLeaseConfig(
+  configFile: LethalConfigFile,
+  opts: {
+    readonly projectDir?: string;
+    readonly makeEnvToolClient?: (cfg: EnvToolConfigSection) => EnvToolClient;
+  } = {},
+): Promise<BcDevConfigSection> {
+  if (configFile.envTool === undefined) return validateBcDevConfig(configFile.bcdev);
+
+  const bcdevRaw = configFile.bcdev ?? {};
+  const bcdevDeclaredKeys = (READS_KEYS as readonly string[]).filter((key) => {
+    const v = (bcdevRaw as Record<string, unknown>)[key];
+    return typeof v === "string" && v !== "";
+  });
+  // SAME validator `run`/`buildDoctorDeps` use — a malformed envTool section throws here
+  // identically to both.
+  const envCfg = validateEnvToolConfig(configFile.envTool, {
+    env: process.env,
+    hasPackageCachePath: Boolean(bcdevRaw.packageCachePath),
+    bcdevDeclaredKeys,
+  });
+  // Fails fast on the three fields the env tool itself can never supply — the SAME check
+  // `startEnvToolSession` runs as its very first statement and `buildDoctorDeps` runs identically.
+  requireBcDevRawFields(bcdevRaw);
+
+  const makeClient =
+    opts.makeEnvToolClient ??
+    ((cfg: EnvToolConfigSection) => new EnvToolClient(cfg, undefined, opts.projectDir));
+  const client = makeClient(envCfg);
+  const supplied: Record<string, string> = {
+    envId: envCfg.envId ?? "",
+    projectDir: opts.projectDir ?? "",
+    testDir: "",
+    runId: "force-reset-lease",
+  };
+  // The hard read-only boundary: ONLY `resolve` blocks are ever run here.
+  const resolved: Record<string, string> = {};
+  for (const [i, block] of (envCfg.resolve ?? []).entries()) {
+    Object.assign(resolved, await client.run(block, `resolve[${i}]`, supplied));
+  }
+
+  const baseUrl = resolved.baseUrl;
+  if (baseUrl === undefined) throw new EnvToolError("envTool.resolve produced no baseUrl");
+  const { server, serverInstance } = splitBaseUrl(
+    baseUrl,
+    resolved.server,
+    resolved.serverInstance,
+  );
+  const port = deriveMcpPort(baseUrl);
+  const username = resolved.username;
+  const password = resolved.password;
+  if (username === undefined || password === undefined) {
+    throw new EnvToolError("envTool.resolve produced no username/password");
+  }
+  // `validateBcDevConfig` requires `packageCachePath` (it is `BcDevConfigSection`'s shared shape,
+  // and force-reset-lease/clear-quarantine reuse that ONE validator rather than a looser one built
+  // just for them — see the doc comment above). Neither command compiles or publishes anything, so
+  // this value is never dereferenced on this path; when the config leaves it to `downloadSymbols`
+  // (no static `packageCachePath` declared — legal per `validateEnvToolConfig`), the SAME default
+  // `startEnvToolSession` computes (env-tool-session.ts:240) is used here too, WITHOUT actually
+  // running `downloadSymbols` — that would be a real I/O side effect this read-only resolver must
+  // not have (the same constraint that rules out `resolveEnvToolSession`, just one step smaller).
+  const packageCachePath = bcdevRaw.packageCachePath ?? join(opts.projectDir ?? ".", ".alpackages");
+  return validateBcDevConfig({
+    ...bcdevRaw,
+    baseUrl,
+    server,
+    serverInstance,
+    port,
+    username,
+    password,
+    packageCachePath,
+  });
+}
+
+/**
  * `lethal force-reset-lease --server ... --instance ... --config ...` (design §8 step 2). Reads
  * the bcdev credentials (company/username/password/tenant) from the SAME config file `lethal
- * run` uses via `validateBcDevConfig`, but the operator's `--server`/`--instance` flags — not
- * whatever the config file's own `bcdev.server`/`bcdev.serverInstance` happen to hold — pick the
- * target, mirroring `clear-quarantine`'s identity source: an operator recovering a specific
- * wedged container names it explicitly, rather than trusting a possibly shared/stale config
- * file to point at the right one.
+ * run` uses — via `resolveForceResetLeaseConfig`, which resolves an envTool config the same
+ * read-only way `lethal doctor` does (see that function's doc comment) — but the operator's
+ * `--server`/`--instance` flags — not whatever the config file's own `bcdev.server`/
+ * `bcdev.serverInstance` happen to hold — pick the target, mirroring `clear-quarantine`'s identity
+ * source: an operator recovering a specific wedged container names it explicitly, rather than
+ * trusting a possibly shared/stale config file to point at the right one.
  *
  * This is a recovery tool that clears safety state (the op marker, the committed active-mutant
  * row, and every outstanding lease credential) — it prints exactly what it is about to reset
  * BEFORE doing it, and (via `performForceResetLease`) never accepts a generation from anywhere
  * but a live `HarnessInfo` read.
+ *
+ * `deps` mirrors `runFromCli`'s own `deps.resolveEnvToolSession`/`deps.buildBackend` seam
+ * (immediately above `runFromCli`'s own doc comment) — injectable ONLY so a test can drive this
+ * exact wiring (config load -> resolve -> OData call) with fakes, without a real config file on
+ * disk or a real `HarnessInfo`/`ForceResetLease` round trip. The real defaults are exactly
+ * `resolveForceResetLeaseConfig` and the global `fetch`.
  */
-async function forceResetLeaseFromCli(parsed: ForceResetLeaseCliConfig): Promise<number> {
+export async function forceResetLeaseFromCli(
+  parsed: ForceResetLeaseCliConfig,
+  deps: {
+    readonly resolveConfig?: typeof resolveForceResetLeaseConfig;
+    readonly fetchFn?: FetchFn;
+  } = {},
+): Promise<number> {
   const configFile = await loadLethalConfigFile(parsed.configPath);
-  const c = validateBcDevConfig(configFile.bcdev);
+  const resolveConfig = deps.resolveConfig ?? resolveForceResetLeaseConfig;
+  const c = await resolveConfig(configFile);
   const odataCfg = {
     // R51: honours an explicit `bcdev.baseUrl` (the env-tool case — a path-routed HTTPS endpoint on
     // 443, which port-7048 injection can never reach), and refuses one that names a different tier
@@ -2816,7 +2931,7 @@ async function forceResetLeaseFromCli(parsed: ForceResetLeaseCliConfig): Promise
 
   let result: ForceResetLeaseResult;
   try {
-    result = await performForceResetLease(odataCfg);
+    result = await performForceResetLease(odataCfg, deps.fetchFn ?? fetch);
   } catch (err) {
     throw new Error(
       `force-reset-lease: could not complete the reset — the HarnessInfo/ForceResetLease call failed. Is the "LethAL Control" extension deployed and the NST at ${parsed.server}/${parsed.serverInstance} reachable? If you have not already, restart the NST/container first (design §8 step 1), then retry. Underlying error: ${err instanceof Error ? err.message : String(err)}`,
