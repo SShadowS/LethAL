@@ -38,6 +38,7 @@ import type { EnvToolBlock, EnvToolConfigSection } from "./env-tool";
 import { EnvToolPublisher } from "./env-tool-publisher";
 import { startEnvToolSession } from "./env-tool-session";
 import type { EnvToolSession } from "./env-tool-session";
+import type { RunEvent } from "./events";
 import { HarnessVerifier } from "./harness";
 import { LeaseClient } from "./lease";
 import {
@@ -50,6 +51,7 @@ import {
 } from "./orchestrator";
 import type { SessionConfig } from "./orchestrator";
 import { PermissionCanaryClient, runPermissionCanary } from "./permission-canary";
+import { createProgressRenderer } from "./progress-renderer";
 import { canonicalContainerKey } from "./publish-serializer";
 import { ContainerDeployer, defaultAlToolPaths, defaultDeployerIo } from "./publisher";
 import type { AppPublisher } from "./publisher";
@@ -82,6 +84,17 @@ const DEFAULT_SELECTOR_IDS: SelectorConfig = {
   controlId: 79198,
   tableId: 79197,
 };
+
+/**
+ * How often `runFromCli`'s stderr progress renderer (progress-renderer.ts) may print a mutant-
+ * progress tick. Every other line it prints (phase boundaries, baseline batches, coverage
+ * splits, warnings) is already low-volume and renders on every occurrence; this is the one
+ * throttle, and it exists only so a run with hundreds of mutants doesn't turn into hundreds of
+ * lines — the final per-mutant table in the report already exists for that. 15s: frequent enough
+ * that the mutants phase never looks stalled, infrequent enough not to compete with the
+ * per-batch/per-phase lines that matter more.
+ */
+const PROGRESS_HEARTBEAT_MS = 15_000;
 
 /**
  * Resolves the three injected object ids (the "Mutation Selector"/"Mutation Register"/"Mutation
@@ -1808,6 +1821,15 @@ export async function runFromCli(
         }
       }
       store = new ResultsStore(parsed.dbPath);
+      // Task 5 (event-stream refactor, spec 2026-08-05 §A): a run this long (a baseline alone
+      // can run for minutes with zero prior output) needs a live indication it hasn't stalled.
+      // Writes to STDERR — never stdout, which is where the final report goes
+      // (`renderConsole`/`writeJsonReport` below) — because mixing progress into the report's
+      // own stream already cost a real session a swallowed error, twice, behind a `grep` on the
+      // combined output.
+      const progress = createProgressRenderer((line) => process.stderr.write(`${line}\n`), {
+        heartbeatMs: PROGRESS_HEARTBEAT_MS,
+      });
       report = await runTheSession({
         backend,
         store,
@@ -1817,6 +1839,14 @@ export async function runFromCli(
         selectorIds,
         skipKnownSurvivors: parsed.skipKnownSurvivors,
         workers: parsed.workers,
+        // `SessionConfig.emit`'s declared parameter type is `RunEventInput` (events.ts) —
+        // narrower than what it is actually invoked with. `runSession`'s internal emitter always
+        // stamps `seq` before forwarding to a caller-supplied `emit` (orchestrator.ts: the
+        // `collectedEvents`/`cfg.emit` wiring inside `runSession`), so every event this renderer
+        // receives IS a full `RunEvent`. The cast makes that existing, already-relied-upon
+        // contract explicit here rather than widening `RunEmitter` itself, which is a
+        // cross-cutting type change outside this task's scope.
+        emit: (event) => progress(event as RunEvent),
         ...(parsed.only !== undefined ? { only: parsed.only } : {}),
         ...(parsed.testsOnly !== undefined ? { testsOnly: parsed.testsOnly } : {}),
         ...(parsed.maxGuardsPerBatch !== undefined
