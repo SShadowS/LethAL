@@ -10,7 +10,20 @@
  * concurrently. `seq` is stamped monotonically so a crash-truncated stream is detectable; the
  * report fold does not depend on arrival order, and `orchestrator.ts`'s final sort keeps the
  * folded artifact deterministic.
+ *
+ * AMENDED AFTER TASK-2 REVIEW (docs/superpowers/plans/2026-08-05-event-stream.md, "AMENDED AFTER
+ * TASK-2 REVIEW"): a field-by-field comparison against `BuildReportInput` found 12 of its 19
+ * top-level fields were not representable from the first-cut union below. The organising rule
+ * from that pass, applied throughout: a fact the run was GIVEN is a static (declared once, in
+ * `run-configured`); a fact the run LEARNS is an event, carried at the moment it is learned, not
+ * before and not aggregated. `resume-resolved` is the case that makes "given" insufficient on its
+ * own — `--resume` is resolved at session start yet half of what it produces (carryable/stranded
+ * counts) is learned, not configured.
  */
+import type { MutantManifestEntry } from "@lethal/schemata";
+import type { BackendCapabilities, TestMethodRef, TestOutcome } from "./backend";
+import type { PermissionCanaryResult } from "./permission-canary";
+import type { NotInstrumentedFile } from "./report";
 import type { CoverageAttribution } from "./selection";
 import type { MutantVerdict, RunnerKind } from "./store";
 
@@ -30,7 +43,47 @@ export type RunEventInput =
       readonly streamSchemaVersion: number;
       readonly runId: number;
     }
-  | { readonly type: "phase-entered"; readonly phase: RunPhase; readonly detail?: string }
+  | {
+      /**
+       * The closed set of statics this run was GIVEN, echoed once from the same config object
+       * `buildReport`'s fold receives directly — one source, two carriages, no computation on
+       * either path. Hard rule: a static appears in exactly ONE declaration event (this one), and
+       * no later event may repeat or update it.
+       *
+       * `only.excludedFileCount` (`BuildReportInput.only`, report.ts:626-629) is deliberately NOT
+       * here: the glob patterns are given at configuration time, but how many files they excluded
+       * is only known once `generateMutationSet` runs — that half is LEARNED, and rides
+       * `mutation-set-generated.excludedByOnly` instead. The fold reunites the two.
+       */
+      readonly type: "run-configured";
+      readonly caps: BackendCapabilities;
+      readonly only?: { readonly patterns: readonly string[] };
+      readonly testsOnly?: readonly string[];
+      readonly stopHungSessions?: boolean;
+    }
+  | {
+      /**
+       * Emitted after `resolveResume` (orchestrator.ts) returns, before any mutant event. Final
+       * `carriedMutants`/`skippedStranded` do NOT ride here — the fold counts them 1:1 from
+       * `mutant-carried`/`mutant-skipped-stranded` events, which is what lets Task 3 delete the
+       * orchestrator's own `resumedMutantCount`/`strandedSkippedCount` counters rather than
+       * keeping two accountings of the same quantity.
+       */
+      readonly type: "resume-resolved";
+      readonly fromRunId: number;
+      readonly mode: "last" | number;
+      readonly carryableCount: number;
+      readonly strandedKeyCount: number;
+      readonly retryStranded: boolean;
+    }
+  | {
+      readonly type: "phase-entered";
+      readonly phase: RunPhase;
+      readonly detail?: string;
+      /** Populated only when `phase === "baseline"`. */
+      readonly testCount?: number;
+      readonly batchIndex?: number;
+    }
   | { readonly type: "phase-left"; readonly phase: RunPhase; readonly elapsedMs: number }
   | {
       readonly type: "mutation-set-generated";
@@ -38,6 +91,17 @@ export type RunEventInput =
       readonly deployedCount: number;
       readonly totalFiles: number;
       readonly instrumentableFiles: number;
+      /** The full skip list — see `SessionReport.notInstrumented.files`. */
+      readonly notInstrumentedFiles: readonly NotInstrumentedFile[];
+      /** R41: `.al` files a `--only` glob excluded from spec generation. 0 when no `only` was
+       *  given. The LEARNED half of `run-configured.only` — see that event's doc comment. */
+      readonly excludedByOnly: number;
+    }
+  | {
+      /** Discovery returns the whole list in one parse — 1,000+ per-item events at one instant
+       *  would be false granularity, not liveness. */
+      readonly type: "tests-discovered";
+      readonly tests: readonly TestMethodRef[];
     }
   | {
       readonly type: "batch-published";
@@ -47,22 +111,71 @@ export type RunEventInput =
     }
   | { readonly type: "batch-invalidated"; readonly batchIndex: number; readonly reason: string }
   | {
-      readonly type: "baseline-finished";
-      readonly testCount: number;
-      readonly failingCount: number;
+      /**
+       * The moment of observation is the batch's baseline RETURNING, not each test inside it: the
+       * silence is inside the backend call, so per-test events would buy no liveness. Carries
+       * per-test rows, not aggregates — `baselineGreen` and the pass/fail counts are folded from
+       * these, never passed in (events carry facts; consumers compute aggregates, which is the
+       * rule `baseline-finished` violated and is deleted for).
+       */
+      readonly type: "baseline-batch-finished";
+      readonly batchIndex: number;
+      readonly verdicts: readonly {
+        readonly name: string;
+        readonly outcome: TestOutcome;
+        /** Short tag, e.g. a permissions refusal or a stale-test-app diagnosis — the composed,
+         *  human-facing text stays downstream so it cannot drift per caller. */
+        readonly classification?: string;
+        readonly failureMessage?: string;
+      }[];
+    }
+  | {
+      /**
+       * Accumulated per batch at split time — see `CoverageSplit` (selection.ts). This is the
+       * strongest single argument for events over the old bag: a rung with 66% no-coverage would
+       * have been visible at batch 1, minutes before the report said so.
+       */
+      readonly type: "coverage-split";
+      readonly batchIndex: number;
+      readonly untargetedTriggerCount: number;
+      readonly coveredCount: number;
+      readonly noCoverageCount: number;
+    }
+  | {
+      /** The once-per-session permission canary's measured verdict — one observation. */
+      readonly type: "permission-canary";
+      readonly result: PermissionCanaryResult;
     }
   | {
       readonly type: "mutant-scored";
-      readonly mutantCode: string;
+      /**
+       * The full manifest entry, not `mutantCode` plus a join. In-process it travels by
+       * reference so this costs nothing; on NDJSON a line carrying file/operator/startIndex is
+       * exactly what a consumer would otherwise have to `jq`-excavate from a separate manifest;
+       * and `orchestrator.ts`'s final sort needs `mutant.file`/`mutant.startIndex` anyway.
+       */
+      readonly mutant: MutantManifestEntry;
       readonly verdict: MutantVerdict;
       readonly batchIndex: number;
       readonly durationMs: number;
       readonly killingTest?: string;
       readonly failureNote?: string;
+      /**
+       * NOT in the brief's amendment list — added because `record()`'s kill-confirmation call
+       * site (orchestrator.ts:3404-3437) sets this on the SAME `error` verdicts `failureNote`
+       * describes, and `SessionOutcome.cause` (report.ts) has no other source. Omitting it would
+       * leave `outcomes` — one of `BuildReportInput`'s 19 audited fields — not fully
+       * reconstructable from events, reproducing the exact gap this review pass exists to close.
+       * Flagged in the task report for confirmation.
+       */
+      readonly cause?: "deadline-exceeded" | "unstable";
       readonly coveringTests: readonly string[];
       readonly coverageAttribution?: CoverageAttribution;
       readonly guardObserved?: boolean;
       readonly runner?: RunnerKind;
+      /** Observed during this mutant's kill-confirmation (orchestrator.ts:3433), same call site
+       *  that sets `cause: "unstable"` — see `describeRunnerDisagreement`. */
+      readonly runnerDisagreement?: string;
     }
   | {
       /**
@@ -71,15 +184,39 @@ export type RunEventInput =
        * DELIBERATELY has no `durationMs` field. The prior cost lives only in `priorDurationMs`, so
        * the fold cannot sum it into `mutantsMs` even by accident — R54 becomes unrepresentable
        * rather than guarded by a filter someone forgets (`report.ts:865`).
+       *
+       * `batchIndex`/`killingTest`/`failureNote`/`runner` are NOT in the brief's amendment list
+       * ("full entry, +coverageAttribution") — added because `record()`'s carried-verdict call
+       * site (orchestrator.ts:2589-2605) passes all four onto the resulting `SessionOutcome`
+       * (batchIndex from the loop; the other three from `CarriedVerdict`, resume.ts:70-85).
+       * Without them the fold cannot reconstruct a carried `SessionOutcome` in full. Flagged in
+       * the task report for confirmation.
        */
       readonly type: "mutant-carried";
-      readonly mutantCode: string;
+      readonly mutant: MutantManifestEntry;
       readonly verdict: MutantVerdict;
       readonly fromRunId: number;
+      readonly batchIndex: number;
       readonly priorDurationMs: number;
+      readonly killingTest?: string;
+      readonly failureNote?: string;
       readonly coveringTests: readonly string[];
+      readonly coverageAttribution?: CoverageAttribution;
+      readonly runner?: RunnerKind;
     }
-  | { readonly type: "mutant-skipped-stranded"; readonly mutantCode: string; readonly note: string }
+  | {
+      /**
+       * `batchIndex` is NOT in the brief's amendment list ("full entry") — added because
+       * `record()`'s stranded-skip call site (orchestrator.ts:2571-2580) passes it onto the
+       * resulting `SessionOutcome`, same as every other recorded verdict. Flagged in the task
+       * report for confirmation. `verdict` is not carried: this event's own type already implies
+       * `"error"` — record() always passes that literal here (orchestrator.ts:2575).
+       */
+      readonly type: "mutant-skipped-stranded";
+      readonly mutant: MutantManifestEntry;
+      readonly batchIndex: number;
+      readonly note: string;
+    }
   | { readonly type: "warning"; readonly code: string; readonly message: string }
   | { readonly type: "quarantined"; readonly reason: string }
   | { readonly type: "session-finished"; readonly elapsedMs: number };
@@ -93,7 +230,10 @@ export type RunEmitter = (event: RunEventInput) => void;
 /**
  * A subscriber that throws must not abort the run or cost the other subscribers their event: a
  * broken renderer is a cosmetic failure, and losing a `mutant-scored` event would corrupt the
- * report. The throw is swallowed deliberately and reported once on stderr.
+ * report. The throw is swallowed deliberately and reported once on stderr — once PER SUBSCRIBER,
+ * not once per throw: a chronically-throwing subscriber (e.g. a renderer that dies on the first
+ * event and would die identically on every one after) must not spam stderr once per mutant while
+ * every other subscriber keeps receiving every event without interruption.
  */
 export function createEmitter(subscribers: readonly EventSubscriber[]): RunEmitter {
   let seq = 0;
