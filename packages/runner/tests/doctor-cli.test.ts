@@ -67,8 +67,7 @@ describe("lethal doctor CLI wiring — config-level parity", () => {
     expect(() => validateBcDevConfig(configFile.bcdev)).toThrow(/missing the "bcdev" section/);
     // `buildDoctorDeps` calls the SAME validator internally, not a second parse — this is not two
     // independent assertions that happen to agree, it is one piece of shared machinery exercised
-    // twice. Covers every check's shared prerequisite, including "lease" (which has no live
-    // read-only signal of its own — see `buildDoctorDeps`'s doc comment in cli.ts for why).
+    // twice. Covers every remaining check's shared prerequisite.
     await expect(buildDoctorDeps(configFile)).rejects.toThrow(/missing the "bcdev" section/);
   });
 });
@@ -112,8 +111,44 @@ describe("lethal doctor CLI wiring — environment (R34)", () => {
     const spawn = fakeSpawn("Stopped");
 
     // What `lethal run` actually does (env-tool-session.ts, R34): resolves, then refuses because
-    // status !== requireStatus.equals.
-    const runOutcome = await startEnvToolSession({
+    // status !== requireStatus.equals. Review round 1 (Important): asserting on the SPECIFIC
+    // rejection text, not merely "it rejected" — a boolean refused/not-refused catches ANY
+    // rejection reason (a missing publisher, a bad stateDir, a future unrelated validation) and
+    // would stay green even if the R34 status refusal this test claims to pin had silently
+    // stopped firing.
+    await expect(
+      startEnvToolSession({
+        cfg,
+        bcdevRaw: BCDEV_RAW,
+        projectDir: "C:/proj",
+        testDir: "C:/tests",
+        runId: "r1",
+        client: new EnvToolClient(cfg, { spawn }),
+        makePublisher: () => ({ publishFile: async () => {} }),
+        verifyHarness: async () => {},
+        stateDir: await mkdtemp(join(tmpdir(), "lethal-envstate-")),
+      }),
+    ).rejects.toThrow(/reports status "Stopped", not "Running"/);
+
+    // What `lethal doctor` does against the IDENTICAL cfg/spawn: same resolve, same comparison.
+    const configFile: LethalConfigFile = { bcdev: BCDEV_RAW, envTool: cfg };
+    const { cfg: doctorCfg, deps } = await buildDoctorDeps(configFile, {
+      makeEnvToolClient: (c) => new EnvToolClient(c, { spawn }),
+    });
+    const report = await runDoctor(doctorCfg, deps);
+    const check = report.checks.find((c) => c.name === "environment");
+    expect(check?.ok).toBe(false);
+    expect(check?.detail).toMatch(/reports status "Stopped", not "Running"/);
+  });
+
+  test("a Running reused environment passes both", async () => {
+    const cfg = envToolCfg("Running");
+    const spawn = fakeSpawn("Running");
+
+    // Review round 1 (Important): this test previously asserted ONLY doctor's side, so it could
+    // not have failed if doctor and `run` disagreed. Drive the SAME cfg/spawn through
+    // `startEnvToolSession` too and assert it actually succeeds.
+    const session = await startEnvToolSession({
       cfg,
       bcdevRaw: BCDEV_RAW,
       projectDir: "C:/proj",
@@ -123,24 +158,9 @@ describe("lethal doctor CLI wiring — environment (R34)", () => {
       makePublisher: () => ({ publishFile: async () => {} }),
       verifyHarness: async () => {},
       stateDir: await mkdtemp(join(tmpdir(), "lethal-envstate-")),
-    }).then(
-      () => ({ refused: false }),
-      () => ({ refused: true }),
-    );
-    expect(runOutcome.refused).toBe(true);
-
-    // What `lethal doctor` does against the IDENTICAL cfg/spawn: same resolve, same comparison.
-    const configFile: LethalConfigFile = { bcdev: BCDEV_RAW, envTool: cfg };
-    const { cfg: doctorCfg, deps } = await buildDoctorDeps(configFile, {
-      makeEnvToolClient: (c) => new EnvToolClient(c, { spawn }),
     });
-    const report = await runDoctor(doctorCfg, deps);
-    expect(report.checks.find((c) => c.name === "environment")?.ok).toBe(false);
-  });
+    expect(session.bcdev.baseUrl).toBe("https://host/env-4711");
 
-  test("a Running reused environment passes both", async () => {
-    const cfg = envToolCfg("Running");
-    const spawn = fakeSpawn("Running");
     const configFile: LethalConfigFile = { bcdev: BCDEV_RAW, envTool: cfg };
     const { cfg: doctorCfg, deps } = await buildDoctorDeps(configFile, {
       makeEnvToolClient: (c) => new EnvToolClient(c, { spawn }),
@@ -267,5 +287,68 @@ describe("lethal doctor CLI wiring — tool-paths", () => {
     });
     const report = await runDoctor(cfg, deps);
     expect(report.checks.find((c) => c.name === "tool-paths")?.ok).toBe(true);
+  });
+
+  // Review round 1 (Important): `run`'s `buildBackend` requires altool only when
+  // `envToolDeploy === undefined` (cli.ts:1548, R21) — an env-tool project publishes through the
+  // tool and never spawns altool. `checkToolPaths` used to require BOTH unconditionally, so this
+  // exact config made `run` proceed while doctor reported `[FAIL] tool-paths — missing: altool`.
+  test("an env-tool project with alc pinned and no altool passes both — `run` does not require altool on that route", async () => {
+    const noExtension = async () => undefined;
+    const publishBlock = { command: ["publish", "{envId}", "{appFile}"] };
+    const envCfg: EnvToolConfigSection = {
+      toolPath: "tool.exe",
+      envId: "env-4711",
+      resolve: [
+        { command: ["env", "get", "{envId}", "--json"], reads: { baseUrl: "url" } },
+        { command: ["env", "users", "{envId}", "--json"], reads: { username: "u", password: "p" } },
+      ],
+      publish: publishBlock,
+    };
+    const bcdevWithAlc = { ...BCDEV_RAW, alcPath: "C:/alc.exe" };
+    const configFile: LethalConfigFile = { bcdev: bcdevWithAlc, envTool: envCfg };
+
+    // What `lethal run` does: `buildBackend` given a real envToolDeploy (never invoked below —
+    // `buildBackend` only checks it is DEFINED before the altool gate) must not refuse for a
+    // missing altool. `parsed.projectDir` is fake, so this rejects LATER for an unrelated reason
+    // (validating selector ids against a project that does not exist) — the assertion is
+    // specifically that the rejection is NOT about alc/altool.
+    const spawn = async () => ({ exitCode: 0, stdout: "{}", stderr: "" });
+    const envToolDeploy = {
+      client: new EnvToolClient(envCfg, { spawn }),
+      publishBlock,
+      envId: "env-4711",
+    };
+    const parsed = {
+      mode: "run" as const,
+      projectDir: "C:/does-not-exist",
+      testDir: "C:/tests",
+      backendKind: "bcdev" as const,
+      dbPath: "db",
+      configPath: "cfg",
+      skipKnownSurvivors: false,
+      workers: 1,
+      keepEnv: false,
+      allowExpiringEnv: false,
+    };
+    const runErr = await buildBackend(parsed, configFile, "C:/scratch", envToolDeploy, {
+      alToolPaths: noExtension,
+    }).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(runErr).not.toBeNull();
+    expect(String(runErr)).not.toMatch(/alc\.exe|altool\.exe/);
+
+    const dir = await mkdtemp(join(tmpdir(), "lethal-doctor-tools-envtool-"));
+    const { cfg, deps } = await buildDoctorDeps(configFile, {
+      quarantineDir: dir,
+      fetchFn: okFetch(info()),
+      alToolPaths: noExtension,
+      makeEnvToolClient: (c) => new EnvToolClient(c, { spawn }),
+    });
+    const report = await runDoctor(cfg, deps);
+    const check = report.checks.find((c) => c.name === "tool-paths");
+    expect(check?.ok).toBe(true);
   });
 });

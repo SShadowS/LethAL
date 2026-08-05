@@ -2067,14 +2067,17 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   const status = await cfg.backend.status();
   // R109: `status.details` is kept VERBATIM here — this call site knows only that string, so
   // naming a SPECIFIC cause ("environment stopped") would be an invented plausible default, this
-  // project's signature bug. It names the NEXT ACTION instead: `lethal doctor <config>` runs every
-  // pre-flight check read-only and reports them all at once, rather than this one-at-a-time
-  // refusal. Contrast `env-tool-session.ts`'s R34 refusal, which DOES measure the actual reported
-  // status and so can honestly name both cause and remedy — that message is deliberately left
-  // alone; the two are symmetric in SHAPE (both name what to do next), never in CONTENT.
+  // project's signature bug. It names the NEXT ACTION instead: `lethal doctor --config <path>`
+  // runs every pre-flight check read-only and reports them all at once, rather than this
+  // one-at-a-time refusal. Contrast `env-tool-session.ts`'s R34 refusal, which DOES measure the
+  // actual reported status and so can honestly name both cause and remedy — that message is
+  // deliberately left alone; the two are symmetric in SHAPE (both name what to do next), never in
+  // CONTENT. Review round 1 (Minor): the invocation must be COPY-PASTEABLE — `lethal doctor
+  // <config>` (no `--config`) is rejected by the real parser, which is a small honesty cost with
+  // no upside for a message that exists to be acted on.
   if (!status.ok) {
     throw new Error(
-      `backend not ready: ${status.details} — run \`lethal doctor <config>\` for a full read-only diagnosis before retrying.`,
+      `backend not ready: ${status.details} — run \`lethal doctor --config <path>\` for a full read-only diagnosis before retrying.`,
     );
   }
 

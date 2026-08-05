@@ -36,7 +36,7 @@ import type { ExecutionBackend } from "./backend";
 import { BcDevMcpBackend } from "./bcdev-backend";
 import type { BcDevConfig } from "./bcdev-backend";
 import { DeploymentVerifier } from "./deployment-verifier";
-import { runDoctor } from "./doctor";
+import { ENV_STATUS_REACHABLE_NO_VENDOR_STATUS, runDoctor } from "./doctor";
 import type { DoctorConfig, DoctorDeps, DoctorReport } from "./doctor";
 import { EnvToolClient, EnvToolError, READS_KEYS, validateEnvToolConfig } from "./env-tool";
 import type { EnvToolBlock, EnvToolConfigSection } from "./env-tool";
@@ -588,9 +588,10 @@ DOCTOR — every pre-flight refusal, read-only, all at once (R109)
   --config <path>            lethal.config.json (the bcdev/envTool sections every check reads)
   --project <dir>            optional; only used to satisfy {projectDir} placeholders an
                              envTool.resolve command might reference
-  Does NOT check: the per-file publish ceiling (needs a generated mutation manifest) or baseline
-  test health (needs an actual run) — both are printed as an explicit caveat on every invocation,
-  never silently implied as covered.
+  Does NOT check: the per-file publish ceiling (needs a generated mutation manifest), baseline
+  test health (needs an actual run), or the machine-global lease/op-marker (no read-only peek
+  exists on the control app today, R110) — all three are printed as an explicit caveat on every
+  invocation, never silently implied as covered.
   Exits 0 when every check passes, 1 otherwise, naming each failing check.
 
 OTHER
@@ -2455,18 +2456,31 @@ function describeCeiling(c: PublishCeiling): string {
 }
 
 /**
- * R109: printed on every `lethal doctor` invocation, success or failure — what the five checks do
- * NOT cover, so a clean report is never misread as "everything `lethal run` might refuse on was
+ * R109: printed on every `lethal doctor` invocation, success or failure — what the checks do NOT
+ * cover, so a clean report is never misread as "everything `lethal run` might refuse on was
  * checked". The per-file publish ceiling (`publish-ceiling.ts`) needs a generated mutation
  * manifest's per-file guard counts, which doctor — deliberately read-only, no instrumentation
  * step — never produces. Baseline test health needs an actual run against the target. Both are
  * measured gaps, not oversights (see `roadmap-auditor`'s standard for what "done" needs to mean
  * here): stating them plainly is this project's answer to exactly this shape of omission.
+ *
+ * Review round 1 (Critical) added the lease/op-marker: it shipped as a fifth CHECK in round 0,
+ * always reporting `"clear"` — a check that structurally could not fail, counted as a pass in the
+ * one report a user in exactly that stuck state would read. `ControlApi` (extensions/lethal-
+ * control) exposes no read-only peek at the machine-global lease/op-marker row today —
+ * `GetOperationStatus` requires an ALREADY-HELD `(epoch, token, generation)` tuple, and doctor
+ * must not acquire one just to check (acquiring, even to release immediately after, is a
+ * mutation). This is a "not implemented yet" gap, not a platform limit: `ControlState.Codeunit.al`
+ * already has the precedent (`CurrentServerGeneration()`, documented as a plain read-only
+ * accessor) for surfacing `Owner`/`Op Kind`/`Expires At` the same way — filed as R110, out of this
+ * task's scope. The lease belongs here, in what doctor admits it cannot check, not in `checks`
+ * pretending it can.
  */
 export const DOCTOR_NOT_CHECKED =
-  "Not checked: the per-file publish ceiling (needs a generated mutation manifest) and baseline " +
-  "test health (needs an actual run). A clean report here does not mean `lethal run` cannot still " +
-  "refuse for either reason.";
+  "Not checked: the per-file publish ceiling (needs a generated mutation manifest), baseline " +
+  "test health (needs an actual run), and the machine-global lease/op-marker (no read-only peek " +
+  "exists on the control app today — R110). A clean report here does not mean `lethal run` " +
+  "cannot still refuse for any of these reasons.";
 
 /**
  * R109 ruling, honesty constraint 2: `requireStatus` is `Pick`ed straight off `EnvToolConfigSection`
@@ -2491,24 +2505,27 @@ function doctorConfigFromEnvTool(
  * — the split CLAUDE.md asks for between "throw on a bad call" and "report a bad state".
  *
  * Constraint 3 (every check calls the refusal's own machinery): `HarnessVerifier.fetchControlVersion`
- * (harness.ts) for control-version, `QuarantineStore`/`quarantineResourceKey`/`defaultQuarantineDir`
- * (quarantine-store.ts/resource-key.ts/orchestrator.ts — the SAME three `runSession`'s quarantine
- * consult and `clearQuarantineFromCli` use) for quarantine, `defaultAlToolPaths`/`resolveAlToolPaths`
- * (publisher.ts/cli.ts — the SAME pair `buildBackend` uses) for tool-paths, and `EnvToolClient`
- * (env-tool.ts) for environment.
+ * (harness.ts) for control-version, `HarnessVerifier.checkReachable` (harness.ts — pure reachability,
+ * deliberately narrower than `verify()`/`fetchControlVersion()` so a content problem is never
+ * mis-attributed under the name "environment", review round 1's Minor finding) for a directly-
+ * configured container's environment probe, `QuarantineStore`/`quarantineResourceKey`/
+ * `defaultQuarantineDir` (quarantine-store.ts/resource-key.ts/orchestrator.ts — the SAME three
+ * `runSession`'s quarantine consult and `clearQuarantineFromCli` use) for quarantine,
+ * `defaultAlToolPaths`/`resolveAlToolPaths` (publisher.ts/cli.ts — the SAME pair `buildBackend`
+ * uses) for tool-paths, and `EnvToolClient` (env-tool.ts) for an env-tool-configured environment.
+ * `altoolRequired` mirrors `buildBackend`'s own `envToolDeploy !== undefined` leniency
+ * (cli.ts:1548, R21) rather than a doctor-only opinion — an env-tool project never spawns altool,
+ * so doctor must not fail one for lacking it (review round 1, Important).
  *
  * Constraint 4 (read-only hard boundary): the environment probe below spawns ONLY the configured
  * `envTool.resolve` blocks — never `createEnv`/`startEnv`/`publish`/`downloadSymbols`, which
  * provision, bill, or mutate. This is the one place in `lethal doctor`'s whole call graph that
  * spawns an external process at all, and it is scoped to that one array on purpose.
  *
- * `leaseState`'s honest limitation: the control app exposes no read-only peek at the machine-global
- * lease/op-marker row — `GetOperationStatus` requires an ALREADY-HELD `(epoch, token, generation)`
- * tuple, and doctor must not acquire one (acquiring, even to release immediately after, is a
- * mutation of server state — exactly what the read-only boundary above exists to keep). It always
- * reports `"clear"` — "no local evidence of a problem", not "verified clear" — and `DOCTOR_NOT_CHECKED`
- * companion text in `renderDoctorReport` below says so; the durable local quarantine record (the
- * "quarantine" check) is the one genuine local signal of a past strand this command can offer.
+ * No `leaseState` here (review round 1, Critical): it shipped in round 0 always returning
+ * `"clear"` — a check that structurally could not fail, counted as a pass. See `DOCTOR_NOT_CHECKED`
+ * (which now names it, and R110) rather than a fifth entry in `DoctorDeps` pretending to observe
+ * something no read-only call can.
  */
 export async function buildDoctorDeps(
   configFile: LethalConfigFile,
@@ -2621,20 +2638,31 @@ export async function buildDoctorDeps(
 
   const envStatus = async (): Promise<string> => {
     const resolveBlocks = resolvedEnvCfg?.resolve;
-    if (resolveBlocks !== undefined && resolveBlocks.length > 0) {
+    if (resolvedEnvCfg !== undefined && resolveBlocks !== undefined && resolveBlocks.length > 0) {
       const resolved = await resolveEnvToolOnce();
-      if (resolved.status !== undefined) return resolved.status;
-      // `envTool.resolve` ran clean but declared no `status` read (no `requireStatus` configured)
-      // — resolve succeeding is itself the only signal available; fall through to the reachability
-      // probe below rather than reporting a status this config never asked to observe.
+      // Review round 1 (bonus fix alongside the Minor below): only compare a REAL status when
+      // `requireStatus` is actually declared — R34/`validateEnvToolConfig`'s own posture ("does
+      // not check a status when no expectation is declared… pre-R34 configs unaffected"). A
+      // `resolve` block reading `status` without `requireStatus` set is legal (nothing forces the
+      // two together), and comparing it against the hardcoded default anyway would apply an
+      // expectation this config never declared.
+      if (resolvedEnvCfg.requireStatus !== undefined && resolved.status !== undefined) {
+        return resolved.status;
+      }
+      // No `requireStatus` declared, or resolve declared no `status` read — resolve succeeding is
+      // itself the only signal available; fall through to the reachability probe below rather
+      // than reporting a status this config never asked to observe.
     }
     // No envTool, or one with nothing to say about status: a directly-configured container has no
-    // separate "status" concept LethAL can read — HarnessInfo answering IS the readiness signal.
-    await (await harnessVerifierFor()).verify();
-    return "Running";
+    // separate "status" concept LethAL can read, and neither does an envTool config with no
+    // `requireStatus` — HarnessInfo answering IS the readiness signal. `checkReachable()`, not
+    // `verify()`: review round 1 (Minor) — `verify()`'s appId/protocol/isolation/tenant/version
+    // gates would surface OTHER checks' concerns under the name "environment". The sentinel says
+    // exactly what was established, rather than inventing a vendor status word ("Running") nothing
+    // reported.
+    await (await harnessVerifierFor()).checkReachable();
+    return ENV_STATUS_REACHABLE_NO_VENDOR_STATUS;
   };
-
-  const leaseState = async (): Promise<string> => "clear";
 
   const quarantine = async (): Promise<string> => {
     const bcdev = await resolvedBcdev();
@@ -2671,8 +2699,14 @@ export async function buildDoctorDeps(
   };
 
   return {
-    cfg: doctorConfigFromEnvTool(envCfg),
-    deps: { envStatus, leaseState, quarantine, controlVersion, toolPaths },
+    cfg: {
+      ...doctorConfigFromEnvTool(envCfg),
+      // Review round 1 (Important): an env-tool-configured project publishes through the tool and
+      // never spawns altool at all (`deployerFor`/`buildBackend`'s `envToolDeploy !== undefined`
+      // branch, cli.ts:1548, R21) — mirror `run`'s own leniency rather than being stricter than it.
+      ...(configFile.envTool !== undefined ? { altoolRequired: false } : {}),
+    },
+    deps: { envStatus, quarantine, controlVersion, toolPaths },
   };
 }
 

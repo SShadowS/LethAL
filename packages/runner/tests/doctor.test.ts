@@ -19,19 +19,20 @@ describe("lethal doctor", () => {
   test("reports every check, not just the first failure", async () => {
     const r = await runDoctor(cfgFixture(), {
       envStatus: async () => "Stopped",
-      leaseState: async () => "clear",
       quarantine: async () => "clear",
       controlVersion: async () => "1.0.0.14",
       toolPaths: async () => ({ alc: "ok", altool: "ok" }),
     });
-    expect(r.checks.length).toBeGreaterThanOrEqual(5);
+    // Review round 1: was `>= 5` — the `lease` check shipped in round 0 but was REMOVED (a check
+    // that structurally could not fail was counted as a pass; see `DOCTOR_NOT_CHECKED` in cli.ts
+    // and roadmap R110). Four remain: environment, quarantine, control-version, tool-paths.
+    expect(r.checks.length).toBeGreaterThanOrEqual(4);
     expect(r.ok).toBe(false);
   });
 
   test("a Stopped environment names the restart command", async () => {
     const r = await runDoctor(cfgFixture(), {
       envStatus: async () => "Stopped",
-      leaseState: async () => "clear",
       quarantine: async () => "clear",
       controlVersion: async () => "1.0.0.14",
       toolPaths: async () => ({ alc: "ok", altool: "ok" }),
@@ -44,7 +45,6 @@ describe("lethal doctor", () => {
   test("all green means ok", async () => {
     const r = await runDoctor(cfgFixture(), {
       envStatus: async () => "Running",
-      leaseState: async () => "clear",
       quarantine: async () => "clear",
       controlVersion: async () => "1.0.0.14",
       toolPaths: async () => ({ alc: "ok", altool: "ok" }),
@@ -61,7 +61,6 @@ describe("lethal doctor", () => {
       envStatus: async () => {
         throw new Error("ECONNREFUSED");
       },
-      leaseState: async () => "clear",
       quarantine: async () => "clear",
       controlVersion: async () => "1.0.0.14",
       toolPaths: async () => ({ alc: "ok", altool: "ok" }),
@@ -72,7 +71,7 @@ describe("lethal doctor", () => {
     expect(env?.detail).toMatch(/ECONNREFUSED/);
     // every OTHER check still ran and still reports green — one dep throwing must not cancel
     // the rest of the report.
-    for (const name of ["lease", "quarantine", "control-version", "tool-paths"]) {
+    for (const name of ["quarantine", "control-version", "tool-paths"]) {
       expect(r.checks.find((c) => c.name === name)?.ok).toBe(true);
     }
   });
@@ -80,7 +79,6 @@ describe("lethal doctor", () => {
   test("an unparseable control version is a named failure, not a thrown error", async () => {
     const r = await runDoctor(cfgFixture(), {
       envStatus: async () => "Running",
-      leaseState: async () => "clear",
       quarantine: async () => "clear",
       controlVersion: async () => "not-a-version",
       toolPaths: async () => ({ alc: "ok", altool: "ok" }),
@@ -94,7 +92,6 @@ describe("lethal doctor", () => {
   test("a below-minimum control version is reported, naming the rebuild", async () => {
     const r = await runDoctor(cfgFixture(), {
       envStatus: async () => "Running",
-      leaseState: async () => "clear",
       quarantine: async () => "clear",
       controlVersion: async () => "1.0.0.0",
       toolPaths: async () => ({ alc: "ok", altool: "ok" }),
@@ -107,7 +104,6 @@ describe("lethal doctor", () => {
   test("a missing tool path is named, not just reported false", async () => {
     const r = await runDoctor(cfgFixture(), {
       envStatus: async () => "Running",
-      leaseState: async () => "clear",
       quarantine: async () => "clear",
       controlVersion: async () => "1.0.0.14",
       toolPaths: async () => ({ alc: "", altool: "ok" }),
@@ -117,16 +113,31 @@ describe("lethal doctor", () => {
     expect(tp?.detail).toMatch(/alc/);
   });
 
-  test("a held lease/op-marker and a quarantined tier are each reported by name", async () => {
+  // Review round 1: `altoolRequired` (default true) lets an env-tool-configured project — which
+  // never spawns altool (`buildBackend`'s `envToolDeploy !== undefined` branch, cli.ts) — pass
+  // with no altool resolved, matching `run`'s own leniency instead of being stricter than it.
+  test("altool is not required when the config says so (env-tool publish route)", async () => {
+    const r = await runDoctor(
+      { ...cfgFixture(), altoolRequired: false },
+      {
+        envStatus: async () => "Running",
+        quarantine: async () => "clear",
+        controlVersion: async () => "1.0.0.14",
+        toolPaths: async () => ({ alc: "ok", altool: "" }),
+      },
+    );
+    const tp = r.checks.find((c) => c.name === "tool-paths");
+    expect(tp?.ok).toBe(true);
+  });
+
+  test("a quarantined tier is reported by name", async () => {
     const r = await runDoctor(cfgFixture(), {
       envStatus: async () => "Running",
-      leaseState: async () => "held by another session",
       quarantine: async () => "run: activation deadline exceeded",
       controlVersion: async () => "1.0.0.14",
       toolPaths: async () => ({ alc: "ok", altool: "ok" }),
     });
     expect(r.ok).toBe(false);
-    expect(r.checks.find((c) => c.name === "lease")?.detail).toBe("held by another session");
     expect(r.checks.find((c) => c.name === "quarantine")?.detail).toBe(
       "run: activation deadline exceeded",
     );
@@ -138,7 +149,6 @@ describe("lethal doctor", () => {
   // once, and `runDoctor` calls each dep at most once per report.
   test("calls each dependency at most once (never retries into a mutating action)", async () => {
     let envCalls = 0;
-    let leaseCalls = 0;
     let quarantineCalls = 0;
     let controlVersionCalls = 0;
     let toolPathsCalls = 0;
@@ -146,10 +156,6 @@ describe("lethal doctor", () => {
       envStatus: async () => {
         envCalls++;
         return "Stopped";
-      },
-      leaseState: async () => {
-        leaseCalls++;
-        return "clear";
       },
       quarantine: async () => {
         quarantineCalls++;
@@ -165,7 +171,6 @@ describe("lethal doctor", () => {
       },
     });
     expect(envCalls).toBe(1);
-    expect(leaseCalls).toBe(1);
     expect(quarantineCalls).toBe(1);
     expect(controlVersionCalls).toBe(1);
     expect(toolPathsCalls).toBe(1);

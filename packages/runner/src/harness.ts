@@ -223,6 +223,21 @@ export class HarnessVerifier {
     return info.semver;
   }
 
+  /**
+   * R109 review round 1 (Minor): pure reachability — calls `fetchHarnessInfo()` and discards the
+   * parsed result entirely, reusing its transport/error handling (auth-vs-missing, stale-build
+   * detection) without interpreting the response CONTENT at all. `lethal doctor`'s environment
+   * check uses this for a directly-configured container, which has no separate "status" concept
+   * of its own — HarnessInfo answering IS the readiness signal there. Deliberately narrower than
+   * both `verify()` (appId/protocol/isolation/tenant gates) and `fetchControlVersion()` (semver
+   * presence): a response missing any of those would otherwise surface under the name
+   * "environment", mis-attributing a different check's concern — the same failure class
+   * `fetchControlVersion()` was added to avoid for control-version specifically.
+   */
+  async checkReachable(): Promise<void> {
+    await this.fetchHarnessInfo();
+  }
+
   async verify(): Promise<HarnessDetails> {
     const info = await this.fetchHarnessInfo();
 
