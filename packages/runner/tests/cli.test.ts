@@ -9,6 +9,7 @@ import type { BcDevConfigSection } from "../src/cli";
 import {
   announceAlRunnerCanary,
   clearQuarantine,
+  fanOutEmit,
   leaseSessionFor,
   odataBaseUrl,
   odataCfgFor,
@@ -22,6 +23,7 @@ import {
   validateSelectorIdsConfig,
   withAlRunnerCanary,
 } from "../src/cli";
+import type { RunEvent } from "../src/events";
 import { CONTROL_APP_ID, MIN_CONTROL_VERSION } from "../src/harness";
 import { LeaseClient } from "../src/lease";
 import { QuarantineStore } from "../src/quarantine-store";
@@ -978,5 +980,63 @@ describe("withAlRunnerCanary (R7/R8 report persistence)", () => {
     const result = withAlRunnerCanary(baseReport, undefined);
     expect(result).toEqual(baseReport);
     expect("alRunnerCanary" in result).toBe(false);
+  });
+});
+
+// ————————————————————————————————————————————————————————————————————————
+// Task 6 review round 1: `fanOutEmit` combines the stderr progress renderer (Task 5) with the
+// `--progress-out` NDJSON sink (Task 6) into the single `SessionConfig.emit` slot `runFromCli`
+// wires. Its whole reason to exist is isolating one subscriber's throw from the other — the same
+// property `events.ts`'s `createEmitter` has and is tested for (events.test.ts's "a throwing
+// subscriber does not stop the others" / "warns only once" pair, mirrored below). The live
+// crash-survival run in task-6-report.md only ever exercised the happy path (both subscribers
+// behaved), so this is the first time the catch branch actually runs.
+// ————————————————————————————————————————————————————————————————————————
+describe("fanOutEmit (Task 6 review round 1)", () => {
+  function collect(): { events: RunEvent[]; sub: (e: RunEvent) => void } {
+    const events: RunEvent[] = [];
+    return { events, sub: (e) => events.push(e) };
+  }
+
+  test("a throwing subscriber does not stop the other, and does not lose the event or any later one", () => {
+    const good = collect();
+    const fan = fanOutEmit([
+      () => {
+        throw new Error("subscriber exploded");
+      },
+      good.sub,
+    ]);
+    const e1 = { type: "phase-entered", phase: "deploy", seq: 1 } as RunEvent;
+    const e2 = { type: "phase-entered", phase: "baseline", seq: 2 } as RunEvent;
+    const e3 = { type: "phase-left", phase: "baseline", elapsedMs: 5, seq: 3 } as RunEvent;
+    expect(() => fan(e1)).not.toThrow();
+    expect(() => fan(e2)).not.toThrow();
+    expect(() => fan(e3)).not.toThrow();
+    expect(good.events).toEqual([e1, e2, e3]);
+  });
+
+  test("a chronically-throwing subscriber produces the warning only once, not per event", () => {
+    const good = collect();
+    const warnings: string[] = [];
+    const originalWrite = process.stderr.write;
+    process.stderr.write = ((chunk: unknown) => {
+      warnings.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      const fan = fanOutEmit([
+        () => {
+          throw new Error("progress subscriber exploded");
+        },
+        good.sub,
+      ]);
+      fan({ type: "phase-entered", phase: "deploy", seq: 1 } as RunEvent);
+      fan({ type: "phase-entered", phase: "baseline", seq: 2 } as RunEvent);
+      fan({ type: "phase-left", phase: "baseline", elapsedMs: 5, seq: 3 } as RunEvent);
+    } finally {
+      process.stderr.write = originalWrite;
+    }
+    expect(warnings).toHaveLength(1);
+    expect(good.events).toHaveLength(3);
   });
 });

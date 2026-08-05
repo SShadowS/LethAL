@@ -1705,8 +1705,13 @@ export function withAlRunnerCanary(
  * identical only by the accident that this function happens to see every event with none filtered
  * out. Reusing `createEmitter` here would make that coincidence load-bearing without a compiler
  * catching it if it ever stopped holding.
+ *
+ * Exported for testing — `runFromCli` only ever exercises this when a real subscriber actually
+ * throws, which the happy-path crash-survival run (task-6-report.md) never did, so the isolation
+ * behaviour it exists for needs its own direct unit tests (cli.test.ts) rather than depending on
+ * `runFromCli`'s end-to-end plumbing to hit the catch branch by chance.
  */
-function fanOutEmit(subs: readonly EventSubscriber[]): EventSubscriber {
+export function fanOutEmit(subs: readonly EventSubscriber[]): EventSubscriber {
   const broken = new Set<number>();
   return (event) => {
     subs.forEach((sub, i) => {
