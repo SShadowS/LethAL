@@ -1,7 +1,18 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { buildReport } from "../src/report";
 import type { BuildReportInput } from "../src/report";
-import goldenInput from "./fixtures/golden-report-input.json";
+
+// Loaded via readFileSync + JSON.parse rather than a static `import ... from "./fixtures/....json"`:
+// a static JSON import requires tsc to know the fixture is part of the project's file list, which
+// means either widening packages/runner/tsconfig.json's `include` (risking the fixture being pulled
+// into the `tsc --build` output graph — see the dist-trap note in CLAUDE.md) or listing the file
+// explicitly. Reading it at runtime keeps the fixture out of the build graph entirely; the
+// `as unknown as BuildReportInput` cast below already means nothing is lost in type safety.
+const goldenInput: unknown = JSON.parse(
+  readFileSync(join(import.meta.dir, "fixtures", "golden-report-input.json"), "utf8"),
+);
 
 /**
  * The safety net for the event-stream refactor (spec 2026-08-05 §A).
