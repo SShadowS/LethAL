@@ -105,3 +105,27 @@ load-bearing.
 ## Cost
 
 $6.67 / 58 turns (analysis, no execution) + $11.89 / 60 turns (verification and repair) = **$18.56**.
+
+## Independent confirmation, and one thing that did NOT reproduce
+
+**Confirmed by my own run, not the agent's.** Re-running the same scoping from the controller
+session, with the agent's tests in place: **72.3% — killed 105, survived 41, no-coverage 0,
+timeout-killed 2, error 0**, baseline 80 tests, 0 failing. Identical to the agent's claim. Combined
+with the red-check (tests removed → exactly 19.5% / 25 / 107 / 15 / 1), the improvement is verified
+three ways: the agent's run, the red-check, and this one.
+
+**The stale-published-test-app finding did NOT reproduce, and that is recorded as a negative
+result.** The setup was exact — source carrying 82 tests in the area, the server holding the
+56-test build from the red-check, both stamped `28.4.0.7`. LethAL's publish took anyway: the run
+found 80 baseline tests and `staleTestApp` was **absent** from the report.
+
+So R31's detector was not exercised, and no hole in it is demonstrated. The likely explanation is
+that the agent hit the problem through `continia test run <env> 68964` directly — its own words —
+which is not LethAL's publish path; LethAL publishes with `--sync-mode ForceSync`, which replaced a
+same-version app here without complaint. **The agent's diagnosis stands for the path it used and does
+not generalise to a LethAL defect.** Not filed as a roadmap row on the strength of one unreproduced
+account.
+
+Incidental: the environment had idled to `Stopped` between rungs, and LethAL refused to publish into
+it, naming the status and stating it will not start an environment it does not own. R34 behaving
+exactly as designed.
