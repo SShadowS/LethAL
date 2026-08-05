@@ -13,6 +13,8 @@ export interface PublishOutcomeStore {
     readonly outcome: PublishOutcome;
   }): void;
   publishOutcomes(tier: string): readonly PublishOutcomeRow[];
+  /** Fix round 1: the operator escape — see `clearPublishCeiling`. */
+  deletePublishOutcomes(tier: string, file: string | undefined): number;
 }
 
 /**
@@ -81,11 +83,25 @@ export class PublishCeilingExceededError extends Error {
  *
  * **With no recorded failure, nothing is ever refused.** A fresh topology must be allowed to
  * discover its own ceiling by failing once — this prevents the SECOND waste, not the first.
+ *
+ * Fix round 1: the message names THREE levers, not two. `--only` and splitting the file both
+ * assume the measurement is right; the third assumes it is wrong. It has to be there, because the
+ * ceiling is a ratchet — any throw out of `deployer.publish()` records a `failed` row, including a
+ * transient Bun spawn `ENOENT` (R65 measured one), and a file once refused can never publish and so
+ * can never produce the counter-evidence that would widen the bracket again. A refusal that does
+ * not say how to undo a bogus measurement leaves sqlite surgery as the only way out.
  */
 export function assertUnderCeiling(input: {
   readonly file: string;
   readonly guardCount: number;
   readonly ceiling: PublishCeiling;
+  /**
+   * The exact `lethal clear-ceiling ...` invocation that would drop this tier's recorded failures,
+   * when the caller knows enough to render one (`clearCeilingCommand` below). Optional so the pure
+   * refusal rule stays testable without a project dir or a tier identity; when absent the message
+   * still NAMES the command, it just cannot pre-fill the arguments.
+   */
+  readonly clearCommand?: string;
 }): void {
   const { smallestFailure, largestSuccess, failureObservedOn } = input.ceiling;
   if (smallestFailure === undefined) return;
@@ -108,7 +124,13 @@ export function assertUnderCeiling(input: {
     "container or proxy has a different one, and one honest failure is how each tier measures",
     "its own. Batches split at file granularity, so --max-guards-per-batch cannot rescue a",
     `single file this size: exclude it with --only <glob>, or split ${input.file} into smaller`,
-    "AL objects.",
+    "AL objects. If the recorded failure was TRANSIENT rather than a size limit (a spawn failure,",
+    "a restarting server, a network blip — anything that made the publish call throw), discard the",
+    // Both branches contain the literal command name, so a reader always learns the third lever
+    // exists; only the pre-filled arguments depend on the caller knowing the tier and project.
+    input.clearCommand === undefined
+      ? "measurement with `lethal clear-ceiling` and measure again."
+      : `measurement and measure again: ${input.clearCommand}`,
   );
   throw new PublishCeilingExceededError(parts.join(" "), {
     file: input.file,
@@ -193,6 +215,87 @@ export function knownCeiling(store: PublishOutcomeStore, tier: string): PublishC
     ...(largestSuccess !== undefined ? { largestSuccess } : {}),
     ...(failureObservedOn !== undefined ? { failureObservedOn } : {}),
   };
+}
+
+/** What `clearPublishCeiling` destroyed, and what the ceiling was on either side of it. */
+export interface ClearedCeiling {
+  readonly removed: readonly PublishOutcomeRow[];
+  readonly before: PublishCeiling;
+  readonly after: PublishCeiling;
+}
+
+/**
+ * Fix round 1 — the operator escape, mirroring `clearQuarantine` (cli.ts): an exported function
+ * that takes an already-constructed store, so the actual clearing logic is unit-testable without
+ * touching a real operator database, plus a thin CLI wrapper that resolves the paths.
+ *
+ * **Why this has to exist.** `knownCeiling` takes the MINIMUM over `failed` rows, so the bracket
+ * is a ratchet that only ever tightens, and a file once refused can never publish and therefore
+ * can never generate the counter-evidence that would widen it again. `publishOk` goes false on ANY
+ * throw out of `deployer.publish()` (`bcdev-backend.ts`) — a Bun spawn `ENOENT` is a measured
+ * instance (R65) — so one transient failure permanently refuses every file that size. That is the
+ * SAME hazard `knownCeiling` deliberately excludes `indeterminate` for; the exclusion closed one
+ * door in, and a transient spawn failure walks through the other.
+ *
+ * **Per tier, with an optional per-FILE narrowing, and the blanket clear is the default.** Three
+ * reasons, in order of weight:
+ *  1. The real-world trigger for clearing is usually that the TOPOLOGY changed — the container was
+ *     recycled, the proxy reconfigured — in which case every prior measurement on that tier is
+ *     stale, not just one. That is the same workflow `clear-quarantine` serves ("recycle the tier,
+ *     then clear"), and a file-only command could not express it.
+ *  2. Rows from a MULTI-FILE artifact carry no file at all (`file` is NULL — see `soleFileOf`), so
+ *     a file-only command could never reach them: a poisoned ceiling recorded by a multi-file
+ *     batch would be permanently unclearable, reintroducing the exact defect this closes.
+ *  3. Evidence loss is answered by making it VISIBLE, not by forbidding it. This returns every row
+ *     it removed and the ceiling before and after, and the CLI prints all of it — you cannot
+ *     destroy a measurement here without being shown what you destroyed.
+ *
+ * `file` narrows to rows recorded against that exact file, for the surgical case where the
+ * operator knows which measurement is bogus and wants to keep the rest of a tier's history.
+ */
+export function clearPublishCeiling(
+  store: PublishOutcomeStore,
+  tier: string,
+  file: string | undefined,
+): ClearedCeiling {
+  if (tier.length === 0) {
+    throw new Error('clearPublishCeiling: tier must be a non-empty tier identity, got ""');
+  }
+  const before = knownCeiling(store, tier);
+  // Read BEFORE deleting: the report names the rows themselves, not just how many there were.
+  const candidates = store.publishOutcomes(tier);
+  const removed = file === undefined ? candidates : candidates.filter((r) => r.file === file);
+  const deleted = store.deletePublishOutcomes(tier, file);
+  // Fail loudly rather than reporting a plausible number: if the DELETE and the SELECT disagree,
+  // the rows this claims to have destroyed are not the rows that were destroyed, and an operator
+  // deciding whether they lost a real measurement would be reading fiction.
+  if (deleted !== removed.length) {
+    const scope = file === undefined ? "" : ` file ${file}`;
+    throw new Error(
+      `clearPublishCeiling: deleted ${deleted} row(s) for tier ${tier}${scope} but identified ` +
+        `${removed.length} to report — refusing to report a set that does not match what was removed`,
+    );
+  }
+  return { removed, before, after: knownCeiling(store, tier) };
+}
+
+/**
+ * The exact `lethal clear-ceiling` invocation for one refusal, so the message a user reads at the
+ * moment they are blocked is copy-pasteable rather than a command name to go look up. Lives here,
+ * next to the refusal that quotes it, so the command's shape has ONE definition.
+ */
+export function clearCeilingCommand(args: {
+  readonly projectDir: string;
+  readonly server: string;
+  readonly serverInstance: string;
+  readonly file?: string;
+}): string {
+  const quoted = (s: string) => `"${s}"`;
+  const fileArg = args.file === undefined ? "" : ` --file ${quoted(args.file)}`;
+  return (
+    `lethal clear-ceiling --project ${quoted(args.projectDir)} ` +
+    `--server ${quoted(args.server)} --instance ${quoted(args.serverInstance)}${fileArg}`
+  );
 }
 
 /**

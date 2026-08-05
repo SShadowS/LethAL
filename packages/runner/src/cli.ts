@@ -57,7 +57,7 @@ import type { SessionConfig } from "./orchestrator";
 import { PermissionCanaryClient, runPermissionCanary } from "./permission-canary";
 import { createNdjsonSink } from "./progress-ndjson";
 import { createProgressRenderer } from "./progress-renderer";
-import { knownCeiling } from "./publish-ceiling";
+import { clearPublishCeiling, knownCeiling } from "./publish-ceiling";
 import type { PublishCeiling } from "./publish-ceiling";
 import { canonicalContainerKey } from "./publish-serializer";
 import { ContainerDeployer, defaultAlToolPaths, defaultDeployerIo } from "./publisher";
@@ -379,6 +379,29 @@ export interface ClearQuarantineCliConfig {
 }
 
 /**
+ * `lethal clear-ceiling --project <dir> --server <url> --instance <name> [--file <name>]`
+ * (R90 fix round 1): discards recorded publish outcomes for one tier, so a TRANSIENT publish
+ * failure stops permanently refusing files that size. Mirrors `clear-quarantine` — this project's
+ * other sticky refusal state — in shape, in that the real clearing logic is an exported function
+ * (`clearPublishCeiling`, publish-ceiling.ts) and this is only the wrapper.
+ *
+ * It needs `--project`/`--db` where `clear-quarantine` needs neither, because the ceiling lives in
+ * the RESULTS database (`<project>/lethal.sqlite`), not in the machine-global `~/.lethal`
+ * quarantine directory — and `--db` is honoured, resolved exactly as `run` resolves it, so an
+ * operator who ran with `--db X` clears the same file that run wrote.
+ */
+export interface ClearCeilingCliConfig {
+  readonly mode: "clear-ceiling";
+  readonly projectDir: string;
+  readonly dbPath: string;
+  readonly server: string;
+  readonly serverInstance: string;
+  /** Narrows the clear to rows recorded against this file. Absent means the whole tier — see
+   *  `clearPublishCeiling` for why the blanket clear is the default rather than the exception. */
+  readonly file?: string;
+}
+
+/**
  * `lethal force-reset-lease --server <url> --instance <name> --config <path>` (design §8 step 2
  * of the operator recovery procedure — see fixtures/README.md's "Recovering from
  * container-needs-recycle" and `performForceResetLease` below). Unlike `clear-quarantine`, this
@@ -415,11 +438,17 @@ export type CliConfig =
   | DryRunCliConfig
   | RunCliConfig
   | ClearQuarantineCliConfig
+  | ClearCeilingCliConfig
   | ForceResetLeaseCliConfig
   | HelpCliConfig
   | VersionCliConfig;
 
-const VALID_SUBCOMMANDS = ["run", "clear-quarantine", "force-reset-lease"] as const;
+const VALID_SUBCOMMANDS = [
+  "run",
+  "clear-quarantine",
+  "clear-ceiling",
+  "force-reset-lease",
+] as const;
 
 /**
  * `lethal` is invoked as `lethal run --project ...`, `lethal clear-quarantine --server ...
@@ -451,6 +480,7 @@ USAGE
   lethal run              --project <dir> --tests <dir> --backend <bcdev|al-runner> [options]
   lethal run              --project <dir> --dry-run
   lethal clear-quarantine --server <url> --instance <name>
+  lethal clear-ceiling    --project <dir> --server <url> --instance <name> [--file <name>]
   lethal force-reset-lease --server <url> --instance <name> --config <path>
 
 RUN — required
@@ -467,7 +497,11 @@ RUN — scope. These bound cost. --tests-only can change a verdict; the others c
   --skip-known-survivors     skip mutants a prior finished run recorded as survivors
   --allow-large-run          run more than ${LARGE_RUN_MUTANT_THRESHOLD} mutation sites (refused by default — a whole
                              real app costs days and usually cannot publish at all)
-  --dry-run                  list what would be mutated; execute nothing
+  --dry-run                  list what would be mutated; execute nothing. Reports both the raw
+                             mutation-site count and the DEPLOYED count (they differ), plus this
+                             tier's measured publish bracket. It never creates a results database,
+                             but if one already exists it is OPENED FOR WRITING and its schema
+                             brought up to date, exactly as a real run would
 
 RUN — cost and recovery
   --max-guards-per-batch <n> cap guards per published artifact. Publish cost scales with guard
@@ -500,6 +534,22 @@ RUN — environment
   --table-id <n>             override the injected control table id
   --keep-env                 do not delete an environment the env tool created
   --allow-expiring-env       proceed against an environment that expires during the run
+
+CLEAR-CEILING — undo a publish-ceiling measurement (R90)
+  A file at or above a guard count MEASURED to fail on a tier is refused before anything is
+  compiled or published. That bracket is a ratchet: a refused file can never publish, so it can
+  never widen the bracket back. Any throw out of the publish call records a failure, including a
+  transient one (a spawn failure, a restarting server), so this is the way back.
+  --project <dir>            project whose results database holds the measurement
+  --server <url>             tier identity, same pair a run uses
+  --instance <name>
+  --file <name>              clear only rows recorded against this file. Omit to clear the whole
+                             tier — the right choice when the TOPOLOGY changed (container
+                             recycled, proxy reconfigured), and the only way to reach rows from a
+                             multi-file artifact, which carry no filename at all
+  --db <path>                results database (default: <project>/lethal.sqlite)
+  Every row removed is printed, with the bracket before and after: discarding a genuine failure
+  is real evidence loss, and it cost a live publish failure to learn.
 
 OTHER
   -h, --help                 this text
@@ -551,6 +601,9 @@ export const RUN_FLAGS = {
   "compile-concurrency": { type: "string" },
   server: { type: "string" },
   instance: { type: "string" },
+  // R90 fix round 1: `clear-ceiling`'s optional per-file narrowing. Lives in the shared flag table
+  // because `parseArgs` runs in strict mode over ONE option set for every subcommand.
+  file: { type: "string" },
   "keep-env": { type: "boolean", default: false },
   "allow-expiring-env": { type: "boolean", default: false },
   "selector-id": { type: "string" },
@@ -606,6 +659,33 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
       throw new Error("missing required --instance <name>");
     }
     return { mode: "clear-quarantine", server, serverInstance };
+  }
+
+  if (subcommand === "clear-ceiling") {
+    const server = values.server;
+    if (server === undefined || server === "") {
+      throw new Error("missing required --server <url>");
+    }
+    const serverInstance = values.instance;
+    if (serverInstance === undefined || serverInstance === "") {
+      throw new Error("missing required --instance <name>");
+    }
+    const project = values.project;
+    if (project === undefined || project === "") {
+      throw new Error(
+        "missing required --project <dir> (the publish ceiling lives in that project's results " +
+          "database, not in the machine-global quarantine directory)",
+      );
+    }
+    const file = values.file;
+    return {
+      mode: "clear-ceiling",
+      projectDir: project,
+      dbPath: values.db ?? join(project, "lethal.sqlite"),
+      server,
+      serverInstance,
+      ...(file !== undefined && file !== "" ? { file } : {}),
+    };
   }
 
   if (subcommand === "force-reset-lease") {
@@ -1583,18 +1663,27 @@ const dryRunTierOf: TierResolver = (name) => operatorTiers.get(name);
  * R90: the measured publish bracket for the tier this project is configured against, if there is
  * one to report.
  *
- * Deliberately BEST-EFFORT and read-only. `--dry-run` is the one mode that requires neither a
- * config file nor a results database — its whole point is answering "how big is this going to be"
- * before committing to anything — so a missing file yields `undefined` and prints nothing, and a
- * config that cannot be read yields a NOTE rather than killing the dry run. `existsSync` guards
- * the database because `new ResultsStore(path)` would otherwise CREATE one, and a dry run must
- * leave no artifacts behind.
+ * **What is tolerated and what is not** — fix round 1 corrected this comment, which previously
+ * claimed a blanket "best-effort" the code does not implement:
+ *  - An ABSENT config file or ABSENT database: tolerated, returns `undefined`, prints nothing.
+ *    `--dry-run` is the one mode that requires neither, so their absence is a normal state rather
+ *    than a failure. `existsSync` also keeps `new ResultsStore(path)` (`create: true`) from
+ *    CREATING a database a dry run was never asked to make.
+ *  - An UNREADABLE or malformed config file: tolerated, returns a `note` the caller prints. The
+ *    dry run's own answer (how many mutants, in which files) does not depend on the config at all,
+ *    so killing it over a config it did not need would be the wrong trade.
+ *  - A locked, corrupt or unreadable DATABASE, and a corrupt `outcome` value in it: **NOT
+ *    tolerated — these throw**, deliberately. `new ResultsStore(...)` and `knownCeiling(...)` sit
+ *    outside the `try` above on purpose. A database that exists but cannot be read is a real
+ *    problem with the file this project's verdicts live in, and reporting "no ceiling measured"
+ *    for it would be indistinguishable from a tier that has genuinely never failed — the
+ *    empty-vs-empty confusion this project treats as its signature bug.
  *
  * An EXISTING database is opened read-WRITE, not read-only: `ResultsStore`'s constructor ensures
  * the schema (see its `migrate`), and going around it to read `publish_outcomes` directly would
  * mean a second implementation of the row parsing — including the corrupt-value guard — which is
  * exactly the drift this file avoids elsewhere. The writes it can perform are idempotent, additive
- * and identical to the ones `lethal run` performs on the same file moments later.
+ * and identical to the ones `lethal run` performs on the same file moments later. `--help` says so.
  */
 async function dryRunCeiling(
   dbPath: string,
@@ -2205,6 +2294,62 @@ async function clearQuarantineFromCli(parsed: ClearQuarantineCliConfig): Promise
 }
 
 /**
+ * `lethal clear-ceiling --project ... --server ... --instance ... [--file ...]` (R90 fix round 1).
+ *
+ * Refuses a MISSING database loudly rather than creating an empty one and reporting a cheerful
+ * "cleared 0 rows": `new ResultsStore(path)` has `create: true`, so without this guard the one
+ * command whose entire job is undoing a recorded measurement would answer identically whether the
+ * measurement was removed or the operator mistyped the path. That is this project's signature bug
+ * (empty-vs-empty "matches"), on the command least able to afford it.
+ *
+ * Prints every row it destroyed and the ceiling on both sides of the clear. Discarding a `failed`
+ * row that was genuine is real evidence loss — it cost a live publish failure to learn — so the
+ * loss is made visible rather than forbidden (see `clearPublishCeiling`).
+ */
+async function clearCeilingFromCli(parsed: ClearCeilingCliConfig): Promise<number> {
+  if (!existsSync(parsed.dbPath)) {
+    throw new Error(
+      `no results database at ${parsed.dbPath} — nothing has ever been measured against this project, so there is no publish ceiling to clear. Pass --db <path> if the run used a database elsewhere.`,
+    );
+  }
+  const tier = quarantineResourceKey({
+    server: parsed.server,
+    serverInstance: parsed.serverInstance,
+  });
+  const store = new ResultsStore(parsed.dbPath);
+  try {
+    const result = clearPublishCeiling(store, tier, parsed.file);
+    const scope = parsed.file === undefined ? "" : ` file ${parsed.file}`;
+    console.log(`clear-ceiling: tier ${tier}${scope} — removed ${result.removed.length} row(s)`);
+    for (const row of result.removed) {
+      console.log(
+        `  ${row.recordedAt}  ${row.outcome}  ${row.guardCount} guard(s)  ${row.file ?? "(multi-file artifact)"}`,
+      );
+    }
+    console.log(
+      `  ceiling before: ${describeCeiling(result.before)}\n  ceiling after:  ${describeCeiling(result.after)}`,
+    );
+    return 0;
+  } finally {
+    store.close();
+  }
+}
+
+/** One-line rendering of a bracket, for `clear-ceiling`'s before/after report. */
+function describeCeiling(c: PublishCeiling): string {
+  if (c.smallestFailure === undefined && c.largestSuccess === undefined) return "nothing measured";
+  const fail =
+    c.smallestFailure === undefined
+      ? "no recorded failure"
+      : `smallest recorded failure ${c.smallestFailure} guard(s)${c.failureObservedOn === undefined ? "" : ` (${c.failureObservedOn})`}`;
+  const ok =
+    c.largestSuccess === undefined
+      ? "no recorded success"
+      : `largest recorded success ${c.largestSuccess} guard(s)`;
+  return `${fail}; ${ok}`;
+}
+
+/**
  * What `performForceResetLease` (design §8 step 2) reports back: a real reset (with the old and
  * new generation, and the new epoch), or a well-formed refusal — the generation read live from
  * `HarnessInfo` no longer matched the row's current one by the time the reset actually ran (a
@@ -2328,6 +2473,9 @@ async function main(): Promise<number> {
   }
   if (parsed.mode === "clear-quarantine") {
     return await clearQuarantineFromCli(parsed);
+  }
+  if (parsed.mode === "clear-ceiling") {
+    return await clearCeilingFromCli(parsed);
   }
   if (parsed.mode === "force-reset-lease") {
     return await forceResetLeaseFromCli(parsed);

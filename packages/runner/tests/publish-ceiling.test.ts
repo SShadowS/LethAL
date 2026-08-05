@@ -17,11 +17,13 @@ import type {
   TestVerdict,
 } from "../src/backend";
 import { PublishFailedError } from "../src/bcdev-backend";
-import { printDryRun } from "../src/cli";
+import { helpText, parseCliConfig, printDryRun } from "../src/cli";
 import { DeploymentVerifier, decidePublishOutcome } from "../src/deployment-verifier";
 import { generateMutationSet, operatorTiers, runSession } from "../src/orchestrator";
 import {
   assertUnderCeiling,
+  clearCeilingCommand,
+  clearPublishCeiling,
   guardsPerFile,
   knownCeiling,
   recordPublishOutcome,
@@ -65,6 +67,17 @@ describe("publish ceiling (R90)", () => {
     }
   });
 
+  test("refuses at EXACTLY the smallest recorded failure, and allows one guard below it", () => {
+    // Fix round 1, Minor 3: the brief's four cases use 660 against 331 — a margin wide enough that
+    // `>` and `>=` are indistinguishable, so the boundary itself was pinned only by the expensive
+    // end-to-end test. These two lines pin it here, where the rule lives.
+    const ceiling = { smallestFailure: 331, largestSuccess: 229 };
+    expect(() => assertUnderCeiling({ file: "Exact.al", guardCount: 331, ceiling })).toThrow(
+      /Exact\.al/,
+    );
+    expect(() => assertUnderCeiling({ file: "Exact.al", guardCount: 330, ceiling })).not.toThrow();
+  });
+
   test("allows a file below the largest recorded success", () => {
     expect(() =>
       assertUnderCeiling({
@@ -104,6 +117,51 @@ describe("publish ceiling — the refusal message names the levers, not a law", 
     expect(m).toMatch(/split/i);
     // Never phrased as law.
     expect(m).not.toMatch(/the limit is/i);
+  });
+
+  test("names the THIRD lever — how to discard the measurement — even with no command to pre-fill", () => {
+    // Fix round 1: `--only` and "split the file" both assume the measurement is right. The ceiling
+    // is a ratchet (min over `failed` rows, and a refused file can never publish to widen it back),
+    // and ANY throw out of the publish call records a failure — a Bun spawn ENOENT is a measured
+    // instance (R65). A refusal that does not say how to undo a bogus measurement leaves sqlite
+    // surgery as the only way out.
+    const bare = (() => {
+      try {
+        assertUnderCeiling({
+          file: "Big.al",
+          guardCount: 660,
+          ceiling: { smallestFailure: 331 },
+        });
+        return "";
+      } catch (e) {
+        return String((e as Error).message);
+      }
+    })();
+    expect(bare).toContain("lethal clear-ceiling");
+    expect(bare).toMatch(/transient/i);
+
+    const withCommand = (() => {
+      try {
+        assertUnderCeiling({
+          file: "Big.al",
+          guardCount: 660,
+          ceiling: { smallestFailure: 331 },
+          clearCommand: clearCeilingCommand({
+            projectDir: "C:/app",
+            server: "http://cronus281",
+            serverInstance: "BC",
+            file: "Big.al",
+          }),
+        });
+        return "";
+      } catch (e) {
+        return String((e as Error).message);
+      }
+    })();
+    // Copy-pasteable, not a command name to go look up.
+    expect(withCommand).toContain(
+      'lethal clear-ceiling --project "C:/app" --server "http://cronus281" --instance "BC" --file "Big.al"',
+    );
   });
 });
 
@@ -209,6 +267,79 @@ describe("knownCeiling — only a demonstrated `failed` publish moves the ceilin
       }
     } finally {
       await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("clearPublishCeiling — the operator escape from a transient failure (fix round 1)", () => {
+  test("clearing a tier drops its recorded failures and reports exactly what it destroyed", () => {
+    const store = new ResultsStore(":memory:");
+    try {
+      recordPublishOutcome(store, "tier-a", 229, "accepted", "Mid.al");
+      recordPublishOutcome(store, "tier-a", 331, "failed", "Big.al");
+      recordPublishOutcome(store, "tier-b", 12, "failed", "Other.al");
+      const result = clearPublishCeiling(store, "tier-a", undefined);
+      expect(result.before.smallestFailure).toBe(331);
+      expect(result.after).toEqual({});
+      expect(result.removed).toHaveLength(2);
+      expect(result.removed.map((r) => r.guardCount).sort((a, b) => a - b)).toEqual([229, 331]);
+      // Another tier's history is untouched — the clear is scoped, not global.
+      expect(knownCeiling(store, "tier-b").smallestFailure).toBe(12);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("--file narrows the clear, so a surgical undo keeps the rest of a tier's history", () => {
+    // The evidence-loss answer: an operator who knows WHICH measurement is bogus does not have to
+    // discard the ones that cost a live publish failure to learn.
+    const store = new ResultsStore(":memory:");
+    try {
+      recordPublishOutcome(store, "tier-a", 9, "failed", "Transient.al");
+      recordPublishOutcome(store, "tier-a", 331, "failed", "Genuinely.al");
+      expect(knownCeiling(store, "tier-a").smallestFailure).toBe(9);
+      const result = clearPublishCeiling(store, "tier-a", "Transient.al");
+      expect(result.removed).toHaveLength(1);
+      expect(result.removed[0]?.file).toBe("Transient.al");
+      expect(result.after.smallestFailure).toBe(331);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("a blanket clear is the ONLY thing that reaches a multi-file artifact's row", () => {
+    // Rows recorded by a multi-file batch carry no filename at all, so a file-only command could
+    // never clear them — which is why the blanket clear is the default rather than the exception.
+    const store = new ResultsStore(":memory:");
+    try {
+      recordPublishOutcome(store, "tier-a", 45, "failed", undefined);
+      expect(clearPublishCeiling(store, "tier-a", "Anything.al").removed).toHaveLength(0);
+      expect(knownCeiling(store, "tier-a").smallestFailure).toBe(45);
+      expect(clearPublishCeiling(store, "tier-a", undefined).removed).toHaveLength(1);
+      expect(knownCeiling(store, "tier-a").smallestFailure).toBeUndefined();
+    } finally {
+      store.close();
+    }
+  });
+
+  test("clearing a tier with nothing recorded is idempotent, not an error", () => {
+    const store = new ResultsStore(":memory:");
+    try {
+      const result = clearPublishCeiling(store, "tier-empty", undefined);
+      expect(result.removed).toHaveLength(0);
+      expect(result.before).toEqual({});
+      expect(result.after).toEqual({});
+    } finally {
+      store.close();
+    }
+  });
+
+  test("an empty tier key is a caller-contract violation here too", () => {
+    const store = new ResultsStore(":memory:");
+    try {
+      expect(() => clearPublishCeiling(store, "", undefined)).toThrow(/tier/);
+    } finally {
+      store.close();
     }
   });
 });
@@ -611,6 +742,87 @@ describe("publish ceiling — wired into the session (R90)", () => {
     }
   });
 
+  test("a file refused by a TRANSIENT failure publishes again after clear-ceiling — the ratchet has a release", async () => {
+    // Fix round 1's Important finding, end to end. `publishOk` goes false on ANY throw out of
+    // `deployer.publish()`, including a Bun spawn ENOENT (R65 measured one), so a transient blip
+    // records a `failed` row that permanently refuses every file that size — a refused file can
+    // never publish, so it can never produce the counter-evidence that would widen the bracket.
+    const dirs = await makeCeilingProject([
+      { name: "Big.Codeunit.al", source: codeunitWithGuards(79000, "Big", 331) },
+    ]);
+    const store = new ResultsStore(":memory:");
+    const session = () =>
+      runSession({
+        backend,
+        store,
+        projectDir: dirs.projectDir,
+        testDir: dirs.testDir,
+        instrumentedDir: dirs.instrumentedDir,
+        selectorIds,
+        resourceServer: RESOURCE_SERVER,
+        resourceServerInstance: RESOURCE_INSTANCE,
+        quarantineDir: dirs.quarantineDir,
+      });
+    const backend = new CeilingBackend();
+    try {
+      // A transient spawn failure recorded against this tier at exactly this file's size.
+      recordPublishOutcome(store, TIER, 331, "failed", "Big.Codeunit.al");
+      const refused = await session().catch((e: unknown) => e);
+      expect(String((refused as Error).message)).toContain("Big.Codeunit.al");
+      expect(backend.publishCalls).toBe(0);
+
+      // The escape the refusal message itself names.
+      const cleared = clearPublishCeiling(store, TIER, "Big.Codeunit.al");
+
+      // The property that matters, asserted FIRST and deliberately: same project, same file, same
+      // tier, and it now PUBLISHES. Assertion order is load-bearing here — checking the returned
+      // bookkeeping first would let a `clearPublishCeiling` that reports a clear it never performed
+      // fail on the bookkeeping line and never reach the only assertion that proves the ratchet
+      // actually released.
+      const report = await session();
+      expect(backend.publishCalls).toBe(1);
+      expect(report.mutants).toHaveLength(331);
+
+      // …and only then, that what it REPORTED destroying matches what the session just proved.
+      expect(cleared.removed).toHaveLength(1);
+      expect(cleared.after.smallestFailure).toBeUndefined();
+    } finally {
+      store.close();
+      await rm(dirs.root, { recursive: true, force: true });
+    }
+  });
+
+  test("the refusal a real session throws carries the copy-pasteable clear-ceiling command", async () => {
+    const dirs = await makeCeilingProject([
+      { name: "Big.Codeunit.al", source: codeunitWithGuards(79000, "Big", 331) },
+    ]);
+    const store = new ResultsStore(":memory:");
+    try {
+      recordPublishOutcome(store, TIER, 331, "failed", "Big.Codeunit.al");
+      const err = await runSession({
+        backend: new CeilingBackend(),
+        store,
+        projectDir: dirs.projectDir,
+        testDir: dirs.testDir,
+        instrumentedDir: dirs.instrumentedDir,
+        selectorIds,
+        resourceServer: RESOURCE_SERVER,
+        resourceServerInstance: RESOURCE_INSTANCE,
+        quarantineDir: dirs.quarantineDir,
+      }).catch((e: unknown) => e);
+      const m = String((err as Error).message);
+      // The real tier and the real project dir, not a placeholder to fill in by hand.
+      expect(m).toContain("lethal clear-ceiling");
+      expect(m).toContain(`--server "${RESOURCE_SERVER}"`);
+      expect(m).toContain(`--instance "${RESOURCE_INSTANCE}"`);
+      expect(m).toContain(`--project "${dirs.projectDir}"`);
+      expect(m).toContain('--file "Big.Codeunit.al"');
+    } finally {
+      store.close();
+      await rm(dirs.root, { recursive: true, force: true });
+    }
+  });
+
   test("an `indeterminate` deploy failure records its category — and refuses nothing afterwards", async () => {
     // R107's shape, end to end: the publish call itself SUCCEEDS while the deployment is not ours.
     // The row must land (so the R107 fix is measurable as a mode flip) and must not become a wall.
@@ -786,5 +998,76 @@ describe("--dry-run reports both counts and the measured bracket (R92/R90)", () 
     } finally {
       await rm(dirs.root, { recursive: true, force: true });
     }
+  });
+});
+
+// ————————————————————————————————————————————————————————————————————————
+// Fix round 1 — `lethal clear-ceiling` at the CLI boundary.
+// ————————————————————————————————————————————————————————————————————————
+
+describe("lethal clear-ceiling (CLI)", () => {
+  test("parses the tier, the project, the db default and the optional --file", () => {
+    expect(
+      parseCliConfig([
+        "clear-ceiling",
+        "--project",
+        "proj",
+        "--server",
+        "http://bc",
+        "--instance",
+        "BC",
+      ]),
+    ).toEqual({
+      mode: "clear-ceiling",
+      projectDir: "proj",
+      dbPath: join("proj", "lethal.sqlite"),
+      server: "http://bc",
+      serverInstance: "BC",
+    });
+    expect(
+      parseCliConfig([
+        "clear-ceiling",
+        "--project",
+        "proj",
+        "--server",
+        "http://bc",
+        "--instance",
+        "BC",
+        "--file",
+        "Big.al",
+        "--db",
+        "other.sqlite",
+      ]),
+    ).toEqual({
+      mode: "clear-ceiling",
+      projectDir: "proj",
+      dbPath: "other.sqlite",
+      server: "http://bc",
+      serverInstance: "BC",
+      file: "Big.al",
+    });
+  });
+
+  test("refuses a missing identity or project rather than clearing something unnamed", () => {
+    expect(() => parseCliConfig(["clear-ceiling", "--project", "p", "--instance", "BC"])).toThrow(
+      /--server/,
+    );
+    expect(() =>
+      parseCliConfig(["clear-ceiling", "--project", "p", "--server", "http://bc"]),
+    ).toThrow(/--instance/);
+    expect(() =>
+      parseCliConfig(["clear-ceiling", "--server", "http://bc", "--instance", "BC"]),
+    ).toThrow(/--project/);
+  });
+
+  test("help documents the subcommand and both of its non-obvious properties", () => {
+    const text = helpText("0.0.0");
+    expect(text).toContain("lethal clear-ceiling");
+    // Omitting --file clears the tier, and that is the ONLY way to reach a multi-file row.
+    expect(text).toMatch(/multi-file artifact/);
+    // Every removed row is printed, because discarding a genuine failure is evidence loss.
+    expect(text).toMatch(/evidence loss/i);
+    // Minor 2: a "dry" run that migrates an existing schema is a surprise unless it is documented.
+    expect(text).toMatch(/OPENED FOR WRITING/);
   });
 });

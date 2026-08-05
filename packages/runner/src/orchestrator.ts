@@ -54,6 +54,7 @@ import {
 import { Semaphore, shardEvenly } from "./pool";
 import {
   assertUnderCeiling,
+  clearCeilingCommand,
   guardsPerFile,
   knownCeiling,
   recordPublishOutcome,
@@ -2429,10 +2430,31 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       // the ceiling inert in BOTH directions: nothing is consulted and nothing is recorded, since
       // a ceiling keyed to no tier could only mix measurements from unrelated topologies.
       const perFileGuards = guardsPerFile(manifest.mutants);
-      if (resourceKey !== undefined) {
+      if (
+        resourceKey !== undefined &&
+        cfg.resourceServer !== undefined &&
+        cfg.resourceServerInstance !== undefined
+      ) {
         const ceiling = knownCeiling(cfg.store, resourceKey);
         for (const [file, guardCount] of perFileGuards) {
-          assertUnderCeiling({ file, guardCount, ceiling });
+          // Fix round 1: the refusal carries the exact `clear-ceiling` invocation for THIS file.
+          // The ceiling is a ratchet — any throw out of the publish call records a `failed` row,
+          // and a refused file can never publish and so can never widen the bracket back — so a
+          // refusal that did not say how to discard a bogus measurement would leave sqlite surgery
+          // as the only way out. The two identity fields are re-checked (rather than reusing
+          // `resourceKey` alone) because the command needs them SEPARATELY, and narrowing here is
+          // what lets `clearCeilingCommand` take them as required strings.
+          assertUnderCeiling({
+            file,
+            guardCount,
+            ceiling,
+            clearCommand: clearCeilingCommand({
+              projectDir: cfg.projectDir,
+              server: cfg.resourceServer,
+              serverInstance: cfg.resourceServerInstance,
+              file,
+            }),
+          });
         }
       }
       // The ONE file this artifact's guards came from, when there is one — recorded alongside the

@@ -565,6 +565,31 @@ export class ResultsStore {
     );
   }
 
+  /**
+   * R90 fix round 1: the operator escape. Removes recorded publish outcomes for one tier —
+   * every row, or only the rows recorded against one FILE.
+   *
+   * Necessary because the ceiling is a RATCHET that only ever tightens: `knownCeiling` takes the
+   * minimum over `failed` rows, and a file once refused can never publish, so it can never produce
+   * the counter-evidence that would widen the bracket again. Any throw out of
+   * `deployer.publish()` — including a Bun spawn `ENOENT`, which R65 measured for real — records a
+   * `failed` row at that artifact's guard count, and without this there is no way back but sqlite
+   * surgery. This is the same hazard `knownCeiling` deliberately excludes `indeterminate` for; the
+   * exclusion closed one door in, and a transient spawn failure walks through the other.
+   *
+   * Returns the number of rows deleted so the caller can state what it destroyed. Deleting real
+   * measurements is real evidence loss, so the CLI wrapper names every row it removes.
+   */
+  deletePublishOutcomes(tier: string, file: string | undefined): number {
+    if (file === undefined) {
+      this.db.query("DELETE FROM publish_outcomes WHERE tier = ?").run(tier);
+    } else {
+      this.db.query("DELETE FROM publish_outcomes WHERE tier = ? AND file = ?").run(tier, file);
+    }
+    const r = this.db.query("SELECT changes() AS n").get() as { n: number };
+    return r.n;
+  }
+
   /** R90: every publish attempt recorded against one tier, oldest first. */
   publishOutcomes(tier: string): PublishOutcomeRow[] {
     const rows = this.db
