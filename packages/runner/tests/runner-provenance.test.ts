@@ -4,11 +4,12 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { MutantManifestEntry } from "@lethal/schemata";
-import { REPORT_SCHEMA_VERSION, buildReport, renderConsole } from "../src/report";
+import { REPORT_SCHEMA_VERSION, renderConsole } from "../src/report";
 import type { SessionOutcome } from "../src/report";
 import { buildResumeIndex } from "../src/resume";
 import { ResultsStore } from "../src/store";
 import type { MutantVerdictRow } from "../src/store";
+import { legacyBuildReport } from "./helpers/legacy-report";
 
 /**
  * R69 Phase 2 Task 5 — provenance through store, resume and report.
@@ -51,7 +52,7 @@ function entry(over: Partial<MutantManifestEntry> = {}): MutantManifestEntry {
 }
 
 function build(outcomes: SessionOutcome[], over: Record<string, unknown> = {}) {
-  return buildReport({
+  return legacyBuildReport({
     caps: CAPS_AUTHORITATIVE,
     baselineGreen: true,
     batches: 1,

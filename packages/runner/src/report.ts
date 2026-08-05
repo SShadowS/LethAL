@@ -1,7 +1,9 @@
 import type { MutantManifestEntry } from "@lethal/schemata";
 import { type AlRunnerCanaryResult, alRunnerCanaryWarnings } from "./al-runner-canary";
 import type { BackendCapabilities } from "./backend";
+import type { RunEvent } from "./events";
 import { type PermissionCanaryResult, permissionCanaryWarnings } from "./permission-canary";
+import { type FoldStatics, foldEvents } from "./report-fold";
 import type { CoverageAttribution } from "./selection";
 import { identityKeyOf } from "./selection";
 import type { MutantVerdict, RunnerKind } from "./store";
@@ -55,6 +57,16 @@ export interface SessionOutcome {
   /** R54: this verdict was CARRIED from a prior run by `--resume`, not measured here — see
    *  `MutantOutcome.carried`. */
   readonly carried?: boolean;
+  /**
+   * Event-stream refactor (spec 2026-08-05 §A): for a CARRIED outcome only, the prior run's own
+   * cost — sourced from `mutant-carried.priorDurationMs` (events.ts), which is the ONLY duration
+   * field that event carries. `durationMs` above stays absent/0 for a carried outcome (this run
+   * spent nothing on it), so the aggregate cost computation in `buildReport` can read `durationMs`
+   * alone and structurally never see a carried cost — no filter required, R54 made unrepresentable
+   * rather than guarded. This field exists purely so the per-mutant OUTPUT row can still show what
+   * the verdict originally cost; `buildReport` reads it ONLY when `carried === true`.
+   */
+  readonly priorDurationMs?: number;
   /**
    * R69 Phase 2 Task 5 — which execution path produced this verdict (see `RunnerKind`, store.ts).
    * `undefined` means fenced: every call site that predates Task 6's client-services routing, and
@@ -609,71 +621,6 @@ export interface MutantOutcome {
   readonly operatorMajor: number;
 }
 
-export interface BuildReportInput {
-  readonly caps: BackendCapabilities;
-  readonly baselineGreen: boolean;
-  readonly batches: number;
-  readonly outcomes: readonly SessionOutcome[];
-  /** Deduped, sorted qualified names of baseline tests that did not pass — see `SessionReport.unsupportedTests`. */
-  readonly unsupportedTests: readonly string[];
-  /** Threaded straight from `generateMutationSet`'s return — see `SessionReport.notInstrumented`. */
-  readonly notInstrumented: {
-    readonly totalFiles: number;
-    readonly files: readonly NotInstrumentedFile[];
-  };
-  /** R41: the `--only` patterns and how many files they excluded — see `SessionReport.only`.
-   *  Absent when the run was not narrowed. */
-  readonly only?: {
-    readonly patterns: readonly string[];
-    readonly excludedFileCount: number;
-  };
-  /** R45: the `--tests-only` patterns, if any — see `SessionReport.testsOnly`. */
-  readonly testsOnly?: readonly string[];
-  /** R31: tests the source declares that the server had no result for — see
-   *  `SessionReport.staleTestApp`. */
-  readonly staleTestApp?: { readonly missingTests: readonly string[] };
-  /** R35: baseline tests BC refused on permissions — see `SessionReport.permissionsRefused`.
-   *  Pass the names only; the diagnosis text is composed here so it cannot drift per caller. */
-  readonly permissionsRefusedTests?: readonly string[];
-  /** R69: baseline tests refused for opening a `TestPage` — see `SessionReport.testPageUnsupported`.
-   *  Names only; the diagnosis text is composed here so it cannot drift per caller. */
-  readonly testPageUnsupportedTests?: readonly string[];
-  /** R59: tests that failed their kill-confirmation under a HUB coverage mode — see
-   *  `SessionReport.runnerDisagreement`. Names only; the explanation is composed here. */
-  readonly runnerDisagreementTests?: readonly string[];
-  /** R53: whether this run was allowed to END BC SESSIONS to score a non-terminating mutant
-   *  (`--stop-hung-sessions`). Drives the `stop-hung-sessions` caveat, but only when the run
-   *  actually scored a `timeout-killed` through it — see the caveat's own comment. */
-  readonly stopHungSessions?: boolean;
-  /** R47: the prior run `--resume` drew from — see `SessionReport.resumedFrom`. */
-  readonly resumedFrom?: {
-    readonly runId: number;
-    readonly carriedMutants: number;
-    readonly skippedStranded: number;
-  };
-  /** Phase wall-clock measured by `runSession` — see `SessionReport.timings`. The per-mutant
-   *  distribution is derived here from `outcomes`, so only the phase totals are passed in. */
-  readonly timings: {
-    readonly totalMs: number;
-    readonly generateMutationSetMs: number;
-    readonly deployMs: number;
-    readonly baselineMs: number;
-  };
-  /** Every test that ran at baseline — the denominator `unsupportedTests` needs, and the source
-   *  of `SessionReport.testFiles`. "105 failing" means nothing without it. */
-  readonly baselineTests: readonly { readonly codeunitName: string; readonly file?: string }[];
-  /** Summed over every batch's `coverageFilter` — see `SessionReport.untargetedTriggerCount`.
-   *  Required, not optional: an absent tally and a measured zero must never look alike. */
-  readonly untargetedTriggerCount: number;
-  /** Threaded straight through from `runSession`'s `SessionSafety` — see `SessionReport.quarantined`. */
-  readonly quarantined?: {
-    readonly reason: string;
-  };
-  /** R26: the once-per-session permission canary's measured verdict, threaded straight through
-   *  from `runSession` — see `SessionReport.permissionCanary`. */
-  readonly permissionCanary?: PermissionCanaryResult;
-}
-
 /**
  * Nearest-rank percentile over an ASCENDING-sorted array, 0 for an empty one.
  *
@@ -780,7 +727,16 @@ function buildExecutionContexts(
   });
 }
 
-export function buildReport(input: BuildReportInput): SessionReport {
+/**
+ * Builds the report from the run's event stream (spec 2026-08-05 §A). Exactly two parameters —
+ * the closed statics set the run was GIVEN (`FoldStatics`: `caps`, `only`, `testsOnly`,
+ * `stopHungSessions`) and the events it EMITTED — never a third. `BuildReportInput`, the ~19-field
+ * hand-assembled bag this replaces, is deleted: everything beyond the four statics above is now
+ * folded from `events` by `foldEvents` (report-fold.ts), which throws rather than defaulting when a
+ * mandatory event is missing. See that file's doc comment for the full rationale.
+ */
+export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): SessionReport {
+  const input = foldEvents(statics, events);
   const counts = {
     killed: 0,
     survived: 0,
@@ -830,7 +786,11 @@ export function buildReport(input: BuildReportInput): SessionReport {
       // R69 Phase 2 Task 5: the one place an absent input `runner` is read as "fenced" — see
       // `MutantOutcome.runner`.
       runner: o.runner ?? "fenced",
-      durationMs: o.durationMs ?? 0,
+      // R54, event-stream refactor: a carried outcome has NO `durationMs` (see
+      // `SessionOutcome.priorDurationMs`'s doc comment) — its ORIGINAL cost is shown here from
+      // `priorDurationMs` instead, deliberately never from `durationMs`, which is what keeps the
+      // aggregate cost computation below correct without a filter.
+      durationMs: o.carried === true ? (o.priorDurationMs ?? 0) : (o.durationMs ?? 0),
       procedureName: o.mutant.procedureName,
       startIndex: o.mutant.startIndex,
       endIndex: o.mutant.endIndex,
@@ -861,8 +821,13 @@ export function buildReport(input: BuildReportInput): SessionReport {
   // 2109.7 s run, with `overhead` clamped to 0 to hide the contradiction. These numbers exist to
   // extrapolate what a bigger run will COST, and time this run never spent is the one thing that
   // must not be in them.
+  //
+  // No `.filter((o) => o.carried !== true)` here any more (event-stream refactor): the fold
+  // (report-fold.ts) never populates a carried outcome's `durationMs` at all — only
+  // `priorDurationMs`, which this map deliberately does not read — so a carried cost cannot reach
+  // this sum even by accident. That is R54 made unrepresentable rather than guarded by a filter
+  // someone could forget.
   const durations = input.outcomes
-    .filter((o) => o.carried !== true)
     .map((o) => o.durationMs ?? 0)
     .filter((d) => d > 0)
     .sort((a, b) => a - b);

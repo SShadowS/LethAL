@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import type { MutantManifestEntry } from "@lethal/schemata";
 import { NO_RESULT_FOR_METHOD } from "../src/bcdev-backend";
-import { buildReport, renderConsole } from "../src/report";
+import { renderConsole } from "../src/report";
 import type { SessionOutcome } from "../src/report";
+import { legacyBuildReport } from "./helpers/legacy-report";
 
 /**
  * R31. Publishing the test app is deliberately the user's own workflow, so LethAL republishes the
@@ -44,7 +45,7 @@ function entry(): MutantManifestEntry {
 
 function build(over: Record<string, unknown> = {}) {
   const outcomes: SessionOutcome[] = [{ mutant: entry(), verdict: "no-coverage", batchIndex: 0 }];
-  return buildReport({
+  return legacyBuildReport({
     caps: CAPS,
     baselineGreen: false,
     batches: 1,
@@ -59,9 +60,14 @@ function build(over: Record<string, unknown> = {}) {
 }
 
 describe("SessionReport.staleTestApp (R31)", () => {
-  test("names the tests the server had no result for", () => {
+  test("names the tests the server had no result for, sorted", () => {
+    // Sorted for the same reason `permissionsRefused.tests`/`testPageUnsupported.tests` are: the
+    // orchestrator's real caller always fed this pre-sorted (`[...missingFromServer].sort()`), and
+    // the event-stream fold now does the sorting itself (report-fold.ts) rather than relying on
+    // every caller to have already deduped/sorted its own Set — the same treatment the other two
+    // "list of test names" fields already got from `buildReport` directly.
     const r = build({ staleTestApp: { missingTests: ["Tests.Gone", "Tests.AlsoGone"] } });
-    expect(r.staleTestApp?.missingTests).toEqual(["Tests.Gone", "Tests.AlsoGone"]);
+    expect(r.staleTestApp?.missingTests).toEqual(["Tests.AlsoGone", "Tests.Gone"]);
     expect(r.validity.caveats).toContain("stale-test-app");
   });
 

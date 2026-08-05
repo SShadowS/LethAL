@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import type { MutantManifestEntry } from "@lethal/schemata";
 import { unsupportedCoverageNote } from "../src/orchestrator";
-import { buildReport, renderConsole } from "../src/report";
+import { renderConsole } from "../src/report";
 import type { SessionOutcome } from "../src/report";
 import { describeTestPageUnsupported } from "../src/testpage-unsupported";
+import { legacyBuildReport } from "./helpers/legacy-report";
 
 /**
  * R69. A test that opens a `TestPage` cannot run in the fenced `GuiAllowed=No` /
@@ -57,7 +58,7 @@ function entry(): MutantManifestEntry {
 
 function build(over: Record<string, unknown> = {}) {
   const outcomes: SessionOutcome[] = [{ mutant: entry(), verdict: "no-coverage", batchIndex: 0 }];
-  return buildReport({
+  return legacyBuildReport({
     caps: CAPS,
     baselineGreen: false,
     batches: 1,

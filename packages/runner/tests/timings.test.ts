@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import type { MutantManifestEntry } from "@lethal/schemata";
-import { buildReport, renderConsole } from "../src/report";
+import { renderConsole } from "../src/report";
 import type { SessionOutcome } from "../src/report";
 import type { MutantVerdict } from "../src/store";
+import { legacyBuildReport } from "./helpers/legacy-report";
 
 /**
  * `SessionReport.timings`. The point of recording cost is extrapolation: a `--only` run over 163
@@ -37,7 +38,7 @@ function outcome(id: string, verdict: MutantVerdict, durationMs: number): Sessio
 }
 
 function build(outcomes: readonly SessionOutcome[], phase = { total: 10_000 }) {
-  return buildReport({
+  return legacyBuildReport({
     caps: CAPS,
     baselineGreen: true,
     batches: 1,

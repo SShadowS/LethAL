@@ -36,6 +36,7 @@ import { discoverTests } from "./discovery";
 import {
   type BaselineClassification,
   type RunEmitter,
+  type RunEvent,
   STREAM_SCHEMA_VERSION,
   createEmitter,
 } from "./events";
@@ -52,6 +53,7 @@ import { Semaphore, shardEvenly } from "./pool";
 import { QuarantineStore } from "./quarantine-store";
 import { buildReport } from "./report";
 import type { NotInstrumentedFile, SessionOutcome, SessionReport } from "./report";
+import type { FoldStatics } from "./report-fold";
 import { quarantineResourceKey } from "./resource-key";
 import {
   CARRYABLE_VERDICTS,
@@ -1912,10 +1914,18 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   const caps = cfg.backend.capabilities();
   const nowIso = cfg.nowIso ?? (() => new Date().toISOString());
   // `record()`'s own `emit` parameter is REQUIRED (see its doc comment) so no call site can write
-  // a store row without emitting — this is the one place an absent `cfg.emit` is allowed to
-  // become a real (if inert) emitter. `createEmitter([])` fans out to zero subscribers, so every
-  // `emit(...)` call below is a genuine no-op when nobody is listening, not a special case.
-  const emit: RunEmitter = cfg.emit ?? createEmitter([]);
+  // a store row without emitting. `runSession` builds its OWN canonical, seq-stamped stream here —
+  // the one every `emit(...)` call site in this file already uses, unchanged — and keeps a full
+  // in-process copy of it (`collectedEvents`) so `buildReport` at the very end can fold the SAME
+  // stream a caller-supplied subscriber saw, never a second, independently-reconstructed one.
+  // `cfg.emit`, when a caller supplies one (a future stderr progress renderer, an NDJSON sink —
+  // Tasks 5/6), is forwarded to as an ADDITIONAL subscriber; it is not itself the canonical stream,
+  // so a caller that never sets it (every test today) still gets full event collection for the fold.
+  const collectedEvents: RunEvent[] = [];
+  const emit: RunEmitter = createEmitter([
+    (e) => collectedEvents.push(e),
+    ...(cfg.emit !== undefined ? [(e: RunEvent): void => cfg.emit?.(e)] : []),
+  ]);
   // run-configured (spec 2026-08-05 §A, AMENDED): the closed statics set `{ caps, only, testsOnly,
   // stopHungSessions }`, echoed once from the same values `buildReport` still reads directly from
   // `cfg` at the end of this function — one source, two carriages. No later event may repeat or
@@ -2062,12 +2072,11 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // unilaterally; see the test below for exactly what precedes it in the minimal case.
   emit({ type: "stream-started", streamSchemaVersion: STREAM_SCHEMA_VERSION, runId });
 
-  // Phase clocks (see `SessionReport.timings`). `deploy` scales with project size, `mutants`
-  // with mutant count, `baseline` is a per-batch toll — recorded separately because a single
-  // total cannot be extrapolated from one run shape to another.
+  // `SessionReport.timings`' per-phase costs (`deploy`/`baseline`/`mutants` scale differently — see
+  // that field's doc comment) are folded from the `phase-left` events emitted below, not tracked in
+  // local accumulators any more (event-stream refactor, spec 2026-08-05 §A) — only the session
+  // total needs a local clock, since `totalMs` never rides an event of its own.
   const sessionStartedMs = Date.now();
-  let deployMs = 0;
-  let baselineMs = 0;
   emit({ type: "phase-entered", phase: "generate" });
   const generateStartedMs = Date.now();
   const {
@@ -2116,37 +2125,17 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // R47: the configured floor for a mutant run's time budget — see `SessionConfig.mutantTimeoutMs`.
   const minMutantBudgetMs = cfg.mutantTimeoutMs ?? MIN_MUTANT_BUDGET_MS;
 
-  const outcomes: SessionOutcome[] = []; // internal accumulation for the report
-  // R47: how many verdicts this session carried from a prior run instead of measuring. Reported,
-  // never inferred from a count difference — a resumed report must be able to say so.
-  let resumedMutantCount = 0;
-  // R53: how many mutants were skipped because a prior run stranded the tier on them.
-  let strandedSkippedCount = 0;
+  const outcomes: SessionOutcome[] = []; // store durability + Task 3 bookkeeping — see `record()`
   let baselineGreenOverall = true;
-  // Task 6 (spec §9): qualified names of baseline tests that did not pass
-  // (fail/error) across all batches — surfaced in the report so an unsupported
-  // test type (or a broken test) is named, never silently dropped.
-  const unsupportedTestNames = new Set<string>();
-  // R31: tests the source declares that the SERVER has no result for — see the baseline loop.
-  const missingFromServer = new Set<string>();
-  // R35: baseline tests BC REFUSED on permissions — a strict subset of `unsupportedTestNames`,
-  // tracked separately because the two demand opposite responses. "Did not pass at baseline" reads
-  // as "your test is broken or is an unsupported type"; a permissions refusal is neither, and is
-  // fixed by one line in the target's own source (`TestPermissions = Disabled`). R27 named this
-  // cause on the `unstable` path only; a test refused HERE was dropped from the green set with the
-  // wrong explanation attached, or none at all.
+  // R35: baseline tests BC REFUSED on permissions. Still consulted DURING the mutant loop (passed
+  // into `runMutantsOnBackend` below) to shape verdicts, e.g. `unsupportedCoverageNote` — it is not
+  // report-only bookkeeping, unlike the session-level unsupported/stale-test-app/testpage sets this
+  // function used to also accumulate purely to hand-assemble the old report bag. Those are gone
+  // (event-stream refactor, spec 2026-08-05 §A): `unsupportedTests`/`staleTestApp`/
+  // `testPageUnsupported` are now folded from `baseline-batch-finished`'s per-test classification
+  // (report-fold.ts), never accumulated here.
   const permissionRefusedTests = new Set<string>();
-  // R69: baseline tests refused for opening a `TestPage` — also a strict subset of
-  // `unsupportedTestNames`, and tracked apart from `permissionRefusedTests` because it is the
-  // OPPOSITE finding. A permissions refusal has a one-line fix in the target's own source; this has
-  // none — the fenced session (`GuiAllowed=No`, `ClientType=ODataV4`) cannot create a test service
-  // at all. Sharing a bucket would tell one of the two readers something false.
-  const testPageUnsupportedTests = new Set<string>();
   const runnerDisagreementTests = new Set<string>();
-  // Summed across batches — see `SessionReport.untargetedTriggerCount`. Declared out here rather
-  // than read off the last batch's split: each batch runs its own coverage filter, and a session
-  // whose only untargeted trigger sits in batch 1 must not report 0.
-  let untargetedTriggerCount = 0;
   // Math.floor: a fractional workers value (e.g. 2.5) would otherwise reach
   // shardEvenly's `Array.from({ length: n }, ...)`, which silently truncates
   // to a shorter array than `i % n` can index into — mutants landing on the
@@ -2381,12 +2370,6 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       } catch (err) {
         deployErr = err;
       }
-      // Charged here, not on the success path below: every branch of `if (!deployed)` ends in a
-      // `continue`, and a batch that failed to deploy has usually spent MORE time than one that
-      // succeeded (the version-conflict retry recompiles; bisection recompiles repeatedly). Any
-      // later work inside that block is charged too, by the second accumulation below.
-      deployMs += Date.now() - deployStartedMs;
-      const deployRetryStartedMs = Date.now();
       if (!deployed) {
         // 3a. version conflict: BC's downgrade rejection is machine-parseable and names the
         // installed version verbatim. Re-stamp strictly above it, recompile, and retry
@@ -2460,11 +2443,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         });
         for (const m of execute)
           record(cfg.store, runId, m, "error", outcomes, batchIdx, emit, undefined, note);
-        deployMs += Date.now() - deployRetryStartedMs;
         emit({ type: "phase-left", phase: "deploy", elapsedMs: Date.now() - deployStartedMs });
         continue; // batch aborted, next batch still attempted
       }
-      deployMs += Date.now() - deployRetryStartedMs;
       // 3d. provenance: correct the run row with what was ACTUALLY compiled and deployed —
       // createRun could only write a placeholder. Backends with no compiled artifact
       // (deploy: "none") have no artifact provenance to record; their run row keeps the
@@ -2555,13 +2536,12 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         }
         baseline.push({ ref, verdict: v });
       }
-      // Charged BEFORE the early exits below, for the same reason the deploy clock is: both the
-      // quarantine `break` and the no-green-tests `continue` leave this scope without reaching the
-      // success-path accumulation, so a baseline that aborted used to report 0 ms and silently
+      // Computed and emitted BEFORE the early exits below, for the same reason the deploy clock
+      // is: both the quarantine `break` and the no-green-tests `continue` leave this scope without
+      // reaching the success-path emit, so a baseline that aborted used to report 0 ms and silently
       // reattribute its whole cost to "overhead". Measured on a run quarantined mid-baseline:
       // baseline 0.0s, overhead 70.1s, when essentially all of it was baseline.
       const baselineElapsedMs = Date.now() - baselineStartedMs;
-      baselineMs += baselineElapsedMs;
       emit({ type: "phase-left", phase: "baseline", elapsedMs: baselineElapsedMs });
       if (safety.isUnsafe) break; // stop the whole session — no mutant scheduling, no next batch
       // baseline-batch-finished: the moment of observation IS the batch's baseline RETURNING (see
@@ -2569,9 +2549,11 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       // all-red path below (`greenTests.length === 0`) rather than only on the happy path.
       // Classification is computed directly against `describeTestPermissionsRefusal`/
       // `describeTestPageUnsupported`/the stale-test-app sentinel — the SAME pure checks the
-      // `refusedThisBatch`/`testPageThisBatch`/`missingFromServer` loops below also run, kept
-      // independent here so this event's correctness never depends on reaching code after the
-      // early `continue`.
+      // `refusedThisBatch`/`testPageThisBatch` loop below also runs, kept independent here so this
+      // event's correctness never depends on reaching code after the early `continue`. This is also
+      // the ONLY place `unsupportedTests`/`staleTestApp`/`testPageUnsupported` are now sourced from
+      // — report-fold.ts folds them from `classification` here, not from a session-level
+      // accumulator in this function (event-stream refactor, spec 2026-08-05 §A).
       emit({
         type: "baseline-batch-finished",
         batchIndex: batchIdx,
@@ -2651,11 +2633,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       //     evidence — see the unstable path, which appends the same string.
       const refusedThisBatch = new Map<string, string>();
       // R69: batch-local for exactly the reasons the R35 map above documents — this batch's note
-      // must describe THIS batch's baseline, and the session-level set is cumulative.
+      // must describe THIS batch's baseline, not one a later batch's classification would overwrite.
       const testPageThisBatch = new Map<string, string>();
       for (const b of unsupportedBaseline) {
         const name = qualifiedTestName(b.ref);
-        unsupportedTestNames.add(name);
         const refusal = describeTestPermissionsRefusal(b.verdict.failureMessage);
         if (refusal !== undefined) {
           refusedThisBatch.set(name, refusal);
@@ -2664,21 +2645,13 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         const testPage = describeTestPageUnsupported(b.verdict.failureMessage);
         if (testPage !== undefined) {
           testPageThisBatch.set(name, testPage);
-          testPageUnsupportedTests.add(name);
         }
       }
-
-      // R31: a test the SOURCE declares but the server returned no result for is a test the
-      // published test app does not contain — i.e. what is deployed is older than the source
-      // being measured. This has cost two debugging sessions, because the symptom is badly
-      // disguised: the baseline goes red and dozens of mutants fall to `no-coverage`, which reads
-      // as a mutation-scoring problem rather than "your published test app is stale". The
-      // evidence was already present per-test; nothing aggregated it into a statement.
-      for (const b of baseline) {
-        if (b.verdict.failureMessage === NO_RESULT_FOR_METHOD) {
-          missingFromServer.add(qualifiedTestName(b.ref));
-        }
-      }
+      // R31 (a test the SOURCE declares but the server returned no result for) no longer needs a
+      // session-level accumulator here: `unsupportedTests`/`staleTestApp`/`testPageUnsupported` are
+      // now folded from `baseline-batch-finished`'s per-test `classification` (report-fold.ts),
+      // which the emit below already computes independently from the SAME `NO_RESULT_FOR_METHOD`
+      // sentinel — see that emit's doc comment for why it is kept independent of this loop.
 
       // 5. coverage filter (capability-gated)
       let perMutantTests: ReadonlyMap<string, readonly TestMethodRef[]>;
@@ -2704,9 +2677,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         perMutantTests = split.covered;
         coverageAttribution = split.attribution;
         uncovered = split.uncovered;
-        untargetedTriggerCount += split.untargetedTriggerCount;
-        // coverage-split: accumulated per batch AT SPLIT TIME — see events.ts's doc comment on
-        // why this is the strongest single argument for events over the old end-of-run bag.
+        // coverage-split: accumulated per batch AT SPLIT TIME, and folded into
+        // `SessionReport.untargetedTriggerCount` by report-fold.ts rather than a session-level
+        // accumulator here — see events.ts's doc comment on why this is the strongest single
+        // argument for events over the old end-of-run bag.
         emit({
           type: "coverage-split",
           batchIndex: batchIdx,
@@ -2721,10 +2695,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       // couldn't run). `unsupportedCoverage` reuses coverageFilter against the
       // second index; empty for coverage:"none" (uncovered is empty there too).
       //
-      // Its `untargetedTriggerCount` is deliberately NOT added to the session tally: a table
+      // Its `untargetedTriggerCount` is deliberately NOT folded into the session tally: a table
       // trigger can never appear in `uncovered` (FALLBACK 2 above catches every one of them
       // before the `uncovered.push`), so this call's tally is structurally 0 — and were that
-      // ever to change, adding it would double-count mutants the SESSION already ran against
+      // ever to change, counting it would double-count mutants the SESSION already ran against
       // every green test. The number on the report means "took the all-green-tests fallback in
       // the run that decided the verdict", and this call decides no verdict.
       const unsupportedCoverage =
@@ -2813,7 +2787,6 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
               undefined,
               true, // strandedSkip
             );
-            strandedSkippedCount += 1;
             continue;
           }
           const carried = carriedVerdictFor(resumeState.index, m);
@@ -2846,7 +2819,6 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
             // above), so its `runId` — the PRIOR run this verdict was carried from — is in scope.
             resumeState.runId,
           );
-          resumedMutantCount += 1;
         }
       }
 
@@ -3144,75 +3116,29 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   } else {
     emit({ type: "quarantined", reason: safety.reason ?? "unknown" });
   }
-  // Sort accumulated outcomes so report ordering never depends on which
-  // worker finished first — determinism must not hinge on scheduling.
-  // Compare (file, startIndex) as (string, number), not a colon-joined
-  // string: localeCompare on "file:1000" vs "file:99" sorted ":1000" before
-  // ":99" (lexical compare of the numeric suffix), scrambling report order
-  // for any file with 100+ mutable start offsets.
-  outcomes.sort(
-    (a, b) =>
-      a.mutant.file.localeCompare(b.mutant.file) || a.mutant.startIndex - b.mutant.startIndex,
-  );
+  // NOTE: `outcomes` itself is no longer sorted here — nothing reads this array any more (see the
+  // comment on the `buildReport` call below), and `foldEvents` (report-fold.ts) now owns the
+  // equivalent sort, applied to what IT accumulates from `collectedEvents`, so the folded report's
+  // ordering still never depends on which worker finished first regardless of arrival order.
   const totalMs = Date.now() - sessionStartedMs;
   emit({ type: "session-finished", elapsedMs: totalMs });
-  return buildReport({
+  // buildReport(statics, events) (spec 2026-08-05 §A): the closed statics set this run was GIVEN —
+  // the SAME four values (and the SAME conditions gating `only`/`testsOnly`) the `run-configured`
+  // event above (~line 1923) was built from, one source, two carriages — plus the FULL collected
+  // event stream. Everything else (`baselineGreen`, `batches`, `outcomes`, `unsupportedTests`, ...)
+  // is now folded from `collectedEvents` by `foldEvents` (report-fold.ts), never assembled here by
+  // hand. `outcomes`/`invalidateBatchVerdicts` above remain the store-durability and in-memory
+  // bookkeeping Task 3's contract (`record()`, `events-orchestrator.test.ts`) still exercises
+  // directly, but neither feeds this call any more — the events do.
+  const statics: FoldStatics = {
     caps,
-    baselineGreen: baselineGreenOverall,
-    batches: artifacts.length,
-    outcomes,
-    unsupportedTests: [...unsupportedTestNames].sort(),
-    notInstrumented: { totalFiles: totalAlFiles, files: notInstrumentedFiles },
-    // Every discovered test, so the report can state the denominator behind `unsupportedTests`
-    // and index test files for `SessionReport.testFiles`.
-    ...(missingFromServer.size > 0
-      ? { staleTestApp: { missingTests: [...missingFromServer].sort() } }
-      : {}),
-    ...(testPageUnsupportedTests.size > 0
-      ? { testPageUnsupportedTests: [...testPageUnsupportedTests].sort() }
-      : {}),
-    ...(permissionRefusedTests.size > 0
-      ? { permissionsRefusedTests: [...permissionRefusedTests].sort() }
-      : {}),
-    ...(runnerDisagreementTests.size > 0
-      ? { runnerDisagreementTests: [...runnerDisagreementTests].sort() }
-      : {}),
-    ...(cfg.stopHungSessions === true ? { stopHungSessions: true } : {}),
-    baselineTests: tests.map((t) => ({
-      codeunitName: t.codeunitName,
-      ...(t.file !== undefined ? { file: t.file } : {}),
-    })),
-    timings: {
-      totalMs,
-      generateMutationSetMs,
-      deployMs,
-      baselineMs,
-    },
-    untargetedTriggerCount,
-    // R41: recorded whenever the run was narrowed, so the `--out` JSON carries the qualifier and
-    // not just the console line. Keyed on the request (`cfg.only`), not on `excludedByOnly > 0`:
-    // a pattern that happens to admit every file still narrowed the run by intent, and a reader
-    // comparing two reports must be able to see that this one was scoped.
-    ...(cfg.only !== undefined && cfg.only.length > 0
-      ? { only: { patterns: cfg.only, excludedFileCount: excludedByOnly } }
-      : {}),
+    ...(cfg.only !== undefined && cfg.only.length > 0 ? { only: { patterns: cfg.only } } : {}),
     ...(cfg.testsOnly !== undefined && cfg.testsOnly.length > 0
       ? { testsOnly: cfg.testsOnly }
       : {}),
-    ...(safety.isUnsafe ? { quarantined: { reason: safety.reason ?? "unknown" } } : {}),
-    ...(permissionCanary !== undefined ? { permissionCanary } : {}),
-    // R47: keyed on the REQUEST, like `only` above — a `--resume` that turned out to carry nothing
-    // still describes a run assembled differently, and a reader comparing two reports must see it.
-    ...(resumeState !== undefined
-      ? {
-          resumedFrom: {
-            runId: resumeState.runId,
-            carriedMutants: resumedMutantCount,
-            skippedStranded: strandedSkippedCount,
-          },
-        }
-      : {}),
-  });
+    ...(cfg.stopHungSessions === true ? { stopHungSessions: true } : {}),
+  };
+  return buildReport(statics, collectedEvents);
 }
 
 /**
@@ -3435,6 +3361,14 @@ async function runMutantsOnBackend(args: {
     // call (after this loop) can carry both, matching `runnerDisagreementTests.add(...)` below.
     let runnerDisagreement: string | undefined;
     let runnerDisagreementTest: string | undefined;
+    // Event-stream refactor (spec 2026-08-05 §A): the R35 counterpart to `runnerDisagreementTest`
+    // above — captured at the SAME instant this loop decides a permissions refusal, for the SAME
+    // reason: `args.permissionRefusedTests.add(...)` below is now a dead sink (nothing reads it —
+    // `SessionReport.permissionsRefused` is folded from events), and without a dedicated event
+    // field the fold has no way to learn this fact at all. `mutant-scored` gained no such field
+    // when `runnerDisagreementTest` was added (Task 2/3's amended union), which is the gap this
+    // closes. Flagged in the task report for confirmation.
+    let permissionRefusedTest: string | undefined;
     let spent = 0;
     // Whether any instrumented guard fired during this mutant's runs — see
     // `MutantOutcome.guardObserved`. Left undefined on a backend that never attests.
@@ -3686,7 +3620,10 @@ async function runMutantsOnBackend(args: {
             describeTestPermissionsRefusal(v.failureMessage);
           // R35: record it session-wide too, so the report's `permissionsRefused` field and this
           // note cannot disagree about whether the run hit a permissions refusal.
-          if (refusal !== undefined) args.permissionRefusedTests.add(qualifiedTestName(ref));
+          if (refusal !== undefined) {
+            args.permissionRefusedTests.add(qualifiedTestName(ref));
+            permissionRefusedTest = qualifiedTestName(ref);
+          }
           // R59: in a HUB coverage mode this test was hub-GREEN by construction — a covering test
           // comes from the green set, and the green set came from bc-dev-mcp — and it has just
           // failed unmutated on the FENCE. That is the runner disagreement itself, observed at no
@@ -3728,6 +3665,8 @@ async function runMutantsOnBackend(args: {
       undefined, // runner — every call site in this loop predates client-services routing
       runnerDisagreement,
       runnerDisagreementTest,
+      undefined, // fromRunId — not a carried verdict
+      permissionRefusedTest,
     );
     for (const t of testResultBuffer) {
       args.store.recordTestResult(
@@ -4152,6 +4091,14 @@ export function record(
   // that ever passes `carried: true` (`runSession`'s step 5b, which has `resumeState.runId` in
   // scope) — flagged here for the task report since it corrects rather than follows the brief.
   fromRunId?: number,
+  // R35, event-stream refactor: rides ONLY on `mutant-scored`, same rule as
+  // `runnerDisagreementTest` above — the qualified name of the test the kill-confirmation call site
+  // (runMutantsOnBackend) found refused on permissions, captured at the exact instant it also
+  // decides `cause: "unstable"`. NOT in events.ts's original amended union — added because without
+  // it `SessionReport.permissionsRefused` had no source at all for a refusal found at
+  // kill-confirmation time (only a baseline-time refusal reached `baseline-batch-finished`'s
+  // classification). Flagged in the task report for confirmation.
+  permissionRefusedTest?: string,
 ): number {
   const key = identityKeyOf(m);
   const mutantRowId = store.recordMutant(runId, {
@@ -4225,6 +4172,7 @@ export function record(
       ...(runner !== undefined ? { runner } : {}),
       ...(runnerDisagreement !== undefined ? { runnerDisagreement } : {}),
       ...(runnerDisagreementTest !== undefined ? { runnerDisagreementTest } : {}),
+      ...(permissionRefusedTest !== undefined ? { permissionRefusedTest } : {}),
     });
   }
   return mutantRowId;

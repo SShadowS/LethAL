@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import type { MutantManifestEntry } from "@lethal/schemata";
-import { buildReport, renderConsole } from "../src/report";
+import { renderConsole } from "../src/report";
 import type { SessionOutcome } from "../src/report";
+import { legacyBuildReport } from "./helpers/legacy-report";
 
 /**
  * R60. LethAL executes every mutant headlessly — the fenced `RunMutant` path runs as
@@ -46,7 +47,7 @@ function entry(): MutantManifestEntry {
 
 function build(over: Record<string, unknown> = {}) {
   const outcomes: SessionOutcome[] = [{ mutant: entry(), verdict: "killed", batchIndex: 0 }];
-  return buildReport({
+  return legacyBuildReport({
     caps: CAPS_AUTHORITATIVE,
     baselineGreen: true,
     batches: 1,

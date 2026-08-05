@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import type { MutantManifestEntry } from "@lethal/schemata";
 import { MAX_MUTATION_TEXT, clipMutationText } from "@lethal/schemata";
-import { buildReport, renderConsole } from "../src/report";
+import { renderConsole } from "../src/report";
 import type { SessionOutcome } from "../src/report";
+import type { LegacyBuildReportInput } from "./helpers/legacy-report";
+import { legacyBuildReport } from "./helpers/legacy-report";
 
 /**
  * A survivor is only a finding if someone can act on it. Before this, a report entry said
@@ -43,7 +45,7 @@ function entry(over: Partial<MutantManifestEntry> = {}): MutantManifestEntry {
 }
 
 function build(outcomes: readonly SessionOutcome[]) {
-  return buildReport({
+  return legacyBuildReport({
     caps: CAPS,
     baselineGreen: true,
     batches: 1,
@@ -175,8 +177,8 @@ describe("MutantOutcome.coverageAttribution — how much coveringTests is worth"
 });
 
 describe("SessionReport.validity — the score's own limits", () => {
-  function withScope(over: Parameters<typeof buildReport>[0] extends infer T ? Partial<T> : never) {
-    return buildReport({
+  function withScope(over: Partial<LegacyBuildReportInput>) {
+    return legacyBuildReport({
       caps: CAPS,
       baselineGreen: true,
       batches: 1,
@@ -281,7 +283,7 @@ describe("SessionReport.survivorsByProcedure — the ranking input", () => {
 
 describe("SessionReport.testsOnly — the narrowing that can manufacture a survivor (R45)", () => {
   test("is flagged distinctly from --only, because only this one can change a verdict", () => {
-    const r = buildReport({
+    const r = legacyBuildReport({
       caps: CAPS,
       baselineGreen: true,
       batches: 1,

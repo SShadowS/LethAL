@@ -222,6 +222,18 @@ export type RunEventInput =
        * call site, same instant, as `runnerDisagreement` and `cause: "unstable"` above.
        */
       readonly runnerDisagreementTest?: string;
+      /**
+       * Task 4 (event-stream refactor, spec 2026-08-05 §A) — the R35 counterpart to
+       * `runnerDisagreementTest` above, and NOT in Task 2/3's amended union either. Set at the
+       * SAME kill-confirmation call site (`orchestrator.ts`'s `runMutantsOnBackend`), the same
+       * instant it decides `cause: "unstable"` for a permissions-refused test — the qualified name
+       * `describeTestPermissionsRefusal` matched. Without this field there was no way to fold
+       * `SessionReport.permissionsRefused` for a refusal found HERE (kill-confirmation time) rather
+       * than at baseline (`baseline-batch-finished`'s `classification` covers only the latter) —
+       * the orchestrator's own `args.permissionRefusedTests` Set became a dead sink the moment
+       * `buildReport` stopped reading a hand-assembled bag, and nothing replaced it until this.
+       */
+      readonly permissionRefusedTest?: string;
     }
   | {
       /**

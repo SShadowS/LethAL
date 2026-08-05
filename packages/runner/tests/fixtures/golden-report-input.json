@@ -222,7 +222,6 @@
       "killingTest": "Sales Approval Tests.ApproveBatchSendsRequest",
       "coveringTests": ["Sales Approval Tests.ApproveBatchSendsRequest"],
       "coverageAttribution": "exact",
-      "guardObserved": true,
       "durationMs": 91234,
       "carried": true,
       "runner": "client-services"
@@ -278,6 +277,50 @@
       "guardObserved": true,
       "durationMs": 355,
       "runner": "fenced"
+    },
+    {
+      "mutant": {
+        "mutantId": "M0012",
+        "file": "Al/Codeunit/Codeunit 50102 Sales Approval Mgt.al",
+        "startIndex": 600,
+        "endIndex": 640,
+        "startLine": 40,
+        "operatorName": "lethal.negate-condition",
+        "operatorVersion": "1.0.0",
+        "astHash": "hashC3",
+        "objectType": "codeunit",
+        "codeunitId": 50102,
+        "codeunitName": "Sales Approval Mgt.",
+        "procedureName": "ApproveBatch",
+        "procedureScope": "public",
+        "originalText": "until Queue.Next() = 0;",
+        "mutatedText": "until Queue.Next() <> 0;"
+      },
+      "verdict": "error",
+      "batchIndex": 2,
+      "failureNote": "not re-run on resume: a prior run's execution of this mutant could not be confirmed complete and stranded the tier. A mutant that never terminates reproduces this every time and blocks every mutant behind it, so it is skipped rather than retried — pass --retry-stranded to attempt it anyway. It is NOT scored either way."
+    },
+    {
+      "mutant": {
+        "mutantId": "M0013",
+        "file": "Al/Codeunit/Codeunit 50102 Sales Approval Mgt.al",
+        "startIndex": 650,
+        "endIndex": 690,
+        "startLine": 42,
+        "operatorName": "lethal.negate-condition",
+        "operatorVersion": "1.0.0",
+        "astHash": "hashC4",
+        "objectType": "codeunit",
+        "codeunitId": 50102,
+        "codeunitName": "Sales Approval Mgt.",
+        "procedureName": "ApproveBatch",
+        "procedureScope": "public",
+        "originalText": "while Queue.Next() <> 0 do",
+        "mutatedText": "while Queue.Next() = 0 do"
+      },
+      "verdict": "error",
+      "batchIndex": 2,
+      "failureNote": "not re-run on resume: a prior run's execution of this mutant could not be confirmed complete and stranded the tier. A mutant that never terminates reproduces this every time and blocks every mutant behind it, so it is skipped rather than retried — pass --retry-stranded to attempt it anyway. It is NOT scored either way."
     }
   ],
   "unsupportedTests": [

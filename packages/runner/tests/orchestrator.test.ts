@@ -59,6 +59,7 @@ import { renderConsole } from "../src/report";
 import type { SessionOutcome } from "../src/report";
 import { SessionSafety, SessionUnsafeError } from "../src/session-safety";
 import { ResultsStore } from "../src/store";
+import { legacyBuildReport } from "./helpers/legacy-report";
 
 const TARGET_AL = `codeunit 79000 "Sandbox Logic"
 {
@@ -1929,8 +1930,7 @@ describe("mutation score — timeout-killed contribution", () => {
   });
 
   test("buildReport: only timeout-killed and survived produces non-null score", async () => {
-    const { buildReport } = await import("../src/report");
-    const report = buildReport({
+    const report = legacyBuildReport({
       caps: { coverage: "procedure", deploy: "publish", isolation: "session", authoritative: true },
       baselineGreen: true,
       batches: 1,
@@ -1991,8 +1991,7 @@ describe("mutation score — timeout-killed contribution", () => {
   });
 
   test("buildReport: killed and timeout-killed contribute equally", async () => {
-    const { buildReport } = await import("../src/report");
-    const report = buildReport({
+    const report = legacyBuildReport({
       caps: { coverage: "procedure", deploy: "publish", isolation: "session", authoritative: true },
       baselineGreen: true,
       batches: 1,
@@ -2095,8 +2094,7 @@ describe("mutation score — timeout-killed contribution", () => {
   });
 
   test("buildReport: null score when no killable mutants", async () => {
-    const { buildReport } = await import("../src/report");
-    const report = buildReport({
+    const report = legacyBuildReport({
       caps: { coverage: "procedure", deploy: "publish", isolation: "session", authoritative: true },
       baselineGreen: true,
       batches: 1,

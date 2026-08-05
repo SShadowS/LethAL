@@ -2,8 +2,9 @@ import { describe, expect, test } from "bun:test";
 import type { MutantManifestEntry } from "@lethal/schemata";
 import { unsupportedCoverageNote } from "../src/orchestrator";
 import { describeTestPermissionsRefusal } from "../src/permission-canary";
-import { buildReport, renderConsole } from "../src/report";
+import { renderConsole } from "../src/report";
 import type { SessionOutcome } from "../src/report";
+import { legacyBuildReport } from "./helpers/legacy-report";
 
 /**
  * R35. R27 taught LethAL to name the `TestPermissions` cause — but only on the `unstable` path,
@@ -45,7 +46,7 @@ function entry(): MutantManifestEntry {
 
 function build(over: Record<string, unknown> = {}) {
   const outcomes: SessionOutcome[] = [{ mutant: entry(), verdict: "error", batchIndex: 0 }];
-  return buildReport({
+  return legacyBuildReport({
     caps: CAPS,
     baselineGreen: false,
     batches: 1,

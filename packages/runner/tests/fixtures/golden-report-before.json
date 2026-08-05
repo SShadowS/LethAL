@@ -1,0 +1,493 @@
+{
+  "schemaVersion": 2,
+  "validity": {
+    "reliability": "narrowed-degraded",
+    "caveats": [
+      "baseline-red",
+      "narrowed",
+      "tests-narrowed",
+      "uninstrumentable-files",
+      "stale-test-app",
+      "tests-permission-refused",
+      "tests-testpage-unsupported",
+      "runner-disagreement",
+      "stop-hung-sessions",
+      "resumed",
+      "untargeted-triggers"
+    ],
+    "scoreDescribes": "7 scored mutant(s) in Al/Codeunit/Codeunit 50100 Sales Helper.al, Al/Codeunit/Codeunit 50101 Sales Post Mgt.al, Al/Codeunit/Codeunit 50102 Sales Approval Mgt.al, Al/Table/Table 50103 Sales Approval Log.al (4 of 13 .al files), with 3 of 12 baseline tests failing",
+    "baselineTests": {
+      "total": 12,
+      "failing": 3
+    },
+    "scoredMutants": {
+      "scored": 7,
+      "recorded": 13
+    },
+    "executionContexts": [
+      {
+        "runner": "fenced",
+        "guiAllowed": false,
+        "clientType": "ODataV4",
+        "basis": "measured on the fenced RunMutant path (R57): every mutant executes in a GuiAllowed=No, ClientType=ODataV4 session",
+        "verdictCount": 11
+      },
+      {
+        "runner": "client-services",
+        "guiAllowed": true,
+        "clientType": "Web",
+        "basis": "carried from run 41 by --resume: not measured in this run — the prior run's own report is the authority on how it was produced",
+        "verdictCount": 1
+      },
+      {
+        "runner": "client-services",
+        "guiAllowed": true,
+        "clientType": "Web",
+        "basis": "measured on the client-services batch-runner path (R69 Phase 2): GuiAllowed=Yes, ClientType=Web — under this path an unhandled Confirm RAISES rather than returning its default, so a mutant inside a Confirm branch can genuinely reach a different verdict here than it would on the fenced path",
+        "verdictCount": 1
+      }
+    ]
+  },
+  "permissionsRefused": {
+    "tests": [
+      "Sales Permission Tests.WritesToAppTable"
+    ],
+    "diagnosis": "BC's permission system refused these tests, which is neither flakiness nor an unsupported test type: the test codeunit most likely omits `TestPermissions = Disabled`, and AL's Restrictive default strips a test body of write permission on its own app's tables. Declare `TestPermissions = Disabled;` on the test codeunit and re-run. Any mutant covered only by these tests is recorded `error` (score-excluded), never a silent `no-coverage`."
+  },
+  "testPageUnsupported": {
+    "tests": [
+      "Sales UI Tests.OpensApprovalCard"
+    ],
+    "diagnosis": "this test opens a TestPage, which the fenced session cannot run: LethAL executes tests in a GuiAllowed=No, ClientType=ODataV4 session (R57/R58) and BC refuses to create a test service there, immediately (measured at 87 ms — a refusal, not a hang). This is a property of the EXECUTION PATH, not of your test: no change to the test or its declarations makes it run here. The affected tests are dropped from the green set, so mutants covered only by them are excluded from the score rather than scored against tests that never ran."
+  },
+  "runnerDisagreement": {
+    "tests": [
+      "Sales Post Tests.ValidatePostingRejectsClosed"
+    ],
+    "explanation": "These tests pass on the bc-dev-mcp hub and fail, unmutated, on the fenced runner that produces every verdict — measured session types, not a guess: hub is GuiAllowed=Yes/ClientType=Web, the fence is GuiAllowed=No/ClientType=ODataV4 (R57). Every mutant they cover is recorded `error` (score-excluded), never a kill: a kill requires the unmutated fenced confirmation to PASS. One confirmation cannot tell a deterministic disagreement from an ordinary flaky test — re-run with coverageMode \"fenced\", where one runner produces both the green set and the verdicts, and the question disappears."
+  },
+  "survivorsByProcedure": [
+    {
+      "file": "Al/Codeunit/Codeunit 50100 Sales Helper.al",
+      "codeunitName": "Sales Helper",
+      "procedureName": "FilterLines",
+      "survived": 1,
+      "noCoverage": 0,
+      "killed": 0,
+      "survivorCodes": [
+        "M0002"
+      ]
+    },
+    {
+      "file": "Al/Codeunit/Codeunit 50101 Sales Post Mgt.al",
+      "codeunitName": "Sales Post Mgt.",
+      "procedureName": "PostBatch",
+      "survived": 1,
+      "noCoverage": 0,
+      "killed": 1,
+      "survivorCodes": [
+        "M0005"
+      ]
+    },
+    {
+      "file": "Al/Codeunit/Codeunit 50102 Sales Approval Mgt.al",
+      "codeunitName": "Sales Approval Mgt.",
+      "procedureName": "ApproveBatch",
+      "survived": 1,
+      "noCoverage": 0,
+      "killed": 1,
+      "survivorCodes": [
+        "M0010"
+      ]
+    },
+    {
+      "file": "Al/Table/Table 50103 Sales Approval Log.al",
+      "codeunitName": "Sales Approval Log",
+      "procedureName": "OnInsert",
+      "survived": 1,
+      "noCoverage": 0,
+      "killed": 0,
+      "survivorCodes": [
+        "M0011"
+      ]
+    }
+  ],
+  "testFiles": {
+    "Sales Helper Tests": "Al/Codeunit/Codeunit 50110 Sales Helper Tests.al",
+    "Sales Post Tests": "Al/Codeunit/Codeunit 50111 Sales Post Tests.al",
+    "Sales Approval Tests": "Al/Codeunit/Codeunit 50112 Sales Approval Tests.al",
+    "Sales Permission Tests": "Al/Codeunit/Codeunit 50113 Sales Permission Tests.al"
+  },
+  "backend": "bcdev",
+  "authoritative": true,
+  "baselineGreen": false,
+  "batches": 3,
+  "counts": {
+    "killed": 2,
+    "survived": 4,
+    "noCoverage": 1,
+    "timeoutKilled": 1,
+    "knownSurvivors": 1,
+    "unstable": 1,
+    "errors": 4,
+    "deadlineExceeded": 1
+  },
+  "mutationScore": 0.42857142857142855,
+  "mutants": [
+    {
+      "mutantCode": "M0001",
+      "file": "Al/Codeunit/Codeunit 50100 Sales Helper.al",
+      "line": 45,
+      "operatorName": "lethal.void-method-call",
+      "verdict": "killed",
+      "batchIndex": 0,
+      "astHash": "hashA1",
+      "codeunitName": "Sales Helper",
+      "operatorMajor": 1,
+      "runner": "fenced",
+      "durationMs": 842,
+      "procedureName": "ComputeTotal",
+      "startIndex": 1200,
+      "endIndex": 1240,
+      "originalText": "TotalAmount := Quantity * UnitPrice;",
+      "mutatedText": "",
+      "coveringTests": [
+        "Sales Helper Tests.ComputeTotalMultipliesQtyByPrice"
+      ],
+      "coverageAttribution": "exact",
+      "guardObserved": true,
+      "killingTest": "Sales Helper Tests.ComputeTotalMultipliesQtyByPrice"
+    },
+    {
+      "mutantCode": "M0002",
+      "file": "Al/Codeunit/Codeunit 50100 Sales Helper.al",
+      "line": 60,
+      "operatorName": "lethal.remove-setrange",
+      "verdict": "survived",
+      "batchIndex": 0,
+      "astHash": "hashA2",
+      "codeunitName": "Sales Helper",
+      "operatorMajor": 1,
+      "runner": "fenced",
+      "durationMs": 615,
+      "procedureName": "FilterLines",
+      "startIndex": 1500,
+      "endIndex": 1550,
+      "originalText": "SalesLine.SetRange(\"Document No.\", DocNo);",
+      "mutatedText": "",
+      "coveringTests": [
+        "Sales Helper Tests.FilterLinesReturnsSubset"
+      ],
+      "coverageAttribution": "object",
+      "guardObserved": true
+    },
+    {
+      "mutantCode": "M0003",
+      "file": "Al/Codeunit/Codeunit 50100 Sales Helper.al",
+      "line": 72,
+      "operatorName": "lethal.empty-block",
+      "verdict": "no-coverage",
+      "batchIndex": 0,
+      "astHash": "hashA3",
+      "codeunitName": "Sales Helper",
+      "operatorMajor": 1,
+      "runner": "fenced",
+      "durationMs": 0,
+      "procedureName": "LogAudit",
+      "startIndex": 1800,
+      "endIndex": 1830,
+      "originalText": "AuditLog.Insert(true);",
+      "mutatedText": "",
+      "coveringTests": []
+    },
+    {
+      "mutantCode": "M0004",
+      "file": "Al/Codeunit/Codeunit 50101 Sales Post Mgt.al",
+      "line": 20,
+      "operatorName": "lethal.swap-call-arguments",
+      "verdict": "timeout-killed",
+      "batchIndex": 1,
+      "astHash": "hashB1",
+      "codeunitName": "Sales Post Mgt.",
+      "operatorMajor": 1,
+      "runner": "fenced",
+      "durationMs": 30000,
+      "procedureName": "PostBatch",
+      "startIndex": 300,
+      "endIndex": 340,
+      "originalText": "PostLines(SalesHeader, SalesLine);",
+      "mutatedText": "PostLines(SalesLine, SalesHeader);",
+      "coveringTests": [
+        "Sales Post Tests.PostBatchTerminates"
+      ],
+      "coverageAttribution": "exact",
+      "killingTest": "Sales Post Tests.PostBatchTerminates"
+    },
+    {
+      "mutantCode": "M0005",
+      "file": "Al/Codeunit/Codeunit 50101 Sales Post Mgt.al",
+      "line": 33,
+      "operatorName": "lethal.void-method-call",
+      "verdict": "survived",
+      "batchIndex": 1,
+      "astHash": "hashB2",
+      "codeunitName": "Sales Post Mgt.",
+      "operatorMajor": 1,
+      "runner": "fenced",
+      "durationMs": 410,
+      "procedureName": "PostBatch",
+      "startIndex": 500,
+      "endIndex": 540,
+      "originalText": "UpdateStatistics(SalesHeader);",
+      "mutatedText": "",
+      "coveringTests": [
+        "Sales Post Tests.PostBatchTerminates",
+        "Sales Post Tests.PostBatchUpdatesLedger"
+      ],
+      "coverageAttribution": "all-green",
+      "guardObserved": false
+    },
+    {
+      "mutantCode": "M0006",
+      "file": "Al/Codeunit/Codeunit 50101 Sales Post Mgt.al",
+      "line": 50,
+      "operatorName": "lethal.negate-condition",
+      "verdict": "error",
+      "batchIndex": 1,
+      "astHash": "hashB3",
+      "codeunitName": "Sales Post Mgt.",
+      "operatorMajor": 1,
+      "runner": "fenced",
+      "durationMs": 0,
+      "procedureName": "ValidatePosting",
+      "startIndex": 700,
+      "endIndex": 730,
+      "originalText": "if Status = Status::Open then",
+      "mutatedText": "if not (Status = Status::Open) then",
+      "coveringTests": [],
+      "failureNote": "runner disagreement: 'Sales Post Tests.ValidatePostingRejectsClosed' passed on the coverage hub and failed, unmutated, on the fenced runner",
+      "cause": "unstable"
+    },
+    {
+      "mutantCode": "M0007",
+      "file": "Al/Codeunit/Codeunit 50101 Sales Post Mgt.al",
+      "line": 65,
+      "operatorName": "lethal.empty-block",
+      "verdict": "error",
+      "batchIndex": 1,
+      "astHash": "hashB4",
+      "codeunitName": "Sales Post Mgt.",
+      "operatorMajor": 1,
+      "runner": "fenced",
+      "durationMs": 0,
+      "procedureName": "ArchiveBatch",
+      "startIndex": 900,
+      "endIndex": 930,
+      "originalText": "ArchiveLines(SalesHeader);",
+      "mutatedText": "",
+      "coveringTests": [],
+      "failureNote": "client timer fired after 60000ms waiting for 'Sales Post Tests.PostBatchUpdatesLedger' — server outcome unknown",
+      "cause": "deadline-exceeded"
+    },
+    {
+      "mutantCode": "M0008",
+      "file": "Al/Codeunit/Codeunit 50101 Sales Post Mgt.al",
+      "line": 80,
+      "operatorName": "lethal.remove-setrange",
+      "verdict": "known-survivor",
+      "batchIndex": 1,
+      "astHash": "hashB5",
+      "codeunitName": "Sales Post Mgt.",
+      "operatorMajor": 1,
+      "runner": "fenced",
+      "durationMs": 0,
+      "procedureName": "FilterOpenBatches",
+      "startIndex": 1000,
+      "endIndex": 1030,
+      "originalText": "Batch.SetRange(Status, Status::Open);",
+      "mutatedText": "",
+      "coveringTests": []
+    },
+    {
+      "mutantCode": "M0009",
+      "file": "Al/Codeunit/Codeunit 50102 Sales Approval Mgt.al",
+      "line": 15,
+      "operatorName": "lethal.void-method-call",
+      "verdict": "killed",
+      "batchIndex": 2,
+      "astHash": "hashC1",
+      "codeunitName": "Sales Approval Mgt.",
+      "operatorMajor": 1,
+      "runner": "client-services",
+      "durationMs": 91234,
+      "procedureName": "ApproveBatch",
+      "startIndex": 200,
+      "endIndex": 240,
+      "originalText": "SendApprovalRequest(SalesHeader);",
+      "mutatedText": "",
+      "coveringTests": [
+        "Sales Approval Tests.ApproveBatchSendsRequest"
+      ],
+      "coverageAttribution": "exact",
+      "carried": true,
+      "killingTest": "Sales Approval Tests.ApproveBatchSendsRequest"
+    },
+    {
+      "mutantCode": "M0010",
+      "file": "Al/Codeunit/Codeunit 50102 Sales Approval Mgt.al",
+      "line": 28,
+      "operatorName": "lethal.negate-condition",
+      "verdict": "survived",
+      "batchIndex": 2,
+      "astHash": "hashC2",
+      "codeunitName": "Sales Approval Mgt.",
+      "operatorMajor": 1,
+      "runner": "client-services",
+      "durationMs": 733,
+      "procedureName": "ApproveBatch",
+      "startIndex": 400,
+      "endIndex": 440,
+      "originalText": "if ApprovalStatus = ApprovalStatus::Pending then",
+      "mutatedText": "if not (ApprovalStatus = ApprovalStatus::Pending) then",
+      "coveringTests": [
+        "Sales Approval Tests.ApproveBatchSendsRequest"
+      ],
+      "coverageAttribution": "exact",
+      "guardObserved": true
+    },
+    {
+      "mutantCode": "M0012",
+      "file": "Al/Codeunit/Codeunit 50102 Sales Approval Mgt.al",
+      "line": 40,
+      "operatorName": "lethal.negate-condition",
+      "verdict": "error",
+      "batchIndex": 2,
+      "astHash": "hashC3",
+      "codeunitName": "Sales Approval Mgt.",
+      "operatorMajor": 1,
+      "runner": "fenced",
+      "durationMs": 0,
+      "procedureName": "ApproveBatch",
+      "startIndex": 600,
+      "endIndex": 640,
+      "originalText": "until Queue.Next() = 0;",
+      "mutatedText": "until Queue.Next() <> 0;",
+      "coveringTests": [],
+      "failureNote": "not re-run on resume: a prior run's execution of this mutant could not be confirmed complete and stranded the tier. A mutant that never terminates reproduces this every time and blocks every mutant behind it, so it is skipped rather than retried — pass --retry-stranded to attempt it anyway. It is NOT scored either way."
+    },
+    {
+      "mutantCode": "M0013",
+      "file": "Al/Codeunit/Codeunit 50102 Sales Approval Mgt.al",
+      "line": 42,
+      "operatorName": "lethal.negate-condition",
+      "verdict": "error",
+      "batchIndex": 2,
+      "astHash": "hashC4",
+      "codeunitName": "Sales Approval Mgt.",
+      "operatorMajor": 1,
+      "runner": "fenced",
+      "durationMs": 0,
+      "procedureName": "ApproveBatch",
+      "startIndex": 650,
+      "endIndex": 690,
+      "originalText": "while Queue.Next() <> 0 do",
+      "mutatedText": "while Queue.Next() = 0 do",
+      "coveringTests": [],
+      "failureNote": "not re-run on resume: a prior run's execution of this mutant could not be confirmed complete and stranded the tier. A mutant that never terminates reproduces this every time and blocks every mutant behind it, so it is skipped rather than retried — pass --retry-stranded to attempt it anyway. It is NOT scored either way."
+    },
+    {
+      "mutantCode": "M0011",
+      "file": "Al/Table/Table 50103 Sales Approval Log.al",
+      "line": 5,
+      "operatorName": "lethal.negate-condition",
+      "verdict": "survived",
+      "batchIndex": 2,
+      "astHash": "hashD1",
+      "codeunitName": "Sales Approval Log",
+      "operatorMajor": 1,
+      "runner": "fenced",
+      "durationMs": 355,
+      "procedureName": "",
+      "startIndex": 50,
+      "endIndex": 90,
+      "originalText": "if Rec.Status = Rec.Status::New then",
+      "mutatedText": "if not (Rec.Status = Rec.Status::New) then",
+      "coveringTests": [
+        "Sales Approval Tests.LogInsertsOnApproval"
+      ],
+      "coverageAttribution": "object",
+      "guardObserved": true,
+      "triggerName": "OnInsert"
+    }
+  ],
+  "unsupportedTests": [
+    "Sales Permission Tests.WritesToAppTable",
+    "Sales Post Tests.ValidatePostingRejectsClosed",
+    "Sales UI Tests.OpensApprovalCard"
+  ],
+  "notInstrumented": {
+    "totalFiles": 13,
+    "fileCount": 2,
+    "siteCount": 9,
+    "files": [
+      {
+        "file": "Al/Page/Page 50120 Sales Approval Card.al",
+        "kinds": "page_declaration",
+        "sites": 6
+      },
+      {
+        "file": "Al/Report/Report 50121 Sales Batch Summary.al",
+        "kinds": "report_declaration",
+        "sites": 3
+      }
+    ]
+  },
+  "untargetedTriggerCount": 2,
+  "only": {
+    "patterns": [
+      "Al/Codeunit/Codeunit 50100 Sales Helper.al",
+      "Al/Codeunit/Codeunit 50101 Sales Post Mgt.al",
+      "Al/Codeunit/Codeunit 50102 Sales Approval Mgt.al",
+      "Al/Table/Table 50103 Sales Approval Log.al"
+    ],
+    "excludedFileCount": 9
+  },
+  "testsOnly": [
+    "Sales Helper Tests.*",
+    "Sales Post Tests.*",
+    "Sales Approval Tests.*"
+  ],
+  "staleTestApp": {
+    "missingTests": [
+      "Sales Regression Tests.LegacyDiscountApplies"
+    ]
+  },
+  "resumedFrom": {
+    "runId": 41,
+    "carriedMutants": 1,
+    "skippedStranded": 2
+  },
+  "timings": {
+    "totalMs": 125000,
+    "generateMutationSetMs": 8000,
+    "deployMs": 42000,
+    "baselineMs": 15000,
+    "mutantsMs": 32955,
+    "perMutant": {
+      "count": 6,
+      "meanMs": 5493,
+      "medianMs": 615,
+      "p95Ms": 30000,
+      "maxMs": 30000
+    }
+  },
+  "quarantined": {
+    "reason": "in-flight-unknown: RunMutant M0007 (Sales Post Mgt..ArchiveBatch) returned no confirmation before the session's durable tier quarantine tripped"
+  },
+  "permissionCanary": {
+    "verdict": "not-mocked",
+    "readPermission": true,
+    "writePermission": true,
+    "insertSucceeded": true
+  }
+}
