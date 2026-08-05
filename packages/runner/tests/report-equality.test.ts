@@ -4,6 +4,7 @@ import { join } from "node:path";
 import type { MutantManifestEntry } from "@lethal/schemata";
 import type { RunEvent, RunEventInput } from "../src/events";
 import { buildReport } from "../src/report";
+import type { SessionReport } from "../src/report";
 import type { FoldStatics } from "../src/report-fold";
 
 // The scenario's raw facts, unchanged in shape from before the refactor — still useful as a single
@@ -57,344 +58,356 @@ function mutant(mutantId: string): MutantManifestEntry {
  * JSON is). This test's snapshot was first recorded after an exact match against that oracle was
  * confirmed field-by-field, so it proves the fold reproduces real prior behaviour, not merely that
  * the snapshot is self-consistent with whatever the fold happens to compute today.
+ *
+ * `buildScenarioReport()` runs the SAME construction fresh for every test that needs it (never a
+ * shared/cached report) — sharing one computed `report` across tests would leave the second
+ * assertion's pass/fail dependent on the first test having already run and succeeded, which is
+ * exactly the kind of accidental coupling a "test passes for the wrong reason" review needs to rule
+ * out.
  */
+function buildScenarioReport(): SessionReport {
+  const statics: FoldStatics = {
+    caps: { coverage: "procedure", deploy: "publish", isolation: "session", authoritative: true },
+    only: {
+      patterns: [
+        "Al/Codeunit/Codeunit 50100 Sales Helper.al",
+        "Al/Codeunit/Codeunit 50101 Sales Post Mgt.al",
+        "Al/Codeunit/Codeunit 50102 Sales Approval Mgt.al",
+        "Al/Table/Table 50103 Sales Approval Log.al",
+      ],
+    },
+    testsOnly: ["Sales Helper Tests.*", "Sales Post Tests.*", "Sales Approval Tests.*"],
+    stopHungSessions: true,
+  };
+
+  const events: RunEventInput[] = [
+    {
+      type: "mutation-set-generated",
+      siteCount: 13,
+      deployedCount: 13,
+      totalFiles: 13,
+      instrumentableFiles: 4,
+      excludedByOnly: 9,
+      notInstrumentedFiles: [
+        {
+          file: "Al/Page/Page 50120 Sales Approval Card.al",
+          kinds: "page_declaration",
+          sites: 6,
+        },
+        {
+          file: "Al/Report/Report 50121 Sales Batch Summary.al",
+          kinds: "report_declaration",
+          sites: 3,
+        },
+      ],
+    },
+    // Every discovered test — codeunitName/file only reach the report (`SessionReport.testFiles`
+    // / `validity.baselineTests.total`); the method name is otherwise unobserved here, so any
+    // distinct name per entry is fine.
+    {
+      type: "tests-discovered",
+      tests: [
+        {
+          codeunitId: 50110,
+          codeunitName: "Sales Helper Tests",
+          method: "T1",
+          file: "Al/Codeunit/Codeunit 50110 Sales Helper Tests.al",
+        },
+        {
+          codeunitId: 50110,
+          codeunitName: "Sales Helper Tests",
+          method: "T2",
+          file: "Al/Codeunit/Codeunit 50110 Sales Helper Tests.al",
+        },
+        {
+          codeunitId: 50110,
+          codeunitName: "Sales Helper Tests",
+          method: "T3",
+          file: "Al/Codeunit/Codeunit 50110 Sales Helper Tests.al",
+        },
+        {
+          codeunitId: 50111,
+          codeunitName: "Sales Post Tests",
+          method: "T1",
+          file: "Al/Codeunit/Codeunit 50111 Sales Post Tests.al",
+        },
+        {
+          codeunitId: 50111,
+          codeunitName: "Sales Post Tests",
+          method: "T2",
+          file: "Al/Codeunit/Codeunit 50111 Sales Post Tests.al",
+        },
+        {
+          codeunitId: 50111,
+          codeunitName: "Sales Post Tests",
+          method: "T3",
+          file: "Al/Codeunit/Codeunit 50111 Sales Post Tests.al",
+        },
+        {
+          codeunitId: 50111,
+          codeunitName: "Sales Post Tests",
+          method: "T4",
+          file: "Al/Codeunit/Codeunit 50111 Sales Post Tests.al",
+        },
+        {
+          codeunitId: 50112,
+          codeunitName: "Sales Approval Tests",
+          method: "T1",
+          file: "Al/Codeunit/Codeunit 50112 Sales Approval Tests.al",
+        },
+        {
+          codeunitId: 50112,
+          codeunitName: "Sales Approval Tests",
+          method: "T2",
+          file: "Al/Codeunit/Codeunit 50112 Sales Approval Tests.al",
+        },
+        {
+          codeunitId: 50112,
+          codeunitName: "Sales Approval Tests",
+          method: "T3",
+          file: "Al/Codeunit/Codeunit 50112 Sales Approval Tests.al",
+        },
+        {
+          codeunitId: 50113,
+          codeunitName: "Sales Permission Tests",
+          method: "WritesToAppTable",
+          file: "Al/Codeunit/Codeunit 50113 Sales Permission Tests.al",
+        },
+        { codeunitId: 50114, codeunitName: "Sales UI Tests", method: "OpensApprovalCard" },
+      ],
+    },
+    // Only the tests that did NOT pass, or that carry a classification, need a verdict here — the
+    // fold derives `unsupportedTests` from outcome alone and `staleTestApp`/`permissionsRefused`/
+    // `testPageUnsupported` from classification alone (both independent of each other, per
+    // events.ts's own doc comment); an unlisted test is simply "passed, nothing to say".
+    {
+      type: "baseline-batch-finished",
+      batchIndex: 0,
+      verdicts: [
+        {
+          name: "Sales Permission Tests.WritesToAppTable",
+          outcome: "fail",
+          classification: ["tests-permission-refused"],
+        },
+        {
+          name: "Sales Post Tests.ValidatePostingRejectsClosed",
+          outcome: "fail",
+          classification: [],
+        },
+        {
+          name: "Sales UI Tests.OpensApprovalCard",
+          outcome: "fail",
+          classification: ["tests-testpage-unsupported"],
+        },
+        // The stale-test-app case: outcome "skip" (never fail/error) so it does NOT also join
+        // `unsupportedTests` — a real `NO_RESULT_FOR_METHOD` verdict is outcome:"error" in
+        // reality, which WOULD also count as unsupported; this fixture deliberately keeps the
+        // two apart to exercise them as independently as the fields themselves are.
+        {
+          name: "Sales Regression Tests.LegacyDiscountApplies",
+          outcome: "skip",
+          classification: ["stale-test-app"],
+        },
+      ],
+    },
+    {
+      type: "resume-resolved",
+      fromRunId: 41,
+      mode: "last",
+      carryableCount: 1,
+      strandedKeyCount: 2,
+      retryStranded: false,
+    },
+    {
+      type: "permission-canary",
+      result: {
+        verdict: "not-mocked",
+        readPermission: true,
+        writePermission: true,
+        insertSucceeded: true,
+      },
+    },
+    // Batch 0
+    { type: "phase-entered", phase: "deploy" },
+    {
+      type: "mutant-scored",
+      mutant: mutant("M0001"),
+      verdict: "killed",
+      batchIndex: 0,
+      durationMs: 842,
+      killingTest: "Sales Helper Tests.ComputeTotalMultipliesQtyByPrice",
+      coveringTests: ["Sales Helper Tests.ComputeTotalMultipliesQtyByPrice"],
+      coverageAttribution: "exact",
+      guardObserved: true,
+    },
+    {
+      type: "mutant-scored",
+      mutant: mutant("M0002"),
+      verdict: "survived",
+      batchIndex: 0,
+      durationMs: 615,
+      coveringTests: ["Sales Helper Tests.FilterLinesReturnsSubset"],
+      coverageAttribution: "object",
+      guardObserved: true,
+      runner: "fenced",
+    },
+    {
+      type: "mutant-scored",
+      mutant: mutant("M0003"),
+      verdict: "no-coverage",
+      batchIndex: 0,
+      durationMs: 0,
+      coveringTests: [],
+    },
+    // Batch 1
+    { type: "phase-entered", phase: "deploy" },
+    {
+      type: "mutant-scored",
+      mutant: mutant("M0004"),
+      verdict: "timeout-killed",
+      batchIndex: 1,
+      durationMs: 30000,
+      killingTest: "Sales Post Tests.PostBatchTerminates",
+      coveringTests: ["Sales Post Tests.PostBatchTerminates"],
+      coverageAttribution: "exact",
+      runner: "fenced",
+    },
+    {
+      type: "mutant-scored",
+      mutant: mutant("M0005"),
+      verdict: "survived",
+      batchIndex: 1,
+      durationMs: 410,
+      coveringTests: [
+        "Sales Post Tests.PostBatchTerminates",
+        "Sales Post Tests.PostBatchUpdatesLedger",
+      ],
+      coverageAttribution: "all-green",
+      guardObserved: false,
+    },
+    {
+      // R59/R35: the kill-confirmation call site's OWN facts, not derived from
+      // `baseline-batch-finished` — see the doc comment on `mutant-scored.runnerDisagreementTest`
+      // (events.ts). `cause: "unstable"` is decided at the SAME instant.
+      type: "mutant-scored",
+      mutant: mutant("M0006"),
+      verdict: "error",
+      batchIndex: 1,
+      durationMs: 0,
+      coveringTests: [],
+      cause: "unstable",
+      failureNote:
+        "runner disagreement: 'Sales Post Tests.ValidatePostingRejectsClosed' passed on the coverage hub and failed, unmutated, on the fenced runner",
+      runnerDisagreementTest: "Sales Post Tests.ValidatePostingRejectsClosed",
+      runner: "fenced",
+    },
+    {
+      type: "mutant-scored",
+      mutant: mutant("M0007"),
+      verdict: "error",
+      batchIndex: 1,
+      durationMs: 0,
+      coveringTests: [],
+      cause: "deadline-exceeded",
+      failureNote:
+        "client timer fired after 60000ms waiting for 'Sales Post Tests.PostBatchUpdatesLedger' — server outcome unknown",
+    },
+    {
+      type: "mutant-scored",
+      mutant: mutant("M0008"),
+      verdict: "known-survivor",
+      batchIndex: 1,
+      durationMs: 0,
+      coveringTests: [],
+    },
+    // Batch 2
+    { type: "phase-entered", phase: "deploy" },
+    {
+      // R54/R69 Phase 2: carried from run 41 by --resume, on the client-services path. No
+      // `guardObserved` — `mutant-carried` has no such field (see the doc comment above).
+      type: "mutant-carried",
+      mutant: mutant("M0009"),
+      verdict: "killed",
+      fromRunId: 41,
+      batchIndex: 2,
+      priorDurationMs: 91234,
+      killingTest: "Sales Approval Tests.ApproveBatchSendsRequest",
+      coveringTests: ["Sales Approval Tests.ApproveBatchSendsRequest"],
+      coverageAttribution: "exact",
+      runner: "client-services",
+    },
+    {
+      type: "mutant-scored",
+      mutant: mutant("M0010"),
+      verdict: "survived",
+      batchIndex: 2,
+      durationMs: 733,
+      coveringTests: ["Sales Approval Tests.ApproveBatchSendsRequest"],
+      coverageAttribution: "exact",
+      guardObserved: true,
+      runner: "client-services",
+    },
+    {
+      type: "mutant-scored",
+      mutant: mutant("M0011"),
+      verdict: "survived",
+      batchIndex: 2,
+      durationMs: 355,
+      coveringTests: ["Sales Approval Tests.LogInsertsOnApproval"],
+      coverageAttribution: "object",
+      guardObserved: true,
+      runner: "fenced",
+    },
+    // R53: two mutants a prior run stranded the tier on, skipped rather than retried —
+    // `mutant-skipped-stranded`, never `mutant-scored`: the event's own type already implies
+    // "error" (events.ts). This is what backs `resumedFrom.skippedStranded: 2` with real rows.
+    {
+      type: "mutant-skipped-stranded",
+      mutant: mutant("M0012"),
+      batchIndex: 2,
+      note: "not re-run on resume: a prior run's execution of this mutant could not be confirmed complete and stranded the tier. A mutant that never terminates reproduces this every time and blocks every mutant behind it, so it is skipped rather than retried — pass --retry-stranded to attempt it anyway. It is NOT scored either way.",
+    },
+    {
+      type: "mutant-skipped-stranded",
+      mutant: mutant("M0013"),
+      batchIndex: 2,
+      note: "not re-run on resume: a prior run's execution of this mutant could not be confirmed complete and stranded the tier. A mutant that never terminates reproduces this every time and blocks every mutant behind it, so it is skipped rather than retried — pass --retry-stranded to attempt it anyway. It is NOT scored either way.",
+    },
+    {
+      type: "coverage-split",
+      batchIndex: 2,
+      untargetedTriggerCount: 2,
+      coveredCount: 0,
+      noCoverageCount: 0,
+    },
+    { type: "phase-left", phase: "generate", elapsedMs: 8000 },
+    { type: "phase-left", phase: "deploy", elapsedMs: 42000 },
+    { type: "phase-left", phase: "baseline", elapsedMs: 15000 },
+    {
+      type: "quarantined",
+      reason:
+        "in-flight-unknown: RunMutant M0007 (Sales Post Mgt..ArchiveBatch) returned no confirmation before the session's durable tier quarantine tripped",
+    },
+    { type: "session-finished", elapsedMs: 125000 },
+  ];
+
+  const stamped: RunEvent[] = events.map((e, i) => ({ ...e, seq: i + 1 }) as RunEvent);
+  return buildReport(statics, stamped);
+}
+
 describe("buildReport output is stable across the event-stream refactor", () => {
   test("an event history covering every verdict kind and the carried/stranded/quarantine paths produces a report identical to the committed snapshot", () => {
-    const statics: FoldStatics = {
-      caps: { coverage: "procedure", deploy: "publish", isolation: "session", authoritative: true },
-      only: {
-        patterns: [
-          "Al/Codeunit/Codeunit 50100 Sales Helper.al",
-          "Al/Codeunit/Codeunit 50101 Sales Post Mgt.al",
-          "Al/Codeunit/Codeunit 50102 Sales Approval Mgt.al",
-          "Al/Table/Table 50103 Sales Approval Log.al",
-        ],
-      },
-      testsOnly: ["Sales Helper Tests.*", "Sales Post Tests.*", "Sales Approval Tests.*"],
-      stopHungSessions: true,
-    };
-
-    const events: RunEventInput[] = [
-      {
-        type: "mutation-set-generated",
-        siteCount: 13,
-        deployedCount: 13,
-        totalFiles: 13,
-        instrumentableFiles: 4,
-        excludedByOnly: 9,
-        notInstrumentedFiles: [
-          {
-            file: "Al/Page/Page 50120 Sales Approval Card.al",
-            kinds: "page_declaration",
-            sites: 6,
-          },
-          {
-            file: "Al/Report/Report 50121 Sales Batch Summary.al",
-            kinds: "report_declaration",
-            sites: 3,
-          },
-        ],
-      },
-      // Every discovered test — codeunitName/file only reach the report (`SessionReport.testFiles`
-      // / `validity.baselineTests.total`); the method name is otherwise unobserved here, so any
-      // distinct name per entry is fine.
-      {
-        type: "tests-discovered",
-        tests: [
-          {
-            codeunitId: 50110,
-            codeunitName: "Sales Helper Tests",
-            method: "T1",
-            file: "Al/Codeunit/Codeunit 50110 Sales Helper Tests.al",
-          },
-          {
-            codeunitId: 50110,
-            codeunitName: "Sales Helper Tests",
-            method: "T2",
-            file: "Al/Codeunit/Codeunit 50110 Sales Helper Tests.al",
-          },
-          {
-            codeunitId: 50110,
-            codeunitName: "Sales Helper Tests",
-            method: "T3",
-            file: "Al/Codeunit/Codeunit 50110 Sales Helper Tests.al",
-          },
-          {
-            codeunitId: 50111,
-            codeunitName: "Sales Post Tests",
-            method: "T1",
-            file: "Al/Codeunit/Codeunit 50111 Sales Post Tests.al",
-          },
-          {
-            codeunitId: 50111,
-            codeunitName: "Sales Post Tests",
-            method: "T2",
-            file: "Al/Codeunit/Codeunit 50111 Sales Post Tests.al",
-          },
-          {
-            codeunitId: 50111,
-            codeunitName: "Sales Post Tests",
-            method: "T3",
-            file: "Al/Codeunit/Codeunit 50111 Sales Post Tests.al",
-          },
-          {
-            codeunitId: 50111,
-            codeunitName: "Sales Post Tests",
-            method: "T4",
-            file: "Al/Codeunit/Codeunit 50111 Sales Post Tests.al",
-          },
-          {
-            codeunitId: 50112,
-            codeunitName: "Sales Approval Tests",
-            method: "T1",
-            file: "Al/Codeunit/Codeunit 50112 Sales Approval Tests.al",
-          },
-          {
-            codeunitId: 50112,
-            codeunitName: "Sales Approval Tests",
-            method: "T2",
-            file: "Al/Codeunit/Codeunit 50112 Sales Approval Tests.al",
-          },
-          {
-            codeunitId: 50112,
-            codeunitName: "Sales Approval Tests",
-            method: "T3",
-            file: "Al/Codeunit/Codeunit 50112 Sales Approval Tests.al",
-          },
-          {
-            codeunitId: 50113,
-            codeunitName: "Sales Permission Tests",
-            method: "WritesToAppTable",
-            file: "Al/Codeunit/Codeunit 50113 Sales Permission Tests.al",
-          },
-          { codeunitId: 50114, codeunitName: "Sales UI Tests", method: "OpensApprovalCard" },
-        ],
-      },
-      // Only the tests that did NOT pass, or that carry a classification, need a verdict here — the
-      // fold derives `unsupportedTests` from outcome alone and `staleTestApp`/`permissionsRefused`/
-      // `testPageUnsupported` from classification alone (both independent of each other, per
-      // events.ts's own doc comment); an unlisted test is simply "passed, nothing to say".
-      {
-        type: "baseline-batch-finished",
-        batchIndex: 0,
-        verdicts: [
-          {
-            name: "Sales Permission Tests.WritesToAppTable",
-            outcome: "fail",
-            classification: ["tests-permission-refused"],
-          },
-          {
-            name: "Sales Post Tests.ValidatePostingRejectsClosed",
-            outcome: "fail",
-            classification: [],
-          },
-          {
-            name: "Sales UI Tests.OpensApprovalCard",
-            outcome: "fail",
-            classification: ["tests-testpage-unsupported"],
-          },
-          // The stale-test-app case: outcome "skip" (never fail/error) so it does NOT also join
-          // `unsupportedTests` — a real `NO_RESULT_FOR_METHOD` verdict is outcome:"error" in
-          // reality, which WOULD also count as unsupported; this fixture deliberately keeps the
-          // two apart to exercise them as independently as the fields themselves are.
-          {
-            name: "Sales Regression Tests.LegacyDiscountApplies",
-            outcome: "skip",
-            classification: ["stale-test-app"],
-          },
-        ],
-      },
-      {
-        type: "resume-resolved",
-        fromRunId: 41,
-        mode: "last",
-        carryableCount: 1,
-        strandedKeyCount: 2,
-        retryStranded: false,
-      },
-      {
-        type: "permission-canary",
-        result: {
-          verdict: "not-mocked",
-          readPermission: true,
-          writePermission: true,
-          insertSucceeded: true,
-        },
-      },
-      // Batch 0
-      { type: "phase-entered", phase: "deploy" },
-      {
-        type: "mutant-scored",
-        mutant: mutant("M0001"),
-        verdict: "killed",
-        batchIndex: 0,
-        durationMs: 842,
-        killingTest: "Sales Helper Tests.ComputeTotalMultipliesQtyByPrice",
-        coveringTests: ["Sales Helper Tests.ComputeTotalMultipliesQtyByPrice"],
-        coverageAttribution: "exact",
-        guardObserved: true,
-      },
-      {
-        type: "mutant-scored",
-        mutant: mutant("M0002"),
-        verdict: "survived",
-        batchIndex: 0,
-        durationMs: 615,
-        coveringTests: ["Sales Helper Tests.FilterLinesReturnsSubset"],
-        coverageAttribution: "object",
-        guardObserved: true,
-        runner: "fenced",
-      },
-      {
-        type: "mutant-scored",
-        mutant: mutant("M0003"),
-        verdict: "no-coverage",
-        batchIndex: 0,
-        durationMs: 0,
-        coveringTests: [],
-      },
-      // Batch 1
-      { type: "phase-entered", phase: "deploy" },
-      {
-        type: "mutant-scored",
-        mutant: mutant("M0004"),
-        verdict: "timeout-killed",
-        batchIndex: 1,
-        durationMs: 30000,
-        killingTest: "Sales Post Tests.PostBatchTerminates",
-        coveringTests: ["Sales Post Tests.PostBatchTerminates"],
-        coverageAttribution: "exact",
-        runner: "fenced",
-      },
-      {
-        type: "mutant-scored",
-        mutant: mutant("M0005"),
-        verdict: "survived",
-        batchIndex: 1,
-        durationMs: 410,
-        coveringTests: [
-          "Sales Post Tests.PostBatchTerminates",
-          "Sales Post Tests.PostBatchUpdatesLedger",
-        ],
-        coverageAttribution: "all-green",
-        guardObserved: false,
-      },
-      {
-        // R59/R35: the kill-confirmation call site's OWN facts, not derived from
-        // `baseline-batch-finished` — see the doc comment on `mutant-scored.runnerDisagreementTest`
-        // (events.ts). `cause: "unstable"` is decided at the SAME instant.
-        type: "mutant-scored",
-        mutant: mutant("M0006"),
-        verdict: "error",
-        batchIndex: 1,
-        durationMs: 0,
-        coveringTests: [],
-        cause: "unstable",
-        failureNote:
-          "runner disagreement: 'Sales Post Tests.ValidatePostingRejectsClosed' passed on the coverage hub and failed, unmutated, on the fenced runner",
-        runnerDisagreementTest: "Sales Post Tests.ValidatePostingRejectsClosed",
-        runner: "fenced",
-      },
-      {
-        type: "mutant-scored",
-        mutant: mutant("M0007"),
-        verdict: "error",
-        batchIndex: 1,
-        durationMs: 0,
-        coveringTests: [],
-        cause: "deadline-exceeded",
-        failureNote:
-          "client timer fired after 60000ms waiting for 'Sales Post Tests.PostBatchUpdatesLedger' — server outcome unknown",
-      },
-      {
-        type: "mutant-scored",
-        mutant: mutant("M0008"),
-        verdict: "known-survivor",
-        batchIndex: 1,
-        durationMs: 0,
-        coveringTests: [],
-      },
-      // Batch 2
-      { type: "phase-entered", phase: "deploy" },
-      {
-        // R54/R69 Phase 2: carried from run 41 by --resume, on the client-services path. No
-        // `guardObserved` — `mutant-carried` has no such field (see the doc comment above).
-        type: "mutant-carried",
-        mutant: mutant("M0009"),
-        verdict: "killed",
-        fromRunId: 41,
-        batchIndex: 2,
-        priorDurationMs: 91234,
-        killingTest: "Sales Approval Tests.ApproveBatchSendsRequest",
-        coveringTests: ["Sales Approval Tests.ApproveBatchSendsRequest"],
-        coverageAttribution: "exact",
-        runner: "client-services",
-      },
-      {
-        type: "mutant-scored",
-        mutant: mutant("M0010"),
-        verdict: "survived",
-        batchIndex: 2,
-        durationMs: 733,
-        coveringTests: ["Sales Approval Tests.ApproveBatchSendsRequest"],
-        coverageAttribution: "exact",
-        guardObserved: true,
-        runner: "client-services",
-      },
-      {
-        type: "mutant-scored",
-        mutant: mutant("M0011"),
-        verdict: "survived",
-        batchIndex: 2,
-        durationMs: 355,
-        coveringTests: ["Sales Approval Tests.LogInsertsOnApproval"],
-        coverageAttribution: "object",
-        guardObserved: true,
-        runner: "fenced",
-      },
-      // R53: two mutants a prior run stranded the tier on, skipped rather than retried —
-      // `mutant-skipped-stranded`, never `mutant-scored`: the event's own type already implies
-      // "error" (events.ts). This is what backs `resumedFrom.skippedStranded: 2` with real rows.
-      {
-        type: "mutant-skipped-stranded",
-        mutant: mutant("M0012"),
-        batchIndex: 2,
-        note: "not re-run on resume: a prior run's execution of this mutant could not be confirmed complete and stranded the tier. A mutant that never terminates reproduces this every time and blocks every mutant behind it, so it is skipped rather than retried — pass --retry-stranded to attempt it anyway. It is NOT scored either way.",
-      },
-      {
-        type: "mutant-skipped-stranded",
-        mutant: mutant("M0013"),
-        batchIndex: 2,
-        note: "not re-run on resume: a prior run's execution of this mutant could not be confirmed complete and stranded the tier. A mutant that never terminates reproduces this every time and blocks every mutant behind it, so it is skipped rather than retried — pass --retry-stranded to attempt it anyway. It is NOT scored either way.",
-      },
-      {
-        type: "coverage-split",
-        batchIndex: 2,
-        untargetedTriggerCount: 2,
-        coveredCount: 0,
-        noCoverageCount: 0,
-      },
-      { type: "phase-left", phase: "generate", elapsedMs: 8000 },
-      { type: "phase-left", phase: "deploy", elapsedMs: 42000 },
-      { type: "phase-left", phase: "baseline", elapsedMs: 15000 },
-      {
-        type: "quarantined",
-        reason:
-          "in-flight-unknown: RunMutant M0007 (Sales Post Mgt..ArchiveBatch) returned no confirmation before the session's durable tier quarantine tripped",
-      },
-      { type: "session-finished", elapsedMs: 125000 },
-    ];
-
-    const stamped: RunEvent[] = events.map((e, i) => ({ ...e, seq: i + 1 }) as RunEvent);
-    const report = buildReport(statics, stamped);
-    expect(report).toMatchSnapshot();
+    expect(buildScenarioReport()).toMatchSnapshot();
   });
 
   test("mutantsMs excludes the carried duration — the R54 regression", () => {
-    // M0009 (carried, priorDurationMs 91234) must not reach `mutantsMs`. Independently recomputed
-    // here (not read off the snapshot) so a snapshot that silently absorbed the bug would not also
-    // silently pass this assertion.
-    const summed = 842 + 615 + 0 + 30000 + 410 + 0 + 0 + 0 + 733 + 355; // M0001..M0011, no carried
-    expect(summed).toBe(32955);
+    // M0009 is carried (priorDurationMs 91234) and must not reach `mutantsMs`. Read off a FRESH
+    // `buildReport` call (not the snapshot, not literals recomputed by hand) — the fixed sum below
+    // (M0001..M0011's own durations, no carried) is the independent oracle this assertion checks
+    // the real output against, not the other way around.
+    const report = buildScenarioReport();
+    const expectedMutantsMs = 842 + 615 + 0 + 30000 + 410 + 0 + 0 + 0 + 733 + 355; // M0001..M0011
+    expect(expectedMutantsMs).toBe(32955);
+    expect(report.timings.mutantsMs).toBe(expectedMutantsMs);
   });
 });

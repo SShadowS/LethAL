@@ -21,14 +21,18 @@ import type { FoldStatics } from "../../src/report-fold";
  * — needed each diff to stay a one-line rename (`buildReport(` → `legacyBuildReport(`), not a
  * rewrite of every literal into a sequence of event-builder calls.
  *
- * To keep the risk bounded, this shim explicitly THROWS rather than silently accepting the two
- * impossible combinations found so far: a carried outcome that also sets `guardObserved` (the real
- * carried-verdict call site, orchestrator.ts, passes `guardObserved: undefined` unconditionally —
- * see the throw below), and more `runnerDisagreementTests` entries than outcomes with
- * `cause: "unstable"` to attach them to (the real coupling is 1:1, decided at the same call site,
- * same instant, as the cause itself). It does NOT attempt to validate every other invariant `record()`
- * upholds — this is a migration aid for fixtures that already existed, not a general-purpose
- * caller-contract checker.
+ * To keep the risk bounded, this shim (a) explicitly THROWS rather than silently accepting two
+ * impossible combinations: a carried outcome that also sets `guardObserved` (the real carried-verdict
+ * call site, orchestrator.ts, passes `guardObserved: undefined` unconditionally — see the throw
+ * below), and more `runnerDisagreementTests` entries than outcomes with `cause: "unstable"` to attach
+ * them to (the real coupling is 1:1, decided at the same call site, same instant, as the cause
+ * itself); and (b) DERIVES `mutation-set-generated.instrumentableFiles`/`siteCount`/`deployedCount`
+ * from the rest of the input rather than hardcoding them to 0 — a caller asking for any batch or
+ * outcome while claiming zero instrumentable files describes exactly the state `planArtifacts`
+ * structurally cannot produce (zero files in, zero batches out), a review round on this task caught
+ * it hardcoded here, and it is fixed the same way as the other two: honestly, not asserted away. It
+ * does NOT attempt to validate every other invariant `record()` upholds — this is a migration aid for
+ * fixtures that already existed, not a general-purpose caller-contract checker.
  *
  * New tests should build `RunEvent[]` directly (see report-fold.test.ts for the pattern) — this
  * file exists so the pre-existing ~12 call sites did not each need a hand-written event sequence,
@@ -91,17 +95,37 @@ function syntheticMutant(id: string): MutantManifestEntry {
 }
 
 export function legacyBuildReport(input: LegacyBuildReportInput): SessionReport {
+  if (input.batches < 0 || !Number.isInteger(input.batches)) {
+    throw new Error(
+      `legacyBuildReport: batches must be a non-negative integer, got ${input.batches}`,
+    );
+  }
   const events: RunEventInput[] = [];
   const push = (e: RunEventInput): void => {
     events.push(e);
   };
 
+  // Honest, not hardcoded: `instrumentableFiles: 0` while the caller ALSO asks for batches/outcomes
+  // below describes a state `planArtifacts` cannot produce (zero files in, zero batches out, by
+  // construction — `orchestrator.ts`'s `if (specs.length === 0) continue;`). A caller claiming any
+  // batch or outcome necessarily had >=1 instrumentable file in reality, so the floor below is not a
+  // guess, it is the one value consistent with what the rest of this input already asserts.
+  const derivedInstrumentableFiles = Math.max(
+    0,
+    input.notInstrumented.totalFiles -
+      input.notInstrumented.files.length -
+      (input.only?.excludedFileCount ?? 0),
+  );
+  const instrumentableFiles =
+    input.batches > 0 || input.outcomes.length > 0
+      ? Math.max(1, derivedInstrumentableFiles)
+      : derivedInstrumentableFiles;
   push({
     type: "mutation-set-generated",
-    siteCount: 0,
-    deployedCount: 0,
+    siteCount: Math.max(input.outcomes.length, instrumentableFiles),
+    deployedCount: input.outcomes.length,
     totalFiles: input.notInstrumented.totalFiles,
-    instrumentableFiles: 0,
+    instrumentableFiles,
     notInstrumentedFiles: input.notInstrumented.files,
     excludedByOnly: input.only?.excludedFileCount ?? 0,
   });
@@ -257,7 +281,11 @@ export function legacyBuildReport(input: LegacyBuildReportInput): SessionReport 
   }
 
   push({ type: "phase-left", phase: "generate", elapsedMs: input.timings.generateMutationSetMs });
-  for (let i = 0; i < Math.max(1, input.batches); i++) {
+  // `input.batches` drives the count DIRECTLY — no silent floor. `folded.batches` is counted from
+  // `phase-entered{deploy}` occurrences (report-fold.ts), so a caller asking for `batches: 0` must
+  // get zero of these, not a quietly-substituted 1: that is the honest zero-batch shape, not an
+  // omission to paper over.
+  for (let i = 0; i < input.batches; i++) {
     push({ type: "phase-entered", phase: "deploy" });
   }
   push({ type: "phase-left", phase: "deploy", elapsedMs: input.timings.deployMs });

@@ -1927,9 +1927,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     ...(cfg.emit !== undefined ? [(e: RunEvent): void => cfg.emit?.(e)] : []),
   ]);
   // run-configured (spec 2026-08-05 §A, AMENDED): the closed statics set `{ caps, only, testsOnly,
-  // stopHungSessions }`, echoed once from the same values `buildReport` still reads directly from
-  // `cfg` at the end of this function — one source, two carriages. No later event may repeat or
-  // update any of these.
+  // stopHungSessions }`, echoed once from the same `cfg` values the `statics` object built at the
+  // end of this function (and passed to `buildReport`) also reads — one source, two carriages. No
+  // later event may repeat or update any of these.
   emit({
     type: "run-configured",
     caps,
@@ -2127,13 +2127,19 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
 
   const outcomes: SessionOutcome[] = []; // store durability + Task 3 bookkeeping — see `record()`
   let baselineGreenOverall = true;
-  // R35: baseline tests BC REFUSED on permissions. Still consulted DURING the mutant loop (passed
-  // into `runMutantsOnBackend` below) to shape verdicts, e.g. `unsupportedCoverageNote` — it is not
-  // report-only bookkeeping, unlike the session-level unsupported/stale-test-app/testpage sets this
-  // function used to also accumulate purely to hand-assemble the old report bag. Those are gone
-  // (event-stream refactor, spec 2026-08-05 §A): `unsupportedTests`/`staleTestApp`/
-  // `testPageUnsupported` are now folded from `baseline-batch-finished`'s per-test classification
-  // (report-fold.ts), never accumulated here.
+  // R35/R59: session-level sinks for permissions-refused / runner-disagreement tests found at
+  // KILL-CONFIRMATION time (inside `runMutantsOnBackend`, threaded through `RunMutantsOnBackendArgs`
+  // below). Both are now DEAD for reporting — nothing reads either Set; `unsupportedCoverageNote`
+  // (called at `record()`'s routable-candidates call site) is fed `refusedThisBatch`, a SEPARATE
+  // batch-local `Map`, not this Set — and `SessionReport.permissionsRefused`/`.runnerDisagreement`
+  // are folded from the per-event fields `mutant-scored.permissionRefusedTest`/
+  // `.runnerDisagreementTest` instead (report-fold.ts), which duplicate the same facts these Sets
+  // still accumulate. Not removed here: doing so means changing `RunMutantsOnBackendArgs`'s
+  // interface and both its call sites (sequential + worker fan-out) for zero behavioural benefit —
+  // genuinely orthogonal to this task, flagged as a residual cleanup in the task report instead. The
+  // session-level unsupported/stale-test-app/testpage Sets this function used to ALSO accumulate are
+  // gone outright (not just dead) — they fed only the old hand-assembled report bag and are now
+  // folded from `baseline-batch-finished`'s per-test classification (report-fold.ts).
   const permissionRefusedTests = new Set<string>();
   const runnerDisagreementTests = new Set<string>();
   // Math.floor: a fractional workers value (e.g. 2.5) would otherwise reach
@@ -2986,9 +2992,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       // specific reason (e.g. mutant M2 hit an in-flight-unknown mid-batch): an earlier mutant M1
       // in the SAME batch may already have been recorded a (false) "survived" — from the SAME
       // unattested binary — before M2 ever ran, and skipping the gate here would let that false
-      // survivor ship in `report.mutants`/`counts` untouched. `invalidateBatchVerdicts` (below)
-      // is what protects M2's own specific diagnostic from being clobbered by this gate's generic
-      // note, not a guard here.
+      // survivor ship in `report.mutants`/`counts` untouched. The `batch-invalidated` event this
+      // emits (below) is what the fold (`foldEvents`, report-fold.ts) reads to rewrite this batch's
+      // verdicts — including protecting M2's own specific diagnostic (`cause` already set) from
+      // being clobbered by this gate's generic note, not a guard here.
       // `toExecute`, not `execute`: under `--resume` a batch may schedule nothing at all because
       // every one of its mutants carried a prior verdict. Such a batch issues no covered run, so
       // it can never earn an attestation — gating it on `execute` would fail the artifact and
@@ -2997,12 +3004,11 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       const contributed = toExecute.some((m) => (perMutantTests.get(m.mutantId)?.length ?? 0) > 0);
       if (caps.authoritative && contributed && !attestation.clean) {
         const note = `unattested artifact: no covered run observed the deployed binary's selector (artifactId ${compiled?.artifactId ?? "unknown"}) — verdicts discarded, container quarantined (design §G)`;
-        invalidateBatchVerdicts(outcomes, batchIdx, note);
         emit({ type: "batch-invalidated", batchIndex: batchIdx, reason: note });
         // R47: and durably, in the store. `--resume` reads a run's stored verdicts by
-        // `finished_at IS NULL` — the exact set this gate's in-memory-only correction used to rely
-        // on `priorSurvivorKeys` filtering OUT. Without this, resuming a quarantined run would
-        // resurrect the false survivors the gate exists to destroy.
+        // `finished_at IS NULL` — the exact set the fold's own (in-memory-only) correction above
+        // relies on `priorSurvivorKeys` filtering OUT. Without this, resuming a quarantined run
+        // would resurrect the false survivors the gate exists to destroy.
         cfg.store.invalidateBatch(runId, batchIdx, note);
         safety.latchUnsafe(note);
       }
@@ -3091,7 +3097,6 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   const lostBatchIndex = leaseSession?.lostBatchIndex;
   if (lostBatchIndex !== undefined) {
     const lostBatchNote = `lease-lost: this batch's artifact was deployed under a lease this session could no longer prove it held (${safety.reason ?? "unknown"}) — verdicts discarded (design §6)`;
-    invalidateBatchVerdicts(outcomes, lostBatchIndex, lostBatchNote);
     emit({ type: "batch-invalidated", batchIndex: lostBatchIndex, reason: lostBatchNote });
   }
 
@@ -3123,13 +3128,18 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   const totalMs = Date.now() - sessionStartedMs;
   emit({ type: "session-finished", elapsedMs: totalMs });
   // buildReport(statics, events) (spec 2026-08-05 §A): the closed statics set this run was GIVEN —
-  // the SAME four values (and the SAME conditions gating `only`/`testsOnly`) the `run-configured`
-  // event above (~line 1923) was built from, one source, two carriages — plus the FULL collected
-  // event stream. Everything else (`baselineGreen`, `batches`, `outcomes`, `unsupportedTests`, ...)
-  // is now folded from `collectedEvents` by `foldEvents` (report-fold.ts), never assembled here by
-  // hand. `outcomes`/`invalidateBatchVerdicts` above remain the store-durability and in-memory
-  // bookkeeping Task 3's contract (`record()`, `events-orchestrator.test.ts`) still exercises
-  // directly, but neither feeds this call any more — the events do.
+  // the SAME `cfg` fields the `run-configured` event above (~line 1933) was built from, one source,
+  // two carriages, plus the FULL collected event stream. The two are NOT gated identically:
+  // `run-configured` includes `only`/`testsOnly` whenever `cfg.only`/`cfg.testsOnly` is merely
+  // `!== undefined` (an empty array still gets an entry there), while `statics` below additionally
+  // requires `.length > 0` (an empty array is treated as "not narrowed", matching `buildReport`'s
+  // OLD pre-refactor condition, kept unchanged on purpose — this is a pre-existing report-facing
+  // rule, not something this task introduced). Everything beyond the four statics
+  // (`baselineGreen`, `batches`, `outcomes`, `unsupportedTests`, ...) is now folded from
+  // `collectedEvents` by `foldEvents` (report-fold.ts), never assembled here by hand. `outcomes`
+  // above remains the store-durability and in-memory bookkeeping Task 3's contract (`record()`,
+  // `events-orchestrator.test.ts`) still exercises directly, but it does not feed this call any
+  // more — the events do.
   const statics: FoldStatics = {
     caps,
     ...(cfg.only !== undefined && cfg.only.length > 0 ? { only: { patterns: cfg.only } } : {}),
@@ -3307,17 +3317,20 @@ async function runMutantsOnBackend(args: {
   /**
    * R35: session-level sink for tests BC refused on permissions, mutated in place like `outcomes`.
    *
-   * The unstable path below recognises the SAME refusal (R27) and names it per mutant. Without
-   * this, a run whose refusals surface only there emitted a per-mutant note saying "declare
-   * `TestPermissions = Disabled`" while `SessionReport.permissionsRefused` was absent and the
-   * `tests-permission-refused` caveat never fired — the same run disagreeing with itself.
+   * DEAD for reporting (event-stream refactor, spec 2026-08-05 §A): before this task, an absent
+   * read of this Set would have left `SessionReport.permissionsRefused` disagreeing with a
+   * per-mutant note naming the same refusal. That coupling no longer runs through this Set at all
+   * — `SessionReport.permissionsRefused` is now folded from `mutant-scored.permissionRefusedTest`
+   * (report-fold.ts), set at the SAME call site that still mutates this Set. Kept only because
+   * removing it means changing this interface and its two call sites for no behavioural gain — see
+   * the comment on `runSession`'s own `permissionRefusedTests` declaration.
    */
   readonly permissionRefusedTests: Set<string>;
   /**
    * R59: session-level sink for tests that failed their kill-confirmation while the backend runs a
    * HUB coverage mode — i.e. tests the hub passed and the fence failed. Mutated in place like
-   * `permissionRefusedTests`, and for the same reason: a per-mutant note saying "runner
-   * disagreement" while the report's own field was absent would be one run disagreeing with itself.
+   * `permissionRefusedTests`, and DEAD for the same reason and since the same task: folded from
+   * `mutant-scored.runnerDisagreementTest` instead now.
    */
   readonly runnerDisagreementTests: Set<string>;
   /**
@@ -3968,58 +3981,19 @@ async function handleBaselineLeaseOutcome(args: {
   );
 }
 
-/**
- * Layer 5C-A Task 8, Task 10 (design §G): rewrites every UNPROTECTED `SessionOutcome` recorded so
- * far for `batchIndex` to verdict `"error"` with `note` — used by the per-artifact fail-closed
- * attestation gate in `runSession` when a batch's artifact ran verdict-contributing (covered)
- * mutants but earned zero clean attestations. `buildReport` (`runSession`'s only call, at its
- * very return) reads `outcomes` — the in-memory array this function mutates in place — so nothing
- * invalidated here can ever leave the orchestrator as a (false) "survived".
- *
- * Two kinds of entries are deliberately left UNTOUCHED, not swept into the generic "unattested"
- * error:
- *   - `o.cause !== undefined` — already a specifically-classified error (deadline-exceeded /
- *     unstable / an in-flight-unknown quarantine via `quarantineInFlight`) produced by a DIFFERENT
- *     code path that already knows exactly why this one mutant is untrustworthy. Overwriting it
- *     with this gate's generic note would destroy strictly more specific diagnostic information
- *     for no benefit — the mutant is already `"error"` either way.
- *   - `o.verdict === "known-survivor"` — a HISTORY verdict (Task 6, `filterHistory`/
- *     `skipKnownSurvivors`): it was never re-tested against THIS batch's binary at all, so this
- *     artifact's attestation failure says nothing about it.
- * Every other verdict this batch produced — survived, killed, timeout-killed, no-coverage, or a
- * plain (cause-less) error — came from actually exercising the unattested binary and must be
- * invalidated: this is the gate's whole point (a false "survived" is the failure mode being
- * closed).
- *
- * This corrects the in-memory `outcomes[]` ONLY. `runSession` pairs it with
- * `store.invalidateBatch(runId, batchIndex, note)`, which applies the same correction durably, and
- * with `safety.latchUnsafe(note)`, which marks the whole session `report.quarantined` (spec
- * §8/§12).
- *
- * The durable half is not optional (R47). This used to rely on a quarantined run never reaching
- * `store.finishRun`, so `priorSurvivorKeys`'s `finished_at IS NOT NULL` filter would exclude its
- * stale on-disk rows from a future `--skip-known-survivors` run. `--resume` then arrived reading by
- * `finished_at IS NULL` — the exact complement — which would have made those rows not merely
- * visible but preferentially selected. Correcting the store removes the dependency on a filter in
- * an unrelated query, which was always the fragile part of that argument.
- */
-export function invalidateBatchVerdicts(
-  outcomes: SessionOutcome[],
-  batchIndex: number,
-  note: string,
-): void {
-  for (let i = 0; i < outcomes.length; i++) {
-    const o = outcomes[i];
-    if (o === undefined || o.batchIndex !== batchIndex) continue;
-    if (o.cause !== undefined || o.verdict === "known-survivor") continue; // preserved, see above
-    outcomes[i] = {
-      mutant: o.mutant,
-      verdict: "error",
-      batchIndex: o.batchIndex,
-      failureNote: note,
-    };
-  }
-}
+// Layer 5C-A Task 8, Task 10 (design §G) / event-stream refactor (spec 2026-08-05 §A):
+// `invalidateBatchVerdicts` — which used to rewrite every unprotected `SessionOutcome` for a given
+// `batchIndex` to verdict `"error"` in the in-memory `outcomes[]` array `buildReport` read — is
+// DELETED. `buildReport` no longer reads `outcomes[]` at all (it folds from `collectedEvents`), so
+// that correction had become a second, unread implementation of the SAME rule `foldEvents`
+// (report-fold.ts) already applies from the `batch-invalidated` event both call sites below still
+// emit — a coordinator review (Fix round 1, Important 5) flagged the duplication as the one place a
+// fix to the rule could land in the tested-looking copy and never reach the report. The two
+// preserved-untouched cases (`cause !== undefined`; `verdict === "known-survivor"`) and the
+// EARLIER-batches-stand behaviour are pinned by `report-fold.test.ts` now, the only implementation
+// left. Both call sites below still write the store correction (`store.invalidateBatch`) and latch
+// `safety` unsafe exactly as before — only the in-memory `outcomes[]` rewrite is gone, and it was
+// already provably unread.
 
 /**
  * Records a mutant's verdict and returns the `mutants.id` row id SQLite
@@ -4034,9 +4008,10 @@ export function invalidateBatchVerdicts(
  * invariant the design calls for ("no call site can write a store row without emitting") as
  * required-and-last would: every one of the ten call sites in this file must pass it, or the
  * build fails. `record` is the single choke point that writes both the store row and the
- * `outcomes[]` entry `buildReport` still reads today; this emits the SAME facts a third way,
- * immediately after `store.recordMutant` returns, so the two can never drift apart from a missed
- * call site.
+ * `outcomes[]` entry — store-durability/Task-3-contract bookkeeping only now; `buildReport` reads
+ * `collectedEvents` instead, never `outcomes[]` (event-stream refactor, spec 2026-08-05 §A). This
+ * still emits the SAME facts `outcomes[]` records, a second way, immediately after
+ * `store.recordMutant` returns, so the two can never drift apart from a missed call site.
  *
  * Exported ONLY for `tests/events-orchestrator.test.ts`, which drives this choke point directly
  * (against a real in-memory `ResultsStore` — the same "construct `new ResultsStore(":memory:")`

@@ -42,7 +42,6 @@ import {
   MIN_MUTANT_BUDGET_MS,
   activateOnce,
   generateMutationSet,
-  invalidateBatchVerdicts,
   narrowFilesToSubset,
   operatorTiers,
   runOnce,
@@ -5202,17 +5201,11 @@ describe("runSession — Layer 5C-B1 Task 8: lease-lost invalidation + dispatch 
     expect(rec?.detail).toContain("operation never cleared after an op-in-flight refusal");
   });
 
-  test("invalidateBatchVerdicts leaves an EARLIER batch's verdicts untouched", () => {
-    const outcomes: SessionOutcome[] = [
-      { mutant: fakeManifestEntry("M0001"), verdict: "survived", batchIndex: 0 },
-      { mutant: fakeManifestEntry("M0002"), verdict: "killed", batchIndex: 0 },
-      { mutant: fakeManifestEntry("M0003"), verdict: "survived", batchIndex: 1 },
-    ];
-    invalidateBatchVerdicts(outcomes, 1, "lease-lost");
-    expect(outcomes[0]?.verdict).toBe("survived"); // earlier batch was individually fence-validated
-    expect(outcomes[1]?.verdict).toBe("killed");
-    expect(outcomes[2]?.verdict).toBe("error");
-  });
+  // `invalidateBatchVerdicts` (the pure in-memory helper this used to unit-test directly) is
+  // deleted (event-stream refactor, spec 2026-08-05 §A, Fix round 1 Important 5) — `buildReport` no
+  // longer reads the `outcomes[]` array it corrected, and `foldEvents` applies the identical rule
+  // from the `batch-invalidated` event instead. That rule, including "an earlier batch's verdicts
+  // stand", is now pinned in `report-fold.test.ts`.
 
   test("activateOnce refuses its RETRY dispatch when the latch trips during the first attempt", async () => {
     // design §6 requires EVERY work-plane dispatch to be guarded, and the retry inside
@@ -6276,12 +6269,13 @@ describe("runSession — Layer 5C-B1 fix round 1: deploy latch guard + earlier-b
   });
 
   test("a lease lost in the SECOND batch invalidates only that batch — the first batch's verdicts stand", async () => {
-    // The "earlier batches STAND" guarantee is otherwise asserted only against the pure
-    // `invalidateBatchVerdicts` helper: nothing drives `runSession` with two batches, so a bug
-    // hardcoding `lostBatchIndex = 0` (or dropping `currentBatchIndex`'s per-batch update) would
-    // pass the whole suite. `planArtifacts` collapses everything into ONE artifact today, so the
-    // split is injected at that seam — Bun's `spyOn` on the module namespace does reach
-    // `runSession`'s own intra-module call (verified: without the spy this test sees one batch).
+    // The "earlier batches STAND" guarantee is otherwise asserted only at the fold's own unit level
+    // (`report-fold.test.ts`, against a hand-built event stream): nothing ELSE drives `runSession`
+    // with two real batches, so a bug hardcoding `lostBatchIndex = 0` (or dropping
+    // `currentBatchIndex`'s per-batch update) would pass the whole suite. `planArtifacts` collapses
+    // everything into ONE artifact today, so the split is injected at that seam — Bun's `spyOn` on
+    // the module namespace does reach `runSession`'s own intra-module call (verified: without the
+    // spy this test sees one batch).
     const dirs = await makeProject();
     await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TARGET_AL);
     await Bun.write(join(dirs.projectDir, "SandboxOther.Codeunit.al"), SECOND_FILE_AL);

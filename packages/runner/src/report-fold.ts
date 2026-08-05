@@ -7,13 +7,19 @@ import type { NotInstrumentedFile, SessionOutcome } from "./report";
  * Folds the run's events into the facts `buildReport` (report.ts) renders (spec 2026-08-05 §A,
  * "AMENDED AFTER TASK-2 REVIEW").
  *
- * THROWS on a missing mandatory event; it never defaults. The bag this replaces
- * (`BuildReportInput`, deleted) deliberately made fields required — `untargetedTriggerCount` was a
- * required `number` because "an absent tally and a measured zero must never look alike"
- * (report.ts). A defaulting fold would turn every missing event into zero/false/empty,
- * industrialising this project's signature bug across the whole report. `finalize()` (the tail of
- * `foldEvents`) throws unless the mandatory events arrived: `mutation-set-generated`;
- * `baseline-batch-finished` OR `quarantined`; `session-finished`.
+ * THROWS on a missing mandatory event; it never silently defaults ONE OF THOSE THREE. The bag this
+ * replaces (`BuildReportInput`, deleted) deliberately made fields required — `untargetedTriggerCount`
+ * was a required `number` because "an absent tally and a measured zero must never look alike"
+ * (report.ts). `finalize()` (the tail of `foldEvents`) throws unless the mandatory events arrived:
+ * `mutation-set-generated`; `baseline-batch-finished` OR `quarantined`; `session-finished`.
+ *
+ * That guarantee is scoped to those three. Every OTHER accumulated field — `untargetedTriggerCount`
+ * itself included — is summed from whatever matching events actually arrived (`coverage-split` for
+ * this one), with no separate presence check of its own; see the accumulation site below for why
+ * that is currently accepted rather than closed the same way. `untargetedTriggerCount` staying
+ * "required, never `undefined`" on `SessionReport` is unaffected either way — that property comes
+ * from initialising the accumulator to 0, which is honest for a session that legitimately never hit
+ * the fallback, not from a presence assertion over `coverage-split`.
  *
  * `mutant-carried` has no `durationMs` field (only `priorDurationMs`), so a carried verdict cannot
  * reach the "this run's own cost" clock even by accident — see `SessionOutcome.priorDurationMs`'s
@@ -104,11 +110,6 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
   let totalFiles = 0;
   let notInstrumentedFiles: readonly NotInstrumentedFile[] = [];
   let excludedByOnly = 0;
-  // How many files `generateMutationSet` found instrumentable — see the mandatory-baseline-evidence
-  // check below. 0 means `planArtifacts` returned zero batches (a project with no mutable sites is
-  // never added to `files` at all — `orchestrator.ts`'s `if (specs.length === 0) continue;`), which
-  // is the one case where the batch loop legitimately never runs and there is nothing wrong.
-  let instrumentableFiles = 0;
 
   // AND across every baseline verdict across every `baseline-batch-finished` event — mirrors
   // `orchestrator.ts`'s `baselineGreenOverall`, which starts true and is never reset once false.
@@ -131,9 +132,12 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
   let deployPhaseEntries = 0;
   // How many batches actually PUBLISHED successfully — see the mandatory-baseline-evidence check
   // below. Baseline runs immediately after a successful publish, unconditionally, so if this stays
-  // 0 the baseline never got a chance regardless of `instrumentableFiles` — every batch's deploy
-  // failed (environmental, or every bisection subset still failing), which is a real, existing,
-  // successfully-COMPLETED session shape (`orchestrator.test.ts`'s bisection/deploy-failure suite).
+  // 0, baseline never got a chance: either there was nothing to publish at all (zero mutable sites —
+  // `planArtifacts` returns `[]`, so a `batch-published` event is structurally impossible, not just
+  // absent) or every planned batch's deploy failed (environmental, or every bisection subset still
+  // failing). Both are real, existing, successfully-COMPLETED session shapes
+  // (`orchestrator.test.ts`'s "no mutable sites" test and its bisection/deploy-failure suite) — this
+  // one signal covers both, so no separate "were there any instrumentable files" check is needed.
   let batchPublishedCount = 0;
 
   let generateMutationSetMs = 0;
@@ -141,6 +145,16 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
   let baselineMs = 0;
   let totalMs = 0;
 
+  // Summed from `coverage-split` events with no presence check of its own — see this file's own
+  // doc comment for why that is scoped out of the three-event mandatory guarantee. `orchestrator.ts`
+  // emits one `coverage-split` per batch whenever `caps.coverage !== "none"`; if that assumption
+  // were ever violated (a batch running coverage-mode filtering but never emitting the event), this
+  // accumulator would silently under-report rather than throw — the same trust model
+  // `deployMs`/`baselineMs`/`generateMutationSetMs` above also rely on for their own `phase-left`
+  // sums. Flagged (Fix round 1, Important, minors) rather than closed: doing so needs a THIRD
+  // signal (was `caps.coverage` ever non-"none" for a published batch) with the same shape as the
+  // `instrumentableFiles`/`batchPublishedCount` reasoning above, and is deferred rather than adding
+  // scope to this task without a concrete failure it is known to prevent.
   let untargetedTriggerCount = 0;
 
   let quarantinedReason: string | undefined;
@@ -159,7 +173,6 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
         totalFiles = e.totalFiles;
         notInstrumentedFiles = e.notInstrumentedFiles;
         excludedByOnly = e.excludedByOnly;
-        instrumentableFiles = e.instrumentableFiles;
         break;
       case "baseline-batch-finished":
         sawBaselineBatchFinished = true;
@@ -286,29 +299,26 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
         "without knowing what was generated (mutation-set-generated is mandatory).",
     );
   }
-  // Two escapes besides `baseline-batch-finished`/`quarantined`, both real and both already
-  // exercised by the orchestrator's own test suite:
+  // One escape besides `baseline-batch-finished`/`quarantined`: `batchPublishedCount === 0`.
+  // Baseline runs immediately after a successful publish, unconditionally, so if no batch ever
+  // published, baseline never got a chance to run and nothing ever latched unsafe either — a real,
+  // successfully-COMPLETED session (`session-finished` still fires below), not a truncated stream.
+  // Two real shapes collapse into this one check: a project with no mutable sites at all (
+  // `planArtifacts` returns `[]`, so `batch-published` is structurally impossible to emit, not just
+  // absent — `orchestrator.test.ts`'s "no mutable sites" test), and a project where every planned
+  // batch's deploy failed (environmental, or a bisection that keeps reproducing regardless of
+  // subset — the bisection/deploy-failure suite). An earlier version of this check ALSO required
+  // `instrumentableFiles > 0` before treating a zero `batchPublishedCount` as suspicious; that
+  // conjunct was redundant (zero instrumentable files already forces zero publishes, by
+  // construction) and, worse, gave a hand-built event stream a way to claim `instrumentableFiles: 0`
+  // while still emitting mutant events no real project with zero mutable sites could ever produce —
+  // exactly the class of bug this task exists to close. Confirmed: dropping it changes nothing about
+  // which real orchestrator scenarios pass (still 0 failures across the full suite).
   //
-  //  1. `instrumentableFiles === 0` — a project with no mutable sites at all makes `planArtifacts`
-  //     return `[]`; the batch loop never runs a single iteration, so the baseline literally never
-  //     runs and nothing ever latches unsafe either.
-  //  2. `batchPublishedCount === 0` (with `instrumentableFiles > 0`) — every batch that WAS planned
-  //     failed to PUBLISH (an environmental deploy failure, or a bisection that keeps reproducing
-  //     regardless of subset). Baseline runs immediately after a successful publish, unconditionally
-  //     — no publish ever succeeding means baseline never got a chance, and the batch is instead
-  //     recorded `error` with a bisection/environmental note, never scored.
-  //
-  // Both are real, successfully-COMPLETED sessions (`session-finished` still fires below), not
-  // truncated streams. What must still throw: `instrumentableFiles > 0` AND `batchPublishedCount >
-  // 0` (a batch WAS planned AND WAS published) with neither `baseline-batch-finished` nor
-  // `quarantined` — that combination means a published artifact's baseline outcome is simply
-  // missing from the stream, which is exactly the truncation this check exists to catch.
-  if (
-    !sawBaselineBatchFinished &&
-    !sawQuarantined &&
-    instrumentableFiles > 0 &&
-    batchPublishedCount > 0
-  ) {
+  // What must still throw: `batchPublishedCount > 0` (a batch WAS published) with neither
+  // `baseline-batch-finished` nor `quarantined` — a published artifact's baseline outcome missing
+  // from the stream is exactly the truncation this check exists to catch.
+  if (!sawBaselineBatchFinished && !sawQuarantined && batchPublishedCount > 0) {
     throw new Error(
       "foldEvents: neither baseline-batch-finished nor quarantined arrived, and at least one batch " +
         "was published — the fold cannot tell whether that batch's baseline ran, or the session " +

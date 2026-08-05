@@ -246,7 +246,59 @@ describe("foldEvents — batch-invalidated rewrites history", () => {
     expect(o?.failureNote).toMatch(/lease lost/);
   });
 
-  test("leaves an already-classified error (a `cause`) untouched — mirrors invalidateBatchVerdicts", () => {
+  // The only remaining coverage of "an EARLIER batch's verdicts stand" — the pure
+  // `invalidateBatchVerdicts` helper this used to be unit-tested against directly (orchestrator.ts)
+  // is deleted (Fix round 1, Important 5): `buildReport` no longer reads the array it corrected, so
+  // it had become a second, unread implementation of this SAME rule.
+  test("leaves an earlier batch's verdicts untouched — only the named batch is rewritten", () => {
+    const events = seq([
+      {
+        type: "mutation-set-generated",
+        siteCount: 3,
+        deployedCount: 3,
+        totalFiles: 1,
+        instrumentableFiles: 1,
+        notInstrumentedFiles: [],
+        excludedByOnly: 0,
+      },
+      { type: "baseline-batch-finished", batchIndex: 0, verdicts: [] },
+      {
+        type: "mutant-scored",
+        mutant: mutant("M0001"),
+        verdict: "survived",
+        batchIndex: 0,
+        durationMs: 5,
+        coveringTests: [],
+      },
+      {
+        type: "mutant-scored",
+        mutant: mutant("M0002"),
+        verdict: "killed",
+        batchIndex: 0,
+        durationMs: 5,
+        coveringTests: [],
+      },
+      {
+        type: "mutant-scored",
+        mutant: mutant("M0003"),
+        verdict: "survived",
+        batchIndex: 1,
+        durationMs: 5,
+        coveringTests: [],
+      },
+      { type: "batch-invalidated", batchIndex: 1, reason: "lease-lost" },
+      { type: "session-finished", elapsedMs: 10 },
+    ]);
+    const folded = foldEvents(STATICS, events);
+    const m1 = folded.outcomes.find((x) => x.mutant.mutantId === "M0001");
+    const m2 = folded.outcomes.find((x) => x.mutant.mutantId === "M0002");
+    const m3 = folded.outcomes.find((x) => x.mutant.mutantId === "M0003");
+    expect(m1?.verdict).toBe("survived"); // earlier batch was individually fence-validated
+    expect(m2?.verdict).toBe("killed");
+    expect(m3?.verdict).toBe("error");
+  });
+
+  test("leaves an already-classified error (a `cause`) untouched", () => {
     const events = seq([
       {
         type: "mutation-set-generated",
