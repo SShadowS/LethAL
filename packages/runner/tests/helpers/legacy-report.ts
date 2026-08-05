@@ -7,14 +7,32 @@ import type { NotInstrumentedFile, SessionOutcome, SessionReport } from "../../s
 import type { FoldStatics } from "../../src/report-fold";
 
 /**
- * Converts the OLD `BuildReportInput`-shaped literal (deleted, spec 2026-08-05 §A) into an
- * equivalent event history and calls `buildReport(statics, events)`.
+ * LEGACY TEST SHIM. Converts the OLD `BuildReportInput`-shaped literal (deleted, spec 2026-08-05
+ * §A) into an equivalent event history and calls `buildReport(statics, events)`.
  *
- * Exists so the ~12 test call sites written against the old bag before this refactor need only
- * swap `buildReport(x)` for `legacyBuildReport(x)` — the object literal each test already builds is
- * unchanged, and this file carries the one-time cost of knowing how each field maps to an event.
- * New tests should prefer constructing `RunEvent[]` directly (see report-fold.test.ts) — this helper
- * is a MIGRATION aid for pre-existing fixtures, not a replacement for testing the fold itself.
+ * This is deliberately NOT the preferred shape for new tests. An event-composing builder (small
+ * functions over the real `RunEvent` union, one per event kind) would be safer in general — a bag
+ * accepted here can, in principle, describe a combination `record()` never produces, which is
+ * exactly the class of bug this refactor's own fixture conversion found twice (see
+ * report-equality.test.ts and task-4-report.md: `resumedFrom.skippedStranded` with no backing
+ * outcomes, and `guardObserved` on a carried verdict). A bag-shaped adapter was chosen anyway,
+ * ONLY because mechanically converting ~12 pre-existing test call sites — each a `buildReport({...})`
+ * literal already reviewed and already exercising real behaviour, not new arbitrary bag construction
+ * — needed each diff to stay a one-line rename (`buildReport(` → `legacyBuildReport(`), not a
+ * rewrite of every literal into a sequence of event-builder calls.
+ *
+ * To keep the risk bounded, this shim explicitly THROWS rather than silently accepting the two
+ * impossible combinations found so far: a carried outcome that also sets `guardObserved` (the real
+ * carried-verdict call site, orchestrator.ts, passes `guardObserved: undefined` unconditionally —
+ * see the throw below), and more `runnerDisagreementTests` entries than outcomes with
+ * `cause: "unstable"` to attach them to (the real coupling is 1:1, decided at the same call site,
+ * same instant, as the cause itself). It does NOT attempt to validate every other invariant `record()`
+ * upholds — this is a migration aid for fixtures that already existed, not a general-purpose
+ * caller-contract checker.
+ *
+ * New tests should build `RunEvent[]` directly (see report-fold.test.ts for the pattern) — this
+ * file exists so the pre-existing ~12 call sites did not each need a hand-written event sequence,
+ * not as a template for future ones.
  */
 export interface LegacyBuildReportInput {
   readonly caps: BackendCapabilities;
