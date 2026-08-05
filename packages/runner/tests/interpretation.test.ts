@@ -1,5 +1,43 @@
 import { describe, expect, test } from "bun:test";
-import { assertBasisResolves } from "../src/interpretation";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { type BasisResolutionDeps, assertBasisResolves } from "../src/interpretation";
+import { CAVEAT_INTERPRETATIONS } from "../src/report";
+import { ATTRIBUTION_INTERPRETATIONS } from "../src/selection";
+
+/**
+ * The universe of pointers this repo's own interpretations may cite — built from the REAL
+ * `ROADMAP.md`, not a fixture set, so this test fails the moment a shipped `basis` cites a
+ * roadmap id that has since been renumbered or removed. `assertBasisResolves` deliberately has no
+ * filesystem access of its own (see its doc comment); this is the caller that gives it one.
+ *
+ * `files` stays empty: no shipped interpretation currently cites a file basis (every one below
+ * points at a roadmap id). Extend this set the day one does.
+ */
+function realDeps(): BasisResolutionDeps {
+  const repoRoot = join(import.meta.dir, "..", "..", "..");
+  const roadmap = readFileSync(join(repoRoot, "ROADMAP.md"), "utf8");
+  const roadmapIds = new Set([...roadmap.matchAll(/\*\*(R\d+)\*\*/g)].map((m) => m[1] as string));
+  return { roadmapIds, files: new Set() };
+}
+
+test("adding an attribution variant fails to COMPILE until its interpretation exists", () => {
+  // The Record<> type is the real assertion — this test documents it and pins the count.
+  expect(Object.keys(ATTRIBUTION_INTERPRETATIONS).sort()).toEqual(["all-green", "exact", "object"]);
+});
+
+test("every caveat has an interpretation", () => {
+  expect(Object.keys(CAVEAT_INTERPRETATIONS).length).toBe(11);
+});
+
+test("every shipped interpretation's basis resolves", () => {
+  for (const i of [
+    ...Object.values(ATTRIBUTION_INTERPRETATIONS),
+    ...Object.values(CAVEAT_INTERPRETATIONS),
+  ]) {
+    expect(() => assertBasisResolves(i.basis, realDeps())).not.toThrow();
+  }
+});
 
 describe("every basis resolves — the roadmap-auditor discipline, applied to prose", () => {
   test("a roadmap id that exists is accepted", () => {

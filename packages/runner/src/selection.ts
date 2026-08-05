@@ -1,5 +1,6 @@
 import type { MutantManifestEntry } from "@lethal/schemata";
 import type { CoverageMap, TestMethodRef } from "./backend";
+import type { Interpretation } from "./interpretation";
 
 export interface IdentityKey {
   readonly astHash: string;
@@ -136,17 +137,11 @@ export interface CoverageSplit {
    *
    * `untargetedTriggerCount` above already tallies FALLBACK 2, but only as a session-wide COUNT
    * and only for table triggers. This is the per-mutant answer, and it changes what a survivor
-   * MEANS:
-   *
-   * - `exact`     — a member-level coverage match. "These tests executed this procedure and did
-   *                 not notice the change" is a real assertion gap.
-   * - `object`    — FALLBACK 1. The tests executed something in this OBJECT; whether they reached
-   *                 the mutated member is unknown. "Covered but survived" here may be no finding
-   *                 at all, and telling an agent to strengthen one of these tests can send it
-   *                 chasing a test that never ran the code.
-   * - `all-green` — FALLBACK 2. Coverage placed it nowhere; every green test was run on the
-   *                 principle that running too much beats hiding a live site. Carries the least
-   *                 information of the three.
+   * MEANS — see `ATTRIBUTION_INTERPRETATIONS` below for what each of the three values means to a
+   * reader. That prose lives there and ONLY there: an agent given a raw report once paid $18.56 to
+   * re-derive the `object` sentence by hand from this comment, and a second copy anywhere else
+   * (e.g. in the `lethal explain` projection) is exactly how such prose rots out of step with this
+   * function.
    *
    * Without this the report presents all three as one undifferentiated `coveringTests` list, i.e.
    * approximate attribution wearing the costume of an exact one. That is the same shape as R29,
@@ -157,6 +152,41 @@ export interface CoverageSplit {
 
 /** How `coverageFilter` placed a mutant's covering tests — see `CoverageSplit.attribution`. */
 export type CoverageAttribution = "exact" | "object" | "all-green";
+
+/**
+ * What each `CoverageAttribution` value MEANS for a reader, moved here verbatim from the prose
+ * that used to live only in `CoverageSplit.attribution`'s doc comment — the sentence an agent once
+ * paid $18.56 to re-derive by hand because a raw report could not carry it. This is now the single
+ * home for that meaning: whoever edits `byObject`/`byMember` precedence in this file is looking at
+ * the same constant that states what the result means, so the two cannot drift into two accounts
+ * of one fact the way a copy living in a report-rendering module could. See `Interpretation`
+ * (interpretation.ts) for the shape, and `packages/runner/tests/selection.test.ts`'s drift
+ * tripwire for the behavioural defence — co-location alone is not provable against prose.
+ */
+export const ATTRIBUTION_INTERPRETATIONS: Record<CoverageAttribution, Interpretation> = {
+  exact: {
+    meaning:
+      'A member-level coverage match. "These tests executed this procedure and did not notice ' +
+      'the change" is a real assertion gap.',
+    basis: "R29",
+  },
+  object: {
+    meaning:
+      "FALLBACK 1. The tests executed something in this OBJECT; whether they reached the " +
+      "mutated member is unknown.",
+    entailedNegative:
+      '"Covered but survived" here may be no finding at all, and telling an agent to strengthen ' +
+      "one of these tests can send it chasing a test that never ran the code.",
+    basis: "R29",
+  },
+  "all-green": {
+    meaning:
+      "FALLBACK 2. Coverage placed it nowhere; every green test was run on the principle that " +
+      "running too much beats hiding a live site.",
+    entailedNegative: "Carries the least information of the three.",
+    basis: "R29",
+  },
+};
 
 export function testKeyOf(ref: TestMethodRef): string {
   return `${ref.codeunitId}::${ref.method}`;
