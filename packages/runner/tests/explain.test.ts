@@ -166,6 +166,20 @@ function interpretationsIn(
   return Object.entries(record).flatMap(([k, v]) => interpretationsIn(v, `${path}.${k}`));
 }
 
+/**
+ * Every LEAF path in `value` — an array index collapses to `[]`, so N survivors contribute one path
+ * per field rather than N. Deliberately type-blind: a leaf is anything that is not an array or a
+ * plain object, so a new `summary: string`, a new `priority: 1` and a new `deserved: true` all show
+ * up identically.
+ */
+function leafPathsIn(value: unknown, path = "$"): readonly string[] {
+  if (Array.isArray(value)) return value.flatMap((v) => leafPathsIn(v, `${path}[]`));
+  if (typeof value === "object" && value !== null) {
+    return Object.entries(value).flatMap(([k, v]) => leafPathsIn(v, `${path}.${k}`));
+  }
+  return [path];
+}
+
 // ————————————————————————————————————————————————————————————————————————————————————————
 // The four tests the plan specifies (task-4-brief.md Step 1), verbatim in intent.
 // ————————————————————————————————————————————————————————————————————————————————————————
@@ -199,12 +213,113 @@ describe("explain — the plan's own four tests", () => {
   });
 });
 
+/** A report that reaches every emitting branch of the projection at once. */
+function fullCoverageReport(): SessionReport {
+  const base = reportFixture();
+  return {
+    ...base,
+    validity: {
+      ...base.validity,
+      reliability: "narrowed-degraded",
+      caveats: ["baseline-red", "narrowed", "tests-narrowed"],
+    },
+    baselineGreen: false,
+    mutants: [
+      survivorMutant("M0001", "exact", true),
+      survivorMutant("M0002", "object", false),
+      survivorMutant("M0003", "all-green"),
+      errorMutant("M0004", "deadline-exceeded"),
+      errorMutant("M0005", "unstable"),
+      errorMutant("M0006"),
+    ],
+    testsOnly: ["test/Posting/**"],
+    quarantined: { reason: "test in-flight-unknown running Foo Tests.PostsBatch (mutant M0004)" },
+    resumedFrom: { runId: 7, carriedMutants: 3, skippedStranded: 2 },
+  };
+}
+
+/**
+ * EVERY leaf path `ExplainOutput` may contain, and nothing else.
+ *
+ * This is the pin the identity check below cannot be. Identity is SHAPE-SCOPED: it inspects objects
+ * carrying `meaning` + `basis` and is blind to everything else, so a top-level `summary: string` or
+ * an `advice: string` on every survivor sails past it — measured, three such fields at once, 35
+ * pass / 0 fail, with "these deserve attention first" in the shipped artifact. This pin is
+ * type-blind and total instead: a new leaf at an unlisted path fails whatever its type or wording,
+ * so smuggled advice dies by CONSTRUCTION rather than by phrasing. A numeric `priority` dies here
+ * too, which matters — `SessionReport.survivorsByProcedure`'s own doc comment refuses a computed
+ * priority score for exactly that reason ("wrong for someone's context and trusted uncritically
+ * anyway").
+ *
+ * The set is also, exactly, the structure `EXPLAIN_SCHEMA_VERSION` versions. So this one test
+ * doubles as the schema's own regression gate: no field can be added, renamed or removed without
+ * landing here, where the version bump gets decided.
+ *
+ * Each entry is tagged with WHERE its value is allowed to come from. There are only four sources,
+ * and "new prose invented by the projection" is not one of them:
+ *   [registry] a member of ADMISSIBLE_INTERPRETATIONS, additionally identity-checked below
+ *   [verbatim] copied unchanged from the report, additionally equality-checked below
+ *   [enum]     a machine value from a closed set the report already carries, or derived from one
+ *   [contract] the fixed EXPLAIN_CONTRACT text
+ */
+const EXPLAIN_LEAF_PATHS: readonly string[] = [
+  "$.explainSchemaVersion", // [enum] this build's constant
+  "$.derivedFromReportSchemaVersion", // [verbatim] report.schemaVersion
+  "$.contract.structureStableUnder", // [contract]
+  "$.contract.proseIsContractual", // [contract]
+  "$.contract.note", // [contract]
+  "$.score.mutationScore", // [verbatim]
+  "$.score.reliability", // [verbatim] validity.reliability
+  "$.score.scoreDescribes", // [verbatim] validity.scoreDescribes
+  "$.score.scored", // [verbatim] validity.scoredMutants.scored
+  "$.score.recorded", // [verbatim] validity.scoredMutants.recorded
+  "$.score.excludedFromScore.errors", // [verbatim] counts.errors
+  "$.score.excludedFromScore.noCoverage", // [verbatim] counts.noCoverage
+  "$.score.excludedFromScore.knownSurvivors", // [verbatim] counts.knownSurvivors
+  "$.caveats[].caveat", // [enum] Caveat
+  "$.caveats[].interpretation.meaning", // [registry]
+  "$.caveats[].interpretation.entailedNegative", // [registry]
+  "$.caveats[].interpretation.basis", // [registry]
+  "$.survivors[].mutantCode", // [verbatim]
+  "$.survivors[].file", // [verbatim]
+  "$.survivors[].line", // [verbatim]
+  "$.survivors[].codeunitName", // [verbatim]
+  "$.survivors[].procedureName", // [verbatim]
+  "$.survivors[].operatorName", // [verbatim]
+  "$.survivors[].originalText", // [verbatim]
+  "$.survivors[].mutatedText", // [verbatim]
+  "$.survivors[].attribution", // [enum] CoverageAttribution
+  "$.survivors[].executionProven", // [enum] derived: attribution === "exact"
+  "$.survivors[].coveringTests[]", // [verbatim]
+  "$.survivors[].guardEvidence", // [enum] GuardEvidence
+  "$.survivors[].interpretation.meaning", // [registry]
+  "$.survivors[].interpretation.entailedNegative", // [registry]
+  "$.survivors[].interpretation.basis", // [registry]
+  "$.survivors[].guardInterpretation.meaning", // [registry]
+  "$.survivors[].guardInterpretation.entailedNegative", // [registry]
+  "$.survivors[].guardInterpretation.basis", // [registry]
+  "$.notMeasured[].mutantCode", // [verbatim]
+  "$.notMeasured[].file", // [verbatim]
+  "$.notMeasured[].line", // [verbatim]
+  "$.notMeasured[].operatorName", // [verbatim]
+  "$.notMeasured[].cause", // [enum] MutantErrorCause
+  "$.notMeasured[].failureNote", // [verbatim]
+  "$.notMeasured[].interpretation.meaning", // [registry]
+  "$.notMeasured[].interpretation.entailedNegative", // [registry]
+  "$.notMeasured[].interpretation.basis", // [registry]
+  "$.toolConditions[].condition", // [enum] ToolCondition
+  "$.toolConditions[].count", // [verbatim] resumedFrom.skippedStranded
+  "$.toolConditions[].detail", // [verbatim] quarantined.reason
+  "$.toolConditions[].interpretation.meaning", // [registry]
+  "$.toolConditions[].interpretation.entailedNegative", // [registry]
+  "$.toolConditions[].interpretation.basis", // [registry]
+];
+
 // ————————————————————————————————————————————————————————————————————————————————————————
-// The admissibility mechanism itself. The regex above is a lexical spot-check: it catches three
-// phrasings and nothing else, and a projection that wrote "strengthen these 19 tests" would sail
-// straight through it. THIS is the test that decides what ships — every interpretation the
-// projection emits must be REFERENCE-IDENTICAL to a member of the registry, so prose written
-// inline in explain.ts cannot reach the output at all, whatever it says.
+// The admissibility mechanism itself. The brief's regex is a lexical spot-check over three
+// phrasings; a projection writing "these 19 deserve attention first" sails straight through it,
+// which was measured. The two tests below are what decide what ships, and it takes BOTH: identity
+// stops an inline Interpretation, the path pin stops a new field of any type at all.
 //
 // The registry members are, by construction, keyed to a machine value and co-located with it
 // (report.ts / selection.ts) and carry a basis that `interpretation.test.ts` resolves against the
@@ -227,37 +342,60 @@ describe("explain — the admissibility rule, made executable", () => {
   });
 
   test("every interpretation in the output is a registry member BY IDENTITY", () => {
-    // Exercised over a report that reaches every emitting branch at once.
-    const base = reportFixture();
-    const out = explain({
-      ...base,
-      validity: {
-        ...base.validity,
-        reliability: "narrowed-degraded",
-        caveats: ["baseline-red", "narrowed", "tests-narrowed"],
-      },
-      baselineGreen: false,
-      mutants: [
-        survivorMutant("M0001", "exact", true),
-        survivorMutant("M0002", "object", false),
-        survivorMutant("M0003", "all-green"),
-        errorMutant("M0004", "deadline-exceeded"),
-        errorMutant("M0005", "unstable"),
-        errorMutant("M0006"),
-      ],
-      testsOnly: ["test/Posting/**"],
-      quarantined: { reason: "test in-flight-unknown running Foo Tests.PostsBatch (mutant M0004)" },
-      resumedFrom: { runId: 7, carriedMutants: 3, skippedStranded: 2 },
-    });
-    const found = interpretationsIn(out);
+    const found = interpretationsIn(explain(fullCoverageReport()));
     expect(found.length).toBeGreaterThan(6);
     const foreign = found.filter((f) => !registry.has(f.value)).map((f) => f.path);
     expect(foreign).toEqual([]);
   });
 
+  test("the output carries NO leaf at an unpinned path — whatever its type or wording", () => {
+    // The fix-round-1 correction. Identity above is shape-scoped and cannot see a plain
+    // `summary`/`advice`/`priority` field; this can, because it knows nothing about shape.
+    const unpinned = [...new Set(leafPathsIn(explain(fullCoverageReport())))].filter(
+      (p) => !EXPLAIN_LEAF_PATHS.includes(p),
+    );
+    expect(unpinned).toEqual([]);
+  });
+
+  test("the pin has no dead entries — every pinned path is reachable", () => {
+    // The other direction: a path left behind by a removed field would silently license anything
+    // later reintroduced under that name. `fullCoverageReport` exists to reach every branch, so
+    // every pinned path must appear in its projection.
+    const produced = new Set(leafPathsIn(explain(fullCoverageReport())));
+    expect(EXPLAIN_LEAF_PATHS.filter((p) => !produced.has(p))).toEqual([]);
+  });
+
+  test("every [verbatim] path really is verbatim — the projection copies, it does not compose", () => {
+    const report = fullCoverageReport();
+    const out = explain(report);
+    expect(out.derivedFromReportSchemaVersion).toBe(report.schemaVersion);
+    expect(out.score.scoreDescribes).toBe(report.validity.scoreDescribes);
+    expect(out.score.mutationScore).toBe(report.mutationScore);
+    expect(out.score.excludedFromScore.errors).toBe(report.counts.errors);
+    const survivorSources = report.mutants.filter((m) => m.verdict === "survived");
+    expect(out.survivors.map((s) => s.originalText)).toEqual(
+      survivorSources.map((m) => m.originalText),
+    );
+    expect(out.survivors.map((s) => s.coveringTests)).toEqual(
+      survivorSources.map((m) => m.coveringTests),
+    );
+    expect(out.notMeasured.map((n) => n.failureNote)).toEqual(
+      report.mutants.filter((m) => m.verdict === "error").map((m) => m.failureNote),
+    );
+    expect(out.toolConditions.find((c) => c.condition === "quarantined")?.detail).toBe(
+      report.quarantined?.reason,
+    );
+    expect(out.toolConditions.find((c) => c.condition === "stranded-skips")?.count).toBe(
+      report.resumedFrom?.skippedStranded,
+    );
+  });
+
   test("no shipped interpretation tells a reader what test to write", () => {
     // Scans the REGISTRY, not one fixture's output: a phrase added to a constant that a fixture
-    // happens not to trigger would otherwise ship unseen.
+    // happens not to trigger would otherwise ship unseen. NOTE this is a spot-check over known
+    // phrasings and nothing more — see `CAVEAT_INTERPRETATIONS`'s doc comment (report.ts) on what
+    // co-location does and does not buy. Target/tool discipline inside a registry constant is a
+    // human judgement at review time; no test here decides it.
     const banned = /write a test|add an assertion|you should test|strengthen (these|this|the)/i;
     const offenders = ADMISSIBLE_INTERPRETATIONS.filter(
       (i) => banned.test(i.meaning) || banned.test(i.entailedNegative ?? ""),
@@ -442,6 +580,64 @@ describe("assertExplainableReport — a foreign report is refused, never silentl
     expect(() => explain(bad)).toThrow(/M0001/);
   });
 
+  test("an unrecognised VERDICT throws — the empty-vs-empty collision, closed", () => {
+    // Measured before the fix: corrupting every "survived" to "Survived" in rung1 produced a
+    // projection byte-identical to the same report with `mutants: []`. 107 survivors gone, caveats
+    // and mutationScore unchanged, nothing said.
+    const bad = reportFixture({
+      mutants: [{ ...survivorMutant("M0001", "exact", true), verdict: "Survived" }],
+    } as unknown as Partial<SessionReport>);
+    expect(() => explain(bad)).toThrow(MalformedReportError);
+    expect(() => explain(bad)).toThrow(/Survived/);
+    expect(() => explain(bad)).toThrow(/timeout-killed/); // the closed set is named
+  });
+
+  test("a corrupt verdict does NOT project to the same thing as no mutants at all", () => {
+    // The property the throw exists for, stated directly rather than left implied by the throw.
+    const corrupt = reportFixture({
+      mutants: [{ ...survivorMutant("M0001", "exact", true), verdict: "Survived" }],
+    } as unknown as Partial<SessionReport>);
+    const emptied = reportFixture({ mutants: [] });
+    let corruptOut: string;
+    try {
+      corruptOut = JSON.stringify(explain(corrupt));
+    } catch (err) {
+      corruptOut = `THREW: ${err instanceof Error ? err.name : String(err)}`;
+    }
+    expect(corruptOut).not.toBe(JSON.stringify(explain(emptied)));
+    expect(corruptOut).toBe("THREW: MalformedReportError");
+  });
+
+  test("a non-boolean guardObserved throws rather than coercing a DECISIVE state", () => {
+    // `null` would coerce to `not-observed` — the state meaning the mutated code was never reached,
+    // which moves a mutant out of the survivor reading entirely. `"false"` would coerce the other
+    // way, to `observed`.
+    for (const value of [null, "false", "no", 0, 1]) {
+      const bad = reportFixture({
+        mutants: [{ ...survivorMutant("M0001", "exact"), guardObserved: value }],
+      } as unknown as Partial<SessionReport>);
+      expect(() => explain(bad)).toThrow(MalformedReportError);
+      expect(() => explain(bad)).toThrow(/guardObserved/);
+    }
+  });
+
+  test("a malformed `quarantined` throws rather than emitting a condition with a null detail", () => {
+    for (const value of [null, "held", {}, { reason: 7 }]) {
+      const bad = reportFixture({ quarantined: value } as unknown as Partial<SessionReport>);
+      expect(() => explain(bad)).toThrow(MalformedReportError);
+    }
+  });
+
+  test("a non-integer `resumedFrom.skippedStranded` throws rather than becoming a string count", () => {
+    for (const value of ["2", 1.5, -1, null]) {
+      const bad = reportFixture({
+        resumedFrom: { runId: 7, carriedMutants: 3, skippedStranded: value },
+      } as unknown as Partial<SessionReport>);
+      expect(() => explain(bad)).toThrow(MalformedReportError);
+      expect(() => explain(bad)).toThrow(/skippedStranded/);
+    }
+  });
+
   test("an unrecognised error cause throws", () => {
     const bad = reportFixture({
       mutants: [{ ...errorMutant("M0003"), cause: "flaky" }],
@@ -512,6 +708,12 @@ describe("explain — the real campaign reports", () => {
         .filter((f) => !new Set<Interpretation>(ADMISSIBLE_INTERPRETATIONS).has(f.value))
         .map((f) => `${name}${f.path}`);
       expect(foreign).toEqual([]);
+      // The path pin, against real data too: the synthetic fixture reaches every branch, but only
+      // real reports prove no field appears that a hand-built fixture never provoked.
+      const unpinned = [...new Set(leafPathsIn(out))]
+        .filter((p) => !EXPLAIN_LEAF_PATHS.includes(p))
+        .map((p) => `${name}${p}`);
+      expect(unpinned).toEqual([]);
     }
   });
 

@@ -18,6 +18,7 @@ import type {
 } from "./report";
 import { ATTRIBUTION_INTERPRETATIONS } from "./selection";
 import type { CoverageAttribution } from "./selection";
+import type { MutantVerdict } from "./store";
 
 /**
  * `lethal explain <report.json>` — a projection of a finished `SessionReport` that says what the
@@ -37,9 +38,30 @@ import type { CoverageAttribution } from "./selection";
  * report already carries, (2) co-located in source with that value, and (3) carries a `basis` that
  * resolves (`assertBasisResolves`, interpretation.ts). This module therefore contains NO prose of
  * its own about a report's contents: every `Interpretation` it emits is a reference to a shared
- * constant in `report.ts` or `selection.ts`. `ADMISSIBLE_INTERPRETATIONS` below is that closed set,
- * and `explain.test.ts` asserts by object IDENTITY that nothing else reaches the output — so prose
- * written inline here cannot ship, whatever it says.
+ * constant in `report.ts` or `selection.ts`, and `ADMISSIBLE_INTERPRETATIONS` below is that closed
+ * set.
+ *
+ * TWO tests enforce that, and it takes both — this is the correction from fix round 1, where the
+ * first test alone was described as covering what it did not:
+ *
+ *   - An IDENTITY check over every `Interpretation`-shaped object in the output. This stops an
+ *     inline interpretation, and only that. It is SHAPE-SCOPED by construction, so a new
+ *     `summary: string` on the output or an `advice: string` on every survivor is invisible to it
+ *     — measured: three such fields, carrying "these deserve attention first", shipped green past
+ *     it.
+ *   - A PATH PIN over every leaf in the output (`EXPLAIN_LEAF_PATHS`, explain.test.ts). Any leaf at
+ *     an unlisted path fails, whatever its type or wording. A new field carrying advice — prose or
+ *     a priority NUMBER, which `SessionReport.survivorsByProcedure`'s own doc comment refuses for
+ *     the same reason — dies by construction rather than by phrasing.
+ *
+ * The pinned path set is also, exactly, the structure `EXPLAIN_SCHEMA_VERSION` versions: the test
+ * that stops smuggled advice is the same test that stops an unversioned schema change.
+ *
+ * What NEITHER test can do is judge whether an admissible interpretation's PROSE respects the
+ * target/tool line below. Advice added to a shared registry constant ships green — see the note on
+ * `CAVEAT_INTERPRETATIONS` (report.ts). Co-location buys keying, not editorial discipline; that
+ * half is a human judgement at review time, and saying so is better than implying a mechanism
+ * covers it.
  *
  * If a useful thing to say has no field to hang on, the fix is to add the FIELD to the report
  * first, as its own change with its own justification — never to let this projection assert
@@ -257,10 +279,29 @@ const EXPLAIN_CONTRACT: ExplainContract = {
     "a claim (a ROADMAP id, or a file) and IS stable enough to key on.",
 };
 
-/** The closed sets a report's values must belong to for this projection to key on them. */
+/**
+ * The closed sets a report's values must belong to for this projection to key on them.
+ *
+ * Each is DERIVED from a type-checked object rather than hand-listed, so a new variant of the
+ * underlying union cannot slip past: the three interpretation registries are `Record<Union, …>`
+ * (adding a variant fails to compile until an interpretation exists), and `KNOWN_VERDICTS` gets the
+ * same guarantee from `satisfies Record<MutantVerdict, 0>` — which is also why the literal is
+ * spelled out rather than being a bare array. `MutantVerdict` has no interpretation registry
+ * (nothing keys a verdict beyond the word itself), so this is where its exhaustiveness lives.
+ */
 const KNOWN_CAVEATS: ReadonlySet<string> = new Set(Object.keys(CAVEAT_INTERPRETATIONS));
 const KNOWN_ATTRIBUTIONS: ReadonlySet<string> = new Set(Object.keys(ATTRIBUTION_INTERPRETATIONS));
 const KNOWN_ERROR_CAUSES: ReadonlySet<string> = new Set(Object.keys(ERROR_CAUSE_INTERPRETATIONS));
+const KNOWN_VERDICTS: ReadonlySet<string> = new Set(
+  Object.keys({
+    killed: 0,
+    survived: 0,
+    "no-coverage": 0,
+    "timeout-killed": 0,
+    "known-survivor": 0,
+    error: 0,
+  } satisfies Record<MutantVerdict, 0>),
+);
 
 function refuse(what: string, got: unknown, closedSet?: ReadonlySet<string>): never {
   const set =
@@ -283,12 +324,33 @@ function refuse(what: string, got: unknown, closedSet?: ReadonlySet<string>): ne
  * That is dormant for those callers; `lethal explain` reads a committed report off disk and is the
  * consumer that meets it first, so this is where it stops.
  *
- * WHAT IS CHECKED, and only this: the values this projection KEYS ON. `schemaVersion`, every
- * `validity.caveats` member, every mutant's `coverageAttribution` and `cause`, and the presence of
- * `coverageAttribution` on a `survived` mutant (without it `executionProven` cannot be computed,
- * and defaulting it in either direction would be a claim the data does not support). It is NOT a
- * full structural validator: fields this projection only copies through are trusted, because a
- * wrong value there produces a visibly wrong copy rather than a confidently wrong MEANING.
+ * WHAT IS CHECKED, and the rule is exact: every value this projection BRANCHES on. Not "keys on"
+ * loosely — branching is what turns a bad value into a silently different ANSWER, so the list is
+ * decided by reading the projection for `if`/`filter`/`>` rather than by judgement:
+ *
+ *   - `schemaVersion`                      — the whole projection's meanings are pinned to it
+ *   - every `validity.caveats` member      — selects a `CAVEAT_INTERPRETATIONS` entry
+ *   - every mutant's `verdict`             — selects `survivors` vs `notMeasured` vs neither
+ *   - every mutant's `coverageAttribution` — selects an interpretation AND decides `executionProven`
+ *   - a `survived` mutant HAVING one       — without it `executionProven` cannot be computed, and
+ *                                            defaulting it either way claims what the data does not
+ *   - every mutant's `guardObserved`       — a tri-state, one of whose states (`not-observed`) moves
+ *                                            a mutant out of the survivor reading entirely
+ *   - every mutant's `cause`               — selects an `ERROR_CAUSE_INTERPRETATIONS` entry
+ *   - `quarantined` / `resumedFrom.skippedStranded` — presence and a `> 0` test emit tool conditions
+ *
+ * `verdict` is the one that shows why the rule has to be mechanical rather than intuitive.
+ * Corrupting every `"survived"` to `"Survived"` in a real report produced a projection BYTE-IDENTICAL
+ * to the same report with `mutants: []` — 107 survivors gone, `caveats` and `mutationScore`
+ * unchanged, nothing said. That is empty-vs-empty in the one command whose job is telling a reader
+ * what the data means. The realistic vector is not hand-editing: `REPORT_SCHEMA_VERSION`'s own rule
+ * is "additive fields do not require a bump", so a future `MutantVerdict` variant clears the version
+ * gate and then simply disappears here.
+ *
+ * It is still NOT a full structural validator, and the boundary is that same distinction: a value
+ * this projection only COPIES (`scoreDescribes`, `failureNote`, `counts`, `file`, `line`) is
+ * trusted, because a wrong value there produces a visibly wrong copy rather than a confidently
+ * wrong MEANING.
  *
  * Every failure THROWS. The alternative — skipping the unrecognised value — would produce a
  * projection whose empty `caveats` is indistinguishable from a genuinely unqualified run, which is
@@ -330,6 +392,23 @@ export function assertExplainableReport(value: unknown): SessionReport {
     if (typeof m !== "object" || m === null) refuse("`mutants` contains a non-object entry", m);
     const mutant = m as Record<string, unknown>;
     const where = `mutant ${JSON.stringify(mutant.mutantCode)}`;
+    // Fix round 1, Important 2. Unvalidated, a corrupted or future verdict matches neither
+    // `survived` nor `error` and the mutant vanishes from the projection with nothing said — see
+    // this function's doc comment for the measured byte-identical collision.
+    if (typeof mutant.verdict !== "string" || !KNOWN_VERDICTS.has(mutant.verdict)) {
+      refuse(`${where} has a verdict this build cannot interpret`, mutant.verdict, KNOWN_VERDICTS);
+    }
+    // Fix round 1, Important 3. `guardEvidenceOf` takes `boolean | undefined`, so within the typed
+    // world it is total; the hole is untrusted JSON reaching it through the cast. `null` would
+    // coerce to `not-observed` — the DECISIVE state, the one that says the mutated code was never
+    // reached — and `"false"` to `observed`. A tri-state `report.ts` argues that carefully for must
+    // not be settled by JS truthiness over a field nothing checked.
+    if (mutant.guardObserved !== undefined && typeof mutant.guardObserved !== "boolean") {
+      refuse(
+        `${where} has a non-boolean guardObserved, which would decide its guard evidence by coercion`,
+        mutant.guardObserved,
+      );
+    }
     const attribution = mutant.coverageAttribution;
     if (
       attribution !== undefined &&
@@ -351,6 +430,28 @@ export function assertExplainableReport(value: unknown): SessionReport {
     const cause = mutant.cause;
     if (cause !== undefined && (typeof cause !== "string" || !KNOWN_ERROR_CAUSES.has(cause))) {
       refuse(`${where} has an error cause this build cannot interpret`, cause, KNOWN_ERROR_CAUSES);
+    }
+  }
+  // The two session-level branches. `quarantined: null` would pass a bare `!== undefined` test and
+  // then emit a tool condition whose `detail` read off a null — and `skippedStranded: "2"` compares
+  // `> 0` as true, putting a string where the output declares a count.
+  const { quarantined, resumedFrom } = record;
+  if (quarantined !== undefined) {
+    if (
+      typeof quarantined !== "object" ||
+      quarantined === null ||
+      typeof (quarantined as Record<string, unknown>).reason !== "string"
+    ) {
+      refuse("`quarantined` is present but is not `{ reason: string }`", quarantined);
+    }
+  }
+  if (resumedFrom !== undefined) {
+    if (typeof resumedFrom !== "object" || resumedFrom === null) {
+      refuse("`resumedFrom` is present but is not an object", resumedFrom);
+    }
+    const skipped = (resumedFrom as Record<string, unknown>).skippedStranded;
+    if (typeof skipped !== "number" || !Number.isInteger(skipped) || skipped < 0) {
+      refuse("`resumedFrom.skippedStranded` is not a non-negative integer", skipped);
     }
   }
   return value as SessionReport;

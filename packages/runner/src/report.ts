@@ -125,6 +125,19 @@ export type Caveat =
  * file that states what the pushed value means, so the two cannot drift into two accounts of one
  * fact. Promoted from the doc comments already attached to each caveat's push site and its related
  * field below — see `Interpretation` (interpretation.ts) for the shape.
+ *
+ * WHAT CO-LOCATION BUYS, AND WHAT IT DOES NOT. It buys KEYING: an interpretation cannot exist
+ * without a machine value to hang on, cannot drift from that value's own definition, and cannot
+ * ship without a `basis` that resolves against `ROADMAP.md` (interpretation.test.ts). `lethal
+ * explain` then emits these constants BY REFERENCE and a path pin refuses any other field
+ * (explain.ts) — so free-floating prose cannot reach a consumer.
+ *
+ * It does NOT police what the prose SAYS. Target-prescriptive advice — "these deserve attention
+ * first", "consider covering this line" — added to a `meaning` below ships green through every one
+ * of those mechanisms, and was measured doing so. The rule that an interpretation states what is
+ * proven about the target and never what test to write (see explain.ts's "THE LINE") is a human
+ * judgement at review time, enforced by whoever reviews an edit to this constant. Nothing here
+ * checks it, and a reader should not believe otherwise.
  */
 export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
   "baseline-red": {
