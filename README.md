@@ -197,6 +197,7 @@ figures under [Testing](#testing) are the measured ones.)*
 | **Named refusals** | A test BC refused — permissions, or a `TestPage` the session cannot create — is reported with its cause and BC's own words, not as an unexplained baseline failure |
 | **Runner provenance** | Every verdict records which session type produced it, and the report states each execution context it actually used rather than asserting one |
 | **Operator recovery** | `lethal force-reset-lease` and `lethal clear-quarantine` recover a container stranded by a dead session |
+| **Diagnostics** | `lethal doctor` runs every pre-flight check (environment status, lease/op-marker, quarantine, control-app version, `alc`/`altool`) read-only, all at once, instead of `lethal run` discovering them one at a time |
 
 ## Prerequisites
 
@@ -261,6 +262,14 @@ If a run aborts partway, continue it instead of starting over:
 
 ```bash
 lethal run ... --resume
+```
+
+`lethal run` discovers a stopped environment, a stale control app, a quarantined tier, or a
+missing `alc`/`altool` one at a time, each only after whatever ran before it. Check all of them at
+once, read-only, before spending time on a real run:
+
+```bash
+lethal doctor --config lethal.config.json
 ```
 
 Recovery, when a session died mid-run and left the container held:

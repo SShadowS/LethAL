@@ -36,10 +36,17 @@ import type { ExecutionBackend } from "./backend";
 import { BcDevMcpBackend } from "./bcdev-backend";
 import type { BcDevConfig } from "./bcdev-backend";
 import { DeploymentVerifier } from "./deployment-verifier";
+import { runDoctor } from "./doctor";
+import type { DoctorConfig, DoctorDeps, DoctorReport } from "./doctor";
 import { EnvToolClient, EnvToolError, READS_KEYS, validateEnvToolConfig } from "./env-tool";
 import type { EnvToolBlock, EnvToolConfigSection } from "./env-tool";
 import { EnvToolPublisher } from "./env-tool-publisher";
-import { startEnvToolSession } from "./env-tool-session";
+import {
+  deriveMcpPort,
+  requireBcDevRawFields,
+  splitBaseUrl,
+  startEnvToolSession,
+} from "./env-tool-session";
 import type { EnvToolSession } from "./env-tool-session";
 import type { EventSubscriber } from "./events";
 import { HarnessVerifier } from "./harness";
@@ -418,6 +425,19 @@ export interface ForceResetLeaseCliConfig {
 }
 
 /**
+ * R109: `lethal doctor --config <path> [--project <dir>]` — every pre-flight refusal `lethal run`
+ * would otherwise discover ONE AT A TIME, run READ-ONLY and reported all at once. `--project` is
+ * optional and used only to satisfy `{projectDir}` placeholders an `envTool.resolve` block's
+ * command might reference (env-tool.ts's `renderCommand`) — doctor runs no session, so it has no
+ * `testDir`/`runId` of its own the way `lethal run` does.
+ */
+export interface DoctorCliConfig {
+  readonly mode: "doctor";
+  readonly configPath: string;
+  readonly projectDir?: string;
+}
+
+/**
  * R49: `lethal --help` / `-h`, and a bare `lethal` with no arguments at all.
  *
  * `parseArgs` runs in strict mode, so before this an unknown `--help` exited 1 with a raw
@@ -441,6 +461,7 @@ export type CliConfig =
   | ClearQuarantineCliConfig
   | ClearCeilingCliConfig
   | ForceResetLeaseCliConfig
+  | DoctorCliConfig
   | HelpCliConfig
   | VersionCliConfig;
 
@@ -449,6 +470,7 @@ const VALID_SUBCOMMANDS = [
   "clear-quarantine",
   "clear-ceiling",
   "force-reset-lease",
+  "doctor",
 ] as const;
 
 /**
@@ -483,6 +505,7 @@ USAGE
   lethal clear-quarantine --server <url> --instance <name>
   lethal clear-ceiling    --project <dir> --server <url> --instance <name> [--db <path>] [--file <name>]
   lethal force-reset-lease --server <url> --instance <name> --config <path>
+  lethal doctor            --config <path> [--project <dir>]
 
 RUN — required
   --project <dir>            AL project to mutate (the app under test)
@@ -556,6 +579,19 @@ CLEAR-CEILING — undo a publish-ceiling measurement (R90)
   is real evidence loss, and it cost a live publish failure to learn. A clear that removes NOTHING
   reports 'nothing-matched'/'nothing-recorded' and exits 1 — it did not undo anything, and the
   next run will be refused identically.
+
+DOCTOR — every pre-flight refusal, read-only, all at once (R109)
+  'lethal run' discovers a stopped environment, a stale control app, a quarantined tier, or a
+  missing alc/altool ONE AT A TIME, each after whatever ran before it. 'lethal doctor' runs every
+  one of those checks read-only and reports them all in a single pass, so a user with several
+  problems finds all of them in one round-trip instead of one slow retry per fix.
+  --config <path>            lethal.config.json (the bcdev/envTool sections every check reads)
+  --project <dir>            optional; only used to satisfy {projectDir} placeholders an
+                             envTool.resolve command might reference
+  Does NOT check: the per-file publish ceiling (needs a generated mutation manifest) or baseline
+  test health (needs an actual run) — both are printed as an explicit caveat on every invocation,
+  never silently implied as covered.
+  Exits 0 when every check passes, 1 otherwise, naming each failing check.
 
 OTHER
   -h, --help                 this text
@@ -721,6 +757,21 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
       );
     }
     return { mode: "force-reset-lease", server, serverInstance, configPath };
+  }
+
+  if (subcommand === "doctor") {
+    const configPath = values.config;
+    if (configPath === undefined || configPath === "") {
+      throw new Error(
+        "missing required --config <path> (the bcdev/envTool sections every check reads)",
+      );
+    }
+    const project = values.project;
+    return {
+      mode: "doctor",
+      configPath,
+      ...(project !== undefined && project !== "" ? { projectDir: project } : {}),
+    };
   }
 
   const projectDir = values.project;
@@ -2404,6 +2455,251 @@ function describeCeiling(c: PublishCeiling): string {
 }
 
 /**
+ * R109: printed on every `lethal doctor` invocation, success or failure — what the five checks do
+ * NOT cover, so a clean report is never misread as "everything `lethal run` might refuse on was
+ * checked". The per-file publish ceiling (`publish-ceiling.ts`) needs a generated mutation
+ * manifest's per-file guard counts, which doctor — deliberately read-only, no instrumentation
+ * step — never produces. Baseline test health needs an actual run against the target. Both are
+ * measured gaps, not oversights (see `roadmap-auditor`'s standard for what "done" needs to mean
+ * here): stating them plainly is this project's answer to exactly this shape of omission.
+ */
+export const DOCTOR_NOT_CHECKED =
+  "Not checked: the per-file publish ceiling (needs a generated mutation manifest) and baseline " +
+  "test health (needs an actual run). A clean report here does not mean `lethal run` cannot still " +
+  "refuse for either reason.";
+
+/**
+ * R109 ruling, honesty constraint 2: `requireStatus` is `Pick`ed straight off `EnvToolConfigSection`
+ * (env-tool.ts) rather than re-declared — a future rename/reshape of that field breaks THIS
+ * function at compile time instead of silently leaving `DoctorConfig.envReady` derived from a
+ * field that no longer means what it says.
+ */
+function doctorConfigFromEnvTool(
+  envTool: Pick<EnvToolConfigSection, "requireStatus"> | undefined,
+): DoctorConfig {
+  const equals = envTool?.requireStatus?.equals;
+  return equals !== undefined ? { envReady: equals } : {};
+}
+
+/**
+ * R109 ruling, honesty constraint 1: builds `DoctorDeps`/`DoctorConfig` through the SAME
+ * load-and-validate path `lethal run` uses — `validateBcDevConfig`/`validateEnvToolConfig`, the
+ * identical calls `resolveEnvToolSession`/`buildBackend` make — never a second, hand-rolled parse.
+ * A config `run` would reject (a missing `bcdev` section, a malformed `envTool` block, an
+ * `envTool.resolve` producing no `baseUrl`, …) throws HERE too, identically: that is a
+ * caller-contract violation (a broken invocation), not a "failing check" `runDoctor` could report
+ * — the split CLAUDE.md asks for between "throw on a bad call" and "report a bad state".
+ *
+ * Constraint 3 (every check calls the refusal's own machinery): `HarnessVerifier.fetchControlVersion`
+ * (harness.ts) for control-version, `QuarantineStore`/`quarantineResourceKey`/`defaultQuarantineDir`
+ * (quarantine-store.ts/resource-key.ts/orchestrator.ts — the SAME three `runSession`'s quarantine
+ * consult and `clearQuarantineFromCli` use) for quarantine, `defaultAlToolPaths`/`resolveAlToolPaths`
+ * (publisher.ts/cli.ts — the SAME pair `buildBackend` uses) for tool-paths, and `EnvToolClient`
+ * (env-tool.ts) for environment.
+ *
+ * Constraint 4 (read-only hard boundary): the environment probe below spawns ONLY the configured
+ * `envTool.resolve` blocks — never `createEnv`/`startEnv`/`publish`/`downloadSymbols`, which
+ * provision, bill, or mutate. This is the one place in `lethal doctor`'s whole call graph that
+ * spawns an external process at all, and it is scoped to that one array on purpose.
+ *
+ * `leaseState`'s honest limitation: the control app exposes no read-only peek at the machine-global
+ * lease/op-marker row — `GetOperationStatus` requires an ALREADY-HELD `(epoch, token, generation)`
+ * tuple, and doctor must not acquire one (acquiring, even to release immediately after, is a
+ * mutation of server state — exactly what the read-only boundary above exists to keep). It always
+ * reports `"clear"` — "no local evidence of a problem", not "verified clear" — and `DOCTOR_NOT_CHECKED`
+ * companion text in `renderDoctorReport` below says so; the durable local quarantine record (the
+ * "quarantine" check) is the one genuine local signal of a past strand this command can offer.
+ */
+export async function buildDoctorDeps(
+  configFile: LethalConfigFile,
+  opts: {
+    readonly projectDir?: string;
+    readonly quarantineDir?: string;
+    readonly alToolPaths?: typeof defaultAlToolPaths;
+    readonly fetchFn?: FetchFn;
+    readonly makeEnvToolClient?: (cfg: EnvToolConfigSection) => EnvToolClient;
+  } = {},
+): Promise<{ readonly cfg: DoctorConfig; readonly deps: DoctorDeps }> {
+  let envCfg: EnvToolConfigSection | undefined;
+  if (configFile.envTool !== undefined) {
+    const bcdevRaw = configFile.bcdev ?? {};
+    const bcdevDeclaredKeys = (READS_KEYS as readonly string[]).filter((key) => {
+      const v = (bcdevRaw as Record<string, unknown>)[key];
+      return typeof v === "string" && v !== "";
+    });
+    // SAME validator, SAME opts shape `resolveEnvToolSession` builds — a malformed envTool
+    // section throws here identically to `run` (constraint 1).
+    envCfg = validateEnvToolConfig(configFile.envTool, {
+      env: process.env,
+      hasPackageCachePath: Boolean(configFile.bcdev?.packageCachePath),
+      bcdevDeclaredKeys,
+    });
+    // Fail fast on the three fields the env tool itself can never supply — the SAME check
+    // `startEnvToolSession` runs as its very first statement, exported for exactly this reuse
+    // (env-tool-session.ts). `server`/`serverInstance`/credentials are deliberately NOT required
+    // here: in env-tool mode they don't exist yet (resolved later — see `resolvedBcdev` below).
+    requireBcDevRawFields(bcdevRaw);
+  } else {
+    // No envTool: this IS exactly what `run` validates (`buildBackend`/`resourceIdentityFor`/
+    // `leaseSessionFor` all call this on the SAME `configFile.bcdev`) — fail here, eagerly, rather
+    // than lazily inside whichever check happens to touch it first.
+    validateBcDevConfig(configFile.bcdev);
+  }
+  const makeClient =
+    opts.makeEnvToolClient ??
+    ((cfg: EnvToolConfigSection) => new EnvToolClient(cfg, undefined, opts.projectDir));
+  // Snapshot into a `const` so a closure below can narrow it — TS will not narrow a captured
+  // `let` across a nested arrow function even after an `!== undefined` check, since it cannot
+  // prove nothing reassigns it before the closure runs.
+  const resolvedEnvCfg = envCfg;
+
+  // Spawns ONLY `envTool.resolve` — never createEnv/startEnv/publish/downloadSymbols (constraint
+  // 4, the hard read-only boundary). Memoized: `environment`/`quarantine`/`control-version` all
+  // need the identity this produces (server/serverInstance/credentials, for an env-tool-configured
+  // project — see `resolvedBcdev` below), and `runDoctor` may call them concurrently; this ensures
+  // the external tool is spawned at most once per `lethal doctor` invocation, not once per check.
+  let resolvePromise: Promise<Record<string, string>> | undefined;
+  const resolveEnvToolOnce = (): Promise<Record<string, string>> => {
+    if (resolvedEnvCfg === undefined) return Promise.resolve({});
+    if (resolvePromise === undefined) {
+      resolvePromise = (async () => {
+        const client = makeClient(resolvedEnvCfg);
+        const supplied: Record<string, string> = {
+          envId: resolvedEnvCfg.envId ?? "",
+          projectDir: opts.projectDir ?? "",
+          testDir: "",
+          runId: "doctor",
+        };
+        const resolved: Record<string, string> = {};
+        for (const [i, block] of (resolvedEnvCfg.resolve ?? []).entries()) {
+          Object.assign(resolved, await client.run(block, `resolve[${i}]`, supplied));
+        }
+        return resolved;
+      })();
+    }
+    return resolvePromise;
+  };
+
+  /**
+   * The `BcDevConfigSection` `quarantine`/`control-version` need — `server`/`serverInstance` and
+   * OData credentials. For a directly-configured bcdev section this is exactly `run`'s own
+   * `validateBcDevConfig(configFile.bcdev)` (unchanged). For an env-tool-configured project those
+   * fields are legitimately ABSENT from the raw file (the tool supplies them) — mirrors
+   * `startEnvToolSession`'s own step 4 derivation (`splitBaseUrl`/`deriveMcpPort`, exported from
+   * env-tool-session.ts for exactly this reuse) so doctor's identity can never drift from a real
+   * run's, rather than a second, hand-rolled derivation.
+   */
+  const resolvedBcdev = async (): Promise<BcDevConfigSection> => {
+    if (resolvedEnvCfg === undefined) return validateBcDevConfig(configFile.bcdev);
+    const resolved = await resolveEnvToolOnce();
+    const baseUrl = resolved.baseUrl;
+    if (baseUrl === undefined) throw new EnvToolError("envTool.resolve produced no baseUrl");
+    const { server, serverInstance } = splitBaseUrl(
+      baseUrl,
+      resolved.server,
+      resolved.serverInstance,
+    );
+    const port = deriveMcpPort(baseUrl);
+    const username = resolved.username;
+    const password = resolved.password;
+    if (username === undefined || password === undefined) {
+      throw new EnvToolError("envTool.resolve produced no username/password");
+    }
+    return validateBcDevConfig({
+      ...(configFile.bcdev ?? {}),
+      baseUrl,
+      server,
+      serverInstance,
+      port,
+      username,
+      password,
+    });
+  };
+
+  const harnessVerifierFor = async (): Promise<HarnessVerifier> =>
+    new HarnessVerifier(odataCfgFor(await resolvedBcdev()), opts.fetchFn ?? fetch);
+
+  const envStatus = async (): Promise<string> => {
+    const resolveBlocks = resolvedEnvCfg?.resolve;
+    if (resolveBlocks !== undefined && resolveBlocks.length > 0) {
+      const resolved = await resolveEnvToolOnce();
+      if (resolved.status !== undefined) return resolved.status;
+      // `envTool.resolve` ran clean but declared no `status` read (no `requireStatus` configured)
+      // — resolve succeeding is itself the only signal available; fall through to the reachability
+      // probe below rather than reporting a status this config never asked to observe.
+    }
+    // No envTool, or one with nothing to say about status: a directly-configured container has no
+    // separate "status" concept LethAL can read — HarnessInfo answering IS the readiness signal.
+    await (await harnessVerifierFor()).verify();
+    return "Running";
+  };
+
+  const leaseState = async (): Promise<string> => "clear";
+
+  const quarantine = async (): Promise<string> => {
+    const bcdev = await resolvedBcdev();
+    const key = quarantineResourceKey({
+      server: bcdev.server,
+      serverInstance: bcdev.serverInstance,
+    });
+    const store = new QuarantineStore(opts.quarantineDir ?? defaultQuarantineDir());
+    const rec = await store.read(key);
+    return rec === null
+      ? "clear"
+      : `${rec.opKind}: ${rec.detail}, recorded ${rec.recordedAtIso}, generation ${rec.generation}`;
+  };
+
+  const controlVersion = async (): Promise<string> =>
+    (await harnessVerifierFor()).fetchControlVersion();
+
+  // Deliberately independent of `resolvedBcdev`: `alcPath`/`altoolPath` overrides are always
+  // hand-written LOCAL machine paths (never env-tool-derived), so this check must not fail just
+  // because server identity is unresolvable — it is testing something else entirely.
+  const toolPaths = async (): Promise<{ readonly alc: string; readonly altool: string }> => {
+    const discover = opts.alToolPaths ?? defaultAlToolPaths;
+    const discovered = await discover();
+    const alcPath = configFile.bcdev?.alcPath;
+    const altoolPath = configFile.bcdev?.altoolPath;
+    const resolved = resolveAlToolPaths(
+      {
+        ...(alcPath !== undefined ? { alcPath } : {}),
+        ...(altoolPath !== undefined ? { altoolPath } : {}),
+      },
+      discovered,
+    );
+    return { alc: resolved.alcPath ?? "", altool: resolved.altoolPath ?? "" };
+  };
+
+  return {
+    cfg: doctorConfigFromEnvTool(envCfg),
+    deps: { envStatus, leaseState, quarantine, controlVersion, toolPaths },
+  };
+}
+
+/** Renders a `DoctorReport` the same way every other subcommand renders its own outcome — one
+ *  named line per check, then the machine-readable summary word `clear-quarantine`/`clear-ceiling`
+ *  already use for their own top line. */
+export function renderDoctorReport(report: DoctorReport): string {
+  const lines = report.checks.map((c) => `  [${c.ok ? "ok" : "FAIL"}] ${c.name}: ${c.detail}`);
+  return [
+    report.ok ? "ok: every check passed" : "FAIL: at least one check failed",
+    ...lines,
+    "",
+    DOCTOR_NOT_CHECKED,
+  ].join("\n");
+}
+
+export async function doctorFromCli(parsed: DoctorCliConfig): Promise<number> {
+  const configFile = await loadLethalConfigFile(parsed.configPath);
+  const { cfg, deps } = await buildDoctorDeps(configFile, {
+    ...(parsed.projectDir !== undefined ? { projectDir: parsed.projectDir } : {}),
+  });
+  const report = await runDoctor(cfg, deps);
+  console.log(renderDoctorReport(report));
+  return report.ok ? 0 : 1;
+}
+
+/**
  * What `performForceResetLease` (design §8 step 2) reports back: a real reset (with the old and
  * new generation, and the new epoch), or a well-formed refusal — the generation read live from
  * `HarnessInfo` no longer matched the row's current one by the time the reset actually ran (a
@@ -2533,6 +2829,9 @@ async function main(): Promise<number> {
   }
   if (parsed.mode === "force-reset-lease") {
     return await forceResetLeaseFromCli(parsed);
+  }
+  if (parsed.mode === "doctor") {
+    return await doctorFromCli(parsed);
   }
   const report = await runFromCli(parsed);
   console.log(renderConsole(report));

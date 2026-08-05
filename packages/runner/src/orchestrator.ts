@@ -2065,7 +2065,18 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     });
   }
   const status = await cfg.backend.status();
-  if (!status.ok) throw new Error(`backend not ready: ${status.details}`);
+  // R109: `status.details` is kept VERBATIM here — this call site knows only that string, so
+  // naming a SPECIFIC cause ("environment stopped") would be an invented plausible default, this
+  // project's signature bug. It names the NEXT ACTION instead: `lethal doctor <config>` runs every
+  // pre-flight check read-only and reports them all at once, rather than this one-at-a-time
+  // refusal. Contrast `env-tool-session.ts`'s R34 refusal, which DOES measure the actual reported
+  // status and so can honestly name both cause and remedy — that message is deliberately left
+  // alone; the two are symmetric in SHAPE (both name what to do next), never in CONTENT.
+  if (!status.ok) {
+    throw new Error(
+      `backend not ready: ${status.details} — run \`lethal doctor <config>\` for a full read-only diagnosis before retrying.`,
+    );
+  }
 
   // NOTE: a prior preflight here scanned [Test] codeunit sources for
   // `TestIsolation = Function;` and aborted session-isolation backends when
