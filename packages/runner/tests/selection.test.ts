@@ -1,6 +1,5 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import {
-  ATTRIBUTION_INTERPRETATIONS,
   buildCoverageIndex,
   coverageFilter,
   filterHistory,
@@ -281,11 +280,11 @@ describe("drift tripwire: object attribution is NOT proof of execution", () => {
     const split = coverageFilter([m], index, [onlyTouchedUnrelated]);
 
     expect(split.attribution.get("M0001")).toBe("object");
-    // The covering-test list names a test that PROVABLY never touched the trigger.
+    // The covering-test list names a test that PROVABLY never touched the trigger — the
+    // behavioural fact `ATTRIBUTION_INTERPRETATIONS.object` (selection.ts) exists to warn about.
+    // Deliberately no assertion against that constant's literal wording: a legitimate reword must
+    // not turn this detector red for a non-behavioural reason.
     expect(split.covered.get("M0001")?.map((t) => t.method)).toEqual(["OnlyTouchedUnrelated"]);
-    // Cross-check against the shipped interpretation text itself, so a reader who breaks this
-    // test lands directly on the constant it is guarding.
-    expect(ATTRIBUTION_INTERPRETATIONS.object.entailedNegative).toMatch(/no finding at all/);
   });
 });
 

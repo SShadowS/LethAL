@@ -206,7 +206,10 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
     entailedNegative:
       "One confirmation cannot separate a deterministic disagreement from a genuinely flaky " +
       "test — this caveat names the CAUSE so the reader stops debugging flakiness, it does not " +
-      "mean any verdict is wrong.",
+      "mean any verdict is wrong. Distinct from `baseline-red` and `tests-permission-refused`, " +
+      "which describe the user's own tests: this describes LethAL measuring the green set on a " +
+      "different session type from the verdicts — a property of the CONFIGURATION, fixed by " +
+      "changing it.",
     basis: "R59",
   },
   "stop-hung-sessions": {
@@ -415,10 +418,10 @@ export interface SessionReport {
   readonly unsupportedTests: readonly string[];
   /**
    * Files never instrumented because no object they declare can carry the selector-var guard
-   * (R5 — see `NotInstrumentedFile`). `mutationScore` above is computed ONLY over instrumented
-   * sites: a project whose skipped files hold a large share of its code can otherwise read as a
-   * confident, near-complete score while most of the project was never measured at all. Always
-   * present; `files` is empty and `fileCount`/`siteCount` are 0 when nothing was skipped.
+   * (R5 — see `NotInstrumentedFile`). See `CAVEAT_INTERPRETATIONS["uninstrumentable-files"]` for
+   * what this means to a reader.
+   *
+   * Always present; `files` is empty and `fileCount`/`siteCount` are 0 when nothing was skipped.
    * `totalFiles` is every `.al` source file `generateMutationSet` scanned (the denominator for
    * judging how much of the project `files` represents) — it is NOT the same as `batches` or any
    * other count already in this report.
@@ -431,12 +434,11 @@ export interface SessionReport {
   };
   /**
    * R41: the `--only` narrowing this run was asked for, if any. Absent means the whole project
-   * was considered.
+   * was considered. See `CAVEAT_INTERPRETATIONS.narrowed` for what this means to a reader.
    *
-   * Present for the same reason `notInstrumented` is: `mutationScore` covers what was RUN, and a
-   * narrowed run's score describes the chosen slice, not the project. A report that recorded the
-   * score but not the narrowing would be indistinguishable from a full run at the same number —
-   * and would stay that way in the `--out` JSON, long after the console line scrolled away.
+   * Present for the same reason `notInstrumented` is: a report that recorded the score but not
+   * the narrowing would be indistinguishable from a full run at the same number — and would stay
+   * that way in the `--out` JSON, long after the console line scrolled away.
    *
    * `excludedFileCount` counts FILES, never sites: the sites in an excluded file are never
    * generated, so their number is not something this run measured (see
@@ -447,31 +449,27 @@ export interface SessionReport {
     readonly excludedFileCount: number;
   };
   /**
-   * R45: the `--tests-only` narrowing, if any. Absent means the whole suite ran at baseline.
+   * R45: the `--tests-only` narrowing, if any. Absent means the whole suite ran at baseline. See
+   * `CAVEAT_INTERPRETATIONS["tests-narrowed"]` for what this means to a reader.
    *
-   * Carried SEPARATELY from `only`, and flagged in `validity.caveats` as `tests-narrowed`,
-   * because the two narrowings differ in kind: `only` selects which mutants run and cannot change
-   * a verdict, while this one selects which TESTS run and can — a mutant whose killing test was
-   * excluded is reported `survived`. A reader comparing two runs must be able to see that one of
-   * them could not have killed everything the other did.
+   * Carried SEPARATELY from `only` — this field, not that one, is what the `tests-narrowed`
+   * caveat flags. A reader comparing two runs must be able to see that one of them could not
+   * have killed everything the other did.
    */
   readonly testsOnly?: readonly string[];
   /**
-   * R31: tests the source declares that the SERVER returned no result for, meaning the published
-   * test app does not contain them — what is deployed is older than the source being measured.
-   * Absent when every discovered test produced a result.
+   * R31: tests the source declares that the SERVER returned no result for. Absent when every
+   * discovered test produced a result. See `CAVEAT_INTERPRETATIONS["stale-test-app"]` for what
+   * this means to a reader.
    *
-   * Present because the symptom is badly disguised and has cost two debugging sessions: the
-   * baseline goes red, dozens of mutants fall to `no-coverage`, and that reads as a
-   * mutation-scoring problem. Publishing the test app is deliberately the user's own workflow, so
-   * LethAL cannot fix this — but it can name it instead of leaving a scoring puzzle.
+   * Present because the symptom is badly disguised and has cost two debugging sessions before
+   * this field existed.
    */
   readonly staleTestApp?: { readonly missingTests: readonly string[] };
   /**
-   * R35: baseline tests BC refused on PERMISSIONS — a strict subset of `unsupportedTests`, split
-   * out because the two demand opposite responses from the reader. "Did not pass at baseline"
-   * sends them to debug a test; this is fixed by declaring one property on the target's own test
-   * codeunit (`TestPermissions = Disabled`), after which the test runs normally.
+   * R35: baseline tests BC refused on PERMISSIONS — a strict subset of `unsupportedTests`. See
+   * `CAVEAT_INTERPRETATIONS["tests-permission-refused"]` for what this means to a reader and the
+   * fix.
    *
    * Measured A/B, 2026-07-26 (see `permission-canary.ts`): two probe codeunits identical except
    * that property, same app, same tables, same server — omitted (AL's Restrictive default) is
@@ -491,18 +489,14 @@ export interface SessionReport {
   /**
    * R69: baseline tests refused because they open a `TestPage`, which the fenced session
    * (`GuiAllowed=No`, `ClientType=ODataV4`) cannot create a test service for. Also a strict subset
-   * of `unsupportedTests`, and split out for the same reason as `permissionsRefused` — but it is
-   * the OPPOSITE kind of finding, which is why it is a separate field rather than another entry
-   * there. A permissions refusal is fixed by one property in the reader's own source; this one has
-   * NO target-side fix at all, and reporting them together would tell one of the two readers
-   * something false.
+   * of `unsupportedTests`. See `CAVEAT_INTERPRETATIONS["tests-testpage-unsupported"]` for what
+   * this means to a reader.
    *
    * MEASURED 2026-07-31 on Cronus281 (`fixtures/sandbox-probes`, codeunit 79218), and the
    * measurement corrected the original filing: the platform REFUSES in 87 ms rather than hanging.
    * Sized on a real project: 9 of Continia Document Output's 104 test files declare a `TestPage`.
    *
-   * Direction is safe — the affected tests leave the green set and mutants covered only by them are
-   * score-excluded, never scored against tests that never ran. Absent when no test hit the refusal.
+   * Absent when no test hit the refusal.
    */
   readonly testPageUnsupported?: {
     readonly tests: readonly string[];
@@ -511,15 +505,10 @@ export interface SessionReport {
   };
   /**
    * R59: tests that PASSED on the bc-dev-mcp hub (they are in the green set, or they would not
-   * have been covering tests) and then FAILED, unmutated, on the fenced runner that produces every
-   * verdict. Present only in a hub coverage mode (`procedure`/`line`); in `fenced`/`none` there is
-   * one runner and the field would be meaningless.
-   *
-   * NOT a wrong-verdict warning. The mutants these tests cover are already `error cause=unstable`,
-   * because a kill requires the unmutated fenced confirmation to PASS — which is why R59's feared
-   * false kill cannot occur. What this field adds is the CAUSE, so the reader stops debugging
-   * flakiness. One confirmation cannot separate a deterministic disagreement from a genuinely
-   * flaky test, and `explanation` says so rather than picking one.
+   * have been covering tests) and then FAILED, unmutated, on the fenced runner that produces
+   * every verdict. Present only in a hub coverage mode (`procedure`/`line`); in `fenced`/`none`
+   * there is one runner and the field would be meaningless. See
+   * `CAVEAT_INTERPRETATIONS["runner-disagreement"]` for what this means to a reader.
    */
   readonly runnerDisagreement?: {
     readonly tests: readonly string[];
@@ -527,7 +516,8 @@ export interface SessionReport {
   };
   /**
    * R47: present when this run was assembled with `--resume`, naming the prior run it drew from and
-   * how many verdicts it carried instead of measuring.
+   * how many verdicts it carried instead of measuring. See `CAVEAT_INTERPRETATIONS.resumed` for
+   * what this means to a reader.
    *
    * Recorded because a resumed report is a composite: `carriedMutants` verdicts were measured
    * against a DIFFERENT published artifact, in a different session, possibly against a differently
@@ -584,7 +574,8 @@ export interface SessionReport {
   };
   /**
    * Table trigger mutants that took `coverageFilter`'s FALLBACK 2 — "coverage places this
-   * nowhere at all, so run every green test" (`selection.ts`; summed over every batch).
+   * nowhere at all, so run every green test" (`selection.ts`; summed over every batch). See
+   * `CAVEAT_INTERPRETATIONS["untargeted-triggers"]` for what this means to a reader.
    *
    * The only signal distinguishing precise trigger attribution (FALLBACK 1, object-level) from
    * giving up, and it is invisible in the verdicts: on a suite where most tests touch the table,
@@ -593,10 +584,6 @@ export interface SessionReport {
    * `byObject`; a regression that re-emptied `byObject` would silently restore the old behaviour
    * with every aggregate count and every per-mutant verdict unchanged. It reached only a
    * `console.warn` before, which no gate can assert — hence a report field.
-   *
-   * NOT a defect on its own: a genuinely unreachable-by-coverage trigger SHOULD run everything
-   * rather than be dropped as `no-coverage`. It is a number to pin, and a rise in it is the thing
-   * to explain.
    *
    * 0 on a backend declaring `coverage: "none"` (al-runner) — no coverage filtering happens
    * there at all, every mutant runs every green test by construction, and no mutant reaches any
@@ -1022,43 +1009,30 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
   const caveats: Caveat[] = [];
   if (!input.baselineGreen) caveats.push("baseline-red");
   if (input.only !== undefined) caveats.push("narrowed");
-  // Listed distinctly from `narrowed`: this is the one narrowing that can manufacture a survivor.
+  // See CAVEAT_INTERPRETATIONS["tests-narrowed"] for what this caveat means to a reader.
   if (input.testsOnly !== undefined && input.testsOnly.length > 0) caveats.push("tests-narrowed");
   if (input.notInstrumented.files.length > 0) caveats.push("uninstrumentable-files");
   if (input.staleTestApp !== undefined) caveats.push("stale-test-app");
-  // R35: distinct from the `baseline-red` caveat these tests also trigger. That one says the
-  // measurement is degraded; this one says the degradation has a known, one-line cause in the
-  // TARGET'S source — which is the difference between "your score is unreliable" and "declare
-  // TestPermissions = Disabled and run it again".
+  // See CAVEAT_INTERPRETATIONS["tests-permission-refused"] for what this caveat means to a reader.
   const permissionsRefusedTests = input.permissionsRefusedTests ?? [];
   if (permissionsRefusedTests.length > 0) caveats.push("tests-permission-refused");
-  // R69: distinct from `baseline-red` AND from `tests-permission-refused`. The first says the
-  // measurement is degraded; the second says the degradation has a one-line fix in the user's own
-  // source. This one says the degradation has NO target-side fix — these tests cannot run on this
-  // execution path — which is a different instruction to the reader, not a shade of the same one.
+  // See CAVEAT_INTERPRETATIONS["tests-testpage-unsupported"] for what this caveat means to a
+  // reader.
   const testPageUnsupportedTests = input.testPageUnsupportedTests ?? [];
   if (testPageUnsupportedTests.length > 0) caveats.push("tests-testpage-unsupported");
-  // R59: distinct from `baseline-red` and from `tests-permission-refused`. Those describe the
-  // user's tests; this one describes LethAL measuring the green set on a different session type
-  // from the verdicts, which is a property of the CONFIGURATION and is fixed by changing it.
+  // See CAVEAT_INTERPRETATIONS["runner-disagreement"] for what this caveat means to a reader.
   const runnerDisagreementTests = input.runnerDisagreementTests ?? [];
   if (runnerDisagreementTests.length > 0) caveats.push("runner-disagreement");
-  // R53, spec §5: "this verdict is evidentially weaker than every other kill, and the report must
-  // say so". A `timeout-killed` scored through `--stop-hung-sessions` rests on BC confirming it
-  // stopped the session — NOT on a failing assertion, and not on any attestation: `ObservedAny`
-  // lives in a SingleInstance codeunit's memory and dies with the stopped session. So the run
-  // cannot even say whether an instrumented site executed. It is also permanent: `timeout-killed`
-  // is carryable by `--resume`.
+  // R53, spec §5 — see CAVEAT_INTERPRETATIONS["stop-hung-sessions"] for what this caveat means to
+  // a reader. `ObservedAny` lives in a SingleInstance codeunit's memory and dies with the stopped
+  // session, which is WHY no attestation survives to check.
   //
   // Only when the flag actually produced one. The flag alone is a setting; a scored timeout is a
   // claim, and it is the claim that needs qualifying.
   if (input.stopHungSessions === true && counts.timeoutKilled > 0) {
     caveats.push("stop-hung-sessions");
   }
-  // R47: a caveat, not a reliability downgrade. The verdicts carried are real measurements taken
-  // over the same source (identity-matched) and the same scope (fingerprint-matched) — calling
-  // that "degraded" would put an honest resume in the same bucket as a red baseline. What it IS
-  // is a composite of two sessions, and the reader is entitled to know before comparing runs.
+  // See CAVEAT_INTERPRETATIONS.resumed for what this caveat means to a reader.
   if (input.resumedFrom !== undefined) caveats.push("resumed");
   if (input.untargetedTriggerCount > 0) caveats.push("untargeted-triggers");
   const narrowed =

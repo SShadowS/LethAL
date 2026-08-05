@@ -17,7 +17,11 @@ import { ATTRIBUTION_INTERPRETATIONS } from "../src/selection";
 function realDeps(): BasisResolutionDeps {
   const repoRoot = join(import.meta.dir, "..", "..", "..");
   const roadmap = readFileSync(join(repoRoot, "ROADMAP.md"), "utf8");
-  const roadmapIds = new Set([...roadmap.matchAll(/\*\*(R\d+)\*\*/g)].map((m) => m[1] as string));
+  const roadmapIds = new Set<string>();
+  for (const match of roadmap.matchAll(/\*\*(R\d+)\*\*/g)) {
+    const [, id] = match;
+    if (id !== undefined) roadmapIds.add(id);
+  }
   return { roadmapIds, files: new Set() };
 }
 
@@ -31,11 +35,12 @@ test("every caveat has an interpretation", () => {
 });
 
 test("every shipped interpretation's basis resolves", () => {
+  const deps = realDeps(); // read ROADMAP.md once, not once per interpretation
   for (const i of [
     ...Object.values(ATTRIBUTION_INTERPRETATIONS),
     ...Object.values(CAVEAT_INTERPRETATIONS),
   ]) {
-    expect(() => assertBasisResolves(i.basis, realDeps())).not.toThrow();
+    expect(() => assertBasisResolves(i.basis, deps)).not.toThrow();
   }
 });
 
