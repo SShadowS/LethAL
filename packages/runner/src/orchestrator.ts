@@ -30,7 +30,7 @@ import { nextAbove, parseVersionConflict, reserveAppVersion } from "./app-versio
 import { AlcCompileError, ArtifactPrepareError, DeploymentError } from "./artifact";
 import type { CompiledArtifact } from "./artifact";
 import type { CoverageMode, ExecutionBackend, TestMethodRef, TestVerdict } from "./backend";
-import { NO_RESULT_FOR_METHOD } from "./bcdev-backend";
+import { NO_RESULT_FOR_METHOD, PublishFailedError } from "./bcdev-backend";
 import { bisectFailingMutant } from "./bisect";
 import { discoverTests } from "./discovery";
 import {
@@ -1784,8 +1784,13 @@ class LeaseSession {
  * Only these are: `AlcCompileError` (alc rejected the source — nothing was ever published),
  * `ArtifactPrepareError` (an fs/spawn/manifest problem on our side, likewise pre-publish), a
  * `DeploymentError` whose own `outcome` field is `"failed"` (BC rejected the publish AND identity
- * verification agrees the server does not run our artifact), and a version conflict (BC named the
- * installed version verbatim — a deterministic rejection).
+ * verification agrees the server does not run our artifact), `PublishFailedError` (R65/R90 —
+ * `BcDevMcpBackend.deploy()`'s OWN typed error for that exact same `"failed"` outcome; see its doc
+ * comment in bcdev-backend.ts. It is unconditionally confirmed-terminal here — the backend only
+ * ever constructs one when `decidePublishOutcome` already returned `"failed"`, so there is no
+ * separate outcome field to re-check, unlike `DeploymentError` which also carries `indeterminate`/
+ * `anomalous`), and a version conflict (BC named the installed version verbatim — a deterministic
+ * rejection).
  *
  * Everything else — notably `DeploymentError` with `indeterminate`/`anomalous` — is a publish
  * whose result we cannot state, and must NOT be tombstoned with `EndPublish`.
@@ -1793,6 +1798,7 @@ class LeaseSession {
 function isConfirmedTerminalPublishFailure(err: unknown): boolean {
   if (err instanceof AlcCompileError || err instanceof ArtifactPrepareError) return true;
   if (err instanceof DeploymentError) return err.outcome === "failed";
+  if (err instanceof PublishFailedError) return true;
   return parseVersionConflict(messageOf(err)) !== null;
 }
 

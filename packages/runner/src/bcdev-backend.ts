@@ -183,10 +183,21 @@ export interface BcDevDeployment {
  * extend `Error` directly, never another typed error) — `anomalous`/`indeterminate` outcomes are
  * an IDENTITY puzzle (the deployer reports one thing, verification reports another) and stay
  * `DeploymentError`; this is reserved for the one case where the publish call itself is the
- * demonstrated cause, which is what R90's per-tier publish ceiling (Task 3) needs to learn from.
+ * demonstrated cause.
+ *
+ * **What this actually reaches** (anything that makes `deployment.deployer.publish()` THROW): a
+ * non-zero `altool publishapp` exit (`ContainerDeployer`), a spawn failure on either publisher,
+ * and `EnvToolClient`'s OWN `envTool.timeoutSeconds` budget expiring. It does NOT reach, and by
+ * construction CANNOT reach, R90's actually-measured reproduction: an external publish tool
+ * (`continia publish`) that EXITS 0 while its JSON body reports `{success: false, ...}`.
+ * `env-tool.ts` has no `success`-field handling today, so that shape resolves as `publishOk ===
+ * true` followed by a verification mismatch — `decidePublishOutcome`'s `"indeterminate"`, not
+ * `"failed"` — so `DeploymentError` is thrown there instead, not this class. Closing that gap is
+ * a separate, filed concern (env-tool.ts), out of scope here.
  *
  * `guardCount`/`file` name WHAT was too big to publish, `tier` names WHERE (so one container's
- * measured ceiling is never confused with another's), and `detail` is the raw diagnosis.
+ * measured ceiling is never confused with another's), and `detail` is the raw diagnosis. R90's
+ * per-tier publish ceiling (Task 3) can learn from these for the failure modes above.
  *
  * R65: the message is guaranteed non-empty NO MATTER WHAT the caller passes — a Bun spawn
  * failure can arrive with an EMPTY `.message`, and reporting that empty string here would
@@ -1087,11 +1098,19 @@ function soleFileOf(manifest: MutantManifest): string | undefined {
  * `PublishFailedError.tier` (R90/Task 3): the same physical-BC-service-tier identity quarantine
  * already keys on (`quarantineResourceKey` — server + serverInstance, tenant deliberately
  * excluded, since the publish ceiling is a proxy/container property shared across every tenant on
- * one tier, same reasoning as the quarantine consult). Falls back to a fixed label rather than
- * `undefined` when the config omits server/serverInstance (both are optional on `BcDevConfig` —
- * an env-tool-routed session may not set them directly, see fixtures/README.md's "Running
- * against an external environment tool") — `tier` is required on `PublishFailedError`, never
- * absent.
+ * one tier, same reasoning as the quarantine consult).
+ *
+ * The `"unconfigured-tier"` fallback is DEFENSIVE, not a live production gap — measured: both
+ * known production factories of `BcDevConfig` always populate `server`/`serverInstance` or throw
+ * first. `bcDevBackendConfig` (cli.ts) sources them from `BcDevConfigSection.server`/
+ * `serverInstance`, which are non-optional required `string` fields (cli.ts), so a directly
+ * configured container always has them. The env-tool-routed path
+ * (`resolveEnvToolSession` -> `splitBaseUrl`, env-tool-session.ts) always derives both from the
+ * resolved `baseUrl` or throws (`EnvToolError`) before a `BcDevConfig` is ever constructed — it
+ * does NOT leave them undefined either. `server`/`serverInstance` are merely optional on the
+ * `BcDevConfig` TYPE (a test, or a future caller, can construct one without them); `tier` is
+ * required and non-optional on `PublishFailedError`, so this fallback exists to keep that
+ * contract honest against such a config, never to describe a reachable production path.
  */
 function tierIdentityOf(cfg: BcDevConfig): string {
   const { server, serverInstance } = cfg;

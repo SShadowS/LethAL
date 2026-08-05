@@ -17,6 +17,7 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "../src/backend";
+import { PublishFailedError } from "../src/bcdev-backend";
 import { DeploymentVerifier, decidePublishOutcome } from "../src/deployment-verifier";
 import { createEmitter } from "../src/events";
 import type { RunEvent } from "../src/events";
@@ -5441,6 +5442,34 @@ describe("runSession — Layer 5C-B1 fix round 1: publish-fence failure paths + 
     expect(client.endPublishArgs[0]?.outcome).toBe("failed");
     expect(client.endPublishArgs[0]?.attemptId).toBe(client.beginPublishArgs[0]?.attemptId ?? "x");
     // A confirmed deterministic rejection strands nothing — no durable tier quarantine.
+    expect(await new QuarantineStore(dir).read("http://cronus281|BC")).toBeNull();
+  });
+
+  test("a PublishFailedError (R65/R90) is ALSO a confirmed terminal — EndPublish tombstones it as failed, tier NOT quarantined", async () => {
+    // Fix round 1: `BcDevMcpBackend.deploy()` now throws `PublishFailedError`, not
+    // `DeploymentError`, for exactly the case the test above covers (decidePublishOutcome
+    // "failed"). Before `isConfirmedTerminalPublishFailure` learned to recognize it, this fell
+    // through to the "UNKNOWN result" branch below and durably quarantined the tier — the
+    // treatment reserved for genuinely ambiguous outcomes, applied to a deterministic one.
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    const { lease } = leaseCfg(client);
+    const err = new PublishFailedError("altool publishapp failed (exit 1): timed out", {
+      guardCount: 331,
+      file: "Big.Codeunit.al",
+      tier: "http://cronus281|BC",
+      detail: "altool publishapp failed (exit 1): timed out",
+    });
+    const backend = leaseBackend({
+      deploy: async () => {
+        throw err;
+      },
+    });
+    await expect(runSessionForTest(backend, { quarantineDir: dir, lease })).rejects.toBe(err);
+    expect(client.endPublishArgs).toHaveLength(1);
+    expect(client.endPublishArgs[0]?.outcome).toBe("failed");
+    expect(client.endPublishArgs[0]?.attemptId).toBe(client.beginPublishArgs[0]?.attemptId ?? "x");
+    // The assertion that actually matters: no durable tier quarantine for a CONFIRMED failure.
     expect(await new QuarantineStore(dir).read("http://cronus281|BC")).toBeNull();
   });
 
