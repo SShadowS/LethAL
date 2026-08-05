@@ -410,18 +410,26 @@ export interface ClearCeilingCliConfig {
 }
 
 /**
- * `lethal force-reset-lease --server <url> --instance <name> --config <path>` (design §8 step 2
- * of the operator recovery procedure — see fixtures/README.md's "Recovering from
- * container-needs-recycle" and `performForceResetLease` below). Unlike `clear-quarantine`, this
- * needs a `--config` too: it authenticates a LIVE `HarnessInfo`/`ForceResetLease` OData call
+ * `lethal force-reset-lease --server <url> --instance <name> --config <path> [--project <dir>]`
+ * (design §8 step 2 of the operator recovery procedure — see fixtures/README.md's "Recovering
+ * from container-needs-recycle" and `performForceResetLease` below). Unlike `clear-quarantine`,
+ * this needs a `--config` too: it authenticates a LIVE `HarnessInfo`/`ForceResetLease` OData call
  * against the server, which needs the bcdev section's company/username/password/tenant — nothing
  * clear-quarantine's purely-local quarantine-record clear requires.
+ *
+ * `--project` mirrors `DoctorCliConfig`'s own optional field below (R109): used only to satisfy a
+ * `{projectDir}` placeholder an `envTool.resolve` block's command might reference — this command
+ * runs no session, so it has no `testDir`/`runId` of its own the way `lethal run` does. Without
+ * it, `resolveForceResetLeaseConfig` supplies `""` (`renderCommand` then throws BY NAME on the
+ * unresolved placeholder, which is correct, but leaves an operator whose config needs it with no
+ * flag to unblock themselves mid-recovery — this closes that gap).
  */
 export interface ForceResetLeaseCliConfig {
   readonly mode: "force-reset-lease";
   readonly server: string;
   readonly serverInstance: string;
   readonly configPath: string;
+  readonly projectDir?: string;
 }
 
 /**
@@ -504,7 +512,7 @@ USAGE
   lethal run              --project <dir> --dry-run
   lethal clear-quarantine --server <url> --instance <name>
   lethal clear-ceiling    --project <dir> --server <url> --instance <name> [--db <path>] [--file <name>]
-  lethal force-reset-lease --server <url> --instance <name> --config <path>
+  lethal force-reset-lease --server <url> --instance <name> --config <path> [--project <dir>]
   lethal doctor            --config <path> [--project <dir>]
 
 RUN — required
@@ -757,7 +765,14 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
           "credentials this recovery action authenticates the live OData calls with)",
       );
     }
-    return { mode: "force-reset-lease", server, serverInstance, configPath };
+    const project = values.project;
+    return {
+      mode: "force-reset-lease",
+      server,
+      serverInstance,
+      configPath,
+      ...(project !== undefined && project !== "" ? { projectDir: project } : {}),
+    };
   }
 
   if (subcommand === "doctor") {
@@ -2483,6 +2498,29 @@ export const DOCTOR_NOT_CHECKED =
   "cannot still refuse for any of these reasons.";
 
 /**
+ * The `packageCachePath` `validateBcDevConfig` requires (it is `BcDevConfigSection`'s shared
+ * shape) when a read-only resolver has nothing else to offer for it — a config that leaves
+ * `packageCachePath` to `downloadSymbols` (no static path declared — legal per
+ * `validateEnvToolConfig`'s `hasPackageCachePath` option) genuinely has no value for this field
+ * until a real session runs `downloadSymbols`, which a read-only resolver must never do.
+ *
+ * Computes the SAME default `startEnvToolSession` does (env-tool-session.ts:240,
+ * `args.bcdevRaw.packageCachePath ?? join(args.projectDir, ".alpackages")`) WITHOUT running
+ * `downloadSymbols` — one place, so `buildDoctorDeps`'s `resolvedBcdev` and
+ * `resolveForceResetLeaseConfig` cannot drift apart on it the way doctor already drifted from
+ * `run` twice before this task (the `altool` requirement, R21; the `requireStatus` comparison,
+ * R34's parity fix) — this is the THIRD instance of the same defect class, caught only because a
+ * fix round tried the same env-tool config against doctor and it threw on a field neither command
+ * dereferences. Shared here rather than copy-pasted a second time.
+ */
+function packageCachePathDefault(
+  bcdevRaw: Partial<BcDevConfigSection> | undefined,
+  projectDir: string | undefined,
+): string {
+  return bcdevRaw?.packageCachePath ?? join(projectDir ?? ".", ".alpackages");
+}
+
+/**
  * R109 ruling, honesty constraint 2: `requireStatus` is `Pick`ed straight off `EnvToolConfigSection`
  * (env-tool.ts) rather than re-declared — a future rename/reshape of that field breaks THIS
  * function at compile time instead of silently leaving `DoctorConfig.envReady` derived from a
@@ -2622,6 +2660,13 @@ export async function buildDoctorDeps(
     if (username === undefined || password === undefined) {
       throw new EnvToolError("envTool.resolve produced no username/password");
     }
+    // See `packageCachePathDefault`'s doc comment — doctor never compiles or publishes either, but
+    // `validateBcDevConfig`'s shared shape still requires the field. Fix round 1 (Important 2):
+    // this was previously omitted here, so `lethal doctor` against an env-tool config that legally
+    // leaves `packageCachePath` to `downloadSymbols` threw "missing required field(s):
+    // packageCachePath" and never ran a single check — doctor stricter than `run` for the third
+    // time in this subsystem.
+    const packageCachePath = packageCachePathDefault(configFile.bcdev, opts.projectDir);
     return validateBcDevConfig({
       ...(configFile.bcdev ?? {}),
       baseUrl,
@@ -2630,6 +2675,7 @@ export async function buildDoctorDeps(
       port,
       username,
       password,
+      packageCachePath,
     });
   };
 
@@ -2862,15 +2908,10 @@ export async function resolveForceResetLeaseConfig(
   if (username === undefined || password === undefined) {
     throw new EnvToolError("envTool.resolve produced no username/password");
   }
-  // `validateBcDevConfig` requires `packageCachePath` (it is `BcDevConfigSection`'s shared shape,
-  // and force-reset-lease/clear-quarantine reuse that ONE validator rather than a looser one built
-  // just for them — see the doc comment above). Neither command compiles or publishes anything, so
-  // this value is never dereferenced on this path; when the config leaves it to `downloadSymbols`
-  // (no static `packageCachePath` declared — legal per `validateEnvToolConfig`), the SAME default
-  // `startEnvToolSession` computes (env-tool-session.ts:240) is used here too, WITHOUT actually
-  // running `downloadSymbols` — that would be a real I/O side effect this read-only resolver must
-  // not have (the same constraint that rules out `resolveEnvToolSession`, just one step smaller).
-  const packageCachePath = bcdevRaw.packageCachePath ?? join(opts.projectDir ?? ".", ".alpackages");
+  // See `packageCachePathDefault`'s doc comment — this recovery command never compiles or
+  // publishes, so the value is never dereferenced on this path, but `validateBcDevConfig`'s shared
+  // shape still requires it.
+  const packageCachePath = packageCachePathDefault(bcdevRaw, opts.projectDir);
   return validateBcDevConfig({
     ...bcdevRaw,
     baseUrl,
@@ -2898,22 +2939,29 @@ export async function resolveForceResetLeaseConfig(
  * BEFORE doing it, and (via `performForceResetLease`) never accepts a generation from anywhere
  * but a live `HarnessInfo` read.
  *
- * `deps` mirrors `runFromCli`'s own `deps.resolveEnvToolSession`/`deps.buildBackend` seam
- * (immediately above `runFromCli`'s own doc comment) — injectable ONLY so a test can drive this
- * exact wiring (config load -> resolve -> OData call) with fakes, without a real config file on
- * disk or a real `HarnessInfo`/`ForceResetLease` round trip. The real defaults are exactly
- * `resolveForceResetLeaseConfig` and the global `fetch`.
+ * `deps` is deliberately narrower than `runFromCli`'s own `deps.resolveEnvToolSession`/
+ * `deps.buildBackend` seam: it does NOT let a caller swap out `resolveForceResetLeaseConfig`
+ * itself (that was round 1's shape, and review caught that it let a test pin "calls whatever it
+ * was handed" while leaving the actual PRODUCTION default — `deps.resolveConfig ??
+ * resolveForceResetLeaseConfig`, reached by every real invocation via `main()`'s bare
+ * `forceResetLeaseFromCli(parsed)` — completely unpinned; reverting the default to the pre-fix
+ * `validateBcDevConfig(configFile.bcdev)` passed the whole suite). This command ALWAYS calls the
+ * real `resolveForceResetLeaseConfig`; only HOW it talks to the env tool (`makeEnvToolClient`) and
+ * HOW it talks to BC (`fetchFn`) are injectable, so a test exercises the genuine resolution
+ * algorithm — including its own default `EnvToolClient` construction — end to end.
  */
 export async function forceResetLeaseFromCli(
   parsed: ForceResetLeaseCliConfig,
   deps: {
-    readonly resolveConfig?: typeof resolveForceResetLeaseConfig;
+    readonly makeEnvToolClient?: (cfg: EnvToolConfigSection) => EnvToolClient;
     readonly fetchFn?: FetchFn;
   } = {},
 ): Promise<number> {
   const configFile = await loadLethalConfigFile(parsed.configPath);
-  const resolveConfig = deps.resolveConfig ?? resolveForceResetLeaseConfig;
-  const c = await resolveConfig(configFile);
+  const c = await resolveForceResetLeaseConfig(configFile, {
+    ...(parsed.projectDir !== undefined ? { projectDir: parsed.projectDir } : {}),
+    ...(deps.makeEnvToolClient !== undefined ? { makeEnvToolClient: deps.makeEnvToolClient } : {}),
+  });
   const odataCfg = {
     // R51: honours an explicit `bcdev.baseUrl` (the env-tool case — a path-routed HTTPS endpoint on
     // 443, which port-7048 injection can never reach), and refuses one that names a different tier

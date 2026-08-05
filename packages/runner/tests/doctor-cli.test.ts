@@ -228,6 +228,65 @@ describe("lethal doctor CLI wiring — environment (R34)", () => {
   });
 });
 
+/**
+ * Fix round 1 (Important 2), found while implementing R51's follow-on: `resolvedBcdev` assembles
+ * a `BcDevConfigSection` from `configFile.bcdev ?? {}` plus the resolved connection fields, but
+ * never supplied `packageCachePath` — which `validateBcDevConfig` requires unconditionally. A
+ * config that legally leaves it to `downloadSymbols` (no static path declared — the exact case
+ * `validateEnvToolConfig`'s `hasPackageCachePath` option exists for) made `buildDoctorDeps` throw
+ * "missing required field(s): packageCachePath" before `runDoctor` ran a single check — the third
+ * instance of doctor being stricter than `run` in this subsystem (after the `altool` requirement
+ * and the `requireStatus` comparison). Fixed by sharing `packageCachePathDefault` with
+ * `resolveForceResetLeaseConfig` (cli.ts) — one place, so the two cannot drift apart on it again.
+ */
+describe("lethal doctor CLI wiring — packageCachePath default (fix round 1, Important 2)", () => {
+  test("an env-tool config that legally omits a static packageCachePath does not make buildDoctorDeps throw", async () => {
+    const bcdevNoCache = {
+      mcpCommand: ["bun", "mcp"],
+      company: "CRONUS",
+      controlSymbolPath: "C:/lethal-control.app",
+      // Deliberately no packageCachePath — legal per validateEnvToolConfig's hasPackageCachePath
+      // option, since downloadSymbols is declared below.
+    };
+    const envCfg: EnvToolConfigSection = {
+      toolPath: "tool.exe",
+      envId: "env-4711",
+      resolve: [
+        { command: ["env", "get", "{envId}", "--json"], reads: { baseUrl: "url" } },
+        {
+          command: ["env", "users", "{envId}", "--json"],
+          reads: { username: "u", password: "p" },
+        },
+      ],
+      publish: { command: ["publish", "{envId}", "{appFile}"] },
+      downloadSymbols: { command: ["env", "download-symbols", "{envId}"] },
+    };
+    const spawn = async (argv: readonly string[]) => {
+      const line = argv.join(" ");
+      if (line.includes("env get")) {
+        return { exitCode: 0, stdout: '{"url":"https://host/env-4711"}', stderr: "" };
+      }
+      if (line.includes("env users")) {
+        return { exitCode: 0, stdout: '{"u":"admin","p":"hunter2"}', stderr: "" };
+      }
+      return { exitCode: 0, stdout: "{}", stderr: "" };
+    };
+
+    const configFile: LethalConfigFile = { bcdev: bcdevNoCache, envTool: envCfg };
+    const dir = await mkdtemp(join(tmpdir(), "lethal-doctor-no-pkgcache-"));
+    // The bug threw INSIDE buildDoctorDeps itself, before runDoctor ever ran — so reaching
+    // runDoctor at all (rather than a rejected promise here) is already most of this assertion.
+    const { cfg, deps } = await buildDoctorDeps(configFile, {
+      quarantineDir: dir,
+      fetchFn: okFetch(info()),
+      makeEnvToolClient: (c) => new EnvToolClient(c, { spawn }),
+    });
+    const report = await runDoctor(cfg, deps);
+    expect(report.checks.find((c) => c.name === "quarantine")?.ok).toBe(true);
+    expect(report.checks.find((c) => c.name === "control-version")?.ok).toBe(true);
+  });
+});
+
 describe("lethal doctor CLI wiring — quarantine", () => {
   test("a quarantined tier that would make `run`'s consult refuse also fails doctor's quarantine check", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lethal-doctor-quarantine-"));

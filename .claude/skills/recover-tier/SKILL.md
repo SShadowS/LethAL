@@ -82,6 +82,9 @@ Credentials never touch disk or a log: resolution happens in-process against the
 `packages/runner/src/cli.ts`). For a directly-configured container (no `envTool` section), this is
 unchanged from before — `server`/`serverInstance`/`username`/`password` are already in the file.
 
+If a `resolve` block references `{projectDir}` and the command refuses with "no value available
+for placeholder {projectDir}", add `--project <dir>` (same flag `lethal doctor` takes).
+
 ### 4. Clear the quarantine
 
 ```bash

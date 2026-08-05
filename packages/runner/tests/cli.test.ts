@@ -580,6 +580,43 @@ describe("parseCliConfig — force-reset-lease subcommand (5C-B2)", () => {
     });
   });
 
+  // Minor 3, fix round 1: without a --project flag, an operator whose envTool.resolve command
+  // references {projectDir} had no way to unblock themselves mid-recovery — resolveForceResetLeaseConfig
+  // fell back to "" and renderCommand throws. Mirrors doctor's own optional --project (cli.ts).
+  test("parses an optional --project, threaded as projectDir", () => {
+    const parsed = parseCliConfig([
+      "force-reset-lease",
+      "--server",
+      "http://Cronus281",
+      "--instance",
+      "BC",
+      "--config",
+      "lethal.config.json",
+      "--project",
+      "C:/proj",
+    ]);
+    expect(parsed).toEqual({
+      mode: "force-reset-lease",
+      server: "http://Cronus281",
+      serverInstance: "BC",
+      configPath: "lethal.config.json",
+      projectDir: "C:/proj",
+    });
+  });
+
+  test("omitting --project leaves projectDir absent, not an empty string", () => {
+    const parsed = parseCliConfig([
+      "force-reset-lease",
+      "--server",
+      "http://Cronus281",
+      "--instance",
+      "BC",
+      "--config",
+      "lethal.config.json",
+    ]);
+    expect(parsed).not.toHaveProperty("projectDir");
+  });
+
   test("missing --server throws a clear error", () => {
     expect(() =>
       parseCliConfig(["force-reset-lease", "--instance", "BC", "--config", "c.json"]),
@@ -970,6 +1007,154 @@ describe("resolveForceResetLeaseConfig (R51 follow-on)", () => {
       /missing the "bcdev" section/,
     );
   });
+
+  // Important 2, fix round 1: `packageCachePath` is structurally required by `validateBcDevConfig`
+  // but this recovery command never dereferences it — the fixture above already omits a static
+  // `packageCachePath` (legal, since `downloadSymbols` is declared), so every test in this
+  // describe block already exercises the default. Pinned explicitly here so a future change to
+  // `packageCachePathDefault` (shared with `buildDoctorDeps`'s `resolvedBcdev`) is caught by name.
+  test("packageCachePath defaults to <projectDir>/.alpackages when the config leaves it to downloadSymbols", async () => {
+    const cfg = envToolConfigFixture();
+    const spawned: string[] = [];
+    const resolved = await resolveForceResetLeaseConfig(cfg, {
+      projectDir: "C:/proj",
+      makeEnvToolClient: (c) => new EnvToolClient(c, { spawn: fakeSpawn(spawned) }),
+    });
+    expect(resolved.packageCachePath).toBe(join("C:/proj", ".alpackages"));
+  });
+
+  // Minor 3, fix round 1: without --project, {projectDir} placeholders in a resolve block have no
+  // value and `renderCommand` throws BY NAME — proven here, then proven UNBLOCKED once a
+  // projectDir is supplied, so the flag genuinely closes the gap rather than merely parsing.
+  test("--project unblocks a resolve block that references {projectDir}; omitting it throws by name", async () => {
+    const cfg: LethalConfigFile = {
+      bcdev: {
+        mcpCommand: ["bun", "mcp"],
+        company: "CRONUS",
+        controlSymbolPath: "C:/lethal-control.app",
+      },
+      envTool: {
+        toolPath: "tool.exe",
+        envId: "env-4711",
+        resolve: [
+          {
+            command: ["env", "get", "{envId}", "--json", "--cwd", "{projectDir}"],
+            reads: { baseUrl: "url", username: "u", password: "p" },
+          },
+        ],
+        publish: { command: ["publish", "{envId}", "{appFile}"] },
+        downloadSymbols: { command: ["env", "download-symbols", "{envId}"] },
+      },
+    };
+    const spawn = async () => ({
+      exitCode: 0,
+      stdout: '{"url":"https://host/env-4711","u":"admin","p":"hunter2"}',
+      stderr: "",
+    });
+
+    await expect(
+      resolveForceResetLeaseConfig(cfg, {
+        makeEnvToolClient: (c) => new EnvToolClient(c, { spawn }),
+      }),
+    ).rejects.toThrow(/no value available for placeholder \{projectDir\}/);
+
+    await expect(
+      resolveForceResetLeaseConfig(cfg, {
+        projectDir: "C:/proj",
+        makeEnvToolClient: (c) => new EnvToolClient(c, { spawn }),
+      }),
+    ).resolves.toMatchObject({ server: expect.any(String) });
+  });
+
+  // Minor 4, fix round 1: the two fail-loudly EnvToolError guards had no test of their own.
+  //
+  // Reaching them is not as simple as omitting a `reads` key: `EnvToolClient.run` itself throws
+  // if a block's DECLARED `reads` key fails to resolve to a non-empty string/number
+  // (env-tool.ts's `run`), and `validateEnvToolConfig`'s "envTool.resolve must produce X" check
+  // (env-tool.ts, `blocksOf`) already refuses a config where NO block anywhere — including
+  // `createEnv`/`startEnv`/`readyWhen`, which count toward "produced" but are never spawned by
+  // this READ-ONLY resolver — declares a `reads` for it. So the only way `resolveForceResetLeaseConfig`'s
+  // OWN post-loop `undefined` check can fire is a create-mode config (`envId` absent) where the
+  // key is declared as produced by `createEnv` (a block this resolver correctly never spawns,
+  // by design — the provisioning boundary) rather than by any `resolve[]` block: structurally
+  // valid per `validateEnvToolConfig`, genuinely unresolved by a resolver that spawns ONLY
+  // `resolve`.
+  describe("fail-loudly guards", () => {
+    const CREATE_MODE_BCDEV = {
+      mcpCommand: ["bun", "mcp"],
+      company: "CRONUS",
+      controlSymbolPath: "C:/lethal-control.app",
+      packageCachePath: "C:/pkg", // sidesteps the unrelated downloadSymbols requirement
+    };
+
+    test("baseUrl declared as produced by createEnv (never spawned here) throws 'produced no baseUrl'", async () => {
+      const cfg: LethalConfigFile = {
+        bcdev: CREATE_MODE_BCDEV,
+        envTool: {
+          toolPath: "tool.exe",
+          // No envId => create mode, which is what makes createEnv/startEnv/readyWhen/
+          // publishApps/deleteEnv all required below — none of them is ever spawned by
+          // resolveForceResetLeaseConfig; only the fixture needs them, to pass validateEnvToolConfig.
+          createEnv: { command: ["env", "create"], reads: { envId: "id", baseUrl: "url" } },
+          startEnv: { command: ["env", "start", "{envId}"] },
+          readyWhen: {
+            command: ["env", "get", "{envId}"],
+            reads: { status: "status" },
+            equals: "Running",
+          },
+          publishApps: ["TestApp"],
+          deleteEnv: { command: ["env", "delete", "{envId}"] },
+          // The ONLY block this resolver actually spawns — produces username/password, not baseUrl.
+          resolve: [{ command: ["fetch-creds"], reads: { username: "u", password: "p" } }],
+          publish: { command: ["publish", "{envId}", "{appFile}"] },
+        },
+      };
+      const spawn = async () => ({
+        exitCode: 0,
+        stdout: '{"u":"admin","p":"hunter2"}',
+        stderr: "",
+      });
+      await expect(
+        resolveForceResetLeaseConfig(cfg, {
+          makeEnvToolClient: (c) => new EnvToolClient(c, { spawn }),
+        }),
+      ).rejects.toThrow(/envTool\.resolve produced no baseUrl/);
+    });
+
+    test("username/password declared as produced by createEnv (never spawned here) throws 'produced no username/password'", async () => {
+      const cfg: LethalConfigFile = {
+        bcdev: CREATE_MODE_BCDEV,
+        envTool: {
+          toolPath: "tool.exe",
+          createEnv: {
+            command: ["env", "create"],
+            reads: { envId: "id", username: "u", password: "p" },
+          },
+          startEnv: { command: ["env", "start", "{envId}"] },
+          readyWhen: {
+            command: ["env", "get", "{envId}"],
+            reads: { status: "status" },
+            equals: "Running",
+          },
+          publishApps: ["TestApp"],
+          deleteEnv: { command: ["env", "delete", "{envId}"] },
+          // The ONLY block this resolver actually spawns — produces baseUrl, not credentials.
+          resolve: [{ command: ["fetch-url"], reads: { baseUrl: "url" } }],
+          publish: { command: ["publish", "{envId}", "{appFile}"] },
+        },
+      };
+      const spawn = async () => ({
+        exitCode: 0,
+        stdout: '{"url":"https://host/env-4711"}',
+        stderr: "",
+      });
+      await expect(
+        resolveForceResetLeaseConfig(cfg, {
+          makeEnvToolClient: (c) => new EnvToolClient(c, { spawn }),
+        }),
+      ).rejects.toThrow(/envTool\.resolve produced no username\/password/);
+    });
+  });
 });
 
 // ————————————————————————————————————————————————————————————————————————
@@ -1058,10 +1243,7 @@ describe("forceResetLeaseFromCli — the wiring (R51 follow-on)", () => {
         configPath,
       },
       {
-        resolveConfig: (cf) =>
-          resolveForceResetLeaseConfig(cf, {
-            makeEnvToolClient: (c) => new EnvToolClient(c, { spawn }),
-          }),
+        makeEnvToolClient: (c) => new EnvToolClient(c, { spawn }),
         fetchFn,
       },
     );
