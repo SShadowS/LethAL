@@ -1482,19 +1482,19 @@ describe("runSession — per-mutant budget floor (Tier 6B Phase 0 Task 6)", () =
     expect(mutantRun?.active).not.toBeNull();
     // A LITERAL, not `MIN_MUTANT_BUDGET_MS`: asserting against the constant under test passes
     // whether or not the floor is applied (set the constant to 0 and `>= 0` is trivially true).
-    expect(mutantRun?.timeoutMs).toBe(30_000);
+    expect(mutantRun?.timeoutMs).toBe(180_000);
     expect(mutantRun?.timeoutMs).toBe(MIN_MUTANT_BUDGET_MS); // ...and the constant still names it
   });
 
   test("a large baseline duration still gets exactly 2x, uncapped by the floor", async () => {
     const dirs = await makeProject();
-    const backend = new BudgetProbeBackend(60_000); // naive 2x budget = 120,000ms, above the floor
+    const backend = new BudgetProbeBackend(100_000); // naive 2x budget = 200,000ms, above the R91 180s floor
     const store = new ResultsStore(":memory:");
     await runSession({ backend, store, ...dirs, selectorIds });
     store.close();
     const mutantRun = backend.runs[1];
     expect(mutantRun).toBeDefined();
-    expect(mutantRun?.timeoutMs).toBe(120_000);
+    expect(mutantRun?.timeoutMs).toBe(200_000);
   });
 
   test("the same floor applies to the confirm-rerun after a fail", async () => {
@@ -1509,7 +1509,7 @@ describe("runSession — per-mutant budget floor (Tier 6B Phase 0 Task 6)", () =
     expect(confirmRun).toBeDefined();
     expect(confirmRun?.active).toBeNull();
     // Literal, for the same reason as above.
-    expect(confirmRun?.timeoutMs).toBe(30_000);
+    expect(confirmRun?.timeoutMs).toBe(180_000);
     expect(confirmRun?.timeoutMs).toBe(MIN_MUTANT_BUDGET_MS);
   });
 });
@@ -6495,6 +6495,25 @@ describe("runSession — R26 permission canary", () => {
     expect(report.permissionCanary?.detail).toContain("canary transport exploded");
     // The session itself is unharmed: mutants were still scored.
     expect(report.mutants.length).toBeGreaterThan(0);
+  });
+});
+
+// MIN_MUTANT_BUDGET_MS is already imported above (line 42) and used by the budget-floor tests
+// further up this file, so this block does not re-import it — a second `import { MIN_MUTANT_BUDGET_MS }`
+// binding would collide with the existing one.
+describe("MIN_MUTANT_BUDGET_MS (R91)", () => {
+  test("is 180s — measured, not a guess", () => {
+    // R91: at the old 30s floor, three consecutive runs against DO codeunit 6175297 each
+    // stranded and quarantined the tier, costing ~10 min of recycle + force-reset-lease +
+    // clear-quarantine + resume EACH TIME. The stranding mutants were `void-method-call`
+    // deleting a `SetCurrentKey` — which does not hang, it makes the following filtered
+    // query pick a worse plan and scan. Slow, not hung.
+    //
+    // The asymmetry decides the number: too low costs a strand (catastrophic — everything
+    // behind it blocked). Too high costs the rare genuine hang taking 180s instead of 30s
+    // to score `timeout-killed` (bounded, linear). Measured p95 per-mutant on that codeunit
+    // was 3.7s, so 180s is ~48x p95.
+    expect(MIN_MUTANT_BUDGET_MS).toBe(180_000);
   });
 });
 

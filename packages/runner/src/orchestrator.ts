@@ -91,10 +91,25 @@ const BASELINE_TIMEOUT_DEFAULT = 120_000;
  * not a retry here, it becomes an `in-flight-unknown`, a durable tier quarantine
  * and an aborted session.
  *
- * The budget's job is catching a runaway mutant, not enforcing performance, so a
- * floor that absorbs a cold start costs nothing real.
+ * R91: 30s was not generous enough. Three consecutive live runs against DO codeunit
+ * 6175297 each stranded and quarantined the tier, costing ~10 min of recycle +
+ * force-reset-lease + clear-quarantine + resume EACH TIME. The stranding mutants were
+ * `void-method-call` deleting a `SetCurrentKey` — which does not hang, it makes the
+ * following filtered query pick a worse plan and scan. Slow, not hung.
+ *
+ * Adaptive/derived-from-baseline was considered and rejected as false precision: the
+ * stranding mutants had a 0 ms baseline, because deleting a `SetCurrentKey` blows up
+ * the *query plan*, not the covering test's own logic — no multiplier of that test's
+ * baseline duration predicts a scan that only exists because of the mutation itself.
+ * Only a generous absolute floor covers the class.
+ *
+ * The asymmetry decides the number: too low costs a strand (catastrophic — everything
+ * behind it blocked). Too high costs the rare genuine hang taking longer to score
+ * `timeout-killed` (bounded, linear). Measured p95 per-mutant on that codeunit was
+ * 3.7s, so 180s is ~48x p95 — the budget's job is catching a runaway mutant, not
+ * enforcing performance, so a floor that generous costs nothing real.
  */
-export const MIN_MUTANT_BUDGET_MS = 30_000;
+export const MIN_MUTANT_BUDGET_MS = 180_000;
 
 /**
  * R48: how many executable mutants a session may schedule before it refuses to start unasked.

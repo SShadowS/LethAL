@@ -311,7 +311,7 @@ export interface RunCliConfig {
   readonly maxGuardsPerBatch?: number;
   /**
    * R47: `--mutant-timeout-ms <n>` raises the FLOOR of the per-mutant time budget. Absent means
-   * `MIN_MUTANT_BUDGET_MS` (30 s).
+   * `MIN_MUTANT_BUDGET_MS` (180 s, R91).
    *
    * The effective budget stays `max(2 x that test's baseline duration, this)`. It exists because
    * the floor was a hardcoded constant with no config surface, and exceeding it costs the WHOLE
