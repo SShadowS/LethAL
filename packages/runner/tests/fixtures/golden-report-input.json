@@ -1,0 +1,341 @@
+{
+  "caps": { "coverage": "procedure", "deploy": "publish", "isolation": "session", "authoritative": true },
+  "baselineGreen": false,
+  "batches": 3,
+  "outcomes": [
+    {
+      "mutant": {
+        "mutantId": "M0001",
+        "file": "Al/Codeunit/Codeunit 50100 Sales Helper.al",
+        "startIndex": 1200,
+        "endIndex": 1240,
+        "startLine": 45,
+        "operatorName": "lethal.void-method-call",
+        "operatorVersion": "1.0.0",
+        "astHash": "hashA1",
+        "objectType": "codeunit",
+        "codeunitId": 50100,
+        "codeunitName": "Sales Helper",
+        "procedureName": "ComputeTotal",
+        "procedureScope": "public",
+        "originalText": "TotalAmount := Quantity * UnitPrice;",
+        "mutatedText": ""
+      },
+      "verdict": "killed",
+      "batchIndex": 0,
+      "killingTest": "Sales Helper Tests.ComputeTotalMultipliesQtyByPrice",
+      "coveringTests": ["Sales Helper Tests.ComputeTotalMultipliesQtyByPrice"],
+      "coverageAttribution": "exact",
+      "guardObserved": true,
+      "durationMs": 842
+    },
+    {
+      "mutant": {
+        "mutantId": "M0002",
+        "file": "Al/Codeunit/Codeunit 50100 Sales Helper.al",
+        "startIndex": 1500,
+        "endIndex": 1550,
+        "startLine": 60,
+        "operatorName": "lethal.remove-setrange",
+        "operatorVersion": "1.0.0",
+        "astHash": "hashA2",
+        "objectType": "codeunit",
+        "codeunitId": 50100,
+        "codeunitName": "Sales Helper",
+        "procedureName": "FilterLines",
+        "procedureScope": "public",
+        "originalText": "SalesLine.SetRange(\"Document No.\", DocNo);",
+        "mutatedText": ""
+      },
+      "verdict": "survived",
+      "batchIndex": 0,
+      "coveringTests": ["Sales Helper Tests.FilterLinesReturnsSubset"],
+      "coverageAttribution": "object",
+      "guardObserved": true,
+      "durationMs": 615,
+      "runner": "fenced"
+    },
+    {
+      "mutant": {
+        "mutantId": "M0003",
+        "file": "Al/Codeunit/Codeunit 50100 Sales Helper.al",
+        "startIndex": 1800,
+        "endIndex": 1830,
+        "startLine": 72,
+        "operatorName": "lethal.empty-block",
+        "operatorVersion": "1.0.0",
+        "astHash": "hashA3",
+        "objectType": "codeunit",
+        "codeunitId": 50100,
+        "codeunitName": "Sales Helper",
+        "procedureName": "LogAudit",
+        "procedureScope": "local",
+        "originalText": "AuditLog.Insert(true);",
+        "mutatedText": ""
+      },
+      "verdict": "no-coverage",
+      "batchIndex": 0
+    },
+    {
+      "mutant": {
+        "mutantId": "M0004",
+        "file": "Al/Codeunit/Codeunit 50101 Sales Post Mgt.al",
+        "startIndex": 300,
+        "endIndex": 340,
+        "startLine": 20,
+        "operatorName": "lethal.swap-call-arguments",
+        "operatorVersion": "1.0.0",
+        "astHash": "hashB1",
+        "objectType": "codeunit",
+        "codeunitId": 50101,
+        "codeunitName": "Sales Post Mgt.",
+        "procedureName": "PostBatch",
+        "procedureScope": "public",
+        "originalText": "PostLines(SalesHeader, SalesLine);",
+        "mutatedText": "PostLines(SalesLine, SalesHeader);"
+      },
+      "verdict": "timeout-killed",
+      "batchIndex": 1,
+      "killingTest": "Sales Post Tests.PostBatchTerminates",
+      "coveringTests": ["Sales Post Tests.PostBatchTerminates"],
+      "coverageAttribution": "exact",
+      "durationMs": 30000,
+      "runner": "fenced"
+    },
+    {
+      "mutant": {
+        "mutantId": "M0005",
+        "file": "Al/Codeunit/Codeunit 50101 Sales Post Mgt.al",
+        "startIndex": 500,
+        "endIndex": 540,
+        "startLine": 33,
+        "operatorName": "lethal.void-method-call",
+        "operatorVersion": "1.0.0",
+        "astHash": "hashB2",
+        "objectType": "codeunit",
+        "codeunitId": 50101,
+        "codeunitName": "Sales Post Mgt.",
+        "procedureName": "PostBatch",
+        "procedureScope": "public",
+        "originalText": "UpdateStatistics(SalesHeader);",
+        "mutatedText": ""
+      },
+      "verdict": "survived",
+      "batchIndex": 1,
+      "coveringTests": [
+        "Sales Post Tests.PostBatchTerminates",
+        "Sales Post Tests.PostBatchUpdatesLedger"
+      ],
+      "coverageAttribution": "all-green",
+      "guardObserved": false,
+      "durationMs": 410
+    },
+    {
+      "mutant": {
+        "mutantId": "M0006",
+        "file": "Al/Codeunit/Codeunit 50101 Sales Post Mgt.al",
+        "startIndex": 700,
+        "endIndex": 730,
+        "startLine": 50,
+        "operatorName": "lethal.negate-condition",
+        "operatorVersion": "1.0.0",
+        "astHash": "hashB3",
+        "objectType": "codeunit",
+        "codeunitId": 50101,
+        "codeunitName": "Sales Post Mgt.",
+        "procedureName": "ValidatePosting",
+        "procedureScope": "public",
+        "originalText": "if Status = Status::Open then",
+        "mutatedText": "if not (Status = Status::Open) then"
+      },
+      "verdict": "error",
+      "batchIndex": 1,
+      "cause": "unstable",
+      "failureNote": "runner disagreement: 'Sales Post Tests.ValidatePostingRejectsClosed' passed on the coverage hub and failed, unmutated, on the fenced runner",
+      "durationMs": 0,
+      "runner": "fenced"
+    },
+    {
+      "mutant": {
+        "mutantId": "M0007",
+        "file": "Al/Codeunit/Codeunit 50101 Sales Post Mgt.al",
+        "startIndex": 900,
+        "endIndex": 930,
+        "startLine": 65,
+        "operatorName": "lethal.empty-block",
+        "operatorVersion": "1.0.0",
+        "astHash": "hashB4",
+        "objectType": "codeunit",
+        "codeunitId": 50101,
+        "codeunitName": "Sales Post Mgt.",
+        "procedureName": "ArchiveBatch",
+        "procedureScope": "public",
+        "originalText": "ArchiveLines(SalesHeader);",
+        "mutatedText": ""
+      },
+      "verdict": "error",
+      "batchIndex": 1,
+      "cause": "deadline-exceeded",
+      "failureNote": "client timer fired after 60000ms waiting for 'Sales Post Tests.PostBatchUpdatesLedger' — server outcome unknown"
+    },
+    {
+      "mutant": {
+        "mutantId": "M0008",
+        "file": "Al/Codeunit/Codeunit 50101 Sales Post Mgt.al",
+        "startIndex": 1000,
+        "endIndex": 1030,
+        "startLine": 80,
+        "operatorName": "lethal.remove-setrange",
+        "operatorVersion": "1.0.0",
+        "astHash": "hashB5",
+        "objectType": "codeunit",
+        "codeunitId": 50101,
+        "codeunitName": "Sales Post Mgt.",
+        "procedureName": "FilterOpenBatches",
+        "procedureScope": "public",
+        "originalText": "Batch.SetRange(Status, Status::Open);",
+        "mutatedText": ""
+      },
+      "verdict": "known-survivor",
+      "batchIndex": 1
+    },
+    {
+      "mutant": {
+        "mutantId": "M0009",
+        "file": "Al/Codeunit/Codeunit 50102 Sales Approval Mgt.al",
+        "startIndex": 200,
+        "endIndex": 240,
+        "startLine": 15,
+        "operatorName": "lethal.void-method-call",
+        "operatorVersion": "1.0.0",
+        "astHash": "hashC1",
+        "objectType": "codeunit",
+        "codeunitId": 50102,
+        "codeunitName": "Sales Approval Mgt.",
+        "procedureName": "ApproveBatch",
+        "procedureScope": "public",
+        "originalText": "SendApprovalRequest(SalesHeader);",
+        "mutatedText": ""
+      },
+      "verdict": "killed",
+      "batchIndex": 2,
+      "killingTest": "Sales Approval Tests.ApproveBatchSendsRequest",
+      "coveringTests": ["Sales Approval Tests.ApproveBatchSendsRequest"],
+      "coverageAttribution": "exact",
+      "guardObserved": true,
+      "durationMs": 91234,
+      "carried": true,
+      "runner": "client-services"
+    },
+    {
+      "mutant": {
+        "mutantId": "M0010",
+        "file": "Al/Codeunit/Codeunit 50102 Sales Approval Mgt.al",
+        "startIndex": 400,
+        "endIndex": 440,
+        "startLine": 28,
+        "operatorName": "lethal.negate-condition",
+        "operatorVersion": "1.0.0",
+        "astHash": "hashC2",
+        "objectType": "codeunit",
+        "codeunitId": 50102,
+        "codeunitName": "Sales Approval Mgt.",
+        "procedureName": "ApproveBatch",
+        "procedureScope": "public",
+        "originalText": "if ApprovalStatus = ApprovalStatus::Pending then",
+        "mutatedText": "if not (ApprovalStatus = ApprovalStatus::Pending) then"
+      },
+      "verdict": "survived",
+      "batchIndex": 2,
+      "coveringTests": ["Sales Approval Tests.ApproveBatchSendsRequest"],
+      "coverageAttribution": "exact",
+      "guardObserved": true,
+      "durationMs": 733,
+      "runner": "client-services"
+    },
+    {
+      "mutant": {
+        "mutantId": "M0011",
+        "file": "Al/Table/Table 50103 Sales Approval Log.al",
+        "startIndex": 50,
+        "endIndex": 90,
+        "startLine": 5,
+        "operatorName": "lethal.negate-condition",
+        "operatorVersion": "1.0.0",
+        "astHash": "hashD1",
+        "objectType": "table",
+        "codeunitId": 50103,
+        "codeunitName": "Sales Approval Log",
+        "procedureName": "",
+        "triggerName": "OnInsert",
+        "originalText": "if Rec.Status = Rec.Status::New then",
+        "mutatedText": "if not (Rec.Status = Rec.Status::New) then"
+      },
+      "verdict": "survived",
+      "batchIndex": 2,
+      "coveringTests": ["Sales Approval Tests.LogInsertsOnApproval"],
+      "coverageAttribution": "object",
+      "guardObserved": true,
+      "durationMs": 355,
+      "runner": "fenced"
+    }
+  ],
+  "unsupportedTests": [
+    "Sales Permission Tests.WritesToAppTable",
+    "Sales Post Tests.ValidatePostingRejectsClosed",
+    "Sales UI Tests.OpensApprovalCard"
+  ],
+  "notInstrumented": {
+    "totalFiles": 13,
+    "files": [
+      { "file": "Al/Page/Page 50120 Sales Approval Card.al", "kinds": "page_declaration", "sites": 6 },
+      { "file": "Al/Report/Report 50121 Sales Batch Summary.al", "kinds": "report_declaration", "sites": 3 }
+    ]
+  },
+  "only": {
+    "patterns": [
+      "Al/Codeunit/Codeunit 50100 Sales Helper.al",
+      "Al/Codeunit/Codeunit 50101 Sales Post Mgt.al",
+      "Al/Codeunit/Codeunit 50102 Sales Approval Mgt.al",
+      "Al/Table/Table 50103 Sales Approval Log.al"
+    ],
+    "excludedFileCount": 9
+  },
+  "testsOnly": ["Sales Helper Tests.*", "Sales Post Tests.*", "Sales Approval Tests.*"],
+  "staleTestApp": { "missingTests": ["Sales Regression Tests.LegacyDiscountApplies"] },
+  "permissionsRefusedTests": ["Sales Permission Tests.WritesToAppTable"],
+  "testPageUnsupportedTests": ["Sales UI Tests.OpensApprovalCard"],
+  "runnerDisagreementTests": ["Sales Post Tests.ValidatePostingRejectsClosed"],
+  "stopHungSessions": true,
+  "resumedFrom": { "runId": 41, "carriedMutants": 1, "skippedStranded": 2 },
+  "timings": {
+    "totalMs": 125000,
+    "generateMutationSetMs": 8000,
+    "deployMs": 42000,
+    "baselineMs": 15000
+  },
+  "baselineTests": [
+    { "codeunitName": "Sales Helper Tests", "file": "Al/Codeunit/Codeunit 50110 Sales Helper Tests.al" },
+    { "codeunitName": "Sales Helper Tests", "file": "Al/Codeunit/Codeunit 50110 Sales Helper Tests.al" },
+    { "codeunitName": "Sales Helper Tests", "file": "Al/Codeunit/Codeunit 50110 Sales Helper Tests.al" },
+    { "codeunitName": "Sales Post Tests", "file": "Al/Codeunit/Codeunit 50111 Sales Post Tests.al" },
+    { "codeunitName": "Sales Post Tests", "file": "Al/Codeunit/Codeunit 50111 Sales Post Tests.al" },
+    { "codeunitName": "Sales Post Tests", "file": "Al/Codeunit/Codeunit 50111 Sales Post Tests.al" },
+    { "codeunitName": "Sales Post Tests", "file": "Al/Codeunit/Codeunit 50111 Sales Post Tests.al" },
+    { "codeunitName": "Sales Approval Tests", "file": "Al/Codeunit/Codeunit 50112 Sales Approval Tests.al" },
+    { "codeunitName": "Sales Approval Tests", "file": "Al/Codeunit/Codeunit 50112 Sales Approval Tests.al" },
+    { "codeunitName": "Sales Approval Tests", "file": "Al/Codeunit/Codeunit 50112 Sales Approval Tests.al" },
+    { "codeunitName": "Sales Permission Tests", "file": "Al/Codeunit/Codeunit 50113 Sales Permission Tests.al" },
+    { "codeunitName": "Sales UI Tests" }
+  ],
+  "untargetedTriggerCount": 2,
+  "quarantined": {
+    "reason": "in-flight-unknown: RunMutant M0007 (Sales Post Mgt..ArchiveBatch) returned no confirmation before the session's durable tier quarantine tripped"
+  },
+  "permissionCanary": {
+    "verdict": "not-mocked",
+    "readPermission": true,
+    "writePermission": true,
+    "insertSucceeded": true
+  }
+}
