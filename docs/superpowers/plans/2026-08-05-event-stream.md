@@ -781,3 +781,86 @@ LETHAL_ITEST_TABLES=1 bun run itest:tables    # frozen: 109 / 17 / 10 over 136 d
 ```
 
 A differing verdict is a BLOCK, never "close enough". `itest:tables` asserts that one named test fails and that the refusal is named in the report — do not "fix" that by making the baseline green.
+
+---
+
+## AMENDED AFTER TASK-2 REVIEW — the union was under-built
+
+A field-by-field comparison during Task 2's review falsified the spec's claim that "roughly 19 input
+fields map onto ~12 event types". `BuildReportInput` has 19 top-level fields; **12 were not
+representable** from the 13 committed event types. Left unfixed, Task 4's fold degrades into "assert
+on a few events, accept the old bag for the rest" — which is the halfway option the spec explicitly
+rejected, wearing the new design's name.
+
+### The boundary: given vs learned
+
+Not "known before the run starts" — `--resume` is resolved at start yet half of it is learned. A fact
+the run was **given** is a static; a fact the run **learns** is an event. Drift needs two accountings
+of one quantity, and a given is never accounted, only carried.
+
+**The statics set is closed: `{ caps, only, testsOnly, stopHungSessions }`.**
+
+They are fold-constructor inputs **and** are echoed once in a `run-configured` event built from the
+same config object — one source, two carriages, no computation on either path. This keeps the stream
+self-describing: an agent tailing NDJSON must not need the config file to know the run was narrowed.
+**Hard rule: a static appears in exactly one declaration event, and no later event may repeat or
+update it.**
+
+### Granularity: the moment of observation
+
+Not per-item, not phase-boundary — the moment the orchestrator actually learns the fact.
+
+| fact | event | why |
+|---|---|---|
+| `baselineTests` | `tests-discovered { tests }` | discovery returns the whole list in one parse; 1,246 per-item events at one instant is false granularity |
+| baseline verdicts + classifications | `baseline-batch-finished { batchIndex, verdicts: [{ name, outcome, classification?, failureMessage? }] }` | the 740 s of silence is *inside* the backend call, so per-test events buy no liveness; the observation moment is the batch return. 4 events with per-test rows |
+| `notInstrumented.files` | rides `mutation-set-generated` as the full `NotInstrumentedFile[]` | learned in one moment inside `generateMutationSet` |
+| `untargetedTriggerCount` | `coverage-split { batchIndex, untargetedTriggerCount, coveredCount, noCoverageCount }` | accumulated per batch at split time. **This is the strongest single argument for events over the bag: rung 2's 66% no-coverage would have been visible at batch 1, ~15 minutes before the report said so.** |
+| `runnerDisagreementTests` | optional field on `mutant-scored` | observed during a specific mutant's kill-confirmation (`orchestrator.ts:3433`) |
+| `permissionCanary` | `permission-canary { result }` | one observation |
+| `resumedFrom` | `resume-resolved { fromRunId, mode, carryableCount, strandedKeyCount, retryStranded }` | emitted after `resolveResume` returns, before any mutant event. Final `carriedMutants`/`skippedStranded` do **not** ride it — the fold counts them 1:1 from `mutant-carried`/`mutant-skipped-stranded`, killing the orchestrator's `resumedMutantCount`/`strandedSkippedCount` counters |
+
+### `baseline-finished` is DELETED
+
+`{ testCount, failingCount }` are aggregates. The design's rule is that **events carry facts and
+consumers compute aggregates**; it was off-spec the day it landed. `baselineGreen` and the counts are
+folded from `baseline-batch-finished`.
+
+### Mutant events carry the full `MutantManifestEntry`
+
+Not `mutantCode: string` plus a join. A join the fold "must not get wrong" is machinery whose failure
+mode is this project's signature bug; in-process the entry travels by reference; on NDJSON a line
+carrying file/operator/startIndex is exactly what the rung-3 consumer had to `jq`-excavate; and the
+final sort needs `mutant.file`/`mutant.startIndex` (`orchestrator.ts:2901`).
+
+Applies to `mutant-scored`, `mutant-carried` and `mutant-skipped-stranded`. **`mutant-carried` also
+gains `coverageAttribution`** — `record()` passes *this* run's attribution for carried verdicts
+(`orchestrator.ts:2601`) and the committed payload omitted it.
+
+### The amended union, complete
+
+**Keep:** `stream-started`, `phase-entered` / `phase-left` (baseline's `phase-entered` gains
+`testCount`/`batchIndex` detail), `batch-published`, `batch-invalidated`, `warning`, `quarantined`,
+`session-finished`.
+
+**Amend:** `mutation-set-generated` (+`notInstrumented` files, +`excludedByOnly`), `mutant-scored`
+(full entry, +`runnerDisagreement`), `mutant-carried` (full entry, +`coverageAttribution`),
+`mutant-skipped-stranded` (full entry).
+
+**Add:** `run-configured`, `resume-resolved`, `tests-discovered`, `baseline-batch-finished`,
+`coverage-split`, `permission-canary`.
+
+**Delete:** `baseline-finished`.
+
+### The acceptance criterion that makes the halfway option unrepresentable
+
+> **`BuildReportInput` is DELETED. `buildReport(statics, events)` takes no other parameters, and the
+> statics set is exactly `{ caps, only, testsOnly, stopHungSessions }`.**
+
+Grep-able, and it fails loudly if anyone reintroduces a bag. Two further invariants for Task 3:
+every `record()` call site emits — including step-5's bulk `no-coverage` recording and the
+batch-failure path, which are outcomes and covered by `mutant-scored` — and `baselineGreen`,
+`batches` and `timings` are **folded**, never passed.
+
+The equivalence harness is unchanged: the golden fixture pinned at `9f0af0c` must produce a
+field-identical report before and after, then the frozen itests per mutant.
