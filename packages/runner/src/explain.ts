@@ -46,12 +46,18 @@ import type { MutantVerdict } from "./store";
  * hole it does NOT close, deliberately.
  *
  * READ THE WHOLE LIST BEFORE TRUSTING IT: all four police WHAT MAY APPEAR — which prose, at which
- * path — and none of them polices whether what appears is RIGHT. That gap was measured: swapping
- * `scored` with `recorded` and `noCoverage` with `knownSurvivors` left the entire runner suite
- * green at 1441 pass / 0 fail, reporting a run that scored 160 of 473 as scoring 473 of 160. The
- * `[verbatim]` test is the only thing checking VALUES, so every `[verbatim]`-tagged path must be
- * asserted in it against its source, over a fixture whose values are pairwise distinct — a fixture
- * with two zeros in it cannot tell a swap from a correct wiring.
+ * path — and none of them polices whether what appears is RIGHT. That gap was measured twice.
+ * Swapping `scored` with `recorded` and `noCoverage` with `knownSurvivors` left the entire runner
+ * suite green at 1441 pass / 0 fail, reporting a run that scored 160 of 473 as scoring 473 of 160.
+ * Then, after that fix, swapping a survivor's `file` with its `codeunitName` was still 1444 pass /
+ * 0 fail, because nine of the 25 `[verbatim]` paths had no value assertion at all.
+ *
+ * So: the `[verbatim]` test is the ONLY thing checking values, and all 25 `[verbatim]`-tagged paths
+ * are now asserted in it against their source — the per-row ones as WHOLE-ROW `toEqual`s, which
+ * cannot be partially written the way a list of per-field assertions can. Two things make that
+ * effective and both are themselves pinned: the fixture's values must be pairwise DISTINCT (a
+ * fixture with two zeros in it cannot tell a swap from a correct wiring — that is exactly how the
+ * first defect stayed green), and it must describe a state `buildReport` could actually produce.
  *
  *   - An IDENTITY check over every `Interpretation`-shaped object in the output. Stops an inline
  *     interpretation, and only that. SHAPE-SCOPED by construction, so a new `summary: string` on

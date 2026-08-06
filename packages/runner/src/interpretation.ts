@@ -9,10 +9,9 @@
  * written, until a later commit on this same branch added 213 lines above it and moved the target
  * without touching the citation — R113(a)'s exact failure mode, reproduced inside the branch that
  * exists to prevent it. That field carries free-text provenance prose; this one is narrower by
- * construction — a POINTER at
- * evidence (a roadmap id such as `"R29"`, or a file such as `"docs/measurements/README.md"`,
- * optionally with a `#fragment`) — because a pointer, unlike prose, can be mechanically checked
- * to resolve. See `assertBasisResolves`.
+ * construction — a POINTER at evidence (a roadmap id such as `"R29"`, or a file such as
+ * `"docs/measurements/README.md"`, optionally with a `#fragment`) — because a pointer, unlike
+ * prose, can be mechanically checked to resolve. See `assertBasisResolves`.
  */
 export interface Interpretation {
   /** What the data means, in prose a reader acts on. */

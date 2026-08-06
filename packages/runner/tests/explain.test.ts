@@ -85,6 +85,18 @@ function errorMutant(code: string, cause?: "deadline-exceeded" | "unstable"): Mu
   };
 }
 
+/** An `error` outcome of the shape `--resume` records for a mutant it did NOT re-run, so a fixture
+ *  claiming `resumedFrom.skippedStranded: n` has n outcomes actually backing it — the fold counts
+ *  that field 1:1 from `mutant-skipped-stranded` (report-fold.ts), it is not free-standing. */
+function strandedSkipMutant(code: string): MutantOutcome {
+  return {
+    ...errorMutant(code),
+    failureNote:
+      "not re-run on resume: a prior run's execution of this mutant could not be confirmed " +
+      "complete and stranded the tier. Pass --retry-stranded to attempt it.",
+  };
+}
+
 /** A mutant with a verdict the projection neither lists nor interprets — it exists only to make a
  *  fixture's `counts` real rather than asserted into place. */
 function plainMutant(code: string, verdict: MutantVerdict): MutantOutcome {
@@ -309,10 +321,21 @@ describe("explain — the plan's own four tests", () => {
  * values (scored 4, recorded 14, errors 3, noCoverage 2, knownSurvivors 5) make any swap among them
  * detectable; two zeros make it undetectable no matter how many assertions are added.
  *
- * They are also CONSISTENT with `mutants` — 3 survived + 3 error + 1 killed + 2 no-coverage +
- * 5 known-survivor = 14 recorded, of which killed + survived = 4 scored — rather than numbers
- * asserted into place beside a mutant list that contradicts them. A fixture describing a state the
- * producer cannot produce is the hazard `legacyBuildReport`'s own doc comment warns about.
+ * They are also CONSISTENT with what `buildReport` would actually derive, checked field by field
+ * against its own producers rather than by eye — because a fixture describing a state the producer
+ * cannot produce is the hazard `legacyBuildReport`'s own doc comment warns about, and a fixture is
+ * a poor place to learn that lesson twice:
+ *
+ *   counts       3 survived + 4 error + 2 killed + 1 no-coverage + 6 known-survivor
+ *   recorded     16 = outcomes.length
+ *   scored        5 = killed + timeoutKilled + survived
+ *   mutationScore 0.4 = 2/5
+ *   unstable/deadlineExceeded  1 each, matching M0005 and M0004's `cause`
+ *   caveats      `resumed` included because `resumedFrom` is set, which `buildReport` pushes
+ *                UNCONDITIONALLY — the final review caught this one missing
+ *   resumedFrom  `carriedMutants: 0` because no outcome here is `carried` (the fold counts it 1:1),
+ *                which is a documented, meaningful state: the resume found nothing to carry.
+ *                `skippedStranded: 2` is backed by the two `strandedSkipMutant` rows above.
  */
 function fullCoverageReport(): SessionReport {
   const base = reportFixture();
@@ -321,40 +344,42 @@ function fullCoverageReport(): SessionReport {
     validity: {
       ...base.validity,
       reliability: "narrowed-degraded",
-      caveats: ["baseline-red", "narrowed", "tests-narrowed"],
-      scoredMutants: { scored: 4, recorded: 14 },
+      caveats: ["baseline-red", "narrowed", "tests-narrowed", "resumed"],
+      scoredMutants: { scored: 5, recorded: 16 },
     },
     baselineGreen: false,
     counts: {
-      killed: 1,
+      killed: 2,
       survived: 3,
-      noCoverage: 2,
+      noCoverage: 1,
       timeoutKilled: 0,
-      knownSurvivors: 5,
+      knownSurvivors: 6,
       unstable: 1,
-      errors: 3,
+      errors: 4,
       deadlineExceeded: 1,
     },
-    mutationScore: 0.25,
+    mutationScore: 0.4,
     mutants: [
       survivorMutant("M0001", "exact", true),
       survivorMutant("M0002", "object", false),
       survivorMutant("M0003", "all-green"),
       errorMutant("M0004", "deadline-exceeded"),
       errorMutant("M0005", "unstable"),
-      errorMutant("M0006"),
-      plainMutant("M0007", "killed"),
-      plainMutant("M0008", "no-coverage"),
-      plainMutant("M0009", "no-coverage"),
-      plainMutant("M0010", "known-survivor"),
+      strandedSkipMutant("M0006"),
+      strandedSkipMutant("M0007"),
+      plainMutant("M0008", "killed"),
+      plainMutant("M0009", "killed"),
+      plainMutant("M0010", "no-coverage"),
       plainMutant("M0011", "known-survivor"),
       plainMutant("M0012", "known-survivor"),
       plainMutant("M0013", "known-survivor"),
       plainMutant("M0014", "known-survivor"),
+      plainMutant("M0015", "known-survivor"),
+      plainMutant("M0016", "known-survivor"),
     ],
     testsOnly: ["test/Posting/**"],
     quarantined: { reason: "test in-flight-unknown running Foo Tests.PostsBatch (mutant M0004)" },
-    resumedFrom: { runId: 7, carriedMutants: 3, skippedStranded: 2 },
+    resumedFrom: { runId: 7, carriedMutants: 0, skippedStranded: 2 },
   };
 }
 
@@ -484,6 +509,40 @@ describe("explain — the admissibility rule, made executable", () => {
     expect(unpinned).toEqual([]);
   });
 
+  test("fullCoverageReport describes a state `buildReport` could actually produce", () => {
+    // Its doc comment claims this; without a check that claim is exactly the kind this session has
+    // been correcting — an assertion of coverage that nothing holds. The final review found the
+    // `resumed` caveat missing from a fixture whose comment already claimed producibility.
+    //
+    // Re-derives each field the way buildReport does (report.ts) rather than comparing to a
+    // hardcoded expectation, so the fixture cannot be "fixed" by editing the numbers on both sides.
+    const r = fullCoverageReport();
+    const tally = (v: MutantVerdict) => r.mutants.filter((m) => m.verdict === v).length;
+    expect(r.counts).toEqual({
+      killed: tally("killed"),
+      survived: tally("survived"),
+      noCoverage: tally("no-coverage"),
+      timeoutKilled: tally("timeout-killed"),
+      knownSurvivors: tally("known-survivor"),
+      errors: tally("error"),
+      unstable: r.mutants.filter((m) => m.cause === "unstable").length,
+      deadlineExceeded: r.mutants.filter((m) => m.cause === "deadline-exceeded").length,
+    });
+    const scored = r.counts.killed + r.counts.timeoutKilled + r.counts.survived;
+    expect(r.validity.scoredMutants).toEqual({ scored, recorded: r.mutants.length });
+    expect(r.mutationScore).toBe((r.counts.killed + r.counts.timeoutKilled) / scored);
+    // `resumed` is pushed unconditionally when `resumedFrom` is set (report.ts); `narrowed` and
+    // `tests-narrowed` likewise follow `only`/`testsOnly`, and `baseline-red` follows baselineGreen.
+    expect(r.validity.caveats.includes("resumed")).toBe(r.resumedFrom !== undefined);
+    expect(r.validity.caveats.includes("baseline-red")).toBe(!r.baselineGreen);
+    expect(r.validity.caveats.includes("narrowed")).toBe(r.only !== undefined);
+    // Both `resumedFrom` tallies are counted 1:1 from events by the fold, never free-standing.
+    expect(r.resumedFrom?.carriedMutants).toBe(r.mutants.filter((m) => m.carried === true).length);
+    expect(r.resumedFrom?.skippedStranded).toBe(
+      r.mutants.filter((m) => m.failureNote?.startsWith("not re-run on resume:") === true).length,
+    );
+  });
+
   test("the pin has no dead entries — every pinned path is reachable", () => {
     // The other direction: a path left behind by a removed field would silently license anything
     // later reintroduced under that name. `fullCoverageReport` exists to reach every branch, so
@@ -529,16 +588,64 @@ describe("explain — the admissibility rule, made executable", () => {
       report.counts.knownSurvivors,
     ];
     expect(new Set(swappable).size).toBe(swappable.length);
+    // The same property for the per-row fields below: a swap is only detectable where the two
+    // values differ, so pin that the fixture keeps them distinct rather than trusting it to.
+    const [firstSurvivor] = report.mutants.filter((m) => m.verdict === "survived");
+    const rowValues = [
+      firstSurvivor?.file,
+      firstSurvivor?.codeunitName,
+      firstSurvivor?.procedureName,
+      firstSurvivor?.operatorName,
+      firstSurvivor?.originalText,
+      firstSurvivor?.mutatedText,
+      String(firstSurvivor?.line),
+      String(firstSurvivor?.startIndex),
+    ];
+    expect(new Set(rowValues).size).toBe(rowValues.length);
+    // ALL NINE per-row [verbatim] fields, projected against source as whole rows rather than
+    // field by field. The final review measured what the field-by-field form missed: six survivor
+    // fields and three notMeasured fields had no value assertion anywhere, so swapping `file` with
+    // `codeunitName` in `survivorOf` was 1444 pass / 0 fail, and reading `notMeasured[].line` off
+    // `startIndex` (77 -> 200) was 48 pass / 0 fail. A whole-row `toEqual` cannot be partially
+    // written: adding a field to `ExplainSurvivor` without adding it here fails the row compare.
     const survivorSources = report.mutants.filter((m) => m.verdict === "survived");
-    expect(out.survivors.map((s) => s.originalText)).toEqual(
-      survivorSources.map((m) => m.originalText),
-    );
-    expect(out.survivors.map((s) => s.coveringTests)).toEqual(
-      survivorSources.map((m) => m.coveringTests),
-    );
-    expect(out.notMeasured.map((n) => n.failureNote)).toEqual(
-      report.mutants.filter((m) => m.verdict === "error").map((m) => m.failureNote),
-    );
+    const survivorVerbatim = (m: {
+      mutantCode: string;
+      file: string;
+      line: number;
+      codeunitName: string;
+      procedureName: string;
+      operatorName: string;
+      originalText: string;
+      mutatedText: string;
+      coveringTests: readonly string[];
+    }) => ({
+      mutantCode: m.mutantCode,
+      file: m.file,
+      line: m.line,
+      codeunitName: m.codeunitName,
+      procedureName: m.procedureName,
+      operatorName: m.operatorName,
+      originalText: m.originalText,
+      mutatedText: m.mutatedText,
+      coveringTests: m.coveringTests,
+    });
+    expect(out.survivors.map(survivorVerbatim)).toEqual(survivorSources.map(survivorVerbatim));
+    const errorSources = report.mutants.filter((m) => m.verdict === "error");
+    const notMeasuredVerbatim = (m: {
+      mutantCode: string;
+      file: string;
+      line: number;
+      operatorName: string;
+      failureNote?: string;
+    }) => ({
+      mutantCode: m.mutantCode,
+      file: m.file,
+      line: m.line,
+      operatorName: m.operatorName,
+      failureNote: m.failureNote,
+    });
+    expect(out.notMeasured.map(notMeasuredVerbatim)).toEqual(errorSources.map(notMeasuredVerbatim));
     expect(out.toolConditions.find((c) => c.condition === "quarantined")?.detail).toBe(
       report.quarantined?.reason,
     );
