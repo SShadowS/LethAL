@@ -262,6 +262,13 @@ describe("assertCampaignPathsCommitted — the wiring assertCommitted trusts", (
       await writeAt(repo, f, "EDITED AFTER THE RUN\n");
     await writeAt(repo, "docs/untracked.md", "never added\n");
     await writeAt(repo, "docs/ignored.md", "gitignored, never committed\n");
+    // STAGED ONLY — `git add`ed after the commit and never committed. The one category the module
+    // header claims ("uncommitted, untracked, ignored, staged-only, modified or missing") that had
+    // no real-git test of its own; the nearest coverage was a SYNTHETIC porcelain string against
+    // the pure `assertCommitted`, which is inference from the fail-closed design rather than a
+    // measurement through this wiring.
+    await writeAt(repo, "docs/staged.md", "written and `git add`ed after the run\n");
+    await git(repo, ["add", "--", "docs/staged.md"]);
     deps = { git: createRepoGitRunner(repo), repoRoot: repo };
   });
 
@@ -283,6 +290,30 @@ describe("assertCampaignPathsCommitted — the wiring assertCommitted trusts", (
     await expect(assertCampaignPathsCommitted(["docs/untracked.md"], deps)).rejects.toThrow(
       /untracked|not committed|not known to git/i,
     );
+  });
+
+  test("a STAGED-ONLY file is refused — `git add` is not a commit", async () => {
+    // Staged-only is the one category in this module's header claim that reaches `assertCommitted`
+    // itself rather than being stopped by an earlier check, so measure WHICH layer catches it:
+    // the file exists, and `ls-files` DOES list it (a staged path is in the index), so both
+    // pre-checks pass and it is the porcelain status that refuses.
+    const echo = await deps.git([
+      "--no-optional-locks",
+      "--literal-pathspecs",
+      "ls-files",
+      "-z",
+      "--",
+      "docs/staged.md",
+    ]);
+    expect(echo.stdout).toBe("docs/staged.md\0"); // tracked, so the pre-checks let it through
+
+    const err = await refusalFrom(assertCampaignPathsCommitted(["docs/staged.md"], deps));
+    expect(err).toBeInstanceOf(UncommittedPathError);
+    // The REAL porcelain code git produced, carried through the -z join un-mangled.
+    expect(err.message).toContain('"A  docs/staged.md"');
+    // ... and the rule's own sentence, which names this exact case.
+    expect(err.message).toContain("never staged or edited after seeing the results");
+    expect((err as UncommittedPathError).paths).toEqual(["docs/staged.md"]);
   });
 
   test("a pre-commitment that DOES NOT EXIST is refused — git itself calls it clean", async () => {
