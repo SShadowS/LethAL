@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   rmSync,
   rmdirSync,
-  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -144,19 +144,56 @@ describe("resolveRecordsDir — resolved against the repo root, never process.cw
     expect(a).not.toBe(b);
   });
 
-  test("findRepoRoot locates THIS worktree's root, where .git is a FILE, not a directory", () => {
-    // The worktree-vs-checkout distinction campaign-freeze.ts's original doc comment called out:
-    // `.git` here is a file pointing at `.git/worktrees/<name>`, and existsSync must not care.
-    const root = findRepoRoot(import.meta.dir);
-    const gitPath = join(root, ".git");
-    expect(existsSync(gitPath)).toBe(true);
-    expect(statSync(gitPath).isFile()).toBe(true);
-  });
-
+  // Fix round 3 (merge-blocking): the previous version of this test read `findRepoRoot(import.meta.dir)`
+  // from the AMBIENT checkout and asserted `.git` there `.isFile()` — true in the worktree this was
+  // written in (`U:/Git/LethAL-d`, where `.git` is a file pointing at `.git/worktrees/<name>`), but
+  // FALSE in the main checkout (`.git` is a directory there) and on any normal clone or CI. The test
+  // took the worktree shape as its premise instead of constructing it — the same class of defect as
+  // fix round 1's fixture whose value coincided with the production default: the ENVIRONMENT supplied
+  // the property, not the test. Replaced with two synthetic constructions, below, that build each
+  // shape explicitly and prove `findRepoRoot` finds both.
   test("resolveRecordsDir composes findRepoRoot with the manifest's recordsDir exactly", () => {
     const manifest = { recordsDir: "docs/campaign/compose-check", campaignId: "x" };
     const resolved = resolveRecordsDir(manifest);
     expect(resolved).toBe(join(findRepoRoot(import.meta.dir), manifest.recordsDir));
+  });
+});
+
+describe("findRepoRoot — indifferent to whether .git is a FILE (worktree) or a DIRECTORY (normal clone) (fix round 3)", () => {
+  // Constructs the worktree shape from scratch rather than assuming this suite happens to be
+  // running inside one — see the note on the deleted test above. `existsSync` doesn't read the
+  // file's content (campaign-manifest.ts's own doc comment), but real worktree `.git` files hold
+  // a `gitdir: <path>` line, so this uses the same shape for fidelity.
+  test("finds the root when .git is a FILE (the worktree shape)", () => {
+    const root = mkdtempSync(join(tmpdir(), "lethal-findroot-worktree-"));
+    try {
+      writeFileSync(join(root, ".git"), "gitdir: /some/path/.git/worktrees/example\n", "utf8");
+      const nested = join(root, "a", "b", "c");
+      mkdirSync(nested, { recursive: true });
+      expect(findRepoRoot(nested)).toBe(root);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("finds the root when .git is a DIRECTORY (the normal-clone shape)", () => {
+    const root = mkdtempSync(join(tmpdir(), "lethal-findroot-clone-"));
+    try {
+      mkdirSync(join(root, ".git"));
+      const nested = join(root, "a", "b", "c");
+      mkdirSync(nested, { recursive: true });
+      expect(findRepoRoot(nested)).toBe(root);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // The only assertion left about the AMBIENT checkout this suite happens to run in — and it
+  // holds under BOTH shapes proven above, so it doesn't assume which one applies here. Deliberately
+  // does NOT assert `.isFile()` or `.isDirectory()` — that was exactly fix round 1's mistake.
+  test("findRepoRoot(import.meta.dir) returns a directory that actually contains a .git entry", () => {
+    const root = findRepoRoot(import.meta.dir);
+    expect(existsSync(join(root, ".git"))).toBe(true);
   });
 });
 
