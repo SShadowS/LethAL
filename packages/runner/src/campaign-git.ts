@@ -8,9 +8,18 @@
  * one `git add` away, and nothing before this stopped it.
  *
  * `assertCommitted` makes it mechanical: one status lookup per path, via an INJECTED `deps.status`
- * rather than this module shelling out itself — the real `git status --porcelain -- <path>` runner
- * is a later task's wiring (the CLI subcommands); this module stays pure, fast and deterministic,
+ * rather than this module shelling out itself — this module stays pure, fast and deterministic,
  * and is exercised without a real repo at all.
+ *
+ * **The real runner lives in `assertCampaignPathsCommitted` (`campaign-subcommands.ts`), and a new
+ * caller wants THAT, not this.** `assertCommitted` trusts `deps.status(path)` completely: it has
+ * no way to check that the answer is even about the path it asked about, and no way to notice the
+ * several ways real git answers "nothing to report" for a path it never examined (a missing file,
+ * a `.gitignore`d one, a whitespace-only pathspec) — each of which reads here as CLEAN.
+ * `assertCampaignPathsCommitted` is what closes those: it proves the path exists and is tracked,
+ * pins the pathspec literal, requires git to echo the path back, and treats a non-zero exit as a
+ * refusal — and only then calls this function. Wiring a second, weaker `deps.status` is the
+ * mistake to avoid; call the existing wiring.
  *
  * The clean/dirty boundary is deliberately narrow and FAILS CLOSED: the only status that passes is
  * the exact-clean answer git itself gives for "no differences against HEAD or the index" — an

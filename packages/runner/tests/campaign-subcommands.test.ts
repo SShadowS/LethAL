@@ -218,6 +218,23 @@ const FAILING_ANCHORS = {
   coveredProcedureRanges: [{ name: "Elsewhere", startLine: 900, endLine: 1000 }],
 };
 
+/** The rung-2 gate item: turning it on makes `--project` REQUIRED, so a `projectDir` the CLI
+ *  adapter dropped surfaces as a throw rather than a silently skipped check. */
+const RECONCILING_ANCHORS = { ...PASSING_ANCHORS, reconcileNotInstrumented: true };
+
+/** `TWO_MUTANTS` plus one file the report claims is uninstrumentable. At least one is required:
+ *  `reconcileNotInstrumented` reports `checked === 0` as NOT passed, because "every listed file is
+ *  uninstrumentable" over zero files is vacuous rather than satisfied. */
+const RECON_REPORT: SessionReport = {
+  ...TWO_MUTANTS,
+  notInstrumented: {
+    totalFiles: 1,
+    fileCount: 1,
+    siteCount: 1,
+    files: [{ file: "Probe.Page.al", kinds: "page_declaration", sites: 1 }],
+  },
+};
+
 // A records directory that CANNOT coincide with this repo's own production default
 // (`docs/campaign/2026-08-03-do`) — see task 2's fix round 1, where a fixture colliding with the
 // production default let a mutant that ignored the file entirely pass.
@@ -436,10 +453,32 @@ describe("assertCampaignPathsCommitted — the wiring assertCommitted trusts", (
   });
 
   test("git failing to answer is a refusal, not a pass", async () => {
+    // NOTE this runner fails the FIRST call, which is `ls-files` — so it can only ever prove
+    // `trackedEcho`'s half of "a non-zero exit is a refusal". It never reaches `porcelainStatus`,
+    // and that is exactly what let `porcelainStatus`'s own guard hide: mutating it to `return ""`
+    // left this test (and the whole suite) green. The next test covers the other half; do not
+    // delete it as a duplicate of this one.
     const failing: GitRunner = async () => ({ code: 128, stdout: "", stderr: "fatal: bad thing" });
     await expect(
       assertCampaignPathsCommitted(["docs/clean.md"], { git: failing, repoRoot: repo }),
     ).rejects.toBeInstanceOf(CampaignGitInvocationError);
+  });
+
+  test("a `git status` that fails AFTER ls-files succeeded is a refusal, not 'clean'", async () => {
+    // The dangerous ordering: the echo check passes, so the path is proven tracked, and then the
+    // one call that decides clean-vs-dirty dies. Reporting "" there is a fail-OPEN — a corrupt
+    // index, a concurrent `index.lock`, or a killed subprocess would each mark every
+    // pre-commitment committed.
+    const statusFails: GitRunner = async (args) =>
+      args.includes("ls-files")
+        ? { code: 0, stdout: "docs/clean.md\0", stderr: "" }
+        : { code: 128, stdout: "", stderr: "fatal: index file corrupt" };
+    const err = await refusalFrom(
+      assertCampaignPathsCommitted(["docs/clean.md"], { git: statusFails, repoRoot: repo }),
+    );
+    expect(err).toBeInstanceOf(CampaignGitInvocationError);
+    expect(err.message).toContain("git status");
+    expect(err.message).toContain("index file corrupt");
   });
 
   test("git echoing a DIFFERENT path than the one asked about is refused", async () => {
@@ -914,13 +953,25 @@ describe("lethal campaign — the manifest itself must be committed", () => {
  * file this task deleted, so that `lethal campaign anchors` is the ONLY way to run the gate and
  * therefore the only way to run it that cannot skip the git check. Its point is unchanged: a
  * driver that printed "FAIL" and exited 0 would be read as a pass by every CI step that ran it.
+ *
+ * Final review, Important 1: this block also covers `campaignFromCli`'s DISPATCH, which nothing
+ * did. `runCampaign*` are exhaustively tested and `parseCliConfig` is exhaustively tested, and
+ * nothing connected them — so making `freeze` dispatch to `runCampaignCompare` AND `anchors` drop
+ * `projectDir` passed the entire runner suite. A `lethal campaign freeze` that silently ran a
+ * compare would write no baseline, freeze nothing, print "identical" and exit 0: the signature bug
+ * at the adapter layer, inside the subsystem built to prevent it. Spawning is what makes it real —
+ * argv through `parseCliConfig` through `campaignFromCli` into the verb that actually runs.
  */
-describe("lethal campaign anchors (exit code, spawned)", () => {
+describe("lethal campaign (exit code + dispatch, spawned)", () => {
   const CLI = join(import.meta.dir, "..", "src", "cli.ts");
   let repo: string;
   let manifestPath: string;
+  let recordsDir: string;
+  let projectDir: string;
   let passingReport: string;
   let threeMutantReport: string;
+  let changedReport: string;
+  let reconReport: string;
 
   beforeAll(async () => {
     repo = await makeRepo({
@@ -929,31 +980,57 @@ describe("lethal campaign anchors (exit code, spawned)", () => {
       [rec("rung-ok.anchors.json")]: JSON.stringify(PASSING_ANCHORS, null, 2),
       [rec("rung-fail.precommit.md")]: "# rung-fail\n",
       [rec("rung-fail.anchors.json")]: JSON.stringify(FAILING_ANCHORS, null, 2),
+      // freeze's own rung: precommit only, so nothing but the manifest and it are checked and the
+      // baseline this verb MINTS is unambiguously its own output.
+      [rec("rung-spawnfreeze.precommit.md")]: "# rung-spawnfreeze\n",
+      // A SECOND freeze rung, untouched by the one above: once `rung-spawnfreeze` has been frozen
+      // its (still uncommitted) baseline is itself a refusal, so a later freeze on that rung never
+      // reaches the cardinality assertion this test is about.
+      [rec("rung-spawncount.precommit.md")]: "# rung-spawncount\n",
+      // The reconciliation rung — the only config in this file that turns it on, so `--project`
+      // is REQUIRED and a dropped `projectDir` surfaces as "Refusing to skip a requested gate item".
+      [rec("rung-recon.precommit.md")]: "# rung-recon\n",
+      [rec("rung-recon.anchors.json")]: JSON.stringify(RECONCILING_ANCHORS, null, 2),
+      // A page cannot carry the injected selector var, so the oracle agrees with the report's own
+      // claim and the reconciliation PASSES — an assertable outcome, unlike the vacuous zero-file case.
+      "project/Probe.Page.al": 'page 79324 "Data Scope Probe"\n{\n}\n',
     });
     manifestPath = join(repo, "campaign.json");
+    recordsDir = join(repo, RECORDS_DIR);
+    projectDir = join(repo, "project");
     passingReport = join(repo, "report.json");
     threeMutantReport = join(repo, "report-3.json");
+    changedReport = join(repo, "report-changed.json");
+    reconReport = join(repo, "report-recon.json");
     await writeFile(passingReport, JSON.stringify(TWO_MUTANTS), "utf8");
     await writeFile(threeMutantReport, JSON.stringify(THREE_MUTANTS), "utf8");
+    await writeFile(changedReport, JSON.stringify(TWO_MUTANTS_CHANGED), "utf8");
+    await writeFile(reconReport, JSON.stringify(RECON_REPORT), "utf8");
   });
 
   afterAll(async () => {
     await rm(repo, { recursive: true, force: true });
   });
 
-  async function run(rung: string, reportFile: string): Promise<{ code: number; out: string }> {
+  async function run(
+    verb: string,
+    rung: string,
+    reportFile: string,
+    extra: readonly string[] = [],
+  ): Promise<{ code: number; out: string }> {
     const proc = Bun.spawn(
       [
         "bun",
         CLI,
         "campaign",
-        "anchors",
+        verb,
         "--manifest",
         manifestPath,
         "--rung",
         rung,
         "--report",
         reportFile,
+        ...extra,
       ],
       { stdout: "pipe", stderr: "pipe" },
     );
@@ -966,19 +1043,85 @@ describe("lethal campaign anchors (exit code, spawned)", () => {
   }
 
   test("exits 0 when every anchor passes", async () => {
-    const { code, out } = await run("rung-ok", passingReport);
+    const { code, out } = await run("anchors", "rung-ok", passingReport);
     expect(out).toContain("PASS baseline-green");
     expect(code).toBe(0);
   });
 
   test("exits NON-ZERO when one anchor fails", async () => {
-    const { code, out } = await run("rung-fail", passingReport);
+    const { code, out } = await run("anchors", "rung-fail", passingReport);
     expect(out).toContain("FAIL coverage-location");
     expect(code).not.toBe(0);
   });
 
+  test("`freeze` runs FREEZE — it archives the report and mints the baseline", async () => {
+    // Dispatch to any other verb produces neither file. `compare` in particular would print
+    // "[compare] … identical" and exit 0, which reads like success.
+    const { code, out } = await run("freeze", "rung-spawnfreeze", passingReport, [
+      "--expect-mutants",
+      "2",
+    ]);
+    expect(out).toContain("[freeze] rung-spawnfreeze: 2 mutants archived and frozen");
+    expect(code).toBe(0);
+    const written = (await readdir(recordsDir))
+      .filter((f) => f.startsWith("rung-spawnfreeze."))
+      .sort();
+    expect(written).toEqual([
+      "rung-spawnfreeze.baseline.json",
+      "rung-spawnfreeze.precommit.md",
+      "rung-spawnfreeze.report.json",
+    ]);
+  });
+
+  test("`freeze` threads --expect-mutants through to the cardinality assertion", async () => {
+    // A count that never reached `assertCardinality` — defaulted, or dropped by the adapter — would
+    // let a report of the wrong size freeze itself.
+    const { code, out } = await run("freeze", "rung-spawncount", threeMutantReport, [
+      "--expect-mutants",
+      "2",
+    ]);
+    expect(out).toContain("expected 2, got 3");
+    expect(code).not.toBe(0);
+    // ... and nothing was written: cardinality precedes every records-directory touch.
+    expect((await readdir(recordsDir)).filter((f) => f.startsWith("rung-spawncount."))).toEqual([
+      "rung-spawncount.precommit.md",
+    ]);
+  });
+
+  test("`compare` runs COMPARE against the baseline `freeze` just committed", async () => {
+    // Depends on the freeze test above having produced the files — then commits them, which is the
+    // real operator flow ("Review and commit this file") and the only way `compare` will accept
+    // them. It also proves freeze's output is directly consumable by compare.
+    await git(repo, ["add", "--", `${RECORDS_DIR}/rung-spawnfreeze.baseline.json`]);
+    await git(repo, ["commit", "-qm", "freeze rung-spawnfreeze"]);
+
+    const same = await run("compare", "rung-spawnfreeze", passingReport);
+    expect(same.out).toContain("identical — all 2 mutant(s) match the committed baseline");
+    expect(same.code).toBe(0);
+
+    const differing = await run("compare", "rung-spawnfreeze", changedReport);
+    expect(differing.out).toContain("RESULT: DIFFERENT");
+    expect(differing.out).toContain("hash-M0002");
+    expect(differing.code).toBe(1);
+  });
+
+  test("`anchors --project` threads projectDir into the reconciliation", async () => {
+    // `reconcileNotInstrumented: true` makes --project REQUIRED. A dropped `projectDir` throws
+    // "Refusing to skip a requested gate item" — so this fails loudly rather than silently
+    // skipping, but only if something actually runs the verb with the flag.
+    const { code, out } = await run("anchors", "rung-recon", reconReport, [
+      "--project",
+      projectDir,
+    ]);
+    expect(out).toContain("PASS notinstrumented-reconciliation");
+    // `{"page":1}` is the oracle's classification of the SOURCE it read at `--project` — it cannot
+    // be produced without the flag having reached `runAnchorCheck` and the file having been read.
+    expect(out).toContain('confirmed uninstrumentable by object header ({"page":1})');
+    expect(code).toBe(0);
+  });
+
   test("exits NON-ZERO on a cardinality mismatch", async () => {
-    const { code, out } = await run("rung-ok", threeMutantReport);
+    const { code, out } = await run("anchors", "rung-ok", threeMutantReport);
     // Asserted on the OUTPUT as well as the code: a CLI that failed to parse its own arguments
     // also exits non-zero, and this test passed for exactly that reason while `--manifest` was
     // still an unknown option.
