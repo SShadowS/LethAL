@@ -107,6 +107,16 @@ export interface AnchorRunArgs {
   readonly configPath: string;
   /** Required when the config sets `reconcileNotInstrumented`; ignored otherwise. */
   readonly projectDir?: string;
+  /**
+   * Called as each phase of the gate STARTS, in order: `"cardinality"`, `"anchors"`, then
+   * `"reconcile"` or `"reconcile-skipped"`. Exists so the ORDERING is checkable from outside
+   * rather than only readable in this file — cardinality must precede every anchor, because an
+   * empty or truncated report satisfies "for all mutants ..." vacuously (see `assertCardinality`).
+   * The type system already enforces it (`checkAnchors` takes a `CardinalityVerifiedReport`, which
+   * only `assertCardinality` produces), and this makes the same ordering fail a TEST rather than
+   * only a compile — including for a caller who reaches these functions from plain JS.
+   */
+  readonly onStep?: (step: string) => void;
 }
 
 export interface AnchorRunOutcome {
@@ -148,9 +158,11 @@ export async function runAnchorCheck(args: AnchorRunArgs): Promise<AnchorRunOutc
   ];
 
   // Throws on a mismatch — and is the ONLY way to obtain the token `checkAnchors` requires.
+  args.onStep?.("cardinality");
   const verified = assertCardinality(report, cfg.expectedMutantCount, "anchors");
   lines.push(`[anchors] cardinality: ${cfg.expectedMutantCount} mutants, as pre-committed`);
 
+  args.onStep?.("anchors");
   const results = checkAnchors(verified, cfg);
   let ok = true;
   for (const r of results) {
@@ -159,6 +171,7 @@ export async function runAnchorCheck(args: AnchorRunArgs): Promise<AnchorRunOutc
   }
 
   if (cfg.reconcileNotInstrumented) {
+    args.onStep?.("reconcile");
     const { projectDir } = args;
     if (projectDir === undefined) {
       throw new Error(
@@ -177,6 +190,7 @@ export async function runAnchorCheck(args: AnchorRunArgs): Promise<AnchorRunOutc
       `[anchors] ${rec.passed ? "PASS" : "FAIL"} notinstrumented-reconciliation — ${rec.detail}`,
     );
   } else {
+    args.onStep?.("reconcile-skipped");
     lines.push(
       "[anchors] SKIP notinstrumented-reconciliation — reconcileNotInstrumented: false in the config (rung-2 gate item; plan Task 7 step 3)",
     );

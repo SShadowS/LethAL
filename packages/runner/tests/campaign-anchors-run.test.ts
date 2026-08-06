@@ -2,9 +2,10 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-// Imports from packages/runner/src, not scripts/campaign/anchors.ts directly — see that file's
-// doc comment for why (scripts/ sits outside this package's tsconfig project graph). The exit
-// code, which only the script owns, is covered by spawning it.
+// The EXIT CODE, which only `main()` owns, is covered by spawning `lethal campaign anchors` in
+// `campaign-subcommands.test.ts`. It used to be covered here by spawning
+// `scripts/campaign/anchors.ts`; that script was deleted when the subcommand landed, so that the
+// gate has exactly one entry point and therefore no entry point that skips the git check.
 import { parseAnchorArgs, parseAnchorConfig, runAnchorCheck } from "../src/campaign-anchors-run";
 import type { SessionReport } from "../src/report";
 
@@ -163,37 +164,8 @@ describe("runAnchorCheck", () => {
 
 /**
  * The exit code IS the gate — a driver that printed "FAIL" and exited 0 would be read as a pass by
- * every script, CI step and operator that ran it. Only the script owns it, so it is spawned.
+ * every script, CI step and operator that ran it. It now belongs to `main()` rather than to a
+ * script, and it is spawned in `campaign-subcommands.test.ts`'s "lethal campaign anchors (exit
+ * code, spawned)" block: `scripts/campaign/anchors.ts` was deleted when the subcommand landed, so
+ * the gate has one entry point and no second one that could reach it without the git check.
  */
-describe("scripts/campaign/anchors.ts (exit code)", () => {
-  const SCRIPT = join(import.meta.dir, "..", "..", "..", "scripts", "campaign", "anchors.ts");
-
-  async function run(): Promise<{ code: number; out: string }> {
-    const proc = Bun.spawn(["bun", SCRIPT, "--report", reportPath, "--config", configPath], {
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    const out = await new Response(proc.stdout).text();
-    const code = await proc.exited;
-    return { code, out };
-  }
-
-  test("exits 0 when every anchor passes", async () => {
-    await writeFile(reportPath, JSON.stringify(PASSING), "utf8");
-    const { code, out } = await run();
-    expect(code).toBe(0);
-    expect(out).toContain("PASS baseline-green");
-  });
-
-  test("exits NON-ZERO when one anchor fails", async () => {
-    await writeFile(reportPath, JSON.stringify(ONE_FAILING_ANCHOR), "utf8");
-    const { code, out } = await run();
-    expect(code).not.toBe(0);
-    expect(out).toContain("FAIL coverage-location");
-  });
-
-  test("exits NON-ZERO on a cardinality mismatch", async () => {
-    await writeFile(reportPath, JSON.stringify(report([{ verdict: "killed", line: 100 }])), "utf8");
-    expect((await run()).code).not.toBe(0);
-  });
-});

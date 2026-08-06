@@ -143,7 +143,24 @@ function realpathOfNearestExisting(p: string): string {
  * outside every git-committed guarantee this campaign gate depends on.
  */
 export function resolveRecordsDir(manifest: CampaignManifest): string {
-  const root = findRepoRoot(import.meta.dir);
+  return resolveRecordsDirIn(findRepoRoot(import.meta.dir), manifest);
+}
+
+/**
+ * `resolveRecordsDir` with the repository root supplied by the caller instead of derived from this
+ * module's own on-disk location — both containment checks are identical, they just anchor on the
+ * given `root`.
+ *
+ * This is not a test seam. `lethal campaign` (cli.ts) MUST resolve against the root of the
+ * repository the campaign MANIFEST lives in, which is a different question from "where was this
+ * module compiled from" in the two cases that matter: a `bun build --compile` binary, where
+ * `import.meta.dir` resolves against Bun's virtual root and `findRepoRoot` would walk to the
+ * filesystem root and throw (R50 measured that class of failure for `package.json`), and a
+ * checkout driving a campaign whose records live in another repository entirely. The manifest is
+ * a real file on disk in the campaign's own repository, so walking up from IT is the resolution
+ * that survives both.
+ */
+export function resolveRecordsDirIn(root: string, manifest: CampaignManifest): string {
   const resolved = join(root, manifest.recordsDir);
 
   if (!isWithin(root, resolved, true)) {
