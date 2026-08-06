@@ -14,13 +14,31 @@ Mutation testing for Microsoft Dynamics 365 Business Central AL code. It tells y
 
 LethAL makes small, deliberate breakages in your AL code (flips a `<` to `<=`, empties a block, drops a `TestField`, changes a return value), then runs your tests against each one. A test suite that stays green while the code is broken is not protecting you.
 
-Each mutant comes back as one of three verdicts:
+Each mutant comes back as one of six verdicts:
 
 | Verdict | Meaning |
 |---------|---------|
 | **killed** | A test failed. That code path is genuinely covered. |
-| **survived** | Every test still passed. Nothing checks that behaviour. |
+| **survived** | Every test still passed. What that is worth depends on *which* tests ran the line — see below. |
 | **no-coverage** | No test *reachable by coverage attribution* executes that code. Sometimes an under-report; see [Limits](#limits). |
+| **timeout-killed** | The mutant exceeded its time budget and BC confirmed it stopped the session. A kill resting on a stopped session rather than a failing assertion, and evidentially the weakest one there is. |
+| **known-survivor** | Recorded as surviving by an earlier finished run and skipped this time via `--skip-known-survivors`. Carried, not re-measured. |
+| **error** | The run could not obtain a verdict — a strand, a refusal, an unstable result. Never counted as a kill or a survivor. |
+
+**A survivor is not automatically a finding.** LethAL records *how* it decided which tests cover a
+mutant, and the answer changes what "survived" is worth:
+
+- `"exact"` — a test executed **that procedure**. "These tests ran this code and did not notice the
+  change" is a real assertion gap.
+- `"object"` — the tests executed *something in that object*; whether they reached the mutated
+  member is **unknown**. Treating these as weak tests sends you rewriting tests that may never have
+  run the line.
+
+(The field is `coverageAttribution` in the report and `attribution` in `lethal explain`'s output.)
+
+On a real 148-mutant run this was **19 exact against 88 object**. Reading all 107 as findings would
+have meant ~87 pointless tests. `lethal explain` exists to make that distinction impossible to miss;
+see [Usage](#usage).
 
 ## A worked example
 
@@ -151,7 +169,36 @@ something in the same object; `guardObserved: true` means an instrumented guard 
 Together they separate "your test reaches this code and does not check it" from "nothing ran it at
 all", which is the distinction the [Limits](#limits) section is about.
 
-Here that first reading is right, so the fix is one more assertion in the test that already covers the
+**6. `lethal explain report.json` states that reading rather than leaving you to derive it.** It
+reads the committed report and nothing else — no server, no database, no config:
+
+```json
+{
+  "attribution": "exact",
+  "executionProven": true,
+  "interpretation": {
+    "meaning": "A member-level coverage match. \"These tests executed this procedure and did not notice the change\" is a real assertion gap.",
+    "basis": "R29"
+  },
+  "guardInterpretation": {
+    "meaning": "WEAK. Some instrumented selector fired somewhere in the artifact during that run — nothing more.",
+    "entailedNegative": "Does NOT say that THIS mutant's guard fired, so a survivor carrying it is still unverified: the mutation may never have been in play.",
+    "basis": "R32"
+  }
+}
+```
+
+Two signals, each honest about its own strength: attribution proves execution, `guardObserved` does
+not. `basis` points at the evidence for each claim. Had this mutant come back `"object"` instead,
+the interpretation would have said so in as many words — *"telling an agent to strengthen one of
+these tests can send it chasing a test that never ran the code."*
+
+What `explain` will **not** tell you is which test to write. That is deliberate: a surviving mutant
+may be a missing assertion, an **equivalent mutant** no test can or should kill, or behaviour nobody
+ever specified — and only the first is a test problem. It states what is proven and what is not, and
+leaves the judgement where the domain knowledge is.
+
+Here the first reading is right, so the fix is one more assertion in the test that already covers the
 procedure:
 
 ```al
@@ -171,14 +218,16 @@ figures under [Testing](#testing) are the measured ones.)*
 | Release | 0.1.0-alpha.1 |
 | Language | TypeScript (Bun workspaces) |
 | Target | AL / Business Central, control extension runtime 16 |
-| Mutation operators | 9 total: 5 Tier-1 (generic), 4 Tier-2 (AL-specific) |
+| Mutation operators | 12 total: 6 Tier-1 (generic), 6 Tier-2 (AL-specific) |
 | Object kinds instrumented | codeunit, table, page, report, pageextension, tableextension |
 | Backends | `bcdev` (live BC, authoritative), `al-runner` (offline, **not** authoritative) |
 | Concurrency safety | Machine-global lease + per-run two-phase fence |
-| Unit tests | 1,486 |
+| Unit tests | 1,910 |
 | Largest project measured | 19,832 mutation sites across 438 files (a real commercial extension) |
 
 ## Features
+
+**Measurement** — how a verdict is produced.
 
 | Feature | Description |
 |---------|-------------|
@@ -186,19 +235,31 @@ figures under [Testing](#testing) are the measured ones.)*
 | **AST-based mutation** | Operates on a real AL parse tree (tree-sitter-al), never on text |
 | **Live BC execution** | Runs the covering test headlessly inside Business Central over OData |
 | **Coverage-aware** | Distinguishes "no test caught it" from "no test runs it at all", and records which attribution path decided |
-| **Actionable survivors** | Each survivor carries its original and mutated text, procedure, covering tests, and a per-procedure rollup, enough for a human or an agent to act without re-deriving anything |
 | **Scoped runs** | `--only` narrows mutants, `--tests-only` narrows the baseline, `--max-guards-per-batch` bounds each published artifact |
 | **Resumable** | An aborted run is continued with `--resume`; verdicts already measured are not thrown away |
+
+**Trustworthiness** — why a verdict is worth believing, or why it refuses to claim one.
+
+| Feature | Description |
+|---------|-------------|
 | **Deployment identity** | Verifies the app under test is the artifact it compiled, and refuses to record a verdict otherwise |
 | **Concurrency-safe** | A machine-global lease stops two runs on one container from interleaving and producing a false verdict |
 | **Two-phase fence** | Every mutant run proves it holds the lease at claim *and* at result-recording, or the result is discarded |
 | **Lost-ack recovery** | An unreadable response is reconciled against the server's own operation marker instead of assuming the worst |
-| **External environments** | A hosted environment owned by a third-party CLI is driven through config-declared commands, with no vendor knowledge in LethAL |
 | **Named refusals** | A test BC refused — permissions, or a `TestPage` the session cannot create — is reported with its cause and BC's own words, not as an unexplained baseline failure |
 | **Runner provenance** | Every verdict records which session type produced it, and the report states each execution context it actually used rather than asserting one |
-| **Operator recovery** | `lethal force-reset-lease` and `lethal clear-quarantine` recover a container stranded by a dead session |
-| **Diagnostics** | `lethal doctor` runs every pre-flight check it can answer read-only (environment status, quarantine, control-app version, `alc`/`altool`) all at once, instead of `lethal run` discovering them one at a time — and states plainly what it cannot check yet |
+| **Committed pre-commitments** | `lethal campaign` refuses to freeze, gate or compare against a pre-commitment that is not committed and clean in git — checked with `git ls-files`, because a missing or ignored file reads to `git status` exactly like a clean one |
+
+**Reading and operating** — what you do with the result, and how you recover when a run dies.
+
+| Feature | Description |
+|---------|-------------|
+| **Actionable survivors** | Each survivor carries its original and mutated text, procedure, covering tests, and a per-procedure rollup, enough for a human or an agent to act without re-deriving anything |
 | **Explained reports** | `lethal explain report.json` says what a finished report MEANS: every survivor carries `executionProven` — true only for a member-level coverage match — beside the interpretation and the evidence pointer that decide what it is worth, so "some test touched the codeunit" is never read as "a test executed this line" |
+| **Diagnostics** | `lethal doctor` runs every pre-flight check it can answer read-only (environment status, quarantine, control-app version, `alc`/`altool`) all at once, instead of `lethal run` discovering them one at a time — and states plainly what it cannot check yet |
+| **Measured publish ceiling** | A file whose instrumented form is too large for the server to publish is refused *before* compiling, against a bracket this tier actually measured — never a hardcoded limit. `lethal clear-ceiling` discards the measurement when the topology changes |
+| **Operator recovery** | `lethal force-reset-lease` and `lethal clear-quarantine` recover a container stranded by a dead session |
+| **External environments** | A hosted environment owned by a third-party CLI is driven through config-declared commands, with no vendor knowledge in LethAL |
 
 ## Prerequisites
 
@@ -324,6 +385,24 @@ lethal force-reset-lease --server http://YourContainer --instance BC --config le
 lethal clear-quarantine --server http://YourContainer --instance BC
 ```
 
+A publish that fails for a size-independent reason — a spawn failure, a container restarting mid-run
+— records a failure at that guard count, and the ceiling only ever ratchets tighter, so a file
+refused once can never publish the counter-evidence that would widen it again. That is what
+`clear-ceiling` is for:
+
+```bash
+# discards recorded publish outcomes for one tier, so a TRANSIENT failure
+# stops permanently refusing files of that size
+lethal clear-ceiling --project path/to/your-al-app \
+                     --server http://YourContainer --instance BC [--file Big.Codeunit.al]
+```
+
+It clears the whole tier by default; `--file` narrows it. A blanket clear is the one that reaches a
+row recorded for a multi-file batch. It prints every row it removed and the bracket before and
+after, and **exits non-zero when it removed nothing** — you ran it because a file was refused, and
+if nothing was cleared that file is still refused. The refusal message itself pre-fills this command
+for the file and tier that tripped it.
+
 From a source checkout, replace `lethal` with `bun packages/runner/src/cli.ts`.
 
 ## Configuration
@@ -345,7 +424,7 @@ Cost and recovery:
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--max-guards-per-batch <n>` | *(unbounded)* | Guards per published artifact. Publish cost scales with guard count, since BC recompiles server-side |
-| `--mutant-timeout-ms <n>` | `30000` | Floor for a mutant's time budget. The budget is `max(2 × that test's baseline, this)` |
+| `--mutant-timeout-ms <n>` | `180000` | Floor for a mutant's time budget, applied as `max(2 × that test's baseline, floor)`. An explicit value **replaces** the floor rather than stacking with it. The default is deliberately generous: too low strands a tier and blocks every mutant behind it, while too high only makes a genuine hang take longer to score `timeout-killed` |
 | `--resume` / `--resume-run <id>` | *(none)* | Continue an aborted run, reusing verdicts it already measured |
 | `--retry-stranded` | `false` | On resume, retry mutants that stranded the tier. Skipped by default: a mutant that never terminates blocks every mutant behind it |
 | `--allow-large-run` | `false` | Run more than 1,000 mutation sites |
@@ -373,9 +452,10 @@ Exit codes: `0` ok, `1` error, `3` quarantined, meaning the run refused to vouch
     engine ............... AST, MutationSpec, semantic layer
       |
       +-- builtin-tier1 .. conditional-boundary, negate-conditional, empty-block,
-      |                    return-value, void-method-call
+      |                    return-value, void-method-call, swap-call-arguments
       +-- builtin-tier2 .. remove-testfield, remove-setrange, remove-calcfields,
-      |                    swap-modify-flag  (AL-specific; reach table triggers)
+      |                    remove-commit, swap-modify-flag, swap-rec-xrec
+      |                    (AL-specific; reach table triggers)
       v
     schemata ............. ONE instrumented artifact, all mutants behind guards
       |
@@ -425,7 +505,7 @@ per-mutant baseline**, where a differing verdict is a regression, never "close e
 | Command | Proves | Frozen |
 |---------|--------|--------|
 | `LETHAL_ITEST_BCDEV=1 bun run itest:bcdev` | End-to-end verdicts against real BC | 3 killed / 10 survived / 3 no-coverage |
-| `LETHAL_ITEST_TABLES=1 bun run itest:tables` | Tier-2 operators, table-trigger and extension-object mutation | 69 / 9 / 6 |
+| `LETHAL_ITEST_TABLES=1 bun run itest:tables` | Tier-2 operators, table-trigger and extension-object mutation | 109 / 17 / 10 over 136 deployed |
 | `LETHAL_ITEST_ENVTOOL=1 bun run itest:envtool` | An externally-owned environment, reached through config | 3 / 10 / 3 |
 | `LETHAL_ITEST_ALRUNNER=1 bun run itest:alrunner` | The al-runner backend | 3 / 13 / 0 |
 | `LETHAL_ITEST_BCDEV=1 bun run itest:lease` | Lease lifecycle, contention, recovery | n/a |
