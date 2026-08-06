@@ -2,8 +2,12 @@
 
 Mutation-testing tool for Microsoft Dynamics 365 Business Central **AL** code. Bun + TypeScript monorepo. Authoritative architecture is `design.md` (repo root); per-layer specs/plans under `docs/superpowers/`.
 
-## `ROADMAP.md` (repo root) — read it, and keep it current
-Open work, measured-but-unclosed correctness risks, and known product gaps live in `ROADMAP.md`, each with a stable `R<n>` id and an evidence pointer. **Add an item the moment you discover one** (a limitation you hit, a gap a real project would trip on) and mark items `done (<commit>)` as they land — session ledgers under `.superpowers/` are scratch and get archived; the roadmap is the durable record. Check it before starting new work: what you are about to build may already be filed, or blocked on something that is.
+## The roadmap — `docs/roadmap/` is the record, `ROADMAP.md` is a generated index
+Open work, measured-but-unclosed correctness risks, and known product gaps live **one item per file** in `docs/roadmap/R<nnn>.md` (zero-padded), each with a stable `R<n>` id, a `status` and an evidence pointer. Repo-root `ROADMAP.md` is a GENERATED index of titles, statuses and links — never hand-edit it; `bun scripts/roadmap-index.ts` rebuilds it and `scripts/roadmap-index.test.ts` fails if the two disagree.
+- **Reading:** the index answers "is this already filed?" for ~6 KT; reading one item is reading its file. The single-table form is gone because a field-wise read on `|` silently returned a fraction of a row and looked complete (R118) — one file per row makes that impossible.
+- **Adding:** **file an item the moment you discover one** (a limitation you hit, a gap a real project would trip on) — write `docs/roadmap/R<nnn>.md`, then regenerate. Two sessions filing at once cannot collide.
+- **Closing:** mark `status` `done (<commit>)` as it lands, then regenerate. Session ledgers under `.superpowers/` are scratch and get archived; the roadmap is the durable record.
+- Check it before starting new work: what you are about to build may already be filed, or blocked on something that is.
 
 ## Packages (workspaces under `packages/`)
 - `engine` — AST (tree-sitter-al), `MutationSpec`, semantic layer, `astSubtreeHash`.

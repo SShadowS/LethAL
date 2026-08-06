@@ -6,8 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, the CLI surface,
 the `lethal.config.json` schema and the JSON report shape may all change between releases.
 
-Entries cite the `R<n>` id from [`ROADMAP.md`](ROADMAP.md), which carries the full evidence for
-each one.
+Entries cite the `R<n>` id from the roadmap; `docs/roadmap/R<nnn>.md` carries the full evidence for
+each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ## [Unreleased]
 

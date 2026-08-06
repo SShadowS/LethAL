@@ -485,7 +485,8 @@ The `LethAL Control` AL extension owns the state a republish of your app cannot 
 | File | Purpose |
 |------|---------|
 | `design.md` | Authoritative architecture |
-| `ROADMAP.md` | Open work, measured-but-unclosed risks, and known product gaps |
+| `docs/roadmap/` | Open work, measured-but-unclosed risks, and known product gaps — one file per item |
+| `ROADMAP.md` | Generated index of the above (`bun scripts/roadmap-index.ts`) |
 | `CHANGELOG.md` | What shipped in each release |
 | `packages/engine` | AL AST, `MutationSpec`, semantic analysis |
 | `packages/builtin-tier1` / `-tier2` | The mutation operators |

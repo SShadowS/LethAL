@@ -29,8 +29,11 @@ into each output filename; nothing else in the build consults a version field.
 
 1. Update `version` in the root `package.json`.
 2. Add the release's entry to [`CHANGELOG.md`](../CHANGELOG.md), Keep-a-Changelog style. Base it on
-   the rows marked `done` in [`ROADMAP.md`](../ROADMAP.md) since the last release — each roadmap row
-   carries the evidence, so the changelog can be specific instead of generic.
+   the rows marked `done` since the last release — [`ROADMAP.md`](../ROADMAP.md) is the generated
+   index (`grep -l '^status: "done' docs/roadmap/R*.md` enumerates them), and each row's own file
+   under [`docs/roadmap/`](roadmap/) carries the evidence, so the changelog can be specific instead
+   of generic. This is also when a row that has sat `done` for a release cycle gets its file
+   deleted; re-run `bun scripts/roadmap-index.ts` afterwards.
 3. Run the full local gate:
    ```bash
    bun run typecheck
