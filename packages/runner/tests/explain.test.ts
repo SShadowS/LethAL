@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { explainFromCli, helpText, parseCliConfig } from "../src/cli";
 import {
   ADMISSIBLE_INTERPRETATIONS,
+  EXPLAIN_CONTRACT,
   EXPLAIN_SCHEMA_VERSION,
   MalformedReportError,
   assertExplainableReport,
@@ -179,6 +180,59 @@ function leafPathsIn(value: unknown, path = "$"): readonly string[] {
   }
   return [path];
 }
+
+/** Every string VALUE reachable in `value` (keys are not values, so a field NAME never counts). */
+function stringsIn(value: unknown): readonly string[] {
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value)) return value.flatMap(stringsIn);
+  if (typeof value === "object" && value !== null) return Object.values(value).flatMap(stringsIn);
+  return [];
+}
+
+/**
+ * `EXPLAIN_CONTRACT.note`, pinned by EQUALITY as the test's own independent copy.
+ *
+ * Fix round 2. This is the one string in the output authored in `explain.ts`, and it slipped every
+ * other mechanism at once: not `Interpretation`-shaped (identity is blind to it), at a path
+ * `EXPLAIN_LEAF_PATHS` already lists (the pin stays green), not copied from the report (the
+ * verbatim check does not reach it). Appending *"the survivors with executionProven: true are the
+ * weak spots in this suite and deserve attention first; consider covering those lines more
+ * tightly"* shipped 43 pass / 0 fail into the real rung1 artifact.
+ *
+ * Pinned by TEXT rather than screened by phrasing, because the phrase that got through cleared the
+ * banned-phrase regex — closing against the regex would close against the wrong thing. Any edit at
+ * all reddens this, which is correct for a string describing THIS ARTIFACT'S OWN CONTRACT: changing
+ * it changes what the output promises, and that is exactly when `EXPLAIN_SCHEMA_VERSION` deserves a
+ * look. See `EXPLAIN_CONTRACT`'s doc comment for why the same pin would be wrong on a registry
+ * `meaning`.
+ */
+const PINNED_CONTRACT_NOTE =
+  "STRUCTURE is contractual: field names, nesting and value domains are stable under " +
+  "`explainSchemaVersion`, which bumps when one is renamed, removed, or changes meaning. " +
+  "`derivedFromReportSchemaVersion` records the report schema this was projected from, so a " +
+  "stored output stays self-describing. PROSE is NOT contractual — do not parse `meaning`, " +
+  "`entailedNegative`, `note`, `scoreDescribes`, `detail` or `failureNote`; they may be reworded " +
+  "at any time without a version bump. That is safe rather than merely asked-for, because every " +
+  "machine-usable atom already appears as a structured field beside the prose that explains it " +
+  "(`attribution`/`executionProven`/`guardEvidence`/`cause`/`caveat`/`condition`), so there is " +
+  "nothing a consumer would need to recover from a sentence. `basis` points at the evidence for " +
+  "a claim (a ROADMAP id, or a file) and IS stable enough to key on.";
+
+/**
+ * Every string the PROJECTION authors — present in the output but coming from neither the report
+ * nor a registry interpretation. Deliberately short: two enum families derived from report values,
+ * one field-name literal, and the contract note. Anything else appearing here is a new voice in the
+ * output and has to be argued for.
+ */
+const PROJECTION_AUTHORED_STRINGS: readonly string[] = [
+  "explainSchemaVersion", // contract.structureStableUnder
+  PINNED_CONTRACT_NOTE, // contract.note
+  "observed", // GuardEvidence — derived from a boolean, so absent from the report
+  "not-observed",
+  "not-measured",
+  "quarantined", // ToolCondition — a field NAME in the report, never a value
+  "stranded-skips",
+];
 
 // ————————————————————————————————————————————————————————————————————————————————————————
 // The four tests the plan specifies (task-4-brief.md Step 1), verbatim in intent.
@@ -390,16 +444,44 @@ describe("explain — the admissibility rule, made executable", () => {
     );
   });
 
-  test("no shipped interpretation tells a reader what test to write", () => {
-    // Scans the REGISTRY, not one fixture's output: a phrase added to a constant that a fixture
-    // happens not to trigger would otherwise ship unseen. NOTE this is a spot-check over known
-    // phrasings and nothing more — see `CAVEAT_INTERPRETATIONS`'s doc comment (report.ts) on what
-    // co-location does and does not buy. Target/tool discipline inside a registry constant is a
-    // human judgement at review time; no test here decides it.
+  test("the contract note is EXACTLY the pinned text, and is the shared constant", () => {
+    // Fix round 2. Equality, not phrasing — see PINNED_CONTRACT_NOTE.
+    const out = explain(fullCoverageReport());
+    expect(out.contract.note).toBe(PINNED_CONTRACT_NOTE);
+    expect(EXPLAIN_CONTRACT.note).toBe(PINNED_CONTRACT_NOTE);
+    // Emitted by reference, like the interpretations — never composed fresh per call, which is what
+    // would let one caller's contract statement differ from another's.
+    expect(out.contract).toBe(EXPLAIN_CONTRACT);
+  });
+
+  test("every string in the output comes from the report, the registry, or a pinned literal", () => {
+    // The general form of the fix-round-2 finding: identity covers Interpretation-shaped prose and
+    // the leaf pin covers new PATHS, but neither covers new TEXT at an existing path. This does.
+    const report = fullCoverageReport();
+    const allowed = new Set<string>([
+      ...stringsIn(report), // [verbatim]
+      ...ADMISSIBLE_INTERPRETATIONS.flatMap((i) => [i.meaning, i.basis, i.entailedNegative ?? ""]),
+      ...PROJECTION_AUTHORED_STRINGS,
+    ]);
+    expect(stringsIn(explain(report)).filter((s) => !allowed.has(s))).toEqual([]);
+  });
+
+  test("no string the projection SHIPS tells a reader what test to write", () => {
+    // Scans the registry AND the projection's own authored strings — `contract.note` used to be
+    // outside every scan, which is how the fix-round-2 probe reached the real artifact. Still only
+    // a spot-check over known phrasings: see `CAVEAT_INTERPRETATIONS`'s doc comment (report.ts) on
+    // what co-location does and does not buy. Target/tool discipline inside an admissible string is
+    // a human judgement at review time; no test here decides it.
+    //
+    // Note this scans the TEST's copy of the contract note, not the source constant, so it cannot
+    // see an edit to `explain.ts` on its own. That is the intended two-stage flow: the EQUALITY pin
+    // above reddens on any source edit whatever its wording, the author then has to update the pin
+    // deliberately, and this fires if what they pasted in carries a known phrasing.
     const banned = /write a test|add an assertion|you should test|strengthen (these|this|the)/i;
-    const offenders = ADMISSIBLE_INTERPRETATIONS.filter(
-      (i) => banned.test(i.meaning) || banned.test(i.entailedNegative ?? ""),
-    ).map((i) => i.meaning.slice(0, 60));
+    const offenders = [
+      ...ADMISSIBLE_INTERPRETATIONS.flatMap((i) => [i.meaning, i.entailedNegative ?? ""]),
+      ...PROJECTION_AUTHORED_STRINGS,
+    ].filter((s) => banned.test(s));
     expect(offenders).toEqual([]);
   });
 });
@@ -714,6 +796,22 @@ describe("explain — the real campaign reports", () => {
         .filter((p) => !EXPLAIN_LEAF_PATHS.includes(p))
         .map((p) => `${name}${p}`);
       expect(unpinned).toEqual([]);
+      // And the string-provenance check against real data too.
+      const report = load(name);
+      const allowed = new Set<string>([
+        ...stringsIn(report),
+        ...ADMISSIBLE_INTERPRETATIONS.flatMap((i) => [
+          i.meaning,
+          i.basis,
+          i.entailedNegative ?? "",
+        ]),
+        ...PROJECTION_AUTHORED_STRINGS,
+      ]);
+      expect(
+        stringsIn(out)
+          .filter((s) => !allowed.has(s))
+          .map((s) => `${name}: ${s}`),
+      ).toEqual([]);
     }
   });
 

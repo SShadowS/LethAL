@@ -3557,6 +3557,18 @@ async function runMutantsOnBackend(args: {
     await activateOnce(args.backend, args.safety, m.mutantId);
     let verdict: SessionVerdict = "survived";
     let killingTest: string | undefined;
+    /**
+     * Every `failureNote` this loop composes is copied VERBATIM into the report and out again
+     * through `lethal explain` (`ExplainNotMeasured.failureNote`), so it reaches every consumer of
+     * this run unedited — the projection deliberately does not rewrite it, because silently editing
+     * the target's own recorded note would be empty-vs-empty in a new costume.
+     *
+     * The target/tool line therefore applies HERE, at the write sites, and nothing checks it: say
+     * what LethAL's own machinery did and what to do about IT — `:3700`'s "raise the floor with
+     * --mutant-timeout-ms and re-run with --resume" is the model — never what test the reader
+     * should write about their own code. See explain.ts's "THE LINE" for why, and for the measured
+     * cost of getting it wrong.
+     */
     let failureNote: string | undefined;
     let cause: "deadline-exceeded" | "unstable" | undefined;
     // Fix round 2, residual 1 (events.ts doc comment): the exact instant the kill-confirmation

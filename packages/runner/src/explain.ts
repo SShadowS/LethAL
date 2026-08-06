@@ -41,27 +41,34 @@ import type { MutantVerdict } from "./store";
  * constant in `report.ts` or `selection.ts`, and `ADMISSIBLE_INTERPRETATIONS` below is that closed
  * set.
  *
- * TWO tests enforce that, and it takes both — this is the correction from fix round 1, where the
- * first test alone was described as covering what it did not:
+ * FOUR tests enforce that, and it takes all four. Each was added because the previous set was
+ * described as covering something it did not — the list below states the scope of each, and the
+ * hole it does NOT close, deliberately:
  *
- *   - An IDENTITY check over every `Interpretation`-shaped object in the output. This stops an
- *     inline interpretation, and only that. It is SHAPE-SCOPED by construction, so a new
- *     `summary: string` on the output or an `advice: string` on every survivor is invisible to it
- *     — measured: three such fields, carrying "these deserve attention first", shipped green past
- *     it.
+ *   - An IDENTITY check over every `Interpretation`-shaped object in the output. Stops an inline
+ *     interpretation, and only that. SHAPE-SCOPED by construction, so a new `summary: string` on
+ *     the output or an `advice: string` on every survivor is invisible to it — measured: three such
+ *     fields, carrying "these deserve attention first", shipped green past it (fix round 1).
  *   - A PATH PIN over every leaf in the output (`EXPLAIN_LEAF_PATHS`, explain.test.ts). Any leaf at
  *     an unlisted path fails, whatever its type or wording. A new field carrying advice — prose or
  *     a priority NUMBER, which `SessionReport.survivorsByProcedure`'s own doc comment refuses for
- *     the same reason — dies by construction rather than by phrasing.
+ *     the same reason — dies by construction. Blind to new TEXT at a path that already exists.
+ *   - A STRING-PROVENANCE check: every string in the output must come from the report, from a
+ *     registry interpretation, or from a short pinned list of strings this projection authors.
+ *     Closes new text at an existing path in general.
+ *   - An EQUALITY PIN on `EXPLAIN_CONTRACT.note`, the one string authored here. Appending
+ *     target-prescriptive advice to it slipped all three checks above at once and shipped into the
+ *     real rung1 artifact (fix round 2); the pin reddens on any edit at all, whatever its wording.
  *
  * The pinned path set is also, exactly, the structure `EXPLAIN_SCHEMA_VERSION` versions: the test
  * that stops smuggled advice is the same test that stops an unversioned schema change.
  *
- * What NEITHER test can do is judge whether an admissible interpretation's PROSE respects the
- * target/tool line below. Advice added to a shared registry constant ships green — see the note on
+ * What NONE of them can do is judge whether an ADMISSIBLE string's prose respects the target/tool
+ * line below. Advice added to a shared registry constant ships green — see the note on
  * `CAVEAT_INTERPRETATIONS` (report.ts). Co-location buys keying, not editorial discipline; that
  * half is a human judgement at review time, and saying so is better than implying a mechanism
- * covers it.
+ * covers it. The same is true one layer out, at the `failureNote` write sites this projection
+ * copies through verbatim — see the note at `orchestrator.ts`'s `let failureNote` declaration.
  *
  * If a useful thing to say has no field to hang on, the fix is to add the FIELD to the report
  * first, as its own change with its own justification — never to let this projection assert
@@ -261,9 +268,28 @@ export interface ExplainOutput {
   readonly toolConditions: readonly ExplainToolCondition[];
 }
 
-/** The contract text, as one constant so redeploys of the same `EXPLAIN_SCHEMA_VERSION` say the
- *  identical thing. */
-const EXPLAIN_CONTRACT: ExplainContract = {
+/**
+ * The contract text, as one constant so redeploys of the same `EXPLAIN_SCHEMA_VERSION` say the
+ * identical thing.
+ *
+ * Fix round 2. EXPORTED, and its exact text pinned by `explain.test.ts`, because `note` is the ONE
+ * string in the whole output authored in this file: not `Interpretation`-shaped (so the identity
+ * check cannot see it), sitting at a path the leaf pin already lists (so the pin stays green), and
+ * not copied from the report (so the verbatim check does not reach it). Appending
+ * target-prescriptive advice to it shipped 43 pass / 0 fail into the real rung1 artifact — Important
+ * 1's exact failure mode, relocated onto an existing pinned path.
+ *
+ * The closure is by EQUALITY against a literal in the test, not by phrasing: any edit at all
+ * reddens, whatever it says. That is the right trade HERE and would be the wrong one for a registry
+ * interpretation — `c76cc50` deliberately dropped an equality pin on
+ * `ATTRIBUTION_INTERPRETATIONS.object.entailedNegative` because a legitimate reword would have
+ * turned a behavioural detector red for the wrong reason. The difference is what the string is
+ * ABOUT: a registry `meaning` describes report data and is expected to improve, and this project
+ * says so by declaring prose non-contractual; `note` describes THIS ARTIFACT'S OWN CONTRACT, so a
+ * change to it is a change to what the output promises — precisely the moment
+ * `EXPLAIN_SCHEMA_VERSION` deserves a look.
+ */
+export const EXPLAIN_CONTRACT: ExplainContract = {
   structureStableUnder: "explainSchemaVersion",
   proseIsContractual: false,
   note:
