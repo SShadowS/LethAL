@@ -63,7 +63,7 @@ afterEach(async () => {
 
 // `parseAnchorArgs` and its two tests were deleted with `scripts/campaign/anchors.ts`, its only
 // caller. `lethal campaign anchors` parses --report/--project through `parseCliConfig` (covered in
-// cli.test.ts) and DERIVES the config path from the manifest plus --rung, so there is no
+// cli.test.ts) and DERIVES the config path from the manifest plus --stage, so there is no
 // free-form --config flag left to parse.
 
 describe("parseAnchorConfig", () => {

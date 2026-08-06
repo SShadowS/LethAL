@@ -62,7 +62,7 @@ import type { NormalizedMutant } from "../itest/mutant-equality";
 import { diffMutants, normalizeForComparison } from "../itest/mutant-equality";
 import { assertCardinality } from "./campaign-anchors";
 import { parseAnchorConfig, runAnchorCheck } from "./campaign-anchors-run";
-import { freezeRungTo } from "./campaign-freeze";
+import { freezeStageTo } from "./campaign-freeze";
 import { UncommittedPathError, assertCommitted } from "./campaign-git";
 import { findRepoRoot, readCampaignManifest, resolveRecordsDirIn } from "./campaign-manifest";
 import type { SessionReport } from "./report";
@@ -244,10 +244,12 @@ export async function assertCampaignPathsCommitted(
 export interface CampaignArgsBase {
   /** Path to the campaign manifest (`{ recordsDir, campaignId }`), as given on the command line. */
   readonly manifestPath: string;
-  /** The rung this invocation is about — `rung1`, `rung2`, ... It NAMES the committed files
-   *  (`<rung>.precommit.md`, `<rung>.anchors.json`, `<rung>.baseline.json`), so it is validated as
-   *  a single filename component and never a path. */
-  readonly rung: string;
+  /** The campaign stage this invocation is about. It NAMES the committed files
+   *  (`<stage>.precommit.md`, `<stage>.anchors.json`, `<stage>.baseline.json`), so it is validated
+   *  as a single filename component and never a path. The name is the campaign author's to choose —
+   *  the 2026-08-03 campaign's stages are `rung1`, `rung2`, `rung3`, and those files are unchanged
+   *  by this flag's rename. */
+  readonly stage: string;
   /** The report a run produced with `--out`. Not itself a committed record. */
   readonly reportPath: string;
   /** Phase notifications, in order. `"assert-committed"` is always first. */
@@ -270,10 +272,10 @@ export interface CampaignAnchorsArgs extends CampaignArgsBase {
   readonly projectDir?: string;
 }
 
-/** A rung names files; it is not a path. `../rung1` or `sub/rung1` would place (or read) a
+/** A stage names files; it is not a path. `../stage1` or `sub/stage1` would place (or read) a
  *  campaign's records outside the directory the manifest designated, which is the whole thing
  *  `resolveRecordsDir`'s containment checks exist to prevent — reintroducing it one layer up. */
-const RUNG_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const STAGE_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 interface ResolvedCampaign {
   readonly recordsDir: string;
@@ -283,7 +285,7 @@ interface ResolvedCampaign {
   readonly git: GitRunner;
   readonly log: (line: string) => void;
   readonly step: (name: string) => void;
-  /** `<recordsDir>/<rung>.<suffix>`, absolute. */
+  /** `<recordsDir>/<stage>.<suffix>`, absolute. */
   readonly file: (suffix: string) => string;
   /** The same file as a repository-relative, forward-slash path — what git is asked about. */
   readonly rel: (abs: string) => string;
@@ -312,10 +314,10 @@ function toRepoRelative(repoRoot: string, abs: string): string {
  * campaign's own repository, so walking up from it is the resolution that works in both.
  */
 function resolveCampaign(args: CampaignArgsBase): ResolvedCampaign {
-  const { rung } = args;
-  if (typeof rung !== "string" || !RUNG_RE.test(rung)) {
+  const { stage } = args;
+  if (typeof stage !== "string" || !STAGE_RE.test(stage)) {
     throw new Error(
-      `campaign: invalid --rung ${JSON.stringify(rung)}. A rung names the committed files (<rung>.precommit.md, <rung>.anchors.json, <rung>.baseline.json) inside the records directory, so it must be a single plain name matching ${RUNG_RE.source} — not a path.`,
+      `campaign: invalid --stage ${JSON.stringify(stage)}. A stage names the committed files (<stage>.precommit.md, <stage>.anchors.json, <stage>.baseline.json) inside the records directory, so it must be a single plain name matching ${STAGE_RE.source} — not a path.`,
     );
   }
   const manifestAbs = resolve(args.manifestPath);
@@ -331,12 +333,12 @@ function resolveCampaign(args: CampaignArgsBase): ResolvedCampaign {
     git: args.git ?? createRepoGitRunner(repoRoot),
     log,
     step: (name) => args.onStep?.(name),
-    file: (suffix) => join(recordsDir, `${rung}.${suffix}`),
+    file: (suffix) => join(recordsDir, `${stage}.${suffix}`),
     rel: (abs) => toRepoRelative(repoRoot, abs),
   };
 }
 
-/** The manifest is checked alongside the rung's own records: a manifest edited after the run can
+/** The manifest is checked alongside the stage's own records: a manifest edited after the run can
  *  redirect `recordsDir` at a different (or freshly minted) set of records, which is the same
  *  failure as editing the pre-commitment, one level up. */
 function committedPaths(c: ResolvedCampaign, records: readonly string[]): string[] {
@@ -350,12 +352,12 @@ function announceChecked(c: ResolvedCampaign, paths: readonly string[]): void {
 }
 
 /**
- * `lethal campaign freeze` — archive a rung's report and freeze its per-mutant verdicts, refusing
- * unless the manifest and the rung's committed records are clean in git FIRST.
+ * `lethal campaign freeze` — archive a stage's report and freeze its per-mutant verdicts, refusing
+ * unless the manifest and the stage's committed records are clean in git FIRST.
  *
  * The ordering is not cosmetic. `assertMatchesBaseline` (baseline-guard.ts) RECORDS a baseline when
  * none exists, so a freeze that ran before the git check and refused after it would have minted
- * `<rung>.baseline.json` from the very run it then rejected — and every later rung would compare
+ * `<stage>.baseline.json` from the very run it then rejected — and every later stage would compare
  * against that.
  */
 export async function runCampaignFreeze(args: CampaignFreezeArgs): Promise<number> {
@@ -364,17 +366,17 @@ export async function runCampaignFreeze(args: CampaignFreezeArgs): Promise<numbe
   const anchors = c.file("anchors.json");
   const baseline = c.file("baseline.json");
 
-  // The anchor config and the baseline are conditional because not every rung has them (rung 2 and
-  // 3 of the 2026-08-03 campaign carry no anchors.json, and the first freeze of a rung is where its
-  // baseline is minted). Both are named in the printed list when they ARE checked, so a check that
-  // did not run is visible rather than implied.
+  // The anchor config and the baseline are conditional because not every stage has them (stages
+  // `rung2` and `rung3` of the 2026-08-03 campaign carry no anchors.json, and the first freeze of a
+  // stage is where its baseline is minted). Both are named in the printed list when they ARE
+  // checked, so a check that did not run is visible rather than implied.
   const records = [precommit, ...[anchors, baseline].filter((p) => existsSync(p))];
   const paths = committedPaths(c, records);
   c.step("assert-committed");
   await assertCampaignPathsCommitted(paths, { git: c.git, repoRoot: c.repoRoot });
   announceChecked(c, paths);
 
-  // A count typed on the command line AFTER a run is not a pre-commitment. When the rung has a
+  // A count typed on the command line AFTER a run is not a pre-commitment. When the stage has a
   // committed anchor config, that file's `expectedMutantCount` is the pre-commitment, and the two
   // must agree — a disagreement means one of them was written after seeing the results.
   c.step("cross-check-expected");
@@ -388,12 +390,12 @@ export async function runCampaignFreeze(args: CampaignFreezeArgs): Promise<numbe
   }
 
   c.step("freeze");
-  await freezeRungTo(args.reportPath, args.rung, args.expectedMutantCount, c.recordsDir);
+  await freezeStageTo(args.reportPath, args.stage, args.expectedMutantCount, c.recordsDir);
   return 0;
 }
 
 /**
- * `lethal campaign anchors` — run the rung's pre-committed anchor gate over a report. Returns 0
+ * `lethal campaign anchors` — run the stage's pre-committed anchor gate over a report. Returns 0
  * when every checked anchor passed, 1 when one failed; throws when the gate could not be evaluated
  * at all (uncommitted records, unreadable report, invalid config, cardinality mismatch).
  */
@@ -417,11 +419,11 @@ export async function runCampaignAnchors(args: CampaignAnchorsArgs): Promise<num
 }
 
 /**
- * `lethal campaign compare` — diff a report against the rung's COMMITTED per-mutant baseline,
+ * `lethal campaign compare` — diff a report against the stage's COMMITTED per-mutant baseline,
  * writing nothing.
  *
  * The difference from `freeze` is the whole reason this is its own verb: `assertMatchesBaseline`
- * mints a baseline when the file is absent, which is right for the run that establishes a rung and
+ * mints a baseline when the file is absent, which is right for the run that establishes a stage and
  * catastrophic for a comparison — it would report "matches" against a file it had just written out
  * of the report it was comparing. So a missing baseline is a REFUSAL here, and nothing on disk is
  * created or modified on any path through this function.
@@ -449,18 +451,18 @@ export async function runCampaignCompare(args: CampaignArgsBase): Promise<number
   // length as the pre-commitment: a truncated report would otherwise be reported as "these N
   // mutants all agree", which is true and beside the point.
   c.step("cardinality");
-  assertCardinality(report, baseline.length, `${args.rung} compare`);
+  assertCardinality(report, baseline.length, `${args.stage} compare`);
 
   c.step("compare");
   const diffs = diffMutants(baseline, normalizeForComparison(report));
   if (diffs.length === 0) {
     c.log(
-      `[compare] ${args.rung}: identical — all ${baseline.length} mutant(s) match the committed baseline at ${baselinePath}`,
+      `[compare] ${args.stage}: identical — all ${baseline.length} mutant(s) match the committed baseline at ${baselinePath}`,
     );
     return 0;
   }
   c.log(
-    `[compare] ${args.rung}: ${diffs.length} per-mutant difference(s) against the committed baseline at ${baselinePath}:`,
+    `[compare] ${args.stage}: ${diffs.length} per-mutant difference(s) against the committed baseline at ${baselinePath}:`,
   );
   for (const d of diffs) c.log(`[compare]   - ${d}`);
   c.log(`[compare] RESULT: DIFFERENT (${diffs.length} mutant(s))`);

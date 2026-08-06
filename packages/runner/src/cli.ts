@@ -466,16 +466,16 @@ export interface ExplainCliConfig {
  *
  * The verb is a POSITIONAL (`positionals[1]`), like `lethal explain`'s report path, because the
  * three verbs are one command's modes rather than three commands: they take the same manifest, the
- * same rung and the same report, and they all refuse identically if the rung's committed records
- * are dirty. `--rung` names the files (`<rung>.precommit.md`, `<rung>.anchors.json`,
- * `<rung>.baseline.json`) inside the records directory the manifest designates — see
+ * same stage and the same report, and they all refuse identically if the stage's committed records
+ * are dirty. `--stage` names the files (`<stage>.precommit.md`, `<stage>.anchors.json`,
+ * `<stage>.baseline.json`) inside the records directory the manifest designates — see
  * `campaign-subcommands.ts`.
  */
 export interface CampaignCliConfig {
   readonly mode: "campaign";
   readonly action: "freeze" | "anchors" | "compare";
   readonly manifestPath: string;
-  readonly rung: string;
+  readonly stage: string;
   readonly reportPath: string;
   /** `freeze` only, where it is REQUIRED: the mutant count pre-committed before the run. */
   readonly expectedMutantCount?: number;
@@ -566,9 +566,9 @@ USAGE
   lethal force-reset-lease --server <url> --instance <name> --config <path> [--project <dir>]
   lethal doctor            --config <path> [--project <dir>]
   lethal explain           <report.json>
-  lethal campaign freeze   --manifest <path> --rung <name> --report <path> --expect-mutants <n>
-  lethal campaign anchors  --manifest <path> --rung <name> --report <path> [--project <dir>]
-  lethal campaign compare  --manifest <path> --rung <name> --report <path>
+  lethal campaign freeze   --manifest <path> --stage <name> --report <path> --expect-mutants <n>
+  lethal campaign anchors  --manifest <path> --stage <name> --report <path> [--project <dir>]
+  lethal campaign compare  --manifest <path> --stage <name> --report <path>
 
 RUN — required
   --project <dir>            AL project to mutate (the app under test)
@@ -672,28 +672,29 @@ EXPLAIN — what a finished report MEANS, as JSON on stdout
 CAMPAIGN — the measurement gates, with 'committed before the run' machine-checked
   A measurement campaign states what it expects in a file, COMMITS it, and only then runs. These
   three verbs are what enforce that: each one reads the campaign manifest, resolves the records
-  directory it names, and REFUSES unless the manifest and the rung's own committed records are
+  directory it names, and REFUSES unless the manifest and the stage's own committed records are
   clean in git BEFORE it reads a report. A pre-commitment that does not exist is a refusal, not a
   pass — 'git status' answers nothing at all for a missing or ignored path, which reads exactly
   like 'clean'.
   --manifest <path>          campaign manifest: {"recordsDir": ..., "campaignId": ...}. The
                              repository IT lives in is the repository the git check runs against
-  --rung <name>              names the committed <rung>.precommit.md, <rung>.anchors.json and
-                             <rung>.baseline.json inside that records directory
+  --stage <name>             the campaign stage this invocation is about. You choose the name; it
+                             names the committed <stage>.precommit.md, <stage>.anchors.json and
+                             <stage>.baseline.json inside that records directory
   --report <path>            the JSON report a run wrote with --out
   --expect-mutants <n>       freeze only, REQUIRED: the mutant count pre-committed before the run.
                              Never derived from the report — a count read out of the report being
                              checked passes on every report ever produced, including an empty one.
-                             When the rung has a committed anchor config, this must equal ITS
+                             When the stage has a committed anchor config, this must equal ITS
                              expectedMutantCount or the freeze is refused
   --project <dir>            anchors only, when the committed config sets reconcileNotInstrumented
   freeze    archive the report and freeze its per-mutant verdicts under the records directory.
             Cardinality is asserted BEFORE any file is written: the baseline guard RECORDS a
             baseline when none exists, so a truncated report freezing itself would then agree with
             itself forever
-  anchors   run the rung's pre-committed anchor gate. Exit 0 = every checked anchor passed; the
+  anchors   run the stage's pre-committed anchor gate. Exit 0 = every checked anchor passed; the
             EXIT CODE is the gate, not the printed text
-  compare   diff a report against the rung's committed per-mutant baseline, WRITING NOTHING. A
+  compare   diff a report against the stage's committed per-mutant baseline, WRITING NOTHING. A
             missing baseline is refused rather than recorded — that is the whole difference from
             freeze
 
@@ -773,17 +774,17 @@ export const RUN_FLAGS = {
   "allow-large-run": { type: "boolean", default: false },
   // Task 6 (event-stream refactor): see `RunCliConfig.progressOutPath`.
   "progress-out": { type: "string" },
-  // `lethal campaign` (subsystem D): the campaign manifest, the rung whose committed records this
+  // `lethal campaign` (subsystem D): the campaign manifest, the stage whose committed records this
   // invocation is about, the report to gate, and freeze's pre-committed mutant count. In the
   // shared table because `parseArgs` runs in strict mode over ONE option set for every subcommand.
   manifest: { type: "string" },
-  rung: { type: "string" },
+  stage: { type: "string" },
   report: { type: "string" },
   "expect-mutants": { type: "string" },
 } as const;
 
 /**
- * `lethal campaign <verb> --manifest <path> --rung <name> --report <path> [...]`.
+ * `lethal campaign <verb> --manifest <path> --stage <name> --report <path> [...]`.
  *
  * Every flag that does not apply to the given verb is REFUSED rather than ignored, matching
  * `--keep-env`/`--allow-expiring-env`'s treatment above: `--expect-mutants` on `anchors` or
@@ -794,7 +795,7 @@ export const RUN_FLAGS = {
 function parseCampaignConfig(
   values: {
     manifest?: string | undefined;
-    rung?: string | undefined;
+    stage?: string | undefined;
     report?: string | undefined;
     "expect-mutants"?: string | undefined;
     project?: string | undefined;
@@ -814,11 +815,11 @@ function parseCampaignConfig(
         "records directory; the repository it lives in is the repository the git check runs against)",
     );
   }
-  const rung = values.rung;
-  if (rung === undefined || rung === "") {
+  const stage = values.stage;
+  if (stage === undefined || stage === "") {
     throw new Error(
-      "missing required --rung <name> (names the committed <rung>.precommit.md / " +
-        "<rung>.anchors.json / <rung>.baseline.json inside the records directory)",
+      "missing required --stage <name> (names the committed <stage>.precommit.md / " +
+        "<stage>.anchors.json / <stage>.baseline.json inside the records directory)",
     );
   }
   const reportPath = values.report;
@@ -851,13 +852,13 @@ function parseCampaignConfig(
           "report against itself and pass on every report ever produced, including an empty one.",
       );
     }
-    return { mode: "campaign", action, manifestPath, rung, reportPath, expectedMutantCount };
+    return { mode: "campaign", action, manifestPath, stage, reportPath, expectedMutantCount };
   }
   return {
     mode: "campaign",
     action,
     manifestPath,
-    rung,
+    stage,
     reportPath,
     ...(values.project !== undefined && values.project !== ""
       ? { projectDir: values.project }
@@ -3113,7 +3114,7 @@ export async function explainFromCli(parsed: ExplainCliConfig): Promise<number> 
 export async function campaignFromCli(parsed: CampaignCliConfig): Promise<number> {
   const base = {
     manifestPath: parsed.manifestPath,
-    rung: parsed.rung,
+    stage: parsed.stage,
     reportPath: parsed.reportPath,
   };
   if (parsed.action === "freeze") {

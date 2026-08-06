@@ -10,19 +10,23 @@ makes a number believable is not the run — it is what was written down before 
 
 ## The mistake to expect
 
-The 2026-08-03 campaign (`docs/campaign/2026-08-03-do/` — a preflight rung plus three measured
-rungs, records committed per rung) followed CLAUDE.md throughout — every fix red-checked, every
+The 2026-08-03 campaign (`docs/campaign/2026-08-03-do/` — a preflight stage plus three measured
+stages, records committed per stage) followed CLAUDE.md throughout — every fix red-checked, every
 gate per-mutant rather than aggregate — **and still made two errors.** It pre-committed the wrong
-QUANTITY as its expected mutant count, and it silently dropped a gate between rungs. Both became
+QUANTITY as its expected mutant count, and it silently dropped a gate between stages. Both became
 visible as errors rather than as results, and both were caught by rules that are nowhere in
 CLAUDE.md.
+
+> That campaign named its stages `rung0`, `rung1`, `rung2`, `rung3`, and its committed records still
+> carry those names on disk. This page says "stage 1/2/3" for the same things — a stage name is
+> whatever the campaign author picked, and `--stage rung1` still resolves those exact files.
 
 That is the argument for this skill. CLAUDE.md governs **code changes**: prove the fix is
 load-bearing, gate the frozen fixtures per mutant. These five rules govern **measurements**, where
 the failure is not a broken build but a number you now believe for the wrong reason. Following
 CLAUDE.md is demonstrably not sufficient to avoid them.
 
-## Preflight — this is what a rung 0 is
+## Preflight — this is what a stage 0 is
 
 ```bash
 bun packages/runner/src/cli.ts doctor --config <lethal.config.json> [--project <dir>]
@@ -43,19 +47,19 @@ objects survives a clean dry run and fails later, live.
 This is what made the campaign's two errors visible *as* errors. Half of it is now machine-checked:
 `lethal campaign freeze | anchors | compare` each read a campaign manifest
 (`{"recordsDir": ..., "campaignId": ...}`), resolve the records directory it names, and REFUSE
-unless the manifest and that rung's own committed records are clean in git — before reading a
+unless the manifest and that stage's own committed records are clean in git — before reading a
 report.
 
 ```bash
-bun packages/runner/src/cli.ts campaign freeze  --manifest <path> --rung <name> --report <out.json> --expect-mutants <n>
-bun packages/runner/src/cli.ts campaign anchors --manifest <path> --rung <name> --report <out.json> [--project <dir>]
-bun packages/runner/src/cli.ts campaign compare --manifest <path> --rung <name> --report <out.json>
+bun packages/runner/src/cli.ts campaign freeze  --manifest <path> --stage <name> --report <out.json> --expect-mutants <n>
+bun packages/runner/src/cli.ts campaign anchors --manifest <path> --stage <name> --report <out.json> [--project <dir>]
+bun packages/runner/src/cli.ts campaign compare --manifest <path> --stage <name> --report <out.json>
 ```
 
-The records are `<rung>.precommit.md`, `<rung>.anchors.json` and `<rung>.baseline.json` inside that
-directory. (`scripts/campaign/{freeze,anchors}.ts` are gone — these verbs replaced them, and derive
-the config path from the manifest plus `--rung` rather than taking it as a free-form flag, which is
-what makes the file the gate READS and the file the gate CHECKS provably the same file.)
+The records are `<stage>.precommit.md`, `<stage>.anchors.json` and `<stage>.baseline.json` inside
+that directory. (`scripts/campaign/{freeze,anchors}.ts` are gone — these verbs replaced them, and
+derive the config path from the manifest plus `--stage` rather than taking it as a free-form flag,
+which is what makes the file the gate READS and the file the gate CHECKS provably the same file.)
 
 **Machine-checked:** the path EXISTS on disk, git TRACKS it (echo-verified through `git ls-files`,
 so an answer about some other path cannot be read as an answer about this one), and it is clean
@@ -71,17 +75,17 @@ So commit the file, then run. Never write the pre-commitment and commit it "alon
 Also still yours: `campaign anchors` evaluates three built-in anchors — `baseline-green`,
 `coverage-location`, `killed-at-least-one` — plus a `notinstrumented-reconciliation` when the config
 asks for it (that one THROWS rather than skipping when `--project` is missing; a requested gate item
-is never quietly dropped). Everything else in `<rung>.precommit.md` is prose the tool cannot check.
+is never quietly dropped). Everything else in `<stage>.precommit.md` is prose the tool cannot check.
 The driver already names one anchor it cannot derive from a report; name yours the same way. A clean
 exit must never read as "all of my expectations passed".
 
 ## Rule 2 — assert cardinality before any anchor reads the report
 
-Rung 1 pre-committed **176**, its gate refused, and the tool was right: `--dry-run` reports mutation
+Stage 1 pre-committed **176**, its gate refused, and the tool was right: `--dry-run` reports mutation
 **sites** (raw specs), while `SessionReport.mutants[]` holds **deployed** mutants after §3.2 dedup
 drops a Tier-1 mutant wherever a Tier-2 operator claims the same site. On real code that is
 **176 → 148** (-16%); also measured 991 → 973 and 476 → 473. The gap depends on the file's operator
-mix, so it cannot be estimated. Predicting one quantity from the other is what broke rung 1's gate.
+mix, so it cannot be estimated. Predicting one quantity from the other is what broke stage 1's gate.
 
 `assertCardinality` refuses first and independently, in `freeze`, `anchors` and `compare` alike:
 *"pre-committed mutant cardinality not met — expected 176, got 148. A gate comparing against a
@@ -93,12 +97,12 @@ plus per-file `sites=`/`deployed=`, and marks every dropped site `[not deployed 
 higher-tier operator]`. **Pre-commit the deployed number, read off that output.** The rule survives
 the fix, because the report is still a different artifact from the dry run.
 
-## Rule 3 — gates carry forward across rungs unless retired IN WRITING before the run
+## Rule 3 — gates carry forward across stages unless retired IN WRITING before the run
 
 This rule exists nowhere else in this repo, and it is the fix for a recorded plan defect.
 
-Rung 1's anchor 1 was "fenced baseline is 56/56 green". Rung 2's pre-committed gate list did not
-carry it. Rung 2 came back with **11 of 409 baseline tests failing** — the report flagged itself
+Stage 1's anchor 1 was "fenced baseline is 56/56 green". Stage 2's pre-committed gate list did not
+carry it. Stage 2 came back with **11 of 409 baseline tests failing** — the report flagged itself
 `narrowed-degraded [baseline-red, narrowed, tests-narrowed]` — and no gate caught it. Adding the
 gate after seeing it fail is exactly the rationalisation rule 1 exists to prevent, so it was
 recorded as a plan defect found by running the plan.
@@ -107,12 +111,12 @@ It is not cosmetic: R55 measured that tests failing at baseline are dropped from
 mutants covered only by them are recorded `no-coverage` — a real survivor converted into a
 non-finding.
 
-So: a rung's gate list starts as the previous rung's, in writing. Removing one is an act with a
+So: a stage's gate list starts as the previous stage's, in writing. Removing one is an act with a
 date and a reason, committed before the run.
 
 ## Rule 4 — retire, don't retune, and name the replacement
 
-Rung 1's anchor 2 pinned covered mutants to one procedure's line range, taken from an older record
+Stage 1's anchor 2 pinned covered mutants to one procedure's line range, taken from an older record
 (105 mutants, 92 no-coverage). Measured now: 15 no-coverage of 148, 133 covered across 14
 procedures. Coverage attribution had been substantially fixed since (R61–R63), so the anchor
 described a superseded reality.
@@ -125,26 +129,26 @@ carries the weight, or the expectation is simply gone.
 
 ## Rule 5 — record negative results
 
-An unreproduced finding is a finding. The model, from rung 3, verbatim:
+An unreproduced finding is a finding. The model, from stage 3, verbatim:
 
 > **R31's detector was not exercised, and no hole in it is demonstrated.**
 
-The rung-3 agent diagnosed a stale published test app; the setup was reconstructed exactly and it
+The stage-3 agent diagnosed a stale published test app; the setup was reconstructed exactly and it
 did not reproduce, because the agent had hit it through a path that is not LethAL's publish path.
 That was written down as a negative result and NOT filed as a roadmap row on the strength of one
-unreproduced account. A gate that passes vacuously gets recorded as vacuous too — rung 2's
+unreproduced account. A gate that passes vacuously gets recorded as vacuous too — stage 2's
 `notInstrumented` reconciliation passed with nothing to reconcile, and says so rather than counting
 as evidence.
 
-## The rung ladder
+## The ladder
 
-Three rungs, each gated before the next starts. The point of the ladder is that a failure at rung
-*n* is cheap and interpretable, because rung *n-1* already holds.
+Three stages, each gated before the next starts. The point of the ladder is that a failure at stage
+*n* is cheap and interpretable, because stage *n-1* already holds.
 
-| rung | question | gate to pass before the next |
+| stage | question | gate to pass before the next |
 |---|---|---|
 | **1 — mechanics** | can one real file be measured end to end? | two clean runs, verdict-identical per mutant on semantic identity, run 1 frozen |
-| **2 — repeatability** | does it hold at module scale, across several publish batches? | same, plus the carried gates of rung 1 (rule 3) |
+| **2 — repeatability** | does it hold at module scale, across several publish batches? | same, plus the carried gates of stage 1 (rule 3) |
 | **3 — consumer** | is the report legible to the thing that must act on it? | every claimed kill red-checked |
 
 Compare on semantic identity (`astHash` / `codeunitName` / `operatorName` / `operatorMajor`), never
@@ -152,10 +156,10 @@ Compare on semantic identity (`astHash` / `codeunitName` / `operatorName` / `ope
 first run and `campaign compare` REFUSES a missing one — that difference is the whole reason they
 are separate verbs.
 
-Rung 3 red-checks because **R86 is open: `failure_note` is NULL for every killed mutant, so no kill
+Stage 3 red-checks because **R86 is open: `failure_note` is NULL for every killed mutant, so no kill
 records why it died** — a false kill and a real one are indistinguishable in the record. Commit its
 reading rule before the consumer starts: **confusion is a hard finding, success is weak evidence.**
-A rung 3 can prove the report is illegible; it cannot prove it is legible, and the write-up must say
+A stage 3 can prove the report is illegible; it cannot prove it is legible, and the write-up must say
 which of those it got. If the consumer is an agent, `fixtures/do-campaign/` holds the workspace
 contract: a PreToolUse fence (`settings.json` + `fence-hook.ts`) whose `preflight.ts` must pass
 FIRST, because hooks fail open and a missing hook file means no fence at all, silently. Its threat
@@ -163,8 +167,8 @@ model is accident, not adversary, and `fence-probe-matrix.md` states the residua
 
 ## Choose the module by MEASURED coverage, not by name
 
-Rung 2's module was picked because a large test area *referenced* its codeunits. It came back
-**313 of 473 mutants `no-coverage` — 66%**, against rung 1's **10%** (15 of 148). The area had the
+Stage 2's module was picked because a large test area *referenced* its codeunits. It came back
+**313 of 473 mutants `no-coverage` — 66%**, against stage 1's **10%** (15 of 148). The area had the
 largest clean test count in the suite and barely executed the code. Rank candidates by measured
 per-test coverage, or accept that a large test area is not a covering one.
 
@@ -191,12 +195,12 @@ Two hard constraints on the same choice:
   `--stop-hung-sessions` attaches its hook only when a mutant is pending, so a baseline overrun has
   nothing to blame. Do not attribute that hang to `TestPage` as such — R69 says the cause is still
   unexplained. Either way it is a **rule-3 concern: carry the baseline-green gate**, and treat a
-  module whose covering tests open a non-trivial page as one you cannot measure yet. Rung 2 applied
+  module whose covering tests open a non-trivial page as one you cannot measure yet. Stage 2 applied
   this screen to reject two otherwise-good test areas.
 
 ## Narrow TESTS, not mutants — that is the cost lever
 
-Rung 2, 473 mutants over 4 batches: deploy 149 s, **baseline 740 s (69% of wall clock)**, mutants
+Stage 2, 473 mutants over 4 batches: deploy 149 s, **baseline 740 s (69% of wall clock)**, mutants
 171 s — per-mutant mean 1067 ms, **median 433 ms**. The baseline is paid PER BATCH (R45), so
 `--tests-only` is the only lever with real leverage at scale; `--only` narrows a phase that was
 already cheap.
@@ -206,7 +210,7 @@ The report flags itself `tests-narrowed`. That makes it a scoping decision to pr
 optimisation to apply quietly, and two runs are only comparable when the narrowing is identical
 across both.
 
-Know the budget class even though the default now covers it. Rung 1 stranded three times on mutants
+Know the budget class even though the default now covers it. Stage 1 stranded three times on mutants
 that were SLOW, not hung: deleting a `SetCurrentKey` makes the following filtered query scan, and on
 the fenced path a budget overrun is indistinguishable from a genuine strand, so the tier quarantines
 instead of scoring the mutant. `--mutant-timeout-ms 180000` eliminated both, while a genuinely

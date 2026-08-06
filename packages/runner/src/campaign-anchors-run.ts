@@ -131,7 +131,7 @@ export interface AnchorRunOutcome {
 // `parseAnchorArgs` lived here and hand-rolled `--report`/`--config`/`--project` for the deleted
 // `scripts/campaign/anchors.ts`. It went with the script: `lethal campaign anchors` parses those
 // through `parseCliConfig` (cli.ts) like every other subcommand, and DERIVES `configPath` from the
-// manifest's records directory plus `--rung` rather than taking it as a free-form flag — which is
+// manifest's records directory plus `--stage` rather than taking it as a free-form flag — which is
 // what makes the file the gate reads and the file the gate checks provably the same file.
 
 /**

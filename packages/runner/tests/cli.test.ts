@@ -154,7 +154,7 @@ describe("parseCliConfig — lethal campaign (subsystem D)", () => {
   const BASE = [
     "--manifest",
     "docs/campaign/x/campaign.json",
-    "--rung",
+    "--stage",
     "rung1",
     "--report",
     "r.json",
@@ -165,7 +165,7 @@ describe("parseCliConfig — lethal campaign (subsystem D)", () => {
       mode: "campaign",
       action: "freeze",
       manifestPath: "docs/campaign/x/campaign.json",
-      rung: "rung1",
+      stage: "rung1",
       reportPath: "r.json",
       expectedMutantCount: 148,
     });
@@ -176,14 +176,14 @@ describe("parseCliConfig — lethal campaign (subsystem D)", () => {
       mode: "campaign",
       action: "anchors",
       manifestPath: "docs/campaign/x/campaign.json",
-      rung: "rung1",
+      stage: "rung1",
       reportPath: "r.json",
     });
     expect(parseCliConfig(["campaign", "compare", ...BASE])).toEqual({
       mode: "campaign",
       action: "compare",
       manifestPath: "docs/campaign/x/campaign.json",
-      rung: "rung1",
+      stage: "rung1",
       reportPath: "r.json",
     });
   });
@@ -202,13 +202,13 @@ describe("parseCliConfig — lethal campaign (subsystem D)", () => {
 
   test("each required flag is refused by name when absent", () => {
     expect(() =>
-      parseCliConfig(["campaign", "anchors", "--rung", "rung1", "--report", "r.json"]),
+      parseCliConfig(["campaign", "anchors", "--stage", "rung1", "--report", "r.json"]),
     ).toThrow(/--manifest/);
     expect(() =>
       parseCliConfig(["campaign", "anchors", "--manifest", "m.json", "--report", "r.json"]),
-    ).toThrow(/--rung/);
+    ).toThrow(/--stage/);
     expect(() =>
-      parseCliConfig(["campaign", "anchors", "--manifest", "m.json", "--rung", "rung1"]),
+      parseCliConfig(["campaign", "anchors", "--manifest", "m.json", "--stage", "rung1"]),
     ).toThrow(/--report/);
   });
 
@@ -220,7 +220,7 @@ describe("parseCliConfig — lethal campaign (subsystem D)", () => {
         "anchors",
         "--manifest",
         "",
-        "--rung",
+        "--stage",
         "r",
         "--report",
         "r.json",
@@ -232,14 +232,14 @@ describe("parseCliConfig — lethal campaign (subsystem D)", () => {
         "anchors",
         "--manifest",
         "m",
-        "--rung",
+        "--stage",
         "",
         "--report",
         "r.json",
       ]),
-    ).toThrow(/--rung/);
+    ).toThrow(/--stage/);
     expect(() =>
-      parseCliConfig(["campaign", "anchors", "--manifest", "m", "--rung", "r", "--report", ""]),
+      parseCliConfig(["campaign", "anchors", "--manifest", "m", "--stage", "r", "--report", ""]),
     ).toThrow(/--report/);
   });
 
