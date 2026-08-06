@@ -16,8 +16,8 @@
  * same function a future campaign's manifest-supplied value does, instead of an independently
  * hardcoded `join`.
  */
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 /** A campaign's own committed records: where they live (relative to the repository root) and
  *  which campaign they belong to. `campaignId` is not used to derive `recordsDir` — it is the
@@ -67,6 +67,52 @@ export function findRepoRoot(startDir: string): string {
 }
 
 /**
+ * Is `candidate` (an absolute path) underneath `root`? Segment-boundary check — `rel === ".." ||
+ * rel.startsWith(".." + sep)` — NOT a bare string prefix. Fix round 2, Defect 2:
+ * `rel.startsWith("..")` alone also matches legitimate names that merely START with the two
+ * characters `..` (`"..foo"`, `"..."`), refusing manifests that never leave the repository at
+ * all. `path.relative` only ever produces a leading `..` as a full segment (`..`, `../x`,
+ * `..\x`) when the path actually climbs above `root`, so anchoring on the segment boundary keeps
+ * every real escape refused while no longer punishing a directory name that happens to start with
+ * a dot.
+ *
+ * `strict`: whether `candidate === root` itself counts as "within". The two call sites in
+ * `resolveRecordsDir` want opposite answers to that question — the PRIMARY check refuses a
+ * `recordsDir` that resolves to the repo root itself (writing records at the top level is its own
+ * failure mode, business rule rather than an escape), so it passes `strict: true`; the SYMLINK
+ * ancestor check wants root itself to count as contained (reaching the repo root while walking UP
+ * looking for an existing ancestor is the ordinary, non-escaping case — most `recordsDir`s name a
+ * directory that doesn't exist yet), so it passes `strict: false`.
+ */
+function isWithin(root: string, candidate: string, strict: boolean): boolean {
+  const rel = relative(root, candidate);
+  if (rel === "") return !strict;
+  return rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+}
+
+/**
+ * Walks UP from `p` to the nearest ancestor that actually exists on disk, and returns THAT
+ * ancestor's real path (`fs.realpathSync`, which resolves symlinks/junctions — `path.relative`
+ * and `path.join` do not; they are purely lexical and never touch the filesystem). `p` itself is
+ * typically the records directory `resolveRecordsDir` is about to `mkdir -p`, which usually does
+ * NOT exist yet — `realpathSync` on a nonexistent path throws `ENOENT`, so the walk-up is
+ * required, not optional. By the time this is called the caller has already normalised `p`
+ * lexically (no `..` segments remain — see `resolveRecordsDir`), so the NON-existent tail below
+ * the found ancestor is a plain subpath extension that cannot itself introduce a further escape:
+ * only an EXISTING symlink/junction somewhere in the ancestor chain can, and resolving that
+ * ancestor's real path is exactly what surfaces it.
+ */
+function realpathOfNearestExisting(p: string): string {
+  let dir = p;
+  for (;;) {
+    if (existsSync(dir)) return realpathSync(dir);
+    const parent = dirname(dir);
+    if (parent === dir) return dir; // filesystem root; the lexical check above already applies
+    dir = parent;
+  }
+}
+
+/**
  * The records directory, resolved against the repository root — NEVER against `process.cwd()`.
  *
  * A relative `manifest.recordsDir` resolved against cwd would silently create a records tree
@@ -76,25 +122,44 @@ export function findRepoRoot(startDir: string): string {
  * so this is correct however `resolveRecordsDir` is invoked (a CLI subcommand, `bun test`, a
  * future caller importing it from elsewhere entirely).
  *
- * `join()` collapses `..` segments (that is `path.normalize`'s job) rather than refusing them, so
- * a `recordsDir` with enough of them (`"../../../../etc/evil"`) walks the joined path OUTSIDE the
- * repository root entirely — silently, and `join()` itself gives no signal that it happened.
- * Refused here by CONTAINMENT: is the resolved path still underneath `root`? Not by pattern-
- * matching the literal `".."` in the input, which a caller could dodge with an encoding or a
- * symlink and still land outside — checking the resolved RESULT is the only form of this check
- * that can't be worked around that way. A records directory outside the repository is exactly
- * the failure this whole mechanism exists to prevent, one layer up: unreachable by `git worktree
- * remove`'s undo, and outside every git-committed guarantee this campaign gate depends on.
+ * Two DIFFERENT escapes are checked, because they are caught by different means:
+ *
+ * 1. LEXICAL: `join()` collapses `..` segments (that is `path.normalize`'s job) rather than
+ *    refusing them, so a `recordsDir` with enough of them (`"../../../../etc/evil"`) walks the
+ *    joined path OUTSIDE the repository root entirely — silently, and `join()` itself gives no
+ *    signal that it happened. Caught by `isWithin` on the plain joined path.
+ * 2. SYMLINK/JUNCTION: `join()`/`path.relative` are purely lexical — they never touch the
+ *    filesystem, so an EXISTING symlink or junction partway down an otherwise-innocent-looking
+ *    `recordsDir` (e.g. `docs/campaign/<link>/leaked`, where `<link>` is a junction pointing
+ *    outside the repo) sails through the lexical check untouched. Caught separately by
+ *    resolving the nearest EXISTING ancestor's real path (`realpathOfNearestExisting`) and
+ *    checking THAT for containment. Fix round 2, Defect 1: an earlier version of this function
+ *    claimed the lexical check alone closed the symlink case too — it did not; that claim has
+ *    been removed and this second check added.
+ *
+ * Both are containment checks on a RESOLVED path, never pattern-matching the literal `".."` in
+ * the input — a records directory outside the repository is exactly the failure this whole
+ * mechanism exists to prevent, one layer up: unreachable by `git worktree remove`'s undo, and
+ * outside every git-committed guarantee this campaign gate depends on.
  */
 export function resolveRecordsDir(manifest: CampaignManifest): string {
   const root = findRepoRoot(import.meta.dir);
   const resolved = join(root, manifest.recordsDir);
-  const rel = relative(root, resolved);
-  if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) {
+
+  if (!isWithin(root, resolved, true)) {
     throw new CampaignManifestError(
       `campaign manifest: recordsDir "${manifest.recordsDir}" resolves to "${resolved}", which is not inside the repository root "${root}". Refusing rather than silently writing a records tree outside the repository.`,
     );
   }
+
+  const realRoot = realpathSync(root);
+  const realAncestor = realpathOfNearestExisting(resolved);
+  if (!isWithin(realRoot, realAncestor, false)) {
+    throw new CampaignManifestError(
+      `campaign manifest: recordsDir "${manifest.recordsDir}" passes through "${realAncestor}" (real path), which is outside the repository root "${realRoot}" even though the lexical path looked contained — a symlink or junction along the way must be redirecting it. Refusing rather than silently writing a records tree outside the repository.`,
+    );
+  }
+
   return resolved;
 }
 

@@ -1,5 +1,13 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  rmSync,
+  rmdirSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { defaultRecordsDir } from "../src/campaign-freeze";
@@ -183,6 +191,69 @@ describe("resolveRecordsDir — traversal escape refused (fix round 1, Important
       campaignId: "x",
     });
     expect(resolved.replace(/\\/g, "/")).toMatch(/docs\/campaign\/valid$/);
+  });
+});
+
+describe("resolveRecordsDir — segment-boundary containment, not string prefix (fix round 2, Defect 2)", () => {
+  // Re-reviewer's exact reproduction: `rel.startsWith("..")` (fix round 1's check) is a STRING
+  // PREFIX test, so it also matched legitimate names that merely start with the two characters
+  // "..". Neither of these ever climbs above the repository root — both must be ALLOWED.
+  test("a recordsDir starting with .. that never leaves the repo is allowed", () => {
+    const resolved = resolveRecordsDir({ recordsDir: "..foo", campaignId: "x" });
+    expect(resolved.replace(/\\/g, "/")).toMatch(/\.\.foo$/);
+  });
+
+  test("a recordsDir of three dots is allowed — not a real traversal", () => {
+    const resolved = resolveRecordsDir({ recordsDir: "...", campaignId: "x" });
+    expect(resolved.replace(/\\/g, "/")).toMatch(/\.\.\.$/);
+  });
+
+  // The other direction, in the SAME fix: a fix that only widens the allowance could let a real
+  // traversal back through. Must still be refused after the segment-boundary rewrite.
+  test("a real traversal is still refused after the segment-boundary fix", () => {
+    expect(() => resolveRecordsDir({ recordsDir: "../evil", campaignId: "x" })).toThrow(
+      CampaignManifestError,
+    );
+  });
+
+  test("docs/campaign/../../.. (climbs exactly to above the repo) is still refused", () => {
+    expect(() =>
+      resolveRecordsDir({ recordsDir: "docs/campaign/../../..", campaignId: "x" }),
+    ).toThrow(CampaignManifestError);
+  });
+});
+
+describe("resolveRecordsDir — symlink/junction bypass refused (fix round 2, Defect 1)", () => {
+  // Re-reviewer's exact class of reproduction: path.join/path.relative are purely lexical and
+  // never touch the filesystem, so an EXISTING junction inside the repo that redirects outside
+  // sails through the lexical containment check untouched. A Windows junction needs no elevated
+  // privileges to create. The junction and its (scratch, newly-created) target are both cleaned
+  // up in `finally` regardless of pass/fail — nothing is left behind on disk.
+  test("an existing junction inside the repo that redirects outside is refused, not silently followed", () => {
+    const root = findRepoRoot(import.meta.dir);
+    const outside = mkdtempSync(join(tmpdir(), "lethal-outside-repo-"));
+    const linkPath = join(root, "docs", "campaign", "__test_junction__");
+    if (existsSync(linkPath)) {
+      rmdirSync(linkPath); // clear a stale leftover from a previously aborted run
+    }
+    symlinkSync(outside, linkPath, "junction");
+    try {
+      expect(() =>
+        resolveRecordsDir({
+          recordsDir: "docs/campaign/__test_junction__/leaked",
+          campaignId: "x",
+        }),
+      ).toThrow(CampaignManifestError);
+      expect(() =>
+        resolveRecordsDir({
+          recordsDir: "docs/campaign/__test_junction__/leaked",
+          campaignId: "x",
+        }),
+      ).toThrow(/real path/);
+    } finally {
+      rmdirSync(linkPath); // removes the junction stub itself, NOT the target's contents
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 });
 
