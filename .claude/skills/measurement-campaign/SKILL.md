@@ -174,13 +174,17 @@ Two hard constraints on the same choice:
   batches split at FILE granularity, so an oversized file becomes its own oversized batch (R90).
   Measured on one hosted environment: 176 and 229 guards publish, 331 and 660 time out. `lethal
   clear-ceiling` is the way back after the ratchet records a failure.
-- **Screen candidates for `TestPage` in their covering tests** — a cheap grep, and a baseline
-  quarantine is a flat gate failure with no recovery story. R69 measured it (2026-07-31, Cronus283):
-  a `[Test]` that opens a `TestPage` never returned, was classified `in-flight-unknown`, and latched
-  the tier quarantined AT BASELINE. `--stop-hung-sessions` cannot rescue that, and the reason is
-  structural rather than a probe result: the stop hook is wired only when a mutant is pending
-  (`bcdev-backend.ts`), because a baseline overrun has no mutation to blame. Rung 2 rejected two
-  otherwise-good test areas on this screen.
+- **Screen candidates for `TestPage` in their covering tests** — grepping for the declaration, not
+  the word: on a real suite 9 files MENTIONED `TestPage` and 5 actually contained one. **It is not a
+  hang.** R69 filed one and then retracted the attribution: measured on the fenced path, a
+  `TestPage` open is REFUSED in **87 ms** (`NavSession.CreateNavTestService()`) and the run
+  COMPLETES — no quarantine, no strand. What you lose is the tests. They fail at baseline, drop out
+  of the green set, and every mutant they alone covered is recorded `no-coverage` under the
+  `baseline-red` caveat (R55) — a real survivor turned into a non-finding. So this is a **rule-3
+  concern, not a hang: carry the baseline-green gate.** Sized on a real app: 19 of 1,287 tests, and
+  439 of 19,081 deployable mutants = **2.30%**, which is why R69 closed as named-not-recovered
+  rather than fixed. The report names the refusal (`testpage-unsupported.ts`). Rung 2 applied this
+  screen to reject two otherwise-good test areas.
 
 ## Narrow TESTS, not mutants — that is the cost lever
 
@@ -204,10 +208,13 @@ default; raise it further only when a module's own shapes justify it, and record
 
 ## Prefer `--resume-run <id>` over bare `--resume`
 
-Until **R89** closes. Measured: a valid unfinished target run existed with 113 verdicts recorded,
-and bare `--resume` created a fresh run anyway, printed no `RESUMED:` banner, and re-measured from
-scratch. A resume that cannot use its target should throw. Naming the run id sidesteps the
-selection defect; delete this paragraph when R89 does.
+Until **R89's SECOND defect** — the resume-selection one — closes. Key it to that, not to the row:
+R89's headline is about `--stop-hung-sessions`, and its own body concludes the stop is *not*
+deficient for that class (the 30 s floor was, and that is fixed), so a close granted for the
+headline would delete live guidance. Measured: a valid unfinished target run existed with 113
+verdicts recorded, and bare `--resume` created a fresh run anyway, printed no `RESUMED:` banner, and
+re-measured from scratch. A resume that cannot use its target should throw. Naming the run id
+sidesteps it.
 
 A resumed run is admissible as a run-vs-run verdict comparison only if you decide so BEFORE seeing
 the result and name the excluded identities. It is never a valid differential input — see
