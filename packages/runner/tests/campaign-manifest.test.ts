@@ -15,9 +15,16 @@ function fixturePath(name: string): string {
 }
 
 describe("readCampaignManifest — reading a campaign's own manifest", () => {
+  // The fixture's recordsDir ("docs/campaign/9999-99-99-fixture-only") is deliberately NOT the
+  // real campaign's own recordsDir ("docs/campaign/2026-08-03-do", campaign-freeze.ts's
+  // THIS_CAMPAIGN_MANIFEST). Fix round 1: the fixture originally reused the real value, so a
+  // mutant that made readCampaignManifest ignore the parsed JSON's recordsDir field and just
+  // return THIS_CAMPAIGN_MANIFEST's own value passed this test anyway — coincidence read as
+  // coverage. A fixture value that cannot coincide with any production default is the only way
+  // this assertion proves the field was actually read OFF THE FILE.
   test("a manifest names its records directory", () => {
     const m = readCampaignManifest(fixturePath("campaign.json"));
-    expect(m.recordsDir).toBe("docs/campaign/2026-08-03-do");
+    expect(m.recordsDir).toBe("docs/campaign/9999-99-99-fixture-only");
   });
 
   // The fixture's campaignId ("fixture-campaign-42") is distinctive precisely so this assertion
@@ -64,6 +71,25 @@ describe("readCampaignManifest — caller-contract violations, fail loud not emp
     const p = join(dir, "empty-records-dir.json");
     writeFileSync(p, JSON.stringify({ recordsDir: "", campaignId: "x" }), "utf8");
     expect(() => readCampaignManifest(p)).toThrow(/recordsDir/);
+  });
+
+  // Fix round 1, Minor: "   " is not the empty string, so a plain `.length === 0` check let it
+  // straight through — refused now via `.trim().length === 0`, same as the empty-string case one
+  // line above.
+  test("a whitespace-only recordsDir is refused, not treated as a real directory name", () => {
+    const p = join(dir, "whitespace-records-dir.json");
+    writeFileSync(p, JSON.stringify({ recordsDir: "   ", campaignId: "x" }), "utf8");
+    expect(() => readCampaignManifest(p)).toThrow(/recordsDir/);
+  });
+
+  test("a whitespace-only campaignId is refused too, for the same reason", () => {
+    const p = join(dir, "whitespace-campaign-id.json");
+    writeFileSync(
+      p,
+      JSON.stringify({ recordsDir: "docs/campaign/x", campaignId: "  \t " }),
+      "utf8",
+    );
+    expect(() => readCampaignManifest(p)).toThrow(/campaignId/);
   });
 
   test("a manifest that is a JSON array, not an object, is refused", () => {
@@ -123,6 +149,40 @@ describe("resolveRecordsDir — resolved against the repo root, never process.cw
     const manifest = { recordsDir: "docs/campaign/compose-check", campaignId: "x" };
     const resolved = resolveRecordsDir(manifest);
     expect(resolved).toBe(join(findRepoRoot(import.meta.dir), manifest.recordsDir));
+  });
+});
+
+describe("resolveRecordsDir — traversal escape refused (fix round 1, Important 1)", () => {
+  // Reviewer's exact reproduction: `join()` collapses `..` segments rather than refusing them,
+  // so enough of them walk the resolved path OUTSIDE the repository root entirely — silently,
+  // and until this fix nothing checked for it.
+  test("enough ../ segments to leave the repository root are refused, not silently resolved", () => {
+    expect(() =>
+      resolveRecordsDir({ recordsDir: "../../../../etc/evil", campaignId: "x" }),
+    ).toThrow(CampaignManifestError);
+    expect(() =>
+      resolveRecordsDir({ recordsDir: "../../../../etc/evil", campaignId: "x" }),
+    ).toThrow(/not inside the repository root/);
+  });
+
+  // A recordsDir that resolves to the repo root itself (e.g. an empty string reaching
+  // resolveRecordsDir directly, bypassing readCampaignManifest's own validation) is the same
+  // failure as the traversal case, one step short of it — also refused.
+  test("a recordsDir that resolves to exactly the repository root is refused", () => {
+    expect(() => resolveRecordsDir({ recordsDir: "", campaignId: "x" })).toThrow(
+      CampaignManifestError,
+    );
+  });
+
+  // Containment, not string-matching: a `..` that stays INSIDE the repo must not be refused —
+  // proves the fix checks the resolved RESULT, not the literal substring ".." in the input (which
+  // the reviewer specifically warned would misses encodings/symlinks and give false confidence).
+  test("an internal .. that never leaves the repository root is NOT refused", () => {
+    const resolved = resolveRecordsDir({
+      recordsDir: "docs/campaign/../campaign/valid",
+      campaignId: "x",
+    });
+    expect(resolved.replace(/\\/g, "/")).toMatch(/docs\/campaign\/valid$/);
   });
 });
 

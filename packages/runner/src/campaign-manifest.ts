@@ -17,7 +17,7 @@
  * hardcoded `join`.
  */
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 /** A campaign's own committed records: where they live (relative to the repository root) and
  *  which campaign they belong to. `campaignId` is not used to derive `recordsDir` — it is the
@@ -75,9 +75,27 @@ export function findRepoRoot(startDir: string): string {
  * location, which is fixed by where the file lives in the repo, not by the caller's shell state —
  * so this is correct however `resolveRecordsDir` is invoked (a CLI subcommand, `bun test`, a
  * future caller importing it from elsewhere entirely).
+ *
+ * `join()` collapses `..` segments (that is `path.normalize`'s job) rather than refusing them, so
+ * a `recordsDir` with enough of them (`"../../../../etc/evil"`) walks the joined path OUTSIDE the
+ * repository root entirely — silently, and `join()` itself gives no signal that it happened.
+ * Refused here by CONTAINMENT: is the resolved path still underneath `root`? Not by pattern-
+ * matching the literal `".."` in the input, which a caller could dodge with an encoding or a
+ * symlink and still land outside — checking the resolved RESULT is the only form of this check
+ * that can't be worked around that way. A records directory outside the repository is exactly
+ * the failure this whole mechanism exists to prevent, one layer up: unreachable by `git worktree
+ * remove`'s undo, and outside every git-committed guarantee this campaign gate depends on.
  */
 export function resolveRecordsDir(manifest: CampaignManifest): string {
-  return join(findRepoRoot(import.meta.dir), manifest.recordsDir);
+  const root = findRepoRoot(import.meta.dir);
+  const resolved = join(root, manifest.recordsDir);
+  const rel = relative(root, resolved);
+  if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) {
+    throw new CampaignManifestError(
+      `campaign manifest: recordsDir "${manifest.recordsDir}" resolves to "${resolved}", which is not inside the repository root "${root}". Refusing rather than silently writing a records tree outside the repository.`,
+    );
+  }
+  return resolved;
 }
 
 /**
@@ -113,12 +131,17 @@ export function readCampaignManifest(path: string): CampaignManifest {
   }
 
   const { recordsDir, campaignId } = parsed as Record<string, unknown>;
-  if (typeof recordsDir !== "string" || recordsDir.length === 0) {
+  // `.trim().length === 0` rather than `.length === 0`: a whitespace-only value ("   ") is not
+  // the empty string, so the plain length check let it straight through — a garbage directory
+  // named "   " (or, once resolved, one indistinguishable from the repo root after path
+  // normalisation eats the whitespace) is the same failure as an empty string, just spelled
+  // differently.
+  if (typeof recordsDir !== "string" || recordsDir.trim().length === 0) {
     throw new CampaignManifestError(
       `campaign manifest "${path}": missing or empty "recordsDir" field (got ${JSON.stringify(recordsDir)}). A manifest that silently resolved an empty records directory would write its records tree at the repository root itself.`,
     );
   }
-  if (typeof campaignId !== "string" || campaignId.length === 0) {
+  if (typeof campaignId !== "string" || campaignId.trim().length === 0) {
     throw new CampaignManifestError(
       `campaign manifest "${path}": missing or empty "campaignId" field (got ` +
         `${JSON.stringify(campaignId)}).`,
