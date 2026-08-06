@@ -138,9 +138,9 @@ export interface CoverageSplit {
    * `untargetedTriggerCount` above already tallies FALLBACK 2, but only as a session-wide COUNT
    * and only for table triggers. This is the per-mutant answer, and it changes what a survivor
    * MEANS — see `ATTRIBUTION_INTERPRETATIONS` below for what each of the three values means to a
-   * reader. That prose lives there and ONLY there: an agent given a raw report once paid $18.56 to
-   * re-derive that constant's `object` sentence by hand, and a second copy anywhere else (e.g. in
-   * the `lethal explain` projection) is exactly how such prose rots out of step with this function.
+   * reader, and for the measurement that put it there. That prose lives there and ONLY there; a
+   * second copy anywhere else (e.g. in the `lethal explain` projection) is exactly how such prose
+   * rots out of step with this function.
    *
    * Without this the report presents all three as one undifferentiated `coveringTests` list, i.e.
    * approximate attribution wearing the costume of an exact one. That is the same shape as R29,

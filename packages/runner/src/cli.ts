@@ -624,10 +624,10 @@ EXPLAIN — what a finished report MEANS, as JSON on stdout
   coverage match, so a survivor with false means some test touched the object and NO test is
   measured to have executed the mutated procedure. Each caveat, error cause and tool condition
   arrives with the same interpretation the source constant carries, plus a 'basis' pointing at the
-  evidence. Structure is versioned under 'explainSchemaVersion'; the PROSE is not contractual and
-  may be reworded without a bump — every machine-usable value is already its own field, so there
-  is nothing to parse out of a sentence. A report from another schema version, or carrying a
-  caveat this build cannot interpret, is REFUSED rather than explained with the value dropped.
+  evidence. The output's own 'contract' block states what is versioned and what is not — read that
+  rather than a summary here, which would be a second copy free to drift from it. A report from
+  another schema version, or carrying a value this build cannot interpret, is REFUSED rather than
+  explained with the unrecognised value dropped.
 
 OTHER
   -h, --help                 this text

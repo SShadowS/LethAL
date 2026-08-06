@@ -24,6 +24,7 @@ import {
 import type { Caveat, MutantOutcome, SessionReport } from "../src/report";
 import { ATTRIBUTION_INTERPRETATIONS } from "../src/selection";
 import type { CoverageAttribution } from "../src/selection";
+import type { MutantVerdict } from "../src/store";
 
 // ————————————————————————————————————————————————————————————————————————————————————————
 // Fixtures. A literal `SessionReport` rather than a run-shaped builder ON PURPOSE: `explain`'s
@@ -80,6 +81,30 @@ function errorMutant(code: string, cause?: "deadline-exceeded" | "unstable"): Mu
     runner: "fenced",
     astHash: `hash-${code}`,
     codeunitName: "Foo Mgt.",
+    operatorMajor: 1,
+  };
+}
+
+/** A mutant with a verdict the projection neither lists nor interprets — it exists only to make a
+ *  fixture's `counts` real rather than asserted into place. */
+function plainMutant(code: string, verdict: MutantVerdict): MutantOutcome {
+  return {
+    mutantCode: code,
+    file: "src/Posting/Bar.Codeunit.al",
+    line: 12,
+    operatorName: "lethal.empty-block",
+    verdict,
+    batchIndex: 0,
+    durationMs: 5,
+    procedureName: "Recalc",
+    startIndex: 10,
+    endIndex: 20,
+    originalText: "begin end",
+    mutatedText: "",
+    coveringTests: [],
+    runner: "fenced",
+    astHash: `hash-${code}`,
+    codeunitName: "Bar Mgt.",
     operatorMajor: 1,
   };
 }
@@ -274,7 +299,21 @@ describe("explain — the plan's own four tests", () => {
   });
 });
 
-/** A report that reaches every emitting branch of the projection at once. */
+/**
+ * A report that reaches every emitting branch of the projection at once.
+ *
+ * Its counts are PAIRWISE DISTINCT, and that is load-bearing rather than tidy. The final review
+ * swapped `scored` with `recorded` and `noCoverage` with `knownSurvivors` and the whole runner suite
+ * stayed green at 1441 pass / 0 fail — because the old fixture had `noCoverage` and `knownSurvivors`
+ * BOTH 0, so the one assertion covering them held whichever way they were wired. Five distinct
+ * values (scored 4, recorded 14, errors 3, noCoverage 2, knownSurvivors 5) make any swap among them
+ * detectable; two zeros make it undetectable no matter how many assertions are added.
+ *
+ * They are also CONSISTENT with `mutants` — 3 survived + 3 error + 1 killed + 2 no-coverage +
+ * 5 known-survivor = 14 recorded, of which killed + survived = 4 scored — rather than numbers
+ * asserted into place beside a mutant list that contradicts them. A fixture describing a state the
+ * producer cannot produce is the hazard `legacyBuildReport`'s own doc comment warns about.
+ */
 function fullCoverageReport(): SessionReport {
   const base = reportFixture();
   return {
@@ -283,8 +322,20 @@ function fullCoverageReport(): SessionReport {
       ...base.validity,
       reliability: "narrowed-degraded",
       caveats: ["baseline-red", "narrowed", "tests-narrowed"],
+      scoredMutants: { scored: 4, recorded: 14 },
     },
     baselineGreen: false,
+    counts: {
+      killed: 1,
+      survived: 3,
+      noCoverage: 2,
+      timeoutKilled: 0,
+      knownSurvivors: 5,
+      unstable: 1,
+      errors: 3,
+      deadlineExceeded: 1,
+    },
+    mutationScore: 0.25,
     mutants: [
       survivorMutant("M0001", "exact", true),
       survivorMutant("M0002", "object", false),
@@ -292,6 +343,14 @@ function fullCoverageReport(): SessionReport {
       errorMutant("M0004", "deadline-exceeded"),
       errorMutant("M0005", "unstable"),
       errorMutant("M0006"),
+      plainMutant("M0007", "killed"),
+      plainMutant("M0008", "no-coverage"),
+      plainMutant("M0009", "no-coverage"),
+      plainMutant("M0010", "known-survivor"),
+      plainMutant("M0011", "known-survivor"),
+      plainMutant("M0012", "known-survivor"),
+      plainMutant("M0013", "known-survivor"),
+      plainMutant("M0014", "known-survivor"),
     ],
     testsOnly: ["test/Posting/**"],
     quarantined: { reason: "test in-flight-unknown running Foo Tests.PostsBatch (mutant M0004)" },
@@ -434,12 +493,42 @@ describe("explain — the admissibility rule, made executable", () => {
   });
 
   test("every [verbatim] path really is verbatim — the projection copies, it does not compose", () => {
+    // THE ONLY TEST CHECKING VALUES. The other three guards ask "is this string allowed to be
+    // here?"; none asks "is this number right?". Final review measured the gap: swapping
+    // scored<->recorded and noCoverage<->knownSurvivors left `bun test packages/runner` at 1441
+    // pass / 0 fail, reporting a run that scored 160 of 473 as scoring 473 of 160, and 313
+    // never-measured mutants relabelled as deliberately-excluded known findings. Every
+    // [verbatim]-tagged path in EXPLAIN_LEAF_PATHS must be asserted here, against its source, over
+    // a fixture whose values are pairwise distinct — see `fullCoverageReport`.
     const report = fullCoverageReport();
     const out = explain(report);
     expect(out.derivedFromReportSchemaVersion).toBe(report.schemaVersion);
     expect(out.score.scoreDescribes).toBe(report.validity.scoreDescribes);
+    expect(out.score.reliability).toBe(report.validity.reliability);
     expect(out.score.mutationScore).toBe(report.mutationScore);
-    expect(out.score.excludedFromScore.errors).toBe(report.counts.errors);
+    // The five that were swappable. Asserted as one object so a swap between any pair shows as a
+    // diff rather than as five independent equalities anyone could add four of.
+    expect({
+      ...out.score.excludedFromScore,
+      scored: out.score.scored,
+      recorded: out.score.recorded,
+    }).toEqual({
+      scored: report.validity.scoredMutants.scored,
+      recorded: report.validity.scoredMutants.recorded,
+      errors: report.counts.errors,
+      noCoverage: report.counts.noCoverage,
+      knownSurvivors: report.counts.knownSurvivors,
+    });
+    // And the fixture actually distinguishes them — a fixture with a repeat cannot detect a swap,
+    // which is exactly how the defect above stayed green.
+    const swappable = [
+      report.validity.scoredMutants.scored,
+      report.validity.scoredMutants.recorded,
+      report.counts.errors,
+      report.counts.noCoverage,
+      report.counts.knownSurvivors,
+    ];
+    expect(new Set(swappable).size).toBe(swappable.length);
     const survivorSources = report.mutants.filter((m) => m.verdict === "survived");
     expect(out.survivors.map((s) => s.originalText)).toEqual(
       survivorSources.map((m) => m.originalText),
@@ -555,6 +644,47 @@ describe("explain — survivors", () => {
     );
   });
 
+  test("executionProven TRUE can sit beside guardEvidence 'not-observed', and is NOT reconciled", () => {
+    // Filed by the final review as a roadmap row; this pins the FACT, not a decision.
+    //
+    // The pair is a genuine contradiction in evidence, not a bug in either field. `exact`
+    // attribution is coverage's claim, from the baseline run on the hub, that a test executed this
+    // procedure. `guardObserved: false` is the fenced run's own attestation that NO instrumented
+    // guard fired at all — which its interpretation calls DECISIVE. Two measurements, two sessions,
+    // opposite answers about the same mutant.
+    //
+    // Zero such survivors exist across all six committed reports and no other fixture builds the
+    // pair, so it is LATENT: nothing here would notice if the projection started reconciling them,
+    // or stopped. This test states what today's projection does — emits both, side by side,
+    // unreconciled — so that whichever way the roadmap row is decided, the change shows up as this
+    // test going red rather than as a silent behaviour shift.
+    const out = explain(reportFixture({ mutants: [survivorMutant("M0001", "exact", false)] }));
+    const [s] = out.survivors;
+    expect(s?.executionProven).toBe(true);
+    expect(s?.guardEvidence).toBe("not-observed");
+    expect(s?.interpretation).toBe(ATTRIBUTION_INTERPRETATIONS.exact);
+    expect(s?.guardInterpretation).toBe(GUARD_EVIDENCE_INTERPRETATIONS["not-observed"]);
+    // No third field, no note, no flag: the projection does not say the two disagree.
+    expect(Object.keys(s ?? {}).sort()).toEqual(
+      [
+        "attribution",
+        "codeunitName",
+        "coveringTests",
+        "executionProven",
+        "file",
+        "guardEvidence",
+        "guardInterpretation",
+        "interpretation",
+        "line",
+        "mutantCode",
+        "mutatedText",
+        "operatorName",
+        "originalText",
+        "procedureName",
+      ].sort(),
+    );
+  });
+
   test("only `survived` mutants become survivors", () => {
     const out = explain(
       reportFixture({
@@ -597,6 +727,22 @@ describe("explain — tool mechanics", () => {
     const q = out.toolConditions.find((c) => c.condition === "quarantined");
     expect(q?.interpretation).toBe(QUARANTINE_INTERPRETATION);
     expect(q?.detail).toContain("in-flight-unknown");
+    // `count` is 0 BY ARGUMENT, not by accident: the mutants a quarantine cost were never
+    // scheduled, so the report structurally cannot count them, and the interpretation says they are
+    // absent rather than survived. The field's doc comment argued that and no test held it — a
+    // `count: 7` here was 45 pass / 0 fail (final review, Minor 3).
+    expect(q?.count).toBe(0);
+  });
+
+  test("an EMPTY quarantine reason omits `detail` rather than emitting a blank one", () => {
+    // The other half of Minor 3: the `reason !== ""` guard was unasserted, so deleting it was also
+    // 45 pass / 0 fail. An empty `detail` would read as "quarantined, and here is why: <nothing>";
+    // omitting it says the report carried no reason, which is what happened.
+    const out = explain(reportFixture({ quarantined: { reason: "" } }));
+    const q = out.toolConditions.find((c) => c.condition === "quarantined");
+    expect(q).toBeDefined();
+    expect(q?.detail).toBeUndefined();
+    expect(q?.interpretation).toBe(QUARANTINE_INTERPRETATION);
   });
 
   test("stranded skips are reported with their count; zero produces no condition at all", () => {
@@ -732,6 +878,20 @@ describe("assertExplainableReport — a foreign report is refused, never silentl
       expect(() => explain(bad)).toThrow(MalformedReportError);
       expect(() => explain(bad)).toThrow(/skippedStranded/);
     }
+  });
+
+  test("an unrecognised RELIABILITY throws — a published enum, even though only copied", () => {
+    // Final review, Minor 8. The projection does not branch on `reliability`; the CONSUMER does,
+    // because `EXPLAIN_CONTRACT.note` publishes value domains as stable. So the branch rule is
+    // widened rather than excepted: closed-set enums are validated even when copied through.
+    const base = reportFixture();
+    const bad = {
+      ...base,
+      validity: { ...base.validity, reliability: "partial" },
+    } as unknown as SessionReport;
+    expect(() => explain(bad)).toThrow(MalformedReportError);
+    expect(() => explain(bad)).toThrow(/partial/);
+    expect(() => explain(bad)).toThrow(/narrowed-degraded/); // the closed set is named
   });
 
   test("an unrecognised error cause throws", () => {

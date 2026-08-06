@@ -2,10 +2,14 @@
  * A projection's claim about what some piece of a `SessionReport` MEANS, plus the evidence that
  * backs the claim.
  *
- * `basis` adopts both the field name and the rule from `ExecutionContext.basis` (report.ts):
- * "How that is known — measured, inferred from the runner's shape, or (for a carried verdict)
- * named as coming from an earlier run. Never a bare claim." (report.ts:194-195). That field
- * carries free-text provenance prose; this one is narrower by construction — a POINTER at
+ * `basis` adopts both the field name and the rule from `ExecutionContext.basis` (report.ts, the
+ * doc comment beginning "How that is known"): "How that is known — measured, inferred from the
+ * runner's shape, or (for a carried verdict) named as coming from an earlier run. Never a bare
+ * claim." Cited by NAME, not by line: this pointer read `report.ts:194-195` and was correct when
+ * written, until a later commit on this same branch added 213 lines above it and moved the target
+ * without touching the citation — R113(a)'s exact failure mode, reproduced inside the branch that
+ * exists to prevent it. That field carries free-text provenance prose; this one is narrower by
+ * construction — a POINTER at
  * evidence (a roadmap id such as `"R29"`, or a file such as `"docs/measurements/README.md"`,
  * optionally with a `#fragment`) — because a pointer, unlike prose, can be mechanically checked
  * to resolve. See `assertBasisResolves`.

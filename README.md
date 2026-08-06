@@ -280,13 +280,12 @@ file and nothing else — no server, no database, no config:
 lethal explain report.json
 ```
 
-The projection's **structure** is versioned (`explainSchemaVersion`, plus the
-`derivedFromReportSchemaVersion` it came from); its **prose is not contractual** and may be
-reworded without a version bump. Nothing is lost by that, because every machine-usable value is
-already its own field — `executionProven`, `attribution`, `guardEvidence`, `cause`, `caveat` —
-beside the sentence that explains it and a `basis` pointing at the evidence. A report from another
-schema version, or carrying a caveat this build cannot interpret, is **refused** rather than
-explained with the unrecognised value quietly dropped.
+The output states its own contract, in a `contract` block at the top — read that rather than this
+paragraph, which is deliberately not a second copy of it. In outline: **structure** is versioned
+(`explainSchemaVersion`, plus the `derivedFromReportSchemaVersion` it came from) and **prose is
+not**, because every machine-usable value is already its own field beside the sentence explaining
+it. A report from another schema version, or carrying a value this build cannot interpret, is
+**refused** rather than explained with the unrecognised value quietly dropped.
 
 Recovery, when a session died mid-run and left the container held:
 

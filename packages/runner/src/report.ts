@@ -305,6 +305,11 @@ export const ERROR_CAUSE_INTERPRETATIONS: Record<MutantErrorCause, Interpretatio
       '`CAVEAT_INTERPRETATIONS["tests-permission-refused"]` (a one-line fix in the target\'s own ' +
       'test codeunit) and `CAVEAT_INTERPRETATIONS["runner-disagreement"]` (a configuration ' +
       "property, not flakiness at all).",
+    // R27's TITLE is struck through VOID (it followed R1), but its surviving half is precisely this
+    // value: "LethAL currently reports those mutants as `error cause=unstable` rather than naming
+    // the cause". Read past the strikethrough to the "What survives as a genuine product concern"
+    // sentence. Cited here rather than R35 because R35 is about DETECTING a permissions refusal,
+    // which is one named cause of `unstable` rather than what the verdict itself means.
     basis: "R27",
   },
 };

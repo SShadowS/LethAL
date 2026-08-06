@@ -43,7 +43,15 @@ import type { MutantVerdict } from "./store";
  *
  * FOUR tests enforce that, and it takes all four. Each was added because the previous set was
  * described as covering something it did not — the list below states the scope of each, and the
- * hole it does NOT close, deliberately:
+ * hole it does NOT close, deliberately.
+ *
+ * READ THE WHOLE LIST BEFORE TRUSTING IT: all four police WHAT MAY APPEAR — which prose, at which
+ * path — and none of them polices whether what appears is RIGHT. That gap was measured: swapping
+ * `scored` with `recorded` and `noCoverage` with `knownSurvivors` left the entire runner suite
+ * green at 1441 pass / 0 fail, reporting a run that scored 160 of 473 as scoring 473 of 160. The
+ * `[verbatim]` test is the only thing checking VALUES, so every `[verbatim]`-tagged path must be
+ * asserted in it against its source, over a fixture whose values are pairwise distinct — a fixture
+ * with two zeros in it cannot tell a swap from a correct wiring.
  *
  *   - An IDENTITY check over every `Interpretation`-shaped object in the output. Stops an inline
  *     interpretation, and only that. SHAPE-SCOPED by construction, so a new `summary: string` on
@@ -349,6 +357,14 @@ const KNOWN_VERDICTS: ReadonlySet<string> = new Set(
     error: 0,
   } satisfies Record<MutantVerdict, 0>),
 );
+const KNOWN_RELIABILITIES: ReadonlySet<string> = new Set(
+  Object.keys({
+    full: 0,
+    narrowed: 0,
+    degraded: 0,
+    "narrowed-degraded": 0,
+  } satisfies Record<ReportValidity["reliability"], 0>),
+);
 
 function refuse(what: string, got: unknown, closedSet?: ReadonlySet<string>): never {
   const set =
@@ -371,9 +387,10 @@ function refuse(what: string, got: unknown, closedSet?: ReadonlySet<string>): ne
  * That is dormant for those callers; `lethal explain` reads a committed report off disk and is the
  * consumer that meets it first, so this is where it stops.
  *
- * WHAT IS CHECKED, and the rule is exact: every value this projection BRANCHES on. Not "keys on"
- * loosely — branching is what turns a bad value into a silently different ANSWER, so the list is
- * decided by reading the projection for `if`/`filter`/`>` rather than by judgement:
+ * WHAT IS CHECKED, and the rule is exact: every value this projection BRANCHES on, PLUS every
+ * closed-set ENUM the contract publishes even when only copied. Not "keys on" loosely — branching
+ * is what turns a bad value into a silently different ANSWER, so the first list is decided by
+ * reading the projection for `if`/`filter`/`>` rather than by judgement:
  *
  *   - `schemaVersion`                      — the whole projection's meanings are pinned to it
  *   - every `validity.caveats` member      — selects a `CAVEAT_INTERPRETATIONS` entry
@@ -394,10 +411,17 @@ function refuse(what: string, got: unknown, closedSet?: ReadonlySet<string>): ne
  * is "additive fields do not require a bump", so a future `MutantVerdict` variant clears the version
  * gate and then simply disappears here.
  *
+ * The SECOND clause exists because that justification has a limit. A copied value is trusted on the
+ * grounds that a wrong copy is VISIBLY wrong — which holds for an open domain (a number, free text)
+ * and fails for a closed-set enum, since `EXPLAIN_CONTRACT.note` publishes value domains as stable
+ * and a consumer therefore branches on one exactly as this file branches on `verdict`. That is the
+ * `verdict` finding one layer out: not branched on HERE, branched on THERE, mis-branched invisibly.
+ * `validity.reliability` is the only copy-through in that class and is validated for it.
+ *
  * It is still NOT a full structural validator, and the boundary is that same distinction: a value
- * this projection only COPIES (`scoreDescribes`, `failureNote`, `counts`, `file`, `line`) is
- * trusted, because a wrong value there produces a visibly wrong copy rather than a confidently
- * wrong MEANING.
+ * this projection only COPIES over an OPEN domain (`scoreDescribes`, `failureNote`, `counts`,
+ * `file`, `line`) is trusted, because a wrong value there produces a visibly wrong copy rather than
+ * a confidently wrong MEANING.
  *
  * Every failure THROWS. The alternative — skipping the unrecognised value — would produce a
  * projection whose empty `caveats` is indistinguishable from a genuinely unqualified run, which is
@@ -421,6 +445,23 @@ export function assertExplainableReport(value: unknown): SessionReport {
   const validity = record.validity;
   if (typeof validity !== "object" || validity === null) {
     refuse("report has no `validity` object", validity);
+  }
+  // Final review, Minor 8. NOT a value this projection branches on — it is copied straight through
+  // — so the branch rule above does not reach it, and that is the rule being too narrow rather than
+  // this being an exception. The rule's justification is that a wrong COPY is visibly wrong; that
+  // holds for an open domain (a number, free text) and fails for a closed-set ENUM, because
+  // `EXPLAIN_CONTRACT.note` publishes value domains as stable, so a consumer branches on
+  // `reliability` exactly as this file branches on `verdict` — and an unrecognised value is then
+  // mis-branched downstream, invisibly. So: validate every value the projection branches on, PLUS
+  // every closed-set enum the contract publishes. `reliability` is the only copy-through in that
+  // second class; `mutationScore`, `scoreDescribes`, `counts`, `failureNote` are all open domains.
+  const reliability = (validity as Record<string, unknown>).reliability;
+  if (typeof reliability !== "string" || !KNOWN_RELIABILITIES.has(reliability)) {
+    refuse(
+      "`validity.reliability` is a value this build cannot interpret",
+      reliability,
+      KNOWN_RELIABILITIES,
+    );
   }
   const caveats = (validity as Record<string, unknown>).caveats;
   if (!Array.isArray(caveats)) {
