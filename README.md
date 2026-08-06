@@ -14,6 +14,11 @@ Mutation testing for Microsoft Dynamics 365 Business Central AL code. It tells y
 
 LethAL makes small, deliberate breakages in your AL code (flips a `<` to `<=`, empties a block, drops a `TestField`, changes a return value), then runs your tests against each one. A test suite that stays green while the code is broken is not protecting you.
 
+The technique is called **mutation testing**, and it is long established outside the BC world; what
+is new here is the AL implementation, not the idea. It answers a question a coverage report cannot:
+coverage tells you a line **ran**, mutation tells you a line is **checked**. If the line's behaviour
+can change and every test still passes, running it proved less than the coverage number suggested.
+
 Each mutant comes back as one of six verdicts:
 
 | Verdict | Meaning |
@@ -351,29 +356,31 @@ it. A report from another schema version, or carrying a value this build cannot 
 Measuring a real codebase is a campaign, not a run: you state what you expect in a file, **commit
 it**, and only then run. `lethal campaign` is what enforces that. Each verb reads a campaign
 manifest (`{"recordsDir": ..., "campaignId": ...}`), resolves the records directory it names, and
-**refuses unless that rung's committed records are clean in git** before it reads a report:
+**refuses unless that stage's committed records are clean in git** before it reads a report:
 
 ```bash
 lethal campaign freeze  --manifest docs/campaign/2026-08-03-do/campaign.json \
-                        --rung rung1 --report report.json --expect-mutants 148
+                        --stage rung1 --report report.json --expect-mutants 148
 lethal campaign anchors --manifest docs/campaign/2026-08-03-do/campaign.json \
-                        --rung rung1 --report report.json
+                        --stage rung1 --report report.json
 lethal campaign compare --manifest docs/campaign/2026-08-03-do/campaign.json \
-                        --rung rung1 --report report.json
+                        --stage rung1 --report report.json
 ```
 
 | Verb | What it does | Exit |
 |------|--------------|------|
-| `freeze` | Archives the report and freezes its per-mutant verdicts under `<recordsDir>/<rung>.*`. Cardinality is asserted **before** anything is written, because the baseline guard *records* a baseline when none exists — a truncated report freezing itself would then agree with itself forever | `0`, or throws |
-| `anchors` | Runs the rung's pre-committed anchor gate over the report. **The exit code is the gate**, not the printed text | `0` all passed, `1` a failure |
-| `compare` | Diffs a report against the rung's committed per-mutant baseline, **writing nothing**. A missing baseline is refused rather than recorded — that is the whole difference from `freeze` | `0` identical, `1` differs |
+| `freeze` | Archives the report and freezes its per-mutant verdicts under `<recordsDir>/<stage>.*`. Cardinality is asserted **before** anything is written, because the baseline guard *records* a baseline when none exists — a truncated report freezing itself would then agree with itself forever | `0`, or throws |
+| `anchors` | Runs the stage's pre-committed anchor gate over the report. **The exit code is the gate**, not the printed text | `0` all passed, `1` a failure |
+| `compare` | Diffs a report against the stage's committed per-mutant baseline, **writing nothing**. A missing baseline is refused rather than recorded — that is the whole difference from `freeze` | `0` identical, `1` differs |
 
-`--rung <name>` names the committed files (`<rung>.precommit.md`, `<rung>.anchors.json`,
-`<rung>.baseline.json`). A pre-commitment that is untracked, ignored, staged-but-uncommitted,
-modified, or simply **missing** is a refusal — `git status` reports nothing at all for a missing or
-ignored path, which reads exactly like "clean", so tracking is checked with `git ls-files` rather
-than inferred. `freeze`'s `--expect-mutants` must equal the `expectedMutantCount` in the rung's
-committed anchor config when it has one: a number typed after the run is not a pre-commitment.
+`--stage <name>` names the committed files (`<stage>.precommit.md`, `<stage>.anchors.json`,
+`<stage>.baseline.json`). You pick the name: `rung1` above is what the 2026-08-03 campaign happened
+to call its first stage, and those files are on disk under exactly that name. A pre-commitment that
+is untracked, ignored, staged-but-uncommitted, modified, or simply **missing** is a refusal —
+`git status` reports nothing at all for a missing or ignored path, which reads exactly like "clean",
+so tracking is checked with `git ls-files` rather than inferred. `freeze`'s `--expect-mutants` must
+equal the `expectedMutantCount` in the stage's committed anchor config when it has one: a number
+typed after the run is not a pre-commitment.
 
 Recovery, when a session died mid-run and left the container held:
 
@@ -579,7 +586,8 @@ a LethAL feature or a mode.
   so LethAL sees only its own abort and cannot tell it from "the server is still working". Such a
   mutant is recorded as an unmeasured error; `--resume` skips it so the run completes rather than
   dying on it forever.
-- **Tier 3 not built.** Nine operators across two tiers today; the advanced set is designed only.
+- **Tier 3 not built.** Twelve operators across two tiers today (six Tier-1, six Tier-2); the
+  advanced set is designed only.
   (Tier-2 operators *do* now claim sites inside `tableextension` and `pageextension` bodies — that
   limit was closed. A `pageextension`'s implicit `Rec` is still refused deliberately: it resolves to
   the extended page's `SourceTable`, which the project usually cannot see, and guessing would claim
