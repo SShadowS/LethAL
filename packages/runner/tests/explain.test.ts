@@ -223,6 +223,13 @@ const PINNED_CONTRACT_NOTE =
  * nor a registry interpretation. Deliberately short: two enum families derived from report values,
  * one field-name literal, and the contract note. Anything else appearing here is a new voice in the
  * output and has to be argued for.
+ *
+ * The three TOKENS need no equality pin of their own: consumers filter on their exact value, so
+ * widening one into a sentence breaks the code that reads it rather than smuggling anything —
+ * measured, `"quarantined"` carrying advice (through an `as ToolCondition` cast) fails five tests.
+ * `note` is the only entry with room to hide a claim, and it is pinned by `PINNED_CONTRACT_NOTE`.
+ *
+ * Shares `EXPLAIN_LEAF_PATHS`'s known bypass (R115) — this list is observed, not derived.
  */
 const PROJECTION_AUTHORED_STRINGS: readonly string[] = [
   "explainSchemaVersion", // contract.structureStableUnder
@@ -308,6 +315,13 @@ function fullCoverageReport(): SessionReport {
  * The set is also, exactly, the structure `EXPLAIN_SCHEMA_VERSION` versions. So this one test
  * doubles as the schema's own regression gate: no field can be added, renamed or removed without
  * landing here, where the version bump gets decided.
+ *
+ * KNOWN BYPASS (R115), stated where whoever edits this list will read it: the set is built from
+ * OBSERVED data, so adding a path here alongside the field that emits it is enough to ship a new
+ * global field green — four small edits, measured at 45 pass / 0 fail. That is a review event, not
+ * a mechanical one: an entry appearing here means a field appeared in `ExplainOutput`, and the
+ * question to ask is whether the projection should be saying that at all. Same for
+ * `PROJECTION_AUTHORED_STRINGS` below. R115 closes it by deriving both from the output TYPE.
  *
  * Each entry is tagged with WHERE its value is allowed to come from. There are only four sources,
  * and "new prose invented by the projection" is not one of them:

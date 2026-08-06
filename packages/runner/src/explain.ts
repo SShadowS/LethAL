@@ -63,6 +63,17 @@ import type { MutantVerdict } from "./store";
  * The pinned path set is also, exactly, the structure `EXPLAIN_SCHEMA_VERSION` versions: the test
  * that stops smuggled advice is the same test that stops an unversioned schema change.
  *
+ * THE BYPASS ALL FOUR SHARE, disclosed because the list above would be dishonest without it. Both
+ * pins are built from OBSERVED data — `EXPLAIN_LEAF_PATHS` and `PROJECTION_AUTHORED_STRINGS` are
+ * hand-maintained lists checked against what the fixture and the six committed reports actually
+ * produce — so a new field ships green if its path and its string are added alongside it. For a
+ * GLOBAL, report-content-independent field that is four small coordinated edits (two in this file,
+ * one in each list) and an unremarkable-looking diff: measured at 45 pass / 0 fail. For a PER-ITEM
+ * field it is impractical, because the six-real-report test forces every distinct real value into
+ * `PROJECTION_AUTHORED_STRINGS` and that enumeration is itself the tell. What closes the global case
+ * is deriving the pinned set from the output TYPE rather than from observed data — filed as R115.
+ * Until then, a diff that adds a field to `ExplainOutput` is a review event, not a mechanical one.
+ *
  * What NONE of them can do is judge whether an ADMISSIBLE string's prose respects the target/tool
  * line below. Advice added to a shared registry constant ships green — see the note on
  * `CAVEAT_INTERPRETATIONS` (report.ts). Co-location buys keying, not editorial discipline; that
@@ -272,12 +283,22 @@ export interface ExplainOutput {
  * The contract text, as one constant so redeploys of the same `EXPLAIN_SCHEMA_VERSION` say the
  * identical thing.
  *
- * Fix round 2. EXPORTED, and its exact text pinned by `explain.test.ts`, because `note` is the ONE
- * string in the whole output authored in this file: not `Interpretation`-shaped (so the identity
- * check cannot see it), sitting at a path the leaf pin already lists (so the pin stays green), and
- * not copied from the report (so the verbatim check does not reach it). Appending
- * target-prescriptive advice to it shipped 43 pass / 0 fail into the real rung1 artifact — Important
- * 1's exact failure mode, relocated onto an existing pinned path.
+ * Fix round 2. EXPORTED, and its exact text pinned by `explain.test.ts`, because `note` is the one
+ * SENTENCE in the output authored in this file: not `Interpretation`-shaped (so the identity check
+ * cannot see it), sitting at a path the leaf pin already lists (so the pin stays green), and not
+ * copied from the report (so the verbatim check does not reach it). Appending target-prescriptive
+ * advice to it shipped 43 pass / 0 fail into the real rung1 artifact — Important 1's exact failure
+ * mode, relocated onto an existing pinned path.
+ *
+ * Fix round 3 corrects this comment's own overclaim: `note` is NOT the only string authored here.
+ * Three more are — `structureStableUnder`'s `"explainSchemaVersion"` below, and the two
+ * `ToolCondition` literals `"quarantined"` / `"stranded-skips"` in `toolConditionsOf`. They need no
+ * pin of their own because they are single TOKENS that consumers filter on by exact value, so
+ * widening one into a sentence breaks the code that reads it rather than smuggling anything: putting
+ * advice inside `"quarantined"` (through an `as ToolCondition` cast, since the type refuses it
+ * outright) fails FIVE tests — string-provenance, the verbatim check, and three that select the
+ * condition by name. Measured, not assumed. `note` is the only one of the four with room to hide a
+ * claim, which is why it alone is pinned.
  *
  * The closure is by EQUALITY against a literal in the test, not by phrasing: any edit at all
  * reddens, whatever it says. That is the right trade HERE and would be the wrong one for a registry
