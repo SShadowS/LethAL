@@ -298,9 +298,9 @@ function main(argv: readonly string[]): number {
     return 1;
   }
   writeFileSync(indexPath, generated);
-  console.log(
-    `${INDEX_FILE}: ${generated.length} bytes from ${readRows(join(repoRoot, ROW_DIR)).length} rows`,
-  );
+  // byteLength, not .length: this index is full of em dashes and `·`, so the two differ by ~800.
+  const rows = readRows(join(repoRoot, ROW_DIR)).length;
+  console.log(`${INDEX_FILE}: ${Buffer.byteLength(generated)} bytes from ${rows} rows`);
   return 0;
 }
 
