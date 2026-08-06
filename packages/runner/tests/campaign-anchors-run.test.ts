@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 // `campaign-subcommands.test.ts`. It used to be covered here by spawning
 // `scripts/campaign/anchors.ts`; that script was deleted when the subcommand landed, so that the
 // gate has exactly one entry point and therefore no entry point that skips the git check.
-import { parseAnchorArgs, parseAnchorConfig, runAnchorCheck } from "../src/campaign-anchors-run";
+import { parseAnchorConfig, runAnchorCheck } from "../src/campaign-anchors-run";
 import type { SessionReport } from "../src/report";
 
 const CONFIG = {
@@ -61,16 +61,10 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-describe("parseAnchorArgs", () => {
-  test("parses a full invocation", () => {
-    const a = parseAnchorArgs(["--report", "r.json", "--config", "c.json", "--project", "P"]);
-    expect(a).toEqual({ reportPath: "r.json", configPath: "c.json", projectDir: "P" });
-  });
-
-  test("throws naming the missing flag rather than defaulting", () => {
-    expect(() => parseAnchorArgs(["--report", "r.json"])).toThrow(/--config/);
-  });
-});
+// `parseAnchorArgs` and its two tests were deleted with `scripts/campaign/anchors.ts`, its only
+// caller. `lethal campaign anchors` parses --report/--project through `parseCliConfig` (covered in
+// cli.test.ts) and DERIVES the config path from the manifest plus --rung, so there is no
+// free-form --config flag left to parse.
 
 describe("parseAnchorConfig", () => {
   test("refuses a config with no expectedMutantCount rather than deriving one from the report", () => {

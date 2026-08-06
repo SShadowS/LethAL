@@ -466,6 +466,19 @@ describe("lethal campaign freeze | anchors | compare", () => {
       [rec("rung-cmp.baseline.json")]: baseline,
       [rec("rung-nobaseline.precommit.md")]: "# rung-nobaseline\n",
       [rec("rung-freeze.precommit.md")]: "# rung-freeze\n",
+      // Fix round 1, Important 1/2: rungs whose PRE-COMMITMENT is committed and clean, so the only
+      // thing wrong is the OTHER file each verb is supposed to check. Without these, every "which
+      // paths" mutation (drop the manifest, drop the anchors, drop the baseline) passes the suite.
+      [rec("rung-dirtyanchors.precommit.md")]: "# rung-dirtyanchors\n",
+      [rec("rung-dirtyanchors.anchors.json")]: JSON.stringify(PASSING_ANCHORS, null, 2),
+      [rec("rung-dirtybaseline.precommit.md")]: "# rung-dirtybaseline\n",
+      [rec("rung-dirtybaseline.baseline.json")]: baseline,
+      [rec("rung-anchorsuntracked.precommit.md")]: "# rung-anchorsuntracked\n",
+      // A rung with ALL THREE records committed and clean, so freeze's announced list pins every
+      // path it checks — including the two conditional ones.
+      [rec("rung-full.precommit.md")]: "# rung-full\n",
+      [rec("rung-full.anchors.json")]: JSON.stringify(PASSING_ANCHORS, null, 2),
+      [rec("rung-full.baseline.json")]: baseline,
     });
     manifestPath = join(repo, "campaign.json");
     recordsDir = join(repo, RECORDS_DIR);
@@ -473,6 +486,18 @@ describe("lethal campaign freeze | anchors | compare", () => {
     // Dirty and untracked pre-commitments, created AFTER the commit.
     await writeAt(repo, rec("rung-dirty.precommit.md"), "# rung-dirty\n\nEDITED AFTER THE RUN\n");
     await writeAt(repo, rec("rung-untracked.precommit.md"), "# rung-untracked\n");
+    // ... and the same treatment for the non-precommit records, leaving each precommit clean.
+    await writeAt(
+      repo,
+      rec("rung-dirtyanchors.anchors.json"),
+      `${JSON.stringify({ ...PASSING_ANCHORS, expectedMutantCount: 999 }, null, 2)}\n`,
+    );
+    await writeAt(repo, rec("rung-dirtybaseline.baseline.json"), "[]\n");
+    await writeAt(
+      repo,
+      rec("rung-anchorsuntracked.anchors.json"),
+      JSON.stringify(PASSING_ANCHORS, null, 2),
+    );
 
     const outDir = realpathSync(await mkdtemp(join(tmpdir(), "lethal-campaign-out-")));
     reportPath = join(outDir, "report.json");
@@ -602,10 +627,19 @@ describe("lethal campaign freeze | anchors | compare", () => {
     expect(order.indexOf("anchors")).toBeGreaterThan(-1);
   });
 
-  test("campaign anchors refuses when the anchor config is UNCOMMITTED", async () => {
-    await expect(
-      runCampaignAnchors({ manifestPath, rung: "rung-untracked", reportPath }),
-    ).rejects.toThrow(/rung-untracked/);
+  test("campaign anchors refuses when the ANCHOR CONFIG is uncommitted, precommit clean", async () => {
+    // Fix round 1, Important 2: this used to point at `rung-untracked`, whose PRECOMMIT is
+    // untracked and whose anchors.json does not exist at all — so it stayed green whichever of the
+    // two paths was dropped, and did not test what it names. `rung-anchorsuntracked` has a
+    // committed, clean precommit and an untracked anchors.json, so the only thing that can refuse
+    // it is the anchor config being checked. `paths` pins that exactly.
+    const err = await refusalFrom(
+      runCampaignAnchors({ manifestPath, rung: "rung-anchorsuntracked", reportPath }),
+    );
+    expect(err).toBeInstanceOf(UncommittedPathError);
+    expect((err as UncommittedPathError).paths).toEqual([
+      rec("rung-anchorsuntracked.anchors.json"),
+    ]);
   });
 
   test("campaign anchors throws on a cardinality mismatch rather than reporting a pass", async () => {
@@ -645,11 +679,20 @@ describe("lethal campaign freeze | anchors | compare", () => {
     // The difference between `compare` and `freeze`: `assertMatchesBaseline` mints a baseline when
     // none exists. A comparison that did that would report "matches" against a file it had just
     // written from the report it was comparing.
+    //
+    // Fix round 1, Important 2: this used to assert only `.rejects.toThrow(/baseline/)`. Drop the
+    // baseline from compare's checked paths and the rejection still matches — but it comes from
+    // `readFile`'s "ENOENT: ... rung-nobaseline.baseline.json", which also contains "baseline", so
+    // the GATE's refusal was never measured. Asserting the class plus a fragment only the gate
+    // produces makes it fail for its stated reason.
     const baselinePath = join(recordsDir, "rung-nobaseline.baseline.json");
     expect(existsSync(baselinePath)).toBe(false);
-    await expect(
+    const err = await refusalFrom(
       runCampaignCompare({ manifestPath, rung: "rung-nobaseline", reportPath }),
-    ).rejects.toThrow(/baseline/);
+    );
+    expect(err).toBeInstanceOf(UncommittedPathError);
+    expect(err.message).toContain("cannot have been committed before the run");
+    expect((err as UncommittedPathError).paths).toEqual([rec("rung-nobaseline.baseline.json")]);
     expect(existsSync(baselinePath)).toBe(false);
   });
 
@@ -657,6 +700,101 @@ describe("lethal campaign freeze | anchors | compare", () => {
     await expect(
       runCampaignCompare({ manifestPath, rung: "rung-cmp", reportPath: threeMutantReportPath }),
     ).rejects.toThrow(/expected 2, got 3/);
+  });
+
+  // ---- WHICH paths each verb checks (fix round 1, Important 1) --------------------------------
+  //
+  // Everything above pins HOW a path is checked and precisely WHEN. None of it pinned WHICH: each
+  // of these four mutations passed the entire runner suite —
+  //   `committedPaths` drops `c.manifestRel`;
+  //   freeze's `records` drops `[anchors, baseline].filter(existsSync)`;
+  //   anchors' `[precommit, anchors]` becomes `[precommit]`;
+  //   compare's `[precommit, baselinePath]` becomes `[precommit]`.
+  // Two independent pins per verb: the announced list (exact), and a rung whose PRE-COMMITMENT is
+  // committed and clean so the only file that can refuse it is the other one.
+
+  test("each verb ANNOUNCES exactly which committed paths it verified", async () => {
+    const freezeLines: string[] = [];
+    await runCampaignFreeze({
+      manifestPath,
+      rung: "rung-full",
+      reportPath,
+      expectedMutantCount: 2,
+      log: (l) => freezeLines.push(l),
+    });
+    expect(freezeLines[0]).toBe(
+      `[campaign] fixture-campaign-77: 4 committed path(s) verified — campaign.json, ${rec("rung-full.precommit.md")}, ${rec("rung-full.anchors.json")}, ${rec("rung-full.baseline.json")}`,
+    );
+
+    const anchorLines: string[] = [];
+    await runCampaignAnchors({
+      manifestPath,
+      rung: "rung-ok",
+      reportPath,
+      log: (l) => anchorLines.push(l),
+    });
+    expect(anchorLines[0]).toBe(
+      `[campaign] fixture-campaign-77: 3 committed path(s) verified — campaign.json, ${rec("rung-ok.precommit.md")}, ${rec("rung-ok.anchors.json")}`,
+    );
+
+    const compareLines: string[] = [];
+    await runCampaignCompare({
+      manifestPath,
+      rung: "rung-cmp",
+      reportPath,
+      log: (l) => compareLines.push(l),
+    });
+    expect(compareLines[0]).toBe(
+      `[campaign] fixture-campaign-77: 3 committed path(s) verified — campaign.json, ${rec("rung-cmp.precommit.md")}, ${rec("rung-cmp.baseline.json")}`,
+    );
+  });
+
+  test("freeze checks the rung's ANCHOR CONFIG, not just its pre-commitment", async () => {
+    // `--expect-mutants` reads this file and treats ITS count as the pre-commitment. Unchecked, the
+    // cross-check compares a number typed on the command line against a file that could have been
+    // written after the run — which is the thing the cross-check exists to prevent.
+    const err = await refusalFrom(
+      runCampaignFreeze({
+        manifestPath,
+        rung: "rung-dirtyanchors",
+        reportPath,
+        expectedMutantCount: 2,
+      }),
+    );
+    expect(err).toBeInstanceOf(UncommittedPathError);
+    expect((err as UncommittedPathError).paths).toEqual([rec("rung-dirtyanchors.anchors.json")]);
+  });
+
+  test("freeze checks the rung's existing BASELINE too", async () => {
+    const err = await refusalFrom(
+      runCampaignFreeze({
+        manifestPath,
+        rung: "rung-dirtybaseline",
+        reportPath,
+        expectedMutantCount: 2,
+      }),
+    );
+    expect(err).toBeInstanceOf(UncommittedPathError);
+    expect((err as UncommittedPathError).paths).toEqual([rec("rung-dirtybaseline.baseline.json")]);
+  });
+
+  test("anchors checks the ANCHOR CONFIG it is about to read", async () => {
+    // The sharpest of the four: this file IS the pre-commitment the verb gates against
+    // (expectedMutantCount, coveredProcedureRanges). The dirty copy on disk says 999 — a verb that
+    // did not check it would happily gate against an edit made after the run.
+    const err = await refusalFrom(
+      runCampaignAnchors({ manifestPath, rung: "rung-dirtyanchors", reportPath }),
+    );
+    expect(err).toBeInstanceOf(UncommittedPathError);
+    expect((err as UncommittedPathError).paths).toEqual([rec("rung-dirtyanchors.anchors.json")]);
+  });
+
+  test("compare checks the BASELINE it is about to compare against", async () => {
+    const err = await refusalFrom(
+      runCampaignCompare({ manifestPath, rung: "rung-dirtybaseline", reportPath }),
+    );
+    expect(err).toBeInstanceOf(UncommittedPathError);
+    expect((err as UncommittedPathError).paths).toEqual([rec("rung-dirtybaseline.baseline.json")]);
   });
 
   // ---- shared argument validation ------------------------------------------------------------
@@ -671,6 +809,68 @@ describe("lethal campaign freeze | anchors | compare", () => {
     await expect(
       runCampaignAnchors({ manifestPath: join(repo, "no-such.json"), rung: "rung-ok", reportPath }),
     ).rejects.toThrow(/no-such\.json/);
+  });
+});
+
+/**
+ * The MANIFEST is checked alongside the rung's own records — its own repository, because a dirty
+ * manifest would refuse every test in the block above.
+ *
+ * Fix round 1, Important 1: dropping `c.manifestRel` from `committedPaths` passed the whole runner
+ * suite. It is the module's own headline design decision (a manifest edited after the run can
+ * redirect `recordsDir` at a different, or freshly minted, set of records), and it fires in
+ * production — the first refusal the real campaign produced was its untracked `campaign.json`.
+ */
+describe("lethal campaign — the manifest itself must be committed", () => {
+  let repo: string;
+  let manifestPath: string;
+  let reportPath: string;
+
+  beforeAll(async () => {
+    repo = await makeRepo({
+      "campaign.json": MANIFEST,
+      [rec("rung-ok.precommit.md")]: "# rung-ok\n",
+      [rec("rung-ok.anchors.json")]: JSON.stringify(PASSING_ANCHORS, null, 2),
+      [rec("rung-ok.baseline.json")]: JSON.stringify(normalizeForComparison(TWO_MUTANTS), null, 2),
+      "report.json": JSON.stringify(TWO_MUTANTS),
+    });
+    manifestPath = join(repo, "campaign.json");
+    reportPath = join(repo, "report.json");
+    // Every RECORD stays committed and clean. Only the manifest is edited after the commit, so it
+    // is the sole thing any of the three verbs can refuse on.
+    await writeAt(
+      repo,
+      "campaign.json",
+      JSON.stringify({ recordsDir: RECORDS_DIR, campaignId: "redirected-after-the-run" }, null, 2),
+    );
+  });
+
+  afterAll(async () => {
+    await rm(repo, { recursive: true, force: true });
+  });
+
+  test("freeze refuses a dirty manifest even when every record is clean", async () => {
+    const err = await refusalFrom(
+      runCampaignFreeze({ manifestPath, rung: "rung-ok", reportPath, expectedMutantCount: 2 }),
+    );
+    expect(err).toBeInstanceOf(UncommittedPathError);
+    expect((err as UncommittedPathError).paths).toEqual(["campaign.json"]);
+  });
+
+  test("anchors refuses a dirty manifest even when every record is clean", async () => {
+    const err = await refusalFrom(
+      runCampaignAnchors({ manifestPath, rung: "rung-ok", reportPath }),
+    );
+    expect(err).toBeInstanceOf(UncommittedPathError);
+    expect((err as UncommittedPathError).paths).toEqual(["campaign.json"]);
+  });
+
+  test("compare refuses a dirty manifest even when every record is clean", async () => {
+    const err = await refusalFrom(
+      runCampaignCompare({ manifestPath, rung: "rung-ok", reportPath }),
+    );
+    expect(err).toBeInstanceOf(UncommittedPathError);
+    expect((err as UncommittedPathError).paths).toEqual(["campaign.json"]);
   });
 });
 

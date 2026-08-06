@@ -40,6 +40,20 @@
  *    independent verification `assertCommitted` structurally cannot do: an answer about some other
  *    file, or about several files, can no longer be read as an answer about this one. It is the
  *    same identity-echo discipline `RunMutant` already uses for mutant activation.
+ *
+ * **What this CANNOT detect, stated so the guarantee is not read as absolute.** This gate asks git
+ * whether a file differs from HEAD; it cannot ask whether the CONTENT was honest when it was
+ * committed. Two consequences, both measured:
+ *  - `git update-index --assume-unchanged` / `--skip-worktree` makes git report a genuinely edited
+ *    file as clean, so the echo passes and this gate passes. Deliberately NOT closed: it is
+ *    strictly weaker than simply committing the edited pre-commitment, which no git check can
+ *    detect at all, and the failure this whole subsystem is aimed at is CARELESSNESS (writing the
+ *    file after the run, or forgetting to commit it) rather than evasion.
+ *  - Committing an edit after the run passes for the same reason. What makes that visible is the
+ *    git HISTORY — the pre-commitment's commit must predate the run — which is a review question,
+ *    not a `git status` question.
+ * The honest claim is therefore narrow: nothing UNCOMMITTED, untracked, ignored, staged-only,
+ * modified or missing can reach these gates unnoticed.
  */
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";

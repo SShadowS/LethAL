@@ -2,8 +2,10 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-// Imports from packages/runner/src, not scripts/campaign/freeze.ts directly — see that file's
-// doc comment for why (scripts/ sits outside this package's tsconfig project graph).
+// `freezeRungTo` is the pure archive-and-freeze half, tested here directly. Its production caller
+// is `runCampaignFreeze` (`campaign-subcommands.ts`), reached as `lethal campaign freeze` and
+// covered in `campaign-subcommands.test.ts` — including that the git check runs BEFORE anything
+// here writes. (It used to be `scripts/campaign/freeze.ts`, deleted with that subcommand.)
 import { freezeRungTo } from "../src/campaign-freeze";
 import type { MutantOutcome, SessionReport } from "../src/report";
 
