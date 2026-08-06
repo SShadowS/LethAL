@@ -240,6 +240,54 @@ describe("coverage: trigger fallback", () => {
   });
 });
 
+// DRIFT TRIPWIRE for `ATTRIBUTION_INTERPRETATIONS.object` (selection.ts).
+//
+// Semantic drift — `object` attribution quietly becoming a PRECISE claim while keeping its name —
+// is not provable against prose; co-locating the constant next to `byObject` (so whoever edits
+// precedence here has the meaning on screen) is the first defence, but it is not a mechanical one.
+// This test is the second: a fixture where the ONLY covering test's own coverage record proves,
+// by naming a DIFFERENT member and nothing else, that it never executed the mutated trigger — yet
+// attribution still returns "object". That is exactly the gap `ATTRIBUTION_INTERPRETATIONS.object`
+// warns about ("whether they reached the mutated member is unknown" / "may be no finding at all").
+//
+// If this test is ever changed or deleted, `ATTRIBUTION_INTERPRETATIONS.object` in selection.ts
+// must be re-reviewed alongside it — a change here that stops failing under a broken `byObject`
+// precedence is the regression this whole test exists to catch (see the R70 pattern in ROADMAP.md).
+describe("drift tripwire: object attribution is NOT proof of execution", () => {
+  test("a test whose own coverage names a DIFFERENT member still attributes 'object' to a trigger mutant", () => {
+    const onlyTouchedUnrelated = {
+      codeunitId: 70000,
+      codeunitName: "Sample",
+      method: "OnlyTouchedUnrelated",
+    };
+    const baseline = [
+      {
+        ref: onlyTouchedUnrelated,
+        coverage: {
+          granularity: "procedure" as const,
+          // This is the whole point: the ONLY thing this test's coverage names is "Unrelated" —
+          // proof, not silence, that it executed that member and named nothing else. A
+          // member-named entry means the coverage tool positively identified that execution;
+          // it is not an absence that could be hiding the trigger.
+          entries: [{ objectType: "Table", objectId: 70000, procedure: "Unrelated" }],
+        },
+      },
+    ];
+    const index = buildCoverageIndex(baseline);
+    // A TABLE trigger: SymbolReference.json never records triggers, so this mutant's member-level
+    // key can never hit — it must take FALLBACK 1 (object-level) unconditionally.
+    const m = entry({ objectType: "table", procedureName: "", triggerName: "OnInsert" });
+    const split = coverageFilter([m], index, [onlyTouchedUnrelated]);
+
+    expect(split.attribution.get("M0001")).toBe("object");
+    // The covering-test list names a test that PROVABLY never touched the trigger — the
+    // behavioural fact `ATTRIBUTION_INTERPRETATIONS.object` (selection.ts) exists to warn about.
+    // Deliberately no assertion against that constant's literal wording: a legitimate reword must
+    // not turn this detector red for a non-behavioural reason.
+    expect(split.covered.get("M0001")?.map((t) => t.method)).toEqual(["OnlyTouchedUnrelated"]);
+  });
+});
+
 // Task 5 amendment: a live-gate run found real trigger mutants BC's coverage index could not
 // name at ALL — not even via the object-level fallback (byObject was empty too). Coverage
 // filtering was silently reporting them `no-coverage`, so they generated, compiled, published,

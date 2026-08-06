@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { AlRunnerCanaryResult } from "../src/al-runner-canary";
 import type { PermissionCanaryResult } from "../src/permission-canary";
 import { renderConsole } from "../src/report";
-import type { SessionReport } from "../src/report";
+import type { Caveat, SessionReport } from "../src/report";
 
 // ————————————————————————————————————————————————————————————————————————
 // R7/R8: `renderConsole` repeats the al-runner canary's measured verdict at the END of the
@@ -221,5 +221,34 @@ describe("renderConsole — permission canary reiteration (R26)", () => {
     const out = renderConsole(bcdevReport);
     expect(out).not.toContain("R26");
     expect(out).not.toContain("permission canary");
+  });
+});
+
+// ————————————————————————————————————————————————————————————————————————
+// `Caveat` union (prerequisite refactor for `lethal explain`): `caveats` used to be a free
+// `readonly string[]` — a typo at a `caveats.push(...)` call site would silently never match a
+// consumer's check. This is a COMPILE-TIME check, not a runtime one: `all` below must list every
+// member of `Caveat` or `tsc` refuses to build (excess/missing keys against `Record<Caveat, true>`).
+// The `toBe(11)` assertion is a weak backstop by comparison — it would not catch two members
+// silently swapped for each other — but it does pin the count against silent growth/shrinkage of
+// the union without a matching update here.
+// ————————————————————————————————————————————————————————————————————————
+describe("Caveat union", () => {
+  test("every caveat the report can push is a member of the union", () => {
+    // Compile-time: this object must be exhaustive over `Caveat` or tsc fails.
+    const all: Record<Caveat, true> = {
+      "baseline-red": true,
+      narrowed: true,
+      "tests-narrowed": true,
+      "uninstrumentable-files": true,
+      "stale-test-app": true,
+      "tests-permission-refused": true,
+      "tests-testpage-unsupported": true,
+      "runner-disagreement": true,
+      "stop-hung-sessions": true,
+      resumed: true,
+      "untargeted-triggers": true,
+    };
+    expect(Object.keys(all).length).toBe(11);
   });
 });

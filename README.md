@@ -198,6 +198,7 @@ figures under [Testing](#testing) are the measured ones.)*
 | **Runner provenance** | Every verdict records which session type produced it, and the report states each execution context it actually used rather than asserting one |
 | **Operator recovery** | `lethal force-reset-lease` and `lethal clear-quarantine` recover a container stranded by a dead session |
 | **Diagnostics** | `lethal doctor` runs every pre-flight check it can answer read-only (environment status, quarantine, control-app version, `alc`/`altool`) all at once, instead of `lethal run` discovering them one at a time — and states plainly what it cannot check yet |
+| **Explained reports** | `lethal explain report.json` says what a finished report MEANS: every survivor carries `executionProven` — true only for a member-level coverage match — beside the interpretation and the evidence pointer that decide what it is worth, so "some test touched the codeunit" is never read as "a test executed this line" |
 
 ## Prerequisites
 
@@ -271,6 +272,20 @@ once, read-only, before spending time on a real run:
 ```bash
 lethal doctor --config lethal.config.json
 ```
+
+A finished report states what happened; `lethal explain` states what it MEANS. It reads the JSON
+file and nothing else — no server, no database, no config:
+
+```bash
+lethal explain report.json
+```
+
+The output states its own contract, in a `contract` block at the top — read that rather than this
+paragraph, which is deliberately not a second copy of it. In outline: **structure** is versioned
+(`explainSchemaVersion`, plus the `derivedFromReportSchemaVersion` it came from) and **prose is
+not**, because every machine-usable value is already its own field beside the sentence explaining
+it. A report from another schema version, or carrying a value this build cannot interpret, is
+**refused** rather than explained with the unrecognised value quietly dropped.
 
 Recovery, when a session died mid-run and left the container held:
 

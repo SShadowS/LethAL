@@ -49,6 +49,7 @@ import {
 } from "./env-tool-session";
 import type { EnvToolSession } from "./env-tool-session";
 import type { EventSubscriber } from "./events";
+import { assertExplainableReport, explain } from "./explain";
 import { HarnessVerifier } from "./harness";
 import { LeaseClient } from "./lease";
 import {
@@ -446,6 +447,17 @@ export interface DoctorCliConfig {
 }
 
 /**
+ * `lethal explain <report.json>` — projects a finished report into what its data MEANS (see
+ * `explain.ts`). Takes its input as a POSITIONAL rather than a flag, like every `<tool> <verb>
+ * <file>` command, and reads nothing else: no server, no database, no config. It is the only
+ * subcommand that touches no environment at all.
+ */
+export interface ExplainCliConfig {
+  readonly mode: "explain";
+  readonly reportPath: string;
+}
+
+/**
  * R49: `lethal --help` / `-h`, and a bare `lethal` with no arguments at all.
  *
  * `parseArgs` runs in strict mode, so before this an unknown `--help` exited 1 with a raw
@@ -470,6 +482,7 @@ export type CliConfig =
   | ClearCeilingCliConfig
   | ForceResetLeaseCliConfig
   | DoctorCliConfig
+  | ExplainCliConfig
   | HelpCliConfig
   | VersionCliConfig;
 
@@ -479,6 +492,7 @@ const VALID_SUBCOMMANDS = [
   "clear-ceiling",
   "force-reset-lease",
   "doctor",
+  "explain",
 ] as const;
 
 /**
@@ -514,6 +528,7 @@ USAGE
   lethal clear-ceiling     --project <dir> --server <url> --instance <name> [--db <path>] [--file <name>]
   lethal force-reset-lease --server <url> --instance <name> --config <path> [--project <dir>]
   lethal doctor            --config <path> [--project <dir>]
+  lethal explain           <report.json>
 
 RUN — required
   --project <dir>            AL project to mutate (the app under test)
@@ -601,6 +616,18 @@ DOCTOR — every pre-flight refusal, read-only, all at once (R109)
   exists on the control app today, R110) — all three are printed as an explicit caveat on every
   invocation, never silently implied as covered.
   Exits 0 when every check passes, 1 otherwise, naming each failing check.
+
+EXPLAIN — what a finished report MEANS, as JSON on stdout
+  'lethal explain report.json' projects a report a run wrote with --out. It reads that file and
+  nothing else: no server, no database, no config. Every survivor arrives with the machine field
+  that decides what it is worth — 'executionProven' is true ONLY for an exact, member-level
+  coverage match, so a survivor with false means some test touched the object and NO test is
+  measured to have executed the mutated procedure. Each caveat, error cause and tool condition
+  arrives with the same interpretation the source constant carries, plus a 'basis' pointing at the
+  evidence. The output's own 'contract' block states what is versioned and what is not — read that
+  rather than a summary here, which would be a second copy free to drift from it. A report from
+  another schema version, or carrying a value this build cannot interpret, is REFUSED rather than
+  explained with the unrecognised value dropped.
 
 OTHER
   -h, --help                 this text
@@ -788,6 +815,20 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
       configPath,
       ...(project !== undefined && project !== "" ? { projectDir: project } : {}),
     };
+  }
+
+  if (subcommand === "explain") {
+    // POSITIONAL, so `positionals[1]`. An empty or missing one is refused here rather than reaching
+    // `readFile("")` and surfacing as a bare ENOENT with no statement of what was expected.
+    const [, reportPath] = positionals;
+    if (reportPath === undefined || reportPath === "") {
+      throw new Error(
+        "missing required <report.json> (the finished report to explain, e.g. the file a run " +
+          "wrote with --out). `lethal explain` reads only that file — no server, database or " +
+          "config is involved.",
+      );
+    }
+    return { mode: "explain", reportPath };
   }
 
   const projectDir = values.project;
@@ -2863,6 +2904,40 @@ export async function doctorFromCli(
 }
 
 /**
+ * `lethal explain <report.json>` — reads the file, refuses anything that is not an explainable
+ * report (`assertExplainableReport`, R113), and prints the projection as JSON.
+ *
+ * JSON and not a rendered table: the projection IS the artifact, its structure is the versioned
+ * contract (`EXPLAIN_SCHEMA_VERSION`), and a second prose surface would be a second place for the
+ * meanings to drift — `renderConsole` already exists for the run itself. Pretty-printed so a human
+ * reading it in a terminal is not the loser.
+ *
+ * Every failure throws: a malformed report exits 1 through `main`'s catch, with
+ * `MalformedReportError`'s own message. There is no "explained what it could" path, deliberately —
+ * see `assertExplainableReport`.
+ */
+export async function explainFromCli(parsed: ExplainCliConfig): Promise<number> {
+  let raw: string;
+  try {
+    raw = await readFile(parsed.reportPath, "utf8");
+  } catch (err) {
+    throw new Error(
+      `explain: could not read ${parsed.reportPath} — ${err instanceof Error ? err.message : String(err)}. Pass the JSON report a run wrote with --out.`,
+    );
+  }
+  let parsedJson: unknown;
+  try {
+    parsedJson = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(
+      `explain: ${parsed.reportPath} is not valid JSON — ${err instanceof Error ? err.message : String(err)}.`,
+    );
+  }
+  console.log(JSON.stringify(explain(assertExplainableReport(parsedJson)), null, 2));
+  return 0;
+}
+
+/**
  * What `performForceResetLease` (design §8 step 2) reports back: a real reset (with the old and
  * new generation, and the new epoch), or a well-formed refusal — the generation read live from
  * `HarnessInfo` no longer matched the row's current one by the time the reset actually ran (a
@@ -3112,6 +3187,9 @@ async function main(): Promise<number> {
   }
   if (parsed.mode === "doctor") {
     return await doctorFromCli(parsed);
+  }
+  if (parsed.mode === "explain") {
+    return await explainFromCli(parsed);
   }
   const report = await runFromCli(parsed);
   console.log(renderConsole(report));
