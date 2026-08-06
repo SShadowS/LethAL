@@ -175,16 +175,24 @@ Two hard constraints on the same choice:
   Measured on one hosted environment: 176 and 229 guards publish, 331 and 660 time out. `lethal
   clear-ceiling` is the way back after the ratchet records a failure.
 - **Screen candidates for `TestPage` in their covering tests** — grepping for the declaration, not
-  the word: on a real suite 9 files MENTIONED `TestPage` and 5 actually contained one. **It is not a
-  hang.** R69 filed one and then retracted the attribution: measured on the fenced path, a
-  `TestPage` open is REFUSED in **87 ms** (`NavSession.CreateNavTestService()`) and the run
-  COMPLETES — no quarantine, no strand. What you lose is the tests. They fail at baseline, drop out
-  of the green set, and every mutant they alone covered is recorded `no-coverage` under the
-  `baseline-red` caveat (R55) — a real survivor turned into a non-finding. So this is a **rule-3
-  concern, not a hang: carry the baseline-green gate.** Sized on a real app: 19 of 1,287 tests, and
-  439 of 19,081 deployable mutants = **2.30%**, which is why R69 closed as named-not-recovered
-  rather than fixed. The report names the refusal (`testpage-unsupported.ts`). Rung 2 applied this
-  screen to reject two otherwise-good test areas.
+  the word: on a real suite 9 files MENTIONED `TestPage` and 5 contained one. **What it costs
+  depends on the page's shape, and R69 measured both ends.** A **code-free** page is REFUSED in
+  87 ms (`NavSession.CreateNavTestService()`) and the run COMPLETES: you lose those tests, they drop
+  from the green set, and every mutant they alone covered becomes `no-coverage` under the
+  `baseline-red` caveat (R55) — a real survivor turned into a non-finding. Sized on a real app at
+  19 of 1,287 tests and 439 of 19,081 deployable mutants = **2.30%**, which is why R69 closed as
+  named-not-recovered; the report names the refusal (`testpage-unsupported.ts`). **That is the
+  floor.** The realistic shape — a page whose `SourceTable` carries triggers or a FlowField,
+  extended by a `pageextension` that writes a row from `OnOpenPage` — **reproduced the original hang
+  instead, twice, deterministically**, wedging the fenced session at baseline: `killed=0 survived=0
+  noCoverage=0` across an entire 84-mutant run, once leaving the NST stuck and needing a
+  Docker-level restart. **Nothing rescues that**: the baseline loop calls `quarantineInFlight` the
+  instant any test comes back `in-flight-unknown`, unconditionally and before any routing, and
+  `--stop-hung-sessions` attaches its hook only when a mutant is pending, so a baseline overrun has
+  nothing to blame. Do not attribute that hang to `TestPage` as such — R69 says the cause is still
+  unexplained. Either way it is a **rule-3 concern: carry the baseline-green gate**, and treat a
+  module whose covering tests open a non-trivial page as one you cannot measure yet. Rung 2 applied
+  this screen to reject two otherwise-good test areas.
 
 ## Narrow TESTS, not mutants — that is the cost lever
 
