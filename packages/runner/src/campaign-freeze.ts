@@ -28,50 +28,39 @@
  */
 import { existsSync } from "node:fs";
 import { copyFile, mkdir, readFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { join } from "node:path";
 import { assertMatchesBaseline } from "../itest/baseline-guard";
 import { assertCardinality } from "./campaign-anchors";
+import { type CampaignManifest, resolveRecordsDir } from "./campaign-manifest";
 import type { SessionReport } from "./report";
 
-/** Where this campaign's committed records live, relative to the repository root. */
-const RECORDS_RELATIVE = "docs/campaign/2026-08-03-do";
+// `findRepoRoot`'s public surface (used by nothing outside this module today, per a repo-wide
+// grep, but exported since Task 2 landed) is unchanged: same walk-up, same refusal, just now
+// shared infrastructure that lives in `campaign-manifest.ts` alongside the manifest reader that
+// needs the identical mechanism. Re-exported here so this stays a compatible move, not a break.
+export { findRepoRoot } from "./campaign-manifest";
 
 /**
- * Walks up from `startDir` looking for `.git` (a directory in an ordinary checkout, a file
- * pointing at `.git/worktrees/<name>` in a worktree — `existsSync` doesn't care which, and
- * finding the WORKTREE's own `.git` is exactly what's wanted here: this campaign's records live
- * IN the worktree, not in the main checkout).
- *
- * Throws rather than falling back to `process.cwd()` or a relative path: a marker that can't be
- * found is a reason to refuse, not a reason to guess and silently write records into whatever
- * directory happened to be current.
+ * This campaign's own manifest — the recordsDir this module has defaulted to since it was
+ * written (`docs/campaign/2026-08-03-do`), now expressed as a `CampaignManifest` value flowing
+ * through the same `resolveRecordsDir()` a future campaign's manifest-supplied value will use
+ * (`campaign-manifest.ts`), instead of an independently hardcoded `join`. This directory name
+ * still has to be written down somewhere for THIS campaign's own zero-arg default — Task 3's CLI
+ * subcommands are where a *different* campaign's manifest gets read from disk and threaded
+ * through `freezeRungTo` directly, bypassing this default entirely.
  */
-export function findRepoRoot(startDir: string): string {
-  let dir = resolve(startDir);
-  for (;;) {
-    if (existsSync(join(dir, ".git"))) return dir;
-    const parent = dirname(dir);
-    if (parent === dir) {
-      throw new Error(
-        `campaign-freeze: could not locate a repository root walking up from ${startDir} (no .git found). Refusing to guess a records directory — freezeRung's whole point is that records are NOT lost to the wrong location.`,
-      );
-    }
-    dir = parent;
-  }
-}
+const THIS_CAMPAIGN_MANIFEST: CampaignManifest = {
+  recordsDir: "docs/campaign/2026-08-03-do",
+  campaignId: "2026-08-03-do",
+};
 
 /**
- * The records directory, resolved against the repository root — NEVER against `process.cwd()`.
- *
- * A relative `RECORDS_RELATIVE` resolved against cwd would silently create a records tree
- * wherever `freeze.ts` happened to be invoked FROM and still report success: a gate that passes
- * while writing its evidence into the void. `import.meta.dir` is this module's own on-disk
- * location, which is fixed by where the file lives in the repo, not by the caller's shell state —
- * so this is correct however `freezeRung` is invoked (CLI script, `bun test`, a future caller
- * importing it from elsewhere entirely).
+ * The records directory this campaign's zero-arg `freezeRung` defaults to, resolved against the
+ * repository root — NEVER against `process.cwd()`. See `resolveRecordsDir`'s doc comment
+ * (`campaign-manifest.ts`) for why a cwd-relative path is refused rather than silently resolved.
  */
 export function defaultRecordsDir(): string {
-  return join(findRepoRoot(import.meta.dir), RECORDS_RELATIVE);
+  return resolveRecordsDir(THIS_CAMPAIGN_MANIFEST);
 }
 
 /**

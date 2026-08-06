@@ -145,6 +145,131 @@ describe("parseCliConfig", () => {
   });
 });
 
+/**
+ * `lethal campaign freeze | anchors | compare` — argument marshaling only. The gates themselves,
+ * and the git wiring they rest on, are exercised against a REAL repository in
+ * `campaign-subcommands.test.ts`.
+ */
+describe("parseCliConfig — lethal campaign (subsystem D)", () => {
+  const BASE = [
+    "--manifest",
+    "docs/campaign/x/campaign.json",
+    "--rung",
+    "rung1",
+    "--report",
+    "r.json",
+  ];
+
+  test("freeze parses into a campaign config carrying every field", () => {
+    expect(parseCliConfig(["campaign", "freeze", ...BASE, "--expect-mutants", "148"])).toEqual({
+      mode: "campaign",
+      action: "freeze",
+      manifestPath: "docs/campaign/x/campaign.json",
+      rung: "rung1",
+      reportPath: "r.json",
+      expectedMutantCount: 148,
+    });
+  });
+
+  test("anchors and compare parse without an expected count", () => {
+    expect(parseCliConfig(["campaign", "anchors", ...BASE])).toEqual({
+      mode: "campaign",
+      action: "anchors",
+      manifestPath: "docs/campaign/x/campaign.json",
+      rung: "rung1",
+      reportPath: "r.json",
+    });
+    expect(parseCliConfig(["campaign", "compare", ...BASE])).toEqual({
+      mode: "campaign",
+      action: "compare",
+      manifestPath: "docs/campaign/x/campaign.json",
+      rung: "rung1",
+      reportPath: "r.json",
+    });
+  });
+
+  test("anchors carries --project through for the notInstrumented reconciliation", () => {
+    const parsed = parseCliConfig(["campaign", "anchors", ...BASE, "--project", "proj"]);
+    expect(parsed).toMatchObject({ mode: "campaign", action: "anchors", projectDir: "proj" });
+  });
+
+  test("an unknown or missing verb is rejected, naming the three", () => {
+    expect(() => parseCliConfig(["campaign", "frobnicate", ...BASE])).toThrow(
+      /expected one of: freeze, anchors, compare/,
+    );
+    expect(() => parseCliConfig(["campaign", ...BASE])).toThrow(/no verb/);
+  });
+
+  test("each required flag is refused by name when absent", () => {
+    expect(() =>
+      parseCliConfig(["campaign", "anchors", "--rung", "rung1", "--report", "r.json"]),
+    ).toThrow(/--manifest/);
+    expect(() =>
+      parseCliConfig(["campaign", "anchors", "--manifest", "m.json", "--report", "r.json"]),
+    ).toThrow(/--rung/);
+    expect(() =>
+      parseCliConfig(["campaign", "anchors", "--manifest", "m.json", "--rung", "rung1"]),
+    ).toThrow(/--report/);
+  });
+
+  test("an empty flag value is refused, not treated as absent", () => {
+    // `--manifest "$M"` with an unset shell variable must not reach `readCampaignManifest("")`.
+    expect(() =>
+      parseCliConfig([
+        "campaign",
+        "anchors",
+        "--manifest",
+        "",
+        "--rung",
+        "r",
+        "--report",
+        "r.json",
+      ]),
+    ).toThrow(/--manifest/);
+    expect(() =>
+      parseCliConfig([
+        "campaign",
+        "anchors",
+        "--manifest",
+        "m",
+        "--rung",
+        "",
+        "--report",
+        "r.json",
+      ]),
+    ).toThrow(/--rung/);
+    expect(() =>
+      parseCliConfig(["campaign", "anchors", "--manifest", "m", "--rung", "r", "--report", ""]),
+    ).toThrow(/--report/);
+  });
+
+  test("freeze REQUIRES --expect-mutants, as a positive integer", () => {
+    expect(() => parseCliConfig(["campaign", "freeze", ...BASE])).toThrow(/--expect-mutants/);
+    for (const bad of ["0", "-1", "2.5", "many", ""]) {
+      expect(() =>
+        parseCliConfig(["campaign", "freeze", ...BASE, "--expect-mutants", bad]),
+      ).toThrow(/--expect-mutants/);
+    }
+  });
+
+  test("a flag that does not apply to the verb is REFUSED, never silently ignored", () => {
+    // The count anchors/compare gate against is the pre-committed one in the committed anchor
+    // config or baseline. Accepting --expect-mutants here would look like it constrained that.
+    expect(() =>
+      parseCliConfig(["campaign", "anchors", ...BASE, "--expect-mutants", "148"]),
+    ).toThrow(/--expect-mutants applies to/);
+    expect(() =>
+      parseCliConfig(["campaign", "compare", ...BASE, "--expect-mutants", "148"]),
+    ).toThrow(/--expect-mutants applies to/);
+    expect(() =>
+      parseCliConfig(["campaign", "freeze", ...BASE, "--expect-mutants", "148", "--project", "p"]),
+    ).toThrow(/--project applies to/);
+    expect(() => parseCliConfig(["campaign", "compare", ...BASE, "--project", "p"])).toThrow(
+      /--project applies to/,
+    );
+  });
+});
+
 describe("validateBcDevConfig", () => {
   const full = {
     mcpCommand: ["bun", "x", "bc-dev-mcp"],

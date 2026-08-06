@@ -35,6 +35,7 @@ import { ArtifactCompiler, defaultArtifactIo } from "./artifact";
 import type { ExecutionBackend } from "./backend";
 import { BcDevMcpBackend } from "./bcdev-backend";
 import type { BcDevConfig } from "./bcdev-backend";
+import { runCampaignAnchors, runCampaignCompare, runCampaignFreeze } from "./campaign-subcommands";
 import { DeploymentVerifier } from "./deployment-verifier";
 import { ENV_STATUS_REACHABLE_NO_VENDOR_STATUS, runDoctor } from "./doctor";
 import type { DoctorConfig, DoctorDeps, DoctorReport } from "./doctor";
@@ -458,6 +459,31 @@ export interface ExplainCliConfig {
 }
 
 /**
+ * `lethal campaign freeze | anchors | compare` (design spec
+ * `2026-08-05-observability-and-campaign-method-design.md` §D1) — the campaign gate machinery that
+ * previously existed only as `scripts/campaign/{freeze,anchors}.ts`, hardcoded to one campaign's
+ * records directory and with nothing checking that a pre-commitment was committed BEFORE the run.
+ *
+ * The verb is a POSITIONAL (`positionals[1]`), like `lethal explain`'s report path, because the
+ * three verbs are one command's modes rather than three commands: they take the same manifest, the
+ * same rung and the same report, and they all refuse identically if the rung's committed records
+ * are dirty. `--rung` names the files (`<rung>.precommit.md`, `<rung>.anchors.json`,
+ * `<rung>.baseline.json`) inside the records directory the manifest designates — see
+ * `campaign-subcommands.ts`.
+ */
+export interface CampaignCliConfig {
+  readonly mode: "campaign";
+  readonly action: "freeze" | "anchors" | "compare";
+  readonly manifestPath: string;
+  readonly rung: string;
+  readonly reportPath: string;
+  /** `freeze` only, where it is REQUIRED: the mutant count pre-committed before the run. */
+  readonly expectedMutantCount?: number;
+  /** `anchors` only: needed when the committed anchor config sets `reconcileNotInstrumented`. */
+  readonly projectDir?: string;
+}
+
+/**
  * R49: `lethal --help` / `-h`, and a bare `lethal` with no arguments at all.
  *
  * `parseArgs` runs in strict mode, so before this an unknown `--help` exited 1 with a raw
@@ -483,6 +509,7 @@ export type CliConfig =
   | ForceResetLeaseCliConfig
   | DoctorCliConfig
   | ExplainCliConfig
+  | CampaignCliConfig
   | HelpCliConfig
   | VersionCliConfig;
 
@@ -493,7 +520,17 @@ const VALID_SUBCOMMANDS = [
   "force-reset-lease",
   "doctor",
   "explain",
+  "campaign",
 ] as const;
+
+/** The three `lethal campaign` verbs — see `CampaignCliConfig`. */
+const CAMPAIGN_ACTIONS = ["freeze", "anchors", "compare"] as const;
+
+type CampaignAction = (typeof CAMPAIGN_ACTIONS)[number];
+
+function isCampaignAction(v: string | undefined): v is CampaignAction {
+  return v !== undefined && (CAMPAIGN_ACTIONS as readonly string[]).includes(v);
+}
 
 /**
  * `lethal` is invoked as `lethal run --project ...`, `lethal clear-quarantine --server ...
@@ -529,6 +566,9 @@ USAGE
   lethal force-reset-lease --server <url> --instance <name> --config <path> [--project <dir>]
   lethal doctor            --config <path> [--project <dir>]
   lethal explain           <report.json>
+  lethal campaign freeze   --manifest <path> --rung <name> --report <path> --expect-mutants <n>
+  lethal campaign anchors  --manifest <path> --rung <name> --report <path> [--project <dir>]
+  lethal campaign compare  --manifest <path> --rung <name> --report <path>
 
 RUN — required
   --project <dir>            AL project to mutate (the app under test)
@@ -629,6 +669,34 @@ EXPLAIN — what a finished report MEANS, as JSON on stdout
   another schema version, or carrying a value this build cannot interpret, is REFUSED rather than
   explained with the unrecognised value dropped.
 
+CAMPAIGN — the measurement gates, with 'committed before the run' machine-checked
+  A measurement campaign states what it expects in a file, COMMITS it, and only then runs. These
+  three verbs are what enforce that: each one reads the campaign manifest, resolves the records
+  directory it names, and REFUSES unless the manifest and the rung's own committed records are
+  clean in git BEFORE it reads a report. A pre-commitment that does not exist is a refusal, not a
+  pass — 'git status' answers nothing at all for a missing or ignored path, which reads exactly
+  like 'clean'.
+  --manifest <path>          campaign manifest: {"recordsDir": ..., "campaignId": ...}. The
+                             repository IT lives in is the repository the git check runs against
+  --rung <name>              names the committed <rung>.precommit.md, <rung>.anchors.json and
+                             <rung>.baseline.json inside that records directory
+  --report <path>            the JSON report a run wrote with --out
+  --expect-mutants <n>       freeze only, REQUIRED: the mutant count pre-committed before the run.
+                             Never derived from the report — a count read out of the report being
+                             checked passes on every report ever produced, including an empty one.
+                             When the rung has a committed anchor config, this must equal ITS
+                             expectedMutantCount or the freeze is refused
+  --project <dir>            anchors only, when the committed config sets reconcileNotInstrumented
+  freeze    archive the report and freeze its per-mutant verdicts under the records directory.
+            Cardinality is asserted BEFORE any file is written: the baseline guard RECORDS a
+            baseline when none exists, so a truncated report freezing itself would then agree with
+            itself forever
+  anchors   run the rung's pre-committed anchor gate. Exit 0 = every checked anchor passed; the
+            EXIT CODE is the gate, not the printed text
+  compare   diff a report against the rung's committed per-mutant baseline, WRITING NOTHING. A
+            missing baseline is refused rather than recorded — that is the whole difference from
+            freeze
+
 OTHER
   -h, --help                 this text
   -V, --version              print the version
@@ -705,7 +773,97 @@ export const RUN_FLAGS = {
   "allow-large-run": { type: "boolean", default: false },
   // Task 6 (event-stream refactor): see `RunCliConfig.progressOutPath`.
   "progress-out": { type: "string" },
+  // `lethal campaign` (subsystem D): the campaign manifest, the rung whose committed records this
+  // invocation is about, the report to gate, and freeze's pre-committed mutant count. In the
+  // shared table because `parseArgs` runs in strict mode over ONE option set for every subcommand.
+  manifest: { type: "string" },
+  rung: { type: "string" },
+  report: { type: "string" },
+  "expect-mutants": { type: "string" },
 } as const;
+
+/**
+ * `lethal campaign <verb> --manifest <path> --rung <name> --report <path> [...]`.
+ *
+ * Every flag that does not apply to the given verb is REFUSED rather than ignored, matching
+ * `--keep-env`/`--allow-expiring-env`'s treatment above: `--expect-mutants` on `anchors` or
+ * `compare` would look like it constrained the comparison when the pre-committed count actually
+ * comes from the committed anchor config or the committed baseline, and `--project` on `freeze` or
+ * `compare` would look like it scoped something in a command that reads no project at all.
+ */
+function parseCampaignConfig(
+  values: {
+    manifest?: string | undefined;
+    rung?: string | undefined;
+    report?: string | undefined;
+    "expect-mutants"?: string | undefined;
+    project?: string | undefined;
+  },
+  positionals: readonly string[],
+): CampaignCliConfig {
+  const [, action] = positionals;
+  if (!isCampaignAction(action)) {
+    throw new Error(
+      `lethal campaign: got ${action === undefined ? "no verb" : `"${action}"`}, expected one of: ${CAMPAIGN_ACTIONS.join(", ")}. Run \`lethal --help\` for usage.`,
+    );
+  }
+  const manifestPath = values.manifest;
+  if (manifestPath === undefined || manifestPath === "") {
+    throw new Error(
+      "missing required --manifest <path> (the campaign manifest naming this campaign's committed " +
+        "records directory; the repository it lives in is the repository the git check runs against)",
+    );
+  }
+  const rung = values.rung;
+  if (rung === undefined || rung === "") {
+    throw new Error(
+      "missing required --rung <name> (names the committed <rung>.precommit.md / " +
+        "<rung>.anchors.json / <rung>.baseline.json inside the records directory)",
+    );
+  }
+  const reportPath = values.report;
+  if (reportPath === undefined || reportPath === "") {
+    throw new Error("missing required --report <path> (the JSON report a run wrote with --out)");
+  }
+
+  const expectRaw = values["expect-mutants"];
+  if (action !== "freeze" && expectRaw !== undefined) {
+    throw new Error(
+      `--expect-mutants applies to \`lethal campaign freeze\`; \`${action}\` takes its pre-committed count from the committed anchor config / baseline, and accepting the flag here would imply it had constrained something`,
+    );
+  }
+  if (action !== "anchors" && values.project !== undefined) {
+    throw new Error(
+      `--project applies to \`lethal campaign anchors\` (the notInstrumented reconciliation reads the project's sources); \`${action}\` reads no project`,
+    );
+  }
+  if (action === "freeze") {
+    const expectedMutantCount = expectRaw === undefined ? undefined : Number(expectRaw);
+    if (
+      expectedMutantCount === undefined ||
+      !Number.isInteger(expectedMutantCount) ||
+      expectedMutantCount < 1
+    ) {
+      throw new Error(
+        "missing or invalid --expect-mutants <n> (a positive integer: the mutant count " +
+          "pre-committed BEFORE the run). It is required rather than derived from the report — a " +
+          "count taken from the report being checked makes the cardinality assertion compare a " +
+          "report against itself and pass on every report ever produced, including an empty one.",
+      );
+    }
+    return { mode: "campaign", action, manifestPath, rung, reportPath, expectedMutantCount };
+  }
+  return {
+    mode: "campaign",
+    action,
+    manifestPath,
+    rung,
+    reportPath,
+    ...(values.project !== undefined && values.project !== ""
+      ? { projectDir: values.project }
+      : {}),
+  };
+}
 
 export function parseCliConfig(argv: readonly string[]): CliConfig {
   // R49: intercepted BEFORE `parseArgs`, which runs in strict mode and would reject `--help` as an
@@ -829,6 +987,10 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
       );
     }
     return { mode: "explain", reportPath };
+  }
+
+  if (subcommand === "campaign") {
+    return parseCampaignConfig(values, positionals);
   }
 
   const projectDir = values.project;
@@ -2938,6 +3100,43 @@ export async function explainFromCli(parsed: ExplainCliConfig): Promise<number> 
 }
 
 /**
+ * `lethal campaign freeze | anchors | compare` — dispatches to the three gates in
+ * `campaign-subcommands.ts`, which own every decision. Like `doctorFromCli`, this calls the REAL
+ * implementations with no swappable resolver in between: the injectable seams
+ * (`git`/`log`/`onStep`) live one layer down, on the functions themselves, so a test exercises the
+ * real argument handling, the real git wiring and the real exit-code logic.
+ *
+ * Returns the exit code. `freeze` returns 0 or throws; `anchors` and `compare` return 1 for a gate
+ * that RAN and failed, which is a different thing from a gate that could not be evaluated (that
+ * throws, and `main`'s catch turns it into 1 with the reason printed).
+ */
+export async function campaignFromCli(parsed: CampaignCliConfig): Promise<number> {
+  const base = {
+    manifestPath: parsed.manifestPath,
+    rung: parsed.rung,
+    reportPath: parsed.reportPath,
+  };
+  if (parsed.action === "freeze") {
+    const { expectedMutantCount } = parsed;
+    if (expectedMutantCount === undefined) {
+      // Unreachable via `parseCliConfig`, which requires it for `freeze` — but this function is
+      // exported, and a caller-contract violation must throw rather than pick a plausible default.
+      throw new Error(
+        "campaign freeze: expectedMutantCount is required and has no default — see --expect-mutants.",
+      );
+    }
+    return await runCampaignFreeze({ ...base, expectedMutantCount });
+  }
+  if (parsed.action === "anchors") {
+    return await runCampaignAnchors({
+      ...base,
+      ...(parsed.projectDir !== undefined ? { projectDir: parsed.projectDir } : {}),
+    });
+  }
+  return await runCampaignCompare(base);
+}
+
+/**
  * What `performForceResetLease` (design §8 step 2) reports back: a real reset (with the old and
  * new generation, and the new epoch), or a well-formed refusal — the generation read live from
  * `HarnessInfo` no longer matched the row's current one by the time the reset actually ran (a
@@ -3190,6 +3389,9 @@ async function main(): Promise<number> {
   }
   if (parsed.mode === "explain") {
     return await explainFromCli(parsed);
+  }
+  if (parsed.mode === "campaign") {
+    return await campaignFromCli(parsed);
   }
   const report = await runFromCli(parsed);
   console.log(renderConsole(report));

@@ -10,9 +10,13 @@
  * looked fine" replaces a gate.
  *
  * The pure predicates stay in `campaign-anchors.ts` (no I/O, no clock, unit-testable). This module
- * owns the parts that touch the filesystem, and `scripts/campaign/anchors.ts` is a thin CLI over
- * it — `scripts/` sits outside every package's `tsconfig` project graph, so testable logic cannot
- * live there (see `compile-only-args.ts` for the same split).
+ * owns the parts that touch the filesystem.
+ *
+ * Its caller is `runCampaignAnchors` (`campaign-subcommands.ts`), reached as
+ * `lethal campaign anchors`. It used to be `scripts/campaign/anchors.ts`, a thin CLI over this
+ * module; that script was DELETED when the subcommand landed, because a driver that reaches this
+ * gate without the manifest — and so without the "records committed before the run" check — is a
+ * second entry point routing around the check, which is the one thing this gate exists to stop.
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -107,6 +111,16 @@ export interface AnchorRunArgs {
   readonly configPath: string;
   /** Required when the config sets `reconcileNotInstrumented`; ignored otherwise. */
   readonly projectDir?: string;
+  /**
+   * Called as each phase of the gate STARTS, in order: `"cardinality"`, `"anchors"`, then
+   * `"reconcile"` or `"reconcile-skipped"`. Exists so the ORDERING is checkable from outside
+   * rather than only readable in this file — cardinality must precede every anchor, because an
+   * empty or truncated report satisfies "for all mutants ..." vacuously (see `assertCardinality`).
+   * The type system already enforces it (`checkAnchors` takes a `CardinalityVerifiedReport`, which
+   * only `assertCardinality` produces), and this makes the same ordering fail a TEST rather than
+   * only a compile — including for a caller who reaches these functions from plain JS.
+   */
+  readonly onStep?: (step: string) => void;
 }
 
 export interface AnchorRunOutcome {
@@ -114,20 +128,11 @@ export interface AnchorRunOutcome {
   readonly lines: readonly string[];
 }
 
-export function parseAnchorArgs(argv: readonly string[]): AnchorRunArgs {
-  const map = new Map<string, string>();
-  for (let i = 0; i < argv.length; i += 2) {
-    const k = argv[i];
-    const v = argv[i + 1];
-    if (k !== undefined && v !== undefined) map.set(k, v);
-  }
-  const reportPath = map.get("--report");
-  const configPath = map.get("--config");
-  if (reportPath === undefined) throw new Error("anchors: missing required flag --report");
-  if (configPath === undefined) throw new Error("anchors: missing required flag --config");
-  const projectDir = map.get("--project");
-  return { reportPath, configPath, ...(projectDir !== undefined ? { projectDir } : {}) };
-}
+// `parseAnchorArgs` lived here and hand-rolled `--report`/`--config`/`--project` for the deleted
+// `scripts/campaign/anchors.ts`. It went with the script: `lethal campaign anchors` parses those
+// through `parseCliConfig` (cli.ts) like every other subcommand, and DERIVES `configPath` from the
+// manifest's records directory plus `--rung` rather than taking it as a free-form flag — which is
+// what makes the file the gate reads and the file the gate checks provably the same file.
 
 /**
  * Runs the gate. Throws on anything that means the gate could not be evaluated at all (unreadable
@@ -148,9 +153,11 @@ export async function runAnchorCheck(args: AnchorRunArgs): Promise<AnchorRunOutc
   ];
 
   // Throws on a mismatch — and is the ONLY way to obtain the token `checkAnchors` requires.
+  args.onStep?.("cardinality");
   const verified = assertCardinality(report, cfg.expectedMutantCount, "anchors");
   lines.push(`[anchors] cardinality: ${cfg.expectedMutantCount} mutants, as pre-committed`);
 
+  args.onStep?.("anchors");
   const results = checkAnchors(verified, cfg);
   let ok = true;
   for (const r of results) {
@@ -159,6 +166,7 @@ export async function runAnchorCheck(args: AnchorRunArgs): Promise<AnchorRunOutc
   }
 
   if (cfg.reconcileNotInstrumented) {
+    args.onStep?.("reconcile");
     const { projectDir } = args;
     if (projectDir === undefined) {
       throw new Error(
@@ -177,6 +185,7 @@ export async function runAnchorCheck(args: AnchorRunArgs): Promise<AnchorRunOutc
       `[anchors] ${rec.passed ? "PASS" : "FAIL"} notinstrumented-reconciliation — ${rec.detail}`,
     );
   } else {
+    args.onStep?.("reconcile-skipped");
     lines.push(
       "[anchors] SKIP notinstrumented-reconciliation — reconcileNotInstrumented: false in the config (rung-2 gate item; plan Task 7 step 3)",
     );
