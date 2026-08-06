@@ -59,8 +59,9 @@ export class UncommittedPathError extends Error {
  * verifies zero paths would otherwise resolve `undefined` without ever calling `deps.status`,
  * which is this project's signature bug (an empty check mistaken for a passing one) sitting inside
  * the module whose entire purpose is closing that class of gap; and `deps.status` resolving a
- * non-string, which a real subprocess-backed implementation (a later task's wiring, across a real
- * process boundary) can do far more easily than this pure module's own callers.
+ * non-string, which the real subprocess-backed implementation (`assertCampaignPathsCommitted`'s
+ * `porcelainStatus`, in `campaign-subcommands.ts`, across a real process boundary) can do far more
+ * easily than this pure module's own callers.
  *
  * Extends `Error` directly, mirroring `LeaseCallerContractError`/`LeaseUnavailableError` in
  * `lease.ts` — NOT a subclass of `UncommittedPathError`, so a caller can `instanceof`-distinguish

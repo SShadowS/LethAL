@@ -123,7 +123,8 @@ describe("assertCommitted — caller-contract violations (fix round 1)", () => {
   });
 
   test("a non-string status is refused as a CONTRACT violation, not a bare TypeError", async () => {
-    // A real subprocess-backed `status` (a later task's wiring) can resolve something other than
+    // The real subprocess-backed `status` (`porcelainStatus`, wired into
+    // `assertCampaignPathsCommitted` in `campaign-subcommands.ts`) can resolve something other than
     // a string far more easily than this module's own pure callers can — a crashed process, a
     // malformed pipe read, a caller that forgot `await`. `raw.trim()` on a non-string would throw
     // a bare TypeError that a caller pattern-matching on this module's error types would not catch.

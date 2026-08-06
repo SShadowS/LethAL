@@ -1105,6 +1105,27 @@ describe("lethal campaign (exit code + dispatch, spawned)", () => {
     expect(differing.code).toBe(1);
   });
 
+  test("a re-freeze on a rung whose baseline is ALREADY committed still FREEZES", async () => {
+    // The exit-0 shape of the dispatch swap, which the fresh-rung freeze test does NOT cover: there,
+    // `compare` is refused by its own missing-baseline gate, so the swap surfaces as a refusal. Here
+    // the baseline exists and is committed (the test above committed it), `<rung>.report.json`
+    // already exists from the first freeze, and so a swapped verb prints
+    // "[compare] … identical — all 2 mutant(s) match", exits 0, freezes nothing, and leaves a
+    // directory listing byte-identical to the one a real freeze produces. Only the `[freeze]` line
+    // separates the two.
+    //
+    // The narrow mutation that survives everything else — `if (baseline exists && no anchors.json)
+    // return runCampaignCompare(args)` — is the PRODUCTION shape, not a contrived one: rungs 2 and 3
+    // of the 2026-08-03 campaign carry no anchors.json, so freeze and compare announce the identical
+    // path list and the announced-list test's kill evaporates.
+    const { code, out } = await run("freeze", "rung-spawnfreeze", passingReport, [
+      "--expect-mutants",
+      "2",
+    ]);
+    expect(out).toContain("[freeze] rung-spawnfreeze: 2 mutants archived and frozen");
+    expect(code).toBe(0);
+  });
+
   test("`anchors --project` threads projectDir into the reconciliation", async () => {
     // `reconcileNotInstrumented: true` makes --project REQUIRED. A dropped `projectDir` throws
     // "Refusing to skip a requested gate item" — so this fails loudly rather than silently
