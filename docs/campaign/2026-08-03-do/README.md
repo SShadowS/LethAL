@@ -1,5 +1,13 @@
 # DO live campaign — committed records (2026-08-03)
 
+> **The tooling named below has been replaced.** `scripts/campaign/anchors.ts` and
+> `scripts/campaign/freeze.ts` were deleted; the same gates are now `lethal campaign anchors` and
+> `lethal campaign freeze`, which also refuse to run against a pre-commitment that is not committed
+> and clean in git. The stage is selected with `--stage rung1` — the *files* keep their `rung<N>`
+> names, because they are the committed record of what this campaign actually did and are not
+> renamed after the fact. Nothing else in this directory has been edited: these are
+> pre-commitments, and editing one after the run is the thing the gates exist to prevent.
+
 Per rung, committed BEFORE the next rung starts:
 
 - `rung<N>.precommit.md` — the expected result, written before the run.

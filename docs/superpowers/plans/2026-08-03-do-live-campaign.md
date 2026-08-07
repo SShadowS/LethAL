@@ -1,5 +1,18 @@
 # DO Live Campaign Implementation Plan
 
+> **SUPERSEDED TOOLING — this plan is a dated record, not runnable instructions.** It was executed
+> on 2026-08-03 and describes the tooling as it existed then. `scripts/campaign/freeze.ts` and
+> `scripts/campaign/anchors.ts`, which the steps below invoke, have since been **deleted** and
+> replaced by `lethal campaign freeze | anchors | compare` — which additionally refuse to run
+> unless the stage's pre-commitment is committed and clean in git. `bun scripts/campaign/freeze.ts
+> <report> <rung> <n>` is now `lethal campaign freeze --manifest <path> --stage <name> --report
+> <path> --expect-mutants <n>`; run `lethal --help` for the current form. The word "rung" survives
+> here and in the committed record filenames (`rung1.precommit.md`) because those are the names the
+> campaign actually used; the flag is `--stage`.
+>
+> The body is deliberately **not** rewritten: it records what was planned and built on that date,
+> and editing it to name commands that did not yet exist would make it a false record.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Run LethAL end to end against Continia Document Output on a fresh Continia environment, in four gated rungs, ending with a separate `claude -p` agent reading the real report and trying to kill survivors.
