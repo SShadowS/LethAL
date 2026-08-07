@@ -1,0 +1,44 @@
+{
+  // R119: `scripts/` was outside `tsc --build` entirely, so `bun run typecheck` checked none of
+  // it — including `build-binary.ts`, which builds every released binary, and the census scripts
+  // whose counting rules decided R82 and R13.
+  //
+  // The survey R119 asked for was run before this file landed: of 19 scripts, 11 compile clean
+  // under the repo's own strict flags and 8 do not. Those 8 are listed in R120 with what each one
+  // fails on; they are NOT admitted here and NOT fixed by weakening a flag for everyone else.
+  // Add a script to `files` below once it compiles clean — the list is deliberately explicit, so
+  // admitting one is a decision somebody made rather than a glob quietly widening.
+  //
+  // A referenced project must be `composite`, and a composite project may not set `noEmit`
+  // (TS6304), so this emits DECLARATIONS ONLY into `scripts/dist` — already covered by
+  // .gitignore's `dist/`, and reached by the same six-literal cleanup the build loop already
+  // runs. `emitDeclarationOnly` is also what satisfies `allowImportingTsExtensions`, which the
+  // test needs for its `./roadmap-index.ts` import. No JavaScript is produced, so nothing here
+  // can be picked up as a stale compiled test the way `packages/*/dist` famously was.
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "emitDeclarationOnly": true,
+    "allowImportingTsExtensions": true,
+    "outDir": "dist"
+  },
+  // `campaign/compile-only.ts` imports `packages/runner/src/compile-only-args` by relative path.
+  // A composite project cannot reach across a project boundary that way (TS6059/TS6307), so the
+  // reference below is what redirects that import to runner's built declarations. It also means
+  // this project builds AFTER runner, which is what we want: a script is checked against the
+  // types the package actually ships, not against a stale copy.
+  "references": [{ "path": "../packages/runner" }],
+  "files": [
+    "bench-record.ts",
+    "build-binary.ts",
+    "campaign/compile-only.ts",
+    "compile-fixtures.ts",
+    "measure-testpage-exclusive.ts",
+    "probe-5cb1.ts",
+    "probe-r1-permissions.ts",
+    "probe-r30-pageext.ts",
+    "probe-r58-compare.ts",
+    "probe-r58-differential.ts",
+    "roadmap-index.ts",
+    "roadmap-index.test.ts"
+  ]
+}

@@ -6,6 +6,7 @@
     { "path": "./packages/schemata" },
     { "path": "./packages/builtin-tier1" },
     { "path": "./packages/builtin-tier2" },
-    { "path": "./packages/runner" }
+    { "path": "./packages/runner" },
+    { "path": "./scripts" }
   ]
 }
