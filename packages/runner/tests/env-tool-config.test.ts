@@ -449,3 +449,91 @@ describe("validateEnvToolConfig — no credentials in envTool.publish.reads (R23
     expect(() => validateEnvToolConfig(cfg, opts)).not.toThrow();
   });
 });
+
+/** R107 — `successWhen`'s config shape. Every one of these must fire BEFORE any process spawns. */
+describe("envTool.<block>.successWhen", () => {
+  const opts = { env: ENV, hasPackageCachePath: true, bcdevDeclaredKeys: [] };
+
+  it("accepts a well-formed declaration on publish, and substitutes ${VAR} in both halves", () => {
+    const cfg = validateEnvToolConfig(
+      base({
+        publish: {
+          command: ["publish", "{envId}", "{appFile}", "--json"],
+          successWhen: { path: "success", equals: "${CONTINIA_ENV_ID}" },
+        },
+      }),
+      opts,
+    );
+    expect(cfg.publish?.successWhen).toEqual({ path: "success", equals: "env-4711" });
+  });
+
+  it("refuses a non-object successWhen", () => {
+    expect(() =>
+      validateEnvToolConfig(
+        base({
+          publish: {
+            command: ["publish"],
+            successWhen: "true" as unknown as { path: string; equals: string },
+          },
+        }),
+        opts,
+      ),
+    ).toThrow(/envTool\.publish\.successWhen must be an object \(got string\)/);
+  });
+
+  it.each(["path", "equals"] as const)("refuses a missing %s", (key) => {
+    const successWhen = { path: "success", equals: "true" } as Record<string, string>;
+    delete successWhen[key];
+    expect(() =>
+      validateEnvToolConfig(
+        base({
+          publish: {
+            command: ["publish"],
+            successWhen: successWhen as unknown as { path: string; equals: string },
+          },
+        }),
+        opts,
+      ),
+    ).toThrow(new RegExp(`envTool\.publish\.successWhen\.${key} must be a string`));
+  });
+
+  it.each(["path", "equals"] as const)(
+    "refuses an EMPTY %s — it cannot fail, which is worse",
+    (key) => {
+      // An empty half would make the check unfalsifiable while reading in the config as though the
+      // project were protected — the exact "green because it measured nothing" shape this repo keeps
+      // finding.
+      expect(() =>
+        validateEnvToolConfig(
+          base({
+            publish: {
+              command: ["publish"],
+              successWhen: { path: "success", equals: "true", [key]: "" },
+            },
+          }),
+          opts,
+        ),
+      ).toThrow(/must not be empty/);
+    },
+  );
+
+  it("accepts it on a resolve block too — exit-0-with-a-failure-body is not publish-specific", () => {
+    const cfg = validateEnvToolConfig(
+      base({
+        resolve: [
+          {
+            command: ["env", "get", "{envId}", "--json"],
+            reads: { baseUrl: "url" },
+            successWhen: { path: "status", equals: "ok" },
+          },
+          {
+            command: ["env", "users", "{envId}", "--json"],
+            reads: { username: "0.username", password: "0.password" },
+          },
+        ],
+      }),
+      opts,
+    );
+    expect(cfg.resolve?.[0]?.successWhen).toEqual({ path: "status", equals: "ok" });
+  });
+});

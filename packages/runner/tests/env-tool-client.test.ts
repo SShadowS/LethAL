@@ -334,3 +334,118 @@ describe("EnvToolClient.run", () => {
     expect(io.calls.length).toBe(0);
   });
 });
+
+/**
+ * R107 — an env-tool publish that EXITS 0 while reporting failure in its body used to be
+ * invisible. Measured mode (R90): `continia publish` exits 0 and prints
+ * `{"success": false, "message": "The operation timed out."}`. Every gate `run()` had was blind to
+ * that, so the publish read as fine and every verdict afterwards was measured against a build that
+ * never landed.
+ */
+describe("EnvToolClient.run — successWhen", () => {
+  const withSuccessWhen = {
+    command: ["publish", "{envId}", "{appFile}"],
+    successWhen: { path: "success", equals: "true" },
+  };
+
+  it("refuses an exit-0 run whose body reports failure", async () => {
+    const io = fakeSpawn([
+      {
+        exitCode: 0,
+        stdout: '{"success": false, "message": "The operation timed out."}',
+        stderr: "",
+      },
+    ]);
+    const err = await new EnvToolClient(CFG, io)
+      .run(withSuccessWhen, "publish", { envId: "e1", appFile: "a.app" })
+      .catch((e: unknown) => (e instanceof Error ? e.message : String(e)));
+    expect(err).toContain("exited 0 but its own output does not report success");
+    expect(err).toContain('"success"');
+    expect(err).toContain('resolved to "false"');
+  });
+
+  it("carries the tool's whole output verbatim, which R23's version-conflict recovery parses", async () => {
+    // Not a nicety: `parseVersionConflict` reads BC's rejection text out of a publish failure's
+    // message. A truncated or summarised body silently disables that recovery.
+    const body = JSON.stringify({
+      success: false,
+      message:
+        "Cannot install the extension because a newer version 1.0.0.9 was already installed.",
+    });
+    const io = fakeSpawn([{ exitCode: 0, stdout: body, stderr: "" }]);
+    const err = await new EnvToolClient(CFG, io)
+      .run(withSuccessWhen, "publish", { envId: "e1", appFile: "a.app" })
+      .catch((e: unknown) => (e instanceof Error ? e.message : String(e)));
+    expect(err).toContain("newer version 1.0.0.9 was already installed");
+  });
+
+  it("accepts an exit-0 run whose body reports success", async () => {
+    const io = fakeSpawn([{ exitCode: 0, stdout: '{"success": true}', stderr: "" }]);
+    await new EnvToolClient(CFG, io).run(withSuccessWhen, "publish", {
+      envId: "e1",
+      appFile: "a.app",
+    });
+    expect(io.calls.length).toBe(1);
+  });
+
+  it("matches a JSON boolean against the declared string", async () => {
+    // The tool prints `true`, the config says `"true"` — config is text, so the comparison is on
+    // the rendered value. Without this a correct config would refuse every successful publish.
+    const io = fakeSpawn([{ exitCode: 0, stdout: '{"result":{"ok":true}}', stderr: "" }]);
+    await new EnvToolClient(CFG, io).run(
+      { command: ["publish"], successWhen: { path: "result.ok", equals: "true" } },
+      "publish",
+      {},
+    );
+    expect(io.calls.length).toBe(1);
+  });
+
+  it("FAILS CLOSED when the declared path is absent — silence is not success", async () => {
+    // The polarity that matters. A `failWhen` would pass this body; `successWhen` refuses it,
+    // because the tool's output shape drifting must never read as "nothing was wrong".
+    const io = fakeSpawn([{ exitCode: 0, stdout: '{"outcome":"ok"}', stderr: "" }]);
+    const err = await new EnvToolClient(CFG, io)
+      .run(withSuccessWhen, "publish", { envId: "e1", appFile: "a.app" })
+      .catch((e: unknown) => (e instanceof Error ? e.message : String(e)));
+    expect(err).toContain("did not resolve to a string, number or boolean");
+  });
+
+  it("FAILS CLOSED when the output is not JSON at all, and quotes the whole body", async () => {
+    // The rejection text sits PAST the 200-character opening the non-`successWhen` path quotes,
+    // deliberately: a short body would be kept by the truncating branch too, so the test would
+    // pass whether or not the whole output is carried.
+    const stdout = `${"publishing".repeat(30)}\nCannot install the extension because a newer version 1.0.0.9 was already installed.`;
+    const io = fakeSpawn([{ exitCode: 0, stdout, stderr: "" }]);
+    const err = await new EnvToolClient(CFG, io)
+      .run(withSuccessWhen, "publish", { envId: "e1", appFile: "a.app" })
+      .catch((e: unknown) => (e instanceof Error ? e.message : String(e)));
+    expect(err).toContain("did not print JSON");
+    expect(err).toContain("newer version 1.0.0.9 was already installed");
+  });
+
+  it("changes nothing for a block that does not declare it", async () => {
+    // The same body that the first test refuses. A config without `successWhen` must behave
+    // exactly as before, or adding this feature would break every working project.
+    const io = fakeSpawn([{ exitCode: 0, stdout: '{"success": false}', stderr: "" }]);
+    const out = await new EnvToolClient(CFG, io).run(
+      { command: ["publish", "{envId}", "{appFile}"] },
+      "publish",
+      { envId: "e1", appFile: "a.app" },
+    );
+    expect(out).toEqual({});
+  });
+
+  it("still reads `reads` values on the same call", async () => {
+    const io = fakeSpawn([{ exitCode: 0, stdout: '{"success":true,"id":"e9"}', stderr: "" }]);
+    const out = await new EnvToolClient(CFG, io).run(
+      {
+        command: ["env", "get"],
+        reads: { envId: "id" },
+        successWhen: { path: "success", equals: "true" },
+      },
+      "resolve[0]",
+      {},
+    );
+    expect(out).toEqual({ envId: "e9" });
+  });
+});

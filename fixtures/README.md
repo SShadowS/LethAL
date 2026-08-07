@@ -645,7 +645,8 @@ From the design spec, unchanged (this is the actual shape `validateEnvToolConfig
     ],
     "downloadSymbols": { "command": ["deps", "download", "{envId}", "{projectDir}", "--json"] },
     "publish":         { "command": ["publish", "{envId}", "{appFile}",
-                                     "--sync-mode", "ForceSync", "--json"] },
+                                     "--sync-mode", "ForceSync", "--json"],
+                         "successWhen": { "path": "success", "equals": "true" } },
     "deleteEnv":       { "command": ["env", "delete", "{envId}"] }
   }
 }
@@ -667,6 +668,48 @@ unset (or empty) variable throws at validation time naming both the variable and
 that referenced it — before any process is spawned. `{placeholder}` is valid only inside a
 `command` array element: the closed set is `{envId}`, `{appFile}`, `{projectDir}`, `{testDir}`,
 `{packageCache}`, `{runId}`, plus whatever the config's own `vars` map declares.
+
+### `successWhen` — when exiting 0 is not enough (R107)
+
+Some tools report failure in their OUTPUT while exiting 0. Measured (R90): `continia publish` exits
+**0** and prints `{"success": false, "message": "The operation timed out."}`. Every gate LethAL had
+on a spawned command — a spawn failure, LethAL's own timeout, a non-zero exit — is blind to that,
+so the publish read as fine and the session went on measuring mutants against a build that never
+landed. That is the worst class of bug this project has: every verdict afterwards is wrong, and
+nothing says so.
+
+Any block may declare `successWhen`. It names a path into the command's JSON output and the value
+at that path that means SUCCESS:
+
+```jsonc
+"publish": {
+  "command": ["publish", "{envId}", "{appFile}", "--json"],
+  "successWhen": { "path": "success", "equals": "true" }   // "result.status", "items.0.state", …
+}
+```
+
+Three things to know before you write one.
+
+- **It is positive evidence, so it fails CLOSED.** A different value, a missing path, a path
+  resolving to an object, or output that is not JSON at all — all of these are a FAILURE. The
+  opposite shape (`failWhen`, "fail if you see this marker") fails OPEN the moment the tool's
+  output changes, and "we saw nothing wrong" reading as "it worked" is the exact bug this exists to
+  remove.
+- **Values compare as text.** A JSON `true` matches `"true"`; a JSON `2` matches `"2"`. The config
+  is text, so the comparison is on the rendered value.
+- **LethAL hardcodes no vendor's vocabulary.** There is no built-in `success` field. Both halves
+  come from your config, the same rule `requireStatus` and `readyWhen.equals` already follow.
+
+Omitting it changes nothing: a config with no `successWhen` behaves exactly as it did before, so
+adding the feature cannot turn a working project's publish into a refusal. Adding it to `publish`
+is worth it on any hosted tier — that is the tier R90's per-publish ceiling exists for, and until a
+failed publish is RECORDED as failed rather than as `indeterminate`, the ceiling can never learn
+itself.
+
+When the check fires, the error carries the tool's **whole output verbatim** (redacted). That is
+load-bearing rather than generous: the orchestrator's one-shot version-conflict recovery parses
+BC's rejection text out of a publish failure's message, and a truncated body would silently disable
+it.
 
 ### Flags
 

@@ -11,6 +11,41 @@ import type { SpawnFn } from "./publisher";
 export interface EnvToolBlock {
   readonly command: readonly string[];
   readonly reads?: Readonly<Record<string, string>>;
+  readonly successWhen?: EnvToolSuccessExpectation;
+}
+
+/**
+ * R107: what the tool's own output must say for the command to count as having SUCCEEDED, on top
+ * of exiting 0.
+ *
+ * The hole this fills was measured (R90): `continia publish` exits **0** while printing
+ * `{"success": false, "message": "The operation timed out."}`. Every gate `run()` had — a spawn
+ * throw, LethAL's own timeout abort, `exitCode !== 0` — is blind to that, so the publish read as
+ * fine and `decidePublishOutcome` recorded `indeterminate` rather than `failed`. Every verdict
+ * after such a publish is measured against a build that never landed.
+ *
+ * Three properties, each deliberate:
+ *
+ * 1. **Vocabulary-neutral.** LethAL hardcodes no vendor's success field or value — same rule
+ *    `requireStatus` and `readyWhen` already follow. The config names both the path and the value.
+ * 2. **Positive evidence, so it fails CLOSED.** This says "success looks like THIS"; anything
+ *    else — a different value, a missing path, output that is not JSON at all — is a failure. The
+ *    opposite polarity (`failWhen`) fails OPEN the moment the tool's output shape drifts, and
+ *    "we saw nothing wrong" reading as "it worked" is this project's signature bug.
+ * 3. **Undeclared changes nothing.** A config without `successWhen` behaves exactly as before, so
+ *    adding this cannot turn a working project's publish into a refusal.
+ */
+export interface EnvToolSuccessExpectation {
+  /**
+   * Dot-separated path into the command's JSON stdout, read the same way `reads` paths are —
+   * `"success"`, `"result.status"`, `"items.0.state"`.
+   */
+  readonly path: string;
+  /**
+   * The value at `path` that means SUCCESS, compared as a string (`true` matches `"true"`).
+   * Anything else, including the path resolving to nothing, is a failure.
+   */
+  readonly equals: string;
 }
 
 /**
@@ -161,6 +196,30 @@ function validateBlockShape(v: unknown, path: string): void {
   }
   requireStringArray(v.command, `${path}.command`);
   if (v.reads !== undefined) requireStringRecord(v.reads, `${path}.reads`);
+  if (v.successWhen !== undefined) validateSuccessWhenShape(v.successWhen, `${path}.successWhen`);
+}
+
+/**
+ * R107: `successWhen`'s shape. Both halves are REQUIRED and both must be non-empty — a
+ * `successWhen` missing either half would otherwise be a check that cannot fail, silently
+ * restoring the exit-0-means-success behaviour it was added to remove, while reading in the
+ * config as though the project were protected.
+ */
+function validateSuccessWhenShape(v: unknown, path: string): void {
+  if (!isPlainObject(v)) {
+    throw new EnvToolError(`envTool.${path} must be an object (got ${describeShape(v)})`);
+  }
+  for (const key of ["path", "equals"] as const) {
+    const val = v[key];
+    if (typeof val !== "string") {
+      throw new EnvToolError(`envTool.${path}.${key} must be a string (got ${describeShape(val)})`);
+    }
+    if (val.length === 0) {
+      throw new EnvToolError(
+        `envTool.${path}.${key} must not be empty — an empty ${key} makes the success check unfalsifiable, which is worse than not declaring it`,
+      );
+    }
+  }
 }
 
 const BLOCK_FIELDS = [
@@ -467,6 +526,17 @@ function substituteSection(
   const subBlock = (b: EnvToolBlock, field: string): EnvToolBlock => ({
     command: b.command.map((a, i) => sub(a, `${field}.command[${i}]`)),
     ...(b.reads !== undefined ? { reads: b.reads } : {}),
+    ...(b.successWhen !== undefined
+      ? {
+          successWhen: {
+            // Same untrusted-text reasoning as `subReadyBlock`'s `equals`: the type says `string`,
+            // but `validateBlockShape` has already rejected anything else by the time we get here,
+            // so these substitutions cannot see `undefined`.
+            path: sub(b.successWhen.path, `${field}.successWhen.path`),
+            equals: sub(b.successWhen.equals, `${field}.successWhen.equals`),
+          },
+        }
+      : {}),
   });
   const subReadyBlock = (b: EnvToolReadyBlock, field: string): EnvToolReadyBlock => ({
     ...subBlock(b, field),
@@ -686,20 +756,52 @@ export class EnvToolClient {
       throw new EnvToolError(`envTool.${name}: ${shown} exit ${res.exitCode}:\n${detail}`);
     }
     const reads = block.reads;
-    if (reads === undefined) return {};
+    const successWhen = block.successWhen;
+    if (reads === undefined && successWhen === undefined) return {};
     let parsed: unknown;
     try {
       parsed = JSON.parse(res.stdout);
     } catch (err) {
+      // With `successWhen` declared the block's own output is the evidence, so the WHOLE output
+      // goes into the error rather than the usual 200-character opening: R23's version-conflict
+      // recovery parses BC's rejection text out of a publish failure's message, and a truncated
+      // body would silently drop it. Without `successWhen` the message is unchanged.
       const tail = readsCredentials
         ? "(output withheld: this command's output carries credentials)"
-        : `stdout began: ${redact(res.stdout.slice(0, 200), this.secrets)}`;
+        : successWhen !== undefined
+          ? `full output:\n${redact(res.stdout, this.secrets)}`
+          : `stdout began: ${redact(res.stdout.slice(0, 200), this.secrets)}`;
       throw new EnvToolError(
         `envTool.${name}: ${shown} did not print JSON (${
           err instanceof Error ? err.message : String(err)
         }) — ${tail}`,
       );
     }
+    // R107: exit 0 is NOT the whole verdict when the config says what success looks like. Fails
+    // closed — a missing path, a non-scalar, or any other value all count as failure, because the
+    // declaration is positive evidence ("success looks like this"), not a blocklist.
+    if (successWhen !== undefined) {
+      const value = readPath(parsed, successWhen.path);
+      const seen =
+        typeof value === "string" || typeof value === "number" || typeof value === "boolean"
+          ? String(value)
+          : undefined;
+      if (seen !== successWhen.equals) {
+        const detail = readsCredentials
+          ? "(output withheld: this command's output carries credentials)"
+          : redact(res.stdout, this.secrets);
+        const found =
+          seen === undefined
+            ? "did not resolve to a string, number or boolean"
+            : `resolved to ${JSON.stringify(seen)}`;
+        throw new EnvToolError(
+          `envTool.${name}: ${shown} exited 0 but its own output does not report success: ` +
+            `successWhen.path ${JSON.stringify(successWhen.path)} ${found}, expected ` +
+            `${JSON.stringify(successWhen.equals)}. Full output:\n${detail}`,
+        );
+      }
+    }
+    if (reads === undefined) return {};
     const out: Record<string, string> = {};
     for (const [key, path] of Object.entries(reads)) {
       const value = readPath(parsed, path);
