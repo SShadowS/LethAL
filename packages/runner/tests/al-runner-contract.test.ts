@@ -266,6 +266,52 @@ describe("runAlRunnerContractProbe — unmeasurable refuses, it does not pass", 
   });
 });
 
+/**
+ * The defect this whole block exists for, and the fake-spawn suite above could not have found it:
+ * every fake there ANSWERS, and the bug was about a process that does not.
+ *
+ * MEASURED with the real `defaultSpawn`: given an aborted `AbortSignal` it RESOLVES — after the
+ * kill — with `exitCode: 143` (128 + SIGTERM) and whatever partial stdout the child managed. It
+ * does not reject. The first draft of the probe bounded each invocation by aborting a controller
+ * and catching a rejection, so the deadline branch was dead code and a killed process was handed to
+ * the facts as if it were an answer.
+ *
+ * `unknown-flag-rejected` tested only "non-zero exit", so a probe that TIMED OUT scored `matches`:
+ * "the runner rejected our flag", concluded from a process that never answered. That is the one
+ * fact whose entire job is to make our argv trustworthy — every other flag we send is measured
+ * through a command line it vouches for.
+ */
+describe("a process that never answers is never scored as an answer", () => {
+  test("a signal-killed exit (143) makes unknown-flag-rejected UNMEASURABLE, not a match", async () => {
+    const { spawn } = fakeSpawn({ unknownFlagExit: 143 });
+    const result = await runAlRunnerContractProbe("al-runner", spawn);
+    expect(verdictOf(result, "unknown-flag-rejected")).toBe("unmeasurable");
+    expect(refusalNames(result)).toContain("unknown-flag-rejected");
+    const refusal = contractRefusals(result).find((r) => r.includes("unknown-flag-rejected"));
+    expect(refusal).toContain("signal kill");
+  });
+
+  test("a NEGATIVE exit is treated the same way — a spawn failure is not an answer either", async () => {
+    const { spawn } = fakeSpawn({ unknownFlagExit: -1 });
+    const result = await runAlRunnerContractProbe("al-runner", spawn);
+    expect(verdictOf(result, "unknown-flag-rejected")).toBe("unmeasurable");
+  });
+
+  test("a spawn that never settles hits the probe's own deadline and refuses", async () => {
+    // The structural half of the fix: the deadline is a RACE now, so a spawn that never settles
+    // produces an explicit `"deadline"` outcome instead of waiting for a rejection that never
+    // comes. Driven with a 50 ms deadline and a spawn that never resolves — under the old
+    // catch-a-rejection shape this test would hang forever rather than fail, which is itself the
+    // point.
+    const spawn: SpawnFn = () => new Promise(() => {});
+    const result = await runAlRunnerContractProbe("al-runner", spawn, 50);
+    for (const f of result.facts) {
+      expect(f.verdict, `fact ${f.fact}`).toBe("unmeasurable");
+    }
+    expect(contractRefusals(result)[0]).toContain("deadline");
+  });
+});
+
 describe("the probe measures the command line the transport actually sends", () => {
   /**
    * A probe that blesses a command nobody runs measures nothing. Pinned by asserting the probe's

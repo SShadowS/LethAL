@@ -293,41 +293,67 @@ function fact(
 export async function runAlRunnerContractProbe(
   alRunnerPath: string,
   spawn: SpawnFn = defaultSpawn,
+  deadlineMs: number = PROBE_DEADLINE_MS,
 ): Promise<AlRunnerContractResult> {
   const facts: ContractFact[] = [];
   let bannerOnStdout = false;
   let root: string | undefined;
 
   /**
-   * One probe invocation, bounded. The deadline is not belt-and-braces: the hang probe RELIES on
-   * al-runner's own timer firing, and if a future build stops honouring
-   * `AL_RUNNER_TEST_TIMEOUT_SEC` that test spins forever — the probe would hang the session it
-   * exists to protect. An abort here surfaces as `unmeasurable`, which refuses, so the operator is
-   * told rather than left watching a dead terminal.
+   * One probe invocation, bounded — by a RACE, not by catching a rejection.
+   *
+   * The first draft aborted an `AbortController` and relied on `spawn` rejecting. It does not.
+   * MEASURED: `defaultSpawn` given an aborted signal RESOLVES, after the kill, with
+   * `exitCode: 143` (128 + SIGTERM) and whatever partial stdout the child had written. So the
+   * `catch` never ran and the deadline message was dead code — and worse, a killed process was
+   * handed to the facts below as an ordinary answer. `unknown-flag-rejected` checks only
+   * "non-zero exit", so a probe that TIMED OUT scored `matches`: "the runner rejected our flag",
+   * concluded from a process that never answered. That is the one fact whose entire job is to make
+   * the argv trustworthy, passing for the wrong reason.
+   *
+   * Racing the way `OneShotTransport.send` already does makes the deadline an explicit outcome
+   * instead of an exception nobody throws.
    */
   const run = async (
     argv: readonly string[],
     env?: Record<string, string>,
   ): Promise<{ exitCode: number; stdout: string; stderr: string } | { error: string }> => {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), PROBE_DEADLINE_MS);
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      return await spawn(argv, {
-        signal: controller.signal,
-        ...(env !== undefined ? { env } : {}),
-      });
+      const res = await Promise.race([
+        spawn(argv, {
+          signal: controller.signal,
+          ...(env !== undefined ? { env } : {}),
+        }),
+        new Promise<"deadline">((resolve) => {
+          timer = setTimeout(() => {
+            controller.abort();
+            resolve("deadline");
+          }, deadlineMs);
+        }),
+      ]);
+      return res === "deadline"
+        ? { error: `the probe exceeded its own ${deadlineMs} ms deadline and was aborted` }
+        : res;
     } catch (err) {
-      return {
-        error: controller.signal.aborted
-          ? `the probe exceeded its own ${PROBE_DEADLINE_MS} ms deadline and was aborted`
-          : err instanceof Error
-            ? err.message
-            : String(err),
-      };
+      return { error: err instanceof Error ? err.message : String(err) };
     } finally {
       clearTimeout(timer);
     }
   };
+
+  /**
+   * Whether an exit code is one the CHILD chose, rather than one a signal imposed on it.
+   *
+   * Same measurement as above: a killed child comes back as 128 + signal (143 for SIGTERM), and a
+   * spawn failure can surface as a negative code. Neither is al-runner answering. This matters for
+   * exactly one fact — `unknown-flag-rejected`, whose whole test is "did the exit code say no?" —
+   * because every other fact reads the OUTPUT and therefore fails to read anything when the process
+   * was killed. Belt-and-braces beside the race above, and cheap: the two would have to fail
+   * together for a killed process to be scored as an answer again.
+   */
+  const isChildChosenExit = (exitCode: number): boolean => exitCode >= 0 && exitCode < 128;
 
   // 1. version
   const ver = await run([alRunnerPath, "--version"]);
@@ -349,12 +375,23 @@ export async function runAlRunnerContractProbe(
   const unknown = await run([alRunnerPath, IMPOSSIBLE_FLAG]);
   if ("error" in unknown) {
     facts.push(fact("unknown-flag-rejected", "unmeasurable", "a non-zero exit", unknown.error));
+  } else if (!isChildChosenExit(unknown.exitCode)) {
+    // A signal killed it, so the runner never said anything about the flag. `unmeasurable`, which
+    // refuses — NOT `matches`, which is what "non-zero means rejected" concluded from exit 143.
+    facts.push(
+      fact(
+        "unknown-flag-rejected",
+        "unmeasurable",
+        "a non-zero exit chosen by the process (measured: 2)",
+        `exit ${unknown.exitCode}, which is a signal kill or a spawn failure rather than an answer`,
+      ),
+    );
   } else {
     facts.push(
       fact(
         "unknown-flag-rejected",
         unknown.exitCode !== 0 ? "matches" : "diverged",
-        "a non-zero exit (measured: 2)",
+        "a non-zero exit chosen by the process (measured: 2)",
         `exit ${unknown.exitCode}`,
       ),
     );

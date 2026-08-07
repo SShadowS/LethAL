@@ -993,7 +993,14 @@ test 1, compile failure 3), and `AL_RUNNER_TEST_TIMEOUT_SEC`. Changed:
 | --- | --- | --- |
 | timeout `message` | `TIMEOUT after 15s` | `Test exceeded 12s timeout.` (v1's wording, returned) |
 | timeout `status` | `error` | `error` (unchanged) |
-| `--output-json` stdout | banner, then JSON | JSON at line 1 on the paths measured |
+| `--output-json` stdout | banner, then JSON | JSON at line 1 — the banner MOVED to stderr, it did not vanish |
+
+The banner row is worth stating precisely, because "no banner on stdout" and "no banner" are
+different facts and only the first is true: on 2.0.1.0 every banner line (`[r2r]`, `[bc] selected
+BC …`, `al-runner - running N bundle(s)`, the per-bundle lines) is on **stderr**, and stdout is pure
+JSON from line 1. Verified by capturing the two streams separately: 4 banner markers on stderr, 0 on
+stdout. So a caller that merges the streams still meets the 2.0.0.0 shape, and only a caller that
+reads stdout alone sees the clean one.
 
 That is the whole argument for R123 in one row. A decode keyed on the timeout literal would have
 turned every hung mutant into a KILL, silently, within hours of being written — which is why the
@@ -1030,6 +1037,20 @@ Exit 127 direct, and 82 when the process is reaped differently. Nothing LethAL d
 dirs, so this costs us nothing operationally — it is filed as R124 because it is a crash against
 upstream's own loud-failure rule, which is one of the three things R93's adapt-first policy says IS
 worth reporting.
+
+### An aborted spawn RESOLVES, it does not reject
+
+Measured 2026-08-07 with this repo's own `defaultSpawn` (Bun.spawn under the hood), aborting a
+500 ms controller against a child that sleeps 20 s: the call **resolved after 512 ms with
+`exitCode: 143`** (128 + SIGTERM), `signal.aborted === true`, and the partial stdout the child had
+already written. It did not throw.
+
+Recorded here because it is not al-runner behaviour at all, and it still broke an al-runner check:
+R123's probe first bounded each invocation by aborting a controller and catching a rejection, so the
+deadline branch was dead code and a killed process reached the facts as an ordinary answer. The
+`unknown-flag-rejected` fact tested only "non-zero exit", so a probe that TIMED OUT scored a match —
+"the runner rejected our flag", concluded from a process that never answered. Anything bounding a
+spawn must RACE it, the way `OneShotTransport.send` does, rather than wait for a throw.
 
 ### What this does NOT establish
 
