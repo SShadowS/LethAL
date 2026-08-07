@@ -77,3 +77,61 @@ describe("every basis resolves — the roadmap-auditor discipline, applied to pr
     );
   });
 });
+
+/**
+ * R115 gap (2). Every registry `Interpretation` must carry ONLY the three keys the type declares —
+ * checked at RUNTIME, over every entry, whether or not any committed report emits it.
+ *
+ * MEASURED before this existed, by doing it: adding
+ * `advice: "these are the weak spots in this suite and deserve attention first"` to
+ * `CAVEAT_INTERPRETATIONS["runner-disagreement"]` left `bun test` at **1599 pass / 0 fail**. Only
+ * `tsc` objected (TS2353). That is a smuggling route rather than a maintenance nicety: `explain`'s
+ * whole admissibility rule is that it emits registry constants BY REFERENCE, so prose added to a
+ * registry entry ships straight into the output — and this project's build order runs `bun test` as
+ * a step SEPARATE from `bun run typecheck`, so a session or CI job running only tests lands it.
+ *
+ * `runner-disagreement` is what made it invisible: no committed report emits that caveat, so every
+ * DATA-derived check (the leaf-path pin, string provenance, the banned-phrase regex) is blind to it.
+ * These tests are deliberately not data-derived — they walk `ADMISSIBLE_INTERPRETATIONS`, built from
+ * `Object.values` over every registry, so an entry no report has ever produced is checked exactly
+ * like one that ships daily.
+ */
+describe("R115: an interpretation carries only its declared keys, at runtime", () => {
+  const ALLOWED: readonly string[] = ["meaning", "entailedNegative", "basis"];
+
+  test("no registry interpretation carries a key beyond meaning/entailedNegative/basis", () => {
+    const offenders: string[] = [];
+    for (const i of ADMISSIBLE_INTERPRETATIONS) {
+      for (const key of Object.keys(i)) {
+        if (!ALLOWED.includes(key)) {
+          offenders.push(`"${key}" on basis ${i.basis}: ${i.meaning.slice(0, 60)}`);
+        }
+      }
+    }
+    // Named, never counted: the message has to say WHICH entry grew a field, because the offending
+    // one may be an entry no report ever emits.
+    expect(offenders).toEqual([]);
+  });
+
+  test("every registry interpretation actually has the two required keys", () => {
+    // The other direction. An entry missing `meaning` or `basis` satisfies the check above
+    // trivially, and `basis` is what `assertBasisResolves` keys on — an absent one is a bare claim.
+    for (const i of ADMISSIBLE_INTERPRETATIONS) {
+      expect(typeof i.meaning, `meaning on ${i.basis}`).toBe("string");
+      expect(typeof i.basis, `basis on ${i.meaning.slice(0, 40)}`).toBe("string");
+      expect(i.meaning.length, `meaning on ${i.basis} is empty`).toBeGreaterThan(0);
+    }
+  });
+
+  test("the registries are actually reachable through ADMISSIBLE_INTERPRETATIONS", () => {
+    // Guards the guard. If `ADMISSIBLE_INTERPRETATIONS` ever stopped spreading a registry, the two
+    // tests above would pass over a smaller set and report nothing — the same
+    // absent-tally-reads-as-zero shape R106 closed in the fold. Pinned by IDENTITY against a known
+    // member of each, so a copy of the prose would not satisfy it.
+    expect(ADMISSIBLE_INTERPRETATIONS).toContain(CAVEAT_INTERPRETATIONS["runner-disagreement"]);
+    expect(ADMISSIBLE_INTERPRETATIONS).toContain(ATTRIBUTION_INTERPRETATIONS.object);
+    expect(ADMISSIBLE_INTERPRETATIONS.length).toBeGreaterThanOrEqual(
+      Object.keys(CAVEAT_INTERPRETATIONS).length + Object.keys(ATTRIBUTION_INTERPRETATIONS).length,
+    );
+  });
+});
