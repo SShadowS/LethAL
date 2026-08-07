@@ -1,0 +1,437 @@
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175272 CDO Document E-Mail Management.al|3414-3501
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175272 CDO Document E-Mail Management.al|3759-3846
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175274 CDO Continia Online PDF Mgt.al|10202-10262
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175274 CDO Continia Online PDF Mgt.al|16116-16245
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175274 CDO Continia Online PDF Mgt.al|18333-18390
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175274 CDO Continia Online PDF Mgt.al|23682-23737
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175274 CDO Continia Online PDF Mgt.al|24411-24479
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175274 CDO Continia Online PDF Mgt.al|3713-3854
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175274 CDO Continia Online PDF Mgt.al|4242-4384
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175274 CDO Continia Online PDF Mgt.al|678-753
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175274 CDO Continia Online PDF Mgt.al|8911-8971
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175274 CDO Continia Online PDF Mgt.al|9649-9855
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175276 CDO E-Mail Management.al|1000-1181
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175276 CDO E-Mail Management.al|14761-14847
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175276 CDO E-Mail Management.al|14877-14914
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175276 CDO E-Mail Management.al|15820-15906
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175276 CDO E-Mail Management.al|15991-16028
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175276 CDO E-Mail Management.al|2063-2149
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175276 CDO E-Mail Management.al|20946-21029
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175276 CDO E-Mail Management.al|2167-2204
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175276 CDO E-Mail Management.al|3216-3326
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175276 CDO E-Mail Management.al|3346-3426
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175276 CDO E-Mail Management.al|4328-4438
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175276 CDO E-Mail Management.al|4454-4542
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175276 CDO E-Mail Management.al|5430-5540
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175276 CDO E-Mail Management.al|5568-5669
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175276 CDO E-Mail Management.al|6553-6663
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175276 CDO E-Mail Management.al|6679-6766
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175276 CDO E-Mail Management.al|7648-7758
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175276 CDO E-Mail Management.al|7774-7860
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175278 CDO E-MailTemplateImportExport.al|1015-1083
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175278 CDO E-MailTemplateImportExport.al|31329-31395
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175280 CDO E-Mail.al|12364-13036
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175280 CDO E-Mail.al|12571-12618
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175280 CDO E-Mail.al|12631-12680
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175280 CDO E-Mail.al|6560-6600
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175280 CDO E-Mail.al|6980-7014
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175280 CDO E-Mail.al|7312-7351
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175280 CDO E-Mail.al|7648-7687
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175280 CDO E-Mail.al|7988-8028
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175284 CDO Report Layout Management.al|1949-2004
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175284 CDO Report Layout Management.al|3911-3966
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175284 CDO Report Layout Management.al|5973-6128
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175284 CDO Report Layout Management.al|6402-6561
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175285 CDO Open Documents.al|1125-1185
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175285 CDO Open Documents.al|346-428
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175287 CDO Essential Module License.al|2652-2856
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175287 CDO Essential Module License.al|2869-3058
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175287 CDO Essential Module License.al|3071-3283
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175291 CDO Security Module License.al|2671-2811
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175291 CDO Security Module License.al|2824-2982
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175291 CDO Security Module License.al|2995-3162
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175293 CDO Payment Link Handler.al|4091-4165
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175293 CDO Payment Link Handler.al|4251-4339
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175293 CDO Payment Link Handler.al|5603-5621
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175293 CDO Payment Link Handler.al|5770-5800
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175293 CDO Payment Link Handler.al|7883-7959
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175293 CDO Payment Link Handler.al|7970-8046
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175293 CDO Payment Link Handler.al|8057-8135
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175293 CDO Payment Link Handler.al|8146-8212
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175296 CDO E-Mail Template Management.al|13131-13416
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175296 CDO E-Mail Template Management.al|13689-13977
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175296 CDO E-Mail Template Management.al|18420-18535
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175296 CDO E-Mail Template Management.al|19266-19541
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175296 CDO E-Mail Template Management.al|19827-20105
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175296 CDO E-Mail Template Management.al|22214-22460
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175296 CDO E-Mail Template Management.al|23309-23551
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175296 CDO E-Mail Template Management.al|23961-24052
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175296 CDO E-Mail Template Management.al|24479-24570
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175296 CDO E-Mail Template Management.al|26934-27151
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175296 CDO E-Mail Template Management.al|27740-27876
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175296 CDO E-Mail Template Management.al|28924-29160
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175296 CDO E-Mail Template Management.al|29538-29629
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175296 CDO E-Mail Template Management.al|30024-30115
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175296 CDO E-Mail Template Management.al|32510-32634
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175296 CDO E-Mail Template Management.al|35117-35275
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175296 CDO E-Mail Template Management.al|44980-45137
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175296 CDO E-Mail Template Management.al|47069-47226
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175296 CDO E-Mail Template Management.al|48722-48864
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175296 CDO E-Mail Template Management.al|50524-50666
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175296 CDO E-Mail Template Management.al|51215-51357
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175296 CDO E-Mail Template Management.al|52196-52313
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175296 CDO E-Mail Template Management.al|53475-53543
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175296 CDO E-Mail Template Management.al|54171-54288
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175296 CDO E-Mail Template Management.al|56042-56145
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175296 CDO E-Mail Template Management.al|64778-64864
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175296 CDO E-Mail Template Management.al|64883-64958
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175297 CDO Send Cust. Statement Mgt.al|13564-13611
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175297 CDO Send Cust. Statement Mgt.al|13976-14023
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175297 CDO Send Cust. Statement Mgt.al|14175-14222
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175297 CDO Send Cust. Statement Mgt.al|14615-14675
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175297 CDO Send Cust. Statement Mgt.al|6044-6106
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175297 CDO Send Cust. Statement Mgt.al|6129-6267
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175297 CDO Send Cust. Statement Mgt.al|6744-6800
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175297 CDO Send Cust. Statement Mgt.al|7911-8003
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175297 CDO Send Cust. Statement Mgt.al|8019-8098
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175297 CDO Send Cust. Statement Mgt.al|8120-8273
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175299 CDO Functions.al|14924-15014
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175299 CDO Functions.al|17816-17900
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175299 CDO Functions.al|9100-9259
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175303 CDO E-Mail Handler.al|10122-10250
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175303 CDO E-Mail Handler.al|10454-10567
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175303 CDO E-Mail Handler.al|11076-11227
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175303 CDO E-Mail Handler.al|13373-13471
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175303 CDO E-Mail Handler.al|16278-16400
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175303 CDO E-Mail Handler.al|18603-18744
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175303 CDO E-Mail Handler.al|29557-29637
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175303 CDO E-Mail Handler.al|6362-6475
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175303 CDO E-Mail Handler.al|6646-6747
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175303 CDO E-Mail Handler.al|9692-9805
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175306 CDO Mail Management.al|1059-1173
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175306 CDO Mail Management.al|2951-3054
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175306 CDO Mail Management.al|589-697
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175307 CDO Electronic Document Mgt.al|1451-1561
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175307 CDO Electronic Document Mgt.al|2048-2168
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175307 CDO Electronic Document Mgt.al|4234-4361
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175307 CDO Electronic Document Mgt.al|4377-4508
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175307 CDO Electronic Document Mgt.al|6987-7064
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175307 CDO Electronic Document Mgt.al|884-990
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175308 CDO PaymentLinkTmplImprtExpt.al|1561-1658
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175308 CDO PaymentLinkTmplImprtExpt.al|4966-5061
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175309 CDO Legacy eDoc Dispatcher.al|4962-5067
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175309 CDO Legacy eDoc Dispatcher.al|5354-5474
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175309 CDO Legacy eDoc Dispatcher.al|6159-6252
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175310 CDO Subscribers.al|13403-13437
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175310 CDO Subscribers.al|14263-14297
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175310 CDO Subscribers.al|14988-15022
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175310 CDO Subscribers.al|20724-20832
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175310 CDO Subscribers.al|23096-23136
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175310 CDO Subscribers.al|23328-23368
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175310 CDO Subscribers.al|23556-23596
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175310 CDO Subscribers.al|23788-23828
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175310 CDO Subscribers.al|24698-24738
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175310 CDO Subscribers.al|25996-26036
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175310 CDO Subscribers.al|28318-28358
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175310 CDO Subscribers.al|34230-34270
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175310 CDO Subscribers.al|34452-34492
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175310 CDO Subscribers.al|34676-34716
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175310 CDO Subscribers.al|34910-34950
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175310 CDO Subscribers.al|49712-49781
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175310 CDO Subscribers.al|8725-8765
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175312 CDO Unhandled Sales Pages Mgt.al|13129-13230
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175312 CDO Unhandled Sales Pages Mgt.al|20728-20837
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175312 CDO Unhandled Sales Pages Mgt.al|29369-29480
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175312 CDO Unhandled Sales Pages Mgt.al|37348-37449
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175312 CDO Unhandled Sales Pages Mgt.al|45645-45762
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175312 CDO Unhandled Sales Pages Mgt.al|5793-5892
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175313 CDO UnhandledPurchasePagesMgt.al|13807-13897
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175313 CDO UnhandledPurchasePagesMgt.al|5223-5328
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175314 CDO UnhandledServicePagesMgt.al|13957-14060
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175314 CDO UnhandledServicePagesMgt.al|21536-21637
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175314 CDO UnhandledServicePagesMgt.al|6157-6262
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175317 CDO Core Event Handler.al|3162-3197
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175319 CDO Log Management.al|1052-1421
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175319 CDO Log Management.al|10906-11513
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175319 CDO Log Management.al|1912-2041
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175319 CDO Log Management.al|2446-2594
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175319 CDO Log Management.al|3076-3474
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175319 CDO Log Management.al|476-595
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175319 CDO Log Management.al|5388-5881
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175319 CDO Log Management.al|9095-9293
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175319 CDO Log Management.al|9751-9939
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175320 CDO String Functions.al|1511-1531
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175320 CDO String Functions.al|1565-1585
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175320 CDO String Functions.al|1811-1832
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175320 CDO String Functions.al|203-252
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175320 CDO String Functions.al|3345-3387
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175320 CDO String Functions.al|3715-3771
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175320 CDO String Functions.al|4101-4157
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175322 CDO Http Management.al|1208-1290
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175322 CDO Http Management.al|1447-1524
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175322 CDO Http Management.al|2621-2701
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175322 CDO Http Management.al|451-500
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175322 CDO Http Management.al|9059-9153
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175322 CDO Http Management.al|968-1035
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175324 CDO Xml Node.al|3959-3997
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175329 CDO Print Web Service.al|671-930
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175330 CDO File Download Web Service.al|725-984
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175335 CDO Send Mail Management.al|10604-10697
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175335 CDO Send Mail Management.al|11522-11613
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175335 CDO Send Mail Management.al|1467-1723
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175335 CDO Send Mail Management.al|2351-2613
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175335 CDO Send Mail Management.al|3304-3542
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175335 CDO Send Mail Management.al|3995-4113
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175335 CDO Send Mail Management.al|4221-4429
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175335 CDO Send Mail Management.al|4548-4725
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175335 CDO Send Mail Management.al|4769-4854
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175335 CDO Send Mail Management.al|6287-6427
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175335 CDO Send Mail Management.al|6577-6811
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175335 CDO Send Mail Management.al|6863-7065
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175335 CDO Send Mail Management.al|7215-7449
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175335 CDO Send Mail Management.al|7752-7851
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175335 CDO Send Mail Management.al|8311-8545
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175335 CDO Send Mail Management.al|9043-9283
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175335 CDO Send Mail Management.al|9990-10054
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175337 CDO Setup Management.al|4572-4749
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175337 CDO Setup Management.al|4826-5032
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175337 CDO Setup Management.al|5408-5536
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175337 CDO Setup Management.al|5947-6164
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175337 CDO Setup Management.al|6731-6838
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175337 CDO Setup Management.al|6849-6976
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175337 CDO Setup Management.al|6987-7102
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175337 CDO Setup Management.al|7115-7258
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175337 CDO Setup Management.al|7269-7387
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175337 CDO Setup Management.al|7400-7518
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175337 CDO Setup Management.al|7531-7654
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175337 CDO Setup Management.al|7665-7771
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175337 CDO Setup Management.al|7784-7882
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175337 CDO Setup Management.al|7893-7980
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175337 CDO Setup Management.al|7991-8091
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175337 CDO Setup Management.al|8104-8191
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175337 CDO Setup Management.al|8202-8355
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175337 CDO Setup Management.al|8534-8683
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175337 CDO Setup Management.al|9022-9125
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175337 CDO Setup Management.al|9493-9670
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175338 CDO Setup Data.al|29551-29668
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175338 CDO Setup Data.al|29593-29657
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175338 CDO Setup Data.al|29679-29795
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175338 CDO Setup Data.al|29721-29784
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175338 CDO Setup Data.al|29808-29933
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175338 CDO Setup Data.al|29854-29922
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175338 CDO Setup Data.al|29944-30068
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175338 CDO Setup Data.al|29990-30057
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175338 CDO Setup Data.al|33544-33676
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175338 CDO Setup Data.al|33586-33665
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175338 CDO Setup Data.al|33687-33818
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175338 CDO Setup Data.al|33729-33807
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175338 CDO Setup Data.al|33831-33971
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175338 CDO Setup Data.al|33877-33960
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175338 CDO Setup Data.al|33982-34121
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175338 CDO Setup Data.al|34028-34110
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175338 CDO Setup Data.al|38482-38599
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175338 CDO Setup Data.al|38524-38588
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175338 CDO Setup Data.al|38610-38726
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175338 CDO Setup Data.al|38652-38715
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175338 CDO Setup Data.al|38739-38862
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175338 CDO Setup Data.al|38786-38851
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175338 CDO Setup Data.al|38873-38998
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175338 CDO Setup Data.al|38919-38987
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175338 CDO Setup Data.al|39009-39133
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175338 CDO Setup Data.al|39055-39122
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175338 CDO Setup Data.al|41653-41773
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175338 CDO Setup Data.al|41697-41762
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175338 CDO Setup Data.al|41784-41903
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175338 CDO Setup Data.al|41828-41892
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175338 CDO Setup Data.al|41916-42044
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175338 CDO Setup Data.al|41964-42033
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175338 CDO Setup Data.al|42055-42182
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175338 CDO Setup Data.al|42103-42171
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175338 CDO Setup Data.al|42515-42547
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175343 CDO Microsoft Graph Rest Api.al|1791-1848
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175343 CDO Microsoft Graph Rest Api.al|1861-1907
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175343 CDO Microsoft Graph Rest Api.al|4948-5072
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175343 CDO Microsoft Graph Rest Api.al|5968-6064
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175345 CDO OAuth Management.al|1973-2091
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175345 CDO OAuth Management.al|2600-2718
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175345 CDO OAuth Management.al|3360-3493
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175345 CDO OAuth Management.al|5728-5748
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175345 CDO OAuth Management.al|5787-5807
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175347 CDO JSON Management.al|274-295
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175347 CDO JSON Management.al|443-470
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175347 CDO JSON Management.al|708-735
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175347 CDO JSON Management.al|976-1003
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175352 CDO Azure Blob Storage.al|1731-1791
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175352 CDO Azure Blob Storage.al|2296-2343
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175352 CDO Azure Blob Storage.al|730-776
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175352 CDO Azure Blob Storage.al|996-1056
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175357 CDO Master Data Mgt. Subsc.al|1599-1642
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175363 CDO E-Seal Service Mgt.al|1023-1336
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175363 CDO E-Seal Service Mgt.al|7143-7456
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175363 CDO E-Seal Service Mgt.al|8724-8949
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175364 CDO Universign E-Seal Service.al|2842-2887
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175364 CDO Universign E-Seal Service.al|6600-6640
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175364 CDO Universign E-Seal Service.al|6806-6843
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175366 CDO Email Translate Mgt.al|1529-1570
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175366 CDO Email Translate Mgt.al|3051-3098
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175366 CDO Email Translate Mgt.al|710-745
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175370 CDO Merge Field Cache.al|563-593
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175371 CDO eDoc PrePost Valid.al|5675-5710
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175372 CDO eDocs Send Code Migration.al|14657-14700
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175372 CDO eDocs Send Code Migration.al|15156-15226
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175372 CDO eDocs Send Code Migration.al|5199-5245
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175372 CDO eDocs Send Code Migration.al|5264-5330
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175374 CDO DO-eDocs Notific. Handler.al|1710-1826
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175376 CDO eDocuments Dispatcher.al|3271-3336
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175376 CDO eDocuments Dispatcher.al|5465-5530
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175376 CDO eDocuments Dispatcher.al|6942-7014
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175376 CDO eDocuments Dispatcher.al|7519-7662
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175376 CDO eDocuments Dispatcher.al|9754-9833
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175386 CDO DC Perm. Assignment Mgt.al|10759-10818
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175386 CDO DC Perm. Assignment Mgt.al|4251-4306
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175386 CDO DC Perm. Assignment Mgt.al|4377-4490
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175386 CDO DC Perm. Assignment Mgt.al|4720-4791
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175386 CDO DC Perm. Assignment Mgt.al|5457-5546
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175386 CDO DC Perm. Assignment Mgt.al|5855-5910
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175386 CDO DC Perm. Assignment Mgt.al|6827-6928
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175386 CDO DC Perm. Assignment Mgt.al|6939-7040
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175401 CDO ABS Auth Settings Mgt.al|720-816
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175402 CDO Conflict Notific. Handler.al|4438-4560
+U:\Git\do-rel2\Cloud\Al\Codeunit\Codeunit 6175403 CDO Auto-Send Log Runner.al|959-1322
+U:\Git\do-rel2\Cloud\Al\Extensions\Purchase\General\Tableextension 6175381 CDO Vendor.al|5059-5159
+U:\Git\do-rel2\Cloud\Al\Extensions\Sales\General\Tableextension 6175383 CDO Customer.al|10088-10188
+U:\Git\do-rel2\Cloud\Al\Extensions\Sales\General\Tableextension 6175383 CDO Customer.al|13019-13079
+U:\Git\do-rel2\Cloud\Al\Extensions\Sales\General\Tableextension 6175383 CDO Customer.al|13779-13821
+U:\Git\do-rel2\Cloud\Al\Extensions\Sales\General\Tableextension 6175383 CDO Customer.al|13848-13962
+U:\Git\do-rel2\Cloud\Al\Extensions\Sales\General\Tableextension 6175383 CDO Customer.al|14104-14218
+U:\Git\do-rel2\Cloud\Al\Extensions\Sales\General\Tableextension 6175383 CDO Customer.al|14365-14479
+U:\Git\do-rel2\Cloud\Al\Extensions\Sales\General\Tableextension 6175383 CDO Customer.al|14591-14633
+U:\Git\do-rel2\Cloud\Al\Extensions\Sales\General\Tableextension 6175383 CDO Customer.al|14690-14804
+U:\Git\do-rel2\Cloud\Al\Extensions\Sales\General\Tableextension 6175383 CDO Customer.al|14920-14962
+U:\Git\do-rel2\Cloud\Al\Extensions\Sales\General\Tableextension 6175383 CDO Customer.al|15018-15132
+U:\Git\do-rel2\Cloud\Al\Extensions\Sales\General\Tableextension 6175383 CDO Customer.al|15471-15531
+U:\Git\do-rel2\Cloud\Al\Extensions\Sales\General\Tableextension 6175383 CDO Customer.al|18520-18573
+U:\Git\do-rel2\Cloud\Al\Extensions\Sales\General\Tableextension 6175383 CDO Customer.al|18596-18710
+U:\Git\do-rel2\Cloud\Al\Extensions\Sales\General\Tableextension 6175383 CDO Customer.al|19891-19947
+U:\Git\do-rel2\Cloud\Al\Page\Page 6175284 CDO E-MailPrint Statement.al|20917-20955
+U:\Git\do-rel2\Cloud\Al\Page\Page 6175284 CDO E-MailPrint Statement.al|23289-23370
+U:\Git\do-rel2\Cloud\Al\Page\Page 6175285 CDO UnhandledPostedSalesShipt.al|15517-15640
+U:\Git\do-rel2\Cloud\Al\Page\Page 6175286 CDO UnhandledPostedSalesInv.al|18511-18635
+U:\Git\do-rel2\Cloud\Al\Page\Page 6175286 CDO UnhandledPostedSalesInv.al|20257-20376
+U:\Git\do-rel2\Cloud\Al\Page\Page 6175286 CDO UnhandledPostedSalesInv.al|20619-20754
+U:\Git\do-rel2\Cloud\Al\Page\Page 6175287 CDO Unhandled Posted Cr. Memo.al|17938-18063
+U:\Git\do-rel2\Cloud\Al\Page\Page 6175287 CDO Unhandled Posted Cr. Memo.al|20198-20318
+U:\Git\do-rel2\Cloud\Al\Page\Page 6175287 CDO Unhandled Posted Cr. Memo.al|20561-20699
+U:\Git\do-rel2\Cloud\Al\Page\Page 6175288 CDO UnhandledPostedReturnRec.al|16394-16517
+U:\Git\do-rel2\Cloud\Al\Page\Page 6175289 CDO Unhandled Issued Reminders.al|15480-15606
+U:\Git\do-rel2\Cloud\Al\Page\Page 6175289 CDO Unhandled Issued Reminders.al|18848-18969
+U:\Git\do-rel2\Cloud\Al\Page\Page 6175289 CDO Unhandled Issued Reminders.al|19212-19353
+U:\Git\do-rel2\Cloud\Al\Page\Page 6175290 CDO UnhandledIss.FinChrgMemos.al|14584-14692
+U:\Git\do-rel2\Cloud\Al\Page\Page 6175295 CDO Setup Wizard.al|4016-4084
+U:\Git\do-rel2\Cloud\Al\Page\Page 6175301 CDO Unhandled.al|17722-17838
+U:\Git\do-rel2\Cloud\Al\Page\Page 6175301 CDO Unhandled.al|18016-18176
+U:\Git\do-rel2\Cloud\Al\Page\Page 6175301 CDO Unhandled.al|18779-18896
+U:\Git\do-rel2\Cloud\Al\Page\Page 6175301 CDO Unhandled.al|19072-19233
+U:\Git\do-rel2\Cloud\Al\Page\Page 6175304 CDO Payment Link Templ. Card.al|3639-3716
+U:\Git\do-rel2\Cloud\Al\Page\Page 6175305 CDO Vendor Remittance Advice.al|12023-12067
+U:\Git\do-rel2\Cloud\Al\Page\Page 6175310 CDO UnhandledPostedServiceShip.al|19740-19867
+U:\Git\do-rel2\Cloud\Al\Page\Page 6175311 CDO UnhandledPostedServiceInv.al|19259-19385
+U:\Git\do-rel2\Cloud\Al\Page\Page 6175312 CDO UnhandledPostedServiceCrM.al|18796-18921
+U:\Git\do-rel2\Cloud\Al\Page\Page 6175313 CDO eDocuments Setup Wizard.al|26610-26664
+U:\Git\do-rel2\Cloud\Al\Page\Page 6175313 CDO eDocuments Setup Wizard.al|28943-28997
+U:\Git\do-rel2\Cloud\Al\Page\Page 6175313 CDO eDocuments Setup Wizard.al|30047-30101
+U:\Git\do-rel2\Cloud\Al\Page\Page 6175316 CDO Fields (With Relation).al|8772-8799
+U:\Git\do-rel2\Cloud\Al\Page\Page 6175367 CDO Unhandled Sales Quote.al|16855-16984
+U:\Git\do-rel2\Cloud\Al\Page\Page 6175368 CDO Unhandled Sales Order.al|17416-17545
+U:\Git\do-rel2\Cloud\Al\Page\Page 6175369 CDO Unhandled Sales Invoice.al|16904-17033
+U:\Git\do-rel2\Cloud\Al\Page\Page 6175370 CDO Unhandled Purchase Quote.al|16782-16917
+U:\Git\do-rel2\Cloud\Al\Page\Page 6175371 CDO Unhandled Purchase Order.al|17178-17313
+U:\Git\do-rel2\Cloud\Al\Page\Page 6175372 CDO Unhandled Purchase Invoice.al|16804-16939
+U:\Git\do-rel2\Cloud\Al\Page\Page 6175381 CDO Unhandled RemittanceAdvice.al|16805-16922
+U:\Git\do-rel2\Cloud\Al\Page\Page 6175389 CDO Local Print Service Part.al|11799-11848
+U:\Git\do-rel2\Cloud\Al\Page\Page 6175392 CDO Printer Dialog.al|10190-10247
+U:\Git\do-rel2\Cloud\Al\Page\Page 6175410 CDO Unhandled Purchase.al|8139-8255
+U:\Git\do-rel2\Cloud\Al\Page\Page 6175444 CDO Html Colors.al|2942-3103
+U:\Git\do-rel2\Cloud\Al\Page\Page 6175444 CDO Html Colors.al|3139-3293
+U:\Git\do-rel2\Cloud\Al\Page\Page 6175468 CDO Output Profile Conflicts.al|5917-5971
+U:\Git\do-rel2\Cloud\Al\Page\Page 6175468 CDO Output Profile Conflicts.al|5998-6048
+U:\Git\do-rel2\Cloud\Al\Report\report 6175283 CDO Update Output Profile.al|20112-20170
+U:\Git\do-rel2\Cloud\Al\Report\report 6175283 CDO Update Output Profile.al|20608-20640
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175283 CDO E-Mail Template Header.al|24072-24165
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175283 CDO E-Mail Template Header.al|24488-24594
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175283 CDO E-Mail Template Header.al|24939-25053
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175283 CDO E-Mail Template Header.al|35283-35383
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175283 CDO E-Mail Template Header.al|36462-36576
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175283 CDO E-Mail Template Header.al|37023-37109
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175283 CDO E-Mail Template Header.al|37269-37330
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175283 CDO E-Mail Template Header.al|49266-49293
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175284 CDO E-Mail Template Line.al|21841-21938
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175284 CDO E-Mail Template Line.al|21971-22052
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175284 CDO E-Mail Template Line.al|23687-23805
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175284 CDO E-Mail Template Line.al|24158-24282
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175284 CDO E-Mail Template Line.al|26686-26795
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175284 CDO E-Mail Template Line.al|26923-27087
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175284 CDO E-Mail Template Line.al|28241-28296
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175284 CDO E-Mail Template Line.al|28363-28409
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175284 CDO E-Mail Template Line.al|28860-28961
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175284 CDO E-Mail Template Line.al|28988-29060
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175284 CDO E-Mail Template Line.al|29667-29779
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175284 CDO E-Mail Template Line.al|29790-29870
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175284 CDO E-Mail Template Line.al|30126-30238
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175284 CDO E-Mail Template Line.al|33086-33154
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175284 CDO E-Mail Template Line.al|33274-33374
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175284 CDO E-Mail Template Line.al|36188-36298
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175284 CDO E-Mail Template Line.al|43468-43492
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175284 CDO E-Mail Template Line.al|43834-43885
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175284 CDO E-Mail Template Line.al|44287-44311
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175284 CDO E-Mail Template Line.al|44491-44542
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175284 CDO E-Mail Template Line.al|45687-45711
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175284 CDO E-Mail Template Line.al|45911-45952
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175284 CDO E-Mail Template Line.al|47382-47405
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175284 CDO E-Mail Template Line.al|47687-47722
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175284 CDO E-Mail Template Line.al|47756-47779
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175284 CDO E-Mail Template Line.al|48518-48541
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175284 CDO E-Mail Template Line.al|48783-48818
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175284 CDO E-Mail Template Line.al|48844-48867
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175284 CDO E-Mail Template Line.al|54027-54076
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175284 CDO E-Mail Template Line.al|54119-54186
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175284 CDO E-Mail Template Line.al|54229-54272
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175284 CDO E-Mail Template Line.al|68396-68503
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175284 CDO E-Mail Template Line.al|69927-69999
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175286 CDO Customer Setup.al|10506-10566
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175286 CDO Customer Setup.al|11700-11762
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175286 CDO Customer Setup.al|11785-11899
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175286 CDO Customer Setup.al|12602-12653
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175286 CDO Customer Setup.al|12680-12794
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175286 CDO Customer Setup.al|12932-13046
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175286 CDO Customer Setup.al|13193-13307
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175286 CDO Customer Setup.al|13419-13470
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175286 CDO Customer Setup.al|13523-13637
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175286 CDO Customer Setup.al|13753-13804
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175286 CDO Customer Setup.al|13860-13974
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175286 CDO Customer Setup.al|5884-5984
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175286 CDO Customer Setup.al|8334-8394
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175286 CDO Customer Setup.al|8895-8951
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175287 CDO Statement Journal Line.al|7630-7753
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175289 CDO E-Mail Templ.Imp.Worksht.L.al|12204-12248
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175294 CDO Vendor Setup.al|3061-3161
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175296 CDO Temp Blob.al|3587-3643
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175301 CDO File.al|12135-12276
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175301 CDO File.al|12411-12526
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175301 CDO File.al|13537-13678
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175301 CDO File.al|13813-13928
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175301 CDO File.al|15144-15338
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175301 CDO File.al|15473-15639
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175301 CDO File.al|19104-19191
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175301 CDO File.al|20103-20190
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175301 CDO File.al|24530-24681
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175301 CDO File.al|24814-24944
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175301 CDO File.al|26126-26234
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175301 CDO File.al|4414-4530
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175301 CDO File.al|8654-8745
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175301 CDO File.al|9040-9156
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175301 CDO File.al|9614-9740
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175302 CDO Log Attachment.al|6656-6741
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175308 CDO Azure Application Setup.al|4435-4608
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175312 CDO Extension App.al|16746-16894
+U:\Git\do-rel2\Cloud\Al\Table\Table 6175312 CDO Extension App.al|17067-17163
