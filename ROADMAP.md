@@ -49,6 +49,7 @@ that ordering is the priority.
 - **R95** · v2 re-meaned exit codes 2 and 3, and our decode swallows the dangerous one · [R095.md](docs/roadmap/R095.md) · open — blocked on R93
 - **R96** · `--test-isolation method` silently stopped meaning per-method isolation · [R096.md](docs/roadmap/R096.md) · open — blocked on R93
 - **R8** · al-runner drops a table global var written by a trigger · [R008.md](docs/roadmap/R008.md) · done (Wave 1 Stream D — root-caused, upstream, detectable by canary)
+- **R121** · A false kill is now VISIBLE but still unclassified — the only proposed discriminator is measured wrong at 75% · [R121.md](docs/roadmap/R121.md) · open — blocked on a corpus, not on code; precondition for R85's kill-rate split
 
 ## Product gaps a real project hits
 
@@ -150,7 +151,7 @@ that ordering is the priority.
 - **R104** · `SessionConfig.emit` accepting a single subscriber, plus a separate `fanOutEmit` helper to combine several,… · [R104.md](docs/roadmap/R104.md) · open
 - **R105** · Two session-level bookkeeping structures in `runSession` are write-only and confirmed dead, kept only to… · [R105.md](docs/roadmap/R105.md) · open
 - **R106** · `report-fold.ts`'s `untargetedTriggerCount` has no presence check of its own, unlike the three events the… · [R106.md](docs/roadmap/R106.md) · open
-- **R86** · No kill records WHY it died, so a false kill and a real one are indistinguishable in the record · [R086.md](docs/roadmap/R086.md) · open — the text is persisted and unread (110/110); the proposed top-frame discriminator is FALSIFIED…
+- **R86** · No kill records WHY it died, so a false kill and a real one are indistinguishable in the record · [R086.md](docs/roadmap/R086.md) · done (`4f3496b`) — the killing run's own failure text is recorded on every kill, in the report and the store…
 - **R81** · `buildCallerIndex` keys call sites on the BARE owner name, so two same-named objects merge their callers —… · [R081.md](docs/roadmap/R081.md) · done (`2af5e23`) — measured first, and the measurement made the fix free. Severity today is ZERO, for a…
 - **R80** · Two AL comment-strippers existed in two packages, and they disagreed about string literals · [R080.md](docs/roadmap/R080.md) · done (`bad29a1`) — measured first, then unified with the policy kept as a flag. The row's premise…
 - **R93** · al-runner v2 landed upstream and every flag we send is gone — the gate is measured RED · [R093.md](docs/roadmap/R093.md) · open — unblocked 2026-08-05 (see R98)
