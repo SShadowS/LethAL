@@ -67,7 +67,7 @@ that ordering is the priority.
 - **R112** · R90's publish ceiling can be INSPECTED and CLEARED only by a bcdev-shaped config, so on an env-tool project… · [R112.md](docs/roadmap/R112.md) · open
 - **R113** · Nothing structurally couples `report.ts`'s `Caveat` union to the code that re-declares or reads it, and the… · [R113.md](docs/roadmap/R113.md) · open
 - **R114** · A STRANDED mutant records no `cause`, so every consumer keyed on `MutantOutcome.cause` is blind to exactly… · [R114.md](docs/roadmap/R114.md) · done (`77a670c`) — `cause: "stranded"` is its own member, set at exactly the two `STRANDED_NOTE_PREFIX`…
-- **R122** · Two more `error` shapes still record no `cause`, and one of them is labelled `deadline-exceeded` when it is not one · [R122.md](docs/roadmap/R122.md) · open — found while landing R114, deliberately left out of it
+- **R122** · Two more `error` shapes still record no `cause`, and one of them is labelled `deadline-exceeded` when it is not one · [R122.md](docs/roadmap/R122.md) · done (`2740d53`) — (a) the op-in-flight-never-cleared pair now records `stranded` and writes the strand note…
 - **R115** · `lethal explain`'s output guard is DATA-derived, not TYPE-derived, and the checks that would close the gap… · [R115.md](docs/roadmap/R115.md) · open
 - **R116** · A survivor can carry `executionProven: true` beside `guardEvidence: "not-observed"` — two of our own signals… · [R116.md](docs/roadmap/R116.md) · open
 - **R117** · Cross-file `file.ts:NNN` citations rot silently, and this repo now has four measured instances — two of which… · [R117.md](docs/roadmap/R117.md) · open
