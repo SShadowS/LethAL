@@ -912,3 +912,83 @@ here as measured and neither was.**
 - **Not equivalence detection.** Nothing here tags arm C's mutant as equivalent; a reader still has
   to work that out. The operator deliberately sets no `equivalenceHint`.
 - One container, one company, one BC 28 server.
+
+## al-runner v2 — the CLI and wire contract, measured against the released binary
+
+Answers R93, and corrects three roadmap claims that had drifted. Every line below was produced by
+running `C:/Users/SShadowS/.dotnet/tools/al-runner.exe` on this Windows machine on **2026-08-07**,
+against **`al-runner v2.0.0.0`** (the NuGet release, not a local build of `main`). Earlier
+measurements in R93-R101 were taken against a local Release build of upstream `main` plus PR #1657;
+where the two disagree, this section is the one that describes the binary a gate would actually run.
+
+### It runs on Windows
+
+R98 recorded that upstream `main` P/Invoked `libc`'s `mprotect` and died before any test ran. On the
+released 2.0.0.0 that is gone: `--version` exits 0 with `al-runner v2.0.0.0`, and
+`fixtures/sandbox-app` + `fixtures/sandbox-tests` run to 2 pass / 0 fail / 0 error, exit 0. Nothing
+in R93 is blocked on the platform any more.
+
+### The flags
+
+| what we need | v1 | v2 (measured) |
+| --- | --- | --- |
+| pick one test | `--run <method>` | `--test PATTERN` (alias `--filter`) — substring of the QUALIFIED name, case-insensitive |
+| the project | positional | positional, repeatable; multiple bundle dirs run sequentially and aggregate |
+| symbol/package resolution | `--packages DIR` | `--package-cache PATH`, repeatable |
+| dependency stubs | `--stubs DIR` | **gone** — listed under NOT YET IMPLEMENTED and not accepted as a flag |
+| per-test budget | `--test-timeout <s>` | **no flag**; the env var `AL_RUNNER_TEST_TIMEOUT_SEC` — and it IS honoured (set to 15, measured a 15.027 s test) |
+| per-test reset | `--test-isolation method` | `--isolation test`. **`method` is accepted only as a v1 alias for `codeunit`** — the weaker mode — silently |
+| machine output | `--output-json` | `--output-json`, same envelope |
+
+An unrecognised flag prints `Unknown option '--run'. Run with --help for the supported flags.` to
+stderr and exits **2**.
+
+### stdout is banner + JSON, so `JSON.parse(stdout)` throws
+
+`--output-json` writes a progress banner to **stdout** ahead of the JSON — `[r2r] re-execing…`,
+`[bc] …selecting BC 28.1.49838.50794…`, `al-runner - running 2 bundle(s)`, a `[1/2] <dir> - 1 suites`
+line per bundle. The JSON object then starts at a line that is exactly `{` at column 0 and runs to
+the end. Upstream tracks this as #1649. Any parser must locate that block; a naive first-`{` scan
+meets a brace inside a banner line.
+
+### The result envelope
+
+Test names are QUALIFIED — `Codeunit79601.FailsLoudly` — and `--test Codeunit79601.PassesQuietly`
+selects exactly that one test, so the qualified name works as both filter and lookup key.
+
+| case | `status` | `message` | process exit |
+| --- | --- | --- | --- |
+| pass | `pass` | absent | 0 |
+| assertion failure | `fail` | `NavNCLDialogException: <the Error() text>` | 1 |
+| runner-enforced timeout | **`error`** | **`TIMEOUT after 15s`** | 1 |
+| project does not compile | — (no `tests`) | `compilationErrors[]` in the JSON, AL diagnostics on stderr | 3 |
+| bundle could not execute | — | — | 2 |
+
+`stackTrace` accompanies `message` on any non-pass, `;`-free and CRLF-separated, e.g.
+`"Probe Logic"(CodeUnit 79600).Spin line 6 - Probe App by LethAL version 1.0.0.0`.
+
+The timeout row is R94: v1 said `status: "fail"` with `Test exceeded <n>s timeout`, so a matcher
+keyed on `fail` misses v2's `error` and a merely-hung mutant is recorded **killed**.
+
+The exit-code rows are R95: v1's 2 meant out-of-scope, v2's 2 means the bundle could not EXECUTE,
+and a decode that maps 2 to "skip" turns a process-level failure into a mutant with no verdict and
+no error.
+
+### `--bc-version` — R101(a) has drifted
+
+R101 states the runner picks "the latest artifact present in the cache" and does not print the
+selection, and concludes a verdict gate cannot accept that. Measured on 2.0.0.0 the default is
+neither silent nor latest-wins: it prints
+`[bc] no --bc-version given - selecting BC 28.1.49838.50794, the exact build this binary was compiled against.`
+Pinning it is still worth doing — a run should not depend on which binary built it — but it is a
+preference, not the correctness hole R101 describes.
+
+### What this does NOT establish
+
+- **Not the server protocol.** Everything here is CLI mode. R97's `SourcePaths[0]` defect is
+  unmeasured against the release and is upstream #1658.
+- **Not a real project.** The fixture resolves zero dependencies, so it never exercises v2's hard
+  artifact prerequisite or its rejection of a symbols-only `.alpackages` — that is R100, and the
+  fixture gates are structurally blind to it.
+- **Not the verdicts.** Whether v2 reproduces the frozen 3 killed / 13 survived / 0 no-coverage
+  per-mutant is the gate's job, not this section's.
