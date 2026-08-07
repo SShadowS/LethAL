@@ -54,6 +54,7 @@ import type { EnvToolSession } from "./env-tool-session";
 import type { EventSubscriber } from "./events";
 import { assertExplainableReport, explain } from "./explain";
 import { HarnessVerifier } from "./harness";
+import type { LeaseSnapshot } from "./harness";
 import { LeaseClient } from "./lease";
 import {
   LARGE_RUN_MUTANT_THRESHOLD,
@@ -2890,10 +2891,9 @@ function describeCeiling(c: PublishCeiling): string {
  * pretending it can.
  */
 export const DOCTOR_NOT_CHECKED =
-  "Not checked: the per-file publish ceiling (needs a generated mutation manifest), baseline " +
-  "test health (needs an actual run), and the machine-global lease/op-marker (no read-only peek " +
-  "exists on the control app today — R110). A clean report here does not mean `lethal run` " +
-  "cannot still refuse for any of these reasons.";
+  "Not checked: the per-file publish ceiling (needs a generated mutation manifest) and baseline " +
+  "test health (needs an actual run). A clean report here does not mean `lethal run` cannot " +
+  "still refuse for either of these reasons.";
 
 /**
  * Final review: printed ONLY for a create-mode envTool config (`envTool.envId` absent) —
@@ -3116,10 +3116,12 @@ function doctorConfigFromEnvTool(
  * provision, bill, or mutate. This is the one place in `lethal doctor`'s whole call graph that
  * spawns an external process at all, and it is scoped to that one array on purpose.
  *
- * No `leaseState` here (review round 1, Critical): it shipped in round 0 always returning
- * `"clear"` — a check that structurally could not fail, counted as a pass. See `DOCTOR_NOT_CHECKED`
- * (which now names it, and R110) rather than a fifth entry in `DoctorDeps` pretending to observe
- * something no read-only call can.
+ * `lease` is back (R110), and the history is why it is worth stating: it shipped in round 0 always
+ * returning `"clear"` — a check that structurally could not fail, counted as a pass, and green in
+ * exactly the stranded-lease scenario the recovery tooling exists for. It was WITHDRAWN then
+ * because no read-only call could observe the holder. `HarnessInfo` now reports `leaseOwner`/
+ * `leaseOpKind`/`leaseExpiresAt` (LethAL Control 1.0.0.15), so the check observes something real
+ * and can fail.
  *
  * Create-mode envTool configs (final review): `environment`/`quarantine`/`control-version` are
  * omitted from the returned `deps` entirely (not merely made to throw a friendlier error) when
@@ -3251,6 +3253,12 @@ export async function buildDoctorDeps(
   const controlVersion = async (): Promise<string> =>
     (await harnessVerifierFor()).fetchControlVersion();
 
+  // R110: reads the lease WITHOUT taking it. `TryAcquire` mutates on grant (epoch++, token,
+  // `Commit`), so probing by acquiring was never an option here — `DoctorDeps`'s contract is that
+  // every probe is non-mutating, and this is the read that finally makes the lease answerable
+  // under it.
+  const lease = async (): Promise<LeaseSnapshot> => (await harnessVerifierFor()).fetchLease();
+
   // Deliberately independent of `resolvedBcdev`: `alcPath`/`altoolPath` overrides are always
   // hand-written LOCAL machine paths (never env-tool-derived), so this check must not fail just
   // because server identity is unresolvable — it is testing something else entirely.
@@ -3280,7 +3288,9 @@ export async function buildDoctorDeps(
     // Create mode: omit the three deps ENTIRELY (not merely make them throw a friendlier error) —
     // `runDoctor` skips a check whose dep is absent, rather than reporting a failure for a
     // question that has no answer yet. See `DOCTOR_CREATE_MODE_CAVEAT` and `doctorFromCli` below.
-    deps: isCreateMode ? { toolPaths } : { envStatus, quarantine, controlVersion, toolPaths },
+    deps: isCreateMode
+      ? { toolPaths }
+      : { envStatus, quarantine, controlVersion, lease, toolPaths },
     ...(isCreateMode ? { createModeCaveat: DOCTOR_CREATE_MODE_CAVEAT } : {}),
   };
 }

@@ -54,6 +54,10 @@ codeunit 71003 "LC Control API"
         Obj: JsonObject;
         Isolation: JsonArray;
         TestTypes: JsonArray;
+        LeaseOwner: Text;
+        LeaseOpKind: Text;
+        LeaseExpiresAt: Text;
+        LeaseTokenPresent: Boolean;
     begin
         if ClientProtocol < 2 then
             Error(ProtocolIncompatibleErr(ClientProtocol));
@@ -67,6 +71,16 @@ codeunit 71003 "LC Control API"
         Obj.Add('tenantCountReachable', false);
         Obj.Add('isolationModes', Isolation);
         Obj.Add('testTypes', TestTypes);
+        // R110: the read-only lease peek. Carried on THIS read rather than on a new endpoint,
+        // because every client already calls HarnessInfo before it can acquire anything — a
+        // separate action would be a second round trip and a second thing to keep in step. Taken
+        // as ONE snapshot (see CurrentLeaseSnapshot), never three reads that could disagree.
+        State.CurrentLeaseSnapshot(LeaseOwner, LeaseOpKind, LeaseExpiresAt, LeaseTokenPresent);
+        Obj.Add('leaseOwner', LeaseOwner);
+        Obj.Add('leaseOpKind', LeaseOpKind);
+        Obj.Add('leaseExpiresAt', LeaseExpiresAt);
+        // Whether a live credential exists, never the credential. See CurrentLeaseSnapshot.
+        Obj.Add('leaseTokenPresent', LeaseTokenPresent);
         Obj.WriteTo(InfoJson);
     end;
 

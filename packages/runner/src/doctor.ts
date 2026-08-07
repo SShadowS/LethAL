@@ -1,5 +1,6 @@
 import { compareAppVersions } from "./app-version";
 import { MIN_CONTROL_VERSION } from "./harness";
+import type { LeaseSnapshot } from "./harness";
 
 /**
  * R109: `lethal doctor` — a read-only pass over every pre-flight refusal `lethal run` would
@@ -10,21 +11,20 @@ import { MIN_CONTROL_VERSION } from "./harness";
  * see cli.ts's `buildDoctorDeps` for what each dependency closure actually calls.
  *
  * What this does NOT check, and why: the per-file publish ceiling (`publish-ceiling.ts`) needs a
- * generated mutation manifest to have per-file guard counts to consult at all, baseline test
- * health needs an actual run against the target, and the machine-global lease/op-marker (R110) has
- * no read-only peek on the control app today — acquiring one to check would itself be a mutation,
- * which this command refuses to do. All three are genuine gaps, not oversights — a doctor report
- * that implied it checked everything `run` might refuse on would be a worse failure mode than one
- * that says plainly what it left out (see `cli.ts`'s `DOCTOR_NOT_CHECKED` caveat text, printed on
- * every `lethal doctor` invocation).
+ * generated mutation manifest to have per-file guard counts to consult at all, and baseline test
+ * health needs an actual run against the target. Both are genuine gaps, not oversights — a doctor
+ * report that implied it checked everything `run` might refuse on would be a worse failure mode
+ * than one that says plainly what it left out (see `cli.ts`'s `DOCTOR_NOT_CHECKED` caveat text,
+ * printed on every `lethal doctor` invocation).
  *
- * Review round 1 removed a fifth check, `lease`: its real wiring (cli.ts) had no way to answer
- * "clear" honestly, so it always returned "clear" and the check could structurally never fail —
+ * The `lease` check has a history worth keeping. Review round 1 REMOVED it: its wiring had no way
+ * to answer "clear" honestly, so it always returned "clear" and could structurally never fail —
  * counted as a pass in a report a user reads specifically to learn whether a lease is stuck. A
- * check that cannot fail is not a weak check, it is a false one, and belongs in
- * `DOCTOR_NOT_CHECKED`, not in `checks`. See ROADMAP R110 for the real fix (surfacing
- * `Owner`/`Op Kind`/`Expires At` from `ControlState.Codeunit.al`'s `CurrentServerGeneration()`-style
- * read-only accessor), which is out of this task's scope.
+ * check that cannot fail is not a weak check, it is a false one. It is back (R110) only because
+ * `HarnessInfo` now reports `leaseOwner`/`leaseOpKind`/`leaseExpiresAt` from a read-only accessor
+ * on the control app, so the check observes something real. Probing by ACQUIRING is still out of
+ * the question here — `TryAcquire` mutates on grant, and every probe in this module is non-mutating
+ * by contract.
  */
 
 /** One check's outcome. `detail` is always populated — on success it says what was observed
@@ -82,6 +82,14 @@ export interface DoctorDeps {
    *  never drift onto different comparison rules. Absent for a create-mode envTool config — same
    *  reasoning as `envStatus`: no control app is published anywhere yet to ask. */
   readonly controlVersion?: () => Promise<string>;
+  /** R110: the deployed lease, read WITHOUT taking it (`HarnessVerifier.fetchLease`). Absent for a
+   *  create-mode envTool config — same reasoning as `envStatus`: no control app exists to ask yet.
+   *
+   *  This check was WITHDRAWN once before. Its first implementation had no way to answer honestly,
+   *  so it returned `"clear"` unconditionally — a check that could not fail on any input, rendered
+   *  as `[ok]`, and confidently green in exactly the stranded-lease scenario the recovery tooling
+   *  exists for. It is back only because `HarnessInfo` now reports the holder. */
+  readonly lease?: () => Promise<LeaseSnapshot>;
   /** Resolved `alc`/`altool` paths (`defaultAlToolPaths`/`resolveAlToolPaths`, publisher.ts/
    *  cli.ts) — an empty string means "not found". Whether an empty `altool` is a FAILURE depends
    *  on `DoctorConfig.altoolRequired` — see that field. Always present, including in create mode:
@@ -130,6 +138,9 @@ export interface DoctorConfig {
    * `configFile.envTool !== undefined`.
    */
   readonly altoolRequired?: boolean;
+  /** Injected so the lease check's expiry comparison is testable without wall-clock timing —
+   *  CLAUDE.md's rule for phase-ordering assertions, applied to a clock. Defaults to now. */
+  readonly now?: Date;
 }
 
 const DEFAULT_ENV_READY = "Running";
@@ -159,6 +170,50 @@ function checkEnvironment(status: string, expected: string): DoctorCheck {
     // R34's exact shape (env-tool-session.ts): name what was reported, name what was required,
     // and say what to do about it — LethAL will not start an environment it does not own.
     detail: `reports status ${JSON.stringify(status)}, not ${JSON.stringify(expected)} — LethAL will not start an environment it does not own: start it yourself, wait until it reports ${JSON.stringify(expected)}, then re-run.`,
+  };
+}
+
+/**
+ * R110. A HELD lease is reported as NOT ok, and that is deliberate even though a lease held by a
+ * live concurrent session is not a fault: `lethal doctor` is reached for when something is already
+ * wrong, and "somebody holds this tier" is the single most useful thing it can say then. The detail
+ * carries who, which operation, and whether the lease has already EXPIRED — an expired holder is an
+ * orphan and the recovery command is named right there, while a live one usually means "wait".
+ *
+ * Green requires BOTH halves: no owner AND no operation in flight. Either alone can be true while
+ * the tier is genuinely busy — an op marker with no owner is the shape a killed session leaves
+ * behind, which is exactly what this exists to surface.
+ */
+function checkLease(lease: LeaseSnapshot, now: Date): DoctorCheck {
+  // `tokenPresent` and `opKind`, NOT `owner`. Measured live on Cronus281 the first time this
+  // check ran against a real container: `TryRelease` clears the token, the expiry and the client
+  // nonce but deliberately LEAVES `Owner` populated, so a cleanly released lease still names its
+  // previous holder — an owner-keyed check reported a perfectly healthy tier as held, right after
+  // a green gate. That is the false-alarm direction, and it is as useless as the false-green the
+  // withdrawn check had.
+  if (!lease.tokenPresent && lease.opKind === "none") {
+    const last = lease.owner === "" ? "" : `; last held by ${lease.owner}`;
+    return {
+      name: "lease",
+      ok: true,
+      detail: `no lease held (no live token, op kind none${last})`,
+    };
+  }
+  const owner = lease.owner === "" ? "(no owner recorded)" : lease.owner;
+  const expiry = Date.parse(lease.expiresAt);
+  const expired = !Number.isNaN(expiry) && expiry < now.getTime();
+  const when =
+    lease.expiresAt === ""
+      ? ", no expiry recorded"
+      : `, expires ${lease.expiresAt}${expired ? " — ALREADY EXPIRED" : ""}`;
+  const advice = expired
+    ? "The holder is past its expiry, so this is an orphaned lease: recover it with `lethal force-reset-lease --server <url> --instance <name> --config <path>`."
+    : "If no session is actually running, recover it with `lethal force-reset-lease --server <url> --instance <name> --config <path>`.";
+  const credential = lease.tokenPresent ? "live token" : "no live token";
+  return {
+    name: "lease",
+    ok: false,
+    detail: `held by ${owner} (${credential}, op kind ${lease.opKind}${when}). ${advice}`,
   };
 }
 
@@ -231,7 +286,7 @@ function checkToolPaths(
 export async function runDoctor(cfg: DoctorConfig, deps: DoctorDeps): Promise<DoctorReport> {
   const envReady = cfg.envReady ?? DEFAULT_ENV_READY;
   const altoolRequired = cfg.altoolRequired ?? DEFAULT_ALTOOL_REQUIRED;
-  const { envStatus, quarantine, controlVersion, toolPaths } = deps;
+  const { envStatus, quarantine, controlVersion, lease, toolPaths } = deps;
   const checkPromises: Promise<DoctorCheck>[] = [];
   if (envStatus !== undefined) {
     checkPromises.push(
@@ -245,6 +300,10 @@ export async function runDoctor(cfg: DoctorConfig, deps: DoctorDeps): Promise<Do
     checkPromises.push(
       runCheck("control-version", async () => checkControlVersion(await controlVersion())),
     );
+  }
+  if (lease !== undefined) {
+    const now = cfg.now ?? new Date();
+    checkPromises.push(runCheck("lease", async () => checkLease(await lease(), now)));
   }
   checkPromises.push(
     runCheck("tool-paths", async () => checkToolPaths(await toolPaths(), altoolRequired)),

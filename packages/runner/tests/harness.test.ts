@@ -11,6 +11,7 @@ import {
   MIN_CONTROL_VERSION,
   MultiTenantContainerError,
   injectControlDependency,
+  parseLeaseSnapshot,
   resetSingleTenantWarningForTests,
 } from "../src/harness";
 
@@ -485,5 +486,85 @@ describe("injectControlDependency", () => {
     expect(result.version).toBe("1.0.0.0");
     expect(result.name).toBe("Target App");
     expect(result.idRanges).toEqual([]);
+  });
+});
+
+/**
+ * R110 — the lease fields on `HarnessInfo`. Parsed strictly rather than defaulted: a control app
+ * older than MIN_CONTROL_VERSION does not carry them, and substituting `""` for a missing
+ * `leaseOwner` would render as "nothing holds the lease" — rebuilding the exact false-green the
+ * withdrawn doctor check was withdrawn for, one layer down.
+ */
+describe("parseLeaseSnapshot (R110)", () => {
+  test("reads owner, op kind, expiry and whether a live token exists", () => {
+    expect(
+      parseLeaseSnapshot({
+        leaseOwner: "lethal-run-42",
+        leaseOpKind: "run",
+        leaseExpiresAt: "2026-08-07T12:05:00.000Z",
+        leaseTokenPresent: true,
+      }),
+    ).toEqual({
+      owner: "lethal-run-42",
+      opKind: "run",
+      expiresAt: "2026-08-07T12:05:00.000Z",
+      tokenPresent: true,
+    });
+  });
+
+  test("a RELEASED lease still names its previous owner — that is not 'held'", () => {
+    // Measured live on Cronus281: `TryRelease` clears the token, the expiry and the client nonce
+    // but deliberately LEAVES `Owner` populated. The parse carries that through faithfully;
+    // deciding what it MEANS is `checkLease`'s job, and it keys on `tokenPresent`/`opKind`.
+    expect(
+      parseLeaseSnapshot({
+        leaseOwner: "lethal-run-41",
+        leaseOpKind: "none",
+        leaseExpiresAt: "",
+        leaseTokenPresent: false,
+      }),
+    ).toEqual({ owner: "lethal-run-41", opKind: "none", expiresAt: "", tokenPresent: false });
+  });
+
+  test("REFUSES an older control app that reports no lease fields, naming the version needed", () => {
+    // The failure that matters: this is what an un-republished container answers, and defaulting
+    // here would report it as "no lease held".
+    expect(() => parseLeaseSnapshot({})).toThrow(HarnessVerificationError);
+    expect(() => parseLeaseSnapshot({})).toThrow(/1\.0\.0\.16/);
+    expect(() => parseLeaseSnapshot({})).toThrow(/republish/);
+  });
+
+  test("refuses a mistyped field rather than coercing it", () => {
+    expect(() =>
+      parseLeaseSnapshot({
+        leaseOwner: 42,
+        leaseOpKind: "none",
+        leaseExpiresAt: "",
+        leaseTokenPresent: false,
+      }),
+    ).toThrow(HarnessVerificationError);
+    // A STRING "false" is not a boolean, and coercing it would read as "no live token" — the
+    // false-green direction again.
+    expect(() =>
+      parseLeaseSnapshot({
+        leaseOwner: "",
+        leaseOpKind: "none",
+        leaseExpiresAt: "",
+        leaseTokenPresent: "false",
+      }),
+    ).toThrow(HarnessVerificationError);
+  });
+
+  test("refuses an EMPTY opKind — the option always formats to one of none/publish/run", () => {
+    // Empty means "the field was not populated", which is a different fact from "no operation is
+    // in flight" and must not read as the latter.
+    expect(() =>
+      parseLeaseSnapshot({
+        leaseOwner: "",
+        leaseOpKind: "",
+        leaseExpiresAt: "",
+        leaseTokenPresent: false,
+      }),
+    ).toThrow(/EMPTY leaseOpKind/);
   });
 });

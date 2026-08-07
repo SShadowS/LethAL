@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import type { DoctorConfig } from "../src/doctor";
 import { runDoctor } from "../src/doctor";
+// R110: the fixtures track MIN_CONTROL_VERSION rather than pinning a literal, so a version bump
+// cannot silently turn every green fixture red — it did exactly that when 1.0.0.15 landed.
+import { MIN_CONTROL_VERSION } from "../src/harness";
 
 /**
  * Task 4 (C3): a minimal, narrow config — `runDoctor` needs only what decides how to INTERPRET a
@@ -20,7 +23,7 @@ describe("lethal doctor", () => {
     const r = await runDoctor(cfgFixture(), {
       envStatus: async () => "Stopped",
       quarantine: async () => "clear",
-      controlVersion: async () => "1.0.0.14",
+      controlVersion: async () => MIN_CONTROL_VERSION,
       toolPaths: async () => ({ alc: "ok", altool: "ok" }),
     });
     // Review round 1: was `>= 5` — the `lease` check shipped in round 0 but was REMOVED (a check
@@ -34,7 +37,7 @@ describe("lethal doctor", () => {
     const r = await runDoctor(cfgFixture(), {
       envStatus: async () => "Stopped",
       quarantine: async () => "clear",
-      controlVersion: async () => "1.0.0.14",
+      controlVersion: async () => MIN_CONTROL_VERSION,
       toolPaths: async () => ({ alc: "ok", altool: "ok" }),
     });
     const env = r.checks.find((c) => c.name === "environment");
@@ -46,7 +49,7 @@ describe("lethal doctor", () => {
     const r = await runDoctor(cfgFixture(), {
       envStatus: async () => "Running",
       quarantine: async () => "clear",
-      controlVersion: async () => "1.0.0.14",
+      controlVersion: async () => MIN_CONTROL_VERSION,
       toolPaths: async () => ({ alc: "ok", altool: "ok" }),
     });
     expect(r.ok).toBe(true);
@@ -62,7 +65,7 @@ describe("lethal doctor", () => {
         throw new Error("ECONNREFUSED");
       },
       quarantine: async () => "clear",
-      controlVersion: async () => "1.0.0.14",
+      controlVersion: async () => MIN_CONTROL_VERSION,
       toolPaths: async () => ({ alc: "ok", altool: "ok" }),
     });
     expect(r.ok).toBe(false);
@@ -105,7 +108,7 @@ describe("lethal doctor", () => {
     const r = await runDoctor(cfgFixture(), {
       envStatus: async () => "Running",
       quarantine: async () => "clear",
-      controlVersion: async () => "1.0.0.14",
+      controlVersion: async () => MIN_CONTROL_VERSION,
       toolPaths: async () => ({ alc: "", altool: "ok" }),
     });
     const tp = r.checks.find((c) => c.name === "tool-paths");
@@ -122,7 +125,7 @@ describe("lethal doctor", () => {
       {
         envStatus: async () => "Running",
         quarantine: async () => "clear",
-        controlVersion: async () => "1.0.0.14",
+        controlVersion: async () => MIN_CONTROL_VERSION,
         toolPaths: async () => ({ alc: "ok", altool: "" }),
       },
     );
@@ -134,7 +137,7 @@ describe("lethal doctor", () => {
     const r = await runDoctor(cfgFixture(), {
       envStatus: async () => "Running",
       quarantine: async () => "run: activation deadline exceeded",
-      controlVersion: async () => "1.0.0.14",
+      controlVersion: async () => MIN_CONTROL_VERSION,
       toolPaths: async () => ({ alc: "ok", altool: "ok" }),
     });
     expect(r.ok).toBe(false);
@@ -163,7 +166,7 @@ describe("lethal doctor", () => {
       },
       controlVersion: async () => {
         controlVersionCalls++;
-        return "1.0.0.14";
+        return MIN_CONTROL_VERSION;
       },
       toolPaths: async () => {
         toolPathsCalls++;
@@ -174,5 +177,122 @@ describe("lethal doctor", () => {
     expect(quarantineCalls).toBe(1);
     expect(controlVersionCalls).toBe(1);
     expect(toolPathsCalls).toBe(1);
+  });
+});
+
+/**
+ * R110 — `lethal doctor`'s lease check, restored.
+ *
+ * Its first implementation was WITHDRAWN in review: it returned `"clear"` unconditionally, so it
+ * could not fail on any input, rendered as `[ok]`, and was confidently green in exactly the
+ * stranded-lease scenario the recovery tooling exists for. The row's acceptance criterion is
+ * therefore not "the check exists" but "a held lease makes doctor non-green" — the property the
+ * withdrawn check could not have had.
+ */
+describe("lethal doctor — the lease check (R110)", () => {
+  const green = {
+    envStatus: async () => "Running",
+    quarantine: async () => "clear",
+    controlVersion: async () => MIN_CONTROL_VERSION,
+    toolPaths: async () => ({ alc: "ok", altool: "ok" }),
+  };
+  // A cleanly RELEASED lease, not a virgin one: `TryRelease` leaves `Owner` populated, which is
+  // the shape a healthy container actually presents and the one an owner-keyed check got wrong.
+  const idle = { owner: "lethal-run-41", opKind: "none", expiresAt: "", tokenPresent: false };
+  const NOW = new Date("2026-08-07T12:00:00.000Z");
+
+  test("A HELD LEASE MAKES DOCTOR NON-GREEN — the property the withdrawn check could not have", async () => {
+    const r = await runDoctor(
+      { ...cfgFixture(), now: NOW },
+      {
+        ...green,
+        lease: async () => ({
+          owner: "lethal-run-42",
+          opKind: "run",
+          expiresAt: "2026-08-07T12:05:00.000Z",
+          tokenPresent: true,
+        }),
+      },
+    );
+    expect(r.ok).toBe(false);
+    const lease = r.checks.find((c) => c.name === "lease");
+    expect(lease?.ok).toBe(false);
+    expect(lease?.detail).toContain("lethal-run-42");
+    expect(lease?.detail).toContain("run");
+    expect(lease?.detail).toContain("force-reset-lease");
+  });
+
+  test("an idle lease passes, and everything else green stays green", async () => {
+    const r = await runDoctor({ ...cfgFixture(), now: NOW }, { ...green, lease: async () => idle });
+    expect(r.ok).toBe(true);
+    expect(r.checks.find((c) => c.name === "lease")?.detail).toContain("no lease held");
+  });
+
+  test("an EXPIRED holder is called an orphan — a live one is not", async () => {
+    // Different work: an expired holder means recover, a live one usually means wait. Collapsing
+    // the two would send an operator to force-reset a lease a running session still owns.
+    const expired = await runDoctor(
+      { ...cfgFixture(), now: NOW },
+      {
+        ...green,
+        lease: async () => ({
+          owner: "x",
+          opKind: "run",
+          expiresAt: "2026-08-07T11:00:00.000Z",
+          tokenPresent: true,
+        }),
+      },
+    );
+    const live = await runDoctor(
+      { ...cfgFixture(), now: NOW },
+      {
+        ...green,
+        lease: async () => ({
+          owner: "x",
+          opKind: "run",
+          expiresAt: "2026-08-07T13:00:00.000Z",
+          tokenPresent: true,
+        }),
+      },
+    );
+    expect(expired.checks.find((c) => c.name === "lease")?.detail).toContain("ALREADY EXPIRED");
+    expect(expired.checks.find((c) => c.name === "lease")?.detail).toContain("orphaned");
+    expect(live.checks.find((c) => c.name === "lease")?.detail).not.toContain("EXPIRED");
+    expect(live.checks.find((c) => c.name === "lease")?.detail).not.toContain("orphaned");
+  });
+
+  test("an op marker with NO owner still fails — that is what a killed session leaves", async () => {
+    // Green requires BOTH halves. Keying only on `owner` would pass the exact shape the recovery
+    // tooling exists for.
+    const r = await runDoctor(
+      { ...cfgFixture(), now: NOW },
+      {
+        ...green,
+        lease: async () => ({ owner: "", opKind: "publish", expiresAt: "", tokenPresent: false }),
+      },
+    );
+    expect(r.checks.find((c) => c.name === "lease")?.ok).toBe(false);
+    expect(r.checks.find((c) => c.name === "lease")?.detail).toContain("no owner recorded");
+  });
+
+  test("is skipped entirely when the dep is absent (create mode), never faked green", async () => {
+    const r = await runDoctor(cfgFixture(), green);
+    expect(r.checks.some((c) => c.name === "lease")).toBe(false);
+    expect(r.ok).toBe(true);
+  });
+
+  test("calls the lease dep at most once — it is a READ, never a probe-by-acquiring", async () => {
+    let calls = 0;
+    await runDoctor(
+      { ...cfgFixture(), now: NOW },
+      {
+        ...green,
+        lease: async () => {
+          calls++;
+          return idle;
+        },
+      },
+    );
+    expect(calls).toBe(1);
   });
 });

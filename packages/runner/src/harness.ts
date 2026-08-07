@@ -74,7 +74,7 @@ const MIN_PROTOCOL_VERSION = 2;
  * Kept in LOCKSTEP with `extensions/lethal-control/app.json`'s `version`: raising this constant
  * without bumping that file makes a freshly built control app fail its own gate. Pinned by a test.
  */
-export const MIN_CONTROL_VERSION = "1.0.0.14";
+export const MIN_CONTROL_VERSION = "1.0.0.16";
 
 /**
  * R20: the harness could not be AUTHENTICATED — HTTP 401/403 — as distinct from "the control app is
@@ -172,6 +172,41 @@ interface HarnessInfo {
   readonly tenantCount?: unknown;
   readonly isolationModes?: unknown;
   readonly testTypes?: unknown;
+  /** R110's read-only lease peek. Absent on any control app older than 1.0.0.15. */
+  readonly leaseOwner?: unknown;
+  readonly leaseOpKind?: unknown;
+  readonly leaseExpiresAt?: unknown;
+  readonly leaseTokenPresent?: unknown;
+}
+
+/**
+ * R110: who holds the machine-global lease, read WITHOUT taking it.
+ *
+ * `TryAcquire` mutates on grant (epoch++, token, `Commit`), so probing by acquiring was never an
+ * option for a read-only caller — and `HarnessInfo` returned no holder, op kind or expiry at all.
+ * The measured consequence: `lethal doctor` could not check the lease, and its first
+ * implementation shipped a `lease` check hardcoded to "clear" — a check that could not fail on any
+ * input, rendered as `[ok]`, and confidently green in exactly the stranded-lease scenario the
+ * recovery tooling exists for. It was withdrawn into doctor's "not checked" list rather than
+ * shipped.
+ */
+export interface LeaseSnapshot {
+  /**
+   * Who holds it — or who LAST held it. **Not a held-or-not signal**, measured live on Cronus281:
+   * `TryRelease` clears the token, the expiry and the client nonce but deliberately leaves `Owner`
+   * populated, so a cleanly released lease still names its previous holder. Reading a non-empty
+   * owner as "held" reports every healthy container as stuck, forever.
+   */
+  readonly owner: string;
+  /** Whether a live lease credential exists. This, with `opKind`, is what actually answers "is
+   *  this tier held?". The token ITSELF is never transmitted — handing out the lease credential
+   *  would let any caller impersonate the holder. */
+  readonly tokenPresent: boolean;
+  /** `none` / `publish` / `run` — the option's own member names, formatted by AL. */
+  readonly opKind: string;
+  /** ISO-8601, or empty when the field is unset. Empty is NOT "expired": it is "no instant
+   *  recorded", and the two must not collapse. */
+  readonly expiresAt: string;
 }
 
 /**
@@ -188,6 +223,44 @@ export interface HarnessDetails {
   readonly protocolVersion: number;
   readonly serverGeneration: string;
   readonly tenantGate: "enforced" | "unenforced";
+}
+
+/**
+ * Parses R110's lease fields out of a raw `HarnessInfo` body.
+ *
+ * Refuses rather than defaulting. A control app older than `MIN_CONTROL_VERSION` does not carry
+ * these fields, and substituting `""` for a missing `leaseOwner` would render as "nothing holds
+ * the lease" — which is the exact false-green the withdrawn doctor check was withdrawn for,
+ * rebuilt one layer down.
+ */
+export function parseLeaseSnapshot(info: {
+  readonly leaseOwner?: unknown;
+  readonly leaseOpKind?: unknown;
+  readonly leaseExpiresAt?: unknown;
+  readonly leaseTokenPresent?: unknown;
+}): LeaseSnapshot {
+  const { leaseOwner, leaseOpKind, leaseExpiresAt, leaseTokenPresent } = info;
+  if (
+    typeof leaseOwner !== "string" ||
+    typeof leaseOpKind !== "string" ||
+    typeof leaseExpiresAt !== "string" ||
+    typeof leaseTokenPresent !== "boolean"
+  ) {
+    throw new HarnessVerificationError(
+      `HarnessInfo did not report the lease (leaseOwner ${JSON.stringify(leaseOwner)}, leaseOpKind ${JSON.stringify(leaseOpKind)}, leaseExpiresAt ${JSON.stringify(leaseExpiresAt)}) — the read-only lease peek needs LethAL Control ${MIN_CONTROL_VERSION} or newer (R110). Fix: rebuild extensions/lethal-control and republish it to this container.`,
+    );
+  }
+  if (leaseOpKind === "") {
+    throw new HarnessVerificationError(
+      "HarnessInfo reported an EMPTY leaseOpKind — the option always formats to one of none/publish/run, so an empty value means the field was not populated rather than that no operation is in flight",
+    );
+  }
+  return {
+    owner: leaseOwner,
+    opKind: leaseOpKind,
+    expiresAt: leaseExpiresAt,
+    tokenPresent: leaseTokenPresent,
+  };
 }
 
 /**
@@ -236,6 +309,19 @@ export class HarnessVerifier {
    */
   async checkReachable(): Promise<void> {
     await this.fetchHarnessInfo();
+  }
+
+  /**
+   * R110: the lease, read WITHOUT taking it. Reuses `fetchHarnessInfo()` — the same OData call and
+   * the same auth-vs-missing / stale-build error handling `verify()` and `fetchControlVersion()`
+   * use — rather than a second HTTP path with its own, possibly-drifted handling, for the same
+   * reason `fetchControlVersion` was written that way.
+   *
+   * Reports ONE concern, like `fetchControlVersion` and unlike `verify()`: an appId mismatch or a
+   * tenant-gate warning must not be folded into a check named "lease".
+   */
+  async fetchLease(): Promise<LeaseSnapshot> {
+    return parseLeaseSnapshot(await this.fetchHarnessInfo());
   }
 
   async verify(): Promise<HarnessDetails> {

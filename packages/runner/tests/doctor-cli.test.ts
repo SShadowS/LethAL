@@ -59,6 +59,12 @@ function info(over: Record<string, unknown> = {}): Record<string, unknown> {
     tenantCountReachable: false,
     isolationModes: ["Codeunit"],
     testTypes: ["codeunit"],
+    // R110: the read-only lease peek. An IDLE lease by default, so the existing "every check
+    // passes" fixtures keep meaning what they say; a test that wants a held lease overrides it.
+    leaseOwner: "",
+    leaseOpKind: "none",
+    leaseExpiresAt: "",
+    leaseTokenPresent: false,
     ...over,
   };
 }

@@ -250,6 +250,50 @@ codeunit 71002 "LC Control State"
         exit(Lease."Server Generation");
     end;
 
+    /// <summary>R110: a READ-ONLY peek at who holds the lease, so nothing has to take it in order to
+    /// find out. `TryAcquire` mutates on grant — epoch++, token, Commit — so probing by acquiring is
+    /// not an option for a read-only caller, and `HarnessInfo` previously returned no holder, op kind
+    /// or expiry at all. The measured consequence: `lethal doctor` could not check the lease, and its
+    /// first implementation shipped a `lease` check hardcoded to "clear" — a check that could not
+    /// fail on any input, rendered as [ok], and confidently green in exactly the stranded-lease
+    /// scenario the recovery tooling exists for.
+    ///
+    /// Same shape as CurrentServerGeneration() above and for the same reasons: Get('') + fail loud,
+    /// and NO LockTable — a plain informational read, not part of any mutating critical section, so
+    /// it never contends with the fenced operations.
+    ///
+    /// ONE Get, three out-parameters, deliberately: three separate accessors would each re-read the
+    /// row and could return values from three different lease states, which is precisely the kind of
+    /// self-inconsistent snapshot a diagnostic must never hand an operator.
+    ///
+    /// "Expires At" is returned as ISO-8601 TEXT rather than a DateTime, so the wire format is fixed
+    /// by this code instead of by whatever JSON rendering the platform picks for a DateTime. An empty
+    /// string means the field is unset (0DT), which is distinct from any real instant.
+    ///
+    /// "Owner" IS NOT A HELD-OR-NOT SIGNAL, and this was measured the hard way on Cronus281: TryRelease
+    /// above clears Token, "Expires At" and "Client Nonce" but deliberately LEAVES Owner populated, so a
+    /// cleanly released lease still names whoever last held it. A reader that treated a non-empty Owner
+    /// as "held" would report every healthy container as stuck, forever. TokenPresent is the live
+    /// credential, and it plus "Op Kind" are what actually answer "is this tier held?".
+    ///
+    /// The token itself is NEVER returned — only whether one exists. HarnessInfo is an unauthenticated-
+    /// shaped read from the client's point of view, and handing out the lease credential would let any
+    /// caller impersonate the holder. A boolean answers the diagnostic question and leaks nothing.</summary>
+    procedure CurrentLeaseSnapshot(var LeaseOwner: Text; var LeaseOpKind: Text; var LeaseExpiresAt: Text; var LeaseTokenPresent: Boolean)
+    var
+        Lease: Record "LC Lease";
+    begin
+        if not Lease.Get('') then
+            Error(LeaseRowMissingErr());
+        LeaseOwner := Lease.Owner;
+        LeaseOpKind := Format(Lease."Op Kind");
+        LeaseTokenPresent := Lease.Token <> '';
+        if Lease."Expires At" = 0DT then
+            LeaseExpiresAt := ''
+        else
+            LeaseExpiresAt := Format(Lease."Expires At", 0, 9);
+    end;
+
     /// <summary>Documented client contract (design §4/§6): a holder of the lease MUST renew AT LEAST AS
     /// OFTEN AS this period, CONTINUOUSLY — design §6's single-flight renew heartbeat runs at ttl/3 in
     /// the runner as a background timer that keeps firing for the whole duration of an in-flight
