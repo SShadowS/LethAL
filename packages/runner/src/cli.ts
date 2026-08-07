@@ -527,6 +527,17 @@ const VALID_SUBCOMMANDS = [
 /** The three `lethal campaign` verbs — see `CampaignCliConfig`. */
 const CAMPAIGN_ACTIONS = ["freeze", "anchors", "compare"] as const;
 
+/**
+ * The subcommands that legitimately read a positional of their own, and therefore opt OUT of
+ * `requireNoStrayPositionals`. Everything else takes flags only, so a positional there was ignored
+ * rather than acted on — see that function for the measured reason that matters.
+ *
+ * An explicit allowlist rather than a check for "did anyone consume it": a subcommand that grows a
+ * positional has to be added here deliberately, which is a decision someone makes rather than a
+ * silence that spreads.
+ */
+const SUBCOMMANDS_TAKING_POSITIONALS: ReadonlySet<string> = new Set(["campaign", "explain"]);
+
 type CampaignAction = (typeof CAMPAIGN_ACTIONS)[number];
 
 function isCampaignAction(v: string | undefined): v is CampaignAction {
@@ -543,11 +554,47 @@ function isCampaignAction(v: string | undefined): v is CampaignAction {
 function requireKnownSubcommand(positionals: readonly string[]): string {
   const [subcommand] = positionals;
   if (subcommand !== undefined && (VALID_SUBCOMMANDS as readonly string[]).includes(subcommand)) {
+    if (!SUBCOMMANDS_TAKING_POSITIONALS.has(subcommand)) {
+      requireNoStrayPositionals(subcommand, positionals.slice(1));
+    }
     return subcommand;
   }
   const got = subcommand === undefined ? "none" : `"${subcommand}"`;
   throw new Error(
     `unknown subcommand: got ${got}, expected one of: ${VALID_SUBCOMMANDS.join(", ")}. Run \`lethal --help\` for usage.`,
+  );
+}
+
+/**
+ * R89. No subcommand takes a positional argument, so anything after it was a mistake — and the
+ * mistakes this catches are not typos, they are invocations that SILENTLY DO SOMETHING ELSE.
+ *
+ * `--resume` is a boolean flag. `parseArgs` therefore puts the next word in `positionals`, where
+ * nothing read it. MEASURED: `lethal run --resume 3` — an operator asking for run 3 — parsed to
+ * `resume: "last"` and would have carried verdicts from whichever run happened to be most recent.
+ * A resume that quietly draws from a run the operator did not name is the worst shape this flag
+ * has: the whole point of `--resume` is to reuse hours of prior work, and reusing the WRONG hours
+ * is not visible in any count. `--resume last` and `--resume anything-at-all` behaved the same way.
+ *
+ * The correct spelling is `--resume` (most recent) or `--resume-run <id>` (a named one), which is
+ * why the message says so rather than only complaining.
+ *
+ * R89's field report — a `--resume last` that produced a fresh run with no `RESUMED:` banner and no
+ * error — is NOT proven to be this; three other hypotheses were ruled out (the CLI does parse
+ * `--resume last` as `resume: "last"`; `resolveResume` throws rather than returning undefined when
+ * it finds no target; and `resumedFrom` has always been keyed on the REQUEST, so a resume carrying
+ * zero verdicts still reports itself). This is a live defect found while investigating it, and a
+ * plausible cause if the operator's real invocation named a run id.
+ */
+function requireNoStrayPositionals(subcommand: string, extra: readonly string[]): void {
+  if (extra.length === 0) return;
+  const looksLikeRunId = extra.some((a) => /^\d+$/.test(a));
+  const hint = looksLikeRunId
+    ? "If you meant to resume a specific run, the flag is `--resume-run <id>`; bare `--resume` takes the most recent unfinished run and would have silently used that one instead."
+    : "If you meant `--resume`, note it takes no argument — use `--resume` alone, or `--resume-run <id>` to name one.";
+  const args = extra.map((a) => `"${a}"`).join(", ");
+  throw new Error(
+    `lethal ${subcommand}: unexpected argument(s) after the subcommand: ${args}. No subcommand takes a positional argument, so this was ignored rather than acted on. ${hint} Run \`lethal --help\` for usage.`,
   );
 }
 

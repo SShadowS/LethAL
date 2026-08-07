@@ -33,6 +33,70 @@ import { LeaseClient } from "../src/lease";
 import { QuarantineStore } from "../src/quarantine-store";
 import { quarantineResourceKey } from "../src/resource-key";
 
+/**
+ * R89. `--resume` is a BOOLEAN flag, so `parseArgs` puts the next word in `positionals`, where
+ * nothing read it. MEASURED before the fix: `lethal run --resume 3` — an operator asking for run 3
+ * — parsed to `resume: "last"` and would have carried verdicts from whichever run happened to be
+ * most recent. `--resume last` and `--resume total-garbage` behaved identically.
+ *
+ * That is the worst shape this flag has. `--resume` exists to reuse hours of prior work; reusing
+ * the WRONG hours appears in no count, and the report would truthfully say it resumed — just from a
+ * run the operator never named.
+ *
+ * These pin the refusal by VALUE (which argument was rejected, and whether the message names
+ * `--resume-run`), not merely that something threw — a guard that rejected everything, including
+ * the legitimate `campaign` verbs, would pass a presence-only assertion.
+ */
+describe("parseCliConfig — R89, a stray positional is refused, never ignored", () => {
+  const base = ["--project", "P", "--tests", "T", "--backend", "bcdev"];
+
+  test("`--resume 3` is refused, and the message says a run WAS being named", () => {
+    // The dangerous one: silently became `--resume last` and resumed a run nobody asked for.
+    expect(() => parseCliConfig(["run", "--resume", "3", ...base])).toThrow(/"3"/);
+    // Asserted on text UNIQUE to the numeric branch. Both branches mention `--resume-run <id>`, so
+    // a `/--resume-run/` match could not tell them apart — a red-check found exactly that: removing
+    // the numeric branch left this test green. The sentence below exists only when the stray
+    // argument looked like a run id, which is when the operator most needs to be told.
+    expect(() => parseCliConfig(["run", "--resume", "3", ...base])).toThrow(
+      /would have silently used that one instead/,
+    );
+  });
+
+  test("a NON-numeric stray does NOT claim the operator was naming a run", () => {
+    // The other side of the same branch: the numeric hint must not fire for `--resume last`, or it
+    // would tell the operator to use `--resume-run last`, which is not a thing.
+    expect(() => parseCliConfig(["run", "--resume", "last", ...base])).not.toThrow(
+      /would have silently used that one instead/,
+    );
+  });
+
+  test("`--resume last` is refused — the word was never read", () => {
+    expect(() => parseCliConfig(["run", "--resume", "last", ...base])).toThrow(/"last"/);
+  });
+
+  test("a stray positional with no --resume at all is still refused", () => {
+    expect(() => parseCliConfig(["run", "wat", ...base])).toThrow(/unexpected argument/);
+  });
+
+  test("bare `--resume` still means the most recent run", () => {
+    const parsed = parseCliConfig(["run", "--resume", ...base]) as { resume?: unknown };
+    expect(parsed.resume).toBe("last");
+  });
+
+  test("`--resume-run 3` still names a run — the guard must not eat the supported spelling", () => {
+    const parsed = parseCliConfig(["run", "--resume-run", "3", ...base]) as { resume?: unknown };
+    expect(parsed.resume).toBe(3);
+  });
+
+  test("`campaign` keeps its own positional verb", () => {
+    // The allowlist half. A guard applied to every subcommand broke all eight campaign tests, which
+    // is how the scope was found — recorded here so nobody re-widens it.
+    expect(() => parseCliConfig(["campaign", "anchors", "--project", "P"])).not.toThrow(
+      /unexpected argument/,
+    );
+  });
+});
+
 describe("parseCliConfig", () => {
   test("missing --project throws a clear error", () => {
     expect(() => parseCliConfig(["run", "--tests", "t", "--backend", "al-runner"])).toThrow(
