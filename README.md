@@ -19,252 +19,16 @@ is new here is the AL implementation, not the idea. It answers a question a cove
 coverage tells you a line **ran**, mutation tells you a line is **checked**. If the line's behaviour
 can change and every test still passes, running it proved less than the coverage number suggested.
 
-Each mutant comes back as one of six verdicts:
+LethAL calls each deliberate change a **mutant**. A mutant is **killed** when one of your tests
+fails — your suite caught it, which is the good outcome. It **survives** when every test still
+passes, which means nothing you have written notices that behaviour. It is **no-coverage** when no
+test runs that code at all. The share your tests killed is the **mutation score**.
 
-| Verdict | Meaning |
-|---------|---------|
-| **killed** | A test failed. That code path is genuinely covered. |
-| **survived** | Every test still passed. What that is worth depends on *which* tests ran the line — see below. |
-| **no-coverage** | No test *reachable by coverage attribution* executes that code. Sometimes an under-report; see [Limits](#limits). |
-| **timeout-killed** | The mutant exceeded its time budget and BC confirmed it stopped the session. A kill resting on a stopped session rather than a failing assertion, and evidentially the weakest one there is. |
-| **known-survivor** | Recorded as surviving by an earlier finished run and skipped this time via `--skip-known-survivors`. Carried, not re-measured. |
-| **error** | The run could not obtain a verdict — a strand, a refusal, an unstable result. Never counted as a kill or a survivor. |
-
-**A survivor is not automatically a finding.** LethAL records *how* it decided which tests cover a
-mutant, and the answer changes what "survived" is worth:
-
-- `"exact"` — a test executed **that procedure**. "These tests ran this code and did not notice the
-  change" is a real assertion gap.
-- `"object"` — the tests executed *something in that object*; whether they reached the mutated
-  member is **unknown**. Treating these as weak tests sends you rewriting tests that may never have
-  run the line.
-
-(The field is `coverageAttribution` in the report and `attribution` in `lethal explain`'s output.)
-
-On a real 148-mutant run this was **19 exact against 88 object**. Reading all 107 as findings would
-have meant ~87 pointless tests. `lethal explain` exists to make that distinction impossible to miss;
-see [Usage](#usage).
-
-## A worked example
-
-**1. Your app code** (`--project`). The only thing LethAL ever mutates. One procedure, one comparison:
-
-```al
-codeunit 50100 "Pricing"
-{
-    procedure IsOverBudget(Amount: Decimal; Budget: Decimal): Boolean
-    begin
-        exit(Amount > Budget);
-    end;
-}
-```
-
-**2. Your test code** (`--tests`), which LethAL never touches. It is not mutated and not rewritten.
-LethAL does not even publish it: publishing the test app stays your own workflow, and LethAL only
-discovers the tests inside it and asks the server to run them.
-
-```al
-codeunit 50101 "Pricing Tests"
-{
-    Subtype = Test;
-
-    var
-        Pricing: Codeunit "Pricing";
-
-    [Test]
-    procedure TestOverBudget()
-    begin
-        if not Pricing.IsOverBudget(101, 100) then
-            Error('101 vs 100 must be over budget');
-        if Pricing.IsOverBudget(99, 100) then
-            Error('99 vs 100 must not be over budget');
-    end;
-}
-```
-
-**3. Three operators claim a site in the app code.** The test app contributes none. That is the whole
-mutant set for this procedure:
-
-| Mutant | Operator | Change |
-|--------|----------|--------|
-| `M0001` | `lethal.empty-block` | the procedure body becomes `begin end` |
-| `M0002` | `lethal.return-value` | `exit(Amount > Budget)` becomes `exit(not (Amount > Budget))` |
-| `M0003` | `lethal.conditional-boundary` | `Amount > Budget` becomes `Amount >= Budget` |
-
-**4. All three ship in ONE published app**, each behind a runtime guard, not three
-compile-and-publish cycles. This is what LethAL emits (reformatted here for reading; the emitter
-does not indent, and nothing human ever has to):
-
-```al
-codeunit 50100 "Pricing"
-{
-  var
-    MutationSelector: Codeunit "Mutation Selector";
-
-  procedure IsOverBudget(Amount: Decimal; Budget: Decimal): Boolean
-    begin
-      if MutationSelector.Active('M0001') then begin
-        begin end;
-      end else if MutationSelector.Active('M0002') then begin
-        begin
-            exit(not (Amount > Budget));
-        end;
-      end else if MutationSelector.Active('M0003') then begin
-        begin
-            exit(Amount >= Budget);
-        end;
-      end else begin
-        begin
-            exit(Amount > Budget);
-        end;
-      end;
-    end;
-}
-```
-
-**You never see this code, and it never enters your repo.** LethAL copies your project into a scratch
-directory under the OS temp dir, mutates the copy there, compiles that, and publishes it. Your source
-tree is not modified and there is nothing to revert. The AL above is a throwaway build, a
-petri dish. The only output you read is the report in step 5. What *does* persist is on the server: the
-instrumented build stays published until you republish your own app, which is why LethAL is for a
-sandbox or dev container, never a production tenant.
-
-The final `else` is your original code, so with no mutant active that published app behaves exactly as
-yours does. Mutants that overlap the same statement become **siblings in one flat chain**, never
-nested guards: N mutants cost N+1 branches, not 2^N. The `Mutation Selector` codeunit reads which
-mutant is active from a table the `LethAL Control` extension owns, so activating the next mutant is a
-table write, with no republish.
-
-**5. LethAL activates one mutant at a time** and runs the tests coverage says reach it:
-
-```
-mutant   file:line                          operator                     verdict          killing test
-M0001    src/Pricing.Codeunit.al:5          lethal.empty-block           killed           Pricing Tests.TestOverBudget
-M0002    src/Pricing.Codeunit.al:5          lethal.return-value          killed           Pricing Tests.TestOverBudget
-M0003    src/Pricing.Codeunit.al:5          lethal.conditional-boundary  survived
-score: 66.7%  (killed 2, survived 1, no-coverage 0, ...)
-SURVIVORS BY PROCEDURE (1 with survivors):
-    1 survived  Pricing.IsOverBudget  (2 killed, 0 no-coverage)
-```
-
-`M0003` is the finding, and you can read it straight off the test in step 2. That test pins the answer
-at 101 vs 100 and at 99 vs 100, but never at 100 vs 100, and `>` differs from `>=` only when the two
-are equal. So no assertion it makes can tell the mutant from your code. The other two mutants both
-change the answer at 101 vs 100, where the first `Error` catches them. The report carries enough to act
-on that without re-deriving anything:
-
-```json
-{
-  "mutantCode": "M0003",
-  "operatorName": "lethal.conditional-boundary",
-  "verdict": "survived",
-  "file": "src/Pricing.Codeunit.al",
-  "line": 5,
-  "procedureName": "IsOverBudget",
-  "originalText": "Amount > Budget",
-  "mutatedText": "Amount >= Budget",
-  "coveringTests": ["Pricing Tests.TestOverBudget"],
-  "coverageAttribution": "exact",
-  "guardObserved": true
-}
-```
-
-`coverageAttribution: "exact"` means that test genuinely executed *this* procedure, not merely
-something in the same object; `guardObserved: true` means an instrumented guard fired while it ran.
-Together they separate "your test reaches this code and does not check it" from "nothing ran it at
-all", which is the distinction the [Limits](#limits) section is about.
-
-**6. `lethal explain report.json` states that reading rather than leaving you to derive it.** It
-reads the committed report and nothing else — no server, no database, no config:
-
-```json
-{
-  "attribution": "exact",
-  "executionProven": true,
-  "interpretation": {
-    "meaning": "A member-level coverage match. \"These tests executed this procedure and did not notice the change\" is a real assertion gap.",
-    "basis": "R29"
-  },
-  "guardInterpretation": {
-    "meaning": "WEAK. Some instrumented selector fired somewhere in the artifact during that run — nothing more.",
-    "entailedNegative": "Does NOT say that THIS mutant's guard fired, so a survivor carrying it is still unverified: the mutation may never have been in play.",
-    "basis": "R32"
-  }
-}
-```
-
-Two signals, each honest about its own strength: attribution proves execution, `guardObserved` does
-not. `basis` points at the evidence for each claim. Had this mutant come back `"object"` instead,
-the interpretation would have said so in as many words — *"telling an agent to strengthen one of
-these tests can send it chasing a test that never ran the code."*
-
-What `explain` will **not** tell you is which test to write. That is deliberate: a surviving mutant
-may be a missing assertion, an **equivalent mutant** no test can or should kill, or behaviour nobody
-ever specified — and only the first is a test problem. It states what is proven and what is not, and
-leaves the judgement where the domain knowledge is.
-
-Here the first reading is right, so the fix is one more assertion in the test that already covers the
-procedure:
-
-```al
-        if Pricing.IsOverBudget(100, 100) then
-            Error('equal amounts must not be over budget');
-```
-
-*(The AL in steps 1, 2 and 4 is real: both source snippets compile under `alc`, and step 4 is this
-repo's own emitter output for step 1. The step 5 verdicts follow from the step 2 test by inspection
-rather than from a recorded run, so read them as worked through, not measured. The frozen live-gate
-figures under [Testing](#testing) are the measured ones.)*
-
-## Overview
-
-| Metric | Value |
-|--------|-------|
-| Release | 0.1.0-alpha.1 |
-| Language | TypeScript (Bun workspaces) |
-| Target | AL / Business Central, control extension runtime 16 |
-| Mutation operators | 12 total: 6 Tier-1 (generic), 6 Tier-2 (AL-specific). "Tier" here groups operators by how AL-aware they are — nothing to do with a BC service tier |
-| Object kinds instrumented | codeunit, table, page, report, pageextension, tableextension |
-| Backends | `bcdev` (live BC, authoritative), `al-runner` (offline, **not** authoritative) |
-| Concurrency safety | Machine-global lease + per-run two-phase fence |
-| Unit tests | 1,910 |
-| Largest project measured | 19,832 mutation sites across 438 files (a real commercial extension) |
-
-## Features
-
-**Measurement** — how a verdict is produced.
-
-| Feature | Description |
-|---------|-------------|
-| **Mutant schemata** | One instrumented build carries every mutation behind runtime guards, not N compiles |
-| **AST-based mutation** | Operates on a real AL parse tree (tree-sitter-al), never on text |
-| **Live BC execution** | Runs the covering test headlessly inside Business Central over OData |
-| **Coverage-aware** | Distinguishes "no test caught it" from "no test runs it at all", and records which attribution path decided |
-| **Scoped runs** | `--only` narrows mutants, `--tests-only` narrows the baseline, `--max-guards-per-batch` bounds each published build |
-| **Resumable** | An aborted run is continued with `--resume`; verdicts already measured are not thrown away |
-
-**Trustworthiness** — why a verdict is worth believing, or why it refuses to claim one.
-
-| Feature | Description |
-|---------|-------------|
-| **Deployment identity** | Verifies the app under test is the build it compiled, and refuses to record a verdict otherwise |
-| **Concurrency-safe** | A machine-global lease stops two runs on one container from interleaving and producing a false verdict |
-| **Two-phase fence** | Every mutant run proves it holds the lease at claim *and* at result-recording, or the result is discarded |
-| **Lost-ack recovery** | An unreadable response is reconciled against the server's own operation marker instead of assuming the worst |
-| **Named refusals** | A test BC refused — permissions, or a `TestPage` the session cannot create — is reported with its cause and BC's own words, not as an unexplained baseline failure |
-| **Runner provenance** | Every verdict records which session type produced it, and the report states each execution context it actually used rather than asserting one |
-| **Committed pre-commitments** | `lethal campaign` refuses to freeze, gate or compare against a pre-commitment that is not committed and clean in git — checked with `git ls-files`, because a missing or ignored file reads to `git status` exactly like a clean one |
-
-**Reading and operating** — what you do with the result, and how you recover when a run dies.
-
-| Feature | Description |
-|---------|-------------|
-| **Actionable survivors** | Each survivor carries its original and mutated text, procedure, covering tests, and a per-procedure rollup, enough for a human or an agent to act without re-deriving anything |
-| **Explained reports** | `lethal explain report.json` says what a finished report MEANS: every survivor carries `executionProven` — true only for a member-level coverage match — beside the interpretation and the evidence pointer that decide what it is worth, so "some test touched the codeunit" is never read as "a test executed this line" |
-| **Diagnostics** | `lethal doctor` runs every pre-flight check it can answer read-only (environment status, quarantine, control-app version, `alc`/`altool`) all at once, instead of `lethal run` discovering them one at a time — and states plainly what it cannot check yet |
-| **Measured publish ceiling** | A file whose instrumented form is too large for the server to publish is refused *before* compiling, against a bracket this server actually measured — never a hardcoded limit. `lethal clear-ceiling` discards the measurement when the topology changes |
-| **Operator recovery** | `lethal force-reset-lease` and `lethal clear-quarantine` recover a container stranded by a dead session |
-| **External environments** | A hosted environment owned by a third-party CLI is driven through config-declared commands, with no vendor knowledge in LethAL |
+**Your source tree is never modified.** LethAL copies your project into a scratch directory under
+the OS temp dir, changes the copy there, compiles that, and publishes it. There is nothing to
+revert. What *does* persist is on the server: the modified build stays published until you
+republish your own app, which is why LethAL is for a **sandbox or dev container, never a production
+tenant**. Your test project is never touched at all — LethAL does not even publish it.
 
 ## Prerequisites
 
@@ -383,27 +147,193 @@ lethal explain report.json
 Start scoped. An unscoped run on a real project is refused by default — it costs days and usually
 cannot even publish (see [Limits](#limits)).
 
-## Usage
+## A worked example
 
-Start with a dry run. It tells you how big the job is without touching a server:
+**1. Your app code** (`--project`). The only thing LethAL ever mutates. One procedure, one comparison:
 
-```bash
-lethal run --project path/to/your-al-app --dry-run
+```al
+codeunit 50100 "Pricing"
+{
+    procedure IsOverBudget(Amount: Decimal; Budget: Decimal): Boolean
+    begin
+        exit(Amount > Budget);
+    end;
+}
 ```
 
-A first real run should be **scoped**. An unscoped run on a real project is refused by default,
-because it costs days and usually cannot even publish (see [Limits](#limits)):
+**2. Your test code** (`--tests`). LethAL discovers the tests inside it and asks the server to run
+them; publishing the test app stays your own workflow.
 
-```bash
-lethal run \
-  --project path/to/your-al-app \
-  --tests   path/to/your-test-app \
-  --backend bcdev \
-  --config  lethal.config.json \
-  --only       "src/Posting/**" \
-  --tests-only "src/Posting/**" \
-  --out        report.json
+```al
+codeunit 50101 "Pricing Tests"
+{
+    Subtype = Test;
+
+    var
+        Pricing: Codeunit "Pricing";
+
+    [Test]
+    procedure TestOverBudget()
+    begin
+        if not Pricing.IsOverBudget(101, 100) then
+            Error('101 vs 100 must be over budget');
+        if Pricing.IsOverBudget(99, 100) then
+            Error('99 vs 100 must not be over budget');
+    end;
+}
 ```
+
+**3. Three operators claim a site in the app code.** The test app contributes none. That is the whole
+mutant set for this procedure:
+
+| Mutant | Operator | Change |
+|--------|----------|--------|
+| `M0001` | `lethal.empty-block` | the procedure body becomes `begin end` |
+| `M0002` | `lethal.return-value` | `exit(Amount > Budget)` becomes `exit(not (Amount > Budget))` |
+| `M0003` | `lethal.conditional-boundary` | `Amount > Budget` becomes `Amount >= Budget` |
+
+**4. All three ship in ONE published app**, each behind a runtime guard, not three
+compile-and-publish cycles. This is what LethAL emits (reformatted here for reading; the emitter
+does not indent, and nothing human ever has to):
+
+```al
+codeunit 50100 "Pricing"
+{
+  var
+    MutationSelector: Codeunit "Mutation Selector";
+
+  procedure IsOverBudget(Amount: Decimal; Budget: Decimal): Boolean
+    begin
+      if MutationSelector.Active('M0001') then begin
+        begin end;
+      end else if MutationSelector.Active('M0002') then begin
+        begin
+            exit(not (Amount > Budget));
+        end;
+      end else if MutationSelector.Active('M0003') then begin
+        begin
+            exit(Amount >= Budget);
+        end;
+      end else begin
+        begin
+            exit(Amount > Budget);
+        end;
+      end;
+    end;
+}
+```
+
+**You never see this code.** It is a throwaway build, a petri dish — see
+[What it does](#what-it-does) for what is and is not touched.
+
+The final `else` is your original code, so with no change switched on that published app behaves
+exactly as yours does. Switching to the next change is a table write, not another publish, which is
+why one build can carry them all.
+
+**5. LethAL activates one mutant at a time** and runs the tests coverage says reach it:
+
+```
+mutant   file:line                          operator                     verdict          killing test
+M0001    src/Pricing.Codeunit.al:5          lethal.empty-block           killed           Pricing Tests.TestOverBudget
+M0002    src/Pricing.Codeunit.al:5          lethal.return-value          killed           Pricing Tests.TestOverBudget
+M0003    src/Pricing.Codeunit.al:5          lethal.conditional-boundary  survived
+score: 66.7%  (killed 2, survived 1, no-coverage 0, ...)
+SURVIVORS BY PROCEDURE (1 with survivors):
+    1 survived  Pricing.IsOverBudget  (2 killed, 0 no-coverage)
+```
+
+`M0003` is the finding, and you can read it straight off the test in step 2. That test pins the answer
+at 101 vs 100 and at 99 vs 100, but never at 100 vs 100, and `>` differs from `>=` only when the two
+are equal. So no assertion it makes can tell the mutant from your code. The other two mutants both
+change the answer at 101 vs 100, where the first `Error` catches them. The report carries enough to act
+on that without re-deriving anything:
+
+```json
+{
+  "mutantCode": "M0003",
+  "operatorName": "lethal.conditional-boundary",
+  "verdict": "survived",
+  "file": "src/Pricing.Codeunit.al",
+  "line": 5,
+  "procedureName": "IsOverBudget",
+  "originalText": "Amount > Budget",
+  "mutatedText": "Amount >= Budget",
+  "coveringTests": ["Pricing Tests.TestOverBudget"],
+  "coverageAttribution": "exact",
+  "guardObserved": true
+}
+```
+
+`coverageAttribution: "exact"` means that test genuinely executed *this* procedure, not merely
+something in the same object; `guardObserved: true` means an instrumented guard fired while it ran.
+Together they separate "your test reaches this code and does not check it" from "nothing ran it at
+all", which is the distinction the [Limits](#limits) section is about.
+
+**6. `lethal explain report.json` states that reading rather than leaving you to derive it.** It
+reads the report file and nothing else — no server, no database, no config — and for each survivor
+says whether a test provably ran that procedure or only something in the same object, with a
+pointer to the evidence for each claim.
+
+What it will **not** tell you is which test to write. That is deliberate: a surviving change may be
+a missing assertion, a change no test can or should catch, or behaviour nobody ever specified — and
+only the first is a test problem. It states what is proven and what is not, and leaves the
+judgement where the domain knowledge is.
+
+Here the first reading is right, so the fix is one more assertion in the test that already covers the
+procedure:
+
+```al
+        if Pricing.IsOverBudget(100, 100) then
+            Error('equal amounts must not be over budget');
+```
+
+*(The AL above is real and compiles; the step 5 verdicts are worked through from the step 2 test
+rather than recorded from a run. The frozen figures under [Development](#development) are measured.)*
+
+## Reading the report
+
+Beyond killed, survived and no-coverage, three verdicts show up on longer runs:
+
+| Verdict | Meaning |
+|---------|---------|
+| **timeout-killed** | The change ran past its time budget and BC confirmed it stopped the session. A kill resting on a stopped session rather than a failing assertion, and the weakest evidence there is |
+| **known-survivor** | Recorded as surviving by an earlier finished run and skipped this time via `--skip-known-survivors`. Carried, not re-measured |
+| **error** | No verdict could be obtained. Never counted as a kill or a survivor |
+
+**A survivor is not automatically a finding**, and this is the single most useful thing to
+understand about the output. LethAL records *how* it decided which tests cover a change, in a field
+called `coverageAttribution` (`attribution` in `lethal explain`), and the answer changes what
+"survived" is worth:
+
+- `"exact"` — a test provably executed **that procedure**. "These tests ran this code and did not
+  notice the change" is a real gap in your tests.
+- `"object"` — the tests executed *something in that object*; whether they ever reached the changed
+  line is **unknown**. Treating these as weak tests sends you rewriting tests that may never have
+  run it.
+
+On a real 148-mutant run this was **19 exact against 88 object**. Reading all 107 as findings would
+have meant roughly 87 pointless tests. `lethal explain` exists to make that distinction impossible
+to miss.
+
+Two more fields worth knowing. `operatorName` names the rule that produced a change — for example
+`lethal.conditional-boundary` turns `>` into `>=`. `basis` values like `R29` point at a numbered
+entry under [`docs/roadmap/`](docs/roadmap/) holding the evidence for a claim, so nothing in the
+output asserts something you cannot go and check.
+
+## Commands
+
+Each command in one line, then the detail. [Quick start](#quick-start) has the first-run sequence.
+
+| Command | What it does | Why you'd reach for it |
+|---------|--------------|------------------------|
+| `lethal run` | Changes a temporary copy of your app, publishes it, and runs your tests against each change | To find the places a real bug would slip past your tests |
+| `lethal run --dry-run` | Lists every change a run would try, touching no server | To see how big the job is before spending container time |
+| `lethal explain <report>` | For each change your tests missed, says whether a test actually ran that code or only came near it | So you fix real gaps instead of strengthening a test that never ran the line |
+| `lethal doctor` | Checks the whole setup in one read-only pass | `run` finds these problems one at a time; `doctor` lists them all first |
+| `lethal clear-quarantine` | Removes LethAL's local "do not trust this server" record | It refuses to reuse that server until you say it is safe |
+| `lethal clear-ceiling` | Forgets a recorded "this file is too big to publish" limit | A publish that failed once for a passing reason would otherwise block files that size forever |
+| `lethal force-reset-lease` | Frees the lock a crashed run left on the server | When the next run says the server is held but you know nothing is running |
+| `lethal campaign` | Freezes a baseline, checks a run against expectations committed beforehand, diffs later runs | Repeat measurement of one codebase. Not a first-afternoon feature |
 
 If a run aborts partway, continue it instead of starting over:
 
@@ -454,13 +384,9 @@ lethal campaign compare --manifest docs/campaign/2026-08-03-do/campaign.json \
 | `compare` | Diffs a report against the stage's committed per-mutant baseline, **writing nothing**. A missing baseline is refused rather than recorded — that is the whole difference from `freeze` | `0` identical, `1` differs |
 
 `--stage <name>` names the committed files (`<stage>.precommit.md`, `<stage>.anchors.json`,
-`<stage>.baseline.json`). You pick the name: `rung1` above is what the 2026-08-03 campaign happened
-to call its first stage, and those files are on disk under exactly that name. A pre-commitment that
-is untracked, ignored, staged-but-uncommitted, modified, or simply **missing** is a refusal —
-`git status` reports nothing at all for a missing or ignored path, which reads exactly like "clean",
-so tracking is checked with `git ls-files` rather than inferred. `freeze`'s `--expect-mutants` must
-equal the `expectedMutantCount` in the stage's committed anchor config when it has one: a number
-typed after the run is not a pre-commitment.
+`<stage>.baseline.json`); you pick the name. A pre-commitment that is untracked, ignored,
+uncommitted, modified or simply missing is refused — the whole point is that you cannot write down
+what you expected after seeing the answer.
 
 Recovery, when a session died mid-run and left the container held:
 
@@ -472,23 +398,16 @@ lethal force-reset-lease --server http://YourContainer --instance BC --config le
 lethal clear-quarantine --server http://YourContainer --instance BC
 ```
 
-A publish that fails for a size-independent reason — a spawn failure, a container restarting mid-run
-— records a failure at that guard count, and the ceiling only ever ratchets tighter, so a file
-refused once can never publish the counter-evidence that would widen it again. That is what
-`clear-ceiling` is for:
+If a publish failed once for a reason that had nothing to do with size — a container restarting,
+say — LethAL will keep refusing files that size. `lethal clear-ceiling` forgets that measurement:
 
 ```bash
-# discards recorded publish outcomes for one server, so a TRANSIENT failure
-# stops permanently refusing files of that size
-lethal clear-ceiling --project path/to/your-al-app \
-                     --server http://YourContainer --instance BC [--file Big.Codeunit.al]
+lethal clear-ceiling --project path/to/your-al-app \n                     --server http://YourContainer --instance BC [--file Big.Codeunit.al]
 ```
 
-It clears the whole server by default; `--file` narrows it. A blanket clear is the one that reaches a
-row recorded for a multi-file batch. It prints every row it removed and the bracket before and
-after, and **exits non-zero when it removed nothing** — you ran it because a file was refused, and
-if nothing was cleared that file is still refused. The refusal message itself pre-fills this command
-for the file and server that tripped it.
+It clears the whole server unless `--file` narrows it, prints every record it removed, and **exits
+non-zero when it removed nothing** — you ran it because a file was refused, so "cleared nothing"
+is a failure, not a success. The refusal message itself pre-fills this command for you.
 
 From a source checkout, replace `lethal` with `bun packages/runner/src/cli.ts`.
 
@@ -530,76 +449,54 @@ Environment and output:
 
 Exit codes: `0` ok, `1` error, `3` quarantined, meaning the run refused to vouch for its own verdicts.
 
-## Architecture
+## How it works, in short
 
-```
-    AL source
-      |
-      v  tree-sitter-al
-    engine ............... AST, MutationSpec, semantic layer
-      |
-      +-- builtin-tier1 .. conditional-boundary, negate-conditional, empty-block,
-      |                    return-value, void-method-call, swap-call-arguments
-      +-- builtin-tier2 .. remove-testfield, remove-setrange, remove-calcfields,
-      |                    remove-commit, swap-modify-flag, swap-rec-xrec
-      |                    (AL-specific; reach table triggers)
-      v
-    schemata ............. ONE instrumented build, all mutants behind guards
-      |
-      v
-    runner ............... orchestrator + backends + results store
-      |
-      |--- acquire machine-global lease ----------------+
-      |--- beginPublish -> publish -> endPublish        |
-      |--- per mutant: phase 1 claim / run / phase 3 verify-and-clear
-      |--- release (op-gated)                           |
-      v                                                 |
-    Business Central <-----------------------------------+
-      \__ LethAL Control extension (lease, fence, headless test invocation)
-```
+**Measuring**
 
-The `LethAL Control` AL extension owns the state a republish of your app cannot reset: the active-mutant row, the artifact registry, and the lease.
+- Every change ships in **one published build**, switched on one at a time — not one compile and
+  publish per change, which is what makes a run on a real project finish at all.
+- Changes are made on a real AL parse tree, never by editing text, and run headlessly inside
+  Business Central over OData.
+- It tells "no test caught it" apart from "no test runs it at all", and records which of the two it
+  decided and why.
+- Runs can be narrowed (`--only`, `--tests-only`), bounded (`--max-guards-per-batch`), and continued
+  after an abort (`--resume`) without discarding what was already measured.
 
-## Key Files
+**Why a verdict is worth believing**
 
-| File | Purpose |
-|------|---------|
-| `design.md` | Authoritative architecture |
-| `docs/roadmap/` | Open work, measured-but-unclosed risks, and known product gaps — one file per item |
-| `ROADMAP.md` | Generated index of the above (`bun scripts/roadmap-index.ts`) |
-| `CHANGELOG.md` | What shipped in each release |
-| `packages/engine` | AL AST, `MutationSpec`, semantic analysis |
-| `packages/builtin-tier1` / `-tier2` | The mutation operators |
-| `packages/schemata` | Instrumentation and compilation into one build |
-| `packages/runner/src/orchestrator.ts` | Session lifecycle, lease, verdict recording |
-| `packages/runner/src/lease.ts` | `LeaseClient`: acquire / renew / release / fence ops |
-| `packages/runner/src/resume.ts` | Which prior verdicts a `--resume` may reuse, and why |
-| `extensions/lethal-control` | The BC extension: lease table, two-phase fence, headless runner |
-| `docs/do-trial-runbook.md` | Reproducing the run against a real commercial product |
-| `docs/measurements/` | Probes behind claims about BC behaviour, so they can be re-checked |
-| `fixtures/README.md` | Live container setup and the recovery procedure |
+- It refuses to record a result unless it can prove the build under test is the one it compiled.
+- Two runs cannot share one server and corrupt each other's results.
+- When it cannot get a trustworthy answer it reports an error rather than guessing — including when
+  BC refuses a test outright, which is reported with BC's own words rather than as an unexplained
+  failure.
 
-## Testing
+**Reading and recovering**
 
-```bash
-bun run typecheck          # tsc --build --force
-rm -rf packages/*/dist     # AFTER typecheck, BEFORE bun test
-bun test                   # unit suite
-```
+- Every survivor carries its original and changed text, the procedure, and the tests that covered
+  it — enough to act on without going back to the code.
+- `lethal explain` says what a finished report *means*; `lethal doctor` checks your setup before a
+  run rather than during one.
+- A file too large for your server to publish is refused *before* compiling, against a limit that
+  server actually demonstrated — never a hardcoded number.
+- `lethal force-reset-lease` and `lethal clear-quarantine` recover a server left stuck by a dead
+  run.
 
-Integration suites are env-gated, take minutes, and run against a live server. Each has a **frozen
-per-mutant baseline**, where a differing verdict is a regression, never "close enough":
-
-| Command | Proves | Frozen |
-|---------|--------|--------|
-| `LETHAL_ITEST_BCDEV=1 bun run itest:bcdev` | End-to-end verdicts against real BC | 3 killed / 10 survived / 3 no-coverage |
-| `LETHAL_ITEST_TABLES=1 bun run itest:tables` | Tier-2 operators, table-trigger and extension-object mutation | 109 / 17 / 10 over 136 deployed |
-| `LETHAL_ITEST_ENVTOOL=1 bun run itest:envtool` | An externally-owned environment, reached through config | 3 / 10 / 3 |
-| `LETHAL_ITEST_ALRUNNER=1 bun run itest:alrunner` | The al-runner backend | 3 / 13 / 0 |
-| `LETHAL_ITEST_BCDEV=1 bun run itest:lease` | Lease lifecycle, contention, recovery | n/a |
-| `LETHAL_ITEST_BCDEV=1 bun run itest:stale-publish` | Publish serialization and staleness | n/a |
+Design detail for all of the above lives in [`design.md`](design.md).
 
 ## Limits
+
+The short version, before the evidence:
+
+- **Sandbox or dev container only.** The changed build stays published until you republish your own
+  app. Never point this at a production tenant.
+- **Tests run without a GUI**, so code behind a `Confirm` or a dialog may be unmeasurable.
+- **A test that opens a `TestPage` cannot be scored**, and one kind of them can stall a whole run.
+- **Big apps must be run in slices** (`--only`). An unscoped run on a real project is refused by
+  default.
+- **One tenant per server.** LethAL cannot fence a second tenant publishing to the same instance.
+- **The `al-runner` backend is not authoritative** — use `bcdev` for any number you intend to quote.
+
+The rest of this section is the evidence for each, with the measurements behind it.
 
 Stated plainly, because a mutation-testing tool that overstates its guarantees is worse than none.
 
@@ -667,15 +564,18 @@ a LethAL feature or a mode.
   so LethAL sees only its own abort and cannot tell it from "the server is still working". Such a
   mutant is recorded as an unmeasured error; `--resume` skips it so the run completes rather than
   dying on it forever.
-- **Tier 3 not built.** Twelve operators across two tiers today (six Tier-1, six Tier-2); the
-  advanced set is designed only.
+- **The advanced operator set is not built.** Twelve operators today, in two groups: six generic
+  ones (Tier-1 — comparisons, return values, empty blocks) and six AL-specific ones (Tier-2 —
+  `TestField`, `SetRange`, `CalcFields`, `Commit` and friends). A third, more aggressive group is
+  designed only.
   (Tier-2 operators *do* now claim sites inside `tableextension` and `pageextension` bodies — that
   limit was closed. A `pageextension`'s implicit `Rec` is still refused deliberately: it resolves to
   the extended page's `SourceTable`, which the project usually cannot see, and guessing would claim
   sites wrongly. Measured on a real extension: zero sites would have been gained by guessing.)
 - **A test that opens a `TestPage` cannot be scored, and on the default path one can end your whole
-  run.** The default fenced session (`GuiAllowed=No`, `ClientType=ODataV4`) cannot create the test
-  service a `TestPage` needs. What happens next depends on the page, which is the part worth
+  run.** LethAL runs tests in a locked-down session — no GUI, web-service client
+  (`GuiAllowed=No`, `ClientType=ODataV4`) — and that session cannot create the test service a
+  `TestPage` needs. What happens next depends on the page, which is the part worth
   knowing:
 
   | Page | Fenced (default) | Hub (`coverageMode: "procedure"`) |
@@ -708,3 +608,70 @@ a LethAL feature or a mode.
 
 **Author**: Torben Leth (sshadows@sshadows.dk)
 **License**: none declared yet. Add a `LICENSE` file before distributing.
+
+## Architecture
+
+```
+    AL source
+      |
+      v  tree-sitter-al
+    engine ............... AST, MutationSpec, semantic layer
+      |
+      +-- builtin-tier1 .. conditional-boundary, negate-conditional, empty-block,
+      |                    return-value, void-method-call, swap-call-arguments
+      +-- builtin-tier2 .. remove-testfield, remove-setrange, remove-calcfields,
+      |                    remove-commit, swap-modify-flag, swap-rec-xrec
+      |                    (AL-specific; reach table triggers)
+      v
+    schemata ............. ONE instrumented build, all mutants behind guards
+      |
+      v
+    runner ............... orchestrator + backends + results store
+      |
+      v
+    Business Central
+      \__ LethAL Control extension (owns which change is switched on, and the lock a run holds)
+```
+
+The `LethAL Control` AL extension owns the state a republish of your app cannot reset: the active-mutant row, the artifact registry, and the lease.
+
+## Development
+
+### Key files
+
+| File | Purpose |
+|------|---------|
+| `design.md` | Authoritative architecture |
+| `docs/roadmap/` | Open work, measured-but-unclosed risks, and known product gaps — one file per item |
+| `ROADMAP.md` | Generated index of the above (`bun scripts/roadmap-index.ts`) |
+| `CHANGELOG.md` | What shipped in each release |
+| `packages/engine` | AL AST, `MutationSpec`, semantic analysis |
+| `packages/builtin-tier1` / `-tier2` | The mutation operators |
+| `packages/schemata` | Instrumentation and compilation into one build |
+| `packages/runner/src/orchestrator.ts` | Session lifecycle, lease, verdict recording |
+| `packages/runner/src/lease.ts` | `LeaseClient`: acquire / renew / release / fence ops |
+| `packages/runner/src/resume.ts` | Which prior verdicts a `--resume` may reuse, and why |
+| `extensions/lethal-control` | The BC extension: lease table, two-phase fence, headless runner |
+| `docs/do-trial-runbook.md` | Reproducing the run against a real commercial product |
+| `docs/measurements/` | Probes behind claims about BC behaviour, so they can be re-checked |
+| `fixtures/README.md` | Live container setup and the recovery procedure |
+
+### Testing
+
+```bash
+bun run typecheck          # tsc --build --force
+rm -rf packages/*/dist     # AFTER typecheck, BEFORE bun test
+bun test                   # unit suite
+```
+
+Integration suites are env-gated, take minutes, and run against a live server. Each has a **frozen
+per-mutant baseline**, where a differing verdict is a regression, never "close enough":
+
+| Command | Proves | Frozen |
+|---------|--------|--------|
+| `LETHAL_ITEST_BCDEV=1 bun run itest:bcdev` | End-to-end verdicts against real BC | 3 killed / 10 survived / 3 no-coverage |
+| `LETHAL_ITEST_TABLES=1 bun run itest:tables` | Tier-2 operators, table-trigger and extension-object mutation | 109 / 17 / 10 over 136 deployed |
+| `LETHAL_ITEST_ENVTOOL=1 bun run itest:envtool` | An externally-owned environment, reached through config | 3 / 10 / 3 |
+| `LETHAL_ITEST_ALRUNNER=1 bun run itest:alrunner` | The al-runner backend | 3 / 13 / 0 |
+| `LETHAL_ITEST_BCDEV=1 bun run itest:lease` | Lease lifecycle, contention, recovery | n/a |
+| `LETHAL_ITEST_BCDEV=1 bun run itest:stale-publish` | Publish serialization and staleness | n/a |
