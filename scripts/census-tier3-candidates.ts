@@ -75,9 +75,15 @@ for (const rel of entries) {
 
   walk(root, (n) => {
     if (n.kind === "property") {
-      const name = n.namedChildren.find((c) => c.kind === "property_name")?.text ?? "";
+      // `rawKind` wherever the kind being matched sits OUTSIDE `ALNodeKind`. That union is a
+      // CURATED subset of the grammar's node types, and `ALSyntaxNode.kind` casts the raw type
+      // into it, so `kind === "property_name"` is a TYPE error that says nothing about runtime —
+      // it matched then and it matches now. Measured on the same 554-file do-rel2/Cloud corpus
+      // this census was run on: property_name 16,230 nodes, argument_list 18,146,
+      // attribute_content 369. Nothing here under-counted. R120.
+      const name = n.namedChildren.find((c) => c.rawKind === "property_name")?.text ?? "";
       if (name.toLowerCase() === "permissions") {
-        const list = n.namedChildren.find((c) => c.kind === "tabledata_permission_list");
+        const list = n.namedChildren.find((c) => c.rawKind === "tabledata_permission_list");
         const owner = n.parent?.parent?.kind ?? "?";
         permissionsProps.push({
           file: rel,
@@ -108,10 +114,10 @@ for (const rel of entries) {
     const owner = n.parent?.namedChildren.find((c) => c.kind.endsWith("identifier"))?.text ?? "?";
     let pendingEvent = false;
     for (const member of n.namedChildren) {
-      if (member.kind === "attribute_item") {
+      if (member.rawKind === "attribute_item") {
         const attr =
           member.namedChildren
-            .find((c) => c.kind === "attribute_content")
+            .find((c) => c.rawKind === "attribute_content")
             ?.namedChildren.find((c) => c.kind === "identifier")?.text ?? "";
         if (EVENT_ATTRS.has(attr.toLowerCase())) pendingEvent = true;
         continue;
@@ -148,7 +154,8 @@ for (const rel of entries) {
     if (n.kind !== "call_expression") return;
     const name = calleeName(n)?.toLowerCase();
     if (name === undefined || !publisherByName.has(name)) return;
-    const args = n.namedChildren.find((c) => c.kind === "argument_list")?.namedChildren.length ?? 0;
+    const args =
+      n.namedChildren.find((c) => c.rawKind === "argument_list")?.namedChildren.length ?? 0;
     raiseSites.push({ file: rel, name, args, stmt: isStatementPosition(n) });
   });
 }
@@ -234,13 +241,13 @@ for (const rootDir of subscriberRoots) {
     const source = await readFile(join(rootDir, rel), "utf8");
     const root = wrapRoot(parseAL(source));
     walk(root, (n) => {
-      if (n.kind !== "attribute_content") return;
+      if (n.rawKind !== "attribute_content") return;
       const id = n.namedChildren.find((c) => c.kind === "identifier")?.text ?? "";
       if (id.toLowerCase() !== "eventsubscriber") return;
       subscriberAttrs += 1;
       // 3rd argument of [EventSubscriber(ObjectType::Codeunit, Codeunit::"X", 'OnBeforeThing', ...)]
       const args =
-        n.namedChildren.find((c) => c.kind === "attribute_arguments")?.namedChildren[0]
+        n.namedChildren.find((c) => c.rawKind === "attribute_arguments")?.namedChildren[0]
           ?.namedChildren ?? [];
       const third = args[2]?.text.replace(/^'|'$/g, "").trim();
       if (third) subscribedNames.add(third.toLowerCase());

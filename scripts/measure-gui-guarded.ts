@@ -56,7 +56,11 @@ function guardedRanges(root: ALSyntaxNode): Array<[number, number]> {
       // condition, which is the `if_keyword` itself (text "if"), so NOTHING ever matched and the
       // measurement read a confident 0.0%. A zero that comes from a broken predicate looks exactly
       // like a zero that means "no such code".
-      const kinds = n.children.map((c) => c.kind);
+      // `rawKind`, not `kind`: `if_keyword`/`then_keyword` are real grammar nodes but are outside
+      // the CURATED `ALNodeKind` union, and `ALSyntaxNode.kind` merely casts the raw type into
+      // that union — so an `indexOf` on `kind` is a type error that says nothing about runtime.
+      // Measured on the 554-file do-rel2/Cloud corpus: 4,389 of each. R120.
+      const kinds = n.children.map((c) => c.rawKind);
       const ifAt = kinds.indexOf("if_keyword");
       const thenAt = kinds.indexOf("then_keyword");
       if (ifAt !== -1 && thenAt > ifAt) {
@@ -115,7 +119,8 @@ for (const f of files) {
     }
     if (guiProcRanges.some(([a, b]) => at >= a && at < b)) sitesInGuiProcedures += 1;
   }
-  if (fileGuarded > 0) worstFiles.push({ file: f.path, guarded: fileGuarded, total: f.specs.length });
+  if (fileGuarded > 0)
+    worstFiles.push({ file: f.path, guarded: fileGuarded, total: f.specs.length });
 }
 
 const pct = (n: number) => (totalSites === 0 ? "0.0%" : `${((n / totalSites) * 100).toFixed(1)}%`);

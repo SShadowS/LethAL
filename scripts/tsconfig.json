@@ -3,9 +3,13 @@
   // it — including `build-binary.ts`, which builds every released binary, and the census scripts
   // whose counting rules decided R82 and R13.
   //
-  // The survey R119 asked for was run before this file landed: of 19 scripts, 11 compile clean
-  // under the repo's own strict flags and 8 do not. Those 8 are listed in R120 with what each one
-  // fails on; they are NOT admitted here and NOT fixed by weakening a flag for everyone else.
+  // The survey R119 asked for was run before this file landed: of 19 scripts, 11 compiled clean
+  // under the repo's own strict flags and 8 did not. R120 then admitted 7 of those 8 without
+  // weakening a flag. The one still outside is `probe-continia-env.ts`, and for a reason no type
+  // fix can reach: it imports `@modelcontextprotocol/sdk`, which is not a dependency of this repo.
+  // Admitting it would mean adding a real dependency for a spent 2026-07-26 probe — the wrong
+  // trade, and a decision rather than an oversight.
+  //
   // Add a script to `files` below once it compiles clean — the list is deliberately explicit, so
   // admitting one is a decision somebody made rather than a glob quietly widening.
   //
@@ -31,9 +35,17 @@
     "bench-record.ts",
     "build-binary.ts",
     "campaign/compile-only.ts",
+    "census-swap-call-arguments.ts",
+    "census-tier3-candidates.ts",
     "compile-fixtures.ts",
+    "line-citations.ts",
+    "line-citations.test.ts",
+    "measure-gui-guarded.ts",
     "measure-testpage-exclusive.ts",
     "probe-5cb1.ts",
+    "probe-alrunner-tables.ts",
+    "probe-grammar-corpus.ts",
+    "probe-grammar-table.ts",
     "probe-r1-permissions.ts",
     "probe-r30-pageext.ts",
     "probe-r58-compare.ts",

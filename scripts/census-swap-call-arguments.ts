@@ -108,8 +108,14 @@ function lookupDeclaredType(scope: ALSyntaxNode, name: string): string | null {
   // `"Code": Code[20]` is a legal parameter name — the declaration site is a `quoted_identifier`
   // while the USE site is a bare `identifier`, so a raw text comparison misses it.
   const unquote = (s: string): string => s.replace(/^"|"$/g, "").toLowerCase();
+  // `rawKind` wherever the kind sits OUTSIDE `ALNodeKind`: that union is a CURATED subset of the
+  // grammar's node types and `ALSyntaxNode.kind` merely CASTS the raw type into it, so
+  // `kind === "quoted_identifier"` is a type error that says nothing about runtime — it matched
+  // then and it matches now. Measured on this census's own corpus (do-rel2/Cloud, 554 files):
+  // quoted_identifier 24,911 nodes, basic_type 5,883, argument_list 18,146. Nothing under-counted,
+  // and the census output is byte-identical across this change. R120.
   const isName = (n: ALSyntaxNode): boolean =>
-    n.kind === "identifier" || n.kind === "quoted_identifier";
+    n.kind === "identifier" || n.rawKind === "quoted_identifier";
   const wanted = unquote(name);
   for (const child of scope.namedChildren) {
     if (child.kind === "parameter_list") {
@@ -131,7 +137,7 @@ function lookupDeclaredType(scope: ALSyntaxNode, name: string): string | null {
       // "no declaration to read". Found by the discrepancy check below, not by inspection.
       const type =
         decl.namedChildren.find((c) => c.kind === "type_specification") ??
-        decl.namedChildren.find((c) => c.kind === "basic_type");
+        decl.namedChildren.find((c) => c.rawKind === "basic_type");
       if (type !== undefined) return type.text;
     }
   }
@@ -179,7 +185,7 @@ let callsWithTwoPlusArgs = 0;
 for (const file of files) {
   walk(file.root, (n) => {
     if (n.kind !== ALNodeKind.procedure_call) return;
-    const argList = n.namedChildren.find((c) => c.kind === "argument_list");
+    const argList = n.namedChildren.find((c) => c.rawKind === "argument_list");
     if (argList === undefined) return;
     const args = argList.namedChildren;
     if (args.length > 0) callsWithArgs += 1;

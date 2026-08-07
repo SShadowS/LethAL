@@ -23,8 +23,8 @@ import { readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ALNodeKind } from "../packages/engine/src/ast/node-kinds";
 import { initParser, parseAL } from "../packages/engine/src/ast/parser";
-import { isStatementPosition } from "../packages/engine/src/ast/tree-walks";
 import { type ALSyntaxNode, wrapRoot } from "../packages/engine/src/ast/syntax-node";
+import { isStatementPosition } from "../packages/engine/src/ast/tree-walks";
 
 interface FileResult {
   readonly file: string;
@@ -77,10 +77,14 @@ for (const [i, name] of entries.entries()) {
   let worstErrorBytes = 0;
   walk(root, (n) => {
     kindHistogram.set(n.kind, (kindHistogram.get(n.kind) ?? 0) + 1);
-    if (n.kind === "ERROR") {
+    // `rawKind`, not `kind`: `ALNodeKind` is a CURATED subset of the grammar's node types, and
+    // `ALSyntaxNode.kind` casts the raw type into it, so comparing `kind` against a kind outside
+    // the union is a type error that says nothing about runtime. `rawKind` is the honest string,
+    // and it is what `syntax-node.ts` tells consumers to branch on for arbitrary kinds. R120.
+    if (n.rawKind === "ERROR") {
       errorNodes++;
       worstErrorBytes = Math.max(worstErrorBytes, n.endIndex - n.startIndex);
-    } else if (n.kind === "MISSING") {
+    } else if (n.rawKind === "MISSING") {
       missingNodes++;
     }
     if (n.kind === ALNodeKind.block) {

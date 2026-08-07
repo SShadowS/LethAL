@@ -47,10 +47,17 @@ if (alRunnerPath === undefined) {
 // PROJECT_DIR, not `<PROJECT_DIR>/src`: `runSession` below generates its own set from
 // `projectDir`, so scanning a different root here would print a header that is not guaranteed to
 // describe the run underneath it (different roots also yield different relative `path` values).
-const files = await generateMutationSet(PROJECT_DIR);
+// `generateMutationSet` returns a RESULT, not a bare array: it also reports the files it could not
+// instrument. Printing only `files` would show a site count with no hint that anything was left
+// out, which is the empty-vs-empty reading this project keeps having to design against.
+const { files, skipped, totalFiles } = await generateMutationSet(PROJECT_DIR);
 console.log(`mutant sites: ${files.reduce((n, f) => n + f.specs.length, 0)}`);
 for (const f of files) {
   console.log(`  ${f.path}: ${f.specs.length}`);
+}
+console.log(`not instrumented: ${skipped.length} of ${totalFiles} scanned file(s)`);
+for (const s of skipped) {
+  console.log(`  ${s.file} (${s.kinds}): ${s.sites} site(s) that can never run`);
 }
 
 const scratch = await mkdtemp(join(tmpdir(), "lethal-probe-alrunner-tables-"));

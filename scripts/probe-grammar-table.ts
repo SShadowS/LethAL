@@ -18,8 +18,8 @@
 import { readFile } from "node:fs/promises";
 import { ALNodeKind } from "../packages/engine/src/ast/node-kinds";
 import { initParser, parseAL } from "../packages/engine/src/ast/parser";
-import { isStatementPosition } from "../packages/engine/src/ast/tree-walks";
 import { type ALSyntaxNode, wrapRoot } from "../packages/engine/src/ast/syntax-node";
+import { isStatementPosition } from "../packages/engine/src/ast/tree-walks";
 
 const DEFAULT_FIXTURE = "fixtures/grammar-probe/ProbeTable.Table.al";
 
@@ -55,9 +55,12 @@ console.log(`parsed ${path} — root kind: ${root.kind}`);
 // 1. Did it parse at all? A grammar that cannot handle tables shows up as ERROR/MISSING nodes.
 const errors: string[] = [];
 walk(root, (n) => {
-  if (n.kind === "ERROR" || n.kind === "MISSING") {
+  // `rawKind`, not `kind`: `ALNodeKind` is a CURATED subset of the grammar's node types, and
+  // `ALSyntaxNode.kind` casts the raw type into it, so comparing `kind` against a kind outside the
+  // union is a type error that says nothing about runtime. R120.
+  if (n.rawKind === "ERROR" || n.rawKind === "MISSING") {
     errors.push(
-      `${n.kind} at ${n.startIndex}-${n.endIndex}: ${JSON.stringify(n.text.slice(0, 60))}`,
+      `${n.rawKind} at ${n.startIndex}-${n.endIndex}: ${JSON.stringify(n.text.slice(0, 60))}`,
     );
   }
 });
