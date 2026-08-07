@@ -5437,6 +5437,17 @@ describe("runSession — Layer 5C-B1 Task 8: lease-lost invalidation + dispatch 
     const rec = await new QuarantineStore(dir).read("http://cronus281|BC");
     expect(rec?.opKind).toBe("test-run");
     expect(rec?.detail).toContain("operation never cleared after an op-in-flight refusal");
+    // R122(a). This branch quarantines the tier because the operation never cleared and the
+    // container may still be executing — i.e. nobody can say whether this mutant finished. That is
+    // a STRAND. It used to record `cause: "deadline-exceeded"`, which promises the opposite (a
+    // backend told us the run was over) and inflated `counts.deadlineExceeded` with runs no
+    // deadline produced.
+    expect(m2?.cause).toBe("stranded");
+    expect(report.counts.deadlineExceeded).toBe(0);
+    // And the note carries the strand prefix, so `--resume` SKIPS it rather than re-running a claim
+    // that will never clear. The two must move together — a cause without the prefix would leave
+    // `explain` calling this stranded while `--resume` re-ran it.
+    expect(isStrandedNote(m2?.failureNote)).toBe(true);
   });
 
   // `invalidateBatchVerdicts` (the pure in-memory helper this used to unit-test directly) is
@@ -5914,9 +5925,16 @@ describe("runSession — Layer 5C-B2: a lost RunMutant ack is reconciled, not bl
     expect(m2?.failureNote).toContain("unreadable");
     expect(m2?.failureNote).toContain("COMPLETED server-side");
     expect(m3).toBeDefined(); // the run continued to the next mutant
-    // Not a deadline: our own client timeout produces a different verdict entirely.
-    expect(m2?.cause).toBeUndefined();
+    // Not a deadline: our own client timeout produces a different verdict entirely. This used to
+    // assert `cause` was UNSET, because the union had no member for "it finished and we could not
+    // read the answer". R122 added `result-lost` for exactly this, so the assertion that matters —
+    // it must not read as a deadline — is now made positively rather than by absence. It must not
+    // read as a STRAND either: a strand means we do not know whether the op finished, and the
+    // reconciling read above just proved that it did.
+    expect(m2?.cause).toBe("result-lost");
     expect(report.counts.deadlineExceeded).toBe(0);
+    // The container is explicitly fine, so this must NOT be skipped by a later `--resume`.
+    expect(isStrandedNote(m2?.failureNote)).toBe(false);
   });
 
   test("an op still ACTIVE and ours that CLEARS while polling is likewise not quarantined", async () => {
@@ -6067,8 +6085,11 @@ describe("runSession — Layer 5C-B2: a lost RunMutant ack is reconciled, not bl
     const m2 = report.mutants.find((m) => m.mutantCode === "M0002");
     expect(m2?.verdict).toBe("error"); // the kill could not be confirmed — never "killed"
     expect(m2?.failureNote).toContain("unreadable");
-    expect(m2?.cause).toBeUndefined();
+    // R122(b), confirmation side — see the covering-run twin above for why this moved from
+    // "unset" to a named cause.
+    expect(m2?.cause).toBe("result-lost");
     expect(report.counts.deadlineExceeded).toBe(0);
+    expect(isStrandedNote(m2?.failureNote)).toBe(false);
   });
 
   test("our OWN client timeout is reconciled too, and is no longer mislabelled a deadline", async () => {
@@ -6464,6 +6485,57 @@ describe("runSession — Layer 5C-B1 fix round 1: the kill-confirmation rerun's 
     expect(client.statusArgs.length).toBeGreaterThan(1); // polled...
     expect(client.recoverArgs).toHaveLength(0); // ...never RecoverOp'd
     expect(await new QuarantineStore(dir).read("http://cronus281|BC")).toBeNull();
+    // R122(a): the op CLEARED, so this is not a strand. `--resume` re-runs it, and no cause is
+    // recorded because "the op finished but its result was not returned" on the lease path has no
+    // member of its own — see R122's own row, which notes this is the shape `result-lost` covers
+    // on the lost-ack path and deliberately does not claim to cover here.
+    expect(isStrandedNote(m2?.failureNote)).toBe(false);
+  });
+
+  /**
+   * The confirmation-side op-in-flight branch when the operation NEVER clears — the twin of the
+   * covering-run case pinned in the Task 8 block above.
+   *
+   * Added because a red-check found this path completely untested: removing `STRANDED_NOTE_PREFIX`
+   * from it left the whole suite green. Half of R122(a)'s change was therefore unverified, and
+   * would have stayed that way — the sibling test above drives the branch only when the op CLEARS,
+   * which is the case that is not a strand.
+   *
+   * `statusQueue` is seeded the same way the covering-run test seeds it: `FakeLeaseClient.next`
+   * shifts until one entry remains and then returns that entry forever, so a final non-idle entry
+   * means the poll never sees `opKind: "none"` and exhausts every attempt.
+   */
+  test("a kill-confirmation op-in-flight that NEVER clears is a strand, not a deadline", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    client.statusQueue = [
+      { opKind: "none", opAttemptId: "", opSeq: 0, lastCompletedOpSeq: 7, completed: true },
+      {
+        opKind: "run",
+        opAttemptId: "someone-else",
+        opSeq: 99,
+        lastCompletedOpSeq: 98,
+        completed: false,
+      },
+    ];
+    const { lease } = leaseCfg(client);
+    const backend = confirmLeaseAfterKill({
+      operation: "lease-lost",
+      leaseInvalidReason: "op-in-flight",
+    });
+    const report = await runSessionForTest(backend, { quarantineDir: dir, lease });
+    const m2 = report.mutants.find((m) => m.mutantCode === "M0002");
+    expect(m2?.verdict).toBe("error");
+    expect(m2?.failureNote).toContain("never cleared");
+    // The two halves that must move together, asserted separately so neither can carry the other:
+    // the machine value `explain` keys on...
+    expect(m2?.cause).toBe("stranded");
+    // ...and the prose predicate `--resume` keys on. A cause without the prefix would leave
+    // `explain` calling this stranded while `--resume` re-ran a claim that will never clear.
+    expect(isStrandedNote(m2?.failureNote)).toBe(true);
+    // Never a deadline: no budget elapsed, and nobody can say the op is over.
+    expect(report.counts.deadlineExceeded).toBe(0);
+    expect(report.quarantined).toBeDefined();
   });
 });
 

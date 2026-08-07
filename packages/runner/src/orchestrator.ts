@@ -3694,9 +3694,21 @@ async function runMutantsOnBackend(args: {
         if (cleared) {
           failureNote = `op-in-flight: RunMutant refused a duplicate claim on this attempt while it was still executing; the operation has since completed but its result was not returned, so ${ref.method}'s verdict for this mutant is discarded rather than re-dispatched (design §5)`;
         } else {
-          failureNote =
-            "op-in-flight: RunMutant refused a duplicate claim on this attempt and the operation never cleared — the container may still be executing it";
-          cause = "deadline-exceeded";
+          // R122(a): a STRAND, and it says so two ways that must agree.
+          //
+          // This branch quarantines the tier because the operation never cleared and the container
+          // may still be executing — i.e. we do not know whether this mutant finished. That is the
+          // definition of a strand, and it is exactly what `deadline-exceeded` must NOT be used for:
+          // that cause promises a backend told us the run was over, which is the one thing nobody
+          // can say here. It also inflated `counts.deadlineExceeded` with runs no deadline produced.
+          //
+          // The note gains `STRANDED_NOTE_PREFIX` along with the cause, and the two go together on
+          // purpose: `buildResumeIndex` decides what `--resume` SKIPS by reading that prefix, so a
+          // cause without the prefix would leave `explain` calling this stranded while `--resume`
+          // re-ran it. Skipping is the right behaviour — a claim that never clears reproduces every
+          // time — and `--retry-stranded` is the escape.
+          failureNote = `${STRANDED_NOTE_PREFIX}op-in-flight: RunMutant refused a duplicate claim on this attempt and the operation never cleared — the container may still be executing it. Raise the floor with --mutant-timeout-ms and re-run with --resume to keep this session's verdicts`;
+          cause = "stranded";
           await quarantineInFlight({
             safety: args.safety,
             quarantineStore: args.quarantineStore,
@@ -3717,6 +3729,12 @@ async function runMutantsOnBackend(args: {
           // genuinely lost (so `error`, never a verdict), but there is nothing to recycle, nothing
           // to latch, and the session runs on to the next mutant.
           failureNote = `lost ack running ${ref.method}: RunMutant's response was unreadable${v.failureMessage !== undefined ? ` (${v.failureMessage})` : ""}, but GetOperationStatus confirms the operation COMPLETED server-side — the run was retried once and that attempt was unreadable too, so this mutant's result is discarded; the container is not stranded (design §5)`;
+          // R122(b): the third thing, and it had no machine value at all until now. Not
+          // `deadline-exceeded` (no budget elapsed) and emphatically not `stranded` (we KNOW the op
+          // finished — that is what the reconciling read just established, and it is why this
+          // branch writes no quarantine). `--resume` re-runs an `error` outcome, so this one fixes
+          // itself on the next pass; saying so is only possible with a cause to key on.
+          cause = "result-lost";
           break;
         }
         // Unresolved: latch unsafe, record a durable tier quarantine, and stop — no further
@@ -3817,9 +3835,12 @@ async function runMutantsOnBackend(args: {
             failureNote = `lease-lost while ${detail} — the kill could not be confirmed under a provable lease`;
           } else {
             const cleared = (await leaseSession?.pollUntilOpClears()) ?? false;
-            failureNote = `op-in-flight while ${detail} — polled instead of re-dispatched (design §5); the operation ${cleared ? "cleared, but its result was not returned" : "never cleared"}`;
+            // R122(a), confirmation-side twin of the covering-run branch above — same reasoning,
+            // and the `STRANDED_NOTE_PREFIX` must ride on the same condition as the cause so
+            // `--resume` and `explain` cannot disagree about which mutants are stranded.
+            failureNote = `${cleared ? "" : STRANDED_NOTE_PREFIX}op-in-flight while ${detail} — polled instead of re-dispatched (design §5); the operation ${cleared ? "cleared, but its result was not returned" : "never cleared"}`;
             if (!cleared) {
-              cause = "deadline-exceeded";
+              cause = "stranded";
               await quarantineInFlight({
                 safety: args.safety,
                 quarantineStore: args.quarantineStore,
@@ -3837,6 +3858,8 @@ async function runMutantsOnBackend(args: {
           verdict = "error";
           if (confirmLostAck === "completed") {
             failureNote = `lost ack confirming ${ref.method}: RunMutant's response was unreadable${confirm.failureMessage !== undefined ? ` (${confirm.failureMessage})` : ""}, but GetOperationStatus confirms the operation COMPLETED server-side — the confirmation was retried once and that attempt was unreadable too, so the kill could not be confirmed; the container is not stranded (design §5)`;
+            // R122(b), confirmation-side twin — the op provably finished, only its answer was lost.
+            cause = "result-lost";
           } else {
             await quarantineInFlight({
               safety: args.safety,

@@ -149,8 +149,14 @@ import type { MutantVerdict } from "./store";
  * `assertExplainableReport` already refuses an unrecognised `cause` by name, loudly, so the hole
  * this version exists to close is closed there by a check instead — and bumping it would make every
  * committed campaign baseline unreadable to this build, which is a real cost for no gain.
+ *
+ * 3 — R122 added `result-lost` for the case where the run provably COMPLETED and only its answer
+ * was unreadable. Same reasoning as 2 on both counts, including `REPORT_SCHEMA_VERSION` again not
+ * moving. Two bumps in one day is what a domain that is still being discovered looks like; the
+ * alternative was leaving two more `error` shapes with no machine value at all, which is what R114
+ * was filed about in the first place.
  */
-export const EXPLAIN_SCHEMA_VERSION = 2;
+export const EXPLAIN_SCHEMA_VERSION = 3;
 
 /**
  * Thrown when the input is not an explainable `SessionReport` — a caller-contract violation, not a

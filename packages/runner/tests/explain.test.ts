@@ -852,6 +852,29 @@ describe("explain — tool mechanics", () => {
     expect(out.notMeasured[0]?.interpretation?.entailedNegative).toContain("not know");
   });
 
+  /**
+   * R122(b). The third `error` shape, and the one that had no machine value at all: the run
+   * provably COMPLETED server-side and only its answer could not be read. It is not a deadline (no
+   * budget elapsed) and it is not a strand (a strand is precisely the case where nobody knows
+   * whether the op finished — this is the case where a reconciling read proved it did).
+   *
+   * The pair is asserted against each other rather than in isolation, because the whole risk here
+   * is the two collapsing into one meaning: reading a result-lost as a strand sends an operator to
+   * recycle a healthy container and wait for `--retry-stranded`, when `--resume` alone fixes it.
+   */
+  test("R122: a result-lost error is distinguishable from a strand, and prescribes --resume", () => {
+    const out = explain(reportFixture({ mutants: [errorMutant("M0003", "result-lost")] }));
+    expect(out.notMeasured[0]?.cause).toBe("result-lost");
+    expect(out.notMeasured[0]?.interpretation).toBe(ERROR_CAUSE_INTERPRETATIONS["result-lost"]);
+    expect(out.notMeasured[0]?.interpretation?.meaning).toContain("--resume");
+    // The two must not say the same thing. `stranded` cannot promise the container is fine;
+    // `result-lost` is the one that can, and that promise is the difference an operator acts on.
+    expect(out.notMeasured[0]?.interpretation?.meaning).toContain("container is explicitly fine");
+    expect(ERROR_CAUSE_INTERPRETATIONS.stranded.meaning).not.toContain(
+      "container is explicitly fine",
+    );
+  });
+
   test("an error with NO recorded cause carries no interpretation — and says nothing instead", () => {
     // The honest shape: LethAL records `cause` at only the two call sites that know it, so a
     // stranded operation reaches the report with `cause` absent. Inventing a meaning here would

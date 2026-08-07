@@ -269,7 +269,7 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
  * third cause a COMPILE error until its interpretation exists. An inline union at each site could
  * grow a variant that no reader of the report has any way to interpret.
  */
-export type MutantErrorCause = "deadline-exceeded" | "unstable" | "stranded";
+export type MutantErrorCause = "deadline-exceeded" | "unstable" | "stranded" | "result-lost";
 
 /**
  * What each `MutantErrorCause` MEANS for a reader, and — because both are facts about LethAL's OWN
@@ -335,6 +335,24 @@ export const ERROR_CAUSE_INTERPRETATIONS: Record<MutantErrorCause, Interpretatio
     // the resume-side skip and its `--retry-stranded` escape were decided. R114 is cited because
     // it is the row that establishes this cause exists at all.
     basis: "R114",
+  },
+  "result-lost": {
+    meaning:
+      "The run completed on the server — `GetOperationStatus` confirms it — but its ANSWER could " +
+      "not be read, and the one retry that earns was unreadable too. So this mutant was not " +
+      "scored. The container is explicitly fine: nothing is stranded, no tier is quarantined, and " +
+      "nothing needs clearing. Re-run with `--resume`, which re-executes an `error` outcome rather " +
+      "than carrying it, and this mutant simply gets measured on the second pass.",
+    entailedNegative:
+      "Not a verdict, and NOT a strand: `stranded` means we do not know whether the mutant " +
+      "finished, and this is the case where we know it did. That difference is the whole reason " +
+      "the two are separate causes — a strand costs a tier quarantine and is SKIPPED by `--resume` " +
+      "until `--retry-stranded`, while this costs one mutant and fixes itself on the next run. " +
+      "Reading them as the same thing would send an operator to recycle a healthy container.",
+    // R122 filed it. The behaviour it describes predates the cause by a long way — the notes at
+    // the two `lostAck === "completed"` sites already said all of this in prose that nothing could
+    // key on, which is the same gap R114 closed for the strand.
+    basis: "R122",
   },
 };
 
