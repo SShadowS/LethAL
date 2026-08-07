@@ -124,7 +124,7 @@ codeunit 50100 "Pricing"
 
 **You never see this code, and it never enters your repo.** LethAL copies your project into a scratch
 directory under the OS temp dir, mutates the copy there, compiles that, and publishes it. Your source
-tree is not modified and there is nothing to revert. The AL above is a throwaway build artifact, a
+tree is not modified and there is nothing to revert. The AL above is a throwaway build, a
 petri dish. The only output you read is the report in step 5. What *does* persist is on the server: the
 instrumented build stays published until you republish your own app, which is why LethAL is for a
 sandbox or dev container, never a production tenant.
@@ -223,7 +223,7 @@ figures under [Testing](#testing) are the measured ones.)*
 | Release | 0.1.0-alpha.1 |
 | Language | TypeScript (Bun workspaces) |
 | Target | AL / Business Central, control extension runtime 16 |
-| Mutation operators | 12 total: 6 Tier-1 (generic), 6 Tier-2 (AL-specific) |
+| Mutation operators | 12 total: 6 Tier-1 (generic), 6 Tier-2 (AL-specific). "Tier" here groups operators by how AL-aware they are — nothing to do with a BC service tier |
 | Object kinds instrumented | codeunit, table, page, report, pageextension, tableextension |
 | Backends | `bcdev` (live BC, authoritative), `al-runner` (offline, **not** authoritative) |
 | Concurrency safety | Machine-global lease + per-run two-phase fence |
@@ -236,18 +236,18 @@ figures under [Testing](#testing) are the measured ones.)*
 
 | Feature | Description |
 |---------|-------------|
-| **Mutant schemata** | One instrumented artifact carries every mutation behind runtime guards, not N compiles |
+| **Mutant schemata** | One instrumented build carries every mutation behind runtime guards, not N compiles |
 | **AST-based mutation** | Operates on a real AL parse tree (tree-sitter-al), never on text |
 | **Live BC execution** | Runs the covering test headlessly inside Business Central over OData |
 | **Coverage-aware** | Distinguishes "no test caught it" from "no test runs it at all", and records which attribution path decided |
-| **Scoped runs** | `--only` narrows mutants, `--tests-only` narrows the baseline, `--max-guards-per-batch` bounds each published artifact |
+| **Scoped runs** | `--only` narrows mutants, `--tests-only` narrows the baseline, `--max-guards-per-batch` bounds each published build |
 | **Resumable** | An aborted run is continued with `--resume`; verdicts already measured are not thrown away |
 
 **Trustworthiness** — why a verdict is worth believing, or why it refuses to claim one.
 
 | Feature | Description |
 |---------|-------------|
-| **Deployment identity** | Verifies the app under test is the artifact it compiled, and refuses to record a verdict otherwise |
+| **Deployment identity** | Verifies the app under test is the build it compiled, and refuses to record a verdict otherwise |
 | **Concurrency-safe** | A machine-global lease stops two runs on one container from interleaving and producing a false verdict |
 | **Two-phase fence** | Every mutant run proves it holds the lease at claim *and* at result-recording, or the result is discarded |
 | **Lost-ack recovery** | An unreadable response is reconciled against the server's own operation marker instead of assuming the worst |
@@ -262,7 +262,7 @@ figures under [Testing](#testing) are the measured ones.)*
 | **Actionable survivors** | Each survivor carries its original and mutated text, procedure, covering tests, and a per-procedure rollup, enough for a human or an agent to act without re-deriving anything |
 | **Explained reports** | `lethal explain report.json` says what a finished report MEANS: every survivor carries `executionProven` — true only for a member-level coverage match — beside the interpretation and the evidence pointer that decide what it is worth, so "some test touched the codeunit" is never read as "a test executed this line" |
 | **Diagnostics** | `lethal doctor` runs every pre-flight check it can answer read-only (environment status, quarantine, control-app version, `alc`/`altool`) all at once, instead of `lethal run` discovering them one at a time — and states plainly what it cannot check yet |
-| **Measured publish ceiling** | A file whose instrumented form is too large for the server to publish is refused *before* compiling, against a bracket this tier actually measured — never a hardcoded limit. `lethal clear-ceiling` discards the measurement when the topology changes |
+| **Measured publish ceiling** | A file whose instrumented form is too large for the server to publish is refused *before* compiling, against a bracket this server actually measured — never a hardcoded limit. `lethal clear-ceiling` discards the measurement when the topology changes |
 | **Operator recovery** | `lethal force-reset-lease` and `lethal clear-quarantine` recover a container stranded by a dead session |
 | **External environments** | A hosted environment owned by a third-party CLI is driven through config-declared commands, with no vendor knowledge in LethAL |
 
@@ -331,7 +331,7 @@ If a run aborts partway, continue it instead of starting over:
 lethal run ... --resume
 ```
 
-`lethal run` discovers a stopped environment, a stale control app, a quarantined tier, or a
+`lethal run` discovers a stopped environment, a stale control app, a quarantined server, or a
 missing `alc`/`altool` one at a time, each only after whatever ran before it. Check all of them at
 once, read-only, before spending time on a real run:
 
@@ -398,17 +398,17 @@ refused once can never publish the counter-evidence that would widen it again. T
 `clear-ceiling` is for:
 
 ```bash
-# discards recorded publish outcomes for one tier, so a TRANSIENT failure
+# discards recorded publish outcomes for one server, so a TRANSIENT failure
 # stops permanently refusing files of that size
 lethal clear-ceiling --project path/to/your-al-app \
                      --server http://YourContainer --instance BC [--file Big.Codeunit.al]
 ```
 
-It clears the whole tier by default; `--file` narrows it. A blanket clear is the one that reaches a
+It clears the whole server by default; `--file` narrows it. A blanket clear is the one that reaches a
 row recorded for a multi-file batch. It prints every row it removed and the bracket before and
 after, and **exits non-zero when it removed nothing** — you ran it because a file was refused, and
 if nothing was cleared that file is still refused. The refusal message itself pre-fills this command
-for the file and tier that tripped it.
+for the file and server that tripped it.
 
 From a source checkout, replace `lethal` with `bun packages/runner/src/cli.ts`.
 
@@ -430,10 +430,10 @@ Cost and recovery:
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--max-guards-per-batch <n>` | *(unbounded)* | Guards per published artifact. Publish cost scales with guard count, since BC recompiles server-side |
-| `--mutant-timeout-ms <n>` | `180000` | Floor for a mutant's time budget, applied as `max(2 × that test's baseline, floor)`. An explicit value **replaces** the floor rather than stacking with it. The default is deliberately generous: too low strands a tier and blocks every mutant behind it, while too high only makes a genuine hang take longer to score `timeout-killed` |
+| `--max-guards-per-batch <n>` | *(unbounded)* | Guards per published build. Publish cost scales with guard count, since BC recompiles server-side |
+| `--mutant-timeout-ms <n>` | `180000` | Floor for a mutant's time budget, applied as `max(2 × that test's baseline, floor)`. An explicit value **replaces** the floor rather than stacking with it. The default is deliberately generous: too low leaves the server stuck and blocks every mutant behind it, while too high only makes a genuine hang take longer to score `timeout-killed` |
 | `--resume` / `--resume-run <id>` | *(none)* | Continue an aborted run, reusing verdicts it already measured |
-| `--retry-stranded` | `false` | On resume, retry mutants that stranded the tier. Skipped by default: a mutant that never terminates blocks every mutant behind it |
+| `--retry-stranded` | `false` | On resume, retry mutants that left the server stuck. Skipped by default: a mutant that never terminates blocks every mutant behind it |
 | `--allow-large-run` | `false` | Run more than 1,000 mutation sites |
 | `--workers <n>` | `1` | Parallel shards (rejected for the authoritative backend) |
 
@@ -464,7 +464,7 @@ Exit codes: `0` ok, `1` error, `3` quarantined, meaning the run refused to vouch
       |                    remove-commit, swap-modify-flag, swap-rec-xrec
       |                    (AL-specific; reach table triggers)
       v
-    schemata ............. ONE instrumented artifact, all mutants behind guards
+    schemata ............. ONE instrumented build, all mutants behind guards
       |
       v
     runner ............... orchestrator + backends + results store
@@ -490,7 +490,7 @@ The `LethAL Control` AL extension owns the state a republish of your app cannot 
 | `CHANGELOG.md` | What shipped in each release |
 | `packages/engine` | AL AST, `MutationSpec`, semantic analysis |
 | `packages/builtin-tier1` / `-tier2` | The mutation operators |
-| `packages/schemata` | Instrumentation and compilation into one artifact |
+| `packages/schemata` | Instrumentation and compilation into one build |
 | `packages/runner/src/orchestrator.ts` | Session lifecycle, lease, verdict recording |
 | `packages/runner/src/lease.ts` | `LeaseClient`: acquire / renew / release / fence ops |
 | `packages/runner/src/resume.ts` | Which prior verdicts a `--resume` may reuse, and why |
@@ -574,7 +574,7 @@ a LethAL feature or a mode.
   What is still **not** established is that any individual survivor is non-equivalent: some
   survivors are unkillable by any test. Read `validity` before quoting `mutationScore`.
 - **Unscoped runs on a real project are refused by default.** 19,832 mutation sites is days of
-  execution, and the artifact carrying every guard is typically rejected by a hosting proxy before
+  execution, and the build carrying every guard is typically rejected by a hosting proxy before
   it publishes. Use `--only`; `--allow-large-run` overrides.
 - **Single-tenant servers only.** App publication is service-instance-wide, so a second tenant
   publishing to the same instance is outside the lease entirely. Documented, **not enforced**, since

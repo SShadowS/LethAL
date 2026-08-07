@@ -586,19 +586,19 @@ RUN — scope. These bound cost. --tests-only can change a verdict; the others c
                              real app costs days and usually cannot publish at all)
   --dry-run                  list what would be mutated; execute nothing. Reports both the raw
                              mutation-site count and the DEPLOYED count (they differ), plus this
-                             tier's measured publish bracket. It never creates a results database;
-                             when one already exists AND the config names a bcdev tier to look the
+                             server's measured publish bracket. It never creates a results database;
+                             when one already exists AND the config names a bcdev server to look the
                              bracket up for, that database is OPENED FOR WRITING and its schema
                              brought up to date, exactly as a real run would
 
 RUN — cost and recovery
-  --max-guards-per-batch <n> cap guards per published artifact. Publish cost scales with guard
+  --max-guards-per-batch <n> cap guards per published build. Publish cost scales with guard
                              count because BC recompiles server-side
   --mutant-timeout-ms <n>    floor for a mutant's time budget (default ${MIN_MUTANT_BUDGET_MS} ms). The budget is
                              max(2 x that test's baseline, this). Exceeding it quarantines the run
   --resume                   continue the most recent unfinished run in --db, reusing its verdicts
   --resume-run <id>          resume a specific run id
-  --retry-stranded           on resume, retry mutants that stranded the tier (skipped by default:
+  --retry-stranded           on resume, retry mutants that left the server stuck (skipped by default:
                              a mutant that never terminates blocks every mutant behind it)
   --stop-hung-sessions       let LethAL END THE BC SESSION running a mutant that exceeds its
                              budget, so a never-terminating mutant scores timeout-killed instead
@@ -624,17 +624,17 @@ RUN — environment
   --allow-expiring-env       proceed against an environment that expires during the run
 
 CLEAR-CEILING — undo a publish-ceiling measurement (R90)
-  A file at or above a guard count MEASURED to fail on a tier is refused before anything is
+  A file at or above a guard count MEASURED to fail on a server is refused before anything is
   compiled or published. That bracket is a ratchet: a refused file can never publish, so it can
   never widen the bracket back. Any throw out of the publish call records a failure, including a
   transient one (a spawn failure, a restarting server), so this is the way back.
   --project <dir>            project whose results database holds the measurement
-  --server <url>             tier identity, same pair a run uses
+  --server <url>             which server instance, the same pair a run uses
   --instance <name>
   --file <name>              clear only rows recorded against this file. Omit to clear the whole
-                             tier — the right choice when the TOPOLOGY changed (container
+                             server — the right choice when the SERVER ITSELF changed (container
                              recycled, proxy reconfigured), and the only way to reach rows from a
-                             multi-file artifact, which carry no filename at all
+                             published build covering several files, which carry no filename at all
   --db <path>                results database (default: <project>/lethal.sqlite). A refusal
                              message pre-fills this with the database the measurement was
                              actually recorded in — copy it rather than retyping
@@ -644,7 +644,7 @@ CLEAR-CEILING — undo a publish-ceiling measurement (R90)
   next run will be refused identically.
 
 DOCTOR — every pre-flight refusal, read-only, all at once (R109)
-  'lethal run' discovers a stopped environment, a stale control app, a quarantined tier, or a
+  'lethal run' discovers a stopped environment, a stale control app, a quarantined server, or a
   missing alc/altool ONE AT A TIME, each after whatever ran before it. 'lethal doctor' runs every
   one of those checks read-only and reports them all in a single pass, so a user with several
   problems finds all of them in one round-trip instead of one slow retry per fix.
@@ -921,7 +921,7 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     const file = values.file;
     if (file === "") {
       throw new Error(
-        "--file was given as an empty string. Omit --file entirely to clear the whole tier; an " +
+        "--file was given as an empty string. Omit --file entirely to clear the whole server; an " +
           "empty value would silently widen the scope from one file to every measurement on it.",
       );
     }
@@ -1393,7 +1393,7 @@ export function recoveryBaseUrl(
   }
   if (!segments.includes(serverInstance)) {
     throw new Error(
-      `force-reset-lease: --instance "${serverInstance}" does not appear in the configured bcdev.baseUrl "${configuredBaseUrl}", so the two name different tiers. This command clears safety state (op marker, active-mutant row, every outstanding lease credential) and will not guess which one you meant — point --server/--instance at the tier the config describes, or remove bcdev.baseUrl to address a container by server+instance on port 7048.`,
+      `force-reset-lease: --instance "${serverInstance}" does not appear in the configured bcdev.baseUrl "${configuredBaseUrl}", so the two name different server instances. This command clears safety state (op marker, active-mutant row, every outstanding lease credential) and will not guess which one you meant — point --server/--instance at the server the config describes, or remove bcdev.baseUrl to address a container by server+instance on port 7048.`,
     );
   }
   return configuredBaseUrl.replace(/\/+$/, "");
@@ -1986,7 +1986,7 @@ async function dryRunCeiling(
   } catch (err) {
     return {
       note:
-        `could not read the configured tier from ${configPath}: ` +
+        `could not read the configured server from ${configPath}: ` +
         `${err instanceof Error ? err.message : String(err)} — no publish ceiling to report`,
     };
   }
@@ -2058,7 +2058,7 @@ export async function printDryRun(
   // ships. They differ, and by an amount no one can estimate from the other.
   if (perFile.length > 0) {
     console.log(
-      "\nper-file guard counts (largest deployed first) — 'sites' is raw mutation sites, 'deployed' is what ships after tier-precedence dedup:",
+      "\nper-file guard counts (largest deployed first) — 'sites' is raw mutation sites, 'deployed' is what ships after a higher-priority operator displaces a lower one at the same site:",
     );
     for (const f of perFile) {
       console.log(`  ${f.file}  sites=${f.sites}  deployed=${f.deployed}`);
@@ -2075,7 +2075,7 @@ export async function printDryRun(
     const { smallestFailure, largestSuccess, failureObservedOn } = measured.ceiling;
     if (smallestFailure === undefined && largestSuccess === undefined) {
       console.log(
-        `\npublish ceiling for tier ${measured.tier}: nothing measured yet. Nothing will be refused — a fresh topology discovers its own ceiling by failing once.`,
+        `\npublish ceiling for server ${measured.tier}: nothing measured yet. Nothing will be refused — a server that has not failed yet discovers its own ceiling by failing once.`,
       );
     } else {
       const failurePart =
@@ -2091,7 +2091,7 @@ export async function printDryRun(
           ? "Nothing will be refused."
           : `Any single file at or above ${smallestFailure} deployed guards will be REFUSED by 'lethal run' before anything is compiled or published.`;
       console.log(
-        `\npublish ceiling MEASURED on tier ${measured.tier}: ${failurePart}; ${successPart}. ${refusalPart} This is a recorded observation of this topology, not a fixed limit.`,
+        `\npublish ceiling MEASURED on server ${measured.tier}: ${failurePart}; ${successPart}. ${refusalPart} This is what this server was observed to do, not a fixed limit.`,
       );
     }
   }
@@ -2105,7 +2105,9 @@ export async function printDryRun(
       // R92 again, at the finest granularity there is: a site the tier-precedence rule drops is
       // NOT a mutant this run will measure, and a list that renders it identically to one that
       // will is how a site count gets pre-committed as a mutant count.
-      const suffix = s.deployed ? "" : "  [not deployed — displaced by a higher-tier operator]";
+      const suffix = s.deployed
+        ? ""
+        : "  [not deployed — a higher-priority operator claimed this site]";
       console.log(`  ${s.file}:${s.line}  ${s.operatorName}${suffix}`);
     }
   }

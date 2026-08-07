@@ -398,10 +398,10 @@ describe("recoveryBaseUrl (R51)", () => {
 describe("recoveryBaseUrl — the instance must match a PATH SEGMENT (R51)", () => {
   test("a one-character instance is not matched by a hostname that merely contains it", () => {
     // `includes()` on the whole URL looks equivalent and is not: "a" is a substring of
-    // "example.com", so a baseUrl naming a different tier would pass the very check that exists to
-    // catch it. This is the case that found the bug.
+    // "example.com", so a baseUrl naming a different server instance would pass the very check
+    // that exists to catch it. This is the case that found the bug.
     expect(() => recoveryBaseUrl("https://p.example.com", "a", "https://p.example.com/b")).toThrow(
-      /different tiers/,
+      /different server instances/,
     );
   });
 

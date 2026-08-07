@@ -1086,8 +1086,9 @@ describe("lethal clear-ceiling (CLI)", () => {
   test("help documents the subcommand and both of its non-obvious properties", () => {
     const text = helpText("0.0.0");
     expect(text).toContain("lethal clear-ceiling");
-    // Omitting --file clears the tier, and that is the ONLY way to reach a multi-file row.
-    expect(text).toMatch(/multi-file artifact/);
+    // Omitting --file clears the whole server, and that is the ONLY way to reach a row recorded
+    // for a build covering several files, since such a row carries no filename.
+    expect(text).toMatch(/published build covering several files/);
     // Every removed row is printed, because discarding a genuine failure is evidence loss.
     expect(text).toMatch(/evidence loss/i);
     // Minor 2: a "dry" run that migrates an existing schema is a surprise unless it is documented.
