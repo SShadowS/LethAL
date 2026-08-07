@@ -168,6 +168,39 @@ export function objectScopeKeyOfNode(node: ALSyntaxNode, objectName: string): st
   return kind === undefined ? null : objectScopeKey(kind, objectName);
 }
 
+/**
+ * The scope key of the object (or extension) a node physically sits INSIDE, found by walking up
+ * from the node itself. `null` when the node is not inside any declaration this table indexes.
+ *
+ * R87. This exists because the alternative — iterating `symbols.objects` and asking each one
+ * "does this node belong to you?" — is the defect it replaces. That loop ran in PARSE ORDER and
+ * answered from the first object declaring a procedure of the right NAME, which on
+ * `do-rel2/Cloud` (244 objects, 1,793 distinct procedure names, 184 of them declared by more than
+ * one object) meant 27 of 390 claimed sites were typed by an object other than the one containing
+ * them, and 73 of 463 candidate sites were lost outright.
+ *
+ * Walking UP cannot have that failure: a node has exactly one enclosing declaration, and reading
+ * the key off that declaration's OWN header needs no search, no ordering, and no node-identity
+ * comparison (`ALSyntaxNode` wrappers are constructed per access, so `===` between a walked node
+ * and a stored one is not reliable in the first place).
+ *
+ * Extensions are handled on the same footing as objects, under `extensionScopeKey`, because
+ * `indexMembers` files their members under exactly that key — a local declared inside a
+ * `tableextension` procedure is resolvable, and answering `null` for it would trade R87's wrong
+ * answers for a new set of missing ones.
+ */
+export function enclosingObjectScopeKey(node: ALSyntaxNode): string | null {
+  let current: ALSyntaxNode | null = node;
+  while (current !== null) {
+    const header = parseObjectHeader(current);
+    if (header !== null) return objectScopeKey(header.kind, header.name);
+    const extension = parseExtensionHeader(current);
+    if (extension !== null) return extensionScopeKey(extension.kind, extension.name);
+    current = current.parent;
+  }
+  return null;
+}
+
 export function buildSymbolTable(files: readonly SourceFile[]): SymbolTable {
   const objects: ObjectSymbol[] = [];
   const procedures = new Map<string, ProcedureSymbol[]>();
