@@ -983,8 +983,30 @@ neither silent nor latest-wins: it prints
 Pinning it is still worth doing — a run should not depend on which binary built it — but it is a
 preference, not the correctness hole R101 describes.
 
+### 2.0.1 shipped the same day, and moved the timeout wording BACK
+
+Re-measured a few hours later against **al-runner v2.0.1.0**, which published while the adapter was
+being written. Unchanged: the flags, the qualified names, the exit codes (unknown flag 2, failing
+test 1, compile failure 3), and `AL_RUNNER_TEST_TIMEOUT_SEC`. Changed:
+
+| | 2.0.0.0 | 2.0.1.0 |
+| --- | --- | --- |
+| timeout `message` | `TIMEOUT after 15s` | `Test exceeded 12s timeout.` (v1's wording, returned) |
+| timeout `status` | `error` | `error` (unchanged) |
+| `--output-json` stdout | banner, then JSON | JSON at line 1 on the paths measured |
+
+That is the whole argument for R123 in one row. A decode keyed on the timeout literal would have
+turned every hung mutant into a KILL, silently, within hours of being written — which is why the
+shipped rule classifies POSITIVELY and treats an unrecognised `status: "error"` as not-measured
+rather than as a failure. The binary is a globally-installed dotnet tool that
+`dotnet tool update` moves under a gate between runs, so `itest:alrunner` now stamps the version it
+ran against.
+
 ### What this does NOT establish
 
+- **Not stability.** Two of the shapes above changed between two point releases hours apart. Every
+  literal in this section is a "today" value, and the reason R123 wants them measured per session
+  rather than written into a decode.
 - **Not the server protocol.** Everything here is CLI mode. R97's `SourcePaths[0]` defect is
   unmeasured against the release and is upstream #1658.
 - **Not a real project.** The fixture resolves zero dependencies, so it never exercises v2's hard
