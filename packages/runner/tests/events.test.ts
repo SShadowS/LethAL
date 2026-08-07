@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import type { MutantManifestEntry } from "@lethal/schemata";
 import { BASELINE_CLASSIFICATIONS, STREAM_SCHEMA_VERSION, createEmitter } from "../src/events";
-import { CAVEAT_INTERPRETATIONS } from "../src/report";
 import type { RunEvent, RunEventInput } from "../src/events";
+import { CAVEAT_INTERPRETATIONS } from "../src/report";
 
 function collect(): { events: RunEvent[]; sub: (e: RunEvent) => void } {
   const events: RunEvent[] = [];
