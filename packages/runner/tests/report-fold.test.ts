@@ -216,6 +216,63 @@ describe("foldEvents — R54, a carried verdict never reaches the mutant clock",
   });
 });
 
+/**
+ * R86: `buildReport` reads THIS fold, not `orchestrator.ts`'s `outcomes[]`. A `killingTestFailure`
+ * that rides the event but is dropped here reaches nothing a reader ever sees, on either the scored
+ * or the carried path — machinery that runs and measures nothing.
+ *
+ * Both verdicts below are kills with DIFFERENT text, so the assertion cannot be satisfied by a fold
+ * that copies one outcome's field onto the other, and neither can be satisfied by an absent field.
+ */
+describe("foldEvents — R86, a kill's own account of why it died", () => {
+  test("carries killingTestFailure on both the scored and the carried path", () => {
+    const SCORED_TEXT =
+      "The length of the string is 18, but it must be less than or equal to 10 characters";
+    const CARRIED_TEXT = "Assert.AreEqual failed. Expected: <3>. Actual: <4>";
+    const events = seq([
+      {
+        type: "mutation-set-generated",
+        siteCount: 2,
+        deployedCount: 2,
+        totalFiles: 1,
+        instrumentableFiles: 1,
+        notInstrumentedFiles: [],
+        excludedByOnly: 0,
+      },
+      { type: "baseline-batch-finished", batchIndex: 0, verdicts: [] },
+      {
+        type: "mutant-scored",
+        mutant: mutant("M0001"),
+        verdict: "killed",
+        batchIndex: 0,
+        durationMs: 1000,
+        coveringTests: [],
+        killingTest: "Sales Helper Tests.T1",
+        killingTestFailure: SCORED_TEXT,
+      },
+      {
+        type: "mutant-carried",
+        mutant: mutant("M0002"),
+        verdict: "killed",
+        fromRunId: 1,
+        batchIndex: 0,
+        priorDurationMs: 500,
+        coveringTests: [],
+        killingTest: "Sales Helper Tests.T2",
+        killingTestFailure: CARRIED_TEXT,
+      },
+      { type: "session-finished", elapsedMs: 5000 },
+    ]);
+    const folded = foldEvents(STATICS, events);
+    expect(folded.outcomes.find((o) => o.mutant.mutantId === "M0001")?.killingTestFailure).toBe(
+      SCORED_TEXT,
+    );
+    expect(folded.outcomes.find((o) => o.mutant.mutantId === "M0002")?.killingTestFailure).toBe(
+      CARRIED_TEXT,
+    );
+  });
+});
+
 describe("foldEvents — batch-invalidated rewrites history", () => {
   test("rewrites the named batch's verdicts to error, with the reason in failureNote", () => {
     const events = seq([

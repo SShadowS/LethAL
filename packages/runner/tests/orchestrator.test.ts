@@ -210,8 +210,10 @@ class StubBackend implements ExecutionBackend {
   /**
    * ROADMAP R26: the `failureMessage` a failing run carries, if any. A public field rather than
    * another positional constructor arg — the ctor already takes seven, and only the permissions-
-   * diagnosis tests need this. Consulted ONLY when the scripted outcome is `"fail"`, so a test that
-   * sets it cannot accidentally attach a failure message to a passing run.
+   * diagnosis tests need this. Consulted ONLY when the scripted outcome is `"fail"` or `"timeout"`,
+   * so a test that sets it cannot accidentally attach a failure message to a PASSING run — which is
+   * what makes the R86 tests below able to distinguish the mutated run from the confirmation rerun.
+   * `"timeout"` was added with R86 because both real producers of that outcome attach text.
    */
   failureMessageFor?: (mutant: string | null, ref: TestMethodRef) => string | undefined;
   constructor(
@@ -279,7 +281,10 @@ class StubBackend implements ExecutionBackend {
     // `attestingBackend` fake (Task 10's own tests, below) models a NEVER-attests container;
     // every pre-existing test here keeps its prior verdicts unaffected by the new fail-closed gate.
     const hasAttestation = this.caps.authoritative && opts.coverage === "none";
-    const failureMessage = outcome === "fail" ? this.failureMessageFor?.(active, ref) : undefined;
+    const failureMessage =
+      outcome === "fail" || outcome === "timeout"
+        ? this.failureMessageFor?.(active, ref)
+        : undefined;
     return {
       ref,
       outcome,
@@ -794,6 +799,78 @@ describe("runSession", () => {
     const store = new ResultsStore(":memory:");
     const report = await runSession({ backend, store, ...dirs, selectorIds });
     expect(report.counts.timeoutKilled).toBeGreaterThan(0);
+  });
+
+  /**
+   * R86. On the R82 gate run `mutants.failure_note` was NULL for all 109 killed mutants, so a swap
+   * killed by BC's own "The length of the string is 18, but it must be less than or equal to 10
+   * characters" — under a test that asserts NOTHING — was stored byte-identically to a kill a real
+   * assertion earned. The text was never missing from the run: the transport already persists it to
+   * `test_results.failure_message`. What was missing was the READ, so the report now carries the
+   * killing run's own text and the reader can tell the two apart by hand.
+   *
+   * The drift these two tests model is NOT "the field was deleted". It is the field wired to the
+   * CONFIRMATION rerun instead of the mutated run. The confirmation passed, so its `failureMessage`
+   * is `undefined`; the field would then be silently absent on every kill in every real run, while
+   * a survivor-side "is it absent?" test stayed green. That is empty-vs-empty, this project's
+   * signature bug, so the assertion is on the exact TEXT — only the mutated run can supply it.
+   */
+  const BC_LENGTH_OVERFLOW =
+    "The length of the string is 18, but it must be less than or equal to 10 characters";
+
+  test("R86: a kill records the MUTATED run's failure text, not the confirmation rerun's", async () => {
+    const dirs = await makeProject();
+    const backend = new StubBackend(CAPS_NST, (mutant) => (mutant === null ? "pass" : "fail"), [
+      "IsOverBudget",
+    ]);
+    // Only the mutant-active run carries text. The null-activation confirmation PASSES, and
+    // `StubBackend` consults `failureMessageFor` only for a "fail" — so nothing but the mutated
+    // run can be the source of the string asserted below.
+    backend.failureMessageFor = (mutant) => (mutant === null ? undefined : BC_LENGTH_OVERFLOW);
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({ backend, store, ...dirs, selectorIds });
+    expect(report.counts.killed).toBeGreaterThan(0);
+    for (const m of report.mutants) {
+      expect(m.verdict).toBe("killed");
+      expect(m.killingTestFailure).toBe(BC_LENGTH_OVERFLOW);
+      // R72/R86: a diagnosis never moves a verdict, and this text is not an `error` note.
+      expect(m.failureNote).toBeUndefined();
+    }
+  });
+
+  test("R86: a survivor records no killing-test failure text", async () => {
+    const dirs = await makeProject();
+    const backend = new StubBackend(CAPS_NST, () => "pass", ["IsOverBudget"]);
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({ backend, store, ...dirs, selectorIds });
+    expect(report.counts.survived).toBeGreaterThan(0);
+    for (const m of report.mutants) {
+      expect(m.killingTestFailure).toBeUndefined();
+    }
+  });
+
+  /**
+   * R86, the timeout arm. `timeout-killed` sets `killingTest` at its own call site and never runs a
+   * confirmation, so it needs its own wiring and its own pin — and it is exactly the verdict most
+   * likely to be a kill the assertions did not earn (R94 files the same shape for al-runner v2).
+   * The runner's own timeout detail is what the reader needs in order to see that. Both real
+   * producers of `outcome: "timeout"` do attach text — `RunMutantTransport`'s server-side-stop 408
+   * branch and `AlRunnerBackend`'s `runnerTimedOut` branch — so the stub attaching it here models
+   * the backends rather than inventing a shape only the fixture has.
+   */
+  test("R86: a timeout-kill records the timed-out run's own detail", async () => {
+    const dirs = await makeProject();
+    const backend = new StubBackend(CAPS_NST, (mutant) => (mutant === null ? "pass" : "timeout"), [
+      "IsOverBudget",
+    ]);
+    backend.failureMessageFor = () => "runner-reported timeout after 30000 ms";
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({ backend, store, ...dirs, selectorIds });
+    expect(report.counts.timeoutKilled).toBeGreaterThan(0);
+    for (const m of report.mutants) {
+      expect(m.verdict).toBe("timeout-killed");
+      expect(m.killingTestFailure).toBe("runner-reported timeout after 30000 ms");
+    }
   });
 
   test("red baseline test is excluded and reported, session continues", async () => {

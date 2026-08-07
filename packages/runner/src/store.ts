@@ -50,6 +50,25 @@ export interface MutantRow {
    * re-running the session; not just held in memory for the one report.
    */
   readonly failureNote?: string;
+  /**
+   * R86: the failure text of the run that KILLED this mutant — BC's own words for why the test
+   * went red, verbatim. Present only on a `killed`/`timeout-killed` row, and only when the backend
+   * gave text (al-runner's `error` paths and bcdev's both do; a backend that reports a bare failure
+   * leaves this absent, which is the honest statement that no text was reported).
+   *
+   * This is NOT a second `failureNote`. `failureNote` accounts for an `error` verdict — LethAL's own
+   * machinery failing — and is written by the orchestrator. This is the TARGET's failure, written by
+   * the backend, on a mutant that was successfully scored. The two never co-occur.
+   *
+   * It exists because a kill BC produced by rejecting the mutated data (an overflow, a division by
+   * zero, a failed field load) was stored byte-identically to a kill an assertion earned: measured
+   * on the R82 gate run, where `failure_note` was NULL for all 109 kills. The error direction is the
+   * flattering one — the reader is told their tests caught something when the platform did.
+   * LethAL does not classify which is which (the discriminator R86 first proposed was measured
+   * WRONG at a 75% false-positive rate, and the text is prose that localises), so this records the
+   * evidence and leaves the judgement to a reader who can see it.
+   */
+  readonly killingTestFailure?: string;
   readonly durationMs: number;
   /**
    * Which batch produced this verdict. Added by R47 so `invalidateBatch` can reach exactly the rows
@@ -80,6 +99,9 @@ export interface MutantVerdictRow {
   readonly verdict: MutantVerdict;
   readonly killingTest?: string;
   readonly failureNote?: string;
+  /** R86 — see `MutantRow.killingTestFailure`. Threaded through so `--resume` carries a kill's own
+   *  account of why it died instead of quietly dropping it on the second run. */
+  readonly killingTestFailure?: string;
   readonly durationMs: number;
   /**
    * R69 Phase 2 Task 5 — see `RunnerKind`. Threaded through so `--resume` can carry it: without
@@ -146,6 +168,7 @@ CREATE TABLE IF NOT EXISTS mutants (
   verdict TEXT NOT NULL,
   killing_test TEXT,
   failure_note TEXT,
+  killing_test_failure TEXT,
   duration_ms INTEGER NOT NULL,
   batch_index INTEGER,
   runner TEXT
@@ -222,6 +245,13 @@ export class ResultsStore {
     // since those verdicts were recorded before LethAL had a second execution path to distinguish.
     if (!cols.some((c) => c.name === "runner")) {
       this.db.exec("ALTER TABLE mutants ADD COLUMN runner TEXT");
+    }
+    // R86: `mutants` gained `killing_test_failure` (see `MutantRow.killingTestFailure`). Same
+    // hazard as the three above — `recordMutant`'s INSERT names the column explicitly, so an
+    // older lethal.sqlite would throw mid-run. Pre-R86 rows keep NULL, which reads as "no text was
+    // recorded", not as "the platform produced no text": those runs never asked the question.
+    if (!cols.some((c) => c.name === "killing_test_failure")) {
+      this.db.exec("ALTER TABLE mutants ADD COLUMN killing_test_failure TEXT");
     }
     // Layer 5A: runs gained deployment provenance. A pre-5A lethal.sqlite has a runs table
     // without these, against which recordArtifact's UPDATE would throw mid-run.
@@ -351,7 +381,7 @@ export class ResultsStore {
     const rows = this.db
       .query(
         "SELECT ast_hash, codeunit_name, operator_name, operator_major, verdict, killing_test, " +
-          "failure_note, duration_ms, runner FROM mutants WHERE run_id = ?",
+          "failure_note, killing_test_failure, duration_ms, runner FROM mutants WHERE run_id = ?",
       )
       .all(runId) as Array<{
       ast_hash: string;
@@ -361,6 +391,7 @@ export class ResultsStore {
       verdict: string;
       killing_test: string | null;
       failure_note: string | null;
+      killing_test_failure: string | null;
       duration_ms: number;
       runner: string | null;
     }>;
@@ -373,6 +404,7 @@ export class ResultsStore {
       durationMs: r.duration_ms,
       ...(r.killing_test !== null ? { killingTest: r.killing_test } : {}),
       ...(r.failure_note !== null ? { failureNote: r.failure_note } : {}),
+      ...(r.killing_test_failure !== null ? { killingTestFailure: r.killing_test_failure } : {}),
       ...(r.runner !== null
         ? {
             runner: this.parseRunnerKind(r.runner, {
@@ -418,8 +450,9 @@ export class ResultsStore {
     const r = this.db
       .query(
         `INSERT INTO mutants (run_id, mutant_code, ast_hash, codeunit_name, operator_name,
-         operator_major, file, line, verdict, killing_test, failure_note, duration_ms, batch_index, runner)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+         operator_major, file, line, verdict, killing_test, failure_note, killing_test_failure,
+         duration_ms, batch_index, runner)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
       )
       .get(
         runId,
@@ -433,6 +466,7 @@ export class ResultsStore {
         row.verdict,
         row.killingTest ?? null,
         row.failureNote ?? null,
+        row.killingTestFailure ?? null,
         row.durationMs,
         row.batchIndex,
         row.runner ?? null,
@@ -465,7 +499,11 @@ export class ResultsStore {
   invalidateBatch(runId: number, batchIndex: number, note: string): number {
     this.db
       .query(
-        "UPDATE mutants SET verdict = 'error', failure_note = ?, killing_test = NULL " +
+        // R86: `killing_test_failure` is cleared alongside `killing_test` for the same reason —
+        // this row is no longer a kill, so a leftover account of "why the test went red" would
+        // describe a verdict that has just been withdrawn.
+        "UPDATE mutants SET verdict = 'error', failure_note = ?, killing_test = NULL, " +
+          "killing_test_failure = NULL " +
           "WHERE run_id = ? AND batch_index = ? AND verdict NOT IN ('error', 'known-survivor')",
       )
       .run(note, runId, batchIndex);

@@ -243,6 +243,9 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
           ...(e.guardObserved !== undefined ? { guardObserved: e.guardObserved } : {}),
           ...(e.killingTest !== undefined ? { killingTest: e.killingTest } : {}),
           ...(e.failureNote !== undefined ? { failureNote: e.failureNote } : {}),
+          ...(e.killingTestFailure !== undefined
+            ? { killingTestFailure: e.killingTestFailure }
+            : {}),
           ...(e.cause !== undefined ? { cause: e.cause } : {}),
           ...(e.runner !== undefined ? { runner: e.runner } : {}),
         });
@@ -273,6 +276,9 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
             : {}),
           ...(e.killingTest !== undefined ? { killingTest: e.killingTest } : {}),
           ...(e.failureNote !== undefined ? { failureNote: e.failureNote } : {}),
+          ...(e.killingTestFailure !== undefined
+            ? { killingTestFailure: e.killingTestFailure }
+            : {}),
           ...(e.runner !== undefined ? { runner: e.runner } : {}),
         });
         break;

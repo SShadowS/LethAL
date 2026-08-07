@@ -3013,6 +3013,11 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
             // comment. `resumeState` is defined in this branch (`if (resumeState !== undefined)`
             // above), so its `runId` — the PRIOR run this verdict was carried from — is in scope.
             resumeState.runId,
+            undefined, // permissionRefusedTest — a carried verdict re-runs nothing
+            // R86: the prior run's own account of why this kill died, carried through unchanged.
+            // Dropping it here would make a resumed report quietly less informative than the run it
+            // resumed, which is the drift `carried.runner` was added to close for the runner tag.
+            carried.killingTestFailure,
           );
         }
       }
@@ -3558,6 +3563,17 @@ async function runMutantsOnBackend(args: {
     let verdict: SessionVerdict = "survived";
     let killingTest: string | undefined;
     /**
+     * R86: the failure text of the run that KILLED this mutant — see `MutantOutcome`'s field of the
+     * same name for what it is for.
+     *
+     * It is assigned ONLY from the MUTATED run's verdict (`v.failureMessage`), never from the
+     * null-activation confirmation rerun below. That rerun PASSES on the kill path by definition,
+     * so its `failureMessage` is always `undefined`: wiring it here would leave the field silently
+     * absent on every kill in every real run while every "absent for a survivor?" test stayed
+     * green. Empty-vs-empty, which is this project's signature bug.
+     */
+    let killingTestFailure: string | undefined;
+    /**
      * Every `failureNote` this loop composes is copied VERBATIM into the report and out again
      * through `lethal explain` (`ExplainNotMeasured.failureNote`), so it reaches every consumer of
      * this run unedited — the projection deliberately does not rewrite it, because silently editing
@@ -3726,6 +3742,7 @@ async function runMutantsOnBackend(args: {
       if (v.outcome === "timeout") {
         verdict = "timeout-killed";
         killingTest = ref.method;
+        killingTestFailure = v.failureMessage;
         break;
       }
       if (v.outcome === "error") {
@@ -3818,6 +3835,9 @@ async function runMutantsOnBackend(args: {
         } else if (confirm.outcome === "pass") {
           verdict = "killed";
           killingTest = ref.method;
+          // R86: `v`, the MUTATED run that failed — not `confirm`, which just passed. See the
+          // `killingTestFailure` declaration above for why the distinction is the whole point.
+          killingTestFailure = v.failureMessage;
         } else if (confirm.outcome === "deadline-exceeded") {
           // Our timer, not the runner's, fired during confirmation — infrastructure,
           // not evidence the test is flaky. Must not inflate counts.unstable.
@@ -3887,6 +3907,7 @@ async function runMutantsOnBackend(args: {
       runnerDisagreementTest,
       undefined, // fromRunId — not a carried verdict
       permissionRefusedTest,
+      killingTestFailure,
     );
     for (const t of testResultBuffer) {
       args.store.recordTestResult(
@@ -4281,6 +4302,12 @@ export function record(
   // kill-confirmation time (only a baseline-time refusal reached `baseline-batch-finished`'s
   // classification). Flagged in the task report for confirmation.
   permissionRefusedTest?: string,
+  // R86: the failure text of the run that killed this mutant — see `MutantOutcome.killingTestFailure`
+  // (report.ts). Passed by the two call sites that decide a kill (`runMutantsOnBackend`'s
+  // confirmation branch and its timeout branch) and by the `--resume` replay, which carries a prior
+  // run's text through unchanged. Every other call site records a verdict that is not a kill and
+  // leaves it absent.
+  killingTestFailure?: string,
 ): number {
   const key = identityKeyOf(m);
   const mutantRowId = store.recordMutant(runId, {
@@ -4296,6 +4323,7 @@ export function record(
     batchIndex,
     ...(killingTest !== undefined ? { killingTest } : {}),
     ...(failureNote !== undefined ? { failureNote } : {}),
+    ...(killingTestFailure !== undefined ? { killingTestFailure } : {}),
     ...(runner !== undefined ? { runner } : {}),
   });
   outcomes.push({
@@ -4309,6 +4337,7 @@ export function record(
     ...(carried === true ? { carried: true } : {}),
     ...(killingTest !== undefined ? { killingTest } : {}),
     ...(failureNote !== undefined ? { failureNote } : {}),
+    ...(killingTestFailure !== undefined ? { killingTestFailure } : {}),
     ...(cause !== undefined ? { cause } : {}),
     ...(runner !== undefined ? { runner } : {}),
   });
@@ -4327,6 +4356,7 @@ export function record(
       priorDurationMs: durationMs,
       ...(killingTest !== undefined ? { killingTest } : {}),
       ...(failureNote !== undefined ? { failureNote } : {}),
+      ...(killingTestFailure !== undefined ? { killingTestFailure } : {}),
       coveringTests,
       ...(coverageAttribution !== undefined ? { coverageAttribution } : {}),
       ...(runner !== undefined ? { runner } : {}),
@@ -4347,6 +4377,7 @@ export function record(
       durationMs,
       ...(killingTest !== undefined ? { killingTest } : {}),
       ...(failureNote !== undefined ? { failureNote } : {}),
+      ...(killingTestFailure !== undefined ? { killingTestFailure } : {}),
       ...(cause !== undefined ? { cause } : {}),
       coveringTests,
       ...(coverageAttribution !== undefined ? { coverageAttribution } : {}),

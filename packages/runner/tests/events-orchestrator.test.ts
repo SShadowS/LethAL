@@ -177,4 +177,60 @@ describe("emitted mutant events agree with recorded outcomes", () => {
     expect("durationMs" in carried).toBe(false);
     expect(carried).toMatchObject({ priorDurationMs: 10, fromRunId: 3 });
   });
+
+  /**
+   * R86 across the resume path, through the seam a carried kill is most likely to be lost in:
+   * `record()`'s positional argument list, now twenty-one entries and mostly optional strings, so a
+   * value passed one slot out lands on a neighbour and still typechecks. A `killingTestFailure` that
+   * reaches the store row but not the `mutant-carried` event would leave every resumed report saying
+   * "killed" with no account of why — the exact state R86 measured, reintroduced by the one path
+   * that re-executes nothing. (`foldEvents`'s side of the same field is pinned in
+   * `report-fold.test.ts`, which has the full-stream harness this file does not.)
+   *
+   * The assertion is on the exact TEXT, not on the field's presence: the neighbouring slot
+   * (`permissionRefusedTest`) is also an optional string, so a swap would still produce a defined
+   * value somewhere and only the value pins which one.
+   */
+  test("R86: a carried kill's failure text survives record()'s argument list", () => {
+    const events: RunEvent[] = [];
+    const emit = createEmitter([(e) => events.push(e)]);
+    const store = new ResultsStore(":memory:");
+    const outcomes: SessionOutcome[] = [];
+    const KILL_TEXT =
+      "The length of the string is 18, but it must be less than or equal to 10 characters";
+    try {
+      const runId = store.createRun({ projectPath: "/p", backend: "bcdev", appVersion: "1.0.0.0" });
+      record(
+        store,
+        runId,
+        mutantEntry("M0001"),
+        "killed",
+        outcomes,
+        0,
+        emit,
+        "Sales Helper Tests.CarriedKill",
+        undefined,
+        undefined,
+        10,
+        ["Sales Helper Tests.CarriedKill"],
+        undefined,
+        undefined,
+        true, // carried
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        3, // fromRunId
+        undefined, // permissionRefusedTest
+        KILL_TEXT,
+      );
+    } finally {
+      store.close();
+    }
+    const carried = events.find((e) => e.type === "mutant-carried");
+    if (carried === undefined) throw new Error("no mutant-carried event recorded");
+    expect(carried).toMatchObject({ killingTestFailure: KILL_TEXT });
+    // `outcomes[]` is the second view `record()` writes alongside the event — they must agree.
+    expect(outcomes[0]?.killingTestFailure).toBe(KILL_TEXT);
+  });
 });

@@ -71,6 +71,9 @@ export interface CarriedVerdict {
   readonly verdict: MutantVerdict;
   readonly killingTest?: string;
   readonly failureNote?: string;
+  /** R86 — see `MutantRow.killingTestFailure` (store.ts). Carried for the same reason
+   *  `killingTest` is: a kill carried onto a second run keeps its own account of why it died. */
+  readonly killingTestFailure?: string;
   readonly durationMs: number;
   /**
    * R69 Phase 2 Task 5 — the runner that actually produced this verdict, carried through from
@@ -171,6 +174,9 @@ export function buildResumeIndex(
       durationMs: row.durationMs,
       ...(row.killingTest !== undefined ? { killingTest: row.killingTest } : {}),
       ...(row.failureNote !== undefined ? { failureNote: row.failureNote } : {}),
+      ...(row.killingTestFailure !== undefined
+        ? { killingTestFailure: row.killingTestFailure }
+        : {}),
       ...(row.runner !== undefined ? { runner: row.runner } : {}),
     });
   }

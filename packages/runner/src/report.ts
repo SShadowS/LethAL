@@ -20,6 +20,8 @@ export interface SessionOutcome {
   readonly batchIndex: number;
   readonly killingTest?: string;
   readonly failureNote?: string;
+  /** R86 — see `MutantOutcome.killingTestFailure`. */
+  readonly killingTestFailure?: string;
   /**
    * Structural reason for an "error" verdict, set only at the two call
    * sites in orchestrator.ts that actually know it — see
@@ -760,6 +762,32 @@ export interface MutantOutcome {
    */
   readonly failureNote?: string;
   /**
+   * R86: the failure text of the run that KILLED this mutant — the target's own words for why the
+   * test went red, verbatim from the backend and never rewritten here.
+   *
+   * A kill BC produced by REJECTING the mutated data — a string overflow, a division by zero, a
+   * failed field load — used to be stored byte-identically to a kill an assertion earned. Measured
+   * on the R82 gate run: `failure_note` was NULL for all 109 killed mutants, and the fixture's arm
+   * E (a swap killed by "The length of the string is 18, but it must be less than or equal to 10
+   * characters", under a test that asserts NOTHING) was indistinguishable from arm A. The direction
+   * of that error is the bad one: it flatters the suite, telling the reader their tests caught
+   * something the platform caught.
+   *
+   * LethAL records the evidence and does NOT classify it. The discriminator R86 first proposed —
+   * "a top callstack frame in the target app means a platform artifact" — was measured WRONG on the
+   * only run it has been checked against: 4 rows matched and 3 of those were ordinary kills where
+   * the target's own `TestField`/`Get` raised, which R82 §4 insists must read as real kills. A 75%
+   * false-positive rule shipped as a `cause` would be worse than the silence it replaced. The text
+   * is also prose, and prose localises (R66), so any text rule is English-only. R121 holds the
+   * unmeasured candidate.
+   *
+   * NOT a verdict input, per R72: a killed mutant stays killed. This annotates.
+   *
+   * Absent when the mutant was not killed, and when the backend reported a failure with no text —
+   * which is the honest statement that none was reported, not a claim that the kill was clean.
+   */
+  readonly killingTestFailure?: string;
+  /**
    * Structural reason for an "error" verdict — mirrors `SessionOutcome.cause`, and see
    * `ERROR_CAUSE_INTERPRETATIONS` for what each value means to a reader. Present only for the two
    * call sites that actually know it (deadline/unstable); other `error` verdicts (e.g. a bisected
@@ -1109,6 +1137,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
       ...(o.mutant.triggerName !== undefined ? { triggerName: o.mutant.triggerName } : {}),
       ...(o.killingTest !== undefined ? { killingTest: o.killingTest } : {}),
       ...(o.failureNote !== undefined ? { failureNote: o.failureNote } : {}),
+      ...(o.killingTestFailure !== undefined ? { killingTestFailure: o.killingTestFailure } : {}),
       ...(o.cause !== undefined ? { cause: o.cause } : {}),
     });
   }
@@ -1376,6 +1405,18 @@ export function renderConsole(r: SessionReport): string {
     // above and would blow out the table's alignment if appended inline.
     if (m.verdict === "error" && m.failureNote !== undefined) {
       lines.push(`         ${m.failureNote}`);
+    }
+    // R86: a kill says WHY it died, in the target's own words. Without this the console states
+    // "killed" and nothing else, so a kill BC produced by rejecting the mutated data reads exactly
+    // like a kill an assertion earned — and that error flatters the suite.
+    //
+    // FIRST LINE only, and truncated: `failureTextOf` (run-mutant-transport.ts) builds the message
+    // plus a `;`-separated AL callstack, and the message is the discriminating part. The whole text
+    // is in `MutantOutcome.killingTestFailure` for anyone who needs the frames.
+    const killText = m.killingTestFailure;
+    if (killText !== undefined) {
+      const firstLine = killText.split("\n")[0] ?? "";
+      lines.push(`         ${firstLine.length > 110 ? `${firstLine.slice(0, 110)}…` : firstLine}`);
     }
   }
   const scoreText = r.mutationScore === null ? "n/a" : `${(r.mutationScore * 100).toFixed(1)}%`;

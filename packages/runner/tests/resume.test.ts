@@ -576,6 +576,42 @@ describe("ResultsStore resume queries (R47)", () => {
       },
     ]);
   });
+
+  /**
+   * R86. `--resume` re-records a carried verdict rather than re-executing it, so anything the store
+   * does not read back is silently dropped on the second run: the resumed report would say "killed"
+   * with no account of why, which is exactly the state R86 exists to end. The drift this models is
+   * a `SELECT` that never learns the new column — the same hole `carried.runner` (R69 Phase 2 Task
+   * 5) was added to close for the runner tag.
+   */
+  test("R86: mutantVerdicts reads back the killing run's failure text, so --resume can carry it", () => {
+    const store = new ResultsStore(":memory:");
+    const id = store.createRun({
+      projectPath: "/p",
+      backend: "bcdev",
+      appVersion: "1.0.0.0",
+      configFingerprint: "fp",
+    });
+    store.recordMutant(id, {
+      mutantCode: "M0001",
+      astHash: "h",
+      codeunitName: "C",
+      operatorName: "op",
+      operatorMajor: 2,
+      file: "f.al",
+      line: 3,
+      verdict: "killed",
+      killingTest: "T",
+      killingTestFailure:
+        "The length of the string is 18, but it must be less than or equal to 10 characters",
+      durationMs: 77,
+      batchIndex: 0,
+    });
+    const [row] = store.mutantVerdicts(id);
+    expect(row?.killingTestFailure).toBe(
+      "The length of the string is 18, but it must be less than or equal to 10 characters",
+    );
+  });
 });
 
 describe("ResultsStore.invalidateBatch (R47)", () => {
@@ -610,6 +646,26 @@ describe("ResultsStore.invalidateBatch (R47)", () => {
     expect(rows.every((r) => r.verdict === "error")).toBe(true);
     expect(rows.every((r) => r.killingTest === undefined)).toBe(true);
     expect(rows.every((r) => r.failureNote === "unattested")).toBe(true);
+  });
+
+  /**
+   * R86: the killing run's failure text goes with the killing test. An invalidated row is no longer
+   * a kill, so a surviving "why the test went red" would describe a verdict that has just been
+   * withdrawn — and it would sit beside `failureNote: "unattested"`, giving the reader two accounts
+   * of the same row that disagree about whether anything was measured.
+   */
+  test("R86: invalidateBatch drops the killing run's failure text along with the killing test", () => {
+    const store = new ResultsStore(":memory:");
+    const id = store.createRun({ projectPath: "/p", backend: "bcdev", appVersion: "1.0.0.0" });
+    seed(store, id, 0, {
+      astHash: "b",
+      verdict: "killed",
+      killingTest: "T",
+      killingTestFailure: "Category must have a value in Data Main",
+    });
+    expect(store.invalidateBatch(id, 0, "unattested")).toBe(1);
+    const rows = store.mutantVerdicts(id);
+    expect(rows.every((r) => r.killingTestFailure === undefined)).toBe(true);
   });
 
   test("leaves ANOTHER batch alone", () => {

@@ -207,6 +207,14 @@ export type RunEventInput =
        * Flagged in the task report for confirmation.
        */
       readonly cause?: "deadline-exceeded" | "unstable";
+      /**
+       * R86 — see `MutantRow.killingTestFailure` (store.ts). The failure text of the run that
+       * KILLED this mutant, verbatim from the backend. Rides here as well as on the store row
+       * because `buildReport` folds events, not `outcomes[]`: without it the report could not
+       * reconstruct a `SessionOutcome` in full, which is the gap this union's audit exists to
+       * close. Set on `killed` and `timeout-killed` only, and never together with `cause`.
+       */
+      readonly killingTestFailure?: string;
       readonly coveringTests: readonly string[];
       readonly coverageAttribution?: CoverageAttribution;
       readonly guardObserved?: boolean;
@@ -265,6 +273,10 @@ export type RunEventInput =
       readonly priorDurationMs: number;
       readonly killingTest?: string;
       readonly failureNote?: string;
+      /** R86 — see `MutantRow.killingTestFailure`. Carried for the same reason `killingTest` is:
+       *  a resumed kill keeps its own account of why it died rather than losing it on the
+       *  second run. `CarriedVerdict` (resume.ts) is its source. */
+      readonly killingTestFailure?: string;
       readonly coveringTests: readonly string[];
       readonly coverageAttribution?: CoverageAttribution;
       readonly runner?: RunnerKind;
