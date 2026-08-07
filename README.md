@@ -276,32 +276,112 @@ Running the released binary needs **no Bun, Node or npm**. You do need:
   - or `bcdev.alcPath` / `bcdev.altoolPath` in your config pointing at any `alc` / `altool`, if
     your server needs specific tool builds. The two are independent: they may name different
     builds, and together they replace the extension install entirely
-- For the `bcdev` backend: a reachable `bc-dev-mcp` endpoint
-- The `LethAL Control` extension published on the target server (built from `extensions/lethal-control`)
+- For the `bcdev` backend: `bc-dev-mcp`. You do not host or start anything — LethAL runs it for you.
+  You name the command in your config (`bcdev.mcpCommand`, e.g. `["bun", "x", "bc-dev-mcp"]`) and
+  each run spawns its own
+- The `LethAL Control` extension published on your server. It is a small AL app that lives in this
+  repo; step 2 of [Quick start](#quick-start) builds and publishes it
 
 Building from source additionally needs [Bun](https://bun.sh) 1.x.
 
 ## Installation
 
-Download the binary for your platform from the releases page, then:
-
-```bash
-lethal --help
-```
-
-Or from source:
+There is no published release yet, so build it yourself. This produces a standalone `lethal`
+executable in `build/` that needs no Bun, Node or npm to run:
 
 ```bash
 git clone <repo-url> LethAL
 cd LethAL
 bun install
-bun run typecheck
-rm -rf packages/*/dist     # AFTER typecheck, BEFORE bun test
-bun test
-bun run build:binary       # optional: produce a standalone executable in build/
+bun run build:binary
 ```
 
-See [`docs/releasing.md`](docs/releasing.md) for how a release is cut.
+Check what you built — `--version` reports the commit it came from and the mutation operators it
+can actually apply, so a stale binary cannot pass for a current one:
+
+```bash
+./build/lethal-0.1.0-alpha.1-windows-x64.exe --version
+```
+
+Everywhere below, `lethal` means that executable. From a source checkout you can skip the build and
+run `bun packages/runner/src/cli.ts` instead. See [`docs/releasing.md`](docs/releasing.md) for how a
+release is cut.
+
+## Quick start
+
+Four steps from a checkout to a first result. Do them against a **sandbox or dev container** — never
+a production tenant, for the reason in step 3.
+
+**1. Write `lethal.config.json` next to your AL app.** Every field below is required; LethAL refuses
+to start and names any that are missing. The user and password are placeholders — put your own in:
+
+```json
+{
+  "bcdev": {
+    "mcpCommand": ["bun", "x", "bc-dev-mcp"],
+    "server": "http://YourContainer",
+    "serverInstance": "BC",
+    "company": "CRONUS",
+    "username": "admin",
+    "password": "pw",
+    "packageCachePath": "C:/path/to/your-al-app/.alpackages",
+    "controlSymbolPath": "C:/path/to/LethAL/extensions/lethal-control/lethal-control.app",
+    "env": {
+      "BC_DEV_USER": "admin",
+      "BC_DEV_PASSWORD": "pw"
+    }
+  }
+}
+```
+
+`env` is not optional in practice: `bc-dev-mcp` reads credentials from `BC_DEV_USER` /
+`BC_DEV_PASSWORD` rather than from parameters, and the process LethAL spawns inherits only a fixed
+allowlist of variables from your shell — so without this block it fails with *"Missing connection
+settings: username"*. `tenant` defaults to `default`.
+
+**2. Build and publish `LethAL Control`.** This is the one thing you install on the server. It owns
+the state a republish of your own app cannot reset, which is how LethAL knows which change is
+currently switched on:
+
+```bash
+# from the LethAL checkout — alc comes with the AL Language VS Code extension
+alc "/project:./extensions/lethal-control" \
+    "/packagecachepath:./extensions/lethal-control/.alpackages" \
+    "/out:./extensions/lethal-control/lethal-control.app"
+```
+
+Publish the resulting `lethal-control.app` to your server the way you publish any other app —
+`Publish-BcContainerApp -containerName <name> -appFile <path> -skipVerification -sync -upgrade`
+for a container, or the VS Code publish command. Point `controlSymbolPath` at that same file.
+
+**3. Check the setup before spending any time on a run:**
+
+```bash
+lethal doctor --config lethal.config.json
+```
+
+This changes nothing. It reports the server, the control-app version, `alc`/`altool`, and whether
+anything still holds the server from an earlier run — all at once, rather than letting a real run
+discover them one at a time.
+
+**4. See how big the job is, then run a slice of it:**
+
+```bash
+lethal run --project path/to/your-al-app --dry-run
+
+lethal run --project path/to/your-al-app \
+           --tests   path/to/your-test-app \
+           --backend bcdev \
+           --config  lethal.config.json \
+           --only       "src/Posting/**" \
+           --tests-only "src/Posting/**" \
+           --out        report.json
+
+lethal explain report.json
+```
+
+Start scoped. An unscoped run on a real project is refused by default — it costs days and usually
+cannot even publish (see [Limits](#limits)).
 
 ## Usage
 
