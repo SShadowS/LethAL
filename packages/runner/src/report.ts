@@ -269,7 +269,7 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
  * third cause a COMPILE error until its interpretation exists. An inline union at each site could
  * grow a variant that no reader of the report has any way to interpret.
  */
-export type MutantErrorCause = "deadline-exceeded" | "unstable";
+export type MutantErrorCause = "deadline-exceeded" | "unstable" | "stranded";
 
 /**
  * What each `MutantErrorCause` MEANS for a reader, and — because both are facts about LethAL's OWN
@@ -313,6 +313,28 @@ export const ERROR_CAUSE_INTERPRETATIONS: Record<MutantErrorCause, Interpretatio
     // sentence. Cited here rather than R35 because R35 is about DETECTING a permissions refusal,
     // which is one named cause of `unstable` rather than what the verdict itself means.
     basis: "R27",
+  },
+  stranded: {
+    meaning:
+      "This mutant's run returned no readable result AND its operation could not be confirmed " +
+      "complete, so the tier was quarantined and the mutant was NOT measured. R91 measured what " +
+      "this usually is on real AL: a mutant that is SLOW rather than hung (deleting a " +
+      "`SetCurrentKey` makes the following filtered query pick a worse plan and scan). Re-run with " +
+      "`--mutant-timeout-ms` raised — 180000 took three consecutive stranding runs to zero — " +
+      "together with `--resume`, which keeps the verdicts already measured. The tier itself needs " +
+      "`lethal clear-quarantine` once it is known to be healthy; a strand is the one cause here " +
+      "that leaves LethAL unsure whether the container is still executing.",
+    entailedNegative:
+      "Not a verdict, and — unlike `deadline-exceeded` — not even a statement that the mutant " +
+      "finished. `deadline-exceeded` means a backend told us the run was over; a strand means we " +
+      "do not know, which is why it quarantines and `deadline-exceeded` does not. On `--resume` " +
+      "these are SKIPPED by default rather than retried (a mutant that never terminates " +
+      "reproduces this every time and blocks every mutant behind it); pass `--retry-stranded` to " +
+      "attempt them anyway.",
+    // R114 filed the gap; R91 is where the prescription's number was measured, and R53 is where
+    // the resume-side skip and its `--retry-stranded` escape were decided. R114 is cited because
+    // it is the row that establishes this cause exists at all.
+    basis: "R114",
   },
 };
 

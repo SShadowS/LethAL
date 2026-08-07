@@ -61,7 +61,12 @@ import {
 } from "./publish-ceiling";
 import { QuarantineStore } from "./quarantine-store";
 import { buildReport } from "./report";
-import type { NotInstrumentedFile, SessionOutcome, SessionReport } from "./report";
+import type {
+  MutantErrorCause,
+  NotInstrumentedFile,
+  SessionOutcome,
+  SessionReport,
+} from "./report";
 import type { FoldStatics } from "./report-fold";
 import { quarantineResourceKey } from "./resource-key";
 import {
@@ -3590,7 +3595,7 @@ async function runMutantsOnBackend(args: {
      * commit — R113(a) in one edit.
      */
     let failureNote: string | undefined;
-    let cause: "deadline-exceeded" | "unstable" | undefined;
+    let cause: MutantErrorCause | undefined;
     // Fix round 2, residual 1 (events.ts doc comment): the exact instant the kill-confirmation
     // loop below decides `cause: "unstable"` because a HUB-green test failed on the FENCE is also
     // the exact instant it knows WHICH test disagreed — captured here so the eventual `record()`
@@ -3730,6 +3735,16 @@ async function runMutantsOnBackend(args: {
         // the verdicts already measured are NOT lost. Both went unsaid until a real project hit
         // this at mutant 13 of 138 and discarded the first twelve.
         failureNote = `${STRANDED_NOTE_PREFIX}${ref.method} returned no readable result and its operation could not be confirmed complete — container may be stranded. Its budget was ${budget} ms; if the mutant was merely slow rather than stranded, raise the floor with --mutant-timeout-ms and re-run with --resume to keep this session's verdicts`;
+        // R114: the machine value that goes with the prose above. Without it this outcome shipped
+        // `cause: undefined`, so `lethal explain`'s R91 prescription — keyed on `cause`, which is
+        // the right thing to key on — could never fire for the very case R91 measured. Deliberately
+        // NOT `deadline-exceeded`: that one means a backend told us the run was over, and the whole
+        // point of this branch is that nobody can say whether it is.
+        //
+        // Set at exactly the two sites that write `STRANDED_NOTE_PREFIX`, so this value and
+        // `isStrandedNote` (resume.ts) describe the same set of mutants. `--resume` still reads the
+        // prose, because rows recorded before this cause existed have nothing else to read.
+        cause = "stranded";
         break;
       }
       if (v.outcome === "deadline-exceeded") {
@@ -3831,6 +3846,10 @@ async function runMutantsOnBackend(args: {
               detail: `test in-flight-unknown confirming ${ref.method} (mutant ${m.mutantId})${confirmRetried ? " — a first, proven-complete attempt had already been retried once" : ""}${confirm.failureMessage !== undefined ? `: ${confirm.failureMessage}` : ""}`,
             });
             failureNote = `${STRANDED_NOTE_PREFIX}${ref.method} confirm returned no readable result and its operation could not be confirmed complete — container may be stranded`;
+            // R114, the confirmation-side twin of the covering-run strand above — same reasoning,
+            // and it must be set here too or the two `STRANDED_NOTE_PREFIX` sites would disagree
+            // about whether a strand has a cause.
+            cause = "stranded";
           }
         } else if (confirm.outcome === "pass") {
           verdict = "killed";
@@ -4258,7 +4277,7 @@ export function record(
   emit: RunEmitter,
   killingTest?: string,
   failureNote?: string,
-  cause?: "deadline-exceeded" | "unstable",
+  cause?: MutantErrorCause,
   durationMs = 0,
   // The tests this mutant was actually run against — see `SessionOutcome.coveringTests`. Defaults
   // to empty for the call sites that record without executing anything (`no-coverage`, known

@@ -21,7 +21,7 @@ import {
   REPORT_SCHEMA_VERSION,
   STRANDED_SKIP_INTERPRETATION,
 } from "../src/report";
-import type { Caveat, MutantOutcome, SessionReport } from "../src/report";
+import type { Caveat, MutantErrorCause, MutantOutcome, SessionReport } from "../src/report";
 import { ATTRIBUTION_INTERPRETATIONS } from "../src/selection";
 import type { CoverageAttribution } from "../src/selection";
 import type { MutantVerdict } from "../src/store";
@@ -61,7 +61,7 @@ function survivorMutant(
   };
 }
 
-function errorMutant(code: string, cause?: "deadline-exceeded" | "unstable"): MutantOutcome {
+function errorMutant(code: string, cause?: MutantErrorCause): MutantOutcome {
   return {
     mutantCode: code,
     file: "src/Posting/Foo.Codeunit.al",
@@ -815,6 +815,41 @@ describe("explain — tool mechanics", () => {
     );
     // The prescription is about LethAL's own machinery, so it names the flag.
     expect(out.notMeasured[0]?.interpretation?.meaning).toContain("--mutant-timeout-ms");
+  });
+
+  /**
+   * R114's acceptance, stated as the property the projection could not have.
+   *
+   * A STRANDED mutant — one whose run returned no readable result and whose operation could not be
+   * confirmed complete, so the tier was quarantined — reached the report with `cause: undefined`.
+   * Measured on real campaign data: all three `error` verdicts in `rung1.run2-partial` carried it.
+   * The prose the operator needs was in `failureNote`, which the explain contract explicitly forbids
+   * consumers to parse, so R91's prescription was keyed on the right machine value and could NEVER
+   * fire for the case R91 measured. Machinery that runs, reports success, and measures nothing.
+   *
+   * `stranded` is its OWN cause rather than a reuse of `deadline-exceeded`, and the difference is
+   * not cosmetic: `deadline-exceeded` means the budget elapsed and a backend told us the mutant is
+   * over, so the container is clean. A strand means we do NOT know whether it is over. Both want the
+   * same first move — raise the floor and resume — so both carry that; only one of them can also
+   * promise the tier is fine.
+   */
+  test("R114: a STRANDED error carries the stranded cause and emits R91's prescription", () => {
+    const strand = {
+      ...errorMutant("M0003", "stranded"),
+      failureNote:
+        "quarantined: Foo Tests.PostsBatch returned no readable result and its operation could " +
+        "not be confirmed complete — container may be stranded. Its budget was 180000 ms",
+    };
+    const out = explain(reportFixture({ mutants: [strand] }));
+    expect(out.notMeasured[0]?.cause).toBe("stranded");
+    expect(out.notMeasured[0]?.interpretation).toBe(ERROR_CAUSE_INTERPRETATIONS.stranded);
+    // R91's prescription, by the flag it names — this is the property the row says it cannot have.
+    expect(out.notMeasured[0]?.interpretation?.meaning).toContain("--mutant-timeout-ms");
+    expect(out.notMeasured[0]?.interpretation?.meaning).toContain("--resume");
+    // And the half `deadline-exceeded` must NOT be allowed to claim for a strand: that the mutant
+    // is done. Asserted on the entailed negative rather than by comparing the two registry entries,
+    // because two entries could drift into saying the same thing and still differ by identity.
+    expect(out.notMeasured[0]?.interpretation?.entailedNegative).toContain("not know");
   });
 
   test("an error with NO recorded cause carries no interpretation — and says nothing instead", () => {

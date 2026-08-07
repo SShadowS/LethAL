@@ -23,7 +23,7 @@
 import type { MutantManifestEntry } from "@lethal/schemata";
 import type { BackendCapabilities, TestMethodRef, TestOutcome } from "./backend";
 import type { PermissionCanaryResult } from "./permission-canary";
-import type { NotInstrumentedFile } from "./report";
+import type { MutantErrorCause, NotInstrumentedFile } from "./report";
 import type { CoverageAttribution } from "./selection";
 import type { MutantVerdict, RunnerKind } from "./store";
 
@@ -206,7 +206,11 @@ export type RunEventInput =
        * reconstructable from events, reproducing the exact gap this review pass exists to close.
        * Flagged in the task report for confirmation.
        */
-      readonly cause?: "deadline-exceeded" | "unstable";
+      // R114: the NAMED type, not a re-spelled inline union. `MutantErrorCause`'s registry is a
+      // `Record<>`, so a new member is a compile error until an interpretation exists — a copy of
+      // the union here would quietly go stale instead, which is how `stranded` would have been
+      // added to the report and dropped from the event stream `buildReport` actually folds.
+      readonly cause?: MutantErrorCause;
       /**
        * R86 — see `MutantRow.killingTestFailure` (store.ts). The failure text of the run that
        * KILLED this mutant, verbatim from the backend. Rides here as well as on the store row

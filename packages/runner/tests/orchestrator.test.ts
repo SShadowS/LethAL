@@ -57,6 +57,7 @@ import type {
 import { QuarantineStore } from "../src/quarantine-store";
 import { renderConsole } from "../src/report";
 import type { SessionOutcome } from "../src/report";
+import { isStrandedNote } from "../src/resume";
 import { SessionSafety, SessionUnsafeError } from "../src/session-safety";
 import { ResultsStore } from "../src/store";
 import { legacyBuildReport } from "./helpers/legacy-report";
@@ -4091,6 +4092,91 @@ async function runSessionForTest(
   });
 }
 
+/**
+ * R114. The strand site wrote a rich `failureNote` and `break`d without ever reaching a `cause`
+ * assignment, so a stranded mutant shipped `cause: undefined`. Measured on real campaign data: all
+ * three `error` verdicts in `rung1.run2-partial` carried it. Consequence, found while building
+ * `lethal explain`: the projection's R91 prescription is keyed on `cause` — the correct machine
+ * value to key on — and could therefore NEVER fire for a strand. The prose the operator needs
+ * existed, but only inside free text the explain contract forbids consumers to parse.
+ *
+ * The fake strands ONE named mutant and answers cleanly for every other, which matters for a
+ * reason worth writing down: a backend that strands its very first mutant never lets the batch
+ * attest, so design §G's fail-closed gate rewrites every note to "unattested artifact" and the
+ * strand note never reaches the report at all. That is why `fault-injection.test.ts`'s
+ * always-stranding fake could not host this test — it produces a quarantine but no stranded
+ * OUTCOME. Scoring a few mutants first is what makes the strand observable.
+ */
+function strandsOnBackend(strandMutantId: string): ExecutionBackend {
+  let active: string | null = null;
+  return fakeBackend({
+    // `coverage: "none"` so every green test covers every mutant (the all-green fallback) — this
+    // fake reports no coverage map, and under a coverage-claiming capability that would make all
+    // nine mutants `no-coverage` and never run one at all.
+    capabilities: () => ({
+      coverage: "none",
+      deploy: "publish",
+      isolation: "session",
+      authoritative: true,
+    }),
+    activate: async (id) => {
+      active = id;
+    },
+    run: async (ref, opts) =>
+      active === strandMutantId
+        ? { ref, outcome: "deadline-exceeded", durationMs: 1, operation: "in-flight-unknown" }
+        : {
+            ref,
+            outcome: "pass",
+            durationMs: 1,
+            ...(opts.coverage === "none"
+              ? { attestation: { observedAny: true, identityMismatch: false } }
+              : {}),
+          },
+  });
+}
+
+describe("runSession — R114, a strand records a machine cause and not only prose", () => {
+  test("a stranded mutant records cause `stranded`", async () => {
+    const report = await runSessionForTest(strandsOnBackend("M0007"), {
+      quarantineDir: freshTmpDir(),
+      nowIso: () => "2026-07-20T12:00:00.000Z",
+    });
+    const stranded = report.mutants.filter((m) => isStrandedNote(m.failureNote));
+    expect(
+      stranded.length,
+      `no stranded outcome in ${JSON.stringify(report.mutants.map((m) => [m.mutantCode, m.verdict, m.failureNote]))}`,
+    ).toBeGreaterThan(0);
+    for (const m of stranded) {
+      expect(m.cause).toBe("stranded");
+    }
+  });
+
+  /**
+   * The invariant that keeps the new machine value and the pre-existing prose predicate from
+   * drifting apart. `buildResumeIndex` (resume.ts) decides which mutants `--resume` SKIPS by
+   * calling `isStrandedNote` on the free-text note — that is the prose-keying R114 objects to, and
+   * it stays, because rows recorded before `cause` existed have nothing else. What must never
+   * happen is the two disagreeing about what a strand IS: a mutant `explain` calls stranded that
+   * `--resume` re-runs, or the reverse, would be two consumers of one report reaching opposite
+   * conclusions about the same row.
+   *
+   * Stated as an equivalence over EVERY outcome in the run, not just the stranded ones, so a fix
+   * that sets `cause = "stranded"` too WIDELY reddens this exactly as loudly as one that sets it
+   * too narrowly. Both directions matter: `deadline-exceeded` promises the mutant is done, and a
+   * strand cannot promise that.
+   */
+  test('`cause === "stranded"` and a STRANDED_NOTE_PREFIX note are the same set', async () => {
+    const report = await runSessionForTest(strandsOnBackend("M0007"), {
+      quarantineDir: freshTmpDir(),
+      nowIso: () => "2026-07-20T12:00:00.000Z",
+    });
+    for (const m of report.mutants) {
+      expect(m.cause === "stranded").toBe(isStrandedNote(m.failureNote));
+    }
+  });
+});
+
 describe("runSession — Task 11 quarantine consult + latch-gated finally", () => {
   test("a pre-quarantined tier refuses to run before status() is ever called", async () => {
     const dir = freshTmpDir();
@@ -4491,10 +4577,16 @@ describe("runSession — latch+quarantine on in-flight-unknown at baseline and k
     // in-flight-unknown is an UNREADABLE ANSWER, and our own client timeout produces a different
     // verdict entirely (`RunMutant timed out`, mapped by the `v.outcome === "deadline-exceeded"`
     // branch that follows this one). Labelling it a deadline inflated `counts.deadlineExceeded` in
-    // the report and mislabelled the durable record. `cause`'s union has no accurate member for
-    // "the ack was lost", so it is left unset rather than carrying a misleading one.
-    expect(sessionReport.mutants[0]?.cause).toBeUndefined();
+    // the report and mislabelled the durable record.
+    //
+    // It then asserted `cause` was UNSET, on the stated grounds that the union had no accurate
+    // member. R114 added one: `stranded` says the operation could not be confirmed complete, which
+    // is exactly what happened here. The assertion this test exists to make is unchanged — a lost
+    // ack must not read as a deadline — so both halves of that are still pinned below, and the
+    // third line is the new fact.
+    expect(sessionReport.mutants[0]?.cause).not.toBe("deadline-exceeded");
     expect(sessionReport.counts.deadlineExceeded).toBe(0);
+    expect(sessionReport.mutants[0]?.cause).toBe("stranded");
   });
 });
 

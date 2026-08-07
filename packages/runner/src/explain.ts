@@ -133,10 +133,24 @@ import type { MutantVerdict } from "./store";
 
 /**
  * Bumped whenever a field of `ExplainOutput` is renamed, removed, or changes meaning, or a value
- * domain shrinks. Additive fields do not require a bump. Prose changes NEVER do — see
- * `EXPLAIN_CONTRACT`.
+ * domain CHANGES — in either direction. Additive FIELDS do not require a bump. Prose changes NEVER
+ * do — see `EXPLAIN_CONTRACT`.
+ *
+ * "In either direction" was ambiguous until R114 had to decide it, so it is written down rather
+ * than re-argued. The old wording said "or a value domain shrinks", which reads as though GROWING
+ * one is additive and free. It is not, and the reason is the same one this file already gives for
+ * validating a copied enum: `EXPLAIN_CONTRACT` publishes value domains as stable, so a consumer
+ * branches on `cause` exactly as this projection branches on `verdict`, and a value it has never
+ * seen lands in whatever its else-branch says — invisibly, and with no version to have caught it.
+ * A new field cannot do that, because a consumer that does not read a field is unaffected by it.
+ *
+ * 2 — R114 added `stranded` to `MutantErrorCause`, so `$.notMeasured[].cause` has a third value.
+ * `REPORT_SCHEMA_VERSION` deliberately did NOT move for the same change: on that side
+ * `assertExplainableReport` already refuses an unrecognised `cause` by name, loudly, so the hole
+ * this version exists to close is closed there by a check instead — and bumping it would make every
+ * committed campaign baseline unreadable to this build, which is a real cost for no gain.
  */
-export const EXPLAIN_SCHEMA_VERSION = 1;
+export const EXPLAIN_SCHEMA_VERSION = 2;
 
 /**
  * Thrown when the input is not an explainable `SessionReport` — a caller-contract violation, not a
