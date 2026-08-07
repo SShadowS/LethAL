@@ -22,6 +22,7 @@ import { DeploymentVerifier, decidePublishOutcome } from "../src/deployment-veri
 import { generateMutationSet, operatorTiers, runSession } from "../src/orchestrator";
 import {
   assertUnderCeiling,
+  batchCeilingWarning,
   clearCeilingCommand,
   clearPublishCeiling,
   guardsPerFile,
@@ -1192,5 +1193,65 @@ describe("clear-ceiling reports a no-op AS a no-op (fix round 2)", () => {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+});
+
+/**
+ * R108 — a batch whose TOTAL crosses the bracket while no single file does. R90 refuses per FILE,
+ * so this case paid for the failure with nothing said beforehand.
+ */
+describe("batchCeilingWarning", () => {
+  const ceiling = { smallestFailure: 331, largestSuccess: 229, failureObservedOn: "2026-08-05" };
+
+  test("warns when the batch TOTAL crosses the bracket, naming total, bracket and the lever", () => {
+    const msg = batchCeilingWarning({
+      batchIndex: 3,
+      guardCount: 412,
+      fileCount: 4,
+      ceiling,
+      maxGuardsPerBatch: 800,
+    });
+    expect(msg).toContain("batch 3");
+    expect(msg).toContain("412 guards across 4 file(s)");
+    expect(msg).toContain("331 guards were MEASURED to fail");
+    expect(msg).toContain("2026-08-05");
+    expect(msg).toContain("largest measured to publish successfully carried 229");
+    expect(msg).toContain("--max-guards-per-batch (currently 800)");
+  });
+
+  test("says it is NOT refused — the whole point is that this direction stays a warning", () => {
+    // `--max-guards-per-batch` is exactly the lever for a batch total, so refusing would be the
+    // false-refusal direction R90 was careful to avoid.
+    const msg = batchCeilingWarning({ batchIndex: 0, guardCount: 331, fileCount: 2, ceiling });
+    expect(msg).toContain("NOT refused");
+    expect(msg).toContain("set --max-guards-per-batch below the bracket");
+  });
+
+  test("says nothing on a fresh tier — no measured failure means no bracket to warn about", () => {
+    expect(
+      batchCeilingWarning({ batchIndex: 0, guardCount: 99_999, fileCount: 9, ceiling: {} }),
+    ).toBeUndefined();
+  });
+
+  test("is inclusive at the boundary, exactly like the per-file refusal", () => {
+    expect(
+      batchCeilingWarning({ batchIndex: 0, guardCount: 331, fileCount: 2, ceiling }),
+    ).toBeDefined();
+    expect(
+      batchCeilingWarning({ batchIndex: 0, guardCount: 330, fileCount: 2, ceiling }),
+    ).toBeUndefined();
+  });
+
+  test("omits the success half when the tier has no measured success to quote", () => {
+    const msg = batchCeilingWarning({
+      batchIndex: 1,
+      guardCount: 400,
+      fileCount: 3,
+      ceiling: { smallestFailure: 331 },
+    });
+    expect(msg).toContain("331 guards were MEASURED to fail");
+    expect(msg).not.toContain("largest measured");
+    // No date recorded either — the sentence must not end with a dangling " on ."
+    expect(msg).not.toContain("tier on .");
   });
 });

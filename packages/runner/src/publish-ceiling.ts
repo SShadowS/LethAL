@@ -323,3 +323,53 @@ export function guardsPerFile(
   for (const m of mutants) counts.set(m.file, (counts.get(m.file) ?? 0) + 1);
   return new Map([...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])));
 }
+
+/**
+ * R108: the WARNING for a batch whose TOTAL crosses the bracket while no single file does.
+ *
+ * `assertUnderCeiling` refuses per FILE, deliberately: batches split at file granularity, so a
+ * file that alone exceeds the ceiling cannot be rescued by any flag. But the ceiling is a property
+ * of what gets PUBLISHED, and a batch publishes several files at once — so N files each
+ * comfortably under the bracket can sum past it and time out, with nothing said beforehand.
+ *
+ * **This must NEVER refuse, and that is the whole design.** `--max-guards-per-batch` is exactly the
+ * lever for a batch total, so refusing here would be the false-refusal direction R90 was careful to
+ * avoid: the user has a fix, and the tool should not pre-empt it. R90's own complaint was "nobody
+ * can discover the ceiling before paying for it", and for the multi-file batch shape that stayed
+ * true after R90 shipped. A warning closes exactly that and nothing more.
+ *
+ * Returns `undefined` when there is nothing to say: no measured failure on this tier (a fresh
+ * topology refuses and warns about nothing), or a total under the bracket.
+ */
+export function batchCeilingWarning(input: {
+  readonly batchIndex: number;
+  /** The batch's SUMMED deployed guard count, across every file in it. */
+  readonly guardCount: number;
+  readonly fileCount: number;
+  readonly ceiling: PublishCeiling;
+  /** The run's `--max-guards-per-batch`, when one is set — quoted so the lever names its own
+   *  current value rather than asking the reader to go and look it up. */
+  readonly maxGuardsPerBatch?: number;
+}): string | undefined {
+  const { smallestFailure, largestSuccess, failureObservedOn } = input.ceiling;
+  if (smallestFailure === undefined) return undefined;
+  if (input.guardCount < smallestFailure) return undefined;
+
+  const dated = failureObservedOn === undefined ? "" : ` on ${failureObservedOn}`;
+  const parts = [
+    `[lethal] batch ${input.batchIndex} carries ${input.guardCount} guards across`,
+    `${input.fileCount} file(s), and ${smallestFailure} guards were MEASURED to fail to publish on`,
+    `this tier${dated}.`,
+  ];
+  if (largestSuccess !== undefined) {
+    parts.push(`The largest measured to publish successfully carried ${largestSuccess}.`);
+  }
+  parts.push(
+    "No single file crosses that on its own, so this is NOT refused — a batch total is exactly",
+    "what --max-guards-per-batch is for, and refusing would take a decision that is yours.",
+    input.maxGuardsPerBatch === undefined
+      ? "If this batch fails to publish, set --max-guards-per-batch below the bracket and rerun."
+      : `If this batch fails to publish, lower --max-guards-per-batch (currently ${input.maxGuardsPerBatch}) below the bracket and rerun.`,
+  );
+  return parts.join(" ");
+}

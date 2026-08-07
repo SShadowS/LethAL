@@ -54,6 +54,7 @@ import {
 import { Semaphore, shardEvenly } from "./pool";
 import {
   assertUnderCeiling,
+  batchCeilingWarning,
   clearCeilingCommand,
   guardsPerFile,
   knownCeiling,
@@ -2474,6 +2475,24 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
               file,
             }),
           });
+        }
+        // R108: no FILE crosses the bracket (or we would have thrown above), but the batch
+        // publishes all of them at once and its TOTAL can. Warn, never refuse — see
+        // `batchCeilingWarning`. Emitted after the per-file loop so a genuine refusal preempts it,
+        // and still ahead of compile and publish, which is the whole point: R90's complaint was
+        // that nobody can discover the ceiling before paying for it, and for the multi-file batch
+        // shape that stayed true after R90.
+        const batchWarning = batchCeilingWarning({
+          batchIndex: batchIdx,
+          guardCount: manifest.mutants.length,
+          fileCount: perFileGuards.size,
+          ceiling,
+          ...(cfg.maxGuardsPerBatch !== undefined
+            ? { maxGuardsPerBatch: cfg.maxGuardsPerBatch }
+            : {}),
+        });
+        if (batchWarning !== undefined) {
+          emit({ type: "warning", code: "batch-over-ceiling", message: batchWarning });
         }
       }
       // The ONE file this artifact's guards came from, when there is one — recorded alongside the

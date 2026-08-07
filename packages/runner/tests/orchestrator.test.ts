@@ -56,9 +56,11 @@ import type {
   MutationSetResult,
   SessionConfig,
 } from "../src/orchestrator";
+import { recordPublishOutcome } from "../src/publish-ceiling";
 import { QuarantineStore } from "../src/quarantine-store";
 import { renderConsole } from "../src/report";
 import type { SessionOutcome } from "../src/report";
+import { quarantineResourceKey } from "../src/resource-key";
 import { isStrandedNote } from "../src/resume";
 import { SessionSafety, SessionUnsafeError } from "../src/session-safety";
 import { ResultsStore } from "../src/store";
@@ -6905,3 +6907,131 @@ function fakeManifestEntry(mutantId: string): MutantManifestEntry {
     astHash: "hash",
   };
 }
+
+// ————————————————————————————————————————————————————————————————————————
+// R108 — the CALL SITE for the batch-total ceiling warning. `assertUnderCeiling` refuses per FILE
+// (batches split at file granularity, so a file over the bracket cannot be rescued by any flag),
+// but the ceiling is a property of what gets PUBLISHED, and a batch publishes several files at
+// once. N files each comfortably under the bracket can sum past it and time out with nothing said.
+//
+// Tested at the SESSION, not at `batchCeilingWarning` — a unit test of the function proves nothing
+// about whether `runSession` ever calls it, which is the exact gap this repo keeps finding.
+// ————————————————————————————————————————————————————————————————————————
+describe("runSession — R108: a batch whose TOTAL crosses the bracket warns before paying", () => {
+  const authoritative = (): ExecutionBackend =>
+    fakeBackend({
+      capabilities: () => ({
+        coverage: "none",
+        deploy: "publish",
+        isolation: "session",
+        authoritative: true,
+      }),
+    });
+
+  /**
+   * Two files, and a recorded failure placed just above the LARGEST single file — so no file can
+   * trip `assertUnderCeiling` and only the batch total can. Derived from the fixture's own counts
+   * rather than hardcoded, so a fixture that grew a mutant cannot silently turn this into a
+   * per-file refusal test wearing a batch-total name.
+   */
+  async function seededRun(): Promise<{ events: RunEvent[]; perFileMax: number; total: number }> {
+    const dirs = await makeProject();
+    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), THREE_PROC_AL);
+    await Bun.write(join(dirs.projectDir, "SandboxTable.Table.al"), TRIGGER_TABLE_AL);
+    const set = await generateMutationSet(dirs.projectDir);
+    const perFile = set.files.map((f) => f.specs.length);
+    const perFileMax = Math.max(...perFile);
+    const total = perFile.reduce((a, b) => a + b, 0);
+    const store = new ResultsStore(":memory:");
+    recordPublishOutcome(
+      store,
+      quarantineResourceKey({ server: "http://cronus281", serverInstance: "BC" }),
+      perFileMax + 1,
+      "failed",
+      undefined,
+    );
+    const events: RunEvent[] = [];
+    const emit = createEmitter([(e) => events.push(e)]);
+    await runSession({
+      backend: authoritative(),
+      store,
+      ...dirs,
+      selectorIds,
+      resourceServer: "http://cronus281",
+      resourceServerInstance: "BC",
+      quarantineDir: freshTmpDir(),
+      emit,
+    });
+    store.close();
+    return { events, perFileMax, total };
+  }
+
+  test("emits a batch-over-ceiling warning naming the total and the lever", async () => {
+    const { events, perFileMax, total } = await seededRun();
+    // The fixture must actually hold the shape under test: two files, and a total strictly above
+    // the largest single file. Without this the test could pass on a one-file project, where the
+    // per-file refusal would have fired instead and this warning is unreachable.
+    expect(total).toBeGreaterThan(perFileMax);
+    const warnings = events.filter(
+      (e): e is Extract<RunEvent, { type: "warning" }> => e.type === "warning",
+    );
+    const hit = warnings.find((e) => e.code === "batch-over-ceiling");
+    expect(hit).toBeDefined();
+    expect(hit?.message).toContain(`${total} guards across`);
+    expect(hit?.message).toContain("--max-guards-per-batch");
+    expect(hit?.message).toContain("NOT refused");
+  });
+
+  test("warns rather than refusing — the session still completes and scores its mutants", async () => {
+    // The property that separates R108 from R90: `--max-guards-per-batch` is the user's lever for
+    // a batch total, so taking the decision away would be the false-refusal direction R90 avoided.
+    const dirs = await makeProject();
+    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), THREE_PROC_AL);
+    await Bun.write(join(dirs.projectDir, "SandboxTable.Table.al"), TRIGGER_TABLE_AL);
+    const set = await generateMutationSet(dirs.projectDir);
+    const perFileMax = Math.max(...set.files.map((f) => f.specs.length));
+    const store = new ResultsStore(":memory:");
+    recordPublishOutcome(
+      store,
+      quarantineResourceKey({ server: "http://cronus281", serverInstance: "BC" }),
+      perFileMax + 1,
+      "failed",
+      undefined,
+    );
+    const report = await runSession({
+      backend: authoritative(),
+      store,
+      ...dirs,
+      selectorIds,
+      resourceServer: "http://cronus281",
+      resourceServerInstance: "BC",
+      quarantineDir: freshTmpDir(),
+    });
+    expect(report.mutants.length).toBeGreaterThan(0);
+    store.close();
+  });
+
+  test("says nothing on a fresh tier — no recorded failure, no bracket", async () => {
+    const dirs = await makeProject();
+    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), THREE_PROC_AL);
+    await Bun.write(join(dirs.projectDir, "SandboxTable.Table.al"), TRIGGER_TABLE_AL);
+    const store = new ResultsStore(":memory:");
+    const events: RunEvent[] = [];
+    const emit = createEmitter([(e) => events.push(e)]);
+    await runSession({
+      backend: authoritative(),
+      store,
+      ...dirs,
+      selectorIds,
+      resourceServer: "http://cronus281",
+      resourceServerInstance: "BC",
+      quarantineDir: freshTmpDir(),
+      emit,
+    });
+    const warnings = events.filter(
+      (e): e is Extract<RunEvent, { type: "warning" }> => e.type === "warning",
+    );
+    expect(warnings.some((e) => e.code === "batch-over-ceiling")).toBe(false);
+    store.close();
+  });
+});
