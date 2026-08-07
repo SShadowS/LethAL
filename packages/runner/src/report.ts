@@ -977,7 +977,8 @@ export const GUARD_EVIDENCE_INTERPRETATIONS: Record<GuardEvidence, Interpretatio
   "not-observed": {
     meaning:
       "DECISIVE. No guarded site executed at all, so the mutated code was never reached and the " +
-      "mutant cannot have been given a chance to fail. It belongs with `no-coverage`.",
+      "mutant cannot have been given a chance to fail. See `reach` for where it belongs, which " +
+      "depends on whether coverage placed a test in the procedure.",
     entailedNegative:
       "Reporting such a mutant `survived` overstates the suite — this is not a finding about the " +
       "tests, and treating it as one attributes to the test suite something the execution path did.",
@@ -990,6 +991,77 @@ export const GUARD_EVIDENCE_INTERPRETATIONS: Record<GuardEvidence, Interpretatio
     entailedNegative:
       'Absent means "not measured", never "not observed" — it is not evidence in either direction.',
     basis: "R32",
+  },
+};
+
+/**
+ * R116: what the PAIR of `coverageAttribution` and `guardObserved` says about whether the mutated
+ * statement was reached — which neither field can say alone.
+ *
+ * The two signals look contradictory and are not. `executionProven` (i.e. `attribution === "exact"`)
+ * is a MEMBER-level coverage match collected on the BASELINE run: a test executed the mutated
+ * PROCEDURE. `guardEvidence: "not-observed"` comes from the MUTANT run's own attestation, and
+ * `ObservedAny` is set inside `IsActive` — the guard predicate the instrumented target calls at
+ * each mutation SITE — so it means no guarded STATEMENT executed anywhere in the target during that
+ * mutant's covering runs. Different granularity, different runs. A test can enter a procedure and
+ * never reach one statement inside it (an untaken branch), and then BOTH readings are correct.
+ *
+ * That pair is more actionable than either half: *this test enters the procedure but never reaches
+ * this line*. It calls for a new case covering the branch, not a stronger assertion in an existing
+ * one — different pieces of work. Collapsing the two upstream, which R116 considered and rejected,
+ * would have destroyed exactly that.
+ *
+ * This exists as its own field because `explain.ts`'s admissibility rule requires an interpretation
+ * to be keyed to a machine value the report carries AND co-located with it, and a claim about a
+ * CONJUNCTION has no single value to sit beside. That rule's own remedy is stated in `explain.ts`:
+ * "if a useful thing to say has no field to hang on, the fix is to add the FIELD". This is that
+ * field.
+ */
+export type SurvivorReach = "covered-but-unreached" | "unreached-and-uncovered" | "not-decided";
+
+/**
+ * The single derivation of `SurvivorReach`, so a projection reads the pair through one function
+ * rather than re-deriving the combination — which is where two accounts of one fact would start.
+ */
+export function survivorReachOf(
+  attribution: CoverageAttribution,
+  guardEvidence: GuardEvidence,
+): SurvivorReach {
+  if (guardEvidence !== "not-observed") return "not-decided";
+  return attribution === "exact" ? "covered-but-unreached" : "unreached-and-uncovered";
+}
+
+/** What each `SurvivorReach` state means. Co-located with the type, as every registry here is. */
+export const REACH_INTERPRETATIONS: Record<SurvivorReach, Interpretation> = {
+  "covered-but-unreached": {
+    meaning:
+      "A test executed the mutated PROCEDURE (member-level coverage, baseline run) and yet NO " +
+      "guarded statement ran during the mutant's own runs. Both are correct at once: the test " +
+      "enters the procedure and never reaches this statement.",
+    entailedNegative:
+      "NOT the same as uncovered, so filing it with `no-coverage` throws away the one thing that " +
+      "makes it actionable. It is also not evidence about assertion strength: no assertion was " +
+      "ever given the chance to see this mutation.",
+    basis: "R116",
+  },
+  "unreached-and-uncovered": {
+    meaning:
+      "No guarded statement ran, and coverage did not place a test in the mutated procedure " +
+      "either. Nothing exercised this code. It belongs with `no-coverage`.",
+    entailedNegative:
+      "Says nothing about the tests that DO exist — this is a statement about the execution path, " +
+      "not about assertion strength.",
+    basis: "R116",
+  },
+  "not-decided": {
+    meaning:
+      "The guard attestation is not decisive for this mutant (`observed` says only that SOME " +
+      "guarded site fired somewhere; `not-measured` says no attestation exists), so the pair says " +
+      "nothing about whether the mutated statement was reached.",
+    entailedNegative:
+      'Not evidence that the statement WAS reached. "Not decided" is a statement about this ' +
+      "report's evidence, never about the target.",
+    basis: "R116",
   },
 };
 

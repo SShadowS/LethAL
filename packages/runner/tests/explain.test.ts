@@ -18,6 +18,7 @@ import {
   ERROR_CAUSE_INTERPRETATIONS,
   GUARD_EVIDENCE_INTERPRETATIONS,
   QUARANTINE_INTERPRETATION,
+  REACH_INTERPRETATIONS,
   REPORT_SCHEMA_VERSION,
   STRANDED_SKIP_INTERPRETATION,
 } from "../src/report";
@@ -274,6 +275,9 @@ const PROJECTION_AUTHORED_STRINGS: readonly string[] = [
   "observed", // GuardEvidence — derived from a boolean, so absent from the report
   "not-observed",
   "not-measured",
+  "covered-but-unreached", // SurvivorReach — R116, derived from a PAIR, so absent from the report
+  "unreached-and-uncovered",
+  "not-decided",
   "quarantined", // ToolCondition — a field NAME in the report, never a value
   "stranded-skips",
 ];
@@ -444,12 +448,16 @@ const EXPLAIN_LEAF_PATHS: readonly string[] = [
   "$.survivors[].executionProven", // [enum] derived: attribution === "exact"
   "$.survivors[].coveringTests[]", // [verbatim]
   "$.survivors[].guardEvidence", // [enum] GuardEvidence
+  "$.survivors[].reach", // [enum] SurvivorReach — R116, derived from (attribution, guardEvidence)
   "$.survivors[].interpretation.meaning", // [registry]
   "$.survivors[].interpretation.entailedNegative", // [registry]
   "$.survivors[].interpretation.basis", // [registry]
   "$.survivors[].guardInterpretation.meaning", // [registry]
   "$.survivors[].guardInterpretation.entailedNegative", // [registry]
   "$.survivors[].guardInterpretation.basis", // [registry]
+  "$.survivors[].reachInterpretation.meaning", // [registry]
+  "$.survivors[].reachInterpretation.entailedNegative", // [registry]
+  "$.survivors[].reachInterpretation.basis", // [registry]
   "$.notMeasured[].mutantCode", // [verbatim]
   "$.notMeasured[].file", // [verbatim]
   "$.notMeasured[].line", // [verbatim]
@@ -486,6 +494,7 @@ describe("explain — the admissibility rule, made executable", () => {
       ...Object.values(ATTRIBUTION_INTERPRETATIONS),
       ...Object.values(CAVEAT_INTERPRETATIONS),
       ...Object.values(GUARD_EVIDENCE_INTERPRETATIONS),
+      ...Object.values(REACH_INTERPRETATIONS),
       ...Object.values(ERROR_CAUSE_INTERPRETATIONS),
       QUARANTINE_INTERPRETATION,
       STRANDED_SKIP_INTERPRETATION,
@@ -751,27 +760,25 @@ describe("explain — survivors", () => {
     );
   });
 
-  test("executionProven TRUE can sit beside guardEvidence 'not-observed', and is NOT reconciled", () => {
-    // Filed by the final review as a roadmap row; this pins the FACT, not a decision.
+  test("executionProven TRUE beside guardEvidence 'not-observed' is NOT a contradiction — R116", () => {
+    // The row this test was filed for is DECIDED, and the decision reversed its original reading.
+    // The pair looked like two measurements disagreeing. It is not: `exact` attribution is a
+    // MEMBER-level coverage match from the BASELINE run (a test executed the mutated PROCEDURE),
+    // while `not-observed` is the MUTANT run's attestation that no guarded STATEMENT ran, because
+    // `ObservedAny` is set inside `IsActive` at each mutation SITE. Different granularity,
+    // different runs. A test can enter a procedure and never reach one statement inside it.
     //
-    // The pair is a genuine contradiction in evidence, not a bug in either field. `exact`
-    // attribution is coverage's claim, from the baseline run on the hub, that a test executed this
-    // procedure. `guardObserved: false` is the fenced run's own attestation that NO instrumented
-    // guard fired at all — which its interpretation calls DECISIVE. Two measurements, two sessions,
-    // opposite answers about the same mutant.
-    //
-    // Zero such survivors exist across all six committed reports and no other fixture builds the
-    // pair, so it is LATENT: nothing here would notice if the projection started reconciling them,
-    // or stopped. This test states what today's projection does — emits both, side by side,
-    // unreconciled — so that whichever way the roadmap row is decided, the change shows up as this
-    // test going red rather than as a silent behaviour shift.
+    // So the pair is MORE actionable than either half — "this test enters the procedure but never
+    // reaches this line" — and reconciling it upstream, which the row considered, would have
+    // destroyed that. The projection now NAMES the state instead of leaving the reader to spot it.
     const out = explain(reportFixture({ mutants: [survivorMutant("M0001", "exact", false)] }));
     const [s] = out.survivors;
     expect(s?.executionProven).toBe(true);
     expect(s?.guardEvidence).toBe("not-observed");
+    expect(s?.reach).toBe("covered-but-unreached");
     expect(s?.interpretation).toBe(ATTRIBUTION_INTERPRETATIONS.exact);
     expect(s?.guardInterpretation).toBe(GUARD_EVIDENCE_INTERPRETATIONS["not-observed"]);
-    // No third field, no note, no flag: the projection does not say the two disagree.
+    expect(s?.reachInterpretation).toBe(REACH_INTERPRETATIONS["covered-but-unreached"]);
     expect(Object.keys(s ?? {}).sort()).toEqual(
       [
         "attribution",
@@ -788,8 +795,52 @@ describe("explain — survivors", () => {
         "operatorName",
         "originalText",
         "procedureName",
+        "reach",
+        "reachInterpretation",
       ].sort(),
     );
+  });
+
+  test("`reach` separates covered-but-unreached from genuinely uncovered", () => {
+    // The distinction the shipped `not-observed` prose used to erase by telling every reader to
+    // file such a mutant with `no-coverage`. That is right for `object`/`all-green` and WRONG for
+    // `exact`, and the two call for different work: a new case covering the branch, versus a test
+    // for code nothing exercises at all.
+    const out = explain(
+      reportFixture({
+        mutants: [
+          survivorMutant("M0001", "exact", false),
+          survivorMutant("M0002", "object", false),
+          survivorMutant("M0003", "all-green", false),
+        ],
+      }),
+    );
+    expect(out.survivors.map((s) => s.reach)).toEqual([
+      "covered-but-unreached",
+      "unreached-and-uncovered",
+      "unreached-and-uncovered",
+    ]);
+  });
+
+  test("`reach` is `not-decided` whenever the guard attestation is not decisive", () => {
+    // `observed` says only that SOME guarded site fired somewhere in the artifact, and
+    // `not-measured` says no attestation exists. Neither can place THIS statement, so the pair
+    // must say nothing rather than guess — including for `exact`, the case most tempting to read
+    // as proof the line ran.
+    const out = explain(
+      reportFixture({
+        mutants: [
+          survivorMutant("M0001", "exact", true),
+          survivorMutant("M0002", "exact"),
+          survivorMutant("M0003", "object", true),
+        ],
+      }),
+    );
+    expect(out.survivors.map((s) => s.reach)).toEqual([
+      "not-decided",
+      "not-decided",
+      "not-decided",
+    ]);
   });
 
   test("only `survived` mutants become survivors", () => {

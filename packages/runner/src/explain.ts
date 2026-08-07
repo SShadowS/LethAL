@@ -4,9 +4,11 @@ import {
   ERROR_CAUSE_INTERPRETATIONS,
   GUARD_EVIDENCE_INTERPRETATIONS,
   QUARANTINE_INTERPRETATION,
+  REACH_INTERPRETATIONS,
   REPORT_SCHEMA_VERSION,
   STRANDED_SKIP_INTERPRETATION,
   guardEvidenceOf,
+  survivorReachOf,
 } from "./report";
 import type {
   Caveat,
@@ -15,6 +17,7 @@ import type {
   MutantOutcome,
   ReportValidity,
   SessionReport,
+  SurvivorReach,
 } from "./report";
 import { ATTRIBUTION_INTERPRETATIONS } from "./selection";
 import type { CoverageAttribution } from "./selection";
@@ -156,7 +159,7 @@ import type { MutantVerdict } from "./store";
  * alternative was leaving two more `error` shapes with no machine value at all, which is what R114
  * was filed about in the first place.
  */
-export const EXPLAIN_SCHEMA_VERSION = 3;
+export const EXPLAIN_SCHEMA_VERSION = 4;
 
 /**
  * Thrown when the input is not an explainable `SessionReport` — a caller-contract violation, not a
@@ -183,6 +186,7 @@ export const ADMISSIBLE_INTERPRETATIONS: readonly Interpretation[] = [
   ...Object.values(ATTRIBUTION_INTERPRETATIONS),
   ...Object.values(CAVEAT_INTERPRETATIONS),
   ...Object.values(GUARD_EVIDENCE_INTERPRETATIONS),
+  ...Object.values(REACH_INTERPRETATIONS),
   ...Object.values(ERROR_CAUSE_INTERPRETATIONS),
   QUARANTINE_INTERPRETATION,
   STRANDED_SKIP_INTERPRETATION,
@@ -254,10 +258,19 @@ export interface ExplainSurvivor {
   readonly executionProven: boolean;
   readonly coveringTests: readonly string[];
   readonly guardEvidence: GuardEvidence;
+  /**
+   * R116: what `attribution` and `guardEvidence` say TOGETHER about whether the mutated statement
+   * was reached — the one claim neither can carry alone, and the reason this field exists rather
+   * than a note. `covered-but-unreached` is the actionable case the two signals were previously
+   * read as contradicting: a test enters the procedure and never reaches this statement.
+   */
+  readonly reach: SurvivorReach;
   /** `ATTRIBUTION_INTERPRETATIONS[attribution]`, by reference. */
   readonly interpretation: Interpretation;
   /** `GUARD_EVIDENCE_INTERPRETATIONS[guardEvidence]`, by reference. */
   readonly guardInterpretation: Interpretation;
+  /** `REACH_INTERPRETATIONS[reach]`, by reference. */
+  readonly reachInterpretation: Interpretation;
 }
 
 /**
@@ -596,6 +609,7 @@ function survivorOf(m: MutantOutcome): ExplainSurvivor {
     refuse(`survivor ${JSON.stringify(m.mutantCode)} has no coverageAttribution`, undefined);
   }
   const guardEvidence = guardEvidenceOf(m.guardObserved);
+  const reach = survivorReachOf(attribution, guardEvidence);
   return {
     mutantCode: m.mutantCode,
     file: m.file,
@@ -611,8 +625,10 @@ function survivorOf(m: MutantOutcome): ExplainSurvivor {
     executionProven: attribution === "exact",
     coveringTests: m.coveringTests,
     guardEvidence,
+    reach,
     interpretation: keyed(ATTRIBUTION_INTERPRETATIONS, attribution, "coverageAttribution"),
     guardInterpretation: keyed(GUARD_EVIDENCE_INTERPRETATIONS, guardEvidence, "guardObserved"),
+    reachInterpretation: keyed(REACH_INTERPRETATIONS, reach, "reach"),
   };
 }
 
