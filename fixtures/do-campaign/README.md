@@ -47,7 +47,7 @@ treated as if it were.
   to be present for it to run.
 - A narrowed invocation shape: `lethal run --project U:/Git/do-lethal/Cloud --only <glob>
   --tests-only <glob> --stop-hung-sessions` (see the design doc,
-  `docs/superpowers/specs/2026-08-03-do-live-campaign-design.md:183-189`, for where this exact
+  `docs/superpowers/specs/2026-08-03-do-live-campaign-design.md` §"Rung 1 — smoke", for where this exact
   shape comes from).
 - A budget (`--max-budget-usd`).
 

@@ -2825,7 +2825,7 @@ export const DOCTOR_CREATE_MODE_CAVEAT =
  * `validateEnvToolConfig`'s `hasPackageCachePath` option) genuinely has no value for this field
  * until a real session runs `downloadSymbols`, which a read-only resolver must never do.
  *
- * Computes the SAME default `startEnvToolSession` does (env-tool-session.ts:240,
+ * Computes the SAME default `startEnvToolSession` does (`env-tool-session.ts`'s `packageCachePath`,
  * `args.bcdevRaw.packageCachePath ?? join(args.projectDir, ".alpackages")`) WITHOUT running
  * `downloadSymbols` — one place, so `buildDoctorDeps`'s `resolvedBcdev` and
  * `resolveForceResetLeaseConfig` cannot drift apart on it the way doctor already drifted from
@@ -2873,7 +2873,7 @@ function doctorConfigFromEnvTool(
  * `defaultAlToolPaths`/`resolveAlToolPaths` (publisher.ts/cli.ts — the SAME pair `buildBackend`
  * uses) for tool-paths, and `EnvToolClient` (env-tool.ts) for an env-tool-configured environment.
  * `altoolRequired` mirrors `buildBackend`'s own `envToolDeploy !== undefined` leniency
- * (cli.ts:1548, R21) rather than a doctor-only opinion — an env-tool project never spawns altool,
+ * (`deployerFor`, R21) rather than a doctor-only opinion — an env-tool project never spawns altool,
  * so doctor must not fail one for lacking it (review round 1, Important).
  *
  * Constraint 4 (read-only hard boundary): the environment probe below spawns ONLY the configured
@@ -2953,7 +2953,8 @@ export async function buildDoctorDeps(
   const resolvedEnvCfg = envCfg;
 
   // Final review: a CREATE-MODE envTool config (`envId` absent — `validateEnvToolConfig`'s own
-  // create-mode branch, env-tool.ts:288-306; `requireStatus` is REFUSED there, env-tool.ts:378)
+  // create-mode branch, `env-tool.ts`'s `const createMode`; `requireStatus` is REFUSED there, by
+  // its "applies only to a REUSED environment" throw)
   // is structurally valid and `lethal run` provisions it. But `environment`/`quarantine`/
   // `control-version` all need an environment that does not exist yet — `resolveEnvToolOnce`
   // would substitute `{envId}` into a `resolve` block's command with nothing supplied, and
@@ -3107,7 +3108,7 @@ export async function buildDoctorDeps(
       ...doctorConfigFromEnvTool(envCfg),
       // Review round 1 (Important): an env-tool-configured project publishes through the tool and
       // never spawns altool at all (`deployerFor`/`buildBackend`'s `envToolDeploy !== undefined`
-      // branch, cli.ts:1548, R21) — mirror `run`'s own leniency rather than being stricter than it.
+      // branch, R21) — mirror `run`'s own leniency rather than being stricter than it.
       ...(configFile.envTool !== undefined ? { altoolRequired: false } : {}),
     },
     // Create mode: omit the three deps ENTIRELY (not merely make them throw a friendlier error) —
@@ -3309,7 +3310,7 @@ export async function performForceResetLease(
  * `validateBcDevConfig` on the assembled result — never a second, hand-rolled parse that could
  * drift from what `run` accepts.
  *
- * Deliberately NOT `resolveEnvToolSession`: its own doc comment (above, `cli.ts:246`) says it "can
+ * Deliberately NOT `resolveEnvToolSession`: `validateSelectorIdsForProject`'s doc comment says it "can
  * provision a real, billed Layer-6C environment" — create-mode's `createEnv`/`startEnv`. A
  * recovery command is reached for AFTER a session already died and left a tier stranded; it must
  * never be able to spend money or mutate infrastructure as a side effect of resolving a config at

@@ -1,7 +1,7 @@
 /**
  * A campaign's committed records live wherever a small manifest names them, not wherever a
  * constant compiled into `campaign-freeze.ts` happened to point — see design spec
- * `2026-08-05-observability-and-campaign-method-design.md` §D1: *"`campaign-freeze.ts:37` pins
+ * `2026-08-05-observability-and-campaign-method-design.md` §D1: *"`campaign-freeze.ts` pins
  * `RECORDS_RELATIVE = "docs/campaign/2026-08-03-do"`. The next campaign forks it or edits a
  * constant."* `readCampaignManifest` reads that naming out of a small JSON file instead, and
  * `resolveRecordsDir` resolves it against the repository root exactly the way

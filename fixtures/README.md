@@ -551,8 +551,8 @@ backend must be 100% verdict-identical (the determinism exit criterion — desig
 
 Verify with `bun packages/runner/src/cli.ts run --project fixtures/sandbox-app --tests
 fixtures/sandbox-tests --backend al-runner --dry-run` — it prints `16 mutant site(s)` and, per
-file/line, exactly two `lethal.negate-conditional` sites (`SandboxLogic.Codeunit.al:10` in
-`ClampPercent` and `:22` inside `LogAudit`).
+file/line, exactly two `lethal.negate-conditional` sites (`SandboxLogic.Codeunit.al`, in
+`ClampPercent` and inside `LogAudit`).
 
 ## Coalescing (Layer 4.3)
 
@@ -1607,7 +1607,7 @@ for this key," and it doesn't.
 ## R36 — the fixture's own `asserterror` accepted the wrong error (2026-07-27)
 
 `RequireCategoryAFails` asserted only that AN error occurred. Deleting `DataMain.Get(MainNo)`
-(M0034, `DataOps.Codeunit.al:44`) leaves the record blank, and `TestField(Category, 'A')` then
+(M0034, in `DataOps.Codeunit.al`'s `RequireCategoryA`) leaves the record blank, and `TestField(Category, 'A')` then
 still raises — because `''` is not `'A'` — so the bare `asserterror` was satisfied by a failure
 with a completely different cause and the mutant was reported SURVIVED.
 

@@ -60,8 +60,9 @@ export function filterHistory(
  * (`CoverageEntry.procedure` absent), which join `byObject` alone and never `byMember`. It is the
  * finer of the two lookups that can match a trigger of ANY object
  * kind, since `SymbolReference.json` never records a trigger at all (`AppMethodIndex.lookup` —
- * see `bcdev-backend.ts:606` — can therefore never name one; `app-package.ts:137-149` builds the
- * index exclusively from that file). When neither index names a TABLE trigger mutant,
+ * see `bcdev-backend.ts`'s `this.methodIndex?.lookup` call — can therefore never name one;
+ * `app-package.ts`'s `AppMethodIndex.fromSymbolReference` builds the index exclusively from that
+ * file). When neither index names a TABLE trigger mutant,
  * `coverageFilter` falls back further still, to every green test — see its fallback branches.
  */
 export interface CoverageIndex {

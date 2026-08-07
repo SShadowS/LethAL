@@ -468,7 +468,7 @@ bun scripts/measure-testpage-exclusive.ts U:/Git/do-rel2/Cloud
 
 The live half needs a running environment with the app under test published, credentials from
 `continia env users <id> --json`, and `bc-dev-mcp` spawned with `BC_DEV_USER`/`BC_DEV_PASSWORD`
-(see `env-tool-session.ts:246`). Its per-test coverage feeds the same script.
+(see `env-tool-session.ts`'s `startEnvToolSession`). Its per-test coverage feeds the same script.
 
 ### A side finding worth keeping
 
@@ -784,7 +784,7 @@ could not say this, and the fear that an argument swap is mostly Booleans is mea
 441 of the 893 sit in statement position, where `lethal.void-method-call` already emits. R13
 subtracted the equivalent overlap for `IsolationLevelSwap` (25 of 36) because a `LockTable()`
 DELETION emits byte-identical text to that operator's. A swap does not: dedup identity is
-`kind:start:end:after.text` (`packages/schemata/src/dedup.ts:23`) and `emitDispatch` chains multiple
+`kind:start:end:after.text` (`packages/schemata/src/dedup.ts`'s `identityOf`) and `emitDispatch` chains multiple
 mutants per component, so both mutants survive at one site. **Marginal == gross here.**
 
 ### What this does NOT establish

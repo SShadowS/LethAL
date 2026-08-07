@@ -30,7 +30,7 @@
  *      test method sleeps or loops long enough to fake this) — it cannot be held open by the client
  *      for a controlled multi-second window. `BeginPublish`/`EndPublish`'s two-call op marker CAN,
  *      and from `AcquireLease`'s perspective a publish marker and a run marker are classified
- *      IDENTICALLY (`Op Kind <> none`, design §4; `ControlState.Codeunit.al:361-363` tests only
+ *      IDENTICALLY (`Op Kind <> none`, design §4; `ControlState.Codeunit.al`'s `TryAcquire` tests only
  *      `Op Kind <> none`, never the kind) — so P9 holds a publish marker open across a real sleep
  *      instead. IMPORTANT — what this substitution costs P9, see the P9-specific note below: it is
  *      NOT interchangeable with a genuinely slow, in-flight `RunMutant` call for every purpose §9
@@ -39,7 +39,7 @@
  *      method runs long enough to hold `RunMutant` open) — P8 also holds a `BeginPublish`/
  *      `EndPublish` marker in place of "session A runs". Defensible for the SAME reason as #1:
  *      `TryAcquire`'s busy/orphaned classification does not distinguish op kind
- *      (`ControlState.Codeunit.al:361-363`), so a publish marker exercises the identical
+ *      (`ControlState.Codeunit.al`'s "Op-marker check"), so a publish marker exercises the identical
  *      busy/orphaned/no-quarantine contract a run marker would. Unlike P9 (see below), P8's claim
  *      — the classification treats a healthy, renewed marker as busy and writes no quarantine — does
  *      not depend on anything actually executing between begin and end, so this substitution does
@@ -51,7 +51,7 @@
  *      narrower, LEASE-layer claim design §5/§6 makes about it — `EndPublish` clears the marker on
  *      ANY confirmed terminal outcome, success or failure, because `ControlState.TryEndPublish`
  *      does not branch on the `outcome` string's content (it is not even a parameter to the state
- *      transition — `ControlState.Codeunit.al:552-554`) — so P7 reports a realistic rejection
+ *      transition — `ControlState.Codeunit.al`'s `TryEndPublish`) — so P7 reports a realistic rejection
  *      message through the SAME `EndPublish` call a real altool rejection would drive the runner
  *      through, without re-running the whole compile/publish pipeline `stale-publish.itest.ts`
  *      already owns.
@@ -65,7 +65,7 @@
  * §9's "slow-run-under-renew" property. P9 traces to Round-1 finding sol#1 ("lock across run
  * starves renew/steal"), whose fix was "lock only in short critical sections": `TryBeginRun`/
  * `TryFinishRun` each take a short `LockTable()`, commit, and release BEFORE phase 2 runs, so phase
- * 2 holds no lease lock (`ControlState.Codeunit.al:632-635`). The property sol#1 exists to guarantee
+ * 2 holds no lease lock (`ControlState.Codeunit.al`'s `TryBeginRun`). The property sol#1 exists to guarantee
  * is that WHILE A REAL `RunMutant` CALL IS GENUINELY IN FLIGHT (an AL test actually executing on the
  * container), a concurrent `RenewLease` can still land — i.e. phase 2's absence of a held lock does
  * not starve the heartbeat. P9 holds a `BeginPublish`/`EndPublish` marker (substitution #1 above) —
@@ -85,13 +85,13 @@
  * paragraph and P9 itself are left as they were — P9B is additive, not a replacement.
  *
  * WHAT P7 + `stale-publish.itest.ts` PROBE A DO AND DO NOT JOINTLY PROVE about the rejected-publish
- * path. Probe A calls `ctx.deployer.publish(artifactA)` (`stale-publish.itest.ts:550`) directly
+ * path. Probe A calls `ctx.deployer.publish(artifactA)` (`stale-publish.itest.ts`) directly
  * against a raw `ContainerDeployer` — no lease, no `BeginPublish`, no `EndPublish` — so it proves the
  * altool-level rejection mechanics (a real downgrade IS rejected) in complete isolation from the
  * lease/marker machinery. P7 calls `client.endPublish` directly with a synthetic rejection message,
  * bypassing the runner's own catch block entirely. The production glue that actually catches a
  * publish failure and calls `endPublish(attemptId, opSeq, "failed")` lives in
- * `orchestrator.ts:892-914` (`ContainerDeployer.publish`'s own try/catch) — and NEITHER probe
+ * `orchestrator.ts`'s `LeaseSession.publish` (its own try/catch around the publish) — and NEITHER probe
  * exercises that glue against a genuine live altool rejection; it is covered only by unit tests, not
  * by any live probe in this file or `stale-publish.itest.ts`. P7 proves `EndPublish` clears on any
  * outcome string; Probe A proves altool actually rejects a downgrade. Each proves one half of the
@@ -102,9 +102,9 @@
  * of driving `acquireSessionLease`/`runSession` itself — required by this file's own design (drive
  * `LeaseClient`/`RunMutantTransport` directly, never through `runSession`), not a defect. P8 mirrors
  * the busy-retry half (treat "operation-busy" as expected, keep polling); P10 mirrors the
- * orphan-specific re-check-once half (compare this file's P10 loop against
- * `orchestrator.ts:646-658`: re-check exactly once on an unchanged (opAttemptId, opStartedAt) marker
- * before concluding it's stranded). Together they mean a green P8/P10 proves the SERVER's
+ * orphan-specific re-check-once half (compare this file's P10 loop against `orchestrator.ts`'s
+ * `orphanMarker` comparison: re-check exactly once on an unchanged (opAttemptId, opStartedAt)
+ * marker before concluding it's stranded). Together they mean a green P8/P10 proves the SERVER's
  * busy/orphaned classification and reset contract, and that the re-check-once pattern is soundly
  * implementable against that contract — NOT that `orchestrator.ts`'s own copy of the pattern is
  * bug-free. A regression introduced only inside `acquireSessionLease` itself (e.g. dropping the
@@ -814,8 +814,8 @@ async function probeDeterministicRejectedPublishNoRecycle(cfg: ActivationConfig)
     // exhaustively proven by stale-publish.itest.ts's Probe A — but see the file header's "WHAT P7 +
     // Probe A DO AND DO NOT JOINTLY PROVE": Probe A drives a raw ContainerDeployer with no lease
     // involved at all, and this probe bypasses the runner's own failure-catching glue
-    // (orchestrator.ts:892-914) entirely, so together they still don't cover that glue against a
-    // real live rejection. This probe's narrower job is the LEASE layer's own guarantee —
+    // (LeaseSession.publish in orchestrator.ts) entirely, so together they still don't cover that glue
+    // against a real live rejection. This probe's narrower job is the LEASE layer's own guarantee —
     // EndPublish clears the marker on EVERY confirmed terminal outcome, success or a deterministic
     // failure, because ControlState.TryEndPublish's state transition does not branch on the
     // `outcome` string's content (only on the fence tuple + attemptId + opSeq matching) — so
@@ -1085,8 +1085,8 @@ async function probeSlowRunMutantGenuinelyInFlight(
     }
 
     // A competing AcquireLease while the RUN marker (Op Kind = run) is active must take
-    // AcquireLease's op-marker branch UNCONDITIONALLY (ControlState.Codeunit.al:361-363 tests only
-    // `Op Kind <> none`, never which kind) BEFORE the plain-held branch — so this must be
+    // AcquireLease's op-marker branch UNCONDITIONALLY (TryAcquire in ControlState.Codeunit.al
+    // tests only `Op Kind <> none`, never which kind) BEFORE the plain-held branch — so this must be
     // "operation-busy", never "held". P9 already proves this classification for a PUBLISH marker;
     // this is the RUN-marker case P9's own header says it cannot reach. Asserted here unconditionally
     // (not gated on runSettled) — at only ~500ms into a ~23000ms sleep the run cannot possibly have

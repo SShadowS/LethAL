@@ -346,7 +346,7 @@ console.log(
   `  qualifying sites also in statement position (lethal.void-method-call claims them): ${stmt.length}`,
 );
 console.log(
-  "  NOT subtracted: dedup identity is kind:start:end:after.text (schemata/src/dedup.ts:23) and",
+  "  NOT subtracted: dedup identity is kind:start:end:after.text (identityOf in schemata/src/dedup.ts) and",
 );
 console.log(
   `  emitDispatch chains multiple mutants per component, so a swap's replacement text never`,

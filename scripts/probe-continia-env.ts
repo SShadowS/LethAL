@@ -24,7 +24,8 @@
  * verdict was wrong — see the plan's "Probe result" section for the full evidence. It was reached
  * without a `port`, so `bcdev_status` hit bc-dev-mcp's OnPrem fallback port (7049,
  * `bc-dev-mcp/src/core/urls.ts`), which Continia's path-routed HTTPS portal does not listen on.
- * `ConnectionConfig.port` is a real override (`bc-dev-mcp/src/mcp/tools/shared.ts:90`), and the
+ * `ConnectionConfig.port` is a real override (`connectionShape` in
+ * `bc-dev-mcp/src/mcp/tools/shared.ts`, the same shape cited above), and the
  * WHATWG URL API normalizes away a default port (`new URL("https://host:443").port === ""`), so
  * embedding `:443` in `server` cannot substitute for it. This version derives and passes `port` —
  * explicit port from `env.url` if it carries one, else 443 for `https:` / 80 for `http:` — so

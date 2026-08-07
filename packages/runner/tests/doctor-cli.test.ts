@@ -271,8 +271,9 @@ describe("lethal doctor CLI wiring — environment (R34)", () => {
 /**
  * Final review (Important 4): a create-mode envTool config (`envId` absent, `createEnv`/
  * `startEnv`/`readyWhen`/`publishApps`/`deleteEnv` declared — `validateEnvToolConfig`'s dedicated
- * create-mode branch, env-tool.ts:288-306) is structurally valid, and `lethal run` provisions it.
- * `requireStatus` is REFUSED in create mode (env-tool.ts:378), so it is never configured here.
+ * create-mode branch, under env-tool.ts's `const createMode`) is structurally valid, and
+ * `lethal run` provisions it. `requireStatus` is REFUSED in create mode (env-tool.ts's
+ * "applies only to a REUSED environment" refusal), so it is never configured here.
  * Round-0/1 `buildDoctorDeps` supplied `envId: resolvedEnvCfg.envId ?? ""` unconditionally, and a
  * `resolve` block's `{envId}` placeholder then had nothing to substitute — `renderCommand` throws
  * BY NAME: `envTool: no value available for placeholder {envId} while building "env get ...`. That
@@ -549,9 +550,10 @@ describe("lethal doctor CLI wiring — tool-paths", () => {
   });
 
   // Review round 1 (Important): `run`'s `buildBackend` requires altool only when
-  // `envToolDeploy === undefined` (cli.ts:1548, R21) — an env-tool project publishes through the
-  // tool and never spawns altool. `checkToolPaths` used to require BOTH unconditionally, so this
-  // exact config made `run` proceed while doctor reported `[FAIL] tool-paths — missing: altool`.
+  // `envToolDeploy === undefined` (cli.ts's "could not locate altool.exe" guard, R21) — an
+  // env-tool project publishes through the tool and never spawns altool. `checkToolPaths` used to
+  // require BOTH unconditionally, so this exact config made `run` proceed while doctor reported
+  // `[FAIL] tool-paths — missing: altool`.
   test("an env-tool project with alc pinned and no altool passes both — `run` does not require altool on that route", async () => {
     const noExtension = async () => undefined;
     const publishBlock = { command: ["publish", "{envId}", "{appFile}"] };

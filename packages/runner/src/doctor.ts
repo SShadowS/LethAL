@@ -124,7 +124,7 @@ export interface DoctorConfig {
    * Review round 1 (Important): whether a missing `altool` fails the `tool-paths` check. Default
    * `true` (a directly-configured container spawns altool via `ContainerDeployer` — `deployerFor`,
    * cli.ts). An env-tool-configured project publishes through the tool instead and never spawns
-   * altool at all (`buildBackend`'s `envToolDeploy !== undefined` branch, cli.ts:1548, and R21's
+   * altool at all (`buildBackend`'s `envToolDeploy !== undefined` branch in cli.ts, and R21's
    * comment there) — `run` does not require it, so doctor must not be stricter than `run` and fail
    * a config `run` accepts. `cli.ts`'s `buildDoctorDeps` derives this from
    * `configFile.envTool !== undefined`.

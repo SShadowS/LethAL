@@ -153,7 +153,9 @@ describe("createEmitter", () => {
   });
 
   // Fix round 2, residual 2: `classification` was narrowed from a bare `string` to the literal
-  // union `report.ts`'s own `caveats` array already uses (`report.ts:918,924,930`). This pins
+  // union `report.ts`'s own `caveats` array already uses (its `Caveat` type, and the three sites
+  // that produce these tags: `caveats.push("tests-permission-refused")`,
+  // `caveats.push("tests-testpage-unsupported")`, `caveats.push("stale-test-app")`). This pins
   // that all three real tags — permission-refused, testpage-unsupported, and stale — type-check
   // as `classification` values, so a typo on either the emit or the fold side is now a compile
   // error instead of a silent mismatch.
@@ -188,10 +190,10 @@ describe("createEmitter", () => {
   });
 
   // Fix round 3: the case a single scalar `classification` could not express. Two of the three
-  // conditions (`describeTestPermissionsRefusal`/`describeTestPageUnsupported`,
-  // `orchestrator.ts:2441-2449`) are independent `if`s over the same `failureMessage`, so a test
-  // matching both must round-trip with BOTH tags intact — a scalar field would have to silently
-  // drop one.
+  // conditions (`describeTestPermissionsRefusal`/`describeTestPageUnsupported`, in
+  // orchestrator.ts's `const classification: BaselineClassification[]` mapping) are independent
+  // `if`s over the same `failureMessage`, so a test matching both must round-trip with BOTH tags
+  // intact — a scalar field would have to silently drop one.
   test("a verdict row carrying both tags round-trips with both intact", () => {
     const { events, sub } = collect();
     const emit = createEmitter([sub]);

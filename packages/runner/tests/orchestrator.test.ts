@@ -3340,7 +3340,8 @@ describe("runSession — bisection on compile failure", () => {
       authoritative: false,
     };
     // The exact object worker 0's deploy() throws — asserted below by reference (`.toBe`),
-    // so the rethrow at orchestrator.ts:667 is proven to propagate it untouched, never
+    // so the rethrow in orchestrator.ts's per-shard catch around its
+    // `deploy(${batchDir}) worker ${i}` dispatch is proven to propagate it untouched, never
     // wrapped in a "bisected to mutant ..." note the way a plain compile failure would be.
     const deployErr = new DeploymentError("failed", "boom: worker 0 could not deploy", {
       status: "unavailable",
@@ -5504,7 +5505,7 @@ describe("runSession — Layer 5C-B1 Task 8: lease-lost invalidation + dispatch 
     // `reconcileLostAck` (this file, the 5C-B2 lost-RunMutant-ack describe block): that drives
     // `pollUntilOpClears` via the lost-ack path. This drives the SAME method from
     // `runMutantsOnBackend`'s own explicit `leaseKind === "op-in-flight"` branch
-    // (orchestrator.ts:2245-2266) — the ONE call site t12 named as still uncovered, since both
+    // (in orchestrator.ts) — the ONE call site t12 named as still uncovered, since both
     // existing op-in-flight tests in this block seed a statusQueue that clears on the FIRST poll.
     client.statusQueue = [
       { opKind: "none", opAttemptId: "", opSeq: 0, lastCompletedOpSeq: 7, completed: true },

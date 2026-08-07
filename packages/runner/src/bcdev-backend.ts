@@ -93,7 +93,8 @@ export interface BcDevConfig {
    * is exactly that case (see the corrected "Probe result" section of this plan). The WHATWG URL
    * API normalizes away a default port (`new URL("https://host:443").port === ""`), so embedding
    * `:443` inside `server` does nothing — only this field reaches bc-dev-mcp's own override
-   * (`bc-dev-mcp/src/core/urls.ts:12`: `c.port ?? (u.port ? Number(u.port) : DEFAULT_DEV_PORT)`).
+   * (`bc-dev-mcp/src/core/urls.ts`'s `DEFAULT_DEV_PORT` fallback:
+   * `c.port ?? (u.port ? Number(u.port) : DEFAULT_DEV_PORT)`).
    */
   readonly port?: number;
 }

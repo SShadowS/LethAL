@@ -1832,7 +1832,7 @@ function isConfirmedTerminalPublishFailure(err: unknown): boolean {
  *   VERSION, not evidence about its SIZE.
  *
  * Final review: the `parseVersionConflict` guard below is UNREACHABLE from its only caller today
- * (`runSession`'s deploy step, ~orchestrator.ts:2547) — a prior comment here claimed it protected
+ * (`runSession`'s deploy step, at `const failureOutcome`) — a prior comment here claimed it protected
  * "the path where the retry then fails for some other reason", which asserts a mechanism the code
  * does not implement (the class of defect Task 2 already took two Importants for; do not repeat
  * it a third time). The caller pre-filters: it calls `parseVersionConflict` on `deployErr` BEFORE

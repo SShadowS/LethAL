@@ -35,7 +35,9 @@ export type RunPhase = "generate" | "deploy" | "baseline" | "mutants" | "teardow
 /**
  * Why a baseline test did not pass — see `baseline-batch-finished`'s `verdicts[].classification`.
  * Not invented: these are the SAME identifiers `report.ts`'s own `caveats` array already pushes
- * (`report.ts:918,924,930`) for exactly the three conditions `orchestrator.ts:2438-2463` assigns.
+ * (its `caveats.push("stale-test-app")`, `caveats.push("tests-permission-refused")` and
+ * `caveats.push("tests-testpage-unsupported")` calls) for exactly the three conditions
+ * `orchestrator.ts`'s `const classification: BaselineClassification[] = []` block assigns.
  */
 export type BaselineClassification =
   | "tests-permission-refused"
@@ -60,10 +62,11 @@ export type RunEventInput =
        * either path. Hard rule: a static appears in exactly ONE declaration event (this one), and
        * no later event may repeat or update it.
        *
-       * `only.excludedFileCount` (`BuildReportInput.only`, report.ts:626-629) is deliberately NOT
-       * here: the glob patterns are given at configuration time, but how many files they excluded
-       * is only known once `generateMutationSet` runs — that half is LEARNED, and rides
-       * `mutation-set-generated.excludedByOnly` instead. The fold reunites the two.
+       * `only.excludedFileCount` (`BuildReportInput.only`'s `readonly excludedFileCount` field in
+       * report.ts) is deliberately NOT here: the glob patterns are given at configuration time, but
+       * how many files they excluded is only known once `generateMutationSet` runs — that half is
+       * LEARNED, and rides `mutation-set-generated.excludedByOnly` instead. The fold reunites the
+       * two.
        */
       readonly type: "run-configured";
       readonly caps: BackendCapabilities;
@@ -137,7 +140,7 @@ export type RunEventInput =
          * Fix round 2: narrowed from a bare `string` to `BaselineClassification` so an emit-side
          * or fold-side spelling drift is a compile error, not a silent mismatch — the same
          * safety `staleTestApp` already had by keying on an exact sentinel
-         * (`failureMessage === NO_RESULT_FOR_METHOD`, `orchestrator.ts:2460`) rather than a
+         * (`b.verdict.failureMessage === NO_RESULT_FOR_METHOD`, orchestrator.ts) rather than a
          * hand-typed string.
          *
          * Fix round 3: widened from an optional SINGLE tag to a LIST, zero or more.
@@ -200,11 +203,11 @@ export type RunEventInput =
       readonly failureNote?: string;
       /**
        * NOT in the brief's amendment list — added because `record()`'s kill-confirmation call
-       * site (orchestrator.ts:3404-3437) sets this on the SAME `error` verdicts `failureNote`
-       * describes, and `SessionOutcome.cause` (report.ts) has no other source. Omitting it would
-       * leave `outcomes` — one of `BuildReportInput`'s 19 audited fields — not fully
-       * reconstructable from events, reproducing the exact gap this review pass exists to close.
-       * Flagged in the task report for confirmation.
+       * site (orchestrator.ts's `const mutantRowId = record(` call) sets this on the SAME `error`
+       * verdicts `failureNote` describes, and `SessionOutcome.cause` (report.ts) has no other
+       * source. Omitting it would leave `outcomes` — one of `BuildReportInput`'s 19 audited
+       * fields — not fully reconstructable from events, reproducing the exact gap this review pass
+       * exists to close. Flagged in the task report for confirmation.
        */
       // R114: the NAMED type, not a re-spelled inline union. `MutantErrorCause`'s registry is a
       // `Record<>`, so a new member is a compile error until an interpretation exists — a copy of
@@ -224,9 +227,9 @@ export type RunEventInput =
       readonly guardObserved?: boolean;
       readonly runner?: RunnerKind;
       /**
-       * The constant diagnosis note — `describeRunnerDisagreement(coverageMode)` (
-       * `runner-disagreement.ts:72-74`) is keyed ONLY on coverage mode, so this alone cannot
-       * identify WHICH test disagreed. Kept because it is still useful prose for a reader.
+       * The constant diagnosis note — `describeRunnerDisagreement(coverageMode)`
+       * (runner-disagreement.ts) is keyed ONLY on coverage mode, so this alone cannot identify
+       * WHICH test disagreed. Kept because it is still useful prose for a reader.
        */
       readonly runnerDisagreement?: string;
       /**
@@ -236,8 +239,8 @@ export type RunEventInput =
        * FULL covering list, not the one test whose kill-confirmation actually disagreed — for a
        * mutant with 2+ covering tests, `coveringTests` alone cannot say which one. The real
        * value: `qualifiedTestName(ref)`, where `ref` is the exact loop variable
-       * `orchestrator.ts:3433`'s `args.runnerDisagreementTests.add(qualifiedTestName(ref))` adds
-       * (the `for (const ref of covering)` loop, `orchestrator.ts:3193`), captured at the same
+       * `orchestrator.ts`'s `runnerDisagreementTest = qualifiedTestName(ref)` assignment reads
+       * (the `for (const ref of covering)` loop, orchestrator.ts), captured at the same
        * call site, same instant, as `runnerDisagreement` and `cause: "unstable"` above.
        */
       readonly runnerDisagreementTest?: string;
@@ -260,12 +263,13 @@ export type RunEventInput =
        *
        * DELIBERATELY has no `durationMs` field. The prior cost lives only in `priorDurationMs`, so
        * the fold cannot sum it into `mutantsMs` even by accident — R54 becomes unrepresentable
-       * rather than guarded by a filter someone forgets (`report.ts:865`).
+       * rather than guarded by a filter someone forgets (`report.ts`'s `const mutantsMs` sum).
        *
        * `batchIndex`/`killingTest`/`failureNote`/`runner` are NOT in the brief's amendment list
        * ("full entry, +coverageAttribution") — added because `record()`'s carried-verdict call
-       * site (orchestrator.ts:2589-2605) passes all four onto the resulting `SessionOutcome`
-       * (batchIndex from the loop; the other three from `CarriedVerdict`, resume.ts:70-85).
+       * site (the `carriedVerdictFor(resumeState.index, m)` branch in orchestrator.ts) passes all
+       * four onto the resulting `SessionOutcome` (batchIndex from the loop; the other three from
+       * `CarriedVerdict`, resume.ts).
        * Without them the fold cannot reconstruct a carried `SessionOutcome` in full. Flagged in
        * the task report for confirmation.
        */
@@ -288,10 +292,11 @@ export type RunEventInput =
   | {
       /**
        * `batchIndex` is NOT in the brief's amendment list ("full entry") — added because
-       * `record()`'s stranded-skip call site (orchestrator.ts:2571-2580) passes it onto the
-       * resulting `SessionOutcome`, same as every other recorded verdict. Flagged in the task
-       * report for confirmation. `verdict` is not carried: this event's own type already implies
-       * `"error"` — record() always passes that literal here (orchestrator.ts:2575).
+       * `record()`'s stranded-skip call site (its `true, // strandedSkip` call in orchestrator.ts)
+       * passes it onto the resulting `SessionOutcome`, same as every other recorded verdict.
+       * Flagged in the task report for confirmation. `verdict` is not carried: this event's own
+       * type already implies `"error"` — record() always passes that literal at that same
+       * `wasStranded(resumeState.index, m)` branch (orchestrator.ts).
        */
       readonly type: "mutant-skipped-stranded";
       readonly mutant: MutantManifestEntry;

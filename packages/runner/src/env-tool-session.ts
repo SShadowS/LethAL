@@ -450,7 +450,7 @@ export function splitBaseUrl(
  * WHATWG URL API normalizes away a default port — `new URL("https://host:443").port === ""` — so
  * an explicit port survives only when the URL text actually carries one; everything else falls
  * back to the protocol default. Without this, bc-dev-mcp's OWN fallback (`DEFAULT_DEV_PORT = 7049`,
- * `bc-dev-mcp/src/core/urls.ts:12`) would fire instead, which is unreachable on a path-routed
+ * `bc-dev-mcp/src/core/urls.ts`) would fire instead, which is unreachable on a path-routed
  * HTTPS portal.
  */
 /** R109: exported alongside `splitBaseUrl` — see that export's doc comment for why. */

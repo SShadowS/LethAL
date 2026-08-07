@@ -202,10 +202,11 @@ function optionalBoolean(json: Record<string, unknown>, key: string): boolean | 
 /**
  * The one `attemptId` bound for the WHOLE fenced surface — exported because `RunMutant` carries an
  * `attemptId` too (`run-mutant-transport.ts`) and must be held to the identical bound, not to a
- * second one that could drift: `ControlState.Codeunit.al:723` stores `CopyStr(AttemptId,1,64)` in
- * phase 1 but `:777` compares that TRUNCATED stored value against the FULL incoming one in phase 3,
- * so an over-long id makes phase 3 unmatchable → `lease-invalid` with `Op Kind = run` left set →
- * a durable `container-needs-recycle` needing the manual operator recovery in `fixtures/README.md`.
+ * second one that could drift: `ControlState.Codeunit.al`'s `TryBeginRun` stores
+ * `CopyStr(AttemptId,1,64)` in phase 1 but `TryFinishRun` compares that TRUNCATED stored value
+ * against the FULL incoming one in phase 3, so an over-long id makes phase 3 unmatchable →
+ * `lease-invalid` with `Op Kind = run` left set → a durable `container-needs-recycle` needing the
+ * manual operator recovery in `fixtures/README.md`.
  * Refusing before dispatch is strictly better than any of that.
  */
 export function assertAttemptId(attemptId: string): void {
