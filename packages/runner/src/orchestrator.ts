@@ -2222,21 +2222,6 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
 
   const outcomes: SessionOutcome[] = []; // store durability + Task 3 bookkeeping — see `record()`
   let baselineGreenOverall = true;
-  // R35/R59: session-level sinks for permissions-refused / runner-disagreement tests found at
-  // KILL-CONFIRMATION time (inside `runMutantsOnBackend`, threaded through `RunMutantsOnBackendArgs`
-  // below). Both are now DEAD for reporting — nothing reads either Set; `unsupportedCoverageNote`
-  // (called at `record()`'s routable-candidates call site) is fed `refusedThisBatch`, a SEPARATE
-  // batch-local `Map`, not this Set — and `SessionReport.permissionsRefused`/`.runnerDisagreement`
-  // are folded from the per-event fields `mutant-scored.permissionRefusedTest`/
-  // `.runnerDisagreementTest` instead (report-fold.ts), which duplicate the same facts these Sets
-  // still accumulate. Not removed here: doing so means changing `RunMutantsOnBackendArgs`'s
-  // interface and both its call sites (sequential + worker fan-out) for zero behavioural benefit —
-  // genuinely orthogonal to this task, flagged as a residual cleanup in the task report instead. The
-  // session-level unsupported/stale-test-app/testpage Sets this function used to ALSO accumulate are
-  // gone outright (not just dead) — they fed only the old hand-assembled report bag and are now
-  // folded from `baseline-batch-finished`'s per-test classification (report-fold.ts).
-  const permissionRefusedTests = new Set<string>();
-  const runnerDisagreementTests = new Set<string>();
   // Math.floor: a fractional workers value (e.g. 2.5) would otherwise reach
   // shardEvenly's `Array.from({ length: n }, ...)`, which silently truncates
   // to a shorter array than `i % n` can index into — mutants landing on the
@@ -2831,7 +2816,6 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         const refusal = describeTestPermissionsRefusal(b.verdict.failureMessage);
         if (refusal !== undefined) {
           refusedThisBatch.set(name, refusal);
-          permissionRefusedTests.add(name);
         }
         const testPage = describeTestPageUnsupported(b.verdict.failureMessage);
         if (testPage !== undefined) {
@@ -3038,8 +3022,6 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         // per shard, just with all of `execute` as a single "shard" on the
         // one backend already deployed in step 3.
         await runMutantsOnBackend({
-          permissionRefusedTests,
-          runnerDisagreementTests,
           backend: cfg.backend,
           safety,
           ...(leaseSession !== undefined ? { leaseSession } : {}),
@@ -3137,8 +3119,6 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
               return;
             }
             await runMutantsOnBackend({
-              permissionRefusedTests,
-              runnerDisagreementTests,
               backend,
               safety,
               mutants: shard,
@@ -3507,25 +3487,6 @@ async function runMutantsOnBackend(args: {
   readonly resourceKey?: string | undefined;
   readonly nowIso: () => string;
   /**
-   * R35: session-level sink for tests BC refused on permissions, mutated in place like `outcomes`.
-   *
-   * DEAD for reporting (event-stream refactor, spec 2026-08-05 §A): before this task, an absent
-   * read of this Set would have left `SessionReport.permissionsRefused` disagreeing with a
-   * per-mutant note naming the same refusal. That coupling no longer runs through this Set at all
-   * — `SessionReport.permissionsRefused` is now folded from `mutant-scored.permissionRefusedTest`
-   * (report-fold.ts), set at the SAME call site that still mutates this Set. Kept only because
-   * removing it means changing this interface and its two call sites for no behavioural gain — see
-   * the comment on `runSession`'s own `permissionRefusedTests` declaration.
-   */
-  readonly permissionRefusedTests: Set<string>;
-  /**
-   * R59: session-level sink for tests that failed their kill-confirmation while the backend runs a
-   * HUB coverage mode — i.e. tests the hub passed and the fence failed. Mutated in place like
-   * `permissionRefusedTests`, and DEAD for the same reason and since the same task: folded from
-   * `mutant-scored.runnerDisagreementTest` instead now.
-   */
-  readonly runnerDisagreementTests: Set<string>;
-  /**
    * Layer 5C-A Task 8, Task 10 (design §G): this batch's artifact-scoped clean-attestation
    * ledger — shared (by reference) across every worker/shard `runSession` fans this batch's
    * mutants out to, since they all exercise the SAME deployed artifact. Mutated in place: set
@@ -3590,16 +3551,14 @@ async function runMutantsOnBackend(args: {
     // Fix round 2, residual 1 (events.ts doc comment): the exact instant the kill-confirmation
     // loop below decides `cause: "unstable"` because a HUB-green test failed on the FENCE is also
     // the exact instant it knows WHICH test disagreed — captured here so the eventual `record()`
-    // call (after this loop) can carry both, matching `runnerDisagreementTests.add(...)` below.
+    // call (after this loop) can carry both.
     let runnerDisagreement: string | undefined;
     let runnerDisagreementTest: string | undefined;
     // Event-stream refactor (spec 2026-08-05 §A): the R35 counterpart to `runnerDisagreementTest`
-    // above — captured at the SAME instant this loop decides a permissions refusal, for the SAME
-    // reason: `args.permissionRefusedTests.add(...)` below is now a dead sink (nothing reads it —
-    // `SessionReport.permissionsRefused` is folded from events), and without a dedicated event
-    // field the fold has no way to learn this fact at all. `mutant-scored` gained no such field
-    // when `runnerDisagreementTest` was added (Task 2/3's amended union), which is the gap this
-    // closes. Flagged in the task report for confirmation.
+    // above — captured at the SAME instant this loop decides a permissions refusal, and carried on
+    // `mutant-scored` because that event is the ONLY way the fold can learn it.
+    // `SessionReport.permissionsRefused` is folded from here; R105 deleted the session-level Set
+    // this used to be written to alongside, which nothing ever read.
     let permissionRefusedTest: string | undefined;
     let spent = 0;
     // Whether any instrumented guard fired during this mutant's runs — see
@@ -3894,7 +3853,6 @@ async function runMutantsOnBackend(args: {
           // R35: record it session-wide too, so the report's `permissionsRefused` field and this
           // note cannot disagree about whether the run hit a permissions refusal.
           if (refusal !== undefined) {
-            args.permissionRefusedTests.add(qualifiedTestName(ref));
             permissionRefusedTest = qualifiedTestName(ref);
           }
           // R59: in a HUB coverage mode this test was hub-GREEN by construction — a covering test
@@ -3904,7 +3862,6 @@ async function runMutantsOnBackend(args: {
           // Strictly a diagnosis: the verdict is already `error cause=unstable` and does not move.
           const disagreement = describeRunnerDisagreement(args.backend.capabilities().coverage);
           if (disagreement !== undefined) {
-            args.runnerDisagreementTests.add(qualifiedTestName(ref));
             runnerDisagreement = disagreement;
             runnerDisagreementTest = qualifiedTestName(ref);
           }
