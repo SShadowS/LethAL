@@ -21,9 +21,29 @@ published and not independently consumable, so a version on them would be a numb
 six more places to forget to update. `scripts/build-binary.ts` reads the root version and stamps it
 into each output filename; nothing else in the build consults a version field.
 
-> The compiled binary has no `--version` flag, because it has no flag parsing for one — see
-> [Known gaps](#known-gaps-in-the-distribution-path). The filename is currently the only place the
-> version is visible to a user.
+`lethal --version` prints three lines, and R88 is why it is three rather than one:
+
+```
+0.1.0-alpha.1
+build: 9b87939… (DIRTY working tree — the commit does not describe this build) built 2026-08-07T19:44:27.927Z
+operators (12): lethal.conditional-boundary, lethal.empty-block, …
+```
+
+The FIRST line is exactly the version, so `lethal --version | head -1` keeps working. The build line
+is injected by `scripts/build-binary.ts` at compile time (`bun build --define`, never a runtime file
+read — R50 measured that a runtime-computed path resolves against Bun's virtual root under
+`--compile` and fails). The operator line is read at RUNTIME from `operatorTiers`, the same map
+`generateMutationSet` walks, so it lists what the binary will actually apply rather than a
+hand-maintained list that can drift.
+
+The reason all three are needed: **measured 2026-08-04**, the local binary was 56 package-commits
+stale and `grep -c` against it returned 0 for both `swap-call-arguments` and `remove-commit`, two
+operators that shipped. A run driven by it silently measured a smaller operator set than the same
+source would, and the filename — which carries only the package version — could not say so.
+
+A DIRTY working tree does not fail the build; it is REPORTED, in capitals. A dirty build is a
+legitimate thing to make while developing. A dirty build claiming a commit that describes something
+else is not.
 
 ## Cutting a version
 
@@ -175,12 +195,10 @@ lethal run --project <dir> --dry-run
 
 ## Known gaps in the distribution path
 
-- **No `--help`.** `parseCliConfig` uses `node:util`'s `parseArgs` in strict mode with no `help`
-  option, so `lethal --help` exits 1 with `TypeError: Unknown option '--help'` and a stack trace.
-  A bare `lethal` is better — `unknown subcommand: got none, expected one of: run, clear-quarantine,
-  force-reset-lease` — but a first-time user's first command is the one that fails worst. Fixing it
-  is a change to `packages/runner/src/cli.ts`.
-- **No `--version`.** The version exists only in the filename.
+> Both `--help` and `--version` used to be listed here as missing. They are not: R49 added the
+> usage text and the version flag, and R88 added the build stamp and operator set to the latter.
+> This note is kept rather than deleted because the two claims sat here, false, for several
+> releases — which is the same rot the citations rule (R117) is about, one level up.
 - **Binaries are unsigned.** SmartScreen will warn on Windows, and macOS Gatekeeper will refuse the
   Darwin builds until they are notarised or the quarantine attribute is cleared.
 - **The macOS and Linux builds have never been executed**, only built and format-checked, because

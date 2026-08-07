@@ -36,6 +36,7 @@ import { ArtifactCompiler, defaultArtifactIo } from "./artifact";
 import type { ExecutionBackend } from "./backend";
 import { BcDevMcpBackend } from "./bcdev-backend";
 import type { BcDevConfig } from "./bcdev-backend";
+import { renderVersion } from "./build-info";
 import { runCampaignAnchors, runCampaignCompare, runCampaignFreeze } from "./campaign-subcommands";
 import { DeploymentVerifier } from "./deployment-verifier";
 import { ENV_STATUS_REACHABLE_NO_VENDOR_STATUS, runDoctor } from "./doctor";
@@ -3576,7 +3577,10 @@ async function main(): Promise<number> {
     return 0;
   }
   if (parsed.mode === "version") {
-    console.log(LETHAL_VERSION);
+    // R88: the build's own provenance, not just its package version. A bug report that cannot name
+    // the commit — or the operator set the run could actually apply — is unanswerable, and a
+    // 56-commit-stale binary silently measured a smaller operator set than its source would.
+    console.log(renderVersion(LETHAL_VERSION, [...operatorTiers.keys()]));
     return 0;
   }
   if (parsed.mode === "dry-run") {

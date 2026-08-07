@@ -192,14 +192,56 @@ async function seedRuntime(t: BuildTarget): Promise<void> {
   await copyFile(source, cacheFile);
 }
 
+/** One `git` invocation, trimmed. Returns `undefined` when git is unavailable or the command
+ *  fails — a build outside a checkout must still produce a binary, it just cannot stamp one. */
+async function git(...args: readonly string[]): Promise<string | undefined> {
+  const proc = Bun.spawn(["git", ...args], {
+    cwd: REPO_ROOT,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [out, exitCode] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+  if (exitCode !== 0) return undefined;
+  return out.trim();
+}
+
+/**
+ * R88: the provenance a released binary carries. `build/` is gitignored, so the artifact is
+ * untracked and git records nothing about it; the filename carries only the package version, which
+ * does not move when `packages/` does. Measured 2026-08-04: a local binary was 56 package-commits
+ * stale and silently ran a smaller operator set than its own source would.
+ *
+ * `dirty` is reported rather than refused. A dirty build is a legitimate thing to make while
+ * developing; what is NOT legitimate is one that claims a commit describing something else, so the
+ * flag rides along and `--version` prints it in capitals.
+ */
+async function buildStampDefines(): Promise<readonly string[]> {
+  const commit = await git("rev-parse", "HEAD");
+  if (commit === undefined) {
+    console.warn("  WARNING: git rev-parse failed — this binary will report no commit stamp");
+    return [];
+  }
+  const status = await git("status", "--porcelain");
+  const dirty = status === undefined || status.length > 0 ? "1" : "0";
+  if (dirty === "1") {
+    console.warn(`  WARNING: working tree is DIRTY — ${commit} does not describe this binary`);
+  }
+  return [
+    `--define=__LETHAL_BUILD_COMMIT__=${JSON.stringify(commit)}`,
+    `--define=__LETHAL_BUILD_TIME__=${JSON.stringify(new Date().toISOString())}`,
+    `--define=__LETHAL_BUILD_DIRTY__=${JSON.stringify(dirty)}`,
+  ];
+}
+
 /** Compiles one target. Returns the output path and its size in bytes. */
 async function build(
   t: BuildTarget,
   version: string,
+  defines: readonly string[],
 ): Promise<{ readonly outPath: string; readonly bytes: number }> {
   const outPath = join(OUT_DIR, `lethal-${version}-${t.suffix}`);
   const proc = Bun.spawn(
-    ["bun", "build", "--compile", `--target=${t.target}`, ENTRY, "--outfile", outPath],
+    ["bun", "build", "--compile", `--target=${t.target}`, ...defines, ENTRY, "--outfile", outPath],
     { cwd: REPO_ROOT, stdout: "pipe", stderr: "pipe" },
   );
   const exitCode = await proc.exited;
@@ -239,6 +281,11 @@ async function main(): Promise<number> {
     selected = [host];
   }
 
+  // R88: computed ONCE for the whole invocation, so every binary from one `build:binaries` run
+  // carries the identical stamp — a per-target timestamp would make two artifacts of the same
+  // build look like two builds.
+  const defines = await buildStampDefines();
+
   console.log(`lethal ${version} — building ${selected.length} target(s) into ${OUT_DIR}\n`);
 
   const failures: { readonly target: string; readonly reason: string }[] = [];
@@ -250,13 +297,13 @@ async function main(): Promise<number> {
         // — every same-platform build, and every host whose npm platform gate lets the `@oven/*`
         // package through — this is the whole story, and `seedRuntime`'s measured-on-Windows
         // assumptions about cache-file naming never come into play.
-        built = await build(t, version);
+        built = await build(t, version, defines);
       } catch (firstErr) {
         const detail = firstErr instanceof Error ? firstErr.message : String(firstErr);
         console.log(`  seed  ${t.target.padEnd(18)} fetching runtime (${t.runtimePackage})`);
         await seedRuntime(t);
         try {
-          built = await build(t, version);
+          built = await build(t, version, defines);
         } catch (retryErr) {
           const retryDetail = retryErr instanceof Error ? retryErr.message : String(retryErr);
           throw new Error(`${retryDetail} (first attempt, before seeding: ${detail})`);
