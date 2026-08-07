@@ -808,6 +808,14 @@ export interface MutantOutcome {
    *
    * Reporting all three as one undifferentiated list is approximate attribution wearing the
    * costume of an exact one — the shape that produced 10 false survivors out of 20 in R29.
+   *
+   * NAME: this is `CoverageSplit.attribution` (selection.ts) under a qualified name, and
+   * `lethal explain` emits it back as plain `attribution`. The same value carries two spellings
+   * on purpose — `MutantOutcome` is a wide, flat record where a bare `attribution` says nothing
+   * about what was attributed, while `CoverageSplit` and `ExplainSurvivor` are already
+   * coverage-scoped, so the qualifier there would be noise. Aligning them would cost a
+   * `REPORT_SCHEMA_VERSION` bump that invalidates every committed campaign baseline for a
+   * cosmetic win, so it is deliberately not done; this comment is the mapping instead.
    */
   readonly coverageAttribution?: CoverageAttribution;
   /**

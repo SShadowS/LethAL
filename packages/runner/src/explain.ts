@@ -225,6 +225,11 @@ export interface ExplainSurvivor {
   /** Verbatim from the report. `mutatedText` is `""` for a deletion operator. */
   readonly originalText: string;
   readonly mutatedText: string;
+  /**
+   * The report's `coverageAttribution`, under the name its own source uses
+   * (`CoverageSplit.attribution`, selection.ts). Same value, two spellings — see that field's
+   * doc comment in report.ts for why they are not aligned.
+   */
   readonly attribution: CoverageAttribution;
   readonly executionProven: boolean;
   readonly coveringTests: readonly string[];
