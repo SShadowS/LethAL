@@ -59,6 +59,17 @@ function baseEvents(): RunEventInput[] {
       batchIndex: 0,
       verdicts: [{ name: "Sales Helper Tests.T1", outcome: "pass", classification: [] }],
     },
+    // R106: a batch that finishes baseline with a GREEN test under a coverage-claiming mode always
+    // reaches the coverage filter and always emits this. A fixture without it describes a stream
+    // `runSession` cannot produce — and this file's own lesson is that a fixture describing an
+    // unreachable state proves nothing about the code that reads it.
+    {
+      type: "coverage-split",
+      batchIndex: 0,
+      untargetedTriggerCount: 0,
+      coveredCount: 1,
+      noCoverageCount: 0,
+    },
   ];
 }
 
@@ -224,6 +235,78 @@ describe("foldEvents — R54, a carried verdict never reaches the mutant clock",
  * Both verdicts below are kills with DIFFERENT text, so the assertion cannot be satisfied by a fold
  * that copies one outcome's field onto the other, and neither can be satisfied by an absent field.
  */
+/**
+ * R106. `untargetedTriggerCount` is summed from `coverage-split` events and was trusted
+ * unconditionally, so a stream where none arrived produced a plausible ZERO rather than an error —
+ * the "absent tally read as a measured zero" shape the fold's other mandatory-event checks exist to
+ * close, left open for this one field.
+ *
+ * The second test is the one that matters most. The row proposing this fix assumed the condition
+ * was "a batch published", and that is WRONG in a way that would throw on real sessions:
+ * `runSession` emits `coverage-split` at step 5, after the step-4 early `continue` that fires when a
+ * batch has no green baseline test. An all-red baseline is a legitimate completed run — it records
+ * every mutant "no green baseline tests" — and owes no split.
+ */
+describe("foldEvents — R106, an absent coverage-split is not a measured zero", () => {
+  const generated = {
+    type: "mutation-set-generated" as const,
+    siteCount: 1,
+    deployedCount: 1,
+    totalFiles: 1,
+    instrumentableFiles: 1,
+    notInstrumentedFiles: [],
+    excludedByOnly: 0,
+  };
+
+  test("THROWS when a green baseline batch produced no coverage-split", () => {
+    const events = seq([
+      generated,
+      {
+        type: "baseline-batch-finished",
+        batchIndex: 0,
+        verdicts: [{ name: "T.T1", outcome: "pass", classification: [] }],
+      },
+      { type: "session-finished", elapsedMs: 1 },
+    ]);
+    expect(() => foldEvents(STATICS, events)).toThrow(/no coverage-split event arrived/);
+    // Names the consequence, not just the absence — the point is the zero, not the event.
+    expect(() => foldEvents(STATICS, events)).toThrow(/measured 0/);
+  });
+
+  test("does NOT throw when the batch's baseline was entirely RED — it owes no split", () => {
+    // The false positive that would have broken real sessions. A batch with no green test never
+    // reaches the coverage filter, so demanding a split from it is demanding something the
+    // orchestrator structurally cannot emit.
+    const events = seq([
+      generated,
+      {
+        type: "baseline-batch-finished",
+        batchIndex: 0,
+        verdicts: [{ name: "T.T1", outcome: "fail", classification: [] }],
+      },
+      { type: "session-finished", elapsedMs: 1 },
+    ]);
+    expect(() => foldEvents(STATICS, events)).not.toThrow();
+  });
+
+  test("does NOT throw under coverage mode `none` — that branch never filters", () => {
+    const events = seq([
+      generated,
+      {
+        type: "baseline-batch-finished",
+        batchIndex: 0,
+        verdicts: [{ name: "T.T1", outcome: "pass", classification: [] }],
+      },
+      { type: "session-finished", elapsedMs: 1 },
+    ]);
+    const noCoverage = {
+      ...STATICS,
+      caps: { ...STATICS.caps, coverage: "none" as const },
+    };
+    expect(() => foldEvents(noCoverage, events)).not.toThrow();
+  });
+});
+
 describe("foldEvents — R86, a kill's own account of why it died", () => {
   test("carries killingTestFailure on both the scored and the carried path", () => {
     const SCORED_TEXT =

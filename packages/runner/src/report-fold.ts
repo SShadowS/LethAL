@@ -156,6 +156,10 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
   // `instrumentableFiles`/`batchPublishedCount` reasoning above, and is deferred rather than adding
   // scope to this task without a concrete failure it is known to prevent.
   let untargetedTriggerCount = 0;
+  /** R106: whether any `coverage-split` arrived, and whether one was ever OWED — see the check at
+   *  the end of the fold for why the second half cannot simply be "a batch published". */
+  let sawCoverageSplit = false;
+  let sawGreenBaselineBatch = false;
 
   let quarantinedReason: string | undefined;
   let permissionCanary: PermissionCanaryResult | undefined;
@@ -176,6 +180,11 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
         break;
       case "baseline-batch-finished":
         sawBaselineBatchFinished = true;
+        // R106: a batch with at least one GREEN test is a batch that reaches the coverage filter.
+        // A batch whose baseline is entirely red does not — `runSession` records every mutant
+        // "no green baseline tests" and `continue`s BEFORE step 5 — so it owes no `coverage-split`
+        // and must not be counted as evidence that one is missing.
+        if (e.verdicts.some((v) => v.outcome === "pass")) sawGreenBaselineBatch = true;
         for (const v of e.verdicts) {
           if (v.outcome !== "pass") baselineGreen = false;
           // Task 6 (spec §9): "did not pass at baseline" — fail/error only, the SAME predicate
@@ -222,6 +231,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
         else if (e.phase === "baseline") baselineMs += e.elapsedMs;
         break;
       case "coverage-split":
+        sawCoverageSplit = true;
         untargetedTriggerCount += e.untargetedTriggerCount;
         break;
       case "permission-canary":
@@ -329,6 +339,28 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
       "foldEvents: neither baseline-batch-finished nor quarantined arrived, and at least one batch " +
         "was published — the fold cannot tell whether that batch's baseline ran, or the session " +
         "quarantined before it could. One of the two is mandatory once a batch has published.",
+    );
+  }
+  // R106. `untargetedTriggerCount` is summed from `coverage-split` events and used to be trusted
+  // unconditionally — so a stream where those events were absent produced a plausible ZERO rather
+  // than an error. That is the "absent tally read as a measured zero" shape the two checks above
+  // exist to close, left open for this one field.
+  //
+  // The condition is NOT "a batch published", which is what the row proposing this assumed, and
+  // getting that wrong would throw on real sessions. `runSession` emits `coverage-split` at step 5,
+  // AFTER the step-4 early `continue` that fires when a batch has no green baseline test at all —
+  // an all-red baseline is a legitimate, completed run (it records every mutant "no green baseline
+  // tests") and it owes no split. So the debt is only incurred by a batch that actually had a green
+  // test to filter on.
+  //
+  // `caps.coverage === "none"` owes nothing either: that branch gives every mutant every green test
+  // by construction and never calls `coverageFilter`.
+  if (statics.caps.coverage !== "none" && sawGreenBaselineBatch && !sawCoverageSplit) {
+    throw new Error(
+      "foldEvents: a batch finished baseline with at least one green test under coverage mode " +
+        `"${statics.caps.coverage}", but no coverage-split event arrived — untargetedTriggerCount ` +
+        "would be reported as a measured 0 when nothing measured it. One coverage-split per such " +
+        "batch is mandatory.",
     );
   }
   if (!sawSessionFinished) {
