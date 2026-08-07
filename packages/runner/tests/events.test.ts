@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { MutantManifestEntry } from "@lethal/schemata";
-import { STREAM_SCHEMA_VERSION, createEmitter } from "../src/events";
+import { BASELINE_CLASSIFICATIONS, STREAM_SCHEMA_VERSION, createEmitter } from "../src/events";
+import { CAVEAT_INTERPRETATIONS } from "../src/report";
 import type { RunEvent, RunEventInput } from "../src/events";
 
 function collect(): { events: RunEvent[]; sub: (e: RunEvent) => void } {
@@ -370,5 +371,31 @@ describe("createEmitter", () => {
     expect(disagreeing).toBe("Suite.TestB");
     // The disagreeing test is a member of the covering list, not some other name entirely.
     expect(e.coveringTests).toContain(disagreeing);
+  });
+});
+
+/**
+ * R113 — `BaselineClassification` used to be an INDEPENDENT copy of three `Caveat` names, under a
+ * doc comment asserting they were the same identifiers `report.ts` pushes. Nothing enforced that.
+ *
+ * `satisfies readonly Caveat[]` in `events.ts` now makes it a compile error, but `bun test` is a
+ * separate step from `bun run typecheck` in this repo, so a type-level guarantee alone is
+ * INVISIBLE to the test runner (R115 found one entirely inert because its type was unimported).
+ * These two tests are the runtime half: they walk the exported array against
+ * `CAVEAT_INTERPRETATIONS`'s own keys, which is the only enumeration of `Caveat` that exists at
+ * run time.
+ */
+describe("BASELINE_CLASSIFICATIONS (R113)", () => {
+  test("every classification is a real `Caveat`, checked against the registry's own keys", () => {
+    const known = Object.keys(CAVEAT_INTERPRETATIONS);
+    const foreign = BASELINE_CLASSIFICATIONS.filter((c) => !known.includes(c));
+    expect(foreign).toEqual([]);
+  });
+
+  test("guards the guard: the array is non-empty and the registry is reachable", () => {
+    // Without this, the check above passes trivially the day either side becomes empty — an
+    // empty-vs-empty match is this project's signature bug.
+    expect(BASELINE_CLASSIFICATIONS.length).toBe(3);
+    expect(Object.keys(CAVEAT_INTERPRETATIONS).length).toBeGreaterThan(3);
   });
 });

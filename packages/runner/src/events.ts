@@ -23,7 +23,7 @@
 import type { MutantManifestEntry } from "@lethal/schemata";
 import type { BackendCapabilities, TestMethodRef, TestOutcome } from "./backend";
 import type { PermissionCanaryResult } from "./permission-canary";
-import type { MutantErrorCause, NotInstrumentedFile } from "./report";
+import type { Caveat, MutantErrorCause, NotInstrumentedFile } from "./report";
 import type { CoverageAttribution } from "./selection";
 import type { MutantVerdict, RunnerKind } from "./store";
 
@@ -38,11 +38,26 @@ export type RunPhase = "generate" | "deploy" | "baseline" | "mutants" | "teardow
  * (its `caveats.push("stale-test-app")`, `caveats.push("tests-permission-refused")` and
  * `caveats.push("tests-testpage-unsupported")` calls) for exactly the three conditions
  * `orchestrator.ts`'s `const classification: BaselineClassification[] = []` block assigns.
+ *
+ * R113: that sentence used to be a claim nothing enforced — an INDEPENDENT copy of three names
+ * under a comment asserting they were the same ones. `satisfies readonly Caveat[]` makes the
+ * coupling structural: a member `Caveat` does not contain is a compile error naming it.
+ *
+ * Deliberately NOT the `Extract<Caveat, "a" | "b" | "c">` the roadmap row proposed. `Extract`
+ * SILENTLY DROPS a member the union does not contain — `Extract<Caveat, "typo">` is `never`, so a
+ * misspelling narrows this type instead of erroring, which is the same class of quiet loss the row
+ * exists to close. It also yields no runtime value, and `bun test` is a separate step from
+ * `bun run typecheck` here, so a purely type-level coupling is invisible to the test runner
+ * (R115). The array below is the runtime half: `events.test.ts` walks it against
+ * `CAVEAT_INTERPRETATIONS`'s own keys, so a drift reddens `bun test` too, not only `tsc`.
  */
-export type BaselineClassification =
-  | "tests-permission-refused"
-  | "tests-testpage-unsupported"
-  | "stale-test-app";
+export const BASELINE_CLASSIFICATIONS = [
+  "tests-permission-refused",
+  "tests-testpage-unsupported",
+  "stale-test-app",
+] as const satisfies readonly Caveat[];
+
+export type BaselineClassification = (typeof BASELINE_CLASSIFICATIONS)[number];
 
 interface Base {
   /** Monotonic, starting at 1. A gap means the stream was truncated. */
