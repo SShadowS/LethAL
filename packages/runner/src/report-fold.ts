@@ -357,10 +357,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
   // by construction and never calls `coverageFilter`.
   if (statics.caps.coverage !== "none" && sawGreenBaselineBatch && !sawCoverageSplit) {
     throw new Error(
-      "foldEvents: a batch finished baseline with at least one green test under coverage mode " +
-        `"${statics.caps.coverage}", but no coverage-split event arrived — untargetedTriggerCount ` +
-        "would be reported as a measured 0 when nothing measured it. One coverage-split per such " +
-        "batch is mandatory.",
+      `foldEvents: a batch finished baseline with at least one green test under coverage mode "${statics.caps.coverage}", but no coverage-split event arrived — untargetedTriggerCount would be reported as a measured 0 when nothing measured it. One coverage-split per such batch is mandatory.`,
     );
   }
   if (!sawSessionFinished) {
