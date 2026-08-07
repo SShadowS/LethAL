@@ -1257,10 +1257,12 @@ export interface BcDevConfigSection {
 
 export interface AlRunnerConfigSection {
   readonly alRunnerPath: string;
+  /** Forwarded as v2's `--package-cache` (v1 spelled it `--packages`). */
   readonly packagesDir?: string;
-  readonly stubsDir?: string;
-  // Opt-in server-mode transport (Task 4): keeps one al-runner process warm
-  // instead of spawning one per test. Off by default.
+  /**
+   * REFUSED — `AlRunnerBackend` throws on it. Kept declared so a config that asks for server
+   * mode gets an explanation (R97) rather than having the request quietly dropped.
+   */
   readonly serverMode?: boolean;
 }
 
@@ -1317,6 +1319,20 @@ export function validateAlRunnerConfig(
   if (!raw.alRunnerPath) {
     throw new Error(
       'lethal.config.json "alRunner" section is missing required field(s): alRunnerPath',
+    );
+  }
+  // al-runner v2 removed `--stubs` entirely — its own --help lists stubs under NOT YET
+  // IMPLEMENTED, and passing the flag is an unknown-option error (exit 2). A config that still
+  // names a stubs directory is asking for something the runner cannot do, so accepting the
+  // field and dropping it on the floor would leave the operator believing their target app's
+  // hand-written dependency stubs are in play while every compile runs without them. Refuse and
+  // say which version took it away.
+  if ((raw as { stubsDir?: unknown }).stubsDir !== undefined) {
+    throw new Error(
+      'lethal.config.json "alRunner" section sets "stubsDir", which al-runner v2 no longer ' +
+        "supports — v2 removed the --stubs flag (its --help lists stubs under NOT YET " +
+        "IMPLEMENTED) and rejects it as an unknown option. Remove the field; there is no " +
+        "replacement flag to point it at.",
     );
   }
   return raw as AlRunnerConfigSection;
@@ -1709,7 +1725,6 @@ export async function buildBackend(
       instrumentedDir: join(scratchDir, "al-runner-active"),
       testDir: parsed.testDir,
       ...(c.packagesDir !== undefined ? { packagesDir: c.packagesDir } : {}),
-      ...(c.stubsDir !== undefined ? { stubsDir: c.stubsDir } : {}),
       selectorObjectId: selectorIds.selectorId,
       ...(c.serverMode !== undefined ? { serverMode: c.serverMode } : {}),
     });

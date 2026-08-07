@@ -5,7 +5,7 @@ import {
   CONTROL_UPGRADE_FILENAME,
   emitStaticSelector,
 } from "@lethal/schemata";
-import { OneShotTransport, ServerTransport } from "./al-runner-transport";
+import { OneShotTransport, qualifiedTestName } from "./al-runner-transport";
 import type { AlRunnerTransport } from "./al-runner-transport";
 import type { CompiledArtifact } from "./artifact";
 import type {
@@ -20,8 +20,40 @@ import type {
 import { defaultSpawn } from "./publisher";
 import type { SpawnFn } from "./publisher";
 
-/** al-runner's own per-test timeout message (verified against v1.0.31). */
-const RUNNER_TIMEOUT_MESSAGE = /Test exceeded \d+s timeout/;
+/**
+ * al-runner's own per-test timeout message — BOTH wordings it has used, because the wording is not
+ * stable and we have watched it move.
+ *
+ * Measured, all on this machine: v1.0.31 said `status: "fail"` with `Test exceeded <n>s timeout`.
+ * al-runner **2.0.0.0** said `status: "error"` with `TIMEOUT after <n>s`. al-runner **2.0.1.0**,
+ * published the same day and installed hours later, went back to `Test exceeded <n>s timeout.` while
+ * KEEPING `status: "error"`. So neither the status nor the text is a stable key on its own, and the
+ * union of two literals is a stopgap rather than a design — see `AL_RUNNER_UNCLASSIFIED_ERROR` for
+ * the part that does not depend on guessing the wording right.
+ */
+const RUNNER_TIMEOUT_MESSAGE = /TIMEOUT after \d+s|Test exceeded \d+s timeout/;
+
+/**
+ * Prefix on the `failureMessage` of an al-runner `status: "error"` this build could not classify.
+ *
+ * Exported so a test can pin the behaviour by NAME rather than by quoting the sentence, and so a
+ * reader meeting one in a report can grep for where it came from. The verdict such a run produces is
+ * `error` — not measured — never `fail`; see `run()` for why that asymmetry is the whole design.
+ */
+export const AL_RUNNER_UNCLASSIFIED_ERROR =
+  "al-runner reported an error this build cannot classify";
+
+/**
+ * v2 answers `--version` with `al-runner v2.0.0.0` and exit 0 (measured 2026-08-07). v1.0.31
+ * REJECTED `--version` outright, so a binary that fails this check is either v1 or not al-runner.
+ */
+const AL_RUNNER_V2_VERSION = /\bv2\.\d/;
+
+/** The actionable half of `status()`'s refusal — what is wrong and what to do about it. */
+const AL_RUNNER_V2_REQUIRED =
+  "This adapter targets al-runner v2: it sends --isolation/--test/--package-cache and " +
+  'positional bundle dirs, which v1 rejects, and reads v2\'s "TIMEOUT after <n>s" shape. ' +
+  "Install al-runner v2, or use --backend bcdev.";
 
 /**
  * `mutant-manifest.json` is written by `writeInstrumentedProject` for every
@@ -76,12 +108,13 @@ export interface AlRunnerConfig {
   readonly alRunnerPath: string; // path to the al-runner executable
   readonly instrumentedDir: string; // schemata output (LethAL-owned scratch)
   readonly testDir: string;
-  readonly packagesDir?: string; // --packages symbol resolution
-  readonly stubsDir?: string; // --stubs for target-app dependencies
+  readonly packagesDir?: string; // --package-cache symbol resolution
   readonly selectorObjectId: number; // id used when rewriting MutationSelector.Codeunit.al
-  // Opt-in: keep one al-runner process warm (server mode) instead of spawning one
-  // per test. Off by default until proven verdict-equivalent against a real binary
-  // (see the Task 4 live-gate note in the Layer 4.2 plan). Default false.
+  /**
+   * REFUSED on v2 — the constructor throws when this is true. Kept as a field, rather than
+   * dropped, precisely so a config that still asks for it gets told why instead of having the
+   * request silently ignored. See the constructor for the R97 measurement.
+   */
   readonly serverMode?: boolean;
 }
 
@@ -96,38 +129,72 @@ export class AlRunnerBackend implements ExecutionBackend {
     private readonly cfg: AlRunnerConfig,
     private readonly spawn: SpawnFn = defaultSpawn,
   ) {
-    this.transport = cfg.serverMode
-      ? new ServerTransport(cfg.alRunnerPath)
-      : new OneShotTransport(cfg.alRunnerPath, spawn);
+    // R97: al-runner v2's server protocol reads only `sourcePaths[0]`, so the TEST bundle is
+    // never loaded and `runTests` answers with an empty, PASSING result for every mutant —
+    // a whole session of "survived" verdicts scored off a suite that never ran. Reported
+    // upstream as al-runner #1658. Refusing here is the only safe reading: the alternative is
+    // a run that looks complete and is entirely wrong. Once #1658 lands, re-measure against a
+    // real binary before removing this.
+    if (cfg.serverMode === true) {
+      throw new Error(
+        "AlRunnerBackend: serverMode is refused on al-runner v2 — its server protocol reads " +
+          "only sourcePaths[0], so the test bundle never runs and every mutant is scored " +
+          "SURVIVED off an empty green result (R97; upstream al-runner #1658). Remove " +
+          '"serverMode" from the alRunner config section to use the one-shot transport.',
+      );
+    }
+    this.transport = new OneShotTransport(cfg.alRunnerPath, spawn);
   }
 
   /**
-   * `authoritative: false` is load-bearing, and one measured reason is worth naming here.
-   * al-runner reports `pass` for an `asserterror` whose guarded statement raised NOTHING —
-   * `asserterror I := 1;` passes (probed 2026-07-25, fixtures/README.md §Tier-2 Phase 0). So a
-   * mutant that removes the only `Error` an asserterror test was checking still lets that test
-   * pass, and the mutant is reported SURVIVED where bcdev kills it. Under-reporting kills is the
-   * safe direction — al-runner never produces a FALSE kill this way — but it is silent, so
-   * `buildBackend` warns on every al-runner session.
+   * `isolation: "full-reset"` is honest only because the transport actually sends
+   * `--isolation test` (see OneShotTransport.send) — v2's mode that gives every [Test] fresh
+   * state. Do not claim it back if that flag ever changes.
    *
-   * Table triggers themselves are fine: al-runner executes object-level and field-level triggers,
-   * and the selector guard injected into a table's `var` section fires there (same probe).
+   * `authoritative: false` stays false, but NOT for the reason this comment used to give. The
+   * two measured al-runner defects it named — R7 (`asserterror I := 1;`, a statement that cannot
+   * raise, reported `pass`) and R8 (a table object's own global not surviving a trigger write
+   * back into a later call on the same record variable) — are FIXED on v2 (R99, measured against
+   * v2.0.0.0). `runAlRunnerCanary` re-measures both every session rather than trusting either
+   * this comment or that one.
+   *
+   * What still makes this backend non-authoritative is architectural, and v2 does not close it:
+   * there is no BC service tier, so there are no transactions — `Commit()` and `Rollback()` are
+   * no-ops, `StartSession` runs inline instead of in a separate session, and the base
+   * application's tables are empty (upstream `docs/limitations.md`). A mutant whose only
+   * observable effect is on any of those is judged against semantics that are not BC's. Combined
+   * with `coverage: "none"` — no per-procedure coverage, so nothing here can narrow which tests
+   * matter — a verdict from this backend is a fast signal, not a result to act on. bcdev remains
+   * the authority.
    */
   capabilities(): BackendCapabilities {
     return { coverage: "none", deploy: "none", isolation: "full-reset", authoritative: false };
   }
 
   async status(): Promise<BackendStatus> {
-    // al-runner has no --version flag (it errors out); --help is the
-    // verified reachability probe (exits 0).
-    const res = await this.spawn([this.cfg.alRunnerPath, "--help"]).catch((e) => ({
+    // v2 HAS `--version` (prints `al-runner v2.0.0.0`, exit 0, measured 2026-08-07); v1.0.31
+    // rejected it with `Error: file or directory not found: --version` and a non-zero exit,
+    // which is why this probe used to be `--help`. Probing with `--version` therefore answers
+    // two questions at once: is the binary runnable, and is it the version this adapter speaks?
+    // That second question is not cosmetic — this adapter sends v2-only argv
+    // (`--isolation test`, `--test`, `--package-cache`, positional bundle dirs) and reads v2's
+    // timeout shape, so pointed at v1 it would produce wrong verdicts rather than an error.
+    const res = await this.spawn([this.cfg.alRunnerPath, "--version"]).catch((e) => ({
       exitCode: -1,
       stdout: "",
       stderr: String(e),
     }));
-    return res.exitCode === 0
-      ? { ok: true, details: res.stdout.trim() }
-      : { ok: false, details: `al-runner not runnable: ${res.stderr}` };
+    if (res.exitCode !== 0) {
+      return { ok: false, details: `al-runner not runnable: ${res.stderr || res.stdout}` };
+    }
+    const reported = (res.stdout || res.stderr).trim();
+    if (!AL_RUNNER_V2_VERSION.test(reported)) {
+      return {
+        ok: false,
+        details: `al-runner at ${this.cfg.alRunnerPath} reports "${reported.slice(0, 200)}", which is not a v2 build. ${AL_RUNNER_V2_REQUIRED}`,
+      };
+    }
+    return { ok: true, details: reported };
   }
 
   async deploy(instrumentedDir: string): Promise<CompiledArtifact | null> {
@@ -248,28 +315,28 @@ export class AlRunnerBackend implements ExecutionBackend {
 
   async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
     const started = Date.now();
+    // ONE name for both the `--test` filter and the lookup below — see qualifiedTestName.
+    const wanted = qualifiedTestName(ref.codeunitId, ref.method);
     const res = await this.transport.send({
       sourceDir: this.activeDir(),
       testDir: this.cfg.testDir,
-      method: ref.method,
+      qualifiedTest: wanted,
       ...(this.cfg.packagesDir !== undefined ? { packagesDir: this.cfg.packagesDir } : {}),
-      ...(this.cfg.stubsDir !== undefined ? { stubsDir: this.cfg.stubsDir } : {}),
-      // Deliberately well below `deadlineMs`, never equal: `--test-timeout` bounds
-      // only the test body inside al-runner, while `deadlineMs` bounds the WHOLE
-      // invocation (al-runner recompiles the project from scratch every call, which
-      // alone can take several seconds). If the two were equal or close, our client
-      // AbortController would always win the race, the runner-confirmed
-      // `outcome: "timeout"` path would be unreachable, and every genuine hang would
-      // be misclassified as infrastructure noise (`deadline-exceeded`) instead of a
-      // real mutant-induced timeout. Halving the budget (min 1s) gives the runner's
-      // own timer real margin to fire first.
+      // Deliberately well below `deadlineMs`, never equal. The runner's own per-test budget
+      // (v2: the AL_RUNNER_TEST_TIMEOUT_SEC env var the transport sets; v1: a `--test-timeout`
+      // flag) bounds only the test body inside al-runner, while `deadlineMs` bounds the WHOLE
+      // invocation (al-runner recompiles the project from scratch every call, which alone can
+      // take several seconds). If the two were equal or close, our client AbortController
+      // would always win the race, the runner-confirmed `outcome: "timeout"` path would be
+      // unreachable, and every genuine hang would be misclassified as infrastructure noise
+      // (`deadline-exceeded`) instead of a real mutant-induced timeout. Halving the budget
+      // (min 1s) gives the runner's own timer real margin to fire first. The v2 move from a
+      // flag to an env var changed how this value is delivered, not why it is halved.
       testTimeoutSeconds: Math.max(1, Math.floor(opts.timeoutMs / 2000)),
       deadlineMs: opts.timeoutMs,
     });
     const durationMs = Date.now() - started;
     if (res.kind === "deadline") return { ref, outcome: "deadline-exceeded", durationMs };
-    if (res.kind === "skip")
-      return { ref, outcome: "skip", durationMs, failureMessage: res.detail };
     if (res.kind === "error")
       return {
         ref,
@@ -278,25 +345,66 @@ export class AlRunnerBackend implements ExecutionBackend {
         failureMessage: res.detail,
         operation: "pre-dispatch-rejected",
       };
-    const t = res.tests.find((x) => x.name === ref.method);
+    const t = res.tests.find((x) => x.name === wanted);
     if (!t)
       return {
         ref,
         outcome: "error",
         durationMs,
-        failureMessage: "al-runner output missing the requested test",
+        // Naming both sides: a mismatch here means the runner ran something other than what
+        // we asked for, and "missing the requested test" alone left nobody able to see which.
+        failureMessage: `al-runner output has no test named "${wanted}" (it returned: ${
+          res.tests.map((x) => x.name).join(", ") || "<no tests>"
+        })`,
         operation: "pre-dispatch-rejected",
       };
-    const runnerTimedOut =
-      t.status === "fail" && t.message !== undefined && RUNNER_TIMEOUT_MESSAGE.test(t.message);
-    const outcome: TestOutcome = t.status === "pass" ? "pass" : runnerTimedOut ? "timeout" : "fail";
+    // How a non-pass becomes a verdict, and the rule is FAIL-CLOSED on purpose.
+    //
+    // `fail` is al-runner's word for "the test's own assertion went red", so it is a kill.
+    // `error` is its word for several different things — a timeout it enforced, and (per its own
+    // `RunnerOutOfScopeException`) a test that reached SMTP, outbound HTTP, printing, external file
+    // I/O or web-service publishing, which v2 now raises on instead of faking a return value.
+    //
+    // Only ONE of those is a verdict about the mutant. So an `error` we can positively classify as
+    // a timeout scores `timeout` (the orchestrator reads that as `timeout-killed`), and an `error`
+    // we CANNOT classify scores `outcome: "error"` — not measured — rather than falling through to
+    // `fail` and crediting the suite with a kill it did not earn.
+    //
+    // That asymmetry is the point, and it is what makes this survive the next release. al-runner
+    // ships several times a day: within one session we measured the timeout wording as
+    // `TIMEOUT after <n>s` on 2.0.0.0 and back to `Test exceeded <n>s timeout.` on 2.0.1.0, hours
+    // apart. Under the old rule — anything not `pass` and not matching the regex is `fail` — that
+    // single string change silently turned every hung mutant into a KILL. Under this one the same
+    // change costs a mutant its verdict and says so out loud, which is the direction this project
+    // is willing to be wrong in. R94, and R93's argument that a measured contract beats a
+    // version-branched decode matrix.
+    if (t.status === "pass") {
+      return { ref, outcome: "pass", durationMs };
+    }
+    const outcome: TestOutcome =
+      t.status === "fail"
+        ? "fail"
+        : t.message !== undefined && RUNNER_TIMEOUT_MESSAGE.test(t.message)
+          ? "timeout"
+          : "error";
     return {
       ref,
       outcome,
       // Wall-clock, NOT the runner's in-VM figure: the orchestrator derives each
       // mutant's timeout budget from this and must include round-trip cost.
       durationMs,
-      ...(t.message !== undefined ? { failureMessage: t.message } : {}),
+      ...(outcome === "error"
+        ? {
+            failureMessage: `${AL_RUNNER_UNCLASSIFIED_ERROR}: al-runner reported status ${JSON.stringify(
+              t.status,
+            )} for ${wanted} with message ${JSON.stringify(t.message ?? "<none>")}. That is not an assertion failure, so it is NOT scored as a kill; if this is a timeout whose wording changed again, add it to RUNNER_TIMEOUT_MESSAGE.`,
+            // Nothing ran that could leave state behind — al-runner is a fresh process per call and
+            // touches no live container — so this is retry-safe rather than a tier hazard.
+            operation: "pre-dispatch-rejected" as const,
+          }
+        : t.message !== undefined
+          ? { failureMessage: t.message }
+          : {}),
     };
   }
 

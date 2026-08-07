@@ -8,12 +8,18 @@ import {
   runAlRunnerCanary,
 } from "../src/al-runner-canary";
 import type { SpawnFn } from "../src/publisher";
+import { alRunnerStdout } from "./helpers/al-runner-stdout";
 
 /**
- * Scripts a fake al-runner process keyed by the `--run <method>` argument, mirroring
+ * Scripts a fake al-runner process keyed by the `--test <qualifiedName>` argument, mirroring
  * al-runner-transport.test.ts's/al-runner-backend.test.ts's `recording`/`okSpawn` fakes rather
  * than reinventing the shape. `exitCode`-only entries stand in for al-runner's own
- * skip(2)/error(3) exits; `status` entries stand in for a normal test-run response.
+ * could-not-execute(2)/could-not-compile(3) exits; `status` entries stand in for a normal
+ * test-run response.
+ *
+ * The response map is keyed by the bare method for readability, but the fake answers with the
+ * QUALIFIED name v2 actually reports (`Codeunit<id>.<method>`) — so a canary that looked up the
+ * bare name would find nothing here, exactly as it would find nothing against a real v2 binary.
  */
 function scriptedSpawn(
   responses: Record<
@@ -24,20 +30,21 @@ function scriptedSpawn(
   const calls: string[][] = [];
   const spawn: SpawnFn = async (argv) => {
     calls.push([...argv]);
-    const runIdx = argv.indexOf("--run");
-    const method = argv[runIdx + 1];
+    const testIdx = argv.indexOf("--test");
+    const qualified = argv[testIdx + 1];
+    const method = qualified?.split(".").pop();
     const scripted = method !== undefined ? responses[method] : undefined;
     if (scripted === undefined) {
-      throw new Error(`scriptedSpawn: no response configured for method "${String(method)}"`);
+      throw new Error(`scriptedSpawn: no response configured for test "${String(qualified)}"`);
     }
     if ("exitCode" in scripted) {
       return { exitCode: scripted.exitCode, stdout: "", stderr: "boom" };
     }
-    const t: Record<string, unknown> = { name: method, status: scripted.status };
+    const t: Record<string, unknown> = { name: qualified, status: scripted.status };
     if (scripted.message !== undefined) t.message = scripted.message;
     return {
       exitCode: scripted.status === "pass" ? 0 : 1,
-      stdout: JSON.stringify({ tests: [t] }),
+      stdout: alRunnerStdout({ tests: [t] }),
       stderr: "",
     };
   };
@@ -84,7 +91,7 @@ describe("runAlRunnerCanary", () => {
     expect(result.tableGlobalVar).toBe("defect-confirmed");
   });
 
-  test("a skip exit (2) is inconclusive, not a defect verdict either way", async () => {
+  test("a could-not-execute exit (2) is inconclusive, not a defect verdict either way", async () => {
     const { spawn } = scriptedSpawn({
       AsserterrorNeverRaises: { exitCode: 2 },
       GlobalVarSurvivesValidate: { status: "pass" as const },
@@ -100,7 +107,7 @@ describe("runAlRunnerCanary", () => {
       // Always answers with an unrelated test name, whichever method was requested.
       return {
         exitCode: 0,
-        stdout: JSON.stringify({ tests: [{ name: "SomeoneElse", status: "pass" }] }),
+        stdout: alRunnerStdout({ tests: [{ name: "Codeunit50001.SomeoneElse", status: "pass" }] }),
         stderr: "",
       };
     };
@@ -114,9 +121,10 @@ describe("runAlRunnerCanary", () => {
     await runAlRunnerCanary("al-runner", spawn);
     expect(calls.length).toBe(2);
     for (const argv of calls) {
-      const runIdx = argv.indexOf("--run");
-      const sourceDir = argv[runIdx + 2];
-      const testDir = argv[runIdx + 3];
+      // v2 argv: ... --test <qualifiedName> <sourceDir> <testDir> (bundle dirs are positional).
+      const testIdx = argv.indexOf("--test");
+      const sourceDir = argv[testIdx + 2];
+      const testDir = argv[testIdx + 3];
       expect(sourceDir).toBeDefined();
       expect(testDir).toBeDefined();
       expect(sourceDir).not.toBe(testDir);
@@ -127,8 +135,8 @@ describe("runAlRunnerCanary", () => {
     const { calls, spawn } = scriptedSpawn(BOTH_CONFIRMED);
     await runAlRunnerCanary("al-runner", spawn);
     const dirs = calls.map((argv) => {
-      const runIdx = argv.indexOf("--run");
-      return [argv[runIdx + 2], argv[runIdx + 3]];
+      const testIdx = argv.indexOf("--test");
+      return [argv[testIdx + 2], argv[testIdx + 3]];
     });
     expect(dirs[0]).toEqual(dirs[1]);
   });
@@ -143,12 +151,13 @@ describe("runAlRunnerCanary", () => {
 
   test('an unrecognized test status (neither exactly "pass" nor "fail") is inconclusive, not read as a confirmed defect either way', async () => {
     const spawn: SpawnFn = async (argv) => {
-      const runIdx = argv.indexOf("--run");
-      const method = argv[runIdx + 1];
-      // A hypothetical future runner-internal status, distinct from both "pass" and "fail".
+      const testIdx = argv.indexOf("--test");
+      const qualified = argv[testIdx + 1];
+      // v2's third status, distinct from both "pass" and "fail" — the canary must not read it
+      // as a defect verdict either way.
       return {
         exitCode: 0,
-        stdout: JSON.stringify({ tests: [{ name: method, status: "error" }] }),
+        stdout: alRunnerStdout({ tests: [{ name: qualified, status: "error" }] }),
         stderr: "",
       };
     };

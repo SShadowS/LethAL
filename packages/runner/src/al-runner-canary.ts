@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { OneShotTransport } from "./al-runner-transport";
+import { OneShotTransport, qualifiedTestName } from "./al-runner-transport";
 import type { SpawnFn } from "./publisher";
 import { defaultSpawn } from "./publisher";
 
@@ -12,6 +12,11 @@ import { defaultSpawn } from "./publisher";
  * measured (2026-07-25, v1.0.31-era). A third-party binary can be upgraded or patched; a canary
  * that re-measures every session tells the truth about the build actually in use rather than
  * about whatever build happened to be installed the day someone wrote a code comment.
+ *
+ * That is no longer hypothetical: both defects are FIXED on al-runner v2.0.0.0 (R99, measured
+ * 2026-08-07), so on a current install this canary is expected to report `defect-not-reproduced`
+ * twice. It stays exactly because the binary is not pinned — a machine with an older al-runner
+ * on its PATH still gets told, and `alRunnerCanaryWarnings` says which of the two happened.
  *
  * Two independent probes, run ONCE per `--backend al-runner` session (never per mutant — the
  * ~2.5s cost of two al-runner invocations is immaterial against a real mutation run, though it
@@ -214,18 +219,19 @@ async function probe(
   testDir: string,
   method: string,
 ): Promise<ProbeOutcome> {
+  // v2 selects and reports tests by their qualified name — the canary's two probes live in
+  // CANARY_TESTS_CODEUNIT_ID, so the same helper the backend uses builds the name here too.
+  const wanted = qualifiedTestName(CANARY_TESTS_CODEUNIT_ID, method);
   const res = await transport.send({
     sourceDir,
     testDir,
-    method,
+    qualifiedTest: wanted,
     testTimeoutSeconds: CANARY_TEST_TIMEOUT_SECONDS,
     deadlineMs: CANARY_DEADLINE_MS,
   });
   if (res.kind === "deadline") return { kind: "inconclusive", note: "canary probe timed out" };
-  if (res.kind === "skip")
-    return { kind: "inconclusive", note: `al-runner reported a limitation: ${res.detail}` };
   if (res.kind === "error") return { kind: "inconclusive", note: res.detail };
-  const t = res.tests.find((x) => x.name === method);
+  const t = res.tests.find((x) => x.name === wanted);
   if (t === undefined) {
     return { kind: "inconclusive", note: "al-runner output did not include the canary test" };
   }

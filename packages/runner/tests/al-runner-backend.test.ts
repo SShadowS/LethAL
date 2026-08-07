@@ -3,19 +3,25 @@ import { mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CONTROL_REGISTER_FILENAME, CONTROL_UPGRADE_FILENAME } from "@lethal/schemata";
-import { AlRunnerBackend } from "../src/al-runner-backend";
+import { AL_RUNNER_UNCLASSIFIED_ERROR, AlRunnerBackend } from "../src/al-runner-backend";
 import { MsInMemoryBackend } from "../src/ms-inmemory-backend";
 import { requiresUnsafeLatch } from "../src/operation-outcome";
+import type { SpawnFn } from "../src/publisher";
+import { alRunnerStdout } from "./helpers/al-runner-stdout";
 
 const ref = { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "PostingUpdatesTotal" };
+/** What al-runner v2 both filters on and reports back for `ref` — see `qualifiedTestName`. */
+const QUALIFIED = "Codeunit79100.PostingUpdatesTotal";
 
 function okSpawn(payload: unknown, exitCode = 0) {
   const calls: string[][] = [];
-  const spawn = async (argv: readonly string[]) => {
+  const envs: (Record<string, string> | undefined)[] = [];
+  const spawn: SpawnFn = async (argv, opts) => {
     calls.push([...argv]);
-    return { exitCode, stdout: JSON.stringify(payload), stderr: "" };
+    envs.push(opts?.env);
+    return { exitCode, stdout: alRunnerStdout(payload), stderr: "" };
   };
-  return { calls, spawn };
+  return { calls, envs, spawn };
 }
 
 async function makeBackend(spawn: ReturnType<typeof okSpawn>["spawn"]) {
@@ -236,9 +242,9 @@ describe("AlRunnerBackend.activate", () => {
 });
 
 describe("AlRunnerBackend.run", () => {
-  test("spawns al-runner with --run and parses a pass", async () => {
-    const { calls, spawn } = okSpawn({
-      tests: [{ name: "PostingUpdatesTotal", status: "pass", durationMs: 3 }],
+  test("spawns al-runner with the v2 argv and parses a pass", async () => {
+    const { calls, envs, spawn } = okSpawn({
+      tests: [{ name: QUALIFIED, status: "pass", durationMs: 3 }],
       passed: 1,
       failed: 0,
       errors: 0,
@@ -248,16 +254,29 @@ describe("AlRunnerBackend.run", () => {
     const { backend } = await makeBackend(spawn);
     const v = await backend.run(ref, { coverage: "none", timeoutMs: 5000 });
     expect(v.outcome).toBe("pass");
-    expect(calls[0]).toContain("--run");
-    expect(calls[0]).toContain("PostingUpdatesTotal");
-    expect(calls[0]).toContain("--output-json");
-    // D3: al-runner defaults to `codeunit` isolation — LethAL must force
-    // `method` isolation so behavior matches the advertised `full-reset`
-    // capability.
     const argv = calls[0] ?? [];
-    const flagIdx = argv.indexOf("--test-isolation");
-    expect(flagIdx).toBeGreaterThanOrEqual(0);
-    expect(argv[flagIdx + 1]).toBe("method");
+    expect(argv).toContain("--output-json");
+
+    // al-runner defaults to `codeunit` isolation (state shared within a codeunit); LethAL must
+    // force v2's `test` mode so behaviour matches the advertised `full-reset` capability. The
+    // v1 argv said `--test-isolation method`, which v2 accepts only as an ALIAS for `codeunit`
+    // — i.e. it silently bought the weaker thing (R96), so `method` must not appear at all.
+    const isoIdx = argv.indexOf("--isolation");
+    expect(isoIdx).toBeGreaterThanOrEqual(0);
+    expect(argv[isoIdx + 1]).toBe("test");
+    expect(argv).not.toContain("method");
+    expect(argv).not.toContain("--test-isolation");
+
+    // The filter is the QUALIFIED name, and it is the same string the lookup below matches on.
+    const testIdx = argv.indexOf("--test");
+    expect(testIdx).toBeGreaterThanOrEqual(0);
+    expect(argv[testIdx + 1]).toBe(QUALIFIED);
+
+    for (const dead of ["--run", "--packages", "--stubs", "--test-timeout"]) {
+      expect(argv).not.toContain(dead);
+    }
+    // v2 has no --test-timeout; the per-test budget is an env var (see the margin test below).
+    expect(envs[0]?.AL_RUNNER_TEST_TIMEOUT_SEC).toBeDefined();
   });
 
   test("exit 1 with fail result maps to fail", async () => {
@@ -265,13 +284,11 @@ describe("AlRunnerBackend.run", () => {
       {
         tests: [
           {
-            name: "PostingUpdatesTotal",
+            name: QUALIFIED,
             status: "fail",
             durationMs: 3,
             message: "boom",
-            stackTrace: "at PostingUpdatesTotal",
-            alSourceLine: 8,
-            alSourceColumn: 37,
+            stackTrace: '"Sandbox Tests"(CodeUnit 79100).PostingUpdatesTotal line 2',
           },
         ],
         passed: 0,
@@ -288,15 +305,42 @@ describe("AlRunnerBackend.run", () => {
     expect(v.failureMessage).toBe("boom");
   });
 
-  test("exit 2 maps to skip, exit 3 maps to error", async () => {
-    for (const [code, outcome] of [
-      [2, "skip"],
-      [3, "error"],
-    ] as const) {
-      const { backend } = await makeBackend(okSpawn({ tests: [] }, code).spawn);
+  // R95: exit 2 means a bundle could not EXECUTE — the runner never ran the mutant. It used to
+  // map to `outcome: "skip"`, so a process-level failure became a silently skipped mutant with
+  // no verdict and nothing an operator would look at. Both codes must now produce `error`, and
+  // — the part that matters — NEITHER may produce a scored pass/fail verdict, because scoring
+  // one means recording a kill or a survivor that nothing measured.
+  test("exit 2 (could not execute) and exit 3 (could not compile) are BOTH outcome=error, never a scored verdict", async () => {
+    for (const code of [2, 3]) {
+      const spawn: SpawnFn = async () => ({
+        exitCode: code,
+        // Deliberately a well-formed GREEN payload: if the exit code were ignored and the
+        // stdout read anyway, this would score a PASS — i.e. a survivor nothing ran.
+        stdout: alRunnerStdout({ tests: [{ name: QUALIFIED, status: "pass" }] }),
+        stderr: `al-runner: bundle failed (exit ${code})`,
+      });
+      const { backend } = await makeBackend(spawn);
       const v = await backend.run(ref, { coverage: "none", timeoutMs: 5000 });
-      expect(v.outcome).toBe(outcome);
+      expect(v.outcome).toBe("error");
+      expect(v.outcome).not.toBe("pass");
+      expect(v.outcome).not.toBe("fail");
+      expect(v.failureMessage).toContain(`exit ${code}`);
+      expect(v.operation).toBe("pre-dispatch-rejected");
     }
+  });
+
+  // R97's other half at the backend seam: a payload the parser cannot read must not become an
+  // empty test list. It surfaces as `error`, never as a mutant nobody killed.
+  test("stdout with no JSON envelope is outcome=error, not a survivor", async () => {
+    const spawn: SpawnFn = async () => ({
+      exitCode: 0,
+      stdout: "al-runner - running 2 bundle(s)\n   0P/0F/0E across 0 tests\n",
+      stderr: "",
+    });
+    const { backend } = await makeBackend(spawn);
+    const v = await backend.run(ref, { coverage: "none", timeoutMs: 5000 });
+    expect(v.outcome).toBe("error");
+    expect(v.failureMessage).toContain("--output-json envelope");
   });
 
   // I8: a timed-out run must not leak the spawned child — the backend aborts
@@ -319,16 +363,22 @@ describe("AlRunnerBackend.run", () => {
     expect(capturedSignal?.aborted).toBe(true);
   });
 
-  test("a runner-confirmed test timeout is outcome=timeout", async () => {
+  // R94, and the pair below is the whole point: v2 reports a runner-side timeout as
+  // `status: "error"` (v1 said `status: "fail"`), so a classifier that also demanded "fail"
+  // let every v2 hang fall through to `fail` and recorded the mutant KILLED — a false kill.
+  // The two cases share a status and differ only in the message, which is what proves the
+  // classification reads the MESSAGE and not the status. Splitting them into separate test
+  // files, or testing only the timeout half, would let a status-based rule pass again.
+  test("a v2 runner-confirmed timeout (status=error) is outcome=timeout", async () => {
     const { spawn } = okSpawn(
       {
         tests: [
           {
-            name: "PostingUpdatesTotal",
-            status: "fail",
-            durationMs: 0,
-            message:
-              "Test exceeded 3s timeout. Use --test-timeout 0 to disable timeout, or increase with --test-timeout <seconds>.",
+            name: QUALIFIED,
+            status: "error",
+            durationMs: 30_014,
+            message: "TIMEOUT after 30s",
+            stackTrace: '"Sandbox Tests"(CodeUnit 79100).PostingUpdatesTotal line 2',
           },
         ],
       },
@@ -337,6 +387,62 @@ describe("AlRunnerBackend.run", () => {
     const { backend } = await makeBackend(spawn);
     const v = await backend.run(ref, { coverage: "none", timeoutMs: 5000 });
     expect(v.outcome).toBe("timeout");
+    expect(v.failureMessage).toBe("TIMEOUT after 30s");
+  });
+
+  /**
+   * al-runner ships several times a day, and we watched the timeout WORDING move inside a single
+   * session: `TIMEOUT after <n>s` on 2.0.0.0, back to `Test exceeded <n>s timeout.` on 2.0.1.0,
+   * both with `status: "error"`. So this test pins BOTH literals rather than whichever one the
+   * binary on this machine happens to say today.
+   */
+  test("both measured timeout wordings classify as outcome=timeout", async () => {
+    for (const message of ["TIMEOUT after 30s", "Test exceeded 12s timeout."]) {
+      const { spawn } = okSpawn(
+        { tests: [{ name: QUALIFIED, status: "error", durationMs: 3, message }] },
+        1,
+      );
+      const { backend } = await makeBackend(spawn);
+      const v = await backend.run(ref, { coverage: "none", timeoutMs: 5000 });
+      expect(v.outcome, `wording: ${message}`).toBe("timeout");
+    }
+  });
+
+  /**
+   * THE FAIL-CLOSED RULE, and this assertion was the opposite one until 2.0.1 shipped.
+   *
+   * It used to expect `fail` — an unclassified `status: "error"` fell through to the kill branch.
+   * That is what made the timeout re-wording dangerous rather than merely annoying: a string change
+   * upstream turned every hung mutant into a KILL, silently, and no aggregate count would show it.
+   * `error` is al-runner's word for several distinct things — a timeout it enforced, and (its own
+   * `RunnerOutOfScopeException`) a test that reached SMTP, outbound HTTP, printing, external file
+   * I/O or web-service publishing — and only one of them says anything about the mutant.
+   *
+   * So: an `error` we cannot positively classify costs the mutant its verdict and says so, rather
+   * than crediting the suite with a kill it did not earn. Wrong in the direction this project is
+   * willing to be wrong in.
+   */
+  test("a status=error we cannot classify is outcome=error — NOT a kill", async () => {
+    const { spawn } = okSpawn(
+      {
+        tests: [
+          {
+            name: QUALIFIED,
+            status: "error",
+            durationMs: 3,
+            message: "RunnerOutOfScopeException: outbound HTTP is not available in this runtime",
+          },
+        ],
+      },
+      1,
+    );
+    const { backend } = await makeBackend(spawn);
+    const v = await backend.run(ref, { coverage: "none", timeoutMs: 5000 });
+    expect(v.outcome).toBe("error");
+    expect(v.failureMessage).toContain(AL_RUNNER_UNCLASSIFIED_ERROR);
+    // The runner's own words survive into the record — without them nobody can tell which
+    // unclassified error this was, which is the whole reason it is not scored.
+    expect(v.failureMessage).toContain("RunnerOutOfScopeException");
   });
 
   test("an ordinary assertion failure is still outcome=fail", async () => {
@@ -344,7 +450,7 @@ describe("AlRunnerBackend.run", () => {
       {
         tests: [
           {
-            name: "PostingUpdatesTotal",
+            name: QUALIFIED,
             status: "fail",
             durationMs: 3,
             message: "expected 2, got 1",
@@ -358,6 +464,37 @@ describe("AlRunnerBackend.run", () => {
     expect(v.outcome).toBe("fail");
   });
 
+  // The lookup must use the SAME qualified name the `--test` filter sent (one helper builds
+  // both). Matching on the bare method would miss every v2 row; matching too loosely would
+  // score a mutant off whatever test happened to be in the payload.
+  test("finds the requested test by its qualified name", async () => {
+    const { spawn } = okSpawn({
+      tests: [
+        { name: "Codeunit79100.SomeoneElse", status: "fail", message: "not ours" },
+        { name: "Codeunit79100.OverBudgetDetected", status: "pass" },
+      ],
+    });
+    const { backend } = await makeBackend(spawn);
+    const v = await backend.run(
+      { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "OverBudgetDetected" },
+      { coverage: "none", timeoutMs: 5000 },
+    );
+    expect(v.outcome).toBe("pass");
+  });
+
+  test("refuses loudly when the runner returns some other test, naming both sides", async () => {
+    const { spawn } = okSpawn({
+      tests: [{ name: "Codeunit79100.SomethingElse", status: "pass" }],
+    });
+    const { backend } = await makeBackend(spawn);
+    const v = await backend.run(ref, { coverage: "none", timeoutMs: 5000 });
+    // Not "pass" — a payload for a DIFFERENT test says nothing about this mutant.
+    expect(v.outcome).toBe("error");
+    expect(v.failureMessage).toContain(QUALIFIED);
+    expect(v.failureMessage).toContain("Codeunit79100.SomethingElse");
+    expect(v.operation).toBe("pre-dispatch-rejected");
+  });
+
   test("our own deadline is outcome=deadline-exceeded, not timeout", async () => {
     const spawn = async () => new Promise<never>(() => {}) as never;
     const { backend } = await makeBackend(spawn as never);
@@ -365,27 +502,25 @@ describe("AlRunnerBackend.run", () => {
     expect(v.outcome).toBe("deadline-exceeded");
   });
 
-  // Regression guard for the timeout-margin bug: the backend's own derivation
-  // of --test-timeout (from opts.timeoutMs) must leave al-runner's internal
-  // timeout comfortably BELOW our client deadline, never >= it. Otherwise our
-  // AbortController always wins the Promise.race and the runner-confirmed
-  // `outcome: "timeout"` path exercised above becomes unreachable in real
-  // execution — every genuine mutant-induced hang would be misclassified as
-  // deadline-exceeded (infrastructure noise). This drives the real
-  // backend.run() path (not a re-implementation of the formula) so a
-  // regression in the derivation itself fails this test.
-  test("--test-timeout leaves real margin below the client deadline", async () => {
+  // Regression guard for the timeout-margin bug: the backend's own derivation of the runner's
+  // per-test budget (from opts.timeoutMs) must leave al-runner's internal timeout comfortably
+  // BELOW our client deadline, never >= it. Otherwise our AbortController always wins the
+  // Promise.race and the runner-confirmed `outcome: "timeout"` path exercised above becomes
+  // unreachable in real execution — every genuine mutant-induced hang would be misclassified as
+  // deadline-exceeded (infrastructure noise). This drives the real backend.run() path (not a
+  // re-implementation of the formula) so a regression in the derivation itself fails this test.
+  // v2 delivers the budget as AL_RUNNER_TEST_TIMEOUT_SEC rather than a `--test-timeout` flag;
+  // the value and its reason are unchanged.
+  test("the per-test budget env var leaves real margin below the client deadline", async () => {
     for (const timeoutMs of [5000, 14000, 120000]) {
-      const { calls, spawn } = okSpawn({
-        tests: [{ name: "PostingUpdatesTotal", status: "pass" }],
+      const { envs, spawn } = okSpawn({
+        tests: [{ name: QUALIFIED, status: "pass" }],
       });
       const { backend } = await makeBackend(spawn);
       await backend.run(ref, { coverage: "none", timeoutMs });
-      const argv = calls[0] ?? [];
-      const idx = argv.indexOf("--test-timeout");
-      expect(idx).toBeGreaterThanOrEqual(0);
-      const seconds = Number(argv[idx + 1]);
-      expect(seconds * 1000).toBeLessThan(timeoutMs);
+      const raw = envs[0]?.AL_RUNNER_TEST_TIMEOUT_SEC;
+      expect(raw).toBeDefined();
+      expect(Number(raw) * 1000).toBeLessThan(timeoutMs);
     }
   });
 
@@ -418,19 +553,98 @@ describe("AlRunnerBackend.run", () => {
 });
 
 describe("AlRunnerBackend.status", () => {
-  // D2: al-runner has no --version flag (it errors out); --help is the
-  // verified reachability probe (exits 0).
-  test("probes with --help, not --version", async () => {
+  // v2 HAS --version and answers `al-runner v2.0.0.0` with exit 0; v1.0.31 rejected the flag
+  // outright, which is why this probe used to be --help. The switch is not cosmetic: --help
+  // exits 0 on BOTH versions, so it could never tell them apart, and this adapter sends v2-only
+  // argv and reads v2's timeout shape.
+  test("probes with --version and accepts a v2 binary", async () => {
     const calls: string[][] = [];
-    const spawn = async (argv: readonly string[]) => {
+    const spawn: SpawnFn = async (argv) => {
       calls.push([...argv]);
-      return { exitCode: 0, stdout: "usage: al-runner ...", stderr: "" };
+      return { exitCode: 0, stdout: "al-runner v2.0.0.0\n", stderr: "" };
     };
     const { backend } = await makeBackend(spawn);
     const status = await backend.status();
     expect(status.ok).toBe(true);
-    expect(calls[0]).toContain("--help");
-    expect(calls[0]).not.toContain("--version");
+    expect(status.details).toBe("al-runner v2.0.0.0");
+    expect(calls[0]).toContain("--version");
+    expect(calls[0]).not.toContain("--help");
+  });
+
+  // A v1 binary must fail with something a human can act on. Silently accepting it would mean
+  // sending flags v1 rejects (exit 2 on every mutant) and reading v1's timeout message shape
+  // through a v2 regex — wrong verdicts rather than an error.
+  test("refuses a v1 binary by name instead of producing wrong verdicts", async () => {
+    const spawn: SpawnFn = async () => ({
+      exitCode: 0,
+      stdout: "al-runner v1.0.31\n",
+      stderr: "",
+    });
+    const { backend } = await makeBackend(spawn);
+    const status = await backend.status();
+    expect(status.ok).toBe(false);
+    expect(status.details).toContain("v1.0.31");
+    expect(status.details).toContain("v2");
+  });
+
+  test("an unrunnable binary is still ok:false", async () => {
+    const spawn: SpawnFn = async () => ({ exitCode: 9009, stdout: "", stderr: "not found" });
+    const { backend } = await makeBackend(spawn);
+    const status = await backend.status();
+    expect(status.ok).toBe(false);
+    expect(status.details).toContain("not runnable");
+  });
+});
+
+describe("AlRunnerBackend serverMode refusal", () => {
+  // R97 / upstream al-runner #1658: v2's server protocol reads only sourcePaths[0], so the TEST
+  // bundle never runs and runTests answers with an empty PASSING result — a whole session of
+  // "survived" verdicts scored off a suite that never executed. Constructing the backend must
+  // therefore throw, not fall back to the one-shot transport silently: a config that asked for
+  // server mode and quietly got something else is the same class of lie.
+  test("constructing with serverMode:true throws, naming R97 and the upstream issue", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-alrunner-server-"));
+    expect(
+      () =>
+        new AlRunnerBackend(
+          {
+            alRunnerPath: "al-runner",
+            instrumentedDir: dir,
+            testDir: "/tests",
+            selectorObjectId: 50000,
+            serverMode: true,
+          },
+          okSpawn({ tests: [] }).spawn,
+        ),
+    ).toThrow(/R97/);
+    expect(
+      () =>
+        new AlRunnerBackend(
+          {
+            alRunnerPath: "al-runner",
+            instrumentedDir: dir,
+            testDir: "/tests",
+            selectorObjectId: 50000,
+            serverMode: true,
+          },
+          okSpawn({ tests: [] }).spawn,
+        ),
+    ).toThrow(/1658/);
+  });
+
+  test("serverMode:false still constructs", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-alrunner-server-off-"));
+    const backend = new AlRunnerBackend(
+      {
+        alRunnerPath: "al-runner",
+        instrumentedDir: dir,
+        testDir: "/tests",
+        selectorObjectId: 50000,
+        serverMode: false,
+      },
+      okSpawn({ tests: [] }).spawn,
+    );
+    expect(backend.capabilities().coverage).toBe("none");
   });
 });
 

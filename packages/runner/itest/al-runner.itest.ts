@@ -13,14 +13,20 @@
  * Expected verdict table is hand-computed in fixtures/README.md — keep the
  * two in sync if the fixture AL or tests change.
  *
- * CLI/JSON contract VERIFIED (2026-07-18) against a real al-runner install:
- * argv shape `--run <method> <instrumentedDir> <testDir> --output-json
- * --test-isolation method [--packages <dir>] [--stubs <dir>]`; JSON stdout
- * envelope `{ tests: [{ name, status, durationMs?, message?, stackTrace?,
- * alSourceLine?, alSourceColumn? }], passed, failed, errors, total,
- * exitCode }` — entry fields are `name`/`status`, not `method`/`result`, and
- * there is no `codeunit` field on an entry. Both confirmed in
- * `src/al-runner-backend.ts`.
+ * CLI/JSON contract VERIFIED (2026-08-07) against al-runner v2.0.0.0: argv shape
+ * `--output-json --isolation test --test <Codeunit<id>.<method>> <instrumentedDir>
+ * <testDir> [--package-cache <dir>]`, with the bundle dirs POSITIONAL; the per-test
+ * budget is the env var `AL_RUNNER_TEST_TIMEOUT_SEC`, not a flag. stdout carries a
+ * human progress banner BEFORE the JSON, so the envelope has to be located rather
+ * than parsed whole (`parseAlRunnerPayload`). Envelope: `{ tests: [{ name, status,
+ * durationMs?, message?, stackTrace? }], passed, failed, errors, total, exitCode }` —
+ * entry fields are `name`/`status`, not `method`/`result`, `name` is QUALIFIED, and
+ * there is no `codeunit` field on an entry. Exit codes: 0 all passed, 1 at least one
+ * test failed or errored, 2 a bundle could not execute, 3 a bundle could not compile.
+ *
+ * The v1 argv this replaced (`--run`, `--packages`, `--stubs`, `--test-timeout`,
+ * `--test-isolation method`) is not merely deprecated — v2 rejects each of those as an
+ * unknown option (exit 2). See `src/al-runner-transport.ts` for the measurements.
  */
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -154,7 +160,35 @@ function assertVerdictTable(report: SessionReport): void {
   );
 }
 
+/**
+ * Stamps the al-runner build this gate actually ran against, and refuses one it cannot identify.
+ *
+ * al-runner ships several times a day, and the binary here is a globally-installed dotnet tool that
+ * `dotnet tool update` can move under us between one gate run and the next. Measured on 2026-08-07:
+ * 2.0.0.0 reported a runner-enforced timeout as `TIMEOUT after <n>s`, and 2.0.1.0 — published the
+ * same day — went back to `Test exceeded <n>s timeout.`. A frozen verdict table that does not say
+ * which build produced it is a frozen table about nothing, and the first symptom of a silent tool
+ * update is a "regression" in code that did not change. So the version goes in the log next to the
+ * verdicts, every run.
+ */
+async function stampRunnerVersion(): Promise<void> {
+  const proc = Bun.spawn([alRunnerPath, "--version"], { stdout: "pipe", stderr: "pipe" });
+  const [out, err] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
+  const exitCode = await proc.exited;
+  const line = out.trim() || err.trim();
+  assert.equal(
+    exitCode,
+    0,
+    `al-runner --version exited ${exitCode} (${line}) — v1.0.31 rejected --version outright, so this is either a v1 binary or not al-runner. This gate is frozen against v2.`,
+  );
+  console.log(`  al-runner build under test: ${line}`);
+}
+
 async function main(): Promise<void> {
+  await stampRunnerVersion();
   const { files } = await generateMutationSet(join(PROJECT_DIR, "src"));
   const total = files.reduce((n, f) => n + f.specs.length, 0);
   assert.equal(

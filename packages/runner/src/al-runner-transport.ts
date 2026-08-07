@@ -3,9 +3,13 @@ import { type SpawnFn, defaultSpawn } from "./publisher";
 export interface AlRunnerRequest {
   readonly sourceDir: string;
   readonly testDir: string;
-  readonly method: string;
+  /**
+   * The name al-runner v2 both FILTERS on (`--test`) and REPORTS back, which is the
+   * qualified `Codeunit<id>.<method>` form — build it with `qualifiedTestName` and never
+   * by hand, so the filter we send and the row a caller matches cannot drift apart.
+   */
+  readonly qualifiedTest: string;
   readonly packagesDir?: string;
-  readonly stubsDir?: string;
   readonly testTimeoutSeconds: number;
   readonly deadlineMs: number;
 }
@@ -20,7 +24,6 @@ export interface AlRunnerRawTest {
 export type AlRunnerResult =
   | { readonly kind: "tests"; readonly tests: readonly AlRunnerRawTest[] }
   | { readonly kind: "deadline" }
-  | { readonly kind: "skip"; readonly detail: string }
   | { readonly kind: "error"; readonly detail: string };
 
 export interface AlRunnerTransport {
@@ -28,9 +31,75 @@ export interface AlRunnerTransport {
   close(): Promise<void>;
 }
 
+/**
+ * al-runner v2 reports and selects tests by their QUALIFIED name — measured against the
+ * installed al-runner v2.0.0.0 (2026-08-07): `--test Codeunit79601.PassesQuietly` selected
+ * exactly that one test, and the JSON rows carry the same qualified `name`. This is the ONE
+ * place that name is built, so the `--test` filter and the result lookup can never disagree;
+ * two independent spellings would mean the runner ran one thing and the caller scored another.
+ */
+export function qualifiedTestName(codeunitId: number, method: string): string {
+  return `Codeunit${codeunitId}.${method}`;
+}
+
+/** Enough stdout to recognise what the runner actually said, without dumping a whole suite. */
+function stdoutPrefix(stdout: string): string {
+  const head = stdout.slice(0, 400);
+  return JSON.stringify(stdout.length > 400 ? `${head}...` : head);
+}
+
+/**
+ * al-runner v2 writes a human progress banner to stdout BEFORE the `--output-json` envelope
+ * (measured against v2.0.0.0: `[r2r] re-execing ...`, `[bc] no --bc-version given ...`,
+ * `al-runner - running 2 bundle(s)`, a per-bundle line each), so `JSON.parse(stdout)` throws on
+ * every real run.
+ *
+ * The envelope is found as the LAST line that BEGINS with `{` at column zero, and runs from
+ * there to the end of output. Three things about that rule are deliberate:
+ * - column zero, because banner lines may CONTAIN a brace and "the first `{` anywhere" would
+ *   slice mid-banner;
+ * - `begins with` rather than `is exactly`, because the measured pretty-printed envelope opens
+ *   with a bare `{` line while a compact one-line envelope would open the same way — accepting
+ *   both costs nothing and rejects nothing a bare-`{` rule would have accepted;
+ * - LAST rather than first, because the envelope always comes after the banner.
+ *
+ * THROWS rather than returning `[]` on anything it cannot read. An empty test list is
+ * indistinguishable from "the filter matched no tests", and a caller that sees no failing test
+ * scores the mutant SURVIVED — a silently-empty confirmation, this project's signature bug and
+ * the reason R97 exists.
+ */
 export function parseAlRunnerPayload(stdout: string): readonly AlRunnerRawTest[] {
-  const parsed = JSON.parse(stdout) as { tests?: AlRunnerRawTest[] };
-  return parsed.tests ?? [];
+  const lines = stdout.split("\n");
+  let start = -1;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if ((lines[i] ?? "").startsWith("{")) {
+      start = i;
+      break;
+    }
+  }
+  if (start < 0) {
+    throw new Error(
+      `al-runner produced no --output-json envelope (no line beginning with "{"): ${stdoutPrefix(stdout)}`,
+    );
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(lines.slice(start).join("\n"));
+  } catch (err) {
+    throw new Error(
+      `al-runner's --output-json envelope is not valid JSON (${err instanceof Error ? err.message : String(err)}): ${stdoutPrefix(stdout)}`,
+    );
+  }
+  const tests =
+    typeof parsed === "object" && parsed !== null
+      ? (parsed as { tests?: unknown }).tests
+      : undefined;
+  if (!Array.isArray(tests)) {
+    throw new Error(
+      `al-runner's --output-json envelope has no "tests" array — a project that failed to COMPILE answers with compilationErrors[] and no tests, and must not be read as "no test failed": ${stdoutPrefix(stdout)}`,
+    );
+  }
+  return tests as readonly AlRunnerRawTest[];
 }
 
 /** One al-runner process per request. Correct, and pays full compilation each time. */
@@ -41,28 +110,39 @@ export class OneShotTransport implements AlRunnerTransport {
   ) {}
 
   async send(req: AlRunnerRequest): Promise<AlRunnerResult> {
+    // v2 argv, measured against the installed al-runner v2.0.0.0 (2026-08-07). The v1 shape
+    // this replaced (`--run <method> ... --test-isolation method --packages --stubs
+    // --test-timeout`) is not merely deprecated: v2 answers an unknown flag with
+    // `Unknown option '--run'.` and exit 2, so every one of those spellings had to go.
     const argv = [
       this.alRunnerPath,
-      "--run",
-      req.method,
+      "--output-json",
+      // v2 renamed the flag AND the mode. `test` gives every [Test] fresh state, which is
+      // what AlRunnerBackend.capabilities() claims as `full-reset`. v2 still ACCEPTS
+      // `method`, but only as a v1 alias for `codeunit` (state shared within a codeunit) —
+      // so the v1 argv above was silently buying the weaker isolation (R96).
+      "--isolation",
+      "test",
+      "--test",
+      req.qualifiedTest,
+      // Bundle dirs are POSITIONAL and repeatable in v2; multiple dirs run sequentially and
+      // aggregate into one summary envelope.
       req.sourceDir,
       req.testDir,
-      "--output-json",
-      // al-runner defaults to `codeunit` isolation (state shared within a
-      // codeunit); force `method` to match the advertised full-reset capability.
-      "--test-isolation",
-      "method",
-      "--test-timeout",
-      String(req.testTimeoutSeconds),
     ];
-    if (req.packagesDir) argv.push("--packages", req.packagesDir);
-    if (req.stubsDir) argv.push("--stubs", req.stubsDir);
+    if (req.packagesDir) argv.push("--package-cache", req.packagesDir);
 
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const res = await Promise.race([
-        this.spawn(argv, { signal: controller.signal }),
+        this.spawn(argv, {
+          signal: controller.signal,
+          // v2 dropped `--test-timeout`; the per-test budget is this env var, and the
+          // released build honours it (measured: AL_RUNNER_TEST_TIMEOUT_SEC=15 produced a
+          // 15.027 s test). SpawnFn merges `env` over process.env, so PATH survives.
+          env: { AL_RUNNER_TEST_TIMEOUT_SEC: String(req.testTimeoutSeconds) },
+        }),
         new Promise<"deadline">((resolve) => {
           timer = setTimeout(() => {
             controller.abort();
@@ -71,10 +151,20 @@ export class OneShotTransport implements AlRunnerTransport {
         }),
       ]);
       if (res === "deadline") return { kind: "deadline" };
-      if (res.exitCode === 2) return { kind: "skip", detail: res.stdout || res.stderr };
-      if (res.exitCode === 3 || res.exitCode < 0)
-        return { kind: "error", detail: res.stderr || res.stdout };
-      return { kind: "tests", tests: parseAlRunnerPayload(res.stdout) };
+      // v2 exit codes, from its own --help: 0 = all passed, 1 = at least one test FAILED or
+      // ERRORED, 2 = a bundle could not EXECUTE, 3 = a bundle could not COMPILE.
+      //
+      // Only 0 and 1 carry per-test verdicts. R95: exit 2 used to map to `kind: "skip"`,
+      // which turned a process-level failure — the runner never ran the mutant at all —
+      // into a silently skipped mutant with no verdict and no error anyone would see. 2 and
+      // 3 alike mean "we measured nothing", and so does any negative code (spawn failure),
+      // so all of them are errors.
+      if (res.exitCode === 0 || res.exitCode === 1)
+        return { kind: "tests", tests: parseAlRunnerPayload(res.stdout) };
+      return {
+        kind: "error",
+        detail: res.stderr || res.stdout || `al-runner exited ${res.exitCode} with no output`,
+      };
     } catch (err) {
       return { kind: "error", detail: String(err) };
     } finally {
@@ -150,9 +240,12 @@ const defaultServerIo = (alRunnerPath: string): ServerIo => ({
  * this backend reports coverage:"none", so the orchestrator already runs every
  * test per mutant.
  *
- * NEVER move the selector into `--stubs` to dodge recompiles: stubPaths are
- * excluded from the cache fingerprint, so that yields a cache HIT serving a
- * stale assembly — fast, silent, wrong verdicts.
+ * UNREACHABLE ON v2, deliberately. `AlRunnerBackend` refuses to construct with
+ * `serverMode: true` (see its constructor): v2's server protocol reads only
+ * `sourcePaths[0]`, so the TEST bundle never runs and every mutant comes back
+ * green and empty (R97, reported upstream as al-runner #1658). The class is kept
+ * so the protocol handling survives for whenever that is fixed upstream — nothing
+ * in a mutation run reaches it today.
  */
 export class ServerTransport implements AlRunnerTransport {
   private proc: ServerProcess | undefined;
@@ -234,7 +327,6 @@ export class ServerTransport implements AlRunnerTransport {
         sourcePaths: [req.sourceDir, req.testDir],
       };
       if (req.packagesDir) payload.packagePaths = [req.packagesDir];
-      if (req.stubsDir) payload.stubPaths = [req.stubsDir];
       proc.write(JSON.stringify(payload));
 
       const deadline = new Promise<"deadline">((resolve) => {

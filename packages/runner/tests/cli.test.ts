@@ -649,6 +649,22 @@ describe("validateAlRunnerConfig", () => {
   test("missing alRunnerPath throws", () => {
     expect(() => validateAlRunnerConfig({})).toThrow("alRunnerPath");
   });
+
+  // al-runner v2 removed --stubs entirely and rejects it as an unknown option. Accepting the
+  // field and dropping it would leave an operator believing their hand-written dependency stubs
+  // were in play while every compile ran without them — a config that lies quietly. The refusal
+  // must name the version, because "unknown field" alone tells nobody what to do about it.
+  test('a config still setting "stubsDir" is REFUSED, naming v2 and the removed flag', () => {
+    expect(() =>
+      validateAlRunnerConfig({ alRunnerPath: "al-runner", stubsDir: "C:/stubs" } as never),
+    ).toThrow(/stubsDir/);
+    expect(() =>
+      validateAlRunnerConfig({ alRunnerPath: "al-runner", stubsDir: "C:/stubs" } as never),
+    ).toThrow(/v2/);
+    expect(() =>
+      validateAlRunnerConfig({ alRunnerPath: "al-runner", stubsDir: "C:/stubs" } as never),
+    ).toThrow(/--stubs/);
+  });
 });
 
 describe("parseCliConfig — clear-quarantine subcommand (Task 13)", () => {
