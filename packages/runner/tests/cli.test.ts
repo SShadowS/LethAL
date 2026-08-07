@@ -17,6 +17,8 @@ import {
   parseCliConfig,
   performForceResetLease,
   permissionCanaryFor,
+  prepareBcdevReadOnly,
+  readOnlyEnvConfig,
   resolveForceResetLeaseConfig,
   resolveSelectorIds,
   resourceIdentityFor,
@@ -1655,5 +1657,162 @@ describe("fanOutEmit (Task 6 review round 1)", () => {
     }
     expect(warnings).toHaveLength(1);
     expect(good.events).toHaveLength(3);
+  });
+});
+
+/**
+ * R111 — the ONE read-only env-tool resolution. Two commands used to carry ~50 near-identical
+ * lines each, and the two copies had already drifted once (`packageCachePath`, which made
+ * `lethal doctor` throw on configs `run` accepted).
+ *
+ * The property that matters is that a read-only caller can never provision or bill. These tests
+ * assert it STRUCTURALLY — on the config the client is handed, not just on what got spawned —
+ * because a spawn assertion only proves what today's code does, while a config with no `publish`
+ * block cannot grow a publish call at all.
+ */
+describe("prepareBcdevReadOnly — R111", () => {
+  function envToolCfg(): LethalConfigFile {
+    return {
+      bcdev: {
+        mcpCommand: ["bun", "mcp"],
+        company: "CRONUS",
+        controlSymbolPath: "c.app",
+      } as unknown as BcDevConfigSection,
+      envTool: {
+        toolPath: "tool.exe",
+        envId: "env-4711",
+        resolve: [
+          { command: ["env", "get", "{envId}", "--json"], reads: { baseUrl: "url" } },
+          {
+            command: ["env", "users", "{envId}", "--json"],
+            reads: { username: "u", password: "p" },
+          },
+        ],
+        publish: { command: ["publish", "{envId}", "{appFile}"] },
+        createEnv: { command: ["env", "create"] },
+        startEnv: { command: ["env", "start", "{envId}"] },
+        deleteEnv: { command: ["env", "delete", "{envId}"] },
+        downloadSymbols: { command: ["env", "download-symbols", "{envId}"] },
+      },
+    };
+  }
+
+  function spawnStub(spawned: string[]) {
+    return async (argv: readonly string[]) => {
+      const line = argv.join(" ");
+      spawned.push(line);
+      if (line.includes("env get")) {
+        return { exitCode: 0, stdout: '{"url":"https://host/env-4711"}', stderr: "" };
+      }
+      if (line.includes("env users")) {
+        return { exitCode: 0, stdout: '{"u":"admin","p":"hunter2"}', stderr: "" };
+      }
+      return { exitCode: 0, stdout: "{}", stderr: "" };
+    };
+  }
+
+  test("readOnlyEnvConfig strips every MUTATING block and keeps everything else", () => {
+    const full = envToolCfg().envTool;
+    if (full === undefined) throw new Error("fixture has no envTool section");
+    const stripped = readOnlyEnvConfig(full as EnvToolConfigSection);
+    expect(stripped.publish).toBeUndefined();
+    expect(stripped.createEnv).toBeUndefined();
+    expect(stripped.startEnv).toBeUndefined();
+    expect(stripped.deleteEnv).toBeUndefined();
+    expect(stripped.downloadSymbols).toBeUndefined();
+    expect(stripped.readyWhen).toBeUndefined();
+    // Everything a resolve still needs survives — a strip that took `toolPath` or `resolve` with
+    // it would make every read-only command fail rather than be safe.
+    expect(stripped.toolPath).toBe("tool.exe");
+    expect(stripped.envId).toBe("env-4711");
+    expect(stripped.resolve).toHaveLength(2);
+  });
+
+  test("the CLIENT is built from the stripped config — the boundary is data, not a comment", async () => {
+    // The structural half. A spawn assertion says what today's code does; this says what a future
+    // edit inside the helper COULD do, which is the property the row asked to make structural.
+    const seen: EnvToolConfigSection[] = [];
+    const spawned: string[] = [];
+    await prepareBcdevReadOnly(envToolCfg(), {
+      runId: "doctor",
+      makeEnvToolClient: (c) => {
+        seen.push(c);
+        return new EnvToolClient(c, { spawn: spawnStub(spawned) });
+      },
+    }).bcdev();
+    expect(seen).toHaveLength(1);
+    const handed = seen[0];
+    expect(handed?.publish).toBeUndefined();
+    expect(handed?.createEnv).toBeUndefined();
+    expect(handed?.startEnv).toBeUndefined();
+    expect(handed?.deleteEnv).toBeUndefined();
+    expect(handed?.downloadSymbols).toBeUndefined();
+  });
+
+  test("spawns ONLY the resolve blocks", async () => {
+    const spawned: string[] = [];
+    await prepareBcdevReadOnly(envToolCfg(), {
+      runId: "doctor",
+      makeEnvToolClient: (c) => new EnvToolClient(c, { spawn: spawnStub(spawned) }),
+    }).bcdev();
+    expect(spawned).toEqual([
+      "tool.exe env get env-4711 --json",
+      "tool.exe env users env-4711 --json",
+    ]);
+  });
+
+  test("memoizes: two consumers of the resolution spawn the tool once", async () => {
+    // `runDoctor` runs several checks concurrently and each needs the resolved identity.
+    const spawned: string[] = [];
+    const r = prepareBcdevReadOnly(envToolCfg(), {
+      runId: "doctor",
+      makeEnvToolClient: (c) => new EnvToolClient(c, { spawn: spawnStub(spawned) }),
+    });
+    await Promise.all([r.resolved(), r.bcdev(), r.resolved()]);
+    expect(spawned).toHaveLength(2); // the two resolve blocks, once each
+  });
+
+  test("carries the caller's runId into placeholder substitution", async () => {
+    // The ONE thing the two callers differ in, so a tool that names things after `{runId}` can
+    // tell a diagnostic probe from a recovery.
+    const cfg = envToolCfg();
+    const withRunId: LethalConfigFile = {
+      ...cfg,
+      envTool: {
+        ...(cfg.envTool as EnvToolConfigSection),
+        resolve: [
+          {
+            command: ["env", "get", "{envId}", "--tag", "{runId}", "--json"],
+            reads: { baseUrl: "url" },
+          },
+          {
+            command: ["env", "users", "{envId}", "--json"],
+            reads: { username: "u", password: "p" },
+          },
+        ],
+      },
+    };
+    const spawned: string[] = [];
+    await prepareBcdevReadOnly(withRunId, {
+      runId: "force-reset-lease",
+      makeEnvToolClient: (c) => new EnvToolClient(c, { spawn: spawnStub(spawned) }),
+    }).bcdev();
+    expect(spawned[0]).toContain("--tag force-reset-lease");
+  });
+
+  test("force-reset-lease reaches the tool through the STRIPPED config too", async () => {
+    // The call site, not the helper: `resolveForceResetLeaseConfig` delegating is what makes the
+    // boundary real for that command, and asserting it here is what would catch a future rewrite
+    // that quietly went back to building its own client.
+    const seen: EnvToolConfigSection[] = [];
+    const spawned: string[] = [];
+    await resolveForceResetLeaseConfig(envToolCfg(), {
+      makeEnvToolClient: (c) => {
+        seen.push(c);
+        return new EnvToolClient(c, { spawn: spawnStub(spawned) });
+      },
+    });
+    expect(seen[0]?.publish).toBeUndefined();
+    expect(seen[0]?.downloadSymbols).toBeUndefined();
   });
 });

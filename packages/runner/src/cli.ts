@@ -2,7 +2,7 @@
 import { closeSync, existsSync, openSync, writeSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { parseArgs } from "node:util";
 import {
   type AppIdRange,
@@ -400,13 +400,31 @@ export interface ClearQuarantineCliConfig {
  * the RESULTS database (`<project>/lethal.sqlite`), not in the machine-global `~/.lethal`
  * quarantine directory — and `--db` is honoured, resolved exactly as `run` resolves it, so an
  * operator who ran with `--db X` clears the same file that run wrote.
+ *
+ * R112: `--server`/`--instance` may be replaced by `--config <path>`. On an env-tool project those
+ * two fields are legitimately absent from the config file — the tool supplies them at runtime — so
+ * demanding them as flags asked an operator to type values that existed nowhere they could read
+ * them, on exactly the hosted topology R90's bracket was measured on. A gate you could trip but
+ * not clear. With `--config` the identity is resolved read-only and PRINTED before anything is
+ * removed.
  */
 export interface ClearCeilingCliConfig {
   readonly mode: "clear-ceiling";
   readonly projectDir: string;
   readonly dbPath: string;
-  readonly server: string;
-  readonly serverInstance: string;
+  /**
+   * R112: OPTIONAL, together with `serverInstance`. On an env-tool project these two fields are
+   * legitimately absent from the config file — the tool supplies them at runtime — so demanding
+   * them as flags asked the operator to type something they cannot read anywhere. When both are
+   * omitted, `configPath` is required instead and the identity is RESOLVED read-only, then PRINTED
+   * before anything is cleared. Explicit flags still win: an operator who names a tier gets that
+   * tier, never a config's opinion of it.
+   */
+  readonly server?: string;
+  readonly serverInstance?: string;
+  /** Required when `server`/`serverInstance` are omitted — the config the identity is resolved
+   *  from. Ignored when both flags are given. */
+  readonly configPath?: string;
   /** Narrows the clear to rows recorded against this file. Absent means the whole tier — see
    *  `clearPublishCeiling` for why the blanket clear is the default rather than the exception. */
   readonly file?: string;
@@ -610,7 +628,7 @@ USAGE
   lethal run               --project <dir> --tests <dir> --backend <bcdev|al-runner> [options]
   lethal run               --project <dir> --dry-run
   lethal clear-quarantine  --server <url> --instance <name>
-  lethal clear-ceiling     --project <dir> --server <url> --instance <name> [--db <path>] [--file <name>]
+  lethal clear-ceiling     --project <dir> (--server <url> --instance <name> | --config <path>) [--db <path>] [--file <name>]
   lethal force-reset-lease --server <url> --instance <name> --config <path> [--project <dir>]
   lethal doctor            --config <path> [--project <dir>]
   lethal explain           <report.json>
@@ -947,13 +965,24 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
   }
 
   if (subcommand === "clear-ceiling") {
-    const server = values.server;
-    if (server === undefined || server === "") {
-      throw new Error("missing required --server <url>");
+    // R112: `--server`/`--instance` are a PAIR, and both may be omitted in favour of `--config`.
+    // One without the other is always a mistake — half an identity would silently clear a tier
+    // named partly by a flag and partly by a config.
+    const server = values.server === "" ? undefined : values.server;
+    const serverInstance = values.instance === "" ? undefined : values.instance;
+    if ((server === undefined) !== (serverInstance === undefined)) {
+      throw new Error(
+        "--server and --instance must be given together (or both omitted, with --config, to " +
+          "resolve the tier from the project's own configuration)",
+      );
     }
-    const serverInstance = values.instance;
-    if (serverInstance === undefined || serverInstance === "") {
-      throw new Error("missing required --instance <name>");
+    const ceilingConfigPath = values.config === "" ? undefined : values.config;
+    if (server === undefined && ceilingConfigPath === undefined) {
+      throw new Error(
+        "name the tier with --server <url> --instance <name>, or pass --config <path> to resolve " +
+          "it from the project's configuration. An env-tool project has no server/serverInstance " +
+          "in its config file to read off — that is what --config is for.",
+      );
     }
     const project = values.project;
     if (project === undefined || project === "") {
@@ -977,8 +1006,9 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
       mode: "clear-ceiling",
       projectDir: project,
       dbPath: values.db ?? join(project, "lethal.sqlite"),
-      server,
-      serverInstance,
+      ...(server !== undefined ? { server } : {}),
+      ...(serverInstance !== undefined ? { serverInstance } : {}),
+      ...(ceilingConfigPath !== undefined ? { configPath: ceilingConfigPath } : {}),
       ...(file !== undefined ? { file } : {}),
     };
   }
@@ -2046,7 +2076,27 @@ async function dryRunCeiling(
     const configFile = await loadLethalConfigFile(configPath);
     server = configFile.bcdev?.server;
     serverInstance = configFile.bcdev?.serverInstance;
+    // R112: on an env-tool project those two fields are LEGITIMATELY absent from the file — that
+    // is the premise of Layer 6C — so a dry run silently printed no bracket at all on exactly the
+    // topology R90's ceiling was measured on. Resolve them the same read-only way `doctor` and
+    // `force-reset-lease` do (`envTool.resolve` blocks only; never createEnv/startEnv/publish/
+    // downloadSymbols), so `--dry-run` can answer "has this tier already paid for its ceiling?"
+    // before anything is published.
+    if (
+      (server === undefined || serverInstance === undefined) &&
+      configFile.envTool !== undefined
+    ) {
+      const resolved = await prepareBcdevReadOnly(configFile, {
+        runId: "dry-run",
+        projectDir: dirname(configPath),
+      }).bcdev();
+      server = resolved.server;
+      serverInstance = resolved.serverInstance;
+    }
   } catch (err) {
+    // Never fatal. A dry run's job is the mutant counts; the bracket is additional. An
+    // unreachable environment must degrade to a NAMED note, not take the whole command down —
+    // which is also why the resolution above sits inside this same try.
     return {
       note:
         `could not read the configured server from ${configPath}: ` +
@@ -2687,7 +2737,7 @@ async function clearQuarantineFromCli(parsed: ClearQuarantineCliConfig): Promise
 }
 
 /**
- * `lethal clear-ceiling --project ... --server ... --instance ... [--file ...]` (R90 fix round 1).
+ * `lethal clear-ceiling --project ... (--server ... --instance ... | --config ...) [--file ...]`.
  *
  * Refuses a MISSING database loudly rather than creating an empty one and reporting a cheerful
  * "cleared 0 rows": `new ResultsStore(path)` has `create: true`, so without this guard the one
@@ -2713,16 +2763,53 @@ async function clearQuarantineFromCli(parsed: ClearQuarantineCliConfig): Promise
  * a script that the escape hatch worked when it did nothing, which is the failure this command
  * exists to prevent, committed by the command itself. So: removed nothing, exit 1.
  */
+/**
+ * R112: `clear-ceiling`'s tier identity. Explicit `--server`/`--instance` win outright — an
+ * operator who names a tier gets that tier, never a config file's opinion of it, which is the same
+ * rule `clear-quarantine` and `force-reset-lease` follow and for the same reason (a shared or
+ * stale config must not redirect a destructive recovery).
+ *
+ * When they are omitted, the identity is resolved through `prepareBcdevReadOnly` — the SAME
+ * read-only path `doctor` and `force-reset-lease` use, so this cannot become a third derivation,
+ * and so an env-tool project cannot provision or publish as a side effect of clearing a ceiling.
+ */
+async function resolveCeilingIdentity(
+  parsed: ClearCeilingCliConfig,
+): Promise<{ server: string; serverInstance: string }> {
+  const { server, serverInstance, configPath } = parsed;
+  if (server !== undefined && serverInstance !== undefined) return { server, serverInstance };
+  if (configPath === undefined) {
+    // Unreachable via `parseCliConfig`, which refuses this combination — kept because this is
+    // where a caller-contract violation would otherwise become a silently wrong tier.
+    throw new Error(
+      "clear-ceiling: neither --server/--instance nor --config was supplied — refusing to guess a tier",
+    );
+  }
+  const configFile = await loadLethalConfigFile(configPath);
+  const resolved = await prepareBcdevReadOnly(configFile, {
+    runId: "clear-ceiling",
+    projectDir: parsed.projectDir,
+  }).bcdev();
+  return { server: resolved.server, serverInstance: resolved.serverInstance };
+}
+
 export async function clearCeilingFromCli(parsed: ClearCeilingCliConfig): Promise<number> {
   if (!existsSync(parsed.dbPath)) {
     throw new Error(
       `no results database at ${parsed.dbPath} — nothing has ever been measured against this project, so there is no publish ceiling to clear. Pass --db <path> if the run used a database elsewhere.`,
     );
   }
-  const tier = quarantineResourceKey({
-    server: parsed.server,
-    serverInstance: parsed.serverInstance,
-  });
+  // R112: the identity, from the flags when given and RESOLVED read-only otherwise. A hosted
+  // env-tool project has no `server`/`serverInstance` in its config file for an operator to read
+  // off, so before this the one command that clears the ceiling demanded two values that existed
+  // nowhere they could see — a gate you could trip but not clear.
+  const identity = await resolveCeilingIdentity(parsed);
+  const tier = quarantineResourceKey(identity);
+  if (parsed.server === undefined) {
+    // PRINTED, always. The tier is the whole scope of a destructive clear, and an operator who did
+    // not type it must still see what was chosen before reading what it removed.
+    console.log(`resolved tier from ${parsed.configPath}: ${tier}`);
+  }
   const store = new ResultsStore(parsed.dbPath);
   try {
     const result = clearPublishCeiling(store, tier, parsed.file);
@@ -2842,6 +2929,153 @@ function packageCachePathDefault(
 }
 
 /**
+ * R111: the ONE read-only env-tool resolution, shared by `lethal doctor` and
+ * `lethal force-reset-lease` (and, since R112, by the publish-ceiling inspect and clear surfaces).
+ *
+ * Before this existed the two commands carried ~50 near-identical lines each — same
+ * `bcdevDeclaredKeys` filter, same `validateEnvToolConfig` opts, same `requireBcDevRawFields`,
+ * same default `makeEnvToolClient`, same `supplied` record (only `runId` differed), same resolve
+ * loop, same `baseUrl` -> `splitBaseUrl` -> `deriveMcpPort` -> credentials ->
+ * `packageCachePathDefault` -> `validateBcDevConfig` tail. **They had already drifted once**:
+ * `packageCachePath` was supplied by the force-reset path and not by doctor, so `lethal doctor`
+ * threw `missing required field(s): packageCachePath` on any env-tool config legally omitting it.
+ *
+ * ── THE SAFETY PROPERTY, AND WHY IT IS NOW STRUCTURAL ─────────────────────────────────────────
+ *
+ * Both callers must spawn ONLY `envTool.resolve` blocks — never `createEnv`/`startEnv`/`publish`/
+ * `downloadSymbols` — because `resolveEnvToolSession` "can provision a real, billed Layer-6C
+ * environment" and these are RECOVERY and DIAGNOSTIC commands, reached for after a session has
+ * already died. Spending money or mutating infrastructure while an operator is cleaning up is the
+ * failure this boundary exists to prevent.
+ *
+ * That property used to be carried by a comment in each copy. Here it is carried by the DATA: the
+ * `EnvToolClient` is built from `readOnlyEnvConfig(envCfg)`, a copy with every mutating block
+ * REMOVED. A future edit inside this function cannot run `publish` even by mistake, because the
+ * config it holds has no `publish` block to run — and `renderCommand` would throw on the attempt
+ * rather than spawn something. A third caller inherits the boundary instead of re-deriving it.
+ */
+export function readOnlyEnvConfig(cfg: EnvToolConfigSection): EnvToolConfigSection {
+  const {
+    createEnv: _createEnv,
+    startEnv: _startEnv,
+    readyWhen: _readyWhen,
+    downloadSymbols: _downloadSymbols,
+    publish: _publish,
+    deleteEnv: _deleteEnv,
+    ...readOnly
+  } = cfg;
+  return readOnly;
+}
+
+/** What `prepareBcdevReadOnly` hands back: the validated envTool section (for callers that need to
+ *  inspect it), the memoized raw `resolve` output, and the assembled `BcDevConfigSection`. */
+export interface BcdevReadOnlyResolution {
+  /** The validated `envTool` section, or `undefined` for a directly-configured bcdev project. */
+  readonly envCfg: EnvToolConfigSection | undefined;
+  /**
+   * The merged `reads` output of every `envTool.resolve` block, `{}` when there is no envTool
+   * section. MEMOIZED: several doctor checks need it and `runDoctor` may call them concurrently,
+   * so the external tool is spawned at most once per invocation rather than once per check.
+   */
+  resolved(): Promise<Record<string, string>>;
+  /** The assembled, validated `BcDevConfigSection` — server/instance/port/credentials. */
+  bcdev(): Promise<BcDevConfigSection>;
+}
+
+/**
+ * Validates EAGERLY (a malformed `envTool` section throws before this returns, identically to
+ * `run`) and resolves LAZILY (nothing is spawned until `resolved()`/`bcdev()` is awaited).
+ *
+ * `runId` is the only thing the callers differ in — it rides into `{runId}` placeholder
+ * substitution, so a tool that names environments after it can tell a doctor probe from a
+ * recovery.
+ */
+export function prepareBcdevReadOnly(
+  configFile: LethalConfigFile,
+  opts: {
+    readonly runId: string;
+    readonly projectDir?: string;
+    readonly makeEnvToolClient?: (cfg: EnvToolConfigSection) => EnvToolClient;
+  },
+): BcdevReadOnlyResolution {
+  let envCfg: EnvToolConfigSection | undefined;
+  if (configFile.envTool !== undefined) {
+    const bcdevRaw = configFile.bcdev ?? {};
+    const bcdevDeclaredKeys = (READS_KEYS as readonly string[]).filter((key) => {
+      const v = (bcdevRaw as Record<string, unknown>)[key];
+      return typeof v === "string" && v !== "";
+    });
+    // SAME validator `run` uses — a malformed envTool section throws here identically.
+    envCfg = validateEnvToolConfig(configFile.envTool, {
+      env: process.env,
+      hasPackageCachePath: Boolean(bcdevRaw.packageCachePath),
+      bcdevDeclaredKeys,
+    });
+    // Fails fast on the three fields the env tool itself can never supply — the SAME check
+    // `startEnvToolSession` runs as its very first statement. `server`/`serverInstance`/
+    // credentials are deliberately NOT required: in env-tool mode they do not exist yet.
+    requireBcDevRawFields(bcdevRaw);
+  }
+  const resolvedEnvCfg = envCfg;
+  const makeClient =
+    opts.makeEnvToolClient ??
+    ((cfg: EnvToolConfigSection) => new EnvToolClient(cfg, undefined, opts.projectDir));
+
+  let resolvePromise: Promise<Record<string, string>> | undefined;
+  const resolved = (): Promise<Record<string, string>> => {
+    if (resolvedEnvCfg === undefined) return Promise.resolve({});
+    if (resolvePromise === undefined) {
+      resolvePromise = (async () => {
+        // The read-only boundary, carried by the config the client holds — see
+        // `readOnlyEnvConfig`.
+        const client = makeClient(readOnlyEnvConfig(resolvedEnvCfg));
+        const supplied: Record<string, string> = {
+          envId: resolvedEnvCfg.envId ?? "",
+          projectDir: opts.projectDir ?? "",
+          testDir: "",
+          runId: opts.runId,
+        };
+        const out: Record<string, string> = {};
+        for (const [i, block] of (resolvedEnvCfg.resolve ?? []).entries()) {
+          Object.assign(out, await client.run(block, `resolve[${i}]`, supplied));
+        }
+        return out;
+      })();
+    }
+    return resolvePromise;
+  };
+
+  const bcdev = async (): Promise<BcDevConfigSection> => {
+    if (resolvedEnvCfg === undefined) return validateBcDevConfig(configFile.bcdev);
+    const out = await resolved();
+    const baseUrl = out.baseUrl;
+    if (baseUrl === undefined) throw new EnvToolError("envTool.resolve produced no baseUrl");
+    const { server, serverInstance } = splitBaseUrl(baseUrl, out.server, out.serverInstance);
+    const port = deriveMcpPort(baseUrl);
+    const username = out.username;
+    const password = out.password;
+    if (username === undefined || password === undefined) {
+      throw new EnvToolError("envTool.resolve produced no username/password");
+    }
+    // See `packageCachePathDefault` — neither caller compiles or publishes, so the value is never
+    // dereferenced on these paths, but `validateBcDevConfig`'s shared shape still requires it.
+    const packageCachePath = packageCachePathDefault(configFile.bcdev, opts.projectDir);
+    return validateBcDevConfig({
+      ...(configFile.bcdev ?? {}),
+      baseUrl,
+      server,
+      serverInstance,
+      port,
+      username,
+      password,
+      packageCachePath,
+    });
+  };
+
+  return { envCfg: resolvedEnvCfg, resolved, bcdev };
+}
+
+/**
  * R109 ruling, honesty constraint 2: `requireStatus` is `Pick`ed straight off `EnvToolConfigSection`
  * (env-tool.ts) rather than re-declared — a future rename/reshape of that field breaks THIS
  * function at compile time instead of silently leaving `DoctorConfig.envReady` derived from a
@@ -2907,26 +3141,20 @@ export async function buildDoctorDeps(
   readonly deps: DoctorDeps;
   readonly createModeCaveat?: string;
 }> {
-  let envCfg: EnvToolConfigSection | undefined;
-  if (configFile.envTool !== undefined) {
-    const bcdevRaw = configFile.bcdev ?? {};
-    const bcdevDeclaredKeys = (READS_KEYS as readonly string[]).filter((key) => {
-      const v = (bcdevRaw as Record<string, unknown>)[key];
-      return typeof v === "string" && v !== "";
-    });
-    // SAME validator, SAME opts shape `resolveEnvToolSession` builds — a malformed envTool
-    // section throws here identically to `run` (constraint 1).
-    envCfg = validateEnvToolConfig(configFile.envTool, {
-      env: process.env,
-      hasPackageCachePath: Boolean(configFile.bcdev?.packageCachePath),
-      bcdevDeclaredKeys,
-    });
-    // Fail fast on the three fields the env tool itself can never supply — the SAME check
-    // `startEnvToolSession` runs as its very first statement, exported for exactly this reuse
-    // (env-tool-session.ts). `server`/`serverInstance`/credentials are deliberately NOT required
-    // here: in env-tool mode they don't exist yet (resolved later — see `resolvedBcdev` below).
-    requireBcDevRawFields(bcdevRaw);
-  } else if (configFile.bcdev === undefined) {
+  // R111: validation and resolution both live in `prepareBcdevReadOnly`, shared with
+  // `force-reset-lease` — including constraint 4, the hard read-only boundary, which that helper
+  // now carries in the config it hands the client rather than in a comment. A malformed envTool
+  // section still throws HERE, eagerly, identically to `run` (constraint 1).
+  const readOnly = prepareBcdevReadOnly(configFile, {
+    runId: "doctor",
+    ...(opts.projectDir !== undefined ? { projectDir: opts.projectDir } : {}),
+    ...(opts.makeEnvToolClient !== undefined ? { makeEnvToolClient: opts.makeEnvToolClient } : {}),
+  });
+  const envCfg = readOnly.envCfg;
+  // Only for a project with NO envTool section. An env-tool config legitimately omits
+  // `server`/`serverInstance`/credentials from the file — validating the raw bcdev section here
+  // would throw on exactly the configs `prepareBcdevReadOnly` exists to resolve.
+  if (configFile.envTool === undefined && configFile.bcdev === undefined) {
     // Final review (Minor): `validateBcDevConfig`'s own message says `...(required for --backend
     // bcdev)` — accurate for `run`, which HAS a --backend flag to name; doctor has none. An
     // al-runner-only project (no `bcdev` section at all — `run --backend al-runner` never touches
@@ -2938,18 +3166,13 @@ export async function buildDoctorDeps(
     throw new Error(
       'lethal doctor only checks a bcdev-configured project — environment, quarantine, control-app version and alc/altool are all live-BC concerns. This config has no "bcdev" section; if this is an al-runner project (--backend al-runner), there is nothing here for doctor to check today.',
     );
-  } else {
+  }
+  if (configFile.envTool === undefined) {
     // No envTool, `bcdev` present: this IS exactly what `run` validates (`buildBackend`/
     // `resourceIdentityFor`/`leaseSessionFor` all call this on the SAME `configFile.bcdev`) — fail
     // here, eagerly, rather than lazily inside whichever check happens to touch it first.
     validateBcDevConfig(configFile.bcdev);
   }
-  const makeClient =
-    opts.makeEnvToolClient ??
-    ((cfg: EnvToolConfigSection) => new EnvToolClient(cfg, undefined, opts.projectDir));
-  // Snapshot into a `const` so a closure below can narrow it — TS will not narrow a captured
-  // `let` across a nested arrow function even after an `!== undefined` check, since it cannot
-  // prove nothing reassigns it before the closure runs.
   const resolvedEnvCfg = envCfg;
 
   // Final review: a CREATE-MODE envTool config (`envId` absent — `validateEnvToolConfig`'s own
@@ -2968,75 +3191,17 @@ export async function buildDoctorDeps(
     (resolvedEnvCfg.envId === undefined || resolvedEnvCfg.envId === "");
 
   // Spawns ONLY `envTool.resolve` — never createEnv/startEnv/publish/downloadSymbols (constraint
-  // 4, the hard read-only boundary). Memoized: `environment`/`quarantine`/`control-version` all
-  // need the identity this produces (server/serverInstance/credentials, for an env-tool-configured
-  // project — see `resolvedBcdev` below), and `runDoctor` may call them concurrently; this ensures
-  // the external tool is spawned at most once per `lethal doctor` invocation, not once per check.
-  let resolvePromise: Promise<Record<string, string>> | undefined;
-  const resolveEnvToolOnce = (): Promise<Record<string, string>> => {
-    if (resolvedEnvCfg === undefined) return Promise.resolve({});
-    if (resolvePromise === undefined) {
-      resolvePromise = (async () => {
-        const client = makeClient(resolvedEnvCfg);
-        const supplied: Record<string, string> = {
-          envId: resolvedEnvCfg.envId ?? "",
-          projectDir: opts.projectDir ?? "",
-          testDir: "",
-          runId: "doctor",
-        };
-        const resolved: Record<string, string> = {};
-        for (const [i, block] of (resolvedEnvCfg.resolve ?? []).entries()) {
-          Object.assign(resolved, await client.run(block, `resolve[${i}]`, supplied));
-        }
-        return resolved;
-      })();
-    }
-    return resolvePromise;
-  };
+  // 4). Memoized inside the shared helper, so the external tool is spawned at most once per
+  // `lethal doctor` invocation even though `runDoctor` may call several checks concurrently.
+  const resolveEnvToolOnce = readOnly.resolved;
 
   /**
    * The `BcDevConfigSection` `quarantine`/`control-version` need — `server`/`serverInstance` and
-   * OData credentials. For a directly-configured bcdev section this is exactly `run`'s own
-   * `validateBcDevConfig(configFile.bcdev)` (unchanged). For an env-tool-configured project those
-   * fields are legitimately ABSENT from the raw file (the tool supplies them) — mirrors
-   * `startEnvToolSession`'s own step 4 derivation (`splitBaseUrl`/`deriveMcpPort`, exported from
-   * env-tool-session.ts for exactly this reuse) so doctor's identity can never drift from a real
-   * run's, rather than a second, hand-rolled derivation.
+   * OData credentials. R111: the derivation itself lives in `prepareBcdevReadOnly`, shared with
+   * `force-reset-lease`, so doctor's identity cannot drift from a recovery's — or from a real
+   * run's, since the helper reuses `startEnvToolSession`'s own `splitBaseUrl`/`deriveMcpPort`.
    */
-  const resolvedBcdev = async (): Promise<BcDevConfigSection> => {
-    if (resolvedEnvCfg === undefined) return validateBcDevConfig(configFile.bcdev);
-    const resolved = await resolveEnvToolOnce();
-    const baseUrl = resolved.baseUrl;
-    if (baseUrl === undefined) throw new EnvToolError("envTool.resolve produced no baseUrl");
-    const { server, serverInstance } = splitBaseUrl(
-      baseUrl,
-      resolved.server,
-      resolved.serverInstance,
-    );
-    const port = deriveMcpPort(baseUrl);
-    const username = resolved.username;
-    const password = resolved.password;
-    if (username === undefined || password === undefined) {
-      throw new EnvToolError("envTool.resolve produced no username/password");
-    }
-    // See `packageCachePathDefault`'s doc comment — doctor never compiles or publishes either, but
-    // `validateBcDevConfig`'s shared shape still requires the field. Fix round 1 (Important 2):
-    // this was previously omitted here, so `lethal doctor` against an env-tool config that legally
-    // leaves `packageCachePath` to `downloadSymbols` threw "missing required field(s):
-    // packageCachePath" and never ran a single check — doctor stricter than `run` for the third
-    // time in this subsystem.
-    const packageCachePath = packageCachePathDefault(configFile.bcdev, opts.projectDir);
-    return validateBcDevConfig({
-      ...(configFile.bcdev ?? {}),
-      baseUrl,
-      server,
-      serverInstance,
-      port,
-      username,
-      password,
-      packageCachePath,
-    });
-  };
+  const resolvedBcdev = readOnly.bcdev;
 
   const harnessVerifierFor = async (): Promise<HarnessVerifier> =>
     new HarnessVerifier(odataCfgFor(await resolvedBcdev()), opts.fetchFn ?? fetch);
@@ -3304,20 +3469,18 @@ export async function performForceResetLease(
  * mid-recovery python-injection step. The fix belongs in the tool, not in a skill's workaround
  * script.
  *
- * Mirrors `buildDoctorDeps`'s `resolvedBcdev` (R109) rather than re-deriving the algorithm: the
- * SAME `validateEnvToolConfig`/`requireBcDevRawFields` calls, the SAME `splitBaseUrl`/
- * `deriveMcpPort` derivation (env-tool-session.ts, exported for exactly this reuse), and the SAME
- * `validateBcDevConfig` on the assembled result — never a second, hand-rolled parse that could
- * drift from what `run` accepts.
+ * R111: this used to be ~50 lines that MIRRORED `buildDoctorDeps`'s `resolvedBcdev` — and the two
+ * copies had already drifted once, on `packageCachePath`. It is now a thin call into
+ * `prepareBcdevReadOnly`, which is the single implementation both commands share; the only thing
+ * this caller contributes is its `runId`.
  *
- * Deliberately NOT `resolveEnvToolSession`: `validateSelectorIdsForProject`'s doc comment says it "can
- * provision a real, billed Layer-6C environment" — create-mode's `createEnv`/`startEnv`. A
- * recovery command is reached for AFTER a session already died and left a tier stranded; it must
- * never be able to spend money or mutate infrastructure as a side effect of resolving a config at
- * the exact moment an operator is trying to clean up. This function spawns ONLY the configured
- * `envTool.resolve` blocks — the identical hard boundary `buildDoctorDeps` documents as its own
- * constraint 4 — and its body never references `startEnvToolSession`, `createEnv`, `startEnv`,
- * `publish` or `downloadSymbols`.
+ * Deliberately NOT `resolveEnvToolSession`: that path "can provision a real, billed Layer-6C
+ * environment" — create-mode's `createEnv`/`startEnv`. A recovery command is reached for AFTER a
+ * session already died and left a tier stranded; it must never be able to spend money or mutate
+ * infrastructure as a side effect of resolving a config at the exact moment an operator is trying
+ * to clean up. That boundary is no longer a promise made in this comment: `prepareBcdevReadOnly`
+ * builds its client from `readOnlyEnvConfig`, a copy of the section with every mutating block
+ * removed, so the config reaching the tool has no `publish` to run.
  */
 export async function resolveForceResetLeaseConfig(
   configFile: LethalConfigFile,
@@ -3326,67 +3489,7 @@ export async function resolveForceResetLeaseConfig(
     readonly makeEnvToolClient?: (cfg: EnvToolConfigSection) => EnvToolClient;
   } = {},
 ): Promise<BcDevConfigSection> {
-  if (configFile.envTool === undefined) return validateBcDevConfig(configFile.bcdev);
-
-  const bcdevRaw = configFile.bcdev ?? {};
-  const bcdevDeclaredKeys = (READS_KEYS as readonly string[]).filter((key) => {
-    const v = (bcdevRaw as Record<string, unknown>)[key];
-    return typeof v === "string" && v !== "";
-  });
-  // SAME validator `run`/`buildDoctorDeps` use — a malformed envTool section throws here
-  // identically to both.
-  const envCfg = validateEnvToolConfig(configFile.envTool, {
-    env: process.env,
-    hasPackageCachePath: Boolean(bcdevRaw.packageCachePath),
-    bcdevDeclaredKeys,
-  });
-  // Fails fast on the three fields the env tool itself can never supply — the SAME check
-  // `startEnvToolSession` runs as its very first statement and `buildDoctorDeps` runs identically.
-  requireBcDevRawFields(bcdevRaw);
-
-  const makeClient =
-    opts.makeEnvToolClient ??
-    ((cfg: EnvToolConfigSection) => new EnvToolClient(cfg, undefined, opts.projectDir));
-  const client = makeClient(envCfg);
-  const supplied: Record<string, string> = {
-    envId: envCfg.envId ?? "",
-    projectDir: opts.projectDir ?? "",
-    testDir: "",
-    runId: "force-reset-lease",
-  };
-  // The hard read-only boundary: ONLY `resolve` blocks are ever run here.
-  const resolved: Record<string, string> = {};
-  for (const [i, block] of (envCfg.resolve ?? []).entries()) {
-    Object.assign(resolved, await client.run(block, `resolve[${i}]`, supplied));
-  }
-
-  const baseUrl = resolved.baseUrl;
-  if (baseUrl === undefined) throw new EnvToolError("envTool.resolve produced no baseUrl");
-  const { server, serverInstance } = splitBaseUrl(
-    baseUrl,
-    resolved.server,
-    resolved.serverInstance,
-  );
-  const port = deriveMcpPort(baseUrl);
-  const username = resolved.username;
-  const password = resolved.password;
-  if (username === undefined || password === undefined) {
-    throw new EnvToolError("envTool.resolve produced no username/password");
-  }
-  // See `packageCachePathDefault`'s doc comment — this recovery command never compiles or
-  // publishes, so the value is never dereferenced on this path, but `validateBcDevConfig`'s shared
-  // shape still requires it.
-  const packageCachePath = packageCachePathDefault(bcdevRaw, opts.projectDir);
-  return validateBcDevConfig({
-    ...bcdevRaw,
-    baseUrl,
-    server,
-    serverInstance,
-    port,
-    username,
-    password,
-    packageCachePath,
-  });
+  return prepareBcdevReadOnly(configFile, { ...opts, runId: "force-reset-lease" }).bcdev();
 }
 
 /**

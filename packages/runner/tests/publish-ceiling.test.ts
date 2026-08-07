@@ -1255,3 +1255,150 @@ describe("batchCeilingWarning", () => {
     expect(msg).not.toContain("tier on .");
   });
 });
+
+/**
+ * R112 — the ceiling could be TRIPPED but not INSPECTED or CLEARED on an env-tool project.
+ * `dryRunCeiling` read `bcdev.server`/`bcdev.serverInstance` straight off disk and printed nothing
+ * when either was missing; `clear-ceiling` demanded them as flags. On a Layer-6C config both are
+ * LEGITIMATELY absent — that is the premise of R51 — and it is the topology R90's bracket was
+ * measured on. A gate you can trip but not clear.
+ */
+describe("R112 — the ceiling is reachable on an env-tool project", () => {
+  const ENVTOOL_CONFIG = {
+    bcdev: {
+      mcpCommand: ["bun", "mcp"],
+      company: "CRONUS",
+      controlSymbolPath: "c.app",
+      packageCachePath: ".alpackages",
+    },
+    envTool: {
+      toolPath: process.execPath,
+      envId: "env-4711",
+      resolve: [
+        {
+          command: ["-e", "console.log(JSON.stringify({url:'https://host/env-4711'}))"],
+          reads: { baseUrl: "url" },
+        },
+        {
+          command: ["-e", "console.log(JSON.stringify({u:'admin',p:'hunter2'}))"],
+          reads: { username: "u", password: "p" },
+        },
+      ],
+      publish: { command: ["publish", "{envId}", "{appFile}"] },
+    },
+  };
+
+  async function envToolProject(): Promise<{
+    root: string;
+    projectDir: string;
+    dbPath: string;
+    configPath: string;
+  }> {
+    const dirs = await makeCeilingProject([
+      { name: "Sized.Codeunit.al", source: codeunitWithGuards(79000, "Sized", 9) },
+    ]);
+    const configPath = join(dirs.projectDir, "lethal.config.json");
+    await Bun.write(configPath, JSON.stringify(ENVTOOL_CONFIG));
+    const dbPath = join(dirs.projectDir, "lethal.sqlite");
+    const store = new ResultsStore(dbPath);
+    // A tier that has already paid for its ceiling — the whole question `--dry-run` should be able
+    // to answer before anything is published.
+    recordPublishOutcome(store, "https://host|env-4711", 331, "failed", "Big.al");
+    store.close();
+    return { root: dirs.root, projectDir: dirs.projectDir, dbPath, configPath };
+  }
+
+  test("--dry-run resolves the tier through the env tool and PRINTS the measured bracket", async () => {
+    // Before this, the bracket section was silently absent — indistinguishable from a tier that
+    // had never failed, which is the reading that matters most and the one it got wrong.
+    const p = await envToolProject();
+    try {
+      const out = await captureDryRun(p.projectDir, { dbPath: p.dbPath, configPath: p.configPath });
+      expect(out).toContain("https://host|env-4711");
+      expect(out).toContain("331");
+    } finally {
+      await rm(p.root, { recursive: true, force: true });
+    }
+  });
+
+  test("clear-ceiling accepts --config in place of --server/--instance, and says which tier it chose", async () => {
+    const p = await envToolProject();
+    const lines: string[] = [];
+    const log = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map(String).join(" "));
+    });
+    try {
+      const code = await clearCeilingFromCli({
+        mode: "clear-ceiling",
+        projectDir: p.projectDir,
+        dbPath: p.dbPath,
+        configPath: p.configPath,
+      });
+      expect(code).toBe(0);
+      const out = lines.join("\n");
+      // Printed BEFORE the removal report: a destructive clear whose scope the operator did not
+      // type must still show what it chose.
+      expect(out).toContain("resolved tier from");
+      expect(out).toContain("https://host|env-4711");
+      // The property, not the prose: the row is actually gone.
+      const store = new ResultsStore(p.dbPath);
+      expect(store.publishOutcomes("https://host|env-4711")).toHaveLength(0);
+      store.close();
+    } finally {
+      log.mockRestore();
+      await rm(p.root, { recursive: true, force: true });
+    }
+  });
+
+  test("explicit --server/--instance still win, and do not announce a resolution", async () => {
+    // The rule `clear-quarantine` and `force-reset-lease` follow: an operator who names a tier
+    // gets that tier, never a possibly shared or stale config's opinion of it.
+    const p = await envToolProject();
+    const lines: string[] = [];
+    const log = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map(String).join(" "));
+    });
+    try {
+      await clearCeilingFromCli({
+        mode: "clear-ceiling",
+        projectDir: p.projectDir,
+        dbPath: p.dbPath,
+        server: "http://other",
+        serverInstance: "BC",
+        configPath: p.configPath,
+      });
+      expect(lines.join("\n")).not.toContain("resolved tier from");
+      // The env-tool tier's row survives — the flags named a DIFFERENT tier and that is what was
+      // cleared (nothing).
+      const store = new ResultsStore(p.dbPath);
+      expect(store.publishOutcomes("https://host|env-4711")).toHaveLength(1);
+      store.close();
+    } finally {
+      log.mockRestore();
+      await rm(p.root, { recursive: true, force: true });
+    }
+  });
+
+  test("parses --config in place of the identity flags, and refuses half an identity", () => {
+    expect(parseCliConfig(["clear-ceiling", "--project", "proj", "--config", "c.json"])).toEqual({
+      mode: "clear-ceiling",
+      projectDir: "proj",
+      dbPath: join("proj", "lethal.sqlite"),
+      configPath: "c.json",
+    });
+    // Half an identity would clear a tier named partly by a flag and partly by a config.
+    expect(() =>
+      parseCliConfig([
+        "clear-ceiling",
+        "--project",
+        "p",
+        "--server",
+        "http://bc",
+        "--config",
+        "c.json",
+      ]),
+    ).toThrow(/together/);
+    // Neither source at all is still refused — this must not become "guess a tier".
+    expect(() => parseCliConfig(["clear-ceiling", "--project", "p"])).toThrow(/--config/);
+  });
+});
