@@ -30,8 +30,13 @@ import type { SpawnFn } from "./publisher";
  * KEEPING `status: "error"`. So neither the status nor the text is a stable key on its own, and the
  * union of two literals is a stopgap rather than a design — see `AL_RUNNER_UNCLASSIFIED_ERROR` for
  * the part that does not depend on guessing the wording right.
+ *
+ * Exported for the R123 wire-contract probe (`al-runner-contract.ts`), which times a real test out
+ * on purpose and checks the wording it gets back against THIS regex rather than against a copy of
+ * it. A probe with its own spelling could pass while the decode below failed — the two would be
+ * measuring different things, which is the one outcome that makes the probe worse than nothing.
  */
-const RUNNER_TIMEOUT_MESSAGE = /TIMEOUT after \d+s|Test exceeded \d+s timeout/;
+export const RUNNER_TIMEOUT_MESSAGE = /TIMEOUT after \d+s|Test exceeded \d+s timeout/;
 
 /**
  * Prefix on the `failureMessage` of an al-runner `status: "error"` this build could not classify.
@@ -46,8 +51,12 @@ export const AL_RUNNER_UNCLASSIFIED_ERROR =
 /**
  * v2 answers `--version` with `al-runner v2.0.0.0` and exit 0 (measured 2026-08-07). v1.0.31
  * REJECTED `--version` outright, so a binary that fails this check is either v1 or not al-runner.
+ *
+ * Exported for the same reason as `RUNNER_TIMEOUT_MESSAGE`: the R123 contract probe measures the
+ * binary's own `--version` and must accept exactly what `status()` accepts. Two spellings of "is
+ * this a v2" would let one of them go stale without the other noticing.
  */
-const AL_RUNNER_V2_VERSION = /\bv2\.\d/;
+export const AL_RUNNER_V2_VERSION = /\bv2\.\d/;
 
 /** The actionable half of `status()`'s refusal — what is wrong and what to do about it. */
 const AL_RUNNER_V2_REQUIRED =

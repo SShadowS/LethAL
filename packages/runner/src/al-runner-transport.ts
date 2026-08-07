@@ -102,6 +102,57 @@ export function parseAlRunnerPayload(stdout: string): readonly AlRunnerRawTest[]
   return tests as readonly AlRunnerRawTest[];
 }
 
+/**
+ * The exact argv this adapter sends al-runner, in one place.
+ *
+ * Exported because `al-runner-contract.ts` (R123) measures the wire contract by spawning al-runner
+ * ITSELF rather than through `OneShotTransport` — a probe routed through the transport cannot see
+ * an exit code the transport already swallowed. That only tells the truth if the probe's command
+ * line is the transport's command line; two independent spellings would mean the probe blessed a
+ * command nobody runs. So both call this.
+ *
+ * v2 argv, measured against the installed al-runner v2.0.0.0 (2026-08-07). The v1 shape it replaced
+ * (`--run <method> ... --test-isolation method --packages --stubs --test-timeout`) is not merely
+ * deprecated: v2 answers an unknown flag with `Unknown option '--run'.` and exit 2, so every one of
+ * those spellings had to go.
+ */
+export function buildAlRunnerArgv(
+  alRunnerPath: string,
+  req: Pick<AlRunnerRequest, "sourceDir" | "testDir" | "qualifiedTest" | "packagesDir">,
+): string[] {
+  const argv = [
+    alRunnerPath,
+    "--output-json",
+    // v2 renamed the flag AND the mode. `test` gives every [Test] fresh state, which is what
+    // AlRunnerBackend.capabilities() claims as `full-reset`. v2 still ACCEPTS `method`, but only as
+    // a v1 alias for `codeunit` (state shared within a codeunit) — so the v1 argv was silently
+    // buying the weaker isolation (R96).
+    "--isolation",
+    "test",
+    "--test",
+    req.qualifiedTest,
+    // Bundle dirs are POSITIONAL and repeatable in v2; multiple dirs run sequentially and
+    // aggregate into one summary envelope.
+    req.sourceDir,
+    req.testDir,
+  ];
+  if (req.packagesDir) argv.push("--package-cache", req.packagesDir);
+  return argv;
+}
+
+/**
+ * The env every al-runner invocation carries. v2 dropped `--test-timeout`; the per-test budget is
+ * this variable, and the released build honours it (measured: `AL_RUNNER_TEST_TIMEOUT_SEC=15`
+ * produced a 15.027 s test). `SpawnFn` merges this over `process.env`, so PATH survives.
+ *
+ * Exported alongside `buildAlRunnerArgv` and for the same reason — the contract probe must spawn
+ * with the budget the transport spawns with, or its timeout measurement describes a run nobody
+ * makes.
+ */
+export function alRunnerEnv(testTimeoutSeconds: number): Record<string, string> {
+  return { AL_RUNNER_TEST_TIMEOUT_SEC: String(testTimeoutSeconds) };
+}
+
 /** One al-runner process per request. Correct, and pays full compilation each time. */
 export class OneShotTransport implements AlRunnerTransport {
   constructor(
@@ -110,27 +161,7 @@ export class OneShotTransport implements AlRunnerTransport {
   ) {}
 
   async send(req: AlRunnerRequest): Promise<AlRunnerResult> {
-    // v2 argv, measured against the installed al-runner v2.0.0.0 (2026-08-07). The v1 shape
-    // this replaced (`--run <method> ... --test-isolation method --packages --stubs
-    // --test-timeout`) is not merely deprecated: v2 answers an unknown flag with
-    // `Unknown option '--run'.` and exit 2, so every one of those spellings had to go.
-    const argv = [
-      this.alRunnerPath,
-      "--output-json",
-      // v2 renamed the flag AND the mode. `test` gives every [Test] fresh state, which is
-      // what AlRunnerBackend.capabilities() claims as `full-reset`. v2 still ACCEPTS
-      // `method`, but only as a v1 alias for `codeunit` (state shared within a codeunit) —
-      // so the v1 argv above was silently buying the weaker isolation (R96).
-      "--isolation",
-      "test",
-      "--test",
-      req.qualifiedTest,
-      // Bundle dirs are POSITIONAL and repeatable in v2; multiple dirs run sequentially and
-      // aggregate into one summary envelope.
-      req.sourceDir,
-      req.testDir,
-    ];
-    if (req.packagesDir) argv.push("--package-cache", req.packagesDir);
+    const argv = buildAlRunnerArgv(this.alRunnerPath, req);
 
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -138,10 +169,7 @@ export class OneShotTransport implements AlRunnerTransport {
       const res = await Promise.race([
         this.spawn(argv, {
           signal: controller.signal,
-          // v2 dropped `--test-timeout`; the per-test budget is this env var, and the
-          // released build honours it (measured: AL_RUNNER_TEST_TIMEOUT_SEC=15 produced a
-          // 15.027 s test). SpawnFn merges `env` over process.env, so PATH survives.
-          env: { AL_RUNNER_TEST_TIMEOUT_SEC: String(req.testTimeoutSeconds) },
+          env: alRunnerEnv(req.testTimeoutSeconds),
         }),
         new Promise<"deadline">((resolve) => {
           timer = setTimeout(() => {

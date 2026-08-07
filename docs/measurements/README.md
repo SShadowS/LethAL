@@ -1002,6 +1002,35 @@ rather than as a failure. The binary is a globally-installed dotnet tool that
 `dotnet tool update` moves under a gate between runs, so `itest:alrunner` now stamps the version it
 ran against.
 
+### A compile failure is NOT exit 3 in the shape a real run meets
+
+Measured 2026-08-07 on 2.0.1.0, and this corrects what the exit-code table above implies. Exit 3 is
+what an invocation where **every** bundle fails to compile answers with. A real LethAL run is not
+that shape: it has an instrumented TARGET that fails to compile beside a test bundle that compiles
+fine. That answers with **exit 1 and completely EMPTY stdout** — no JSON envelope at all.
+
+Exit 1 is inside the range the decode reads verdicts from. The only thing between that and a batch
+of false SURVIVORS is `parseAlRunnerPayload` refusing an unreadable envelope instead of returning
+`[]`. R123's contract probe therefore measures the PROPERTY — "a compile failure must not yield a
+readable envelope naming the requested test" — rather than pinning either exit code, because the
+first draft pinned exit 3 and was measuring a case that never happens.
+
+### Passing the same bundle dir twice CRASHES the runner
+
+Also measured 2026-08-07 on 2.0.1.0, found while writing that probe. Two positional bundle dirs with
+the same BASENAME die with an unhandled exception rather than a named failure:
+
+```
+Unhandled exception. System.ArgumentException: An item with the same key has already been added. Key: broken3
+   at System.Linq.Enumerable.ToDictionary[...]
+   at AlRunner.Reporter.SerializeJsonOutput(IReadOnlyList`1 buckets, Int32 exitCode) in AlRunner/Reporter.cs:line 180
+```
+
+Exit 127 direct, and 82 when the process is reaped differently. Nothing LethAL does sends duplicate
+dirs, so this costs us nothing operationally — it is filed as R124 because it is a crash against
+upstream's own loud-failure rule, which is one of the three things R93's adapt-first policy says IS
+worth reporting.
+
 ### What this does NOT establish
 
 - **Not stability.** Two of the shapes above changed between two point releases hours apart. Every

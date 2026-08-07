@@ -31,6 +31,7 @@ import {
   alRunnerCanaryWarnings,
   runAlRunnerCanary,
 } from "./al-runner-canary";
+import { contractRefusals, contractSummary, runAlRunnerContractProbe } from "./al-runner-contract";
 import { ArtifactCompiler, defaultArtifactIo } from "./artifact";
 import type { ExecutionBackend } from "./backend";
 import { BcDevMcpBackend } from "./bcdev-backend";
@@ -2228,6 +2229,38 @@ export async function announceAlRunnerCanary(
 }
 
 /**
+ * R123: measures al-runner's wire contract and REFUSES the session if a fact the decode depends on
+ * has moved. Runs BEFORE `announceAlRunnerCanary` on purpose — if the contract has shifted, the
+ * canary's own reading of this binary is not trustworthy either, so there is no point printing it.
+ *
+ * Throws rather than returning a flag. There is nothing to unwind at this point in `runFromCli`
+ * (no environment provisioned, no artifact published, no mutant run) and no `SessionReport` to
+ * attach a caveat to, because the session never starts. A run whose verdicts would be decoded by
+ * assumptions that no longer hold is not a degraded run — it is a run whose output means nothing,
+ * and this project would rather print why than hand someone a number.
+ *
+ * Skips exactly where `announceAlRunnerCanary` skips: with no configured `alRunnerPath` there is no
+ * binary to measure and no al-runner session to protect.
+ */
+export async function announceAlRunnerContract(
+  configFile: LethalConfigFile,
+  runProbe: typeof runAlRunnerContractProbe = runAlRunnerContractProbe,
+): Promise<void> {
+  const alRunnerPath = configFile.alRunner?.alRunnerPath;
+  if (alRunnerPath === undefined) return;
+  const result = await runProbe(alRunnerPath);
+  // Printed whether or not it refuses, so a session that DID run records the contract its verdicts
+  // were produced under — the same reasoning that made `itest:alrunner` stamp the version.
+  console.warn(contractSummary(result));
+  const refusals = contractRefusals(result);
+  if (refusals.length > 0) {
+    throw new Error(
+      `${refusals.join("\n")}\nRefusing to run: al-runner's wire contract has moved, so this session's verdicts would be decoded by assumptions that no longer hold. Use --backend bcdev, or re-measure and update the adapter.`,
+    );
+  }
+}
+
+/**
  * Attaches a measured al-runner canary result onto a `SessionReport` — a plain, obviously-correct
  * merge (never mutating `report`) extracted so it's directly unit-testable without needing a real
  * `runSession`/`ResultsStore`/backend to produce a `SessionReport` in the first place. `canary`
@@ -2295,6 +2328,9 @@ export async function runFromCli(
     // R7/R8: injectable so a test can drive the al-runner canary's warning wiring below with a
     // canned `AlRunnerCanaryResult`, without spawning a real al-runner process.
     runAlRunnerCanary?: typeof runAlRunnerCanary;
+    /** R123: same injection point and same reason as `runAlRunnerCanary` above — a test drives a
+     *  canned contract result without spawning a real al-runner. */
+    runAlRunnerContractProbe?: typeof runAlRunnerContractProbe;
   } = {},
 ): Promise<SessionReport> {
   const configFile = await loadLethalConfigFile(parsed.configPath);
@@ -2321,6 +2357,12 @@ export async function runFromCli(
   // no-`alRunnerPath` fallback path.
   let alRunnerCanaryResult: AlRunnerCanaryResult | undefined;
   if (parsed.backendKind === "al-runner") {
+    // R123: the contract first — if it has moved, nothing measured after it can be trusted,
+    // including the canary. Throws on a divergence; see `announceAlRunnerContract`.
+    await announceAlRunnerContract(
+      configFile,
+      deps.runAlRunnerContractProbe ?? runAlRunnerContractProbe,
+    );
     alRunnerCanaryResult = await announceAlRunnerCanary(
       configFile,
       deps.runAlRunnerCanary ?? runAlRunnerCanary,
