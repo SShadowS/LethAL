@@ -131,6 +131,20 @@ export function buildAlRunnerArgv(
     "test",
     "--test",
     req.qualifiedTest,
+    // R125 (measured 2026-08-07 on al-runner 2.1.0.0): with no BC version given, the runner selects
+    // the build it was COMPILED against — 28.1.49838.50794 for 2.1.0.0 — and refuses, because a
+    // project's `.alpackages` hold SYMBOL-only Microsoft apps and the runtime (R2R) apps for that
+    // build are not in its artifact cache. Every mutant then came back `error` and the whole run
+    // measured nothing: `itest:alrunner` went 3/13/0 -> 0/0/0 the moment the tool auto-updated.
+    //
+    // `--auto-provision` is upstream's own named remedy for exactly this ("or re-run with
+    // --auto-provision"), and it resolves the version from the PROJECT rather than from the binary
+    // — which is the version whose symbols the project actually carries. Cheap after the first
+    // run: artifacts are cached per BC version on the machine.
+    //
+    // Placed BEFORE the positional bundle dirs deliberately: they are positional and repeatable, so
+    // every flag belongs ahead of them.
+    "--auto-provision",
     // Bundle dirs are POSITIONAL and repeatable in v2; multiple dirs run sequentially and
     // aggregate into one summary envelope.
     req.sourceDir,

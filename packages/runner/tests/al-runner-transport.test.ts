@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   OneShotTransport,
   ServerTransport,
+  buildAlRunnerArgv,
   parseAlRunnerPayload,
   qualifiedTestName,
 } from "../src/al-runner-transport";
@@ -378,5 +379,45 @@ describe("ServerTransport", () => {
       global.setTimeout = originalSetTimeout;
       global.clearTimeout = originalClearTimeout;
     }
+  });
+});
+
+/**
+ * R125 — al-runner 2.1.0.0 shipped and `itest:alrunner` went 3/13/0 -> 0/0/0 with
+ * `baselineGreen=false`. Cause, from the runner's own output: with no BC version given it selects
+ * the build it was COMPILED against (28.1.49838.50794), and a project's `.alpackages` hold
+ * SYMBOL-only Microsoft apps, so there is no runtime to execute against and every mutant comes back
+ * `error`. Upstream names the remedy itself: "or re-run with --auto-provision".
+ */
+describe("buildAlRunnerArgv — --auto-provision (R125)", () => {
+  const argvReq = {
+    sourceDir: "C:/proj/app",
+    testDir: "C:/proj/tests",
+    qualifiedTest: "Suite.Test",
+  };
+
+  test("every invocation carries --auto-provision", () => {
+    expect(buildAlRunnerArgv("al-runner", argvReq)).toContain("--auto-provision");
+  });
+
+  test("it precedes the POSITIONAL bundle dirs, which must stay last", () => {
+    // Bundle dirs are positional and repeatable in v2, so a flag placed after them is fragile —
+    // and the contract probe extracts the dirs from the end of the argv it captures.
+    const argv = buildAlRunnerArgv("al-runner", argvReq);
+    expect(argv.indexOf("--auto-provision")).toBeLessThan(argv.indexOf(argvReq.sourceDir));
+    expect(argv.slice(-2)).toEqual([argvReq.sourceDir, argvReq.testDir]);
+  });
+
+  test("--package-cache still follows the dirs, unchanged", () => {
+    const argv = buildAlRunnerArgv("al-runner", {
+      ...argvReq,
+      packagesDir: "C:/proj/.alpackages",
+    });
+    expect(argv.slice(-4)).toEqual([
+      argvReq.sourceDir,
+      argvReq.testDir,
+      "--package-cache",
+      "C:/proj/.alpackages",
+    ]);
   });
 });
