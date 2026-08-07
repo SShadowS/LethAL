@@ -41,9 +41,11 @@ import type {
 import * as orchestratorModule from "../src/orchestrator";
 import {
   MIN_MUTANT_BUDGET_MS,
+  NO_GREEN_BASELINE,
   activateOnce,
   generateMutationSet,
   narrowFilesToSubset,
+  noGreenBaselineNote,
   operatorTiers,
   runOnce,
   runSession,
@@ -4135,6 +4137,103 @@ function strandsOnBackend(strandMutantId: string): ExecutionBackend {
           },
   });
 }
+
+/**
+ * R100. A real AL project's `.alpackages` holds SYMBOL-only Microsoft apps, which al-runner v2
+ * cannot execute — it links real DLLs now. It refuses with a genuinely good message: every missing
+ * app by name and version, and `al-runner provision` as the one command that fixes it.
+ *
+ * The operator saw none of it. MEASURED 2026-08-07 against a real symbols-only `.alpackages`: all
+ * 16 mutants came back `error note=no green baseline tests`, because the site that records them
+ * dropped the baseline verdicts' own messages on the floor and wrote a bare literal. That reads as
+ * "your test suite is broken" when the truth is "run one command" — the same flattering-direction
+ * error R86 was about, pointed at the target's tests instead of at our own prerequisite.
+ *
+ * The fix is structural, NOT a detector: no pattern-match on al-runner's prose, because a
+ * message-shape rule is an English-only rule upstream can reword in a day (R123 exists because it
+ * did). "Every baseline test failed, and here is what they said" works for any backend and any
+ * cause, including ones nobody has met.
+ */
+describe("noGreenBaselineNote — R100, a dead baseline says WHY", () => {
+  const b = (failureMessage?: string) => ({
+    verdict: { ...(failureMessage !== undefined ? { failureMessage } : {}) },
+  });
+
+  test("one shared message is quoted in full — that is the missing-prerequisite shape", () => {
+    const provisioning =
+      "BC runtime apps are not available as R2R packages — only symbol/dev packages were found.\n" +
+      "  Resolve it ONE of these ways:\n    (a) al-runner provision";
+    const note = noGreenBaselineNote([b(provisioning), b(provisioning), b(provisioning)]);
+    expect(note).toContain(NO_GREEN_BASELINE);
+    expect(note).toContain("all 3 failed with the same message");
+    // The whole point: the instruction survives. Asserted on the FIX, not on the diagnosis —
+    // a truncation that keeps "something is wrong" and loses "here is the command" is the exact
+    // failure this function replaced.
+    expect(note).toContain("al-runner provision");
+  });
+
+  test("differing messages are counted, and the first is not implied to explain the rest", () => {
+    const note = noGreenBaselineNote([b("alpha failed"), b("beta failed"), b("alpha failed")]);
+    expect(note).toContain("3 failed with 2 distinct messages");
+    expect(note).toContain("alpha failed");
+    // Never claims the others said this too.
+    expect(note).not.toContain("same message");
+  });
+
+  test("no messages at all says so, rather than implying silence means nothing happened", () => {
+    const note = noGreenBaselineNote([b(), b()]);
+    expect(note).toContain("none of the 2 baseline test(s) reported why");
+  });
+
+  test("a message longer than the cap is truncated with an ellipsis, not dropped", () => {
+    const long = `${"x".repeat(5000)}TAIL`;
+    const note = noGreenBaselineNote([b(long)]);
+    expect(note).toContain("…");
+    expect(note).not.toContain("TAIL");
+    // Still bounded — a note is not a log file.
+    expect(note.length).toBeLessThan(4300);
+  });
+
+  test("the al-runner provisioning message fits under the cap WHOLE — the measured case", () => {
+    // 1370 bytes measured against the real binary, with `al-runner provision` in its last quarter.
+    // A 1200-byte cap truncated that to `al-runn…`, losing the only actionable line. This pins that
+    // the cap clears the real message rather than merely being "generous".
+    const real = `${"d".repeat(1200)}\n(a) One command (recommended):\n      al-runner provision\n`;
+    expect(real.length).toBeGreaterThan(1200);
+    const note = noGreenBaselineNote([b(real)]);
+    expect(note).toContain("al-runner provision");
+    expect(note).not.toContain("…");
+  });
+});
+
+describe("runSession — R100, the dead-baseline note reaches the report", () => {
+  /**
+   * The wiring half, and it was NOT covered by the unit tests above — a red-check found that
+   * reverting the call site to the bare literal left the whole suite green. A correct function
+   * nothing calls is the same defect as no function at all, and it is the second time in this
+   * session that testing a helper in isolation proved nothing about the code path that matters.
+   */
+  test("every mutant's note carries the baseline's own failure message", async () => {
+    const dirs = await makeProject();
+    const PROVISIONING =
+      "BC runtime apps are not available as R2R packages. Resolve with: al-runner provision";
+    // Every run fails, so not one baseline test is green and the `greenTests.length === 0` branch
+    // records every mutant. `failureMessageFor` is consulted only on a "fail", so the message can
+    // only have come from the baseline verdicts.
+    const backend = new StubBackend(CAPS_NST, () => "fail", ["IsOverBudget"]);
+    backend.failureMessageFor = () => PROVISIONING;
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({ backend, store, ...dirs, selectorIds });
+    expect(report.baselineGreen).toBe(false);
+    expect(report.mutants.length).toBeGreaterThan(0);
+    for (const m of report.mutants) {
+      expect(m.verdict).toBe("error");
+      // Both halves: the stem a reader recognises, and the message that tells them what to do.
+      expect(m.failureNote).toContain(NO_GREEN_BASELINE);
+      expect(m.failureNote).toContain("al-runner provision");
+    }
+  });
+});
 
 describe("runSession — R114, a strand records a machine cause and not only prose", () => {
   test("a stranded mutant records cause `stranded`", async () => {

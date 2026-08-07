@@ -2781,18 +2781,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       const greenTests = baseline.filter((b) => b.verdict.outcome === "pass");
       if (greenTests.length < baseline.length) baselineGreenOverall = false;
       if (greenTests.length === 0) {
+        const note = noGreenBaselineNote(baseline);
         for (const m of execute) {
-          record(
-            cfg.store,
-            runId,
-            m,
-            "error",
-            outcomes,
-            batchIdx,
-            emit,
-            undefined,
-            "no green baseline tests",
-          );
+          record(cfg.store, runId, m, "error", outcomes, batchIdx, emit, undefined, note);
         }
         continue;
       }
@@ -4290,6 +4281,69 @@ async function handleBaselineLeaseOutcome(args: {
  * caller outside this file may use it — `runSession` and `runMutantsOnBackend` are the only real
  * callers, and both live here.
  */
+/**
+ * The stem of the note every mutant gets when NOT ONE baseline test passed. Exported so a test can
+ * pin the behaviour by name rather than by quoting a sentence that is allowed to improve.
+ */
+export const NO_GREEN_BASELINE = "no green baseline tests";
+
+/**
+ * How long a baseline failure message may be before the note truncates it.
+ *
+ * MEASURED, and the number is set from the measurement rather than chosen for tidiness:
+ * al-runner's provisioning-gap message is 1370 bytes, and the part that tells the operator what to
+ * DO — `al-runner provision` — is in its last quarter. A 1200-byte cap truncated it to `al-runn…`,
+ * losing the one line the whole message exists to deliver. Any limit here must clear that message
+ * with room to spare, because a truncation that keeps the diagnosis and drops the fix recreates
+ * exactly the problem `noGreenBaselineNote` was written to solve.
+ *
+ * The cost is bounded and worth it: this note is written once per mutant, so a 16-mutant batch
+ * carries ~16 copies. That is smaller than the per-mutant source text a report already holds.
+ */
+const BASELINE_NOTE_MESSAGE_LIMIT = 4000;
+
+/**
+ * R100. What every mutant's `failureNote` says when the whole baseline failed.
+ *
+ * It used to be the bare literal `"no green baseline tests"`, and the baseline verdicts' own
+ * messages were dropped on the floor at that point. MEASURED 2026-08-07 against a real
+ * symbols-only `.alpackages`, which is what every real AL project has: al-runner refuses with an
+ * excellent message — it lists each missing Microsoft platform app by name and version and gives
+ * `al-runner provision` as the one command that fixes it — and the operator saw NONE of it. All 16
+ * mutants came back `error note=no green baseline tests`, which reads as "your test suite is
+ * broken" when the truth is "run one command". The direction of that error is the bad one: it
+ * blames the target's tests for a prerequisite of ours.
+ *
+ * Deliberately NOT a detector. There is no pattern-match on al-runner's prose here, because a
+ * message-shape rule is an English-only rule that upstream can reword at any time (R66 measured
+ * that class; R123 exists because al-runner rewords things within a single day). The rule is
+ * structural instead — "every baseline test failed, and here is what they said" — so it works for
+ * any backend and any cause, including ones nobody has met yet.
+ */
+export function noGreenBaselineNote(
+  baseline: readonly { readonly verdict: { readonly failureMessage?: string } }[],
+): string {
+  const messages = baseline
+    .map((b) => b.verdict.failureMessage)
+    .filter((m): m is string => m !== undefined && m.trim() !== "");
+  if (messages.length === 0) {
+    return `${NO_GREEN_BASELINE} — and none of the ${baseline.length} baseline test(s) reported why`;
+  }
+  const distinct = [...new Set(messages)];
+  const [first] = distinct;
+  if (first === undefined) return NO_GREEN_BASELINE; // unreachable: distinct is non-empty here
+  const shown =
+    first.length > BASELINE_NOTE_MESSAGE_LIMIT
+      ? `${first.slice(0, BASELINE_NOTE_MESSAGE_LIMIT)}…`
+      : first;
+  // One shared message is the common case AND the informative one — it means a single cause took
+  // the whole suite down, which is what a missing prerequisite looks like. Several distinct ones
+  // means something more diffuse, so say how many rather than implying the first explains the rest.
+  return distinct.length === 1
+    ? `${NO_GREEN_BASELINE} — all ${baseline.length} failed with the same message: ${shown}`
+    : `${NO_GREEN_BASELINE} — ${baseline.length} failed with ${distinct.length} distinct messages; the first was: ${shown}`;
+}
+
 export function record(
   store: ResultsStore,
   runId: number,
