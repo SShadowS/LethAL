@@ -48,3 +48,32 @@ this run.
 points at. **Verified before the run: the AL source is identical.** `diff -rq` reports differences
 only under `.alpackages` (symbol package versions), editor/tooling directories, and
 `lethal.sqlite` — **no `.al` file differs**. The frame carries across unchanged.
+
+## Forward note 3 — the wall-clock projection in the pre-commitment is WRONG, and high
+
+`rung0.precommit.md` projects "~5 hours for 894 mutants" from "the campaign's measured
+~19.5 s/mutant". That figure was taken from the wrong variant, and the correction matters because
+the run is roughly an order of magnitude cheaper than the pre-commitment implies.
+
+From `docs/benchmarks/runs.jsonl`, the same 138-mutant DO scope measured twice:
+
+| run | coverage selection | per-mutant |
+| --- | --- | --- |
+| `do-r37-coverage-selected` | ON (the default `coverageMode: procedure`) | **1.0 s** |
+| `do-r37-all-tests` | OFF — every mutant runs every test | **15.9 s** |
+
+This run uses the default, so ~1 s/mutant applies, not ~16-19 s. The dominant cost is the BASELINE,
+which the unnarrowed records put at 12-14 minutes for the full suite — consistent with forward note
+1's warning that the baseline would dominate, but at a total of roughly 35-45 minutes rather than
+five hours.
+
+Nothing about the bar, the scope or the false-kill rule changes. Only the cost estimate was wrong,
+and it was wrong in the safe direction — the run was authorised on a worse projection than the one
+it will actually meet.
+
+## Forward note 4 — the cardinality pre-commitment held
+
+`rung0.precommit.md` fixed the scope at **894 deployed** mutants before the run. The run's own
+generation phase reports **940 sites -> 894 deployed** across 12 of 554 files. The deployed figure
+matches exactly, which is the check R92 exists to make possible: the previous campaign pre-committed
+a SITE count as a mutant count and every anchor correctly refused.
