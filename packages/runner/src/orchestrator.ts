@@ -3510,7 +3510,32 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       : {}),
     ...(cfg.stopHungSessions === true ? { stopHungSessions: true } : {}),
   };
-  return buildReport(statics, collectedEvents);
+  const report = buildReport(statics, collectedEvents);
+  // R89: a run ASKED to resume must SAY it resumed. This is the invariant the code already claims —
+  // `resolveResume` throws when it finds no target, and `resumedFrom` is keyed on the request
+  // (`resume-resolved`) rather than on whether anything was carried, so `cfg.resume !== undefined`
+  // entails `report.resumedFrom !== undefined` on every path there is.
+  //
+  // It is asserted rather than assumed because the one field report R89 exists for is precisely a
+  // violation of it: a `--resume last` on a hosted DO run printed no `RESUMED:` banner and
+  // re-measured 86 mutants from scratch, with a valid unfinished target sitting in the store
+  // holding 113 verdicts. Three explanations were ruled out against the code (the CLI does not drop
+  // the flag; `resolveResume` cannot return quietly; `resumedFrom` was never derived from carried
+  // mutants), the argv was never recovered, and the row's own conclusion is that reproduction needs
+  // the invocation rather than more code reading.
+  //
+  // So this does not explain it. It makes the next occurrence LOUD instead of silent, and prints
+  // the four facts a diagnosis needs — which is the difference between another unreproducible field
+  // report and a bug someone can fix. Twelve hours of re-measurement is what the silent version
+  // costs.
+  if (cfg.resume !== undefined && report.resumedFrom === undefined) {
+    const resolved = resumeState === undefined ? "undefined" : `runId ${resumeState.runId}`;
+    const resolvedEvents = collectedEvents.filter((e) => e.type === "resume-resolved").length;
+    throw new Error(
+      `runSession: --resume was requested (${JSON.stringify(cfg.resume)}) but the report records no resume. Every path that reaches here should have emitted \`resume-resolved\` or thrown in \`resolveResume\`. This is R89's unexplained field report reproducing. Do not re-run: capture this message. runId=${runId} backend=${backendName} configFingerprint=${configFingerprint} projectDir=${cfg.projectDir} resumeState=${resolved} events=${collectedEvents.length} resumeResolvedEvents=${resolvedEvents}`,
+    );
+  }
+  return report;
 }
 
 /**

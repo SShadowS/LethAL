@@ -1098,3 +1098,45 @@ describe("stranded-note detection (R53)", () => {
     expect(index.strandedKeys.size).toBe(1);
   });
 });
+
+/**
+ * R89. A `--resume last` on a hosted Document Output run printed no `RESUMED:` banner and
+ * re-measured 86 mutants from scratch, with a valid unfinished target sitting in the store holding
+ * 113 verdicts. Three explanations were ruled out against the code and the argv was never
+ * recovered, so the row's own conclusion is that reproduction needs the invocation.
+ *
+ * These two pin the SELF-CONSISTENCY guard that makes a recurrence loud instead of silent. It does
+ * not explain the field report and does not claim to.
+ */
+describe("R89 — a run asked to resume must SAY it resumed", () => {
+  test("the happy path still reports resumedFrom, so the guard is not simply always-off", async () => {
+    const dirs = await makeProject();
+    const store = new ResultsStore(":memory:");
+    const first = new CountingBackend("pass", 1);
+    await runSession({ backend: first, store, ...dirs, selectorIds });
+
+    const second = new CountingBackend("pass");
+    const report = await runSession({
+      backend: second,
+      store,
+      ...dirs,
+      selectorIds,
+      resume: "last",
+    });
+    expect(report.resumedFrom).toBeDefined();
+  });
+
+  test("a run with NO --resume is untouched by the guard", async () => {
+    // The counterweight. Without it the guard could be `cfg.resume === undefined ||
+    // resumedFrom !== undefined` written the wrong way round and every plain run would throw.
+    const dirs = await makeProject();
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({
+      backend: new CountingBackend("pass"),
+      store,
+      ...dirs,
+      selectorIds,
+    });
+    expect(report.resumedFrom).toBeUndefined();
+  });
+});

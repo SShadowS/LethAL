@@ -1,79 +1,41 @@
-# 2026-08-07 — R85, the swap kill rate on Continia Document Output
+# 2026-08-07 — R85 swap rate, rung 1
 
-Instrument **(b)** of R85: a LethAL run at scale against a real project, yielding the
-`lethal.swap-call-arguments` kill rate as a by-product.
+**This campaign stands exactly as committed. Nothing in it has been edited.** This README is a
+forward note, which is the only way a correction is recorded against a committed campaign record.
 
-`rung0.precommit.md` is the pre-commitment and is **immutable** — it was committed (`7ad63c1`)
-before the environment was started and before any verdict existed. Corrections and decisions taken
-afterwards go here as forward notes, never as edits to that file. That rule is why the campaign
-gates exist.
+## What it produced
 
-## Files
+Not a rate. It scored **3** swap mutants out of 894 deployed, all three killed, and all three
+measured to be FALSE kills of the arm-E shape (a description overflowing the shorter field a name is
+assigned to, BC rejecting the data before any assertion ran). `rung1.result.md` declines to apply
+the pre-committed bar at n = 3 and says so.
 
-| file | what it is |
-| --- | --- |
-| `rung0.precommit.md` | the bar, the seeded scope rule, the false-kill rule. Fixed before the run. |
-| `rung1.scope.md` | the 12 files the rule chose, with per-file swap and deployed counts |
-| `select-scope.py` | the selector, so the scope is reproducible from the seed alone |
-| `swap-sites-437.txt` | the sampling frame: every claimed swap site, file and span |
+Its own conclusion: *"A second run under the same rule is not worth it. A tighter rate needs a NEW
+pre-commitment with a coverage-aware selection rule, written openly as its own campaign, with this
+result left standing."*
 
----
+## The successor exists
 
-## Forward note 1 — the baseline is NOT narrowed, and that is a deliberate cost
+**`docs/campaign/2026-08-08-r85-swap-population/`.** Read that one for the rate.
 
-`rung0.precommit.md` fixes the file scope and is silent on test scope. Settling it here, before the
-run rather than after: **no `--tests-only`. The full suite runs.**
+It became possible because **R127** shipped `--operator <name>` on 2026-08-08, which this campaign
+did not have. With it the WHOLE swap population is cheaper than this run's truncated slice — 523
+mutants against 894 — so there is no sampling rule, no seed, and nothing to select on. The
+coverage-aware requirement this campaign's result asked for turned out to be unsatisfiable from this
+run (11 files touched, 3 with any coverage, holding 10 of the 437 sites) and became unnecessary
+rather than being satisfied.
 
-The previous campaign (`2026-08-03-do`) used `--tests-only "Src/AutomaticDocuments/**"`, which
-narrowed the baseline from 1,246 tests to 56 and made a 148-mutant run affordable. That narrowing is
-correct for a determinism gate and **wrong for this question**. CLAUDE.md states the reason plainly:
-`--tests-only` narrows the baseline and CAN change a verdict, because an excluded killing test
-manufactures a survivor. A rate computed against a narrowed suite is the rate at which *that subset*
-notices a swap, which is not what R85 asks.
+Result there: 523 deployed, 177 scored, first-party rate **63/154 = 40.9%** raw and **37.0%**
+false-kill-adjusted, with **6 of 63** kills the same arm-E shape this campaign found at 3 of 3.
 
-Measured for the record: the suite holds **1,314 `[Test]` procedures across 105 files**, and the
-`AutomaticDocuments` subset the previous campaign used is 5 of those files.
+## Two figures in this campaign that a later reader should not misquote
 
-The cost is accepted knowingly and is expected to dominate the run: the baseline executes every test
-once with coverage collection, and a fuller baseline also raises per-mutant cost, because better
-coverage attribution means each mutant is run against more covering tests. The previous campaign's
-~19.5 s/mutant figure was measured under the 56-test baseline and is therefore a FLOOR here, not an
-estimate. Any wall-clock projection in `rung0.precommit.md` that was derived from it understates
-this run.
+Both are correct as written and both are narrower than they look:
 
-## Forward note 2 — the target tree
-
-`rung0.precommit.md` measured the 437-site frame against `U:/Git/do-rel2/Cloud`; the run targets
-`U:/Git/do-lethal/Cloud`, which is what the previous campaign used and what the envtool config
-points at. **Verified before the run: the AL source is identical.** `diff -rq` reports differences
-only under `.alpackages` (symbol package versions), editor/tooling directories, and
-`lethal.sqlite` — **no `.al` file differs**. The frame carries across unchanged.
-
-## Forward note 3 — the wall-clock projection in the pre-commitment is WRONG, and high
-
-`rung0.precommit.md` projects "~5 hours for 894 mutants" from "the campaign's measured
-~19.5 s/mutant". That figure was taken from the wrong variant, and the correction matters because
-the run is roughly an order of magnitude cheaper than the pre-commitment implies.
-
-From `docs/benchmarks/runs.jsonl`, the same 138-mutant DO scope measured twice:
-
-| run | coverage selection | per-mutant |
-| --- | --- | --- |
-| `do-r37-coverage-selected` | ON (the default `coverageMode: procedure`) | **1.0 s** |
-| `do-r37-all-tests` | OFF — every mutant runs every test | **15.9 s** |
-
-This run uses the default, so ~1 s/mutant applies, not ~16-19 s. The dominant cost is the BASELINE,
-which the unnarrowed records put at 12-14 minutes for the full suite — consistent with forward note
-1's warning that the baseline would dominate, but at a total of roughly 35-45 minutes rather than
-five hours.
-
-Nothing about the bar, the scope or the false-kill rule changes. Only the cost estimate was wrong,
-and it was wrong in the safe direction — the run was authorised on a worse projection than the one
-it will actually meet.
-
-## Forward note 4 — the cardinality pre-commitment held
-
-`rung0.precommit.md` fixed the scope at **894 deployed** mutants before the run. The run's own
-generation phase reports **940 sites -> 894 deployed** across 12 of 554 files. The deployed figure
-matches exactly, which is the check R92 exists to make possible: the previous campaign pre-committed
-a SITE count as a mutant count and every anchor correctly refused.
+- **"437 sites across 91 files."** Correct, and it is the FIRST-PARTY population, measured by a
+  census script that skipped `Cloud/.dependencies/`. Measured again through the real pipeline, the
+  first-party figure is exactly 437 across exactly 91 files — the census was right — and the whole
+  project holds **523 across 111 files**, because LethAL also mutates the 137 vendored `.al` files
+  the census excluded.
+- **"80% of the chosen scope had no covering test."** A property of this campaign's seeded
+  file-budget rule, not of the project. Over the whole population the split is **66%**.

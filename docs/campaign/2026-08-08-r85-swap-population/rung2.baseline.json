@@ -1,0 +1,3663 @@
+[
+  {
+    "key": "00bf3562a237e119ed9cdc6221983b94528b53d1a56730723280cfea90415fb3|CDO Email Template Merge Table|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "00bf3562a237e119ed9cdc6221983b94528b53d1a56730723280cfea90415fb3|CDO Email Template Merge Table|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "00bf3562a237e119ed9cdc6221983b94528b53d1a56730723280cfea90415fb3|CDO Email Template Merge Table|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "00bf3562a237e119ed9cdc6221983b94528b53d1a56730723280cfea90415fb3|CDO Email Template Merge Table|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "00bf3562a237e119ed9cdc6221983b94528b53d1a56730723280cfea90415fb3|CDO Email Template Merge Table|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "00bf3562a237e119ed9cdc6221983b94528b53d1a56730723280cfea90415fb3|CDO Email Template Merge Table|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "00bf3562a237e119ed9cdc6221983b94528b53d1a56730723280cfea90415fb3|CDO Email Template Merge Table|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "00bf3562a237e119ed9cdc6221983b94528b53d1a56730723280cfea90415fb3|CDO Email Template Merge Table|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "024f8b4094b1fd3905a1d537f2a062461c2b21df68942caabbc8417a2109dcba|CDO E-Mail Handler|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "04669f4444fe5a9558352c08b253f338894174db5c3844b4da69a46a48715a7d|CDO UnhandledPostedSalesInv.|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "055dcc0ed9273031c2dcb3772cc17ee600b2efa5b0e4c5e910a6473650632912|CDO Log Management|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "0619a03b3d2745c7d8925739558ece6a8d73ad5ab9f4721a3d95b6a78f5e6dd8|CDO Http Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "069dd3e6857975951c7f51d6a997aa810c036b18e648c2fa56ccac22e6083ec5|CDO Merge Table Top/Bottom|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "07220add12804b6c9bcebf44324516fe51c7e30048c98ea4d48ea150de46965b|CDO Setup Data|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "07220add12804b6c9bcebf44324516fe51c7e30048c98ea4d48ea150de46965b|CDO Setup Data|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "07220add12804b6c9bcebf44324516fe51c7e30048c98ea4d48ea150de46965b|CDO Setup Data|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "07220add12804b6c9bcebf44324516fe51c7e30048c98ea4d48ea150de46965b|CDO Setup Data|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "09914962de15c00b1da9805f97cfcdd2ebc804872d24da8d39a59cc26629077d|CDO File|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "0a2c452336f6b32d0a158dddcbfcdb9c64be90fe810e51cde0ba2c783cf69a99|CDO Azure Application Setup|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "0a52502dc1716bc0e6be8a8810d3323c7e55f3c52a6f64ede8ba0e8f9b1daa28|CDO Merge Table Top/Bottom|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "0dcca25b213b1e5b3c071f7b0478393e61a87aad3dc1a26f867483b208822a07|CDO Send Mail Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "1131b03b1ba4f13d5f1d97644e393fd1b4df034ac3c7948a83b59d803776cca5|CDO E-Mail Template Management|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "1131b03b1ba4f13d5f1d97644e393fd1b4df034ac3c7948a83b59d803776cca5|CDO File|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "1131b03b1ba4f13d5f1d97644e393fd1b4df034ac3c7948a83b59d803776cca5|CDO Send Mail Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "12a90324c95b966216b422512f4775042808fe79559aa1090783280e48179f99|CDO Extension App|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "158a5ae3c74203a45e37d9e0a0ace2255358decdd04d5f0c6d81eb3c66bb2f02|CDO Http Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "1760b0e9f51695c2d47de4d00dc4720341f2680ebda118ea1880016e2bd377af|CDO eSeal Service Mgt|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "18002399fa61361bcdb789e2df7d1d4ecdfeb64be7a932bd1274391ed0ddf68c|CDO Setup Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "19d065152048d9ca0980d0596c3810099980ae2f9f061f46ba86c952aa19cf9f|CDO CDN E-Doc Send Code part|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "19d065152048d9ca0980d0596c3810099980ae2f9f061f46ba86c952aa19cf9f|CDO Customer Setup|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "19d065152048d9ca0980d0596c3810099980ae2f9f061f46ba86c952aa19cf9f|CDO Customer|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "19d065152048d9ca0980d0596c3810099980ae2f9f061f46ba86c952aa19cf9f|CDO E-Mail Handler|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "19d065152048d9ca0980d0596c3810099980ae2f9f061f46ba86c952aa19cf9f|CDO E-Mail Template Header|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "GetRecipientsDescription_eDocsAndEmail_ShowsCombinedFormat",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "19d065152048d9ca0980d0596c3810099980ae2f9f061f46ba86c952aa19cf9f|CDO E-Mail Template Header|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "19d065152048d9ca0980d0596c3810099980ae2f9f061f46ba86c952aa19cf9f|CDO E-Mail Template Line|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "19d065152048d9ca0980d0596c3810099980ae2f9f061f46ba86c952aa19cf9f|CDO E-Mail Template Line|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "19d065152048d9ca0980d0596c3810099980ae2f9f061f46ba86c952aa19cf9f|CDO E-Mail Template Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "19d065152048d9ca0980d0596c3810099980ae2f9f061f46ba86c952aa19cf9f|CDO E-Mail Template Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "19d065152048d9ca0980d0596c3810099980ae2f9f061f46ba86c952aa19cf9f|CDO E-Mail Template Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "19d065152048d9ca0980d0596c3810099980ae2f9f061f46ba86c952aa19cf9f|CDO File|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "19d065152048d9ca0980d0596c3810099980ae2f9f061f46ba86c952aa19cf9f|CDO Legacy eDoc Dispatcher|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "19d065152048d9ca0980d0596c3810099980ae2f9f061f46ba86c952aa19cf9f|CDO Unhandled Issued Reminders|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "19d065152048d9ca0980d0596c3810099980ae2f9f061f46ba86c952aa19cf9f|CDO Unhandled Posted Cr. Memo|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "19d065152048d9ca0980d0596c3810099980ae2f9f061f46ba86c952aa19cf9f|CDO UnhandledPostedSalesInv.|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "19d065152048d9ca0980d0596c3810099980ae2f9f061f46ba86c952aa19cf9f|CDO Vendor Setup|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "19d065152048d9ca0980d0596c3810099980ae2f9f061f46ba86c952aa19cf9f|CDO Vendor|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "1b4de49df88bae7bc2db7a7db5504be8a5ea5a6e61b2c8e6f4b6853a1aee848a|CDO Customer Setup|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "1b4de49df88bae7bc2db7a7db5504be8a5ea5a6e61b2c8e6f4b6853a1aee848a|CDO Customer|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "CustomerWithEntriesAndZeroBalance_WithEntriesInPeriodCondition_ShouldCreateJournalLine",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "1b4de49df88bae7bc2db7a7db5504be8a5ea5a6e61b2c8e6f4b6853a1aee848a|CDO Open Documents|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "1b4de49df88bae7bc2db7a7db5504be8a5ea5a6e61b2c8e6f4b6853a1aee848a|CDO Send Cust. Statement Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "PeriodStatement_EntriesInPeriod_WhenEntryInsidePeriod_ShouldCreateJournalLine",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "1bcb6635da772f46d15716e02d340179867b2d4964009615ae23815b482c9ef3|CDO Azure Blob Storage|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "1bcb6635da772f46d15716e02d340179867b2d4964009615ae23815b482c9ef3|CDO Azure Blob Storage|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "1bcb6635da772f46d15716e02d340179867b2d4964009615ae23815b482c9ef3|CDO Download Country Template|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "1bcb6635da772f46d15716e02d340179867b2d4964009615ae23815b482c9ef3|CDO E-Mail Template Header|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "1bcb6635da772f46d15716e02d340179867b2d4964009615ae23815b482c9ef3|CDO E-Mail Template Line|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "1bcb6635da772f46d15716e02d340179867b2d4964009615ae23815b482c9ef3|CDO E-Mail Template Line|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "1bcb6635da772f46d15716e02d340179867b2d4964009615ae23815b482c9ef3|CDO eDocs Send Code Migration|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "SetDefaultSendCodeOnDocuments_WhenModifiedCustomersDictPopulated_ShouldUpdateOnlyThoseCustomers",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "1bcb6635da772f46d15716e02d340179867b2d4964009615ae23815b482c9ef3|CDO eDocs Send Code Migration|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "SetDefaultSendCodeOnDocuments_WhenSalesInvoiceBlankAndCustomerHasSendCode_ShouldUpdateInvoice",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "1bcb6635da772f46d15716e02d340179867b2d4964009615ae23815b482c9ef3|CDO eDocuments Setup Wizard|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "1bcb6635da772f46d15716e02d340179867b2d4964009615ae23815b482c9ef3|CDO eDocuments Setup Wizard|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "1bcb6635da772f46d15716e02d340179867b2d4964009615ae23815b482c9ef3|CDO eDocuments Setup Wizard|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "1bcb6635da772f46d15716e02d340179867b2d4964009615ae23815b482c9ef3|CDO Email Translate Mgt|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "1bcb6635da772f46d15716e02d340179867b2d4964009615ae23815b482c9ef3|CDO Email Translate Mgt|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "1bcb6635da772f46d15716e02d340179867b2d4964009615ae23815b482c9ef3|CDO Fields (With Relation)|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "1bcb6635da772f46d15716e02d340179867b2d4964009615ae23815b482c9ef3|CDO Master Data Mgt. Subsc.|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "1bcb6635da772f46d15716e02d340179867b2d4964009615ae23815b482c9ef3|CDO Merge Field Cache|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "Modern_ModifyCDOFileName_WhenMergeResolvesBlank_KeepsBaselineGuid",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "1bcb6635da772f46d15716e02d340179867b2d4964009615ae23815b482c9ef3|CDO Output Profile Conflicts|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "1bcb6635da772f46d15716e02d340179867b2d4964009615ae23815b482c9ef3|CDO Setup Data|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "1bcb6635da772f46d15716e02d340179867b2d4964009615ae23815b482c9ef3|CDO Table Field Array Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "GetFieldCaption_WhenValidTableAndField_ReturnsCaption",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "1d8e90ec33a761252d06138139547c8403235c8cd477274408b4c5e968badacc|CDO Unhandled Posted Cr. Memo|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "1dd544aea2912969156e6d87a850b8b8b9781bfaada19069bdad50665706cf53|CDO Send Cust. Statement Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "PeriodStatement_EntriesInPeriod_WhenEntryInsidePeriod_ShouldCreateJournalLine",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "1e30192c002964e60d06d4312e9461b5525e189eddfb05bff27618fc35359bf7|CDO E-Mail Template Line|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "210a62a4cd59cc50f7c78680f2ab491a70a452b62856ae08ce64f8a8a51f8ae3|CDO E-Mail Attachments|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "210a62a4cd59cc50f7c78680f2ab491a70a452b62856ae08ce64f8a8a51f8ae3|CDO E-Mail Attachments|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "21ae0252034fd518038b05656eaa17dda7883deb60974e7b5a05909502497a5e|CDO ABS Auth Settings Mgt|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "21ae0252034fd518038b05656eaa17dda7883deb60974e7b5a05909502497a5e|CDO CDN E-Doc Send Code part|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "21ae0252034fd518038b05656eaa17dda7883deb60974e7b5a05909502497a5e|CDO E-Mail Handler|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "FindEMailTemplateLine_ServiceInvoice_ShouldFindCorrectTemplate",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "21ae0252034fd518038b05656eaa17dda7883deb60974e7b5a05909502497a5e|CDO E-Mail Handler|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "GetOutputProfile_WhenEventSubscriberHandles_ShouldReturnOverriddenSendCode",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "21ae0252034fd518038b05656eaa17dda7883deb60974e7b5a05909502497a5e|CDO E-Mail Handler|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "21ae0252034fd518038b05656eaa17dda7883deb60974e7b5a05909502497a5e|CDO E-Mail Template Line|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "21ae0252034fd518038b05656eaa17dda7883deb60974e7b5a05909502497a5e|CDO E-Mail Template Line|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "21ae0252034fd518038b05656eaa17dda7883deb60974e7b5a05909502497a5e|CDO E-Mail Template Line|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "21ae0252034fd518038b05656eaa17dda7883deb60974e7b5a05909502497a5e|CDO E-Mail Template Line|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "21ae0252034fd518038b05656eaa17dda7883deb60974e7b5a05909502497a5e|CDO E-Mail Template Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "21ae0252034fd518038b05656eaa17dda7883deb60974e7b5a05909502497a5e|CDO E-Mail Template Management|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "21ae0252034fd518038b05656eaa17dda7883deb60974e7b5a05909502497a5e|CDO File|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "21ae0252034fd518038b05656eaa17dda7883deb60974e7b5a05909502497a5e|CDO File|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "21ae0252034fd518038b05656eaa17dda7883deb60974e7b5a05909502497a5e|CDO File|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "21ae0252034fd518038b05656eaa17dda7883deb60974e7b5a05909502497a5e|CDO File|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "21ae0252034fd518038b05656eaa17dda7883deb60974e7b5a05909502497a5e|CDO String Functions|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "RegexReplaceIgnoreCase_WhenCaseDiffers_StillMatches",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "21ae0252034fd518038b05656eaa17dda7883deb60974e7b5a05909502497a5e|CDO String Functions|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "TemplateContentProcessing_WhenSpecialCharacters_ShouldPreserveContent",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "21ae0252034fd518038b05656eaa17dda7883deb60974e7b5a05909502497a5e|CDO Subscribers|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "21ae0252034fd518038b05656eaa17dda7883deb60974e7b5a05909502497a5e|CDO Unhandled Purchase|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "21ae0252034fd518038b05656eaa17dda7883deb60974e7b5a05909502497a5e|CDO UnhandledIss.FinChrgMemos|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "220af0e2da10ab798e92c42c00e4e5fcf036af432732aba1141e132a886eb05e|CDO Merge Table Field|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "22bd9f359fdb161e5a5035915edbd01fe4412f15012820ee483fa25bc36ae043|CDO DC Perm. Assignment Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "UserWithSourceRole_ReceivesTargetRole_Admin",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "22bd9f359fdb161e5a5035915edbd01fe4412f15012820ee483fa25bc36ae043|CDO Document E-Mail Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "22bd9f359fdb161e5a5035915edbd01fe4412f15012820ee483fa25bc36ae043|CDO Document E-Mail Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "22bd9f359fdb161e5a5035915edbd01fe4412f15012820ee483fa25bc36ae043|CDO E-Mail Template Line|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "GetRecipientsDescription_eDocsAndEmail_ShowsCombinedFormat",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "22bd9f359fdb161e5a5035915edbd01fe4412f15012820ee483fa25bc36ae043|CDO eDocuments Dispatcher|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "SendElectronicDocument_ModernBatch_WhenAllSucceed_ShouldCreateOneLogEntryPerRecord",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "22bd9f359fdb161e5a5035915edbd01fe4412f15012820ee483fa25bc36ae043|CDO eDocuments Dispatcher|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "SendElectronicDocument_ModernBatch_WhenMiddleFails_EachSucceedingRecordLogsOnce",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "22bd9f359fdb161e5a5035915edbd01fe4412f15012820ee483fa25bc36ae043|CDO Merge Table Field|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "22bd9f359fdb161e5a5035915edbd01fe4412f15012820ee483fa25bc36ae043|CDO Merge Table Top/Bottom|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "22bd9f359fdb161e5a5035915edbd01fe4412f15012820ee483fa25bc36ae043|CDO Send Mail Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "22bd9f359fdb161e5a5035915edbd01fe4412f15012820ee483fa25bc36ae043|CDO Subscribers|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "22bd9f359fdb161e5a5035915edbd01fe4412f15012820ee483fa25bc36ae043|CDO Unhandled Sales Pages Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "22bd9f359fdb161e5a5035915edbd01fe4412f15012820ee483fa25bc36ae043|CDO UnhandledPurchasePagesMgt.|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "2396936eac395a68cc87d419d8d97f4e7d51491e48e5552a2b3846419e8a07df|CDO Universign eSeal Service|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "26672aedcc90f52d78cfef1cea56297f2eafd510f2b0e2b7d68964358d1b7eac|CDO E-Mail Handler|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "SalesPost_SendOnPosting_All_InvoicePosted_DocHandleCalled",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "26f161730bd5dbd0922c1af0394cd61f84d16720115a544064d5814d10e0afda|CDO Send Cust. Statement Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "DueDateStatement_WhenOpenEntryFallsDueInPeriod_ShouldCreateBalanceDueJournalLine",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "2c16e9d6979bb80089941cbfce17b4113467acc49093c3ebbe20741993ac3a1a|CDO Merge Table Field|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "2df1231b91e2e11bc86dfff0e0b7f6f88dbc89cce0bc1953026e4b0a9bcd3110|CDO Send Cust. Statement Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "PeriodStatement_WhenSendingDateHasPassed_ShouldCreateJournalLineForCalculatedPeriod",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "2fc27b612372c055be032dfdc002104d9c670e721cd4df3a2ede4f5404d2d3f5|CDO E-Mail Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "312dc2026bbf420860c2e575937b95222c24fca2d8ac381d739302698e85eb50|CDO Email Template Merge Table|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "312dc2026bbf420860c2e575937b95222c24fca2d8ac381d739302698e85eb50|CDO Email Template Merge Table|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "34d959c45c037d88898870605d0c76cb889dc39bbf26c07bc6b082ae1a6f32fb|CDO E-Mail Handler|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "34d959c45c037d88898870605d0c76cb889dc39bbf26c07bc6b082ae1a6f32fb|CDO E-Mail Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "34d959c45c037d88898870605d0c76cb889dc39bbf26c07bc6b082ae1a6f32fb|CDO E-Mail Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "34d959c45c037d88898870605d0c76cb889dc39bbf26c07bc6b082ae1a6f32fb|CDO E-Mail Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "34d959c45c037d88898870605d0c76cb889dc39bbf26c07bc6b082ae1a6f32fb|CDO E-Mail Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "34d959c45c037d88898870605d0c76cb889dc39bbf26c07bc6b082ae1a6f32fb|CDO E-Mail Template Line|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "34d959c45c037d88898870605d0c76cb889dc39bbf26c07bc6b082ae1a6f32fb|CDO E-Mail Template Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "34d959c45c037d88898870605d0c76cb889dc39bbf26c07bc6b082ae1a6f32fb|CDO E-Mail Template Management|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "34d959c45c037d88898870605d0c76cb889dc39bbf26c07bc6b082ae1a6f32fb|CDO E-Mail/Print Statement|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "34d959c45c037d88898870605d0c76cb889dc39bbf26c07bc6b082ae1a6f32fb|CDO Electronic Document Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "34d959c45c037d88898870605d0c76cb889dc39bbf26c07bc6b082ae1a6f32fb|CDO Email Template Merge Table|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "34d959c45c037d88898870605d0c76cb889dc39bbf26c07bc6b082ae1a6f32fb|CDO Email Template Merge Table|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "34d959c45c037d88898870605d0c76cb889dc39bbf26c07bc6b082ae1a6f32fb|CDO Email Template Merge Table|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "34d959c45c037d88898870605d0c76cb889dc39bbf26c07bc6b082ae1a6f32fb|CDO File|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "34d959c45c037d88898870605d0c76cb889dc39bbf26c07bc6b082ae1a6f32fb|CDO File|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "34d959c45c037d88898870605d0c76cb889dc39bbf26c07bc6b082ae1a6f32fb|CDO Send Mail Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "34d959c45c037d88898870605d0c76cb889dc39bbf26c07bc6b082ae1a6f32fb|CDO Service-Post and Handle|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "34d959c45c037d88898870605d0c76cb889dc39bbf26c07bc6b082ae1a6f32fb|CDO Template Recipient Setup|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "34d959c45c037d88898870605d0c76cb889dc39bbf26c07bc6b082ae1a6f32fb|CDO Template Recipient Setup|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "34d959c45c037d88898870605d0c76cb889dc39bbf26c07bc6b082ae1a6f32fb|CDO Template Recipient Setup|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "34d959c45c037d88898870605d0c76cb889dc39bbf26c07bc6b082ae1a6f32fb|CDO Unhandled RemittanceAdvice|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "34d959c45c037d88898870605d0c76cb889dc39bbf26c07bc6b082ae1a6f32fb|CDO UnhandledPostedReturnRec.|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "34d959c45c037d88898870605d0c76cb889dc39bbf26c07bc6b082ae1a6f32fb|CDO UnhandledPostedSalesShipt.|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "34d959c45c037d88898870605d0c76cb889dc39bbf26c07bc6b082ae1a6f32fb|CDO UnhandledPostedServiceCrM.|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "34d959c45c037d88898870605d0c76cb889dc39bbf26c07bc6b082ae1a6f32fb|CDO UnhandledPostedServiceInv.|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "34d959c45c037d88898870605d0c76cb889dc39bbf26c07bc6b082ae1a6f32fb|CDO UnhandledPostedServiceShip|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "34e7349c2c45a88ee1f426a0a04a763aafc02ef9c97756067b56ad29595cab1b|CDO Email Template Merge Table|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "34fd20a4a0e574d6b6448d07c3f89e7046f024a6a95865143852a0e0ae0648fc|CDO Contnia Online PDF Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "376783382be24736a1d3a20dcb8d88c888a6ebda4cdfb019f7ad7608e17fe999|CDO Microsoft Graph Rest Api|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "37a7b3b1d38c44a38a63e100e8d95d9f78bfa7626280f5ea030a6656c2761df5|CDO Http Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "3b9c9ae6d95b0410321186123cf998b4ad8298b8b10d239af255fcafcadf1ff2|CDO Send Mail Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "3dd0de043c577ce2ca322cdf7ab40ba150721d77158e4aabd2a724bcd33257c7|CDO Merge Table Field|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "43235c49d5ba1a85ca1c98b002e67b892e213a9bc4c703e6795feda0b78c57ea|CDO Send Cust. Statement Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "DueDateStatement_WhenOpenEntryFallsDueInPeriod_ShouldCreateBalanceDueJournalLine",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "4500b6ddfa032b2b28f8b12d4548162a68b006e51c8502b82e8a4f5166485e74|CDO Electronic Document Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "45ba84a6c74fea6584fc1c36ed792933b0e9cb7c713f07981b5e493a6dbf1247|CDO Contnia Online PDF Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "467367185e33bb6e7e70aaf7d0a35b9e9b4619ba659c74f9d9cb108f240a2a11|CDO Merge Table Top/Bottom|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "46cc2001f46c33746d22221f11033f2f52609ba573b8d5d6c4954a6d57798f74|CDO Setup Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "4b1e747f54b91ee52d0c317cf8ac9396ce13fa57de3580e567c4283b3a928381|CDO Log Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "4bfce7456cdd565374eca03ca8b2490f04346d26139fdbcc05d20e6a91ab5b69|CDO Update Output Profile|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "4bfce7456cdd565374eca03ca8b2490f04346d26139fdbcc05d20e6a91ab5b69|CDO Update Output Profile|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "4f61e0ff63a71441db75bd02289be24aba8f4fa6b789395b7039f204a18c50e9|CDO Security Module License|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "CheckFeatureIsEnabled_WhenFeatureEnabledAndCheckNotEnabled_ShouldShowMessage",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "4f61e0ff63a71441db75bd02289be24aba8f4fa6b789395b7039f204a18c50e9|CDO Security Module License|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "4f61e0ff63a71441db75bd02289be24aba8f4fa6b789395b7039f204a18c50e9|CDO Security Module License|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "4f70d0433064048bd07dadf4ae760af9df804dfd1e4c441ac6a9bb3f4b3d6bdd|CDO Merge Table Field|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "508277780ba61403d3afbfc6ee3afbf739f042c3202aa5fecf8934d23a23e4dc|CDO E-Mail Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "508277780ba61403d3afbfc6ee3afbf739f042c3202aa5fecf8934d23a23e4dc|CDO E-Mail Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "508277780ba61403d3afbfc6ee3afbf739f042c3202aa5fecf8934d23a23e4dc|CDO E-Mail Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "508277780ba61403d3afbfc6ee3afbf739f042c3202aa5fecf8934d23a23e4dc|CDO E-Mail Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "508277780ba61403d3afbfc6ee3afbf739f042c3202aa5fecf8934d23a23e4dc|CDO E-Mail Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "53642054be93f714ac4b88aabb8cc5cc149f253d405c64073621bc6467642e21|CDO Email Template Merge Table|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "54ab139df12dc280e88bf2b854a5b27366969eeee4fb262ba57c0263aea3494d|CDO Setup Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "551623f00953b5c6ff90a3bdb8f0ce2134fd92cf255966d94c3c05875b1c9649|CDO Merge Table Field|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "55ca663de5634986f638c115fa3b2d3ba86cf308742b00e8972ec66c31f334e0|CDO E-Mail Template Header|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "55ca663de5634986f638c115fa3b2d3ba86cf308742b00e8972ec66c31f334e0|CDO E-Mail Template Management|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "55ca663de5634986f638c115fa3b2d3ba86cf308742b00e8972ec66c31f334e0|CDO File|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "55ca663de5634986f638c115fa3b2d3ba86cf308742b00e8972ec66c31f334e0|CDO Mail Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "55ca663de5634986f638c115fa3b2d3ba86cf308742b00e8972ec66c31f334e0|CDO Send Mail Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "55ca663de5634986f638c115fa3b2d3ba86cf308742b00e8972ec66c31f334e0|CDO Setup Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "5c408584c7f82d5fb8db1dd97f7bba63c8c50dcee2b57a4bd8188b47cce2452b|CDO E-Mail Template Header|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "5c408584c7f82d5fb8db1dd97f7bba63c8c50dcee2b57a4bd8188b47cce2452b|CDO E-Mail Template Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "5c408584c7f82d5fb8db1dd97f7bba63c8c50dcee2b57a4bd8188b47cce2452b|CDO Mail Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "5c4a756c0587eada22fc8eb49d7ed0bbd42346b61f401af8730c08f6578caf29|CDO Electronic Document Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "6010504dbd39b2f7af460b9d4222e762f5354535860009007802c7d394d17969|CDO Setup Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "613c14d6c469d761da3e9d023108ac2a87b0fe0780e6950b7aa9cdfa01d0b852|CDO Report Layout Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "613c14d6c469d761da3e9d023108ac2a87b0fe0780e6950b7aa9cdfa01d0b852|CDO Report Layout Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "633b6b524f9472f217c3a7d7ac61591282cf6d3afd1e82f682843228cd0bbdc4|CDO E-Mail Template Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "656c1725e54194df1ef594ef5c1136d398c17688632d77dd3d9ff85abd5c09fc|CDO E-Mail Template Management|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "LegacySystem_CustomerWithBalance_ShouldCreateJournalLine",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "65ba302b1ac03b5bf917aa4f8a33d621d7ffffb4dc36cc68938dff6bb5eae45b|CDO Azure Blob Storage|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "65ba302b1ac03b5bf917aa4f8a33d621d7ffffb4dc36cc68938dff6bb5eae45b|CDO Azure Blob Storage|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "65ba302b1ac03b5bf917aa4f8a33d621d7ffffb4dc36cc68938dff6bb5eae45b|CDO DC Perm. Assignment Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "65ba302b1ac03b5bf917aa4f8a33d621d7ffffb4dc36cc68938dff6bb5eae45b|CDO eDocs Send Code Migration|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "65ba302b1ac03b5bf917aa4f8a33d621d7ffffb4dc36cc68938dff6bb5eae45b|CDO Functions|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "65ba302b1ac03b5bf917aa4f8a33d621d7ffffb4dc36cc68938dff6bb5eae45b|CDO Payment Link Handler|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "65ba302b1ac03b5bf917aa4f8a33d621d7ffffb4dc36cc68938dff6bb5eae45b|CDO Payment Link Handler|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "65ba302b1ac03b5bf917aa4f8a33d621d7ffffb4dc36cc68938dff6bb5eae45b|CDO Send Mail Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "65ba302b1ac03b5bf917aa4f8a33d621d7ffffb4dc36cc68938dff6bb5eae45b|CDO Send Mail Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "65ba302b1ac03b5bf917aa4f8a33d621d7ffffb4dc36cc68938dff6bb5eae45b|CDO String Functions|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "TemplateContentProcessing_WhenSpecialCharacters_ShouldPreserveContent",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "66624f3f8ff91cdd983b816767771f3a722b425aea16a47ae6c63d1529858a75|CDO E-Mail Template Line|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "666ff124689fc43bf3defde5e8985f08219597fd66a1b983a641a6a84de23134|CDO E-Mail Handler|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "666ff124689fc43bf3defde5e8985f08219597fd66a1b983a641a6a84de23134|CDO E-Mail Handler|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "68c719c78af62ce0ba0dd41a5bcf08445d8c3b5cbb68761f5300e65dc69e1c0d|CDO Auto-Send Log Runner|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "68f0c45cbc9b0168eb4ea75714248eeb37dc46c656b86b6fc99c27af610186a0|CDO Setup Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "68fec7a3eb938d540ff749aaf4daf1dfb795308b37ab20dee1d03b5e036eed4e|CDO Core Event Handler|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "6a65967b29df601a2b5985a73099c42f270a2b97b82870a9d9629101b4f9c77d|CDO Customer|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "CustomerWithEntriesAndZeroBalance_WithEntriesInPeriodCondition_ShouldCreateJournalLine",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "6a65967b29df601a2b5985a73099c42f270a2b97b82870a9d9629101b4f9c77d|CDO Customer|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "6a65967b29df601a2b5985a73099c42f270a2b97b82870a9d9629101b4f9c77d|CDO Customer|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "6a65967b29df601a2b5985a73099c42f270a2b97b82870a9d9629101b4f9c77d|CDO Customer|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "6c56e11ee7ee4e88de472c8eeafa0d55fabded5d1be3d5e918f53eb8849b75d3|CDO Http Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "6cab59a938f2892c6ce062ac4c501f96a405e8d2f58567396f79996ce2e7c663|CDO Setup Data|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "6cab59a938f2892c6ce062ac4c501f96a405e8d2f58567396f79996ce2e7c663|CDO Setup Data|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "6cab59a938f2892c6ce062ac4c501f96a405e8d2f58567396f79996ce2e7c663|CDO Setup Data|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "6cab59a938f2892c6ce062ac4c501f96a405e8d2f58567396f79996ce2e7c663|CDO Setup Data|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "6cab59a938f2892c6ce062ac4c501f96a405e8d2f58567396f79996ce2e7c663|CDO Setup Data|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "6cab59a938f2892c6ce062ac4c501f96a405e8d2f58567396f79996ce2e7c663|CDO Setup Data|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "6cab59a938f2892c6ce062ac4c501f96a405e8d2f58567396f79996ce2e7c663|CDO Setup Data|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "6cab59a938f2892c6ce062ac4c501f96a405e8d2f58567396f79996ce2e7c663|CDO Setup Data|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "6cab59a938f2892c6ce062ac4c501f96a405e8d2f58567396f79996ce2e7c663|CDO Setup Data|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "6cab59a938f2892c6ce062ac4c501f96a405e8d2f58567396f79996ce2e7c663|CDO Setup Data|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "6cab59a938f2892c6ce062ac4c501f96a405e8d2f58567396f79996ce2e7c663|CDO Setup Data|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "6cab59a938f2892c6ce062ac4c501f96a405e8d2f58567396f79996ce2e7c663|CDO Setup Data|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "6cab59a938f2892c6ce062ac4c501f96a405e8d2f58567396f79996ce2e7c663|CDO Setup Data|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "6d7637b9e3f3af30d2ace044261e4a58079c6893ceedc4d82faaa94a499c5ac4|CDO Setup Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "6efc111a3f685578ea781b9b24c4e1b79544790e9af4acf4cd0ef57d088f9375|CDO E-mail Sign. Import Export|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "6efc111a3f685578ea781b9b24c4e1b79544790e9af4acf4cd0ef57d088f9375|CDO E-Mail Template Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "6efc111a3f685578ea781b9b24c4e1b79544790e9af4acf4cd0ef57d088f9375|CDO E-MailTemplateImportExport|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "6efc111a3f685578ea781b9b24c4e1b79544790e9af4acf4cd0ef57d088f9375|CDO PaymentLinkTmplImprtExpt|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "707e653715cf2c929976bdba2df45788321176ceaaeac99ff6f0fd0d4363c841|CDO Log Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "751c17e4c28d19432d67b09b9b86bf9b1e4e52aba73cab92a15696f34b384e8e|CDO File|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "751c17e4c28d19432d67b09b9b86bf9b1e4e52aba73cab92a15696f34b384e8e|CDO File|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "76811947f6f95437ec9115e7f764c3b7aad1ca61e0c030b3749ca3cbe1c2f257|CDO Merge Table Field|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "76811947f6f95437ec9115e7f764c3b7aad1ca61e0c030b3749ca3cbe1c2f257|CDO Merge Table Top/Bottom|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "79e2856001bc44fecd8503fb1147ded7e8e0e172b1f0c16c6fed4a81a91a30e5|CDO Customer Setup|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "79e2856001bc44fecd8503fb1147ded7e8e0e172b1f0c16c6fed4a81a91a30e5|CDO Customer|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "7ac0acda5105df114bb591a433b8466f611c43a1dbcee12d4e0a0bfc13656dfe|CDO E-Mail|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "7ac99c58cbad4936cddad96ffbbc44ee880b6c760c293181a7e5e3e13f7f4866|CDO E-Mail Template Management|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "7c783464cbb9e65857eb5cc8340825c1322d675aeac13a93145f9f11f7ca094d|CDO Xml Node|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "XmlAttachmentSerialization_WhenExportingToXml_ShouldIncludeBase64Content",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "7df1611c278dbad92d59935b9d0b0db9466238ed55f0cfec3b385b784fafb7a1|CDO Send Cust. Statement Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "PeriodStatement_WhenSendingDateHasPassed_ShouldCreateJournalLineForCalculatedPeriod",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "7fad4b1bee9952961682f3ad5897a358179b247e44f605d6c30c9acfc9f3217d|CDO DC Perm. Assignment Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "80f0fe24ed28a04ce53b8d021717218b8ea8260fa0104509edbd3bdd0a525548|CDO Log Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "826271d532762b286e63ae574155e6b3cb4444d699a8bc42c39df8501a3e1487|CDO Setup Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8354e9fec8aa621ef7a4cfff533ccfe769daaee1f014b8f3c96dba94754b1fe2|CDO E-mail Sign. Import Export|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8354e9fec8aa621ef7a4cfff533ccfe769daaee1f014b8f3c96dba94754b1fe2|CDO E-MailTemplateImportExport|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8354e9fec8aa621ef7a4cfff533ccfe769daaee1f014b8f3c96dba94754b1fe2|CDO PaymentLinkTmplImprtExpt|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8354e9fec8aa621ef7a4cfff533ccfe769daaee1f014b8f3c96dba94754b1fe2|CDO Setup Wizard|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "84e3f3bcefe4067fcc7e1abbc181e6ca3a2b4aa327954312249b9562af5e95f4|CDO Setup Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8684b560152827d1a9f2c26f45ada1c5556fec12be835e7a14a7aedc011b1814|CDO Service-Post and Handle|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "8a6148a75e7d2b53f8bf59f0f5601ee4c2ae4c502e4e1232fb592f650a7ee847|CDO eSeal Service Mgt|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8a6148a75e7d2b53f8bf59f0f5601ee4c2ae4c502e4e1232fb592f650a7ee847|CDO eSeal Service Mgt|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8ac1fb5d3a9b9d37776a3a46bce50f9568187f1b52515cf77b9c56bda7357f87|CDO DC Perm. Assignment Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "GetMappings_ReturnsExactProductionConstants",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "8ac1fb5d3a9b9d37776a3a46bce50f9568187f1b52515cf77b9c56bda7357f87|CDO DC Perm. Assignment Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "GetMappings_ReturnsExactProductionConstants",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "8ac1fb5d3a9b9d37776a3a46bce50f9568187f1b52515cf77b9c56bda7357f87|CDO E-Mail Template Header|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8ac1fb5d3a9b9d37776a3a46bce50f9568187f1b52515cf77b9c56bda7357f87|CDO Legacy eDoc Dispatcher|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "SendElectronicDocument_LegacyBatch_WhenMiddleExportFailsWithoutFallback_ShouldNotDeliverStaleXmlForFailedRecord",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "8ac1fb5d3a9b9d37776a3a46bce50f9568187f1b52515cf77b9c56bda7357f87|CDO Unhandled Sales Pages Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8ac1fb5d3a9b9d37776a3a46bce50f9568187f1b52515cf77b9c56bda7357f87|CDO Unhandled Sales Pages Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8ac1fb5d3a9b9d37776a3a46bce50f9568187f1b52515cf77b9c56bda7357f87|CDO Unhandled Sales Pages Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8b434df9631cfe7eff99d142d6d34ebaf629c1f0b56c2291365f5e85eede7dbb|CDO Table Field Array Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8d84f2fd8212e1ecd4dcc963a7a3730e35399fc6434e02433870368feea58063|CDO Functions|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8d84f2fd8212e1ecd4dcc963a7a3730e35399fc6434e02433870368feea58063|CDO Report Layout Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO Automatic Period Statement|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "GetPeriodDescription_WhenDateFormulaAndSendingDateIsNotZero_ShouldReturnPeriodStartAndEndDate",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO Contnia Online PDF Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO Contnia Online PDF Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO Contnia Online PDF Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO Contnia Online PDF Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO Conversion|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO Customer Setup|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO Customer|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "LegacySystem_CustomerWithBalance_ShouldCreateJournalLine",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO DC Perm. Assignment Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "GetMappings_ReturnsExactProductionConstants",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO DC Perm. Assignment Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO E-Mail Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO E-Mail Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO E-Mail Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO E-Mail Template Line|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "StatementMergeFields_FilenameAndBody_AllValuesConsistent",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO E-Mail Template Line|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "StatementMergeFields_FilenameAndBody_AllValuesConsistent",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO E-Mail Template Line|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO E-Mail Template Line|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO E-Mail Template Line|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO eDocs Send Code Migration|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "SetDefaultSendCodeOnDocuments_WhenModifiedCustomersDictPopulated_ShouldUpdateOnlyThoseCustomers",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO Functions|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO Local Print Service Part|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO Microsoft Graph Rest Api|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO Microsoft Graph Rest Api|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO Output Profile Conflicts|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO Payment Link Handler|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "GetPaymentLinkMergeFields_WhenCalled_PopulatesMergeFields",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO Payment Link Handler|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "GetPaymentLinkMergeFields_WhenCalled_PopulatesMergeFields",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO Payment Link Handler|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "GetPaymentLinkMergeFields_WhenCalled_PopulatesMergeFields",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO Payment Link Handler|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "GetPaymentLinkMergeFields_WhenCalled_PopulatesMergeFields",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO Payment Link Handler|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO Payment Link Templ. Card|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO Printer Dialog|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO Sales-Post and Handle|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO Send Cust. Statement Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "PeriodStatement_EntriesInPeriod_WhenEntryInsidePeriod_ShouldCreateJournalLine",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO Send Cust. Statement Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO Send Cust. Statement Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO Service-Post and Handle|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO Setup Data|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO Setup Data|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO Setup Data|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO Setup Data|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO Setup Data|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO Setup Data|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO Setup Data|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO Setup Data|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO Setup Data|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO Setup Data|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO Setup Data|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO Setup Data|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO Setup Data|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO Setup Data|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO Setup Data|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO Setup Data|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO Setup Data|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO Temp Blob|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8e1ed40540f4d1d17eae07de12fe0324366870a40e5b1769b0667c32af2090c3|CDO Vendor Remittance Advice|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "8f63e4361412648a2de367bee03eb80fdc2bbce5df5e5eff90476204bf83069e|CDO Html Colors|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "905d09697bcfd061a1ce1f1f8138564dbc2f52623a16abcc21517afa95e620d1|CDO E-Mail/Print Statement|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "908e2458ab5a3bc382a0ce072913c5e2be99a73dfa7a1f8cb20652ba98216eb4|CDO Contnia Online PDF Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "908e2458ab5a3bc382a0ce072913c5e2be99a73dfa7a1f8cb20652ba98216eb4|CDO E-Mail Templ.Imp.Worksht.L|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "908e2458ab5a3bc382a0ce072913c5e2be99a73dfa7a1f8cb20652ba98216eb4|CDO E-Mail Template Header|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "908e2458ab5a3bc382a0ce072913c5e2be99a73dfa7a1f8cb20652ba98216eb4|CDO eDocuments Dispatcher|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "SendElectronicDocument_ModernBatch_WhenAllSucceed_ShouldCreateOneLogEntryPerRecord",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "908e2458ab5a3bc382a0ce072913c5e2be99a73dfa7a1f8cb20652ba98216eb4|CDO Unhandled Sales Pages Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "908e2458ab5a3bc382a0ce072913c5e2be99a73dfa7a1f8cb20652ba98216eb4|CDO Unhandled Sales Pages Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "908e2458ab5a3bc382a0ce072913c5e2be99a73dfa7a1f8cb20652ba98216eb4|CDO UnhandledPurchasePagesMgt.|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "908e2458ab5a3bc382a0ce072913c5e2be99a73dfa7a1f8cb20652ba98216eb4|CDO UnhandledServicePagesMgt.|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "908e2458ab5a3bc382a0ce072913c5e2be99a73dfa7a1f8cb20652ba98216eb4|CDO UnhandledServicePagesMgt.|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "908e2458ab5a3bc382a0ce072913c5e2be99a73dfa7a1f8cb20652ba98216eb4|CDO UnhandledServicePagesMgt.|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "924a1580b341e1736c1af1a9d7ccd0ffebeb72eb3fb72a290283fb4fd2f187c8|CDO Email Template Merge Table|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "94d765aca6b5ec28aadf130ea1919f58573da621c6220fead531294888cdd761|CDO Table Field Array Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "95029104a1dce429cd2164d69a80a75ca7f394a0591af43e2e9028523345f66d|CDO Automatic Period Statement|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "GetPeriodDescription_WhenDateFormulaAndSendingDateIsNotZero_ShouldReturnPeriodStartAndEndDate",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "9579a80952c414380f1f0a41ffd3b5ebe22534f464ff0f21ebcb7947bb3730f3|CDO Setup Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "961fcb6b16bd209736419f2518258855762c99784de7a1f119d6a294855a4d51|CDO E-Mail Template Line|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "GetRecipientsDescription_eDocsAndEmail_ShowsCombinedFormat",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "961fcb6b16bd209736419f2518258855762c99784de7a1f119d6a294855a4d51|CDO E-Mail Template Line|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "961fcb6b16bd209736419f2518258855762c99784de7a1f119d6a294855a4d51|CDO E-Mail Template Line|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "961fcb6b16bd209736419f2518258855762c99784de7a1f119d6a294855a4d51|CDO E-Mail Template Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "961fcb6b16bd209736419f2518258855762c99784de7a1f119d6a294855a4d51|CDO E-Mail Template Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "961fcb6b16bd209736419f2518258855762c99784de7a1f119d6a294855a4d51|CDO Electronic Document Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "NoPrintedField_WhenSendingEDocument_ShouldBeUpdated",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "961fcb6b16bd209736419f2518258855762c99784de7a1f119d6a294855a4d51|CDO Electronic Document Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "961fcb6b16bd209736419f2518258855762c99784de7a1f119d6a294855a4d51|CDO File|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "961fcb6b16bd209736419f2518258855762c99784de7a1f119d6a294855a4d51|CDO File|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "961fcb6b16bd209736419f2518258855762c99784de7a1f119d6a294855a4d51|CDO Legacy eDoc Dispatcher|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "961fcb6b16bd209736419f2518258855762c99784de7a1f119d6a294855a4d51|CDO Send Mail Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "961fcb6b16bd209736419f2518258855762c99784de7a1f119d6a294855a4d51|CDO Template Recipient Setup|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "961fcb6b16bd209736419f2518258855762c99784de7a1f119d6a294855a4d51|CDO Template Recipient Setup|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "961fcb6b16bd209736419f2518258855762c99784de7a1f119d6a294855a4d51|CDO Template Recipient Setup|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "961fcb6b16bd209736419f2518258855762c99784de7a1f119d6a294855a4d51|CDO Template Recipient Setup|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "961fcb6b16bd209736419f2518258855762c99784de7a1f119d6a294855a4d51|CDO Unhandled Purchase Invoice|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "961fcb6b16bd209736419f2518258855762c99784de7a1f119d6a294855a4d51|CDO Unhandled Purchase Order|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "961fcb6b16bd209736419f2518258855762c99784de7a1f119d6a294855a4d51|CDO Unhandled Purchase Quote|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "961fcb6b16bd209736419f2518258855762c99784de7a1f119d6a294855a4d51|CDO Unhandled Sales Invoice|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "961fcb6b16bd209736419f2518258855762c99784de7a1f119d6a294855a4d51|CDO Unhandled Sales Order|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "961fcb6b16bd209736419f2518258855762c99784de7a1f119d6a294855a4d51|CDO Unhandled Sales Quote|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "973ebd77a706d8693f4107ea8361ccda866e39b64b40193ed7f2304fd4d7006d|CDO E-Mail Template Management|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "973ebd77a706d8693f4107ea8361ccda866e39b64b40193ed7f2304fd4d7006d|CDO E-Mail Template Management|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "973ebd77a706d8693f4107ea8361ccda866e39b64b40193ed7f2304fd4d7006d|CDO Log Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "97dc3a73fc48f19e23b148a25556a2ffda08bac482a781975a7cf90fcc7f1b5c|CDO Open Documents|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "9b028b33118ae32c6e6e2c9764ff42d9420b6a07b23958d21079674716c95362|CDO Unhandled Issued Reminders|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "9d75ac1749737768ad42ad8b8cb50b58278ea11e1fd2728f6ffacb4ecee974d2|CDO Email Template Merge Table|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "9d75ac1749737768ad42ad8b8cb50b58278ea11e1fd2728f6ffacb4ecee974d2|CDO Email Template Merge Table|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "9dff6a40882e8ca20b2fe54f0ee30bd60e3cb67e53c5eab08e1d115cca13beb5|CDO Setup Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "a0f8e0aedb99abdcc01affdd0ce6e3b31fbfb005308ddf91f89f800f267e7a87|CDO Essential Module License|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "CheckFeatureIsEnabled_WhenFeatureEnabledAndCheckNotEnabled_ShouldShowMessage",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "a0f8e0aedb99abdcc01affdd0ce6e3b31fbfb005308ddf91f89f800f267e7a87|CDO Essential Module License|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "CheckFeatureIsEnabled_WhenFeatureEnabledAndCheckNotEnabled_ShouldShowMessage",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "a0f8e0aedb99abdcc01affdd0ce6e3b31fbfb005308ddf91f89f800f267e7a87|CDO Essential Module License|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "CheckFeatureIsEnabled_WhenFeatureEnabledAndCheckNotEnabled_ShouldShowMessage",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "a3c97f76272a74755ec762a805e1ed04d7b3a250f52f8d26347655db09864b09|CDO Log Attachment|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "a53445df5413df593d53a0a70df4e6d2e42d302adbabbc8bcb27ecab65676f28|CDO Setup Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "a5ec960587d5d010a5ba5e3de6cd1844cf8645898094baa986665e766e9d1cdc|CDO Merge Table Top/Bottom|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "a69510405f4466f6592ef7539966a3dd6ab70d0754c6d9efaa5f637893001c10|CDO E-Mail Handler|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "SalesPost_SendOnPosting_All_InvoicePosted_DocHandleCalled",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "a69510405f4466f6592ef7539966a3dd6ab70d0754c6d9efaa5f637893001c10|CDO E-Mail Template Header|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "a69510405f4466f6592ef7539966a3dd6ab70d0754c6d9efaa5f637893001c10|CDO eDocuments Dispatcher|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "SendElectronicDocument_ModernBatch_WhenMiddleFails_EachSucceedingRecordLogsOnce",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "a69510405f4466f6592ef7539966a3dd6ab70d0754c6d9efaa5f637893001c10|CDO Electronic Document Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "a69510405f4466f6592ef7539966a3dd6ab70d0754c6d9efaa5f637893001c10|CDO Email Template Merge Table|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "a69510405f4466f6592ef7539966a3dd6ab70d0754c6d9efaa5f637893001c10|CDO OAuth Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "a69510405f4466f6592ef7539966a3dd6ab70d0754c6d9efaa5f637893001c10|CDO OAuth Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "a69510405f4466f6592ef7539966a3dd6ab70d0754c6d9efaa5f637893001c10|CDO Setup Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "a69510405f4466f6592ef7539966a3dd6ab70d0754c6d9efaa5f637893001c10|CDO Template Recipient Setup|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "a6eb29735128e9a70b2603140335e3b1130f6d0005384a1ce7a28c333f58b6b6|CDO E-Mail Template Line|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ac3de1c4a84398ee2361be8e3f7ac532290e59785b4930538d2f98a38ac6e641|CDO Unhandled|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "ac3de1c4a84398ee2361be8e3f7ac532290e59785b4930538d2f98a38ac6e641|CDO Unhandled|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "acf7ba1754d51f0ac53de7a16c167d826bd0bed8538f0931eb77d7f83e979a10|CDO Html Colors|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO Continia License Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO Copy E-Mail Template|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO E-Mail Signature|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "GetHTML_WithStyles_ExtractsScopedStylesAndWrappedBody",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO E-Mail Signature|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO E-Mail Signature|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO E-Mail Template Line|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "StatementMergeFields_FilenameAndBody_AllValuesConsistent",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO E-Mail Template Line|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "StatementMergeFields_FilenameAndBody_AllValuesConsistent",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO E-Mail Template Line|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO E-Mail Template Line|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO E-Mail Template Line|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO E-Mail Template Line|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO E-Mail Template Line|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO E-Mail Template Line|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO E-Mail|lethal.swap-call-arguments|1",
+    "verdict": "error",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": "other"
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO E-Mail|lethal.swap-call-arguments|1",
+    "verdict": "error",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": "other"
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO E-Mail|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "AddBccRecipient_WhenAddingToExisting_ShouldAppendWithSemicolon",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO E-Mail|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "AddCcRecipient_WhenAddingToExisting_ShouldAppendWithSemicolon",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO E-Mail|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "AddToRecipient_WhenAddingToExisting_ShouldAppendWithSemicolon",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO E-Mail|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO E-Mail|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO eDoc PrePost Valid.|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO eDocuments Dispatcher|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "Modern_CustomFilenameTemplate_RenamedFilenameReachesAccumulator",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO Email Template Merge Table|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO Email Template Merge Table|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO Email Template Merge Table|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO Email Translate Mgt|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO JSON Management|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "GetAsBool_WhenTrue_ReturnsTrue",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO JSON Management|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "GetAsDecimal_WhenDecimalValue_ReturnsValue",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO JSON Management|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "GetAsInteger_WhenValidInteger_ReturnsValue",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO JSON Management|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "Parse_WhenValidJson_Succeeds",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO OAuth Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO OAuth Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO Payment Link Handler|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO Recipient Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "AddRecipientsFromTable_WhenBccRecipientExists_ShouldAddToBcc",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO Recipient Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "AddRecipientsFromTable_WhenCcRecipientExists_ShouldAddToCc",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO Recipient Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "AddRecipientsFromTable_WhenToRecipientExists_ShouldAddToRecipients",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO Remittance Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO Remittance Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO Remittance Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO Remittance Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO Remittance Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO Send Code|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "GetSendCode_WithValidData_ShouldReturnSendCode",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO String Functions|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "Contains_WhenValueExists_ReturnsTrue",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO String Functions|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "Replace_WhenFindExists_ReplacesOccurrence",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO String Functions|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "Replace_WhenFindExists_ReplacesOccurrence",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO Subscribers|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO Subscribers|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO Subscribers|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO Subscribers|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO Subscribers|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO Subscribers|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO Subscribers|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO Subscribers|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO Subscribers|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO Subscribers|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO Subscribers|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO Subscribers|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO Subscribers|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO Subscribers|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO Subscribers|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO Table Field Array Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO Universign eSeal Service|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|CDO Universign eSeal Service|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "addfead3bd875cdb5b276ee46c0b6762268fcabe0e0d1688cb2d6207f8b90e62|CDO Contnia Online PDF Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "afce9e3a76366a474dff5fe621260062303a7999ed8c2a9d2becaea59e248fca|CDO Log Management|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "b1b5b01380530a02760bafee15a5e4ea16a59928e8aca0146a3df46d473454de|CDO Unhandled Posted Cr. Memo|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "b1b5b01380530a02760bafee15a5e4ea16a59928e8aca0146a3df46d473454de|CDO Unhandled|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "b49fb509af205bf951acf5144016f9beaa631c2c03ae7aef66c7264345daa7d4|CDO Merge Table Top/Bottom|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "b5beef646eaf72d358880e79ec8641e9d1c2d827c267e008cc3cc8eac22abec2|CDO OAuth Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "b9946b622309852e28c50e020f04ef9fde2070e5dacd87116fd72b67f843cfd5|CDO E-Mail Template Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "ba903f99de32cdbfff36525434abb71ddd728a8bc29a4c87d666c2335a57da9e|CDO Send Mail Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "bbe251109e74a76770cc858bbbad00ba478bd5ccdead56c6f9048d5a34c8e6d7|CDO E-Mail Template Line|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "bf9c613679b2afdb8d259ad354c6ca4af9ee1e3032bceee6be9b4edd7ed7a933|CDO E-Mail Signature List|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "bfe0a2f6f5bb9d9b6197647c65dd834ca01ec4901bb7d983e1546d16201e4b86|CDO Setup Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "c11e49e3f4d79e850b7a66061c96b84718239b6324df000dc8beb6d9a3416717|CDO Extension App|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "c14abc508adb78f0a5b0d4aa50a81e9d472865283a3a08a8f3ff3de1a790d9a5|CDO E-Mail Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "c14abc508adb78f0a5b0d4aa50a81e9d472865283a3a08a8f3ff3de1a790d9a5|CDO E-Mail Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "c14abc508adb78f0a5b0d4aa50a81e9d472865283a3a08a8f3ff3de1a790d9a5|CDO E-Mail Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "c14abc508adb78f0a5b0d4aa50a81e9d472865283a3a08a8f3ff3de1a790d9a5|CDO E-Mail Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "c14abc508adb78f0a5b0d4aa50a81e9d472865283a3a08a8f3ff3de1a790d9a5|CDO E-Mail Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "c20de26ffa703ac054fc2177ea86375c09481043cc890e403fb27ab6c80330fe|CDO Contnia Online PDF Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "c73cc35f4b3f600554552a2f69c4976f6b946c4c25304137444b1e0b441c4aa5|CDO Report Layout Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "c78116b9966c599bac972cb0d314f2d1f85eae5022c584728bc85be219605470|CDO E-Mail Template Management|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "c78116b9966c599bac972cb0d314f2d1f85eae5022c584728bc85be219605470|CDO E-Mail Template Management|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "c78116b9966c599bac972cb0d314f2d1f85eae5022c584728bc85be219605470|CDO Send Mail Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "c78116b9966c599bac972cb0d314f2d1f85eae5022c584728bc85be219605470|CDO Send Mail Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "c97adb5dbfe63a4918945040a0c2c3f3f6fb47c8c47e56ada7dd2d37b0cf7733|CDO Merge Table Top/Bottom|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "c9caf3aeda90661b75bfe6e0598e6495fbb2fbd0b7bac7f1d4c00d0468049ca1|CDO E-Mail Signature List|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "c9cd823f1e3d36bd2425fbbdf6dd385c00fc824588b0d4b53154e8c6c6badea1|CDO Conflict Notific. Handler|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "c9cd823f1e3d36bd2425fbbdf6dd385c00fc824588b0d4b53154e8c6c6badea1|CDO DO-eDocs Notific. Handler|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "cb5ff9066ad5d64435740b093cdf6172d2aeacf6a325ac07e0f970462f7b1d78|CDO E-Mail Template Line|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "cb5ff9066ad5d64435740b093cdf6172d2aeacf6a325ac07e0f970462f7b1d78|CDO E-Mail Template Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "cb5ff9066ad5d64435740b093cdf6172d2aeacf6a325ac07e0f970462f7b1d78|CDO File|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "cb5ff9066ad5d64435740b093cdf6172d2aeacf6a325ac07e0f970462f7b1d78|CDO Mail Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "cb8ead093fe8f78f232a3c8a30f12a33c79f2531f0849971f8e3a3f027359cea|CDO Send Mail Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "cc77d46a5d7ac0bb306a15773ee7e46e24265751049b10a34c3ea867838a2633|CDO Setup Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "cc8bbe0a803623cf37bf31fd980f1ec55b75b6feaf05cd66ac78f1feab544638|CDO String Functions|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "AddString_WhenBothStringsNonEmpty_ReturnsConcatenatedWithDelimiter",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "d08b41604824bd14addf179025301afed82c69beb79a1ca4cae9721cfa2289dd|CDO Customer Setup|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "d08b41604824bd14addf179025301afed82c69beb79a1ca4cae9721cfa2289dd|CDO Customer|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "d08b41604824bd14addf179025301afed82c69beb79a1ca4cae9721cfa2289dd|CDO Send Cust. Statement Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "DueDateStatement_WhenOpenEntryFallsDueInPeriod_ShouldCreateBalanceDueJournalLine",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "d09a4825e093a2baee13226ed2e4145ec5664fb952537e7c7457825cdf4c3c92|CDO Send Mail Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "d3499183d8ebf949fdf0ee4fff10adaf141473835cc0c7b81c202e07cfe5ae55|CDO Http Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "d4ab4bc4233e951832e4cbe91ddf4e546df5f65081120d6b0ebdda411c92995b|CDO Log Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "d4eb7b97a424c977348a9cd7c141035afffed3194fc26f2a94340a5039e4d8a6|CDO Automatic Period Statement|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "GetPeriodDescription_WhenDateFormulaAndSendingDateIsNotZero_ShouldReturnPeriodStartAndEndDate",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "d4fcda0af4b15e4f4b88ec9d2fb4d1de16b61b7029cce326d7fef2dcf0bced06|CDO Send Mail Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "d4fcda0af4b15e4f4b88ec9d2fb4d1de16b61b7029cce326d7fef2dcf0bced06|CDO Send Mail Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "d4fcda0af4b15e4f4b88ec9d2fb4d1de16b61b7029cce326d7fef2dcf0bced06|CDO Send Mail Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "d53a62f371607ab3aebde2d61cdc9f11d8f0f556e762585a97a39e0d5c63d617|CDO Setup Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "d693b79af74c909b95efb67480972bd88ff3c7bec22a59e9586cfabe680d13d3|CDO Microsoft Graph Rest Api|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "d824345702484f1bfc2e502ae81632197dcded6759a06df593084372a79029fd|CDO Customer Setup|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "d824345702484f1bfc2e502ae81632197dcded6759a06df593084372a79029fd|CDO Customer Setup|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "d824345702484f1bfc2e502ae81632197dcded6759a06df593084372a79029fd|CDO Customer Setup|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "d824345702484f1bfc2e502ae81632197dcded6759a06df593084372a79029fd|CDO Customer Setup|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "d8395926d87abc154234d6fe5efbd995e5b18ddbda97fd22a50cdd8f039e0cd1|CDO Log Management|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "d8802b9b61f4de7b8aa7d7ea25a4d9a0447f558308c003bb200e0613f6185fd9|CDO Customer Setup|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "d8802b9b61f4de7b8aa7d7ea25a4d9a0447f558308c003bb200e0613f6185fd9|CDO Customer Setup|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "d8802b9b61f4de7b8aa7d7ea25a4d9a0447f558308c003bb200e0613f6185fd9|CDO Customer Setup|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "d8802b9b61f4de7b8aa7d7ea25a4d9a0447f558308c003bb200e0613f6185fd9|CDO Customer Setup|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "d8802b9b61f4de7b8aa7d7ea25a4d9a0447f558308c003bb200e0613f6185fd9|CDO Customer Setup|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "d8802b9b61f4de7b8aa7d7ea25a4d9a0447f558308c003bb200e0613f6185fd9|CDO Customer|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "CustomerWithEntriesAndZeroBalance_WithEntriesInPeriodCondition_ShouldCreateJournalLine",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "d8802b9b61f4de7b8aa7d7ea25a4d9a0447f558308c003bb200e0613f6185fd9|CDO Customer|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "LegacySystem_CustomerWithBalance_ShouldCreateJournalLine",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "d8802b9b61f4de7b8aa7d7ea25a4d9a0447f558308c003bb200e0613f6185fd9|CDO Customer|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "d8802b9b61f4de7b8aa7d7ea25a4d9a0447f558308c003bb200e0613f6185fd9|CDO Customer|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "d8802b9b61f4de7b8aa7d7ea25a4d9a0447f558308c003bb200e0613f6185fd9|CDO Customer|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "d8e9b36bb28e0d8b366982e0c59bb5681be032fcf7351c907ebb1707160cdc06|CDO Email Template Merge Table|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "d9d8ce8ac36d65b7fc33ca2dff7f3d86032ea623a88fda488f082ec9aaa0cdc5|CDO Setup Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "da65e48fb95ba5cb4e39789ccf27e663a42f3ca3555d1092313fa490a7e20331|CDO E-Mail Template Line|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "daea63d0af2a3001b19b0028217ede1edebbde6d74b9f4a4bc79aa2c2db43826|CDO E-Mail Template Line|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "dc2a3e9d7e084f58bff56aa3f81ddd5b4de3d53979bd93e1826a0b17b0b865c7|CDO File Download Web Service|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "dc2a3e9d7e084f58bff56aa3f81ddd5b4de3d53979bd93e1826a0b17b0b865c7|CDO Print Web Service|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "e0d50c267ac165d1d00c259f0708136aae2ff655edaf85213f9cf282b087b8e2|CDO Http Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "e23cc72cfba60fe5a7035934c9a864b700dde26565baed76302f95f81b9995b2|CDO E-Mail Template Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "e23cc72cfba60fe5a7035934c9a864b700dde26565baed76302f95f81b9995b2|CDO E-Mail Template Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "e23cc72cfba60fe5a7035934c9a864b700dde26565baed76302f95f81b9995b2|CDO E-Mail Template Management|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "e23cc72cfba60fe5a7035934c9a864b700dde26565baed76302f95f81b9995b2|CDO E-Mail Template Management|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "e44593c7f8cdbf6c7ac7aec5d2554a25be2eb7b1c51ac4df3d9b28b7d89f172b|CDO Setup Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "e47295701d587296239f758bf01b942cf33eceb41d10c5fa7baf9a42d9312e32|CDO Setup Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "e50b295c18427e033c2e1e049882f45dab245eeb990904067d001496da45ba04|CDO Email Template Merge Table|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "e8101aaa70565984028a241a916b3972934952cd7f523c6cae312d1ee5b3c2cf|CDO Merge Table Top/Bottom|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "e8369f336f3293708bdf51a3be76fcebd5ab3f79dda53bee7758e8c591a8702c|CDO Email Template Merge Table|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "e8369f336f3293708bdf51a3be76fcebd5ab3f79dda53bee7758e8c591a8702c|CDO Email Template Merge Table|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "e9cff70bb1cc1dc0fd4bde08760eb9bafc50c0fa848a91e35a93c5929d157fd5|CDO DC Perm. Assignment Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ef1fdd92d6ebf8ac92c09133698587aff853ae35cb50d47a1146f6b638c07746|CDO Setup Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "ef43cbb125f7d26d1b24bd6c515cecc41df1ffd34cea6c11714eae8ae6608db0|CDO Statement Journal Line|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "f08d98b4f56c214a959fe1b54adae22cbf7a5675631ebe1ace332e6ccd55bcf3|CDO Log Management|lethal.swap-call-arguments|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "f4b4434d67dfd241d205ff2b84297d5d005a4d343fae11fbc9eaa078e0b8bbc5|CDO Unhandled|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "f4b4434d67dfd241d205ff2b84297d5d005a4d343fae11fbc9eaa078e0b8bbc5|CDO UnhandledPostedSalesInv.|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "f5da1ac74b779fb9be2cf6e300eaf04a6c068f9dc4a01c76d47a0930421db7fe|CDO Automatic Period Statement|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "NextSendingDate_WhenStartDayIsSetToTheSameDay_ShouldReturnNextSendingDate",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "f67b5a518aa22f196c16afcbc52bb38a11409af1bb8696a9d29269d412aadd3d|CDO Unhandled Issued Reminders|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "f99e733d792a4abfaae493c0cfd7caa718bc888fd455c4b10c314d9740fa87f4|CDO Contnia Online PDF Mgt.|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "fd5d32c1cf3e6f329dbeb906d39c994ad77b5306ba3bd82b9317932e3283dea0|CDO E-Mail Template Management|lethal.swap-call-arguments|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  }
+]
