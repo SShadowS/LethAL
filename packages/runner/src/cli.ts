@@ -1394,6 +1394,57 @@ export interface LethalConfigFile {
    * having to pass flags on every invocation.
    */
   readonly selectorIds?: Partial<SelectorConfig>;
+  /**
+   * R101(c) — AL preprocessor symbols to define when compiling this project, on BOTH compile
+   * paths: LethAL's own `alc` step and al-runner's.
+   *
+   * TOP-LEVEL, not inside `bcdev`/`alRunner`, because it is a property of the PROJECT rather than
+   * of a backend. A project compiled with different symbols on the two paths would be two different
+   * programs, and their verdicts would not be comparable.
+   *
+   * MEASURED 2026-08-09 (`scripts/r101c-define-probe/`), and the measurement is why this is worth a
+   * config key at all: an undefined symbol does NOT fail the compile. `alc` builds the `#else`
+   * branch cleanly and emits a different artifact. So without this, a project whose real build
+   * defines a symbol gets instrumented, mutated and SCORED on code the customer does not ship, and
+   * nothing says so.
+   */
+  readonly preprocessorSymbols?: readonly string[];
+}
+
+/** Characters that would make a symbol ambiguous to one of the two compilers — see below. */
+const SYMBOL_SEPARATOR_RE = /[,;\s]/;
+
+/**
+ * R101(c) — validates `preprocessorSymbols` and returns the list, or `[]` when absent.
+ *
+ * Refuses rather than sanitising. Every rejection below is a config the author MEANT something by,
+ * and quietly dropping a symbol reproduces exactly the defect this key exists to close: a run
+ * compiled from the wrong branch, silently.
+ */
+export function validatePreprocessorSymbols(raw: unknown): readonly string[] {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw)) {
+    throw new Error(
+      `lethal.config.json: "preprocessorSymbols" must be an array of strings, got ${JSON.stringify(raw)}`,
+    );
+  }
+  const symbols: string[] = [];
+  for (const entry of raw) {
+    if (typeof entry !== "string" || entry.trim() === "") {
+      throw new Error(
+        `lethal.config.json: "preprocessorSymbols" contains a non-string or empty entry (${JSON.stringify(entry)}) — every entry must be an AL preprocessor symbol`,
+      );
+    }
+    // A symbol carrying a comma, a semicolon or whitespace would either be split by alc's
+    // `/define:A,B` list form into things nobody wrote, or reach al-runner as one unusable token.
+    if (SYMBOL_SEPARATOR_RE.test(entry)) {
+      throw new Error(
+        `lethal.config.json: "preprocessorSymbols" entry ${JSON.stringify(entry)} contains whitespace or a separator — list each symbol as its own array entry`,
+      );
+    }
+    symbols.push(entry);
+  }
+  return symbols;
 }
 
 /** Pure validators — no I/O — so "missing config field" errors are unit-testable directly. */
@@ -1828,6 +1879,9 @@ export async function buildBackend(
   // non-default value through.
   selectorIds: SelectorConfig = DEFAULT_SELECTOR_IDS,
 ): Promise<ExecutionBackend> {
+  // R101(c): validated FIRST, for both backends, before anything is constructed — a typo'd symbol
+  // list must fail immediately rather than after a compile that silently used the other branch.
+  const preprocessorSymbols = validatePreprocessorSymbols(configFile.preprocessorSymbols);
   if (parsed.backendKind === "al-runner") {
     // R3/R4: validated here, first, before constructing anything — al-runner's own `alc` run is
     // lazy (`AlRunnerBackend.activate()`, see `selector.ts`'s doc comment), so this is the
@@ -1841,6 +1895,9 @@ export async function buildBackend(
       ...(c.packagesDir !== undefined ? { packagesDir: c.packagesDir } : {}),
       selectorObjectId: selectorIds.selectorId,
       ...(c.serverMode !== undefined ? { serverMode: c.serverMode } : {}),
+      // R101(c): the same list the bcdev path's `alc` step gets below. Both compile paths must
+      // select the same branch, or their verdicts describe two different programs.
+      ...(preprocessorSymbols.length > 0 ? { preprocessorSymbols } : {}),
     });
   }
 
@@ -1914,6 +1971,9 @@ export async function buildBackend(
       alcPath: resolved.alcPath,
       packageCachePath: c.packageCachePath,
       outputDir,
+      // R101(c) — see `ArtifactCompilerConfig.preprocessorSymbols`. This is the half R101's own
+      // framing missed: the gap is in LethAL's OWN compile first, not al-runner's.
+      ...(preprocessorSymbols.length > 0 ? { preprocessorSymbols } : {}),
     },
     defaultArtifactIo,
   );

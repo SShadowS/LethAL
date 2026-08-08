@@ -53,6 +53,7 @@ function build(outcomes: readonly SessionOutcome[]) {
     unsupportedTests: [],
     notInstrumented: { totalFiles: 1, files: [] },
     timings: { totalMs: 0, generateMutationSetMs: 0, deployMs: 0, baselineMs: 0 },
+    preprocessorSymbols: [],
     untargetedTriggerCount: 0,
     baselineTests: [],
   });
@@ -186,6 +187,7 @@ describe("SessionReport.validity — the score's own limits", () => {
       unsupportedTests: [],
       notInstrumented: { totalFiles: 551, files: [] },
       timings: { totalMs: 0, generateMutationSetMs: 0, deployMs: 0, baselineMs: 0 },
+      preprocessorSymbols: [],
       untargetedTriggerCount: 0,
       baselineTests: [],
       ...over,
@@ -291,6 +293,7 @@ describe("SessionReport.testsOnly — the narrowing that can manufacture a survi
       unsupportedTests: [],
       notInstrumented: { totalFiles: 551, files: [] },
       timings: { totalMs: 0, generateMutationSetMs: 0, deployMs: 0, baselineMs: 0 },
+      preprocessorSymbols: [],
       untargetedTriggerCount: 0,
       baselineTests: [],
       testsOnly: ["Src/Documents/**"],

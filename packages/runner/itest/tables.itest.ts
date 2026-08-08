@@ -240,6 +240,20 @@ const EXPECTED = {
    */
   platformArtifactKills: 1,
   /**
+   * R121: this fixture is the measured VACUOUS case for the assertion screen, and pinning it here is
+   * the point rather than an incidental extra.
+   *
+   * All 22 tests in `fixtures/sandbox-data-tests` raise via bare `Error(...)`; none uses Microsoft's
+   * Library Assert. So the screen's rule — "the failure text does not begin with `Assert.`" — flags
+   * EVERY kill and separates nothing. Continia Document Output, where the rule was scored at 100%
+   * recall and 26.1% precision, calls Library Assert ~1,886 times and produces `partial`.
+   *
+   * A gate that only asserted a COUNT here would pass identically whether the report distinguished
+   * those two situations or printed the same number for both, which is exactly the failure R121
+   * exists to avoid.
+   */
+  assertionScreenDiscrimination: "vacuous",
+  /**
    * `coverageFilter`'s FALLBACK 2 ("coverage places this table trigger nowhere, run every green
    * test") must fire for NOBODY here. This is the assertion `0a463fd` actually earns: before it,
    * member-less coverage observations were discarded, `byObject["table:79300"]` held one
@@ -506,6 +520,34 @@ function assertVerdictTable(report: SessionReport): void {
   assert.ok(
     report.validity.caveats.includes("platform-artifact-kills"),
     "the screen must also appear as a caveat, or `lethal explain` projects nothing for it",
+  );
+
+  // R121 — the assertion screen, pinned as the VACUOUS case. See EXPECTED's comment for why that
+  // is the interesting assertion on this fixture.
+  const assertionScreen = report.assertionScreen;
+  assert.ok(assertionScreen !== undefined, "a run with 113 kills must carry an assertion screen");
+  assert.ok(
+    assertionScreen.killsWithText > 0,
+    "every kill on this path records its failure text (R86) — a zero here means the text stopped " +
+      "being recorded, and the screen would then be reporting `no-text` about a suite it never read",
+  );
+  assert.equal(
+    assertionScreen.discrimination,
+    EXPECTED.assertionScreenDiscrimination,
+    "this fixture raises via bare `Error(...)` in all 22 tests, so the screen must report itself " +
+      "as separating NOTHING here. A `partial` would mean either the fixture grew an assertion " +
+      "library or the rule started matching something it was never scored on",
+  );
+  assert.equal(
+    assertionScreen.flagged,
+    assertionScreen.killsWithText,
+    "vacuous means every kill with text was flagged — asserted directly so the discrimination " +
+      "label and the numbers behind it cannot disagree",
+  );
+  assert.equal(
+    assertionScreen.runnerRefusals,
+    0,
+    "al-runner's `out-of-scope:` marker cannot appear on the bcdev path",
   );
   // Per-mutant verdicts are asserted by `assertMatchesBaseline` (tables.baseline.json), not here
   // — see EXPECTED's doc comment for why the old inline 7-entry map was removed rather than

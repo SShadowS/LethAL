@@ -27,6 +27,8 @@ import {
   isMutableSite,
   writeInstrumentedProject,
 } from "@lethal/schemata";
+import type { AlRunnerProvisionResult } from "./al-runner-backend";
+import type { AlRunnerBcBuild } from "./al-runner-transport";
 import { nextAbove, parseVersionConflict, reserveAppVersion } from "./app-version";
 import { AlcCompileError, ArtifactPrepareError, DeploymentError } from "./artifact";
 import type { CompiledArtifact } from "./artifact";
@@ -607,6 +609,18 @@ export interface SessionConfig {
    * call, not the tool's.
    */
   readonly stopHungSessions?: boolean;
+  /**
+   * R101(c): the AL preprocessor symbols the backends were built with, carried here ONLY so the
+   * report can say which branch of the target it measured.
+   *
+   * `runSession` does not use them for anything — the compile paths already have them
+   * (`ArtifactCompilerConfig.preprocessorSymbols`, `AlRunnerConfig.preprocessorSymbols`). Passing
+   * them again looks redundant and is not: the report is the only artifact anyone reads afterwards,
+   * and a report that cannot say which symbols were defined cannot say which program was scored.
+   * Measured 2026-08-09: an undefined symbol does not fail the compile, it silently selects the
+   * other branch.
+   */
+  readonly preprocessorSymbols?: readonly string[];
   /**
    * R19: work that must happen AFTER the lease is held and before anything is measured.
    *
@@ -2259,6 +2273,38 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     );
   }
 
+  // R128: pay al-runner's artifact provisioning ONCE, here, before any mutant's clock starts.
+  // `--auto-provision` rides in every mutant's argv, so without this the FIRST invocation of a run
+  // does the downloading inside that mutant's own timeout budget and the mutant is scored
+  // `deadline-exceeded` for a reason that has nothing to do with it.
+  //
+  // Measured 2026-08-09 (see `AlRunnerBackend.provisionOnce`): the download is NOT a
+  // once-per-machine cost. `--auto-provision` resolves the project's BC version by PREFIX to the
+  // latest matching Microsoft build, so a cache that was warm yesterday is cold the moment upstream
+  // publishes a new one — a fully warm machine still fetched 135 MB.
+  //
+  // A structural check rather than a widened `ExecutionBackend`, for the same reason as
+  // `observedBcBuild` below: no other backend provisions anything. Best-effort — a failure here
+  // leaves the session exactly as it behaved before this existed.
+  const provisioner = cfg.backend as { provisionOnce?: () => Promise<AlRunnerProvisionResult> };
+  if (provisioner.provisionOnce !== undefined) {
+    const provisioned = await provisioner.provisionOnce();
+    if (!provisioned.ran) {
+      emit({
+        type: "warning",
+        code: "al-runner-provision-failed",
+        message: `runSession: the one-time al-runner provisioning step could not be spawned, so artifact downloading (if any is needed) will happen inside the FIRST mutant's timeout budget and may score it \`deadline-exceeded\` for an infrastructure reason (R128). Runner said: ${provisioned.detail}`,
+      });
+    } else if (provisioned.downloaded) {
+      const seconds = (provisioned.elapsedMs / 1000).toFixed(1);
+      emit({
+        type: "warning",
+        code: "al-runner-provisioned",
+        message: `runSession: al-runner fetched BC artifacts before this session started (${seconds}s). That cost is now OUTSIDE every mutant's budget, which is why this step exists (R128). It recurs whenever Microsoft publishes a new build matching the project's BC version prefix, not only on a fresh machine.`,
+      });
+    }
+  }
+
   // NOTE: a prior preflight here scanned [Test] codeunit sources for
   // `TestIsolation = Function;` and aborted session-isolation backends when
   // it was missing. That was factually wrong: `TestIsolation` is a
@@ -3484,6 +3530,25 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // comment on the `buildReport` call below), and `foldEvents` (report-fold.ts) now owns the
   // equivalent sort, applied to what IT accumulates from `collectedEvents`, so the folded report's
   // ordering still never depends on which worker finished first regardless of arrival order.
+  // R129: which BC RUNTIME produced these verdicts, on the one backend that chooses one itself.
+  // al-runner announces its selection on every invocation and nothing read the line, so a report
+  // said which al-runner BINARY ran (R123's contract probe) but not which BC build it ran the tests
+  // against — the thing the verdicts actually depend on.
+  //
+  // A structural check rather than a widened `ExecutionBackend`: no other backend has the concept
+  // (bcdev's runtime is the container the config names, which the report already identifies), and
+  // adding the method to the shared interface would make every other backend answer `undefined`
+  // forever. Emitted AFTER the mutant phase so it describes the invocations this run actually made,
+  // and only when one of them said something — never a defaulted version.
+  const bcBuildSource = cfg.backend as { observedBcBuild?: () => AlRunnerBcBuild | undefined };
+  const observedBcBuild = bcBuildSource.observedBcBuild?.();
+  if (observedBcBuild !== undefined) {
+    emit({
+      type: "al-runner-bc-build",
+      build: observedBcBuild.build,
+      announcement: observedBcBuild.announcement,
+    });
+  }
   const totalMs = Date.now() - sessionStartedMs;
   emit({ type: "session-finished", elapsedMs: totalMs });
   // buildReport(statics, events) (spec 2026-08-05 §A): the closed statics set this run was GIVEN —
@@ -3509,6 +3574,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       ? { testsOnly: cfg.testsOnly }
       : {}),
     ...(cfg.stopHungSessions === true ? { stopHungSessions: true } : {}),
+    // R101(c): ALWAYS carried, including as `[]`. "No symbol was defined" is the statement a reader
+    // needs when a project has an `#if` — it is the difference between measuring the branch the
+    // customer ships and measuring the other one, and the report was silent about it.
+    preprocessorSymbols: cfg.preprocessorSymbols ?? [],
   };
   const report = buildReport(statics, collectedEvents);
   // R89: a run ASKED to resume must SAY it resumed. This is the invariant the code already claims —

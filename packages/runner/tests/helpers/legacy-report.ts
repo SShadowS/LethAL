@@ -70,9 +70,13 @@ export interface LegacyBuildReportInput {
     readonly baselineMs: number;
   };
   readonly baselineTests: readonly { readonly codeunitName: string; readonly file?: string }[];
+  /** R101(c) — see `SessionReport.preprocessorSymbols`. */
+  readonly preprocessorSymbols?: readonly string[];
   readonly untargetedTriggerCount: number;
   readonly quarantined?: { readonly reason: string };
   readonly permissionCanary?: PermissionCanaryResult;
+  /** R129 — what `runSession` emits when the al-runner path announced a BC build. */
+  readonly alRunnerBcBuild?: { readonly build: string; readonly announcement: string };
 }
 
 function syntheticMutant(id: string): MutantManifestEntry {
@@ -130,6 +134,14 @@ export function legacyBuildReport(input: LegacyBuildReportInput): SessionReport 
     excludedByOnly: input.only?.excludedFileCount ?? 0,
     excludedByOperator: 0,
   });
+
+  if (input.alRunnerBcBuild !== undefined) {
+    push({
+      type: "al-runner-bc-build",
+      build: input.alRunnerBcBuild.build,
+      announcement: input.alRunnerBcBuild.announcement,
+    });
+  }
 
   push({
     type: "tests-discovered",
@@ -219,6 +231,10 @@ export function legacyBuildReport(input: LegacyBuildReportInput): SessionReport 
         priorDurationMs: o.durationMs ?? 0,
         ...(o.killingTest !== undefined ? { killingTest: o.killingTest } : {}),
         ...(o.failureNote !== undefined ? { failureNote: o.failureNote } : {}),
+        // R86: the real carried-verdict call site (orchestrator.ts) passes a prior run's kill text
+        // through unchanged. The shim used to drop it, which made every fixture built here invisible
+        // to anything reading a kill's own words — R121's screen, for one.
+        ...(o.killingTestFailure !== undefined ? { killingTestFailure: o.killingTestFailure } : {}),
         coveringTests: o.coveringTests ?? [],
         ...(o.coverageAttribution !== undefined
           ? { coverageAttribution: o.coverageAttribution }
@@ -240,6 +256,8 @@ export function legacyBuildReport(input: LegacyBuildReportInput): SessionReport 
         durationMs: o.durationMs ?? 0,
         ...(o.killingTest !== undefined ? { killingTest: o.killingTest } : {}),
         ...(o.failureNote !== undefined ? { failureNote: o.failureNote } : {}),
+        // R86 — see the `mutant-carried` push above.
+        ...(o.killingTestFailure !== undefined ? { killingTestFailure: o.killingTestFailure } : {}),
         ...(o.cause !== undefined ? { cause: o.cause } : {}),
         coveringTests: o.coveringTests ?? [],
         ...(o.coverageAttribution !== undefined
@@ -300,6 +318,10 @@ export function legacyBuildReport(input: LegacyBuildReportInput): SessionReport 
     ...(input.only !== undefined ? { only: { patterns: input.only.patterns } } : {}),
     ...(input.testsOnly !== undefined ? { testsOnly: input.testsOnly } : {}),
     ...(input.stopHungSessions === true ? { stopHungSessions: true } : {}),
+    // R101(c): `[]` rather than absent, matching what `runSession` always passes — the report's
+    // `preprocessorSymbols` is a required field precisely because "no symbol was defined" is an
+    // answer.
+    preprocessorSymbols: input.preprocessorSymbols ?? [],
   };
   return buildReport(statics, stamped);
 }

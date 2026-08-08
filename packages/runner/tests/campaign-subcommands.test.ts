@@ -158,6 +158,7 @@ function report(mutants: readonly MutantOutcome[]): SessionReport {
       mutantsMs: 0,
       perMutant: { count: 0, meanMs: 0, medianMs: 0, p95Ms: 0, maxMs: 0 },
     },
+    preprocessorSymbols: [],
     untargetedTriggerCount: 0,
   };
 }

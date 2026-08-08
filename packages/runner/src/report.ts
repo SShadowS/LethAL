@@ -1,5 +1,13 @@
 import type { MutantManifestEntry } from "@lethal/schemata";
 import { type AlRunnerCanaryResult, alRunnerCanaryWarnings } from "./al-runner-canary";
+import {
+  ASSERTION_SCREEN_DIAGNOSIS,
+  ASSERTION_SCREEN_DISCRIMINATION_NOTES,
+  type AssertionScreenDiscrimination,
+  killMessageOf,
+  looksLikeAssertionFailure,
+  looksLikeRunnerRefusal,
+} from "./assertion-screen";
 import type { BackendCapabilities } from "./backend";
 import type { RunEvent } from "./events";
 import type { Interpretation } from "./interpretation";
@@ -123,7 +131,8 @@ export type Caveat =
   | "stop-hung-sessions"
   | "resumed"
   | "untargeted-triggers"
-  | "platform-artifact-kills";
+  | "platform-artifact-kills"
+  | "kills-without-assertion";
 
 /**
  * What each `Caveat` MEANS for a reader, and — where the roadmap entry that filed it recorded one
@@ -285,6 +294,15 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
       "assertion — only `lethal.remove-commit` tags sites today, so the screen's reach is one " +
       "operator wide.",
     basis: "R72",
+  },
+  "kills-without-assertion": {
+    meaning: ASSERTION_SCREEN_DIAGNOSIS,
+    entailedNegative:
+      "Does NOT mean those kills are false, and does not change one. On the only corpus this rule " +
+      "has been scored against it flagged 23 of 73 kills at 26.1% precision — so most flagged " +
+      "kills were real. Read `assertionScreen.discrimination` before reading the count at all: on " +
+      "a suite that raises via bare `Error(...)` the rule flags everything and separates nothing.",
+    basis: "R121",
   },
 };
 
@@ -484,6 +502,25 @@ export interface ExecutionContext {
   /** How many of this report's verdicts were produced under this context — the denominator a
    *  reader needs to judge how much of the score this context actually accounts for. */
   readonly verdictCount: number;
+  /**
+   * R129: the BC artifact build these verdicts were executed against, when the path ANNOUNCED one.
+   *
+   * Present only on the al-runner path, and only when a run's output carried the runner's own
+   * `[bc]` line. That is the one path which CHOOSES a BC runtime for itself: bcdev executes against
+   * whichever container the config names, which the report already identifies. Absent is "the path
+   * did not say", never a guess — and absent on a CARRIED verdict too, whose BC build belongs to the
+   * run it came from and is that run's report to state.
+   *
+   * Worth capturing even though the selection is currently deterministic given the binary: 2.1.1's
+   * own `--help` documents a DIFFERENT default rule ("the latest version present in the artifacts
+   * dir") from the one its runtime announces ("the exact build this binary was compiled against").
+   * If a release ever makes the help text true, selection becomes machine-state-dependent, and two
+   * differing runs that recorded nothing would be indistinguishable afterwards.
+   */
+  readonly bcBuild?: string;
+  /** The runner's own line the `bcBuild` above was read from, verbatim — so a reader who distrusts
+   *  the parse can check it, and a reworded announcement is visible rather than silent. */
+  readonly bcBuildAnnouncement?: string;
 }
 
 /** Per-procedure survivor rollup — see `SessionReport.survivorsByProcedure`. */
@@ -686,6 +723,54 @@ export interface SessionReport {
     readonly diagnosis: string;
   };
   /**
+   * R121: how many kills were NOT produced by a test assertion — a 100%-recall SCREEN, never a
+   * classification. See `assertion-screen.ts` for the corpus it was scored against, the three rules
+   * that were refuted with numbers instead of argument, and why nothing here is shippable as a
+   * classifier.
+   *
+   * Present whenever the run produced at least one kill, INCLUDING when nothing was flagged: absence
+   * would make "checked, and every kill came from an assertion" indistinguishable from "not
+   * checked". The `kills-without-assertion` caveat is pushed only when something WAS flagged.
+   *
+   * `discrimination` is not decoration. The same `flagged` number means opposite things on a suite
+   * using an assertion library and on one raising via bare `Error(...)`, and only that field tells
+   * them apart. Read it first.
+   *
+   * Verdicts do not move and `mutationScore` is unchanged (R72's discipline).
+   */
+  readonly assertionScreen?: {
+    /** Kills considered — `killed` plus `timeout-killed`, which is the population the rule was
+     *  scored over. */
+    readonly kills: number;
+    /** Kills carrying failure text the rule could look at. */
+    readonly killsWithText: number;
+    /**
+     * Kills with NO recorded failure text. The rule says nothing about these, and they are counted
+     * separately rather than folded into either side: the corpus the rule was measured on carried
+     * text on every kill, so applying it to a textless kill would be using it outside its
+     * measurement.
+     */
+    readonly killsWithoutText: number;
+    /** Kills whose failure text carries no `Assert.` prefix. */
+    readonly flagged: number;
+    /** `mutantCode`s of those, sorted. */
+    readonly flaggedMutants: readonly string[];
+    readonly discrimination: AssertionScreenDiscrimination;
+    /** What `discrimination` means here, so a reader who has only this block still knows. */
+    readonly discriminationNote: string;
+    /**
+     * R101(f): flagged kills carrying al-runner's own `out-of-scope: ` marker — the runner refusing
+     * an API rather than any test noticing anything. A named subset because it is the ONE signal
+     * anyone has found for this problem that does not localise (R66): al-runner emits it in a fixed
+     * structural form rather than from BC's message table. al-runner-only, so it is a subset and
+     * not the answer.
+     */
+    readonly runnerRefusals: number;
+    readonly runnerRefusalMutants: readonly string[];
+    /** The hedge and the instruction, stated once rather than per mutant. */
+    readonly diagnosis: string;
+  };
+  /**
    * R59: tests that PASSED on the bc-dev-mcp hub (they are in the green set, or they would not
    * have been covering tests) and then FAILED, unmutated, on the fenced runner that produces
    * every verdict. Present only in a hub coverage mode (`procedure`/`line`); in `fenced`/`none`
@@ -770,6 +855,20 @@ export interface SessionReport {
    * there at all, every mutant runs every green test by construction, and no mutant reaches any
    * fallback. Read it only alongside `backend`.
    */
+  /**
+   * R101(c): the AL preprocessor symbols this run compiled the target WITH. ALWAYS present, and `[]`
+   * is a real answer rather than a missing one — it means every `#else` branch was selected.
+   *
+   * MEASURED 2026-08-09 (`scripts/r101c-define-probe/`): with a symbol undefined, `alc` does not
+   * fail; it compiles the other branch cleanly and emits a different artifact. And the AST layer
+   * does not evaluate `#if` at all, so mutants are generated in BOTH branches and the ones in the
+   * dropped branch are deployed-but-unreachable, landing as `survived`/`no-coverage` — verdicts that
+   * read as statements about the test suite and are not.
+   *
+   * So this field is the answer to "which program did you score?", and a report without it could not
+   * answer it at all.
+   */
+  readonly preprocessorSymbols: readonly string[];
   readonly untargetedTriggerCount: number;
   /**
    * Set only when the session latched unsafe (spec §8/§12) — see `QUARANTINE_INTERPRETATION` for
@@ -1222,6 +1321,9 @@ function buildExecutionContexts(
   outcomes: readonly SessionOutcome[],
   caps: BackendCapabilities,
   resumedFrom: { readonly runId: number } | undefined,
+  // R129 — see `ExecutionContext.bcBuild`. Attached only to non-carried entries on a
+  // non-authoritative (al-runner) backend, which is the only path that announces one.
+  alRunnerBcBuild: { readonly build: string; readonly announcement: string } | undefined,
 ): ExecutionContext[] {
   const groups = new Map<string, { runner: RunnerKind; carried: boolean; verdictCount: number }>();
   for (const o of outcomes) {
@@ -1235,9 +1337,18 @@ function buildExecutionContexts(
   if (groups.size === 0) {
     return [{ runner: "fenced", ...measuredExecutionContext("fenced", caps), verdictCount: 0 }];
   }
+  // R129: only a directly-measured entry on the announcing path gets the build. A carried verdict
+  // was produced by a DIFFERENT run against whatever that run selected, and stamping this run's
+  // observation onto it would be a provenance claim about a session this one never made.
+  const bcFields =
+    alRunnerBcBuild !== undefined && !caps.authoritative
+      ? { bcBuild: alRunnerBcBuild.build, bcBuildAnnouncement: alRunnerBcBuild.announcement }
+      : {};
   return [...groups.values()].map((g) => {
     const measured = measuredExecutionContext(g.runner, caps);
-    if (!g.carried) return { runner: g.runner, ...measured, verdictCount: g.verdictCount };
+    if (!g.carried) {
+      return { runner: g.runner, ...measured, ...bcFields, verdictCount: g.verdictCount };
+    }
     // A carried verdict's basis names the run it actually came from, never this run's own
     // measurement claim — see the resume-hole rationale above.
     const basis =
@@ -1477,6 +1588,43 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
             })),
           diagnosis: PLATFORM_ARTIFACT_KILL_DIAGNOSIS,
         };
+  // R121 — the assertion screen. Built over `killed` + `timeout-killed`, which is the population
+  // `scripts/r121-classify-eval.ts` scored the rule over; narrowing it here would ship a rule
+  // different from the measured one.
+  const screenedKills = mutants.filter(
+    (m) => m.verdict === "killed" || m.verdict === "timeout-killed",
+  );
+  const killsWithText = screenedKills.filter((m) => m.killingTestFailure !== undefined);
+  const flaggedKills = killsWithText.filter(
+    (m) => !looksLikeAssertionFailure(killMessageOf(m.killingTestFailure)),
+  );
+  const runnerRefusals = flaggedKills.filter((m) =>
+    looksLikeRunnerRefusal(killMessageOf(m.killingTestFailure)),
+  );
+  if (flaggedKills.length > 0) caveats.push("kills-without-assertion");
+  const discrimination: AssertionScreenDiscrimination =
+    killsWithText.length === 0
+      ? "no-text"
+      : flaggedKills.length === 0
+        ? "none"
+        : flaggedKills.length === killsWithText.length
+          ? "vacuous"
+          : "partial";
+  const assertionScreen =
+    screenedKills.length === 0
+      ? undefined
+      : {
+          kills: screenedKills.length,
+          killsWithText: killsWithText.length,
+          killsWithoutText: screenedKills.length - killsWithText.length,
+          flagged: flaggedKills.length,
+          flaggedMutants: flaggedKills.map((m) => m.mutantCode).sort(),
+          discrimination,
+          discriminationNote: ASSERTION_SCREEN_DISCRIMINATION_NOTES[discrimination],
+          runnerRefusals: runnerRefusals.length,
+          runnerRefusalMutants: runnerRefusals.map((m) => m.mutantCode).sort(),
+          diagnosis: ASSERTION_SCREEN_DIAGNOSIS,
+        };
   const narrowed =
     input.only !== undefined ||
     input.operators !== undefined ||
@@ -1510,6 +1658,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     input.outcomes,
     input.caps,
     input.resumedFrom !== undefined ? { runId: input.resumedFrom.runId } : undefined,
+    input.alRunnerBcBuild,
   );
 
   return {
@@ -1545,6 +1694,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
         }
       : {}),
     ...(platformArtifactKills !== undefined ? { platformArtifactKills } : {}),
+    ...(assertionScreen !== undefined ? { assertionScreen } : {}),
     ...(runnerDisagreementTests.length > 0
       ? {
           runnerDisagreement: {
@@ -1577,6 +1727,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
       siteCount: notInstrumentedSites,
       files: input.notInstrumented.files,
     },
+    preprocessorSymbols: statics.preprocessorSymbols ?? [],
     untargetedTriggerCount: input.untargetedTriggerCount,
     ...(input.only !== undefined ? { only: input.only } : {}),
     ...(input.operators !== undefined ? { operators: input.operators } : {}),
@@ -1744,6 +1895,34 @@ export function renderConsole(r: SessionReport): string {
       if (g.mutants.length > 10) lines.push(`    ... ${g.mutants.length - 10} more`);
     }
   }
+  // R121: printed whenever there were kills at all, including when NOTHING was flagged — "checked,
+  // and every kill came from an assertion" is worth as much to a reader as a count, and silence
+  // would make it indistinguishable from "not checked". The discrimination line comes FIRST because
+  // the count reads as a finding on one suite and as noise on another, and only that line separates
+  // them.
+  const screen = r.assertionScreen;
+  if (screen !== undefined) {
+    lines.push(
+      `ASSERTION SCREEN: ${screen.flagged} of ${screen.killsWithText} kill(s) with failure text were not produced by a test assertion [${screen.discrimination}]. ${screen.discriminationNote}`,
+    );
+    if (screen.flagged > 0) lines.push(`  ${screen.diagnosis}`);
+    if (screen.killsWithoutText > 0) {
+      lines.push(
+        `  ${screen.killsWithoutText} further kill(s) recorded no failure text at all, so this screen says nothing about them.`,
+      );
+    }
+    if (screen.runnerRefusals > 0) {
+      lines.push(
+        `  ${screen.runnerRefusals} of the flagged carry al-runner's own \`out-of-scope: \` marker — the runner refusing an API, not a test noticing anything. That marker is emitted by the runner in a fixed form rather than from BC's localised message table, so unlike the rest of this screen it does not depend on the message language (R101/R66): ${screen.runnerRefusalMutants.slice(0, 10).join(", ")}`,
+      );
+    }
+    if (screen.discrimination === "partial") {
+      lines.push(`  ${screen.flaggedMutants.slice(0, 10).join(", ")}`);
+      if (screen.flaggedMutants.length > 10) {
+        lines.push(`  ... ${screen.flaggedMutants.length - 10} more`);
+      }
+    }
+  }
   // R59: same prominence again, and for the same reason — the reader's default reading of
   // "unstable" is "my tests are flaky", and here the fix is a config key, not a test.
   if (r.runnerDisagreement !== undefined) {
@@ -1796,6 +1975,17 @@ export function renderConsole(r: SessionReport): string {
     lines.push(
       `INTERACTIVE EXECUTION (client-services): ${interactive.verdictCount} verdict(s) here come from the GuiAllowed=Yes, ClientType=${interactive.clientType} path (R69 Phase 2) instead — ${interactive.basisText}. This is NOT the fenced branch above: under GuiAllowed=Yes an UNHANDLED Confirm RAISES rather than returning its default, so a mutant inside a Confirm branch can genuinely reach a different verdict here than it would fenced — a disagreement between the two paths on such a mutant is not necessarily a bug in either measurement.`,
     );
+  }
+  // R129: which BC RUNTIME produced these verdicts, printed once, beside the path that chose it.
+  // Nothing else in the report answers it on the al-runner path — the gate's first line names the
+  // al-runner BINARY, which is a different question.
+  {
+    const announced = r.validity.executionContexts.find((c) => c.bcBuild !== undefined);
+    if (announced?.bcBuild !== undefined) {
+      lines.push(
+        `BC RUNTIME: al-runner executed these tests against BC ${announced.bcBuild}, which it selected itself and announced: "${announced.bcBuildAnnouncement ?? ""}"`,
+      );
+    }
   }
   // The score's own limits, immediately after it. A reader quotes `score: 15.7%` long before
   // correlating four separate qualifier fields, so the qualification has to arrive with it.

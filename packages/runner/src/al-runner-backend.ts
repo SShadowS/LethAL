@@ -5,7 +5,12 @@ import {
   CONTROL_UPGRADE_FILENAME,
   emitStaticSelector,
 } from "@lethal/schemata";
-import { OneShotTransport, qualifiedTestName } from "./al-runner-transport";
+import {
+  OneShotTransport,
+  alRunnerEnv,
+  buildAlRunnerArgv,
+  qualifiedTestName,
+} from "./al-runner-transport";
 import type { AlRunnerBcBuild, AlRunnerTransport } from "./al-runner-transport";
 import type { CompiledArtifact } from "./artifact";
 import type {
@@ -57,6 +62,34 @@ export const AL_RUNNER_UNCLASSIFIED_ERROR =
  * this a v2" would let one of them go stale without the other noticing.
  */
 export const AL_RUNNER_V2_VERSION = /\bv2\.\d/;
+
+/**
+ * R128 — the `--test` filter the one-time provisioning invocation sends. It must match NO test:
+ * al-runner's `--test` is a substring match, and this string cannot be a substring of any AL
+ * identifier (AL has no `_` restriction, but a qualified name is `Codeunit<id>.<method>` and this is
+ * neither). Exported so a test can pin the "runs zero tests" property by name.
+ */
+export const AL_RUNNER_PROVISION_SENTINEL = "Codeunit0.__lethal_provision_only__";
+
+/**
+ * Per-test budget for the provisioning invocation. It runs no test, so this bounds nothing real —
+ * it is set only because `alRunnerEnv` requires a number, and deliberately generous so that a future
+ * al-runner which DID run something under this filter could not be silently timed out into looking
+ * like a successful provision.
+ */
+const PROVISION_TEST_TIMEOUT_SECONDS = 600;
+
+/** What `AlRunnerBackend.provisionOnce` observed. Best-effort throughout — see that method. */
+export interface AlRunnerProvisionResult {
+  readonly elapsedMs: number;
+  /** False only when the binary could not be spawned at all. */
+  readonly ran: boolean;
+  /** Whether this invocation actually FETCHED anything, i.e. whether the cache was cold for the
+   *  versions this session's runs will select. The number a reader wants. */
+  readonly downloaded: boolean;
+  /** Tail of the runner's own output, for a reader diagnosing a provisioning that did nothing. */
+  readonly detail: string;
+}
 
 /** The actionable half of `status()`'s refusal — what is wrong and what to do about it. */
 const AL_RUNNER_V2_REQUIRED =
@@ -119,6 +152,18 @@ export interface AlRunnerConfig {
   readonly testDir: string;
   readonly packagesDir?: string; // --package-cache symbol resolution
   readonly selectorObjectId: number; // id used when rewriting MutationSelector.Codeunit.al
+  /**
+   * R101(c) — AL preprocessor symbols, sent as one repeated `--define SYM` per symbol.
+   *
+   * al-runner 2.1.1 has both `--define SYM` and `--preprocessor-symbols A,B,...`, and its own help
+   * says each entry of the comma form "is validated identically to --define" — so they are the same
+   * thing and the repeated form is used, because it cannot be broken by a symbol containing a comma.
+   *
+   * The SAME list must reach LethAL's own `alc` step (`ArtifactCompilerConfig.preprocessorSymbols`).
+   * Fixing only this half would leave the instrumented target compiled from the other branch, which
+   * is the correction R101(c)'s row needed: the gap is in LethAL's own compile FIRST.
+   */
+  readonly preprocessorSymbols?: readonly string[];
   /**
    * REFUSED on v2 — the constructor throws when this is true. Kept as a field, rather than
    * dropped, precisely so a config that still asks for it gets told why instead of having the
@@ -199,6 +244,74 @@ export class AlRunnerBackend implements ExecutionBackend {
    */
   observedBcBuild(): AlRunnerBcBuild | undefined {
     return this.transport.observedBcBuild();
+  }
+
+  /**
+   * R128 — pay al-runner's artifact provisioning ONCE, at session start, outside any mutant's
+   * timeout budget.
+   *
+   * THE PROBLEM, and it is bigger than R125's note. `--auto-provision` is in every mutant's argv, so
+   * the FIRST invocation of a run does the downloading and every later one is a no-op. A mutant that
+   * spends its clock fetching artifacts is scored `deadline-exceeded` — an infrastructure outcome
+   * rather than a wrong verdict, but still a mutant nobody measured for a reason that has nothing to
+   * do with the mutant.
+   *
+   * MEASURED 2026-08-09 on al-runner 2.1.1.0, and this is what makes the step worth building rather
+   * than filing. `--auto-provision` resolves TWO versions:
+   *   - the ENGINE at the BINARY's build (`28.1.49838.50794`, "the exact build this binary was
+   *     compiled against");
+   *   - the platform R2R apps AND the test toolkit at the PROJECT's version PREFIX, resolved to the
+   *     latest Microsoft build matching it (`28.0` -> `28.0.46665.53508`).
+   *
+   * That second resolution is a moving target. A cache that was warm yesterday is cold the moment
+   * Microsoft publishes a new 28.0 build, so this is not a once-per-machine cost — it is a
+   * once-per-upstream-publish cost, and it lands on whichever mutant runs first. A run taken on a
+   * fully warm cache on this machine downloaded 135 MB anyway, because the prefix had moved.
+   *
+   * WHY NOT `al-runner provision <bundle>`, re-measured on 2.1.1.0 rather than taken from R125:
+   * the subcommand resolves the platform apps at the project's version but the TEST TOOLKIT at the
+   * BINARY's version (`test toolkit already present at .../28.1.49838.50794/test-apps`), so it
+   * leaves the run's own directory without one and the first mutant downloads it anyway. R128's
+   * stated reason — "it fetches no engine artifacts at all" — is wrong: it reports
+   * `BC <binary build> engine artifacts already complete`, exactly as `--auto-provision` does. The
+   * real gap is the test toolkit's version, not the engine.
+   *
+   * WHY THE TEST BUNDLE is the bundle passed here: at session start the instrumented directory does
+   * not exist yet, while `cfg.testDir` always does and always compiles. Provisioning is decided from
+   * the bundle's declared BC version, and the test app and the target it tests necessarily declare
+   * the same one — a test app cannot depend on a target built for a different platform.
+   *
+   * BEST-EFFORT BY CONSTRUCTION. Nothing here can fail a session: if provisioning does not work, the
+   * run proceeds and the first mutant pays the download, which is exactly today's behaviour. Failing
+   * the session on it would turn an optimisation into a new way to lose a run.
+   */
+  async provisionOnce(): Promise<AlRunnerProvisionResult> {
+    const started = Date.now();
+    const argv = buildAlRunnerArgv(this.cfg.alRunnerPath, {
+      sourceDir: this.cfg.testDir,
+      testDir: this.cfg.testDir,
+      // A filter that matches nothing. al-runner's `--test` is a substring match (R93), so this
+      // selects zero tests and the invocation exists only for its provisioning side effect.
+      qualifiedTest: AL_RUNNER_PROVISION_SENTINEL,
+      ...(this.cfg.packagesDir !== undefined ? { packagesDir: this.cfg.packagesDir } : {}),
+      ...(this.cfg.preprocessorSymbols !== undefined
+        ? { preprocessorSymbols: this.cfg.preprocessorSymbols }
+        : {}),
+    });
+    const res = await this.spawn(argv, { env: alRunnerEnv(PROVISION_TEST_TIMEOUT_SECONDS) }).catch(
+      (e) => ({ exitCode: -1, stdout: "", stderr: String(e) }),
+    );
+    const output = `${res.stderr}\n${res.stdout}`;
+    return {
+      elapsedMs: Date.now() - started,
+      // Any exit code is accepted: this invocation runs no test, and what it is for happens before
+      // the runner ever decides one. Only a spawn failure (-1) is treated as "did not run".
+      ran: res.exitCode >= 0,
+      // The reason a reader cares at all: whether THIS session paid a download, which is what
+      // explains a slow start and what says the cache had moved.
+      downloaded: /^\[provision\][^\n]*\b(downloading|Downloading|fetching)\b/m.test(output),
+      detail: (res.stderr || res.stdout).slice(-400),
+    };
   }
 
   /**
@@ -377,6 +490,9 @@ export class AlRunnerBackend implements ExecutionBackend {
       testDir: this.cfg.testDir,
       qualifiedTest: wanted,
       ...(this.cfg.packagesDir !== undefined ? { packagesDir: this.cfg.packagesDir } : {}),
+      ...(this.cfg.preprocessorSymbols !== undefined
+        ? { preprocessorSymbols: this.cfg.preprocessorSymbols }
+        : {}),
       // Deliberately well below `deadlineMs`, never equal. The runner's own per-test budget
       // (v2: the AL_RUNNER_TEST_TIMEOUT_SEC env var the transport sets; v1: a `--test-timeout`
       // flag) bounds only the test body inside al-runner, while `deadlineMs` bounds the WHOLE

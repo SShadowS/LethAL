@@ -59,6 +59,7 @@ describe("renderConsole — al-runner canary reiteration (R7/R8)", () => {
       mutantsMs: 0,
       perMutant: { count: 0, meanMs: 0, medianMs: 0, p95Ms: 0, maxMs: 0 },
     },
+    preprocessorSymbols: [],
     untargetedTriggerCount: 0,
   };
 
@@ -165,6 +166,7 @@ describe("renderConsole — permission canary reiteration (R26)", () => {
       mutantsMs: 0,
       perMutant: { count: 0, meanMs: 0, medianMs: 0, p95Ms: 0, maxMs: 0 },
     },
+    preprocessorSymbols: [],
     untargetedTriggerCount: 0,
   };
 
@@ -229,7 +231,7 @@ describe("renderConsole — permission canary reiteration (R26)", () => {
 // `readonly string[]` — a typo at a `caveats.push(...)` call site would silently never match a
 // consumer's check. This is a COMPILE-TIME check, not a runtime one: `all` below must list every
 // member of `Caveat` or `tsc` refuses to build (excess/missing keys against `Record<Caveat, true>`).
-// The `toBe(13)` assertion is a weak backstop by comparison — it would not catch two members
+// The `toBe(14)` assertion is a weak backstop by comparison — it would not catch two members
 // silently swapped for each other — but it does pin the count against silent growth/shrinkage of
 // the union without a matching update here.
 // ————————————————————————————————————————————————————————————————————————
@@ -250,7 +252,8 @@ describe("Caveat union", () => {
       resumed: true,
       "untargeted-triggers": true,
       "platform-artifact-kills": true,
+      "kills-without-assertion": true,
     };
-    expect(Object.keys(all).length).toBe(13);
+    expect(Object.keys(all).length).toBe(14);
   });
 });

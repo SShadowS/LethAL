@@ -66,6 +66,7 @@ function build(over: Record<string, unknown> = {}) {
     unsupportedTests: ["Tests.OpensPage", "Tests.AlsoBroken"],
     notInstrumented: { totalFiles: 1, files: [] },
     timings: { totalMs: 0, generateMutationSetMs: 0, deployMs: 0, baselineMs: 0 },
+    preprocessorSymbols: [],
     untargetedTriggerCount: 0,
     baselineTests: [{ codeunitName: "Tests" }],
     ...over,

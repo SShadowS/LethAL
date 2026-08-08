@@ -2,6 +2,18 @@
 
 exports[`buildReport output is stable across the event-stream refactor an event history covering every verdict kind and the carried/stranded/quarantine paths produces a report identical to the committed snapshot 1`] = `
 {
+  "assertionScreen": {
+    "diagnosis": "This is a SCREEN, not a classification, and no verdict moved: every mutant below is still \`killed\` and still in \`mutationScore\`. What it says is only that no test assertion produced the failure text — on the one real corpus this rule has been scored against (73 hand-classified kills on a third-party app) it caught every false kill and about three of every four it flagged were real kills, where the mutated program errored on its own wrong behaviour. Read them; do not subtract them.",
+    "discrimination": "no-text",
+    "discriminationNote": "No kill carried any failure text, so this rule was never applied. That is a statement about what the backend reported, not about the kills: it is what a backend that returns no failure message produces, and it must not be read as 'every kill came from an assertion'.",
+    "flagged": 0,
+    "flaggedMutants": [],
+    "kills": 3,
+    "killsWithText": 0,
+    "killsWithoutText": 3,
+    "runnerRefusalMutants": [],
+    "runnerRefusals": 0,
+  },
   "authoritative": true,
   "backend": "bcdev",
   "baselineGreen": false,
@@ -342,6 +354,7 @@ exports[`buildReport output is stable across the event-stream refactor an event 
       "Sales Permission Tests.WritesToAppTable",
     ],
   },
+  "preprocessorSymbols": [],
   "quarantined": {
     "reason": "in-flight-unknown: RunMutant M0007 (Sales Post Mgt..ArchiveBatch) returned no confirmation before the session's durable tier quarantine tripped",
   },

@@ -25,6 +25,7 @@
  *   bun scripts/r121-classify-eval.ts [<report.json>]
  */
 import { readFileSync } from "node:fs";
+import { killMessageOf, looksLikeAssertionFailure } from "../packages/runner/src/assertion-screen";
 
 interface Mutant {
   readonly mutantCode: string;
@@ -44,9 +45,15 @@ const kills = report.mutants.filter(
 /**
  * The message and the callstack arrive as one field, message first, frames after, newline
  * separated. Splitting on the first newline is the only structure there is.
+ *
+ * Delegates to `killMessageOf` (packages/runner/src/assertion-screen.ts) rather than carrying its
+ * own copy, and rule B2 below calls the SHIPPED `looksLikeAssertionFailure` for the same reason:
+ * this script's whole value is that the numbers it prints describe the rule LethAL actually
+ * applies. Two spellings would let the shipped screen drift away from its own measurement without
+ * anything failing.
  */
 function messageOf(m: Mutant): string {
-  return (m.killingTestFailure ?? "").split("\n")[0]?.trim() ?? "";
+  return killMessageOf(m.killingTestFailure);
 }
 
 /**
@@ -117,14 +124,18 @@ const RULES: readonly Rule[] = [
   {
     name: "B2. the message is not an assertion (no `Assert.` prefix)",
     note: "R121's half 2, spelled as 'platform-class' = 'no test assertion fired'.",
-    flags: (m) => !/^Assert\./i.test(messageOf(m)),
+    flags: (m) => !looksLikeAssertionFailure(messageOf(m)),
   },
   {
     name: "B. B1 AND B2 — the candidate rule R121 proposes",
     note: "The conjunction the row says 'the data does support' and asks to be measured.",
     flags: (m) => {
       const f = topFrame(m);
-      return f !== undefined && f.procedure !== m.procedureName && !/^Assert\./i.test(messageOf(m));
+      return (
+        f !== undefined &&
+        f.procedure !== m.procedureName &&
+        !looksLikeAssertionFailure(messageOf(m))
+      );
     },
   },
   {
@@ -140,7 +151,11 @@ const RULES: readonly Rule[] = [
     note: "The best structural (non-text) rule this corpus supports. Reported with its precision, not recommended.",
     flags: (m) => {
       const f = topFrame(m);
-      return f !== undefined && f.procedure === m.procedureName && !/^Assert\./i.test(messageOf(m));
+      return (
+        f !== undefined &&
+        f.procedure === m.procedureName &&
+        !looksLikeAssertionFailure(messageOf(m))
+      );
     },
   },
   {

@@ -2084,6 +2084,7 @@ describe("mutation score — timeout-killed contribution", () => {
       unsupportedTests: [],
       notInstrumented: { totalFiles: 0, files: [] },
       timings: { totalMs: 0, generateMutationSetMs: 0, deployMs: 0, baselineMs: 0 },
+      preprocessorSymbols: [],
       untargetedTriggerCount: 0,
       baselineTests: [],
       outcomes: [
@@ -2145,6 +2146,7 @@ describe("mutation score — timeout-killed contribution", () => {
       unsupportedTests: [],
       notInstrumented: { totalFiles: 0, files: [] },
       timings: { totalMs: 0, generateMutationSetMs: 0, deployMs: 0, baselineMs: 0 },
+      preprocessorSymbols: [],
       untargetedTriggerCount: 0,
       baselineTests: [],
       outcomes: [
@@ -2248,6 +2250,7 @@ describe("mutation score — timeout-killed contribution", () => {
       unsupportedTests: [],
       notInstrumented: { totalFiles: 0, files: [] },
       timings: { totalMs: 0, generateMutationSetMs: 0, deployMs: 0, baselineMs: 0 },
+      preprocessorSymbols: [],
       untargetedTriggerCount: 0,
       baselineTests: [],
       outcomes: [

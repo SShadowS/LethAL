@@ -12,6 +12,8 @@ export interface AlRunnerRequest {
   readonly packagesDir?: string;
   readonly testTimeoutSeconds: number;
   readonly deadlineMs: number;
+  /** R101(c) — see `AlRunnerConfig.preprocessorSymbols`. */
+  readonly preprocessorSymbols?: readonly string[];
 }
 
 export interface AlRunnerRawTest {
@@ -176,7 +178,10 @@ export function parseAlRunnerPayload(stdout: string): readonly AlRunnerRawTest[]
  */
 export function buildAlRunnerArgv(
   alRunnerPath: string,
-  req: Pick<AlRunnerRequest, "sourceDir" | "testDir" | "qualifiedTest" | "packagesDir">,
+  req: Pick<
+    AlRunnerRequest,
+    "sourceDir" | "testDir" | "qualifiedTest" | "packagesDir" | "preprocessorSymbols"
+  >,
 ): string[] {
   const argv = [
     alRunnerPath,
@@ -216,6 +221,14 @@ export function buildAlRunnerArgv(
     req.testDir,
   ];
   if (req.packagesDir) argv.push("--package-cache", req.packagesDir);
+  // R101(c). One repeated `--define SYM` per symbol rather than the comma-separated
+  // `--preprocessor-symbols`: 2.1.1's own help says each entry of the comma form "is validated
+  // identically to --define", so the two are the same thing, and the repeated form cannot be
+  // broken by a symbol that ever contains a comma. Appended AFTER the positional bundle dirs is
+  // wrong for this runner (positional args are repeatable), so it goes here, before them, like
+  // `--package-cache` — which is itself pushed after the positionals above and measured to work,
+  // so the runner's parser is not positional-strict. Keeping this next to it keeps one rule.
+  for (const symbol of req.preprocessorSymbols ?? []) argv.push("--define", symbol);
   return argv;
 }
 

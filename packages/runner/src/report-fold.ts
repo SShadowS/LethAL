@@ -57,6 +57,12 @@ export interface FoldStatics {
   readonly testsOnly?: readonly string[];
   /** R53: whether this run was allowed to end BC sessions to score a non-terminating mutant. */
   readonly stopHungSessions?: boolean;
+  /**
+   * R101(c): the AL preprocessor symbols this run compiled the target WITH. Always present, even as
+   * an empty array, because `[]` is a real configuration (it selects every `#else` branch) and not
+   * an unset one. See `SessionReport.preprocessorSymbols`.
+   */
+  readonly preprocessorSymbols?: readonly string[];
 }
 
 /**

@@ -72,6 +72,29 @@ export interface ArtifactCompilerConfig {
   readonly alcPath: string;
   readonly packageCachePath: string;
   readonly outputDir: string;
+  /**
+   * R101(c) — AL preprocessor symbols to define for this compile, passed to `alc` as
+   * `/define:A,B`. Empty or absent means NO symbol is defined, which is a real configuration and
+   * not an unset one: it selects every `#else` branch.
+   *
+   * MEASURED 2026-08-09 (`scripts/r101c-define-probe/`), and the measurement is why this exists.
+   * With a symbol undefined, `alc` does NOT fail — it compiles the OTHER branch, cleanly, and
+   * emits a different artifact (3473 bytes vs 3505). So a project whose real build defines a
+   * symbol LethAL does not pass is instrumented, mutated and SCORED on code the customer never
+   * ships, and nothing anywhere says so. That silence is the whole defect; a loud failure would
+   * have been harmless.
+   *
+   * Worse in this codebase specifically: the AST layer does not evaluate `#if` at all — tree-sitter
+   * treats the directives as trivia — so `generateMutationSet` produces mutants in BOTH branches.
+   * Whichever branch `alc` then drops takes its mutants with it, and they are deployed-but-
+   * unreachable, landing as `survived`/`no-coverage`. Those verdicts read as statements about the
+   * test suite and are not.
+   *
+   * Comma-separated in the argv. Semicolon was measured to work too; comma is chosen because it is
+   * what al-runner's own `--preprocessor-symbols A,B,...` uses, and one spelling across both
+   * compile paths is worth more than supporting two here.
+   */
+  readonly preprocessorSymbols?: readonly string[];
 }
 
 export interface ArtifactIo {
@@ -115,10 +138,14 @@ export class ArtifactCompiler {
     const scratch = toForwardSlashes(join(this.cfg.outputDir, `${input.artifactId}.app`));
     let res: { exitCode: number; stdout: string; stderr: string };
     try {
+      const symbols = this.cfg.preprocessorSymbols ?? [];
       res = await this.io.spawn([
         this.cfg.alcPath,
         `/project:${toForwardSlashes(input.projectDir)}`,
         `/packagecachepath:${toForwardSlashes(this.cfg.packageCachePath)}`,
+        // R101(c). Omitted entirely when nothing is configured, rather than sent empty: `/define:`
+        // with no value is a different thing to say to a compiler than not saying it.
+        ...(symbols.length > 0 ? [`/define:${symbols.join(",")}`] : []),
         `/out:${scratch}`,
       ]);
     } catch (err) {

@@ -51,6 +51,7 @@ function build(outcomes: readonly SessionOutcome[], phase = { total: 10_000 }) {
       deployMs: 4000,
       baselineMs: 1000,
     },
+    preprocessorSymbols: [],
     untargetedTriggerCount: 0,
     baselineTests: [],
   });

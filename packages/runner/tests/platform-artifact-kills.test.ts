@@ -53,6 +53,7 @@ function build(outcomes: readonly SessionOutcome[]) {
     unsupportedTests: [],
     notInstrumented: { totalFiles: 1, files: [] },
     timings: { totalMs: 0, generateMutationSetMs: 0, deployMs: 0, baselineMs: 0 },
+    preprocessorSymbols: [],
     untargetedTriggerCount: 0,
     baselineTests: [{ codeunitName: "Tests" }],
   });
