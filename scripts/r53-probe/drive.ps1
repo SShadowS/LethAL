@@ -7,8 +7,20 @@
 $ErrorActionPreference = 'Stop'
 $base    = 'http://Cronus281:7048/BC/ODataV4'
 $company = 'CRONUS Danmark A/S'
-$user    = 'sshadows'
-$pass    = '1234'
+# Credentials come from the GITIGNORED fixtures/sandbox-app/lethal.config.local.json, never from a
+# literal here — this repository is public. Same pattern as scripts/r83-probe/ and
+# scripts/r72-probe/. The endpoint and company stay literal: they are the topology this probe is
+# ABOUT, and neither is a credential.
+$configPath = Join-Path $PSScriptRoot '..\..\fixtures\sandbox-app\lethal.config.local.json'
+if (-not (Test-Path $configPath)) {
+  throw "cannot read $configPath - see fixtures/README.md for the expected local-file setup"
+}
+$cfg     = (Get-Content $configPath -Raw | ConvertFrom-Json).bcdev
+$user    = $cfg.username
+$pass    = $cfg.password
+if ([string]::IsNullOrEmpty($user) -or [string]::IsNullOrEmpty($pass)) {
+  throw "$configPath : bcdev.username and bcdev.password must both be set"
+}
 $pair    = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("${user}:${pass}"))
 $headers = @{ Authorization = "Basic $pair"; 'Content-Type' = 'application/json' }
 $q       = "?company=$([uri]::EscapeDataString($company))&tenant=default"

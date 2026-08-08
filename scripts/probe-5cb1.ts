@@ -46,19 +46,51 @@
  * itself the correct, honest signal (see probe-author-report.md).
  */
 
+import { readFileSync } from "node:fs";
+
 // ---------------------------------------------------------------------------------------------
 // Constants — every endpoint URL, credential, company/tenant, and target/test identifier lives
 // here, named, per the brief.
 // ---------------------------------------------------------------------------------------------
+
+/**
+ * Credentials come from the GITIGNORED `fixtures/sandbox-app/lethal.config.local.json`, never from a
+ * literal here — this repository is public. Same pattern as `scripts/r83-probe/` and
+ * `scripts/r72-probe/`, and the reason it applies to a throwaway probe as much as to shipped code:
+ * a container password committed once stays in the history whether or not the probe still runs.
+ *
+ * The endpoint and company are still literals: they are the measured facts this probe is ABOUT
+ * (it exists to pin what a specific container answered), and neither is a credential.
+ */
+const CONFIG_PATH = "fixtures/sandbox-app/lethal.config.local.json";
+
+function bcdevSection(): Record<string, unknown> {
+  const parsed: unknown = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
+  const bcdev =
+    typeof parsed === "object" && parsed !== null
+      ? (parsed as { bcdev?: unknown }).bcdev
+      : undefined;
+  if (typeof bcdev !== "object" || bcdev === null) {
+    throw new Error(`${CONFIG_PATH} has no "bcdev" object — see fixtures/README.md for its shape`);
+  }
+  return bcdev as Record<string, unknown>;
+}
+
+function credential(key: string): string {
+  const value = bcdevSection()[key];
+  if (typeof value !== "string" || value === "") {
+    throw new Error(`${CONFIG_PATH}: bcdev.${key} must be a non-empty string`);
+  }
+  return value;
+}
 
 /** Verified live fact, not re-derived: BC's OData V4 base on this container. */
 const ODATA_BASE = "http://Cronus281:7048/BC/ODataV4";
 /** Verified live fact: exact company display name (URL-encodes to `CRONUS%20Danmark%20A%2FS`). */
 const COMPANY = "CRONUS Danmark A/S";
 const TENANT = "default";
-const USERNAME = "sshadows";
-const PASSWORD = "1234";
-const AUTH_HEADER = `Basic ${btoa(`${USERNAME}:${PASSWORD}`)}`;
+const USERNAME = credential("username");
+const AUTH_HEADER = `Basic ${btoa(`${USERNAME}:${credential("password")}`)}`;
 
 /** The `LethAL Control` extension's own app id (ControlApi.HarnessInfo's hardcoded `appId`). */
 const CONTROL_APP_ID = "5e7a1c00-1111-4c00-8c00-1e7a1c000701";
