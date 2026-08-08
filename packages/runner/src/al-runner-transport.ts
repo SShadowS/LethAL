@@ -217,8 +217,14 @@ export function buildAlRunnerArgv(
     "--auto-provision",
     // Bundle dirs are POSITIONAL and repeatable in v2; multiple dirs run sequentially and
     // aggregate into one summary envelope.
-    req.sourceDir,
-    req.testDir,
+    //
+    // The same dir is never sent twice. On the mutant path the two are different by construction
+    // (`AlRunnerBackend.run` passes its active instrumented dir and the test dir), so this is a
+    // no-op there. It matters for R128's one-time provisioning invocation, which has no
+    // instrumented dir yet and passes the TEST bundle as both — without the dedupe that invocation
+    // would compile the same bundle twice for nothing, which on a real project is a whole extra
+    // compile before the session starts.
+    ...(req.sourceDir === req.testDir ? [req.sourceDir] : [req.sourceDir, req.testDir]),
   ];
   if (req.packagesDir) argv.push("--package-cache", req.packagesDir);
   // R101(c). One repeated `--define SYM` per symbol rather than the comma-separated

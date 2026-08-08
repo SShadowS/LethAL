@@ -137,6 +137,10 @@ describe("AlRunnerBackend.provisionOnce (R128)", () => {
     await (await makeBackend(spawn)).provisionOnce();
     const argv = calls[0]?.argv ?? [];
     expect(argv).toContain("/tests");
+    // ONCE, not twice. Bundle dirs are positional and repeatable, and this invocation passes the
+    // test dir as both source and test — sending it twice would compile the same bundle twice for
+    // nothing, which on a real project is a whole extra compile before the session starts.
+    expect(argv.filter((a) => a === "/tests").length).toBe(1);
     // And the package cache, or symbol resolution differs from what every later invocation uses.
     expect(argv).toContain("--package-cache");
     expect(argv).toContain("/packages");
