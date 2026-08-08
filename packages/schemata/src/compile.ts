@@ -107,12 +107,16 @@ const NON_OBJECT_DECLARATION_KINDS: ReadonlySet<string> = new Set([
 
 /**
  * True when this file's object declaration can carry the
- * `var MutationSelector: Codeunit "Mutation Selector";` declaration — i.e. it is a codeunit or a
- * table. Exported as the SINGLE construction point of that predicate: `generateMutationSet`
- * (@lethal/runner) drops a file's specs up front when this is false, and
+ * `var MutationSelector: Codeunit "Mutation Selector";` declaration — i.e. its kind is one of
+ * `CARRIER_KINDS` below. Exported as the SINGLE construction point of that predicate:
+ * `generateMutationSet` (@lethal/runner) drops a file's specs up front when this is false, and
  * `injectMutationSelectorVar` below throws on the same condition as the backstop. Two hand-rolled
- * copies of "codeunit or table" could drift, and the drift is silent in the dangerous direction
+ * copies of the carrier list could drift, and the drift is silent in the dangerous direction
  * (specs generated for a file the injector will then refuse, aborting the session).
+ *
+ * This doc comment used to say "i.e. it is a codeunit or a table", which was true when the list
+ * held two kinds and has been false since R40 added `page`/`report` and R30 added the two
+ * extension kinds. The list itself is the authority; nothing here restates it any more.
  */
 export function canCarryMutationSelectorVar(root: ALSyntaxNode): boolean {
   return CARRIER_KINDS.some((k) => findFirst(root, k) !== null);
@@ -129,13 +133,17 @@ export function canCarryMutationSelectorVar(root: ALSyntaxNode): boolean {
  * out to be for codeunits. On Continia Document Output the old refusal cost 41% of the app's
  * mutation sites; pages and reports are 6,492 of those 8,259.
  *
- * `pageextension`/`tableextension` compile with the var too, and are deliberately NOT here yet:
- * they do not match `objectHeadersOf`'s header regex (project.ts), and it is unmeasured whether BC
- * attributes an extension's coverage to the extension's own id or the base object's. Guessing
- * that wrong mis-keys `coverageFilter` and manufactures false survivors — the R29 failure exactly.
- * Enums stay out for a simpler reason: they hold no code, so they can hold no var.
+ * `pageextension`/`tableextension` were added by R30 after the coverage-attribution question this
+ * comment used to defer on was measured — the tables gate covers both (a `tableextension`'s five
+ * mutants are all killed; a `pageextension`'s are `no-coverage`). Enums stay out for a simpler
+ * reason: they hold no code, so they can hold no var. `xmlport` and `query` are the kinds that
+ * still hold code and still cannot carry it.
+ *
+ * Exported (R127) so the ONE user-facing message that names these kinds — `generateMutationSet`'s
+ * skipped-file warning in @lethal/runner — derives the list instead of restating it. It restated
+ * it as "only a codeunit or a table" for two releases after that stopped being true.
  */
-const CARRIER_KINDS: readonly ALNodeKind[] = [
+export const CARRIER_KINDS: readonly ALNodeKind[] = [
   ALNodeKind.codeunit,
   ALNodeKind.table,
   ALNodeKind.page,

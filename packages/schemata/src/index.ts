@@ -14,6 +14,7 @@ export type { LiftInput, LiftArtifacts } from "./lift";
 export { duplicateEnclosing } from "./duplicate";
 export type { DuplicateInput } from "./duplicate";
 export {
+  CARRIER_KINDS,
   compileSchemataForFile,
   canCarryMutationSelectorVar,
   describeObjectKinds,

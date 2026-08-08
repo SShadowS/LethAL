@@ -53,6 +53,7 @@ function baseEvents(): RunEventInput[] {
       instrumentableFiles: 1,
       notInstrumentedFiles: [],
       excludedByOnly: 0,
+      excludedByOperator: 0,
     },
     {
       type: "baseline-batch-finished",
@@ -92,6 +93,7 @@ describe("foldEvents — mandatory events, throwing rather than defaulting", () 
         instrumentableFiles: 2,
         notInstrumentedFiles: [],
         excludedByOnly: 0,
+        excludedByOperator: 0,
       },
       { type: "batch-published", batchIndex: 0, guardCount: 8, elapsedMs: 100 },
       { type: "session-finished", elapsedMs: 10 },
@@ -114,6 +116,7 @@ describe("foldEvents — mandatory events, throwing rather than defaulting", () 
         instrumentableFiles: 2,
         notInstrumentedFiles: [],
         excludedByOnly: 0,
+        excludedByOperator: 0,
       },
       { type: "batch-published", batchIndex: 0, guardCount: 8, elapsedMs: 100 },
       { type: "quarantined", reason: "test in-flight-unknown" },
@@ -134,6 +137,7 @@ describe("foldEvents — mandatory events, throwing rather than defaulting", () 
         instrumentableFiles: 0,
         notInstrumentedFiles: [],
         excludedByOnly: 0,
+        excludedByOperator: 0,
       },
       { type: "session-finished", elapsedMs: 10 },
     ]);
@@ -154,6 +158,7 @@ describe("foldEvents — mandatory events, throwing rather than defaulting", () 
         instrumentableFiles: 1,
         notInstrumentedFiles: [],
         excludedByOnly: 0,
+        excludedByOperator: 0,
       },
       { type: "phase-entered", phase: "deploy" },
       {
@@ -193,6 +198,7 @@ describe("foldEvents — R54, a carried verdict never reaches the mutant clock",
         instrumentableFiles: 1,
         notInstrumentedFiles: [],
         excludedByOnly: 0,
+        excludedByOperator: 0,
       },
       { type: "baseline-batch-finished", batchIndex: 0, verdicts: [] },
       {
@@ -256,6 +262,7 @@ describe("foldEvents — R106, an absent coverage-split is not a measured zero",
     instrumentableFiles: 1,
     notInstrumentedFiles: [],
     excludedByOnly: 0,
+    excludedByOperator: 0,
   };
 
   test("THROWS when a green baseline batch produced no coverage-split", () => {
@@ -321,6 +328,7 @@ describe("foldEvents — R86, a kill's own account of why it died", () => {
         instrumentableFiles: 1,
         notInstrumentedFiles: [],
         excludedByOnly: 0,
+        excludedByOperator: 0,
       },
       { type: "baseline-batch-finished", batchIndex: 0, verdicts: [] },
       {
@@ -367,6 +375,7 @@ describe("foldEvents — batch-invalidated rewrites history", () => {
         instrumentableFiles: 1,
         notInstrumentedFiles: [],
         excludedByOnly: 0,
+        excludedByOperator: 0,
       },
       { type: "baseline-batch-finished", batchIndex: 0, verdicts: [] },
       {
@@ -400,6 +409,7 @@ describe("foldEvents — batch-invalidated rewrites history", () => {
         instrumentableFiles: 1,
         notInstrumentedFiles: [],
         excludedByOnly: 0,
+        excludedByOperator: 0,
       },
       { type: "baseline-batch-finished", batchIndex: 0, verdicts: [] },
       {
@@ -448,6 +458,7 @@ describe("foldEvents — batch-invalidated rewrites history", () => {
         instrumentableFiles: 1,
         notInstrumentedFiles: [],
         excludedByOnly: 0,
+        excludedByOperator: 0,
       },
       { type: "baseline-batch-finished", batchIndex: 0, verdicts: [] },
       {
@@ -479,6 +490,7 @@ describe("foldEvents — batch-invalidated rewrites history", () => {
         instrumentableFiles: 1,
         notInstrumentedFiles: [],
         excludedByOnly: 0,
+        excludedByOperator: 0,
       },
       { type: "baseline-batch-finished", batchIndex: 0, verdicts: [] },
       {
@@ -509,6 +521,7 @@ describe("foldEvents — the R35 kill-confirmation path (not just baseline class
         instrumentableFiles: 1,
         notInstrumentedFiles: [],
         excludedByOnly: 0,
+        excludedByOperator: 0,
       },
       { type: "baseline-batch-finished", batchIndex: 0, verdicts: [] },
       {
@@ -541,12 +554,59 @@ describe("foldEvents — statics reunited with learned facts", () => {
         instrumentableFiles: 1,
         notInstrumentedFiles: [],
         excludedByOnly: 4,
+        excludedByOperator: 0,
       },
       { type: "baseline-batch-finished", batchIndex: 0, verdicts: [] },
       { type: "session-finished", elapsedMs: 10 },
     ]);
     const folded = foldEvents(statics, events);
     expect(folded.only).toEqual({ patterns: ["Al/Codeunit/**"], excludedFileCount: 4 });
+  });
+
+  test("R127: operators.names (static) + excludedByOperator (learned) combine into one field", () => {
+    const statics: FoldStatics = {
+      ...STATICS,
+      operators: { names: ["lethal.swap-call-arguments"] },
+    };
+    const events = seq([
+      {
+        type: "mutation-set-generated",
+        siteCount: 3,
+        deployedCount: 3,
+        totalFiles: 5,
+        instrumentableFiles: 5,
+        notInstrumentedFiles: [],
+        excludedByOnly: 0,
+        excludedByOperator: 891,
+      },
+      { type: "baseline-batch-finished", batchIndex: 0, verdicts: [] },
+      { type: "session-finished", elapsedMs: 10 },
+    ]);
+    const folded = foldEvents(statics, events);
+    expect(folded.operators).toEqual({
+      names: ["lethal.swap-call-arguments"],
+      excludedSiteCount: 891,
+    });
+  });
+
+  test("R127: no operator static means the field is ABSENT even when the count rode the event", () => {
+    // Guards the reunion in the direction that matters: a learned count with no configured names
+    // must not manufacture a narrowing block on a run that was never operator-scoped.
+    const events = seq([
+      {
+        type: "mutation-set-generated",
+        siteCount: 3,
+        deployedCount: 3,
+        totalFiles: 5,
+        instrumentableFiles: 5,
+        notInstrumentedFiles: [],
+        excludedByOnly: 0,
+        excludedByOperator: 891,
+      },
+      { type: "baseline-batch-finished", batchIndex: 0, verdicts: [] },
+      { type: "session-finished", elapsedMs: 10 },
+    ]);
+    expect(foldEvents(STATICS, events).operators).toBeUndefined();
   });
 
   test("batches is the count of deploy phase entries, one per batch loop iteration", () => {
@@ -559,6 +619,7 @@ describe("foldEvents — statics reunited with learned facts", () => {
         instrumentableFiles: 2,
         notInstrumentedFiles: [],
         excludedByOnly: 0,
+        excludedByOperator: 0,
       },
       { type: "phase-entered", phase: "deploy" },
       { type: "phase-entered", phase: "deploy" },

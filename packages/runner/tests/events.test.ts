@@ -256,6 +256,7 @@ describe("createEmitter", () => {
         instrumentableFiles: 2,
         notInstrumentedFiles: [],
         excludedByOnly: 0,
+        excludedByOperator: 0,
       },
       {
         type: "tests-discovered",

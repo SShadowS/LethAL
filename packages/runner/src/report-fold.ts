@@ -47,6 +47,12 @@ export interface FoldStatics {
    * the two into `FoldedReport.only`.
    */
   readonly only?: { readonly patterns: readonly string[] };
+  /**
+   * R127: the `--operator` narrowing this run was GIVEN, if any — names only. How many mutation
+   * sites that excluded is LEARNED (see `mutation-set-generated.excludedByOperator`, events.ts);
+   * the fold reunites the two into `FoldedReport.operators`.
+   */
+  readonly operators?: { readonly names: readonly string[] };
   /** R45: the `--tests-only` narrowing this run was GIVEN, if any. */
   readonly testsOnly?: readonly string[];
   /** R53: whether this run was allowed to end BC sessions to score a non-terminating mutant. */
@@ -72,6 +78,11 @@ export interface FoldedReport {
   readonly only?: {
     readonly patterns: readonly string[];
     readonly excludedFileCount: number;
+  };
+  /** R127: the operator narrowing, with the LEARNED site count reunited onto it. */
+  readonly operators?: {
+    readonly names: readonly string[];
+    readonly excludedSiteCount: number;
   };
   readonly testsOnly?: readonly string[];
   readonly staleTestApp?: { readonly missingTests: readonly string[] };
@@ -110,6 +121,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
   let totalFiles = 0;
   let notInstrumentedFiles: readonly NotInstrumentedFile[] = [];
   let excludedByOnly = 0;
+  let excludedByOperator = 0;
 
   // AND across every baseline verdict across every `baseline-batch-finished` event — mirrors
   // `orchestrator.ts`'s `baselineGreenOverall`, which starts true and is never reset once false.
@@ -177,6 +189,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
         totalFiles = e.totalFiles;
         notInstrumentedFiles = e.notInstrumentedFiles;
         excludedByOnly = e.excludedByOnly;
+        excludedByOperator = e.excludedByOperator;
         break;
       case "baseline-batch-finished":
         sawBaselineBatchFinished = true;
@@ -414,6 +427,10 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
     // condition orchestrator.ts used to gate this field: non-empty patterns, not just "defined".
     ...(statics.only !== undefined && statics.only.patterns.length > 0
       ? { only: { patterns: statics.only.patterns, excludedFileCount: excludedByOnly } }
+      : {}),
+    // R127: same reunion for the operator narrowing — GIVEN names, LEARNED site count.
+    ...(statics.operators !== undefined && statics.operators.names.length > 0
+      ? { operators: { names: statics.operators.names, excludedSiteCount: excludedByOperator } }
       : {}),
     ...(statics.testsOnly !== undefined && statics.testsOnly.length > 0
       ? { testsOnly: statics.testsOnly }

@@ -86,6 +86,12 @@ export type RunEventInput =
       readonly type: "run-configured";
       readonly caps: BackendCapabilities;
       readonly only?: { readonly patterns: readonly string[] };
+      /**
+       * R127: the `--operator` narrowing this run was GIVEN. Split the same way `only` is — the
+       * NAMES are configured, the count of sites they excluded is LEARNED and rides
+       * `mutation-set-generated.excludedByOperator`.
+       */
+      readonly operators?: { readonly names: readonly string[] };
       readonly testsOnly?: readonly string[];
       readonly stopHungSessions?: boolean;
     }
@@ -124,6 +130,10 @@ export type RunEventInput =
       /** R41: `.al` files a `--only` glob excluded from spec generation. 0 when no `only` was
        *  given. The LEARNED half of `run-configured.only` — see that event's doc comment. */
       readonly excludedByOnly: number;
+      /** R127: mutation SITES an `--operator` filter excluded (a site count, not a file count —
+       *  see `MutationSetResult.excludedByOperator` for why the two differ). 0 when no operator
+       *  filter was given. The LEARNED half of `run-configured.operators`. */
+      readonly excludedByOperator: number;
     }
   | {
       /** Discovery returns the whole list in one parse — 1,000+ per-item events at one instant

@@ -185,7 +185,7 @@ describe("assertRunSizeAcceptable (R48)", () => {
     } catch (err) {
       message = err instanceof Error ? err.message : String(err);
     }
-    expect(message).toContain("Narrow --only further");
+    expect(message).toContain("Narrow --only or --operator further");
   });
 
   test("runSession refuses before deploying anything", async () => {

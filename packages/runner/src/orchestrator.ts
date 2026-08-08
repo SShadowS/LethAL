@@ -15,6 +15,7 @@ import {
   wrapRoot,
 } from "@lethal/engine";
 import {
+  CARRIER_KINDS,
   type InstrumentedFile,
   type MutantManifest,
   type MutantManifestEntry,
@@ -201,11 +202,12 @@ const tierOf: TierResolver = (name) => operatorTiers.get(name);
  *
  * Files whose object kind cannot carry the selector var are dropped here, with one warning per
  * run. A mutation guard is a bare `MutationSelector.Active(...)` call, which needs a
- * `var MutationSelector: Codeunit "Mutation Selector";` in scope, and only a codeunit or a table
- * can carry that declaration today (`canCarryMutationSelectorVar` / `injectMutationSelectorVar`
- * in @lethal/schemata). A real project routinely holds a page with `OnAction`/`OnOpenPage`
- * bodies, and the tier-1 operators target those bodies happily — so without this filter one such
- * page aborts the whole session at compile time. Dropping the specs costs only those mutants:
+ * `var MutationSelector: Codeunit "Mutation Selector";` in scope, and only the kinds in
+ * `CARRIER_KINDS` can carry that declaration (`canCarryMutationSelectorVar` /
+ * `injectMutationSelectorVar` in @lethal/schemata) — six today, `xmlport` and `query` being the
+ * kinds that still hold code and still cannot. A real project routinely holds one, and the tier-1
+ * operators target its trigger bodies happily — so without this filter one such file aborts the
+ * whole session at compile time. Dropping the specs costs only those mutants:
  * `prepareBatchProject` copies every project `.al` file the instrumented write did not produce
  * into the batch dir verbatim, so the page still reaches the server, byte-identical to source.
  *
@@ -231,6 +233,21 @@ export interface MutationSetResult {
    * avoid. The report says "N files were not considered", never a number it did not measure.
    */
   readonly excludedByOnly: number;
+  /**
+   * R127: mutation SITES an `--operator` filter excluded. 0 when no operator filter was given.
+   *
+   * A SITE count, not a file count, and the asymmetry with `excludedByOnly` above is real rather
+   * than an inconsistency. `--only` skips files before their specs exist, so their site count is
+   * genuinely unmeasured. An operator filter runs every operator over every admitted file exactly
+   * as an unfiltered run does and then drops the specs it was not asked for — so the number
+   * dropped IS measured, and reporting a file count here would throw away a fact the run holds.
+   *
+   * Counted post-dedup and across every file that produced specs, including files no selector var
+   * can be injected into (those specs would not have deployed either way, but they were still
+   * considered and dropped by this filter, and a count that silently skipped them would not add
+   * up against a full run's site count).
+   */
+  readonly excludedByOperator: number;
 }
 
 export interface MutationSetOptions {
@@ -244,6 +261,23 @@ export interface MutationSetOptions {
    * selecting nothing.
    */
   readonly only?: readonly string[];
+  /**
+   * R127: operator names allowed to contribute mutants. Absent (or empty) means every registered
+   * operator, the behaviour before `--operator` existed.
+   *
+   * Matched against `MutationSpec.operatorName`. A name may be given with or without the builtin
+   * `lethal.` prefix; an unregistered name throws, and so does a registered one that contributes
+   * no deployable mutant to this project — see `resolveOperatorNames` and `generateMutationSet`.
+   *
+   * Filters AFTER per-file dedup, not before, and that ordering is load-bearing. `dedupeSpecs`
+   * drops a Tier-1 spec when a Tier-2 operator emits byte-identical AL at the same node (§3.2
+   * precedence). Filtering first would hide the Tier-2 winner from dedup and RESURRECT the Tier-1
+   * mutant that a full run deletes, so an operator-scoped run would deploy a mutant the project's
+   * real mutant set does not contain. Filtering afterwards makes the result a strict subset of
+   * what an unfiltered run would deploy, which is what "narrowing cannot change a verdict" means
+   * here.
+   */
+  readonly operators?: readonly string[];
   /**
    * When present, this function's four `console.warn` calls emit `{ type: "warning" }` events on
    * it instead — `runSession` always passes one (defaulting to a no-op emitter). Absent for the
@@ -291,6 +325,53 @@ function admittedByOnly(
   return admitted;
 }
 
+/**
+ * R127: turns the `--operator` names a caller asked for into the exact registered operator names
+ * `generateMutationSet` will admit, or throws naming what is registered.
+ *
+ * Separated from `generateMutationSet` for the same reason `admittedByOnly` is: the refusal is
+ * testable without parsing AL, and it happens BEFORE any file is read.
+ *
+ * The `lethal.` prefix is optional on the way in. Every builtin operator is named
+ * `lethal.<something>`, so requiring the prefix would make the common invocation
+ * `--operator lethal.swap-call-arguments` and buy nothing; resolution is still exact, because an
+ * unprefixed name is only accepted when `lethal.<name>` is registered and the bare name is not.
+ * A name that resolves to nothing is refused rather than ignored — an ignored name would run
+ * every OTHER operator the caller asked for and report the result as the scope they requested.
+ */
+export function resolveOperatorNames(
+  requested: readonly string[],
+  registered: readonly string[],
+): ReadonlySet<string> | undefined {
+  if (requested.length === 0) return undefined;
+  const known = new Set(registered);
+  const resolved = new Set<string>();
+  const unknown: string[] = [];
+  for (const name of requested) {
+    if (known.has(name)) {
+      resolved.add(name);
+      continue;
+    }
+    const prefixed = `lethal.${name}`;
+    if (known.has(prefixed)) {
+      resolved.add(prefixed);
+      continue;
+    }
+    unknown.push(name);
+  }
+  if (unknown.length > 0) {
+    const named = unknown.map((n) => `"${n}"`).join(", ");
+    const registeredList = [...known]
+      .sort()
+      .map((n) => `"${n}"`)
+      .join(", ");
+    throw new Error(
+      `--operator named ${unknown.length === 1 ? "an operator" : "operators"} this build does not register: ${named}. Registered operators are ${registeredList} (the "lethal." prefix is optional). Refusing rather than running with the remaining names, which would report a narrower scope than the one asked for.`,
+    );
+  }
+  return resolved;
+}
+
 export async function generateMutationSet(
   projectDir: string,
   options: MutationSetOptions = {},
@@ -317,6 +398,11 @@ export async function generateMutationSet(
   // after a full parse. `undefined` means "no narrowing" — distinct from an empty set, which
   // `admittedByOnly` refuses outright.
   const admitted = admittedByOnly(entries, options.only ?? []);
+  // R127: resolved before any file is read too, so an unregistered operator name fails as
+  // immediately as a typo'd `--only` pattern does. `undefined` means "every operator".
+  const admittedOperators = resolveOperatorNames(options.operators ?? [], [
+    ...operatorTiers.keys(),
+  ]);
   // Pass 1: parse every file — INCLUDING files `--only` excluded. Pass 2 (below) walks them
   // against ONE context built over all of them; see this function's doc comment for why the
   // context must be project-wide, and note that narrowing the PARSE set instead of the
@@ -330,6 +416,14 @@ export async function generateMutationSet(
   const ctx = buildSemanticContext(parsed.map(({ path, root }) => ({ path, root })));
 
   let excludedByOnly = 0;
+  // R127: post-dedup sites the `--operator` filter dropped, and which admitted operators actually
+  // contributed something. `producedAnywhere` counts a contribution in ANY considered file;
+  // `producedInstrumentable` only in a file that can carry the selector var. The two are separate
+  // so the "this operator deploys nothing" refusal below can tell "no sites at all" from "sites
+  // only in files nothing can be injected into", which are different mistakes with different fixes.
+  let excludedByOperator = 0;
+  const producedAnywhere = new Set<string>();
+  const producedInstrumentable = new Set<string>();
   // Sites an operator claimed that are not inside executable AL — see the drop below.
   let nonExecutableSites = 0;
   for (const { path: rel, source, root } of parsed) {
@@ -373,19 +467,56 @@ export async function generateMutationSet(
       }
     });
     if (specs.length === 0) continue;
+    // R127: narrow to the requested operators AFTER per-file dedup — see
+    // `MutationSetOptions.operators` for why filtering first would resurrect a Tier-1 mutant that
+    // a full run deletes. `dedupeSpecs` returns the surviving spec OBJECTS, so reference identity
+    // is the join (the same technique `cli.ts`'s dry-run summary already uses).
+    let fileSpecs = specs;
+    if (admittedOperators !== undefined) {
+      const survivedDedup = new Set(dedupeSpecs(specs, tierOf));
+      const selected: MutationSpec[] = [];
+      for (const spec of specs) {
+        if (!survivedDedup.has(spec)) continue; // a full run does not deploy this one either
+        if (admittedOperators.has(spec.operatorName)) selected.push(spec);
+        else excludedByOperator++;
+      }
+      fileSpecs = selected;
+    }
+    if (fileSpecs.length === 0) continue;
+    for (const spec of fileSpecs) producedAnywhere.add(spec.operatorName);
     if (!canCarryMutationSelectorVar(root)) {
-      skipped.push({ file: rel, kinds: describeObjectKinds(root), sites: specs.length });
+      skipped.push({ file: rel, kinds: describeObjectKinds(root), sites: fileSpecs.length });
       continue;
     }
-    files.push({ path: rel, source, root, specs });
+    for (const spec of fileSpecs) producedInstrumentable.add(spec.operatorName);
+    files.push({ path: rel, source, root, specs: fileSpecs });
+  }
+  // R127: an operator that contributes no deployable mutant is refused, for the same reason a
+  // `--only` pattern matching no file is. A run that quietly dropped it would publish, run a whole
+  // baseline and report a null score with no failures — "nothing to fix" rather than "that
+  // operator finds nothing here". Empty-vs-empty agreement is this project's signature bug.
+  if (admittedOperators !== undefined) {
+    const barren = [...admittedOperators].filter((n) => !producedInstrumentable.has(n)).sort();
+    if (barren.length > 0) {
+      const named = barren.map((n) => `"${n}"`).join(", ");
+      const uninstrumentableOnly = barren.filter((n) => producedAnywhere.has(n)).sort();
+      const nuance =
+        uninstrumentableOnly.length > 0
+          ? ` ${uninstrumentableOnly.map((n) => `"${n}"`).join(", ")} DID find sites, but only in files no selector var can be injected into (see the skip list above), so nothing would deploy.`
+          : "";
+      throw new Error(
+        `--operator ${barren.length === 1 ? "matched no deployable mutation site for operator" : "matched no deployable mutation site for operators"} ${named} in this project${admitted !== undefined ? " (within the --only scope)" : ""}.${nuance} Refusing rather than running with a smaller mutant set than asked for, which would report a score for a scope that was never measured.`,
+      );
+    }
   }
   if (skipped.length > 0) {
     const total = skipped.reduce((n, s) => n + s.sites, 0);
     const detail = skipped.map((s) => `${s.file} (${s.kinds}, ${s.sites} site(s))`).join(", ");
-    const why =
-      "only a codeunit or a table can carry the injected " +
-      '`var MutationSelector: Codeunit "Mutation Selector";` declaration, so a guard in any ' +
-      "other object kind cannot compile (AL0118). Not mutated; published unchanged";
+    // The carrier list is READ from @lethal/schemata, never restated here. This message said
+    // "only a codeunit or a table" for two releases after R40 added page/report and R30 added the
+    // two extension kinds, so a user hitting it was told a reason that was no longer true.
+    const carriers = CARRIER_KINDS.map((k) => k.replace(/_declaration$/, "")).join(", ");
+    const why = `only ${carriers} can carry the injected \`var MutationSelector: Codeunit "Mutation Selector";\` declaration, so a guard in any other object kind cannot compile (AL0118). Not mutated; published unchanged`;
     warn(
       "not-instrumentable-files-skipped",
       `[lethal] skipped ${skipped.length} file(s) holding ${total} mutation site(s): ${why}: ${detail}.`,
@@ -403,7 +534,13 @@ export async function generateMutationSet(
       `[lethal] --only narrowed this run to ${entries.length - excludedByOnly}/${entries.length} .al file(s); ${excludedByOnly} file(s) contributed no mutants. The score below covers the narrowed set ONLY — it is not a project score.`,
     );
   }
-  return { files, skipped, totalFiles: entries.length, excludedByOnly };
+  if (admittedOperators !== undefined) {
+    warn(
+      "operator-narrowed-run",
+      `[lethal] --operator narrowed this run to ${[...admittedOperators].sort().join(", ")}; ${excludedByOperator} mutation site(s) from other operators were excluded. The score below covers those operators ONLY — it is not a project score.`,
+    );
+  }
+  return { files, skipped, totalFiles: entries.length, excludedByOnly, excludedByOperator };
 }
 
 export interface SessionConfig {
@@ -421,6 +558,15 @@ export interface SessionConfig {
    * only; every file is still parsed into the semantic context, still compiled, still published.
    */
   readonly only?: readonly string[];
+  /**
+   * R127: operator names allowed to contribute mutants (`--operator`). Absent means every
+   * registered operator. See `MutationSetOptions.operators`.
+   *
+   * Like `only` and unlike `testsOnly`, this narrows the MUTANT SET and cannot change a verdict:
+   * it is applied after per-file dedup, so what it deploys is a strict subset of what an
+   * unfiltered run would deploy, mutant for mutant.
+   */
+  readonly operators?: readonly string[];
   /**
    * R45: glob patterns naming which TEST files may run (`--tests-only`). Absent means the whole
    * suite. Narrows the baseline — the phase `only` does not touch and where a real project's run
@@ -1889,10 +2035,10 @@ export function assertRunSizeAcceptable(input: {
   if (input.allowLargeRun) return;
   if (input.mutantCount <= LARGE_RUN_MUTANT_THRESHOLD) return;
   const scoped = input.narrowed
-    ? "Narrow --only further, or pass --allow-large-run to run it anyway."
-    : 'Scope it with --only <glob> (e.g. --only "Al/Codeunit/**"), or pass --allow-large-run to run it anyway.';
+    ? "Narrow --only or --operator further, or pass --allow-large-run to run it anyway."
+    : 'Scope it with --only <glob> (e.g. --only "Al/Codeunit/**") or --operator <name> (R127), or pass --allow-large-run to run it anyway.';
   throw new Error(
-    `this run would schedule ${input.mutantCount} mutation site(s) across ${input.fileCount} file(s), above the ${LARGE_RUN_MUTANT_THRESHOLD} pre-flight limit. ${scoped}\nWhy this refuses instead of warning: measured against a hosted BC environment, a real project costs ~19.5 s per mutant (p95 43 s), so this run is measured in hours to days — and the artifact carrying every guard is itself often unpublishable (a 11,777-guard publish was severed by the hosting proxy at 362 s). The failure would land long after the warning scrolled past.\nLevers: --only <glob> narrows which files contribute mutants (cannot change a verdict); --tests-only <glob> narrows the baseline, which dominates a first run (CAN change a verdict — an excluded killing test manufactures a survivor); --max-guards-per-batch <n> bounds each published artifact.`,
+    `this run would schedule ${input.mutantCount} mutation site(s) across ${input.fileCount} file(s), above the ${LARGE_RUN_MUTANT_THRESHOLD} pre-flight limit. ${scoped}\nWhy this refuses instead of warning: measured against a hosted BC environment, a real project costs ~19.5 s per mutant (p95 43 s), so this run is measured in hours to days — and the artifact carrying every guard is itself often unpublishable (a 11,777-guard publish was severed by the hosting proxy at 362 s). The failure would land long after the warning scrolled past.\nLevers: --only <glob> narrows which files contribute mutants (cannot change a verdict); --operator <name> narrows which operators contribute mutants (cannot change a verdict either — R127); --tests-only <glob> narrows the baseline, which dominates a first run (CAN change a verdict — an excluded killing test manufactures a survivor); --max-guards-per-batch <n> bounds each published artifact.`,
   );
 }
 
@@ -2017,10 +2163,20 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // stopHungSessions }`, echoed once from the same `cfg` values the `statics` object built at the
   // end of this function (and passed to `buildReport`) also reads — one source, two carriages. No
   // later event may repeat or update any of these.
+  // R127: resolve `--operator` to its registered spellings ONCE, here, before anything is
+  // published — three consequences, all wanted. An unregistered name fails at the very start of
+  // the session rather than after a deploy; the fingerprint treats `empty-block` and
+  // `lethal.empty-block` as the same scope, because they are; and the REPORT records the resolved
+  // name, so a reader months later is not left guessing what an abbreviation meant.
+  const resolvedOperators =
+    cfg.operators === undefined
+      ? undefined
+      : [...(resolveOperatorNames(cfg.operators, [...operatorTiers.keys()]) ?? [])].sort();
   emit({
     type: "run-configured",
     caps,
     ...(cfg.only !== undefined ? { only: { patterns: cfg.only } } : {}),
+    ...(resolvedOperators !== undefined ? { operators: { names: resolvedOperators } } : {}),
     ...(cfg.testsOnly !== undefined ? { testsOnly: cfg.testsOnly } : {}),
     ...(cfg.stopHungSessions === true ? { stopHungSessions: true } : {}),
   });
@@ -2139,6 +2295,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     skipKnownSurvivors: cfg.skipKnownSurvivors ?? false,
     selectorIds: cfg.selectorIds,
     ...(cfg.only !== undefined ? { only: cfg.only } : {}),
+    // R127: part of the fingerprint for the same reason `only` is — two runs that deployed
+    // different mutant sets are not resumable into one another, and a resume that carried
+    // verdicts across an operator-scope change would report them as this run's own measurement.
+    ...(resolvedOperators !== undefined ? { operators: resolvedOperators } : {}),
     ...(cfg.testsOnly !== undefined ? { testsOnly: cfg.testsOnly } : {}),
   });
   const resumeState = resolveResume(cfg, backendName, configFingerprint, emit);
@@ -2185,8 +2345,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     skipped: notInstrumentedFiles,
     totalFiles: totalAlFiles,
     excludedByOnly,
+    excludedByOperator,
   } = await generateMutationSet(cfg.projectDir, {
     ...(cfg.only !== undefined ? { only: cfg.only } : {}),
+    ...(resolvedOperators !== undefined ? { operators: resolvedOperators } : {}),
     emit,
   });
   const generateMutationSetMs = Date.now() - generateStartedMs;
@@ -2208,6 +2370,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     instrumentableFiles: allFiles.length,
     notInstrumentedFiles,
     excludedByOnly,
+    excludedByOperator,
   });
   emit({ type: "phase-left", phase: "generate", elapsedMs: generateMutationSetMs });
   // R48: refuse an unscoped run on a large project BEFORE anything is published. See
@@ -2215,7 +2378,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   assertRunSizeAcceptable({
     mutantCount: siteCount,
     fileCount: allFiles.length,
-    narrowed: cfg.only !== undefined,
+    narrowed: cfg.only !== undefined || resolvedOperators !== undefined,
     allowLargeRun: cfg.allowLargeRun ?? false,
   });
   const artifacts = planArtifacts(allFiles, {
@@ -3339,6 +3502,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   const statics: FoldStatics = {
     caps,
     ...(cfg.only !== undefined && cfg.only.length > 0 ? { only: { patterns: cfg.only } } : {}),
+    ...(resolvedOperators !== undefined && resolvedOperators.length > 0
+      ? { operators: { names: resolvedOperators } }
+      : {}),
     ...(cfg.testsOnly !== undefined && cfg.testsOnly.length > 0
       ? { testsOnly: cfg.testsOnly }
       : {}),

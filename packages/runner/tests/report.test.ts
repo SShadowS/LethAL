@@ -229,7 +229,7 @@ describe("renderConsole — permission canary reiteration (R26)", () => {
 // `readonly string[]` — a typo at a `caveats.push(...)` call site would silently never match a
 // consumer's check. This is a COMPILE-TIME check, not a runtime one: `all` below must list every
 // member of `Caveat` or `tsc` refuses to build (excess/missing keys against `Record<Caveat, true>`).
-// The `toBe(11)` assertion is a weak backstop by comparison — it would not catch two members
+// The `toBe(12)` assertion is a weak backstop by comparison — it would not catch two members
 // silently swapped for each other — but it does pin the count against silent growth/shrinkage of
 // the union without a matching update here.
 // ————————————————————————————————————————————————————————————————————————
@@ -239,6 +239,7 @@ describe("Caveat union", () => {
     const all: Record<Caveat, true> = {
       "baseline-red": true,
       narrowed: true,
+      "operator-narrowed": true,
       "tests-narrowed": true,
       "uninstrumentable-files": true,
       "stale-test-app": true,
@@ -249,6 +250,6 @@ describe("Caveat union", () => {
       resumed: true,
       "untargeted-triggers": true,
     };
-    expect(Object.keys(all).length).toBe(11);
+    expect(Object.keys(all).length).toBe(12);
   });
 });

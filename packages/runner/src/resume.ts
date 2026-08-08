@@ -222,6 +222,11 @@ export interface SessionFingerprintInput {
   readonly testDir: string;
   readonly backend: string;
   readonly only?: readonly string[];
+  /**
+   * R127: the `--operator` narrowing, if any. In for the same reason `only` is: it changes which
+   * mutants the run deployed at all.
+   */
+  readonly operators?: readonly string[];
   readonly testsOnly?: readonly string[];
   readonly skipKnownSurvivors: boolean;
   readonly selectorIds: {
@@ -239,6 +244,12 @@ export function sessionFingerprint(input: SessionFingerprintInput): string {
     testDir: input.testDir,
     backend: input.backend,
     only: input.only === undefined ? null : [...input.only].sort(),
+    // R127: OMITTED entirely when absent, rather than serialised as `null` the way `only` and
+    // `testsOnly` are. Those two were in the canonical shape from the start; adding a third key
+    // that is always present would change the digest of every run ever recorded, so a store
+    // holding a half-finished 12-hour run would stop resuming the moment this build shipped. A
+    // conditional key is deterministic (same position whenever present) and costs nothing.
+    ...(input.operators !== undefined ? { operators: [...input.operators].sort() } : {}),
     testsOnly: input.testsOnly === undefined ? null : [...input.testsOnly].sort(),
     skipKnownSurvivors: input.skipKnownSurvivors,
     selectorIds: [

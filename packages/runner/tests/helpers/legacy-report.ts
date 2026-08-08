@@ -128,6 +128,7 @@ export function legacyBuildReport(input: LegacyBuildReportInput): SessionReport 
     instrumentableFiles,
     notInstrumentedFiles: input.notInstrumented.files,
     excludedByOnly: input.only?.excludedFileCount ?? 0,
+    excludedByOperator: 0,
   });
 
   push({

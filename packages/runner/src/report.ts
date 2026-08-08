@@ -109,6 +109,7 @@ export const REPORT_SCHEMA_VERSION = 2;
 export type Caveat =
   | "baseline-red"
   | "narrowed"
+  | "operator-narrowed"
   | "tests-narrowed"
   | "uninstrumentable-files"
   | "stale-test-app"
@@ -161,6 +162,18 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
       "`only` selects which mutants run and cannot itself change a verdict — unlike " +
       "`tests-narrowed`, which selects which tests run and can.",
     basis: "R41",
+  },
+  "operator-narrowed": {
+    meaning:
+      "The run was scoped by `--operator`. `mutationScore` covers the named operators ONLY, and " +
+      "an operator-scoped score describes how the suite handles that kind of change, not the " +
+      "project.",
+    entailedNegative:
+      "`operator` selects which mutants run and cannot itself change a verdict: the filter is " +
+      "applied AFTER per-file dedup, so every mutant it deploys is one an unfiltered run would " +
+      "have deployed too. It is separate from `narrowed` (`--only`) because the two narrow " +
+      "different axes and a reader must be able to tell which one produced the number.",
+    basis: "R127",
   },
   "tests-narrowed": {
     meaning:
@@ -559,6 +572,20 @@ export interface SessionReport {
   readonly only?: {
     readonly patterns: readonly string[];
     readonly excludedFileCount: number;
+  };
+  /**
+   * R127: the `--operator` narrowing this run was asked for, if any. Absent means every registered
+   * operator contributed. See `CAVEAT_INTERPRETATIONS["operator-narrowed"]`.
+   *
+   * `names` are the RESOLVED registered names, so a report never records an abbreviation a later
+   * reader would have to guess at. `excludedSiteCount` counts SITES, not files, and unlike
+   * `only.excludedFileCount` it is a number this run genuinely measured — every operator still ran
+   * over every admitted file and the filter dropped the specs afterwards (see
+   * `MutationSetResult.excludedByOperator`).
+   */
+  readonly operators?: {
+    readonly names: readonly string[];
+    readonly excludedSiteCount: number;
   };
   /**
    * R45: the `--tests-only` narrowing, if any. Absent means the whole suite ran at baseline. See
@@ -1322,6 +1349,8 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
   const caveats: Caveat[] = [];
   if (!input.baselineGreen) caveats.push("baseline-red");
   if (input.only !== undefined) caveats.push("narrowed");
+  // See CAVEAT_INTERPRETATIONS["operator-narrowed"] for what this caveat means to a reader.
+  if (input.operators !== undefined) caveats.push("operator-narrowed");
   // See CAVEAT_INTERPRETATIONS["tests-narrowed"] for what this caveat means to a reader.
   if (input.testsOnly !== undefined && input.testsOnly.length > 0) caveats.push("tests-narrowed");
   if (input.notInstrumented.files.length > 0) caveats.push("uninstrumentable-files");
@@ -1349,7 +1378,9 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
   if (input.resumedFrom !== undefined) caveats.push("resumed");
   if (input.untargetedTriggerCount > 0) caveats.push("untargeted-triggers");
   const narrowed =
-    input.only !== undefined || (input.testsOnly !== undefined && input.testsOnly.length > 0);
+    input.only !== undefined ||
+    input.operators !== undefined ||
+    (input.testsOnly !== undefined && input.testsOnly.length > 0);
   const degraded = !input.baselineGreen;
   const reliability =
     narrowed && degraded
@@ -1359,9 +1390,19 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
         : degraded
           ? "degraded"
           : "full";
-  const scopeText = narrowed
-    ? `${input.only?.patterns.join(", ") ?? ""} (${input.notInstrumented.totalFiles - (input.only?.excludedFileCount ?? 0)} of ${input.notInstrumented.totalFiles} .al files)`
-    : `${input.notInstrumented.totalFiles} .al file(s)`;
+  // R127: the file axis and the operator axis are described separately, because they narrow
+  // different things and a reader who sees one number has to be able to tell which narrowing
+  // produced it. The `--only` wording is unchanged; a run with no `--only` now reads as the plain
+  // file count even when `--tests-only` or `--operator` narrowed it, instead of the old
+  // empty-patterns " (40 of 40 .al files)" that named a narrowing on the wrong axis.
+  const fileScope =
+    input.only !== undefined
+      ? `${input.only.patterns.join(", ")} (${input.notInstrumented.totalFiles - input.only.excludedFileCount} of ${input.notInstrumented.totalFiles} .al files)`
+      : `${input.notInstrumented.totalFiles} .al file(s)`;
+  const scopeText =
+    input.operators !== undefined
+      ? `${fileScope}, operators ${input.operators.names.join(", ")} only (${input.operators.excludedSiteCount} site(s) from other operators excluded)`
+      : fileScope;
   const baselineText = degraded
     ? `, with ${input.unsupportedTests.length} of ${input.baselineTests.length} baseline tests failing`
     : "";
@@ -1437,6 +1478,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     },
     untargetedTriggerCount: input.untargetedTriggerCount,
     ...(input.only !== undefined ? { only: input.only } : {}),
+    ...(input.operators !== undefined ? { operators: input.operators } : {}),
     ...(input.testsOnly !== undefined ? { testsOnly: input.testsOnly } : {}),
     ...(input.staleTestApp !== undefined ? { staleTestApp: input.staleTestApp } : {}),
     ...(input.resumedFrom !== undefined ? { resumedFrom: input.resumedFrom } : {}),
@@ -1699,6 +1741,13 @@ export function renderConsole(r: SessionReport): string {
   if (r.only !== undefined) {
     lines.push(
       `NARROWED (--only): ${r.only.patterns.map((p) => `"${p}"`).join(", ")} — ${r.only.excludedFileCount} .al file(s) contributed no mutants. The score above covers the narrowed set ONLY, it is not a project score.`,
+    );
+  }
+  // R127: the operator axis, printed separately from `--only` for the same reason it is a separate
+  // caveat — the two narrow different things and a reader must be able to tell which one they got.
+  if (r.operators !== undefined) {
+    lines.push(
+      `NARROWED (--operator): ${r.operators.names.map((n) => `"${n}"`).join(", ")} — ${r.operators.excludedSiteCount} mutation site(s) from other operators were excluded. The score above covers those operators ONLY, it is not a project score.`,
     );
   }
   // Same reasoning as NOT INSTRUMENTED above: a qualifier on the score belongs next to the score.

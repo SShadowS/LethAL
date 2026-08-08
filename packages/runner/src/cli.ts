@@ -270,6 +270,10 @@ export interface DryRunCliConfig {
   /** R41: `--only` globs, absent when the run was not narrowed — see `RunCliConfig.only`.
    *  Honoured here too, so the count a dry run reports is the count a real run would produce. */
   readonly only?: readonly string[];
+  /** R127: `--operator` names, absent when the run was not operator-scoped — see
+   *  `RunCliConfig.operators`. Honoured here for the same reason `only` is: a dry run exists to
+   *  answer "how big is this going to be", and it must answer for the scope actually asked for. */
+  readonly operators?: readonly string[];
   /**
    * R90: same defaults as `RunCliConfig`, because a dry run is where the publish ceiling is worth
    * knowing — before anything is generated, instrumented, compiled or published. Both are read
@@ -315,6 +319,18 @@ export interface RunCliConfig {
    * still published. A pattern matching no file is refused — see `admittedByOnly`.
    */
   readonly only?: readonly string[];
+  /**
+   * R127: `--operator <name>` (repeatable) narrows which OPERATORS contribute mutants, so a
+   * question about one kind of change does not have to buy every other operator's sites in the
+   * same files. Absent — not `[]` — when the flag was not given, matching this file's
+   * `exactOptionalPropertyTypes` convention.
+   *
+   * The same kind of narrowing as `only` and not the same kind as `testsOnly`: it selects mutants
+   * and cannot change a verdict. Measured cost of not having it (R85 rung 1): 894 mutants deployed
+   * to score 3 argument swaps, because asking for the FILES that hold swap sites also buys every
+   * `empty-block` and `void-method-call` site in them.
+   */
+  readonly operators?: readonly string[];
   /**
    * R45: `--tests-only <glob>` (repeatable) narrows which TEST files run at baseline. Absent means
    * the whole suite.
@@ -646,6 +662,10 @@ RUN — required
 RUN — scope. These bound cost. --tests-only can change a verdict; the others cannot.
   --only <glob>              only these files contribute mutants (repeatable). Every file is still
                              parsed, compiled and published — this selects mutants, not sources
+  --operator <name>          only these operators contribute mutants (repeatable). The 'lethal.'
+                             prefix is optional; an unregistered name, or a registered one with no
+                             deployable site here, is refused. The report flags it
+                             'operator-narrowed'
   --tests-only <glob>        only these test files run at baseline (repeatable). CAN CHANGE A
                              VERDICT: exclude a killing test and its mutant is reported survived.
                              The report flags it 'tests-narrowed'
@@ -826,6 +846,8 @@ export const RUN_FLAGS = {
   "table-id": { type: "string" },
   // R41: repeatable — several `--only` patterns union. See `RunCliConfig.only`.
   only: { type: "string", multiple: true },
+  // R127: repeatable — several `--operator` names union. See `RunCliConfig.operators`.
+  operator: { type: "string", multiple: true },
   // R45: repeatable — see `RunCliConfig.testsOnly`.
   "tests-only": { type: "string", multiple: true },
   // R44: see `RunCliConfig.maxGuardsPerBatch`.
@@ -1088,6 +1110,16 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
   }
   const only = onlyRaw !== undefined && onlyRaw.length > 0 ? { only: onlyRaw } : {};
 
+  // R127: same reasoning as the `--only ""` check above. An empty name would reach
+  // `resolveOperatorNames` as an unregistered operator and be refused there, but the message
+  // would list every registered name to explain a value the caller never meant to pass.
+  const operatorRaw = values.operator;
+  if (operatorRaw?.some((n) => n === "") === true) {
+    throw new Error('--operator requires a non-empty name (e.g. --operator "swap-call-arguments")');
+  }
+  const operators =
+    operatorRaw !== undefined && operatorRaw.length > 0 ? { operators: operatorRaw } : {};
+
   const testsOnlyRaw = values["tests-only"];
   if (testsOnlyRaw?.some((p) => p === "") === true) {
     throw new Error(
@@ -1156,6 +1188,7 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
       dbPath: values.db ?? join(projectDir, "lethal.sqlite"),
       configPath: values.config ?? join(projectDir, "lethal.config.json"),
       ...only,
+      ...operators,
     };
   }
 
@@ -1251,6 +1284,7 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     ...(compileConcurrency !== undefined ? { compileConcurrency } : {}),
     ...(Object.keys(selectorIdOverrides).length > 0 ? { selectorIdOverrides } : {}),
     ...only,
+    ...operators,
     ...testsOnly,
     ...(maxGuardsPerBatch !== undefined ? { maxGuardsPerBatch } : {}),
     ...(mutantTimeoutMs !== undefined ? { mutantTimeoutMs } : {}),
@@ -2127,14 +2161,22 @@ async function dryRunCeiling(
 export async function printDryRun(
   projectDir: string,
   only: readonly string[] | undefined,
-  paths: { readonly dbPath: string; readonly configPath: string },
+  paths: {
+    readonly dbPath: string;
+    readonly configPath: string;
+    /** R127: `--operator` names, honoured here for the same reason `only` is. */
+    readonly operators?: readonly string[];
+  },
 ): Promise<void> {
-  // R41: `--only` is honoured here too. A dry run whose whole purpose is "how big is this going to
-  // be" would be worse than useless if it answered for the unnarrowed project.
-  const { files, skipped, totalFiles, excludedByOnly } = await generateMutationSet(
-    projectDir,
-    only !== undefined ? { only } : {},
-  );
+  // R41/R127: `--only` and `--operator` are honoured here too. A dry run whose whole purpose is
+  // "how big is this going to be" would be worse than useless if it answered for a wider scope
+  // than the one the real run will use.
+  const operators = paths.operators;
+  const { files, skipped, totalFiles, excludedByOnly, excludedByOperator } =
+    await generateMutationSet(projectDir, {
+      ...(only !== undefined ? { only } : {}),
+      ...(operators !== undefined ? { operators } : {}),
+    });
   const sites = sitesOf(files);
   const artifacts = planArtifacts(files);
   // R92: the two numbers are NAMED, never left to be told apart by position — the campaign's own
@@ -2164,6 +2206,11 @@ export async function printDryRun(
   if (only !== undefined && only.length > 0) {
     console.log(
       `narrowed by --only ${only.map((p) => `"${p}"`).join(", ")}: ${excludedByOnly} of ${totalFiles} .al file(s) excluded from mutation (still parsed, compiled and published)`,
+    );
+  }
+  if (operators !== undefined && operators.length > 0) {
+    console.log(
+      `narrowed by --operator ${operators.map((n) => `"${n}"`).join(", ")}: ${excludedByOperator} mutation site(s) from other operators excluded`,
     );
   }
   // R92/R90: per-file guard counts, largest DEPLOYED first — the ordering that matters, since the
@@ -2569,6 +2616,7 @@ export async function runFromCli(
         // subscriber from a throw in its siblings, so there is nothing to pre-combine here.
         emit: emitSubscribers,
         ...(parsed.only !== undefined ? { only: parsed.only } : {}),
+        ...(parsed.operators !== undefined ? { operators: parsed.operators } : {}),
         ...(parsed.testsOnly !== undefined ? { testsOnly: parsed.testsOnly } : {}),
         ...(parsed.maxGuardsPerBatch !== undefined
           ? { maxGuardsPerBatch: parsed.maxGuardsPerBatch }
@@ -3563,6 +3611,7 @@ async function main(): Promise<number> {
     await printDryRun(parsed.projectDir, parsed.only, {
       dbPath: parsed.dbPath,
       configPath: parsed.configPath,
+      ...(parsed.operators !== undefined ? { operators: parsed.operators } : {}),
     });
     return 0;
   }

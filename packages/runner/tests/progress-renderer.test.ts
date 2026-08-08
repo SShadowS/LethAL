@@ -76,6 +76,7 @@ describe("progress renderer", () => {
         instrumentableFiles: 441,
         notInstrumentedFiles: [],
         excludedByOnly: 0,
+        excludedByOperator: 0,
       }),
     );
     expect(out[0]).toContain("176");
