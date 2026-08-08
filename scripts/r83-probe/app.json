@@ -1,0 +1,49 @@
+{
+  "id": "3f9c81ad-27b6-4e05-9d14-6ab2f70c5e81",
+  "name": "LethAL R83 Probe",
+  "publisher": "LethAL",
+  "version": "1.0.0.0",
+  "brief": "R83: can InherentPermissions REFUSE an operation Permissions grants?",
+  "description": "Throwaway probe. Measures whether InherentPermissions constrains rather than grants, in the lowered-session mode where an object's Permissions property is load-bearing (R13). Not for production use.",
+  "privacyStatement": "",
+  "EULA": "",
+  "help": "",
+  "url": "",
+  "logo": "",
+  "dependencies": [
+    {
+      "id": "5d86850b-0d76-4eca-bd7b-951ad998e997",
+      "name": "Tests-TestLibraries",
+      "publisher": "Microsoft",
+      "version": "25.0.0.0"
+    },
+    {
+      "id": "23de40a6-dfe8-4f80-80db-d70f83ce8caf",
+      "name": "Test Runner",
+      "publisher": "Microsoft",
+      "version": "23.0.0.0"
+    },
+    {
+      "id": "40860557-a18d-42ad-aecb-22b7dd80dc80",
+      "name": "Permissions Mock",
+      "publisher": "Microsoft",
+      "version": "25.0.0.0"
+    }
+  ],
+  "screenshots": [],
+  "idRanges": [
+    {
+      "from": 71520,
+      "to": 71530
+    }
+  ],
+  "resourceExposurePolicy": {
+    "allowDebugging": true,
+    "allowDownloadingSource": true,
+    "includeSourceInSymbolFile": true
+  },
+  "platform": "28.0.0.0",
+  "application": "28.0.0.0",
+  "runtime": "17.0",
+  "features": []
+}
