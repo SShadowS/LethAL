@@ -330,6 +330,18 @@ async function runOnce(scratchRoot: string): Promise<RunOnceResult> {
         ? { environmentName: launchCfg.environmentName }
         : {}),
       ...(bcdev.env !== undefined ? { env: bcdev.env } : {}),
+      // R76's own recorded caveat, fixed 2026-08-08: this script hand-builds the backend config
+      // and used to drop `coverageMode`, so the gate could not exercise the very setting R76 was
+      // CLOSED by (`procedure`, which routes baseline through the hub and makes a real `TestPage`
+      // test survivable). The measurement that closed R76 had to be taken through the direct CLI
+      // instead, which means the gate froze a mode the fix does not apply to.
+      //
+      // Forwarding an absent field is a no-op — `BcDevConfig.coverageMode` falls back to
+      // `DEFAULT_COVERAGE_MODE` ("fenced") — so the frozen 109/17/10 is unaffected while the
+      // config file has no `coverageMode`. Verified by running the gate with this line in and the
+      // config untouched. What it buys is that setting the field in the config file now actually
+      // reaches the backend.
+      ...(bcdev.coverageMode !== undefined ? { coverageMode: bcdev.coverageMode } : {}),
     },
     undefined,
     { compiler, deployer, verifier, harnessVerifier },

@@ -67,9 +67,11 @@ else is not.
 6. Smoke-test the host binary against a fixture (see [Verifying a build](#verifying-a-build)).
 7. Tag and publish the artifacts.
 
-> This repository has **no configured git remote** as of 2026-07-27 (`git remote -v` is empty), so
-> step 7 has no destination yet and no release has been cut. Nothing below step 6 has been
-> exercised.
+> **Corrected 2026-08-08.** This said the repository had no configured git remote, which was true
+> on 2026-07-27 and is not now: `origin` is `https://github.com/SShadowS/LethAL.git`, and it is
+> PUBLIC. What remains true is that **no release has been cut** — step 7 has never been run, and
+> nothing below step 6 has been exercised. Scan for secrets before any push, not only before a
+> release.
 
 ## What the build produces
 
@@ -203,4 +205,4 @@ lethal run --project <dir> --dry-run
   Darwin builds until they are notarised or the quarantine attribute is cleared.
 - **The macOS and Linux builds have never been executed**, only built and format-checked, because
   this is a Windows machine. Verify each on its own platform before publishing.
-- **No release host.** No git remote is configured, so there is nowhere to upload to yet.
+- **No release has been cut.** `origin` exists (`https://github.com/SShadowS/LethAL.git`, public) as of 2026-08-08, so there IS somewhere to upload to — but step 7 has never been run, so the upload half of this document is still unexercised.
