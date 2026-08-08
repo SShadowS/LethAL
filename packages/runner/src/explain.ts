@@ -71,8 +71,9 @@ import type { MutantVerdict } from "./store";
  *     a priority NUMBER, which `SessionReport.survivorsByProcedure`'s own doc comment refuses for
  *     the same reason — dies by construction. Blind to new TEXT at a path that already exists.
  *   - A STRING-PROVENANCE check: every string in the output must come from the report, from a
- *     registry interpretation, or from a short pinned list of strings this projection authors.
- *     Closes new text at an existing path in general.
+ *     registry interpretation, or from the projection's own shipped constants (`EXPLAIN_CONTRACT`'s
+ *     values, the two interpretation-registry key sets, `TOOL_CONDITIONS`) — DERIVED, so there is no
+ *     list to append to. Closes new text at an existing path in general.
  *   - An EQUALITY PIN on `EXPLAIN_CONTRACT.note`, the one string authored here. Appending
  *     target-prescriptive advice to it slipped all three checks above at once and shipped into the
  *     real rung1 artifact (fix round 2); the pin reddens on any edit at all, whatever its wording.
@@ -80,16 +81,24 @@ import type { MutantVerdict } from "./store";
  * The pinned path set is also, exactly, the structure `EXPLAIN_SCHEMA_VERSION` versions: the test
  * that stops smuggled advice is the same test that stops an unversioned schema change.
  *
- * THE BYPASS ALL FOUR SHARE, disclosed because the list above would be dishonest without it. Both
- * pins are built from OBSERVED data — `EXPLAIN_LEAF_PATHS` and `PROJECTION_AUTHORED_STRINGS` are
+ * THE BYPASS ALL FOUR USED TO SHARE — CLOSED 2026-08-08 (R115 gaps 1 and 3), and stated here
+ * because the shape of what closed it is worth knowing. Both pins were built from OBSERVED data:
  * hand-maintained lists checked against what the fixture and the six committed reports actually
- * produce — so a new field ships green if its path and its string are added alongside it. For a
- * GLOBAL, report-content-independent field that is four small coordinated edits (two in this file,
- * one in each list) and an unremarkable-looking diff: measured at 45 pass / 0 fail. For a PER-ITEM
- * field it is impractical, because the six-real-report test forces every distinct real value into
- * `PROJECTION_AUTHORED_STRINGS` and that enumeration is itself the tell. What closes the global case
- * is deriving the pinned set from the output TYPE rather than from observed data — filed as R115.
- * Until then, a diff that adds a field to `ExplainOutput` is a review event, not a mechanical one.
+ * produce. A new GLOBAL field therefore shipped green with four small coordinated edits — two here,
+ * one in each list — at 45 pass / 0 fail, and a field emitted under a condition NO report reaches
+ * (`survivors.length > 200`) was invisible in both directions at 43 pass / 0 fail.
+ *
+ * Neither is now. `EXPLAIN_LEAF_PATHS` is asserted equal to the leaf set walked out of
+ * `ExplainOutput`'s own DECLARATION, so an unreachable field enters the pin and then fails the
+ * reachability test for having no producer (both halves red-checked). And the authored-string
+ * allowlist is DERIVED from shipped constants rather than listed, so the fourth edit has nowhere to
+ * land: the same probe now reddens string provenance, naming the sentence, on the real rung1 report.
+ *
+ * What that does NOT close, stated rather than glossed: a new field on `EXPLAIN_CONTRACT` would
+ * still widen the admitted-string set, since its values are admitted wholesale. The whole-object
+ * equality pin on `EXPLAIN_CONTRACT` in the test is what makes adding one loud, and dropping that
+ * pin re-opens this. A diff that adds a field to `ExplainOutput` or to the contract is still a
+ * review event.
  *
  * What NONE of them can do is judge whether an ADMISSIBLE string's prose respects the target/tool
  * line below. Advice added to a shared registry constant ships green — see the note on
@@ -304,8 +313,15 @@ export interface ExplainNotMeasured {
  * fully prescriptive about. Each is keyed 1:1 to a report field: `quarantined` to
  * `SessionReport.quarantined`'s presence, `stranded-skips` to a non-zero
  * `SessionReport.resumedFrom.skippedStranded`.
+ *
+ * The TOKENS are the source and the type is derived from them, not the other way round, so the two
+ * cannot drift apart. R115 gap (3): `explain.test.ts` builds its allowed-authored-string set from
+ * runtime constants rather than from a hand-maintained list, and these two literals are the only
+ * strings in the output with no registry or report behind them. A hand list would have been one
+ * more place a new authored string could be quietly added.
  */
-export type ToolCondition = "quarantined" | "stranded-skips";
+export const TOOL_CONDITIONS = ["quarantined", "stranded-skips"] as const;
+export type ToolCondition = (typeof TOOL_CONDITIONS)[number];
 
 export interface ExplainToolCondition {
   readonly condition: ToolCondition;

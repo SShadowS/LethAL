@@ -9,6 +9,7 @@ import {
   EXPLAIN_CONTRACT,
   EXPLAIN_SCHEMA_VERSION,
   MalformedReportError,
+  TOOL_CONDITIONS,
   assertExplainableReport,
   explain,
 } from "../src/explain";
@@ -26,6 +27,7 @@ import type { Caveat, MutantErrorCause, MutantOutcome, SessionReport } from "../
 import { ATTRIBUTION_INTERPRETATIONS } from "../src/selection";
 import type { CoverageAttribution } from "../src/selection";
 import type { MutantVerdict } from "../src/store";
+import { TypeLeafPathError, typeLeafPaths } from "./helpers/type-leaf-paths";
 
 // ————————————————————————————————————————————————————————————————————————————————————————
 // Fixtures. A literal `SessionReport` rather than a run-shaped builder ON PURPOSE: `explain`'s
@@ -258,28 +260,37 @@ const PINNED_CONTRACT_NOTE =
 
 /**
  * Every string the PROJECTION authors — present in the output but coming from neither the report
- * nor a registry interpretation. Deliberately short: two enum families derived from report values,
- * one field-name literal, and the contract note. Anything else appearing here is a new voice in the
- * output and has to be argued for.
+ * nor a registry interpretation. Two enum families derived from report values, two `ToolCondition`
+ * tokens, and the contract's own text.
  *
- * The three TOKENS need no equality pin of their own: consumers filter on their exact value, so
- * widening one into a sentence breaks the code that reads it rather than smuggling anything —
- * measured, `"quarantined"` carrying advice (through an `as ToolCondition` cast) fails five tests.
- * `note` is the only entry with room to hide a claim, and it is pinned by `PINNED_CONTRACT_NOTE`.
+ * DERIVED, not listed. R115 gap (3): this used to be a hand-maintained array, and that made it the
+ * fourth of four small coordinated edits that shipped a new GLOBAL prose field green — two lines in
+ * `explain.ts`, one entry in `EXPLAIN_LEAF_PATHS`, one entry here, measured at 45 pass / 0 fail. The
+ * realistic route was never malice: an author whose new field reddens two tests "fixes" them by
+ * adding the two entries, and nobody is asked whether the projection should be saying that at all.
  *
- * Shares `EXPLAIN_LEAF_PATHS`'s known bypass (R115) — this list is observed, not derived.
+ * Building the set from the shipped constants removes the place to add the entry. A new authored
+ * string now has exactly two homes, and both are loud:
+ *   - `EXPLAIN_CONTRACT` — pinned below as a WHOLE OBJECT, so a new field there reddens the pin
+ *     rather than widening this set quietly;
+ *   - a new interpretation registry — which is a `Record<Union, Interpretation>` with a resolving
+ *     basis, i.e. the admissibility rule being followed rather than dodged.
+ *
+ * The TOKENS need no equality pin of their own: consumers filter on their exact value, so widening
+ * one into a sentence breaks the code that reads it rather than smuggling anything — measured,
+ * `"quarantined"` carrying advice (through an `as ToolCondition` cast) fails five tests. `note` is
+ * the only entry with room to hide a claim, and it is pinned by `PINNED_CONTRACT_NOTE`.
  */
 const PROJECTION_AUTHORED_STRINGS: readonly string[] = [
-  "explainSchemaVersion", // contract.structureStableUnder
-  PINNED_CONTRACT_NOTE, // contract.note
-  "observed", // GuardEvidence — derived from a boolean, so absent from the report
-  "not-observed",
-  "not-measured",
-  "covered-but-unreached", // SurvivorReach — R116, derived from a PAIR, so absent from the report
-  "unreached-and-uncovered",
-  "not-decided",
-  "quarantined", // ToolCondition — a field NAME in the report, never a value
-  "stranded-skips",
+  // The contract's own text, whatever it currently says. Safe to admit wholesale ONLY because the
+  // constant is pinned by equality below; drop that pin and this line becomes the hole.
+  ...Object.values(EXPLAIN_CONTRACT).filter((v): v is string => typeof v === "string"),
+  // GuardEvidence — derived from a boolean, so absent from the report.
+  ...Object.keys(GUARD_EVIDENCE_INTERPRETATIONS),
+  // SurvivorReach — R116, derived from a PAIR, so absent from the report.
+  ...Object.keys(REACH_INTERPRETATIONS),
+  // ToolCondition — a field NAME in the report, never a value.
+  ...TOOL_CONDITIONS,
 ];
 
 // ————————————————————————————————————————————————————————————————————————————————————————
@@ -418,6 +429,34 @@ function fullCoverageReport(): SessionReport {
  *   [enum]     a machine value from a closed set the report already carries, or derived from one
  *   [contract] the fixed EXPLAIN_CONTRACT text
  */
+/**
+ * The same set, DERIVED from `ExplainOutput`'s declaration instead of from observed output.
+ *
+ * R115 gap (1). See `typeLeafPaths` for the mechanism and why it parses rather than type-checks.
+ * The two sets are asserted equal below; that equality is what turns a field no report provokes
+ * from invisible into a dead pin entry, which the existing reachability test already fails on.
+ *
+ * `expectedLeafTypeNames` states every type allowed to become ONE path. All of them are closed
+ * unions of string literals the report already carries, `Interpretation` excepted — which is
+ * expanded, not listed, because `interpretation.ts` is in `files`.
+ */
+function derivedExplainLeafPaths(): readonly string[] {
+  const src = join(import.meta.dir, "..", "src");
+  return typeLeafPaths({
+    files: [join(src, "explain.ts"), join(src, "interpretation.ts")],
+    root: "ExplainOutput",
+    expectedLeafTypeNames: [
+      "Caveat",
+      "CoverageAttribution",
+      "GuardEvidence",
+      "SurvivorReach",
+      "MutantErrorCause",
+      "ToolCondition",
+      'ReportValidity["reliability"]',
+    ],
+  });
+}
+
 const EXPLAIN_LEAF_PATHS: readonly string[] = [
   "$.explainSchemaVersion", // [enum] this build's constant
   "$.derivedFromReportSchemaVersion", // [verbatim] report.schemaVersion
@@ -552,6 +591,41 @@ describe("explain — the admissibility rule, made executable", () => {
     );
   });
 
+  test("the pin is exactly what `ExplainOutput`'s TYPE can produce — R115 gap (1)", () => {
+    // The pin was built from OBSERVED output, so a field emitted only under a condition no report
+    // reaches was invisible in both directions: no unpinned leaf, no dead entry. Measured with
+    // `...(survivors.length > 200 ? { summary: "…" } : {})` at 43 pass / 0 fail.
+    //
+    // The declaration has no such blind spot. Comparing the pin against it means such a field must
+    // enter the pin, and the reachability test below then fails it for having no producer — which
+    // is the assertion that actually catches it. Sorted, because neither set's ORDER is meaningful
+    // and a diff on ordering would be noise.
+    expect([...derivedExplainLeafPaths()].sort()).toEqual([...EXPLAIN_LEAF_PATHS].sort());
+  });
+
+  test("the type walk fails LOUDLY rather than flattening a struct it cannot expand", () => {
+    // Guards the guard. If `typeLeafPaths` quietly turned an unresolvable type reference into one
+    // leaf, the equality above would stay green while every field inside that type went unpinned —
+    // empty-vs-empty, this project's signature bug. Dropping `interpretation.ts` from the file list
+    // makes `Interpretation` exactly such a reference.
+    const src = join(import.meta.dir, "..", "src");
+    expect(() =>
+      typeLeafPaths({
+        files: [join(src, "explain.ts")],
+        root: "ExplainOutput",
+        expectedLeafTypeNames: [
+          "Caveat",
+          "CoverageAttribution",
+          "GuardEvidence",
+          "SurvivorReach",
+          "MutantErrorCause",
+          "ToolCondition",
+          'ReportValidity["reliability"]',
+        ],
+      }),
+    ).toThrow(TypeLeafPathError);
+  });
+
   test("the pin has no dead entries — every pinned path is reachable", () => {
     // The other direction: a path left behind by a removed field would silently license anything
     // later reintroduced under that name. `fullCoverageReport` exists to reach every branch, so
@@ -663,11 +737,20 @@ describe("explain — the admissibility rule, made executable", () => {
     );
   });
 
-  test("the contract note is EXACTLY the pinned text, and is the shared constant", () => {
+  test("the contract is EXACTLY the pinned object, field for field, and is the shared constant", () => {
     // Fix round 2. Equality, not phrasing — see PINNED_CONTRACT_NOTE.
     const out = explain(fullCoverageReport());
     expect(out.contract.note).toBe(PINNED_CONTRACT_NOTE);
-    expect(EXPLAIN_CONTRACT.note).toBe(PINNED_CONTRACT_NOTE);
+    // WHOLE-OBJECT, not just `note`, and that is R115 gap (3)'s other half.
+    // `PROJECTION_AUTHORED_STRINGS` now admits every string value of `EXPLAIN_CONTRACT`
+    // wholesale, so an added contract field would otherwise widen the allowed-string set
+    // silently — which is exactly the smuggling route being closed. A `toEqual` on the whole
+    // object makes adding one a visible, argued change instead.
+    expect(EXPLAIN_CONTRACT).toEqual({
+      structureStableUnder: "explainSchemaVersion",
+      proseIsContractual: false,
+      note: PINNED_CONTRACT_NOTE,
+    });
     // Emitted by reference, like the interpretations — never composed fresh per call, which is what
     // would let one caller's contract statement differ from another's.
     expect(out.contract).toBe(EXPLAIN_CONTRACT);
