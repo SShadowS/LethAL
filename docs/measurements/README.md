@@ -1057,10 +1057,88 @@ spawn must RACE it, the way `OneShotTransport.send` does, rather than wait for a
 - **Not stability.** Two of the shapes above changed between two point releases hours apart. Every
   literal in this section is a "today" value, and the reason R123 wants them measured per session
   rather than written into a decode.
-- **Not the server protocol.** Everything here is CLI mode. R97's `SourcePaths[0]` defect is
-  unmeasured against the release and is upstream #1658.
+- **Not the server protocol.** Everything above is CLI mode. The server protocol is measured in its
+  own section below, added 2026-08-08.
 - **Not a real project.** The fixture resolves zero dependencies, so it never exercises v2's hard
   artifact prerequisite or its rejection of a symbols-only `.alpackages` — that is R100, and the
   fixture gates are structurally blind to it.
 - **Not the verdicts.** Whether v2 reproduces the frozen 3 killed / 13 survived / 0 no-coverage
   per-mutant is the gate's job, not this section's.
+
+## al-runner 2.1.0.0 server mode — measured, and it is a different protocol now
+
+Answers R97. Every line below came from driving `al-runner --server` directly over stdin/stdout on
+this Windows machine on **2026-08-08**, against **al-runner v2.1.0.0**, with
+`fixtures/sandbox-app` as the source bundle and `fixtures/sandbox-tests` as the test bundle.
+
+### The defect R97 was filed for is FIXED
+
+R97 recorded, against 2.0.0.0, that `runTests` used `SourcePaths[0]` only, so a request carrying
+`[sourceDir, testDir]` never ran the test bundle and answered
+`{"tests":[],"passed":0,...,"exitCode":0}` — green and empty. On 2.1.0.0 the same request runs both
+bundles:
+
+```
+request:  {"command":"runTests","sourcePaths":["…/fixtures/sandbox-app","…/fixtures/sandbox-tests"]}
+line 1:   {"type":"test","name":"Codeunit79100.ClampPercentRuns","status":"pass","durationMs":24}
+line 2:   {"type":"test","name":"Codeunit79100.OverBudgetDetected","status":"pass","durationMs":3}
+line 3:   {"type":"summary","exitCode":0,"passed":2,"failed":0,"errors":0,"total":2,"cached":true,"protocolVersion":2}
+```
+
+Order still matters, and the order LethAL sent is the correct one. Reversed
+(`[testDir, sourceDir]`), the test RUNS but fails: `Codeunit 79000 is not present in the test
+assembly or any loaded dependency`. So the earlier bundle is built as an implementation package and
+the later one supplies the tests, which is exactly the `[sourceDir, testDir]` shape `ServerTransport`
+was sending.
+
+### The response is streaming NDJSON, not one envelope
+
+This is the part that matters more than the fix. 2.1.0.0 answers one `{"type":"test",…}` line per
+test and then one `{"type":"summary",…,"protocolVersion":2}` line. The transport this repo carried
+read **one** line per request and looked for a `tests` array. Against this binary it would have
+found none on the first per-test line and returned an empty list — the silently-empty confirmation
+that is this project's signature bug, relocated from upstream into our own decoder.
+
+`{"ready":true}` on start and `{"error":"Unknown command: bogusCommand"}` for an unknown command are
+unchanged.
+
+### There is NO per-test selection
+
+Measured by sending the request with each plausible field name in turn against one warm server.
+All six were **ignored**: every request ran the whole suite and returned `total: 2`.
+
+| field sent | tests run |
+| --- | --- |
+| *(none)* | both |
+| `testFilter` | both |
+| `filter` | both |
+| `test` | both |
+| `tests` (array) | both |
+| `testName` | both |
+| `pattern` | both |
+
+Guessed field names cannot prove a capability is absent, but they are what a caller has; the CLI's
+`--test <qualified>` has no counterpart anyone can reach over this protocol today.
+
+### What that costs, and why serverMode stays refused
+
+`ExecutionBackend.run()` is called once per TEST. With no per-test selection the server executes T
+tests on each of those T calls, so one mutant costs T² test executions where the CLI's `--test`
+filter costs T. Warm-process speed is real — the same request took 6,980 ms cold and 1,011 ms warm
+here — but it does not pay for a quadratic. `AlRunnerBackend` therefore still throws on
+`serverMode: true`, with a message that now states these reasons rather than the fixed upstream one,
+and the transport that decoded the old envelope is deleted rather than repaired.
+
+Server mode becomes worth revisiting when the backend can make ONE call per MUTANT instead of one
+per test — a single whole-suite response already carries every verdict that mutant needs. Filed as
+R126.
+
+### What this does NOT establish
+
+- **Not isolation.** The CLI sends `--isolation test`; nothing was measured about whether the server
+  protocol accepts or honours an isolation setting, and running a whole suite in one warm process is
+  not obviously the same semantics as one process per test.
+- **Not provisioning.** `--server`'s usage line takes only `--package-cache` and `--cache`, so it has
+  no `--auto-provision`. These runs succeeded because the 28.1.49838.50794 artifacts were already
+  cached from R125's work; a cold machine is untested and would likely refuse the way R125 records.
+- **Not stability.** Same caveat as CLI mode: `protocolVersion: 2` is a today value.

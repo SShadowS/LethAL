@@ -3,7 +3,11 @@ import { mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CONTROL_REGISTER_FILENAME, CONTROL_UPGRADE_FILENAME } from "@lethal/schemata";
-import { AL_RUNNER_UNCLASSIFIED_ERROR, AlRunnerBackend } from "../src/al-runner-backend";
+import {
+  AL_RUNNER_SERVER_MODE_REFUSED,
+  AL_RUNNER_UNCLASSIFIED_ERROR,
+  AlRunnerBackend,
+} from "../src/al-runner-backend";
 import { MsInMemoryBackend } from "../src/ms-inmemory-backend";
 import { requiresUnsafeLatch } from "../src/operation-outcome";
 import type { SpawnFn } from "../src/publisher";
@@ -597,39 +601,41 @@ describe("AlRunnerBackend.status", () => {
 });
 
 describe("AlRunnerBackend serverMode refusal", () => {
-  // R97 / upstream al-runner #1658: v2's server protocol reads only sourcePaths[0], so the TEST
-  // bundle never runs and runTests answers with an empty PASSING result — a whole session of
-  // "survived" verdicts scored off a suite that never executed. Constructing the backend must
-  // therefore throw, not fall back to the one-shot transport silently: a config that asked for
-  // server mode and quietly got something else is the same class of lie.
-  test("constructing with serverMode:true throws, naming R97 and the upstream issue", async () => {
+  // R97. Constructing the backend must throw, not fall back to the one-shot transport silently:
+  // a config that asked for server mode and quietly got something else is the same class of lie
+  // as the empty green result the refusal was originally built for.
+  //
+  // The REASON changed on 2026-08-08 and the test changed with it. It used to assert the string
+  // "1658" — the upstream issue for "the server reads only sourcePaths[0]" — and that defect is
+  // FIXED in al-runner 2.1.0.0 (measured: `sourcePaths: [sourceDir, testDir]` runs both bundles,
+  // total 2 / passed 2). Asserting a stale cause would have kept a fixed upstream bug alive in
+  // this suite forever. What is refused now is measured here and now: no per-test selection in
+  // the server protocol, against a run() called once per test.
+  test("constructing with serverMode:true throws the refusal, naming R97", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lethal-alrunner-server-"));
-    expect(
-      () =>
-        new AlRunnerBackend(
-          {
-            alRunnerPath: "al-runner",
-            instrumentedDir: dir,
-            testDir: "/tests",
-            selectorObjectId: 50000,
-            serverMode: true,
-          },
-          okSpawn({ tests: [] }).spawn,
-        ),
-    ).toThrow(/R97/);
-    expect(
-      () =>
-        new AlRunnerBackend(
-          {
-            alRunnerPath: "al-runner",
-            instrumentedDir: dir,
-            testDir: "/tests",
-            selectorObjectId: 50000,
-            serverMode: true,
-          },
-          okSpawn({ tests: [] }).spawn,
-        ),
-    ).toThrow(/1658/);
+    const construct = () =>
+      new AlRunnerBackend(
+        {
+          alRunnerPath: "al-runner",
+          instrumentedDir: dir,
+          testDir: "/tests",
+          selectorObjectId: 50000,
+          serverMode: true,
+        },
+        okSpawn({ tests: [] }).spawn,
+      );
+    expect(construct).toThrow(/R97/);
+    // By identity, not by re-quoting the sentence: two spellings of the refusal would let the
+    // shipped one drift while this stayed green.
+    expect(construct).toThrow(AL_RUNNER_SERVER_MODE_REFUSED);
+  });
+
+  // The refusal has to say what to DO, not only that something is wrong. A message naming the
+  // roadmap row but not the config key leaves a reader with a run that will not start and no
+  // next step.
+  test("the refusal names the config key to remove and the transport it falls back to", () => {
+    expect(AL_RUNNER_SERVER_MODE_REFUSED).toContain('"serverMode"');
+    expect(AL_RUNNER_SERVER_MODE_REFUSED).toContain("one-shot");
   });
 
   test("serverMode:false still constructs", async () => {

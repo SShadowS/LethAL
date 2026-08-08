@@ -127,6 +127,46 @@ export interface AlRunnerConfig {
   readonly serverMode?: boolean;
 }
 
+/**
+ * Why `serverMode` is refused, in the message a caller actually sees.
+ *
+ * Exported so the refusal test pins it by NAME rather than by quoting a sentence that would then
+ * exist in two places and drift.
+ *
+ * The ORIGINAL reason (R97, measured 2026-08-05 on 2.0.0.0) was that the server's `runTests` read
+ * only `sourcePaths[0]`, so the test bundle never ran and every mutant scored SURVIVED off an
+ * empty green result. **That is fixed.** Re-measured 2026-08-08 against al-runner 2.1.0.0:
+ * `sourcePaths: [sourceDir, testDir]` runs BOTH bundles and answers `total: 2, passed: 2` on
+ * `fixtures/sandbox-app` + `fixtures/sandbox-tests`.
+ *
+ * Two NEW, measured reasons replaced it, and neither is an upstream defect:
+ *
+ * 1. **The server has no per-test selection.** The CLI takes `--test <qualified>` and runs exactly
+ *    that one test; the server ran the WHOLE suite under every field name a caller could plausibly
+ *    send (`testFilter`, `filter`, `test`, `tests`, `testName`, `pattern` — all six ignored, all
+ *    six returned `total: 2`). `ExecutionBackend.run()` is called once per TEST, so server mode
+ *    would execute T tests for each of the T calls that make up one mutant: quadratic where the
+ *    CLI is linear. Warm-process speed does not pay for that on any suite big enough to care.
+ * 2. **The response shape moved and is no longer the envelope this repo decoded.** 2.1.0.0 streams
+ *    one `{"type":"test",...}` line per test and then one
+ *    `{"type":"summary","exitCode":0,"passed":2,...,"protocolVersion":2}` line. The old decoder read
+ *    ONE line and looked for a `tests` array, so on the current binary it would have produced an
+ *    empty list from the first per-test line — this project's signature bug, now sitting in our
+ *    code rather than upstream's.
+ *
+ * So the transport that decoded the old envelope is DELETED rather than carried: a branch nothing
+ * runs, against a protocol nothing speaks, is a lie waiting to happen (R93's own argument for
+ * deleting the v1 path). Server mode becomes worth revisiting when the backend interface can make
+ * ONE call per mutant instead of one per test — filed as R126.
+ */
+export const AL_RUNNER_SERVER_MODE_REFUSED =
+  "AlRunnerBackend: serverMode is not supported. al-runner 2.1.0.0's server protocol runs the " +
+  "WHOLE suite per runTests (no per-test selection under any field name — measured), while this " +
+  "backend's run() is called once per test, so server mode is quadratic where the CLI's --test " +
+  "filter is linear. Its response shape also moved to streaming per-test JSON lines plus a " +
+  'summary line, which the transport this repo carried could not read. Remove "serverMode" ' +
+  "from the alRunner config section to use the one-shot transport (R97, R126).";
+
 export class AlRunnerBackend implements ExecutionBackend {
   // Set by deploy(); until then (or if deploy() is never called — existing
   // callers may drive activate()/run() directly against cfg.instrumentedDir)
@@ -138,19 +178,12 @@ export class AlRunnerBackend implements ExecutionBackend {
     private readonly cfg: AlRunnerConfig,
     private readonly spawn: SpawnFn = defaultSpawn,
   ) {
-    // R97: al-runner v2's server protocol reads only `sourcePaths[0]`, so the TEST bundle is
-    // never loaded and `runTests` answers with an empty, PASSING result for every mutant —
-    // a whole session of "survived" verdicts scored off a suite that never ran. Reported
-    // upstream as al-runner #1658. Refusing here is the only safe reading: the alternative is
-    // a run that looks complete and is entirely wrong. Once #1658 lands, re-measure against a
-    // real binary before removing this.
+    // R97, re-measured 2026-08-08 against al-runner 2.1.0.0. The upstream defect this refusal
+    // was FIRST built for (server reads only sourcePaths[0]) is fixed; two measured reasons of
+    // our own replaced it. See AL_RUNNER_SERVER_MODE_REFUSED for both, and for why the
+    // ServerTransport that decoded the old envelope was deleted rather than repaired.
     if (cfg.serverMode === true) {
-      throw new Error(
-        "AlRunnerBackend: serverMode is refused on al-runner v2 — its server protocol reads " +
-          "only sourcePaths[0], so the test bundle never runs and every mutant is scored " +
-          "SURVIVED off an empty green result (R97; upstream al-runner #1658). Remove " +
-          '"serverMode" from the alRunner config section to use the one-shot transport.',
-      );
+      throw new Error(AL_RUNNER_SERVER_MODE_REFUSED);
     }
     this.transport = new OneShotTransport(cfg.alRunnerPath, spawn);
   }
