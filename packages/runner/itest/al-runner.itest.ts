@@ -136,6 +136,33 @@ function assertVerdictTable(report: SessionReport): void {
     'al-runner reports coverage:"none" — no-coverage must never occur',
   );
 
+  // R129: this run must SAY which BC runtime produced its verdicts. The gate's first line names the
+  // al-runner BINARY, which is a different question — the binary selects a BC artifact build on its
+  // own, announces it, and until R129 nothing read the line.
+  //
+  // Asserted as a SHAPE, never as a fixed version. Pinning a version here would fail every time
+  // upstream ships a new binary, which is several times a day, and would be a version pin dressed
+  // up as a regression test. What must not regress is that the field is populated at all.
+  const announced = report.validity.executionContexts.find((c) => c.bcBuild !== undefined);
+  assert.ok(
+    announced !== undefined,
+    "no execution context carries a `bcBuild` — al-runner announces its BC artifact selection on " +
+      "every invocation (R129), so an absent field means the parse stopped matching (most likely " +
+      "the runner reworded its `[bc]` line) and the report can no longer say which BC RUNTIME " +
+      "produced these verdicts",
+  );
+  assert.match(
+    announced.bcBuild ?? "",
+    /^\d+\.\d+\.\d+\.\d+$/,
+    "the recorded BC build must be a four-part version",
+  );
+  assert.ok(
+    (announced.bcBuildAnnouncement ?? "").includes(announced.bcBuild ?? ""),
+    "the verbatim announcement must contain the version parsed out of it — otherwise the two " +
+      "fields describe different things and a reader cannot check the parse",
+  );
+  console.log(`  BC runtime under test: ${announced.bcBuild}`);
+
   const killed = report.mutants.filter((m) => m.verdict === "killed");
   assert.equal(killed.length, EXPECTED.killed);
   for (const m of killed) {

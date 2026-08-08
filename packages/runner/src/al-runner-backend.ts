@@ -79,6 +79,17 @@ export const AL_RUNNER_PROVISION_SENTINEL = "Codeunit0.__lethal_provision_only__
  */
 const PROVISION_TEST_TIMEOUT_SECONDS = 600;
 
+/**
+ * Wall-clock bound on the one-time provisioning invocation. R128.
+ *
+ * Generous ON PURPOSE: a legitimate cold fetch is a ~1 GB artifact download, measured in minutes,
+ * and a tight budget would abort exactly the case this step exists for. What it bounds is the
+ * pathological one — without it, this step would MOVE an unbounded hang from inside a mutant (where
+ * `deadlineMs` bounds it) to before the lease is taken (where nothing does), which is a worse
+ * failure mode than the one being fixed.
+ */
+const PROVISION_DEADLINE_MS = 30 * 60 * 1000;
+
 /** What `AlRunnerBackend.provisionOnce` observed. Best-effort throughout — see that method. */
 export interface AlRunnerProvisionResult {
   readonly elapsedMs: number;
@@ -284,6 +295,14 @@ export class AlRunnerBackend implements ExecutionBackend {
    * BEST-EFFORT BY CONSTRUCTION. Nothing here can fail a session: if provisioning does not work, the
    * run proceeds and the first mutant pays the download, which is exactly today's behaviour. Failing
    * the session on it would turn an optimisation into a new way to lose a run.
+   *
+   * AND IT IS BOUNDED, which is not decoration. Without a deadline this step would MOVE an unbounded
+   * hang rather than remove one: a wedged al-runner inside a mutant is bounded by that mutant's
+   * `deadlineMs`, while a wedged al-runner here would hang the session before the lease is even
+   * taken — a strictly worse failure mode than the one this exists to fix. The budget is generous
+   * (`PROVISION_DEADLINE_MS`) because a legitimate cold fetch is measured in minutes; it exists to
+   * bound the pathological case, not to police the normal one. On expiry the result is exactly the
+   * failure result, so the session proceeds as it did before this method existed.
    */
   async provisionOnce(): Promise<AlRunnerProvisionResult> {
     const started = Date.now();
@@ -298,14 +317,29 @@ export class AlRunnerBackend implements ExecutionBackend {
         ? { preprocessorSymbols: this.cfg.preprocessorSymbols }
         : {}),
     });
-    const res = await this.spawn(argv, { env: alRunnerEnv(PROVISION_TEST_TIMEOUT_SECONDS) }).catch(
-      (e) => ({ exitCode: -1, stdout: "", stderr: String(e) }),
-    );
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const res = await Promise.race([
+      this.spawn(argv, {
+        signal: controller.signal,
+        env: alRunnerEnv(PROVISION_TEST_TIMEOUT_SECONDS),
+      }).catch((e) => ({ exitCode: -1, stdout: "", stderr: String(e) })),
+      new Promise<{ exitCode: number; stdout: string; stderr: string }>((resolve) => {
+        timer = setTimeout(() => {
+          controller.abort();
+          resolve({
+            exitCode: -1,
+            stdout: "",
+            stderr: `the one-time provisioning invocation did not finish within ${PROVISION_DEADLINE_MS} ms and was aborted`,
+          });
+        }, PROVISION_DEADLINE_MS);
+      }),
+    ]).finally(() => clearTimeout(timer));
     const output = `${res.stderr}\n${res.stdout}`;
     return {
       elapsedMs: Date.now() - started,
       // Any exit code is accepted: this invocation runs no test, and what it is for happens before
-      // the runner ever decides one. Only a spawn failure (-1) is treated as "did not run".
+      // the runner ever decides one. Only a spawn failure or the deadline (-1) is "did not run".
       ran: res.exitCode >= 0,
       // The reason a reader cares at all: whether THIS session paid a download, which is what
       // explains a slow start and what says the cache had moved.

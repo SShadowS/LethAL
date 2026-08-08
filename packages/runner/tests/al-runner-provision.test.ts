@@ -101,6 +101,25 @@ describe("AlRunnerBackend.provisionOnce (R128)", () => {
     expect(result.downloaded).toBe(true);
   });
 
+  test("is BOUNDED — an abort signal is handed to the spawn", async () => {
+    // Without a deadline this step would MOVE an unbounded hang rather than remove one: a wedged
+    // al-runner inside a mutant is bounded by that mutant's `deadlineMs`, while a wedged one here
+    // would hang the session before the lease is even taken — a worse failure mode than the one
+    // being fixed.
+    //
+    // What is asserted is the MECHANISM, not the 30-minute budget: waiting for the real deadline is
+    // not a test anyone would run, and shortening it for the test would pin a number this code does
+    // not otherwise expose. A spawn given no signal cannot be aborted at all, so this is the
+    // property whose absence would silently restore the unbounded wait.
+    let sawSignal = false;
+    const spawn: SpawnFn = async (_argv, opts) => {
+      sawSignal = opts?.signal instanceof AbortSignal;
+      return { exitCode: 0, stdout: "", stderr: WARM };
+    };
+    await (await makeBackend(spawn)).provisionOnce();
+    expect(sawSignal).toBe(true);
+  });
+
   test("a spawn failure is reported, never thrown — this can only ever be best-effort", async () => {
     // If provisioning cannot run, the session must proceed exactly as it did before this existed:
     // the first mutant pays the download. Throwing here would turn an optimisation into a new way to

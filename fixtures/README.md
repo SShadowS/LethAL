@@ -1254,9 +1254,23 @@ CLI flags:
   "alRunner": {
     "alRunnerPath": "al-runner",
     "packagesDir": "C:/path/to/.alpackages"
-  }
+  },
+  // R101(c): AL preprocessor symbols, TOP-LEVEL because they are a property of the PROJECT rather
+  // than of a backend. The same list reaches LethAL's own `alc` step (`/define:A,B`) and al-runner
+  // (`--define A --define B`); compiling the two paths with different symbols would produce two
+  // different programs whose verdicts are not comparable.
+  "preprocessorSymbols": ["DOSMTP"]
 }
 ```
+
+**Why `preprocessorSymbols` matters more than it looks.** Measured 2026-08-09
+(`scripts/r101c-define-probe/`): with a symbol UNDEFINED, `alc` does not fail — it compiles the
+`#else` branch cleanly and emits a different artifact. So omitting a symbol the customer's real build
+defines means LethAL instruments, mutates and SCORES code the customer does not ship, silently. Worse
+here specifically: the AST layer does not evaluate `#if` at all, so mutants are generated in BOTH
+branches, and the ones in the branch `alc` drops are deployed-but-unreachable and come back
+`survived`/`no-coverage` — verdicts that read as statements about the test suite and are not.
+`SessionReport.preprocessorSymbols` records what a run used, always, including as `[]`.
 
 `alcPath` (R43) and `altoolPath` (R64) are optional `bcdev` fields, not required ones — with
 neither set, the CLI locates the newest `ms-dynamics-smb.al-*` VS Code extension under
