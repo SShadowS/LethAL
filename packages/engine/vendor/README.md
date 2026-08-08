@@ -8,13 +8,18 @@ package loads this file at runtime via `web-tree-sitter` to parse AL source.
 
 - Repository: <https://github.com/SShadowS/tree-sitter-al>
 - License: MIT
-- Version: `3.0.1` (`package.json`)
-- Commit: `f150581de8dd4393b8774ead02098a20ecc1e527` — "queries: capture scoped
-  member-trigger names (Object::Member)", 2026-06-28, contained in `origin/main`
-- Provenance: **built locally from source at that commit**, NOT downloaded from a
-  release. `tree-sitter build --wasm`, tree-sitter CLI 0.26.11.
-- Artifact: 7,979,068 bytes,
-  `sha256:3ea975682469daa2382137daff0b3954030c84a8619243333f68528af964d49c`
+- Version: `3.2.1`
+- Commit: `335d1ffc04a123a1812a033f768827db710d9239` — "chore: rebuild
+  tree-sitter-al.wasm for v3.2.1", tag `v3.2.1`
+- Provenance: **built locally from source at that tag**, NOT downloaded from a
+  release. `tree-sitter build --wasm`, tree-sitter CLI 0.26.11, from a detached
+  worktree at the tag so the grammar checkout's own state could not leak in.
+- Artifact: 7,457,411 bytes,
+  `sha256:33b861ddd6172d697232fbbe48103f9b91c4205fd768add13a0d0c4260f48b2e`
+
+Previously `3.0.1` at commit `f150581` (7,979,068 bytes,
+`sha256:3ea9756824...`), kept here because a bump's evidence is only readable
+against what it replaced.
 
 A commit alone does not determine the binary — `tree-sitter build --wasm` uses
 local Emscripten when present and falls back to a Docker image otherwise, and the
@@ -65,6 +70,63 @@ installed locally. Downloading a release asset also works when the release
 matches the commit you want, but prefer building: a release artifact can lag the
 grammar's HEAD, and the repo's checked-in root wasm demonstrably does.
 
+## The 3.0.1 -> 3.2.1 bump (2026-08-08), and what it cost: nothing
+
+Recorded because the v2 -> v3 bump's damage was silent and the next reader
+deserves to know what a CLEAN bump looks like too.
+
+Upstream moved three tags past what was vendored. The vendored binary was built
+at `f150581`, which is already past the `v3.0.1` tag, so the substantive changes
+taken on were two, both parse-correctness FIXES rather than shape changes:
+
+- **v3.1.0** (`307dc39`) — `TableData` as a first option member; whitespace-
+  tolerant `# pragma` / `# region`.
+- **v3.2.0** (`14bd55c`) — whitespace-tolerant `# if` / `# elif`, depth-correct.
+
+Plus a parser regeneration on the same tree-sitter CLI (0.26.11) and packaging
+changes. Nothing renamed, nothing re-parented — which is what made the outcome
+predictable, and is exactly the reading the v2 -> v3 bump also had before it
+turned out to insert container nodes. So it was measured anyway.
+
+**Measured on 659 real AL files (6.0 MB): Continia Document Output's `Cloud`
+(554) plus its test app (105).**
+
+| | vendored 3.0.1 build | 3.2.1 |
+| --- | --- | --- |
+| files parsed / clean | 659 / 659 (100%) | 659 / 659 (100%) |
+| ERROR nodes | 0 | 0 |
+| `statementCalls` | 18,150 | 18,150 |
+| `blocks` | 8,458 | 8,458 |
+| `triggerBlocks` | 2,146 | 2,146 |
+| `procedures` | 4,484 | 4,484 |
+| `exits` | 2,536 | 2,536 |
+
+And the PER-SITE half this document demands and had no instrument for until now:
+`scripts/census-tier1-sites.ts` emits one row per (operator, file, line, column,
+before, after) for every Tier-1 operator over the whole corpus. **31,110 sites,
+and the two JSON files are BYTE-IDENTICAL** — 0 sites only in the old, 0 only in
+the new, per operator:
+
+```
+lethal.conditional-boundary        493
+lethal.empty-block                7976
+lethal.negate-conditional         2804
+lethal.return-value                981
+lethal.swap-call-arguments         706
+lethal.void-method-call          18150
+```
+
+Then `bun test` (2,069 pass / 1 skip / 0 fail) and the live tables gate
+(109 killed / 17 survived / 10 no-coverage, `untargetedTriggers=0`, PASS,
+per-mutant against the committed baseline).
+
+**What the bump does NOT prove.** The two fixes are for `#if` / `#pragma` /
+`#region` with whitespace and for `TableData` as a first option member; this
+corpus contains none of those shapes, which is precisely why every number is
+identical. So this measures that the bump costs nothing, not that it gains
+anything. The gain is on code the old grammar misread, and no corpus here
+carries it.
+
 ## Bumping the vendored WASM
 
 The unit suite alone CANNOT tell you a bump was safe. A grammar that parses
@@ -75,14 +137,24 @@ all of this:
 2. Update the **version**, **commit** and **provenance** fields above.
 3. `bun run typecheck`, then `rm -rf packages/*/dist`, then `bun test`. Any new
    failure is a shape change — map the clusters before fixing anything.
-4. **Run the corpus probe and compare site counts, not just parse errors:**
+4. **Run BOTH censuses — aggregate and per-site. The aggregate one alone is
+   not the proof this document asks for.**
 
    ```bash
-   bun run scripts/probe-grammar-corpus.ts <corpus-dir> --json /tmp/after.json
+   bun run scripts/probe-grammar-corpus.ts <flat-corpus-dir> --json /tmp/after.json
+   bun scripts/census-tier1-sites.ts <corpus-dir> /tmp/sites-after.json
    ```
 
    A drop in `statementCalls`, `blocks`, `triggerBlocks`, `procedures` or
-   `exits` is a silent capability loss even when the parse is 100% clean.
+   `exits` is a silent capability loss even when the parse is 100% clean. But
+   counts cannot see a bump that keeps every total while moving WHICH sites are
+   claimed, and R120 established that is reachable at runtime with no type error:
+   `ALNodeKind` is a CURATED subset and `ALSyntaxNode.kind` CASTS the raw
+   tree-sitter type into it. `census-tier1-sites.ts` emits the site LIST for
+   every Tier-1 operator, so the two runs diff directly.
+
+   Note `probe-grammar-corpus.ts` reads a FLAT directory (no recursion) while
+   `census-tier1-sites.ts` recurses. Stage a flat copy for the first.
 5. Run the live gate (`itest:bcdev`, `itest:alrunner`, `itest:lease`,
    `itest:stale-publish`). Expect the per-mutant baselines to flag a difference
    if any operator's target subtree changed shape: `empty-block`'s identity hash
