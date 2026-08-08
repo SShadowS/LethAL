@@ -1,0 +1,38 @@
+corpus: docs/campaign/2026-08-08-r85-swap-population/rung2.report.json
+kills: 73   target app: Continia Document Output
+ground truth: 6 FALSE kills, 67 real
+
+A. top frame is inside the TARGET app
+  R86's first proposal. Already falsified on run 148 at 75% false positives; scored here on a second, independent corpus.
+  flagged 20  true-positive 6  FALSE-POSITIVE 14  missed 0  |  precision 30.0%  recall 100.0%
+  false positives (first 4): M0032 "The value of DMY2Date parameter 2 is outside of the permitte"; M0156 "The report could not be created as a Pdf document.\Customer:"; M0175 "The report could not be created as a Pdf document.\Customer:"; M0177 "The report could not be created as a Pdf document.\Customer:"
+
+B1. top frame's PROCEDURE is not the mutated procedure
+  R121's half 1, at the finest granularity the record actually supports (see the note on topFrame).
+  flagged 61  true-positive 0  FALSE-POSITIVE 61  missed 6  |  precision 0.0%  recall 0.0%
+  false positives (first 4): M0005 "Assert.IsTrue failed. AddRecipientsFromTable should return t"; M0006 "Assert.AreEqual failed. Expected:<cc@example.com> (Text). Ac"; M0007 "Assert.AreEqual failed. Expected:<bcc@example.com> (Text). A"; M0018 "Assert.AreNotEqual failed. Expected any value except:<> (Tex"
+
+B2. the message is not an assertion (no `Assert.` prefix)
+  R121's half 2, spelled as 'platform-class' = 'no test assertion fired'.
+  flagged 23  true-positive 6  FALSE-POSITIVE 17  missed 0  |  precision 26.1%  recall 100.0%
+  false positives (first 4): M0032 "The value of DMY2Date parameter 2 is outside of the permitte"; M0156 "The report could not be created as a Pdf document.\Customer:"; M0175 "The report could not be created as a Pdf document.\Customer:"; M0177 "The report could not be created as a Pdf document.\Customer:"
+
+B. B1 AND B2 — the candidate rule R121 proposes
+  The conjunction the row says 'the data does support' and asks to be measured.
+  flagged 11  true-positive 0  FALSE-POSITIVE 11  missed 6  |  precision 0.0%  recall 0.0%
+  false positives (first 4): M0156 "The report could not be created as a Pdf document.\Customer:"; M0175 "The report could not be created as a Pdf document.\Customer:"; M0177 "The report could not be created as a Pdf document.\Customer:"; M0179 "The report could not be created as a Pdf document.\Customer:"
+
+B1-inverted. top frame's PROCEDURE **IS** the mutated procedure
+  Added after B1 measured 0/0: on this corpus the arm-E failure raises INSIDE the mutated procedure, which is the opposite of what R121 assumed.
+  flagged 12  true-positive 6  FALSE-POSITIVE 6  missed 0  |  precision 50.0%  recall 100.0%
+  false positives (first 4): M0032 "The value of DMY2Date parameter 2 is outside of the permitte"; M0251 "The value of DELSTR parameter 2 is outside of the permitted "; M0262 "The following exception was encountered when processing XML "; M0364 "An item with the same key has already been added."
+
+B-inverted. B1-inverted AND B2
+  The best structural (non-text) rule this corpus supports. Reported with its precision, not recommended.
+  flagged 12  true-positive 6  FALSE-POSITIVE 6  missed 0  |  precision 50.0%  recall 100.0%
+  false positives (first 4): M0032 "The value of DMY2Date parameter 2 is outside of the permitte"; M0251 "The value of DELSTR parameter 2 is outside of the permitted "; M0262 "The following exception was encountered when processing XML "; M0364 "An item with the same key has already been added."
+
+D. the message matches the field-length shape
+  The text rule. Perfect by construction on this corpus because it IS the ground truth, and English-only by construction (R66). Listed so its ceiling is visible beside the others.
+  flagged 6  true-positive 6  FALSE-POSITIVE 0  missed 0  |  precision 100.0%  recall 100.0%
+
