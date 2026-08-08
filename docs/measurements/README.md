@@ -569,6 +569,33 @@ constructed string. What is needed first is a measurement of WHICH shape trigger
 call depth, `TableNo`, the test runner's own transaction, or something else — because a diagnosis
 that fires on the wrong shape mislabels genuine kills as platform noise.
 
+### ANSWERED 2026-08-08: it is the RETURN-VALUE FORM, not the shape either row guessed
+
+`scripts/r72-probe/` — a 2 x 2 x 2 over prior `Commit()`, call frame and `Codeunit.Run` form,
+measured on **Cronus281** (BC 28.0.46665.49944, `LethAL Control` 1.0.0.16) through the fenced path.
+Full table and controls in that directory's README.
+
+| | value form `Ran := Codeunit.Run(X)` | statement form `Codeunit.Run(X);` |
+| --- | --- | --- |
+| write opened in the `[Test]` body | **ABORT** | survives |
+| write opened in a callee, called from the test | **ABORT** | survives |
+
+Both rows hold with and without a prior `Commit()` in the test, so eight cells collapse onto ONE
+factor. Controls: the value form with no write open succeeds and returns `Yes`; the write alone with
+no `Codeunit.Run` succeeds.
+
+**The frame is measured IRRELEVANT.** That is the variable the table above and R72's own row both
+named, and it is not the one. What actually differs between the two prior measurements is that every
+aborting arm consumed `Codeunit.Run`'s Boolean return value (`Ran := Codeunit.Run(...)`) and
+`Data Commit Ops.CommitThenRun` calls it as a bare statement.
+
+**Consequence for the detector.** The trigger is a syntactic property of the call site, visible
+before anything runs: a `lethal.remove-commit` whose following `Codeunit.Run` CONSUMES its return
+value. That is much sharper than the operator-plus-corroborating-text rule below, which was written
+when the trigger was unknown. It is still not buildable against anything real, for an unchanged
+reason: no fixture holds a `remove-commit` site in the value form, so the artifact cannot be
+produced by a mutant any gate generates.
+
 ---
 
 ## R13 — can a `Permissions` property refuse anything, and is a `LockTable` deletion observable?

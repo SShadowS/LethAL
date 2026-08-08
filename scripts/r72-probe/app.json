@@ -1,0 +1,49 @@
+{
+  "id": "b2f70c31-9d84-4a56-91ce-7c0e5a3b8d42",
+  "name": "LethAL R72 Probe",
+  "publisher": "LethAL",
+  "version": "1.0.0.0",
+  "brief": "R72: which variable triggers BC refusing Codeunit.Run in a write transaction?",
+  "description": "Throwaway probe. A 2x2x2 over prior-Commit, call frame and Codeunit.Run return-value form, to settle which one makes BC abort the transaction. Not for production use.",
+  "privacyStatement": "",
+  "EULA": "",
+  "help": "",
+  "url": "",
+  "logo": "",
+  "dependencies": [
+    {
+      "id": "5d86850b-0d76-4eca-bd7b-951ad998e997",
+      "name": "Tests-TestLibraries",
+      "publisher": "Microsoft",
+      "version": "25.0.0.0"
+    },
+    {
+      "id": "23de40a6-dfe8-4f80-80db-d70f83ce8caf",
+      "name": "Test Runner",
+      "publisher": "Microsoft",
+      "version": "23.0.0.0"
+    },
+    {
+      "id": "40860557-a18d-42ad-aecb-22b7dd80dc80",
+      "name": "Permissions Mock",
+      "publisher": "Microsoft",
+      "version": "25.0.0.0"
+    }
+  ],
+  "screenshots": [],
+  "idRanges": [
+    {
+      "from": 71540,
+      "to": 71550
+    }
+  ],
+  "resourceExposurePolicy": {
+    "allowDebugging": true,
+    "allowDownloadingSource": true,
+    "includeSourceInSymbolFile": true
+  },
+  "platform": "28.0.0.0",
+  "application": "28.0.0.0",
+  "runtime": "17.0",
+  "features": []
+}
