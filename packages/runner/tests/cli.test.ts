@@ -9,7 +9,6 @@ import type { BcDevConfigSection, LethalConfigFile } from "../src/cli";
 import {
   announceAlRunnerCanary,
   clearQuarantine,
-  fanOutEmit,
   forceResetLeaseFromCli,
   leaseSessionFor,
   odataBaseUrl,
@@ -1603,63 +1602,6 @@ describe("withAlRunnerCanary (R7/R8 report persistence)", () => {
 });
 
 // ————————————————————————————————————————————————————————————————————————
-// Task 6 review round 1: `fanOutEmit` combines the stderr progress renderer (Task 5) with the
-// `--progress-out` NDJSON sink (Task 6) into the single `SessionConfig.emit` slot `runFromCli`
-// wires. Its whole reason to exist is isolating one subscriber's throw from the other — the same
-// property `events.ts`'s `createEmitter` has and is tested for (events.test.ts's "a throwing
-// subscriber does not stop the others" / "warns only once" pair, mirrored below). The live
-// crash-survival run in task-6-report.md only ever exercised the happy path (both subscribers
-// behaved), so this is the first time the catch branch actually runs.
-// ————————————————————————————————————————————————————————————————————————
-describe("fanOutEmit (Task 6 review round 1)", () => {
-  function collect(): { events: RunEvent[]; sub: (e: RunEvent) => void } {
-    const events: RunEvent[] = [];
-    return { events, sub: (e) => events.push(e) };
-  }
-
-  test("a throwing subscriber does not stop the other, and does not lose the event or any later one", () => {
-    const good = collect();
-    const fan = fanOutEmit([
-      () => {
-        throw new Error("subscriber exploded");
-      },
-      good.sub,
-    ]);
-    const e1 = { type: "phase-entered", phase: "deploy", seq: 1 } as RunEvent;
-    const e2 = { type: "phase-entered", phase: "baseline", seq: 2 } as RunEvent;
-    const e3 = { type: "phase-left", phase: "baseline", elapsedMs: 5, seq: 3 } as RunEvent;
-    expect(() => fan(e1)).not.toThrow();
-    expect(() => fan(e2)).not.toThrow();
-    expect(() => fan(e3)).not.toThrow();
-    expect(good.events).toEqual([e1, e2, e3]);
-  });
-
-  test("a chronically-throwing subscriber produces the warning only once, not per event", () => {
-    const good = collect();
-    const warnings: string[] = [];
-    const originalWrite = process.stderr.write;
-    process.stderr.write = ((chunk: unknown) => {
-      warnings.push(String(chunk));
-      return true;
-    }) as typeof process.stderr.write;
-    try {
-      const fan = fanOutEmit([
-        () => {
-          throw new Error("progress subscriber exploded");
-        },
-        good.sub,
-      ]);
-      fan({ type: "phase-entered", phase: "deploy", seq: 1 } as RunEvent);
-      fan({ type: "phase-entered", phase: "baseline", seq: 2 } as RunEvent);
-      fan({ type: "phase-left", phase: "baseline", elapsedMs: 5, seq: 3 } as RunEvent);
-    } finally {
-      process.stderr.write = originalWrite;
-    }
-    expect(warnings).toHaveLength(1);
-    expect(good.events).toHaveLength(3);
-  });
-});
-
 /**
  * R111 — the ONE read-only env-tool resolution. Two commands used to carry ~50 near-identical
  * lines each, and the two copies had already drifted once (`packageCachePath`, which made

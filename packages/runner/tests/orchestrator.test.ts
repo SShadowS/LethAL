@@ -4407,7 +4407,13 @@ describe("runSession — Task 13 folded fix: warn when authoritative but no tier
     // Deliberately the RAW runSession call (not runSessionForTest, which always fills in
     // resourceServer/resourceServerInstance) — this is exactly the shape of the ~30
     // pre-existing authoritative tests elsewhere in this file.
-    await runSession({ backend: authoritativeNoCoverage(), store, ...dirs, selectorIds, emit });
+    await runSession({
+      backend: authoritativeNoCoverage(),
+      store,
+      ...dirs,
+      selectorIds,
+      emit: [emit],
+    });
     const warnings = events.filter(
       (e): e is Extract<RunEvent, { type: "warning" }> => e.type === "warning",
     );
@@ -4423,11 +4429,43 @@ describe("runSession — Task 13 folded fix: warn when authoritative but no tier
     // keeps the test tied to the actual condition under test.
     const events: RunEvent[] = [];
     const emit = createEmitter([(e) => events.push(e)]);
-    await runSessionForTest(authoritativeNoCoverage(), { quarantineDir: freshTmpDir(), emit });
+    await runSessionForTest(authoritativeNoCoverage(), {
+      quarantineDir: freshTmpDir(),
+      emit: [emit],
+    });
     const warnings = events.filter(
       (e): e is Extract<RunEvent, { type: "warning" }> => e.type === "warning",
     );
     expect(warnings.some((e) => e.code === "quarantine-consult-disabled")).toBe(false);
+  });
+
+  /**
+   * R104. `SessionConfig.emit` used to take ONE subscriber, and `cli.ts` carried a `fanOutEmit`
+   * helper purely to squeeze the stderr progress renderer and the `--progress-out` NDJSON sink
+   * through that single slot — which `runSession` then unwrapped again into its own
+   * `createEmitter([...])`. Widening the field deleted the helper and its two direct tests.
+   *
+   * A deletion cannot be red-checked, so this covers the FEATURE those tests were standing in for:
+   * that every configured subscriber really receives the whole stream. Nothing else asserts it —
+   * `events.test.ts` covers `createEmitter`'s fan-out and its isolation, but not that `runSession`
+   * passes ALL of `cfg.emit` through. A regression to `[cfg.emit[0]]` would have been invisible.
+   *
+   * Asserted as EQUAL SEQUENCES rather than as two non-empty arrays: a subscriber that receives
+   * only the first event, or a stream re-stamped per subscriber, both pass a length-greater-than-0
+   * check and fail this one.
+   */
+  test("every subscriber in cfg.emit receives the SAME whole stream — R104", async () => {
+    const first: RunEvent[] = [];
+    const second: RunEvent[] = [];
+    await runSessionForTest(authoritativeNoCoverage(), {
+      quarantineDir: freshTmpDir(),
+      emit: [(e) => first.push(e), (e) => second.push(e)],
+    });
+    expect(first.length).toBeGreaterThan(1);
+    expect(second).toEqual(first);
+    // One canonical stream, so `seq` is a single 1..n run — not two independently stamped copies
+    // that happen to have the same length.
+    expect(first.map((e) => e.seq)).toEqual(first.map((_, i) => i + 1));
   });
 
   test("does NOT warn for a non-authoritative (al-runner) backend either", async () => {
@@ -4443,7 +4481,7 @@ describe("runSession — Task 13 folded fix: warn when authoritative but no tier
     });
     const events: RunEvent[] = [];
     const emit = createEmitter([(e) => events.push(e)]);
-    await runSession({ backend, store, ...dirs, selectorIds, emit });
+    await runSession({ backend, store, ...dirs, selectorIds, emit: [emit] });
     const warnings = events.filter(
       (e): e is Extract<RunEvent, { type: "warning" }> => e.type === "warning",
     );
@@ -4471,7 +4509,7 @@ describe("runSession — fix round 1: stream-started carries the run's own id", 
     });
     const events: RunEvent[] = [];
     const emit = createEmitter([(e) => events.push(e)]);
-    await runSession({ backend, store, ...dirs, selectorIds, emit });
+    await runSession({ backend, store, ...dirs, selectorIds, emit: [emit] });
 
     const streamStarted = events.find((e) => e.type === "stream-started");
     if (streamStarted === undefined || streamStarted.type !== "stream-started") {
@@ -6960,7 +6998,7 @@ describe("runSession — R108: a batch whose TOTAL crosses the bracket warns bef
       resourceServer: "http://cronus281",
       resourceServerInstance: "BC",
       quarantineDir: freshTmpDir(),
-      emit,
+      emit: [emit],
     });
     store.close();
     return { events, perFileMax, total };
@@ -7026,7 +7064,7 @@ describe("runSession — R108: a batch whose TOTAL crosses the bracket warns bef
       resourceServer: "http://cronus281",
       resourceServerInstance: "BC",
       quarantineDir: freshTmpDir(),
-      emit,
+      emit: [emit],
     });
     const warnings = events.filter(
       (e): e is Extract<RunEvent, { type: "warning" }> => e.type === "warning",

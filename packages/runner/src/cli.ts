@@ -2374,40 +2374,6 @@ export function withAlRunnerCanary(
   return canary !== undefined ? { ...report, alRunnerCanary: canary } : report;
 }
 
-/**
- * Fans one already-stamped `RunEvent` out to several independent `SessionConfig.emit` subscribers
- * — today, the stderr progress renderer (Task 5) and, when `--progress-out` is given, the NDJSON
- * sink (Task 6). Isolates a throwing subscriber from its siblings, same shape as `events.ts`'s own
- * `createEmitter`, but WITHOUT re-stamping `seq`: every event reaching this function already
- * carries its real `seq` from `runSession`'s canonical stream, and re-running it through
- * `createEmitter` would silently overwrite that with a second, locally-recomputed counter — numerically
- * identical only by the accident that this function happens to see every event with none filtered
- * out. Reusing `createEmitter` here would make that coincidence load-bearing without a compiler
- * catching it if it ever stopped holding.
- *
- * Exported for testing — `runFromCli` only ever exercises this when a real subscriber actually
- * throws, which the happy-path crash-survival run (task-6-report.md) never did, so the isolation
- * behaviour it exists for needs its own direct unit tests (cli.test.ts) rather than depending on
- * `runFromCli`'s end-to-end plumbing to hit the catch branch by chance.
- */
-export function fanOutEmit(subs: readonly EventSubscriber[]): EventSubscriber {
-  const broken = new Set<number>();
-  return (event) => {
-    subs.forEach((sub, i) => {
-      try {
-        sub(event);
-      } catch (err) {
-        if (!broken.has(i)) {
-          broken.add(i);
-          process.stderr.write(
-            `[lethal] progress subscriber ${i} threw and will keep receiving events: ${String(err)}\n`,
-          );
-        }
-      }
-    });
-  };
-}
-
 export async function runFromCli(
   parsed: RunCliConfig,
   deps: {
@@ -2596,12 +2562,12 @@ export async function runFromCli(
         selectorIds,
         skipKnownSurvivors: parsed.skipKnownSurvivors,
         workers: parsed.workers,
-        // `SessionConfig.emit` is typed `EventSubscriber` (events.ts) precisely because
-        // `runSession` splices it in as an additional subscriber of its own canonical,
-        // seq-stamped stream — every event this receives IS a full `RunEvent`, no cast required.
-        // A single subscriber even when `--progress-out` adds a second one: `fanOutEmit` isolates
-        // either from a throw in the other, and from re-stamping `seq` (see its own doc comment).
-        emit: emitSubscribers.length > 1 ? fanOutEmit(emitSubscribers) : progress,
+        // `SessionConfig.emit` is typed `readonly EventSubscriber[]` (events.ts) precisely
+        // because `runSession` splices them into its own canonical, seq-stamped stream — every
+        // event these receive IS a full `RunEvent`, no cast required. Handed over as the list
+        // (R104): `runSession`'s `createEmitter` is the one fan-out, and it already isolates each
+        // subscriber from a throw in its siblings, so there is nothing to pre-combine here.
+        emit: emitSubscribers,
         ...(parsed.only !== undefined ? { only: parsed.only } : {}),
         ...(parsed.testsOnly !== undefined ? { testsOnly: parsed.testsOnly } : {}),
         ...(parsed.maxGuardsPerBatch !== undefined

@@ -559,25 +559,31 @@ export interface SessionConfig {
    *  instead of racing the real clock. Defaults to `() => new Date().toISOString()`. */
   readonly nowIso?: () => string;
   /**
-   * A subscriber spliced into the event stream (spec 2026-08-05 §A, events.ts). Optional at this
+   * Subscribers spliced into the event stream (spec 2026-08-05 §A, events.ts). Optional at this
    * level ONLY — a caller that does not care about events (every test that predates this field,
    * a one-off script) pays nothing. Once inside `runSession`, `record()`'s own `emit` parameter is
-   * REQUIRED: `runSession` defaults an absent `cfg.emit` to a no-op emitter
-   * (`createEmitter([])`) exactly once, at the top of the function, so every internal call site
-   * always has a real (if inert) emitter to pass — there is no second place in this file where
-   * "no emitter configured" can be rediscovered and quietly skipped.
+   * REQUIRED: `runSession` builds ONE canonical emitter at the top of the function, so every
+   * internal call site always has a real (if inert) emitter to pass — there is no second place in
+   * this file where "no emitter configured" can be rediscovered and quietly skipped.
    *
-   * Typed `EventSubscriber`, not `RunEmitter`: `runSession` splices this in as an ADDITIONAL
-   * SUBSCRIBER of its own canonical, seq-stamped stream (see the `emit` construction below), so
-   * it actually receives fully-stamped `RunEvent`s, never a bare `RunEventInput`. `RunEvent
-   * extends RunEventInput` and both are plain arrow-function types, so parameter checking is
-   * contravariant and every existing caller that passes a `createEmitter(...)`-returned
-   * `RunEmitter` here (which is callable with a `RunEventInput`, a supertype of `RunEvent`)
-   * remains valid under this narrower type. This is the general `RunEmitter` alias's one
-   * exception — `MutationSetOptions.emit`/`PlanOptions.emit` above are real construct-and-stamp
-   * call sites and stay `RunEmitter`.
+   * An ARRAY, not one subscriber (R104). It was one, and `cli.ts` carried a `fanOutEmit` helper
+   * whose only job was pre-combining the stderr progress renderer with the `--progress-out` NDJSON
+   * sink into the single slot — which `runSession` then unwrapped again by splicing that
+   * combination into its own `createEmitter([...])`. Two fan-out implementations, one of them
+   * existing solely because of this type's width. `createEmitter` already isolates a throwing
+   * subscriber from its siblings, which is the whole behaviour `fanOutEmit` reimplemented, so
+   * widening here deleted it outright rather than moving it.
+   *
+   * Typed `EventSubscriber`, not `RunEmitter`: `runSession` splices these in as ADDITIONAL
+   * SUBSCRIBERS of its own canonical, seq-stamped stream (see the `emit` construction below), so
+   * they receive fully-stamped `RunEvent`s, never a bare `RunEventInput`. `RunEvent extends
+   * RunEventInput` and both are plain arrow-function types, so parameter checking is contravariant
+   * and a caller passing a `createEmitter(...)`-returned `RunEmitter` (callable with a
+   * `RunEventInput`, a supertype of `RunEvent`) remains valid under this narrower type. This is the
+   * general `RunEmitter` alias's one exception — `MutationSetOptions.emit`/`PlanOptions.emit` above
+   * are real construct-and-stamp call sites and stay `RunEmitter`.
    */
-  readonly emit?: EventSubscriber;
+  readonly emit?: readonly EventSubscriber[];
 }
 
 /** Alias kept for readability at call sites within this module. */
@@ -2000,14 +2006,13 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // the one every `emit(...)` call site in this file already uses, unchanged — and keeps a full
   // in-process copy of it (`collectedEvents`) so `buildReport` at the very end can fold the SAME
   // stream a caller-supplied subscriber saw, never a second, independently-reconstructed one.
-  // `cfg.emit`, when a caller supplies one (a future stderr progress renderer, an NDJSON sink —
-  // Tasks 5/6), is forwarded to as an ADDITIONAL subscriber; it is not itself the canonical stream,
-  // so a caller that never sets it (every test today) still gets full event collection for the fold.
+  // `cfg.emit`'s subscribers (the stderr progress renderer, the `--progress-out` NDJSON sink) are
+  // forwarded to as ADDITIONAL subscribers of that stream; none of them is the canonical stream, so
+  // a caller that never sets it (every test today) still gets full event collection for the fold.
+  // This is the ONLY fan-out — R104 deleted `cli.ts`'s `fanOutEmit`, which existed only to squeeze
+  // several subscribers through a single-subscriber `cfg.emit` that this line then unwrapped again.
   const collectedEvents: RunEvent[] = [];
-  const emit: RunEmitter = createEmitter([
-    (e) => collectedEvents.push(e),
-    ...(cfg.emit !== undefined ? [cfg.emit] : []),
-  ]);
+  const emit: RunEmitter = createEmitter([(e) => collectedEvents.push(e), ...(cfg.emit ?? [])]);
   // run-configured (spec 2026-08-05 §A, AMENDED): the closed statics set `{ caps, only, testsOnly,
   // stopHungSessions }`, echoed once from the same `cfg` values the `statics` object built at the
   // end of this function (and passed to `buildReport`) also reads — one source, two carriages. No
