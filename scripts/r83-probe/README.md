@@ -107,9 +107,14 @@ cp scripts/r13-probe/.alpackages/*.app scripts/r83-probe/.alpackages/
   /out:"U:/Git/LethAL/scripts/r83-probe/r83-probe.app"
 ```
 
+Credentials come from the gitignored `fixtures/sandbox-app/lethal.config.local.json` (`bcdev.env`),
+never from a literal here — this repo is public.
+
 ```powershell
 $env:DOCKER_CONTEXT='desktop-windows'
-$cred = New-Object System.Management.Automation.PSCredential('sshadows', (ConvertTo-SecureString '1234' -AsPlainText -Force))
+$c = Get-Content 'U:\Git\LethAL\fixtures\sandbox-app\lethal.config.local.json' | ConvertFrom-Json
+$cred = New-Object System.Management.Automation.PSCredential(
+  $c.bcdev.username, (ConvertTo-SecureString $c.bcdev.password -AsPlainText -Force))
 Publish-BcContainerApp -containerName Cronus281 -appFile 'U:\Git\LethAL\scripts\r83-probe\r83-probe.app' -useDevEndpoint -credential $cred -syncMode ForceSync
 ```
 
