@@ -103,6 +103,17 @@ export interface MutantManifestEntry {
    */
   readonly originalText: string;
   readonly mutatedText: string;
+  /**
+   * R72 — carried verbatim from `MutationSpec.platformKillMechanism` (engine). A syntactic property
+   * of the SITE saying that if this mutant dies, the platform rather than the suite is the likely
+   * cause. Present only where an operator recognised one; absent is not a claim of the opposite.
+   *
+   * Typed as a bare `string` here rather than as the engine's union, deliberately: a manifest is
+   * read back off disk from runs this build did not produce, and a value written by an older or
+   * newer engine must survive the round trip rather than fail a parse. The report re-exposes it
+   * unchanged for the same reason.
+   */
+  readonly platformKillMechanism?: string;
 }
 
 /**
@@ -403,6 +414,9 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
         mutatedText: clipMutationText(spec.after.text),
         ...(procedureScope !== undefined ? { procedureScope } : {}),
         ...(triggerName !== undefined ? { triggerName } : {}),
+        ...(spec.platformKillMechanism !== undefined
+          ? { platformKillMechanism: spec.platformKillMechanism }
+          : {}),
       });
     }
   }

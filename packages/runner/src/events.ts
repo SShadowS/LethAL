@@ -213,6 +213,22 @@ export type RunEventInput =
       readonly result: PermissionCanaryResult;
     }
   | {
+      /**
+       * R129 — which BC artifact build al-runner announced it executed this session's tests
+       * against, read off the runner's own `[bc]` line. Emitted once, after the mutant phase, and
+       * ONLY when a run actually announced one: a session that never reached the runner, or a
+       * runner build that stopped printing the line, emits nothing rather than a defaulted version.
+       *
+       * al-runner-specific by design. The bcdev path's runtime is the container the config names,
+       * which the report already identifies; this exists because the al-runner path chooses a BC
+       * build on its own and nothing recorded the choice.
+       */
+      readonly type: "al-runner-bc-build";
+      readonly build: string;
+      /** The runner's own line, verbatim — see `AlRunnerBcBuild.announcement`. */
+      readonly announcement: string;
+    }
+  | {
       readonly type: "mutant-scored";
       /**
        * The full manifest entry, not `mutantCode` plus a join. In-process it travels by

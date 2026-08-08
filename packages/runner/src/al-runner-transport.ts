@@ -29,6 +29,64 @@ export type AlRunnerResult =
 export interface AlRunnerTransport {
   send(req: AlRunnerRequest): Promise<AlRunnerResult>;
   close(): Promise<void>;
+  /**
+   * R129: which BC artifact build al-runner announced it was executing against, as observed on the
+   * runs this transport has already made. `undefined` before any run, and after a run whose output
+   * carried no such line — never a guess.
+   *
+   * See `parseAlRunnerBcBuild` for why the answer is read off the runner's own words rather than
+   * pinned by us with `--bc-version`.
+   */
+  observedBcBuild(): AlRunnerBcBuild | undefined;
+}
+
+/** R129 — the BC runtime an al-runner invocation announced, plus the line it was read from. */
+export interface AlRunnerBcBuild {
+  /** The version as announced, e.g. `28.1.49838.50794`. */
+  readonly build: string;
+  /** The runner's own line, verbatim and untrimmed of meaning — a reader who distrusts the parse
+   *  can check it, and a future wording change is visible in the report rather than silent. */
+  readonly announcement: string;
+}
+
+/**
+ * Reads the BC artifact build al-runner announced out of its output. R129.
+ *
+ * Every invocation says which BC runtime it selected, and until this existed LethAL threw the line
+ * away: a report named which al-runner BINARY ran (R123's contract probe) but not which BC RUNTIME
+ * that binary executed the tests against, which is what the verdicts actually depend on.
+ *
+ * MEASURED 2026-08-09 on al-runner 2.1.1.0: these lines go to **stderr**, not stdout. Both forms
+ * occur, and both are accepted:
+ *
+ *     [bc] no --bc-version given - selecting BC 28.1.49838.50794, the exact build this binary was
+ *          compiled against. Override with --bc-version.
+ *     [bc] selected BC 28.1.49838.50794 (~/.local/share/al-runner/artifacts/28.1.49838.50794)
+ *
+ * `selected` wins when both are present: it is the runner's statement of what it actually used,
+ * where `selecting` is its statement of intent.
+ *
+ * WHY READ IT RATHER THAN PIN IT. Passing `--bc-version` ourselves would make the choice LethAL's,
+ * and R125 measured that failure mode: a project whose symbols do not match the pin fails loudly
+ * for a reason we introduced, and `--auto-provision` resolving the version is exactly what cured
+ * it. Reading is also the only thing that would make a future divergence DETECTABLE — 2.1.1's own
+ * `--help` documents a different default rule ("the latest version present in the artifacts dir")
+ * from the one its runtime announces ("the exact build this binary was compiled against"). If a
+ * release ever makes the help text true, selection becomes machine-state-dependent, and a run that
+ * recorded nothing would give no way to tell two differing runs apart afterwards.
+ *
+ * Returns `undefined` when nothing matched. That is the honest "the runner did not say", never a
+ * defaulted version — a wrong BC build recorded as fact is worse than an absent one.
+ */
+export function parseAlRunnerBcBuild(output: string): AlRunnerBcBuild | undefined {
+  // Anchored on `[bc] ` at line start so a version number appearing in a test's own failure text
+  // can never be mistaken for the runner's announcement.
+  const selected = /^\[bc\] selected BC ([0-9]+(?:\.[0-9]+)+)\b.*$/m.exec(output);
+  const chosen = selected ?? /^\[bc\][^\n]*\bselecting BC ([0-9]+(?:\.[0-9]+)+)\b.*$/m.exec(output);
+  if (chosen === null) return undefined;
+  const [line, build] = chosen;
+  if (build === undefined) return undefined;
+  return { build, announcement: line.trim() };
 }
 
 /**
@@ -176,10 +234,23 @@ export function alRunnerEnv(testTimeoutSeconds: number): Record<string, string> 
 
 /** One al-runner process per request. Correct, and pays full compilation each time. */
 export class OneShotTransport implements AlRunnerTransport {
+  /**
+   * R129. Kept LATEST-WINS rather than first-wins: within a session every invocation is the same
+   * binary with the same argv and so announces the same build, but if that ever stops being true
+   * the report should describe the runs it most recently made rather than a stale first answer.
+   * A run that announces nothing leaves the previous observation alone — absence of a line is not
+   * evidence the selection changed.
+   */
+  private lastBcBuild: AlRunnerBcBuild | undefined;
+
   constructor(
     private readonly alRunnerPath: string,
     private readonly spawn: SpawnFn = defaultSpawn,
   ) {}
+
+  observedBcBuild(): AlRunnerBcBuild | undefined {
+    return this.lastBcBuild;
+  }
 
   async send(req: AlRunnerRequest): Promise<AlRunnerResult> {
     const argv = buildAlRunnerArgv(this.alRunnerPath, req);
@@ -200,6 +271,12 @@ export class OneShotTransport implements AlRunnerTransport {
         }),
       ]);
       if (res === "deadline") return { kind: "deadline" };
+      // R129: read the announcement before branching on the exit code, so a run that FAILED still
+      // records which BC runtime produced the failure. Both streams are scanned even though the
+      // lines were measured on stderr — the cost is a regex over text already in memory, and a
+      // future release moving its banner to stdout would otherwise silently stop being recorded.
+      const bcBuild = parseAlRunnerBcBuild(`${res.stderr}\n${res.stdout}`);
+      if (bcBuild !== undefined) this.lastBcBuild = bcBuild;
       // v2 exit codes, from its own --help: 0 = all passed, 1 = at least one test FAILED or
       // ERRORED, 2 = a bundle could not EXECUTE, 3 = a bundle could not COMPILE.
       //

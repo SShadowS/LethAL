@@ -14,6 +14,13 @@
     "errorClass": null
   },
   {
+    "key": "042be415edc59abb702f4d7528565491209ee3cabab9141ccc70756474f3ecd1|Data Commit Ops|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "042be415edc59abb702f4d7528565491209ee3cabab9141ccc70756474f3ecd1|Data Main List Ext|lethal.void-method-call|1",
     "verdict": "no-coverage",
     "killingTest": null,
@@ -45,6 +52,13 @@
     "key": "0a4aa6ba624a968a10ed0a7f498acecfcece91cce81f92a0459538ca3df0b35c|Data Commit Ops|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "CommitBeforeCodeunitRunSucceeds",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "0a4aa6ba624a968a10ed0a7f498acecfcece91cce81f92a0459538ca3df0b35c|Data Commit Ops|lethal.void-method-call|1",
+    "verdict": "killed",
+    "killingTest": "CommitBeforeValueFormCodeunitRunSucceeds",
     "coverageFiltered": false,
     "errorClass": null
   },
@@ -238,6 +252,13 @@
     "errorClass": null
   },
   {
+    "key": "40277aa121cd95030531672f906db4dc1f238ef3179b8c58d7815e6a8fe957f5|Data Commit Ops|lethal.return-value|1",
+    "verdict": "killed",
+    "killingTest": "CommitBeforeValueFormCodeunitRunSucceeds",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "40277aa121cd95030531672f906db4dc1f238ef3179b8c58d7815e6a8fe957f5|Data Loader|lethal.return-value|1",
     "verdict": "killed",
     "killingTest": "UserDefinedBuiltinsRun",
@@ -374,6 +395,13 @@
     "key": "6f65d08100f64fb6d38328b10873c82ec2f74cdb1dc6bf0aa0e1d08b83e8f1b7|Data Ops|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "LoadAmountReadsField",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "73729b51b143cadec3b1131ca39fded2ad1ac6fa2dbd3aa19e742efd744da304|Data Commit Ops|lethal.remove-commit|1",
+    "verdict": "killed",
+    "killingTest": "CommitBeforeValueFormCodeunitRunSucceeds",
     "coverageFiltered": false,
     "errorClass": null
   },
@@ -661,6 +689,13 @@
     "key": "b1f8d37229dc8335ae14f7ee9d7da052fd08c17862337ce980053ec608121738|Data Main|lethal.remove-calcfields|1",
     "verdict": "killed",
     "killingTest": "CategoryGuardNeedsCalcFields",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "b2d6969a181d78a5ee1c83fe34a2ee86a056dc6c5466aa2a103a3145f3a62f0c|Data Commit Ops|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "CommitBeforeValueFormCodeunitRunSucceeds",
     "coverageFiltered": false,
     "errorClass": null
   },

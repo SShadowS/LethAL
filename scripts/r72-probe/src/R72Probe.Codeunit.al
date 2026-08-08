@@ -119,6 +119,41 @@ codeunit 71543 "R72 Probe"
         Error('MEASURED arm=A8_Cmt_Callee_Stmt ran=n/a reachedAfterCall=Yes');
     end;
 
+    // ---- the GUARD form, added 2026-08-08 -------------------------------------------------
+    //
+    // The 2x2x2 above varied only the ASSIGNMENT form (`Ran := Codeunit.Run(X)`) against the bare
+    // statement. Real AL consumes the return value a second way, and R72's original row named it
+    // as the adversarial hole a detector must survive:
+    //
+    //     if not Codeunit.Run(X) then Error(SomethingErr, GetLastErrorText());
+    //
+    // A detector that flags "the return value is consumed" claims this shape too, and until these
+    // two arms ran that claim rested on the mechanism ("the Boolean form promises a rollback the
+    // platform will not make inside a transaction it did not open") rather than on a measurement.
+    // A shipped diagnosis resting on an inference is the thing this repo keeps getting wrong, so
+    // it is measured instead.
+    //
+    // B1 is the question; B2 is the control that keeps the answer about the TRANSACTION rather
+    // than about the guard form as such, exactly as C1 does for the assignment form.
+
+    [Test]
+    procedure B1_NoCmt_Test_Guard()
+    begin
+        WriteHere(71011);
+        if not Codeunit.Run(Codeunit::"R72 Target") then
+            Error('MEASURED arm=B1_NoCmt_Test_Guard ranFalse=Yes caught=%1', GetLastErrorText());
+        Error('MEASURED arm=B1_NoCmt_Test_Guard ranFalse=No reachedAfterCall=Yes');
+    end;
+
+    [Test]
+    procedure B2_RunOnly_Guard()
+    begin
+        // No write opened first.
+        if not Codeunit.Run(Codeunit::"R72 Target") then
+            Error('MEASURED arm=B2_RunOnly_Guard ranFalse=Yes caught=%1', GetLastErrorText());
+        Error('MEASURED arm=B2_RunOnly_Guard ranFalse=No reachedAfterCall=Yes');
+    end;
+
     // ---- controls -----------------------------------------------------------------------
 
     [Test]

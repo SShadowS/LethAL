@@ -105,6 +105,9 @@ export interface FoldedReport {
   readonly untargetedTriggerCount: number;
   readonly quarantined?: { readonly reason: string };
   readonly permissionCanary?: PermissionCanaryResult;
+  /** R129 — the BC artifact build al-runner announced it executed against, when it announced one.
+   *  Absent on every other backend, and absent on an al-runner session whose runs said nothing. */
+  readonly alRunnerBcBuild?: { readonly build: string; readonly announcement: string };
 }
 
 interface BatchInvalidation {
@@ -175,6 +178,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
 
   let quarantinedReason: string | undefined;
   let permissionCanary: PermissionCanaryResult | undefined;
+  let alRunnerBcBuild: { build: string; announcement: string } | undefined;
   let resumeFromRunId: number | undefined;
 
   const outcomes: SessionOutcome[] = [];
@@ -249,6 +253,9 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
         break;
       case "permission-canary":
         permissionCanary = e.result;
+        break;
+      case "al-runner-bc-build":
+        alRunnerBcBuild = { build: e.build, announcement: e.announcement };
         break;
       case "resume-resolved":
         resumeFromRunId = e.fromRunId;
@@ -464,5 +471,6 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
     untargetedTriggerCount,
     ...(quarantinedReason !== undefined ? { quarantined: { reason: quarantinedReason } } : {}),
     ...(permissionCanary !== undefined ? { permissionCanary } : {}),
+    ...(alRunnerBcBuild !== undefined ? { alRunnerBcBuild } : {}),
   };
 }

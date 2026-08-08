@@ -596,6 +596,23 @@ when the trigger was unknown. It is still not buildable against anything real, f
 reason: no fixture holds a `remove-commit` site in the value form, so the artifact cannot be
 produced by a mutant any gate generates.
 
+### The GUARD form measured too, 2026-08-08, same container and same day
+
+"Consumes its return value" covers a second AL shape the 2x2x2 never varied, and it is the one R72's
+row named as the adversarial hole: `if not Codeunit.Run(X) then Error(SomethingErr,
+GetLastErrorText())`. Two more arms on the same probe:
+
+| arm | write open first | form | outcome |
+| --- | --- | --- | --- |
+| B1 | yes | `if not Codeunit.Run(X) then Error(...)` | **ABORT** |
+| B2 | no | `if not Codeunit.Run(X) then Error(...)` | survives, `ranFalse=No` |
+
+B1 answers with BC's generic transaction message and a callstack naming the `if` line itself, so the
+guard's `then` branch never ran and the caller never regained control. No arm in either pass has ever
+reported `ranFalse=Yes`. The re-wrap hole is therefore closed by measurement rather than by
+mechanism, and a detector phrased as "the return value is consumed" is measured on both shapes it
+claims rather than on one plus an inference.
+
 ---
 
 ## R13 — can a `Permissions` property refuse anything, and is a `LockTable` deletion observable?

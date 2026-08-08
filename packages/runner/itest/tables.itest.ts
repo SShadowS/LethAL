@@ -126,7 +126,14 @@ const EXPECTED = {
   // coexist with `void-method-call` at their sites rather than displacing it, because dedup keys on
   // replacement TEXT and a swap's is never a deletion's empty string. That coexistence is R82's
   // "marginal == gross" claim, and it is now a measurement rather than an argument.
-  totalMutantSites: 148,
+  // R72 moved this from 148 to 154. `Data Commit Ops.CommitThenRunValueForm` is the first fixture
+  // site in any project that can produce BC's write-transaction refusal: the SAME procedure shape as
+  // `CommitThenRun` with the `Codeunit.Run` return value consumed, which a 2x2x2 on Cronus281
+  // measured as the only factor deciding the abort. Six raw specs, five deployed (Tier-1
+  // `void-method-call` and Tier-2 `remove-commit` both claim the `Commit()` and §3.2 keeps Tier 2).
+  // Per-mutant predictions pre-committed in
+  // docs/superpowers/specs/2026-08-08-r72-value-form-arm-precommitment.md BEFORE this run.
+  totalMutantSites: 154,
   // R36 moved this from 63/10 to 64/9, deliberately and in one direction only.
   //
   // `RequireCategoryAFails` used to assert merely that AN error occurred, so deleting
@@ -167,7 +174,13 @@ const EXPECTED = {
   // also the live proof that a swapped call COMPILES with a `var` parameter), :69 (arm B —
   // EXPRESSION position, the shape 452 of the 893 real sites have) and :146 (arm E — killed by a
   // platform length overflow under a test that asserts NOTHING, this repo's sharpest false kill).
-  killed: 109,
+  // R72 moved this from 109 to 113. Four of `CommitThenRunValueForm`'s five deployed mutants are
+  // predicted killed, and the one that matters is the `lethal.remove-commit` at its `Commit()`:
+  // deleting it leaves a write open across a `Codeunit.Run` whose return value is consumed, BC
+  // aborts the transaction, and the test dies without reaching any assertion. That mutant is the
+  // first anywhere to be scored `killed` AND screened as a platform artifact — and the verdict
+  // deliberately does not move, which `assertPlatformArtifactScreen` below pins alongside the count.
+  killed: 113,
   // R73 moved this from 9 to 12, and TWO of the three additions are worth reading rather than
   // accepting:
   //
@@ -195,7 +208,11 @@ const EXPECTED = {
   //   DataSwapOps:145 / :150 `empty-block` and :146 `void-method-call` — the arm E controls. Its
   //     test asserts nothing, so deleting that call is genuinely unobservable. They are what proves
   //     arm E's KILL came from the swap's runtime overflow and not from anything the test does.
-  survived: 17,
+  // R72 moved this from 17 to 18. The addition is `void-method-call` on `CommitThenRunValueForm`'s
+  // `DataMain.Init()`, which survives for the same reason the fixture's two other `Init()` deletions
+  // do: every field is assigned immediately after, so the deletion is unobservable. Manufacturing an
+  // assertion that killed it would test the fixture rather than the operator.
+  survived: 18,
   // R78 moved this from 6 to 9. The three new sites all belong to the TestPage-only pair
   // (`Data Value Source` / `Data Value Card`), and all three land `no-coverage` because the one
   // test that reaches them is refused on the fenced path. That is the measured statement of the
@@ -208,8 +225,20 @@ const EXPECTED = {
   // directly, so procedure-level attribution should reach all of them. If any arrives `no-coverage`
   // that is an ATTRIBUTION finding, named as one in the spec's §5, and must not be absorbed by
   // adjusting the fixture until it is understood.
+  // R72 leaves this at 10 — the new arm sits in a codeunit the new test calls directly, so
+  // procedure-level attribution must reach all five of its mutants. Any arriving `no-coverage` is an
+  // ATTRIBUTION finding and must not be absorbed by editing this number.
   noCoverage: 10,
-  mutationScore: 109 / (109 + 17),
+  mutationScore: 113 / (113 + 18),
+  /**
+   * R72: the screen must fire, and it must fire on exactly one mutant.
+   *
+   * `lethal.remove-commit` is the only operator that tags a site, and the fixture holds exactly one
+   * site in the value form. A second tagged kill here would mean either a new fixture site nobody
+   * declared or the detector claiming the STATEMENT form — the shape measured to survive, and the
+   * shape whose false prediction R72 spent a probe correcting.
+   */
+  platformArtifactKills: 1,
   /**
    * `coverageFilter`'s FALLBACK 2 ("coverage places this table trigger nowhere, run every green
    * test") must fire for NOBODY here. This is the assertion `0a463fd` actually earns: before it,
@@ -431,6 +460,52 @@ function assertVerdictTable(report: SessionReport): void {
       "coverage should place every trigger in this fixture (FALLBACK 1). A non-zero here with " +
       "unchanged verdicts is the signature of the pre-0a463fd bug returning: `byObject` starved, " +
       "attribution silently coarsened, every count identical",
+  );
+  // R72: the screen, asserted at the same prominence as the counts above and in the same place, so
+  // a run that silently stopped naming the platform artifact fails rather than passing quietly.
+  //
+  // Three separate claims, because they can break independently:
+  //   1. the screen fires, on exactly one mutant, under the measured mechanism name;
+  //   2. that mutant is the `lethal.remove-commit` in `CommitThenRunValueForm` — not some other
+  //      kill that happened to acquire the tag;
+  //   3. its verdict is still `killed` and it is still inside `mutationScore`. This is the one that
+  //      guards R72's own discipline: a diagnosis must never move a verdict, and the cheapest way
+  //      to break that is to start excluding screened kills from the denominator.
+  const screen = report.platformArtifactKills;
+  assert.ok(
+    screen !== undefined,
+    "the report must NAME the write-transaction artifact — the fixture holds a `remove-commit` " +
+      "site at a value-form `Codeunit.Run`, which BC is measured to refuse, and a run that scores " +
+      "that kill without saying why credits a platform refusal to the suite (R72)",
+  );
+  assert.equal(screen.killedCount, EXPECTED.platformArtifactKills, "screened-kill count mismatch");
+  assert.deepEqual(
+    screen.byMechanism.map((g) => g.mechanism),
+    ["write-txn-codeunit-run"],
+    "the only mechanism any operator tags today is the write-transaction one",
+  );
+  const [screenedCode] = screen.byMechanism[0]?.mutants ?? [];
+  const screened = report.mutants.find((m) => m.mutantCode === screenedCode);
+  assert.ok(
+    screened !== undefined,
+    `screened mutant ${screenedCode} is not in the report's own mutant list`,
+  );
+  assert.equal(screened.operatorName, "lethal.remove-commit", "screened mutant's operator");
+  assert.equal(
+    screened.procedureName,
+    "CommitThenRunValueForm",
+    "the screened mutant must be the VALUE-FORM arm — `CommitThenRun` uses the statement form, " +
+      "which is measured NOT to abort, and tagging it would re-assert the prediction the r72 probe " +
+      "falsified",
+  );
+  assert.equal(
+    screened.verdict,
+    "killed",
+    "a diagnosis must NEVER move a verdict (R72/R121) — this mutant stays `killed`",
+  );
+  assert.ok(
+    report.validity.caveats.includes("platform-artifact-kills"),
+    "the screen must also appear as a caveat, or `lethal explain` projects nothing for it",
   );
   // Per-mutant verdicts are asserted by `assertMatchesBaseline` (tables.baseline.json), not here
   // — see EXPECTED's doc comment for why the old inline 7-entry map was removed rather than

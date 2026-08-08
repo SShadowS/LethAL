@@ -50,6 +50,7 @@ export type {
   ConformanceCase,
   ParentContextHint,
   EquivalenceHint,
+  PlatformKillMechanism,
   SemanticCapability,
   AstNodeId,
 } from "./operator/interface";

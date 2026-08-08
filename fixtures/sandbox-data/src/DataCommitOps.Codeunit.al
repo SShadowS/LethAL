@@ -53,4 +53,42 @@ codeunit 79312 "Data Commit Ops"
         Commit();
         Codeunit.Run(Codeunit::"Data Commit Target");
     end;
+
+    // CommitThenRunValueForm — the SAME shape as CommitThenRun with exactly one character group
+    // changed, and that one difference is the whole platform-artifact mechanism.
+    //
+    // MEASURED 2026-08-08 (`scripts/r72-probe/`, a 2x2x2 plus controls on Cronus281): BC aborts the
+    // transaction when `Codeunit.Run`'s RETURN VALUE is consumed with a write open. It does that in
+    // either call frame, with or without a prior `Commit()`, and the bare statement form above
+    // survives in every cell. Two further arms measured the guard form
+    // (`if not Codeunit.Run(X) then ...`) and it aborts too, so "the return value is consumed"
+    // covers both shapes by measurement rather than by inference.
+    //
+    // That is why `CommitThenRun` SURVIVED on the live gate and why R72's prediction, not the gate,
+    // was wrong. Until this arm existed no fixture could produce the artifact at all, so R72's
+    // diagnosis could only have been proven against a constructed string — the R31 shape the row
+    // exists to avoid.
+    //
+    // With the `Commit()` intact the write is closed before the call, so the call succeeds and
+    // returns true. With it deleted (the `lethal.remove-commit` mutant) the write is still open, BC
+    // refuses at the `Ran := ...` line, the caller never regains control, and the mutant dies for a
+    // reason that says nothing about the assertions. The verdict deliberately stays `killed`.
+    //
+    // The SAME callee as CommitThenRun, on purpose: the return-value form is then the only
+    // difference between the two arms, mirroring the probe's own design.
+    procedure CommitThenRunValueForm(): Boolean
+    var
+        DataMain: Record "Data Main";
+        Target: Codeunit "Data Commit Target";
+        Ran: Boolean;
+    begin
+        DataMain.Init();
+        DataMain."No." := Target.CommitRunNo();
+        DataMain.Category := 'A';
+        DataMain.Amount := 9;
+        DataMain.Insert(false);
+        Commit();
+        Ran := Codeunit.Run(Codeunit::"Data Commit Target");
+        exit(Ran);
+    end;
 }

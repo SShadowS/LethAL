@@ -8,6 +8,7 @@ export type {
   ConformanceCase,
   ParentContextHint,
   EquivalenceHint,
+  PlatformKillMechanism,
   SemanticCapability,
   SemanticContext,
   AstNodeId,

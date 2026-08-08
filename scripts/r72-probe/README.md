@@ -61,6 +61,27 @@ a FAILED test; that is the transport, not a broken experiment.
 - **C2 is the control that makes it about `Codeunit.Run`** rather than about the write or this
   probe's permissions.
 
+## The GUARD form, measured 2026-08-08 in a second pass
+
+The 2x2x2 above varies the ASSIGNMENT form against the bare statement and nothing else. Real AL
+consumes the return value a second way, and R72's original row named it as the adversarial hole a
+detector must survive: `if not Codeunit.Run(X) then Error(SomethingErr, GetLastErrorText())`. Any
+detector phrased as "the return value is consumed" claims that shape too, so it was measured
+rather than inferred from the mechanism.
+
+| arm | write open first | form | outcome |
+| --- | --- | --- | --- |
+| B1 | yes | `if not Codeunit.Run(X) then Error(...)` | **ABORT** |
+| B2 | no | `if not Codeunit.Run(X) then Error(...)` | survives, `ranFalse=No` |
+
+B1 comes back with BC's generic transaction message, and its callstack names
+`R72 Probe.B1_NoCmt_Test_Guard line 3` — the `if` line itself. The guard's `then` branch never ran:
+no arm ever reported `ranFalse=Yes`. So the guard form behaves exactly as the assignment form does,
+and the re-wrap hole is closed by measurement rather than by argument. B2 is the guard form's own
+version of C1: with no write open the same code returns true and the test reaches its own message.
+
+Same container, same day, same fenced path as the eight arms above.
+
 The abort is raised at the `Codeunit.Run` line itself and the assignment never completes — the
 callstack for A3 names `R72 Callee.WriteThenRunValueForm line 6`, and no arm reported
 `ran=No`. That reconfirms R72's earlier finding that the refusal is NOT catchable through the
@@ -110,7 +131,7 @@ bun scripts/r72-probe/drive.ts fixtures/sandbox-app/lethal.config.local.json \
   df1aa9ff-6539-4c86-a9d0-ad702b61ac9a 71543 \
   A1_NoCmt_Test_Val A2_NoCmt_Test_Stmt A3_NoCmt_Callee_Val A4_NoCmt_Callee_Stmt \
   A5_Cmt_Test_Val A6_Cmt_Test_Stmt A7_Cmt_Callee_Val A8_Cmt_Callee_Stmt \
-  C1_RunOnly_Val C2_WriteOnly
+  B1_NoCmt_Test_Guard B2_RunOnly_Guard C1_RunOnly_Val C2_WriteOnly
 ```
 
 The probe owns a TABLE, so a later republish with a changed table set meets the schema ghost — see

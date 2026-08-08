@@ -8,6 +8,7 @@ import {
 } from "@lethal/operator-sdk";
 import { countArguments, synthesizeAfter } from "./mutate-helpers";
 import { claimsSystemCall } from "./receiver";
+import { detectWriteTxnCodeunitRun } from "./write-txn-codeunit-run";
 
 const CALL_NAME = "Commit";
 
@@ -45,9 +46,11 @@ const CALL_NAME = "Commit";
  *     runner's isolation** — which is the actual kill mechanism. Until it is, a survivor here is
  *     weak evidence about the suite, and no gate has ever KILLED a `remove-commit` mutant.
  *   - BC's "cannot run codeunit in a write transaction" (spec §5) — an error-kill that says nothing
- *     about assertion quality — is NOT yet distinguished in the report. Filed as R72; the detector
- *     is deliberately not written against an assumed message string, since nothing here has ever
- *     produced that text.
+ *     about assertion quality — IS now distinguished, as of R72's close. `generate` tags a site
+ *     whose deleted `Commit()` is followed by a `Codeunit.Run` that consumes its return value with
+ *     `platformKillMechanism: "write-txn-codeunit-run"`, and the report screens killed mutants
+ *     carrying it. The tag is syntactic, never a message match: BC's own text is generic and
+ *     localises (R66). The verdict does NOT move — see `PlatformKillMechanism`.
  */
 export const removeCommit: MutationOperator = {
   name: "lethal.remove-commit",
@@ -65,6 +68,10 @@ export const removeCommit: MutationOperator = {
   },
 
   generate(node: ALSyntaxNode, _ctx: SemanticContext): readonly MutationSpec[] {
+    // R72: a SITE property, decided here because this is the only place that still has the AST.
+    // It says which of the operator's two kill mechanisms this site can produce, and it never
+    // touches the verdict — see `PlatformKillMechanism`.
+    const platformKillMechanism = detectWriteTxnCodeunitRun(node);
     return [
       {
         operatorName: "lethal.remove-commit",
@@ -73,6 +80,7 @@ export const removeCommit: MutationOperator = {
         before: node,
         after: synthesizeAfter(node, ""),
         parentContext: "statement-position",
+        ...(platformKillMechanism !== null ? { platformKillMechanism } : {}),
       },
     ];
   },

@@ -4,6 +4,10 @@ import type { BackendCapabilities } from "./backend";
 import type { RunEvent } from "./events";
 import type { Interpretation } from "./interpretation";
 import { type PermissionCanaryResult, permissionCanaryWarnings } from "./permission-canary";
+import {
+  PLATFORM_ARTIFACT_KILL_DIAGNOSIS,
+  PLATFORM_KILL_MECHANISM_EXPLANATIONS,
+} from "./platform-artifact-kills";
 import { type FoldStatics, foldEvents } from "./report-fold";
 import type { CoverageAttribution } from "./selection";
 import { identityKeyOf } from "./selection";
@@ -118,7 +122,8 @@ export type Caveat =
   | "runner-disagreement"
   | "stop-hung-sessions"
   | "resumed"
-  | "untargeted-triggers";
+  | "untargeted-triggers"
+  | "platform-artifact-kills";
 
 /**
  * What each `Caveat` MEANS for a reader, and — where the roadmap entry that filed it recorded one
@@ -271,6 +276,15 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
       "everything rather than be dropped as `no-coverage`. It is a number to pin, and a rise " +
       "in it is the thing to explain.",
     basis: "R29",
+  },
+  "platform-artifact-kills": {
+    meaning: PLATFORM_ARTIFACT_KILL_DIAGNOSIS,
+    entailedNegative:
+      "Does NOT mean those verdicts are wrong, and does not change one: they stay `killed` and " +
+      "they stay in `mutationScore`. Nor does its absence mean every other kill was earned by an " +
+      "assertion — only `lethal.remove-commit` tags sites today, so the screen's reach is one " +
+      "operator wide.",
+    basis: "R72",
   },
 };
 
@@ -643,6 +657,35 @@ export interface SessionReport {
     readonly diagnosis: string;
   };
   /**
+   * R72: KILLED mutants whose site carries a recognised platform kill mechanism — a SCREEN over the
+   * kills, not a classification of them. See `CAVEAT_INTERPRETATIONS["platform-artifact-kills"]`
+   * for what this means to a reader, and `platform-artifact-kills.ts` for what it deliberately
+   * cannot see.
+   *
+   * Absent when no killed mutant carries one. That is NOT the statement "every kill was earned by
+   * an assertion": only `lethal.remove-commit` tags sites today, and R82's arm E is a live example
+   * of a platform-produced kill from a different operator that nothing here screens.
+   *
+   * The verdicts do not move and `mutationScore` is unchanged — deliberately, per design §6.7's
+   * timeout precedent. Re-scoring on a diagnosis would invalidate every frozen gate figure and
+   * every committed campaign baseline.
+   */
+  readonly platformArtifactKills?: {
+    /** Killed mutants screened, across every mechanism below. */
+    readonly killedCount: number;
+    readonly byMechanism: ReadonlyArray<{
+      readonly mechanism: string;
+      /** `mutantCode`s, sorted — a stable list a gate can assert on. */
+      readonly mutants: readonly string[];
+      /** What this mechanism IS, from `PLATFORM_KILL_MECHANISM_EXPLANATIONS`, or a bare marker when
+       *  the run's manifest carried a tag this build has no explanation for (an older/newer engine
+       *  wrote it). Naming the unknown tag beats dropping the mutant from the screen silently. */
+      readonly explanation: string;
+    }>;
+    /** The hedge and the instruction, stated once rather than per mutant. */
+    readonly diagnosis: string;
+  };
+  /**
    * R59: tests that PASSED on the bc-dev-mcp hub (they are in the green set, or they would not
    * have been covering tests) and then FAILED, unmutated, on the fenced runner that produces
    * every verdict. Present only in a hub coverage mode (`procedure`/`line`); in `fenced`/`none`
@@ -862,6 +905,19 @@ export interface MutantOutcome {
    * `failureNote` is their only account, and it is free text.
    */
   readonly cause?: MutantErrorCause;
+  /**
+   * R72: a syntactic property of this mutant's SITE saying the platform is known to refuse the
+   * mutated program here, so a kill can be BC rather than an assertion. Carried verbatim from
+   * `MutantManifestEntry.platformKillMechanism`; see `PLATFORM_KILL_MECHANISM_EXPLANATIONS`
+   * (platform-artifact-kills.ts) for what each value means and `SessionReport.platformArtifactKills`
+   * for the session-level screen built over it.
+   *
+   * Present on the mutant whatever its verdict — the site property is true of a survivor too — and
+   * the screen counts only the KILLED ones, because a survivor at such a site is just a survivor.
+   *
+   * NEVER a verdict input. A killed mutant carrying this stays killed.
+   */
+  readonly platformKillMechanism?: string;
   /**
    * Summed test time this mutant was scored by, in ms. 0 when nothing ran against it
    * (`no-coverage`, known-survivor skip, or a batch-wide failure recorded without execution) —
@@ -1278,6 +1334,11 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
       ...(o.failureNote !== undefined ? { failureNote: o.failureNote } : {}),
       ...(o.killingTestFailure !== undefined ? { killingTestFailure: o.killingTestFailure } : {}),
       ...(o.cause !== undefined ? { cause: o.cause } : {}),
+      // R72: a SITE property, so it comes off the manifest entry and never off the outcome — it is
+      // true of this mutant whatever happened when it ran.
+      ...(o.mutant.platformKillMechanism !== undefined
+        ? { platformKillMechanism: o.mutant.platformKillMechanism }
+        : {}),
     });
   }
 
@@ -1377,6 +1438,45 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
   // See CAVEAT_INTERPRETATIONS.resumed for what this caveat means to a reader.
   if (input.resumedFrom !== undefined) caveats.push("resumed");
   if (input.untargetedTriggerCount > 0) caveats.push("untargeted-triggers");
+  // R72 — see CAVEAT_INTERPRETATIONS["platform-artifact-kills"]. Built from the mutant rows just
+  // assembled rather than from `input.outcomes`, so the codes it lists are the same strings the
+  // report's own `mutants` array carries and a reader can join the two without a second lookup.
+  //
+  // KILLED only, and `timeout-killed` deliberately not included: a timeout is already its own
+  // qualified outcome (design §6.7) and folding a second hedge into it would say nothing new.
+  const platformKillsByMechanism = new Map<string, string[]>();
+  for (const m of mutants) {
+    if (m.verdict !== "killed") continue;
+    const mechanism = m.platformKillMechanism;
+    if (mechanism === undefined) continue;
+    const list = platformKillsByMechanism.get(mechanism);
+    if (list === undefined) platformKillsByMechanism.set(mechanism, [m.mutantCode]);
+    else list.push(m.mutantCode);
+  }
+  if (platformKillsByMechanism.size > 0) caveats.push("platform-artifact-kills");
+  const platformArtifactKills =
+    platformKillsByMechanism.size === 0
+      ? undefined
+      : {
+          killedCount: [...platformKillsByMechanism.values()].reduce((n, l) => n + l.length, 0),
+          byMechanism: [...platformKillsByMechanism.entries()]
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([mechanism, list]) => ({
+              mechanism,
+              mutants: [...list].sort(),
+              // A tag with no explanation in THIS build is named rather than dropped: the manifest
+              // may have been written by a different engine version, and silently un-screening a
+              // mutant because a string is unrecognised is the empty-vs-empty failure this repo is
+              // named for.
+              explanation:
+                mechanism in PLATFORM_KILL_MECHANISM_EXPLANATIONS
+                  ? PLATFORM_KILL_MECHANISM_EXPLANATIONS[
+                      mechanism as keyof typeof PLATFORM_KILL_MECHANISM_EXPLANATIONS
+                    ]
+                  : `no explanation is registered in this build for the site tag "${mechanism}" — it was written by a different engine version`,
+            })),
+          diagnosis: PLATFORM_ARTIFACT_KILL_DIAGNOSIS,
+        };
   const narrowed =
     input.only !== undefined ||
     input.operators !== undefined ||
@@ -1444,6 +1544,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
           },
         }
       : {}),
+    ...(platformArtifactKills !== undefined ? { platformArtifactKills } : {}),
     ...(runnerDisagreementTests.length > 0
       ? {
           runnerDisagreement: {
@@ -1629,6 +1730,19 @@ export function renderConsole(r: SessionReport): string {
     );
     for (const t of r.testPageUnsupported.tests.slice(0, 10)) lines.push(`  ${t}`);
     if (n > 10) lines.push(`  ... ${n - 10} more`);
+  }
+  // R72: same prominence, and the reader's default reading is the one to interrupt — a kill counts
+  // as evidence the suite works. This says which kills cannot carry that weight, and says it
+  // without moving a single verdict.
+  if (r.platformArtifactKills !== undefined) {
+    lines.push(
+      `PLATFORM-ARTIFACT KILL SCREEN: ${r.platformArtifactKills.killedCount} killed mutant(s) sit at a site BC is measured to refuse. ${r.platformArtifactKills.diagnosis}`,
+    );
+    for (const g of r.platformArtifactKills.byMechanism) {
+      lines.push(`  ${g.mechanism} (${g.mutants.length}): ${g.explanation}`);
+      lines.push(`    ${g.mutants.slice(0, 10).join(", ")}`);
+      if (g.mutants.length > 10) lines.push(`    ... ${g.mutants.length - 10} more`);
+    }
   }
   // R59: same prominence again, and for the same reason — the reader's default reading of
   // "unstable" is "my tests are flaky", and here the fix is a config key, not a test.

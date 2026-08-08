@@ -574,6 +574,38 @@ codeunit 79310 "Data Tests"
             Error('expected the Codeunit.Run callee to have flagged %1', Target.CommitRunNo());
     end;
 
+    [Test]
+    procedure CommitBeforeValueFormCodeunitRunSucceeds()
+    var
+        CommitOps: Codeunit "Data Commit Ops";
+        Target: Codeunit "Data Commit Target";
+        DataMain: Record "Data Main";
+    begin
+        // THE PLATFORM ARTIFACT, and the only fixture site that can produce it. The test above
+        // calls `Codeunit.Run` as a bare statement and its mutant SURVIVES; this one consumes the
+        // return value, which is the single factor a 2x2x2 on Cronus281 measured as deciding the
+        // abort (`scripts/r72-probe/`). Deleting the `Commit()` leaves the write open, BC refuses
+        // at the `Ran := ...` line, and this test dies without any assertion below being reached.
+        //
+        // The mutant is scored `killed` and stays killed. What R72's diagnosis adds is the reason:
+        // the report says this kill came from the platform refusing the mutated program, not from
+        // anything asserted here. Re-scoring it would invalidate every frozen gate figure.
+        //
+        // The assertions still matter for the BASELINE half: with the `Commit()` intact the call
+        // must actually succeed and the callee must actually have run, or "survives" and "never
+        // happened" would look alike.
+        DeleteMain(Target.CommitRunNo());
+        Commit();
+
+        if not CommitOps.CommitThenRunValueForm() then
+            Error('expected Codeunit.Run to report success once the write was committed');
+
+        if not DataMain.Get(Target.CommitRunNo()) then
+            Error('expected CommitThenRunValueForm to have inserted %1', Target.CommitRunNo());
+        if not DataMain.Flagged then
+            Error('expected the Codeunit.Run callee to have flagged %1', Target.CommitRunNo());
+    end;
+
     // ---------------------------------------------------------------------------------------------
     // R70: the cross-kind name collision, made live.
     //

@@ -6,7 +6,7 @@ import {
   emitStaticSelector,
 } from "@lethal/schemata";
 import { OneShotTransport, qualifiedTestName } from "./al-runner-transport";
-import type { AlRunnerTransport } from "./al-runner-transport";
+import type { AlRunnerBcBuild, AlRunnerTransport } from "./al-runner-transport";
 import type { CompiledArtifact } from "./artifact";
 import type {
   BackendCapabilities,
@@ -186,6 +186,19 @@ export class AlRunnerBackend implements ExecutionBackend {
       throw new Error(AL_RUNNER_SERVER_MODE_REFUSED);
     }
     this.transport = new OneShotTransport(cfg.alRunnerPath, spawn);
+  }
+
+  /**
+   * R129: which BC artifact build this session's al-runner invocations announced they executed
+   * against. `undefined` until at least one invocation has been made and has said so.
+   *
+   * Deliberately NOT part of `ExecutionBackend` — no other backend has the concept, and widening
+   * the shared interface for one implementation's provenance would invite every other backend to
+   * answer `undefined` forever. `runSession` reaches it through a narrow structural check instead,
+   * which is honest about there being exactly one backend that can answer.
+   */
+  observedBcBuild(): AlRunnerBcBuild | undefined {
+    return this.transport.observedBcBuild();
   }
 
   /**
