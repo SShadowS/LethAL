@@ -138,9 +138,16 @@ export function buildAlRunnerArgv(
     // measured nothing: `itest:alrunner` went 3/13/0 -> 0/0/0 the moment the tool auto-updated.
     //
     // `--auto-provision` is upstream's own named remedy for exactly this ("or re-run with
-    // --auto-provision"), and it resolves the version from the PROJECT rather than from the binary
-    // — which is the version whose symbols the project actually carries. Cheap after the first
-    // run: artifacts are cached per BC version on the machine.
+    // --auto-provision"). Cheap after the first run: artifacts are cached per BC version.
+    //
+    // CORRECTION, measured 2026-08-08 on 2.1.1.0 (R128): this comment used to say it "resolves the
+    // version from the PROJECT rather than from the binary — which is the version whose symbols the
+    // project actually carries". That is not what happens. With no `--bc-version` the runner
+    // announces `selecting BC <v>, the exact build this binary was compiled against` and provisions
+    // THAT, and it works even though the fixture's `.alpackages` carry 28.0.46665.47126 symbols
+    // while the selected build is 28.1.49838.50794. It is the `provision` SUBCOMMAND that resolves
+    // the project's version — and only for platform apps, which is precisely why that subcommand is
+    // not a substitute (see R128).
     //
     // Placed BEFORE the positional bundle dirs deliberately: they are positional and repeatable, so
     // every flag belongs ahead of them.
