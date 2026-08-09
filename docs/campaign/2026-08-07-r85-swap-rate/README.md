@@ -13,8 +13,10 @@ names, ast hashes, timings and failure text are byte-identical to the committed 
 number this campaign reports is still checkable against the artifact that produced it.
 
 Redaction was chosen over deletion so the record stays re-analysable. It does NOT remove the source
-from git history — the file was public from 2026-08-07 — and rewriting history is a separate
-decision that has not been taken.
+from git history — the file was public from 2026-08-07. A history rewrite was CONSIDERED and
+DECLINED on 2026-08-09 after the blast radius was measured (0 forks, 0 open PRs, one remote branch,
+and 48 commit SHAs cited across the roadmap that it would have disturbed). The reasoning, and what
+would reopen it, are recorded once in this campaign's rung-2 successor README.
 
 `killingTestFailure` is RETAINED, ruled 2026-08-09: its callstack frames are names and line numbers,
 which the ruling covers, and its message text is the corpus R121's classifier evaluation scores

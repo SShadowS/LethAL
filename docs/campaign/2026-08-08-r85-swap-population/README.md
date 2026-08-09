@@ -17,8 +17,36 @@ number this campaign reports is still checkable against the artifact that produc
 false, B2 at 23 flagged / 26.1% precision / 100% recall).
 
 Redaction was chosen over deletion so the record stays re-analysable. It does NOT remove the source
-from git history — the file was public from 2026-08-08 — and rewriting history is a separate
-decision that has not been taken.
+from git history — the file was public from 2026-08-08.
+
+## A history rewrite was CONSIDERED and DECLINED, 2026-08-09
+
+Not an oversight. The blast radius was measured first:
+
+| fact | value |
+| --- | --- |
+| forks / network | 0 |
+| watchers / stars | 0 / 1 |
+| open pull requests | 0 |
+| remote refs | `refs/heads/master` only |
+| `refs/pull/1,2/head` contain either report | no, both checked |
+| contributors ever | 2, and the second's commit predates both campaigns |
+
+Mechanically the rewrite is easy — one branch, one author, `git-filter-repo` installed, ~50 commits
+touched. **It was declined because it would not have bought what it appears to buy.** A force push
+leaves the old objects fetchable by SHA on GitHub until GitHub's own garbage collection runs, which
+only a Support ticket triggers; any clone anyone made keeps everything regardless; and mirrors and
+code-search indexes had two days. The realistic ceiling was "publicly browsable" becoming "needs a
+specific SHA and beating GC", not deletion.
+
+Against that: this repository closes roadmap rows with `done (<commit>)`. **48 commit SHAs are cited
+across `docs/roadmap/` and `CLAUDE.md`**, 4 of which the rewrite would invalidate, plus every SHA in
+the 49 rewritten commit messages. Paying that in record integrity for a mostly symbolic gain was
+judged the worse trade, on the owner's assessment that nobody fetched it.
+
+**What would reopen this:** evidence that someone did fetch it, or Continia treating the exposure as
+reportable. In that case the rewrite is the prerequisite and the GitHub Support GC request is the
+actual operation — doing the first without the second accomplishes little.
 
 ## What is still published here, deliberately
 
