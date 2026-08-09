@@ -54,5 +54,16 @@ Verify AL edits by an offline `alc` compile (use `/al-compile` or the `al-compil
 ## The recurring hazard: "test passes for the wrong reason"
 A test asserts the right thing but passes whether or not the code is correct. Reading the diff does not catch it; only mutation does. **Red-check every fix**: revert the specific fix, confirm the specific test goes red, restore — report both. Use the `mutation-red-checker` subagent. Gate on per-mutant equality, not aggregate counts.
 
+## Committing a campaign report — this repo is PUBLIC
+A `SessionReport` from a real project carries that project's AL source in every mutant's
+`originalText`/`mutatedText`. Two Continia Document Output reports were committed with 2,550 such
+fields before anyone noticed (redacted 2026-08-09). **Run `bun scripts/redact-campaign-report.ts
+<report.json>` BEFORE committing one**; `--check` exits 1 on an unredacted file and
+`scripts/redact-campaign-report.test.ts` asserts both committed reports stay clean.
+The ruling it implements (2026-08-09): **filenames, paths, procedure names and test names are fine
+to publish; source code is not.** `killingTestFailure` is deliberately KEPT — its callstacks are
+names and line numbers, and its message text is the corpus `scripts/r121-classify-eval.ts` scores
+false-kill rules against. Redaction after a push changes what a fresh clone sees and nothing else.
+
 ## Environment
 Git bash on Windows; use bash syntax with Windows paths. **Never `2>nul`** (creates undeletable files) — use `2>/dev/null`. The `! <cmd>` prefix is only for interactive logins the tools can't complete (e.g. device-code auth). BC container publish/unpublish/restart are NOT user-only: `bccontainerhelper` is reachable from the PowerShell tool — the Cronus BC servers are Windows Docker containers on this machine (switch `docker context use desktop-windows` first, since the session default is the Linux engine). `altool publishapp` publishes over HTTP (dev endpoint); removal needs `UnPublish-BcContainerApp` under the Windows context.

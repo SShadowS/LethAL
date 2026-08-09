@@ -26,16 +26,31 @@ File paths (including `.dependencies\CDO\...`), procedure names, codeunit names 
 qualified test names. These were ruled acceptable by the repository owner on 2026-08-09; the ruling
 was specifically that **filenames and paths are fine, source code is not**.
 
-## What is still open
+## Failure text is RETAINED, and that was a decision, not an oversight
 
-`killingTestFailure` retains each kill's first-line message, ~8.5 KB across 73 kills. Measured
-composition: 50 are Microsoft Library Assert output whose message text was written by Continia's test
-authors, 15 are target-authored `Error(...)` literals, 8 are Business Central platform messages. The
-first two categories are string literals lifted out of the product's source, so under a strict
-reading of the ruling above they are source code too. They are retained because they are the corpus
-R121's classifier evaluation scores against, and removing them would make the shipped screen's
-measured precision uncheckable by anyone outside this machine. The remaining ~90 KB of that field is
-callstack frames — procedure names, line numbers, app names and versions — which the ruling covers.
+`killingTestFailure` keeps each kill's first-line message — ~8.5 KB across 73 kills. Measured
+composition:
+
+| n | what it is |
+| --- | --- |
+| 50 | Microsoft Library Assert output, whose message text was written by Continia's test authors |
+| 15 | target-authored `Error(...)` literals |
+| 8 | Business Central platform messages |
+
+The first two categories are string literals lifted out of the product's source, so under the
+strictest reading of the ruling above they are source code too. **The repository owner ruled on
+2026-08-09 that they stay.** The reasoning recorded at the time: assert and error message text is
+documentation-grade rather than implementation, and it is the corpus R121's classifier evaluation
+scores against — redacting it would leave the shipped screen's measured precision (26.1%, 100%
+recall) uncheckable by anyone outside this machine, and would also destroy the corpus's ability to
+score any FUTURE candidate rule, which is the property R121 exists for after two rules were written
+from examples and refuted only by this data.
+
+The remaining ~90 KB of that field is callstack frames — procedure names, line numbers, app names and
+versions — which the filenames-and-paths half of the ruling already covers.
+
+A future campaign committing a report here inherits this ruling: strip `originalText`/`mutatedText`,
+keep everything else.
 
 ## What this campaign measured
 

@@ -16,6 +16,10 @@ Redaction was chosen over deletion so the record stays re-analysable. It does NO
 from git history — the file was public from 2026-08-07 — and rewriting history is a separate
 decision that has not been taken.
 
+`killingTestFailure` is RETAINED, ruled 2026-08-09: its callstack frames are names and line numbers,
+which the ruling covers, and its message text is the corpus R121's classifier evaluation scores
+against. See this campaign's rung-2 successor README for the full composition and reasoning.
+
 ## What it produced
 
 Not a rate. It scored **3** swap mutants out of 894 deployed, all three killed, and all three
