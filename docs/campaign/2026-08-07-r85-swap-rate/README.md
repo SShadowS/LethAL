@@ -1,7 +1,20 @@
 # 2026-08-07 — R85 swap rate, rung 1
 
-**This campaign stands exactly as committed. Nothing in it has been edited.** This README is a
-forward note, which is the only way a correction is recorded against a committed campaign record.
+**This campaign's RESULTS stand exactly as committed. No verdict, count or conclusion has been
+edited.** This README is a forward note, which is the only way a correction is recorded against a
+committed campaign record.
+
+**ONE EXCEPTION, 2026-08-09: `rung1.report.json` was REDACTED.** Every mutant's `originalText` and
+`mutatedText` held verbatim AL statements from Continia Document Output, a commercial product, in a
+PUBLIC repository. Both fields are now the literal string
+`[redacted: third-party source, see this directory's README]` — 1,504 fields across 752 mutants.
+Nothing else changed: mutant ids, verdicts, operators, file paths, procedure names, covering test
+names, ast hashes, timings and failure text are byte-identical to the committed run, so every
+number this campaign reports is still checkable against the artifact that produced it.
+
+Redaction was chosen over deletion so the record stays re-analysable. It does NOT remove the source
+from git history — the file was public from 2026-08-07 — and rewriting history is a separate
+decision that has not been taken.
 
 ## What it produced
 
