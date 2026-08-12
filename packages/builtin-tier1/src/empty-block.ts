@@ -63,7 +63,11 @@ export const emptyBlock: MutationOperator = {
       expectedSpecs: [
         {
           parentContext: "statement-position",
-          beforeText: "begin DoThing(); end;",
+          // Grammar 4.0.0 moved the statement terminator OUT of `code_block`: the block
+          // node now ends at its `end`, and the `;` belongs to the enclosing construct.
+          // Under 3.x this beforeText was `begin DoThing(); end;` and the mutation
+          // deleted the terminator with the block; now the `;` survives untouched.
+          beforeText: "begin DoThing(); end",
           afterText: "begin end",
         },
       ],

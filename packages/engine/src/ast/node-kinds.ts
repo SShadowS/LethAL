@@ -1,6 +1,7 @@
 /**
  * ALNodeKind — enumeration of AST node types produced by the
- * SShadowS/tree-sitter-al grammar (v3.0.1).
+ * SShadowS/tree-sitter-al grammar (introduced against v3.0.1; every value
+ * re-verified present in v4.0.0's node-types.json at the 2026-08-12 bump).
  *
  * String values are cross-checked against the grammar's node-types.json.
  * Where the design-plan name differs from the grammar name, the plan's key
@@ -13,6 +14,13 @@
  * declaration's members inside a `declaration_body`. Code that walked
  * straight from the parent to its children under v2.5.0 must skip these
  * containers explicitly.
+ *
+ * v4 (grammar 4.0.0) renames nothing this set curates. It moves the statement
+ * terminator OUT of every statement/block span (`node.text` no longer ends in
+ * `;`), wraps bare `case … else` bodies in a `statement_block`, and adds named
+ * node types this set deliberately does not yet include (`assignment_operator`,
+ * the `where()` marker keywords, `preproc_define`/`preproc_undef`). Add them
+ * here only when a consumer needs them.
  */
 export const ALNodeKind = {
   // --- Top-level / declarations --------------------------------------------

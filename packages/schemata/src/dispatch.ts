@@ -24,7 +24,16 @@ export function emitDispatch(component: Component): string {
     const lead = i === 0 ? "if" : "end else if";
     parts.push(`${lead} MutationSelector.Active('${b.mutantId}') then begin\n  ${b.text}\n`);
   }
-  parts.push(`end else begin\n  ${original}\nend;`);
+  // The chain replaces exactly the root's span, so it must end with a `;` if
+  // and only if that span consumed one — the same consumed-terminator rule as
+  // `wrapIfSingleStatementSlot` and `spliceIntoRoot`. Grammar 4.0.0 moved the
+  // statement terminator OUT of every statement/block node, so the root's `;`
+  // (when it has one) now survives in the source after the replaced span, and
+  // appending another here emitted `end;;`. Statements that own an internal
+  // `;` (a parenless `call_statement`) still end their text with one and still
+  // get it reproduced.
+  const consumedTerminator = original.trimEnd().endsWith(";");
+  parts.push(`end else begin\n  ${original}\nend${consumedTerminator ? ";" : ""}`);
   return parts.join("");
 }
 

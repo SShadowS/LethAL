@@ -8,23 +8,30 @@ package loads this file at runtime via `web-tree-sitter` to parse AL source.
 
 - Repository: <https://github.com/SShadowS/tree-sitter-al>
 - License: MIT
-- Version: `3.2.1`
-- Commit: `335d1ffc04a123a1812a033f768827db710d9239` — "chore: rebuild
-  tree-sitter-al.wasm for v3.2.1", tag `v3.2.1`
+- Version: `4.0.0`
+- Commit: `2c17f4c02f619403944dd323e41ef72d7b6eae9f` — tag `v4.0.0`
+  (the tag sits four commits past the "chore: rebuild tree-sitter-al.wasm for
+  4.0.0" commit; the extra four are upstream gate/CI fixes, no grammar change)
 - Provenance: **built locally from source at that tag**, NOT downloaded from a
-  release. `tree-sitter build --wasm`, tree-sitter CLI 0.26.11, from a detached
+  release. `tree-sitter build --wasm`, tree-sitter CLI 0.26.12, from a detached
   worktree at the tag so the grammar checkout's own state could not leak in.
-- Artifact: 7,457,411 bytes,
-  `sha256:33b861ddd6172d697232fbbe48103f9b91c4205fd768add13a0d0c4260f48b2e`
+- Artifact: 10,129,980 bytes,
+  `sha256:5e0006239e502d68379c92794f4b25fdfe15c8c9391f988be20c75d8100790ab`
 
-Previously `3.0.1` at commit `f150581` (7,979,068 bytes,
-`sha256:3ea9756824...`), kept here because a bump's evidence is only readable
-against what it replaced.
+Previously `3.2.1` at commit `335d1ff` (7,457,411 bytes, `sha256:33b861ddd6...`),
+kept here because a bump's evidence is only readable against what it replaced.
 
 A commit alone does not determine the binary — `tree-sitter build --wasm` uses
 local Emscripten when present and falls back to a Docker image otherwise, and the
 two toolchains do not produce byte-identical output. Record the artifact hash on
 every bump so the vendored file can be *verified*, not merely re-approximated.
+The build is not even reproducible on ONE machine: two consecutive
+`tree-sitter build --wasm` runs at the 4.0.0 tag with the same CLI differed in
+848 bytes (and 7 bytes of length) — emscripten-class path/metadata noise — so
+the recorded hash identifies the SHIPPED artifact, never the (commit, toolchain)
+pair. The wasm checked into the grammar repo's root at the tag is close but not
+this artifact either (10,129,974 bytes, `sha256:c1232fd290...`); build from
+source rather than copying it.
 
 > The `tree-sitter-al.wasm` checked into the grammar repo's own root is NOT the
 > same artifact — it is dated before the commit above and is 8,941,485 bytes.
@@ -126,6 +133,116 @@ corpus contains none of those shapes, which is precisely why every number is
 identical. So this measures that the bump costs nothing, not that it gains
 anything. The gain is on code the old grammar misread, and no corpus here
 carries it.
+
+## The 3.2.1 -> 4.0.0 bump (2026-08-12): trees move, and the identity hashes move with them
+
+Upstream 4.0.0 is a deliberately breaking release (its changelog enumerates every
+tree-moving change by node-instance set difference over 15,358 BC.History files).
+Three releases came in one bump: 3.3.0 (additive `#define`/`#undef`), 3.3.1
+(scanner fixes, tree-neutral) and 4.0.0. What it cost HERE, measured:
+
+**Grammar-caused code changes needed: one.** `emitDispatch` (`packages/schemata/src/dispatch.ts`)
+appended `;` unconditionally after a guard chain's final `end`. Under 3.x every
+statement span consumed its own terminator so that was correct; 4.0.0 moves the
+`;` OUT of every statement/block node, the source's own `;` now survives outside
+the replaced span, and the unconditional append emitted `end;;`. The fix applies
+the same consumed-terminator rule the other two splice sites already used: emit
+`;` if and only if the replaced text ended with one. Two test updates rode along
+(`empty-block`'s conformance `beforeText` lost its trailing `;`; a compile.test
+expectation likewise).
+
+**Aggregate census** — same corpus as the 3.2.1 bump (Continia Document Output
+Cloud + Test), re-snapshotted 2026-08-12 at 658 files, so numbers are not
+directly comparable to the 659-file column above; the A/B below is same-day,
+same-snapshot:
+
+| | 3.2.1 | 4.0.0 |
+| --- | --- | --- |
+| files parsed / clean | 658 / 658 | 658 / 658 |
+| ERROR nodes | 0 | 0 |
+| `statementCalls` | 17,910 | 17,929 |
+| `blocks` | 8,416 | 8,416 |
+| `triggerBlocks` | 2,146 | 2,146 |
+| `procedures` | 4,443 | 4,443 |
+| `exits` | 2,533 | 2,533 |
+
+**Per-site census** (`census-tier1-sites.ts`, position-keyed): 30,823 -> 30,751
+sites. Every moved site maps to a named upstream change:
+
+- **94 removed**, all `lethal.negate-conditional`, every one a single-entry
+  `DataItemLink`/`RunPageLink`/`SubPageLink` property (`"No." = field("No.")`)
+  that 3.x misparsed as a `comparison_expression` and 4.0.0 parses as
+  `link_value`. These were never live mutants — the orchestrator's
+  `isMutableSite` guard already dropped declarative sites — so the census shrank
+  and no run changes.
+- **19 added** `lethal.void-method-call`: statement calls in bare `case … else`
+  bodies. 4.0.0 wraps those bodies in a `statement_block`, which is exactly what
+  `isStatementPosition` keys on — a genuine coverage GAIN (`else Error('');` was
+  unclaimable under 3.x).
+- **3 added** `lethal.empty-block`: the dangling-`else` repair. In
+  `X: if C then begin … end else begin … end;` inside a case branch, 3.x bound
+  the `else` to the CASE (block parent `case_else_branch`, unclaimed); 4.0.0
+  binds it to the inner `if` (parent `if_statement`, claimed). Upstream calls
+  this its only change to what a program MEANS; here it surfaces as three new
+  blocks.
+- **0 other text or position drift**: 22,945 surviving positions byte-identical,
+  7,669 differ only by the trailing `;` leaving the span, 0 anything else.
+  Position-key collisions (115, nested same-operator sites) proven identical as
+  semicolon-normalized multisets on both sides.
+
+**Identity hashes move — `assignment_operator` is why.** 4.0.0 makes the
+assignment operator a named node (upstream: +243,044 instances; the bytes were
+previously in NO node). `astSubtreeHash` serializes named children, so every
+`empty-block` mutant whose block contains a `:=`/`+=` gained a child and a new
+hash: 2 of sandbox-app's 16 mutants, 30 of sandbox-data's 141. Both fixtures
+proven per-site BEFORE any baseline was touched: spec planning replicated
+(targets -> generate -> validateSpec -> isMutableSite -> dedup) under both wasms,
+joined 1:1 on (operator, file, line, col) — no site appeared or disappeared, no
+text changed beyond the trailing `;`, and the hash mapping is functional (no
+old hash maps to two new ones). Every moved hash belongs to `empty-block`; every
+other operator's hashes are byte-stable.
+
+**Baselines re-recorded the sanctioned way** (delete, gate records, gate re-run
+self-compares — never hand-edited), with the offline proof that
+`old-baseline re-keyed through the mapping == recorded baseline` as EXACT JSON
+multisets (verdicts, killingTests and all) for each of the four:
+
+| gate | frozen figures | re-keyed | self-compare |
+| --- | --- | --- | --- |
+| `itest:bcdev` | 3 / 10 / 3, baselineGreen=true | 2 hashes | PASS |
+| `itest:alrunner` (v2.1.1.0, BC 28.1) | 3 / 13 / 0 | 2 hashes | PASS |
+| `itest:tables` | 113 / 18 / 10, untargetedTriggers=0, screen `vacuous`, the one named TestPage refusal | 30 hashes | PASS |
+| `itest:envtool` | 3 / 10 / 3 | 2 hashes | PASS |
+
+`itest:lease` (P1-P10, P9B) and `itest:stale-publish` (Probes A+B): PASS,
+unchanged — they pin no per-mutant baseline.
+
+The envtool gate's environment had been deleted, and recreating one exposed two
+latent runner gaps — neither grammar-caused, both fixed alongside this bump: the
+envtool ITEST never spread `afterLeaseAcquiredFor` into `runSession`, so a
+config's `publishApps` was silently never published (the R31/R56 staleness class
+cli.ts warns about — invisible until a FRESH environment made "no test app"
+observable as every baseline test failing with "RunMutant returned 0 test
+lines"); and `EnvToolPublisher.publishFile` died republishing identical bytes
+because BC rejects a duplicate packageId — now treated as already-published,
+`publishFile` only, since compiled mutant artifacts carry fresh versions and a
+duplicate THERE stays loud. The gate now runs against environment
+`1a15baa8-914a-4806-ad7b-354dfeefc593` (DK 28.1, expires 2026-08-26; the
+gitignored config names it).
+
+Also verified: all 41 curated `ALNodeKind` values still exist in 4.0.0's
+`node-types.json` (nothing renamed or removed that LethAL names), so no kind
+regeneration was needed; the new named types (`assignment_operator`, the
+`where()` marker keywords, `preproc_define`/`preproc_undef`,
+`begin_keyword`/`end_keyword` inside `#if`) are simply not yet in the curated
+set. Unit suite after the one dispatch fix: 2,169 pass / 1 skip / 0 fail.
+
+**What this bump does NOT prove**, same caveat as last time: the corpus here
+contains none of the shapes the 4.0.0 semantic fixes repair at scale (the
+fixture dangling-else sites are the exception that DID move). The gain is on
+code the old grammar misread — `#if`-split blocks, mixed-case keywords, spaced
+`exit (…)` — and only the three dangling-else/case-else clusters above witness
+it in this corpus.
 
 ## Bumping the vendored WASM
 

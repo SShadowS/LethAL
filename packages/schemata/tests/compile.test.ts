@@ -518,8 +518,13 @@ describe("compileSchemataForFile — member splice reproduces a consumed termina
       spec(inner, "begin end", "lethal.empty-block"),
     ]);
 
-    expect(out).toContain("if X > 0 then begin end\n        else\n            Y := 2;");
+    // Grammar 4.0.0: the outer if_statement's span no longer includes its
+    // trailing `;` (the terminator re-parented outside every statement node),
+    // so the branch text ends at `Y := 2` and the source's own `;` survives
+    // after the spliced chain. A `;` before `end` is optional in AL.
+    expect(out).toContain("if X > 0 then begin end\n        else\n            Y := 2\n");
     expect(out).not.toMatch(/begin end;\s*else/);
+    expect(out).not.toContain(";;");
     expect(countErrorNodes(out)).toBe(0);
   });
 });

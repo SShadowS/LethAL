@@ -49,6 +49,20 @@
     "errorClass": null
   },
   {
+    "key": "63c4f230d49983a82f9a54edf57f787ba2196df2de23c5374a9921c523fc408f|Sandbox Logic|lethal.empty-block|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "77ee7e3d0adfcd76e1ae34e9067dcebc5c466f1172a857c730b0d43f7085d15c|Sandbox Logic|lethal.empty-block|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "7f9598a6e5967d4f80e59cb2e93f397782a77e8b3f13df55547e612cae4b2610|Sandbox Logic|lethal.void-method-call|1",
     "verdict": "survived",
     "killingTest": null,
@@ -70,21 +84,7 @@
     "errorClass": null
   },
   {
-    "key": "af16d6b1942beab927de37b79a2264af52d35d115e82408215959bdf23882ae2|Sandbox Logic|lethal.empty-block|1",
-    "verdict": "survived",
-    "killingTest": null,
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
     "key": "b03dba085d6a4498f41e5e223ecb64c66e6eee1d2d2ef7ab55f84fa7c63835d7|Sandbox Logic|lethal.empty-block|1",
-    "verdict": "survived",
-    "killingTest": null,
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "e2fe1df979a97af7156c420973b37fd55f8da2e2e4c8f48073b2d8a00752683f|Sandbox Logic|lethal.empty-block|1",
     "verdict": "survived",
     "killingTest": null,
     "coverageFiltered": false,
