@@ -8,15 +8,28 @@ package loads this file at runtime via `web-tree-sitter` to parse AL source.
 
 - Repository: <https://github.com/SShadowS/tree-sitter-al>
 - License: MIT
-- Version: `4.0.0`
-- Commit: `2c17f4c02f619403944dd323e41ef72d7b6eae9f` — tag `v4.0.0`
-  (the tag sits four commits past the "chore: rebuild tree-sitter-al.wasm for
-  4.0.0" commit; the extra four are upstream gate/CI fixes, no grammar change)
-- Provenance: **built locally from source at that tag**, NOT downloaded from a
-  release. `tree-sitter build --wasm`, tree-sitter CLI 0.26.12, from a detached
-  worktree at the tag so the grammar checkout's own state could not leak in.
-- Artifact: 10,129,980 bytes,
-  `sha256:5e0006239e502d68379c92794f4b25fdfe15c8c9391f988be20c75d8100790ab`
+- Version: `4.0.0` + two post-tag fixes (`914e779` grammar, `3bac021` scanner)
+- Commit: `05e6288`, upstream branch `fix/3.4.0-grammar-defects`, UNTAGGED —
+  five commits past tag `v4.0.0` (`2c17f4c`). Taken 2026-08-12, hours after the
+  tag bump landed here, because `914e779` fixes an object-level variable named
+  after a section keyword (`var Filter: Codeunit …`, also `keys`, `fields`,
+  `layout` + 11 more) parsing as ERROR — reported by a downstream consumer
+  verifying 4.0.0, present since 2.5.1. The other post-tag commits are upstream
+  CI/build fixes with no grammar effect. Precedent for vendoring past a tag:
+  the 3.0.1 build was itself past `v3.0.1`.
+- Provenance: **built locally from source at that commit**, NOT downloaded from
+  a release. `tree-sitter build --wasm`, tree-sitter CLI 0.26.12, from a
+  detached worktree so the grammar checkout's own state could not leak in.
+- Artifact: 10,323,562 bytes,
+  `sha256:4dcd0fda87f1f74b440f0d5d71d9ab1851c34fceceae27b3b75885ca05fa01a9`
+- What the post-tag rebuild was proven NOT to change, against the tag build on
+  the same day, same corpus snapshot: per-site Tier-1 census BYTE-IDENTICAL
+  (30,751 sites), both fixtures' per-spec identity hashes BYTE-IDENTICAL
+  (16 + 141 rows — so every committed itest baseline stays valid), unit suite
+  2,172 pass / 0 fail, `itest:bcdev` 3/10/3 PASS per-mutant. What it adds:
+  `probe-kw-vars2.ts` (session scratch) showed the tag build ERRORs on
+  `var Filter: Codeunit "Some Thing";` at object level and this build parses it
+  clean — real BC code uses such names, our corpus just does not.
 
 Previously `3.2.1` at commit `335d1ff` (7,457,411 bytes, `sha256:33b861ddd6...`),
 kept here because a bump's evidence is only readable against what it replaced.
