@@ -40,6 +40,7 @@ that ordering is the priority.
 - **R13** · Tier-3 operators · [R013.md](docs/roadmap/R013.md) · done (`d2b3236`)
 - **R15** · Custom environment tool support · [R015.md](docs/roadmap/R015.md) · done (gate PASSED 2026-07-26, baseline frozen)
 - **R16** · Run the `envtool` live gate and record its baseline · [R016.md](docs/roadmap/R016.md) · done (2026-07-26 — 3 killed / 10 survived / 3 no-coverage, matching the container gate)
+- **R133** · Vendored tree-sitter-al is 3.2.1; upstream 4.0.0 is a breaking release that moves named trees LethAL hashes · [R133.md](docs/roadmap/R133.md) · done (af3d9a3) — bumped 2026-08-12, same day as filed. One grammar-caused code fix…
 
 ## Correctness risks (measured, not closed)
 
