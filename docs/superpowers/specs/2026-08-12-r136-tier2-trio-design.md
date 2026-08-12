@@ -457,9 +457,9 @@ as designed and is not a displacement caused by this wave. Task A8 must not read
   input, forever. `lethal.swap-rec-xrec` has four such cases today and no unit-test file at all, so
   its four documented refusals have no offline guard whatsoever, and only the live baseline would
   notice if one broke. That is this repo's signature "empty-vs-empty matches" failure sitting in the
-  operator package the trio is about to be added to. Do not copy the pattern. Every refusal in
-  section 5 that belongs to one of these three operators gets a unit test that asserts the generated
-  spec list is empty.
+  operator package the trio is about to be added to. It is filed as **R137** and is not this wave's
+  work to fix, but it IS the pattern this wave must not copy. Every refusal in section 5 that belongs
+  to one of these three operators gets a unit test that asserts the generated spec list is empty.
 - **A refusal test whose semantic context is too NARROW passes for the wrong reason too, one layer
   down.** The conformance runner builds a ONE-FILE context, and `claimsRecordMethod`'s
   project-declared-procedure rule can only fire over a project-wide context, which its own contract
