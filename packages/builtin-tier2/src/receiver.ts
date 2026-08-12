@@ -285,6 +285,37 @@ export function claimsSystemCall(node: ALSyntaxNode, ctx: SemanticContext, name:
 
 // --- callee shape ----------------------------------------------------------
 
+/**
+ * The AST node holding a `procedure_call`'s method-NAME span: the callee itself for an unqualified
+ * call (`TestField(...)`), or the `member` field of a qualified one's `field_access` callee
+ * (`Rec.TestField(...)`). Reads exactly the `function` field and `field_access` member path
+ * `describeCallee` already resolves for `claimsRecordMethod`, below, so a caller that needs the
+ * name's OWN span shares that resolution instead of re-deriving "which node is the name" a second
+ * time — precisely the second-parser-for-one-node-shape mistake this file's own module doc warns
+ * drifts (R80).
+ *
+ * Two Tier-2 operators share this (docs/superpowers/specs/2026-08-12-r136-tier2-trio-design.md
+ * §2.5): `lethal.swap-find-direction` splices its replacement over this node's own span (§2.2);
+ * `lethal.validate-to-assign` slices the call's text UP TO this node's start as its receiver prefix
+ * for the qualified form (§2.3, amendment 2). Both read the same node, so the two operators cannot
+ * disagree with each other about where the method name starts or ends.
+ *
+ * Returns `null` for anything `describeCallee` itself cannot resolve: `node` is not a
+ * `procedure_call`, the `function` field is missing, or the callee is a shape neither branch below
+ * covers (a chained call, an arbitrary expression). Refuses rather than guesses, matching every
+ * other predicate in this file.
+ */
+export function calleeNameNode(node: ALSyntaxNode): ALSyntaxNode | null {
+  if (node.kind !== ALNodeKind.procedure_call) return null;
+  const callee = node.childForFieldName("function");
+  if (callee === null) return null;
+  if (isIdentifierLike(callee)) return callee;
+  if (callee.kind === ALNodeKind.field_access) {
+    return callee.childForFieldName("member");
+  }
+  return null;
+}
+
 interface CallTarget {
   /** `null` for the implicit-receiver form (`TestField("No.")`). */
   readonly receiver: ALSyntaxNode | null;

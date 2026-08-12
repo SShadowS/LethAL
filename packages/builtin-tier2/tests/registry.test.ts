@@ -22,6 +22,10 @@ const EXPECTED_OPERATORS = [
   // `OnValidate` and for `OnRename`, so the operator ships scoped to exactly those two trigger
   // kinds — and it must NOT re-acquire `OnModify`, which stays measured-equivalent.
   "lethal.swap-rec-xrec",
+  // R136: FindFirst <-> FindLast, both directions, one mutant per site. Cannot manufacture the
+  // platform-kill class `swap-modify-flag`'s Insert/Delete extension can: both methods return the
+  // same found-or-not-found answer over the same filtered set, so only which row loads changes.
+  "lethal.swap-find-direction",
 ] as const;
 
 describe("tier2Operators", () => {

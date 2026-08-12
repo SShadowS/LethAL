@@ -3,6 +3,7 @@ import { removeCalcFields } from "./remove-calcfields";
 import { removeCommit } from "./remove-commit";
 import { removeSetRange } from "./remove-setrange";
 import { removeTestField } from "./remove-testfield";
+import { swapFindDirection } from "./swap-find-direction";
 import { swapModifyFlag } from "./swap-modify-flag";
 import { swapRecXRec } from "./swap-rec-xrec";
 
@@ -12,7 +13,8 @@ export { removeCalcFields } from "./remove-calcfields";
 export { swapModifyFlag } from "./swap-modify-flag";
 export { removeCommit } from "./remove-commit";
 export { swapRecXRec } from "./swap-rec-xrec";
-export { claimsRecordMethod, claimsSystemCall } from "./receiver";
+export { swapFindDirection } from "./swap-find-direction";
+export { claimsRecordMethod, claimsSystemCall, calleeNameNode } from "./receiver";
 
 /**
  * Tier 2 operator registry.
@@ -65,4 +67,6 @@ export const tier2Operators: readonly MutationOperator[] = [
   // MEASURED to differ from `Rec` headlessly. `OnModify` is excluded by measurement, not by
   // caution — see `swap-rec-xrec.ts`.
   swapRecXRec,
+  // R136: FindFirst <-> FindLast, both directions, one mutant per site. See `swap-find-direction.ts`.
+  swapFindDirection,
 ];
