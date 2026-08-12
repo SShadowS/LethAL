@@ -369,11 +369,22 @@ a length overflow produces a kill under a test that asserts nothing.
    and row seeding all belong in `Data Tests`, where they cost nothing. Every extra statement in an
    arm codeunit is another mutant somebody must pre-commit a verdict for, so arm bodies stay
    minimal. Concretely: arms G, H, I and J need no rows at all, because `Validate` runs `OnValidate`
-   against the in-memory record, and dropping the insert and modify calls the plan sketched removes
-   four collateral mutants and every duplicate-key concern from those arms.
+   against the in-memory record with no database row involved, and dropping the insert and modify
+   calls the plan sketched removes four collateral mutants and every duplicate-key concern from those
+   arms. That AL behaviour is not assumed here: the fixture already relies on it twice, in
+   `Data Tests.BlankNoValidateFails` and `Data Tests.NoTriggerValidateRunsWeak`, both of which
+   `Validate` a freshly declared record variable that was never inserted and both of which reach the
+   trigger. Those two tests are also the standing evidence that the arms below will behave the same
+   way.
 4. **Setup calls inside the target use the non-claimable spellings.** `Insert(false)` and
    `Modify(false)` are not claimed by `swap-modify-flag`, so an arm carries only the mutant it is
-   about. Assignments in the target are free: no current operator claims an assignment statement.
+   about. A plain assignment in an arm codeunit is free, because no operator targets an assignment
+   statement. **The table's own trigger bodies are NOT free in the same way.** `lethal.swap-rec-xrec`
+   claims a `Rec`-qualified or `xRec`-qualified READ inside a field `OnValidate` or a table
+   `OnRename`, so writing the doubling trigger as `Rec."Level Doubled" := Rec."Level" * 2;` would
+   create a `swap-rec-xrec` mutant on the right-hand side, while the unqualified spelling
+   `"Level Doubled" := "Level" * 2;` creates none. Write the unqualified form, and do not "improve"
+   it by adding receivers.
 5. **Every new test raises through bare `Error(...)`.** The tables gate asserts that the R121
    assertion screen reports itself as `vacuous` on this fixture, which is true precisely because no
    test here uses an assertion library. A new test that used one would change what that gate proves.
