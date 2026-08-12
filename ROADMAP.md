@@ -52,6 +52,7 @@ that ordering is the priority.
 - **R8** · al-runner drops a table global var written by a trigger · [R008.md](docs/roadmap/R008.md) · done (Wave 1 Stream D — root-caused, upstream, detectable by canary)
 - **R121** · A false kill is now VISIBLE but still unclassified — the only proposed discriminator is measured wrong at 75% · [R121.md](docs/roadmap/R121.md) · done (2026-08-09) — the SCREEN shipped, and only the screen. `SessionReport.assertionScreen` reports how many…
 - **R132** · No gate ever exercises the assertion screen in the mode where it discriminates · [R132.md](docs/roadmap/R132.md) · open — filed 2026-08-09 when R121 shipped the screen. Every one of the four live gates produces `vacuous` or…
+- **R137** · swap-rec-xrec's conformance refusals assert nothing — empty expectedSpecs passes on any input · [R137.md](docs/roadmap/R137.md) · open — found 2026-08-12 while writing the R136 trio spec
 
 ## Product gaps a real project hits
 
