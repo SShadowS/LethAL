@@ -110,6 +110,7 @@ import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BcDevMcpBackend } from "../src/bcdev-backend";
 import {
+  afterLeaseAcquiredFor,
   buildBackend,
   leaseSessionFor,
   resolveEnvToolSession,
@@ -230,6 +231,13 @@ async function runOnce(scratchRoot: string): Promise<SessionReport> {
         // already-resolved `effectiveConfig` every other seam below reads (Task 7's contract).
         ...leaseSessionFor(parsed, effectiveConfig),
         ...resourceIdentityFor(parsed, effectiveConfig),
+        // Same publishApps wiring too. Without this fragment a config's `publishApps` is
+        // silently never published (the R31/R56 staleness class cli.ts warns about at
+        // `afterLeaseAcquiredFor`): the gate then measures whatever test app the environment
+        // already carries — or, on a fresh environment, no test app at all, which presents as
+        // every baseline test failing with "RunMutant returned 0 test lines". Found live
+        // 2026-08-12 when the gate environment had to be recreated.
+        ...afterLeaseAcquiredFor(envSession),
         quarantineDir: join(scratchRoot, "quarantine"),
       });
     } finally {

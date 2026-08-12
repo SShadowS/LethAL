@@ -104,6 +104,51 @@ describe("EnvToolPublisher", () => {
     expect(calls[0]).toEqual(["tool.exe", "publish", "e1", "lethal-control.app"]);
     expect(readArtifactCalls).toEqual(["lethal-control.app"]);
   });
+
+  it("publishFile treats BC's duplicate-package-ID rejection as already-published", async () => {
+    // A packageId is content-derived: the same .app file republished yields exactly this
+    // rejection, and it means the goal state — this exact package on the environment — already
+    // holds. Observed live 2026-08-12: the envtool gate's second run against the same
+    // environment died here republishing the identical publishApps entry.
+    const { publisher } = publisherWith({
+      exitCode: 1,
+      stdout:
+        '{"success": false, "message": "A duplicate package ID is detected. Cannot publish an ' +
+        "extension with packageId: '0ececc10', appId: 'ff7935bb', name: 'LethAL Sandbox Tests', " +
+        "publisher: 'LethAL' and version: '1.0.0.2', because the same package ID already exists " +
+        'in a published extension."}',
+      stderr: "",
+    });
+    await expect(publisher.publishFile("tests.app")).resolves.toBeUndefined();
+  });
+
+  it("publishFile still surfaces every other rejection", async () => {
+    const { publisher } = publisherWith({
+      exitCode: 1,
+      stdout: '{"success": false, "message": "The operation timed out."}',
+      stderr: "",
+    });
+    await expect(publisher.publishFile("tests.app")).rejects.toThrow(/timed out/);
+  });
+
+  it("publish (mutated artifacts) does NOT get the duplicate-package skip", async () => {
+    // Every compiled artifact carries a fresh random version, so a duplicate packageId on THIS
+    // path signals a genuine fault (two sessions racing, a stale artifact) and must stay loud.
+    const { publisher } = publisherWith({
+      exitCode: 1,
+      stdout: '{"success": false, "message": "A duplicate package ID is detected."}',
+      stderr: "",
+    });
+    await expect(
+      publisher.publish({
+        appId: "a",
+        artifactId: "0".repeat(32),
+        appPath: "x.app",
+        sha256: DIGEST,
+        version: "1.0.0.1",
+      } as never),
+    ).rejects.toThrow(/duplicate package ID/);
+  });
 });
 
 /**

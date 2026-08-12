@@ -46,13 +46,31 @@ export class EnvToolPublisher implements AppPublisher {
    * Publishes a file that has no `CompiledArtifact` record — `lethal-control.app` and every
    * `publishApps` entry. The digest is computed and reported rather than compared: there is no
    * expectation to compare against, and inventing one would be theatre.
+   *
+   * BC's "duplicate package ID" rejection is treated as already-published, not as a failure: a
+   * packageId is content-derived, so that rejection means this exact package is already on the
+   * environment — the goal state of this call. Without the skip, a reuse-mode config with
+   * `publishApps` can never run twice against the same environment (observed live 2026-08-12 on
+   * the envtool gate's self-compare run). The skip deliberately does NOT extend to
+   * `publish` above: compiled artifacts carry a fresh random version each, so a duplicate there
+   * signals a real fault and must stay loud.
    */
   async publishFile(appPath: string): Promise<void> {
     await serializePublish(this.ctx.serializerKey, async () => {
       const bytes = await this.io.readArtifact(appPath);
       const digest = Bun.SHA256.hash(bytes, "hex");
       console.log(`[lethal] publishing ${appPath} (sha256 ${digest}) to env ${this.ctx.envId}`);
-      await this.client.run(this.block, "publish", { envId: this.ctx.envId, appFile: appPath });
+      try {
+        await this.client.run(this.block, "publish", { envId: this.ctx.envId, appFile: appPath });
+      } catch (err) {
+        if (err instanceof EnvToolError && /duplicate package ID/i.test(err.message)) {
+          console.log(
+            `[lethal] ${appPath} is already published on env ${this.ctx.envId} (same package ID) — skipping`,
+          );
+          return;
+        }
+        throw err;
+      }
     });
   }
 }
