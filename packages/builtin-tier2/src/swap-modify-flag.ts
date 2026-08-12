@@ -32,7 +32,7 @@ const RUN_TRIGGER_METHODS = ["Modify", "Insert", "Delete"] as const;
 const OPERATOR_VERSION = "1.1.0";
 
 /**
- * `SwapModifyFlag` — rewrite `<rec>.Modify(true)` -> `<rec>.Modify(false)`, and, since 1.1.0, the
+ * `SwapModifyFlag`: rewrite `<rec>.Modify(true)` -> `<rec>.Modify(false)`, and, since 1.1.0, the
  * same rewrite for `Insert` and `Delete`.
  *
  * Spec: docs/superpowers/specs/2026-07-25-tier2-mutation-operators-design.md §4 table + §4 intro;
@@ -222,6 +222,12 @@ export const swapModifyFlag: MutationOperator = {
  * order through `claimsRecordMethod` and short-circuits on the first match: a non-matching node
  * costs at most three cheap callee-name comparisons and nothing more, since `claimsRecordMethod`
  * itself rejects on the callee name before doing any symbol-table work.
+ *
+ * Returns a boolean rather than the matched method name, because nothing today needs to know
+ * WHICH of the three names claimed. R138 (docs/roadmap/R138.md) will need it: distinguishing an
+ * `Insert` mutant's platform-kill mechanism from a `Delete` one requires knowing which method
+ * matched at `generate()` time. Whoever picks up R138 should change this to return
+ * `string | null` (the matched name, or `null`) instead of adding a second lookup.
  */
 function claimsAnyRunTriggerMethod(node: ALSyntaxNode, ctx: SemanticContext): boolean {
   return RUN_TRIGGER_METHODS.some((methodName) => claimsRecordMethod(node, ctx, methodName));
