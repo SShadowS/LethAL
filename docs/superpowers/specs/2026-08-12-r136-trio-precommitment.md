@@ -79,7 +79,8 @@ account for every deployed mutant with nothing left over.
 and is about 0.8681. No-coverage mutants stay out of the denominator, as before.
 
 Raw 207 minus deployed 192 is 15, the usual dedup. Thirteen of those displacements pre-existed. The
-two new ones are both the SAME pre-existing pattern: at each find arm's `SetRange` call, Tier-1
+two new ones are both the SAME pre-existing pattern: at each of the two find arms that HAVE a
+`SetRange` call, which is arms D and E and not arm F, Tier-1
 `lethal.void-method-call` and Tier-2 `lethal.remove-setrange` propose the identical deletion, and
 section 3.2 precedence keeps the Tier-2 one. **No mutant of any of the three changed operators
 displaces anything, and none is displaced.** If the AFTER census's displacement count arrives as
@@ -99,11 +100,19 @@ can tell a strong test from a weak one. These six are what does:
 5. arm K, `empty-block` on the loop body.
 6. arm K, `void-method-call` deleting the `Insert`.
 
-Two of them share a span with a mutant predicted `killed`. Arm B's `Insert(true)` span carries both a
-surviving `swap-modify-flag` and a killed `void-method-call`; arm H's `Validate` span carries both a
-surviving `validate-to-assign` and a killed `void-method-call`. Two mutants, one span, two different
-verdicts, which no aggregate count can fake and which a report that merged same-span mutants could
-not produce at all.
+**Three of them share a span with a mutant predicted `killed`**, and the third is not the same kind of
+evidence as the first two. Arm B's `Insert(true)` span carries a surviving `swap-modify-flag` and a
+killed `void-method-call`; arm H's `Validate` span carries a surviving `validate-to-assign` and a
+killed `void-method-call`. Two mutants, one span, two different verdicts, which no aggregate count can
+fake and which a report that merged same-span mutants could not produce at all.
+
+Arm K's `KeyProbe.Insert(true)` is the third such span, carrying rows 29 and 30, and its polarity is
+REVERSED: there the Tier-1 deletion SURVIVES and the Tier-2 rewrite KILLS. It is worth stating
+separately rather than folded into a count of three, because **arm K's pair is not evidence that the
+operator distinguishes a strong test from a weak one.** Its covering test asserts nothing at all, so
+there is no assertion strength to distinguish; the kill is a duplicate-key platform error. Arms B and
+H are the discrimination evidence. Arm K is the demonstration that a kill can arrive without any
+assertion earning it.
 
 ## Per-mutant prediction
 
@@ -147,7 +156,7 @@ parameters, on purpose.
 | --- | --- | --- | --- | --- |
 | 11 | `lethal.empty-block` | arm F's whole body -> `begin end` | **killed** | the Boolean function returns its default `false`, and the test's `if not FindOps.AnyRow() then Error(...)` fires |
 | 12 | `lethal.return-value` | `exit(Probe.FindFirst())` -> `exit(not (Probe.FindFirst()))` | **killed** | the baseline answer is `true`, so the negation returns `false` and the same assertion fires. This is why the arm asserts `true` rather than `false` |
-| 13 | **`lethal.swap-find-direction`** | `Probe.FindFirst()` -> `Probe.FindLast()` | **survived** | with no filter and at least one row present, both directions answer "found". An existence-only assertion cannot see a direction reversal, which is exactly the equivalence class this operator's documentation claims. UNCERTAIN in one direction only: see the note below |
+| 13 | **`lethal.swap-find-direction`** | `Probe.FindFirst()` -> `Probe.FindLast()` | **survived** | with no filter and at least one row present, both directions answer "found". An existence-only assertion cannot see a direction reversal, which is exactly the equivalence class this operator's documentation claims. NOT flagged uncertain, deliberately: an existence answer has only two cases, and both directions give the same answer in each, so no seeded data can separate them. See the unflagging note below for why a kill here would therefore be a stronger finding than a flagged uncertainty |
 
 ### `DataFlagOps.Codeunit.al`, arms A, B, C and K (17 deployed)
 
@@ -183,7 +192,7 @@ it, and runs `OnDelete`, stably across three runs. So it adds no baseline failur
 | --- | --- | --- | --- | --- |
 | 22 | `lethal.empty-block` | arm C's whole body -> `begin end` | **killed** | returns `false`, the assertion fires |
 | 23 | `lethal.void-method-call` | `Probe.Delete(true)` -> deleted | **killed** | no delete means no `OnDelete`, so no tombstone, so `Tomb.Get('TOMB-' + No)` answers `false` |
-| 24 | **`lethal.swap-modify-flag`** | `Probe.Delete(true)` -> `Probe.Delete(false)` | **killed** | the row is still deleted but `OnDelete` is skipped, so no tombstone appears. This is the kill for the `Delete` half, proven by its own arm rather than inferred from the `Insert` one |
+| 24 | **`lethal.swap-modify-flag`** | `Probe.Delete(true)` -> `Probe.Delete(false)` | **killed** | the row is still deleted but `OnDelete` is skipped, so no tombstone appears. This is the kill for the `Delete` half, proven by its own arm rather than inferred from the `Insert` one. One premise is reasoned and not measured: that `Delete(false)` locates the row by primary key alone, the way arm C's probe measured `Delete(true)` doing. If it raised instead, this row would still be `killed` but by a platform error, and the "proven by its own arm" claim would be unearned. See the lesser-premise note below |
 | 25 | `lethal.return-value` | `exit(Tomb.Get('TOMB-' + No))` -> `exit(not (...))` | **killed** | the baseline answer is `true`, the negation returns `false` |
 
 Arm K is `InsertTwiceWithKeyTrigger()`, a two-iteration `for` loop whose body is `KeyProbe.Init();
@@ -193,11 +202,11 @@ baseline the two iterations insert `'KEY-1'` and `'KEY-2'` and the test passes.
 
 | # | operator | before -> after | predicted | why |
 | --- | --- | --- | --- | --- |
-| 26 | `lethal.empty-block` | arm K's whole procedure body -> `begin end` | **survived** | nothing runs, nothing is inserted, nothing raises, and the test asserts nothing there is to fail. This is arm K's CONTROL: it is what proves the kill at row 29 came from the platform and not from the arm being reached at all |
+| 26 | `lethal.empty-block` | arm K's whole procedure body -> `begin end` | **survived** | nothing runs, nothing is inserted, nothing raises, and the test asserts nothing there is to fail. This is arm K's CONTROL: it is what proves the kill at row 30 came from the platform and not from the arm being reached at all |
 | 27 | `lethal.empty-block` | arm K's `for` loop body -> `begin end` | **survived** | the loop turns twice doing nothing. Same reason as row 26, one nesting level in |
 | 28 | `lethal.void-method-call` | `KeyProbe.Init()` -> deleted | **killed by a duplicate key, a PLATFORM ARTIFACT no screen tags** | after `Insert(true)` the record variable carries the key `OnInsert` assigned, `'KEY-1'`. Without `Init()` the second iteration therefore inserts with `"No."` already set to `'KEY-1'`, `OnInsert`'s blank guard is false, and the second insert raises a duplicate primary key. The test asserts nothing, so this kill cannot have come from an assertion. UNCERTAIN: see the note below |
 | 29 | `lethal.void-method-call` | `KeyProbe.Insert(true)` -> deleted | **survived** | with the insert gone the loop turns twice doing only `Init()`. No row lands and nothing raises |
-| 30 | **`lethal.swap-modify-flag`** | `KeyProbe.Insert(true)` -> `KeyProbe.Insert(false)` | **killed by a duplicate key, a PLATFORM ARTIFACT no screen tags** | `OnInsert` never runs, so `"No."` stays blank both iterations. The first blank-key insert succeeds, because blank is a legal `Code[20]`, and the second raises a duplicate primary key. This is the arm the whole of R138 rests on: the mutant IS killed, and the suite did NOT earn the kill |
+| 30 | **`lethal.swap-modify-flag`** | `KeyProbe.Insert(true)` -> `KeyProbe.Insert(false)` | **killed by a duplicate key, a PLATFORM ARTIFACT no screen tags** | `OnInsert` never runs, so `"No."` stays blank both iterations. The first blank-key insert succeeds, because blank is a legal `Code[20]`, and the second raises a duplicate primary key. This is the arm the whole of R138 rests on: the mutant IS killed, and the suite did NOT earn the kill. MECHANISM flagged, verdict not: uncertainty 5 below |
 
 ### `DataKeyProbe.Table.al` (2 deployed)
 
@@ -208,8 +217,8 @@ table's own comment names the second of them; the first is named here for the fi
 
 | # | operator | before -> after | predicted | why |
 | --- | --- | --- | --- | --- |
-| 31 | `lethal.empty-block` | the `OnInsert` body -> `begin end` | **killed by a duplicate key, a PLATFORM ARTIFACT no screen tags** | emptying the trigger removes the key assignment, so `"No."` stays blank both iterations, exactly as under row 30. First insert succeeds, second raises. A THIRD route to the same mechanism, alongside rows 28 and 32 |
-| 32 | `lethal.negate-conditional` | `"No." = ''` -> `"No." <> ''` | **killed by a duplicate key, a PLATFORM ARTIFACT no screen tags** | on a freshly `Init()`d record the key IS blank, so the negated guard is false and the assignment never runs. Same blank key, same duplicate on the second insert, via a different operator than arm K's own |
+| 31 | `lethal.empty-block` | the `OnInsert` body -> `begin end` | **killed by a duplicate key, a PLATFORM ARTIFACT no screen tags** | emptying the trigger removes the key assignment, so `"No."` stays blank both iterations, exactly as under row 30. First insert succeeds, second raises. A THIRD route to the same mechanism, alongside rows 28 and 32. MECHANISM flagged, verdict not: uncertainty 5 below |
+| 32 | `lethal.negate-conditional` | `"No." = ''` -> `"No." <> ''` | **killed by a duplicate key, a PLATFORM ARTIFACT no screen tags** | on a freshly `Init()`d record the key IS blank, so the negated guard is false and the assignment never runs. Same blank key, same duplicate on the second insert, via a different operator than arm K's own. MECHANISM flagged, verdict not: uncertainty 5 below |
 
 ### `DataTriggerProbe.Table.al` (8 deployed)
 
@@ -267,9 +276,12 @@ which has no assignment equivalent, so `validate-to-assign` must emit NOTHING th
 
 ## Where this prediction is genuinely uncertain
 
-Five uncertainties, each with what would settle it. An honestly flagged uncertainty is worth more
-than a confident guess, because the gate settles it either way and a wrong confident guess damages
-the record.
+**Four uncertainties that could move a VERDICT** (items 1 to 4, covering rows 2, 7, 28, 37, 38, 39,
+40 and 47), and **one that can move only a MECHANISM** (item 5, covering rows 30, 31 and 32). Each
+carries what would settle it. An honestly flagged uncertainty is worth more than a confident guess,
+because the gate settles it either way and a wrong confident guess damages the record. Equally, a
+flag on something determinable is padding: one earlier candidate was removed on that ground and the
+removal is recorded below with its reasoning, so the list can be checked rather than trusted.
 
 **1. Arm I's attribution, rows 37 to 40. The most likely contradiction in the whole table.** Arm I
 sites four mutants in a table PROCEDURE. A trigger mutant that misses at member level falls back to
@@ -307,16 +319,49 @@ would `survive`. **Settled by** the row's verdict together with `killingTestFail
 message confirms the mechanism, and a survival would mean the trigger's write does not propagate
 back, which is worth writing down about the platform.
 
-**5. Arm F's survival, row 13, in one direction only.** If anything in the seeded data made the
-existence answer differ between `FindFirst` and `FindLast`, the survivor would become a kill and the
-arm would stop demonstrating the equivalence class. The arm has no filter and its test seeds exactly
-one row, so a difference is hard to construct, which is why this is listed last. **Settled by** the
-verdict; a kill means the arm's data was not as neutral as designed and the arm needs fixing before
-the equivalence claim is made.
+**5. Rows 30, 31 and 32 all rest on a blank primary key being INSERTABLE.** Each predicts that the
+first blank-key insert succeeds and the second raises a duplicate, which assumes an `Insert` with a
+blank `Code[20]` primary key is accepted rather than refused. This premise is VERDICT-safe but not
+MECHANISM-safe: if the first insert itself refused, all three rows would still be `killed`, still by
+a platform error, still untagged. But they would be killed by a different mechanism than the one this
+document records, and these three rows are the fixture's live statement of R138, where the mechanism
+IS the thing being recorded. **Settled by** `killingTestFailure` on each of the three: a duplicate-key
+message confirms the recorded mechanism, and any other refusal message means R138's shape needs
+restating even though its point stands.
 
-Rows 1, 3 to 6, 8 to 12, 14 to 27, 29 to 36 and 41 to 51 are not flagged. Each follows from either a
-type default (an emptied body returns 0 or `false`), a negation of a value the covering test asserts
-is non-zero or `true`, or a trigger effect the covering test reads back directly.
+Two lesser members of the same class, neither flagged as an uncertainty because neither can move a
+verdict, but both worth naming so nobody re-derives them at the gate:
+
+- **`Count()` inside `OnInsert` returning the PRE-insert count** is what fixes the baseline keys as
+  `'KEY-1'` then `'KEY-2'`. If it counted the row being inserted, they would be `'KEY-2'` then
+  `'KEY-3'`. Cosmetic: either reading leaves the baseline green and every arm K verdict unchanged,
+  because nothing asserts on the key values.
+- **`Delete(false)` locating the row by primary key alone**, in row 24. The arm C probe measured
+  `Delete(true)` on a key-only record variable and not `Delete(false)`. If the flagless form instead
+  raised "the record does not exist", row 24 would still be `killed`, but by a platform error rather
+  than by the missing tombstone, and the wave's claim that the `Delete` half is proven BY ITS OWN ARM
+  would be unearned. **Settled by** row 24's `killingTestFailure`: it must be the arm C test's own
+  `Error('expected Delete(true) to run OnDelete and leave a tombstone')`, not a platform message.
+
+**Arm F's survival, row 13, is deliberately NOT flagged**, and this is a change from an earlier draft
+of this document. The design spec lists "arm F may kill" as its risk 3, on the premise that something
+in the seeded data could make the existence answer differ between the two directions. On inspection
+nothing can: `AnyRow` carries no filter, so both `FindFirst` and `FindLast` read the whole table, and
+an existence answer has only two cases. If any row exists, both directions find one and both return
+`true`. If none exists, both return `false` and the test fails identically under the mutant and under
+the original. There is no third case for the seeded data to land in, so the equivalence is total with
+respect to the only thing the arm observes, independent of how many rows the test seeds. Flagging it
+anyway would have padded the uncertainty list with something determinable. **The consequence of
+unflagging is that a kill here is a STRONGER finding, not a weaker one:** it would be unexplained by
+any mechanism this document can name, and would have to be diagnosed rather than absorbed as "the
+arm's data was not neutral".
+
+**The three groups partition all 51, so "not flagged" is a claim and not an omission.** Eight rows
+are verdict-flagged: 2, 7, 28, 37, 38, 39, 40 and 47. Three are mechanism-flagged only: 30, 31 and
+32. The remaining **forty** are unflagged: rows 1, 3 to 6, 8 to 27, 29, 33 to 36, 41 to 46 and 48 to
+51. Eight plus three plus forty is 51. Every unflagged row follows from either a type default (an
+emptied body returns 0 or `false`), a negation of a value the covering test asserts is non-zero or
+`true`, or a trigger effect the covering test reads back directly.
 
 ## What must ALSO hold, and would be a finding if it did not
 
@@ -346,12 +391,19 @@ is non-zero or `true`, or a trigger effect the covering test reads back directly
   keyed to the object. Having a named test is necessary and not sufficient. The precedent that it
   does work on this fixture is `Data No Trigger`, whose only route in is a `Validate` on a
   never-inserted record and whose `empty-block` mutant is `killed` in the committed baseline with the
-  count at 0. **The concrete way this invariant could break in this wave is `Data Key Probe`**, a
-  brand-new table touched by exactly one test. If its object-level entry comes back empty, rows 31
-  and 32 take the all-green-tests fallback, the count becomes 2, and the warning fires. Their
-  VERDICTS would not move, because arm K's test is in the all-green set either way, so the count is
-  the only thing that can catch it. That is precisely why the gate asserts the tally rather than
-  trusting the verdicts.
+  count at 0. **This wave adds TWO new tables, and either can break the invariant, so here are all
+  three arithmetics in advance rather than derived at the gate while staring at an unexpected
+  number.** `Data Key Probe` hosts two trigger mutants, rows 31 and 32; `Data Trigger Probe` hosts
+  four, rows 33 to 36. If `Data Key Probe`'s object-level entry comes back empty, its two take
+  `coverageFilter`'s FALLBACK 2 and the count is **2**. If `Data Trigger Probe`'s comes back empty,
+  its four do and the count is **4**. If both miss, it is **6**. Any other non-zero value means a
+  PRE-EXISTING trigger also stopped attributing, which is a wider regression than this wave and must
+  be diagnosed as one.
+  `Data Key Probe` is the likelier of the two: it is touched by exactly one test, where
+  `Data Trigger Probe` is touched by ten of the eleven new ones, six of them through real rows and
+  four only through an in-memory `Validate`. In every one of those cases the VERDICTS do not move,
+  because the covering test is in the all-green set either way, so the tally is the only thing that
+  can catch it. That is precisely why the gate asserts the tally rather than trusting the verdicts.
 
 - **The assertion screen still reports itself as `vacuous`.** All 44 tests in
   `fixtures/sandbox-data-tests` raise through bare `Error(...)` and none uses an assertion library,
@@ -411,7 +463,10 @@ is non-zero or `true`, or a trigger effect the covering test reads back directly
 - **Anything about the other three gates** beyond "unchanged". `fixtures/sandbox-app` was censused
   and is byte-for-byte identical, which is a measurement rather than an argument, but it is a
   measurement about the mutant population and not about those gates' verdicts.
-- **The three platform premises flagged above.** Reversed-range `SetRange`, validation on plain
-  assignment, and trigger writes propagating back to the caller's record variable are each load
-  bearing for at least one row here, and each is reasoned rather than measured. Whichever way the
-  gate answers, the answer belongs in the report as a platform fact, not absorbed into a verdict.
+- **Six platform premises this document reasons about rather than measures.** Four are load bearing
+  for a verdict or a recorded mechanism: a reversed-range `SetRange` matching nothing, no validation
+  running on a plain field assignment, a trigger's write propagating back to the caller's record
+  variable, and a blank `Code[20]` primary key being insertable. Two are load bearing for wording
+  only: `Count()` inside `OnInsert` returning the pre-insert count, and `Delete(false)` locating a row
+  by primary key alone. Whichever way the gate answers each, the answer belongs in the report as a
+  platform fact, not absorbed into a verdict.
