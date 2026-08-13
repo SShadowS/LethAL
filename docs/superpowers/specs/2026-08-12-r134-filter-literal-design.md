@@ -415,7 +415,12 @@ rejoin (matching the failure mode this paragraph used to cite) made step 5's ref
 kept anyway, with the SAME status the placeholder-arity throw already carries (section 2.4): a
 backstop against a bug in this reasoning or the classifier, not a case expected to fire, kept because
 it makes any rule ADDED to the ladder LATER safe by construction rather than by review, the same
-protection the closing sentence below already named. An adversarial reader auditing this step should
+protection the closing sentence below already named. **Sharpened by an independent audit (2026-08-13):
+step 5 is also the MASKING PARTNER of `classifyRange`'s own left/right atom-validity checks: rule 3's
+transposition of whichever side is non-empty means defeating either check alone is caught by step 5
+re-running the other check on the way out, so "unreachable backstop" and "masking partner of an
+unpinned guard pair" are different claims, and the second is a reason nobody should remove step 5, not
+merely a restatement of the first.** An adversarial reader auditing this step should
 test it by calling the shared classifier directly against a leading, trailing or doubled `|` (for
 example `classifyContent('|%1')`), not by hunting for a natural `mutateFilterContent` input that
 trips it, since none exists for the four rules above. The re-parse still catches any future rule,
