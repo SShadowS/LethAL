@@ -171,14 +171,24 @@ export const validateToAssign: MutationOperator = {
  * The call's field argument and value argument, or `null` unless it carries exactly two
  * (`exactArguments`, `./mutate-helpers.ts`). The single point where the two-argument guard is
  * enforced; both `targets()` and `generate()` call this rather than each re-deriving the count.
+ *
+ * Two layers guard against indexing a non-array, deliberately redundant with each other: the
+ * explicit `args === null` early return, AND `args?.[0]`/`args?.[1]` rather than a bare index. This
+ * function sits on `op.targets(node, ctx)`'s path, which `packages/runner/src/orchestrator.ts` calls
+ * inside a per-node walk with no surrounding `try`/`catch`, so an uncaught throw here would abort
+ * mutation generation for the WHOLE project rather than refusing one site, and the single-argument
+ * `Validate(F)` shape this guards against is an ordinary real-code site (up to 179 in one censused
+ * project), not a caller-contract violation worth throwing on. Optional indexing means the explicit
+ * early return can be defeated or deleted without that turning into a crash: `args?.[0]` still reads
+ * `undefined` off a `null` `args`, which the very next line already treats as a refusal.
  */
 function validateArguments(
   node: ALSyntaxNode,
 ): { fieldArg: ALSyntaxNode; valueArg: ALSyntaxNode } | null {
   const args = exactArguments(node, VALUE_ARGUMENT_COUNT);
   if (args === null) return null;
-  const fieldArg = args[0];
-  const valueArg = args[1];
+  const fieldArg = args?.[0];
+  const valueArg = args?.[1];
   if (fieldArg === undefined || valueArg === undefined) return null;
   return { fieldArg, valueArg };
 }
