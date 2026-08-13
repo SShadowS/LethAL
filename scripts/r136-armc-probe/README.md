@@ -69,8 +69,8 @@ bcdev_test_orchestrate (3 runs): classification "stableFailed" (i.e. stably repr
 ```
 
 No callstack pointed at the `Delete(true)` line itself as a failure site -- the callstack in every
-run is the test's OWN `Error()` call at line 24, confirming `Delete(true)` returned control normally
-rather than raising.
+run is the test's own `Error()` call in the PASS branch, confirming `Delete(true)` returned control
+normally rather than raising.
 
 ## What this settles
 

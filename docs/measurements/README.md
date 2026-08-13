@@ -1186,3 +1186,34 @@ R126.
   no `--auto-provision`. These runs succeeded because the 28.1.49838.50794 artifacts were already
   cached from R125's work; a cold machine is untested and would likely refuse the way R125 records.
 - **Not stability.** Same caveat as CLI mode: `protocolVersion: 2` is a today value.
+
+---
+
+## R136 arm C -- does `Delete(true)` work with no preceding `Get`/`Find`? **Yes**
+
+`scripts/r136-armc-probe/`. Measured 2026-08-13 against **Cronus283** (the same container
+`fixtures/sandbox-data`/`fixtures/sandbox-data-tests` target), via the `bc-dev` MCP tool's
+`bcdev_test_run` and `bcdev_test_orchestrate` -- the standard BC dev-endpoint test runner, not
+LethAL's own fenced `RunMutant` path, because the question has nothing to do with mutant execution
+or sessions.
+
+`fixtures/sandbox-data/src/DataFlagOps.Codeunit.al`'s arm C (`DeleteWithTrigger`, committed in
+`fd4d21c`) sets a record variable's primary key field and calls `Delete(true)` directly, never
+`Get`/`Find`ing it first -- the row was seeded separately, by the covering test. Whether that
+actually locates and deletes the right row, and runs `OnDelete`, was reasoned about rather than
+measured when the arm was written. A wrong answer would not merely mislabel one mutant: it would
+make the arm's own BASELINE call raise, surfacing as a second baseline test failure against a gate
+that asserts exactly one permitted failure by name.
+
+| test | shape | result |
+|---|---|---|
+| `DeleteWithoutGetRunsOnDelete` | seed a row through one record variable, then `Delete(true)` on a SEPARATE, never-`Get`/`Find`'d variable with only its primary key assigned | **succeeds** -- the row is deleted, `OnDelete` runs, the tombstone appears, no runtime error |
+
+Ran 3x via `bcdev_test_orchestrate`: classified `stableFailed` (i.e. stably reproduces the same PASS
+message every time), 0 flaky, 0 inconsistent.
+
+**Settles**: arm C's committed shape needs no change; the mechanism its predicted `killed` verdict
+depends on is not undermined by an unrelated platform artifact. **Does not establish**: the same
+holds for tables with more complex keys, `SIFT` fields, or non-clustered primary keys -- only the
+single-`Code[20]`-primary-key shape `Data Trigger Probe` actually uses. Full detail, reproduction
+steps and the raw result in `scripts/r136-armc-probe/README.md`.
