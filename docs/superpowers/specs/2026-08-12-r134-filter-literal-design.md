@@ -24,7 +24,7 @@ are running live gates concurrently and this task must not touch a gate or `fixt
 **The population.** From `docs/roadmap/R134.md`, a census of a 658-file Continia Document Output
 snapshot taken 2026-08-12: 288 `SetFilter` calls total, 95 carrying `<>`, about 134 carrying some
 comparator (`<>` presumably counted inside that figure, so the non-`<>` comparators are roughly
-134 minus 95, about 39 — the roadmap's own wording does not say whether 134 includes the 95, and
+134 minus 95, about 39. The roadmap's own wording does not say whether 134 includes the 95, and
 this document reads it as inclusive because the alternative reading would leave 39 sites with a
 comparator that names no comparator, which is a stranger census result), 43 carrying a `|`
 alternative list, and 14 carrying a `..` range. No population is claimed for wildcards, `@`, `&`,
@@ -48,7 +48,7 @@ accessor (`calleeNameNode`, same file, added in Wave A for `swap-find-direction`
 (`exactArguments`/`countArguments`, `packages/builtin-tier2/src/mutate-helpers.ts`), the
 synthesized-after-node adapter (`synthesizeAfter`, same file), dedup identity
 (`packages/schemata/src/dedup.ts`), and baseline identity
-(`packages/runner/src/selection.ts`, unread in this pass but unchanged by anything below — this
+(`packages/runner/src/selection.ts`, unread in this pass but unchanged by anything below: this
 operator adds a row to the same table, it does not touch how the table is keyed).
 
 **Verified directly for this document, because the sibling spec's costliest lesson was that a
@@ -57,20 +57,20 @@ premise treated as obvious can be the one that is wrong:**
 - `packages/operator-sdk/src/build.ts`'s `textLiteral` builder encodes an AL string literal as
   `` '${value.replace(/'/g, "''")}' ``. That is the ENCODE half (embedded `'` becomes `''`,
   outer quotes added). No DECODE (unescape `''` back to `'`, strip outer quotes) exists anywhere
-  in `packages/` today — a repo-wide search for `unquote`/`unescape`/a second `replace(/'/g, ...)`
+  in `packages/` today: a repo-wide search for `unquote`/`unescape`/a second `replace(/'/g, ...)`
   found only this one occurrence. This operator has to write both directions itself, and the
   re-encode direction must call the identical transform `build.ts` uses rather than a
   hand-rolled equivalent, so the two never drift apart.
 - `packages/engine/src/ast/hash.ts`'s `astSubtreeHash`, read in full. An `identifier` node's TEXT
   is replaced by a scope-relative index built fresh per hash call (`(identifier #0)`,
   `(identifier #1)`, ...), so two different identifier spellings in structurally identical
-  positions hash identically — this is the mechanism the trio spec's section 4 used to explain
+  positions hash identically. This is the mechanism the trio spec's section 4 used to explain
   why `Probe.Insert(true)` and `Probe.Delete(true)` collapse into one baseline key. A
   `text_literal` node, by contrast, is matched by `isLiteral()` and hashed as
-  `` `(${node.kind} ${node.text})` `` — its TEXT participates VERBATIM, uncanonicalised. The
+  `` `(${node.kind} ${node.text})` ``: its TEXT participates VERBATIM, uncanonicalised. The
   same is true, by a different code path, of any named leaf node with no named children
   (`node.namedChildren.length === 0`), which is how a `quoted_identifier` field name like
-  `"No."` also hashes on its literal text rather than being anonymised — `quoted_identifier` is
+  `"No."` also hashes on its literal text rather than being anonymised. `quoted_identifier` is
   not `ALNodeKind.identifier`, confirmed against `packages/builtin-tier2/src/receiver.ts`'s own
   `isIdentifierLike`, which needs a second branch for exactly this reason.
 - `packages/schemata/src/dedup.ts`'s `identityOf` keys on
@@ -78,7 +78,7 @@ premise treated as obvious can be the one that is wrong:**
   Read `void-method-call` (`packages/builtin-tier1/src/void-method-call.ts`) and `remove-setrange`
   (`packages/builtin-tier2/src/remove-setrange.ts`) side by side: both set `before: node` where
   `node` is the SAME `procedure_call` AST node for a shared call site, and both set
-  `after: synthesizeAfter(node, "")` — identical `before.kind`/`startIndex`/`endIndex`, identical
+  `after: synthesizeAfter(node, "")`, identical `before.kind`/`startIndex`/`endIndex`, identical
   empty `after.text`, hence one shared identity, hence Tier 2 wins the collision. This operator's
   `after.text` is never empty (a splice, described in section 2), so at every `SetFilter` site
   this operator claims, its identity differs from `void-method-call`'s by `after.text` alone and
@@ -110,7 +110,7 @@ premise treated as obvious can be the one that is wrong:**
   `packages/builtin-tier2/src` and `packages/builtin-tier1/src` for the string `SetFilter` (already
   cited above) confirms it is claimed by NOTHING today. This operator is therefore the first to put
   `SetFilter` on `claimsRecordMethod`'s shadowing-guard surface, which by the trio spec's own rule
-  (section 2.5 there) means it needs its own project-wide shadowing refusal test — the fixture's
+  (section 2.5 there) means it needs its own project-wide shadowing refusal test. The fixture's
   existing shadowing negative in `Data Ops.RunUserDefinedBuiltins`/`ShadowedBuiltins` covers
   `SetLoadFields`, `TestField` and `SetRange`, never `SetFilter`.
 
@@ -125,7 +125,7 @@ filter syntax, not MEASURED against a running container in this session:
    is reasoned here, not measured. Section 2.4 names the probe that would settle it if ever in
    doubt: seed known rows, apply both forms, compare `Count()`.
 2. `..X` matches every row with a value less than or equal to X, and `X..` matches every row with
-   a value greater than or equal to X — both bounds inclusive, and each an open (one-sided) range.
+   a value greater than or equal to X, both bounds inclusive, and each an open (one-sided) range.
    Also reasoned, not measured. The same kind of probe would settle it: seed a row exactly at the
    bound and confirm it is matched by both `..X` and `X..`.
 
@@ -133,7 +133,7 @@ Both are ordinary, textbook AL filter syntax and neither is expected to be wrong
 because the trio spec's own precommitment document had a directly analogous premise (that BC does
 not normalise a reversed `SetRange(Field, High, Low)` range) that turned out to be correctly
 predicted, but only after being explicitly flagged as reasoned-not-measured rather than silently
-assumed — and a second premise in that same document that WAS silently assumed (`Record.Init()`
+assumed. A second premise in that same document that WAS silently assumed (`Record.Init()`
 resetting a key already used for a prior insert) is exactly the one that broke a fixture baseline.
 The lesson taken here is procedural: name every reasoned platform claim before code is written
 against it, not just the ones that turn out to matter.
@@ -148,7 +148,7 @@ against it, not just the ones that turn out to matter.
 
 Claim (b) carries the risk, for the same reason the trio spec gave: the platform sits between the
 mutation and the verdict, and a mutation inside a STRING cannot be proven safe by reading the AST
-alone — the string still has to be re-parsed as AL source once spliced in, and the resulting filter
+alone: the string still has to be re-parsed as AL source once spliced in, and the resulting filter
 still has to be evaluated by BC against real rows. A later task in this wave (the fixture's own
 precommitment document) must pre-commit a per-mutant verdict table before that live run, in the
 same form the trio spec's precommitment document used, so a contradicted prediction is written up
@@ -157,7 +157,7 @@ as a finding rather than quietly reconciled.
 ## 2. The operator: `lethal.flip-filter-literal`
 
 Name, tier and version as proposed: `lethal.flip-filter-literal`, tier 2, version 1.0.0. Ratified
-as written (proposal 1) — the naming pattern matches the other Tier-2 operators
+as written (proposal 1): the naming pattern matches the other Tier-2 operators
 (`swap-find-direction`, `validate-to-assign`, `remove-setrange`), and nothing about the design below
 gives a reason to depart from it.
 
@@ -165,23 +165,23 @@ gives a reason to depart from it.
 
 A `procedure_call` node where all of the following hold:
 
-1. `claimsRecordMethod(node, ctx, "SetFilter")` — the same receiver proof, case-insensitivity and
+1. `claimsRecordMethod(node, ctx, "SetFilter")`, the same receiver proof, case-insensitivity and
    project-declared-procedure shadowing refusal every other Tier-2 operator in this product uses.
-2. `countArguments(node) >= 2` — at least a field argument and a filter-text argument. `SetFilter`
+2. `countArguments(node) >= 2`: at least a field argument and a filter-text argument. `SetFilter`
    with fewer than two arguments does not parse as this shape and is out of scope by construction.
-3. The SECOND argument (in declaration order) is a plain string literal, `ALNodeKind.text_literal`
-   — a `SetFilter(F, MyFilterVar, V)` call, whose filter text is a variable, is invisible to a
+3. The SECOND argument (in declaration order) is a plain string literal, `ALNodeKind.text_literal`.
+   A `SetFilter(F, MyFilterVar, V)` call, whose filter text is a variable, is invisible to a
    static operator and is refused (section 5).
 4. The mini-parser described in section 2.2, run against that literal's unquoted content, finds at
    least one rule in the section 2.3 ladder that applies. An unrecognised or unhandled shape
-   produces no mutant, never a guessed one — this is the refuse-by-default posture proposal 3
+   produces no mutant, never a guessed one. This is the refuse-by-default posture proposal 3
    named, and it is the reason `targets()` and `generate()` must share one helper rather than each
    re-deriving "does this site have a mutation," the same pattern `swap-find-direction`'s
    `claimedDirection()` and `validate-to-assign`'s `validateArguments()` already use. Call the
    shared helper `plannedFilterMutation(node, ctx)`; it returns `null` for anything guard 1-3
    refuses AND for anything the mini-parser refuses, or a small plan value (which rule fired, the
    mutated literal content) that `generate()` uses to build the spec. `targets()` therefore returns
-   true only when `generate()` is guaranteed to produce exactly one spec — the same guarantee
+   true only when `generate()` is guaranteed to produce exactly one spec, the same guarantee
    `validate-to-assign` gives, and the reason a `targets()` that returned true on a site
    `generate()` then refused would be a correctness bug, not a cosmetic mismatch.
 
@@ -189,7 +189,7 @@ A `procedure_call` node where all of the following hold:
 many `%N` placeholders the filter text uses (unlike `validate-to-assign`'s fixed two-argument
 shape).** Call `countArguments(node)` to get the call's actual argument count N, then call
 `exactArguments(node, N)` to get the validated list, then read index 1 (the second argument). This
-is not a hardcoded index read of the kind amendment 1 in the trio spec closed off — `exactArguments`
+is not a hardcoded index read of the kind amendment 1 in the trio spec closed off. `exactArguments`
 still checks BOTH the top-level comma count and the comment-filtered named-child count against N
 before returning anything, so a pragma or pre-processor region sitting inside the parentheses still
 makes the accessor return `null` and the whole site refuse, exactly the safety property amendment 1
@@ -198,7 +198,7 @@ of being the compile-time constant 2.
 
 ### 2.2 The mini-parser: `packages/builtin-tier2/src/filter-expression.ts`
 
-Ratified as a refuse-by-default parser (proposal 3), with its refusal surface made concrete below —
+Ratified as a refuse-by-default parser (proposal 3), with its refusal surface made concrete below:
 proposal 3 states the rule ("anything unclassifiable refuses the site") but not every shape that
 falls under it, and an adversarial reader needs the concrete list to know the rule is real rather
 than aspirational.
@@ -281,13 +281,13 @@ this as a named deferral, and section 3's arm H is the fixture's proof that the 
 
 ### 2.3 The mutation ladder: one mutant per site
 
-Ratified as four rules (proposal 4), with the ORDER justified below — the brief listed the rules
+Ratified as four rules (proposal 4), with the ORDER justified below. The brief listed the rules
 but not why this order, and "the set is right" is a weaker claim than "the order is right," since
 a filter can contain alternatives matching more than one rule shape at once and the order is what
 decides which one gets mutated.
 
 Evaluate the four rules in this fixed order. At each rule, scan every alternative left to right; if
-any alternative matches that rule's shape, mutate the FIRST (leftmost) one that does and stop —
+any alternative matches that rule's shape, mutate the FIRST (leftmost) one that does and stop:
 later rules are never tried once an earlier one has fired. If no alternative matches any of the
 four rules, the site refuses.
 
@@ -299,7 +299,7 @@ four rules, the site refuses.
    a small table of `[claimed, replacement]` pairs, tried in order, exactly like that operator's
    `DIRECTIONS` array, so the mapping cannot drift from what gets emitted.
 3. **Open-range flip.** An alternative classified as an OPEN range: `..X` becomes `X..` and `X..`
-   becomes `..X`. A CLOSED range never matches this rule — it is a different classification
+   becomes `..X`. A CLOSED range never matches this rule: it is a different classification
    (section 2.2 step 4), not merely an unhandled case of this one.
 4. **Drop a placeholder-free alternative.** Only when the site has two or more alternatives. Drop
    the first alternative (scanning left to right) that classifies as an atom with no `%` — a bare
@@ -314,7 +314,7 @@ four rules, the site refuses.
 **Why this order, not just this set.**
 
 - Negation flip first: it is the single largest sub-population by the census (95 of 288 sites), and
-  it is also the most semantically total change of the four — it inverts the ENTIRE truth table for
+  it is also the most semantically total change of the four: it inverts the ENTIRE truth table for
   the atom's value, where a boundary shift only misclassifies rows exactly at one point and a
   dropped alternative only removes one disjunct from a larger set. Putting the highest-population,
   highest-severity rule first means that when a filter happens to contain shapes matching more than
@@ -338,10 +338,10 @@ four rules, the site refuses.
 
 Ratified as proposed (proposal 5): the multiset of `%N` tokens in the mutated literal content must
 equal the multiset in the original. By construction, none of the four rules can violate this on its
-own — rules 1-3 rewrite only the comparator or range TOKEN, leaving the atom (placeholder or bare
+own: rules 1-3 rewrite only the comparator or range TOKEN, leaving the atom (placeholder or bare
 token) byte-for-byte unchanged, and rule 4 is restricted to dropping an alternative that carries NO
 placeholder at all, so it removes zero placeholder tokens by definition. The assertion is therefore
-a backstop against a bug in this reasoning or in the classifier, not a case expected to ever fire —
+a backstop against a bug in this reasoning or in the classifier, not a case expected to ever fire,
 and that is exactly why this repo's convention is to throw rather than silently accept a mismatch: a
 caller-contract violation here would be a bug in THIS operator's own code, not a shape to refuse.
 
@@ -369,7 +369,7 @@ section 0 would do it directly.
 Ratified as proposed (proposal 6): re-escape `'` to `''` and re-wrap in outer quotes when splicing
 the mutated content back into AL source, and do it by calling the identical transform
 `packages/operator-sdk/src/build.ts`'s `textLiteral` uses (`` value.replace(/'/g, "''") ``) rather
-than a second, hand-written escaper — one escaping rule, shared, so the encode and decode halves of
+than a second, hand-written escaper. One escaping rule, shared, so the encode and decode halves of
 this operator can never drift from each other or from the rest of the product's own AL emission.
 
 ### 2.6 Emission: a splice, not a rebuild
@@ -383,10 +383,10 @@ documents dropping trivia BETWEEN its arguments. This operator does not reconstr
 takes the call node's own `.text` verbatim, computes the filter-text argument node's span relative
 to the call node's start (the exact pattern `swap-find-direction`'s `replaceNameSpan` already uses
 for the method-name span), and replaces only that span with the newly quoted, mutated literal text.
-Every other character in the call — the receiver, the method name's own casing, the field argument,
-any later value arguments, any comment sitting between arguments — passes through unchanged. Guard
+Every other character in the call, the receiver, the method name's own casing, the field argument,
+any later value arguments, any comment sitting between arguments, passes through unchanged. Guard
 the splice exactly as `replaceNameSpan` does: if the argument node's span does not fall inside the
-call node's own text, return no mutant rather than producing corrupted AL — this should be
+call node's own text, return no mutant rather than producing corrupted AL. This should be
 impossible for a genuine descendant, and is guarded rather than assumed for the same reason every
 other splice in this product is.
 
@@ -414,7 +414,7 @@ this operator claims, its identity differs from `void-method-call`'s identity (w
 `after.text`) by that field alone, and both mutants survive dedup. This is proposal 2's claim,
 confirmed rather than repeated: the two operators' `before` nodes are the SAME AST node for a
 shared call site (both set `before: node`), so `before.kind`/`startIndex`/`endIndex` are identical
-between them and `after.text` is the only field that can differ — which it always does here. This
+between them and `after.text` is the only field that can differ, which it always does here. This
 operator also never claims a `SetRange` call (its target predicate names `SetFilter` specifically),
 so it cannot collide with `remove-setrange` at all; the two operators have disjoint target method
 names.
@@ -447,17 +447,17 @@ different field name embedded in a decoy token, a different bound value) between
 
 ## 3. The fixture arms
 
-All new arms live in `fixtures/sandbox-data`, reusing `table 79302 "Data Related"` — no new table.
+All new arms live in `fixtures/sandbox-data`, reusing `table 79302 "Data Related"`: no new table.
 That table already exists for `Data Ops.CountForMain`, already has an Integer primary key
 (`"Entry No."`) and a `Code[20]` field (`"Main No."`) suited to every shape this operator's four
 rules need, and `fixtures/sandbox-data-tests/src/DataTests.Codeunit.al` already carries idempotent
 seeding helpers for it (`AddRelated(EntryNo, MainNo, AmountValue)`, `ClearRelated(MainNo)`, both
 read in full for this document). Reusing them means Task B6 adds one codeunit and zero new
-tables — the same "minimal fixture growth" principle the trio spec's rule 3 (section 3.3 there)
+tables: the same "minimal fixture growth" principle the trio spec's rule 3 (section 3.3 there)
 applied to its own arms, applied here to avoid the schema growth entirely rather than merely
 minimising it.
 
-**Placeholder id, to be confirmed or moved by Task B6**: `codeunit 79317 "Data Filter Ops"` — 79317
+**Placeholder id, to be confirmed or moved by Task B6**: `codeunit 79317 "Data Filter Ops"`. 79317
 is free against the fixture's current inventory (verified in section 0; the highest codeunit id in
 use today is 79316).
 
@@ -483,11 +483,11 @@ pre-committed against the actual AL, the way the trio spec's sibling precommitme
 **The pre-existing site, classified rather than left implicit** (task requirement, proposal 8):
 `Data Ops.CountIgnoringMainFilter`'s `Related.SetFilter("Main No.", '%1', MainNo);`. Unquoted
 content is `%1`: one alternative, no `|`, classified as an ATOM (a bare placeholder, section 2.2
-step 4). No rule in the ladder matches a lone placeholder atom — rule 1 needs a `<>` token, rule 2
+step 4). No rule in the ladder matches a lone placeholder atom: rule 1 needs a `<>` token, rule 2
 needs a boundary token, rule 3 needs a `..`, and rule 4 needs two or more alternatives. This site
 therefore REFUSES under this design, for the same reason arm H refuses: the ladder finds nothing to
 do, not because the parser could not classify the content. `void-method-call`'s existing mutant at
-this call and the frozen verdict it already carries are unaffected — this operator contributes
+this call and the frozen verdict it already carries are unaffected. This operator contributes
 nothing here, which is itself a small, free confirmation that a genuinely un-mutatable shape stays
 un-mutated rather than being guessed at.
 
@@ -497,7 +497,7 @@ un-mutated rather than being guessed at.
   must seed its own rows; none may depend on rows another arm's test happens to insert.
 - **Seeding stays idempotent** (same section, rule 6), matching `AddRelated`'s own existing
   behaviour (`Get` then `Delete(false)` then re-`Insert(false)`), for residue-from-an-aborted-run
-  safety rather than because BC commits between tests — R32 already measured that platform test
+  safety rather than because BC commits between tests: R32 already measured that platform test
   isolation rolls writes back between tests, and the existing helper already carries a comment
   saying so.
 - **Setup calls use non-claimable spellings.** `AddRelated`'s own `Delete(false)`/`Insert(false)`
@@ -521,7 +521,7 @@ measures:
   shapes section 5 lists, including the pre-existing bare-placeholder site and the deferred closed
   range;
 - each of the four ladder rules produces a mutant that compiles, is attributed to its covering
-  test, and scores correctly — at minimum, rules 1 and 2 are proven in BOTH a killed and a survived
+  test, and scores correctly: at minimum, rules 1 and 2 are proven in BOTH a killed and a survived
   form (arms A/B and C/D), which is the discrimination evidence, not merely a kill count;
 - the Tier-2 rewrite coexists with the Tier-1 deletion at every claimed span, the same coexistence
   mechanism the trio spec measured for its own three operators;
@@ -535,9 +535,9 @@ measures:
 - any rate on real code. The census in section 0 counts syntactic sites, not killable ones, and no
   fixture measurement turns one into the other.
 - anything about wildcards, `@`, `&`, the filter DSL's own quoting layer, or a non-literal filter-
-  text argument — all refused, all with unmeasured real-code populations.
-- anything settling the two REASONED (not measured) platform claims in section 0 — the bare-atom-
-  equals-explicit-`=` equivalence and the inclusive, one-sided nature of an open range — unless an
+  text argument, all refused, all with unmeasured real-code populations.
+- anything settling the two REASONED (not measured) platform claims in section 0, the bare-atom-
+  equals-explicit-`=` equivalence and the inclusive, one-sided nature of an open range, unless an
   arm's own verdict happens to contradict one of them, in which case that contradiction is the
   finding, written up rather than absorbed, exactly as the trio spec's precommitment amendment did
   for its own two contradicted premises.
@@ -574,7 +574,7 @@ measures:
 | 5. placeholder-arity invariant, asserted with a throw | **ratified as written** | the exact contract (sorted multiset equality, exported for direct unit testing) and the observation that none of the four rules can violate it by construction, which is why the assertion is a backstop rather than a case expected to fire |
 | 6. re-encoding mirrors the operator-sdk's `textLiteral` escape | **ratified as written** | confirmation, against `build.ts`, of the exact transform to mirror, and the reason to call it rather than re-derive it (no drift between encode and decode) |
 | 7. refusals recorded: closed range, wildcard/`@`/`&`, non-literal argument, `remove-setfilter` | **ratified, list extended** | two refusal cases this document's own classification work surfaced (stray mid-token `%`, empty alternative/range) that the brief's proposal implied under "anything unclassifiable" but did not name; the ladder-exhaustion cases (all-placeholder alternatives, the bare-atom shape) recorded as a DIFFERENT kind of "no mutant" from a true parser refusal |
-| 8. fixture arms table, including a refusal negative and the pre-existing site's classification | **authored from scratch** | the brief specified only what this table must contain, not its content — this document supplies eight arms (A-H, with F recorded as a documented equivalence class rather than a ninth near-duplicate procedure) covering all four ladder rules with at least one kill each and a discriminating survivor for the two most populous rules, one refusal negative (arm H, the closed range named in item 7), and the classification of the pre-existing `CountIgnoringMainFilter` site, all built on the EXISTING `Data Related` table and its existing seeding helpers rather than new schema |
+| 8. fixture arms table, including a refusal negative and the pre-existing site's classification | **authored from scratch** | the brief specified only what this table must contain, not its content. This document supplies eight arms (A-H, with F recorded as a documented equivalence class rather than a ninth near-duplicate procedure) covering all four ladder rules with at least one kill each and a discriminating survivor for the two most populous rules, one refusal negative (arm H, the closed range named in item 7), and the classification of the pre-existing `CountIgnoringMainFilter` site, all built on the EXISTING `Data Related` table and its existing seeding helpers rather than new schema |
 
 ## 7. Order of work, for the tasks after this one
 
@@ -590,5 +590,5 @@ a separate per-mutant precommitment document, in the shape of the trio spec's ow
 document, before any live gate touches this operator; the live re-record; and a close-out that
 updates `docs/roadmap/R134.md`'s status and regenerates `ROADMAP.md`.
 
-A differing verdict against Task B7's precommitment is a BLOCK, never "close enough" — the same
+A differing verdict against Task B7's precommitment is a BLOCK, never "close enough", the same
 rule every prior wave in this project has used.
