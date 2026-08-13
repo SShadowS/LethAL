@@ -69,6 +69,15 @@ codeunit 79314 "Data Flag Ops"
     //
     // PREDICTED: killed, by a platform error, and tagged by NO screen (R138) -- never described as
     // "the suite caught it".
+    //
+    // The `KeyProbe."No." := '';` below is NOT redundant with `Init()` -- do not remove it as
+    // dead-looking cleanup. MEASURED (scripts/r136-armk-count-probe/): `Record.Init()` does not
+    // reset a primary key field on a variable already used for a prior `Insert()` in the same
+    // transaction, so on the loop's second iteration `KeyProbe."No."` would otherwise still read
+    // 'KEY-1' from the first iteration, the trigger's blank-check guard would never re-fire, and
+    // BOTH inserts would collide on 'KEY-1' -- at BASELINE, with the trigger fully enabled. That
+    // silently re-breaks the very baseline this arm depends on. The assignment is claimed by no
+    // registered operator (a plain assignment statement), so it costs no new mutation site.
     procedure InsertTwiceWithKeyTrigger()
     var
         KeyProbe: Record "Data Key Probe";
@@ -76,6 +85,7 @@ codeunit 79314 "Data Flag Ops"
     begin
         for i := 1 to 2 do begin
             KeyProbe.Init();
+            KeyProbe."No." := '';
             KeyProbe.Insert(true);
         end;
     end;

@@ -1217,3 +1217,50 @@ depends on is not undermined by an unrelated platform artifact. **Does not estab
 holds for tables with more complex keys, `SIFT` fields, or non-clustered primary keys -- only the
 single-`Code[20]`-primary-key shape `Data Trigger Probe` actually uses. Full detail, reproduction
 steps and the raw result in `scripts/r136-armc-probe/README.md`.
+
+---
+
+## `Record.Init()` does not reset a primary key already used for a prior `Insert()` on the same variable
+
+General BC platform behaviour, not specific to any one fixture arm. `scripts/r136-armk-count-probe/`.
+Measured 2026-08-13 against **Cronus283**, via the `bc-dev` MCP tool's `bcdev_test_run` and
+`bcdev_test_orchestrate`.
+
+**The finding**: insert a row through a Record variable, setting its primary key by hand
+(`Rec."No." := 'MANUAL1'; Rec.Insert(false);`), then call `Rec.Init();` again on that SAME
+variable, then read the key back. `"No."` still reads `'MANUAL1'`, not blank. `Clear(Rec)`, by
+contrast, correctly resets it to `''`. So a loop that reuses one Record variable across several
+inserts -- `for i := 1 to N do begin Rec.Init(); Rec.Insert(true); end;` -- cannot rely on `Init()`
+alone to blank a primary key an earlier iteration's trigger assigned; the field carries over.
+
+**Why this took three wrong turns to find.** The leading hypothesis was that `Count()`, called
+inside `OnInsert` to compute the next key (`'KEY-' + Format(Count() + 1)`), returns a stale
+pre-insert count on the second of two back-to-back inserts in one uncommitted transaction. Three
+completely different counting mechanisms were substituted in an isolated probe -- `Count()`
+itself, a table-level `var` incremented inside `OnInsert`, and a `SingleInstance` codeunit counter
+whose in-memory state `Init()` cannot touch by construction -- and all three failed IDENTICALLY
+with the same duplicate key. Three unrelated mechanisms failing the same way is what ruled out the
+counter as the variable and pointed at the loop's own `Init()` call instead.
+
+| test | shape | result |
+|---|---|---|
+| `CheckNoAfterReInit` | Insert a row with a hand-set key, `Init()` the same variable again, read the key back | `"No." = 'MANUAL1'` -- unchanged, not blank |
+| `CheckNoAfterReClear` | Same, but `Clear(Rec)` instead of the second `Init()` | `"No." = ''` -- correctly blank |
+
+**Settles**: this is why `fixtures/sandbox-data/src/DataFlagOps.Codeunit.al`'s arm K
+(`InsertTwiceWithKeyTrigger`, target `table 79331 "Data Key Probe"`) failed at BASELINE on
+unmutated code -- not a `Count()` staleness bug. The fix landed there is an explicit
+`KeyProbe."No." := '';` immediately after `Init()`, which costs zero new mutation sites (a plain
+assignment is claimed by no registered operator in this product) and re-keys only the one
+`empty-block` mutant on the loop's block (any edit to that span changes its shape regardless of
+whether the new statement is itself claimable) -- `Init()`'s and `Insert(true)`'s own mutants keep
+their original identities. A `Clear(KeyProbe)`-instead-of-`Init()` alternative also works but was
+rejected as strictly more expensive: it additionally re-keys the `void-method-call` mutant on that
+call by changing its arity.
+
+**Does not establish**: whether this is documented Microsoft platform behaviour or an internal
+implementation detail (not investigated -- the probe only needed to know THAT it happens), or
+whether it holds for composite primary keys or for inserts made through an indirection layer like
+`Codeunit.Run`. Only the single-`Code[20]`-key, same-procedure-loop shape arm K actually uses was
+measured. Full round-by-round investigation, including the three failed counting mechanisms, in
+`scripts/r136-armk-count-probe/README.md`.
