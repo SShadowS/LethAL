@@ -400,14 +400,28 @@ either check fails:
   the same alternative split, the same four-way classification), or
 - any alternative in the RE-SPLIT mutated content is empty, or differs from its own `trim()`.
 
-This is what makes rule 4's rejoin (section 2.3) safe by construction rather than by inspection: a
-naive substring removal can leave a leading, trailing or doubled `|` behind (dropping `ABC` from
-`'ABC|%1'` by deleting only that substring yields `'|%1'`), and this step catches that before it
-ever reaches BC, by re-parsing the joined result exactly as if it were a fresh site. The same
-re-parse also catches any future rule, added to the ladder later, that emits a shape steps 1-4 would
-not have admitted as input: one function, already required to exist for the input side, doing the
-same job on the output side, rather than a second, hand-written check that could drift from the
-first.
+**Corrected, Task B3 (2026-08-13): this step is a BACKSTOP, unreachable through the four rules
+above as implemented, not a live guard against a reachable rejoin bug.** An earlier draft of this
+paragraph justified step 5 by a naive substring-removal failure mode (dropping `ABC` from `'ABC|%1'`
+by deleting only that substring, leaving `'|%1'`), implying step 5 catches THAT bug in THIS
+operator's own rule 4. It does not, because rule 4 is not implemented that way: the rejoin is built
+by removing one element from the already-split, already-classified alternatives and rejoining the
+remainder with a plain `join('|')`, which cannot itself produce an empty, leading, trailing or
+doubled `|`, and no rule 1-3 can smuggle a forbidden character or a trim-violating alternative past
+step 5 either, since both are already refused on the INPUT side (the same split-and-trim check step
+5 re-runs). This is not reasoned, it is confirmed directly: Task B3 disabled step 5's re-check and
+ran the full test suite, and zero tests changed result; only substituting a deliberately naive
+rejoin (matching the failure mode this paragraph used to cite) made step 5's refusal fire. Step 5 is
+kept anyway, with the SAME status the placeholder-arity throw already carries (section 2.4): a
+backstop against a bug in this reasoning or the classifier, not a case expected to fire, kept because
+it makes any rule ADDED to the ladder LATER safe by construction rather than by review, the same
+protection the closing sentence below already named. An adversarial reader auditing this step should
+test it by calling the shared classifier directly against a leading, trailing or doubled `|` (for
+example `classifyContent('|%1')`), not by hunting for a natural `mutateFilterContent` input that
+trips it, since none exists for the four rules above. The re-parse still catches any future rule,
+added to the ladder later, that emits a shape steps 1-4 would not have admitted as input: one
+function, already required to exist for the input side, doing the same job on the output side,
+rather than a second, hand-written check that could drift from the first.
 
 ### 2.3 The mutation ladder: one mutant per site
 
