@@ -103,6 +103,13 @@ alternative list, and 14 carrying a `..` range. No population is claimed for wil
 or a variable (non-literal) filter-text argument; none of those were censused and none is claimed
 mutatable here.
 
+**A caveat on the `<>` figure, added on review.** The census counts syntactic `<>` occurrences, not
+occurrences rule 1 can reach. The most common `<>` idiom in real BC code is `<>''` (the standard way
+to write "field is not blank"), and section 2.2's step 2 refuses any embedded quote, so that idiom
+is refused before it ever reaches the ladder. Rule 1's real reach on a census of real code is
+therefore materially below the raw 95-site count; this document does not have a figure for how much
+below, since the census did not break `<>` occurrences down by what follows the token.
+
 **Today's coverage.** `negate-conditional` mutates `comparison_expression` nodes in AL source; a
 `SetFilter` filter expression is a `text_literal` (string literal) argument, a different node kind
 that no registered operator inspects. The only mutant a `SetFilter` site gets today is whole-call
@@ -194,8 +201,11 @@ filter syntax, not MEASURED against a running container in this session:
 1. A bare atom (`Rec.SetFilter(F, '5')`) and an explicitly `=`-prefixed atom
    (`Rec.SetFilter(F, '=5')`) select the identical row set. This is standard, long-standing AL
    filter syntax (equality is the default relation when no comparator token is present), but it
-   is reasoned here, not measured. Section 2.4 names the probe that would settle it if ever in
-   doubt: seed known rows, apply both forms, compare `Count()`.
+   is reasoned here, not measured. **This claim affects the emitted spelling only** (section 2.4's
+   choice of `'=%1'` over a bare `'%1'` for rule 1's output); it is not load-bearing for any
+   verdict this design predicts, since a verdict never depends on which of the two equivalent
+   spellings the ladder emits. Section 2.4 names the probe that would settle it if ever in doubt:
+   seed known rows, apply both forms, compare `Count()`.
 2. `..X` matches every row with a value less than or equal to X, and `X..` matches every row with
    a value greater than or equal to X, both bounds inclusive, and each an open (one-sided) range.
    Also reasoned, not measured. The same kind of probe would settle it: seed a row exactly at the
@@ -528,19 +538,23 @@ impossible for a genuine descendant, and is guarded rather than assumed for the 
 other splice in this product is.
 
 `before: node` (the whole `procedure_call`), `after: synthesizeAfter(node, splicedText)`,
-`parentContext`: this operator only ever claims a call in statement position, since `SetFilter`'s
-return value (a `Boolean`, whether the filter changed something evaluable) is not the shape this
-design reasons about being read from an expression context — so `parentContext` is the literal
-`"statement-position"`, the same precedent `remove-setrange` and `validate-to-assign` use for a
-guard that already established it, rather than the computed hint `swap-find-direction` needs
-because THAT operator claims expression-position sites too. Whether restricting to statement
-position is itself the right call, given `swap-find-direction` and `swap-modify-flag` both claim
-expression-position sites: `SetFilter`'s own return value is a Boolean flag (something changed),
-which is a real but rarely-consumed signal in real AL, and this design does not have a measured
-population for how often a `SetFilter` call sits in expression position. Restricting to statement
-position is the safe direction (missing a site costs this operator's signal, `void-method-call`
-still covers it) and is recorded here as a scope decision rather than an oversight, parallel to how
-the trio spec recorded `validate-to-assign`'s own un-braced-then-branch cost.
+`parentContext`: COMPUTED, not hardcoded, the same honest hint `swap-find-direction` uses:
+`isStatementPosition(node) ? "statement-position" : "expression-position"`. None of the four guards
+in section 2.1 restrict this operator to statement position, unlike `remove-setrange` and
+`validate-to-assign` (both deletions, whose own `isStatementPosition` guard is what lets them
+hardcode the literal), and this operator does not need one: a splice never removes a statement, so
+it stays safe in expression position too, the same reasoning that already lets `swap-find-direction`
+claim both.
+
+An earlier draft of this section justified a statement-position restriction with two claims, and
+both were wrong. First, it said `SetFilter`'s return value is a Boolean read from an expression
+context; `Record.SetFilter` has no return value at all (it is a `procedure`, not a `function`), so
+there is no such value to reason about. Second, it said `void-method-call` "still covers" whatever
+this operator would miss by restricting to statement position; that is measured false for the exact
+shape it was invoked to excuse. An un-braced then-branch call, `if F then Rec.SetFilter("No.",
+'<>%1', 'X');`, has `if_statement` as its parent, so `isStatementPosition` measures FALSE there, and
+`void-method-call` does NOT claim that site either. Computing the hint honestly, as done here,
+means this operator claims that shape itself instead of relying on a safety net that is not there.
 
 ### 2.7 Dedup and baseline identity
 
@@ -556,31 +570,70 @@ operator also never claims a `SetRange` call (its target predicate names `SetFil
 so it cannot collide with `remove-setrange` at all; the two operators have disjoint target method
 names.
 
-**Baseline distinguishability — the question the task brief specifically raised, checked against
-`packages/engine/src/ast/hash.ts` rather than assumed.** The trio spec's operators (`swap-find-
-direction`, `validate-to-assign`) collapse several fixture arms into one baseline key, because their
-mutation changes only an IDENTIFIER (a method name), and `astSubtreeHash` canonicalises every
-identifier's text to a scope-relative index — so two sites differing only in which method name they
-call can hash identically. This operator's mutation changes a STRING LITERAL's content, and
-`astSubtreeHash` hashes a `text_literal` node's TEXT VERBATIM (confirmed in section 0). The `before`
-node hashed for the baseline key is the ORIGINAL, UNMUTATED call — its filter-text literal carries
-whatever the real AL source wrote, not this operator's output — so two different `SetFilter` sites
-will hash to different `astHash` values whenever their ORIGINAL filter-literal text differs, even if
-every identifier around that literal (the receiver, the field argument if it is a bare identifier,
-the value argument) would otherwise canonicalise to an identical pattern. Since a real `SetFilter`
-call's filter text is, by construction, the part of the call that encodes what makes that site
-meaningfully different from another `SetFilter` call, two genuinely distinct fixture arms are
-expected to carry distinct filter text and therefore distinct hashes — this operator's mutants are
-expected to be MORE distinguishable in the frozen baseline than the trio's were, not less.
+**Baseline distinguishability, the question the task brief specifically raised, and the one claim
+in the first draft of this document that a reviewer MEASURED false, with real hashes.** The trio
+spec's operators (`swap-find-direction`, `validate-to-assign`) collapse several fixture arms into
+one baseline key, because their mutation changes only an IDENTIFIER (a method name), and
+`astSubtreeHash` canonicalises every identifier's text to a scope-relative index, so two sites
+differing only in which method name they call can hash identically. This operator's mutation
+changes a STRING LITERAL's content, and `astSubtreeHash` hashes a `text_literal` node's TEXT
+VERBATIM (confirmed in section 0). The `before` node hashed for the baseline key is the ORIGINAL,
+UNMUTATED call, its filter-text literal carries whatever the real AL source wrote, not this
+operator's output. This also settles a question the first draft left implicit: R134's own roadmap
+row assumed the mutated node would be the string literal itself, while this design (and the dedup
+discussion above) makes `before` the whole call instead. That is the better choice for dedup
+coexistence with `void-method-call`, and it is recorded here as a stated decision now that a reviewer
+asked why the change was never remarked on, but it does not, on its own, avoid the collision below:
+the collision would occur under either choice, since both twins' filter-literal text is identical
+either way.
 
-This is not a guarantee, and this document does not claim it as one. Two sites COULD still collapse
-if they carried byte-identical filter-literal text AND every surrounding identifier canonicalised to
-the same pattern (same argument count, same relative declaration order). The mitigation is cheap and
-belongs to the fixture task rather than to this operator's code: **every arm in section 3 must use a
-distinct filter-literal string**, which every arm below already does, incidentally, because each
-one is built to demonstrate a different rule or a different mechanism. If Task B6 or B7 ever needs
-two arms sharing one rule's shape, this constraint is the reason to still vary the literal text (a
-different field name embedded in a decoy token, a different bound value) between them.
+The first draft reasoned from "the hashed node carries the real filter text" to a general claim that
+this operator's mutants would be MORE distinguishable in the frozen baseline than the trio's, not
+less, and stated that claim as verified fact. That claim is FALSE for two of this design's own
+arms, and it is false for the exact reason a discrimination pair exists: arms A and B (and,
+separately, arms C and D) are each built to hold ONE rule's shape fixed and vary only the runtime
+DATA the covering test seeds, since that is what makes them a kill/survivor pair for the same
+mutation in the first place. Holding the shape fixed means holding the ORIGINAL AL source identical:
+`Related.SetFilter("Main No.", '<>%1', MainNo)` appears verbatim in both arm A and arm B, and
+`Related.SetFilter("Entry No.", '<%1', Threshold)` appears verbatim in both arm C and arm D. A
+reviewer computed `astSubtreeHash` directly on these four call nodes and confirmed the collision:
+arms A and B hash to the same value, and arms C and D hash to the same value, because every
+identifier around the literal (the receiver, the field argument, the value argument) canonicalises
+to an identical pattern within each pair, and the literal itself is byte-identical too. The collision
+is structural, not a slip in the arm text.
+
+**What the collision does and does not cost.** `diffMutants` compares a repeated baseline key as a
+per-key multiset, so a kill/survivor pair is still pinned correctly overall (`{killed, survived}`)
+and a straight swap of verdicts is still caught. What is lost is ATTRIBUTION: a baseline diff naming
+a repeated key as `[occurrence 1 of 2]` does not tell a reader which arm moved, and
+`--skip-known-survivors` matches on the serialized key, so one twin's recorded survivor entry can
+make the other's mutant skip execution entirely and record as `known-survivor`, a verdict produced
+without running that mutant.
+
+**Fix.** Each colliding pair keeps its rule and its predicted verdict, but the SURVIVOR arm of each
+pair (arm B, arm D) carries one extra, inert alternative in its filter text purely to make the
+ORIGINAL call's bytes differ from its twin's: arm B's filter becomes `'<>%1|FLT-NONE'` and arm D's
+becomes `'<%1|FLT-NONE'`, where `FLT-NONE` is a tag no seeded row anywhere in this fixture carries.
+Call this a HASH decoy, to keep it distinct from the RESIDUE decoy section 3 adds to arms C, D, E
+and H below: the two exist for different reasons and neither substitutes for the other. An inert
+alternative that never matches a real row cannot change which rows either the baseline or the
+mutant filter selects, so it changes only the ORIGINAL call's hash, not either arm's predicted
+verdict. The ladder still finds the SAME rule at the SAME leading alternative: the fixed scan order
+tries rule 1 or rule 2 first and fires on the first matching alternative, `'<>%1'` or `'<%1'`,
+before it ever reaches `FLT-NONE`, which cannot classify as anything a rule wants to mutate on its
+own. This is Task B6's literal to spell out exactly; what this document fixes is that such a decoy
+must exist at all, and why.
+
+Note this is NOT a mitigation of "vary the filter text between arms" in the general sense the first
+draft proposed (varying a field NAME, for instance, does not vary `astHash` when the field is an
+unquoted identifier, since an identifier canonicalises to a scope-relative index regardless of its
+spelling; only a QUOTED identifier, a leaf node, hashes on its own text, per section 0). The hash
+decoy above works for a different reason: it is appended INSIDE the filter literal, which hashes
+verbatim regardless of quoting, and it is inert by construction rather than merely "different."
+
+A unit test, asserting `astSubtreeHash` is pairwise distinct across every arm's `SetFilter` node,
+converts this from a reasoned claim back into a measured one and keeps it true when a later task
+adds a ninth arm. Section 7 lists writing that test as part of this wave's order of work.
 
 ## 3. The fixture arms
 
@@ -644,10 +697,14 @@ un-mutated rather than being guessed at.
   gave: `lethal.return-value` rewrites a non-zero `exit(Integer)` to `exit(0)` and deliberately
   skips a site that already returns 0, so an arm whose assertion happens to be 0 has an unkillable
   `return-value` collateral for reasons unrelated to this operator.
-- **Reserve distinct filter-literal text per arm**, per section 2.7's baseline-distinguishability
-  discussion — already true of every arm above by construction, since each demonstrates a
-  different rule or mechanism, but worth stating as a rule for whichever arm Task B6 adds beyond
-  this table (including a possible dedicated arm F).
+- **Every discrimination pair (arm A/B, arm C/D) needs a HASH decoy on its survivor twin**, per
+  section 2.7's fix: an inert `|FLT-NONE` alternative appended to the filter text, so the ORIGINAL
+  call's bytes differ from its twin's even though the rule and the predicted verdict do not. This is
+  NOT the weaker "use distinct filter text per arm" rule the first draft of this document stated;
+  that rule cannot hold for a genuine discrimination pair, which by definition holds the shape (and
+  therefore the filter text) fixed and varies only the seeded data. Any arm Task B6 or B7 adds that
+  forms a new discrimination pair needs the same treatment, checked by the unit test section 2.7
+  requires.
 
 ## 4. What the live run may and may not conclude
 
@@ -664,8 +721,11 @@ measures:
   mechanism the trio spec measured for its own three operators;
 - the placeholder-arity invariant never throws across the whole fixture (a throw anywhere would be
   a bug in this operator's own code, not a fixture finding);
-- this operator's mutants are distinguishable in the frozen baseline per site, as section 2.7
-  reasons they should be, PROVIDED every arm's filter-literal text stays distinct as designed.
+- this operator's mutants are distinguishable in the frozen baseline per site, PROVIDED each
+  discrimination pair carries the hash decoy section 2.7 requires and the unit test asserting
+  `astSubtreeHash` pairwise distinctness passes. This is not, as the first draft claimed, an
+  automatic consequence of mutating a string literal instead of an identifier: two of this design's
+  own arms were measured to collide before the fix.
 
 **May not conclude, and no report or roadmap wording from this wave may imply otherwise:**
 
