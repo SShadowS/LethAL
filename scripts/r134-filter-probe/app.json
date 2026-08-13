@@ -1,0 +1,28 @@
+{
+  "id": "6f3a8d21-4c7e-4b1a-9e6d-2a8f5c7b0e93",
+  "name": "LethAL R134 Filter Probe",
+  "publisher": "LethAL",
+  "version": "1.0.0.0",
+  "brief": "R134: does SetFilter on an Integer field raise when an OR-alternative is not a valid integer?",
+  "description": "Throwaway probe, not for production use. Measures whether Record.SetFilter/Count raises a runtime error when an Integer field's filter text carries a non-numeric OR-alternative, the exact shape R134 arm D's hash decoy needs (docs/superpowers/specs/2026-08-12-r134-filter-literal-design.md section 2.7: 'Entry No.' filtered with '<%1|FLT-NONE').",
+  "privacyStatement": "",
+  "EULA": "",
+  "help": "",
+  "url": "",
+  "logo": "",
+  "dependencies": [],
+  "screenshots": [],
+  "idRanges": [
+    {
+      "from": 71600,
+      "to": 71610
+    }
+  ],
+  "resourceExposurePolicy": {
+    "allowDebugging": true,
+    "allowDownloadingSource": true,
+    "includeSourceInSymbolFile": true
+  },
+  "runtime": "13.0",
+  "features": []
+}

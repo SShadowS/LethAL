@@ -937,6 +937,168 @@ codeunit 79310 "Data Tests"
     end;
 
     // ---------------------------------------------------------------------------------------------
+    // R134 -- `lethal.flip-filter-literal`, eight arms (A-H; F is a documented equivalence class,
+    // not a fixture procedure). Target: codeunit 79317 "Data Filter Ops", which documents each
+    // arm's PREDICTED verdict and mechanism in the R82/R136 style.
+    //
+    // Spec: docs/superpowers/specs/2026-08-12-r134-filter-literal-design.md section 3. Per-mutant
+    // predictions are pre-committed in a SEPARATE document before the live run (Task B7), same
+    // precedent as R82 and R136.
+    //
+    // Every arm reserves its own "Main No." tag and its own Entry No. band (79150-79192), so no
+    // arm's count can see another arm's rows and no verdict depends on test execution order. Every
+    // test below raises through bare Error(...), matching the fixture's existing convention (the
+    // tables gate asserts the R121 assertion screen reports itself as vacuous here, which requires
+    // exactly that).
+    // ---------------------------------------------------------------------------------------------
+
+    [Test]
+    procedure NegationFlipChangesTheCount()
+    var
+        FilterOps: Codeunit "Data Filter Ops";
+        Actual: Integer;
+    begin
+        // ARM A. Strong. One row tagged FILT-A1, two tagged FILT-A2: CountExcluding('FILT-A1')
+        // counts the OTHER group (2). The flip to '=%1' would count FILT-A1's own group (1)
+        // instead -- a different number, so the assertion discriminates.
+        ClearRelated('FILT-A1');
+        ClearRelated('FILT-A2');
+        AddRelated(79150, 'FILT-A1', 1);
+        AddRelated(79151, 'FILT-A2', 2);
+        AddRelated(79152, 'FILT-A2', 3);
+        Actual := FilterOps.CountExcluding('FILT-A1');
+        if Actual <> 2 then
+            Error('expected 2 rows other than FILT-A1, got %1', Actual);
+    end;
+
+    [Test]
+    procedure ExistenceOnlyAssertionMissesTheNegationFlip()
+    var
+        FilterOps: Codeunit "Data Filter Ops";
+    begin
+        // ARM B. Weak ON PURPOSE (the hash-decoy survivor twin of arm A): asserts only that SOME
+        // row outside FILT-B1 exists, which is true under both the original ('<>FILT-B1', seeing
+        // FILT-B2's row) and the flip ('=FILT-B1', seeing FILT-B1's own row) -- existence cannot
+        // tell which group was counted.
+        ClearRelated('FILT-B1');
+        ClearRelated('FILT-B2');
+        AddRelated(79153, 'FILT-B1', 1);
+        AddRelated(79154, 'FILT-B2', 2);
+        if not FilterOps.AnyExcluding('FILT-B1') then
+            Error('expected at least one row excluding FILT-B1');
+    end;
+
+    [Test]
+    procedure BoundaryShiftAdmitsTheThresholdRow()
+    var
+        FilterOps: Codeunit "Data Filter Ops";
+        Actual: Integer;
+    begin
+        // ARM C. Strong. Three consecutive entries in the FLT-C group (79160, 79161, 79162),
+        // called with Threshold = 79162 (the third entry): '<79162' matches only the first two
+        // (2). The shift to '<=79162' would also admit 79162 itself (3). The residue decoy, in a
+        // DIFFERENT Main No. group below the threshold, proves the SetRange scope is doing real
+        // work: an unscoped filter would count it too.
+        ClearRelated('FLT-C');
+        ClearRelated('FLT-C-RESIDUE');
+        AddRelated(79159, 'FLT-C-RESIDUE', 1);
+        AddRelated(79160, 'FLT-C', 2);
+        AddRelated(79161, 'FLT-C', 3);
+        AddRelated(79162, 'FLT-C', 4);
+        Actual := FilterOps.CountBelowThreshold(79162);
+        if Actual <> 2 then
+            Error('expected 2 rows below the threshold entry, got %1', Actual);
+    end;
+
+    [Test]
+    procedure GapAtTheBoundaryMakesTheShiftEquivalent()
+    var
+        FilterOps: Codeunit "Data Filter Ops";
+        Actual: Integer;
+    begin
+        // ARM D. The equivalence survivor: a GAP at the threshold (entries 79170 and 79172 only,
+        // called with Threshold = 79171) means '<79171' and '<=79171' both match just 79170 (1) --
+        // no row sits exactly at the shifted boundary, so the mutant is equivalent regardless of
+        // what else exists. The residue decoy proves the scope, same as arm C.
+        ClearRelated('FLT-D');
+        ClearRelated('FLT-D-RESIDUE');
+        AddRelated(79169, 'FLT-D-RESIDUE', 1);
+        AddRelated(79170, 'FLT-D', 2);
+        AddRelated(79172, 'FLT-D', 3);
+        Actual := FilterOps.CountBelowThresholdSparse(79171);
+        if Actual <> 1 then
+            Error('expected exactly the one entry below the gap, got %1', Actual);
+    end;
+
+    [Test]
+    procedure RangeFlipChangesTheCountRegardlessOfInclusivity()
+    var
+        FilterOps: Codeunit "Data Filter Ops";
+        Actual: Integer;
+    begin
+        // ARM E. Strong. Entries strictly below (79178, 79179) and above (79181) the bound
+        // (79180), NONE exactly at it: '..79180' matches the two below (2) whether the range is
+        // read as inclusive or exclusive at the bound, since no row sits there either way. The
+        // flip to '79180..' would match only 79181 (1). The residue decoy, at or below the bound
+        // in a different group, proves the scope.
+        ClearRelated('FLT-E');
+        ClearRelated('FLT-E-RESIDUE');
+        AddRelated(79177, 'FLT-E-RESIDUE', 1);
+        AddRelated(79178, 'FLT-E', 2);
+        AddRelated(79179, 'FLT-E', 3);
+        AddRelated(79181, 'FLT-E', 4);
+        Actual := FilterOps.CountUpToBound(79180);
+        if Actual <> 2 then
+            Error('expected 2 entries at or below the bound, got %1', Actual);
+    end;
+
+    [Test]
+    procedure DroppedPlaceholderFreeAlternativeChangesTheCount()
+    var
+        FilterOps: Codeunit "Data Filter Ops";
+        Actual: Integer;
+    begin
+        // ARM G. Strong. Two FLT-G-DECOY rows plus three FLT-G-TARGET rows, called with
+        // MainNo = 'FLT-G-TARGET': the baseline filter matches both groups (5). Dropping the
+        // placeholder-free 'FLT-G-DECOY' alternative leaves only the target group (3). A tag
+        // distinct from the existing CountForMainIgnoresDecoys test's own 'T-DECOY' seeding
+        // (finding 5) -- reusing that tag would make this baseline count depend on residue from a
+        // different test.
+        ClearRelated('FLT-G-DECOY');
+        ClearRelated('FLT-G-TARGET');
+        AddRelated(79185, 'FLT-G-DECOY', 1);
+        AddRelated(79186, 'FLT-G-DECOY', 2);
+        AddRelated(79187, 'FLT-G-TARGET', 3);
+        AddRelated(79188, 'FLT-G-TARGET', 4);
+        AddRelated(79189, 'FLT-G-TARGET', 5);
+        Actual := FilterOps.CountDecoyOrTarget('FLT-G-TARGET');
+        if Actual <> 5 then
+            Error('expected the decoy and target rows together (5), got %1', Actual);
+    end;
+
+    [Test]
+    procedure ClosedRangeCountIsScopedByMainNo()
+    var
+        FilterOps: Codeunit "Data Filter Ops";
+        Actual: Integer;
+    begin
+        // ARM H. The closed-range refusal negative: flip-filter-literal emits nothing here
+        // (spec section 2.2 step 4, section 5). This test instead pins the two collateral
+        // verdicts -- deleting the SetFilter (leaving the SetRange scope) still counts exactly
+        // the 2 FLT-H rows the range already matched; deleting the SetRange (leaving the range
+        // unscoped) would also admit the residue decoy sitting inside the same numeric range but
+        // tagged differently.
+        ClearRelated('FLT-H');
+        ClearRelated('FLT-H-RESIDUE');
+        AddRelated(79190, 'FLT-H', 1);
+        AddRelated(79191, 'FLT-H-RESIDUE', 2);
+        AddRelated(79192, 'FLT-H', 3);
+        Actual := FilterOps.CountInRange(79190);
+        if Actual <> 2 then
+            Error('expected 2 rows in the closed range (residue decoy excluded by scope), got %1', Actual);
+    end;
+
+    // ---------------------------------------------------------------------------------------------
     // Seeding helpers. All idempotent — see InsertDoublesAmountWeak's comment for why that is
     // kept even though the persistence claim behind it was measured false.
     // around every mutant run, so rows PERSIST into the next one.
