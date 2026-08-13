@@ -557,7 +557,7 @@ function assertVerdictTable(report: SessionReport): void {
   // R121 — the assertion screen, pinned as the VACUOUS case. See EXPECTED's comment for why that
   // is the interesting assertion on this fixture.
   const assertionScreen = report.assertionScreen;
-  assert.ok(assertionScreen !== undefined, "a run with 113 kills must carry an assertion screen");
+  assert.ok(assertionScreen !== undefined, "a run with 157 kills must carry an assertion screen");
   assert.ok(
     assertionScreen.killsWithText > 0,
     "every kill on this path records its failure text (R86) — a zero here means the text stopped " +
