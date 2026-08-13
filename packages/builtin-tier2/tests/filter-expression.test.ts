@@ -51,6 +51,27 @@ describe("mutateFilterContent — the precedence ladder", () => {
   it("precedence: negation beats drop-alternative on a mixed expression", () => {
     expect(mutateFilterContent("<>%1|FIXED")?.rule).toBe("flip-negation");
   });
+  it("precedence: negation (rule 1) beats boundary shift (rule 2) when different alternatives qualify for each", () => {
+    // '<>%1' (rule 1) and '<%2' (rule 2) cannot be the SAME alternative (each alternative classifies
+    // into exactly one shape), so this is the only way the two rules can ever compete on one site.
+    expect(mutateFilterContent("<>%1|<%2")).toEqual({ mutated: "=%1|<%2", rule: "flip-negation" });
+  });
+  it("precedence: boundary shift (rule 2) beats open-range flip (rule 3), NOT on severity (spec §2.3's own worked example)", () => {
+    // Spec §2.3: "at a filter like '<%1|..%2', ... the ladder fires rule 2 and emits the narrower of
+    // the two available mutations" — rule 2's position is justified by sharing rule 1's single-token
+    // rewrite mechanism, not by severity, and this is the one case the order actually changes the
+    // outcome for, so it is the case worth pinning.
+    expect(mutateFilterContent("<%1|..%2")).toEqual({
+      mutated: "<=%1|..%2",
+      rule: "shift-boundary",
+    });
+  });
+  it("precedence: open-range flip (rule 3) beats drop-alternative (rule 4) when both qualify", () => {
+    expect(mutateFilterContent("..%1|FIXED")).toEqual({
+      mutated: "%1..|FIXED",
+      rule: "flip-open-range",
+    });
+  });
   it("refuses when every alternative carries a placeholder and no other rule applies", () => {
     expect(mutateFilterContent("%1|%2")).toBeNull();
   });
