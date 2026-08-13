@@ -80,6 +80,7 @@ that ordering is the priority.
 - **R134** · Mutate inside SetFilter's filter-expression literal — the one filter class no operator can see · [R134.md](docs/roadmap/R134.md) · open — filed 2026-08-12 from a worked example session. Census committed below; not specced, not built.
 - **R135** · Declarative surfaces (FlowFields/CalcFormula, query objects, filter properties) need a mutation mechanism before any operator · [R135.md](docs/roadmap/R135.md) · open — filed 2026-08-12. The mechanism decision comes first; every operator here is blocked on it.
 - **R136** · Tier-2 executable candidates: FindFirst/FindLast swap, Validate-to-assign, run-trigger flag on Insert/Delete · [R136.md](docs/roadmap/R136.md) · open — filed 2026-08-12 with corpus censuses. Each candidate still owes the house admission procedure…
+- **R139** · A stale published TEST app is indistinguishable from genuinely failing tests, and costs a full gate run to diagnose · [R139.md](docs/roadmap/R139.md) · open — measured 2026-08-13 during the R136 trio's first gate run
 
 ## Backends and tooling
 
