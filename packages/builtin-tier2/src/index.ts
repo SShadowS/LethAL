@@ -6,6 +6,7 @@ import { removeTestField } from "./remove-testfield";
 import { swapFindDirection } from "./swap-find-direction";
 import { swapModifyFlag } from "./swap-modify-flag";
 import { swapRecXRec } from "./swap-rec-xrec";
+import { validateToAssign } from "./validate-to-assign";
 
 export { removeTestField } from "./remove-testfield";
 export { removeSetRange } from "./remove-setrange";
@@ -14,6 +15,7 @@ export { swapModifyFlag } from "./swap-modify-flag";
 export { removeCommit } from "./remove-commit";
 export { swapRecXRec } from "./swap-rec-xrec";
 export { swapFindDirection } from "./swap-find-direction";
+export { validateToAssign } from "./validate-to-assign";
 export { claimsRecordMethod, claimsSystemCall, calleeNameNode } from "./receiver";
 
 /**
@@ -69,4 +71,7 @@ export const tier2Operators: readonly MutationOperator[] = [
   swapRecXRec,
   // R136: FindFirst <-> FindLast, both directions, one mutant per site. See `swap-find-direction.ts`.
   swapFindDirection,
+  // R136: Validate(F, V) -> F := V, deleting the OnValidate trigger chain while leaving the field
+  // value correct. See `validate-to-assign.ts`.
+  validateToAssign,
 ];

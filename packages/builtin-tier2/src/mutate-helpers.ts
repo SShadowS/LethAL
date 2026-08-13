@@ -62,19 +62,35 @@ export function countArguments(call: ALSyntaxNode): number {
 }
 
 /**
+ * The `count` argument expressions of `call`, in declaration order, or `null` unless the call
+ * carries EXACTLY that many.
+ *
+ * Checked from both directions at once, the same way `soleArgument` always has: the top-level
+ * comma count (`countArguments`) must equal `count`, AND the comment-filtered named-child count
+ * (`argumentNodes`) must also equal `count`. Neither check alone is enough. Docs/superpowers/specs/
+ * 2026-08-12-r136-tier2-trio-design.md §2.3 amendment 1 is why this is an EXACT-COUNT accessor
+ * rather than an indexed one: an indexed `argumentAt(call, 0)` would return whatever sits first
+ * among the named children, and this file deliberately leaves non-comment trivia (a pragma, a
+ * `#region`) IN that list, on the ground that every consumer here treats a longer-than-expected list
+ * as a refusal. An index does not refuse anything; it just reads whatever is first, trivia or not.
+ * The exact-count contract keeps that refusal for every caller, this one included.
+ */
+export function exactArguments(call: ALSyntaxNode, count: number): readonly ALSyntaxNode[] | null {
+  if (countArguments(call) !== count) return null;
+  const nodes = argumentNodes(call);
+  return nodes.length === count ? nodes : null;
+}
+
+/**
  * The single argument of `call`, or `null` if it does not carry exactly one.
  *
- * "Exactly one" is checked twice over, from both directions: no top-level comma separator, AND
- * exactly one non-comment named child. The second half is what makes an unrecognised trivia node
+ * Delegates to `exactArguments(call, 1)`, so this predicate's own behaviour is unchanged by that
+ * function's introduction: "exactly one" is still checked from both directions, no top-level comma
+ * separator AND exactly one non-comment named child, which is what makes an unrecognised trivia node
  * (a `#region` between the parens, say) refuse rather than be mistaken for the argument.
  */
 export function soleArgument(call: ALSyntaxNode): ALSyntaxNode | null {
-  const argumentList = call.childForFieldName(ARGUMENTS_FIELD);
-  if (argumentList === null) return null;
-  if (argumentList.children.some((c) => c.rawKind === ARGUMENT_SEPARATOR)) return null;
-  const [only, ...rest] = argumentNodes(call);
-  if (only === undefined || rest.length > 0) return null;
-  return only;
+  return exactArguments(call, 1)?.[0] ?? null;
 }
 
 /**

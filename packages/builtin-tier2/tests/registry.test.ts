@@ -26,6 +26,10 @@ const EXPECTED_OPERATORS = [
   // platform-kill class `swap-modify-flag`'s Insert/Delete extension can: both methods return the
   // same found-or-not-found answer over the same filtered set, so only which row loads changes.
   "lethal.swap-find-direction",
+  // R136: Validate(F, V) -> F := V, deleting the OnValidate trigger chain while leaving the field
+  // value correct. The implicit-receiver form emits the qualified Rec.F := V, not a bare F := V,
+  // per the trio spec's amendment 1.
+  "lethal.validate-to-assign",
 ] as const;
 
 describe("tier2Operators", () => {
