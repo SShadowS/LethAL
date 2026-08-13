@@ -54,6 +54,7 @@ that ordering is the priority.
 - **R132** · No gate ever exercises the assertion screen in the mode where it discriminates · [R132.md](docs/roadmap/R132.md) · open — filed 2026-08-09 when R121 shipped the screen. Every one of the four live gates produces `vacuous` or…
 - **R137** · swap-rec-xrec's conformance refusals assert nothing — empty expectedSpecs passes on any input · [R137.md](docs/roadmap/R137.md) · open — found 2026-08-12 while writing the R136 trio spec
 - **R138** · The platform-artifact screen cannot see run-trigger-flag kills: Insert(false) kills by duplicate key, and nothing tags it · [R138.md](docs/roadmap/R138.md) · open — found 2026-08-12 by the adversarial review of the R136 trio spec, before any code landed
+- **R140** · Fallback 2 scores a trigger mutant `survived` when its only covering test is red, where member-level attribution declines · [R140.md](docs/roadmap/R140.md) · open — measured 2026-08-13 on the R136 trio's first live run
 
 ## Product gaps a real project hits
 
