@@ -1,8 +1,8 @@
 # R134 - `lethal.flip-filter-literal`: mutating inside a `SetFilter` string
 
-Status: **DRAFT, AWAITING ADVERSARIAL REVIEW.** Written 2026-08-13 as Task B1 of
+Status: **REVIEWED AND READY FOR IMPLEMENTATION, 2026-08-13.** Written 2026-08-13 as Task B1 of
 `docs/superpowers/plans/2026-08-12-r134-r136-operator-waves.md`. It opens Wave B, and, per this
-task's brief, ratifies six of the brief's eight numbered proposals as written, elaborates two of
+task's brief, ratifies three of the brief's eight numbered proposals as written, elaborates four of
 them into an unambiguous procedure without changing what they cover, and authors one of them (the
 fixture arms table) from scratch, since the brief specified only what that table must contain, not
 its content. The ratification log at the end (section 6) gives one line per proposal. Extends the
@@ -10,6 +10,78 @@ operator set defined in `docs/superpowers/specs/2026-07-25-tier2-mutation-operat
 follows the shape of `docs/superpowers/specs/2026-08-12-r136-tier2-trio-design.md`, including that
 document's rule that a per-mutant prediction table is pre-committed in a SEPARATE document before
 the live run (a later task in this wave).
+
+**Reviewed by spec-adversary 2026-08-13 (19 adopted, 0 rejected).** The review returned 2 blocker,
+8 major and 9 minor findings, and every one is adopted below. Finding 3 is the one a reviewer
+MEASURED directly, by computing `astSubtreeHash` on the actual fixture arms rather than reasoning
+about it, and it is the costliest fix in this round: it overturns a claim the first draft stated as
+verified fact.
+
+1. **Adopted (blocker).** The atom predicate now requires a NON-EMPTY string (`isAtom`, section 2.2
+   step 4), so `'<>'` and its siblings no longer classify as a comparator with an empty remainder
+   and fall through to ladder exhaustion instead of emitting an unmeasured `'='`.
+2. **Adopted (blocker).** Rule 4's rejoin is now stated explicitly (surviving alternatives joined
+   with a single `|`), and the parser re-parses its own output before `generate()` may return a
+   spec, refusing the site if the output does not classify or if any output alternative is empty or
+   differs from its own `trim()` (section 2.2 step 5). Whitespace is refused explicitly rather than
+   left undecided.
+3. **Adopted (major, measured).** Section 2.7's claim that this operator's mutants are more
+   distinguishable in the frozen baseline than the trio spec's is false for two of this design's own
+   discrimination pairs, arms A/B and arms C/D, which the reviewer confirmed collide by hashing the
+   actual call nodes. Fixed with a HASH decoy alternative in each survivor twin's filter text and a
+   new unit test asserting `astSubtreeHash` is pairwise distinct across every arm.
+4. **Adopted (major).** Arm E is reseeded so no row sits exactly at the bound, removing the
+   baseline's dependence on the unmeasured range-inclusivity claim. The bare-atom-versus-explicit-`=`
+   claim is demoted to "affects the emitted spelling only," since it was never load-bearing for any
+   verdict.
+5. **Adopted (major).** Arm G's `'T-DECOY'` tag is renamed to avoid colliding with the existing
+   `CountForMainIgnoresDecoys` test's own seeding, and a new arm rule requires every arm to reserve
+   its own tag, distinct from any existing test's.
+6. **Adopted (major).** Arms C, D, E and H now scope with a `SetRange("Main No.", <arm tag>)` before
+   the `SetFilter` and seed one decoy row in a different `Main No.` group, so their `void-method-
+   call` collateral has a determinate verdict instead of depending on residue or on rows the arm
+   never seeded. The new `SetRange` gains its own `remove-setrange` collateral, displacing
+   `void-method-call` at that statement.
+7. **Adopted (major).** Arm H's upper bound is now a computed expression (`LowBound + 2`) rather
+   than a second bare identifier, so `swap-call-arguments`'s same-type-identifier-pair predicate no
+   longer matches, and arm H tests only the ladder-exhaustion deferral it exists for.
+8. **Adopted (major, three parts).** `parentContext` is now computed via the same honest
+   `isStatementPosition` hint `swap-find-direction` uses, instead of hardcoded. The claim that
+   `SetFilter` returns a Boolean is deleted, since AL's `Record.SetFilter` has no return value. The
+   claim that `void-method-call` covers whatever this operator misses is deleted too, since it is
+   measured false for an un-braced then-branch call.
+9. **Adopted (major).** `isAtom` is now defined once, as a predicate over a string, and rules 1
+   through 3 all call it, instead of each rule half-restating "atom" for the substring it happens to
+   need.
+10. **Adopted (major).** The ladder's order is unchanged (rules 1, 2, 3, 4), but the justification
+    for rule 2's position no longer claims severity, which the reviewer showed the order does not
+    actually follow. It now says plainly that rules 1 and 2 are grouped because they share a
+    single-token rewrite mechanism, and the ladder accepts the narrower mutant where both apply as
+    the cost of that grouping.
+11. **Adopted (minor).** "By rule 4 below" is corrected. The shared `isAtom` predicate (finding 9's
+    fix) removes the forward reference and the ambiguity along with it.
+12. **Adopted (minor).** Section 2.2 now states that the quote round trip is protected by the
+    REFUSAL on any embedded quote, not by the shared escaper, since no content this parser ever
+    admits past step 2 contains a `'` for the escaper to round-trip.
+13. **Adopted (minor).** Step 1's citation now points at the `text_literal` node's own measured
+    shape (grammar kind `string_literal`, no named children) rather than a conformance test's
+    `beforeText`, which is the whole call's text and cannot establish the claim on its own.
+14. **Adopted (minor).** "Every new test raises through bare `Error(...)`" is now a rule in section
+    3.2, not only an observation about what the live run may not conclude.
+15. **Adopted (minor).** A new "Collateral to expect" subsection, matching the trio spec's section
+    3.4, names the Tier-1 and Tier-2 collateral at every arm, including which arms carry a predicted
+    surviving `void-method-call` by design.
+16. **Adopted (minor).** Section 0 now notes that the common `<>''` idiom is refused by step 2's
+    quote check, so rule 1's real reach on a census of real code is materially below the raw
+    95-site count.
+17. **Adopted (minor).** The vague "vary a field name" mitigation is removed. The concrete hash-
+    decoy fix (finding 3) does not depend on field-name variation, which would not have worked for
+    an unquoted identifier anyway.
+18. **Adopted (minor).** Section 2.7 now records, as a stated decision rather than an implicit one,
+    that this design changed `before` from the literal (R134's own roadmap assumption) to the whole
+    call, and that the choice is better for dedup but does not by itself avoid finding 3's collision.
+19. **Adopted (minor).** Step 3 now names the whole-empty-content case (`SetFilter(F, '')` splitting
+    to `[""]`) explicitly, alongside `||` and a leading or trailing `|`.
 
 Every factual claim this document makes about the codebase was checked against the source named
 next to it, not assumed from the brief or from the sibling spec. Every claim about how Business
@@ -204,13 +276,16 @@ falls under it, and an adversarial reader needs the concrete list to know the ru
 than aspirational.
 
 **Step 1: unquote.** The literal's own `.text` includes its delimiting quotes, the same way every
-other literal node's `.text` in this codebase does (confirmed against `remove-setrange.ts`'s own
-conformance test, whose `beforeText` for `SetRange("No.", 'A')` includes the quotes verbatim).
-Strip the leading and trailing `'`, then replace every `''` with a single `'`. This is the exact
-inverse of `build.ts`'s `textLiteral` encoder. If the text does not start and end with `'`, that is
-a caller-contract violation (guard 1-3 already established this node is a `text_literal`, and a
-`text_literal` always carries its delimiters) — throw rather than silently proceed on malformed
-input, per this repo's convention that a caller-contract violation is a throw, not a refusal.
+other literal node's `.text` in this codebase does. Confirmed directly on the node itself, not on a
+conformance test's `beforeText` (which is the whole CALL's text and cannot establish a claim about
+one argument node on its own): a `text_literal` node (grammar kind `string_literal`, per
+`packages/engine/src/ast/node-kinds.ts`) has no named children, and for a filter argument written
+`'<%1'` its `.text` is the five-character string `'<%1'`, quotes included. Strip the leading and
+trailing `'`, then replace every `''` with a single `'`. This is the exact inverse of `build.ts`'s
+`textLiteral` encoder. If the text does not start and end with `'`, that is a caller-contract
+violation (guard 1-3 already established this node is a `text_literal`, and a `text_literal` always
+carries its delimiters). Throw rather than silently proceed on malformed input, per this repo's
+convention that a caller-contract violation is a throw, not a refusal.
 
 **Step 2: the cheap character refusal.** Refuse the WHOLE site if the unquoted content contains any
 of `* ? @ ( ) ' &`, checked on the UNESCAPED content (after step 1, not on the raw doubled-quote AL
@@ -228,56 +303,101 @@ have to reconstruct that reasoning themselves:
   alternative list). A parenthesised or grouped sub-expression is a shape this parser does not
   model.
 - `'`, after step 1's unescaping, signals that the FILTER-EXPRESSION language's OWN quoting
-  mechanism may be in play — AL's filter syntax lets an atom be wrapped in a second, inner layer of
+  mechanism may be in play. AL's filter syntax lets an atom be wrapped in a second, inner layer of
   single quotes to escape characters (such as `|` or `..`) that would otherwise be read as filter
   syntax, a layer distinct from the AL SOURCE string-literal quoting step 1 already undid. This
   parser does not implement that second layer, so any embedded quote forces a refusal rather than a
-  guess at which characters sit inside it versus outside it — splitting on `|` inside such a quoted
-  atom would be wrong, since a `|` there is a literal character, not an alternative separator.
+  guess at which characters sit inside it versus outside it: splitting on `|` inside such a quoted
+  atom would be wrong, since a `|` there is a literal character, not an alternative separator. One
+  consequence worth stating directly, so a later reader who relaxes this refusal does not miss it:
+  because this refusal fires on ANY embedded quote, no content this parser ever admits past this
+  step contains a `'`, so section 2.5's re-encoding transform never actually has a quote to
+  round-trip on ADMITTED content. That transform protects step 1's unquote and section 2.5's own
+  re-quote of the OUTER AL string-literal delimiters, which always round-trip regardless of what is
+  inside them. It is the REFUSAL above, not the shared escaper, that keeps the inner quote round
+  trip safe today. Confirmed directly: `'<>'''''`, the AL idiom for "not blank," parses as one
+  string literal, decodes to `<>''`, and is refused here by this exact bullet. AL has no backslash
+  escape, so a path like `'C:\temp\'` decodes cleanly and is refused instead by ladder exhaustion (no
+  rule matches a bare token containing `\`).
 - `&` is AL's filter AND-combinator. Not one of the four recognised shapes.
 
 This document has NOT verified the exact grammar of AL's filter-expression language against
-Microsoft's documentation or a live probe — the character list above is reasoned from general
+Microsoft's documentation or a live probe. The character list above is reasoned from general
 knowledge of AL filter syntax, the same status section 0 already gave the bare-atom-equals-`=`
 claim and the range-inclusivity claim. If review turns up a character this list should also refuse,
 adding it only widens the refusal surface (the safe direction) and costs no re-key, because a wider
 refusal changes nothing about sites this operator already claims.
 
 **Step 3: split into alternatives.** Split the (already-refused-if-necessary) content on
-top-level `|`. There is no nesting to worry about after step 2's refusal — none of the characters
+top-level `|`. There is no nesting to worry about after step 2's refusal: none of the characters
 that could create nested structure (`(`, `)`, `'`) survive step 2. Refuse the whole site if any
-resulting alternative is empty (`||`, a leading or trailing `|`) — an empty alternative is not a
-shape any of the four rules can act on.
+resulting alternative is empty: `||`, a leading or trailing `|`, or the single-alternative case of
+whole-empty content (`SetFilter(F, '')` splits to `[""]`). None of these is a shape any of the four
+rules can act on. Refuse the whole site, too, if any alternative differs from its own `trim()`: a
+leading or trailing space inside an alternative (`'A | B'` splitting to `["A ", " B"]`) changes what
+a `Code` or `Text` field actually matches, and this parser does not model whitespace as part of any
+of the four shapes in step 4 below, so a space is treated the same as an unrecognised character:
+refuse rather than guess whether it was meaningful.
 
-**Step 4: classify each alternative.** Every alternative must classify into exactly one of four
-shapes, tried in this order, or the WHOLE SITE refuses — classification is all-or-nothing across
-every alternative in one site, not a per-alternative partial refusal, because proposal 3 already
-requires refusing "the whole site" rather than mutating around an unparseable part:
+**Step 4: classify each alternative.** Classification uses one shared predicate, `isAtom(s)`,
+defined once over a string rather than separately for each rule that needs it. The brief's proposal
+defined "atom" only for the whole-alternative case; rule 1 needs it applied to a comparator's
+remainder and rule 2 needs it applied to each side of a `..`, and treating a substring by intuition
+instead of by one written rule is exactly how an empty remainder went unnoticed in the first draft.
+
+`isAtom(s)` is true if and only if `s` is NON-EMPTY, contains no `..`, contains none of `<`, `>`,
+`=`, and either matches `/^%\d+$/` (a clean, whole-string placeholder) or contains no `%` at all (a
+bare token). A `%` that is present but does not form a clean, whole-string placeholder, such as
+`50%`, `%A` or `%1x`, fails `isAtom`, matching neither shape.
+
+Every alternative must classify into exactly one of four shapes, tried in this order, or the WHOLE
+SITE refuses. Classification is all-or-nothing across every alternative in one site, not a
+per-alternative partial refusal, because proposal 3 already requires refusing "the whole site"
+rather than mutating around an unparseable part:
 
 1. **Comparator**: the alternative starts with one of `<>`, `<=`, `>=`, `<`, `>`, `=` (checked
-   longest-match first so `<=` is not misread as `<` followed by garbage), and everything after
-   that token is itself a valid ATOM by rule 4 below. `<>1..5` is NOT a comparator (the remainder
-   `1..5` is not a valid atom, since it contains `..`), falls through every later rule too, and the
-   whole site refuses.
+   longest-match first so `<=` is not misread as `<` followed by garbage), and `isAtom` holds for
+   everything after that token. `'<>'`, whose remainder is the empty string, is NOT a comparator
+   under this predicate: the non-empty requirement in `isAtom` is what closes the gap where an empty
+   remainder used to satisfy an unwritten notion of "atom" by accident and the ladder would
+   otherwise have emitted an unmeasured `'='` for it. `<>1..5` is also not a comparator (the
+   remainder `1..5` fails `isAtom`, since it contains `..`), falls through every later rule too, and
+   the whole site refuses.
 2. **Range**: the alternative contains exactly one occurrence of `..`, is not already classified as
-   a comparator (a range never carries a leading comparator token), and each non-empty side of the
-   `..` is itself a valid atom. Both sides non-empty is a CLOSED range (`X..Y`); exactly one side
-   empty is an OPEN range (`..X` or `X..`); both sides empty (`..` alone) refuses.
-3. **Atom**: the entire alternative, with no comparator token and no `..`, matches exactly one of
-   two shapes: a PLACEHOLDER, `%` followed by one or more digits and nothing else (`%1`, `%12`), or
-   a BARE TOKEN containing no `%` character at all. An alternative containing a `%` that is not a
-   clean, whole-alternative placeholder — `50%`, `%A`, `%1x` — matches neither shape and is
-   unclassifiable, refusing the whole site. This closes a gap the brief's proposal did not name: a
-   stray `%` inside ordinary filter content is unlikely in the census's real data, but the refuse-
-   by-default posture means an operator that did not check for it would silently misparse rather
-   than refuse.
+   a comparator (a range never carries a leading comparator token), and `isAtom` holds for each
+   non-empty side of the `..`. Both sides non-empty is a CLOSED range (`X..Y`); exactly one side
+   empty is an OPEN range (`..X` or `X..`); both sides empty (`..` alone) refuses, and a side that is
+   present but fails `isAtom` also refuses.
+3. **Atom**: `isAtom` holds for the entire alternative. This is the same predicate rules 1 and 2
+   already call, applied here to the whole alternative instead of a substring, so there is exactly
+   one definition of "atom" in this document, not three written separately and kept in sync by
+   hand.
 4. Anything not matching 1-3 is unclassifiable. Refuse the whole site.
 
-A closed range (`X..Y`) is a RECOGNISED shape at this step — it classifies successfully — but no
-rule in section 2.3's ladder targets it. That is a distinct outcome from "unclassifiable," worth
-keeping conceptually separate: a site whose only classifiable content is a closed range produces no
-mutant because the LADDER finds nothing to do, not because the PARSER gave up. Section 5 records
-this as a named deferral, and section 3's arm H is the fixture's proof that the deferral is real.
+A closed range (`X..Y`) is a RECOGNISED shape at this step. It classifies successfully, but no rule
+in section 2.3's ladder targets it, which is a distinct outcome from "unclassifiable," worth keeping
+conceptually separate: a site whose only classifiable content is a closed range produces no mutant
+because the LADDER finds nothing to do, not because the PARSER gave up. Section 5 records this as a
+named deferral, and section 3's arm H is the fixture's proof that the deferral is real.
+
+**Step 5: the parser validates its own output, not just its input.** This is part of the parser's
+contract, not a downstream check the operator adds afterward. The same function that runs steps 1-4
+also re-runs itself over whatever mutated content the section 2.3 ladder produces, before
+`generate()` is allowed to return a spec, and refuses the site (no mutant, not a corrupted one) if
+either check fails:
+
+- the mutated content does not itself classify under steps 2-4 (the same cheap-character refusal,
+  the same alternative split, the same four-way classification), or
+- any alternative in the RE-SPLIT mutated content is empty, or differs from its own `trim()`.
+
+This is what makes rule 4's rejoin (section 2.3) safe by construction rather than by inspection: a
+naive substring removal can leave a leading, trailing or doubled `|` behind (dropping `ABC` from
+`'ABC|%1'` by deleting only that substring yields `'|%1'`), and this step catches that before it
+ever reaches BC, by re-parsing the joined result exactly as if it were a fresh site. The same
+re-parse also catches any future rule, added to the ladder later, that emits a shape steps 1-4 would
+not have admitted as input: one function, already required to exist for the input side, doing the
+same job on the output side, rather than a second, hand-written check that could drift from the
+first.
 
 ### 2.3 The mutation ladder: one mutant per site
 
@@ -302,31 +422,48 @@ four rules, the site refuses.
    becomes `..X`. A CLOSED range never matches this rule: it is a different classification
    (section 2.2 step 4), not merely an unhandled case of this one.
 4. **Drop a placeholder-free alternative.** Only when the site has two or more alternatives. Drop
-   the first alternative (scanning left to right) that classifies as an atom with no `%` — a bare
-   token, never a placeholder. `'ABC|%1'` becomes `'%1'`; `'%1|ABC'` also becomes `'%1'`, because
-   "first" means the first ONE FOUND matching the predicate, not the literal first alternative in
-   the list regardless of shape. This reading is the one that makes the rule's own placeholder-
-   arity guarantee (section 2.4) hold no matter which position the qualifying alternative sits in,
-   and it is stated explicitly here because the brief's wording ("drop the first alternative
-   containing NO % placeholder") is ambiguous between the two readings and only one of them is
-   safe.
+   the first alternative (scanning left to right) that classifies as an atom with no `%`, a bare
+   token, never a placeholder, and re-join the remaining alternatives, in their original order,
+   with a single `|` between each pair. `'ABC|%1'` becomes `'%1'`; `'%1|ABC'` also becomes `'%1'`,
+   because "first" means the first ONE FOUND matching the predicate, not the literal first
+   alternative in the list regardless of shape. This reading is the one that makes the rule's own
+   placeholder-arity guarantee (section 2.4) hold no matter which position the qualifying
+   alternative sits in, and it is stated explicitly here because the brief's wording ("drop the
+   first alternative containing NO % placeholder") is ambiguous between the two readings and only
+   one of them is safe. The rejoin itself is a plain string join, not separately validated here:
+   section 2.2's step 5 is what catches a rejoin gone wrong (a leading, trailing or doubled `|` left
+   by dropping an edge alternative), by re-parsing the joined result before `generate()` returns it.
 
-**Why this order, not just this set.**
+**Why this order, not just this set.** Two different criteria decide this order, and they must not
+be blurred into one.
 
-- Negation flip first: it is the single largest sub-population by the census (95 of 288 sites), and
-  it is also the most semantically total change of the four: it inverts the ENTIRE truth table for
-  the atom's value, where a boundary shift only misclassifies rows exactly at one point and a
-  dropped alternative only removes one disjunct from a larger set. Putting the highest-population,
+- Negation flip first, on SEVERITY. It is the single largest sub-population by the census (95 of
+  288 sites), and it is also the most semantically total change of the four: it inverts the ENTIRE
+  truth table for the atom's value, where a boundary shift only misclassifies rows exactly at one
+  point and a dropped alternative only removes one disjunct from a larger set. Putting the
   highest-severity rule first means that when a filter happens to contain shapes matching more than
-  one rule, the mutation chosen is the one most likely to be caught by an ordinary assertion, not
-  the narrowest one available.
-- Boundary shift second: the remaining comparator population (roughly 39 sites by the reading in
-  section 0), and still a single-token rewrite like rule 1, so it is grouped with it ahead of the
-  two structurally different rules.
-- Open-range flip third: a smaller, rarer population (up to 14 sites carry any `..`, and only the
-  open-range subset of those qualifies; closed ranges are deferred). Still a single-token-class
-  rewrite (the `..` token's position moves, nothing else does), so it stays ahead of the
-  structurally different rule 4.
+  one rule, the mutation chosen is, at least in this one case, the one most likely to be caught by
+  an ordinary assertion.
+- Boundary shift second, NOT on severity. An earlier draft of this document also justified this
+  position by severity, but severity does not actually support it: reversing an open range's
+  direction (rule 3) changes more of the filtered set than shifting one boundary by one point (rule
+  2) does, so a severity ranking alone would place rule 3 above rule 2, not below it. Rule 2 sits
+  here instead because it shares rule 1's rewrite mechanism: both rewrite a single leading
+  comparator token and leave the atom untouched. Grouping same-mechanism rules together is a
+  legitimate ordering choice on its own, but it is a DIFFERENT criterion from rule 1's, and it has a
+  real cost that this document states rather than hides: at a filter like `'<%1|..%2'`, where one
+  alternative matches rule 2's shape and another matches rule 3's, the ladder fires rule 2 and emits
+  the narrower of the two available mutations, not the one rule 1's own severity argument would call
+  most likely to be caught. Practical exposure is small (at most 14 census sites carry any `..` at
+  all, so a site combining a comparator and a range is rarer still), but the justification for rule
+  2's position is mechanism-sharing, not severity, and this document no longer claims otherwise.
+- Open-range flip third: grouped with rules 1 and 2 as a single-token-class rewrite (the `..`
+  token's position moves, nothing else does), ahead of the structurally different rule 4, for the
+  same mechanism-sharing reason rule 2 is grouped with rule 1. Its own population (up to 14 sites
+  carry any `..`) is smaller than either comparator population, but population is not what places it
+  third rather than second: a comparator alternative and a range alternative cannot both be the SAME
+  alternative (rule 2 and rule 3 classify mutually exclusive shapes), so ranking rule 2 ahead of
+  rule 3 only matters, as above, for the rare filter that carries one of each.
 - Drop-alternative last: this is the one rule that removes a whole alternative rather than rewriting
   a token, so it is structurally the most disruptive of the four, and it applies only under a
   narrower precondition (two or more alternatives, at least one placeholder-free) than the other
