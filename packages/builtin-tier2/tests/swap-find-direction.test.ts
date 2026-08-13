@@ -137,6 +137,25 @@ describe("swapFindDirection", () => {
   });
 
   /**
+   * The implicit-receiver form (`Rec` implicit inside a table's own code) had no claim test at all
+   * for this operator, unlike `swap-modify-flag`'s pre-existing one for `Modify`. This pins both
+   * directions of it directly, inside a table's own trigger body.
+   */
+  it("claims the implicit-receiver form of FindFirst() inside a table trigger body", () => {
+    const src = `table 50190 "T3" { fields { field(1; "No."; Code[20]) { } } trigger OnInsert() begin FindFirst(); end; }`;
+    const specs = specsFor(src);
+    expect(specs.map((s) => s.before.text)).toEqual(["FindFirst()"]);
+    expect(specs[0]?.after.text).toBe("FindLast()");
+  });
+
+  it("claims the implicit-receiver form of FindLast() inside a table trigger body", () => {
+    const src = `table 50191 "T4" { fields { field(1; "No."; Code[20]) { } } trigger OnInsert() begin FindLast(); end; }`;
+    const specs = specsFor(src);
+    expect(specs.map((s) => s.before.text)).toEqual(["FindLast()"]);
+    expect(specs[0]?.after.text).toBe("FindFirst()");
+  });
+
+  /**
    * Section 2.5 of the R136 trio spec: a shadowing refusal test built over a single-file context
    * passes even if the shadowing guard were deleted, because `claimsRecordMethod`'s project-
    * declared-procedure rule can only fire over a context built across the WHOLE project. Each

@@ -211,6 +211,26 @@ describe("swap-modify-flag extension to Insert/Delete (R136)", () => {
     expect(specs.map((s) => s.after.text)).toEqual(["Rec.Insert(false)", "Rec.Delete(false)"]);
   });
 
+  /**
+   * The implicit-receiver form (`Rec` implicit inside a table's own code) was only ever exercised
+   * for `Modify` (the pre-existing test above, "claims the implicit-receiver form inside a table
+   * trigger body"). Nothing proved the R136 extension's two new method names claim that form too,
+   * so this pins both directly.
+   */
+  it("claims the implicit-receiver form of Insert(true) inside a table trigger body", () => {
+    const src = `table 50165 "T1" { fields { field(1; "No."; Code[20]) { } } trigger OnInsert() begin Insert(true); end; }`;
+    const specs = specsFor(src);
+    expect(specs.map((s) => s.before.text)).toEqual(["Insert(true)"]);
+    expect(specs[0]?.after.text).toBe("Insert(false)");
+  });
+
+  it("claims the implicit-receiver form of Delete(true) inside a table trigger body", () => {
+    const src = `table 50166 "T2" { fields { field(1; "No."; Code[20]) { } } trigger OnDelete() begin Delete(true); end; }`;
+    const specs = specsFor(src);
+    expect(specs.map((s) => s.before.text)).toEqual(["Delete(true)"]);
+    expect(specs[0]?.after.text).toBe("Delete(false)");
+  });
+
   it("still refuses Insert(false): the direction is true->false only", () => {
     const src = `codeunit 50158 "T" {
       procedure P()
