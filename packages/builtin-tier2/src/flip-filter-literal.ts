@@ -170,15 +170,27 @@ function plannedFilterMutation(node: ALSyntaxNode, ctx: SemanticContext): Filter
   if (!claimsRecordMethod(node, ctx, METHOD_NAME)) return null;
 
   const count = countArguments(node);
+  // Paired with the `literalNode === undefined` check below: red-checked TOGETHER (not
+  // separately — each alone stayed green), removing BOTH turns this into a crash reading
+  // `.kind` off `undefined` for `SetFilter(F)`. Either one alone is redundant with the other by
+  // construction (`exactArguments(node, count)` always returns an array of length `count`), so
+  // do not delete one on the strength of a red-check that only defeated the other.
   if (count < MIN_ARGUMENT_COUNT) return null;
 
   const args = exactArguments(node, count);
   if (args === null) return null;
   const literalNode = args[FILTER_TEXT_ARGUMENT_INDEX];
+  // Paired with the `count < MIN_ARGUMENT_COUNT` check above — see that comment.
   if (literalNode === undefined) return null;
+  // Paired with the `content === null` check below: red-checked TOGETHER, removing BOTH turns
+  // this into a crash inside `classifyContent`'s own `content.split("|")` for a non-literal
+  // second argument like `SetFilter(F, SomeVar)`. Each alone is currently redundant with the
+  // other (no other node kind's `.text` matches `unquoteALString`'s `'...'` shape today), so a
+  // red-check that defeats only one proves nothing about the pair.
   if (literalNode.kind !== ALNodeKind.text_literal) return null;
 
   const content = unquoteALString(literalNode.text);
+  // Paired with the `literalNode.kind !== ALNodeKind.text_literal` check above — see that comment.
   if (content === null) return null;
 
   const mutation = mutateFilterContent(content);
