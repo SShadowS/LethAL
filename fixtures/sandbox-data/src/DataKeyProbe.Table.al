@@ -24,6 +24,13 @@ table 79331 "Data Key Probe"
     // Assigns the key from a row count, the same shape as a No. Series assignment on real code.
     // Reached only through OnInsert, so Insert(false) skips the assignment entirely rather than
     // merely leaving it unrun on an already-keyed row.
+    //
+    // A SECOND, unrelated route to the identical platform-kill mechanism lives in this one `if`:
+    // `lethal.negate-conditional` on `"No." = ''` produces `"No." <> ''`, which is false on every
+    // freshly Init()'d record, so the assignment never runs either. Same duplicate-key error, same
+    // untagged platform artifact (R138) -- but via a different operator than arm K's own
+    // `swap-modify-flag` mutant on `Insert(true)`. Pre-commit this verdict deliberately rather than
+    // discovering it as a surprise at the live gate.
     trigger OnInsert()
     begin
         if "No." = '' then

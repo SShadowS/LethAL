@@ -1,0 +1,28 @@
+{
+  "id": "8a1e4f2d-6b3c-4a91-8d2f-5e9c7a0b3f61",
+  "name": "LethAL R136 ArmC Probe",
+  "publisher": "LethAL",
+  "version": "1.0.0.0",
+  "brief": "R136 arm C: does Delete(true) run OnDelete when the record was never Get/Find'd, only its primary key assigned?",
+  "description": "Throwaway probe, not for production use. Measures whether `Rec.\"No.\" := X; Rec.Delete(true);` (no preceding Get/Find) successfully deletes the row and runs OnDelete, the exact shape of codeunit 79314 \"Data Flag Ops\".DeleteWithTrigger in fixtures/sandbox-data.",
+  "privacyStatement": "",
+  "EULA": "",
+  "help": "",
+  "url": "",
+  "logo": "",
+  "dependencies": [],
+  "screenshots": [],
+  "idRanges": [
+    {
+      "from": 71570,
+      "to": 71580
+    }
+  ],
+  "resourceExposurePolicy": {
+    "allowDebugging": true,
+    "allowDownloadingSource": true,
+    "includeSourceInSymbolFile": true
+  },
+  "runtime": "13.0",
+  "features": []
+}
