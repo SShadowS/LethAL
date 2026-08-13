@@ -626,17 +626,28 @@ without running that mutant.
 
 **Fix.** Each colliding pair keeps its rule and its predicted verdict, but the SURVIVOR arm of each
 pair (arm B, arm D) carries one extra, inert alternative in its filter text purely to make the
-ORIGINAL call's bytes differ from its twin's: arm B's filter becomes `'<>%1|FLT-NONE'` and arm D's
-becomes `'<%1|FLT-NONE'`, where `FLT-NONE` is a tag no seeded row anywhere in this fixture carries.
-Call this a HASH decoy, to keep it distinct from the RESIDUE decoy section 3 adds to arms C, D, E
-and H below: the two exist for different reasons and neither substitutes for the other. An inert
-alternative that never matches a real row cannot change which rows either the baseline or the
-mutant filter selects, so it changes only the ORIGINAL call's hash, not either arm's predicted
+ORIGINAL call's bytes differ from its twin's: arm B's filter becomes `'<>%1|FLT-NONE'`. Arm D's
+decoy must be a NUMERIC alternative instead, such as `'<%1|999999999'`, not the same `'FLT-NONE'`
+text: a decoy alternative must be TYPE-VALID for the field it filters, or the arm's own BASELINE
+call raises before any mutation is even in play. Arm B's field (`"Main No."`) is `Code[20]`, where
+any string is a syntactically valid filter value; arm D's field (`"Entry No."`) is `Integer`, and
+Business Central's filter evaluator does not accept a non-numeric OR-alternative there. MEASURED
+directly (Task B6, `scripts/r134-filter-probe/`): `SetFilter("Entry No.", '<%1|FLT-NONE', N)`
+raises immediately, `The value "FLT-NONE" can't be evaluated into type Integer`, confirming that
+the first draft's `'<%1|FLT-NONE'` for arm D would have broken that arm's own baseline test, not
+merely produced an unmeasured mutant. `999999999` (or any Entry No. value no row anywhere in this
+fixture ever uses) is a valid Integer literal and is confirmed inert and non-throwing by the same
+probe. Call this a HASH decoy, to keep it distinct from the RESIDUE decoy section 3 adds to arms
+C, D, E and H below: the two exist for different reasons and neither substitutes for the other. An
+inert alternative that never matches a real row cannot change which rows either the baseline or
+the mutant filter selects, so it changes only the ORIGINAL call's hash, not either arm's predicted
 verdict. The ladder still finds the SAME rule at the SAME leading alternative: the fixed scan order
 tries rule 1 or rule 2 first and fires on the first matching alternative, `'<>%1'` or `'<%1'`,
-before it ever reaches `FLT-NONE`, which cannot classify as anything a rule wants to mutate on its
-own. This is Task B6's literal to spell out exactly; what this document fixes is that such a decoy
-must exist at all, and why.
+before it ever reaches the decoy alternative, which the ladder never considers once an earlier
+rule has already fired. This is Task B6's literal to spell out exactly; what this document fixes
+is that such a decoy must exist at all, why, and that its exact value must also be type-valid for
+the field it decorates: a static hash check passing is not proof of that, only running the filter
+against a live container is.
 
 Note this is NOT a mitigation of "vary the filter text between arms" in the general sense the first
 draft proposed (varying a field NAME, for instance, does not vary `astHash` when the field is an
@@ -678,7 +689,7 @@ pre-committed against the actual AL, the way the trio spec's sibling precommitme
 | **A** | `CountExcluding(MainNo)`: `Related.SetFilter("Main No.", '<>%1', MainNo); exit(Related.Count());`. Test seeds rows split across two `Main No.` groups of DIFFERENT sizes (for example one row tagged `'T-NEGA'`, two rows tagged `'T-NEGB'`) and calls with `MainNo = 'T-NEGA'`, asserting the count of the OTHER group | rule 1 (negation flip), KILL | Baseline counts the non-`'T-NEGA'` rows (2). The flip to `'=%1'` counts the `'T-NEGA'` rows instead (1). Different counts, assertion fires. **KILLED** |
 | **B** | `AnyExcluding(MainNo)`: `Related.SetFilter("Main No.", '<>%1\|FLT-NONE', MainNo); exit(Related.Count() > 0);`. The `\|FLT-NONE` alternative is a HASH decoy (section 2.7): inert, matched by no seeded row anywhere in this fixture, present only so this call's ORIGINAL text differs from arm A's and the two do not collide in `astSubtreeHash`. Test seeds at least one row in each of the two groups and asserts only that the excluded-group count is non-zero | rule 1, weak-assertion SURVIVOR | Baseline: count(!=MainNo) OR count(FLT-NONE, always 0) > 0 is true. Flip to `=`: count(==MainNo) OR count(FLT-NONE) is also > 0 by construction (at least one row was seeded in that group too); `FLT-NONE` contributes 0 rows under either reading, so it changes nothing about the verdict. An existence-only assertion cannot see which group was counted. **SURVIVED**, and this is the arm that proves the operator's kill signal actually depends on the assertion looking at a VALUE, not merely existence, the same discrimination class `swap-find-direction`'s arm F and `validate-to-assign`'s arm H each demonstrated for their own operators. Its `void-method-call` collateral (deleting the whole `SetFilter`, unscoped) counts every row in the table, which this design does not predict without B6's exact seeding |
 | **C** | `CountBelowThreshold(Threshold)`: `Related.SetRange("Main No.", 'FLT-C'); Related.SetFilter("Entry No.", '<%1', Threshold); exit(Related.Count());`. The `SetRange` scopes the count to this arm's own tag (finding 6): without it, the count would depend on every row in the table, not just this arm's own. Test seeds, within the `'FLT-C'` group, rows at three consecutive `Entry No.` values including one AT the threshold (for example entries N, N+1, N+2, called with `Threshold = N+2`), plus one RESIDUE decoy row in a DIFFERENT `Main No.` group with an `Entry No.` below the threshold, proving the scope is doing real work: an unscoped filter would also have counted that decoy | rule 2 (boundary shift), KILL | Baseline, scoped to `'FLT-C'`, `<N+2` matches entries N and N+1 (2). Shifted to `<=N+2`, it also matches N+2 (3). Different counts. **KILLED**, specifically because a row sits exactly AT the boundary, the mechanism this arm exists to demonstrate. The scope makes this verdict robust to residue from an aborted run, which an unscoped filter would not be |
-| **D** | `CountBelowThresholdSparse(Threshold)`: `Related.SetRange("Main No.", 'FLT-D'); Related.SetFilter("Entry No.", '<%1\|FLT-NONE', Threshold); exit(Related.Count());`. The `\|FLT-NONE` alternative is arm C/D's HASH decoy (section 2.7), needed because this call would otherwise be byte-identical to arm C's `SetFilter`. Test seeds, within the `'FLT-D'` group, rows with a GAP at the threshold (for example entries N and N+2 only, no N+1, called with `Threshold = N+1`), plus a residue decoy row in a different `Main No.` group below the threshold | rule 2, equivalence SURVIVOR | Baseline `<N+1` matches only N (1). Shifted to `<=N+1` also matches only N, since no row sits at N+1. Identical counts. **SURVIVED**, the boundary-shift analogue of `swap-find-direction`'s "equivalent whenever the filtered set holds zero or one row" class: here the mutant is equivalent whenever no row sits exactly at the shifted boundary, independent of how much data exists elsewhere. The `void-method-call` collateral (deleting the `SetFilter`, leaving the `SetRange` scope) counts all of the arm's own rows (2), differing from baseline's 1: **KILLED**, and, because of the scope, that verdict no longer depends on what else happens to be in the table |
+| **D** | `CountBelowThresholdSparse(Threshold)`: `Related.SetRange("Main No.", 'FLT-D'); Related.SetFilter("Entry No.", '<%1\|999999999', Threshold); exit(Related.Count());`. The `\|999999999` alternative is arm C/D's HASH decoy (section 2.7), needed because this call would otherwise be byte-identical to arm C's `SetFilter`. NUMERIC, not the `'FLT-NONE'` text this document's first draft used for it: `"Entry No."` is `Integer`, and a non-numeric OR-alternative there makes `SetFilter` raise at the call itself, before this arm's baseline count ever runs (measured, Task B6, `scripts/r134-filter-probe/`). Test seeds, within the `'FLT-D'` group, rows with a GAP at the threshold (for example entries N and N+2 only, no N+1, called with `Threshold = N+1`), plus a residue decoy row in a different `Main No.` group below the threshold | rule 2, equivalence SURVIVOR | Baseline `<N+1` matches only N (1). Shifted to `<=N+1` also matches only N, since no row sits at N+1. Identical counts. **SURVIVED**, the boundary-shift analogue of `swap-find-direction`'s "equivalent whenever the filtered set holds zero or one row" class: here the mutant is equivalent whenever no row sits exactly at the shifted boundary, independent of how much data exists elsewhere. The `void-method-call` collateral (deleting the `SetFilter`, leaving the `SetRange` scope) counts all of the arm's own rows (2), differing from baseline's 1: **KILLED**, and, because of the scope, that verdict no longer depends on what else happens to be in the table |
 | **E** | `CountUpToBound(Bound)`: `Related.SetRange("Main No.", 'FLT-E'); Related.SetFilter("Entry No.", '..%1', Bound); exit(Related.Count());`. Test seeds, within the `'FLT-E'` group, rows strictly below AND above the bound but NONE exactly at it (for example entries N-2, N-1, N+1, called with `Bound = N`), so the baseline does not depend on section 0's unmeasured range-inclusivity claim (finding 4), plus a residue decoy row in a different `Main No.` group at or below N | rule 3 (open-range flip), KILL | Baseline `..N` matches N-2 and N-1 (2) under EITHER an inclusive or exclusive reading at the bound, since no seeded row sits exactly at N. Flipped to `N..`, only N+1 matches (1). Different counts. **KILLED**, and this verdict no longer rests on the range-inclusivity claim to be correct. The `void-method-call` collateral (deleting the `SetFilter`, leaving the `SetRange` scope) counts all 3 of the arm's own rows, differing from baseline's 2: **KILLED** as well, not the unpredictable survivor an unscoped, at-the-bound seeding would have produced |
 | **F** | (no dedicated arm; recorded as a note rather than a fixture procedure, to avoid adding a fourth near-duplicate procedure for a class already demonstrated twice) The same equivalence class arm D demonstrates for rule 2 applies to rule 3 whenever a seeded set has no row exactly at the pivot, or exactly one row (which satisfies both `..X` and `X..` at once). Task B6 may add a dedicated arm for this if the adversarial review wants live proof of the range case specifically rather than an inference from arm D's boundary case | rule 3, equivalence class (documented, not separately fixtured) | not applicable, no mutant scored under this row |
 | **G** | `CountDecoyOrTarget(MainNo)`: `Related.SetFilter("Main No.", 'FLT-G-DECOY\|%1', MainNo); exit(Related.Count());`. Test seeds rows in an `'FLT-G-DECOY'` group and a separate group tagged by the passed-in `MainNo` (for example two `'FLT-G-DECOY'` rows and three rows tagged `'FLT-G-TARGET'`, called with `MainNo = 'FLT-G-TARGET'`). Renamed from the first draft's `'T-DECOY'`/`'T-DROP'`, which collided with the existing `CountForMainIgnoresDecoys` test's own `'T-DECOY'` seeding (finding 5): under residue from an aborted run this arm's baseline count would have picked up that other test's rows too | rule 4 (drop placeholder-free alternative), KILL | Baseline matches `'FLT-G-DECOY'` OR `MainNo` rows (2 + 3 = 5). Dropping the placeholder-free `'FLT-G-DECOY'` alternative leaves only `'%1'`, matching just the `MainNo` rows (3). Different counts. **KILLED**, and the arm that shows WHY the rule's placeholder-free restriction is what keeps the call's own argument list untouched: `'FLT-G-DECOY'` was never backed by a call argument, so removing it from the filter text requires no change anywhere else in the call. Its `void-method-call` collateral (deleting the whole `SetFilter`, unscoped) counts every row in the table, which in an isolated run happens to equal the same 5 rows the filter already matched: a predicted **SURVIVOR**, named here rather than left implicit as the first draft left it |
@@ -741,14 +752,30 @@ The `void-method-call` collateral at the `SetFilter` span itself (deleting only 
 any `SetRange` scope in place) is worth naming per arm, because the first draft of this document
 named it for arm H alone and left a reader to discover the rest for themselves (finding 6):
 
-- **Arms A, C and D: predicted KILLED.** Deleting the filter admits at least one row the filtered
-  baseline excluded (arm A's other `Main No.` group; arm C's and D's row past the shifted boundary).
-- **Arms B, E, G and H: predicted SURVIVED.** In each of these arms, deleting the filter counts
+- **Arms A, C, D and E: predicted KILLED.** Deleting the filter admits at least one row the
+  filtered baseline excluded (arm A's other `Main No.` group; arm C's and D's row past the shifted
+  boundary; arm E's row past the open-range bound). Arm E's place in this bucket corrects an error
+  in this document's first draft, which grouped it under the SURVIVED bucket below on the generic
+  "the filter's own alternatives already cover the arm's full seeded set" reasoning. That reasoning
+  does not hold for arm E: finding 4's reseeding (above) deliberately put one of arm E's own
+  `FLT-E`-tagged rows (N+1) on the far side of the bound from the other two, specifically so rule 3
+  has something to flip. The baseline's `..N` filter does not match that row, so deleting the
+  filter (while the `SetRange` scope keeps all three `FLT-E` rows in view) admits it, the identical
+  mechanism that kills arms C and D. Confirmed against the committed fixture (Task B6): baseline 2,
+  deletion mutant 3.
+- **Arms B, G and H: predicted SURVIVED.** In each of these arms, deleting the filter counts
   exactly the same rows the filter already matched, either because the assertion is existence-only
-  (arm B) or because the filter's own alternatives already cover the arm's full seeded set (E, G,
-  H). This is not a defect in the arm; it is a fact about what deleting a filter costs when the
-  filter was not excluding anything the covering test happened to seed. Task B6's exact seeding is
-  what turns each "predicted" into a scored verdict.
+  (arm B) or because the filter's own alternatives already cover the arm's full seeded set (G, H).
+  This is not a defect in the arm; it is a fact about what deleting a filter costs when the filter
+  was not excluding anything the covering test happened to seed. Task B6's exact seeding is what
+  turns each "predicted" into a scored verdict. Task B6 also checked whether the same reseeding
+  discipline that broke arm E's bucketing could have broken G's or H's: it does not. G carries no
+  `SetRange` scope at all (finding 6 does not apply to it), and BOTH of its tags are alternatives
+  the filter itself matches, by construction, so there is no row outside what the filter already
+  covers. H's own `FLT-H`-tagged rows are, by the arm's own design, all seeded WITHIN the closed
+  range it demonstrates, and its residue decoy carries a DIFFERENT `Main No.` tag, so it is excluded
+  by the `SetRange` scope regardless of where its Entry No. sits, unlike arm E's own row, which
+  carries the SAME tag as the rest of that arm's set and sits outside the filter on purpose.
 
 Arm H may also show a `swap-call-arguments` mutant if Task B6's exact literal, despite finding 7's
 fix, still ends up with two same-typed bare identifiers somewhere in the call. This design's own
