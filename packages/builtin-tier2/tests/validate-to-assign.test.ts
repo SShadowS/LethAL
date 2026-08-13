@@ -127,11 +127,34 @@ describe("validateToAssign", () => {
     expect(specsFor(src)).toEqual([]);
   });
 
-  it("refuses an unproven receiver", () => {
+  /**
+   * Named for what it actually exercises: `Mystery: Variant` is a DECLARED, resolvable receiver of
+   * a non-record type, so this test is sensitive to `claimsRecordMethod`'s non-record guard
+   * (`receiver.kind === "non-record"`), not its unresolved-receiver guard. An earlier version of
+   * this test was named "refuses an unproven receiver", which overpromised: it never touched the
+   * genuinely-unresolved path at all. That path gets its own test directly below.
+   */
+  it("refuses a receiver declared with a non-record type (Variant)", () => {
     const src = `codeunit 50208 "T" {
       procedure P(Mystery: Variant; NewName: Text)
       begin
         Mystery.Validate(Name, NewName);
+      end;
+    }`;
+    expect(specsFor(src)).toEqual([]);
+  });
+
+  /**
+   * The genuinely unresolved case (`claimsRecordMethod`'s `receiver.kind === "unresolved"` guard):
+   * `Unknown` is never declared anywhere in this procedure (no var, no parameter, no object
+   * global), which is the shape `receiver.test.ts`'s own "REFUSES when the receiver cannot be
+   * resolved at all" test uses for `TestField`. This operator gets the same case for `Validate`.
+   */
+  it("refuses a receiver that cannot be resolved at all", () => {
+    const src = `codeunit 50216 "T" {
+      procedure P(NewName: Text)
+      begin
+        Unknown.Validate(Name, NewName);
       end;
     }`;
     expect(specsFor(src)).toEqual([]);
@@ -209,8 +232,13 @@ describe("validateToAssign", () => {
    * passes even if the shadowing guard were deleted, because `claimsRecordMethod`'s project-declared-
    * procedure rule can only fire over a context built across the WHOLE project. `Validate` gets its
    * own refusal proven over a `projectContextFor` context, paired with a "still CLAIMS" counterweight.
+   *
+   * This block covers the QUALIFIED-receiver form only (`Other.Validate(...)`, `Other: Record
+   * "..."`). `claimsRecordMethod` has a SECOND shadowing path for the implicit-receiver form (the
+   * `target.receiver === null` branch, reached when a table's own code calls `Validate` with no
+   * receiver at all); see "implicit-receiver form shadowing" below for that path's own tests.
    */
-  describe("shadowing refusal across files", () => {
+  describe("qualified-form shadowing refusal across files", () => {
     function specsForProject(sources: readonly string[]) {
       const roots = sources.map((s) => parseClean(s));
       const ctx: SemanticContext = projectContextFor(roots);
@@ -235,6 +263,87 @@ describe("validateToAssign", () => {
       const table = `table 50215 "Plain Table Val1" { fields { field(1; "No."; Code[20]) { } } }`;
       const specs = specsForProject([caller("Plain Table Val1"), table]);
       expect(specs.map((s) => s.before.text)).toEqual(["Other.Validate(Name, NewName)"]);
+    });
+  });
+
+  /**
+   * `claimsRecordMethod`'s implicit-receiver branch (`target.receiver === null`) has its OWN
+   * shadowing rule, checked two ways: does the enclosing table itself declare a procedure of that
+   * name (`declaresProcedure`), or does a `tableextension` of it (`projectDeclaresProcedureOnTable`,
+   * the same helper the qualified-form block above exercises)? Neither was tested by any of the
+   * three R136 trio operators for their own new method names (an independent audit found this: the
+   * guard is real and method-name-agnostic, and IS tested generically elsewhere with `TestField`/
+   * `SetRange`, but no trio test proved `Insert`/`Delete`/`FindFirst`/`FindLast`/`Validate` go
+   * through this second path correctly). This block closes that gap for `Validate`.
+   *
+   * All three cases use `projectContextFor`, matching this file's own convention for every other
+   * shadowing test, even though the first case below (the table shadowing itself) does not strictly
+   * need cross-file resolution: `declaresProcedure` reads the SAME object node's own members
+   * directly, so a single-file context sees it too. The second case (a `tableextension` in a
+   * separate source declaring the procedure) is the one that genuinely cannot fire without a
+   * project-wide context, mirroring why the qualified-form block above requires it.
+   */
+  describe("implicit-receiver form shadowing", () => {
+    function specsForProject(sources: readonly string[]) {
+      const roots = sources.map((s) => parseClean(s));
+      const ctx: SemanticContext = projectContextFor(roots);
+      const calls: ALSyntaxNode[] = roots.flatMap((root) =>
+        findAll(root, ALNodeKind.procedure_call),
+      );
+      return calls
+        .filter((n) => validateToAssign.targets(n, ctx))
+        .flatMap((n) => validateToAssign.generate(n, ctx));
+    }
+
+    it("REFUSES the implicit-receiver form when the enclosing table declares its own Validate procedure", () => {
+      const table = `table 50217 "Data Trigger Probe Test 3" {
+        fields {
+          field(1; "No."; Code[20]) { }
+          field(2; Level; Integer) { }
+        }
+        procedure Bump(V: Integer)
+        begin
+          Validate(Level, V);
+        end;
+        procedure Validate(FieldNo: Integer; NewValue: Integer)
+        begin
+        end;
+      }`;
+      expect(specsForProject([table])).toEqual([]);
+    });
+
+    it("REFUSES the implicit-receiver form when a tableextension of the enclosing table declares Validate", () => {
+      const table = `table 50218 "Data Trigger Probe Test 4" {
+        fields {
+          field(1; "No."; Code[20]) { }
+          field(2; Level; Integer) { }
+        }
+        procedure Bump(V: Integer)
+        begin
+          Validate(Level, V);
+        end;
+      }`;
+      const tableExtension = `tableextension 50219 "Ext Declares Validate" extends "Data Trigger Probe Test 4" {
+        procedure Validate(FieldNo: Integer; NewValue: Integer)
+        begin
+        end;
+      }`;
+      expect(specsForProject([table, tableExtension])).toEqual([]);
+    });
+
+    it("still CLAIMS the implicit-receiver form when nothing declares such a procedure", () => {
+      const table = `table 50220 "Data Trigger Probe Test 5" {
+        fields {
+          field(1; "No."; Code[20]) { }
+          field(2; Level; Integer) { }
+        }
+        procedure Bump(V: Integer)
+        begin
+          Validate(Level, V);
+        end;
+      }`;
+      const specs = specsForProject([table]);
+      expect(specs.map((s) => s.before.text)).toEqual(["Validate(Level, V)"]);
     });
   });
 });
