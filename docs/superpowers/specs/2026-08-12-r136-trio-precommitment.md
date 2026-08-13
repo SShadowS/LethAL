@@ -16,6 +16,13 @@ fixture's own review fix round added a comment to `DataKeyProbe.Table.al` and sh
 down seven lines without changing anything about them. Arm plus operator plus text is the key that
 survives both.
 
+> **READ THE AMENDMENT AT THE END OF THIS FILE BEFORE USING THIS TABLE.** Run 1 happened on
+> 2026-08-13. Forty-four of the 51 predictions were fairly measured and all forty-four matched. Seven
+> were not fairly measured, because arm K's covering test was red at baseline. The fixture has since
+> been fixed, one prediction is re-issued DIFFERENTLY on fixture-driven grounds, and two rows have new
+> identities. Everything above this line is left exactly as it was written before run 1, so that what
+> was predicted the first time stays visible. The amendment says what changed and why.
+
 ## Why the fixture grew at all
 
 Three operator changes landed in this wave and not one of them had a live site.
@@ -470,3 +477,255 @@ emptied body returns 0 or `false`), a negation of a value the covering test asse
   only: `Count()` inside `OnInsert` returning the pre-insert count, and `Delete(false)` locating a row
   by primary key alone. Whichever way the gate answers each, the answer belongs in the report as a
   platform fact, not absorbed into a verdict.
+
+---
+
+# Amendment, written BEFORE run 2
+
+Date: 2026-08-13. Same gate, same fixture, same container. Run 1 has happened. This amendment is
+committed BEFORE the next run, for the same reason the original was committed before the first: a
+prediction edited after seeing results is a rationalisation, and the only defence is the commit order.
+
+Everything above this line is untouched. Nothing in the original table was rewritten, deleted or
+re-scored. This section says what run 1 proved, what it could not test, what it contradicted, and
+what is re-issued. **The two kinds of change are kept apart on purpose:** a re-issued prediction is
+legitimate only when the FIXTURE changed under it, and is labelled fixture-driven. A prediction is
+never changed to agree with an observation, which would be retuning.
+
+## What run 1 PROVED
+
+Aggregate measured: `killed=154 survived=23 noCoverage=10 untargetedTriggers=2`, plus 5 mutants
+recorded `error`. The arithmetic, which reconciles exactly:
+
+| bucket | session total | pre-existing 141 | new 51 |
+| --- | --- | --- | --- |
+| killed | 154 | 113 | **41** |
+| survived | 23 | 18 | **5** |
+| no-coverage | 10 | 10 | **0** |
+| error | 5 | 0 | **5** |
+| total | 192 | 141 | **51** |
+
+The pre-existing column is byte-for-byte the frozen baseline, so **no pre-existing mutant moved**,
+which is the first thing this wave had to not break and the `swap-modify-flag` MINOR version bump's
+identity claim measured live rather than read out of the hashing source.
+
+Of the 51, **seven were not fairly measured** (rows 26 to 32, treated below) and **forty-four were**.
+For those forty-four the original table predicted **41 killed and 3 survived**. Measured: **41 killed
+and 3 survived. Forty-four of forty-four, exact.** The three survivors are the three the wave exists
+to demonstrate: arm F's `swap-find-direction`, arm B's `swap-modify-flag` and arm H's
+`validate-to-assign`. Both same-span discriminating pairs behaved as designed, each producing two
+different verdicts at one span.
+
+So the claims the wave was built to settle are settled for every arm except K: all three operators
+claim their sites, emit artifacts that compile, are attributed and scored; the flag extension works on
+`Insert` and on `Delete`, each by its own arm; the find swap kills in both directions and in expression
+position; `validate-to-assign` works in the qualified and the implicit-receiver form. Arm I attributed,
+so **uncertainty 1, the leading risk in the original document, resolved in favour of the prediction**: a
+table procedure does get a member-level coverage entry here, and the alternative arithmetic of
+`154 / 178` did not happen. Uncertainties 2 and 3 also resolved in favour of their predictions, and the
+decision to unflag arm F was correct.
+
+## What run 1 did NOT test, and why
+
+One red test at baseline made seven verdicts unearnable.
+`Data Tests.DoubleInsertWithoutKeyTriggerRaises`, arm K's covering test, failed on UNMUTATED code. That
+single fact split the seven two ways, and the split is itself the most useful thing in this amendment.
+
+**Five recorded `error`, honestly: rows 26, 27, 28, 29 and 30**, all in
+`Data Flag Ops.InsertTwiceWithKeyTrigger`, all with the note `unsupported test type: mutant covered
+only by test(s) that did not pass at baseline (Data Tests.DoubleInsertWithoutKeyTriggerRaises)`.
+Member-level attribution WORKED here: it found arm K's test, saw it was not green, and refused to
+score rather than inventing a verdict. That is the correct behaviour and it is what a reader wants.
+
+**Two recorded `survived`, misleadingly: rows 31 and 32**, the two trigger mutants in
+`Data Key Probe`. These predicted `killed` and came back `survived`, and **the observation did not
+test the prediction.** The chain: attribution needs a coverage observation from a GREEN baseline test;
+`Data Key Probe`'s only covering test was red; so its object-level entry was empty; so both mutants
+took `coverageFilter`'s FALLBACK 2 and ran against every GREEN test; and the all-green set by
+definition excludes the one red test. No green test invokes arm K, so no test in the set could reach
+`Data Key Probe`'s `OnInsert` at all. Both mutants were scored against tests that cannot execute them.
+That is not a survival. It is a mutant matched against nothing and reported as if the suite had looked
+at it, which is the empty-versus-empty confirmation this project is named for, arriving as a `survived`
+verdict instead of as an error.
+
+**This contrast is a product finding, not a fixture story.** One root cause, one red test, produced an
+honest `error` for the five PROCEDURE mutants and a misleading `survived` for the two TRIGGER mutants,
+purely because the trigger path has a fallback the procedure path does not. Fallback 2 exists so an
+unplaceable trigger runs everything rather than being dropped from the score, and that reasoning is
+sound when a green test somewhere touches the object. When the only test that could reach the object is
+RED, the fallback converts "we cannot know" into a scored `survived`. **The narrow fix would be for
+fallback 2 to decline to score when the object's only covering tests are non-green, the way
+member-level attribution already declines.** This is not filed as a roadmap row here only because this
+commit is scoped to one document; it should be filed, and it is the most valuable thing run 1 produced.
+
+**`untargetedTriggerCount` came back 2, and this document had already named that exact number and those
+exact two rows.** The amendment made at review, which added all three failure arithmetics in advance, is
+what turned an unexpected number into a labelled branch instead of a mystery. The number and the rows
+were predicted; the CAUSE was one level deeper than either mechanism the document listed. It had listed
+"the observation is not reported" and "the observation is not keyed to the object". The actual cause is a
+third: **the test that would have reported the observation was not GREEN.** Recorded here as the third
+mechanism, since it is the one that will recur.
+
+## What run 1 CONTRADICTED
+
+Two premise findings. Both are written down as contradictions rather than absorbed.
+
+**1. The `Count()` premise was misjudged as cosmetic, and the judgement was wrong.** The original
+document said `Count()` inside `OnInsert` returning the pre-insert count was "cosmetic, since either
+reading leaves the baseline green and every arm K verdict unchanged". The baseline was NOT green, so the
+sentence assumed the very thing that failed. The premise is now load bearing for the baseline, in this
+precise form: **`Count()` must ADVANCE between the two iterations**, because if it returned the same
+value twice both iterations would build the same key and the baseline would be red. The specific
+starting value is what is now MEASURED, and the evidence that pins it is the pre-fix failure message,
+which named `No.='KEY-1'`: iteration one produced `'KEY-1'`, so `Count()` answered 0 before the insert.
+The three green passes after the fix confirm the second key differs from the first, but on their own
+they could not have separated a 0-then-1 counter from a 1-then-2 one, since both give distinct keys.
+Naming which evidence settles which half is the point of recording this.
+
+**2. The mechanism that actually broke was a premise nobody had written down at all.** `Record.Init()`
+does not reset a primary key field on a variable already used for a prior `Insert()` in the same
+transaction; `Clear()` does. Measured against Cronus283, indexed in `docs/measurements/README.md`, probe
+at `scripts/r136-armk-count-probe/`. Three different counting mechanisms were substituted and all three
+failed identically, which is what ruled the counter out and pointed at `Init()`.
+
+The sharp lesson is not that a premise was missed. It is **which** premise, and how close this document
+came. Uncertainty 4 flagged exactly one side of a two-sided assumption: that `OnInsert`'s key assignment
+propagates back to the caller's record variable. That side was CONFIRMED. What the document never wrote
+down is the corollary the BASELINE silently depended on: that `Init()` then undoes it on the next
+iteration. **Confirming the flagged half is precisely what broke the fixture**, because a key that
+propagates back and is not cleared is a key that collides. Six platform premises were enumerated and the
+one that mattered was a seventh, sitting on the other side of a premise already on the list. "I listed my
+premises" is not the same as "I listed all of them", and the reliable way to find the rest is to ask, of
+every premise on the list, what its inverse would have to be for the BASELINE to pass.
+
+## The fix, and what it costs
+
+Commit `267d98d` adds one statement to arm K, `KeyProbe."No." := '';`, immediately after
+`KeyProbe.Init();`. `Init()` and `Insert(true)` are untouched. Verified live, 3 of 3 stable passes.
+
+A census from a worktree pinned at the fix confirms the population is unchanged: **192 deployed, 207
+raw, 15 displaced, still the same 51 new mutants with the same nine per-operator counts, and no new
+mutation site anywhere.** A plain assignment is claimed by no registered operator, so the added
+statement creates no mutant of its own; it appears in the census only nested inside two block texts.
+
+**Two rows re-key, not one.** Row 26's span CONTAINS row 27's, so anything that changes the loop body
+changes the procedure body too. Quoted verbatim from the census artifact:
+
+Row 26, `lethal.empty-block`, arm K's whole procedure body:
+
+```
+OLD before-text:
+  begin\n        for i := 1 to 2 do begin\n            KeyProbe.Init();\n            KeyProbe.Insert(true);\n        end;\n    end
+NEW before-text:
+  begin\n        for i := 1 to 2 do begin\n            KeyProbe.Init();\n            KeyProbe."No." := '';\n            KeyProbe.Insert(true);\n        end;\n    end
+```
+
+Row 27, `lethal.empty-block`, arm K's for-loop body:
+
+```
+OLD before-text:
+  begin\n            KeyProbe.Init();\n            KeyProbe.Insert(true);\n        end
+NEW before-text:
+  begin\n            KeyProbe.Init();\n            KeyProbe."No." := '';\n            KeyProbe.Insert(true);\n        end
+```
+
+Rows 28, 29 and 30 keep their exact before and after text; only their line numbers moved.
+
+## Re-issued predictions for run 2
+
+Seven rows. Each is marked **fixture-driven** (the AL under it changed, so a different prediction is
+legitimate) or **unchanged** (the prediction stands as originally written). Rows 1 to 25 and 33 to 51
+are not re-issued: they were fairly measured and they matched.
+
+| row | operator and site | re-issued prediction | label | reasoning |
+| --- | --- | --- | --- | --- |
+| 26 | `lethal.empty-block`, arm K's procedure body | **survived** | **unchanged verdict, NEW IDENTITY** | the body never runs, nothing is inserted, nothing raises, and the test asserts nothing there is to fail. Identical to the original reasoning. Only the baseline key moves, because the before text changed |
+| 27 | `lethal.empty-block`, arm K's loop body | **survived** | **unchanged verdict, NEW IDENTITY** | the loop turns twice doing nothing. Same as row 26, one nesting level in |
+| 28 | `lethal.void-method-call`, `KeyProbe.Init()` deleted | **survived**, was `killed` | **FIXTURE-DRIVEN CHANGE** | derived below. `Init()` is now observably a no-op on both iterations, so deleting it cannot change any observable, and the mutant is EQUIVALENT rather than merely unnoticed |
+| 29 | `lethal.void-method-call`, `KeyProbe.Insert(true)` deleted | **survived** | **unchanged** | with the insert gone the loop turns twice doing only `Init()` and the blank assignment. No row lands, nothing raises. One extra harmless statement now runs; the mechanism is otherwise word for word the original |
+| 30 | `lethal.swap-modify-flag`, `Insert(true)` to `Insert(false)` | **killed** by duplicate key, PLATFORM ARTIFACT, untagged | **unchanged, and now MORE robust** | `OnInsert` never runs, so the key is never assigned. The first blank-key insert succeeds, the second raises. The fix does not touch this: the key is now blank both because the trigger is skipped AND because the arm blanks it explicitly. This row is what R138 rests on |
+| 31 | `lethal.empty-block`, `Data Key Probe`'s `OnInsert` body | **killed** by duplicate key, PLATFORM ARTIFACT, untagged | **unchanged, RE-ISSUED AGAINST A CONTRARY OBSERVATION** | emptying the trigger removes the key assignment, so the key stays blank both iterations; first insert succeeds, second raises. Run 1's `survived` was scored against a test set that cannot reach this trigger, so it did not test this. Not retuned |
+| 32 | `lethal.negate-conditional`, `"No." = ''` to `"No." <> ''` | **killed** by duplicate key, PLATFORM ARTIFACT, untagged | **unchanged, RE-ISSUED AGAINST A CONTRARY OBSERVATION** | the negated guard is false on a blank key, so the assignment never runs; same blank key, same duplicate. Same reason as row 31 for why run 1 did not test it |
+
+Rows 31 and 32 also gain a note the original could not have: their mechanism never depended on `Init()`
+blanking anything, because under either mutant the key is never ASSIGNED in the first place. So the fix
+neither helps nor hurts them; it only makes them reachable.
+
+### Row 28, derived rather than asserted
+
+The original mechanism was: after `Insert(true)` the record variable carries the trigger-assigned key,
+so with `Init()` deleted the second iteration enters `OnInsert` with the key already set, the blank
+guard is false, and the second insert collides. **That mechanism no longer holds, and the reason is the
+fix, not the measurement.**
+
+Arm K's loop body is now `KeyProbe.Init(); KeyProbe."No." := ''; KeyProbe.Insert(true);`. Delete
+`Init()` and the body becomes `KeyProbe."No." := ''; KeyProbe.Insert(true);`. Iteration one blanks the
+key, `OnInsert` sees blank, assigns `'KEY-1'`, the row lands. Iteration two blanks the key AGAIN,
+unconditionally, because the assignment is not what `Init()` was doing and does not depend on it.
+`OnInsert` sees blank, assigns `'KEY-2'`, the row lands. No collision, nothing raises, and the test
+asserts nothing. **Verdict: survived.**
+
+It is worth saying WHY this is airtight rather than probable. `table 79331 "Data Key Probe"` has exactly
+ONE field, `"No."`. `Init()`'s whole job is to reset fields to defaults, and here there is one field to
+reset, which the explicit assignment now resets anyway. On iteration one the variable is fresh, so every
+field is already at its default and `Init()` has nothing to do. On iteration two `Init()` is measured NOT
+to reset a key used for a prior insert, so it has nothing it CAN do. **`Init()` is therefore a no-op on
+both iterations, and deleting a no-op is undetectable by any test, not merely by this one.** Row 28 moves
+from "killed by a platform artifact" to "an equivalent mutant", which is the same category as the
+`Init()` survivors already frozen elsewhere in this fixture, where every field is assigned immediately
+after and R72 recorded that manufacturing an assertion to kill one would be testing the fixture.
+
+**Two consequences follow and both must be carried, not left implicit.**
+
+First, **the untagged platform-artifact routes drop from FOUR to THREE**: rows 30, 31 and 32. Row 28 is
+no longer one of them. Uncertainty 5, the blank-key-insertable premise, now covers exactly those three
+rows, and it is unchanged in substance.
+
+Second, **arm K now has FOUR surviving mutants and one kill**, where the original predicted three and
+two. That is a better control set, not a worse one: rows 26, 27, 28 and 29 all survive because the arm
+inserts nothing or does nothing observable, and row 30 alone kills, so the kill cannot be attributed to
+the arm merely being reached. The `empty-block` control the fixture comment names is now one of four
+controls saying the same thing.
+
+## Aggregate prediction for run 2
+
+| figure | frozen before the wave | original prediction | **run 2 prediction** |
+| --- | --- | --- | --- |
+| deployed mutants | 141 | 192 | **192** |
+| raw specs | 154 | 207 | **207** |
+| displaced | 13 | 15 | **15** |
+| `killed` | 113 | 158 | **157** |
+| `survived` | 18 | 24 | **25** |
+| `noCoverage` | 10 | 10 | **10** |
+| `error` | 0 | 0 | **0** |
+| `mutationScore` | 113 / 131 | 158 / 182 | **157 / 182** |
+
+Of the 51: **44 killed, 7 survived, 0 no-coverage, 0 error.** 113 plus 44 is 157; 18 plus 7 is 25;
+157 plus 25 plus 10 is 192, the deployed count. The score `157 / 182` does not reduce, since 157 is
+prime and 182 is 2 times 7 times 13, and it is about 0.8626.
+
+**The whole difference from the original 158 / 24 / 10 is row 28, one mutant moving from killed to
+survived.** Nothing else moved. A reader can verify that claim from those two rows of the table alone
+without re-deriving anything, which is the property this amendment is shaped to give them.
+
+## What must ALSO hold in run 2, updated
+
+The original list stands, with these changes:
+
+- **`error` must be 0.** Rows 26 to 30 must be scored, not skipped. A repeat of `unsupported test type`
+  means arm K's test is red again, and the FIRST thing to check is whether the published test app is
+  the fixed one rather than re-deriving the platform behaviour.
+- **Exactly ONE baseline failure, `Data Tests.PageActionComputesNonZero`.** Run 1 had two. Arm K's test
+  must now be green, which was verified live 3 of 3 at the fix.
+- **`untargetedTriggerCount` back to 0**, and rows 31 and 32 must attribute at OBJECT level rather than
+  taking the all-green fallback. A repeat of 2 with the baseline green would be a different and more
+  interesting failure than run 1's, because the red-test cause would be gone. The three failure
+  arithmetics stated earlier still apply, now with the third mechanism added to the two the original
+  named.
+- **`platformArtifactKills` stays 1**, and the count of untagged platform-artifact kills this wave adds
+  is now **three**, rows 30, 31 and 32. Run 1 did not report that figure back into this document; run 2
+  must confirm it rather than let it be assumed.
+- **The assertion screen must still report `vacuous`.** Same position, and likewise unconfirmed from
+  run 1 in the record available here, so run 2 must state it.
+- **Rows 26 and 27 will not match the previous baseline by key**, because their before text changed.
+  That is expected, and it is the ONLY expected key change; any other re-keyed row is a finding.
