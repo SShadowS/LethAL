@@ -30,7 +30,7 @@ describe("unquoteALString / quoteALString", () => {
   });
 });
 
-describe("mutateFilterContent — the precedence ladder", () => {
+describe("mutateFilterContent, the precedence ladder", () => {
   it("rule 1: flips <>%1 to =%1", () => {
     expect(mutateFilterContent("<>%1")).toEqual({ mutated: "=%1", rule: "flip-negation" });
   });
@@ -58,7 +58,7 @@ describe("mutateFilterContent — the precedence ladder", () => {
   });
   it("precedence: boundary shift (rule 2) beats open-range flip (rule 3), NOT on severity (spec §2.3's own worked example)", () => {
     // Spec §2.3: "at a filter like '<%1|..%2', ... the ladder fires rule 2 and emits the narrower of
-    // the two available mutations" — rule 2's position is justified by sharing rule 1's single-token
+    // the two available mutations", rule 2's position is justified by sharing rule 1's single-token
     // rewrite mechanism, not by severity, and this is the one case the order actually changes the
     // outcome for, so it is the case worth pinning.
     expect(mutateFilterContent("<%1|..%2")).toEqual({
@@ -116,7 +116,7 @@ describe("mutateFilterContent — the precedence ladder", () => {
     it("drops a leading placeholder-free alternative without leaving a stray '|' (spec §2.2 step 5's own example)", () => {
       expect(mutateFilterContent("ABC|%1")).toEqual({ mutated: "%1", rule: "drop-alternative" });
     });
-    it("classifyContent — the same function step 5 re-runs on the ladder's output — refuses a leading, trailing or doubled '|' directly", () => {
+    it("classifyContent, the same function step 5 re-runs on the ladder's output, refuses a leading, trailing or doubled '|' directly", () => {
       // These are exactly the shapes a naive substring-deletion rejoin (deleting "ABC" from
       // "ABC|%1" by removing only that substring, leaving "|%1") would produce. Testing them
       // directly against classifyContent proves the defence classifyContent-as-step-5 provides,
@@ -152,6 +152,44 @@ describe("mutateFilterContent — the precedence ladder", () => {
       expect(mutateFilterContent("|%1")).toBeNull();
       expect(mutateFilterContent("%1|")).toBeNull();
     });
+  });
+});
+
+describe("independent audit findings (2026-08-13): guards with no coverage", () => {
+  it("finding 1: a second '..' occurrence refuses rather than silently dropping the tail (classifyRange's parts.length !== 2 check)", () => {
+    // With that check removed, classifyRange("..A..B") reads only the first ".."-split pair
+    // (left="", right="A") and silently drops the "..B" tail; the ladder would then emit
+    // {mutated:"A..", rule:"flip-open-range"}, a corrupted mutation. Correctly, this refuses.
+    expect(mutateFilterContent("..A..B")).toBeNull();
+  });
+  it("finding 2: a bare '..' alternative (both sides empty) refuses even alongside another alternative", () => {
+    // With classifyRange's "left === '' && right === ''" check removed, ".." classifies as a
+    // (vacuous) range, rule 4 then drops the OTHER alternative "FIXED" and rejoins to bare "..",
+    // which step 5 (wrongly) accepts because the same relaxed classifyRange re-validates it.
+    expect(mutateFilterContent("..|FIXED")).toBeNull();
+  });
+  it("finding 3: classifyRange's left/right atom-validity checks are a MASKING PAIR, pinned by defeating both at once", () => {
+    // Defeating either check ALONE is invisible to any test: rule 3 transposes whichever side is
+    // non-empty to the OTHER side when it fires ('X..' <-> '..X'), and step 5 re-runs this same
+    // classifyRange on that transposed output, so the SURVIVING check catches the invalid atom on
+    // the way out even when the check on its original side was removed on the way in. Only
+    // defeating BOTH simultaneously (the red-check for this test) lets an atom containing '='
+    // through on both ends. See the paired comments on both checks in filter-expression.ts.
+    expect(mutateFilterContent("X=Y..")).toBeNull();
+    expect(mutateFilterContent("..X=Y")).toBeNull();
+  });
+  it("finding 4: a single non-placeholder atom with no '|' produces no mutant (rule 4's parts.length >= 2 guard)", () => {
+    // Masked to the same null by step 5 even if this guard were removed (dropping the site's only
+    // alternative rejoins to "", which step 5's empty-alternative check refuses independently),
+    // but nothing in the suite called mutateFilterContent with this exact shape before this test.
+    expect(mutateFilterContent("FIXED")).toBeNull();
+  });
+  it("finding 5: '?' (a documented BC wildcard) refuses in isolation, not only alongside '*'", () => {
+    expect(mutateFilterContent("<>FIL?")).toBeNull();
+  });
+  it("finding 6: '(' and ')' each refuse in isolation, not only when both appear together", () => {
+    expect(mutateFilterContent("<>(FIL")).toBeNull();
+    expect(mutateFilterContent("<>FIL)")).toBeNull();
   });
 });
 

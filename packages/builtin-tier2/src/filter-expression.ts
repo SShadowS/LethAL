@@ -28,11 +28,21 @@ export interface FilterMutation {
 
 /**
  * One AL comparator token recognised by rule 1 (`<>`) and rule 2 (`<`, `<=`, `>`, `>=`), plus the
- * bare `=` a comparator alternative may already carry. Checked longest-match first (`COMPARATOR_TOKENS`
- * below) so `<=` is never misread as `<` followed by a garbage remainder.
+ * bare `=` a comparator alternative may already carry.
  */
 type ComparatorToken = "<>" | "<=" | ">=" | "<" | ">" | "=";
 
+/**
+ * Listed longest-match first for readability of intent, but this order is NOT load-bearing today,
+ * and an earlier version of this comment claimed otherwise. If `<` is tried before `<=` against
+ * `'<=%1'`, `<` matches as a prefix and its remainder is `'=%1'`, but `isAtom` rejects any
+ * remainder containing `=`, so that attempt fails and the loop falls through to `<=`, which
+ * succeeds. `isAtom`'s own exclusion of `<`, `>`, `=` is what makes a shorter token's spurious
+ * prefix match harmless, regardless of where it sits in this list (confirmed by reversing this
+ * array to shortest-first and re-running the suite: zero tests failed). The order is kept
+ * longest-first anyway because it reads as the obvious, unsurprising choice, not because removing
+ * it would break anything measured here.
+ */
 const COMPARATOR_TOKENS: readonly ComparatorToken[] = ["<>", "<=", ">=", "<", ">", "="];
 
 /**
@@ -121,7 +131,17 @@ function classifyRange(
   const right = parts[1];
   if (left === undefined || right === undefined) return null;
   if (left === "" && right === "") return null;
+  // MASKING PAIR (see the matching comment on the `right` check below, and the "finding 3" test in
+  // filter-expression.test.ts): removing this check ALONE is invisible to any test. Rule 3 (open-
+  // range flip) TRANSPOSES whichever side is non-empty to the OTHER side when it fires ('X..' <->
+  // '..X'), and step 5 re-runs this same `classifyRange` on that transposed output, so an invalid
+  // `left` atom that slips past THIS check on the way in lands on the RIGHT on the way out, where
+  // the `right` check below still catches it. Only defeating BOTH checks at once (as the paired
+  // red-check for this pair does) lets an invalid atom (one containing `=`, for example) through.
   if (left !== "" && !isAtom(left)) return null;
+  // MASKING PAIR (see the matching comment on the `left` check above): this check's own removal is
+  // masked the same way, in the opposite direction: the `left` check catches the atom after rule 3
+  // transposes it there.
   if (right !== "" && !isAtom(right)) return null;
   return { kind: "range", left, right };
 }
@@ -151,7 +171,7 @@ function classifyAlternative(s: string): ClassifiedAlternative | null {
  * ladder's OUTPUT before `mutateFilterContent` returns a mutation: the same refusal surface that
  * governs a site's INPUT governs what any rule (this ladder's four, or a future one) is allowed to
  * emit. Exported so a unit test can call it directly, mirroring how `mutate-helpers.ts` exports
- * each of its pieces individually — in particular so the "rejoin leaves a stray `|`" hazard (spec
+ * each of its pieces individually, in particular so the "rejoin leaves a stray `|`" hazard (spec
  * §2.2 step 5's own example) can be tested against the exact function step 5 relies on, not just
  * inferred from `mutateFilterContent`'s end-to-end behaviour.
  */
@@ -176,9 +196,9 @@ export function extractPlaceholders(s: string): readonly string[] {
 
 /**
  * The placeholder-arity invariant (spec §2.4): the multiset of `%N` tokens must be identical
- * before and after. By construction, none of the four ladder rules below can violate this — rules
+ * before and after. By construction, none of the four ladder rules below can violate this: rules
  * 1-3 rewrite only a leading token and leave the atom byte-for-byte unchanged, and rule 4 only ever
- * drops an alternative already proven placeholder-free — so this is a backstop against a bug in
+ * drops an alternative already proven placeholder-free, so this is a backstop against a bug in
  * that reasoning or in the classifier, not a case expected to fire. Per this repo's convention, a
  * caller-contract violation throws rather than silently proceeding.
  */
@@ -218,10 +238,10 @@ function finalizeMutation(
 /**
  * The mutation ladder (spec §2.3): rules 1-4, tried in that fixed order. At each rule, every
  * alternative is scanned LEFT TO RIGHT; the first one matching that rule's shape is mutated and the
- * ladder stops — later rules are never tried once an earlier one has fired. Returns the single
+ * ladder stops: later rules are never tried once an earlier one has fired. Returns the single
  * highest-precedence applicable mutation, or `null` to REFUSE the site (either because `content`
  * itself does not classify under steps 2-4, or because classification succeeds but no rule in the
- * ladder finds anything to do — "ladder exhaustion", a distinct outcome from parser refusal per
+ * ladder finds anything to do, "ladder exhaustion", a distinct outcome from parser refusal per
  * spec §5, e.g. a closed range or a lone placeholder atom).
  */
 export function mutateFilterContent(content: string): FilterMutation | null {
@@ -294,7 +314,7 @@ export function mutateFilterContent(content: string): FilterMutation | null {
 /**
  * Inverse of `build.textLiteral` (`packages/operator-sdk/src/build.ts`): strip the delimiting `'`
  * and unescape `''` back to `'`. Returns `null` for anything that is not a plain `'...'` literal
- * shape (unbalanced delimiters, no delimiters at all), rather than throwing — this function is a
+ * shape (unbalanced delimiters, no delimiters at all), rather than throwing: this function is a
  * general-purpose primitive, not a check that already knows its input is a `text_literal` node's
  * text; a caller that DOES already know that (the operator built on top of this module) is the one
  * with grounds to treat a `null` here as a caller-contract violation.
