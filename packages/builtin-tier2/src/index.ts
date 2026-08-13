@@ -1,4 +1,5 @@
 import type { MutationOperator } from "@lethal/operator-sdk";
+import { flipFilterLiteral } from "./flip-filter-literal";
 import { removeCalcFields } from "./remove-calcfields";
 import { removeCommit } from "./remove-commit";
 import { removeSetRange } from "./remove-setrange";
@@ -16,6 +17,7 @@ export { removeCommit } from "./remove-commit";
 export { swapRecXRec } from "./swap-rec-xrec";
 export { swapFindDirection } from "./swap-find-direction";
 export { validateToAssign } from "./validate-to-assign";
+export { flipFilterLiteral } from "./flip-filter-literal";
 export { claimsRecordMethod, claimsSystemCall, calleeNameNode } from "./receiver";
 
 /**
@@ -74,4 +76,8 @@ export const tier2Operators: readonly MutationOperator[] = [
   // R136: Validate(F, V) -> F := V, deleting the OnValidate trigger chain while leaving the field
   // value correct. See `validate-to-assign.ts`.
   validateToAssign,
+  // R134: mutates INSIDE a SetFilter call's filter-expression string literal (negation flip,
+  // boundary shift, open-range flip, drop a placeholder-free alternative). See
+  // `flip-filter-literal.ts`.
+  flipFilterLiteral,
 ];

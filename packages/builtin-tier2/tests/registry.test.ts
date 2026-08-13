@@ -30,6 +30,11 @@ const EXPECTED_OPERATORS = [
   // value correct. The implicit-receiver form emits the qualified Rec.F := V, not a bare F := V,
   // per the trio spec's amendment 1.
   "lethal.validate-to-assign",
+  // R134: mutates inside a SetFilter call's filter-expression string literal — a splice, never a
+  // deletion or rebuild — via a refuse-by-default mini-parser and a fixed four-rule ladder (negation
+  // flip, boundary shift, open-range flip, drop a placeholder-free alternative). The first Tier-2
+  // operator to put SetFilter on claimsRecordMethod's shadowing-guard surface.
+  "lethal.flip-filter-literal",
 ] as const;
 
 describe("tier2Operators", () => {
