@@ -239,7 +239,7 @@ no table here may reintroduce `InherentPermissions`.**
 The table below is the Phase-0 fixture's frozen result, kept because it is still the clearest
 statement of what the Phase-0 half of the fixture proves. It is NOT this fixture's current
 aggregate: Phase 1 grew it to 75 deployed mutants, and R30 grew it again to 84 —
-`tables.itest.ts`'s `EXPECTED` now asserts the live-measured **113 killed / 18 survived / 10
+`tables.itest.ts`'s `EXPECTED` now asserts the live-measured **157 killed / 25 survived / 10
 no-coverage** (see §Phase 1 and §"Extension objects" below). The Phase-0 objects and their tests
 are unchanged inside that larger set.
 
@@ -404,10 +404,10 @@ return-value mutants are unaffected.
 
 Phase 1 extended `sandbox-data` from 7 to **75 deployed mutants** — 81 raw specs, of which **6**
 Tier-1 `void-method-call` specs lose the §3.2 dedup to a Tier-2 deletion at the same site. **R30
-then took it to 84 deployed mutants — 93 raw specs, 9 dropped by dedup; R78 then to 87 deployed / 96 raw; R70 then to 90 deployed / 99 raw; R73 then to 103 deployed / 114 raw; R71 then to 106 deployed / 117 raw; R68 then to 106 deployed / 118 raw (a Tier-2 claim gained, its Tier-1 twin deduped away); R82 then to 136 deployed / 148 raw — `codeunit 79311 "Data Swap Ops"`, six arms for `lethal.swap-call-arguments`, and note that NONE of its 30 specs is deduped away: four sites carry a swap AND a `void-method-call` mutant, because dedup keys on replacement TEXT and a swap's is never a deletion's empty string; R72 then to 141 deployed / 154 raw — `Data Commit Ops.CommitThenRunValueForm`, whose six raw specs lose one Tier-1 `void-method-call` to the Tier-2 `remove-commit` at its `Commit()`** (see §"Extension objects"
+then took it to 84 deployed mutants — 93 raw specs, 9 dropped by dedup; R78 then to 87 deployed / 96 raw; R70 then to 90 deployed / 99 raw; R73 then to 103 deployed / 114 raw; R71 then to 106 deployed / 117 raw; R68 then to 106 deployed / 118 raw (a Tier-2 claim gained, its Tier-1 twin deduped away); R82 then to 136 deployed / 148 raw — `codeunit 79311 "Data Swap Ops"`, six arms for `lethal.swap-call-arguments`, and note that NONE of its 30 specs is deduped away: four sites carry a swap AND a `void-method-call` mutant, because dedup keys on replacement TEXT and a swap's is never a deletion's empty string; R72 then to 141 deployed / 154 raw — `Data Commit Ops.CommitThenRunValueForm`, whose six raw specs lose one Tier-1 `void-method-call` to the Tier-2 `remove-commit` at its `Commit()`; R136 then to 192 deployed / 207 raw — three operator changes (`swap-modify-flag` extended to `Insert`/`Delete`, plus the new `swap-find-direction` and `validate-to-assign`) across eleven fixture arms in two new tables, with all 51 per-mutant verdicts pre-committed and matching, and two of the 15 dedup drops newly explained by the same reversed-`SetRange`-displacement pattern the find arms share** (see §"Extension objects"
 below). Both numbers are reproducible offline, no server needed: `generateMutationSet` returns 93
 (which `tables.itest.ts` asserts before it deploys anything), `dedupeSpecs` drops 9, and
-113 + 18 + 10 = 141 recorded mutants come back from the live gate (131 of them SCORED; the 10 no-coverage are excluded from the score). Every shape below exists because its ABSENCE lets a
+157 + 25 + 10 = 192 recorded mutants come back from the live gate (182 of them SCORED; the 10 no-coverage are excluded from the score). Every shape below exists because its ABSENCE lets a
 broken operator pass — a fixture that only exercises the happy path tells you nothing. Design
 spec: `docs/superpowers/specs/2026-07-25-tier2-mutation-operators-design.md` §6.
 

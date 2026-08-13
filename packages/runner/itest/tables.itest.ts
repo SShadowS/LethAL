@@ -133,7 +133,13 @@ const EXPECTED = {
   // `void-method-call` and Tier-2 `remove-commit` both claim the `Commit()` and §3.2 keeps Tier 2).
   // Per-mutant predictions pre-committed in
   // docs/superpowers/specs/2026-08-08-r72-value-form-arm-precommitment.md BEFORE this run.
-  totalMutantSites: 154,
+  // R136 moved this from 154 to 207. Three operator changes and eleven new fixture arms (A through
+  // K), none of which had a live site before: `lethal.swap-modify-flag` extended from `Modify` alone
+  // to `Insert`/`Delete` (1.0.0 -> 1.1.0), the new `lethal.swap-find-direction`
+  // (`FindFirst` <-> `FindLast`), and the new `lethal.validate-to-assign` (`Validate(F, V)` ->
+  // `F := V`, refusing the single-argument form). All 51 per-mutant verdicts were pre-committed in
+  // docs/superpowers/specs/2026-08-12-r136-trio-precommitment.md BEFORE this run.
+  totalMutantSites: 207,
   // R36 moved this from 63/10 to 64/9, deliberately and in one direction only.
   //
   // `RequireCategoryAFails` used to assert merely that AN error occurred, so deleting
@@ -180,7 +186,18 @@ const EXPECTED = {
   // aborts the transaction, and the test dies without reaching any assertion. That mutant is the
   // first anywhere to be scored `killed` AND screened as a platform artifact — and the verdict
   // deliberately does not move, which `assertPlatformArtifactScreen` below pins alongside the count.
-  killed: 113,
+  // R136 moved this from 113 to 158, per the 45 killed predictions in
+  // docs/superpowers/specs/2026-08-12-r136-trio-precommitment.md, then to 157 by that same
+  // document's additive amendment (committed before the second live run): row 28, the
+  // `void-method-call` deleting `KeyProbe.Init()`, was reclassified from `killed` to `survived` as
+  // EQUIVALENT. `Data Key Probe` has exactly one field, so once the arm's fix gave `Init()` an
+  // explicit blank key assignment to precede, `Init()` itself has nothing left to do on either
+  // iteration — deleting a no-op is undetectable by any test. Three of the remaining 44 are
+  // platform artifacts by construction — a duplicate primary key from a blank `Code[20]` key on a
+  // second insert, reached three different ways — and none is tagged by the screen below, which is
+  // the measured size of its blind spot (docs/roadmap/R138.md), not evidence that only one platform
+  // artifact exists in this run.
+  killed: 157,
   // R73 moved this from 9 to 12, and TWO of the three additions are worth reading rather than
   // accepting:
   //
@@ -212,7 +229,17 @@ const EXPECTED = {
   // `DataMain.Init()`, which survives for the same reason the fixture's two other `Init()` deletions
   // do: every field is assigned immediately after, so the deletion is unobservable. Manufacturing an
   // assertion that killed it would test the fixture rather than the operator.
-  survived: 18,
+  // R136 moved this from 18 to 24, then to 25 by the same amendment noted above. The seven new
+  // survivors are the discrimination evidence the wave exists for, plus one equivalence: arm F's
+  // `swap-find-direction` (an existence-only assertion cannot see a direction reversal — the
+  // fixture's one deliberate equivalent among the DISCRIMINATION arms), arm B's `swap-modify-flag`
+  // (`Insert(false)` still lands a row, so a read-back assertion misses it), arm H's
+  // `validate-to-assign` (the assignment leaves the field value correct, so a value-only assertion
+  // misses the skipped trigger), and FOUR arm K mutants whose covering test asserts nothing at all:
+  // `empty-block` on the procedure body, `empty-block` on the loop body, `void-method-call` deleting
+  // the `Insert`, and (added by the amendment) `void-method-call` deleting `Init()` — the last of
+  // these is EQUIVALENT rather than undertested, since there is nothing left for `Init()` to do.
+  survived: 25,
   // R78 moved this from 6 to 9. The three new sites all belong to the TestPage-only pair
   // (`Data Value Source` / `Data Value Card`), and all three land `no-coverage` because the one
   // test that reaches them is refused on the fenced path. That is the measured statement of the
@@ -228,8 +255,13 @@ const EXPECTED = {
   // R72 leaves this at 10 — the new arm sits in a codeunit the new test calls directly, so
   // procedure-level attribution must reach all five of its mutants. Any arriving `no-coverage` is an
   // ATTRIBUTION finding and must not be absorbed by editing this number.
+  // R136 leaves this at 10, unchanged — none of the wave's 51 new mutants was predicted
+  // no-coverage. Arm I (a table PROCEDURE, not a trigger) was the leading attribution risk: a
+  // PUBLIC procedure mutant that misses member-level coverage gets no fallback and is reported
+  // no-coverage directly, unlike a trigger mutant's two fallbacks. If it had missed, all four of
+  // arm I's mutants would have moved together and the aggregate would read 154/24/14.
   noCoverage: 10,
-  mutationScore: 113 / (113 + 18),
+  mutationScore: 157 / (157 + 25),
   /**
    * R72: the screen must fire, and it must fire on exactly one mutant.
    *
@@ -243,7 +275,7 @@ const EXPECTED = {
    * R121: this fixture is the measured VACUOUS case for the assertion screen, and pinning it here is
    * the point rather than an incidental extra.
    *
-   * All 22 tests in `fixtures/sandbox-data-tests` raise via bare `Error(...)`; none uses Microsoft's
+   * All 44 tests in `fixtures/sandbox-data-tests` raise via bare `Error(...)`; none uses Microsoft's
    * Library Assert. So the screen's rule — "the failure text does not begin with `Assert.`" — flags
    * EVERY kill and separates nothing. Continia Document Output, where the rule was scored at 100%
    * recall and 26.1% precision, calls Library Assert ~1,886 times and produces `partial`.
@@ -534,7 +566,7 @@ function assertVerdictTable(report: SessionReport): void {
   assert.equal(
     assertionScreen.discrimination,
     EXPECTED.assertionScreenDiscrimination,
-    "this fixture raises via bare `Error(...)` in all 22 tests, so the screen must report itself " +
+    "this fixture raises via bare `Error(...)` in all 44 tests, so the screen must report itself " +
       "as separating NOTHING here. A `partial` would mean either the fixture grew an assertion " +
       "library or the rule started matching something it was never scored on",
   );
@@ -658,6 +690,51 @@ async function assertTriggerKillAndSurvive(
   }
 }
 
+/**
+ * R136: `astSubtreeHash` alpha-renames identifiers, so `Insert` and `Delete` hash identically to
+ * each other, as do `FindFirst` and `FindLast` — and the baseline's semantic-identity key
+ * (astHash/codeunitName/operatorName/operatorMajor) carries no site text at all. So nothing frozen
+ * in `tables.baseline.json` can distinguish a claimed `Delete` site from a claimed `Insert` one, or
+ * a `FindLast` rewrite from a `FindFirst` one — both members of each pair collapse into the same
+ * key. These four assertions read `report.mutants` directly, which DOES carry `originalText`/
+ * `mutatedText`, to pin what the collapsed baseline key structurally cannot.
+ */
+function assertTrioTextEvidence(report: SessionReport): void {
+  const killedMutantWith = (
+    operatorName: string,
+    field: "originalText" | "mutatedText",
+    needle: string,
+  ) =>
+    report.mutants.some(
+      (m) => m.operatorName === operatorName && m.verdict === "killed" && m[field].includes(needle),
+    );
+
+  assert.ok(
+    killedMutantWith("lethal.swap-modify-flag", "originalText", "Insert(true)"),
+    "expected a killed lethal.swap-modify-flag mutant whose originalText contains Insert(true) — " +
+      "the Insert half of the 1.1.0 extension (arm A), which the collapsed baseline key cannot see " +
+      "apart from the Delete half",
+  );
+  assert.ok(
+    killedMutantWith("lethal.swap-modify-flag", "originalText", "Delete(true)"),
+    "expected a killed lethal.swap-modify-flag mutant whose originalText contains Delete(true) — " +
+      "the Delete half of the 1.1.0 extension (arm C), which the collapsed baseline key cannot see " +
+      "apart from the Insert half",
+  );
+  assert.ok(
+    killedMutantWith("lethal.swap-find-direction", "mutatedText", "FindLast"),
+    "expected a killed lethal.swap-find-direction mutant whose mutatedText contains FindLast — the " +
+      "FindFirst -> FindLast direction (arm D), which the collapsed baseline key cannot see apart " +
+      "from the other direction",
+  );
+  assert.ok(
+    killedMutantWith("lethal.swap-find-direction", "mutatedText", "FindFirst"),
+    "expected a killed lethal.swap-find-direction mutant whose mutatedText contains FindFirst — the " +
+      "FindLast -> FindFirst direction (arm E), which the collapsed baseline key cannot see apart " +
+      "from the other direction",
+  );
+}
+
 async function main(): Promise<void> {
   // PROJECT_DIR, not `<PROJECT_DIR>/src` — `runSession` generates from `cfg.projectDir`, so
   // scanning anything else would let this header describe a different file set than the run
@@ -684,6 +761,8 @@ async function main(): Promise<void> {
       first.report,
       await readDeployedManifests(join(scratchA, "instrumented")),
     );
+    // R136: the four durable text-based assertions the collapsed baseline key cannot express.
+    assertTrioTextEvidence(first.report);
     // Per-mutant regression guard against the committed baseline, keyed on semantic identity
     // (astHash/codeunitName/operatorName/operatorMajor) rather than mutant code — so it survives
     // renumbering that the EXPECTED.verdicts map above deliberately does not.
@@ -695,6 +774,7 @@ async function main(): Promise<void> {
       second.report,
       await readDeployedManifests(join(scratchB, "instrumented")),
     );
+    assertTrioTextEvidence(second.report);
 
     const shape = (r: SessionReport) =>
       [...r.mutants]
