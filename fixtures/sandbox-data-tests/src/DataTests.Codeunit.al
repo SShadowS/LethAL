@@ -760,6 +760,183 @@ codeunit 79310 "Data Tests"
     end;
 
     // ---------------------------------------------------------------------------------------------
+    // R136 — the Tier-2 trio: `swap-modify-flag` extended to Insert/Delete (1.1.0),
+    // `swap-find-direction` and `validate-to-assign`. Target: `codeunit 79314 "Data Flag Ops"`,
+    // `codeunit 79315 "Data Find Ops"`, `codeunit 79316 "Data Validate Ops"` and
+    // `table 79330 "Data Trigger Probe"`'s own ValidateLevelImplicit, each documenting its arm's
+    // PREDICTED verdict and mechanism in the R82 style.
+    //
+    // Spec: docs/superpowers/specs/2026-08-12-r136-tier2-trio-design.md §3. Per-mutant predictions
+    // are pre-committed in a SEPARATE document before the live run, following R82's precedent —
+    // a run that cannot contradict its author is a demonstration, not a measurement (R73).
+    //
+    // Two same-span pairs carry DIFFERENT verdicts on purpose (spec §2.4): arm B (the flag swap
+    // survives, the deletion kills) and arm H (the assignment survives, the deletion kills). A
+    // report that dropped one of the pair, or merged them, cannot produce two different verdicts
+    // at one span.
+    //
+    // Arm K (`DoubleInsertWithoutKeyTriggerRaises`) is a PLATFORM-ARTIFACT kill that no screen tags
+    // (R138): its covering test asserts nothing, and the kill comes from a duplicate-key error, not
+    // from any assertion.
+    // ---------------------------------------------------------------------------------------------
+
+    [Test]
+    procedure InsertRunTriggerSetsTheTriggerField()
+    var
+        Probe: Record "Data Trigger Probe";
+        FlagOps: Codeunit "Data Flag Ops";
+    begin
+        // ARM A. Strong. Insert(false) skips OnInsert, "Inserted By Trigger" stays false.
+        if Probe.Get('FLAG-A') then
+            Probe.Delete(false);
+        if not FlagOps.InsertWithTrigger('FLAG-A') then
+            Error('expected Insert(true) to run OnInsert and set the trigger field');
+    end;
+
+    [Test]
+    procedure WeakInsertAssertionMissesTheFlag()
+    var
+        Probe: Record "Data Trigger Probe";
+        FlagOps: Codeunit "Data Flag Ops";
+    begin
+        // ARM B. Weak ON PURPOSE — only asserts a row landed, which Insert(false) still produces.
+        // void-method-call at the same span deletes the Insert, so no row lands, and that mutant
+        // kills instead.
+        if Probe.Get('FLAG-B') then
+            Probe.Delete(false);
+        if not FlagOps.InsertCounted('FLAG-B') then
+            Error('expected InsertCounted to land a row');
+    end;
+
+    [Test]
+    procedure DeleteRunTriggerLeavesTombstone()
+    var
+        Probe: Record "Data Trigger Probe";
+        Tomb: Record "Data Trigger Probe";
+        FlagOps: Codeunit "Data Flag Ops";
+    begin
+        // ARM C. Strong. The row is seeded HERE, in the test app, per spec §3.3 rule 3 — the arm
+        // codeunit only sets the key and deletes it. Both the row and its tombstone are cleared
+        // first (rule 7): residue from an aborted run would otherwise make arm C's own Delete(true)
+        // raise a SECOND tombstone insert, a duplicate key unrelated to the mutation.
+        if Tomb.Get('TOMB-FLAG-C') then
+            Tomb.Delete(false);
+        if Probe.Get('FLAG-C') then
+            Probe.Delete(false);
+        Probe.Init();
+        Probe."No." := 'FLAG-C';
+        Probe.Insert(false);
+
+        if not FlagOps.DeleteWithTrigger('FLAG-C') then
+            Error('expected Delete(true) to run OnDelete and leave a tombstone');
+    end;
+
+    [Test]
+    procedure FindFirstPicksTheLowestKeyInRange()
+    var
+        FindOps: Codeunit "Data Find Ops";
+    begin
+        // ARM D. Strong. The decoy 'FIND-0' sorts BEFORE the filtered range and carries a
+        // different Level (90), so an unfiltered FindFirst (the remove-setrange collateral) would
+        // land on it instead — the decoy is what makes that collateral genuinely killable, not
+        // just this arm's own swap.
+        ResetTriggerProbe('FIND-0', 90);
+        ResetTriggerProbe('FIND-A', 1);
+        ResetTriggerProbe('FIND-B', 2);
+        if FindOps.FirstLevelInRange('FIND-A', 'FIND-B') <> 1 then
+            Error('expected FindFirst to land on FIND-A with Level 1');
+    end;
+
+    [Test]
+    procedure FindLastPicksTheHighestKeyInRange()
+    var
+        FindOps: Codeunit "Data Find Ops";
+    begin
+        // ARM E, the other direction. The decoy 'FIND-Z' sorts AFTER the filtered range this time
+        // (rule 1 is directional) and carries Level 91, different from the asserted 4.
+        ResetTriggerProbe('FIND-C', 3);
+        ResetTriggerProbe('FIND-D', 4);
+        ResetTriggerProbe('FIND-Z', 91);
+        if FindOps.LastLevelInRange('FIND-C', 'FIND-D') <> 4 then
+            Error('expected FindLast to land on FIND-D with Level 4');
+    end;
+
+    [Test]
+    procedure ExistenceOnlyAssertionMissesTheDirection()
+    var
+        FindOps: Codeunit "Data Find Ops";
+    begin
+        // ARM F — the EQUIVALENT-to-this-suite survivor. AnyRow carries no filter at all (spec
+        // §3.2 amendment 7), so an existence-only assertion cannot tell FindFirst from FindLast:
+        // both answer "found" the moment any row exists. Level 50 is reserved to this arm alone
+        // (spec §3.3 rule 2), even though AnyRow never reads it.
+        ResetTriggerProbe('FIND-ANY', 50);
+        if not FindOps.AnyRow() then
+            Error('expected at least one row to exist');
+    end;
+
+    [Test]
+    procedure ValidateRunsTheFieldTrigger()
+    var
+        ValidateOps: Codeunit "Data Validate Ops";
+    begin
+        // ARM G. Strong, quoted field identifier. No row needed — Validate runs OnValidate
+        // against the in-memory record.
+        if ValidateOps.SetLevel(5) <> 10 then
+            Error('expected OnValidate to double 5 into 10');
+    end;
+
+    [Test]
+    procedure ValueOnlyAssertionMissesTheTriggerSkip()
+    var
+        ValidateOps: Codeunit "Data Validate Ops";
+    begin
+        // ARM H — the sharpest survivor in the wave. The plain field value is correct even when
+        // OnValidate is skipped, so asserting only the field VALUE cannot see the skip; the
+        // void-method-call deletion at the same span still kills, because deleting the call
+        // altogether leaves "Level" at 0.
+        if ValidateOps.SetLevelWeak(7) <> 7 then
+            Error('expected the Level field to hold 7');
+    end;
+
+    [Test]
+    procedure ImplicitValidateRunsInsideTheTable()
+    var
+        Probe: Record "Data Trigger Probe";
+    begin
+        // ARM I — the IMPLICIT-receiver emit path, measured live inside a TABLE object rather than
+        // a codeunit.
+        if Probe.ValidateLevelImplicit(6) <> 12 then
+            Error('expected the implicit-receiver Validate to double 6 into 12');
+    end;
+
+    [Test]
+    procedure TouchLevelRunsTheTriggerAgain()
+    var
+        ValidateOps: Codeunit "Data Validate Ops";
+    begin
+        // ARM J — the refusal negative. The single-argument Validate("Level") has no assignment
+        // equivalent, so validate-to-assign must emit nothing here; this test instead pins the
+        // site's void-method-call mutant as killed.
+        if ValidateOps.TouchLevel(9) <> 18 then
+            Error('expected the single-argument Validate to re-run OnValidate and double 9 into 18');
+    end;
+
+    [Test]
+    procedure DoubleInsertWithoutKeyTriggerRaises()
+    var
+        KeyProbe: Record "Data Key Probe";
+        FlagOps: Codeunit "Data Flag Ops";
+    begin
+        // ARM K. Asserts NOTHING, by design (spec §3.2): under Insert(false) "No." never gets
+        // assigned, the first blank-key insert succeeds and the second raises a duplicate key
+        // before any assertion could run. The verdict, if killed, is a platform artifact that R138
+        // notes no screen tags.
+        KeyProbe.DeleteAll(false);
+        FlagOps.InsertTwiceWithKeyTrigger();
+    end;
+
+    // ---------------------------------------------------------------------------------------------
     // Seeding helpers. All idempotent — see InsertDoublesAmountWeak's comment for why that is
     // kept even though the persistence claim behind it was measured false.
     // around every mutant run, so rows PERSIST into the next one.
@@ -767,6 +944,18 @@ codeunit 79310 "Data Tests"
     // Both inserts use `Insert(false)` deliberately: running Data Main's OnInsert here would kill
     // the mutant that fixture is meant to leave surviving.
     // ---------------------------------------------------------------------------------------------
+
+    local procedure ResetTriggerProbe(No: Code[20]; LevelValue: Integer)
+    var
+        Probe: Record "Data Trigger Probe";
+    begin
+        if Probe.Get(No) then
+            Probe.Delete(false);
+        Probe.Init();
+        Probe."No." := No;
+        Probe."Level" := LevelValue;
+        Probe.Insert(false);
+    end;
 
     local procedure ResetMain(MainNo: Code[20]; CategoryCode: Code[10]; AmountValue: Decimal)
     var
