@@ -52,10 +52,11 @@ that ordering is the priority.
 - **R8** · al-runner drops a table global var written by a trigger · [R008.md](docs/roadmap/R008.md) · done (Wave 1 Stream D — root-caused, upstream, detectable by canary)
 - **R121** · A false kill is now VISIBLE but still unclassified — the only proposed discriminator is measured wrong at 75% · [R121.md](docs/roadmap/R121.md) · done (2026-08-09) — the SCREEN shipped, and only the screen. `SessionReport.assertionScreen` reports how many…
 - **R132** · No gate ever exercises the assertion screen in the mode where it discriminates · [R132.md](docs/roadmap/R132.md) · open — filed 2026-08-09 when R121 shipped the screen. Every one of the four live gates produces `vacuous` or…
-- **R137** · swap-rec-xrec's conformance refusals assert nothing — empty expectedSpecs passes on any input · [R137.md](docs/roadmap/R137.md) · open — found 2026-08-12 while writing the R136 trio spec
+- **R137** · swap-rec-xrec's conformance refusals assert nothing — empty expectedSpecs passes on any input · [R137.md](docs/roadmap/R137.md) · done (see commit below) — the harness now fails a refusal case that emits, and the sweep found a refusal that…
 - **R138** · The platform-artifact screen cannot see run-trigger-flag kills: Insert(false) kills by duplicate key, and nothing tags it · [R138.md](docs/roadmap/R138.md) · open — found 2026-08-12 by the adversarial review of the R136 trio spec, before any code landed
 - **R140** · Fallback 2 scores a trigger mutant `survived` when its only covering test is red, where member-level attribution declines · [R140.md](docs/roadmap/R140.md) · open — measured 2026-08-13 on the R136 trio's first live run
 - **R141** · flip-filter-literal's character-class refusals are proven offline only: no live negative anywhere · [R141.md](docs/roadmap/R141.md) · open — found 2026-08-14 while closing out R134, before the operator's own gate run
+- **R142** · A conformance case with a non-empty expectation still never checks for EXTRA specs · [R142.md](docs/roadmap/R142.md) · open — filed 2026-08-14 while closing R137
 
 ## Product gaps a real project hits
 

@@ -180,15 +180,24 @@ function inObservableTrigger(node: ALSyntaxNode): boolean {
  * Is `node` the left-hand side of an assignment?
  *
  * Structural rather than positional: an `assignment_statement`'s first named child is its target.
- * Anything at or under that child is refused, so `xRec.Amount := 5` and a hypothetical
- * `xRec.Amount[1] := 5` are both out.
+ * Anything at or under that child is refused, so `xRec.Amount := 5` and `xRec.Name[1] := 'A'` are
+ * both out.
+ *
+ * Compared by SPAN, not by object identity. `namedChildren` builds a fresh wrapper object on every
+ * access, so `namedChildren[0] === child` was false even when they were the same syntax node, and
+ * this refusal never once fired (R137). A span pair identifies a node uniquely inside one tree.
  */
 function isAssignmentTarget(node: ALSyntaxNode): boolean {
   let child: ALSyntaxNode = node;
   let current: ALSyntaxNode | null = node.parent;
   while (current !== null) {
     if (current.kind === ALNodeKind.assignment_statement) {
-      return current.namedChildren[0] === child;
+      const target = current.namedChildren[0];
+      return (
+        target !== undefined &&
+        target.startIndex === child.startIndex &&
+        target.endIndex === child.endIndex
+      );
     }
     child = current;
     current = current.parent;

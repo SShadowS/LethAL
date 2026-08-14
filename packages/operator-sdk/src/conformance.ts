@@ -39,6 +39,20 @@ export async function runConformance(op: MutationOperator): Promise<ConformanceR
       }
     });
 
+    // A case with NO expected specs is a documented refusal: the operator must emit nothing here.
+    // Checking only that every expected spec appeared made such a case pass on any input at all
+    // (R137) — the repo's empty-vs-empty shape, inside the harness meant to catch it.
+    if (c.expectedSpecs.length === 0) {
+      if (produced.length > 0) {
+        failures.push({
+          caseName: c.name,
+          reason: `refusal case produced ${produced.length} spec(s), expected none`,
+          produced: produced.map(describe),
+        });
+      }
+      continue;
+    }
+
     const expectedRemaining = c.expectedSpecs.slice();
     for (const spec of produced) {
       const idx = expectedRemaining.findIndex(
@@ -54,16 +68,20 @@ export async function runConformance(op: MutationOperator): Promise<ConformanceR
       failures.push({
         caseName: c.name,
         reason: `expected mutation not produced: ${JSON.stringify(expectedRemaining[0])}`,
-        produced: produced.map((s) => ({
-          beforeText: s.before.text,
-          afterText: renderAfter(s),
-          parentContext: s.parentContext,
-        })),
+        produced: produced.map(describe),
       });
     }
   }
 
   return { allPassed: failures.length === 0, failures };
+}
+
+function describe(spec: MutationSpec): ConformanceFailure["produced"][number] {
+  return {
+    beforeText: spec.before.text,
+    afterText: renderAfter(spec),
+    parentContext: spec.parentContext,
+  };
 }
 
 function renderAfter(spec: MutationSpec): string {
