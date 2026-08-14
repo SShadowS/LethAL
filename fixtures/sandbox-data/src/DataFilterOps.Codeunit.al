@@ -220,4 +220,53 @@ codeunit 79317 "Data Filter Ops"
         Related.SetFilter("Entry No.", '%1..%2', LowBound, LowBound + 2);
         exit(Related.Count());
     end;
+
+    // ---------------------------------------------------------------------------------------
+    // ARM I (R141) -- the CHARACTER refusal negative, the other half of arm H.
+    //
+    // The operator refuses a filter string two structurally different ways, and until this arm
+    // only one had ever run against a real server. Arm H measures LADDER EXHAUSTION: a closed
+    // range CLASSIFIES and then no rule in the ladder matches it. This arm measures the CHARACTER
+    // refusal, which happens earlier and for a different reason: `REFUSED_CHARACTERS` in
+    // packages/builtin-tier2/src/filter-expression.ts is /[*?@()'&]/, so the mini-parser declines
+    // the string outright and nothing is ever classified.
+    //
+    // The inner quote is the character worth measuring. `<>''` (not blank) is the commonest `<>`
+    // shape in real AL, and it is the population where a BROKEN character refusal would do its
+    // worst: rule 1 would rewrite `<>` to `=`, handing BC a filter the mini-parser never
+    // validated. That fails in the bad direction -- a runtime filter error scores `killed` with no
+    // assertion earning it and nothing tagging the mechanism (R86, R138) -- which is exactly the
+    // false kill this project exists to catch.
+    //
+    // The AL literal is '<>''''' : five quotes, four of them the AL escape for the two inner
+    // quotes BC's filter DSL reads as an empty string. Measured against Cronus283
+    // (scripts/r141-filter-probe/, README.md there records the run): BC accepts it, reports the
+    // filter back as `<>''`, and counts the non-blank rows.
+    //
+    // SCOPED BY ENTRY NO. BAND, not by "Main No.", and that is forced rather than stylistic: the
+    // filter's own target field IS "Main No.", so a "Main No." scope would make the not-blank
+    // filter redundant (every row in scope carries the tag), the baseline would equal the
+    // filter-deleted count, and the arm's own assertion would no longer prove the filter ran at
+    // all. The band's upper bound is a COMPUTED expression (LowBound + 3) for arm H's reason:
+    // two bare same-typed identifiers would let Tier-1 lethal.swap-call-arguments claim the site.
+    //
+    // Seeding is the probe's, exactly: two tagged rows and one BLANK row inside the band, plus a
+    // tagged residue decoy OUTSIDE it. The blank row is what makes the filter do work (without it
+    // the filter matches the whole band); the out-of-band decoy is what makes the SetRange do work
+    // (without it the unscoped mutant counts the same 2 and survives on data starvation).
+    //
+    // PREDICTED: flip-filter-literal emits NOTHING (character refusal, not ladder exhaustion --
+    // and not the same code path as arm H's). void-method-call (deleting the SetFilter, leaving
+    // the band scope) KILLED (counts the blank row too -- 3, not 2; MEASURED). remove-setrange
+    // (deleting the SetRange, leaving the not-blank filter unscoped) KILLED (counts the
+    // out-of-band decoy too -- 3, not 2; MEASURED). Both collateral verdicts by
+    // `NotBlankFilterCountsOnlyTaggedRows`.
+    procedure CountTaggedInBand(LowBound: Integer): Integer
+    var
+        Related: Record "Data Related";
+    begin
+        Related.SetRange("Entry No.", LowBound, LowBound + 3);
+        Related.SetFilter("Main No.", '<>''''');
+        exit(Related.Count());
+    end;
 }

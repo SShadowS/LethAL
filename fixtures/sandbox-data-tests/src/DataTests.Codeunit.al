@@ -1098,6 +1098,31 @@ codeunit 79310 "Data Tests"
             Error('expected 2 rows in the closed range (residue decoy excluded by scope), got %1', Actual);
     end;
 
+    [Test]
+    procedure NotBlankFilterCountsOnlyTaggedRows()
+    var
+        FilterOps: Codeunit "Data Filter Ops";
+        Actual: Integer;
+    begin
+        // ARM I (R141). The CHARACTER refusal negative: flip-filter-literal emits nothing at a
+        // filter carrying an inner quote, a different code path from arm H's ladder exhaustion.
+        // Entry No. band 79200..79203 holds two tagged rows and one BLANK row; the tagged residue
+        // decoy sits OUTSIDE the band at 79210. Baseline counts the 2 non-blank rows in the band.
+        // Deleting the SetFilter counts the blank row too (3); deleting the SetRange counts the
+        // out-of-band decoy too (3). Both numbers measured directly against Cronus283 before this
+        // arm was written (scripts/r141-filter-probe/).
+        ClearRelated('FLT-I');
+        ClearRelated('FLT-I-DECOY');
+        ClearRelated('');
+        AddRelated(79200, 'FLT-I', 1);
+        AddRelated(79201, 'FLT-I', 2);
+        AddRelated(79202, '', 3);
+        AddRelated(79210, 'FLT-I-DECOY', 4);
+        Actual := FilterOps.CountTaggedInBand(79200);
+        if Actual <> 2 then
+            Error('expected 2 non-blank rows in the band, got %1', Actual);
+    end;
+
     // ---------------------------------------------------------------------------------------------
     // Seeding helpers. All idempotent — see InsertDoublesAmountWeak's comment for why that is
     // kept even though the persistence claim behind it was measured false.

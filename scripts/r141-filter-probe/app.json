@@ -1,0 +1,28 @@
+{
+  "id": "b7c41f92-6d38-4a5e-8c17-3f9e2d4b6a01",
+  "name": "LethAL R141 Filter Probe",
+  "publisher": "LethAL",
+  "version": "1.0.0.0",
+  "brief": "R141: does SetFilter on a Code[20] field accept the not-blank idiom '<>'''', and what does each planned mutant count?",
+  "description": "Throwaway probe, not for production use. Measures the four counts R141's new fixture arm needs: the baseline not-blank filter, the same call with the SetFilter deleted (void-method-call), the same call with the SetRange deleted (remove-setrange), and what BC reports the filter to be. See docs/roadmap/R141.md.",
+  "privacyStatement": "",
+  "EULA": "",
+  "help": "",
+  "url": "",
+  "logo": "",
+  "dependencies": [],
+  "screenshots": [],
+  "idRanges": [
+    {
+      "from": 71520,
+      "to": 71529
+    }
+  ],
+  "resourceExposurePolicy": {
+    "allowDebugging": true,
+    "allowDownloadingSource": true,
+    "includeSourceInSymbolFile": true
+  },
+  "runtime": "13.0",
+  "features": []
+}
