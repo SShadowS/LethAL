@@ -1189,6 +1189,67 @@ R126.
 
 ---
 
+## al-runner 2.1.2.0 server mode — a resident server answers with the FIRST bundle it compiled
+
+Answers R126, and it is not the answer that row expected. Measured **2026-08-14** against
+**al-runner v2.1.2.0** by driving `--server` over stdin/stdout, with `fixtures/sandbox-app` +
+`fixtures/sandbox-tests` copied into a scratch dir. Full reproduction in
+`scripts/r126-server-probe/`.
+
+R126 asks whether the backend could make ONE call per MUTANT. LethAL activates a mutant by REWRITING
+`MutationSelector.Codeunit.al` in the source dir, so that design needs a resident server to act on a
+source change between requests. **It does not.**
+
+| step | source at the time | verdict returned |
+| --- | --- | --- |
+| request 1, fresh server | original | `OverBudgetDetected` **pass** (correct) |
+| request 2, same server | `IsOverBudget` changed `>` to `>=` | **pass** — WRONG, the test asserts against it |
+| request 3, same server | restored | pass |
+| fresh server, first request | already mutated | **fail** (correct) |
+| same fresh server, next request | restored | **fail** — WRONG, stale in the other direction |
+| the CLI, same mutated source | mutated | **fail** (correct) |
+
+Symmetric, and the fresh-server control is what makes it a finding rather than a fixture accident:
+every server is correct on its FIRST answer and frozen after it, while the CLI is correct every time
+on the same files.
+
+**It is not the AL-output cache.** One stale answer arrived with
+`"cached": false, "changedFiles": ["SandboxLogic.Codeunit.al"]` — the server detected the edit, said
+it was not serving from cache, and still executed the loaded assembly. A fresh server reporting
+`"cached": true` answered correctly.
+
+**No request field reaches it.** Eight guessed field names were ignored silently, the same method
+R97 used for the missing test filter: `isolation`, `testIsolation`, `isolationMode`, `noCache`,
+`reload`, `forceRebuild`, `rebuild`, `invalidate`.
+
+### What it would have been worth
+
+| path | wall clock |
+| --- | --- |
+| CLI, whole suite, AL-output cache MISS | 26.1 s |
+| CLI, whole suite, cache hit | 13.2 s |
+| CLI, `--test <one test>`, cache hit | 13.2 s |
+| server, first request after start | 4.7-6.3 s |
+| server, warm requests after that | 0.42-1.14 s |
+
+One test costs the same as the whole suite on the CLI: the fixed process + dependency load dominates
+entirely. Removing that per call is a real prize, which is why the refusal is recorded with numbers
+rather than as a shrug.
+
+### What this does NOT establish
+
+- **Not a claim about the VS Code extension**, this protocol's documented consumer. An editor that
+  reloads on save may never meet this. The finding is about a caller that changes sources BETWEEN
+  requests to one resident server — which is exactly what per-mutant activation is.
+- **Not isolation semantics.** Still unmeasured, and moot for R126 until a resident server
+  recompiles at all.
+- **Not stability.** al-runner ships several times a day; every number here is today's, against
+  2.1.2.0.
+
+---
+
+---
+
 ## R136 arm C -- does `Delete(true)` work with no preceding `Get`/`Find`? **Yes**
 
 `scripts/r136-armc-probe/`. Measured 2026-08-13 against **Cronus283** (the same container
