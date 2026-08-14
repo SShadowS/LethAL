@@ -95,13 +95,21 @@ describe("lethal doctor CLI wiring — config-level parity", () => {
   // for a command with no --backend flag. `run --backend bcdev` still refuses this config (same
   // as before — parity holds), but doctor's OWN message is now scoped to what doctor actually
   // needs, not a copy of `run`'s.
-  test("an empty config (the al-runner shape) refuses with doctor's own scoped message, not run's --backend one", async () => {
+  // R146 UPDATED this test rather than deleting it. It used to assert the message "doctor only
+  // checks a bcdev-configured project… if this is an al-runner project there is nothing here for
+  // doctor to check today", and to treat an EMPTY config as "the al-runner shape". Both stopped
+  // being true: R131 added a check that is about al-runner and needs no environment, and R146 made
+  // doctor accept a config that actually declares `alRunner`. What survives, and is what this test
+  // was really for, is that a config declaring NO backend at all refuses with doctor's own scoped
+  // message rather than `run`'s `--backend`-flavoured one.
+  test("a config declaring NO backend section refuses with doctor's own scoped message, not run's --backend one", async () => {
     const configFile: LethalConfigFile = {};
     expect(() => validateBcDevConfig(configFile.bcdev)).toThrow(/missing the "bcdev" section/);
     await expect(buildDoctorDeps(configFile)).rejects.toThrow(
-      /doctor only checks a bcdev-configured project/,
+      /no "bcdev", "envTool" or "alRunner" section/,
     );
-    await expect(buildDoctorDeps(configFile)).rejects.toThrow(/al-runner/);
+    // And it names the remedy in doctor's own terms, never `--backend`, which doctor has no flag for.
+    await expect(buildDoctorDeps(configFile)).rejects.toThrow(/Add the section for the backend/);
   });
 
   // A `bcdev` section that IS present but missing a required field is a genuine typo, not the
@@ -340,7 +348,7 @@ describe("lethal doctor CLI wiring — create-mode envTool config (final review,
     const {
       cfg: doctorCfg,
       deps,
-      createModeCaveat,
+      caveat: createModeCaveat,
     } = await buildDoctorDeps(configFile, {
       alRunnerCacheDir: NO_CACHE_DIR,
       alToolPaths: async () => ({ alcPath: "C:/alc.exe", altoolPath: "C:/altool.exe" }),
@@ -382,7 +390,7 @@ describe("lethal doctor CLI wiring — create-mode envTool config (final review,
     const {
       cfg: doctorCfg,
       deps,
-      createModeCaveat,
+      caveat: createModeCaveat,
     } = await buildDoctorDeps(configFile, {
       alRunnerCacheDir: NO_CACHE_DIR,
       alToolPaths: async () => ({ alcPath: "C:/alc.exe", altoolPath: "C:/altool.exe" }),

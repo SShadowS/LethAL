@@ -35,7 +35,7 @@ import {
 } from "./al-runner-canary";
 import { contractRefusals, contractSummary, runAlRunnerContractProbe } from "./al-runner-contract";
 import { ArtifactCompiler, defaultArtifactIo } from "./artifact";
-import type { ExecutionBackend } from "./backend";
+import type { BackendStatus, ExecutionBackend } from "./backend";
 import { BcDevMcpBackend } from "./bcdev-backend";
 import type { BcDevConfig } from "./bcdev-backend";
 import { renderVersion } from "./build-info";
@@ -75,7 +75,7 @@ import { clearPublishCeiling, knownCeiling } from "./publish-ceiling";
 import type { PublishCeiling } from "./publish-ceiling";
 import { canonicalContainerKey } from "./publish-serializer";
 import { ContainerDeployer, defaultAlToolPaths, defaultDeployerIo } from "./publisher";
-import type { AppPublisher } from "./publisher";
+import type { AppPublisher, SpawnFn } from "./publisher";
 import { QuarantineStore } from "./quarantine-store";
 import { renderConsole, writeJsonReport } from "./report";
 import type { SessionReport } from "./report";
@@ -2983,6 +2983,35 @@ export const DOCTOR_CREATE_MODE_CAVEAT =
   "nothing to check yet — none exists until a run provisions one. Only tool-paths is checked here.";
 
 /**
+ * R146 — the caveat an AL-RUNNER-ONLY project gets, and the reason it is not optional.
+ *
+ * Before this row, such a config THREW: `lethal doctor` only accepted a bcdev-shaped one, so R131's
+ * `al-runner-cache` check — a local directory read, needing no environment, written FOR al-runner
+ * users — was unreachable by the users who only use al-runner.
+ *
+ * The fix is not "report the live-BC checks anyway". Environment status, the lease, the quarantine
+ * record and the LethAL Control version have no meaning without a BC server, and rendering any of
+ * them `[ok]` would repeat R110's withdrawn lease check exactly: a check that structurally cannot
+ * fail, printed green, in the scenario the tooling exists for. They are ABSENT, and this names them
+ * so the absence is a statement rather than a gap.
+ *
+ * `alc`/`altool` are absent for a MEASURED reason, and R146's own row got this wrong. The row lists
+ * `alc` as "needed for the target compile on both backends". It is not: `buildBackend`'s al-runner
+ * branch returns before `defaultAlToolPaths`/`resolveAlToolPaths` are reached, and `ArtifactCompiler`
+ * is constructed only on the bcdev branch, because al-runner compiles the bundle with its own
+ * compiler. Checking alc here would fail configs `lethal run --backend al-runner` accepts, which is
+ * the stricter-than-`run` drift R21 and R34 each caught once already.
+ */
+export const DOCTOR_AL_RUNNER_ONLY_CAVEAT =
+  'this config declares "alRunner" and neither "bcdev" nor "envTool", so it is an al-runner-only ' +
+  "project and only the two checks that mean something without a BC server were run. NOT CHECKED, " +
+  "and absent rather than passing: environment status, the lease, the quarantine record, the " +
+  "control-version of the deployed LethAL Control app — all four need a live BC server — and " +
+  "alc/altool, which `lethal run --backend al-runner` never resolves because al-runner compiles " +
+  "the bundle with its own compiler. A green report here says nothing about whether a bcdev run " +
+  "would work.";
+
+/**
  * The `packageCachePath` `validateBcDevConfig` requires (it is `BcDevConfigSection`'s shared
  * shape) when a read-only resolver has nothing else to offer for it — a config that leaves
  * `packageCachePath` to `downloadSymbols` (no static path declared — legal per
@@ -3166,6 +3195,44 @@ function doctorConfigFromEnvTool(
 }
 
 /**
+ * R146 — the `al-runner` doctor probe, or `undefined` when the config never mentions al-runner.
+ *
+ * Builds the REAL `AlRunnerBackend` and calls its own `status()`, which is the same call
+ * `runSession` makes before a session starts: it spawns `--version` and refuses a binary that is not
+ * v2, because this adapter's v2-only argv pointed at v1 produces wrong verdicts rather than an
+ * error. Doctor's honesty constraint 3 is that every check calls the refusal's own machinery, and a
+ * second hand-rolled `--version` parse here is exactly the drift that constraint exists to stop.
+ *
+ * The fields `status()` does not touch (`instrumentedDir`, `testDir`, `selectorObjectId`) are given
+ * inert values. Nothing this function does reads them, and nothing it does writes to disk or spawns
+ * anything except `--version`, so it stays inside doctor's read-only boundary by construction.
+ *
+ * `serverMode: true` is passed through rather than dropped: the constructor REFUSES it (R97/R126),
+ * and a config `run` would reject must throw here too rather than being quietly reported on.
+ */
+function alRunnerStatusFor(
+  configFile: LethalConfigFile,
+  spawn?: SpawnFn,
+): (() => Promise<BackendStatus>) | undefined {
+  const raw = configFile.alRunner;
+  if (raw === undefined) return undefined;
+  const c = validateAlRunnerConfig(raw);
+  return async () => {
+    const backend = new AlRunnerBackend(
+      {
+        alRunnerPath: c.alRunnerPath,
+        instrumentedDir: "",
+        testDir: "",
+        selectorObjectId: 0,
+        ...(c.serverMode !== undefined ? { serverMode: c.serverMode } : {}),
+      },
+      ...(spawn !== undefined ? ([spawn] as const) : ([] as const)),
+    );
+    return backend.status();
+  };
+}
+
+/**
  * R109 ruling, honesty constraint 1: builds `DoctorDeps`/`DoctorConfig` through the SAME
  * load-and-validate path `lethal run` uses — `validateBcDevConfig`/`validateEnvToolConfig`, the
  * identical calls `resolveEnvToolSession`/`buildBackend` make — never a second, hand-rolled parse.
@@ -3218,16 +3285,56 @@ export async function buildDoctorDeps(
      *  1 GB cache the machine running it happens to have — and so its result is the machine's,
      *  not the suite's. Absent means al-runner's own default location. */
     readonly alRunnerCacheDir?: string;
+    /** R146: the spawn the al-runner `--version` probe uses. Injected by tests so the check can be
+     *  driven without a real al-runner install; absent means the real one. */
+    readonly alRunnerSpawn?: SpawnFn;
   } = {},
 ): Promise<{
   readonly cfg: DoctorConfig;
   readonly deps: DoctorDeps;
-  readonly createModeCaveat?: string;
+  /**
+   * R146: at most ONE caveat, because the two shapes that produce one are mutually exclusive — a
+   * create-mode config HAS an `envTool` section, and an al-runner-only config has neither `envTool`
+   * nor `bcdev`. Renamed from `createModeCaveat` when the second kind arrived, so the field name
+   * does not claim to be about create mode while carrying something else.
+   */
+  readonly caveat?: string;
 }> {
   // R111: validation and resolution both live in `prepareBcdevReadOnly`, shared with
   // `force-reset-lease` — including constraint 4, the hard read-only boundary, which that helper
   // now carries in the config it hands the client rather than in a comment. A malformed envTool
   // section still throws HERE, eagerly, identically to `run` (constraint 1).
+  // R146 — an AL-RUNNER-ONLY project. Decided BEFORE `prepareBcdevReadOnly`, because that helper
+  // resolves a bcdev identity this config does not have and would throw on the way.
+  //
+  // The check list is short on purpose. `alRunnerCache` (R131) reads a local directory; `alRunner`
+  // spawns `--version` through `AlRunnerBackend.status()`, the same call `runSession` makes, and it
+  // can genuinely refuse. Everything else doctor knows how to ask is a live-BC concern and is left
+  // out rather than answered vacuously — see `DOCTOR_AL_RUNNER_ONLY_CAVEAT` for the full list and
+  // for the measurement that keeps alc out of it.
+  if (
+    configFile.envTool === undefined &&
+    configFile.bcdev === undefined &&
+    configFile.alRunner !== undefined
+  ) {
+    // Eagerly, exactly as `buildBackend` does, so a config `run` would reject throws HERE too
+    // (honesty constraint 1) rather than surfacing as a failing check. `serverMode: true` is
+    // refused by `AlRunnerBackend`'s own constructor for the same reason.
+    validateAlRunnerConfig(configFile.alRunner);
+    const alRunnerProbe = alRunnerStatusFor(configFile, opts.alRunnerSpawn);
+    return {
+      cfg: {},
+      deps: {
+        // Non-undefined by construction: this branch is reached only when `configFile.alRunner` is
+        // defined, which is the only thing `alRunnerStatusFor` returns `undefined` for. Narrowed
+        // rather than asserted — `!` is banned here.
+        ...(alRunnerProbe !== undefined ? { alRunner: alRunnerProbe } : {}),
+        alRunnerCache: () => readAlRunnerCache(opts.alRunnerCacheDir),
+      },
+      caveat: DOCTOR_AL_RUNNER_ONLY_CAVEAT,
+    };
+  }
+
   const readOnly = prepareBcdevReadOnly(configFile, {
     runId: "doctor",
     ...(opts.projectDir !== undefined ? { projectDir: opts.projectDir } : {}),
@@ -3238,16 +3345,19 @@ export async function buildDoctorDeps(
   // `server`/`serverInstance`/credentials from the file — validating the raw bcdev section here
   // would throw on exactly the configs `prepareBcdevReadOnly` exists to resolve.
   if (configFile.envTool === undefined && configFile.bcdev === undefined) {
-    // Final review (Minor): `validateBcDevConfig`'s own message says `...(required for --backend
-    // bcdev)` — accurate for `run`, which HAS a --backend flag to name; doctor has none. An
-    // al-runner-only project (no `bcdev` section at all — `run --backend al-runner` never touches
-    // `configFile.bcdev`, so this is a perfectly valid config) hit that message and read it as
-    // "your config is broken", when the honest answer is narrower: doctor's checks are all live-BC
-    // concerns and none of them apply here yet. Scoped to `bcdev` being FULLY ABSENT — a `bcdev`
-    // section that IS present but missing a required field is a genuine typo, and
-    // `validateBcDevConfig`'s own field-listing message below is the right one for that.
+    // Reached only when the config declares NO backend at all — the al-runner-only branch above has
+    // already returned. That is a real mistake worth refusing (R146 point 3), and widening doctor to
+    // accept it would have thrown the refusal away along with the bug.
+    //
+    // Scoped to a section being FULLY ABSENT. A `bcdev` section that IS present but missing a
+    // required field is a genuine typo, and `validateBcDevConfig`'s own field-listing message below
+    // is the right one for that.
+    //
+    // The message this replaced said doctor "only checks a bcdev-configured project… if this is an
+    // al-runner project there is nothing here for doctor to check today". That stopped being true
+    // on 2026-08-14 when R131 added `al-runner-cache`, and R146 is the row that noticed.
     throw new Error(
-      'lethal doctor only checks a bcdev-configured project — environment, quarantine, control-app version and alc/altool are all live-BC concerns. This config has no "bcdev" section; if this is an al-runner project (--backend al-runner), there is nothing here for doctor to check today.',
+      'lethal doctor found no "bcdev", "envTool" or "alRunner" section in this config, so there is no backend for it to check anything about. Add the section for the backend this project runs on.',
     );
   }
   if (configFile.envTool === undefined) {
@@ -3363,6 +3473,11 @@ export async function buildDoctorDeps(
   const alRunnerCache = async (): Promise<AlRunnerCacheReport> =>
     readAlRunnerCache(opts.alRunnerCacheDir);
 
+  // R146: the al-runner probe follows the CONFIG, not the `--backend` flag doctor does not have. A
+  // bcdev project that also declares an `alRunner` section gets it alongside the live-BC checks; a
+  // config that never mentions al-runner gets no dep and therefore no check.
+  const alRunner = alRunnerStatusFor(configFile, opts.alRunnerSpawn);
+
   return {
     cfg: {
       ...doctorConfigFromEnvTool(envCfg),
@@ -3374,10 +3489,13 @@ export async function buildDoctorDeps(
     // Create mode: omit the three deps ENTIRELY (not merely make them throw a friendlier error) —
     // `runDoctor` skips a check whose dep is absent, rather than reporting a failure for a
     // question that has no answer yet. See `DOCTOR_CREATE_MODE_CAVEAT` and `doctorFromCli` below.
-    deps: isCreateMode
-      ? { toolPaths, alRunnerCache }
-      : { envStatus, quarantine, controlVersion, lease, toolPaths, alRunnerCache },
-    ...(isCreateMode ? { createModeCaveat: DOCTOR_CREATE_MODE_CAVEAT } : {}),
+    deps: {
+      ...(isCreateMode ? {} : { envStatus, quarantine, controlVersion, lease }),
+      toolPaths,
+      ...(alRunner !== undefined ? { alRunner } : {}),
+      alRunnerCache,
+    },
+    ...(isCreateMode ? { caveat: DOCTOR_CREATE_MODE_CAVEAT } : {}),
   };
 }
 
@@ -3420,22 +3538,30 @@ export async function doctorFromCli(
      *  1 GB cache the machine running it happens to have — and so its result is the machine's,
      *  not the suite's. Absent means al-runner's own default location. */
     readonly alRunnerCacheDir?: string;
+    /** R146: the spawn the al-runner `--version` probe uses. Injected by tests; absent means the
+     *  real one. */
+    readonly alRunnerSpawn?: SpawnFn;
   } = {},
 ): Promise<number> {
   const configFile = await loadLethalConfigFile(parsed.configPath);
   const {
     cfg,
     deps: doctorDeps,
-    createModeCaveat,
+    caveat,
   } = await buildDoctorDeps(configFile, {
     ...(parsed.projectDir !== undefined ? { projectDir: parsed.projectDir } : {}),
     ...(deps.quarantineDir !== undefined ? { quarantineDir: deps.quarantineDir } : {}),
     ...(deps.alToolPaths !== undefined ? { alToolPaths: deps.alToolPaths } : {}),
     ...(deps.fetchFn !== undefined ? { fetchFn: deps.fetchFn } : {}),
     ...(deps.makeEnvToolClient !== undefined ? { makeEnvToolClient: deps.makeEnvToolClient } : {}),
+    // R146: this was DECLARED on both sides and dropped in the middle, so R131's injection seam did
+    // nothing when reached through the CLI and a unit test driving `lethal doctor` walked whatever
+    // multi-GB artifact cache the machine happened to hold.
+    ...(deps.alRunnerCacheDir !== undefined ? { alRunnerCacheDir: deps.alRunnerCacheDir } : {}),
+    ...(deps.alRunnerSpawn !== undefined ? { alRunnerSpawn: deps.alRunnerSpawn } : {}),
   });
   const report = await runDoctor(cfg, doctorDeps);
-  console.log(renderDoctorReport(report, createModeCaveat));
+  console.log(renderDoctorReport(report, caveat));
   return report.ok ? 0 : 1;
 }
 
