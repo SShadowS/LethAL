@@ -1,0 +1,28 @@
+{
+  "id": "3f1a7c28-5b64-4d91-9e02-6a8c1d4f7b35",
+  "name": "LethAL R135 Publish Probe",
+  "publisher": "LethAL",
+  "version": "1.0.0.1",
+  "brief": "R135: what does publish+sync+install cost for an artifact that differs by ONE declarative property?",
+  "description": "Throwaway probe, not for production use. Times the deployment step Option A of docs/roadmap/R135.md would pay PER MUTANT, by publishing the same tiny app repeatedly with only a FlowField CalcFormula condition changed. See scripts/r135-publish-probe/README.md.",
+  "privacyStatement": "",
+  "EULA": "",
+  "help": "",
+  "url": "",
+  "logo": "",
+  "dependencies": [],
+  "screenshots": [],
+  "idRanges": [
+    {
+      "from": 71540,
+      "to": 71549
+    }
+  ],
+  "resourceExposurePolicy": {
+    "allowDebugging": true,
+    "allowDownloadingSource": true,
+    "includeSourceInSymbolFile": true
+  },
+  "runtime": "13.0",
+  "features": []
+}

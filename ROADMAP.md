@@ -58,6 +58,7 @@ that ordering is the priority.
 - **R141** · flip-filter-literal's character-class refusals are proven offline only: no live negative anywhere · [R141.md](docs/roadmap/R141.md) · done (e66c78d) — arm I measures the character refusal live; the tables gate is frozen at 187/31/10 over 228…
 - **R142** · A conformance case with a non-empty expectation still never checks for EXTRA specs · [R142.md](docs/roadmap/R142.md) · done — measured first (31 non-empty cases across all 15 operators, ZERO over-produce), then the exactness…
 - **R143** · `run-trigger-skipped-insert` tags every Insert mutant, so the platform screen over-reports; narrowing it needs the target table's OnInsert · [R143.md](docs/roadmap/R143.md) · open — filed 2026-08-14 while closing R138
+- **R144** · The declarative sites LethAL drops are counted and then thrown away in a stderr warning the report never carries · [R144.md](docs/roadmap/R144.md) · open — filed 2026-08-14 by R135's ruling, which is incomplete without it
 
 ## Product gaps a real project hits
 
@@ -82,9 +83,10 @@ that ordering is the priority.
 - **R117** · Cross-file `file.ts:NNN` citations rot silently, and this repo now has four measured instances — two of which… · [R117.md](docs/roadmap/R117.md) · done — 97 pointers replaced with greppable names across live source, tests and the roadmap, and…
 - **R118** · `ROADMAP.md` rows are read field-wise on `|`, and 115 of 166 rows contain INLINE pipes — so a field-wise read… · [R118.md](docs/roadmap/R118.md) · done (this commit) — the table is GONE, not parsed more carefully: one item per file under `docs/roadmap/`…
 - **R134** · Mutate inside SetFilter's filter-expression literal — the one filter class no operator can see · [R134.md](docs/roadmap/R134.md) · done (4f5e896)
-- **R135** · Declarative surfaces (FlowFields/CalcFormula, query objects, filter properties) need a mutation mechanism before any operator · [R135.md](docs/roadmap/R135.md) · open — filed 2026-08-12. The mechanism decision comes first; every operator here is blocked on it.
+- **R135** · Declarative surfaces (FlowFields/CalcFormula, query objects, filter properties) need a mutation mechanism before any operator · [R135.md](docs/roadmap/R135.md) · closed 2026-08-14 — RULING: Option C. LethAL does not mutate declarative surfaces. Option B is dead on…
 - **R136** · Tier-2 executable candidates: FindFirst/FindLast swap, Validate-to-assign, run-trigger flag on Insert/Delete · [R136.md](docs/roadmap/R136.md) · done (1d259ca)
 - **R139** · A stale published TEST app is indistinguishable from genuinely failing tests, and costs a full gate run to diagnose · [R139.md](docs/roadmap/R139.md) · done — check 1 (16b4014) refuses on the server's own words, check 2 (91bf897) compares the PUBLISHED test set…
+- **R145** · Per-mutant artifact variants for declarative surfaces — measured, costed, and blocked on demand rather than on effort · [R145.md](docs/roadmap/R145.md) · open — filed 2026-08-14 by R135's ruling, deliberately NOT scheduled
 
 ## Backends and tooling
 
