@@ -141,3 +141,72 @@ describe("SessionReport.platformArtifactKills (R72)", () => {
     expect(text).toContain("does not claim any");
   });
 });
+
+// R138 added the SECOND mechanism. Everything above tested one; a screen with one group cannot show
+// whether grouping, ordering, per-group explanations or the count across groups actually work.
+describe("SessionReport.platformArtifactKills with two mechanisms (R138)", () => {
+  const INSERT_TAG = { platformKillMechanism: "run-trigger-skipped-insert" } as const;
+
+  test("groups the two mechanisms separately, sorted, with the count spanning both", () => {
+    const r = build([
+      { mutant: entry("M0001", TAG), verdict: "killed", batchIndex: 0 },
+      { mutant: entry("M0002", INSERT_TAG), verdict: "killed", batchIndex: 0 },
+      { mutant: entry("M0003", INSERT_TAG), verdict: "killed", batchIndex: 0 },
+      { mutant: entry("M0004"), verdict: "killed", batchIndex: 0 },
+    ]);
+    expect(r.platformArtifactKills?.killedCount).toBe(3);
+    expect(r.platformArtifactKills?.byMechanism.map((g) => g.mechanism)).toEqual([
+      "run-trigger-skipped-insert",
+      "write-txn-codeunit-run",
+    ]);
+    expect(r.platformArtifactKills?.byMechanism.map((g) => g.mutants)).toEqual([
+      ["M0002", "M0003"],
+      ["M0001"],
+    ]);
+  });
+
+  // Each mechanism must carry its OWN explanation. One group inheriting the other's would tell the
+  // reader a duplicate-key artifact was measured on Cronus281 as a write-transaction abort.
+  test("each group explains its own mechanism, and says how strong its evidence is", () => {
+    const r = build([
+      { mutant: entry("M0001", TAG), verdict: "killed", batchIndex: 0 },
+      { mutant: entry("M0002", INSERT_TAG), verdict: "killed", batchIndex: 0 },
+    ]);
+    const byName = new Map(
+      (r.platformArtifactKills?.byMechanism ?? []).map((g) => [g.mechanism, g.explanation]),
+    );
+    expect(byName.get("run-trigger-skipped-insert")).toContain("duplicate primary key");
+    expect(byName.get("run-trigger-skipped-insert")).toContain("every `Insert` mutant carries");
+    expect(byName.get("write-txn-codeunit-run")).toContain("return value is consumed");
+    expect(byName.get("write-txn-codeunit-run")).not.toContain("duplicate primary key");
+  });
+
+  // The shared diagnosis is now mechanism-NEUTRAL. It used to say every screened mutant sits at a
+  // site BC is "MEASURED to refuse", which is true of the write-transaction detector and not true
+  // of every `Insert` site — so the shared text would have overclaimed for the whole second group.
+  test("the shared diagnosis does not claim every screened site was measured", () => {
+    const r = build([{ mutant: entry("M0002", INSERT_TAG), verdict: "killed", batchIndex: 0 }]);
+    const diagnosis = r.platformArtifactKills?.diagnosis ?? "";
+    expect(diagnosis).toContain("they stay killed");
+    expect(diagnosis).toContain("does not claim any");
+    expect(diagnosis).not.toContain("MEASURED to refuse");
+  });
+
+  test("the second mechanism moves no verdict either", () => {
+    const tagged: readonly SessionOutcome[] = [
+      { mutant: entry("M0001", INSERT_TAG), verdict: "killed", batchIndex: 0 },
+      { mutant: entry("M0002"), verdict: "survived", batchIndex: 0 },
+    ];
+    const untagged: readonly SessionOutcome[] = [
+      { mutant: entry("M0001"), verdict: "killed", batchIndex: 0 },
+      { mutant: entry("M0002"), verdict: "survived", batchIndex: 0 },
+    ];
+    const withTag = build(tagged);
+    const without = build(untagged);
+    expect(withTag.counts).toEqual(without.counts);
+    expect(withTag.mutationScore).toBe(without.mutationScore);
+    expect(withTag.mutants.map((m) => m.verdict)).toEqual(without.mutants.map((m) => m.verdict));
+    expect(withTag.platformArtifactKills?.killedCount).toBe(1);
+    expect(without.platformArtifactKills).toBeUndefined();
+  });
+});

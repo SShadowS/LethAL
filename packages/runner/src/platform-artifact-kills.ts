@@ -36,23 +36,29 @@
  *
  * WHAT IT CANNOT SEE, stated because a screen that hides its own reach is worse than none:
  *
- *   - Only `lethal.remove-commit` tags sites today. Other operators produce platform-refused kills
- *     too — R82's arm E is a swap killed by a BC field-length overflow — and none of those are
- *     screened here. An absent tag is not a claim that a kill was assertion-earned.
+ *   - Only `lethal.remove-commit` and `lethal.swap-modify-flag`'s `Insert` mutants tag sites today
+ *     (R138 added the second). Other operators produce platform-refused kills too — R82's arm E is a
+ *     swap killed by a BC field-length overflow, and the table fixture's arm K reaches its
+ *     duplicate-key error by two further routes, an `empty-block` on the `OnInsert` body and a
+ *     `negate-conditional` on its blank-key guard, neither of which is tagged. An absent tag is not
+ *     a claim that a kill was assertion-earned.
  *   - The tag is a property of the SITE, decided before anything ran, so a tagged kill MIGHT still
  *     have been earned by an assertion in a covering test that failed for its own reasons before the
  *     refusal was reached. That is exactly why this reads "read these" and not "these are false".
  */
 
+import type { PlatformKillMechanism } from "@lethal/engine";
+
 /** `SessionReport.platformArtifactKills.diagnosis`, stated once so the report and any consumer
  *  reading the constant cannot drift into two accounts of one fact. */
 export const PLATFORM_ARTIFACT_KILL_DIAGNOSIS =
   "These mutants were scored `killed`, and they stay killed — this is an annotation, not a " +
-  "re-score. What it adds is that each one sits at a site where Business Central is MEASURED to " +
-  "refuse the mutated program outright, so a kill there can be the platform rather than anything " +
-  "your tests assert. Read them before crediting them to the suite. LethAL does not claim any " +
-  "particular one of them is false: it screens on the site, which it can prove, not on the reason " +
-  "the test went red, which it cannot.";
+  "re-score. What it adds is that each one sits at a site where Business Central can refuse the " +
+  "mutated program outright, so a kill there can be the platform rather than anything your tests " +
+  "assert. Read them before crediting them to the suite. LethAL does not claim any particular one " +
+  "of them is false: it screens on the site, which it can prove, not on the reason the test went " +
+  "red, which it cannot. How strongly each mechanism is evidenced differs, and each says so in " +
+  "its own explanation below.";
 
 /**
  * What each recognised mechanism means, keyed on the tag an operator writes into
@@ -61,11 +67,20 @@ export const PLATFORM_ARTIFACT_KILL_DIAGNOSIS =
  * A `Record` over the closed set rather than a lookup with a default: a tag nobody wrote an
  * explanation for must be a compile error here, not a mutant screened with an empty reason.
  */
-export const PLATFORM_KILL_MECHANISM_EXPLANATIONS: Record<"write-txn-codeunit-run", string> = {
+export const PLATFORM_KILL_MECHANISM_EXPLANATIONS: Record<PlatformKillMechanism, string> = {
   "write-txn-codeunit-run":
     "the deleted `Commit()` can leave a write transaction open across a later `Codeunit.Run` whose " +
     "return value is consumed (`Ran := Codeunit.Run(X)`, or `if not Codeunit.Run(X) then ...`), " +
     "and BC aborts the whole transaction there — measured on Cronus281, in both call frames, with " +
     "and without a prior `Commit()`. The bare statement form `Codeunit.Run(X);` does not abort and " +
-    "is not tagged.",
+    "is not tagged. STRONG: a detector fires only on that measured shape.",
+  "run-trigger-skipped-insert":
+    "rewriting `Insert(true)` to `Insert(false)` skips `OnInsert`. On a table whose `OnInsert` " +
+    "assigns the primary key that leaves the key blank: the first blank-key insert succeeds " +
+    "(blank is a legal `Code[20]`) and a second raises a duplicate primary key, or a later " +
+    "`Get`/`Modify` on the expected key raises that the record does not exist. The test then dies " +
+    "on the platform before evaluating any assertion. WEAKER THAN THE ABOVE, and deliberately so: " +
+    "every `Insert` mutant carries this tag, because whether the target table's `OnInsert` touches " +
+    "the primary key is not visible at the call site, and for a base-app record it is not visible " +
+    "at all. Treat it as a prompt to read the kill, not as a verdict on it.",
 };

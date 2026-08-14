@@ -25,12 +25,31 @@ export type AstNodeId = string;
  * it does not re-score one (design §6.7's timeout precedent, and the discipline R121 also obeys).
  * Re-scoring would invalidate every frozen gate figure and every committed campaign baseline.
  *
+ * `"run-trigger-skipped-insert"` — rewriting `Insert(true)` to `Insert(false)` skips `OnInsert`. On
+ * a table whose `OnInsert` assigns the primary key that leaves the key blank: the first blank-key
+ * insert succeeds, because blank is a legal `Code[20]`, and a second raises a duplicate primary key.
+ * The single-row variant is a later `Get`/`Modify` on the expected key raising "the record does not
+ * exist". Either way the test dies on the platform before evaluating any assertion. R138, measured
+ * live on the table fixture's arm K, whose covering test asserts nothing at all.
+ *
+ * THE TWO ARE NOT EQUALLY PROVEN, and the report must not present them as if they were. The
+ * write-transaction tag is emitted only where a detector found the exact measured shape.
+ * `run-trigger-skipped-insert` is emitted on EVERY `Insert` mutant, because whether the target
+ * table's `OnInsert` touches the primary key is not visible at the call site and, for a base-app
+ * record, is not visible at all — the semantic layer is source-derived and cannot see base-app
+ * triggers. So it means "a kill here CAN be the platform; read it", never "this kill is false".
+ * See `PLATFORM_KILL_MECHANISM_EXPLANATIONS` (runner), where each mechanism states its own evidence.
+ *
+ * `Delete` and `Modify` get NO mechanism, ruled 2026-08-14 and recorded on R138: skipping `OnDelete`
+ * or `OnModify` writes LESS than the unmutated program, never more, and the row is still located by
+ * the same key — there is no error the mutation can add.
+ *
  * Deliberately keyed on SYNTAX and never on BC's failure text. The refusal's message is BC's
  * generic "An error occurred and the transaction is stopped", which names neither `Codeunit.Run`
  * nor the rule (so a text rule would fire on any platform-stopped transaction) and which localises
  * (R66), making a text rule English-only. A syntactic marker has neither ceiling.
  */
-export type PlatformKillMechanism = "write-txn-codeunit-run";
+export type PlatformKillMechanism = "write-txn-codeunit-run" | "run-trigger-skipped-insert";
 
 export interface MutationSpec {
   readonly operatorName: string;

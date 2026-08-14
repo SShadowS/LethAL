@@ -4,6 +4,7 @@ import {
   type MutationOperator,
   type MutationSpec,
   type ParentContextHint,
+  type PlatformKillMechanism,
   type SemanticContext,
   isStatementPosition,
 } from "@lethal/operator-sdk";
@@ -20,6 +21,26 @@ const FALSE_REPLACEMENT = "false";
  * names are in scope.
  */
 const RUN_TRIGGER_METHODS = ["Modify", "Insert", "Delete"] as const;
+
+/**
+ * R138. The one method of the three whose skipped trigger can ADD an error rather than remove one —
+ * see `PlatformKillMechanism` (engine) for the mechanism and for the ruling that `Delete`/`Modify`
+ * get none. Matched case-insensitively, like every other method comparison here.
+ */
+const PLATFORM_KILL_METHOD = "Insert";
+
+/**
+ * The tag `Insert` mutants carry. Declared as a typed constant rather than an inline string so a
+ * value the engine's union does not know is a compile error here, at the one place that writes it.
+ *
+ * There is deliberately NO detector behind it, unlike `write-txn-codeunit-run` (which has its own
+ * module and fires only on the exact measured shape). Whether the target table's `OnInsert` assigns
+ * the primary key is not visible at the call site, and for a base-app record it is not visible at
+ * all. So every `Insert` mutant is tagged and the tag means "a kill here CAN be the platform; read
+ * it". Narrowing it — resolve the receiver's table, find its `OnInsert`, check whether it assigns a
+ * primary-key field — is `docs/roadmap/R143.md`.
+ */
+const RUN_TRIGGER_SKIPPED_INSERT: PlatformKillMechanism = "run-trigger-skipped-insert";
 
 /**
  * Single source of truth for both places this operator's version must agree
@@ -110,9 +131,17 @@ const OPERATOR_VERSION = "1.1.0";
  * a No. Series; with the trigger skipped the key stays blank, and either a second insert of the same
  * shape raises a duplicate-key error or a later `Get`/`Modify` on the expected key raises "the
  * record does not exist". Either way the test dies on the platform before any assertion runs, and
- * the mutant is scored `killed` without the suite having earned it. This operator does not tag that
- * class (no `PlatformKillMechanism` is emitted here); closing the screen gap is `docs/roadmap/R138.md`,
- * filed separately so the next reader finds the class named rather than rediscovering it live.
+ * the mutant is scored `killed` without the suite having earned it.
+ *
+ * Since R138 the `Insert` mutants declare `run-trigger-skipped-insert`, so the report's
+ * platform-artifact screen groups them. `Delete` and `Modify` declare nothing, and that is a RULING,
+ * not an omission: skipping `OnDelete`/`OnModify` writes LESS than the unmutated program, never
+ * more, and the row is still located by the same key, so there is no error the mutation can add. The
+ * tag is BROADER than its mechanism — every `Insert` mutant carries it, because whether the target
+ * table's `OnInsert` touches the primary key is not visible here — which is why it means "read this
+ * kill", never "this kill is false". Narrowing it is `docs/roadmap/R143.md`.
+ *
+ * The verdict does NOT move. A diagnosis never re-scores a mutant (R72's discipline).
  *
  * Documented limits:
  *   - (spec §4 table) only observable when the table's `OnModify`/`OnInsert`/`OnDelete` does
@@ -134,15 +163,24 @@ export const swapModifyFlag: MutationOperator = {
 
   targets(node: ALSyntaxNode, ctx: SemanticContext): boolean {
     if (node.kind !== ALNodeKind.procedure_call) return false;
-    if (!claimsAnyRunTriggerMethod(node, ctx)) return false;
+    if (claimedRunTriggerMethod(node, ctx) === null) return false;
     return booleanTrueArgument(node) !== null;
   },
 
-  generate(node: ALSyntaxNode, _ctx: SemanticContext): readonly MutationSpec[] {
+  generate(node: ALSyntaxNode, ctx: SemanticContext): readonly MutationSpec[] {
     const arg = booleanTrueArgument(node);
     if (arg === null) return [];
     const mutatedText = replaceArgument(node, arg, FALSE_REPLACEMENT);
     if (mutatedText === null) return [];
+    // R138: the tag follows the matched METHOD, not the operator. Re-asking rather than threading
+    // the name from `targets()` — `generate()` is called on nodes `targets()` accepted, but the two
+    // are separate entry points and an operator that assumed otherwise would be relying on the
+    // walker's calling convention rather than on its own guards.
+    const method = claimedRunTriggerMethod(node, ctx);
+    const platformKillMechanism =
+      method !== null && method.toLowerCase() === PLATFORM_KILL_METHOD.toLowerCase()
+        ? RUN_TRIGGER_SKIPPED_INSERT
+        : undefined;
 
     return [
       {
@@ -152,6 +190,7 @@ export const swapModifyFlag: MutationOperator = {
         before: node,
         after: synthesizeAfter(node, mutatedText),
         parentContext: parentContextOf(node),
+        ...(platformKillMechanism !== undefined ? { platformKillMechanism } : {}),
       },
     ];
   },
@@ -218,19 +257,21 @@ export const swapModifyFlag: MutationOperator = {
 };
 
 /**
- * Does `node` call ANY of `RUN_TRIGGER_METHODS` on a proven record receiver? Tries each name in
- * order through `claimsRecordMethod` and short-circuits on the first match: a non-matching node
- * costs at most three cheap callee-name comparisons and nothing more, since `claimsRecordMethod`
- * itself rejects on the callee name before doing any symbol-table work.
+ * WHICH of `RUN_TRIGGER_METHODS` does `node` call on a proven record receiver, or `null` for none?
+ * Tries each name in order through `claimsRecordMethod` and short-circuits on the first match: a
+ * non-matching node costs at most three cheap callee-name comparisons and nothing more, since
+ * `claimsRecordMethod` itself rejects on the callee name before doing any symbol-table work.
  *
- * Returns a boolean rather than the matched method name, because nothing today needs to know
- * WHICH of the three names claimed. R138 (docs/roadmap/R138.md) will need it: distinguishing an
- * `Insert` mutant's platform-kill mechanism from a `Delete` one requires knowing which method
- * matched at `generate()` time. Whoever picks up R138 should change this to return
- * `string | null` (the matched name, or `null`) instead of adding a second lookup.
+ * Returns the matched NAME rather than a boolean, which is what R138 needed: only the `Insert`
+ * mutants declare a `PlatformKillMechanism`, so `generate()` has to know which of the three names
+ * claimed. The name returned is this file's own spelling from `RUN_TRIGGER_METHODS`, not the
+ * source's — `claimsRecordMethod` matches case-insensitively, so `INSERT(True)` claims under
+ * `"Insert"` and is tagged exactly as `Insert(true)` is.
  */
-function claimsAnyRunTriggerMethod(node: ALSyntaxNode, ctx: SemanticContext): boolean {
-  return RUN_TRIGGER_METHODS.some((methodName) => claimsRecordMethod(node, ctx, methodName));
+function claimedRunTriggerMethod(node: ALSyntaxNode, ctx: SemanticContext): string | null {
+  return (
+    RUN_TRIGGER_METHODS.find((methodName) => claimsRecordMethod(node, ctx, methodName)) ?? null
+  );
 }
 
 /**

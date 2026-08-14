@@ -331,14 +331,22 @@ const EXPECTED = {
   // R132 moves it to 191 / 222, about 0.8604, up again for the same reason.
   mutationScore: 191 / (191 + 31),
   /**
-   * R72: the screen must fire, and it must fire on exactly one mutant.
+   * R72, extended by R138: the screen must fire, and on exactly these mutants under exactly these
+   * mechanisms.
    *
-   * `lethal.remove-commit` is the only operator that tags a site, and the fixture holds exactly one
-   * site in the value form. A second tagged kill here would mean either a new fixture site nobody
-   * declared or the detector claiming the STATEMENT form — the shape measured to survive, and the
-   * shape whose false prediction R72 spent a probe correcting.
+   * It was 1 until R138, when `lethal.swap-modify-flag`'s `Insert` mutants gained the second
+   * mechanism. The fixture holds three `Insert(true)` sites — arms A, B and K in `Data Flag Ops` —
+   * of which arms A and K are killed and arm B survives, and a survivor at such a site is not
+   * screened. So 1 + 2 = 3, pre-committed in
+   * docs/superpowers/specs/2026-08-14-r138-insert-mechanism-precommitment.md before the run.
+   *
+   * A count alone would be satisfied by the wrong three mutants, so `byMechanism` is pinned by NAME
+   * and by MEMBERSHIP below. The write-transaction group in particular must stay at exactly one: a
+   * second member there would mean the detector had started claiming the STATEMENT form of
+   * `Codeunit.Run`, the shape measured to survive and the false prediction R72 spent a probe
+   * correcting.
    */
-  platformArtifactKills: 1,
+  platformArtifactKills: 3,
   /**
    * R121: this fixture is the measured VACUOUS case for the assertion screen, and pinning it here is
    * the point rather than an incidental extra.
@@ -607,15 +615,24 @@ function assertVerdictTable(report: SessionReport): void {
   assert.equal(screen.killedCount, EXPECTED.platformArtifactKills, "screened-kill count mismatch");
   assert.deepEqual(
     screen.byMechanism.map((g) => g.mechanism),
-    ["write-txn-codeunit-run"],
-    "the only mechanism any operator tags today is the write-transaction one",
+    ["run-trigger-skipped-insert", "write-txn-codeunit-run"],
+    "both mechanisms must be present and named — R138 added the second, and the report sorts them",
   );
-  const [screenedCode] = screen.byMechanism[0]?.mutants ?? [];
-  const screened = report.mutants.find((m) => m.mutantCode === screenedCode);
-  assert.ok(
-    screened !== undefined,
-    `screened mutant ${screenedCode} is not in the report's own mutant list`,
-  );
+  const groupOf = (mechanism: string) => {
+    const g = screen.byMechanism.find((x) => x.mechanism === mechanism);
+    assert.ok(g !== undefined, `no ${mechanism} group in the screen`);
+    return g;
+  };
+  const mutantOf = (code: string) => {
+    const m = report.mutants.find((x) => x.mutantCode === code);
+    assert.ok(m !== undefined, `screened mutant ${code} is not in the report's own mutant list`);
+    return m;
+  };
+  // Mechanism 1, R72 — unchanged by R138, and asserted as such rather than assumed.
+  const writeTxn = groupOf("write-txn-codeunit-run");
+  assert.equal(writeTxn.mutants.length, 1, "the write-transaction mechanism screens exactly one");
+  const [screenedCode] = writeTxn.mutants;
+  const screened = mutantOf(screenedCode ?? "");
   assert.equal(screened.operatorName, "lethal.remove-commit", "screened mutant's operator");
   assert.equal(
     screened.procedureName,
@@ -628,6 +645,50 @@ function assertVerdictTable(report: SessionReport): void {
     screened.verdict,
     "killed",
     "a diagnosis must NEVER move a verdict (R72/R121) — this mutant stays `killed`",
+  );
+  // Mechanism 2, R138. Pinned BY MUTANT, because a count of two is satisfied by the wrong two: the
+  // fixture has three `Insert(true)` sites and the interesting fact is exactly WHICH of them the
+  // screen holds — arms A and K (both killed), never arm B (which survives, and a survivor at such
+  // a site is just a survivor), and never the `Delete` or either `Modify` site, which the R138
+  // ruling says get no mechanism at all.
+  const insertGroup = groupOf("run-trigger-skipped-insert");
+  const insertScreened = insertGroup.mutants.map(mutantOf);
+  assert.equal(insertScreened.length, 2, "the Insert mechanism screens exactly two kills");
+  for (const m of insertScreened) {
+    assert.equal(
+      m.operatorName,
+      "lethal.swap-modify-flag",
+      "only `swap-modify-flag` declares the Insert mechanism",
+    );
+    assert.ok(
+      /\.?insert\s*\(\s*true/i.test(m.originalText ?? ""),
+      `screened mutant ${m.mutantCode} is not at an Insert(true) site: ${m.originalText}`,
+    );
+    assert.equal(
+      m.verdict,
+      "killed",
+      "a diagnosis must NEVER move a verdict (R72/R121) — these stay `killed`",
+    );
+  }
+  assert.deepEqual(
+    insertScreened.map((m) => m.procedureName).sort(),
+    ["InsertTwiceWithKeyTrigger", "InsertWithTrigger"],
+    "the two screened Insert kills are arm A and arm K. Arm K is the genuine platform artifact " +
+      "(its covering test asserts nothing and the kill is a duplicate primary key); arm A is an " +
+      "honest assertion kill that the tag screens anyway, because the tag cannot see whether the " +
+      "target table's OnInsert touches the primary key. One of two — the cost this wave accepted " +
+      "and R143 exists to narrow. A CHANGE here means either a new fixture site or the ruling on " +
+      "which methods get a mechanism silently widening to Delete/Modify",
+  );
+  // The two mechanisms must not share one explanation: the reader would be told a duplicate-key
+  // artifact was measured on Cronus281 as a write-transaction abort.
+  assert.ok(
+    insertGroup.explanation.includes("duplicate primary key"),
+    "the Insert mechanism must explain ITS own mechanism",
+  );
+  assert.ok(
+    writeTxn.explanation.includes("return value is consumed"),
+    "the write-transaction mechanism must keep its own measured explanation",
   );
   assert.ok(
     report.validity.caveats.includes("platform-artifact-kills"),

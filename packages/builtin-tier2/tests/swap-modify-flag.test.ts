@@ -306,3 +306,80 @@ describe("swap-modify-flag extension to Insert/Delete (R136)", () => {
     });
   });
 });
+
+// R138. `Insert(false)` can kill through a PLATFORM error rather than an assertion: with `OnInsert`
+// skipped, a table whose `OnInsert` assigns the primary key leaves that key blank, the first
+// blank-key insert succeeds and a second raises a duplicate primary key. The mutant is scored
+// `killed` and the suite did not earn it. `Delete` and `Modify` have no such shape — skipping their
+// triggers writes LESS, never more — so only the `Insert` mutants declare a mechanism.
+//
+// The ruling and its cost are pre-committed in
+// docs/superpowers/specs/2026-08-14-r138-insert-mechanism-precommitment.md.
+describe("swap-modify-flag platform-kill mechanism (R138)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  it("declares run-trigger-skipped-insert on an Insert mutant", () => {
+    const src = `codeunit 50170 "T" { procedure P() var Rec: Record Customer; begin Rec.Insert(true); end; }`;
+    const specs = specsFor(src);
+    expect(specs.map((s) => s.before.text)).toEqual(["Rec.Insert(true)"]);
+    expect(specs[0]?.platformKillMechanism).toBe("run-trigger-skipped-insert");
+  });
+
+  // The tag must follow the METHOD, not the operator. Tagging every mutant this operator emits
+  // would claim a platform mechanism for `Delete`/`Modify` that does not exist, and the screen's
+  // whole value is that an untagged kill is not screened.
+  it("declares NOTHING on a Delete mutant — skipping OnDelete removes errors, it does not add them", () => {
+    const src = `codeunit 50171 "T" { procedure P() var Rec: Record Customer; begin Rec.Delete(true); end; }`;
+    const specs = specsFor(src);
+    expect(specs.map((s) => s.before.text)).toEqual(["Rec.Delete(true)"]);
+    expect(specs[0]?.platformKillMechanism).toBeUndefined();
+  });
+
+  it("declares NOTHING on a Modify mutant", () => {
+    const src = `codeunit 50172 "T" { procedure P() var Rec: Record Customer; begin Rec.Modify(true); end; }`;
+    const specs = specsFor(src);
+    expect(specs.map((s) => s.before.text)).toEqual(["Rec.Modify(true)"]);
+    expect(specs[0]?.platformKillMechanism).toBeUndefined();
+  });
+
+  // All three in one walk, so a change that tags by position, by order, or by "the first match
+  // wins" rather than by the matched method name fails here.
+  it("tags exactly the Insert mutant when all three methods appear in one procedure", () => {
+    const src = `codeunit 50173 "T" {
+      procedure P()
+      var Rec: Record Customer;
+      begin
+        Rec.Modify(true);
+        Rec.Insert(true);
+        Rec.Delete(true);
+      end;
+    }`;
+    const specs = specsFor(src);
+    expect(specs.map((s) => s.before.text)).toEqual([
+      "Rec.Modify(true)",
+      "Rec.Insert(true)",
+      "Rec.Delete(true)",
+    ]);
+    expect(specs.map((s) => s.platformKillMechanism)).toEqual([
+      undefined,
+      "run-trigger-skipped-insert",
+      undefined,
+    ]);
+  });
+
+  // AL is case-insensitive, and the fixture's own `MODIFY(TRUE)` arm exists because a case-sensitive
+  // method comparison is a real way to get this wrong. The tag must not depend on the spelling.
+  it("tags a case-variant INSERT(True) exactly as it tags Insert(true)", () => {
+    const src = `codeunit 50174 "T" { procedure P() var Rec: Record Customer; begin Rec.INSERT(True); end; }`;
+    const specs = specsFor(src);
+    expect(specs[0]?.platformKillMechanism).toBe("run-trigger-skipped-insert");
+  });
+
+  it("tags the implicit-receiver form inside a table's own trigger", () => {
+    const src = `table 50175 "T3" { fields { field(1; "No."; Code[20]) { } } trigger OnInsert() begin Insert(true); end; }`;
+    const specs = specsFor(src);
+    expect(specs[0]?.platformKillMechanism).toBe("run-trigger-skipped-insert");
+  });
+});
