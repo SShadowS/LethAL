@@ -1,0 +1,35 @@
+{
+  "id": "3c9d5b71-2e84-4f1a-b6d2-7a0c8e5f4931",
+  "name": "LethAL R132 Assert Probe",
+  "publisher": "LethAL",
+  "version": "1.0.0.0",
+  "brief": "R132: what does a Microsoft Library Assert failure actually say, and does a dependency on it compile and publish here?",
+  "description": "Throwaway probe, not for production use. Measures the exact failure text a Library Assert failure produces, which is the text R121's assertion screen keys on ('does the message begin with Assert.'), and proves a fixture can take a Library Assert dependency on these containers at all. See docs/roadmap/R132.md.",
+  "privacyStatement": "",
+  "EULA": "",
+  "help": "",
+  "url": "",
+  "logo": "",
+  "dependencies": [
+    {
+      "id": "dd0be2ea-f733-4d65-bb34-a28f4624fb14",
+      "name": "Library Assert",
+      "publisher": "Microsoft",
+      "version": "28.0.0.0"
+    }
+  ],
+  "screenshots": [],
+  "idRanges": [
+    {
+      "from": 71530,
+      "to": 71539
+    }
+  ],
+  "resourceExposurePolicy": {
+    "allowDebugging": true,
+    "allowDownloadingSource": true,
+    "includeSourceInSymbolFile": true
+  },
+  "runtime": "13.0",
+  "features": []
+}

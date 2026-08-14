@@ -1124,6 +1124,39 @@ codeunit 79310 "Data Tests"
     end;
 
     // ---------------------------------------------------------------------------------------------
+    // R132 -- the assertion screen's `partial` branch, which no live gate had ever exercised.
+    //
+    // These two tests are a TWIN PAIR over `codeunit 79318 "Data Assert Ops"`: identical target
+    // shape, identical verdicts, and the only difference is HOW each one raises. The first is the
+    // only test in any LethAL fixture that raises through Microsoft's Library Assert, so its kills
+    // carry a failure text beginning with `Assert.` and R121's screen does NOT flag them; the second
+    // raises through bare `Error(...)` like every other test here, so its kills ARE flagged. That
+    // makes `assertionScreen.discrimination` report `partial` on this gate instead of `vacuous`.
+    //
+    // Design: docs/superpowers/specs/2026-08-14-r132-assertion-screen-partial-design.md.
+    // ---------------------------------------------------------------------------------------------
+
+    [Test]
+    procedure AssertScreenSeesAnAssertionFailure()
+    var
+        AssertOps: Codeunit "Data Assert Ops";
+        LibraryAssert: Codeunit "Library Assert";
+    begin
+        LibraryAssert.AreEqual(50, AssertOps.DoubledLevel(25), 'doubled level');
+    end;
+
+    [Test]
+    procedure AssertScreenSeesABareErrorFailure()
+    var
+        AssertOps: Codeunit "Data Assert Ops";
+        Actual: Integer;
+    begin
+        Actual := AssertOps.TripledLevel(25);
+        if Actual <> 75 then
+            Error('expected 75 from the tripled level, got %1', Actual);
+    end;
+
+    // ---------------------------------------------------------------------------------------------
     // Seeding helpers. All idempotent — see InsertDoublesAmountWeak's comment for why that is
     // kept even though the persistence claim behind it was measured false.
     // around every mutant run, so rows PERSIST into the next one.

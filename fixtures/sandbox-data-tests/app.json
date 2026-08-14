@@ -2,7 +2,7 @@
   "id": "ae4589f8-4376-41a5-acf3-8df73772fefd",
   "name": "LethAL Sandbox Data Tests",
   "publisher": "LethAL",
-  "version": "1.0.0.12",
+  "version": "1.0.0.13",
   "brief": "Tier-2 Phase 0 fixture: test app for the sandbox-data mutation target.",
   "description": "Test codeunit exercising fixtures/sandbox-data's table triggers. Asserts via Error()/asserterror \u2014 no Library Assert dependency. Not for production use \u2014 see fixtures/README.md.",
   "privacyStatement": "",
@@ -11,6 +11,12 @@
   "url": "",
   "logo": "",
   "dependencies": [
+    {
+      "id": "dd0be2ea-f733-4d65-bb34-a28f4624fb14",
+      "name": "Library Assert",
+      "publisher": "Microsoft",
+      "version": "28.0.0.0"
+    },
     {
       "id": "aa2f0691-47c3-470e-a351-5bfe955d4f13",
       "name": "LethAL Sandbox Data",
