@@ -75,6 +75,7 @@ describe("progress renderer", () => {
         totalFiles: 554,
         instrumentableFiles: 441,
         notInstrumentedFiles: [],
+        declarativeSiteFiles: [],
         excludedByOnly: 0,
         excludedByOperator: 0,
       }),

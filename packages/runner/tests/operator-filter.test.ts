@@ -380,6 +380,7 @@ describe("buildReport — an operator-scoped run says so", () => {
           totalFiles: 91,
           instrumentableFiles: 91,
           notInstrumentedFiles: [],
+          declarativeSiteFiles: [],
           excludedByOnly: 0,
           excludedByOperator: 891,
         },

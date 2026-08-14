@@ -72,6 +72,7 @@ import {
 import { QuarantineStore } from "./quarantine-store";
 import { buildReport } from "./report";
 import type {
+  DeclarativeSiteFile,
   MutantErrorCause,
   NotInstrumentedFile,
   SessionOutcome,
@@ -261,6 +262,22 @@ export interface MutationSetResult {
    * up against a full run's site count).
    */
   readonly excludedByOperator: number;
+  /**
+   * R144: per file, the sites an operator matched that are not inside executable AL — an AL page or
+   * report property is declarative and has no statement to wrap, so there is nothing to mutate.
+   * Empty when the project has no such surface, and that empty list is a MEASURED zero, not an
+   * absent one: before this, the count reached a single `warn(...)` on stderr and a reader of a
+   * report could not tell "no declarative surface" from "154 sites silently declined".
+   *
+   * The drop is R135's ruling (LethAL does not mutate declarative surfaces, measured at ~163x the
+   * per-mutant publish cost for the second deployment path it would need). This is the half of that
+   * ruling the report owes a reader.
+   *
+   * Scoped by `--only` like everything else here: a file the `only` filter excluded is never walked,
+   * so its declarative sites are not counted — the same "never measured" honesty `excludedByOnly`
+   * keeps.
+   */
+  readonly declarativeSites: readonly DeclarativeSiteFile[];
 }
 
 export interface MutationSetOptions {
@@ -437,8 +454,11 @@ export async function generateMutationSet(
   let excludedByOperator = 0;
   const producedAnywhere = new Set<string>();
   const producedInstrumentable = new Set<string>();
-  // Sites an operator claimed that are not inside executable AL — see the drop below.
+  // Sites an operator claimed that are not inside executable AL — see the drop below. The total
+  // feeds the warning; the per-file rows feed `SessionReport.declarativeSites` (R144), because a
+  // bare total cannot tell a reader whether the refusal touched anything they care about.
   let nonExecutableSites = 0;
+  const declarativeSites: DeclarativeSiteFile[] = [];
   for (const { path: rel, source, root } of parsed) {
     // R41: excluded from MUTATION, not from the context above and not from the published app —
     // `prepareBatchProject` still copies this file into the batch dir verbatim.
@@ -451,6 +471,7 @@ export async function generateMutationSet(
     // `buildSpanIndex`'s doc comment in @lethal/engine.
     const spanIndex = buildSpanIndex(root);
     const specs: MutationSpec[] = [];
+    let declarativeInThisFile = 0;
     visit(root, (node) => {
       for (const op of allOperators) {
         if (op.targets(node, ctx)) {
@@ -466,6 +487,7 @@ export async function generateMutationSet(
               // aborted the entire session at `buildComponents`. Dropped, and tallied so a silent
               // shrink of the mutant set is impossible.
               nonExecutableSites++;
+              declarativeInThisFile++;
             } else if (validation.ok) {
               specs.push(spec);
             } else {
@@ -479,6 +501,17 @@ export async function generateMutationSet(
         }
       }
     });
+    // R144: recorded BEFORE the `specs.length === 0` bail below, deliberately. A page whose only
+    // matched sites are declarative produces no spec at all, and that is exactly the file a reader
+    // most needs named — dropping the row with the file would report zero for the project that has
+    // the most of them.
+    if (declarativeInThisFile > 0) {
+      declarativeSites.push({
+        file: rel,
+        kinds: describeObjectKinds(root),
+        sites: declarativeInThisFile,
+      });
+    }
     if (specs.length === 0) continue;
     // R127: narrow to the requested operators AFTER per-file dedup — see
     // `MutationSetOptions.operators` for why filtering first would resurrect a Tier-1 mutant that
@@ -536,9 +569,10 @@ export async function generateMutationSet(
     );
   }
   if (nonExecutableSites > 0) {
+    const where = declarativeSites.map((d) => `${d.file} (${d.kinds}, ${d.sites} site(s))`);
     warn(
       "non-executable-sites-dropped",
-      `[lethal] dropped ${nonExecutableSites} matched site(s) that are not inside executable AL (declarative page/report properties such as SubPageLink or a filter, which parse as comparison expressions). They cannot be wrapped and are not mutants.`,
+      `[lethal] dropped ${nonExecutableSites} matched site(s) that are not inside executable AL (declarative page/report properties, which parse as the same expression shapes statements do). They cannot be wrapped and are not mutants: ${where.join(", ")}.`,
     );
   }
   if (excludedByOnly > 0) {
@@ -553,7 +587,14 @@ export async function generateMutationSet(
       `[lethal] --operator narrowed this run to ${[...admittedOperators].sort().join(", ")}; ${excludedByOperator} mutation site(s) from other operators were excluded. The score below covers those operators ONLY — it is not a project score.`,
     );
   }
-  return { files, skipped, totalFiles: entries.length, excludedByOnly, excludedByOperator };
+  return {
+    files,
+    skipped,
+    totalFiles: entries.length,
+    excludedByOnly,
+    excludedByOperator,
+    declarativeSites,
+  };
 }
 
 export interface SessionConfig {
@@ -2408,6 +2449,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     totalFiles: totalAlFiles,
     excludedByOnly,
     excludedByOperator,
+    declarativeSites: declarativeSiteFiles,
   } = await generateMutationSet(cfg.projectDir, {
     ...(cfg.only !== undefined ? { only: cfg.only } : {}),
     ...(resolvedOperators !== undefined ? { operators: resolvedOperators } : {}),
@@ -2431,6 +2473,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     totalFiles: totalAlFiles,
     instrumentableFiles: allFiles.length,
     notInstrumentedFiles,
+    declarativeSiteFiles,
     excludedByOnly,
     excludedByOperator,
   });

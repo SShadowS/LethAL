@@ -23,7 +23,7 @@
 import type { MutantManifestEntry } from "@lethal/schemata";
 import type { BackendCapabilities, TestMethodRef, TestOutcome } from "./backend";
 import type { PermissionCanaryResult } from "./permission-canary";
-import type { Caveat, MutantErrorCause, NotInstrumentedFile } from "./report";
+import type { Caveat, DeclarativeSiteFile, MutantErrorCause, NotInstrumentedFile } from "./report";
 import type { CoverageAttribution } from "./selection";
 import type { MutantVerdict, RunnerKind } from "./store";
 
@@ -127,6 +127,10 @@ export type RunEventInput =
       readonly instrumentableFiles: number;
       /** The full skip list — see `SessionReport.notInstrumented.files`. */
       readonly notInstrumentedFiles: readonly NotInstrumentedFile[];
+      /** R144: the full per-file declarative-drop list — see `SessionReport.declarativeSites`.
+       *  Required, and empty on a project with no declarative surface: an absent list and a
+       *  measured zero must not look alike, the same rule `untargetedTriggerCount` follows. */
+      readonly declarativeSiteFiles: readonly DeclarativeSiteFile[];
       /** R41: `.al` files a `--only` glob excluded from spec generation. 0 when no `only` was
        *  given. The LEARNED half of `run-configured.only` — see that event's doc comment. */
       readonly excludedByOnly: number;

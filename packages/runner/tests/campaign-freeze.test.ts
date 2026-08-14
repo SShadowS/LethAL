@@ -78,6 +78,7 @@ function report(mutants: readonly MutantOutcome[]): SessionReport {
     mutants,
     unsupportedTests: [],
     notInstrumented: { totalFiles: 0, fileCount: 0, siteCount: 0, files: [] },
+    declarativeSites: { siteCount: 0, fileCount: 0, files: [] },
     timings: {
       totalMs: 0,
       generateMutationSetMs: 0,

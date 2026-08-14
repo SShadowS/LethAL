@@ -1,7 +1,7 @@
 import type { BackendCapabilities } from "./backend";
 import type { RunEvent } from "./events";
 import type { PermissionCanaryResult } from "./permission-canary";
-import type { NotInstrumentedFile, SessionOutcome } from "./report";
+import type { DeclarativeSiteFile, NotInstrumentedFile, SessionOutcome } from "./report";
 
 /**
  * Folds the run's events into the facts `buildReport` (report.ts) renders (spec 2026-08-05 §A,
@@ -81,6 +81,9 @@ export interface FoldedReport {
     readonly totalFiles: number;
     readonly files: readonly NotInstrumentedFile[];
   };
+  /** R144: per-file declarative drops, off `mutation-set-generated`. Required and possibly empty —
+   *  see `SessionReport.declarativeSites`. */
+  readonly declarativeSites: readonly DeclarativeSiteFile[];
   readonly only?: {
     readonly patterns: readonly string[];
     readonly excludedFileCount: number;
@@ -129,6 +132,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
 
   let totalFiles = 0;
   let notInstrumentedFiles: readonly NotInstrumentedFile[] = [];
+  let declarativeSiteFiles: readonly DeclarativeSiteFile[] = [];
   let excludedByOnly = 0;
   let excludedByOperator = 0;
 
@@ -198,6 +202,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
         sawMutationSetGenerated = true;
         totalFiles = e.totalFiles;
         notInstrumentedFiles = e.notInstrumentedFiles;
+        declarativeSiteFiles = e.declarativeSiteFiles;
         excludedByOnly = e.excludedByOnly;
         excludedByOperator = e.excludedByOperator;
         break;
@@ -435,6 +440,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
     outcomes,
     unsupportedTests: [...unsupportedTests].sort(),
     notInstrumented: { totalFiles, files: notInstrumentedFiles },
+    declarativeSites: declarativeSiteFiles,
     // R41: reunite the GIVEN patterns (statics) with the LEARNED exclusion count
     // (mutation-set-generated.excludedByOnly) — see `FoldStatics.only`'s doc comment. Same
     // condition orchestrator.ts used to gate this field: non-empty patterns, not just "defined".

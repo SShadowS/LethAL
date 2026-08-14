@@ -387,6 +387,34 @@ const EXPECTED = {
    * number is edited.
    */
   untargetedTriggerCount: 0,
+  /**
+   * R144: the declarative surface LethAL REFUSES to mutate, which R135 ruled out permanently and
+   * which the report now has to say out loud.
+   *
+   * One site, in one file, and both halves are deliberate. `page 79320 "Data Main List"` carries
+   * `Enabled = Rec."Modify Count" > 0` — a page PROPERTY whose value is a boolean expression, which
+   * tree-sitter yields as the same comparison shape a statement would, so
+   * `lethal.conditional-boundary` claims it and `isMutableSite` then drops it. It was added for
+   * this gate, and `totalMutantSites` above is UNCHANGED at 252 because of it: a declarative site
+   * produces no mutant, which is the entire point.
+   *
+   * Pinning a real 1 rather than the measured 0 the fixture had before is what makes this
+   * assertion mean anything. A gate asserting `siteCount === 0` would pass identically on a build
+   * where the count never reached the report at all — the exact "checked, and there was nothing"
+   * misreading R144 was filed to prevent.
+   *
+   * The shapes that DO NOT produce a drop were measured the same day (grammar 4.0.x): `SubPageLink`,
+   * `SourceTableView`, `TableRelation ... where(...)`, `DataItemTableFilter` and `RunPageLink` no
+   * longer parse as comparison expressions, so no operator claims them and nothing is dropped. A
+   * rise above 1 here therefore means the grammar or an operator's targeting changed, not that the
+   * fixture grew.
+   */
+  declarativeSites: {
+    siteCount: 1,
+    fileCount: 1,
+    file: "src/DataMainList.Page.al",
+    kinds: "page_declaration",
+  },
 };
 
 interface LaunchLocalConfig {
@@ -548,7 +576,7 @@ function assertVerdictTable(report: SessionReport): void {
   // says nothing about which mutant moved, and this gate takes minutes to re-run against a live
   // container — so the first run has to carry its own diagnosis.
   console.log(
-    `  verdicts: killed=${report.counts.killed} survived=${report.counts.survived} noCoverage=${report.counts.noCoverage} baselineGreen=${report.baselineGreen} score=${report.mutationScore} untargetedTriggers=${report.untargetedTriggerCount}`,
+    `  verdicts: killed=${report.counts.killed} survived=${report.counts.survived} noCoverage=${report.counts.noCoverage} baselineGreen=${report.baselineGreen} score=${report.mutationScore} untargetedTriggers=${report.untargetedTriggerCount} declarativeSites=${report.declarativeSites.siteCount}`,
   );
   for (const m of report.mutants) {
     const cause = m.cause !== undefined ? ` cause=${m.cause}` : "";
@@ -729,6 +757,47 @@ function assertVerdictTable(report: SessionReport): void {
     assertionScreen.runnerRefusals,
     0,
     "al-runner's `out-of-scope:` marker cannot appear on the bcdev path",
+  );
+  // R144: the declarative refusal, pinned at the same prominence as the counts — R135's ruling is
+  // "refuse the class permanently AND say so in the report", and a ruling the report never states
+  // is a decision the product never communicates. Asserted per FILE, not as a bare total: a total
+  // alone would be satisfied by a drop somewhere else in the fixture.
+  assert.equal(
+    report.declarativeSites.siteCount,
+    EXPECTED.declarativeSites.siteCount,
+    "declarative-site count mismatch — the fixture holds exactly one page property LethAL refuses " +
+      "to mutate (`Data Main List`'s `Enabled`). A 0 means the count stopped reaching the report; " +
+      "a rise means an operator started claiming declarative shapes it did not claim before",
+  );
+  assert.equal(
+    report.declarativeSites.fileCount,
+    EXPECTED.declarativeSites.fileCount,
+    "declarative-site file count mismatch",
+  );
+  const declarative = report.declarativeSites.files[0];
+  assert.ok(
+    declarative !== undefined,
+    "the declarative-site list must name its file, not just count it",
+  );
+  assert.equal(
+    declarative.file.replaceAll("\\", "/"),
+    EXPECTED.declarativeSites.file,
+    "the declarative site must be the one the fixture put there, not some other file's",
+  );
+  assert.equal(
+    declarative.kinds,
+    EXPECTED.declarativeSites.kinds,
+    "declarative-site kind mismatch",
+  );
+  assert.equal(
+    declarative.sites,
+    EXPECTED.declarativeSites.siteCount,
+    "per-file declarative count mismatch",
+  );
+  assert.ok(
+    report.validity.caveats.includes("declarative-sites-dropped"),
+    "a run that declined a declarative site must CARRY the caveat — the count without the caveat " +
+      "leaves a reader to discover the refusal by reading a number they were never pointed at",
   );
   // Per-mutant verdicts are asserted by `assertMatchesBaseline` (tables.baseline.json), not here
   // — see EXPECTED's doc comment for why the old inline 7-entry map was removed rather than

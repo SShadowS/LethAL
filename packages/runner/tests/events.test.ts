@@ -255,6 +255,7 @@ describe("createEmitter", () => {
         totalFiles: 2,
         instrumentableFiles: 2,
         notInstrumentedFiles: [],
+        declarativeSiteFiles: [],
         excludedByOnly: 0,
         excludedByOperator: 0,
       },

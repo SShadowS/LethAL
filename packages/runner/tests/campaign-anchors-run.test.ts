@@ -24,6 +24,7 @@ function report(
     baselineGreen: true,
     unsupportedTests: [],
     notInstrumented: { totalFiles: 0, fileCount: 0, siteCount: 0, files: [] },
+    declarativeSites: { siteCount: 0, fileCount: 0, files: [] },
     mutants: mutants.map((m, i) => ({
       mutantCode: `M${String(i).padStart(4, "0")}`,
       file: "Codeunit 6175297 CDO Send Cust. Statement Mgt.al",

@@ -3,7 +3,12 @@ import type { BackendCapabilities, TestOutcome } from "../../src/backend";
 import type { BaselineClassification, RunEvent, RunEventInput } from "../../src/events";
 import type { PermissionCanaryResult } from "../../src/permission-canary";
 import { buildReport } from "../../src/report";
-import type { NotInstrumentedFile, SessionOutcome, SessionReport } from "../../src/report";
+import type {
+  DeclarativeSiteFile,
+  NotInstrumentedFile,
+  SessionOutcome,
+  SessionReport,
+} from "../../src/report";
 import type { FoldStatics } from "../../src/report-fold";
 
 /**
@@ -48,6 +53,9 @@ export interface LegacyBuildReportInput {
     readonly totalFiles: number;
     readonly files: readonly NotInstrumentedFile[];
   };
+  /** R144: optional here ONLY because every pre-existing fixture predates the field; absent means
+   *  the converted history carries an empty list, which is what those fixtures describe. */
+  readonly declarativeSites?: readonly DeclarativeSiteFile[];
   readonly only?: {
     readonly patterns: readonly string[];
     readonly excludedFileCount: number;
@@ -131,6 +139,9 @@ export function legacyBuildReport(input: LegacyBuildReportInput): SessionReport 
     totalFiles: input.notInstrumented.totalFiles,
     instrumentableFiles,
     notInstrumentedFiles: input.notInstrumented.files,
+    // R144: legacy fixtures predate the declarative-site list and none of them describes a project
+    // with a declarative surface, so an empty list is the honest conversion, not a default.
+    declarativeSiteFiles: input.declarativeSites ?? [],
     excludedByOnly: input.only?.excludedFileCount ?? 0,
     excludedByOperator: 0,
   });

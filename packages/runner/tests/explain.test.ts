@@ -167,6 +167,7 @@ function reportFixture(over: Partial<SessionReport> = {}): SessionReport {
     ],
     unsupportedTests: [],
     notInstrumented: { totalFiles: 40, fileCount: 0, siteCount: 0, files: [] },
+    declarativeSites: { siteCount: 0, fileCount: 0, files: [] },
     only: { patterns: ["src/Posting/**"], excludedFileCount: 38 },
     timings: {
       totalMs: 1000,

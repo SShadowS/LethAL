@@ -107,6 +107,27 @@ export interface NotInstrumentedFile {
 }
 
 /**
+ * R144: a file holding sites an operator matched that are NOT inside executable AL, and which
+ * LethAL therefore refuses to mutate at all. See `SessionReport.declarativeSites`.
+ *
+ * SIBLING of `NotInstrumentedFile`, and the distinction is the whole point: that one says "this
+ * FILE cannot carry the mechanism", this one says "this SITE cannot". A file can appear in both
+ * lists, in neither, or in one alone.
+ */
+export interface DeclarativeSiteFile {
+  readonly file: string;
+  /** Object kind(s) this file declares, e.g. `"page_declaration"` — from `describeObjectKinds`. */
+  readonly kinds: string;
+  /**
+   * Specs dropped here, counted per SPEC rather than per source position: two operators claiming
+   * the same declarative property count twice, the same way `MutationSetResult.excludedByOperator`
+   * counts. The figure R135 recorded for Continia Document Output (154 across 47 files) is a spec
+   * count too, so the two are comparable.
+   */
+  readonly sites: number;
+}
+
+/**
  * Bumped whenever a field is renamed, removed, or changes meaning. Additive fields do not require
  * a bump. A machine-consumed contract with no version breaks silently the first time it changes,
  * and the consumer has no way to notice.
@@ -132,7 +153,8 @@ export type Caveat =
   | "resumed"
   | "untargeted-triggers"
   | "platform-artifact-kills"
-  | "kills-without-assertion";
+  | "kills-without-assertion"
+  | "declarative-sites-dropped";
 
 /**
  * What each `Caveat` MEANS for a reader, and — where the roadmap entry that filed it recorded one
@@ -303,6 +325,20 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
       "kills were real. Read `assertionScreen.discrimination` before reading the count at all: on " +
       "a suite that raises via bare `Error(...)` the rule flags everything and separates nothing.",
     basis: "R121",
+  },
+  "declarative-sites-dropped": {
+    meaning:
+      "An operator matched code-shaped text inside a DECLARATIVE AL surface — a page or report " +
+      "property whose value is an expression — and LethAL dropped it rather than mutating it. " +
+      "There is no statement to wrap, and R135 ruled (2026-08-14, measured) that LethAL does not " +
+      "mutate declarative surfaces: the second deployment path that would cost roughly 163x per " +
+      "mutant on the one real project measured. `declarativeSites.files` names where they are.",
+    entailedNegative:
+      "These are NOT mutants that survived, NOT mutants recorded no-coverage, and NOT a gap in " +
+      "the operator set — they never became mutants at all and are absent from every count in " +
+      "this report, `mutationScore` included. Nor does the number say how much risk hides there: " +
+      "it counts specs operators happened to claim, which is not the same as sites worth mutating.",
+    basis: "R144",
   },
 };
 
@@ -607,6 +643,24 @@ export interface SessionReport {
     readonly fileCount: number;
     readonly siteCount: number;
     readonly files: readonly NotInstrumentedFile[];
+  };
+  /**
+   * R144: sites an operator matched that are NOT inside executable AL, and which LethAL therefore
+   * refuses to mutate — see `DeclarativeSiteFile` and
+   * `CAVEAT_INTERPRETATIONS["declarative-sites-dropped"]`.
+   *
+   * Always present; `files` is empty and both counts are 0 when the project has no such surface.
+   * That zero is MEASURED, not defaulted, which is the whole reason the field exists: the count
+   * used to live in one `warn(...)` on stderr, where a reader of a report could not tell a project
+   * with no declarative surface from one where LethAL silently declined 154 sites, and no gate
+   * could pin either. Same shape and same reason as `notInstrumented` (R5).
+   *
+   * `siteCount` counts SPECS, not source positions — see `DeclarativeSiteFile.sites`.
+   */
+  readonly declarativeSites: {
+    readonly siteCount: number;
+    readonly fileCount: number;
+    readonly files: readonly DeclarativeSiteFile[];
   };
   /**
    * R41: the `--only` narrowing this run was asked for, if any. Absent means the whole project
@@ -1526,6 +1580,11 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
   // See CAVEAT_INTERPRETATIONS["tests-narrowed"] for what this caveat means to a reader.
   if (input.testsOnly !== undefined && input.testsOnly.length > 0) caveats.push("tests-narrowed");
   if (input.notInstrumented.files.length > 0) caveats.push("uninstrumentable-files");
+  // R144 — see CAVEAT_INTERPRETATIONS["declarative-sites-dropped"]. Pushed on the SITE count, not
+  // the file count, for the same reason the caveat exists at all: a run that declined one site and
+  // a run that declined 154 must not read alike.
+  const declarativeSiteCount = input.declarativeSites.reduce((n, f) => n + f.sites, 0);
+  if (declarativeSiteCount > 0) caveats.push("declarative-sites-dropped");
   if (input.staleTestApp !== undefined) caveats.push("stale-test-app");
   // See CAVEAT_INTERPRETATIONS["tests-permission-refused"] for what this caveat means to a reader.
   const permissionsRefusedTests = input.permissionsRefusedTests ?? [];
@@ -1727,6 +1786,11 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
       siteCount: notInstrumentedSites,
       files: input.notInstrumented.files,
     },
+    declarativeSites: {
+      siteCount: declarativeSiteCount,
+      fileCount: input.declarativeSites.length,
+      files: input.declarativeSites,
+    },
     preprocessorSymbols: statics.preprocessorSymbols ?? [],
     untargetedTriggerCount: input.untargetedTriggerCount,
     ...(input.only !== undefined ? { only: input.only } : {}),
@@ -1845,6 +1909,17 @@ export function renderConsole(r: SessionReport): string {
       `NOT INSTRUMENTED: ${r.notInstrumented.fileCount}/${r.notInstrumented.totalFiles} .al file(s) (${pct}), ${r.notInstrumented.siteCount} mutation site(s) never measured — the score above excludes them entirely, it is not a full-project score. Only a codeunit or a table can carry the injected selector var; page/report/query/xmlport objects are published unchanged.`,
     );
     for (const f of r.notInstrumented.files) {
+      lines.push(`  ${f.file} (${f.kinds}, ${f.sites} site(s))`);
+    }
+  }
+  // R144: the sibling of NOT INSTRUMENTED above, and printed next to it for that reason — one says
+  // a FILE could not carry the mechanism, this one says a SITE cannot. R135 ruled these out
+  // permanently; a ruling the report never states is a decision the product never communicates.
+  if (r.declarativeSites.siteCount > 0) {
+    lines.push(
+      `DECLARATIVE SITES REFUSED: ${r.declarativeSites.siteCount} matched site(s) in ${r.declarativeSites.fileCount} file(s) are AL page/report PROPERTIES, not statements — LethAL does not mutate declarative surfaces (R135, measured) and never made a mutant of them. They are absent from every count above, survivors and no-coverage alike.`,
+    );
+    for (const f of r.declarativeSites.files) {
       lines.push(`  ${f.file} (${f.kinds}, ${f.sites} site(s))`);
     }
   }

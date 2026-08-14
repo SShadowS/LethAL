@@ -31,6 +31,17 @@ page 79320 "Data Main List"
                 field("Modify Count"; Rec."Modify Count")
                 {
                     ApplicationArea = All;
+                    // R144's fixture site, and the ONLY reason this property exists. `Enabled`
+                    // takes a boolean EXPRESSION, which tree-sitter yields as the same comparison
+                    // shape a statement would, so `lethal.conditional-boundary` claims it — and
+                    // `isMutableSite` then drops it, because a page property is declarative and
+                    // has no statement to wrap. That drop is R135's ruling; this site is what
+                    // makes the gate able to assert the report SAYS so, instead of asserting a
+                    // zero that would read the same on a fixture with no declarative surface.
+                    //
+                    // It must add exactly ZERO mutants. If the fixture's mutant totals ever move
+                    // because of this line, the drop itself regressed.
+                    Enabled = Rec."Modify Count" > 0;
                 }
             }
         }
