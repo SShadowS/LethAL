@@ -233,6 +233,55 @@ export class PublishFailedError extends Error {
   }
 }
 
+/** The `fetch` surface `fetchPublishedAppPackage` uses, narrow enough for a test to stand in for. */
+export type FetchLike = (
+  url: string,
+  init?: { method?: string; headers?: Record<string, string>; signal?: AbortSignal },
+) => Promise<Response>;
+
+/** BC's own OnPrem default for the development service, and bc-dev-mcp's fallback. */
+const DEFAULT_DEV_PORT = 7049;
+const PUBLISHED_PACKAGE_TIMEOUT_MS = 15_000;
+
+/**
+ * The dev-endpoint URL that returns the package the server holds for `app`, or `null` when the
+ * configuration does not name a server and instance.
+ *
+ * Returning `null` rather than a guessed URL matters: a guess would send credentials to whatever
+ * host the guess resolved to. A port already present in `server` wins, because an operator who
+ * wrote one meant it; otherwise `cfg.port` (the field bc-dev-mcp itself is given), and only then
+ * BC's 7049 default — the same precedence bc-dev-mcp applies to its own dev calls, so this read and
+ * the runner's other traffic cannot end up on different ports.
+ */
+export function devPackagesUrl(
+  cfg: Pick<BcDevConfig, "server" | "serverInstance" | "tenant" | "port">,
+  app: { readonly publisher: string; readonly name: string },
+): string | null {
+  const { server, serverInstance } = cfg;
+  if (server === undefined || serverInstance === undefined) return null;
+  let base: URL;
+  try {
+    base = new URL(server);
+  } catch {
+    return null;
+  }
+  // `URL.port` is "" both for an absent port and for a protocol-default one (`:80`, `:443`), so an
+  // HTTPS portal with no explicit port keeps the protocol default rather than gaining `:7049`.
+  const explicit = base.port !== "" ? base.port : undefined;
+  const fallback = base.protocol === "https:" ? undefined : String(cfg.port ?? DEFAULT_DEV_PORT);
+  const port = explicit ?? (cfg.port !== undefined ? String(cfg.port) : fallback);
+  const host = port === undefined ? base.hostname : `${base.hostname}:${port}`;
+  // `encodeURIComponent`, NOT `URLSearchParams`, which encodes a space as `+`. The request shape
+  // measured working against Cronus283 on 2026-08-14 uses `%20`, and whether BC's dev endpoint
+  // decodes `+` as a space is exactly the kind of thing this project measures rather than assumes —
+  // an app name with a space is the normal case, not an edge one.
+  // `versionText` is empty on purpose: it means "whatever version you have", and this read exists
+  // to learn that version, so pinning one would answer the question with its own premise.
+  const tenantParam = cfg.tenant !== undefined ? `&tenant=${encodeURIComponent(cfg.tenant)}` : "";
+  const params = `publisher=${encodeURIComponent(app.publisher)}&appName=${encodeURIComponent(app.name)}&versionText=${tenantParam}`;
+  return `${base.protocol}//${host}/${serverInstance}/dev/packages?${params}`;
+}
+
 export class BcDevMcpBackend implements ExecutionBackend {
   private client: Client | undefined;
   // Populated by deploy() from the just-compiled .app so run() can resolve coverage
@@ -282,6 +331,56 @@ export class BcDevMcpBackend implements ExecutionBackend {
       isolation: "session",
       authoritative: true,
     };
+  }
+
+  /**
+   * R139 check 2: the bytes of the package this SERVER currently holds for `app`, or `null` when it
+   * cannot be read.
+   *
+   * The dev endpoint's own `dev/packages` is the read, chosen over the three alternatives the row
+   * weighed: it needs no new deployment step, no control-app version bump (which would cost a
+   * rebuild and a republish to every fixture container, and would make every gate require the new
+   * version), and no second credential source. `versionText` is left empty, which asks for whatever
+   * the server has.
+   *
+   * NEVER throws. Every reachable failure — no server configured, no credentials, a 404 on an
+   * environment whose dev endpoint does not serve packages, a refused connection, a timeout — is a
+   * `null`, because a proactive check that cannot read must not be able to stop a run that check 1
+   * would otherwise complete or refuse on the authoritative signal.
+   */
+  async fetchPublishedAppPackage(
+    app: { readonly publisher: string; readonly name: string },
+    fetchFn: FetchLike = fetch,
+  ): Promise<Uint8Array | null | undefined> {
+    // `undefined`, not `null`: this configuration cannot form the request at all, so there is
+    // nothing for the caller to report. The env-tool path is the real instance — it reaches BC
+    // through a tool-supplied base URL and names no dev server of its own, and it publishes the
+    // test app itself, so a warning on every one of its runs would be noise about a check that was
+    // never applicable.
+    const url = devPackagesUrl(this.cfg, app);
+    if (url === null) return undefined;
+    const username = this.cfg.env?.BC_DEV_USER;
+    const password = this.cfg.env?.BC_DEV_PASSWORD;
+    if (username === undefined || password === undefined) return undefined;
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), PUBLISHED_PACKAGE_TIMEOUT_MS);
+    try {
+      const res = await fetchFn(url, {
+        method: "GET",
+        headers: { authorization: `Basic ${btoa(`${username}:${password}`)}` },
+        signal: controller.signal,
+      });
+      if (!res.ok) return null;
+      return new Uint8Array(await res.arrayBuffer());
+    } catch {
+      // Deliberately swallowed, and deliberately not narrowed: network stacks report a refused
+      // connection, a DNS failure and an abort as three unrelated error shapes, and every one of
+      // them means the same thing here — this check has nothing to say.
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   private async connect(): Promise<Client> {

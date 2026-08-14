@@ -63,6 +63,12 @@ import {
   knownCeiling,
   recordPublishOutcome,
 } from "./publish-ceiling";
+import {
+  type PublishedApp,
+  comparePublishedTestApp,
+  parsePublishedApp,
+  publishedTestAppWarning,
+} from "./published-test-app";
 import { QuarantineStore } from "./quarantine-store";
 import { buildReport } from "./report";
 import type {
@@ -2335,6 +2341,11 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   }
   if (tests.length === 0) throw new Error("no tests discovered");
 
+  // R139 check 2: ask the server what test app it holds BEFORE measuring, so a stale one is named
+  // in seconds rather than after a full baseline round trip. Reports, never refuses — check 1 owns
+  // the refusal, on the server's own words. See `published-test-app.ts`.
+  await reportPublishedTestApp(cfg, tests, emit);
+
   const backendName = caps.authoritative ? "bcdev" : "al-runner";
   // R47: computed for EVERY run, not just a resuming one — a run that does not record its own
   // fingerprint cannot be resumed later, and the run worth resuming is precisely the one nobody
@@ -3760,6 +3771,82 @@ export function unsupportedCoverageNote(
 /** Human-readable `Codeunit.method` identity for report/notes — unambiguous across codeunits sharing a method name. */
 function qualifiedTestName(ref: TestMethodRef): string {
   return `${ref.codeunitName}.${ref.method}`;
+}
+
+/** What the test project's `app.json` has to say for check 2 to have a local expectation at all. */
+interface TestAppManifest {
+  readonly name?: unknown;
+  readonly publisher?: unknown;
+  readonly version?: unknown;
+}
+
+/**
+ * R139 check 2 — compare the PUBLISHED test app against the local source, before measuring.
+ *
+ * Every exit here is silent-and-continue except the two that have something to say, and that is the
+ * design rather than laziness:
+ *
+ * - **No backend support** (`al-runner` runs locally, nothing is published): nothing to compare.
+ * - **No readable `app.json`** in the test project: the local expectation does not exist. LethAL
+ *   does not own the test project and cannot require it to look a particular way.
+ * - **The server could not answer**: says so once, because a check that fails silently is
+ *   indistinguishable from a check that passed, which is this repo's signature bug in miniature.
+ * - **A finding**: the whole point.
+ *
+ * It never throws, and it never refuses. Check 1 refuses on the SERVER's own words after baseline;
+ * this one is a cheap head start on the same diagnosis, and a proactive check built on a derived
+ * signal must not be able to stop a run that would otherwise be fine.
+ */
+async function reportPublishedTestApp(
+  cfg: SessionConfig,
+  tests: readonly TestMethodRef[],
+  emit: RunEmitter,
+): Promise<void> {
+  const fetchPackage = cfg.backend.fetchPublishedAppPackage;
+  if (fetchPackage === undefined) return;
+
+  let manifest: TestAppManifest;
+  try {
+    manifest = JSON.parse(await readFile(join(cfg.testDir, "app.json"), "utf8")) as TestAppManifest;
+  } catch {
+    return;
+  }
+  const { name, publisher, version } = manifest;
+  if (typeof name !== "string" || typeof publisher !== "string" || typeof version !== "string") {
+    return;
+  }
+
+  const bytes = await fetchPackage.call(cfg.backend, { publisher, name });
+  // `undefined` means the backend could not form the request at all — nothing was tried, so there
+  // is nothing to report. Only a genuine failed READ (`null`) is worth an operator's attention.
+  if (bytes === undefined) return;
+  if (bytes === null) {
+    emit({
+      type: "warning",
+      code: "published-test-app-unreadable",
+      message: `[lethal] could not read the published test app "${name}" from the server, so this run did not verify that the container holds the suite this project's source declares. A stale test app is still caught at baseline, one round trip later.`,
+    });
+    return;
+  }
+
+  let published: PublishedApp;
+  try {
+    published = parsePublishedApp(Buffer.from(bytes));
+  } catch (err) {
+    emit({
+      type: "warning",
+      code: "published-test-app-unreadable",
+      message: `[lethal] the server returned a package for the test app "${name}" that could not be read (${err instanceof Error ? err.message : String(err)}), so this run did not verify the published suite.`,
+    });
+    return;
+  }
+
+  const message = publishedTestAppWarning(
+    comparePublishedTestApp({ version, tests: tests.map(qualifiedTestName) }, published),
+  );
+  if (message !== undefined) {
+    emit({ type: "warning", code: "published-test-app-mismatch", message });
+  }
 }
 
 /**

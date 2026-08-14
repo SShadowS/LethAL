@@ -34,6 +34,43 @@ function findEndOfCentralDirectory(buf: Buffer): number {
   throw new Error("not a zip archive: no End Of Central Directory record found");
 }
 
+/**
+ * Reads one named entry from a package, or `null` when the package does not contain it.
+ *
+ * R139 check 2 reads a package the SERVER produced, where an entry's absence is ordinary rather
+ * than exceptional: `NavxManifest.xml` is always there, the app's own AL source is there only when
+ * the publisher included it. Distinguishing "absent" from "corrupt" is the whole point — a thrown
+ * error caught and read as absence would turn a corrupt download into a confident "no source".
+ */
+export function readPackageEntry(buf: Buffer, entryName: string): Buffer | null {
+  return listPackageEntries(buf).includes(entryName) ? extractZipEntry(buf, entryName) : null;
+}
+
+/** Every entry name in a package, in central-directory order. */
+export function listPackageEntries(buf: Buffer): readonly string[] {
+  const names: string[] = [];
+  const eocdPos = findEndOfCentralDirectory(buf);
+  const centralDirSize = buf.readUInt32LE(eocdPos + 12);
+  const centralDirOffsetRaw = buf.readUInt32LE(eocdPos + 16);
+  const baseOffset = eocdPos - centralDirSize - centralDirOffsetRaw;
+
+  let pos = baseOffset + centralDirOffsetRaw;
+  const centralDirEnd = pos + centralDirSize;
+  while (pos < centralDirEnd) {
+    if (buf.readUInt32LE(pos) !== CENTRAL_DIR_SIGNATURE) {
+      throw new Error(`corrupt zip central directory at offset ${pos}`);
+    }
+    const nameLen = buf.readUInt16LE(pos + 28);
+    const extraLen = buf.readUInt16LE(pos + 30);
+    const commentLen = buf.readUInt16LE(pos + 32);
+    names.push(
+      buf.toString("utf8", pos + CENTRAL_DIR_FIXED_SIZE, pos + CENTRAL_DIR_FIXED_SIZE + nameLen),
+    );
+    pos += CENTRAL_DIR_FIXED_SIZE + nameLen + extraLen + commentLen;
+  }
+  return names;
+}
+
 /** Reads and inflates one named entry from a zip (or zip-with-prepended-header) archive. */
 function extractZipEntry(buf: Buffer, entryName: string): Buffer {
   const eocdPos = findEndOfCentralDirectory(buf);
@@ -115,7 +152,6 @@ const SYMBOL_ARRAYS: ReadonlyArray<{ key: string; objectType: number }> = [
   { key: "PageExtensions", objectType: 14 },
   { key: "TableExtensions", objectType: 15 },
 ];
-
 
 interface SymbolMethod {
   readonly Id: number;

@@ -105,6 +105,53 @@ function admittedTestFiles(
   return admitted;
 }
 
+/**
+ * Every `[Test]` one AL SOURCE STRING declares, attributed to its codeunit.
+ *
+ * Split out of `discoverTests` for R139 check 2, which asks the same question of AL that came back
+ * from the SERVER (inside the published app package) rather than off disk. Sharing this function
+ * is the point: comparing a local list built by this parser against a remote list built by a second
+ * one would report differences that are parser disagreements, and "your published app is missing a
+ * test" is the wrong thing to say when the truth is "two regexes disagree".
+ */
+export function testsInAlSource(rel: string, source: string): TestMethodRef[] {
+  const refs: TestMethodRef[] = [];
+  // R79: section on CODE only. Prose of the shape `codeunit 50100 "Sales Post"` used to open a
+  // bogus section and swallow every [Test] below it, without a word anywhere.
+  const masked = maskNonCode(source);
+
+  // Find all codeunit headers in the file
+  const codeunitMatches = Array.from(masked.matchAll(CODEUNIT_HEADER_GLOBAL));
+  const sections: string[] = [];
+
+  for (let i = 0; i < codeunitMatches.length; i++) {
+    const headerMatch = codeunitMatches[i];
+    if (!headerMatch || headerMatch.index === undefined) continue;
+
+    const codeunitId = Number(headerMatch[1]);
+    const codeunitName = headerMatch[3] ?? headerMatch[4] ?? "";
+
+    // Determine section boundaries: from this header to the next (or end of file)
+    const sectionStart = headerMatch.index;
+    const nextMatch = codeunitMatches[i + 1];
+    const sectionEnd = nextMatch?.index ?? masked.length;
+
+    const section = masked.substring(sectionStart, sectionEnd);
+    sections.push(section);
+
+    // Check if this codeunit section has Subtype = Test
+    if (!SUBTYPE_TEST.test(section)) continue;
+
+    // Find test methods in this section only
+    for (const m of section.matchAll(TEST_METHOD)) {
+      refs.push({ codeunitId, codeunitName, method: m[2] ?? m[3] ?? "", file: rel });
+    }
+  }
+
+  assertEveryTestAttributed(rel, masked, sections);
+  return refs;
+}
+
 export async function discoverTests(
   testDir: string,
   options: DiscoverOptions = {},
@@ -116,39 +163,7 @@ export async function discoverTests(
   for (const rel of alFiles) {
     if (admitted !== undefined && !admitted.has(rel)) continue;
     const source = await readFile(join(testDir, rel), "utf8");
-    // R79: section on CODE only. Prose of the shape `codeunit 50100 "Sales Post"` used to open a
-    // bogus section and swallow every [Test] below it, without a word anywhere.
-    const masked = maskNonCode(source);
-
-    // Find all codeunit headers in the file
-    const codeunitMatches = Array.from(masked.matchAll(CODEUNIT_HEADER_GLOBAL));
-    const sections: string[] = [];
-
-    for (let i = 0; i < codeunitMatches.length; i++) {
-      const headerMatch = codeunitMatches[i];
-      if (!headerMatch || headerMatch.index === undefined) continue;
-
-      const codeunitId = Number(headerMatch[1]);
-      const codeunitName = headerMatch[3] ?? headerMatch[4] ?? "";
-
-      // Determine section boundaries: from this header to the next (or end of file)
-      const sectionStart = headerMatch.index;
-      const nextMatch = codeunitMatches[i + 1];
-      const sectionEnd = nextMatch?.index ?? masked.length;
-
-      const section = masked.substring(sectionStart, sectionEnd);
-      sections.push(section);
-
-      // Check if this codeunit section has Subtype = Test
-      if (!SUBTYPE_TEST.test(section)) continue;
-
-      // Find test methods in this section only
-      for (const m of section.matchAll(TEST_METHOD)) {
-        refs.push({ codeunitId, codeunitName, method: m[2] ?? m[3] ?? "", file: rel });
-      }
-    }
-
-    assertEveryTestAttributed(rel, masked, sections);
+    refs.push(...testsInAlSource(rel, source));
   }
   return refs;
 }

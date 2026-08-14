@@ -168,4 +168,26 @@ export interface ExecutionBackend {
   compileCheck(instrumentedDir: string): Promise<void>;
   activate(mutantId: string | null): Promise<void>;
   run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict>;
+  /**
+   * R139 check 2, OPTIONAL: the bytes of the package this backend's server currently holds for
+   * `app`.
+   *
+   * Three answers, and the difference between the last two is what keeps the check honest:
+   *
+   * - **bytes** — the server answered.
+   * - **`null`** — it was ASKED and did not answer (refused connection, 404, timeout, non-200).
+   *   The caller says so, because a check that fails silently reads exactly like a check that
+   *   passed.
+   * - **`undefined`** — it was never asked, because this configuration cannot form the request at
+   *   all (no server named, no credentials). The caller stays silent: there is no failure to report,
+   *   only a capability that does not apply here.
+   *
+   * Optional for the same reason `undefined` exists: `al-runner` compiles and runs locally, so
+   * there is no published app to ask about. Implementations must never throw — a proactive check
+   * must not be able to stop a run.
+   */
+  fetchPublishedAppPackage?(app: {
+    readonly publisher: string;
+    readonly name: string;
+  }): Promise<Uint8Array | null | undefined>;
 }
