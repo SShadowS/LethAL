@@ -139,7 +139,16 @@ const EXPECTED = {
   // (`FindFirst` <-> `FindLast`), and the new `lethal.validate-to-assign` (`Validate(F, V)` ->
   // `F := V`, refusing the single-argument form). All 51 per-mutant verdicts were pre-committed in
   // docs/superpowers/specs/2026-08-12-r136-trio-precommitment.md BEFORE this run.
-  totalMutantSites: 207,
+  // R134 moved this from 207 to 243. One operator landed with no live site anywhere:
+  // `lethal.flip-filter-literal` (Tier 2, 1.0.0) mutates INSIDE the filter STRING a `SetFilter`
+  // hands to BC, through a four-rule ladder (flip `<>` to `=`, shift a `<`/`<=`/`>`/`>=` boundary,
+  // reverse an open range, drop a placeholder-free alternative from a `|` list). The fixture's one
+  // pre-existing `SetFilter` carries the bare placeholder `'%1'`, which every rule declines, so
+  // nothing measured any rule of the four. `codeunit 79317 "Data Filter Ops"` adds seven arms (A,
+  // B, C, D, E, G and H) plus seven tests. 36 new raw specs, 4 new displacements, 32 new deployed.
+  // All 32 per-mutant verdicts were pre-committed in
+  // docs/superpowers/specs/2026-08-12-r134-filter-precommitment.md BEFORE this run.
+  totalMutantSites: 243,
   // R36 moved this from 63/10 to 64/9, deliberately and in one direction only.
   //
   // `RequireCategoryAFails` used to assert merely that AN error occurred, so deleting
@@ -197,7 +206,15 @@ const EXPECTED = {
   // second insert, reached three different ways — and none is tagged by the screen below, which is
   // the measured size of its blind spot (docs/roadmap/R138.md), not evidence that only one platform
   // artifact exists in this run.
-  killed: 157,
+  // R134 moved this from 157 to 183. 26 of the 32 new mutants are predicted killed, and FOUR of
+  // those are `flip-filter-literal` itself: arm A's `'<>%1'` -> `'=%1'` (rule 1), arm C's `'<%1'` ->
+  // `'<=%1'` with a row sitting exactly AT the threshold (rule 2), arm E's `'..%1'` -> `'%1..'`
+  // (rule 3), and arm G's `'FLT-G-DECOY|%1'` -> `'%1'` (rule 4). A matching verdict on those four
+  // does NOT prove the suite caught them: a mutated filter is DATA that BC re-parses at runtime, and
+  // a platform rejection scores `killed` with nothing recording which happened (R86/R138). The
+  // wave's real claim rests on the two SURVIVORS and on the arm C / arm D pair, which
+  // `assertFilterLiteralEvidence` below pins directly.
+  killed: 183,
   // R73 moved this from 9 to 12, and TWO of the three additions are worth reading rather than
   // accepting:
   //
@@ -239,7 +256,14 @@ const EXPECTED = {
   // `empty-block` on the procedure body, `empty-block` on the loop body, `void-method-call` deleting
   // the `Insert`, and (added by the amendment) `void-method-call` deleting `Init()` — the last of
   // these is EQUIVALENT rather than undertested, since there is nothing left for `Init()` to do.
-  survived: 25,
+  // R134 moved this from 25 to 31. Six of the 32 new mutants are predicted survived, and two of
+  // them are the load-bearing predictions of the whole wave, because a survivor cannot be
+  // manufactured by a platform error the way a kill can: arm B's `flip-filter-literal` (an
+  // existence-only assertion cannot see WHICH group was counted) and arm D's (with a GAP at the
+  // boundary the shifted comparator selects the identical row, so the mutant is genuinely
+  // EQUIVALENT). The other four are collateral: `void-method-call` at arms B, G and H, and
+  // `conditional-boundary` turning arm B's `Count() > 0` into the tautology `Count() >= 0`.
+  survived: 31,
   // R78 moved this from 6 to 9. The three new sites all belong to the TestPage-only pair
   // (`Data Value Source` / `Data Value Card`), and all three land `no-coverage` because the one
   // test that reaches them is refused on the fenced path. That is the measured statement of the
@@ -260,8 +284,15 @@ const EXPECTED = {
   // PUBLIC procedure mutant that misses member-level coverage gets no fallback and is reported
   // no-coverage directly, unlike a trigger mutant's two fallbacks. If it had missed, all four of
   // arm I's mutants would have moved together and the aggregate would read 154/24/14.
+  // R134 leaves this at 10, unchanged: all 32 of its new mutants sit inside procedures of
+  // `codeunit 79317 "Data Filter Ops"`, each called directly by exactly one new test, so
+  // member-level attribution must reach every one of them. Any arriving `no-coverage` is an
+  // ATTRIBUTION finding and must not be absorbed by editing this number.
   noCoverage: 10,
-  mutationScore: 157 / (157 + 25),
+  // 183 / 214 does not reduce (183 is 3 x 61, 214 is 2 x 107). It is about 0.8551, DOWN from
+  // 0.8626: a wave that adds six deliberate survivors is SUPPOSED to move the score down, and a
+  // score that rose instead would mean the survivors did not arrive.
+  mutationScore: 183 / (183 + 31),
   /**
    * R72: the screen must fire, and it must fire on exactly one mutant.
    *
@@ -275,7 +306,7 @@ const EXPECTED = {
    * R121: this fixture is the measured VACUOUS case for the assertion screen, and pinning it here is
    * the point rather than an incidental extra.
    *
-   * All 44 tests in `fixtures/sandbox-data-tests` raise via bare `Error(...)`; none uses Microsoft's
+   * All 51 tests in `fixtures/sandbox-data-tests` raise via bare `Error(...)`; none uses Microsoft's
    * Library Assert. So the screen's rule — "the failure text does not begin with `Assert.`" — flags
    * EVERY kill and separates nothing. Continia Document Output, where the rule was scored at 100%
    * recall and 26.1% precision, calls Library Assert ~1,886 times and produces `partial`.
@@ -557,7 +588,7 @@ function assertVerdictTable(report: SessionReport): void {
   // R121 — the assertion screen, pinned as the VACUOUS case. See EXPECTED's comment for why that
   // is the interesting assertion on this fixture.
   const assertionScreen = report.assertionScreen;
-  assert.ok(assertionScreen !== undefined, "a run with 157 kills must carry an assertion screen");
+  assert.ok(assertionScreen !== undefined, "a run with 183 kills must carry an assertion screen");
   assert.ok(
     assertionScreen.killsWithText > 0,
     "every kill on this path records its failure text (R86) — a zero here means the text stopped " +
@@ -566,7 +597,7 @@ function assertVerdictTable(report: SessionReport): void {
   assert.equal(
     assertionScreen.discrimination,
     EXPECTED.assertionScreenDiscrimination,
-    "this fixture raises via bare `Error(...)` in all 44 tests, so the screen must report itself " +
+    "this fixture raises via bare `Error(...)` in all 51 tests, so the screen must report itself " +
       "as separating NOTHING here. A `partial` would mean either the fixture grew an assertion " +
       "library or the rule started matching something it was never scored on",
   );
@@ -735,6 +766,105 @@ function assertTrioTextEvidence(report: SessionReport): void {
   );
 }
 
+/**
+ * R134: the six `lethal.flip-filter-literal` sites, pinned by TEXT and by the verdict of the
+ * `void-method-call` sharing each span.
+ *
+ * Why this exists when `tables.baseline.json` already keys per mutant. Two reasons, and the second
+ * is the load-bearing one.
+ *
+ *   1. The baseline is RE-RECORDED by the run that first measures a fixture growth, so it cannot
+ *      catch anything on that run: it blesses whatever arrived. These assertions are what carried a
+ *      prediction into the run rather than out of it, and they stay readable afterwards.
+ *   2. The baseline's key (astHash/codeunitName/operatorName/operatorMajor) carries no site text and
+ *      no PAIRING. The wave's whole claim is that this operator tells a strong test from a weak one,
+ *      and the evidence for that is not a count: it is arm C and arm D, identical rule and identical
+ *      mutation shape with OPPOSITE verdicts, plus two spans where the Tier-2 splice and the Tier-1
+ *      deletion disagree in opposite directions (arm D flip survives while the deletion is killed;
+ *      arm G flip is killed while the deletion survives). No aggregate can fake that pairing and no
+ *      baseline row expresses it.
+ *
+ * The `void` column also carries the dedup coexistence claim (§2.7 of the design): this operator
+ * sets `before` to the whole CALL, exactly as `void-method-call` does, but its `after.text` is a
+ * splice and never the empty string, so the two identities differ by that one field and neither
+ * displaces the other. If any arm below loses its `void-method-call`, dedup started treating a
+ * splice and a deletion as the same identity, a wider regression than this wave.
+ *
+ * Arm H (`CountInRange`) is deliberately absent: a CLOSED range classifies fine but no rule in the
+ * ladder targets it, so the site must refuse by ladder exhaustion. A seventh flip mutant means that
+ * deferral broke; a fifth means an arm's shape stopped classifying.
+ */
+function assertFilterLiteralEvidence(report: SessionReport): void {
+  const FILTER_ARMS = [
+    // arm, procedure, the literal before -> after, the flip's verdict, and the verdict of the
+    // `void-method-call` deleting the SAME `SetFilter` call.
+    ["A", "CountExcluding", "'<>%1'", "'=%1'", "killed", "killed"],
+    ["B", "AnyExcluding", "'<>%1|FLT-NONE'", "'=%1|FLT-NONE'", "survived", "survived"],
+    ["C", "CountBelowThreshold", "'<%1'", "'<=%1'", "killed", "killed"],
+    ["D", "CountBelowThresholdSparse", "'<%1|999999999'", "'<=%1|999999999'", "survived", "killed"],
+    ["E", "CountUpToBound", "'..%1'", "'%1..'", "killed", "killed"],
+    ["G", "CountDecoyOrTarget", "'FLT-G-DECOY|%1'", "'%1'", "killed", "survived"],
+  ] as const;
+
+  const flips = report.mutants.filter((m) => m.operatorName === "lethal.flip-filter-literal");
+  console.log(
+    `  flip-filter-literal: ${flips.map((m) => `${m.procedureName}=${m.verdict}`).join(", ") || "(none)"}`,
+  );
+  assert.equal(
+    flips.length,
+    FILTER_ARMS.length,
+    `expected exactly ${FILTER_ARMS.length} lethal.flip-filter-literal mutants (one per arm A, B, C, D, E and G), got ${flips.length} at ${flips.map((m) => m.procedureName).join(", ")}`,
+  );
+  assert.deepEqual(
+    flips.filter((m) => m.procedureName === "CountInRange").map((m) => m.mutantCode),
+    [],
+    "arm H's CLOSED range must emit NO flip-filter-literal mutant: it classifies successfully and " +
+      "then exhausts the ladder, which is the refusal negative this arm exists to be",
+  );
+
+  for (const [arm, procedureName, before, after, flipVerdict, voidVerdict] of FILTER_ARMS) {
+    const inArm = report.mutants.filter((m) => m.procedureName === procedureName);
+    const [flip, ...extraFlips] = inArm.filter(
+      (m) => m.operatorName === "lethal.flip-filter-literal",
+    );
+    assert.ok(flip !== undefined, `arm ${arm} (${procedureName}): no flip-filter-literal mutant`);
+    assert.deepEqual(
+      extraFlips.map((m) => m.mutantCode),
+      [],
+      `arm ${arm} (${procedureName}): more than one flip-filter-literal mutant`,
+    );
+    assert.ok(
+      flip.originalText.includes(before),
+      `arm ${arm}: flip's originalText must carry the literal ${before}, got ${flip.originalText}`,
+    );
+    assert.ok(
+      flip.mutatedText.includes(after),
+      `arm ${arm}: flip's mutatedText must carry the literal ${after}, got ${flip.mutatedText}`,
+    );
+    assert.equal(flip.verdict, flipVerdict, `arm ${arm} (${procedureName}): flip verdict`);
+
+    // The `void-method-call` sharing this span, matched on the SetFilter text so an arm's OTHER
+    // statement-position deletions (the SetRange on arms C, D, E and H) cannot answer for it.
+    const [voided, ...extraVoids] = inArm.filter(
+      (m) => m.operatorName === "lethal.void-method-call" && m.originalText.includes("SetFilter"),
+    );
+    assert.ok(
+      voided !== undefined,
+      `arm ${arm} (${procedureName}): the SetFilter span carries a flip but NO void-method-call, so dedup has started treating a splice and a deletion as one identity`,
+    );
+    assert.deepEqual(
+      extraVoids.map((m) => m.mutantCode),
+      [],
+      `arm ${arm} (${procedureName}): more than one void-method-call on a SetFilter`,
+    );
+    assert.equal(
+      voided.verdict,
+      voidVerdict,
+      `arm ${arm} (${procedureName}): the SetFilter deletion's verdict. Arms D and G are the two spans where it disagrees with the flip, in opposite directions, and that disagreement is the evidence no aggregate count can produce`,
+    );
+  }
+}
+
 async function main(): Promise<void> {
   // PROJECT_DIR, not `<PROJECT_DIR>/src` — `runSession` generates from `cfg.projectDir`, so
   // scanning anything else would let this header describe a different file set than the run
@@ -763,6 +893,9 @@ async function main(): Promise<void> {
     );
     // R136: the four durable text-based assertions the collapsed baseline key cannot express.
     assertTrioTextEvidence(first.report);
+    // R134: the six flip-filter-literal arms, their texts, and the pairing with each span's
+    // void-method-call: the wave's discrimination claim, which no baseline row can express.
+    assertFilterLiteralEvidence(first.report);
     // Per-mutant regression guard against the committed baseline, keyed on semantic identity
     // (astHash/codeunitName/operatorName/operatorMajor) rather than mutant code — so it survives
     // renumbering that the EXPECTED.verdicts map above deliberately does not.
@@ -775,6 +908,7 @@ async function main(): Promise<void> {
       await readDeployedManifests(join(scratchB, "instrumented")),
     );
     assertTrioTextEvidence(second.report);
+    assertFilterLiteralEvidence(second.report);
 
     const shape = (r: SessionReport) =>
       [...r.mutants]

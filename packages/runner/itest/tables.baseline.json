@@ -336,9 +336,23 @@
     "errorClass": null
   },
   {
+    "key": "27d9ef312d9207b0616440d7164b6c7fbf6b1295c2ba1801b72446462dd4e10d|Data Filter Ops|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "28ec3ef887cc37eba71608be6c43c99ffad17eae3a4846a7b96278c1818580ec|Data Swap Ops|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "SwapReversesTheRangeComparison",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "291ca94471c4e99540647ddb3be0910828c21cbff23fd7eacc243a7d0c5f17be|Data Filter Ops|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "ExistenceOnlyAssertionMissesTheNegationFlip",
     "coverageFiltered": false,
     "errorClass": null
   },
@@ -388,6 +402,13 @@
     "key": "30bba5bb3b24ff3a1397f185bd4d5eb6567a87106024106a023b39a6ead33cfc|Data Main Ext|lethal.remove-setrange|1",
     "verdict": "killed",
     "killingTest": "ExtCountRelatedIgnoresDecoys",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "326ff72ac66c81e59e3d1dca5d999e965826fe9ebc7ed922b1a3c38e54ec3f87|Data Filter Ops|lethal.conditional-boundary|1",
+    "verdict": "survived",
+    "killingTest": null,
     "coverageFiltered": false,
     "errorClass": null
   },
@@ -483,6 +504,13 @@
     "errorClass": null
   },
   {
+    "key": "46f1c8005b0b1e57c3af7712fb66f087e34e5cfef5a4895866ae28628c2ce6ad|Data Filter Ops|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "BoundaryShiftAdmitsTheThresholdRow",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "4dd7c10064c121842bc19ef4697abfc8f22cc784296f3e16747aacdfc4097edb|Data Scope Probe|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "ScopeProbeCountsOnlyFilteredRelated",
@@ -539,6 +567,13 @@
     "errorClass": null
   },
   {
+    "key": "58c5712645cbdd4ad820a47219ed4287ec37a72d24d4f4e89221eca826896b96|Data Filter Ops|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "DroppedPlaceholderFreeAlternativeChangesTheCount",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "5bd1ae068fbdf002b204abc14d378030129f17f8784449b352db76b6102421e1|Data Main Ext|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "ExtRequireCategoryFails",
@@ -563,6 +598,20 @@
     "key": "63bbaccc92ed756efb44d86e0512890978e0198784eb988ffa91ee87478b8246|Data Ops|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "MarkProcessedFiresModifyTrigger",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "6718f452d59a94232d7b0b1dd82942a8a6a0a546091a2f7d74abadaed2bee39c|Data Filter Ops|lethal.remove-setrange|1",
+    "verdict": "killed",
+    "killingTest": "RangeFlipChangesTheCountRegardlessOfInclusivity",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "6e6f446554f674d6e9e64a7a5e5142825ad0c351f756064ad55471679a28d776|Data Filter Ops|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "ClosedRangeCountIsScopedByMainNo",
     "coverageFiltered": false,
     "errorClass": null
   },
@@ -644,6 +693,48 @@
     "errorClass": null
   },
   {
+    "key": "775a7b9b5dbee9db428ccfbcc06d2cbb52939dbb329b11741090ee86e1d9a909|Data Filter Ops|lethal.return-value|1",
+    "verdict": "killed",
+    "killingTest": "BoundaryShiftAdmitsTheThresholdRow",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "775a7b9b5dbee9db428ccfbcc06d2cbb52939dbb329b11741090ee86e1d9a909|Data Filter Ops|lethal.return-value|1",
+    "verdict": "killed",
+    "killingTest": "ClosedRangeCountIsScopedByMainNo",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "775a7b9b5dbee9db428ccfbcc06d2cbb52939dbb329b11741090ee86e1d9a909|Data Filter Ops|lethal.return-value|1",
+    "verdict": "killed",
+    "killingTest": "DroppedPlaceholderFreeAlternativeChangesTheCount",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "775a7b9b5dbee9db428ccfbcc06d2cbb52939dbb329b11741090ee86e1d9a909|Data Filter Ops|lethal.return-value|1",
+    "verdict": "killed",
+    "killingTest": "GapAtTheBoundaryMakesTheShiftEquivalent",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "775a7b9b5dbee9db428ccfbcc06d2cbb52939dbb329b11741090ee86e1d9a909|Data Filter Ops|lethal.return-value|1",
+    "verdict": "killed",
+    "killingTest": "NegationFlipChangesTheCount",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "775a7b9b5dbee9db428ccfbcc06d2cbb52939dbb329b11741090ee86e1d9a909|Data Filter Ops|lethal.return-value|1",
+    "verdict": "killed",
+    "killingTest": "RangeFlipChangesTheCountRegardlessOfInclusivity",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "775a7b9b5dbee9db428ccfbcc06d2cbb52939dbb329b11741090ee86e1d9a909|Data Find Ops|lethal.return-value|1",
     "verdict": "killed",
     "killingTest": "ExistenceOnlyAssertionMissesTheDirection",
@@ -686,9 +777,30 @@
     "errorClass": null
   },
   {
+    "key": "78431f302dce39838089dad1bc52da69afc4475634f656f07f6e40230cbee1c4|Data Filter Ops|lethal.flip-filter-literal|1",
+    "verdict": "killed",
+    "killingTest": "RangeFlipChangesTheCountRegardlessOfInclusivity",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "78431f302dce39838089dad1bc52da69afc4475634f656f07f6e40230cbee1c4|Data Filter Ops|lethal.void-method-call|1",
+    "verdict": "killed",
+    "killingTest": "RangeFlipChangesTheCountRegardlessOfInclusivity",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "791bdf5ccfa49e553e89015a1d520bf7a10c5d1fb2a3aad5f4ea40ecf6fb530f|Data Ops|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "RequireCategoryAFails",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "7ad4ff1f2662520bea5fc027ae8a6958a90791e71d4f5a927b7e7072b648f63d|Data Filter Ops|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "GapAtTheBoundaryMakesTheShiftEquivalent",
     "coverageFiltered": false,
     "errorClass": null
   },
@@ -714,6 +826,20 @@
     "errorClass": null
   },
   {
+    "key": "833b5dc954e37559f7d0a6747c0a91c80de6c91998782022173d2d0a542fd2d6|Data Filter Ops|lethal.flip-filter-literal|1",
+    "verdict": "killed",
+    "killingTest": "DroppedPlaceholderFreeAlternativeChangesTheCount",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "833b5dc954e37559f7d0a6747c0a91c80de6c91998782022173d2d0a542fd2d6|Data Filter Ops|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "838ae64ec48742561ebe9f1ca8ca08ae2abacd780728cc990e00111654982874|Data Flag Ops|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "WeakInsertAssertionMissesTheFlag",
@@ -724,6 +850,20 @@
     "key": "86aa55fe5feb9fa6da8698741ac7f056231164a3a1bcea3cb97afabd42cbcc58|Data Ops|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "ShadowedBuiltinsRun",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "86cb5be337f68b07681337f2041c3d77738f9f5093a7faf5cd7b8a6b100df456|Data Filter Ops|lethal.flip-filter-literal|1",
+    "verdict": "killed",
+    "killingTest": "NegationFlipChangesTheCount",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "86cb5be337f68b07681337f2041c3d77738f9f5093a7faf5cd7b8a6b100df456|Data Filter Ops|lethal.void-method-call|1",
+    "verdict": "killed",
+    "killingTest": "NegationFlipChangesTheCount",
     "coverageFiltered": false,
     "errorClass": null
   },
@@ -791,6 +931,13 @@
     "errorClass": null
   },
   {
+    "key": "9854917a8158c73df16c464f6e998c47c0b8db0952d2f3d61391647d533078f8|Data Filter Ops|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "RangeFlipChangesTheCountRegardlessOfInclusivity",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "99c015c7a0861729e1cf3c2df47eec56a61fe3340e423305f4a5174fe4444e9d|Data Main List Ext|lethal.remove-setrange|1",
     "verdict": "no-coverage",
     "killingTest": null,
@@ -843,6 +990,20 @@
     "key": "a22445ff2842966e67c6ea9b5ac40270a678c214cc0851b15dee61484a6188b4|Data Swap Ops|lethal.conditional-boundary|1",
     "verdict": "killed",
     "killingTest": "SwapReversesTheRangeComparison",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "a2c6b4392bb50cf4475ee11c351b542eb253f37dd2ac6c48ad6bafaba2867a35|Data Filter Ops|lethal.flip-filter-literal|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "a2c6b4392bb50cf4475ee11c351b542eb253f37dd2ac6c48ad6bafaba2867a35|Data Filter Ops|lethal.void-method-call|1",
+    "verdict": "killed",
+    "killingTest": "GapAtTheBoundaryMakesTheShiftEquivalent",
     "coverageFiltered": false,
     "errorClass": null
   },
@@ -973,6 +1134,20 @@
     "errorClass": null
   },
   {
+    "key": "b936293a62278e0237c4e8ea88bd8e7b7ef4164f197853ce118861b2f980fade|Data Filter Ops|lethal.flip-filter-literal|1",
+    "verdict": "killed",
+    "killingTest": "BoundaryShiftAdmitsTheThresholdRow",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "b936293a62278e0237c4e8ea88bd8e7b7ef4164f197853ce118861b2f980fade|Data Filter Ops|lethal.void-method-call|1",
+    "verdict": "killed",
+    "killingTest": "BoundaryShiftAdmitsTheThresholdRow",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "ba57b8a23dc6a3b34719619f2473665fc8064e6bb05617e81d5bebf3c4364457|Data Validate Ops|lethal.return-value|1",
     "verdict": "killed",
     "killingTest": "TouchLevelRunsTheTriggerAgain",
@@ -983,6 +1158,13 @@
     "key": "ba57b8a23dc6a3b34719619f2473665fc8064e6bb05617e81d5bebf3c4364457|Data Validate Ops|lethal.return-value|1",
     "verdict": "killed",
     "killingTest": "ValidateRunsTheFieldTrigger",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "bb04bc7fbd23366cf5e65e8cfd9263b597ac5bcae97344d73d8ecca091b288ed|Data Filter Ops|lethal.remove-setrange|1",
+    "verdict": "killed",
+    "killingTest": "GapAtTheBoundaryMakesTheShiftEquivalent",
     "coverageFiltered": false,
     "errorClass": null
   },
@@ -1036,6 +1218,13 @@
     "errorClass": null
   },
   {
+    "key": "c44ce6b0d2f31c995ba0a78b3abda6237ac7977f092e36f1197178dc46e5f9eb|Data Filter Ops|lethal.remove-setrange|1",
+    "verdict": "killed",
+    "killingTest": "ClosedRangeCountIsScopedByMainNo",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "c73aba3885af311270af7738201c818793b7a313060f6c4d6cbe311ae7439fbf|Data Validate Ops|lethal.validate-to-assign|1",
     "verdict": "killed",
     "killingTest": "ValidateRunsTheFieldTrigger",
@@ -1085,6 +1274,13 @@
     "errorClass": null
   },
   {
+    "key": "ce74f228da875a6d8ddf7b301fc1d1f42e28500532d9e6628f16f8adeb64e923|Data Filter Ops|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "NegationFlipChangesTheCount",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "ceb8ef921b3f22b7d57512a5d1a725f4460897a4e7bb19721b3db626cffb5a7e|Data Ops|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "CountForMainIgnoresDecoys",
@@ -1095,6 +1291,13 @@
     "key": "d0e4e27a2a1f0c3e7e10d0c216466138840535fb72fcb68c6e81264f4b8986f2|Data Ops|lethal.remove-setrange|1",
     "verdict": "killed",
     "killingTest": "CountForMainIgnoresDecoys",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "d1766d1e6cc7375d59cd213457cc23a3e6ea72b10306b8611d1a1d77af48b6cc|Data Filter Ops|lethal.return-value|1",
+    "verdict": "killed",
+    "killingTest": "ExistenceOnlyAssertionMissesTheNegationFlip",
     "coverageFiltered": false,
     "errorClass": null
   },
@@ -1165,6 +1368,13 @@
     "key": "d36581a980ee091d62faf54b2a4512ee7cb1db33aea2a4f417a5edde7ef9d79f|Data Validator|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "UserDefinedBuiltinsRun",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "d4493e1d7f52bf1ecd8af7c622d178c5ff268dd00b9e28d2cd1e1da2cbfa8d06|Data Filter Ops|lethal.remove-setrange|1",
+    "verdict": "killed",
+    "killingTest": "BoundaryShiftAdmitsTheThresholdRow",
     "coverageFiltered": false,
     "errorClass": null
   },
@@ -1284,6 +1494,20 @@
     "key": "eac1a311eb36cb1649b4e6835786640b63c95c06831fd4b7d88febcf3b3b29c6|Data Main|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "CategoryGuardNeedsCalcFields",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "edd0971e1ccbdc71f0cef4c899cb988d26c4153f733c65b9d08b74978213aca4|Data Filter Ops|lethal.flip-filter-literal|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "edd0971e1ccbdc71f0cef4c899cb988d26c4153f733c65b9d08b74978213aca4|Data Filter Ops|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
     "coverageFiltered": false,
     "errorClass": null
   },
