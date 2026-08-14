@@ -557,6 +557,22 @@ export interface ExecutionContext {
   /** The runner's own line the `bcBuild` above was read from, verbatim — so a reader who distrusts
    *  the parse can check it, and a reworded announcement is visible rather than silent. */
   readonly bcBuildAnnouncement?: string;
+  /**
+   * R147: the Microsoft platform-app directory these verdicts were executed against, when the
+   * session PINNED one at start rather than letting al-runner re-resolve it per invocation.
+   *
+   * Present on the same terms as `bcBuild`: the al-runner path only, directly-measured entries only,
+   * never a carried verdict. It answers a question `bcBuild` does not — al-runner resolves the
+   * ENGINE at the binary's build and the PLATFORM APPS at the project's version prefix, and these
+   * are two different builds (28.1.x versus 28.0.x, measured). `bcBuild` names the first.
+   *
+   * It is also what makes a resumed report honest. `sessionFingerprint` deliberately does NOT cover
+   * the pin — widening it would break every `--resume` the moment Microsoft publishes, which is
+   * worse than the problem — so a resumed report can hold verdicts produced against two different
+   * platform-app builds. Carried entries never receive this field, so the seam is visible instead of
+   * hidden.
+   */
+  readonly platformAppsDir?: string;
 }
 
 /** Per-procedure survivor rollup — see `SessionReport.survivorsByProcedure`. */
@@ -1378,6 +1394,8 @@ function buildExecutionContexts(
   // R129 — see `ExecutionContext.bcBuild`. Attached only to non-carried entries on a
   // non-authoritative (al-runner) backend, which is the only path that announces one.
   alRunnerBcBuild: { readonly build: string; readonly announcement: string } | undefined,
+  // R147 — see `ExecutionContext.platformAppsDir`. Gated exactly as `alRunnerBcBuild` is.
+  alRunnerPlatformAppsDir: string | undefined,
 ): ExecutionContext[] {
   const groups = new Map<string, { runner: RunnerKind; carried: boolean; verdictCount: number }>();
   for (const o of outcomes) {
@@ -1394,10 +1412,16 @@ function buildExecutionContexts(
   // R129: only a directly-measured entry on the announcing path gets the build. A carried verdict
   // was produced by a DIFFERENT run against whatever that run selected, and stamping this run's
   // observation onto it would be a provenance claim about a session this one never made.
-  const bcFields =
-    alRunnerBcBuild !== undefined && !caps.authoritative
+  const bcFields = {
+    ...(alRunnerBcBuild !== undefined && !caps.authoritative
       ? { bcBuild: alRunnerBcBuild.build, bcBuildAnnouncement: alRunnerBcBuild.announcement }
-      : {};
+      : {}),
+    // R147, same two gates and for the same reason: a carried verdict's platform apps belong to the
+    // run it came from, and bcdev has no such concept at all.
+    ...(alRunnerPlatformAppsDir !== undefined && !caps.authoritative
+      ? { platformAppsDir: alRunnerPlatformAppsDir }
+      : {}),
+  };
   return [...groups.values()].map((g) => {
     const measured = measuredExecutionContext(g.runner, caps);
     if (!g.carried) {
@@ -1718,6 +1742,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     input.caps,
     input.resumedFrom !== undefined ? { runId: input.resumedFrom.runId } : undefined,
     input.alRunnerBcBuild,
+    input.alRunnerPlatformAppsDir,
   );
 
   return {

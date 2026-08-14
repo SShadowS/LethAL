@@ -7276,3 +7276,154 @@ describe("runSession — R108: a batch whose TOTAL crosses the bracket warns bef
     store.close();
   });
 });
+
+/**
+ * R147 — the platform-app pin must reach EVERY backend that will execute a mutant, or the session
+ * refuses.
+ *
+ * The failure this prevents is not a slow run. The baseline always executes on `cfg.backend` and is
+ * never sharded, so a pin that reached only that instance would have the baseline running under a
+ * FROZEN platform-app build while the mutants ran under `--auto-provision`, which resolves the
+ * project's version prefix forward on every invocation. A Microsoft publish mid-session then moves
+ * the platform apps under the mutants and not under the baseline. Worse, the report would not show
+ * it: `observedBcBuild` is read from `cfg.backend` alone, so it would name the build that produced
+ * the BASELINE and present it as the build that produced the verdicts.
+ */
+describe("runSession propagates al-runner's pinned platform-app directory (R147)", () => {
+  const PIN = "C:/cache/28.0.46665.53671/platform-apps";
+  const caps: BackendCapabilities = {
+    coverage: "none",
+    deploy: "none",
+    isolation: "full-reset",
+    authoritative: false,
+  };
+
+  /** A backend that provisions and CAN be pinned — the real `AlRunnerBackend` shape. */
+  class PinnableStub extends StubBackend {
+    pins: string[] = [];
+    // `null` rather than `undefined` for "do not pin": an explicit `undefined` argument triggers the
+    // JavaScript DEFAULT and would silently give this stub a pin the test was written to withhold.
+    constructor(private readonly pin: string | null = PIN) {
+      super(caps, (mutant) => (mutant === null ? "pass" : "fail"));
+    }
+    async provisionOnce() {
+      return {
+        elapsedMs: 1,
+        ran: true,
+        downloaded: false,
+        detail: "",
+        ...(this.pin !== null
+          ? { platformAppsDir: this.pin }
+          : { platformAppsRefusal: "measured nothing, on purpose" }),
+      };
+    }
+    usePlatformAppsDir(dir: string): void {
+      this.pins.push(dir);
+    }
+  }
+
+  /** Provisions, but cannot take the answer. The shape a future wrapper or decorator would have. */
+  class UnpinnableStub extends StubBackend {
+    constructor() {
+      super(caps, (mutant) => (mutant === null ? "pass" : "fail"));
+    }
+    async provisionOnce() {
+      return { elapsedMs: 1, ran: true, downloaded: false, detail: "", platformAppsDir: PIN };
+    }
+  }
+
+  test("the session backend is pinned, and the run SAYS which directory", async () => {
+    const dirs = await makeProject();
+    const store = new ResultsStore(":memory:");
+    const events: RunEvent[] = [];
+    const backend = new PinnableStub();
+    await runSession({
+      backend,
+      store,
+      ...dirs,
+      selectorIds,
+      emit: [createEmitter([(e) => events.push(e)])],
+    });
+    expect(backend.pins).toEqual([PIN]);
+    expect(events.some((e) => e.type === "al-runner-platform-apps" && e.dir === PIN)).toBe(true);
+    store.close();
+  });
+
+  test("every worker backend is pinned too, with the SAME directory", async () => {
+    const dirs = await makeProject();
+    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
+    const store = new ResultsStore(":memory:");
+    const workers = [new PinnableStub(), new PinnableStub()];
+    await runSession({
+      backend: new PinnableStub(),
+      backendFactory: (i: number) => workers[i] ?? new PinnableStub(),
+      store,
+      ...dirs,
+      selectorIds,
+      workers: 2,
+    });
+    // Both, and one apiece — the pin is applied once at construction time, not per mutant.
+    expect(workers.map((w) => w.pins)).toEqual([[PIN], [PIN]]);
+    store.close();
+  });
+
+  test("a worker backend that cannot be pinned FAILS the session, rather than running other argv", async () => {
+    const dirs = await makeProject();
+    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
+    const store = new ResultsStore(":memory:");
+    await expect(
+      runSession({
+        backend: new PinnableStub(),
+        backendFactory: () => new UnpinnableStub(),
+        store,
+        ...dirs,
+        selectorIds,
+        workers: 2,
+      }),
+    ).rejects.toThrow(/does not accept one/);
+    store.close();
+  });
+
+  test("CONTROL: no pin, no propagation, no throw — an unpinnable worker is fine", async () => {
+    // Passes with the feature enabled and disabled alike. Without it, "the throw fires" would be
+    // indistinguishable from "the throw fires always", and disabling the pin would still look green.
+    const dirs = await makeProject();
+    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
+    const store = new ResultsStore(":memory:");
+    const events: RunEvent[] = [];
+    const report = await runSession({
+      backend: new PinnableStub(null),
+      backendFactory: () => new UnpinnableStub(),
+      store,
+      ...dirs,
+      selectorIds,
+      workers: 2,
+      emit: [createEmitter([(e) => events.push(e)])],
+    });
+    expect(report.mutants.length).toBeGreaterThan(0);
+    // And it is REPORTED, never silent: a build whose parse had gone stale must not look identical
+    // to a build that never had the feature.
+    expect(
+      events.some((e) => e.type === "warning" && e.code === "al-runner-platform-apps-unpinned"),
+    ).toBe(true);
+    store.close();
+  });
+
+  test("a bcdev-shaped backend, which never provisions, is never asked to be pinned", async () => {
+    const dirs = await makeProject();
+    const store = new ResultsStore(":memory:");
+    const events: RunEvent[] = [];
+    await runSession({
+      backend: new StubBackend(caps, (mutant) => (mutant === null ? "pass" : "fail")),
+      store,
+      ...dirs,
+      selectorIds,
+      emit: [createEmitter([(e) => events.push(e)])],
+    });
+    expect(events.some((e) => e.type === "al-runner-platform-apps")).toBe(false);
+    expect(
+      events.some((e) => e.type === "warning" && e.code === "al-runner-platform-apps-unpinned"),
+    ).toBe(false);
+    store.close();
+  });
+});

@@ -26,6 +26,15 @@ import { defaultSpawn } from "./publisher";
  * spawns al-runner directly — but through `buildAlRunnerArgv`/`alRunnerEnv`, the SAME argv and env
  * the transport sends, because a probe that blesses a command line nobody runs measures nothing.
  *
+ * THAT SENTENCE IS NOW HALF TRUE, AND THE GAP IS FILED RATHER THAN HIDDEN. R147 made every
+ * per-mutant invocation carry `--package-cache <the pinned platform-apps directory>` and drop
+ * `--auto-provision`, while this probe still builds its invocations with no pin. It runs from
+ * `cli.ts` BEFORE `runSession`, so before any provisioning has happened and therefore before a pin
+ * exists — which is why closing it means changing R123's own design rather than adding a field here.
+ * See `docs/roadmap/R149.md`. Two of the five facts make it more than bookkeeping:
+ * `compile-failure-not-scorable`, which stands between a project that failed to compile and a batch
+ * of false survivors, and `unknown-flag-rejected`, whose whole test is the exit code.
+ *
  * WHY AN UNMEASURABLE FACT REFUSES. `runAlRunnerCanary` deliberately demotes its own failures to a
  * warning and lets the session proceed; that is right for a defect canary, whose silence is
  * informative in itself and whose absence costs the reader a caveat. It is wrong here. "We could

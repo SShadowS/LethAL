@@ -1,4 +1,4 @@
-import { cp, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   CONTROL_REGISTER_FILENAME,
@@ -9,6 +9,8 @@ import {
   OneShotTransport,
   alRunnerEnv,
   buildAlRunnerArgv,
+  isChildChosenExit,
+  parseAlRunnerPlatformAppsDir,
   qualifiedTestName,
 } from "./al-runner-transport";
 import type { AlRunnerBcBuild, AlRunnerTransport } from "./al-runner-transport";
@@ -100,6 +102,24 @@ export interface AlRunnerProvisionResult {
   readonly downloaded: boolean;
   /** Tail of the runner's own output, for a reader diagnosing a provisioning that did nothing. */
   readonly detail: string;
+  /**
+   * R147 — the Microsoft platform-app directory this invocation reported FINISHING, once it has been
+   * checked on disk. `runSession` hands it to every backend that will execute a mutant, which then
+   * sends it as `--package-cache` and stops sending `--auto-provision`.
+   *
+   * Absent whenever `platformAppsRefusal` is present, and exactly one of the two always is.
+   */
+  readonly platformAppsDir?: string;
+  /**
+   * R147 — why no directory was pinned, in the reader's terms. Present exactly when
+   * `platformAppsDir` is absent.
+   *
+   * Not optional in spirit: a run that quietly declined to pin, in a build where the parse had gone
+   * stale, would look identical to a build of LethAL that never had the feature. The wording this
+   * parse reads has already moved once inside a week, so "it stopped working and nobody was told" is
+   * the expected failure, not a hypothetical one.
+   */
+  readonly platformAppsRefusal?: string;
 }
 
 /** The actionable half of `status()`'s refusal — what is wrong and what to do about it. */
@@ -228,6 +248,9 @@ export class AlRunnerBackend implements ExecutionBackend {
   // callers may drive activate()/run() directly against cfg.instrumentedDir)
   // activeDir() falls back to the statically configured instrumented dir.
   private deployedDir: string | undefined;
+  /** R147 — see `usePlatformAppsDir`. Undefined until this session's provisioning run has reported a
+   *  directory that passed every check, and then for the rest of the session. */
+  private platformAppsDir: string | undefined;
   private readonly transport: AlRunnerTransport;
 
   constructor(
@@ -336,8 +359,10 @@ export class AlRunnerBackend implements ExecutionBackend {
       }),
     ]).finally(() => clearTimeout(timer));
     const output = `${res.stderr}\n${res.stdout}`;
+    const platformApps = await this.readPlatformAppsPin(res.exitCode, output);
     return {
       elapsedMs: Date.now() - started,
+      ...platformApps,
       // Any exit code is accepted: this invocation runs no test, and what it is for happens before
       // the runner ever decides one. Only a spawn failure or the deadline (-1) is "did not run".
       ran: res.exitCode >= 0,
@@ -346,6 +371,83 @@ export class AlRunnerBackend implements ExecutionBackend {
       downloaded: /^\[provision\][^\n]*\b(downloading|Downloading|fetching)\b/m.test(output),
       detail: (res.stderr || res.stdout).slice(-400),
     };
+  }
+
+  /**
+   * R147 — decide whether this session may pin the platform-app directory, and say why not when it
+   * may not. Three conditions, all of them because a WRONG pin costs a whole session.
+   *
+   * 1. **The runner chose its own exit code.** Not `AlRunnerProvisionResult.ran`, which is
+   *    `exitCode >= 0` and therefore `true` for a signal kill: `defaultSpawn` RESOLVES on a killed
+   *    child with `128 + signal` and whatever partial output it had written (measured for R123). A
+   *    provisioning killed mid-download can have printed its completion sentence for the FIRST of
+   *    R130's two passes and left the directory half rewritten by the second. `ran` is deliberately
+   *    left alone — it exists for R128's warning and means what it says there.
+   * 2. **The runner printed a COMPLETION sentence naming exactly one directory.** See
+   *    `parseAlRunnerPlatformAppsDir` for why the intent sentence is not read and why two agreeing
+   *    passes are one answer.
+   * 3. **That directory exists and holds at least as many `*.app` files as the runner said it
+   *    wrote.** The count comes from the runner's own sentence; deciding a number ourselves would be
+   *    the guess this check exists to avoid. It is what catches a provisioning that stopped part-way
+   *    without being killed.
+   *
+   * Any failure returns a refusal instead, and the session keeps today's behaviour: `--auto-provision`
+   * on every invocation. That is the safe direction — it is slower, never wrong.
+   */
+  private async readPlatformAppsPin(
+    exitCode: number,
+    output: string,
+  ): Promise<{ platformAppsDir: string } | { platformAppsRefusal: string }> {
+    if (!isChildChosenExit(exitCode)) {
+      return {
+        platformAppsRefusal: `the provisioning invocation exited ${exitCode}, which is a signal or a spawn failure rather than al-runner answering, so nothing it printed about a platform-app directory is believed (R147). Every invocation keeps --auto-provision, as before.`,
+      };
+    }
+    const parsed = parseAlRunnerPlatformAppsDir(output);
+    if (parsed.kind === "no-completion-line") {
+      return {
+        platformAppsRefusal:
+          "the provisioning invocation printed no completion sentence naming a platform-app " +
+          "directory (`[provision] Downloaded <N> app(s) ... to <dir>`), so there is nothing to pin " +
+          "(R147). Either the cache was already complete and the runner said nothing, or the wording " +
+          "moved. Every invocation keeps --auto-provision, as before.",
+      };
+    }
+    if (parsed.kind === "conflicting") {
+      return {
+        platformAppsRefusal: `the provisioning invocation named ${parsed.dirs.length} DIFFERENT platform-app directories (${parsed.dirs.join(", ")}), so there is no basis for picking one (R147). Every invocation keeps --auto-provision, as before.`,
+      };
+    }
+    let apps = 0;
+    try {
+      for (const entry of await readdir(parsed.dir)) {
+        if (entry.toLowerCase().endsWith(".app")) apps++;
+      }
+    } catch (err) {
+      return {
+        platformAppsRefusal: `al-runner said it wrote ${parsed.appCount} platform app(s) to ${parsed.dir}, but that directory cannot be read (${err instanceof Error ? err.message : String(err)}), so it is not pinned (R147). Every invocation keeps --auto-provision, as before.`,
+      };
+    }
+    if (apps < parsed.appCount) {
+      return {
+        platformAppsRefusal: `al-runner said it wrote ${parsed.appCount} platform app(s) to ${parsed.dir}, but that directory holds ${apps} — a provisioning that stopped part-way. Not pinned (R147); every invocation keeps --auto-provision, as before.`,
+      };
+    }
+    return { platformAppsDir: parsed.dir };
+  }
+
+  /**
+   * R147 — adopt the platform-app directory this session's provisioning run reported.
+   *
+   * Called by `runSession` on EVERY backend instance that will execute a mutant, which on
+   * `workers > 1` is more than this one. `provisionOnce` deliberately does not set it on itself:
+   * `cli.ts` builds the worker backends up front, before `runSession` is entered, and
+   * `cfg.backendFactory(i)` hands back an already-built instance — so the pin has to be a setter on
+   * an instance rather than anything a constructor could carry, and one caller applying it to all of
+   * them is what stops the baseline and the mutants running under different argv.
+   */
+  usePlatformAppsDir(dir: string): void {
+    this.platformAppsDir = dir;
   }
 
   /**
@@ -527,6 +629,9 @@ export class AlRunnerBackend implements ExecutionBackend {
       ...(this.cfg.preprocessorSymbols !== undefined
         ? { preprocessorSymbols: this.cfg.preprocessorSymbols }
         : {}),
+      // R147 — present only after `usePlatformAppsDir`, and its presence is what suppresses
+      // `--auto-provision` (see `buildAlRunnerArgv`). Before the pin this is exactly today's argv.
+      ...(this.platformAppsDir !== undefined ? { platformAppsDir: this.platformAppsDir } : {}),
       // Deliberately well below `deadlineMs`, never equal. The runner's own per-test budget
       // (v2: the AL_RUNNER_TEST_TIMEOUT_SEC env var the transport sets; v1: a `--test-timeout`
       // flag) bounds only the test body inside al-runner, while `deadlineMs` bounds the WHOLE

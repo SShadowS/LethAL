@@ -14,6 +14,15 @@ export interface AlRunnerRequest {
   readonly deadlineMs: number;
   /** R101(c) — see `AlRunnerConfig.preprocessorSymbols`. */
   readonly preprocessorSymbols?: readonly string[];
+  /**
+   * R147 — the Microsoft platform-app directory THIS session's one-time provisioning run reported
+   * writing, handed straight back to the runner as an extra `--package-cache`.
+   *
+   * Present only after `AlRunnerBackend.usePlatformAppsDir` has been called with a directory that
+   * passed every check in `provisionOnce`. Its presence is what suppresses `--auto-provision` — see
+   * `buildAlRunnerArgv`, which is the one place the two are made mutually exclusive.
+   */
+  readonly platformAppsDir?: string;
 }
 
 export interface AlRunnerRawTest {
@@ -89,6 +98,124 @@ export function parseAlRunnerBcBuild(output: string): AlRunnerBcBuild | undefine
   const [line, build] = chosen;
   if (build === undefined) return undefined;
   return { build, announcement: line.trim() };
+}
+
+/**
+ * R147 — what `parseAlRunnerPlatformAppsDir` found, including WHY it found nothing.
+ *
+ * A bare `string | undefined` was the obvious shape and is the wrong one. "No pin" has three
+ * distinguishable causes and a reader who is told only that the optimisation is off cannot tell a
+ * reworded runner from a conflicted one from a build of LethAL that never had the feature. Silence
+ * on the negative path is exactly how this feature would die unnoticed.
+ */
+export type AlRunnerPlatformAppsParse =
+  | {
+      readonly kind: "found";
+      /** The path exactly as the runner printed it, never normalised — the normalised form exists
+       *  only to compare two spellings, and an operator reading a refusal wants the real string. */
+      readonly dir: string;
+      /** How many `.app` files the runner said it wrote there. The caller turns this into a floor. */
+      readonly appCount: number;
+    }
+  | { readonly kind: "no-completion-line" }
+  | { readonly kind: "conflicting"; readonly dirs: readonly string[] };
+
+/**
+ * Whether an exit code is one the CHILD chose, rather than one a signal imposed on it.
+ *
+ * Measured for R123: `defaultSpawn` given an aborted signal RESOLVES, after the kill, with
+ * `exitCode: 143` (128 + SIGTERM) and whatever partial stdout the child had written; a spawn failure
+ * surfaces as a negative code. Neither is al-runner answering.
+ *
+ * Lives here rather than inside `al-runner-contract.ts` because R147 needs the same question
+ * answered about the one-time provisioning run — a killed provisioning can print a completion
+ * sentence and leave a half-written directory behind, and `AlRunnerProvisionResult.ran`
+ * (`exitCode >= 0`) says `true` for it. Two spellings of "is this the runner speaking" would let one
+ * of them go stale without the other noticing, so there is one.
+ */
+export function isChildChosenExit(exitCode: number): boolean {
+  return exitCode >= 0 && exitCode < 128;
+}
+
+/**
+ * The COMPLETION sentence al-runner prints once it has finished writing the Microsoft platform apps.
+ *
+ * Measured 2026-08-15 on al-runner 2.1.2.0, verbatim:
+ *
+ *     [provision] Downloaded 6 app(s) (115 MB total) to C:\...\28.0.46665.53671\platform-apps
+ *
+ * Three things about this regex are load-bearing.
+ *
+ * - **`^\[provision\] ` anchored at line start.** A test's own failure text can contain anything,
+ *   including a path. The same rule `parseAlRunnerBcBuild` keeps for `[bc] `, for the same reason.
+ * - **`Downloaded <N> app(s)`, not merely "Downloaded".** The SAME output carries
+ *   `[provision] Downloaded 107 test .app file(s) (20 MB) to <...>\test-apps`, which is the test
+ *   toolkit and not this. It is rejected twice over: the noun phrase differs and so does the
+ *   directory.
+ * - **The directory must END in `platform-apps`, and the path is taken to end of line.** That is
+ *   what makes a path containing spaces safe. The prefix before it is LAZY, so the match starts at
+ *   the FIRST position on the line where a rooted path begins, and everything after it — spaces
+ *   included — belongs to the path. A greedy prefix would instead start at the last such position,
+ *   which for `C:\Users\John Smith\...\platform-apps` is still `C:`, but only by luck.
+ *
+ * `~` is an accepted root even though nothing has been seen to print one here, because this runner
+ * DOES print `~`-rooted paths elsewhere (`parseAlRunnerBcBuild`'s doc comment records one). Reading
+ * it means the caller reports "that directory does not exist"; skipping it would report "the runner
+ * printed nothing", and the difference is the whole value of the refusal.
+ *
+ * The separator before the path is a plain `\s`, and that is safe HERE and would not have been on
+ * the `fetching` line: `od -c` of 2.1.2.0's output shows that one carrying a raw `0x1A` (SUB) where
+ * an arrow glyph was mangled by the console code page. This sentence is `... to <path>` in ASCII.
+ * Not reading the other line is what keeps this expression free of control characters.
+ */
+const PLATFORM_APPS_COMPLETION =
+  /^\[provision\] Downloaded (\d+) app\(s\)[^\n]*?\s((?:[A-Za-z]:[\\/]|[\\/]|~[\\/])[^\n]*platform-apps[\\/]?)[ \t\r]*$/gm;
+
+/** Separator and trailing-separator insensitive, and case-insensitive on win32 — the three ways one
+ *  directory gets two spellings. Used ONLY to compare; the reported path stays verbatim. */
+function normalisePlatformAppsPath(p: string): string {
+  const unified = p.replace(/[\\/]+/g, "/").replace(/\/+$/, "");
+  return process.platform === "win32" ? unified.toLowerCase() : unified;
+}
+
+/**
+ * Read the platform-app directory al-runner said it finished writing. R147.
+ *
+ * WHY THE COMPLETION SENTENCE AND NOT THE INTENT ONE. The same run also prints
+ * `[provision] fetching Microsoft platform R2R apps for BC <v> <SEP> <dir>` BEFORE the download
+ * starts, so pinning on it would pin a directory that may be half written. That line is also unfit
+ * to parse on its own terms: `od -c` of the 2.1.2.0 output shows byte `0x1A` (SUB) where an arrow
+ * glyph was mangled by the console code page, so keying on its separator would bind LethAL to
+ * whatever encoding the console happened to use. And its wording moved inside one week — on 2.1.1.0
+ * (R130's transcript) it ended in a literal `...` and carried no path at all.
+ *
+ * WHY A COUNT COMES BACK WITH IT. The runner states how many apps it wrote in the same sentence that
+ * states where. Reading that number is the same principle as reading the path; deciding the number
+ * six ourselves would be the guess. The caller turns it into a floor on the directory's contents,
+ * which is what catches a provisioning that stopped part-way.
+ *
+ * TWO PASSES, ONE DIRECTORY. `--auto-provision` provisions twice per invocation (R130), so the
+ * sentence normally appears twice naming the same place. Identical answers are one answer. Two
+ * DIFFERENT directories return `conflicting` and pin nothing: LethAL has no basis for picking one,
+ * and picking one anyway is the invented-plausible-default this project refuses.
+ */
+export function parseAlRunnerPlatformAppsDir(output: string): AlRunnerPlatformAppsParse {
+  PLATFORM_APPS_COMPLETION.lastIndex = 0;
+  const seen = new Map<string, string>();
+  let appCount = 0;
+  for (const m of output.matchAll(PLATFORM_APPS_COMPLETION)) {
+    const [, count, dir] = m;
+    if (count === undefined || dir === undefined) continue;
+    seen.set(normalisePlatformAppsPath(dir), dir);
+    appCount = Math.max(appCount, Number(count));
+  }
+  if (seen.size === 0) return { kind: "no-completion-line" };
+  if (seen.size > 1) return { kind: "conflicting", dirs: [...seen.values()] };
+  // Exactly one entry, and `Map` preserves insertion order, so this is the last spelling seen of the
+  // one directory every pass agreed on.
+  const [dir] = [...seen.values()];
+  if (dir === undefined) return { kind: "no-completion-line" };
+  return { kind: "found", dir, appCount };
 }
 
 /**
@@ -180,9 +307,23 @@ export function buildAlRunnerArgv(
   alRunnerPath: string,
   req: Pick<
     AlRunnerRequest,
-    "sourceDir" | "testDir" | "qualifiedTest" | "packagesDir" | "preprocessorSymbols"
+    | "sourceDir"
+    | "testDir"
+    | "qualifiedTest"
+    | "packagesDir"
+    | "preprocessorSymbols"
+    | "platformAppsDir"
   >,
 ): string[] {
+  // R147 — the pin and `--auto-provision` are MUTUALLY EXCLUSIVE, and this is the one place that is
+  // true. Sending both would keep paying what the flag costs (measured 2026-08-15 on 2.1.2.0: 17.1 s
+  // and 2 x 115 MB per invocation, on a cache already holding every byte), which is the entire thing
+  // the pin exists to stop. A caller therefore cannot assemble a half configuration.
+  //
+  // The direction of the default matters as much as the exclusivity: NO pin means today's argv,
+  // exactly. R125's provisioning invocation and R123's contract probe both build their argv without
+  // one and are unaffected by this change.
+  const pinned = req.platformAppsDir !== undefined;
   const argv = [
     alRunnerPath,
     "--output-json",
@@ -214,7 +355,9 @@ export function buildAlRunnerArgv(
     //
     // Placed BEFORE the positional bundle dirs deliberately: they are positional and repeatable, so
     // every flag belongs ahead of them.
-    "--auto-provision",
+    //
+    // R147: omitted when a platform-app directory is pinned. See `pinned` above.
+    ...(pinned ? [] : ["--auto-provision"]),
     // Bundle dirs are POSITIONAL and repeatable in v2; multiple dirs run sequentially and
     // aggregate into one summary envelope.
     //
@@ -227,6 +370,14 @@ export function buildAlRunnerArgv(
     ...(req.sourceDir === req.testDir ? [req.sourceDir] : [req.sourceDir, req.testDir]),
   ];
   if (req.packagesDir) argv.push("--package-cache", req.packagesDir);
+  // R147. `--package-cache` is REPEATABLE (al-runner's own --help: "Extra directory to scan for .app
+  // dependencies (repeatable)"), so the pin ADDS to the project's own symbol directory rather than
+  // replacing it, and adds to al-runner's default scan rather than replacing that — which is why a
+  // project resolving its test toolkit through the default scan keeps doing so. Measured 2026-08-15
+  // on 2.1.2.0 in the two-entry shape a real config produces: `package caches: 2 dir(s)`, exit 0,
+  // and a `diff` of stderr against today's shape that differs only in that count and two elapsed-ms
+  // figures — same dependency resolution, same tests, same results.
+  if (req.platformAppsDir !== undefined) argv.push("--package-cache", req.platformAppsDir);
   // R101(c). One repeated `--define SYM` per symbol rather than the comma-separated
   // `--preprocessor-symbols`: 2.1.1's own help says each entry of the comma form "is validated
   // identically to --define", so the two are the same thing, and the repeated form cannot be

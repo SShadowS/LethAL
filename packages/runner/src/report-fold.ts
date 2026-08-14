@@ -117,6 +117,10 @@ export interface FoldedReport {
   /** R129 — the BC artifact build al-runner announced it executed against, when it announced one.
    *  Absent on every other backend, and absent on an al-runner session whose runs said nothing. */
   readonly alRunnerBcBuild?: { readonly build: string; readonly announcement: string };
+  /** R147 — the Microsoft platform-app directory this session pinned, when it pinned one. Absent on
+   *  every other backend, and absent on an al-runner session that declined to pin (which emits a
+   *  named `al-runner-platform-apps-unpinned` warning carrying the reason instead). */
+  readonly alRunnerPlatformAppsDir?: string;
 }
 
 interface BatchInvalidation {
@@ -189,6 +193,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
   let quarantinedReason: string | undefined;
   let permissionCanary: PermissionCanaryResult | undefined;
   let alRunnerBcBuild: { build: string; announcement: string } | undefined;
+  let alRunnerPlatformAppsDir: string | undefined;
   let resumeFromRunId: number | undefined;
 
   const outcomes: SessionOutcome[] = [];
@@ -267,6 +272,9 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
         break;
       case "al-runner-bc-build":
         alRunnerBcBuild = { build: e.build, announcement: e.announcement };
+        break;
+      case "al-runner-platform-apps":
+        alRunnerPlatformAppsDir = e.dir;
         break;
       case "resume-resolved":
         resumeFromRunId = e.fromRunId;
@@ -484,5 +492,6 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
     ...(quarantinedReason !== undefined ? { quarantined: { reason: quarantinedReason } } : {}),
     ...(permissionCanary !== undefined ? { permissionCanary } : {}),
     ...(alRunnerBcBuild !== undefined ? { alRunnerBcBuild } : {}),
+    ...(alRunnerPlatformAppsDir !== undefined ? { alRunnerPlatformAppsDir } : {}),
   };
 }

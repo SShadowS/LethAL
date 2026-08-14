@@ -2203,6 +2203,33 @@ function resolveResume(
   return { runId: priorRunId, index };
 }
 
+/**
+ * R147 — hand a backend the platform-app directory this session pinned, and REFUSE the session if it
+ * cannot take one.
+ *
+ * A structural check, like `provisionOnce` and `observedBcBuild` above it: no other backend has the
+ * concept, and widening `ExecutionBackend` for one implementation would make every other backend
+ * answer nothing forever. What is different here is the failure: those two are best-effort readers,
+ * this one decides the ARGV that produces verdicts. An optional call that silently no-ops would let
+ * the baseline and the mutants run under different command lines, which is the caller-contract
+ * violation this repo throws on rather than defaulting past.
+ *
+ * Only ever reached when a pin was established, which only happens on the al-runner path — so a
+ * bcdev session never sees this function at all.
+ */
+function pinPlatformAppsDir(backend: ExecutionBackend, dir: string, who: string): void {
+  const pinnable = backend as { usePlatformAppsDir?: (d: string) => void };
+  if (typeof pinnable.usePlatformAppsDir !== "function") {
+    throw new Error(
+      `runSession: this session pinned al-runner's platform-app directory (${dir}) but ${who} does ` +
+        "not accept one, so it would run every mutant with --auto-provision while the rest of the " +
+        "session ran with --package-cache. Two argv in one report is a wrong-provenance claim, not " +
+        "a slow run, so this refuses rather than proceeding (R147).",
+    );
+  }
+  pinnable.usePlatformAppsDir(dir);
+}
+
 export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // Constructed once for the whole session and threaded to every activateOnce call site
   // (baseline activation below, and the per-mutant loop in runMutantsOnBackend) — the latch is
@@ -2338,9 +2365,37 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // A structural check rather than a widened `ExecutionBackend`, for the same reason as
   // `observedBcBuild` below: no other backend provisions anything. Best-effort — a failure here
   // leaves the session exactly as it behaved before this existed.
+  // R147 — set once, from the provisioning run below, and read again when the worker backends are
+  // built so that every instance executing a mutant sends the SAME argv as the baseline.
+  let platformAppsDir: string | undefined;
   const provisioner = cfg.backend as { provisionOnce?: () => Promise<AlRunnerProvisionResult> };
   if (provisioner.provisionOnce !== undefined) {
     const provisioned = await provisioner.provisionOnce();
+    // R147 — pin the platform-app directory this provisioning run reported, so that no LATER
+    // invocation pays for provisioning again. Measured 2026-08-15 on al-runner 2.1.2.0, on a FULLY
+    // warm cache: `--auto-provision` costs 17.1 s and re-downloads 2 x 115 MB on EVERY invocation,
+    // and the same run handed `--package-cache <that directory>` costs 6.8 s and downloads nothing.
+    // One invocation per (mutant x covering test) means that is paid on every one.
+    //
+    // The pin is also what makes a mid-session Microsoft publish unable to move the platform apps
+    // under a running campaign: today the runner resolves the project's version PREFIX forward on
+    // every invocation, so a run that starts on ...53655 can finish on ...53671 with nothing
+    // recording that it did. Frozen at session start, it cannot.
+    if (provisioned.platformAppsDir !== undefined) {
+      pinPlatformAppsDir(cfg.backend, provisioned.platformAppsDir, "the session backend");
+      platformAppsDir = provisioned.platformAppsDir;
+      emit({ type: "al-runner-platform-apps", dir: provisioned.platformAppsDir });
+    } else {
+      // NEVER silent. A build whose parse had gone stale would otherwise be indistinguishable from
+      // a build that never had this feature: same verdicts, same counts, no line anywhere. The
+      // wording this reads has already moved once inside a week (R130's 2.1.1.0 transcript printed
+      // no path at all), so a quiet death is the expected failure rather than a hypothetical one.
+      emit({
+        type: "warning",
+        code: "al-runner-platform-apps-unpinned",
+        message: `runSession: al-runner's platform-app directory was NOT pinned, so every invocation keeps paying --auto-provision (R147). ${provisioned.platformAppsRefusal ?? "no reason was reported, which is itself a defect"}`,
+      });
+    }
     if (!provisioned.ran) {
       emit({
         type: "warning",
@@ -2641,7 +2696,21 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         throw new Error("runSession: workers > 1 requires backendFactory");
       }
       for (let i = 0; i < workers; i++) {
-        workerBackends.push(factory(i));
+        const worker = factory(i);
+        // R147 — every backend that will execute a mutant gets the SAME pin, and a backend that
+        // cannot take it fails the session LOUDLY rather than quietly running different argv.
+        //
+        // What the silent version would cost: the baseline always runs on `cfg.backend` and is never
+        // sharded, so it would execute under the frozen pin while the mutants executed under
+        // `--auto-provision`, whose prefix resolves forward on EVERY invocation. A Microsoft publish
+        // mid-session would then move the platform apps under the mutants and not under the
+        // baseline. The report would not show it either: `observedBcBuild` is read from
+        // `cfg.backend` alone, so it would name the build that produced the BASELINE and present it
+        // as the build that produced the verdicts.
+        if (platformAppsDir !== undefined) {
+          pinPlatformAppsDir(worker, platformAppsDir, `worker backend ${i}`);
+        }
+        workerBackends.push(worker);
       }
     }
     for (const [batchIdx, batchFiles] of artifacts.entries()) {

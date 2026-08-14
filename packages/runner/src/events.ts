@@ -242,6 +242,23 @@ export type RunEventInput =
       readonly announcement: string;
     }
   | {
+      /**
+       * R147 — the Microsoft platform-app directory this session PINNED, so that no invocation after
+       * the one-time provisioning run pays for provisioning again.
+       *
+       * Emitted once, right after the provisioning step, and ONLY when a pin was actually
+       * established: a session that declined to pin emits an `al-runner-platform-apps-unpinned`
+       * warning carrying the reason instead. Both directions are reported, because a build whose
+       * parse had gone stale would otherwise produce exactly the same verdicts, the same counts and
+       * no line anywhere.
+       *
+       * al-runner-specific by design, the same as `al-runner-bc-build`: no other backend provisions
+       * anything.
+       */
+      readonly type: "al-runner-platform-apps";
+      readonly dir: string;
+    }
+  | {
       readonly type: "mutant-scored";
       /**
        * The full manifest entry, not `mutantCode` plus a join. In-process it travels by
