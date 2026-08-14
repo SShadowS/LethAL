@@ -3,6 +3,7 @@ import type { TestMethodRef, TestOutcome, TestVerdict } from "./backend";
 import { describeThrown } from "./describe-error";
 import { assertAttemptId } from "./lease";
 import type { LeaseTuple } from "./lease";
+import { runMutantLineCountMessage } from "./stale-test-app";
 
 /**
  * OData client for the `LethALControl_RunMutant` action (Layer 5C-A). One call does
@@ -645,7 +646,7 @@ export class RunMutantTransport {
         fencedOp,
       );
     }
-    let parsed: { testResults?: unknown };
+    let parsed: { testResults?: unknown; error?: unknown };
     try {
       parsed = JSON.parse(result.codeunitResults) as { testResults?: unknown };
     } catch {
@@ -660,11 +661,17 @@ export class RunMutantTransport {
     // Fail closed: RunMutant selects exactly one method server-side, so exactly one line is the
     // only acceptable shape (spec §5.7). Zero or many is a protocol fault, never a verdict.
     if (lines.length !== 1) {
+      // R139: the server's own `error` key says WHY, and this branch used to throw it away. Both
+      // producers of a line-count answer put their reason there — `RunOneMethod`'s fail-closed exit
+      // for a method it could not select exactly once, and `BuildRunError` for every caught phase-2
+      // terminal error — so "zero lines" alone cannot tell a stale published test app from a lock
+      // timeout. `runMutantLineCountMessage` appends the text verbatim when there is one and leaves
+      // the message byte-identical when there is not.
       return {
         ref,
         outcome: "error",
         durationMs,
-        failureMessage: `RunMutant returned ${lines.length} test lines, expected exactly 1`,
+        failureMessage: runMutantLineCountMessage(lines.length, parsed.error),
       };
     }
     const line = lines[0] as {

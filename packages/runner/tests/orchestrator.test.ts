@@ -63,6 +63,7 @@ import type { SessionOutcome } from "../src/report";
 import { quarantineResourceKey } from "../src/resource-key";
 import { isStrandedNote } from "../src/resume";
 import { SessionSafety, SessionUnsafeError } from "../src/session-safety";
+import { StaleTestAppError, runMutantLineCountMessage } from "../src/stale-test-app";
 import { ResultsStore } from "../src/store";
 import { legacyBuildReport } from "./helpers/legacy-report";
 
@@ -1363,6 +1364,104 @@ describe("runSession — Task 6 unsupported-baseline qualification (spec §9)", 
     // Only those 3 ever ran under activation — the unsupported-covered mutants
     // were excluded, not executed.
     expect(backend.ranActive).toBe(3);
+  });
+
+  // ————————————————————————————————————————————————————————————————————————————————————————
+  // R139 — a test the PUBLISHED app does not contain. Unlike every other diagnosis in this block,
+  // this one REFUSES the session. A refused or unrunnable test costs its own coverage and the rest
+  // of the run is still about the suite the source describes; a test the server has never seen
+  // means the run is measuring a DIFFERENT suite, and the score it would print is about something
+  // nobody can reconstruct. This cost a full live gate run twice, three days apart.
+  //
+  // The fixture shape is deliberate: TWO tests, one green with mutants of its own, so "no mutant
+  // ran" can actually fail. With a single missing test the no-green-baseline path already executes
+  // nothing, and the assertion would pass whether or not the refusal exists.
+  // ————————————————————————————————————————————————————————————————————————————————————————
+  describe("R139 — the published test app is missing a test the source declares", () => {
+    const missingFor = (method: string) =>
+      method === "UnsupportedTest"
+        ? {
+            outcome: "error" as const,
+            procedure: "IsUnderBudget",
+            failureMessage: runMutantLineCountMessage(
+              0,
+              "expected exactly one method UnsupportedTest, found 0",
+            ),
+          }
+        : { outcome: "pass" as const, procedure: "IsOverBudget" };
+
+    test("refuses the run, names the test, and measures nothing", async () => {
+      const dirs = await qualProject();
+      const backend = new QualificationBackend(missingFor);
+      const store = new ResultsStore(":memory:");
+
+      const err = await runSession({ backend, store, ...dirs, selectorIds }).then(
+        () => undefined,
+        (e: unknown) => e,
+      );
+
+      expect(err).toBeInstanceOf(StaleTestAppError);
+      expect((err as StaleTestAppError).missingTests).toEqual(["Sandbox Tests.UnsupportedTest"]);
+      // The throw skips buildReport, so this message is the ONLY diagnosis the operator gets. It
+      // has to carry the remedy, not just the complaint.
+      expect((err as Error).message).toContain("Sandbox Tests.UnsupportedTest");
+      expect((err as Error).message).toContain("publish");
+      // The green test's own 3 mutants must NOT have been measured: refusing after the numbers are
+      // in would be a report nobody can trust, dressed up as a refusal.
+      expect(backend.ranActive).toBe(0);
+    });
+
+    test("a wrapped platform error at the same site does NOT refuse", async () => {
+      // `BuildRunError` sends a lock timeout through the identical zero-test-lines shape. Treating
+      // that as staleness would tell the operator to republish an app that was never stale, and the
+      // transient clearing on the retry would make the wrong diagnosis look confirmed.
+      const dirs = await qualProject();
+      const backend = new QualificationBackend((method: string) =>
+        method === "UnsupportedTest"
+          ? {
+              outcome: "error" as const,
+              procedure: "IsUnderBudget",
+              failureMessage: runMutantLineCountMessage(
+                0,
+                "The AL Test Suite table is locked by another user.",
+              ),
+            }
+          : { outcome: "pass" as const, procedure: "IsOverBudget" },
+      );
+      const store = new ResultsStore(":memory:");
+      const report = await runSession({ backend, store, ...dirs, selectorIds });
+
+      expect(report.staleTestApp).toBeUndefined();
+      expect(report.counts.killed).toBe(3);
+    });
+
+    test("suite-management permission text in a zero-line answer is not read as R35", async () => {
+      // Surfacing the server's own words (R139) made text visible to the OTHER baseline classifiers
+      // that they never used to see. A permission failure on the SUITE tables happens before the
+      // test body runs, so R35's remedy ("declare TestPermissions = Disabled on your test codeunit")
+      // is the wrong fix for it, and a wrong remedy is worse than none.
+      const dirs = await qualProject();
+      const backend = new QualificationBackend((method: string) =>
+        method === "UnsupportedTest"
+          ? {
+              outcome: "error" as const,
+              procedure: "IsUnderBudget",
+              failureMessage: runMutantLineCountMessage(
+                0,
+                "Sorry, the current permissions prevented the action. " +
+                  "(TableData 130450 AL Test Suite Insert: LethAL Control)",
+              ),
+            }
+          : { outcome: "pass" as const, procedure: "IsOverBudget" },
+      );
+      const store = new ResultsStore(":memory:");
+      const report = await runSession({ backend, store, ...dirs, selectorIds });
+
+      expect(report.permissionsRefused).toBeUndefined();
+      expect(report.validity.caveats).not.toContain("tests-permission-refused");
+      for (const m of report.mutants.filter((m) => m.verdict === "error"))
+        expect(m.failureNote).not.toContain("TestPermissions = Disabled");
+    });
   });
 });
 

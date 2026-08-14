@@ -33,7 +33,7 @@ import { nextAbove, parseVersionConflict, reserveAppVersion } from "./app-versio
 import { AlcCompileError, ArtifactPrepareError, DeploymentError } from "./artifact";
 import type { CompiledArtifact } from "./artifact";
 import type { CoverageMode, ExecutionBackend, TestMethodRef, TestVerdict } from "./backend";
-import { NO_RESULT_FOR_METHOD, PublishFailedError } from "./bcdev-backend";
+import { PublishFailedError } from "./bcdev-backend";
 import { bisectFailingMutant } from "./bisect";
 import type { PublishOutcome } from "./deployment-verifier";
 import { discoverTests } from "./discovery";
@@ -92,6 +92,11 @@ import {
 } from "./selection";
 import type { CoverageAttribution } from "./selection";
 import { SessionSafety, SessionUnsafeError } from "./session-safety";
+import {
+  StaleTestAppError,
+  describeStaleTestApp,
+  isRunMutantLineCountMessage,
+} from "./stale-test-app";
 import type { ResultsStore } from "./store";
 import type { MutantVerdict, RunnerKind } from "./store";
 import { describeTestPageUnsupported } from "./testpage-unsupported";
@@ -2971,19 +2976,29 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         batchIndex: batchIdx,
         verdicts: baseline.map((b) => {
           const classification: BaselineClassification[] = [];
+          // R139: a line-count answer is the transport reporting that RunMutant did not return one
+          // test line, so the test BODY never executed. Since the server's own error text is now
+          // carried in that message, BC wording about suite management would otherwise reach the
+          // two classifiers below and be reported as a property of the test: a permission failure
+          // on the suite tables would collect R35's remedy ("declare TestPermissions = Disabled on
+          // your test codeunit"), which cannot fix it. Both classifiers describe what happened
+          // INSIDE a test, so neither may read a message that proves nothing ran.
+          const bodyNeverRan = isRunMutantLineCountMessage(b.verdict.failureMessage);
           if (
+            !bodyNeverRan &&
             didNotPassAtBaseline(b.verdict.outcome) &&
             describeTestPermissionsRefusal(b.verdict.failureMessage) !== undefined
           ) {
             classification.push("tests-permission-refused");
           }
           if (
+            !bodyNeverRan &&
             didNotPassAtBaseline(b.verdict.outcome) &&
             describeTestPageUnsupported(b.verdict.failureMessage) !== undefined
           ) {
             classification.push("tests-testpage-unsupported");
           }
-          if (b.verdict.failureMessage === NO_RESULT_FOR_METHOD) {
+          if (describeStaleTestApp(b.verdict.failureMessage) !== undefined) {
             classification.push("stale-test-app");
           }
           return {
@@ -2996,6 +3011,25 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           };
         }),
       });
+      // R139: REFUSE rather than measure. Placed after the emit above so the event stream and the
+      // store still record what this baseline observed, and before any mutant of this batch runs.
+      //
+      // Why this one diagnosis refuses when R35's and R69's only annotate: those describe a test
+      // that could not run, and the rest of the session is still measuring the suite the source
+      // describes. This one says the SERVER HAS NEVER SEEN a test the source declares, so the run
+      // is measuring a different suite, every mutant covered only by those tests would be scored
+      // `no-coverage` (R55), and the report would put a plausible number on a suite nobody can
+      // reconstruct. Twice, three days apart, that is exactly what a live gate run produced.
+      //
+      // The throw is inside the lease's own try/finally below, so the lease is released and every
+      // worker backend disposed on the way out. `buildReport` never runs, which is deliberate but
+      // has a cost: `StaleTestAppError`'s message is the ONLY diagnosis the operator receives, so
+      // it carries the names AND the remedy rather than pointing at a report that will not exist.
+      const missingFromServer = baseline
+        .filter((b) => describeStaleTestApp(b.verdict.failureMessage) !== undefined)
+        .map((b) => qualifiedTestName(b.ref));
+      if (missingFromServer.length > 0) throw new StaleTestAppError(missingFromServer);
+
       const greenTests = baseline.filter((b) => b.verdict.outcome === "pass");
       if (greenTests.length < baseline.length) baselineGreenOverall = false;
       if (greenTests.length === 0) {
@@ -3046,6 +3080,11 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       const testPageThisBatch = new Map<string, string>();
       for (const b of unsupportedBaseline) {
         const name = qualifiedTestName(b.ref);
+        // R139: same guard as the classification emit above, and needed in BOTH places because
+        // these two maps feed the per-mutant note while the emit feeds the report's own lists. A
+        // line-count answer proves the test body never ran, so BC wording inside it is about suite
+        // management and neither diagnosis may claim it.
+        if (isRunMutantLineCountMessage(b.verdict.failureMessage)) continue;
         const refusal = describeTestPermissionsRefusal(b.verdict.failureMessage);
         if (refusal !== undefined) {
           refusedThisBatch.set(name, refusal);
@@ -3058,8 +3097,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       // R31 (a test the SOURCE declares but the server returned no result for) no longer needs a
       // session-level accumulator here: `unsupportedTests`/`staleTestApp`/`testPageUnsupported` are
       // now folded from `baseline-batch-finished`'s per-test `classification` (report-fold.ts),
-      // which the emit below already computes independently from the SAME `NO_RESULT_FOR_METHOD`
-      // sentinel — see that emit's doc comment for why it is kept independent of this loop.
+      // which the emit above already computes independently via `describeStaleTestApp` — see that
+      // emit's doc comment for why it is kept independent of this loop. Since R139 that fold is
+      // unreachable on both producers anyway, because the session refuses before it can be built;
+      // it stays in place for any future producer that classifies without warranting a refusal.
 
       // 5. coverage filter (capability-gated)
       let perMutantTests: ReadonlyMap<string, readonly TestMethodRef[]>;

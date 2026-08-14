@@ -35,6 +35,7 @@ import type {
   FencedCoverageStats,
   RunMutantTransport,
 } from "./run-mutant-transport";
+import { NO_RESULT_FOR_METHOD } from "./stale-test-app";
 
 export interface BcDevConfig {
   readonly mcpCommand: readonly string[]; // e.g. ["bun", "x", "bc-dev-mcp"] — argv to spawn
@@ -114,12 +115,14 @@ export const DEFAULT_COVERAGE_MODE: CoverageMode = "fenced";
  * the PUBLISHED test app does not contain that method — the source declares a test the server has
  * never seen.
  *
- * Exported because `runSession` aggregates these into a stale-test-app diagnosis, and a detector
- * matching a string literal the producer might later reword is a silent regression: the diagnosis
- * would simply stop firing, and the symptom it explains (red baseline, dozens of no-coverage
- * mutants) reads as a mutation-scoring problem instead.
+ * Re-exported rather than defined here since R139. It now lives in `stale-test-app.ts` beside the
+ * detector that reads it AND beside the fenced transport's own wording for the same condition,
+ * because keeping a producer's literal in one module and its detector in another is exactly how
+ * this diagnosis came to be dead on the transport path for months: a detector matching a string
+ * literal the producer might later reword is a silent regression, and one written against the wrong
+ * producer entirely never fires at all.
  */
-export const NO_RESULT_FOR_METHOD = "bcdev_test_run returned no result for the requested method";
+export { NO_RESULT_FOR_METHOD };
 
 // direct bcdev_test_run call: the actual payload nests `status`
 // ("passed"|"failed"|"skipped", not "outcome": "pass"|"fail"|"skip") and `output` (combined

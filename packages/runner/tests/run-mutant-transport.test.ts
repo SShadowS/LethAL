@@ -108,6 +108,47 @@ describe("RunMutantTransport.run — terminal mapping", () => {
     expect(v.failureMessage).toContain("unexpected result enum");
   });
 
+  // R139: the server ALREADY says why it returned nothing, in `codeunitResults.error` — both from
+  // `RunOneMethod`'s own fail-closed exit and from `BuildRunError`, which wraps every caught
+  // phase-2 terminal error in the same shape. This branch used to discard that text and report a
+  // line count, which is how a stale published test app and a lock timeout became indistinguishable
+  // (roadmap R139). Surfacing it is what lets a detector key on the ONE condition that has a single
+  // producing code path instead of on the line count, which has several.
+  test("zero test lines: the server's own error text is carried, not discarded", async () => {
+    const inner = echo({
+      codeunitResults: JSON.stringify({
+        error: "expected exactly one method OverBudgetDetected, found 0",
+      }),
+    });
+    const v = await transport(okFetch(inner)).run(REQ);
+    expect(v.outcome).toBe("error");
+    expect(v.failureMessage).toContain("expected exactly 1");
+    expect(v.failureMessage).toContain("expected exactly one method OverBudgetDetected, found 0");
+  });
+
+  test("zero test lines with no server error key: the message is unchanged", async () => {
+    // `{"testResults":[]}` is a distinct, unmeasured server state. It must stay exactly as
+    // informative (and as unclassified) as it was before R139, never gain an invented annotation.
+    const inner = echo({ codeunitResults: JSON.stringify({ testResults: [] }) });
+    const v = await transport(okFetch(inner)).run(REQ);
+    expect(v.outcome).toBe("error");
+    expect(v.failureMessage).toBe("RunMutant returned 0 test lines, expected exactly 1");
+  });
+
+  test("a non-string server error key is reported as malformed, with evidence", async () => {
+    // Never `String(...)`: `{"error":{...}}` would render as "[object Object]", which is the
+    // plausible-default shape this repo's conventions forbid. Never a throw either — a malformed
+    // server answer is not a caller-contract violation.
+    const inner = echo({
+      codeunitResults: JSON.stringify({ error: { code: 42, detail: "structured" } }),
+    });
+    const v = await transport(okFetch(inner)).run(REQ);
+    expect(v.outcome).toBe("error");
+    expect(v.failureMessage).toContain("not a string");
+    expect(v.failureMessage).toContain("structured");
+    expect(v.failureMessage).not.toContain("[object Object]");
+  });
+
   test("more than one test line → error (exactly-one fail closed)", async () => {
     const inner = echo({
       codeunitResults: JSON.stringify({

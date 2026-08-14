@@ -3,6 +3,7 @@ import type { MutantManifestEntry } from "@lethal/schemata";
 import { NO_RESULT_FOR_METHOD } from "../src/bcdev-backend";
 import { renderConsole } from "../src/report";
 import type { SessionOutcome } from "../src/report";
+import { describeStaleTestApp, runMutantLineCountMessage } from "../src/stale-test-app";
 import { legacyBuildReport } from "./helpers/legacy-report";
 
 /**
@@ -109,5 +110,85 @@ describe("NO_RESULT_FOR_METHOD — producer and detector share one constant", ()
     // reworded its literal independently, the diagnosis would quietly never fire again and the
     // symptom would go back to reading as a scoring problem.
     expect(NO_RESULT_FOR_METHOD).toBe("bcdev_test_run returned no result for the requested method");
+  });
+});
+
+/**
+ * R139. The R31 detector above keys on `NO_RESULT_FOR_METHOD`, which only the `bcdev_test_run`
+ * path produces. The tables gate runs its baseline through the FENCED RunMutant transport, whose
+ * answer for a method the published app does not contain is a different string entirely, so the
+ * detector has never once fired on the path that actually hit this problem — twice, on live gate
+ * runs three days apart (roadmap R139).
+ *
+ * The server's own words are the evidence, not the client's line counter. `RunOneMethod`
+ * (extensions/lethal-control/src/RunMethod.Codeunit.al) answers `{"error": "expected exactly one
+ * method %1, found %2"}` with NO `testResults` key, and `BuildRunError`
+ * (ControlApi.Codeunit.al) wraps EVERY caught phase-2 terminal error in that same shape. So the
+ * transport sees zero test lines for a missing method, for a DUPLICATE method (`found 2`), for a
+ * lock timeout, and for a failed suite load alike. Matching the line count would name a confident
+ * wrong cause on every one of those; matching `found 0` names the one condition that has exactly
+ * one producing code path.
+ */
+describe("describeStaleTestApp (R139)", () => {
+  const missing = (method: string) =>
+    `${runMutantLineCountMessage(0, `expected exactly one method ${method}, found ${0}`)}`;
+
+  test("names the method when the server says it found none", () => {
+    const d = describeStaleTestApp(missing("NegationFlipChangesTheCount"));
+    expect(d).toBeDefined();
+    expect(d).toContain("NegationFlipChangesTheCount");
+    expect(d).toContain("published");
+  });
+
+  test("still matches the bcdev sentinel, so R31's own path keeps its diagnosis", () => {
+    expect(describeStaleTestApp(NO_RESULT_FOR_METHOD)).toBeDefined();
+  });
+
+  test("declines a DUPLICATE method, which reaches the client as the same zero test lines", () => {
+    // `found 2` takes the identical AL exit with no testResults key. It means the published app has
+    // the method twice, not zero times, and republishing is the wrong remedy for it.
+    const dup = runMutantLineCountMessage(0, "expected exactly one method SomeTest, found 2");
+    expect(describeStaleTestApp(dup)).toBeUndefined();
+  });
+
+  test("declines a wrapped platform error, which also reaches the client as zero test lines", () => {
+    const locked = runMutantLineCountMessage(
+      0,
+      "The AL Test Suite table cannot be changed because it is locked by another user.",
+    );
+    expect(describeStaleTestApp(locked)).toBeUndefined();
+  });
+
+  test("declines a bare line-count message with no server text at all", () => {
+    // `{"testResults":[]}` with no `error` key is a distinct, unmeasured server state. Claiming
+    // staleness for it would be a guess.
+    expect(describeStaleTestApp(runMutantLineCountMessage(0, undefined))).toBeUndefined();
+  });
+
+  test("declines the server wording when it did not come from the zero-line branch", () => {
+    // A test whose own Error(...) quotes this wording must not be read as a server refusal. Only
+    // the transport builds the prefix, and it builds it nowhere else.
+    expect(
+      describeStaleTestApp("expected exactly one method PickedByHand, found 0"),
+    ).toBeUndefined();
+  });
+
+  test("declines a permissions refusal, a TestPage refusal and an ordinary assertion", () => {
+    expect(
+      describeStaleTestApp(
+        "Sorry, the current permissions prevented the action. (TableData 79300 Data Main Insert)",
+      ),
+    ).toBeUndefined();
+    expect(
+      describeStaleTestApp(
+        "Unexpected CLR exception thrown.: System.NotSupportedException: Specified method is not " +
+          "supported. at Microsoft.Dynamics.Nav.Runtime.NavSession.CreateNavTestService()",
+      ),
+    ).toBeUndefined();
+    expect(describeStaleTestApp("expected 2 rows other than FILT-A1, got 1")).toBeUndefined();
+  });
+
+  test("declines undefined — a verdict need not carry a message", () => {
+    expect(describeStaleTestApp(undefined)).toBeUndefined();
   });
 });

@@ -184,12 +184,21 @@ export type RunEventInput =
          * as the other two now (not a separate loop — all three classifications for one verdict are
          * computed together), UNCONDITIONALLY (no `didNotPassAtBaseline` gate: the pre-refactor
          * loop this mirrors, `missingFromServer`, also ran over every baseline verdict, not just the
-         * non-passing ones). It uses EXACT equality against `NO_RESULT_FOR_METHOD`
-         * (`orchestrator.ts`), not a substring pattern, so — unlike the other two — it structurally
-         * CANNOT co-occur with them via concatenation: a `failureMessage` built by concatenating two
-         * unrelated exceptions is, by construction, longer than and different from the bare sentinel
-         * string, so it can never be `=== NO_RESULT_FOR_METHOD`. The list still covers all three
-         * uniformly rather than special-casing the one member that cannot realistically co-occur.
+         * non-passing ones).
+         *
+         * R139 CORRECTS what this comment used to claim about that third member. It said the
+         * stale-test-app check "structurally CANNOT co-occur" with the other two, because exact
+         * equality against `NO_RESULT_FOR_METHOD` cannot match a concatenation. That reasoning was
+         * sound for the `bcdev_test_run` producer and useless for the one that actually mattered:
+         * the fenced RunMutant transport words the same condition differently, so the check never
+         * fired on the path where a stale test app twice cost a live gate run. `describeStaleTestApp`
+         * (`stale-test-app.ts`) now matches BOTH producers, and the second arm is an anchored
+         * prefix/suffix match rather than whole-string equality, so the cannot-co-occur property no
+         * longer holds by construction. Nothing depends on it: `classification` is a list precisely
+         * so more than one membership is expressible. In practice the other two are now SUPPRESSED
+         * for such a message rather than merely unlikely — see the `isRunMutantLineCountMessage`
+         * guard in `orchestrator.ts`, which exists because a message proving the test body never ran
+         * must not be read as a statement about the test.
          */
         readonly classification: readonly BaselineClassification[];
         readonly failureMessage?: string;
