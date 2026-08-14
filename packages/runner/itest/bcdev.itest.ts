@@ -79,6 +79,21 @@ const EXPECTED = {
   killed: 3,
   survived: 10,
   noCoverage: 3,
+  /**
+   * R132: this gate now carries the VACUOUS case for R121's assertion screen, which `itest:tables`
+   * used to pin and gave up when its fixture grew a Library Assert arm.
+   *
+   * Every test in `fixtures/sandbox-tests` raises through bare `Error(...)`, so the rule — "the
+   * failure text does not begin with `Assert.`" — flags every kill that carries text and separates
+   * NOTHING here. That is a property of the suite's assertion style, not of the mutants, and it is
+   * worth pinning for the same reason the `partial` case is: the same flagged COUNT means opposite
+   * things on the two suites, and only `discrimination` tells them apart.
+   *
+   * PREDICTED in docs/superpowers/specs/2026-08-14-r132-assertion-arm-precommitment.md before this
+   * assertion was ever run, along with the competing possibility (`no-text`, if no kill carried
+   * failure text at all — R132's own table lists both because nobody had measured which).
+   */
+  assertionScreenDiscrimination: "vacuous",
 };
 
 // Sandbox target app id (fixtures/sandbox-app/app.json "id") — the RunMutant `targetAppId` and the
@@ -562,6 +577,31 @@ function assertVerdictTable(report: SessionReport): void {
       `expected every killed mutant in SandboxLogic.Codeunit.al (IsOverBudget), got ${m.file}`,
     );
   }
+
+  // R132: the vacuous half of the pair this repo now pins live. See EXPECTED's comment.
+  const assertionScreen = report.assertionScreen;
+  assert.ok(
+    assertionScreen !== undefined,
+    `a run with ${EXPECTED.killed} kills must carry an assertion screen`,
+  );
+  assert.ok(
+    assertionScreen.killsWithText > 0,
+    "every kill on this path records its failure text (R86) — a zero here means the screen is " +
+      "reporting `no-text` about a suite it never read",
+  );
+  assert.equal(
+    assertionScreen.discrimination,
+    EXPECTED.assertionScreenDiscrimination,
+    "this fixture's tests all raise through bare `Error(...)`, so the screen must report that it " +
+      "separated nothing here. A `partial` would mean this suite grew an assertion library, or the " +
+      "rule started matching text it was never scored on",
+  );
+  assert.equal(
+    assertionScreen.flagged,
+    assertionScreen.killsWithText,
+    "vacuous means every kill with text was flagged — asserted directly so the label and the " +
+      "numbers behind it cannot disagree",
+  );
 
   const noCoverage = report.mutants.filter((m) => m.verdict === "no-coverage");
   assert.equal(noCoverage.length, EXPECTED.noCoverage);

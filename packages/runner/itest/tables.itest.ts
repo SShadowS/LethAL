@@ -155,7 +155,14 @@ const EXPECTED = {
   // `flip-filter-literal` stays at SIX, which is the number the arm exists to hold down. All four
   // verdicts pre-committed in
   // docs/superpowers/specs/2026-08-14-r141-character-refusal-precommitment.md BEFORE this run.
-  totalMutantSites: 248,
+  // R132 moved this from 248 to 252. `codeunit 79318 "Data Assert Ops"` is a TWIN PAIR: two
+  // procedures of identical shape whose covering tests differ only in HOW they raise, one through
+  // Microsoft's Library Assert and one through bare `Error(...)`. Four new mutants, no displacement
+  // (neither site is a call), all four predicted killed — and the point is not the verdicts but what
+  // the assertion screen does with them, which is why this fixture's `discrimination` moves from
+  // `vacuous` to `partial` below. Pre-committed in
+  // docs/superpowers/specs/2026-08-14-r132-assertion-arm-precommitment.md BEFORE this run.
+  totalMutantSites: 252,
   // R36 moved this from 63/10 to 64/9, deliberately and in one direction only.
   //
   // `RequireCategoryAFails` used to assert merely that AN error occurred, so deleting
@@ -228,7 +235,11 @@ const EXPECTED = {
   // arm's own bare `Error(...)` text: a kill whose failure text is a BC filter-evaluation error would
   // mean the character refusal broke and BC was handed `=''`, which is the false kill this arm exists
   // to detect rather than to produce.
-  killed: 187,
+  // R132 moved this from 187 to 191: all four of the twin pair's mutants are predicted killed, two
+  // by an `Assert.AreEqual` and two by a bare `Error(...)`. Identical verdicts are the CONTROL here
+  // — with the verdicts equal, the only thing separating the four is the screen, which is what the
+  // arm exists to measure.
+  killed: 191,
   // R73 moved this from 9 to 12, and TWO of the three additions are worth reading rather than
   // accepting:
   //
@@ -280,6 +291,8 @@ const EXPECTED = {
   // R141 leaves this at 31: arm I predicts no survivors. Its blank in-band row and its out-of-band
   // decoy exist precisely so neither collateral deletion can survive on data starvation, which is the
   // shape that made `remove-setrange` survivors uninformative before the fixture seeded decoys.
+  // R132 leaves this at 31: both halves of the twin pair assert an exact non-zero value, so an
+  // emptied body and a zeroed `exit` are both observable.
   survived: 31,
   // R78 moved this from 6 to 9. The three new sites all belong to the TestPage-only pair
   // (`Data Value Source` / `Data Value Card`), and all three land `no-coverage` because the one
@@ -307,13 +320,16 @@ const EXPECTED = {
   // ATTRIBUTION finding and must not be absorbed by editing this number.
   // R141 leaves this at 10, unchanged, for the same reason: arm I's four mutants sit in a procedure
   // of `codeunit 79317 "Data Filter Ops"` called directly by one new test.
+  // R132 leaves this at 10 for the same reason: both new procedures are called directly by their
+  // own new test.
   noCoverage: 10,
   // 183 / 214 does not reduce (183 is 3 x 61, 214 is 2 x 107). It is about 0.8551, DOWN from
   // 0.8626: a wave that adds six deliberate survivors is SUPPOSED to move the score down, and a
   // score that rose instead would mean the survivors did not arrive.
   // R141 moves it to 187 / 218, about 0.8578, back UP: an arm of four predicted kills and no
   // survivors should raise it. The direction is the readable part, not the digits.
-  mutationScore: 187 / (187 + 31),
+  // R132 moves it to 191 / 222, about 0.8604, up again for the same reason.
+  mutationScore: 191 / (191 + 31),
   /**
    * R72: the screen must fire, and it must fire on exactly one mutant.
    *
@@ -327,16 +343,28 @@ const EXPECTED = {
    * R121: this fixture is the measured VACUOUS case for the assertion screen, and pinning it here is
    * the point rather than an incidental extra.
    *
-   * All 52 tests in `fixtures/sandbox-data-tests` raise via bare `Error(...)`; none uses Microsoft's
-   * Library Assert. So the screen's rule — "the failure text does not begin with `Assert.`" — flags
-   * EVERY kill and separates nothing. Continia Document Output, where the rule was scored at 100%
-   * recall and 26.1% precision, calls Library Assert ~1,886 times and produces `partial`.
+   * R132 MOVED THIS FROM `vacuous` TO `partial`, deliberately, and the `vacuous` case moved to
+   * `itest:bcdev` rather than being given up.
    *
-   * A gate that only asserted a COUNT here would pass identically whether the report distinguished
-   * those two situations or printed the same number for both, which is exactly the failure R121
-   * exists to avoid.
+   * Until R132, all 52 tests here raised via bare `Error(...)`, so the rule — "the failure text does
+   * not begin with `Assert.`" — flagged EVERY kill and separated nothing, and this gate pinned that.
+   * The trouble with pinning only that is that `partial`, the one branch where a reader is told
+   * something actionable, then ran in NO live gate at all: it was proven by unit tests and by
+   * re-scoring one committed third-party corpus (Continia Document Output, which calls Library
+   * Assert ~1,886 times and where the rule scored 100% recall and 26.1% precision).
+   *
+   * `codeunit 79318 "Data Assert Ops"` and its two tests are a twin pair built to make this fixture
+   * produce BOTH kinds of failure text: identical target shape, identical verdicts, one covered by
+   * `Library Assert.AreEqual` and one by bare `Error(...)`. So the rule now has something to
+   * separate here, and `itest:bcdev` (whose suite is still bare `Error(...)` only) pins the vacuous
+   * case. Both states are asserted live, by two gates.
+   *
+   * A gate that only asserted a COUNT would pass identically whether the report distinguished those
+   * two situations or printed the same number for both, which is exactly the failure R121 exists to
+   * avoid — so the assertions below pin the two POPULATIONS and the per-mutant membership, not a
+   * number.
    */
-  assertionScreenDiscrimination: "vacuous",
+  assertionScreenDiscrimination: "partial",
   /**
    * `coverageFilter`'s FALLBACK 2 ("coverage places this table trigger nowhere, run every green
    * test") must fire for NOBODY here. This is the assertion `0a463fd` actually earns: before it,
@@ -618,16 +646,24 @@ function assertVerdictTable(report: SessionReport): void {
   assert.equal(
     assertionScreen.discrimination,
     EXPECTED.assertionScreenDiscrimination,
-    "this fixture raises via bare `Error(...)` in all 52 tests, so the screen must report itself " +
-      "as separating NOTHING here. A `partial` would mean either the fixture grew an assertion " +
-      "library or the rule started matching something it was never scored on",
+    "R132: this fixture now raises BOTH ways — 52 tests through bare `Error(...)` and one through " +
+      "Microsoft's Library Assert — so the screen must report that it separated something. A " +
+      "`vacuous` here means the Library Assert arm stopped killing anything, or its failure text " +
+      "stopped reaching `killingTestFailure`, and the branch this gate exists to exercise is dark " +
+      "again",
   );
-  assert.equal(
-    assertionScreen.flagged,
-    assertionScreen.killsWithText,
-    "vacuous means every kill with text was flagged — asserted directly so the discrimination " +
-      "label and the numbers behind it cannot disagree",
+  // R132: both populations must be non-empty, asserted directly so the discrimination label and the
+  // numbers behind it cannot disagree — and so a future change that empties either side fails here
+  // rather than quietly reverting this gate to the vacuous case it used to pin.
+  assert.ok(
+    assertionScreen.flagged > 0,
+    `partial requires flagged kills; got flagged=${assertionScreen.flagged}`,
   );
+  assert.ok(
+    assertionScreen.killsWithText - assertionScreen.flagged > 0,
+    `partial requires UNflagged kills — the Library Assert arm — got killsWithText=${assertionScreen.killsWithText} flagged=${assertionScreen.flagged}`,
+  );
+  assertAssertionScreenTwinPair(report, assertionScreen.flaggedMutants);
   assert.equal(
     assertionScreen.runnerRefusals,
     0,
@@ -785,6 +821,49 @@ function assertTrioTextEvidence(report: SessionReport): void {
       "FindLast -> FindFirst direction (arm E), which the collapsed baseline key cannot see apart " +
       "from the other direction",
   );
+}
+
+/**
+ * R132: the twin pair, pinned by MEMBERSHIP rather than by any count.
+ *
+ * `codeunit 79318 "Data Assert Ops"` holds two procedures of identical shape. `DoubledLevel` is
+ * covered by a test that raises through Microsoft's `Library Assert`, `TripledLevel` by one that
+ * raises through bare `Error(...)`. Every one of their four mutants is killed, so the VERDICTS are a
+ * control: the only thing that differs is which side of the screen each kill lands on.
+ *
+ * Asserting `discrimination === "partial"` alone would pass if the screen split the fixture
+ * somewhere else entirely — say if a BC platform error started killing an unrelated mutant with text
+ * that happens to begin with `Assert.`. Naming the four mutants is what makes this an assertion
+ * about the RULE.
+ */
+function assertAssertionScreenTwinPair(
+  report: SessionReport,
+  flaggedMutants: readonly string[],
+): void {
+  const flagged = new Set(flaggedMutants);
+  const TWINS = [
+    // procedure, how its covering test raises, whether the screen must flag its kills
+    ["DoubledLevel", "Library Assert", false],
+    ["TripledLevel", "bare Error(...)", true],
+  ] as const;
+
+  for (const [procedureName, style, mustBeFlagged] of TWINS) {
+    const mutants = report.mutants.filter((m) => m.procedureName === procedureName);
+    assert.deepEqual(
+      mutants.map((m) => m.operatorName).sort(),
+      ["lethal.empty-block", "lethal.return-value"],
+      `${procedureName}: expected exactly its two mutants, got ${mutants.map((m) => `${m.operatorName}=${m.verdict}`).join(", ")}`,
+    );
+    for (const m of mutants) {
+      assert.equal(m.verdict, "killed", `${procedureName} (${m.operatorName}): verdict`);
+      assert.equal(
+        flagged.has(m.mutantCode),
+        mustBeFlagged,
+        `${procedureName} (${m.operatorName}) is killed by a test raising through ${style}, so the ` +
+          `assertion screen must ${mustBeFlagged ? "" : "NOT "}flag it. killingTestFailure: ${JSON.stringify(m.killingTestFailure ?? null)}`,
+      );
+    }
+  }
 }
 
 /**

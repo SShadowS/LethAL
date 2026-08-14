@@ -84,6 +84,13 @@
     "errorClass": null
   },
   {
+    "key": "08b5df0c6213325221a366d8032c0fe4713b3b1fe95a37656c29cc9ef9b8dc65|Data Assert Ops|lethal.return-value|1",
+    "verdict": "killed",
+    "killingTest": "AssertScreenSeesABareErrorFailure",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "0a4aa6ba624a968a10ed0a7f498acecfcece91cce81f92a0459538ca3df0b35c|Data Commit Ops|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "CommitBeforeCodeunitRunSucceeds",
@@ -507,6 +514,13 @@
     "key": "46f1c8005b0b1e57c3af7712fb66f087e34e5cfef5a4895866ae28628c2ce6ad|Data Filter Ops|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "BoundaryShiftAdmitsTheThresholdRow",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "473f8aabd89fb3776cd184869a26a1c95377d88cd9b8b6de8951a4d5feaddea4|Data Assert Ops|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "AssertScreenSeesAnAssertionFailure",
     "coverageFiltered": false,
     "errorClass": null
   },
@@ -1043,6 +1057,13 @@
     "errorClass": null
   },
   {
+    "key": "a75c8d5c57533c2919fb66da9ae2c5d5a15b02f9e5dea53154756d69ced184a2|Data Assert Ops|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "AssertScreenSeesABareErrorFailure",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "a8ee39646a0ad5ea316601ac48a3c045788c3cc8ecc8ae493c84c6a56093ded2|Data Swap Ops|lethal.negate-conditional|1",
     "verdict": "killed",
     "killingTest": "CommutativeCalleeMakesTheSwapEquivalent",
@@ -1466,6 +1487,13 @@
     "key": "dc96c7c315c1a3526f4ecf9aba3a55b436b6f7a1b98e7e9ea3905ea314387278|Data Filter Ops|lethal.remove-setrange|1",
     "verdict": "killed",
     "killingTest": "NotBlankFilterCountsOnlyTaggedRows",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "e0227de3081ca2802aff69f83c9c34df2332781f4eb548dca858bad5f4f9c193|Data Assert Ops|lethal.return-value|1",
+    "verdict": "killed",
+    "killingTest": "AssertScreenSeesAnAssertionFailure",
     "coverageFiltered": false,
     "errorClass": null
   },
