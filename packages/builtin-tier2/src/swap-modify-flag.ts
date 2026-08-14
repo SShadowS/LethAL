@@ -8,6 +8,7 @@ import {
   type SemanticContext,
   isStatementPosition,
 } from "@lethal/operator-sdk";
+import { insertSkipCanRaise } from "./insert-key-assignment";
 import { soleArgument, synthesizeAfter } from "./mutate-helpers";
 import { claimsRecordMethod } from "./receiver";
 
@@ -33,12 +34,12 @@ const PLATFORM_KILL_METHOD = "Insert";
  * The tag `Insert` mutants carry. Declared as a typed constant rather than an inline string so a
  * value the engine's union does not know is a compile error here, at the one place that writes it.
  *
- * There is deliberately NO detector behind it, unlike `write-txn-codeunit-run` (which has its own
- * module and fires only on the exact measured shape). Whether the target table's `OnInsert` assigns
- * the primary key is not visible at the call site, and for a base-app record it is not visible at
- * all. So every `Insert` mutant is tagged and the tag means "a kill here CAN be the platform; read
- * it". Narrowing it — resolve the receiver's table, find its `OnInsert`, check whether it assigns a
- * primary-key field — is `docs/roadmap/R143.md`.
+ * R143 gave it a detector: `insertSkipCanRaise` (`./insert-key-assignment.ts`) resolves the
+ * receiver's table, finds its `OnInsert` and checks whether that trigger assigns a primary-key
+ * field. Unlike `write-txn-codeunit-run`'s detector, which fires only on an exact measured shape,
+ * this one is a REFUSAL detector: it drops the tag only where the mechanism is provably
+ * unavailable, and a receiver the project cannot resolve keeps it. So the tag still means "a kill
+ * here CAN be the platform; read it", never "this kill is false".
  */
 const RUN_TRIGGER_SKIPPED_INSERT: PlatformKillMechanism = "run-trigger-skipped-insert";
 
@@ -136,10 +137,14 @@ const OPERATOR_VERSION = "1.1.0";
  * Since R138 the `Insert` mutants declare `run-trigger-skipped-insert`, so the report's
  * platform-artifact screen groups them. `Delete` and `Modify` declare nothing, and that is a RULING,
  * not an omission: skipping `OnDelete`/`OnModify` writes LESS than the unmutated program, never
- * more, and the row is still located by the same key, so there is no error the mutation can add. The
- * tag is BROADER than its mechanism — every `Insert` mutant carries it, because whether the target
- * table's `OnInsert` touches the primary key is not visible here — which is why it means "read this
- * kill", never "this kill is false". Narrowing it is `docs/roadmap/R143.md`.
+ * more, and the row is still located by the same key, so there is no error the mutation can add.
+ *
+ * R143 NARROWED the `Insert` tag from "every one" to "every one whose mechanism is not provably
+ * unavailable": the receiver's table is resolved, and a table whose `OnInsert` does not assign the
+ * primary key (or has no `OnInsert` at all) loses the tag. A receiver this project cannot resolve
+ * KEEPS it — see `insertSkipCanRaise` (`./insert-key-assignment.ts`) for that ruling, its three
+ * measured limits, and why a screen resolves the unknown case in the opposite direction from every
+ * other Tier-2 guard. The tag still means "read this kill", never "this kill is false".
  *
  * The verdict does NOT move. A diagnosis never re-scores a mutant (R72's discipline).
  *
@@ -177,8 +182,13 @@ export const swapModifyFlag: MutationOperator = {
     // are separate entry points and an operator that assumed otherwise would be relying on the
     // walker's calling convention rather than on its own guards.
     const method = claimedRunTriggerMethod(node, ctx);
+    // R143: and, for `Insert`, only where the mechanism is not PROVABLY unavailable — see
+    // `insertSkipCanRaise` (`insert-key-assignment.ts`) for the four cases and for why an
+    // unresolvable receiver keeps the tag rather than losing it.
     const platformKillMechanism =
-      method !== null && method.toLowerCase() === PLATFORM_KILL_METHOD.toLowerCase()
+      method !== null &&
+      method.toLowerCase() === PLATFORM_KILL_METHOD.toLowerCase() &&
+      insertSkipCanRaise(node, ctx)
         ? RUN_TRIGGER_SKIPPED_INSERT
         : undefined;
 

@@ -205,6 +205,60 @@ export function claimsRecordMethod(
 }
 
 /**
+ * R143: the TABLE a claimed record call's receiver resolves to, by name, or `null` when this
+ * project's source cannot prove one.
+ *
+ * Exists because a tag or a refusal sometimes depends on the target TABLE rather than on the call
+ * — `swap-modify-flag` needs the receiver's `OnInsert` to decide whether skipping it can raise a
+ * platform error. It lives here, beside `claimsRecordMethod`, and shares that predicate's
+ * `describeCallee` / `enclosingObject` / `resolveReceiver` path rather than resolving a receiver a
+ * second way. Two parsers for one node shape is the mistake ROADMAP R80 already records.
+ *
+ * `null` covers three genuinely different situations and deliberately does not distinguish them,
+ * because no caller so far can act on the difference: the node is not a call at all, the receiver
+ * is not provably a record, or it IS a record whose table this project cannot name (a base-app
+ * `Record Customer`, whose `tableRef` is `null`). A caller that needs "resolved to nothing" to be
+ * safe must decide what `null` means for ITS question — see `insertSkipCanRaise`
+ * (`insert-key-assignment.ts`), which treats it as "cannot prove otherwise" and keeps its tag.
+ *
+ * Handles the implicit-receiver form the same way `claimsRecordMethod` does, and that is most of
+ * the value: inside a table (or a `tableextension`, or a `page` with a `SourceTable`) a bare
+ * `Insert(true)` has no receiver node to resolve, and a caller reaching for `resolveReceiver`
+ * directly would silently answer `null` for every one of those sites.
+ */
+export function resolveReceiverTable(node: ALSyntaxNode, ctx: SemanticContext): string | null {
+  const symbols = (ctx as { symbols?: SymbolTable } | undefined)?.symbols;
+  if (symbols === undefined) {
+    throw new Error("resolveReceiverTable: a SemanticContext with a symbol table is required");
+  }
+  if (node.kind !== ALNodeKind.procedure_call) return null;
+  const callee = node.childForFieldName("function");
+  if (callee === null) return null;
+  const target = describeCallee(callee);
+  if (target === null) return null;
+  const objectNode = enclosingObject(node);
+  if (objectNode === null) return null;
+  const objectName = objectNameOf(objectNode);
+  if (objectName === null) return null;
+
+  if (target.receiver === null) {
+    // Implicit `Rec`, resolved exactly as `claimsRecordMethod` resolves it — including the
+    // `pageextension` refusal, whose implicit record is the extended page's `SourceTable` and is
+    // not visible here.
+    return objectNode.kind === ALNodeKind.table
+      ? objectName
+      : objectNode.kind === ALNodeKind.tableextension
+        ? extendedTableOf(objectNode)
+        : objectNode.kind === ALNodeKind.page
+          ? sourceTableOf(objectNode)
+          : null;
+  }
+
+  const receiver = resolveReceiver(target.receiver, node, objectNode, objectName, symbols);
+  return receiver.kind === "record" ? receiver.tableRef : null;
+}
+
+/**
  * R33: does `node` call the AL SYSTEM function `name` — the receiverless kind, of which `Commit()`
  * is the case Phase 2 needs — rather than a procedure this project declares under the same name?
  *

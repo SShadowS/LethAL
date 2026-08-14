@@ -335,18 +335,24 @@ const EXPECTED = {
    * mechanisms.
    *
    * It was 1 until R138, when `lethal.swap-modify-flag`'s `Insert` mutants gained the second
-   * mechanism. The fixture holds three `Insert(true)` sites — arms A, B and K in `Data Flag Ops` —
-   * of which arms A and K are killed and arm B survives, and a survivor at such a site is not
-   * screened. So 1 + 2 = 3, pre-committed in
-   * docs/superpowers/specs/2026-08-14-r138-insert-mechanism-precommitment.md before the run.
+   * mechanism, and 3 until R143 gave that mechanism a detector. The fixture holds three
+   * `Insert(true)` sites — arms A, B and K in `Data Flag Ops` — of which arms A and K are killed
+   * and arm B survives, and a survivor at such a site is not screened.
    *
-   * A count alone would be satisfied by the wrong three mutants, so `byMechanism` is pinned by NAME
+   * R143 TOOK THIS FROM 3 TO 2, and the mutant that left is the point of the change. Arms A and B
+   * insert into `Data Trigger Probe`, whose `OnInsert` sets a Boolean and never touches the primary
+   * key, so the duplicate-key mechanism is provably unavailable there and arm A's kill is
+   * assertion-earned. Arm K inserts into `Data Key Probe`, whose `OnInsert` DOES assign the key.
+   * So 1 + 1 = 2, pre-committed in
+   * docs/superpowers/specs/2026-08-14-r143-insert-narrowing-precommitment.md before the run.
+   *
+   * A count alone would be satisfied by the wrong two mutants, so `byMechanism` is pinned by NAME
    * and by MEMBERSHIP below. The write-transaction group in particular must stay at exactly one: a
    * second member there would mean the detector had started claiming the STATEMENT form of
    * `Codeunit.Run`, the shape measured to survive and the false prediction R72 spent a probe
    * correcting.
    */
-  platformArtifactKills: 3,
+  platformArtifactKills: 2,
   /**
    * R121: this fixture is the measured VACUOUS case for the assertion screen, and pinning it here is
    * the point rather than an incidental extra.
@@ -681,7 +687,7 @@ function assertVerdictTable(report: SessionReport): void {
   // ruling says get no mechanism at all.
   const insertGroup = groupOf("run-trigger-skipped-insert");
   const insertScreened = insertGroup.mutants.map(mutantOf);
-  assert.equal(insertScreened.length, 2, "the Insert mechanism screens exactly two kills");
+  assert.equal(insertScreened.length, 1, "the Insert mechanism screens exactly one kill");
   for (const m of insertScreened) {
     assert.equal(
       m.operatorName,
@@ -700,13 +706,16 @@ function assertVerdictTable(report: SessionReport): void {
   }
   assert.deepEqual(
     insertScreened.map((m) => m.procedureName).sort(),
-    ["InsertTwiceWithKeyTrigger", "InsertWithTrigger"],
-    "the two screened Insert kills are arm A and arm K. Arm K is the genuine platform artifact " +
-      "(its covering test asserts nothing and the kill is a duplicate primary key); arm A is an " +
-      "honest assertion kill that the tag screens anyway, because the tag cannot see whether the " +
-      "target table's OnInsert touches the primary key. One of two — the cost this wave accepted " +
-      "and R143 exists to narrow. A CHANGE here means either a new fixture site or the ruling on " +
-      "which methods get a mechanism silently widening to Delete/Modify",
+    ["InsertTwiceWithKeyTrigger"],
+    "the ONE screened Insert kill is arm K, and R143 is why the list is one name rather than two. " +
+      "Arm K is the genuine platform artifact: `Data Key Probe`'s OnInsert assigns the primary " +
+      "key, its covering test asserts nothing, and the kill is a duplicate key. Arm A " +
+      "(`InsertWithTrigger`) LEFT this group when the detector landed — `Data Trigger Probe`'s " +
+      "OnInsert sets a Boolean and never touches the key, so the mechanism is provably " +
+      "unavailable there and its kill is assertion-earned. Arm A reappearing here means the " +
+      "detector stopped resolving the receiver's table; arm K disappearing means it started " +
+      "refusing a table it can resolve, which is the direction that credits a platform refusal to " +
+      "the suite",
   );
   // The two mechanisms must not share one explanation: the reader would be told a duplicate-key
   // artifact was measured on Cronus281 as a write-transaction abort.

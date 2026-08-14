@@ -377,9 +377,22 @@ describe("swap-modify-flag platform-kill mechanism (R138)", () => {
     expect(specs[0]?.platformKillMechanism).toBe("run-trigger-skipped-insert");
   });
 
-  it("tags the implicit-receiver form inside a table's own trigger", () => {
-    const src = `table 50175 "T3" { fields { field(1; "No."; Code[20]) { } } trigger OnInsert() begin Insert(true); end; }`;
+  // R143 CHANGED THIS CASE, deliberately. The implicit receiver resolves to the table itself, so
+  // the detector can now READ that table's `OnInsert` — and this one assigns the key, so the tag
+  // stays. The sibling below is the same shape with a trigger that does not, which is the mutant
+  // R143 removed from the screen.
+  it("tags the implicit-receiver form inside a table whose OnInsert assigns the key", () => {
+    const src = `table 50175 "T3" { fields { field(1; "No."; Code[20]) { } } keys { key(PK; "No.") { } } trigger OnInsert() begin "No." := 'K'; Insert(true); end; }`;
     const specs = specsFor(src);
+    expect(specs.map((s) => s.before.text)).toEqual(["Insert(true)"]);
     expect(specs[0]?.platformKillMechanism).toBe("run-trigger-skipped-insert");
+  });
+
+  it("does NOT tag the implicit-receiver form when that table's OnInsert leaves the key alone", () => {
+    const src = `table 50176 "T4" { fields { field(1; "No."; Code[20]) { } field(2; Flag; Boolean) { } } keys { key(PK; "No.") { } } trigger OnInsert() begin Flag := true; Insert(true); end; }`;
+    const specs = specsFor(src);
+    expect(specs.map((s) => s.before.text)).toEqual(["Insert(true)"]);
+    expect(specs.map((s) => s.after.text)).toEqual(["Insert(false)"]);
+    expect(specs[0]?.platformKillMechanism).toBeUndefined();
   });
 });
