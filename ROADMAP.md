@@ -55,7 +55,7 @@ that ordering is the priority.
 - **R137** · swap-rec-xrec's conformance refusals assert nothing — empty expectedSpecs passes on any input · [R137.md](docs/roadmap/R137.md) · done (3d2c336) — the harness now fails a refusal case that emits, and the sweep found a refusal that had…
 - **R138** · The platform-artifact screen cannot see run-trigger-flag kills: Insert(false) kills by duplicate key, and nothing tags it · [R138.md](docs/roadmap/R138.md) · open — found 2026-08-12 by the adversarial review of the R136 trio spec, before any code landed
 - **R140** · Fallback 2 scores a trigger mutant `survived` when its only covering test is red, where member-level attribution declines · [R140.md](docs/roadmap/R140.md) · open — measured 2026-08-13 on the R136 trio's first live run
-- **R141** · flip-filter-literal's character-class refusals are proven offline only: no live negative anywhere · [R141.md](docs/roadmap/R141.md) · open — found 2026-08-14 while closing out R134, before the operator's own gate run
+- **R141** · flip-filter-literal's character-class refusals are proven offline only: no live negative anywhere · [R141.md](docs/roadmap/R141.md) · done (see commit below) — arm I measures the character refusal live; the tables gate is frozen at 187/31/10…
 - **R142** · A conformance case with a non-empty expectation still never checks for EXTRA specs · [R142.md](docs/roadmap/R142.md) · open — filed 2026-08-14 while closing R137
 
 ## Product gaps a real project hits

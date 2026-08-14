@@ -574,6 +574,13 @@
     "errorClass": null
   },
   {
+    "key": "59db81e0b518907a391a107629eb9f73187b6c94aa683b4fced6b713f27e8d39|Data Filter Ops|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "NotBlankFilterCountsOnlyTaggedRows",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "5bd1ae068fbdf002b204abc14d378030129f17f8784449b352db76b6102421e1|Data Main Ext|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "ExtRequireCategoryFails",
@@ -724,6 +731,13 @@
     "key": "775a7b9b5dbee9db428ccfbcc06d2cbb52939dbb329b11741090ee86e1d9a909|Data Filter Ops|lethal.return-value|1",
     "verdict": "killed",
     "killingTest": "NegationFlipChangesTheCount",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "775a7b9b5dbee9db428ccfbcc06d2cbb52939dbb329b11741090ee86e1d9a909|Data Filter Ops|lethal.return-value|1",
+    "verdict": "killed",
+    "killingTest": "NotBlankFilterCountsOnlyTaggedRows",
     "coverageFiltered": false,
     "errorClass": null
   },
@@ -1288,6 +1302,13 @@
     "errorClass": null
   },
   {
+    "key": "cfdc3c46a2a15992376eed83d821f4f3d0fe5a45983c309616fea0fb7f3c9a22|Data Filter Ops|lethal.void-method-call|1",
+    "verdict": "killed",
+    "killingTest": "NotBlankFilterCountsOnlyTaggedRows",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "d0e4e27a2a1f0c3e7e10d0c216466138840535fb72fcb68c6e81264f4b8986f2|Data Ops|lethal.remove-setrange|1",
     "verdict": "killed",
     "killingTest": "CountForMainIgnoresDecoys",
@@ -1438,6 +1459,13 @@
     "key": "d9cbca5018b3f77051d8f33a72d7e5f6a971924b158b7413b40f621b238147b8|Data Ops|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "TouchCategoryWeak",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "dc96c7c315c1a3526f4ecf9aba3a55b436b6f7a1b98e7e9ea3905ea314387278|Data Filter Ops|lethal.remove-setrange|1",
+    "verdict": "killed",
+    "killingTest": "NotBlankFilterCountsOnlyTaggedRows",
     "coverageFiltered": false,
     "errorClass": null
   },

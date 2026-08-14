@@ -148,7 +148,14 @@ const EXPECTED = {
   // B, C, D, E, G and H) plus seven tests. 36 new raw specs, 4 new displacements, 32 new deployed.
   // All 32 per-mutant verdicts were pre-committed in
   // docs/superpowers/specs/2026-08-12-r134-filter-precommitment.md BEFORE this run.
-  totalMutantSites: 243,
+  // R141 moved this from 243 to 248. One arm, `Data Filter Ops.CountTaggedInBand`, whose `SetFilter`
+  // literal carries an inner quote (the `<>''` not-blank idiom) and therefore hits the operator's
+  // CHARACTER refusal — a different code path from arm H's ladder exhaustion, and until now proven
+  // by one offline unit test and nothing else. Five new raw specs, one displacement, four deployed;
+  // `flip-filter-literal` stays at SIX, which is the number the arm exists to hold down. All four
+  // verdicts pre-committed in
+  // docs/superpowers/specs/2026-08-14-r141-character-refusal-precommitment.md BEFORE this run.
+  totalMutantSites: 248,
   // R36 moved this from 63/10 to 64/9, deliberately and in one direction only.
   //
   // `RequireCategoryAFails` used to assert merely that AN error occurred, so deleting
@@ -214,7 +221,14 @@ const EXPECTED = {
   // a platform rejection scores `killed` with nothing recording which happened (R86/R138). The
   // wave's real claim rests on the two SURVIVORS and on the arm C / arm D pair, which
   // `assertFilterLiteralEvidence` below pins directly.
-  killed: 183,
+  // R141 moved this from 183 to 187: all four of arm I's deployed mutants are predicted killed, and
+  // each of the two interesting ones rests on a count MEASURED against Cronus283 before the arm was
+  // written (scripts/r141-filter-probe/) — deleting the `SetFilter` counts the blank row too (3, not
+  // 2), deleting the `SetRange` counts the out-of-band decoy too (3, not 2). Each kill must carry the
+  // arm's own bare `Error(...)` text: a kill whose failure text is a BC filter-evaluation error would
+  // mean the character refusal broke and BC was handed `=''`, which is the false kill this arm exists
+  // to detect rather than to produce.
+  killed: 187,
   // R73 moved this from 9 to 12, and TWO of the three additions are worth reading rather than
   // accepting:
   //
@@ -263,6 +277,9 @@ const EXPECTED = {
   // boundary the shifted comparator selects the identical row, so the mutant is genuinely
   // EQUIVALENT). The other four are collateral: `void-method-call` at arms B, G and H, and
   // `conditional-boundary` turning arm B's `Count() > 0` into the tautology `Count() >= 0`.
+  // R141 leaves this at 31: arm I predicts no survivors. Its blank in-band row and its out-of-band
+  // decoy exist precisely so neither collateral deletion can survive on data starvation, which is the
+  // shape that made `remove-setrange` survivors uninformative before the fixture seeded decoys.
   survived: 31,
   // R78 moved this from 6 to 9. The three new sites all belong to the TestPage-only pair
   // (`Data Value Source` / `Data Value Card`), and all three land `no-coverage` because the one
@@ -288,11 +305,15 @@ const EXPECTED = {
   // `codeunit 79317 "Data Filter Ops"`, each called directly by exactly one new test, so
   // member-level attribution must reach every one of them. Any arriving `no-coverage` is an
   // ATTRIBUTION finding and must not be absorbed by editing this number.
+  // R141 leaves this at 10, unchanged, for the same reason: arm I's four mutants sit in a procedure
+  // of `codeunit 79317 "Data Filter Ops"` called directly by one new test.
   noCoverage: 10,
   // 183 / 214 does not reduce (183 is 3 x 61, 214 is 2 x 107). It is about 0.8551, DOWN from
   // 0.8626: a wave that adds six deliberate survivors is SUPPOSED to move the score down, and a
   // score that rose instead would mean the survivors did not arrive.
-  mutationScore: 183 / (183 + 31),
+  // R141 moves it to 187 / 218, about 0.8578, back UP: an arm of four predicted kills and no
+  // survivors should raise it. The direction is the readable part, not the digits.
+  mutationScore: 187 / (187 + 31),
   /**
    * R72: the screen must fire, and it must fire on exactly one mutant.
    *
@@ -306,7 +327,7 @@ const EXPECTED = {
    * R121: this fixture is the measured VACUOUS case for the assertion screen, and pinning it here is
    * the point rather than an incidental extra.
    *
-   * All 51 tests in `fixtures/sandbox-data-tests` raise via bare `Error(...)`; none uses Microsoft's
+   * All 52 tests in `fixtures/sandbox-data-tests` raise via bare `Error(...)`; none uses Microsoft's
    * Library Assert. So the screen's rule — "the failure text does not begin with `Assert.`" — flags
    * EVERY kill and separates nothing. Continia Document Output, where the rule was scored at 100%
    * recall and 26.1% precision, calls Library Assert ~1,886 times and produces `partial`.
@@ -597,7 +618,7 @@ function assertVerdictTable(report: SessionReport): void {
   assert.equal(
     assertionScreen.discrimination,
     EXPECTED.assertionScreenDiscrimination,
-    "this fixture raises via bare `Error(...)` in all 51 tests, so the screen must report itself " +
+    "this fixture raises via bare `Error(...)` in all 52 tests, so the screen must report itself " +
       "as separating NOTHING here. A `partial` would mean either the fixture grew an assertion " +
       "library or the rule started matching something it was never scored on",
   );
@@ -793,6 +814,14 @@ function assertTrioTextEvidence(report: SessionReport): void {
  * Arm H (`CountInRange`) is deliberately absent: a CLOSED range classifies fine but no rule in the
  * ladder targets it, so the site must refuse by ladder exhaustion. A seventh flip mutant means that
  * deferral broke; a fifth means an arm's shape stopped classifying.
+ *
+ * R141: arm I (`CountTaggedInBand`) is absent for a DIFFERENT reason, and keeping the two apart is
+ * the point of asserting both. Its literal carries an inner quote (`'<>'''''`, the `<>''` not-blank
+ * idiom), so `REFUSED_CHARACTERS` declines the string before anything is classified — the character
+ * refusal, which no gate exercised until this arm. Arm H proves the ladder can exhaust; arm I proves
+ * the parser can refuse. A flip mutant at arm I would mean BC was handed a filter the mini-parser
+ * never validated, whose likely runtime rejection would score `killed` with no assertion earning it
+ * (R86, R138) — a false kill dressed as a pass.
  */
 function assertFilterLiteralEvidence(report: SessionReport): void {
   const FILTER_ARMS = [
@@ -821,6 +850,34 @@ function assertFilterLiteralEvidence(report: SessionReport): void {
     "arm H's CLOSED range must emit NO flip-filter-literal mutant: it classifies successfully and " +
       "then exhausts the ladder, which is the refusal negative this arm exists to be",
   );
+  assert.deepEqual(
+    flips.filter((m) => m.procedureName === "CountTaggedInBand").map((m) => m.mutantCode),
+    [],
+    "arm I's INNER QUOTE must emit NO flip-filter-literal mutant: `REFUSED_CHARACTERS` declines the " +
+      "string before classification, a different refusal from arm H's ladder exhaustion (R141)",
+  );
+
+  // Arm I's own four mutants, and the failure text that earned each kill. Asserting the verdicts
+  // alone would pass if BC had rejected a spliced filter instead of the test asserting anything,
+  // which is the exact false kill this arm exists to detect.
+  const armI = report.mutants.filter((m) => m.procedureName === "CountTaggedInBand");
+  assert.deepEqual(
+    armI.map((m) => m.operatorName).sort(),
+    [
+      "lethal.empty-block",
+      "lethal.remove-setrange",
+      "lethal.return-value",
+      "lethal.void-method-call",
+    ],
+    `arm I (CountTaggedInBand): expected exactly its four collateral mutants, got ${armI.map((m) => `${m.operatorName}=${m.verdict}`).join(", ")}`,
+  );
+  for (const m of armI) {
+    assert.equal(m.verdict, "killed", `arm I (${m.operatorName}): verdict`);
+    assert.ok(
+      (m.killingTestFailure ?? "").includes("non-blank rows in the band"),
+      `arm I (${m.operatorName}): the kill must carry the arm's own assertion text, got ${JSON.stringify(m.killingTestFailure ?? null)}`,
+    );
+  }
 
   for (const [arm, procedureName, before, after, flipVerdict, voidVerdict] of FILTER_ARMS) {
     const inArm = report.mutants.filter((m) => m.procedureName === procedureName);
