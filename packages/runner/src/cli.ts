@@ -26,6 +26,8 @@ import {
 import rootPackageJson from "../../../package.json" with { type: "json" };
 import type { ActivationConfig, FetchFn } from "./activation";
 import { AlRunnerBackend } from "./al-runner-backend";
+import { readAlRunnerCache } from "./al-runner-cache";
+import type { AlRunnerCacheReport } from "./al-runner-cache";
 import {
   type AlRunnerCanaryResult,
   alRunnerCanaryWarnings,
@@ -3212,6 +3214,10 @@ export async function buildDoctorDeps(
     readonly alToolPaths?: typeof defaultAlToolPaths;
     readonly fetchFn?: FetchFn;
     readonly makeEnvToolClient?: (cfg: EnvToolConfigSection) => EnvToolClient;
+    /** R131: al-runner's artifact root. Injected by tests so a unit test does not walk whatever
+     *  1 GB cache the machine running it happens to have — and so its result is the machine's,
+     *  not the suite's. Absent means al-runner's own default location. */
+    readonly alRunnerCacheDir?: string;
   } = {},
 ): Promise<{
   readonly cfg: DoctorConfig;
@@ -3351,6 +3357,12 @@ export async function buildDoctorDeps(
     return { alc: resolved.alcPath ?? "", altool: resolved.altoolPath ?? "" };
   };
 
+  // R131: reads a local directory and adds up sizes. No spawn, no write, no delete — so it is
+  // inside doctor's read-only boundary (constraint 4) by construction rather than by promise, and
+  // it runs in create mode too, where there is no environment but there is still a disk.
+  const alRunnerCache = async (): Promise<AlRunnerCacheReport> =>
+    readAlRunnerCache(opts.alRunnerCacheDir);
+
   return {
     cfg: {
       ...doctorConfigFromEnvTool(envCfg),
@@ -3363,8 +3375,8 @@ export async function buildDoctorDeps(
     // `runDoctor` skips a check whose dep is absent, rather than reporting a failure for a
     // question that has no answer yet. See `DOCTOR_CREATE_MODE_CAVEAT` and `doctorFromCli` below.
     deps: isCreateMode
-      ? { toolPaths }
-      : { envStatus, quarantine, controlVersion, lease, toolPaths },
+      ? { toolPaths, alRunnerCache }
+      : { envStatus, quarantine, controlVersion, lease, toolPaths, alRunnerCache },
     ...(isCreateMode ? { createModeCaveat: DOCTOR_CREATE_MODE_CAVEAT } : {}),
   };
 }
@@ -3404,6 +3416,10 @@ export async function doctorFromCli(
     readonly alToolPaths?: typeof defaultAlToolPaths;
     readonly fetchFn?: FetchFn;
     readonly makeEnvToolClient?: (cfg: EnvToolConfigSection) => EnvToolClient;
+    /** R131: al-runner's artifact root. Injected by tests so a unit test does not walk whatever
+     *  1 GB cache the machine running it happens to have — and so its result is the machine's,
+     *  not the suite's. Absent means al-runner's own default location. */
+    readonly alRunnerCacheDir?: string;
   } = {},
 ): Promise<number> {
   const configFile = await loadLethalConfigFile(parsed.configPath);

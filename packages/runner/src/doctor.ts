@@ -1,3 +1,5 @@
+import { describeAlRunnerCache } from "./al-runner-cache";
+import type { AlRunnerCacheReport } from "./al-runner-cache";
 import { compareAppVersions } from "./app-version";
 import { MIN_CONTROL_VERSION } from "./harness";
 import type { LeaseSnapshot } from "./harness";
@@ -95,6 +97,17 @@ export interface DoctorDeps {
    *  on `DoctorConfig.altoolRequired` — see that field. Always present, including in create mode:
    *  resolving a local compiler/publisher path needs no environment to exist. */
   readonly toolPaths: () => Promise<{ readonly alc: string; readonly altool: string }>;
+  /**
+   * R131: al-runner's artifact cache, READ. Always present and never conditional, for the same
+   * reason `toolPaths` is: reading a local directory needs no environment to exist.
+   *
+   * Its check can never be `ok: false`, and that is a deliberate exception to the lesson `lease`
+   * carries three fields above. `lease` shipped as a check that structurally could not fail while
+   * CLAIMING a safety property, which is a false green. This one claims nothing: it reports a size
+   * and names which builds al-runner will not select again. R131 ruled that deleting from a cache
+   * another tool owns is not LethAL's to do, so there is no threshold here that would be a fault.
+   */
+  readonly alRunnerCache: () => Promise<AlRunnerCacheReport>;
 }
 
 /**
@@ -286,7 +299,7 @@ function checkToolPaths(
 export async function runDoctor(cfg: DoctorConfig, deps: DoctorDeps): Promise<DoctorReport> {
   const envReady = cfg.envReady ?? DEFAULT_ENV_READY;
   const altoolRequired = cfg.altoolRequired ?? DEFAULT_ALTOOL_REQUIRED;
-  const { envStatus, quarantine, controlVersion, lease, toolPaths } = deps;
+  const { envStatus, quarantine, controlVersion, lease, toolPaths, alRunnerCache } = deps;
   const checkPromises: Promise<DoctorCheck>[] = [];
   if (envStatus !== undefined) {
     checkPromises.push(
@@ -307,6 +320,14 @@ export async function runDoctor(cfg: DoctorConfig, deps: DoctorDeps): Promise<Do
   }
   checkPromises.push(
     runCheck("tool-paths", async () => checkToolPaths(await toolPaths(), altoolRequired)),
+  );
+  // R131 — informational by construction; see `DoctorDeps.alRunnerCache` for why it cannot fail.
+  checkPromises.push(
+    runCheck("al-runner-cache", async () => ({
+      name: "al-runner-cache",
+      ok: true,
+      detail: describeAlRunnerCache(await alRunnerCache()),
+    })),
   );
   const checks = await Promise.all(checkPromises);
   return { checks, ok: checks.every((c) => c.ok) };

@@ -18,6 +18,14 @@ function cfgFixture(): DoctorConfig {
   return { envReady: "Running" };
 }
 
+/**
+ * R131: a machine with no al-runner cache. Every fixture below uses it, because the cache check
+ * reports a local disk fact that has nothing to do with what these tests are about — and a fixture
+ * reading the REAL `~/.local/share/al-runner` would make these tests depend on whoever ran a gate
+ * last. The check's own behaviour is tested in `al-runner-cache.test.ts`.
+ */
+const EMPTY_CACHE = { dir: "/nonexistent", present: false, totalBytes: 0, builds: [] } as const;
+
 describe("lethal doctor", () => {
   test("reports every check, not just the first failure", async () => {
     const r = await runDoctor(cfgFixture(), {
@@ -25,6 +33,7 @@ describe("lethal doctor", () => {
       quarantine: async () => "clear",
       controlVersion: async () => MIN_CONTROL_VERSION,
       toolPaths: async () => ({ alc: "ok", altool: "ok" }),
+      alRunnerCache: async () => EMPTY_CACHE,
     });
     // Review round 1: was `>= 5` — the `lease` check shipped in round 0 but was REMOVED (a check
     // that structurally could not fail was counted as a pass; see `DOCTOR_NOT_CHECKED` in cli.ts
@@ -39,6 +48,7 @@ describe("lethal doctor", () => {
       quarantine: async () => "clear",
       controlVersion: async () => MIN_CONTROL_VERSION,
       toolPaths: async () => ({ alc: "ok", altool: "ok" }),
+      alRunnerCache: async () => EMPTY_CACHE,
     });
     const env = r.checks.find((c) => c.name === "environment");
     expect(env?.ok).toBe(false);
@@ -51,6 +61,7 @@ describe("lethal doctor", () => {
       quarantine: async () => "clear",
       controlVersion: async () => MIN_CONTROL_VERSION,
       toolPaths: async () => ({ alc: "ok", altool: "ok" }),
+      alRunnerCache: async () => EMPTY_CACHE,
     });
     expect(r.ok).toBe(true);
   });
@@ -67,6 +78,7 @@ describe("lethal doctor", () => {
       quarantine: async () => "clear",
       controlVersion: async () => MIN_CONTROL_VERSION,
       toolPaths: async () => ({ alc: "ok", altool: "ok" }),
+      alRunnerCache: async () => EMPTY_CACHE,
     });
     expect(r.ok).toBe(false);
     const env = r.checks.find((c) => c.name === "environment");
@@ -85,6 +97,7 @@ describe("lethal doctor", () => {
       quarantine: async () => "clear",
       controlVersion: async () => "not-a-version",
       toolPaths: async () => ({ alc: "ok", altool: "ok" }),
+      alRunnerCache: async () => EMPTY_CACHE,
     });
     expect(r.ok).toBe(false);
     const cv = r.checks.find((c) => c.name === "control-version");
@@ -98,6 +111,7 @@ describe("lethal doctor", () => {
       quarantine: async () => "clear",
       controlVersion: async () => "1.0.0.0",
       toolPaths: async () => ({ alc: "ok", altool: "ok" }),
+      alRunnerCache: async () => EMPTY_CACHE,
     });
     const cv = r.checks.find((c) => c.name === "control-version");
     expect(cv?.ok).toBe(false);
@@ -110,6 +124,7 @@ describe("lethal doctor", () => {
       quarantine: async () => "clear",
       controlVersion: async () => MIN_CONTROL_VERSION,
       toolPaths: async () => ({ alc: "", altool: "ok" }),
+      alRunnerCache: async () => EMPTY_CACHE,
     });
     const tp = r.checks.find((c) => c.name === "tool-paths");
     expect(tp?.ok).toBe(false);
@@ -127,6 +142,7 @@ describe("lethal doctor", () => {
         quarantine: async () => "clear",
         controlVersion: async () => MIN_CONTROL_VERSION,
         toolPaths: async () => ({ alc: "ok", altool: "" }),
+        alRunnerCache: async () => EMPTY_CACHE,
       },
     );
     const tp = r.checks.find((c) => c.name === "tool-paths");
@@ -139,6 +155,7 @@ describe("lethal doctor", () => {
       quarantine: async () => "run: activation deadline exceeded",
       controlVersion: async () => MIN_CONTROL_VERSION,
       toolPaths: async () => ({ alc: "ok", altool: "ok" }),
+      alRunnerCache: async () => EMPTY_CACHE,
     });
     expect(r.ok).toBe(false);
     expect(r.checks.find((c) => c.name === "quarantine")?.detail).toBe(
@@ -155,6 +172,7 @@ describe("lethal doctor", () => {
     let quarantineCalls = 0;
     let controlVersionCalls = 0;
     let toolPathsCalls = 0;
+    let cacheCalls = 0;
     await runDoctor(cfgFixture(), {
       envStatus: async () => {
         envCalls++;
@@ -172,11 +190,16 @@ describe("lethal doctor", () => {
         toolPathsCalls++;
         return { alc: "ok", altool: "ok" };
       },
+      alRunnerCache: async () => {
+        cacheCalls++;
+        return EMPTY_CACHE;
+      },
     });
     expect(envCalls).toBe(1);
     expect(quarantineCalls).toBe(1);
     expect(controlVersionCalls).toBe(1);
     expect(toolPathsCalls).toBe(1);
+    expect(cacheCalls).toBe(1);
   });
 });
 
@@ -195,6 +218,7 @@ describe("lethal doctor — the lease check (R110)", () => {
     quarantine: async () => "clear",
     controlVersion: async () => MIN_CONTROL_VERSION,
     toolPaths: async () => ({ alc: "ok", altool: "ok" }),
+    alRunnerCache: async () => EMPTY_CACHE,
   };
   // A cleanly RELEASED lease, not a virgin one: `TryRelease` leaves `Owner` populated, which is
   // the shape a healthy container actually presents and the one an owner-keyed check got wrong.
