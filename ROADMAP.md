@@ -188,6 +188,7 @@ that ordering is the priority.
 - **R146** · `lethal doctor` refuses an al-runner-only project, so its al-runner checks reach nobody who only uses al-runner · [R146.md](docs/roadmap/R146.md) · open — found 2026-08-14 while landing R131's cache report
 - **R147** · Every al-runner CLI invocation re-downloads 230 MB of platform apps, and LethAL can stop paying for it with --package-cache · [R147.md](docs/roadmap/R147.md) · open — measured 2026-08-14 while closing R130. 10 s and 230 MB per invocation, on a warm cache, repeatably
 - **R148** · The al-runner fixture's test bundle resolves its own target to a stale symbol-only .app, and al-runner warns that calls into it will fail · [R148.md](docs/roadmap/R148.md) · open — observed 2026-08-15 while measuring R147 on al-runner 2.1.2.0. Harmless today; the gate is 3/13/0…
+- **R149** · After R147 the R123 contract probe measures an argv no mutant sends, and its own promise is that it does not · [R149.md](docs/roadmap/R149.md) · open — filed 2026-08-15 out of the spec-adversary review of R147, before R147 landed
 - **R108** · A batch whose TOTAL guard count exceeds the measured publish ceiling still pays for the failure — R90 refuses… · [R108.md](docs/roadmap/R108.md) · done (`pending`) — `batchCeilingWarning` warns (never refuses) when a batch TOTAL crosses the tier bracket…
 
 ---
