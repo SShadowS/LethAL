@@ -222,6 +222,16 @@ class StubBackend implements ExecutionBackend {
    * `"timeout"` was added with R86 because both real producers of that outcome attach text.
    */
   failureMessageFor?: (mutant: string | null, ref: TestMethodRef) => string | undefined;
+  /**
+   * R140: per-TEST baseline coverage, overriding the flat `coverageProcedures` list below. A
+   * public field for the same reason `failureMessageFor` is one, and needed because the default
+   * hands every baseline test the identical entry list — so no test could model the one shape
+   * R140 is about: an object whose ONLY covering test is the one that did not pass at baseline.
+   * Returning `undefined` falls through to the default list.
+   */
+  coverageEntriesFor?: (
+    ref: TestMethodRef,
+  ) => Array<{ objectType: string; objectId: number; procedure?: string }> | undefined;
   constructor(
     private readonly caps: BackendCapabilities,
     private readonly script: (
@@ -300,11 +310,13 @@ class StubBackend implements ExecutionBackend {
         ? {
             coverage: {
               granularity: "procedure" as const,
-              entries: this.coverageProcedures.map((p) => ({
-                objectType: "Codeunit",
-                objectId: 79000,
-                procedure: p,
-              })),
+              entries:
+                this.coverageEntriesFor?.(ref) ??
+                this.coverageProcedures.map((p) => ({
+                  objectType: "Codeunit",
+                  objectId: 79000,
+                  procedure: p,
+                })),
             },
           }
         : {}),
@@ -503,6 +515,83 @@ describe("runSession", () => {
       } finally {
         store.close();
       }
+    });
+  });
+
+  // R140, end to end. The bug: a table whose ONLY covering test is red at baseline. That test is
+  // dropped from the green set, so fallback 2 runs the trigger mutants against a green set that by
+  // construction excludes the one test able to kill them, and every one of them comes back
+  // `survived`. `survived` is a FINDING — the user reads it as "your suite executes this line and
+  // does not catch this mutation" — so the old behaviour manufactured a defect report against a
+  // suite that was, as far as anything here could tell, entirely correct.
+  //
+  // The member-level path already declined in this exact situation. This pins that fallback 2 now
+  // does too: the mutant is `error` (score-excluded) with a note naming the red test, never a
+  // survivor, and `untargetedTriggerCount` no longer claims it was run untargeted.
+  describe("R140: a table trigger whose only covering test is red at baseline", () => {
+    const RED = "RedAtBaseline";
+    const TWO_TEST_AL = `codeunit 79100 "Sandbox Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure OverBudgetDetected()
+    begin
+    end;
+
+    [Test]
+    procedure ${RED}()
+    begin
+    end;
+}
+`;
+
+    async function runIt() {
+      const dirs = await makeProject(TWO_TEST_AL);
+      await Bun.write(join(dirs.projectDir, "SandboxTable.Table.al"), TRIGGER_TABLE_AL);
+      // Baseline: the red test fails; every mutant run passes, so any mutant that IS scored comes
+      // back `survived` — which is precisely the wrong answer this row is about.
+      const backend = new StubBackend(CAPS_NST, (mutant, ref) =>
+        mutant === null && ref.method === RED ? "fail" : "pass",
+      );
+      // Only the RED test ever executed anything in table 79001. Nothing green mentions it, at any
+      // precision, so its trigger mutants miss member level and object level alike.
+      backend.coverageEntriesFor = (ref) =>
+        ref.method === RED
+          ? [{ objectType: "Table", objectId: 79001 }]
+          : [{ objectType: "Codeunit", objectId: 79000, procedure: "IsOverBudget" }];
+      const store = new ResultsStore(":memory:");
+      try {
+        const report = await runSession({ backend, store, ...dirs, selectorIds });
+        return { report, triggers: report.mutants.filter((m) => m.file.includes("SandboxTable")) };
+      } finally {
+        store.close();
+      }
+    }
+
+    test("declines rather than scoring: error with a note naming the red test, never `survived`", async () => {
+      const { report, triggers } = await runIt();
+      expect(triggers.length).toBeGreaterThan(0);
+      for (const m of triggers) {
+        expect(m.verdict).toBe("error");
+        expect(m.failureNote).toContain("did not pass at baseline");
+        expect(m.failureNote).toContain(`Sandbox Tests.${RED}`);
+      }
+      // The whole point: none of them reads as a finding against the user's tests.
+      expect(triggers.some((m) => m.verdict === "survived")).toBe(false);
+      // And the untargeted tally does not claim they were run untargeted — they were not run.
+      expect(report.untargetedTriggerCount).toBe(0);
+      // The red test is still NAMED at session level, as it always was.
+      expect(report.unsupportedTests).toContain(`Sandbox Tests.${RED}`);
+    });
+
+    test("the codeunit's own mutants are untouched — the decline is scoped to the unseen object", async () => {
+      const { report } = await runIt();
+      const logic = report.mutants.filter((m) => m.file.includes("SandboxLogic"));
+      expect(logic.length).toBeGreaterThan(0);
+      // Covered by the GREEN test at member level, mutant runs pass: ordinary survivors, and they
+      // must stay ordinary survivors.
+      expect(logic.every((m) => m.verdict === "survived")).toBe(true);
     });
   });
 

@@ -3119,6 +3119,17 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       // unreachable on both producers anyway, because the session refuses before it can be built;
       // it stays in place for any future producer that classifies without warranting a refusal.
 
+      // R140: built BEFORE the split, not after, because fallback 2 now consults it. It answers
+      // one question for the split — "did a test that could not pass at baseline nevertheless
+      // execute something in this object?" — and the same index then serves its original purpose
+      // below (`unsupportedCoverage`), so the two consumers cannot drift onto different evidence.
+      const unsupportedIndex = buildCoverageIndex(
+        unsupportedBaseline.map((b) => ({
+          ref: b.ref,
+          ...(b.verdict.coverage !== undefined ? { coverage: b.verdict.coverage } : {}),
+        })),
+      );
+
       // 5. coverage filter (capability-gated)
       let perMutantTests: ReadonlyMap<string, readonly TestMethodRef[]>;
       // R-agent-output: which attribution path placed each mutant's covering tests. Empty on the
@@ -3139,6 +3150,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           execute,
           index,
           greenTests.map((b) => b.ref),
+          unsupportedIndex,
         );
         perMutantTests = split.covered;
         coverageAttribution = split.attribution;
@@ -3161,23 +3173,20 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       // couldn't run). `unsupportedCoverage` reuses coverageFilter against the
       // second index; empty for coverage:"none" (uncovered is empty there too).
       //
-      // Its `untargetedTriggerCount` is deliberately NOT folded into the session tally: a table
-      // trigger can never appear in `uncovered` (FALLBACK 2 above catches every one of them
-      // before the `uncovered.push`), so this call's tally is structurally 0 — and were that
-      // ever to change, counting it would double-count mutants the SESSION already ran against
-      // every green test. The number on the report means "took the all-green-tests fallback in
-      // the run that decided the verdict", and this call decides no verdict.
+      // Its `untargetedTriggerCount` is deliberately NOT folded into the session tally, and stays
+      // structurally 0 after R140. A table trigger reaches `uncovered` by exactly one route now:
+      // fallback 2 DECLINED because `unsupportedIndex.byObject` holds its object key — the same
+      // key FALLBACK 1 looks up in this call, on this same index, so it resolves here at object
+      // level and can never reach this call's own fallback 2. Were that ever to change, counting
+      // it would double-count mutants the SESSION already ran against every green test. The
+      // number on the report means "took the all-green-tests fallback in the run that decided the
+      // verdict", and this call decides no verdict.
       const unsupportedCoverage =
         uncovered.length === 0
           ? new Map<string, readonly TestMethodRef[]>()
           : coverageFilter(
               uncovered,
-              buildCoverageIndex(
-                unsupportedBaseline.map((b) => ({
-                  ref: b.ref,
-                  ...(b.verdict.coverage !== undefined ? { coverage: b.verdict.coverage } : {}),
-                })),
-              ),
+              unsupportedIndex,
               unsupportedBaseline.map((b) => b.ref),
             ).covered;
       // R69 Phase 2 Task 6: a mutant covered ONLY by a non-passing baseline test is a routing

@@ -449,6 +449,167 @@ describe("coverage: table trigger mutants run untargeted when coverage cannot se
   });
 });
 
+// R140. Fallback 2 runs an unplaceable table trigger mutant against every GREEN test. When the
+// object's only covering test is one that did NOT pass at baseline, that green set by construction
+// excludes the one test able to kill the mutant, so it comes back `survived` — reliably, silently,
+// and wrongly. Measured 2026-08-13: two mutants took that path, both pre-committed `killed`, and
+// the pre-commitment was right.
+//
+// The member-level path already declines in exactly this situation (the mutant lands in
+// `uncovered`, and the orchestrator then re-attributes it against the non-green baseline and
+// records `error` with a note naming the red test). These tests hold fallback 2 to the same rule:
+// when a non-green test covers the object, DECLINE rather than score, because a false `survived`
+// is a manufactured defect report against the user's suite, not merely lost information.
+describe("R140: fallback 2 declines when only a non-green test covers the object", () => {
+  const redTest = { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "RedAtBaseline" };
+  // Green coverage names ONLY codeunit 70000 — nothing green mentions table 99999 at any
+  // precision, so a table 99999 trigger mutant misses member level and object level alike.
+  const greenBaseline = [
+    {
+      ref: t1,
+      coverage: {
+        granularity: "procedure" as const,
+        entries: [{ objectType: "Codeunit", objectId: 70000, procedure: "Post" }],
+      },
+    },
+  ];
+  const allGreen = [t1];
+  const triggerMutant = () =>
+    entry({
+      objectType: "table",
+      codeunitId: 99999,
+      procedureName: "",
+      originalText: "Original();",
+      mutatedText: "",
+      triggerName: "OnInsert",
+    });
+
+  test("declines: the mutant lands in `uncovered`, is not scored, and is not tallied as untargeted", () => {
+    // The red test DID execute something in table 99999 — it is the only test that can reach the
+    // trigger, and it is exactly the test the green set excludes.
+    const nonGreenIndex = buildCoverageIndex([
+      {
+        ref: redTest,
+        coverage: {
+          granularity: "procedure" as const,
+          entries: [{ objectType: "Table", objectId: 99999 }],
+        },
+      },
+    ]);
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const m = triggerMutant();
+      const split = coverageFilter([m], buildCoverageIndex(greenBaseline), allGreen, nonGreenIndex);
+      expect(split.covered.size).toBe(0);
+      expect(split.uncovered).toEqual([m]);
+      expect(split.attribution.has("M0001")).toBe(false);
+      // Not "we gave up and ran everything" — we declined, so the untargeted tally must not
+      // claim this mutant was run untargeted.
+      expect(split.untargetedTriggerCount).toBe(0);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  test("still falls back when NO test covers the object — green or otherwise", () => {
+    // A non-green index that names a DIFFERENT table. Nothing anywhere saw table 99999, which is
+    // the genuine "we don't know, so run everything" case fallback 2 was built for.
+    const nonGreenIndex = buildCoverageIndex([
+      {
+        ref: redTest,
+        coverage: {
+          granularity: "procedure" as const,
+          entries: [{ objectType: "Table", objectId: 88888 }],
+        },
+      },
+    ]);
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const split = coverageFilter(
+        [triggerMutant()],
+        buildCoverageIndex(greenBaseline),
+        allGreen,
+        nonGreenIndex,
+      );
+      expect(split.covered.get("M0001")).toEqual(allGreen);
+      expect(split.attribution.get("M0001")).toBe("all-green");
+      expect(split.untargetedTriggerCount).toBe(1);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  // The decline is keyed on the (objectType, objectId) PAIR for the same reason every other
+  // lookup in this file is — see `objectKeyOf`. A red test that covered `codeunit 99999` says
+  // nothing about `table 99999`, and declining on it would turn a legitimate fallback into a
+  // silent `no-coverage` for an unrelated object. R70's cross-kind name collision is this shape.
+  test("does not decline on a non-green hit for the same id under a DIFFERENT object type", () => {
+    const nonGreenIndex = buildCoverageIndex([
+      {
+        ref: redTest,
+        coverage: {
+          granularity: "procedure" as const,
+          entries: [{ objectType: "Codeunit", objectId: 99999, procedure: "Run" }],
+        },
+      },
+    ]);
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const split = coverageFilter(
+        [triggerMutant()],
+        buildCoverageIndex(greenBaseline),
+        allGreen,
+        nonGreenIndex,
+      );
+      expect(split.covered.get("M0001")).toEqual(allGreen);
+      expect(split.untargetedTriggerCount).toBe(1);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  // Green coverage wins outright: fallback 2 is never reached, so the decline cannot fire and
+  // cannot demote a mutant coverage placed precisely.
+  test("a trigger the green index places at object level is unaffected by the non-green index", () => {
+    const nonGreenIndex = buildCoverageIndex([
+      {
+        ref: redTest,
+        coverage: {
+          granularity: "procedure" as const,
+          entries: [{ objectType: "Table", objectId: 70000 }],
+        },
+      },
+    ]);
+    const green = [
+      {
+        ref: t1,
+        coverage: {
+          granularity: "procedure" as const,
+          entries: [{ objectType: "Table", objectId: 70000, procedure: "Post" }],
+        },
+      },
+    ];
+    const m = entry({ objectType: "table", procedureName: "", triggerName: "OnInsert" });
+    const split = coverageFilter([m], buildCoverageIndex(green), [t1], nonGreenIndex);
+    expect(split.covered.get("M0001")).toEqual([t1]);
+    expect(split.attribution.get("M0001")).toBe("object");
+    expect(split.uncovered.length).toBe(0);
+  });
+
+  // Omitting the argument must leave every existing caller — including `coverageFilter`'s own
+  // second, non-green-index invocation in the orchestrator — behaving exactly as before.
+  test("omitting the non-green index keeps the pre-R140 behaviour", () => {
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const split = coverageFilter([triggerMutant()], buildCoverageIndex(greenBaseline), allGreen);
+      expect(split.covered.get("M0001")).toEqual(allGreen);
+      expect(split.untargetedTriggerCount).toBe(1);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+});
+
 // A BC object id is unique only WITHIN a type — `table 50100` and `codeunit 50100` are two
 // different objects and a project routinely holds both. Keying coverage on the bare numeric id
 // merges them, and the merge silently defeats the untargeted fallback above: the table trigger

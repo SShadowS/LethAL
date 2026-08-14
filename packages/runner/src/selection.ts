@@ -258,6 +258,14 @@ export function coverageFilter(
   mutants: readonly MutantManifestEntry[],
   index: CoverageIndex,
   allTests: readonly TestMethodRef[],
+  /**
+   * R140. Coverage built from the baseline tests that did NOT pass — the tests `index` above
+   * excludes by construction. Consulted at exactly one place, FALLBACK 2, to tell "nobody has ever
+   * seen this object execute" apart from "the only test that sees it is the red one". Optional
+   * because the orchestrator's SECOND `coverageFilter` call already runs against this very index
+   * as its primary one, where a further non-green index would be meaningless.
+   */
+  nonGreenIndex?: CoverageIndex,
 ): CoverageSplit {
   const byKey = new Map(allTests.map((t) => [testKeyOf(t), t]));
   const covered = new Map<string, TestMethodRef[]>();
@@ -340,8 +348,30 @@ export function coverageFilter(
     // established for table triggers (live gate 2026-07-25, fixtures/README.md §Tier-2 Phase 0).
     // Extending it would flip a mutant in a wholly-uncovered codeunit/page from `no-coverage`
     // (excluded from the score, honestly "we don't know") to `survived` (scored) on a guess.
+    //
+    // R140 — and it DECLINES first. Reaching here means no green test was seen executing anything
+    // in this object; if a NON-green baseline test was, then the only test that can reach this
+    // trigger is precisely the one the green set excludes, and running the green set is guaranteed
+    // to come back `survived` against tests that could never have killed the mutant. That is not a
+    // lost result, it is a manufactured defect report against the user's own suite — `survived` is
+    // read as "your tests execute this line and do not catch this mutation". So decline, exactly as
+    // the member-level path already does: fall through to `uncovered`, where the orchestrator
+    // re-attributes the mutant against the non-green baseline and records `error` with a note
+    // naming the red test. MEASURED 2026-08-13: two `OnInsert` mutants took the old path and both
+    // had been pre-committed `killed`, correctly — the observation simply could not test it.
+    //
+    // Keyed on `byObject` of the (objectType, objectId) PAIR, the same key fallback 1 uses, so the
+    // decline can only ever fire on evidence about THIS object — a red test that covered
+    // `codeunit 99999` says nothing about `table 99999` (R70's collision shape).
     const isTableTrigger = isTrigger && normalizeObjectType(m.objectType, context) === "table";
     if ((testKeys === undefined || testKeys.size === 0) && isTableTrigger) {
+      const nonGreenTests = nonGreenIndex?.byObject.get(
+        objectKeyOf(m.objectType, m.codeunitId, context),
+      );
+      if (nonGreenTests !== undefined && nonGreenTests.size > 0) {
+        uncovered.push(m);
+        continue;
+      }
       covered.set(m.mutantId, [...allTests]);
       attribution.set(m.mutantId, "all-green");
       untargetedTriggerCount++;
