@@ -162,6 +162,12 @@ export const STALE_TEST_APP_REMEDY =
   "an unchanged version string), compile the test project, publish the resulting .app, and verify " +
   "the container reports the version your test project's app.json declares. Then re-run.";
 
+/** One missing test: its qualified name, and the server's own account of why it is missing. */
+export interface StaleTestAppFinding {
+  readonly name: string;
+  readonly description: string;
+}
+
 /**
  * Refuses the session rather than measuring a suite the run cannot reconstruct.
  *
@@ -176,13 +182,19 @@ export const STALE_TEST_APP_REMEDY =
 export class StaleTestAppError extends Error {
   readonly missingTests: readonly string[];
 
-  constructor(missingTests: readonly string[]) {
-    const names = [...missingTests].sort();
+  constructor(missing: readonly StaleTestAppFinding[]) {
+    const sorted = [...missing].sort((a, b) => a.name.localeCompare(b.name));
+    const names = sorted.map((m) => m.name);
     const refusal =
       "Refusing to measure: every mutant covered only by these would be recorded no-coverage and " +
       "the run would report a plausible score for a suite that never ran.";
+    // Each test's own line carries the SERVER's claim, not just this detector's conclusion. The
+    // repo already keeps BC's verbatim words next to the R35 diagnosis for the same reason: a
+    // reader can only overrule a matcher if the evidence travels with it. It also distinguishes
+    // which producer answered, since the two arms word their answers differently.
+    const evidence = sorted.map((m) => `  ${m.name}: ${m.description}`).join("\n");
     super(
-      `the published test app is missing ${names.length} test(s) this project's source declares: ${names.join(", ")}. ${refusal} ${STALE_TEST_APP_REMEDY}`,
+      `the published test app is missing ${names.length} test(s) this project's source declares:\n${evidence}\n${refusal} ${STALE_TEST_APP_REMEDY}`,
     );
     this.name = "StaleTestAppError";
     this.missingTests = names;

@@ -7,6 +7,7 @@ import {
   RunMutantTransport,
   isAlStopResponse,
 } from "../src/run-mutant-transport";
+import { describeStaleTestApp, runMutantLineCountMessage } from "../src/stale-test-app";
 
 const CFG: ActivationConfig = {
   baseUrl: "http://bc:7048/BC",
@@ -124,6 +125,16 @@ describe("RunMutantTransport.run — terminal mapping", () => {
     expect(v.outcome).toBe("error");
     expect(v.failureMessage).toContain("expected exactly 1");
     expect(v.failureMessage).toContain("expected exactly one method OverBudgetDetected, found 0");
+    // THE SEAM, pinned twice. Everything else in this file and in the classifier's own tests builds
+    // its inputs by calling `runMutantLineCountMessage`, which closes helper-to-detector drift and
+    // opens a worse hole: nothing would observe the TRANSPORT's actual output meeting the detector.
+    // A hand-rolled message here that still contained both substrings above would leave every test
+    // in the repo green while `describeStaleTestApp` stopped matching anything a live server can
+    // produce, which is the exact shape of the bug R139 exists to close.
+    expect(v.failureMessage).toBe(
+      runMutantLineCountMessage(0, "expected exactly one method OverBudgetDetected, found 0"),
+    );
+    expect(describeStaleTestApp(v.failureMessage)).toBeDefined();
   });
 
   test("zero test lines with no server error key: the message is unchanged", async () => {

@@ -3025,9 +3025,15 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       // worker backend disposed on the way out. `buildReport` never runs, which is deliberate but
       // has a cost: `StaleTestAppError`'s message is the ONLY diagnosis the operator receives, so
       // it carries the names AND the remedy rather than pointing at a report that will not exist.
-      const missingFromServer = baseline
-        .filter((b) => describeStaleTestApp(b.verdict.failureMessage) !== undefined)
-        .map((b) => qualifiedTestName(b.ref));
+      const missingFromServer = baseline.flatMap((b) => {
+        const described = describeStaleTestApp(b.verdict.failureMessage);
+        // The description travels INTO the error rather than being recomputed or dropped: it is the
+        // server's own account, per test, and it is the only thing a reader can use to overrule the
+        // matcher when the refusal is the only output the run produces.
+        return described === undefined
+          ? []
+          : [{ name: qualifiedTestName(b.ref), description: described }];
+      });
       if (missingFromServer.length > 0) throw new StaleTestAppError(missingFromServer);
 
       const greenTests = baseline.filter((b) => b.verdict.outcome === "pass");

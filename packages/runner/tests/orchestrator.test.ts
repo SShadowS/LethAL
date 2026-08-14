@@ -1406,9 +1406,21 @@ describe("runSession — Task 6 unsupported-baseline qualification (spec §9)", 
       // has to carry the remedy, not just the complaint.
       expect((err as Error).message).toContain("Sandbox Tests.UnsupportedTest");
       expect((err as Error).message).toContain("publish");
+      // The SERVER's own claim, per test, not just this matcher's conclusion. Same reasoning the
+      // R35 map records for keeping its verbatim quote: a reader can overrule a diagnosis only if
+      // the evidence travels with it. It also says WHICH producer fired, since the two arms of
+      // `describeStaleTestApp` word their answers differently.
+      expect((err as Error).message).toContain(
+        "the published test app does not contain UnsupportedTest",
+      );
       // The green test's own 3 mutants must NOT have been measured: refusing after the numbers are
       // in would be a report nobody can trust, dressed up as a refusal.
       expect(backend.ranActive).toBe(0);
+      // And the run must be left in the shape a `--resume` can pick up after the operator
+      // republishes: recorded, unfinished, holding no mutant verdict. `finishRun` never stamps it,
+      // which is also what keeps it out of `priorSurvivorKeys`.
+      expect(store.getRun(1)?.finished).toBe(false);
+      expect(store.mutantVerdicts(1)).toEqual([]);
     });
 
     test("a wrapped platform error at the same site does NOT refuse", async () => {
