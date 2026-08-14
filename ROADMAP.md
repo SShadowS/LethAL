@@ -55,6 +55,7 @@ that ordering is the priority.
 - **R137** · swap-rec-xrec's conformance refusals assert nothing — empty expectedSpecs passes on any input · [R137.md](docs/roadmap/R137.md) · open — found 2026-08-12 while writing the R136 trio spec
 - **R138** · The platform-artifact screen cannot see run-trigger-flag kills: Insert(false) kills by duplicate key, and nothing tags it · [R138.md](docs/roadmap/R138.md) · open — found 2026-08-12 by the adversarial review of the R136 trio spec, before any code landed
 - **R140** · Fallback 2 scores a trigger mutant `survived` when its only covering test is red, where member-level attribution declines · [R140.md](docs/roadmap/R140.md) · open — measured 2026-08-13 on the R136 trio's first live run
+- **R141** · flip-filter-literal's character-class refusals are proven offline only: no live negative anywhere · [R141.md](docs/roadmap/R141.md) · open — found 2026-08-14 while closing out R134, before the operator's own gate run
 
 ## Product gaps a real project hits
 
@@ -78,7 +79,7 @@ that ordering is the priority.
 - **R116** · A survivor can carry `executionProven: true` beside `guardEvidence: "not-observed"` — two of our own signals… · [R116.md](docs/roadmap/R116.md) · done (`pending`) — the pair is NOT a contradiction, and the projection now NAMES it: a derived `reach` field…
 - **R117** · Cross-file `file.ts:NNN` citations rot silently, and this repo now has four measured instances — two of which… · [R117.md](docs/roadmap/R117.md) · done — 97 pointers replaced with greppable names across live source, tests and the roadmap, and…
 - **R118** · `ROADMAP.md` rows are read field-wise on `|`, and 115 of 166 rows contain INLINE pipes — so a field-wise read… · [R118.md](docs/roadmap/R118.md) · done (this commit) — the table is GONE, not parsed more carefully: one item per file under `docs/roadmap/`…
-- **R134** · Mutate inside SetFilter's filter-expression literal — the one filter class no operator can see · [R134.md](docs/roadmap/R134.md) · open — filed 2026-08-12 from a worked example session. Census committed below; not specced, not built.
+- **R134** · Mutate inside SetFilter's filter-expression literal — the one filter class no operator can see · [R134.md](docs/roadmap/R134.md) · done (4f5e896)
 - **R135** · Declarative surfaces (FlowFields/CalcFormula, query objects, filter properties) need a mutation mechanism before any operator · [R135.md](docs/roadmap/R135.md) · open — filed 2026-08-12. The mechanism decision comes first; every operator here is blocked on it.
 - **R136** · Tier-2 executable candidates: FindFirst/FindLast swap, Validate-to-assign, run-trigger flag on Insert/Delete · [R136.md](docs/roadmap/R136.md) · done (1d259ca)
 - **R139** · A stale published TEST app is indistinguishable from genuinely failing tests, and costs a full gate run to diagnose · [R139.md](docs/roadmap/R139.md) · open — measured 2026-08-13 during the R136 trio's first gate run

@@ -753,6 +753,16 @@ method-call` on each statement-position call (each `SetRange` and each `SetFilte
 mechanism the trio spec measured for its own find arms), so those sites carry one collateral mutant
 at the `SetRange` span, not two.
 
+**Arm B additionally brings `conditional-boundary`, which this list originally omitted.** The census
+for the pre-commitment found it before the run: arm B is the only new arm whose `exit` holds a
+COMPARISON (`exit(Related.Count() > 0)`) rather than a bare `Related.Count()`, and the pre-existing
+Tier-1 `conditional-boundary` operator rewrites that `>` to `>=`, exactly as it already does at the
+three other comparison sites in this fixture. It is a survivor: a row count is never negative, so
+`>= 0` is a tautology and the function returns true unconditionally, which the baseline also does.
+Recorded as row 9 of the pre-commitment and confirmed live at commit `4f5e896`. The omission was in
+this prose, never in behaviour, and it is named here so the next reader of section 3.3 counts the
+same collateral the census does.
+
 The `void-method-call` collateral at the `SetFilter` span itself (deleting only the filter, leaving
 any `SetRange` scope in place) is worth naming per arm, because the first draft of this document
 named it for arm H alone and left a reader to discover the rest for themselves (finding 6):
