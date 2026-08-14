@@ -3189,32 +3189,25 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
               unsupportedIndex,
               unsupportedBaseline.map((b) => b.ref),
             ).covered;
-      // R69 Phase 2 Task 6: a mutant covered ONLY by a non-passing baseline test is a routing
-      // CANDIDATE, not yet a verdict — `describeTestPageUnsupported`-refused tests may be
-      // routable through the client-services batch path (`selectRoutedTests`). Recording is
-      // deferred until after the fenced mutant loop below (routed work must never overlap it —
-      // see `SessionConfig.routedTransport`'s doc comment); everything NOT resolved to a routed
-      // verdict falls back to exactly this pre-Task-6 note.
-      const routableCandidates: Array<{
+      // R69 (closed): a mutant covered ONLY by a test this session cannot run is NAMED rather
+      // than silently scored `no-coverage`. Recording is deferred until after the fenced mutant
+      // loop below so the note can quote what THIS batch observed; everything with no such
+      // covering test is recorded `no-coverage` right here. There is no second execution path to
+      // resolve these on — the client-services router that would have run them was measured
+      // unprofitable and DELETED (`c1da575`, ROADMAP R69/R74/R75/R78). Do not reintroduce one
+      // without re-reading those four rows.
+      const unsupportedOnlyCandidates: Array<{
         mutant: MutantManifestEntry;
         covering: readonly TestMethodRef[];
       }> = [];
       for (const m of uncovered) {
         const covering = unsupportedCoverage.get(m.mutantId);
         if (covering !== undefined && covering.length > 0) {
-          routableCandidates.push({ mutant: m, covering });
+          unsupportedOnlyCandidates.push({ mutant: m, covering });
         } else {
           record(cfg.store, runId, m, "no-coverage", outcomes, batchIdx, emit);
         }
       }
-      // R69 Phase 2 Task 6: qualified test name -> BC's own baseline failure text, the input
-      // `describeTestPageUnsupported`/`selectRoutedTests`' gate 1 reads. Keyed off
-      // `unsupportedBaseline` (batch-local, like `testPageThisBatch` above) rather than
-      // `refusedThisBatch`/`testPageThisBatch`, which already discarded the raw text after
-      // classifying it — gate 1 needs the text itself, not this batch's conclusion about it.
-      const baselineFailureMessages = new Map<string, string | undefined>(
-        unsupportedBaseline.map((b) => [qualifiedTestName(b.ref), b.verdict.failureMessage]),
-      );
 
       // 5b. R47 resume: record the mutants a prior run already scored, WITHOUT executing them, and
       // hand only the remainder to the per-mutant loop.
@@ -3482,12 +3475,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         cfg.store.invalidateBatch(runId, batchIdx, note);
         safety.latchUnsafe(note);
       }
-      // R69 Phase 2 Task 6: resolve this batch's routing candidates — deliberately AFTER both
+      // R69 (closed): record this batch's unsupported-only candidates — deliberately AFTER both
       // fenced-mutant-loop branches above (sequential and worker fan-out) and after the
-      // attestation gate right above, never interleaved with either. Routed work runs over a
-      // DIFFERENT session/transport (client-services, `GuiAllowed=Yes`) than the lease-fenced
-      // `RunMutant` path those use, so it must never overlap it on the same tier — see
-      // `SessionConfig.routedTransport`'s doc comment. Skipped entirely once `safety.isUnsafe`:
+      // attestation gate right above, never interleaved with either, because the note quotes
+      // what those loops observed. Skipped entirely once `safety.isUnsafe`:
       // the fenced loop or the attestation gate just latched for a reason of their own, and a
       // batch already abandoned records nothing further (matches every other post-latch branch
       // in this function).
@@ -3497,8 +3488,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       // of a real app's mutants and deleted (see ROADMAP R69, docs/measurements §"R69's go/no-go").
       // Naming it is the shipped value: `unsupportedCoverageNote` quotes BC's own refusal, so a
       // reader sees "your TestPage test cannot run on this path", not a silent `no-coverage`.
-      if (routableCandidates.length > 0 && !safety.isUnsafe) {
-        for (const c of routableCandidates) {
+      if (unsupportedOnlyCandidates.length > 0 && !safety.isUnsafe) {
+        for (const c of unsupportedOnlyCandidates) {
           const qualified = [...new Set(c.covering.map(qualifiedTestName))].sort();
           record(
             cfg.store,
