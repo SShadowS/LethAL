@@ -3,9 +3,13 @@ name: CI
 # Runs on every push and pull request. Deliberately does NOT run the integration gates: those
 # publish to a live Business Central container, are env-gated (LETHAL_ITEST_*), and take minutes
 # each. They stay a human-invoked, machine-local gate — see CLAUDE.md.
+#
+# Every branch, not just master. A gate that only runs after a merge tells you about a problem you
+# have already shipped, and a `branches: [master]` filter means a feature branch gets no signal at
+# all until someone opens a pull request — which is exactly how this file was first written, and
+# the push that was meant to test it triggered nothing.
 on:
   push:
-    branches: [master]
   pull_request:
 
 jobs:
