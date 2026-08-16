@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/SShadowS/LethAL/blob/master/schemas/doctor-v1.schema.json",
+  "title": "LethAL doctor --json output",
+  "description": "What `lethal doctor --config <path> --json` prints on stdout. Versioned by doctorSchemaVersion: bumped when a field is renamed, removed or changes meaning, or when a value domain changes in either direction. Additive fields do not bump it, so a consumer must tolerate properties it does not know. Exit code 0 means every check passed, 1 means at least one failed; the code is the gate, not this document.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["doctorSchemaVersion", "ok", "checks", "notChecked"],
+  "properties": {
+    "doctorSchemaVersion": {
+      "type": "integer",
+      "const": 1,
+      "description": "The version of THIS document's structure."
+    },
+    "ok": {
+      "type": "boolean",
+      "description": "True only when every check passed. Mirrors the exit code."
+    },
+    "checks": {
+      "type": "array",
+      "description": "One entry per check actually run. A check omitted for the config shape is absent rather than passing; the caveat says which and why.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "ok", "detail"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "What to branch on, e.g. `environment`, `quarantine`, `control-version`, `tool-paths`."
+          },
+          "ok": { "type": "boolean" },
+          "detail": {
+            "type": "string",
+            "description": "What was observed, never just \"ok\". Prose for a human; do not parse it."
+          }
+        }
+      }
+    },
+    "notChecked": {
+      "type": "array",
+      "description": "What doctor does NOT check, on every invocation. This is the part that matters when `ok` is true: a green report does not cover these.",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "enum": ["publish-ceiling", "baseline-test-health"]
+      }
+    },
+    "caveat": {
+      "type": "object",
+      "description": "Present only when the config shape triggers one. Says which checks were skipped and why.",
+      "additionalProperties": false,
+      "required": ["kind", "note"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["create-mode", "al-runner-only"],
+          "description": "The branchable half."
+        },
+        "note": {
+          "type": "string",
+          "description": "The same sentence the console prints. Prose, and not contractual."
+        }
+      }
+    }
+  }
+}

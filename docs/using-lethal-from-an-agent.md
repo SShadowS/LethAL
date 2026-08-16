@@ -95,6 +95,10 @@ code.
 
 Three surfaces, three purposes, each versioned separately.
 
+Two of them have a published JSON Schema in [`../schemas/`](../schemas/) — the `explain` projection
+and `doctor --json`. Validate against those rather than trusting a shape you inferred from one
+example. The report and the event stream do not have one yet.
+
 ### `--out report.json` — the record
 
 `schemaVersion: 2`. The full result: `counts`, `mutationScore`, `validity`, and every mutant with

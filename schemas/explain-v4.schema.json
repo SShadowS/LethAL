@@ -1,0 +1,254 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/SShadowS/LethAL/blob/master/schemas/explain-v4.schema.json",
+  "title": "LethAL explain output",
+  "description": "What `lethal explain <report.json>` prints on stdout. THE SPLIT CONTRACT, which the payload also states in its own `contract` block: STRUCTURE is contractual and versioned by explainSchemaVersion; PROSE is not, and may improve without a bump. Every machine-usable fact is a field, so no consumer has a reason to parse a `meaning` string. Additive fields do not bump the version, so tolerate properties you do not know.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "explainSchemaVersion",
+    "derivedFromReportSchemaVersion",
+    "contract",
+    "score",
+    "caveats",
+    "survivorSelection",
+    "survivors",
+    "notMeasured",
+    "toolConditions"
+  ],
+  "properties": {
+    "explainSchemaVersion": {
+      "type": "integer",
+      "const": 4,
+      "description": "The version of THIS document's structure."
+    },
+    "derivedFromReportSchemaVersion": {
+      "type": "integer",
+      "description": "The report schemaVersion this projection was derived from. Recorded so the output stays self-describing once written to a file."
+    },
+    "contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["structureStableUnder", "proseIsContractual", "note"],
+      "properties": {
+        "structureStableUnder": { "type": "string", "const": "explainSchemaVersion" },
+        "proseIsContractual": {
+          "type": "boolean",
+          "const": false,
+          "description": "Branch on this rather than reading `note`."
+        },
+        "note": { "type": "string" }
+      }
+    },
+    "score": {
+      "type": "object",
+      "description": "The score with the qualifications that decide whether it may be quoted at all. Read `reliability` and `scoreDescribes` before quoting `mutationScore`.",
+      "additionalProperties": false,
+      "required": [
+        "mutationScore",
+        "reliability",
+        "scoreDescribes",
+        "scored",
+        "recorded",
+        "excludedFromScore"
+      ],
+      "properties": {
+        "mutationScore": {
+          "type": ["number", "null"],
+          "description": "Null when nothing was scored. Denominator is killed + timeoutKilled + survived."
+        },
+        "reliability": {
+          "type": "string",
+          "enum": ["full", "narrowed", "degraded", "narrowed-degraded"]
+        },
+        "scoreDescribes": {
+          "type": "string",
+          "description": "The report's own sentence about what the number covers, verbatim."
+        },
+        "scored": { "type": "integer" },
+        "recorded": { "type": "integer" },
+        "excludedFromScore": {
+          "type": "object",
+          "description": "Outcomes the number does NOT describe. Adding these to the survivors would double-count; ignoring them overstates what the run measured.",
+          "additionalProperties": false,
+          "required": ["errors", "noCoverage", "knownSurvivors"],
+          "properties": {
+            "errors": { "type": "integer" },
+            "noCoverage": { "type": "integer" },
+            "knownSurvivors": { "type": "integer" }
+          }
+        }
+      }
+    },
+    "caveats": {
+      "type": "array",
+      "description": "What bounds this run's result. Each arrives with the shared interpretation constant keyed to it.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["caveat", "interpretation"],
+        "properties": {
+          "caveat": {
+            "type": "string",
+            "enum": [
+              "baseline-red",
+              "narrowed",
+              "operator-narrowed",
+              "tests-narrowed",
+              "uninstrumentable-files",
+              "stale-test-app",
+              "tests-permission-refused",
+              "tests-testpage-unsupported",
+              "runner-disagreement",
+              "stop-hung-sessions",
+              "resumed",
+              "untargeted-triggers",
+              "platform-artifact-kills",
+              "kills-without-assertion",
+              "declarative-sites-dropped"
+            ]
+          },
+          "interpretation": { "$ref": "#/$defs/interpretation" }
+        }
+      }
+    },
+    "survivorSelection": {
+      "type": "object",
+      "description": "What `survivors` is a view OF. Always present, including when nothing was capped, so completeness is read rather than inferred from a missing field. Read `total` before treating `survivors` as the whole set.",
+      "additionalProperties": false,
+      "required": ["total", "shown", "omitted", "rankedBy"],
+      "properties": {
+        "total": {
+          "type": "integer",
+          "description": "Survivors in the report, before any cap."
+        },
+        "shown": { "type": "integer", "description": "survivors.length." },
+        "omitted": { "type": "integer", "description": "total - shown. Zero when nothing was capped." },
+        "rankedBy": {
+          "type": "string",
+          "enum": ["report-order", "actionability"],
+          "description": "`report-order`: every survivor, in the order the report recorded them. `actionability`: the list was ranked by how much evidence each row carries and may be a prefix of it."
+        }
+      }
+    },
+    "survivors": {
+      "type": "array",
+      "description": "Mutants no test killed. A survivor is a LEAD, not a proven test-suite gap: check `executionProven` first.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "mutantCode",
+          "file",
+          "line",
+          "codeunitName",
+          "procedureName",
+          "operatorName",
+          "originalText",
+          "mutatedText",
+          "attribution",
+          "executionProven",
+          "coveringTests",
+          "guardEvidence",
+          "reach",
+          "interpretation",
+          "guardInterpretation",
+          "reachInterpretation"
+        ],
+        "properties": {
+          "mutantCode": { "type": "string" },
+          "file": { "type": "string" },
+          "line": { "type": "integer" },
+          "codeunitName": { "type": "string" },
+          "procedureName": { "type": "string" },
+          "operatorName": { "type": "string" },
+          "originalText": {
+            "type": "string",
+            "description": "The AL this operator replaced. A report from a real project carries that project's source here."
+          },
+          "mutatedText": {
+            "type": "string",
+            "description": "What it was replaced with. Empty string for a deletion operator, which is a fact rather than a missing value."
+          },
+          "attribution": { "type": "string", "enum": ["exact", "object", "all-green"] },
+          "executionProven": {
+            "type": "boolean",
+            "description": "True ONLY for `exact`, a member-level coverage match: a test is measured to have executed the mutated procedure. False means some test touched the object and nothing proves the mutated code ran."
+          },
+          "coveringTests": { "type": "array", "items": { "type": "string" } },
+          "guardEvidence": {
+            "type": "string",
+            "enum": ["observed", "not-observed", "not-measured"]
+          },
+          "reach": {
+            "type": "string",
+            "enum": ["covered-but-unreached", "unreached-and-uncovered", "not-decided"],
+            "description": "What attribution and guardEvidence say TOGETHER, which neither can say alone."
+          },
+          "interpretation": { "$ref": "#/$defs/interpretation" },
+          "guardInterpretation": { "$ref": "#/$defs/interpretation" },
+          "reachInterpretation": { "$ref": "#/$defs/interpretation" }
+        }
+      }
+    },
+    "notMeasured": {
+      "type": "array",
+      "description": "Mutants recorded with an `error` verdict: excluded from the score, and NOT a verdict about the mutant. Never capped by --top.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["mutantCode", "file", "line", "operatorName"],
+        "properties": {
+          "mutantCode": { "type": "string" },
+          "file": { "type": "string" },
+          "line": { "type": "integer" },
+          "operatorName": { "type": "string" },
+          "cause": {
+            "type": "string",
+            "enum": ["deadline-exceeded", "unstable", "stranded", "result-lost"],
+            "description": "Present only when the report recorded a structural cause. Absent means the row's only account is `failureNote`."
+          },
+          "failureNote": { "type": "string" },
+          "interpretation": { "$ref": "#/$defs/interpretation" }
+        }
+      }
+    },
+    "toolConditions": {
+      "type": "array",
+      "description": "Conditions about LethAL's OWN state, as opposed to the target's code. This is the half the projection is fully prescriptive about.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["condition", "count", "interpretation"],
+        "properties": {
+          "condition": { "type": "string", "enum": ["quarantined", "stranded-skips"] },
+          "count": {
+            "type": "integer",
+            "description": "How many mutants the condition accounts for. Always 0 for `quarantined`, whose cost was never scheduled and so cannot be counted."
+          },
+          "detail": { "type": "string" },
+          "interpretation": { "$ref": "#/$defs/interpretation" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "interpretation": {
+      "type": "object",
+      "description": "What a machine value MEANS, plus a pointer at the evidence. Emitted by reference to a shared constant co-located with the value it is keyed to; never composed per call.",
+      "additionalProperties": false,
+      "required": ["meaning", "basis"],
+      "properties": {
+        "meaning": { "type": "string" },
+        "entailedNegative": {
+          "type": "string",
+          "description": "What this rules OUT, when that is worth stating. Absent when there is no useful negative."
+        },
+        "basis": {
+          "type": "string",
+          "description": "A roadmap id such as `R29`, or a file such as `docs/measurements/README.md`. Never a bare claim."
+        }
+      }
+    }
+  }
+}
