@@ -42,7 +42,7 @@ import { renderVersion } from "./build-info";
 import { runCampaignAnchors, runCampaignCompare, runCampaignFreeze } from "./campaign-subcommands";
 import { DeploymentVerifier } from "./deployment-verifier";
 import { ENV_STATUS_REACHABLE_NO_VENDOR_STATUS, runDoctor } from "./doctor";
-import type { DoctorConfig, DoctorDeps, DoctorReport } from "./doctor";
+import type { DoctorCheck, DoctorConfig, DoctorDeps, DoctorReport } from "./doctor";
 import { EnvToolClient, EnvToolError, READS_KEYS, validateEnvToolConfig } from "./env-tool";
 import type { EnvToolBlock, EnvToolConfigSection } from "./env-tool";
 import { EnvToolPublisher } from "./env-tool-publisher";
@@ -484,6 +484,9 @@ export interface DoctorCliConfig {
   readonly mode: "doctor";
   readonly configPath: string;
   readonly projectDir?: string;
+  /** R151: `--json`. Prints `DoctorJsonOutput` instead of the rendered lines. The exit code is
+   *  identical either way — the rendering is what changes, never the verdict. */
+  readonly json?: boolean;
 }
 
 /**
@@ -495,6 +498,12 @@ export interface DoctorCliConfig {
 export interface ExplainCliConfig {
   readonly mode: "explain";
   readonly reportPath: string;
+  /**
+   * R150: `--top <n>`, the cap on the survivor list. Absent means every survivor, in report order.
+   * See `ExplainOptions.topSurvivors` (explain.ts) for what a cap selects and what it states about
+   * what it dropped.
+   */
+  readonly topSurvivors?: number;
 }
 
 /**
@@ -650,8 +659,8 @@ USAGE
   lethal clear-quarantine  --server <url> --instance <name>
   lethal clear-ceiling     --project <dir> (--server <url> --instance <name> | --config <path>) [--db <path>] [--file <name>]
   lethal force-reset-lease --server <url> --instance <name> --config <path> [--project <dir>]
-  lethal doctor            --config <path> [--project <dir>]
-  lethal explain           <report.json>
+  lethal doctor            --config <path> [--project <dir>] [--json]
+  lethal explain           <report.json> [--top <n>]
   lethal campaign freeze   --manifest <path> --stage <name> --report <path> --expect-mutants <n>
   lethal campaign anchors  --manifest <path> --stage <name> --report <path> [--project <dir>]
   lethal campaign compare  --manifest <path> --stage <name> --report <path>
@@ -745,6 +754,12 @@ DOCTOR — every pre-flight refusal, read-only, all at once (R109)
   test health (needs an actual run), or the machine-global lease/op-marker (no read-only peek
   exists on the control app today, R110) — all three are printed as an explicit caveat on every
   invocation, never silently implied as covered.
+  --json                     print the report as JSON on stdout instead of the rendered lines:
+                             'doctorSchemaVersion', 'ok', 'checks' (name/ok/detail each), the
+                             'notChecked' TOKENS for the two things above, and a 'caveat' with a
+                             machine 'kind' when the config shape triggers one. Same object, same
+                             exit code — only the rendering changes. This is the pre-flight to run
+                             first from a script or an agent
   Exits 0 when every check passes, 1 otherwise, naming each failing check.
 
 EXPLAIN — what a finished report MEANS, as JSON on stdout
@@ -758,6 +773,17 @@ EXPLAIN — what a finished report MEANS, as JSON on stdout
   rather than a summary here, which would be a second copy free to drift from it. A report from
   another schema version, or carrying a value this build cannot interpret, is REFUSED rather than
   explained with the unrecognised value dropped.
+  --top <n>                  keep at most n survivors. Without it you get every survivor in report
+                             order; with it the list is RANKED by how much evidence each row
+                             carries (execution-proven first, then the covered-but-unreached pair,
+                             then object-level attribution) and cut to n. The output always states
+                             what it did in 'survivorSelection': total, shown, omitted and
+                             'rankedBy', present even when nothing was dropped, so a capped list
+                             can never read as a complete one. The cap bounds SURVIVORS only,
+                             never 'notMeasured'. Measured motive, reproducible from this repo:
+                             docs/campaign/2026-08-03-do/rung2.report.json (473 mutants, 125
+                             survivors) projects to 243 KB, 206 KB of it survivors; --top 15 makes
+                             it 30 KB. The uncapped output does not fit an agent's context window
 
 CAMPAIGN — the measurement gates, with 'committed before the run' machine-checked
   A measurement campaign states what it expects in a file, COMMITS it, and only then runs. These
@@ -873,6 +899,12 @@ export const RUN_FLAGS = {
   stage: { type: "string" },
   report: { type: "string" },
   "expect-mutants": { type: "string" },
+  // R150: `lethal explain --top <n>`. In the shared table for the same reason as every flag above —
+  // `parseArgs` runs in strict mode over ONE option set for every subcommand.
+  top: { type: "string" },
+  // R151: `lethal doctor --json`. Shared table, same reason; refused for every other subcommand at
+  // the top of `parseCliConfig` rather than silently ignored there.
+  json: { type: "boolean", default: false },
 } as const;
 
 /**
@@ -978,6 +1010,16 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
 
   const subcommand = requireKnownSubcommand(positionals);
 
+  // R151: `--json` belongs to `doctor` alone, and is REFUSED elsewhere rather than ignored. A
+  // silently-dropped `--json` on `run` would hand a caller the prose rendering while they believed
+  // they had asked for a machine surface — and `run` already has two of those, so the refusal can
+  // say where to look instead.
+  if (values.json === true && subcommand !== "doctor") {
+    throw new Error(
+      `--json is only accepted by \`lethal doctor\`, not \`lethal ${subcommand}\`. For a run, the machine surfaces are --out (the JSON report), --progress-out (the NDJSON event stream), and \`lethal explain <report.json>\`.`,
+    );
+  }
+
   if (subcommand === "clear-quarantine") {
     const server = values.server;
     if (server === undefined || server === "") {
@@ -1077,6 +1119,7 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
       mode: "doctor",
       configPath,
       ...(project !== undefined && project !== "" ? { projectDir: project } : {}),
+      ...(values.json === true ? { json: true } : {}),
     };
   }
 
@@ -1090,6 +1133,19 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
           "wrote with --out). `lethal explain` reads only that file — no server, database or " +
           "config is involved.",
       );
+    }
+    // R150: refused HERE, before the file is read, so `--top nonsense` costs nothing and says what
+    // was wrong. `explain()` refuses the same values again on its own account — this is a second
+    // check of the same contract at a different layer, not the only one.
+    const top = values.top;
+    if (top !== undefined) {
+      const n = Number(top);
+      if (!Number.isInteger(n) || n < 1) {
+        throw new Error(
+          `--top must be a positive integer (the maximum number of survivors to keep), got ${JSON.stringify(top)}. Omit it to get every survivor.`,
+        );
+      }
+      return { mode: "explain", reportPath, topSurvivors: n };
     }
     return { mode: "explain", reportPath };
   }
@@ -2775,8 +2831,12 @@ export async function runFromCli(
  * spec §8/§12) — separate from exit 1's "an ordinary uncaught failure/config error". A CI/operator
  * script can branch on this without parsing the rendered console report: 3 means "the tier may be
  * stranded, go recycle it and run `lethal clear-quarantine`", not "fix your config and retry".
+ *
+ * Exported so the documents that PROMISE this code to outside consumers (R153) can be checked
+ * against it rather than restating it — see `agent-contract.test.ts`. A published exit code that
+ * quietly stopped matching the binary is the drift worth a test.
  */
-const QUARANTINED_EXIT_CODE = 3;
+export const QUARANTINED_EXIT_CODE = 3;
 
 /**
  * Operator-proven clear (spec §10): reads the current quarantine record's generation and calls
@@ -3517,6 +3577,79 @@ export function renderDoctorReport(report: DoctorReport, createModeCaveat?: stri
 }
 
 /**
+ * R151. `lethal doctor --json` — the same report, as the object `renderDoctorReport` renders.
+ *
+ * Versioned like every other machine surface this tool publishes (`REPORT_SCHEMA_VERSION`,
+ * `EXPLAIN_SCHEMA_VERSION`, `STREAM_SCHEMA_VERSION`), and for the same reason: a consumer that
+ * branches on a field needs a number that moves when the field's meaning does. Bumped when a field
+ * is renamed, removed, or changes meaning, or when a value domain changes in either direction —
+ * `DOCTOR_NOT_CHECKED_TOKENS` and `DOCTOR_CAVEAT_KINDS` are both such domains. Additive fields do
+ * not require a bump.
+ */
+export const DOCTOR_SCHEMA_VERSION = 1;
+
+/**
+ * What doctor does NOT check, as tokens rather than only as the sentence in `DOCTOR_NOT_CHECKED`.
+ *
+ * This is the half R151 exists for. An agent that acts on a passing doctor report has to know what
+ * the pass does not cover, and "parse it out of the prose" is exactly the position this whole
+ * surface exists to get consumers out of. The prose is emitted too, verbatim, so nothing is lost —
+ * but the branchable thing is the token.
+ *
+ * Kept in step with `DOCTOR_NOT_CHECKED` by a test that asserts the sentence still names each one;
+ * a token whose prose disappeared would be a promise the report no longer explains.
+ */
+export const DOCTOR_NOT_CHECKED_TOKENS = ["publish-ceiling", "baseline-test-health"] as const;
+export type DoctorNotChecked = (typeof DOCTOR_NOT_CHECKED_TOKENS)[number];
+
+/** Which conditional caveat a report carries, if any. One token per caveat constant above. */
+export const DOCTOR_CAVEAT_KINDS = ["create-mode", "al-runner-only"] as const;
+export type DoctorCaveatKind = (typeof DOCTOR_CAVEAT_KINDS)[number];
+
+export interface DoctorJsonOutput {
+  readonly doctorSchemaVersion: number;
+  readonly ok: boolean;
+  readonly checks: readonly DoctorCheck[];
+  /** Always present, and never empty: these two are unchecked on EVERY invocation. */
+  readonly notChecked: readonly DoctorNotChecked[];
+  /** Present only when the config shape triggers one. `note` is the same sentence the console
+   *  prints — prose, and non-contractual, exactly like `explain`'s. */
+  readonly caveat?: { readonly kind: DoctorCaveatKind; readonly note: string };
+}
+
+/**
+ * Projects a `DoctorReport` and its optional caveat into the `--json` payload.
+ *
+ * An unrecognised caveat string THROWS rather than being passed through as an unlabelled note: a
+ * consumer branching on `caveat.kind` would otherwise silently miss a whole config shape's warning,
+ * and this repository's rule is that a caller-contract violation fails loudly rather than returning
+ * a plausible default. A third caveat constant must therefore arrive here with a token, which is a
+ * one-line change and a deliberate one.
+ */
+export function doctorJson(report: DoctorReport, caveat?: string): DoctorJsonOutput {
+  const kind =
+    caveat === undefined
+      ? undefined
+      : caveat === DOCTOR_CREATE_MODE_CAVEAT
+        ? "create-mode"
+        : caveat === DOCTOR_AL_RUNNER_ONLY_CAVEAT
+          ? "al-runner-only"
+          : undefined;
+  if (caveat !== undefined && kind === undefined) {
+    throw new Error(
+      `doctor --json: unrecognised caveat with no token in DOCTOR_CAVEAT_KINDS — ${JSON.stringify(caveat)}. Add its token rather than emitting it unlabelled.`,
+    );
+  }
+  return {
+    doctorSchemaVersion: DOCTOR_SCHEMA_VERSION,
+    ok: report.ok,
+    checks: report.checks,
+    notChecked: DOCTOR_NOT_CHECKED_TOKENS,
+    ...(kind !== undefined && caveat !== undefined ? { caveat: { kind, note: caveat } } : {}),
+  };
+}
+
+/**
  * Final review (Important 1): ALWAYS calls the real `buildDoctorDeps` — never a swappable
  * top-level resolver. R51 review round 1 found and reverted exactly that shape on
  * `forceResetLeaseFromCli` (`deps.resolveConfig ?? resolveForceResetLeaseConfig`): a test could
@@ -3561,7 +3694,13 @@ export async function doctorFromCli(
     ...(deps.alRunnerSpawn !== undefined ? { alRunnerSpawn: deps.alRunnerSpawn } : {}),
   });
   const report = await runDoctor(cfg, doctorDeps);
-  console.log(renderDoctorReport(report, caveat));
+  // R151: the JSON is the same object, not a second account of it — `doctorJson` reads the report
+  // `renderDoctorReport` renders, so the two cannot disagree about whether a check passed.
+  console.log(
+    parsed.json === true
+      ? JSON.stringify(doctorJson(report, caveat), null, 2)
+      : renderDoctorReport(report, caveat),
+  );
   return report.ok ? 0 : 1;
 }
 
@@ -3595,7 +3734,8 @@ export async function explainFromCli(parsed: ExplainCliConfig): Promise<number> 
       `explain: ${parsed.reportPath} is not valid JSON — ${err instanceof Error ? err.message : String(err)}.`,
     );
   }
-  console.log(JSON.stringify(explain(assertExplainableReport(parsedJson)), null, 2));
+  const options = parsed.topSurvivors !== undefined ? { topSurvivors: parsed.topSurvivors } : {};
+  console.log(JSON.stringify(explain(assertExplainableReport(parsedJson), options), null, 2));
   return 0;
 }
 

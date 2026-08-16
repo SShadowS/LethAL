@@ -4,11 +4,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { BcDevConfigSection, LethalConfigFile } from "../src/cli";
 import {
+  DOCTOR_AL_RUNNER_ONLY_CAVEAT,
   DOCTOR_CREATE_MODE_CAVEAT,
   DOCTOR_NOT_CHECKED,
+  DOCTOR_NOT_CHECKED_TOKENS,
+  DOCTOR_SCHEMA_VERSION,
   buildBackend,
   buildDoctorDeps,
   doctorFromCli,
+  doctorJson,
+  helpText,
+  parseCliConfig,
   renderDoctorReport,
   validateBcDevConfig,
 } from "../src/cli";
@@ -811,5 +817,170 @@ describe("doctorFromCli (final review, Important 1)", () => {
     expect(code).toBe(0);
     expect(out).toContain(DOCTOR_CREATE_MODE_CAVEAT);
     expect(out).not.toContain("{envId}");
+  });
+
+  // R151 — `--json`. The pre-flight an agent runs first was the one surface it could not parse.
+
+  async function runJson(
+    configFile: LethalConfigFile,
+    deps: Parameters<typeof doctorFromCli>[1],
+  ): Promise<{ code: number; parsed: Record<string, unknown>; out: string }> {
+    const configPath = await writeConfig(configFile);
+    const lines: string[] = [];
+    const log = spyOn(console, "log").mockImplementation((...a: unknown[]) => {
+      lines.push(a.map(String).join(" "));
+    });
+    try {
+      const code = await doctorFromCli({ mode: "doctor", configPath, json: true }, deps);
+      const out = lines.join("\n");
+      return { code, parsed: JSON.parse(out), out };
+    } finally {
+      log.mockRestore();
+    }
+  }
+
+  test("--json prints the report as parseable JSON, and NOT the rendered lines", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-doctor-json-"));
+    const { code, parsed, out } = await runJson(
+      { bcdev: RESOLVED_BCDEV },
+      {
+        quarantineDir: dir,
+        fetchFn: okFetch(info()),
+        alToolPaths: async () => ({ alcPath: "C:/alc.exe", altoolPath: "C:/altool.exe" }),
+      },
+    );
+    expect(code).toBe(0);
+    expect(parsed.ok).toBe(true);
+    expect(parsed.doctorSchemaVersion).toBe(DOCTOR_SCHEMA_VERSION);
+    expect(parsed.notChecked).toEqual([...DOCTOR_NOT_CHECKED_TOKENS]);
+    // The rendering is what changes. If both were printed, a consumer piping stdout into a JSON
+    // parser would get a syntax error rather than a report, so this is not cosmetic.
+    expect(out).not.toContain("ok: every check passed");
+  });
+
+  test("--json keeps the EXIT CODE identical — the rendering changes, never the verdict", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-doctor-json-fail-"));
+    const deps = {
+      quarantineDir: dir,
+      fetchFn: okFetch(info({ semver: "1.0.0.0" })),
+      alToolPaths: async () => ({ alcPath: "C:/alc.exe", altoolPath: "C:/altool.exe" }),
+    };
+    const { code, parsed } = await runJson({ bcdev: RESOLVED_BCDEV }, deps);
+    expect(code).toBe(1);
+    expect(parsed.ok).toBe(false);
+    const failing = (parsed.checks as { name: string; ok: boolean }[]).filter((c) => !c.ok);
+    // The whole point of the surface: WHICH check failed, without regexing a rendered line.
+    expect(failing.map((c) => c.name)).toEqual(["control-version"]);
+  });
+
+  test("a create-mode config's caveat arrives with a machine kind, not only prose", async () => {
+    const envCfg: EnvToolConfigSection = {
+      toolPath: "tool.exe",
+      resolve: [
+        { command: ["env", "get", "{envId}", "--json"], reads: { baseUrl: "url" } },
+        { command: ["env", "users", "{envId}", "--json"], reads: { username: "u", password: "p" } },
+      ],
+      publish: { command: ["publish", "{envId}", "{appFile}"] },
+      createEnv: { command: ["env", "create", "--json"], reads: { envId: "id" } },
+      startEnv: { command: ["env", "start", "{envId}"] },
+      readyWhen: {
+        command: ["env", "status", "{envId}", "--json"],
+        reads: { status: "status" },
+        equals: "Running",
+      },
+      deleteEnv: { command: ["env", "delete", "{envId}"] },
+      publishApps: ["tests.app"],
+    };
+    const { parsed } = await runJson(
+      { bcdev: BCDEV_RAW, envTool: envCfg },
+      { alToolPaths: async () => ({ alcPath: "C:/alc.exe", altoolPath: "C:/altool.exe" }) },
+    );
+    expect(parsed.caveat).toEqual({ kind: "create-mode", note: DOCTOR_CREATE_MODE_CAVEAT });
+  });
+});
+
+describe("doctorJson (R151)", () => {
+  function reportOf(checks: DoctorReport["checks"]): DoctorReport {
+    return { checks, ok: checks.every((c) => c.ok) };
+  }
+
+  test("carries the checks through unchanged — one account of a check, not two", () => {
+    // `doctorJson` and `renderDoctorReport` read the SAME report. If this projection rebuilt the
+    // checks, the two surfaces could disagree about whether a check passed, which is the one thing
+    // a second rendering must never introduce.
+    const report = reportOf([
+      { name: "environment", ok: true, detail: "reachable (no vendor status reported)" },
+      { name: "quarantine", ok: false, detail: "run: activation deadline exceeded" },
+    ]);
+    const json = doctorJson(report);
+    expect(json.checks).toBe(report.checks);
+    expect(json.ok).toBe(false);
+  });
+
+  test("notChecked is always present and never empty — a pass does not mean everything was checked", () => {
+    const json = doctorJson(reportOf([{ name: "tool-paths", ok: true, detail: "x" }]));
+    expect(json.notChecked).toEqual([...DOCTOR_NOT_CHECKED_TOKENS]);
+    expect(json.notChecked.length).toBeGreaterThan(0);
+  });
+
+  test("the prose still NAMES each notChecked token — the two must not drift apart", () => {
+    // The tokens are the branchable half and `DOCTOR_NOT_CHECKED` is the explanation. A token whose
+    // sentence disappeared would be a promise the report no longer explains, and vice versa.
+    expect(DOCTOR_NOT_CHECKED).toContain("publish ceiling");
+    expect(DOCTOR_NOT_CHECKED).toContain("baseline");
+    expect(DOCTOR_NOT_CHECKED_TOKENS).toEqual(["publish-ceiling", "baseline-test-health"]);
+  });
+
+  test("no caveat means no caveat FIELD — absent, never an empty object", () => {
+    expect(doctorJson(reportOf([{ name: "tool-paths", ok: true, detail: "x" }])).caveat).toBe(
+      undefined,
+    );
+  });
+
+  test("each caveat constant maps to its own token", () => {
+    const report = reportOf([{ name: "tool-paths", ok: true, detail: "x" }]);
+    expect(doctorJson(report, DOCTOR_CREATE_MODE_CAVEAT)?.caveat?.kind).toBe("create-mode");
+    expect(doctorJson(report, DOCTOR_AL_RUNNER_ONLY_CAVEAT)?.caveat?.kind).toBe("al-runner-only");
+  });
+
+  test("an unrecognised caveat THROWS rather than shipping unlabelled prose", () => {
+    // A consumer branches on `kind`. A caveat with no token would be invisible to that branch while
+    // still being printed, which is a warning that silently stops working for the machine reader.
+    expect(() =>
+      doctorJson(reportOf([{ name: "tool-paths", ok: true, detail: "x" }]), "a new caveat"),
+    ).toThrow(/unrecognised caveat/);
+  });
+});
+
+describe("lethal doctor --json — the flag (R151)", () => {
+  test("--json is accepted by doctor", () => {
+    expect(parseCliConfig(["doctor", "--config", "c.json", "--json"])).toEqual({
+      mode: "doctor",
+      configPath: "c.json",
+      json: true,
+    });
+  });
+
+  test("without the flag the property is ABSENT, not false", () => {
+    expect(parseCliConfig(["doctor", "--config", "c.json"])).toEqual({
+      mode: "doctor",
+      configPath: "c.json",
+    });
+  });
+
+  test("--json on any other subcommand is REFUSED, naming where the machine surfaces are", () => {
+    // Ignoring it would hand a caller prose while they believed they had asked for JSON.
+    expect(() =>
+      parseCliConfig(["run", "--project", "p", "--tests", "t", "--backend", "bcdev", "--json"]),
+    ).toThrow(/--json is only accepted by `lethal doctor`/);
+    expect(() => parseCliConfig(["explain", "report.json", "--json"])).toThrow(
+      /--json is only accepted by `lethal doctor`/,
+    );
+  });
+
+  test("help documents --json and the tokens it emits", () => {
+    const text = helpText("0.0.0");
+    expect(text).toContain("--json");
+    expect(text).toContain("notChecked");
   });
 });

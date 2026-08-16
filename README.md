@@ -411,6 +411,25 @@ is a failure, not a success. The refusal message itself pre-fills this command f
 
 From a source checkout, replace `lethal` with `bun packages/runner/src/cli.ts`.
 
+## Driving it from an agent, a script or CI
+
+LethAL is built to be called by a program: one binary, flags rather than prompts, distinct exit
+codes (`0` ok, `1` error, `3` quarantined), a read-only pre-flight in `lethal doctor --json`, a
+versioned JSON report, an NDJSON event stream flushed per event, and `lethal explain`, whose whole
+purpose is telling a consumer what the data means rather than making it guess.
+
+Two documents collect that contract so nobody has to derive it from the source:
+
+- [`docs/using-lethal-from-an-agent.md`](docs/using-lethal-from-an-agent.md) — the reference: argv,
+  exit codes, which of the three output surfaces answers which question, and the four rules that
+  stop a caller reaching a confident wrong conclusion.
+- [`skills/lethal-mutation-testing/SKILL.md`](skills/lethal-mutation-testing/SKILL.md) — the same
+  contract as a copyable agent skill. Drop it into your own agent's skills directory.
+
+Both are checked against the code by `packages/runner/tests/agent-contract.test.ts`: a flag either
+document names must exist, and the exit codes and schema versions they promise must be the ones
+this build returns.
+
 ## Configuration
 
 `lethal --help` is the authoritative list. The flags that change what a run **measures**:

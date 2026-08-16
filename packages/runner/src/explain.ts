@@ -333,6 +333,47 @@ export interface ExplainToolCondition {
   readonly interpretation: Interpretation;
 }
 
+/**
+ * How the `survivors` array was ORDERED, and therefore which ones a cap kept.
+ *
+ * A token rather than prose, so a consumer branches on an exact value (the same reason
+ * `TOOL_CONDITIONS` are tokens). Two values, and the distinction is the whole point:
+ *
+ * - `report-order` — every survivor is present, in the order the report recorded them. Nothing was
+ *   selected, so nothing needed ranking. This is what an uncapped `explain` emits.
+ * - `actionability` — the list was RANKED and may be a prefix of it. See `survivorActionabilityRank`
+ *   for the order, which is total and deterministic: the same report and the same cap produce the
+ *   same rows in the same sequence, on any machine.
+ */
+export const SURVIVOR_RANKINGS = ["report-order", "actionability"] as const;
+export type SurvivorRanking = (typeof SURVIVOR_RANKINGS)[number];
+
+/**
+ * What the `survivors` array is a view OF — always emitted, whether or not a cap was applied.
+ *
+ * R150. Measured on `docs/campaign/2026-08-03-do/rung2.report.json` (473 mutants, 125 survivors):
+ * the projection is 243 KB, 206 KB of it survivors, and `--top 15` makes it 30 KB. An agent
+ * consuming the uncapped file has a context window and that file does not fit in a small one.
+ * `--top` bounds it. The danger a cap introduces is the one
+ * this repository is most careful about: a truncated list that reads exactly like a complete one,
+ * so an agent reports "20 survivors" when there were 125. That is why the count block is present
+ * even when nothing was omitted, rather than appearing only on truncation — a consumer reads
+ * `total` unconditionally and never has to infer completeness from the absence of a field.
+ *
+ * `total` is the number of survivors the REPORT holds. `shown` is `survivors.length`. Both are
+ * emitted rather than one plus a flag, because a consumer that wants "how many did I not see"
+ * should not have to subtract, and `omitted` is stated for the same reason.
+ */
+export interface ExplainSurvivorSelection {
+  /** Survivors in the report, before any cap. */
+  readonly total: number;
+  /** Survivors in `survivors` — i.e. `survivors.length`, restated so the block reads alone. */
+  readonly shown: number;
+  /** `total - shown`. Zero when nothing was capped. */
+  readonly omitted: number;
+  readonly rankedBy: SurvivorRanking;
+}
+
 export interface ExplainOutput {
   readonly explainSchemaVersion: number;
   /** The `REPORT_SCHEMA_VERSION` the input declared — always equal to this build's, because
@@ -342,6 +383,8 @@ export interface ExplainOutput {
   readonly contract: ExplainContract;
   readonly score: ExplainScore;
   readonly caveats: readonly ExplainCaveat[];
+  /** What `survivors` is a view of. Read this BEFORE treating the array as the whole set. */
+  readonly survivorSelection: ExplainSurvivorSelection;
   readonly survivors: readonly ExplainSurvivor[];
   readonly notMeasured: readonly ExplainNotMeasured[];
   readonly toolConditions: readonly ExplainToolCondition[];
@@ -687,13 +730,77 @@ function toolConditionsOf(report: SessionReport): ExplainToolCondition[] {
 }
 
 /**
+ * Where one survivor sits in the ranking a cap selects by. LOWER is kept first.
+ *
+ * The order is over EVIDENCE, not over importance: it is a restatement of what the run measured
+ * about each row, in the order of how much of the "is this a real gap" question is already
+ * settled. It is deliberately not a judgement about the target's code, which rule (1) of this
+ * file's admissibility rule forbids, and it tells no one what test to write.
+ *
+ * - 0 — `executionProven` and `reach: "not-decided"`. A test is measured to have executed this
+ *   PROCEDURE, and nothing says the statement went unreached. The most evidence any survivor here
+ *   carries.
+ * - 1 — `executionProven` and `reach: "covered-but-unreached"`. A test enters the procedure and no
+ *   guarded statement fired: the R116 pair. Strong evidence too, about a different situation, and
+ *   ranked below 0 only because 0's rows are the ones whose covering test ran what was mutated.
+ * - 2 — not `executionProven`, `reach: "not-decided"`. Some test touched the OBJECT. Whether the
+ *   mutated member ran is unknown, which is FALLBACK 1's whole warning.
+ * - 3 — not `executionProven`, `reach: "unreached-and-uncovered"`. Neither signal places a test at
+ *   this code. The least any survivor carries, so the first to drop off a capped list.
+ *
+ * Ties break on `file`, then `line`, then `mutantCode`, which makes the order TOTAL: two rows can
+ * never compare equal, so `--top 20` on one machine is `--top 20` on every other. A rank that left
+ * ties would make the cap's contents depend on the sort implementation.
+ */
+export function survivorActionabilityRank(s: ExplainSurvivor): number {
+  if (s.executionProven) return s.reach === "covered-but-unreached" ? 1 : 0;
+  return s.reach === "unreached-and-uncovered" ? 3 : 2;
+}
+
+/** The total order `rankedBy: "actionability"` names. Exported so a consumer, or a test, can
+ *  reproduce the selection without re-deriving the tie-breaks. */
+export function rankSurvivors(survivors: readonly ExplainSurvivor[]): ExplainSurvivor[] {
+  return [...survivors].sort((a, b) => {
+    const byRank = survivorActionabilityRank(a) - survivorActionabilityRank(b);
+    if (byRank !== 0) return byRank;
+    if (a.file !== b.file) return a.file < b.file ? -1 : 1;
+    if (a.line !== b.line) return a.line - b.line;
+    return a.mutantCode < b.mutantCode ? -1 : a.mutantCode > b.mutantCode ? 1 : 0;
+  });
+}
+
+/** What `explain` may be asked to do differently. Absent means the whole projection, in report
+ *  order — the behaviour every caller had before R150 added the cap. */
+export interface ExplainOptions {
+  /**
+   * Keep at most this many survivors, chosen by `rankSurvivors`. A positive integer; 0 and negative
+   * values are REFUSED rather than clamped, because "show me none" and "show me all" are both
+   * plausible readings of `--top 0` and a projection that guesses which one the caller meant would
+   * be guessing about completeness. Omit the option to get every survivor.
+   */
+  readonly topSurvivors?: number;
+}
+
+/**
  * Projects a finished `SessionReport`. Validates first (`assertExplainableReport`) even though the
  * parameter is typed: the callers that reach a report off disk get there through a cast, so the
  * type is a promise this function must not take on trust.
  */
-export function explain(report: SessionReport): ExplainOutput {
+export function explain(report: SessionReport, options: ExplainOptions = {}): ExplainOutput {
   const validated = assertExplainableReport(report);
   const { counts, validity } = validated;
+  const { topSurvivors } = options;
+  if (topSurvivors !== undefined && (!Number.isInteger(topSurvivors) || topSurvivors < 1)) {
+    // A caller-contract violation, thrown rather than defaulted: silently treating a bad cap as
+    // "no cap" would emit a complete list to a caller who asked for a bounded one, and silently
+    // treating it as zero would emit an empty one that reads like a report with no survivors.
+    throw new Error(
+      `explain: topSurvivors must be a positive integer, got ${JSON.stringify(topSurvivors)}`,
+    );
+  }
+  const allSurvivors = validated.mutants.filter((m) => m.verdict === "survived").map(survivorOf);
+  const survivors =
+    topSurvivors === undefined ? allSurvivors : rankSurvivors(allSurvivors).slice(0, topSurvivors);
   return {
     explainSchemaVersion: EXPLAIN_SCHEMA_VERSION,
     derivedFromReportSchemaVersion: validated.schemaVersion,
@@ -714,7 +821,13 @@ export function explain(report: SessionReport): ExplainOutput {
       caveat,
       interpretation: keyed(CAVEAT_INTERPRETATIONS, caveat, "caveat"),
     })),
-    survivors: validated.mutants.filter((m) => m.verdict === "survived").map(survivorOf),
+    survivorSelection: {
+      total: allSurvivors.length,
+      shown: survivors.length,
+      omitted: allSurvivors.length - survivors.length,
+      rankedBy: topSurvivors === undefined ? "report-order" : "actionability",
+    },
+    survivors,
     notMeasured: validated.mutants.filter((m) => m.verdict === "error").map(notMeasuredOf),
     toolConditions: toolConditionsOf(validated),
   };

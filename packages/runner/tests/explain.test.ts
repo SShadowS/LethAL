@@ -9,9 +9,12 @@ import {
   EXPLAIN_CONTRACT,
   EXPLAIN_SCHEMA_VERSION,
   MalformedReportError,
+  SURVIVOR_RANKINGS,
   TOOL_CONDITIONS,
   assertExplainableReport,
   explain,
+  rankSurvivors,
+  survivorActionabilityRank,
 } from "../src/explain";
 import type { Interpretation } from "../src/interpretation";
 import {
@@ -293,6 +296,9 @@ const PROJECTION_AUTHORED_STRINGS: readonly string[] = [
   ...Object.keys(REACH_INTERPRETATIONS),
   // ToolCondition — a field NAME in the report, never a value.
   ...TOOL_CONDITIONS,
+  // SurvivorRanking — R150. Describes how this projection ordered its own output, so it can come
+  // from nowhere but here.
+  ...SURVIVOR_RANKINGS,
 ];
 
 // ————————————————————————————————————————————————————————————————————————————————————————
@@ -452,6 +458,7 @@ function derivedExplainLeafPaths(): readonly string[] {
       "CoverageAttribution",
       "GuardEvidence",
       "SurvivorReach",
+      "SurvivorRanking",
       "MutantErrorCause",
       "ToolCondition",
       'ReportValidity["reliability"]',
@@ -477,6 +484,10 @@ const EXPLAIN_LEAF_PATHS: readonly string[] = [
   "$.caveats[].interpretation.meaning", // [registry]
   "$.caveats[].interpretation.entailedNegative", // [registry]
   "$.caveats[].interpretation.basis", // [registry]
+  "$.survivorSelection.total", // [derived] survivors in the report, before any cap — R150
+  "$.survivorSelection.shown", // [derived] survivors.length
+  "$.survivorSelection.omitted", // [derived] total - shown
+  "$.survivorSelection.rankedBy", // [enum] SurvivorRanking
   "$.survivors[].mutantCode", // [verbatim]
   "$.survivors[].file", // [verbatim]
   "$.survivors[].line", // [verbatim]
@@ -939,6 +950,135 @@ describe("explain — survivors", () => {
 });
 
 // ————————————————————————————————————————————————————————————————————————————————————————
+// R150 — the bounded projection. `explain` on a real campaign report is 253 KB, 209 KB of it
+// survivors, which is a file an agent consumer cannot hold. `topSurvivors` bounds it. Every test
+// below is about the same danger: a capped list that reads like a complete one.
+// ————————————————————————————————————————————————————————————————————————————————————————
+
+describe("explain — survivorSelection and the cap", () => {
+  /** One survivor per rank tier, deliberately in the WORST order, so any test asserting a ranked
+   *  result would also pass on an unsorted one only by accident. Rank comes from the pair
+   *  (attribution, guardObserved): see `survivorActionabilityRank`. */
+  function oneOfEachRank(): MutantOutcome[] {
+    return [
+      survivorMutant("M0004", "object", false), // rank 3 — unreached-and-uncovered
+      survivorMutant("M0003", "object", true), // rank 2 — not-decided, not execution-proven
+      survivorMutant("M0002", "exact", false), // rank 1 — covered-but-unreached
+      survivorMutant("M0001", "exact", true), // rank 0 — the most evidence
+    ];
+  }
+
+  test("with no cap: every survivor, in REPORT order, and the block says so", () => {
+    // The uncapped path must not quietly start ranking. Callers that predate the cap read
+    // `survivors` positionally against their own report, and `report-order` is the promise that
+    // still holds for them.
+    const out = explain(reportFixture({ mutants: oneOfEachRank() }));
+    expect(out.survivors.map((s) => s.mutantCode)).toEqual(["M0004", "M0003", "M0002", "M0001"]);
+    expect(out.survivorSelection).toEqual({
+      total: 4,
+      shown: 4,
+      omitted: 0,
+      rankedBy: "report-order",
+    });
+  });
+
+  test("the count block is emitted even when NOTHING was capped", () => {
+    // The whole point of emitting it unconditionally: a consumer reads `total` without first having
+    // to decide whether the field's absence means "complete" or "this build is older than the cap".
+    const out = explain(reportFixture({ mutants: [survivorMutant("M0001", "exact", true)] }));
+    expect(out.survivorSelection.total).toBe(1);
+    expect(out.survivorSelection.omitted).toBe(0);
+  });
+
+  test("a cap keeps the ranked PREFIX and STATES what it dropped", () => {
+    const out = explain(reportFixture({ mutants: oneOfEachRank() }), { topSurvivors: 2 });
+    expect(out.survivors.map((s) => s.mutantCode)).toEqual(["M0001", "M0002"]);
+    expect(out.survivorSelection).toEqual({
+      total: 4,
+      shown: 2,
+      omitted: 2,
+      rankedBy: "actionability",
+    });
+  });
+
+  test("`shown` and `omitted` describe the array actually emitted, not the request", () => {
+    // The failure this catches is a cap that reports what it was ASKED for. `--top 10` against 4
+    // survivors must not say `shown: 10`, and `omitted` must never go negative.
+    const out = explain(reportFixture({ mutants: oneOfEachRank() }), { topSurvivors: 10 });
+    expect(out.survivors).toHaveLength(4);
+    expect(out.survivorSelection).toEqual({
+      total: 4,
+      shown: 4,
+      omitted: 0,
+      rankedBy: "actionability",
+    });
+  });
+
+  test("the rank is the documented tier order, and it is over EVIDENCE", () => {
+    const out = explain(reportFixture({ mutants: oneOfEachRank() }), { topSurvivors: 4 });
+    expect(out.survivors.map((s) => [s.mutantCode, s.executionProven, s.reach] as const)).toEqual([
+      ["M0001", true, "not-decided"],
+      ["M0002", true, "covered-but-unreached"],
+      ["M0003", false, "not-decided"],
+      ["M0004", false, "unreached-and-uncovered"],
+    ]);
+    expect(out.survivors.map(survivorActionabilityRank)).toEqual([0, 1, 2, 3]);
+  });
+
+  test("the order is TOTAL — ties break on file, then line, then mutantCode", () => {
+    // Without a total order the contents of `--top n` depend on the sort implementation, so the
+    // same report and the same cap could disagree between two machines. Every mutant here is rank
+    // 0, so ONLY the tie-breaks decide, and they are fed in reverse of the expected result.
+    const same = (code: string, file: string, line: number): MutantOutcome => ({
+      ...survivorMutant(code, "exact", true),
+      file,
+      line,
+    });
+    const out = explain(
+      reportFixture({
+        mutants: [
+          same("M0009", "src/B.al", 10),
+          same("M0002", "src/A.al", 99),
+          same("M0001", "src/A.al", 99),
+          same("M0003", "src/A.al", 7),
+        ],
+      }),
+      { topSurvivors: 4 },
+    );
+    expect(out.survivors.map((s) => s.mutantCode)).toEqual(["M0003", "M0001", "M0002", "M0009"]);
+  });
+
+  test("ranking does not mutate the caller's array", () => {
+    const survivors = explain(reportFixture({ mutants: oneOfEachRank() })).survivors;
+    const before = survivors.map((s) => s.mutantCode);
+    rankSurvivors(survivors);
+    expect(survivors.map((s) => s.mutantCode)).toEqual(before);
+  });
+
+  test("a cap that is not a positive integer is REFUSED, never clamped", () => {
+    // `--top 0` has two plausible readings ("none" / "all") and a projection that picks one is
+    // guessing about completeness, which is the one thing this block exists to make impossible.
+    const report = reportFixture({ mutants: oneOfEachRank() });
+    for (const bad of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => explain(report, { topSurvivors: bad })).toThrow(/positive integer/);
+    }
+  });
+
+  test("the cap bounds survivors ONLY — notMeasured is untouched and still complete", () => {
+    // Stated as a test rather than left to the help text: a consumer that caps survivors must not
+    // silently receive a shortened error list too, because nothing in the output would say so.
+    const out = explain(
+      reportFixture({
+        mutants: [...oneOfEachRank(), errorMutant("M0010", "unstable"), errorMutant("M0011")],
+      }),
+      { topSurvivors: 1 },
+    );
+    expect(out.survivors).toHaveLength(1);
+    expect(out.notMeasured.map((n) => n.mutantCode)).toEqual(["M0010", "M0011"]);
+  });
+});
+
+// ————————————————————————————————————————————————————————————————————————————————————————
 // Tool mechanics — the half of the line the projection IS allowed to be prescriptive about.
 // ————————————————————————————————————————————————————————————————————————————————————————
 
@@ -1361,5 +1501,66 @@ describe("lethal explain — CLI", () => {
     await expect(
       explainFromCli({ mode: "explain", reportPath: join(tmpdir(), "lethal-no-such-report.json") }),
     ).rejects.toThrow(/--out/);
+  });
+
+  // R150 — the cap, reached the way a user reaches it.
+
+  test("--top parses to a cap, and the printed JSON is the capped projection", async () => {
+    const parsed = parseCliConfig(["explain", "report.json", "--top", "1"]);
+    expect(parsed).toEqual({ mode: "explain", reportPath: "report.json", topSurvivors: 1 });
+
+    const dir = await mkdtemp(join(tmpdir(), "lethal-explain-top-"));
+    const path = join(dir, "report.json");
+    await writeFile(path, JSON.stringify(reportFixture()), "utf8");
+    const lines: string[] = [];
+    const log = spyOn(console, "log").mockImplementation((...a: unknown[]) => {
+      lines.push(a.map(String).join(" "));
+    });
+    try {
+      const code = await explainFromCli({ mode: "explain", reportPath: path, topSurvivors: 1 });
+      expect(code).toBe(0);
+      const printed = JSON.parse(lines.join("\n"));
+      // The fixture has two survivors, so this proves BOTH halves: the array was cut, and the
+      // output says what was cut. A cap that printed one survivor and no `omitted` would satisfy
+      // the first half alone, and that is the failure mode worth a test.
+      expect(printed.survivors).toHaveLength(1);
+      expect(printed.survivorSelection).toEqual({
+        total: 2,
+        shown: 1,
+        omitted: 1,
+        rankedBy: "actionability",
+      });
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  test("--top without a cap flag is absent, not zero", () => {
+    // `topSurvivors: 0` would be a refusal at the library boundary, so the no-flag path must leave
+    // the property off entirely rather than pass a falsy default through.
+    expect(parseCliConfig(["explain", "report.json"])).toEqual({
+      mode: "explain",
+      reportPath: "report.json",
+    });
+  });
+
+  test("a --top that is not a positive integer is refused at parse time, before the file is read", () => {
+    for (const bad of ["0", "1.5", "twenty", ""]) {
+      expect(() => parseCliConfig(["explain", "report.json", "--top", bad])).toThrow(
+        /--top must be a positive integer/,
+      );
+    }
+    // A leading dash has to be written `--top=-3`: bare `--top -3` never reaches this validation
+    // because `parseArgs` refuses it first as an ambiguous argument. Both refuse; only this form
+    // exercises OUR message.
+    expect(() => parseCliConfig(["explain", "report.json", "--top=-3"])).toThrow(
+      /--top must be a positive integer/,
+    );
+  });
+
+  test("help documents --top and what it states about what it dropped", () => {
+    const text = helpText("0.0.0");
+    expect(text).toContain("--top <n>");
+    expect(text).toContain("survivorSelection");
   });
 });

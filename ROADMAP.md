@@ -87,6 +87,10 @@ that ordering is the priority.
 - **R136** · Tier-2 executable candidates: FindFirst/FindLast swap, Validate-to-assign, run-trigger flag on Insert/Delete · [R136.md](docs/roadmap/R136.md) · done (1d259ca)
 - **R139** · A stale published TEST app is indistinguishable from genuinely failing tests, and costs a full gate run to diagnose · [R139.md](docs/roadmap/R139.md) · done — check 1 (16b4014) refuses on the server's own words, check 2 (91bf897) compares the PUBLISHED test set…
 - **R145** · Per-mutant artifact variants for declarative surfaces — measured, costed, and blocked on demand rather than on effort · [R145.md](docs/roadmap/R145.md) · open — filed 2026-08-14 by R135's ruling, deliberately NOT scheduled
+- **R150** · `lethal explain`'s survivor list is unbounded, so the projection built for agents does not fit an agent · [R150.md](docs/roadmap/R150.md) · done (`--top <n>`, this commit) — the cap ships with the count block that keeps a capped list from reading as…
+- **R151** · `lethal doctor` renders prose only, so the pre-flight an agent should run FIRST is the one it cannot parse · [R151.md](docs/roadmap/R151.md) · done (`--json`, this commit) — doctor emits `DoctorJsonOutput`; `run` and `campaign` deliberately unchanged
+- **R152** · Three versioned output surfaces, no published schema for any of them, so a consumer validates by hoping · [R152.md](docs/roadmap/R152.md) · open — filed 2026-08-16 while assessing whether LethAL can be driven by an agent
+- **R153** · Nothing in the repository tells an OUTSIDE agent how to call LethAL or how to read what it returns · [R153.md](docs/roadmap/R153.md) · done (this commit) — a reference doc and a copyable skill, both checked against the code by…
 
 ## Backends and tooling
 
