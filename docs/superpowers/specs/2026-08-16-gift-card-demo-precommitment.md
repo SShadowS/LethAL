@@ -124,6 +124,71 @@ finding about precedence, not about this app.
 4. Predicted verdicts assume all 8 tests pass at baseline. A red baseline changes several rows from
    `survived` to `no-coverage` (R55) and invalidates the score.
 
+## Verification of those four, 2026-08-16 — before any live run
+
+Each uncertainty was chased as far as it can be chased without a container. Two are now settled, one
+changed the demo, and one stays a reasoned prediction.
+
+### 1. Test isolation — PARTIALLY settled, and it changed the app
+
+Measured evidence exists and says writes DO roll back:
+`fixtures/sandbox-data-tests/src/DataTests.Codeunit.al` (R32 verification, 2026-07-27) records four
+fixture tables holding **0 rows in both companies after 432 fenced runs**, and that comment was
+written specifically to correct an earlier one claiming rows persist.
+
+What it does not settle is **granularity**: per TEST, or per RUN? Both models produce "nothing left
+afterwards". Every fixture here is written to be correct either way — idempotent
+delete-before-insert helpers, arms that reseed before counting — which is good practice and also the
+reason none of them distinguishes the two.
+
+That distinction decides whether this demo works. Under per-RUN rollback, four earlier tests' entries
+are still present when `RedeemReducesBalance` runs, the unfiltered sum is not 60, and row #23 —
+the whole point of the demo — comes back **killed**.
+
+**Action taken:** the suite now calls a `ClearAll()` helper at the top of every test, so it is
+correct under either model. The prediction for #23 stands unchanged, and now rests on the test's own
+setup rather than on an unmeasured platform property. Filed as `docs/roadmap/R156.md`, which stays
+open because the underlying question is still unanswered for whoever writes the next fixture.
+
+### 2. The two `Init()` deletions — NOT settled, and deliberately left alone
+
+There is no way to answer this offline: it is a question about what BC does at runtime, not about
+what LethAL generates. The reasoning is unchanged — a freshly declared local record is already
+empty, and every field the code cares about is assigned explicitly afterwards — so #7 and #34 stay
+predicted `survived`, and stay flagged as the least confident rows here.
+
+They were NOT removed from the demo to make the prediction safe. `Init()` before a build-and-insert
+is idiomatic AL, the audience writes it, and deleting it to tidy a prediction would make the demo
+less like the code it is supposed to resemble.
+
+### 3. The `run-trigger-skipped-insert` tag — SETTLED, statically, with a control
+
+Ran the real `generateMutationSet` over `examples/gift-card` and read
+`MutationSpec.platformKillMechanism` at every `swap-modify-flag` site:
+
+| Project | Site | Mechanism |
+|---|---|---|
+| `examples/gift-card` | `GiftCard.Insert(true)` | **none** |
+| `examples/gift-card` | `GiftCardEntry.Insert(true)` | **none** |
+| `examples/gift-card` | both `Modify(true)` sites | none (not an insert) |
+| `fixtures/sandbox-data` | `KeyProbe.Insert(true)` | **`run-trigger-skipped-insert`** |
+| `fixtures/sandbox-data` | both `Probe.Insert(true)` sites | none |
+
+The control is the load-bearing half. A probe reporting "none" everywhere would prove nothing at
+all — this repository's signature bug — so it was run against the fixture where R143 is known to
+tag, and it does tag there, on exactly the arm whose `OnInsert` assigns a blank `Code[20]` primary
+key. So #12's "killed AND untagged" is confirmed on the untagged half. The killed half still needs a
+server.
+
+### 4. A red baseline — SETTLED, in code
+
+The mechanism is real and is where the prediction said it is: `stale-test-app.ts` states it
+(a failing test leaves the green set and every mutant covered only by it is recorded
+`no-coverage`), `orchestrator.ts` implements it, and `CAVEAT_INTERPRETATIONS["baseline-red"]`
+(`report.ts`) publishes it with basis `R55`. So a red baseline does move rows from `survived` to
+`no-coverage` and does invalidate the score, exactly as stated. Nothing to change; the caveat is
+simply a condition to check before reading anything else on the day.
+
 ## A stage-mechanics finding this exercise produced
 
 Nine predicted survivors, and `explain --top n` ranks by evidence — `executionProven` first, ties

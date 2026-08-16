@@ -10,6 +10,7 @@ codeunit 90150 "Gift Card Tests"
     var
         GiftCard: Record "Gift Card";
     begin
+        ClearAll();
         GiftCardMgt.Issue('GC-CREATE', 'C10000', 100, CalcDate('<+1Y>', WorkDate()));
 
         if not GiftCard.Get('GC-CREATE') then
@@ -23,18 +24,21 @@ codeunit 90150 "Gift Card Tests"
     [Test]
     procedure IssueRequiresCustomer()
     begin
+        ClearAll();
         asserterror GiftCardMgt.Issue('GC-NOCUST', '', 100, CalcDate('<+1Y>', WorkDate()));
     end;
 
     [Test]
     procedure IssueRequiresExpiryDate()
     begin
+        ClearAll();
         asserterror GiftCardMgt.Issue('GC-NOEXP', 'C10000', 100, 0D);
     end;
 
     [Test]
     procedure IssueRejectsNegativeAmount()
     begin
+        ClearAll();
         asserterror GiftCardMgt.Issue('GC-NEG', 'C10000', -50, CalcDate('<+1Y>', WorkDate()));
     end;
 
@@ -43,6 +47,7 @@ codeunit 90150 "Gift Card Tests"
     var
         GiftCard: Record "Gift Card";
     begin
+        ClearAll();
         GiftCardMgt.Issue('GC-REDEEM', 'C10000', 100, CalcDate('<+1Y>', WorkDate()));
 
         GiftCardMgt.Redeem('GC-REDEEM', 40);
@@ -57,6 +62,7 @@ codeunit 90150 "Gift Card Tests"
     [Test]
     procedure RedeemMoreThanBalanceFails()
     begin
+        ClearAll();
         GiftCardMgt.Issue('GC-SHORT', 'C10000', 50, CalcDate('<+1Y>', WorkDate()));
 
         asserterror GiftCardMgt.Redeem('GC-SHORT', 80);
@@ -67,6 +73,7 @@ codeunit 90150 "Gift Card Tests"
     var
         GiftCard: Record "Gift Card";
     begin
+        ClearAll();
         GiftCardMgt.Issue('GC-BLOCK', 'C10000', 100, CalcDate('<+1Y>', WorkDate()));
         GiftCard.Get('GC-BLOCK');
         GiftCard.Blocked := true;
@@ -80,11 +87,33 @@ codeunit 90150 "Gift Card Tests"
     var
         GiftCard: Record "Gift Card";
     begin
+        ClearAll();
         GiftCardMgt.Issue('GC-EXPIRED', 'C10000', 100, CalcDate('<+1Y>', WorkDate()));
         GiftCard.Get('GC-EXPIRED');
         GiftCard."Expiry Date" := CalcDate('<-1D>', WorkDate());
         GiftCard.Modify(true);
 
         asserterror GiftCardMgt.Redeem('GC-EXPIRED', 10);
+    end;
+
+    /// <summary>
+    /// A clean start for every test, so that what a test measures depends on what that test did and
+    /// on nothing else.
+    ///
+    /// Not decoration. Every balance assertion in this suite reads one card, and one that could see
+    /// an earlier test's entries would pass or fail for a reason the test never states. BC test
+    /// isolation is MEASURED to roll test writes back under LethAL's fenced runs
+    /// (fixtures/sandbox-data-tests, R32 verification, 2026-07-27: four tables held 0 rows after 432
+    /// runs), but nothing in this repository measures whether that rollback happens per TEST or per
+    /// RUN. A suite that is correct either way costs two lines, and this one is a demo that has to
+    /// behave identically in a rehearsal and on a stage.
+    /// </summary>
+    local procedure ClearAll()
+    var
+        GiftCard: Record "Gift Card";
+        GiftCardEntry: Record "Gift Card Entry";
+    begin
+        GiftCardEntry.DeleteAll(false);
+        GiftCard.DeleteAll(false);
     end;
 }
