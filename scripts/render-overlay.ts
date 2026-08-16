@@ -392,14 +392,37 @@ function siteCard(s: RenderedSite): string {
     m.procedureName !== undefined && m.procedureName !== ""
       ? m.procedureName
       : (m.triggerName ?? "(trigger)");
-  const tests = (m.coveringTests ?? []).map((t) => `<li>${esc(t)}</li>`).join("");
+  const covering = m.coveringTests ?? [];
+  const killer = m.killingTest;
+  // `killingTest` is a bare method name; `coveringTests` are qualified with the test codeunit.
+  const isKiller = (t: string): boolean =>
+    killer !== undefined && (t === killer || t.endsWith(`.${killer}`));
+  const tests = covering
+    .map((t) =>
+      isKiller(t)
+        ? `<li class="failed"><span class="mark killed"></span>${esc(t)} <span class="chip">failed — this is the kill</span></li>`
+        : `<li>${esc(t)}</li>`,
+    )
+    .join("");
+  /**
+   * What the list can honestly say about the tests that are NOT the killer, and it differs by
+   * verdict because the runner differs: the per-mutant loop BREAKS at the first failing test
+   * (orchestrator.ts), so on a kill the tests after it were never run and calling them "passed"
+   * would be a claim nothing measured. A survivor is the opposite: the loop only runs to the end
+   * when nothing failed, so there every covering test did run and did stay green.
+   */
+  const testsNote =
+    m.verdict === "survived"
+      ? "all ran against this mutant, none failed"
+      : killer !== undefined
+        ? "the run stops at the first failure, so the rest may not have run"
+        : "";
   return `<div class="card ${s.state}">
   <div class="cardhead"><span class="mark ${s.state}" aria-hidden="true"></span><b>${esc(m.operatorName)}</b> <span class="verdict">${esc(m.verdict)}</span> <span class="chip">${esc(where)}</span></div>
   <p class="meaning">${esc(STATE_MEANING[s.state])}</p>
   <div class="diff"><div class="was"><span>was</span><code>${highlightBlock(m.originalText)}</code></div><div class="now"><span>became</span><code>${highlightBlock(m.mutatedText) || "<em>(deleted)</em>"}</code></div></div>
   <p class="badges"><span class="badge">attribution: ${esc(m.coverageAttribution ?? "n/a")}</span><span class="badge">executionProven: ${m.coverageAttribution === "exact"}</span><span class="badge">guardObserved: ${String(m.guardObserved ?? "not measured")}</span></p>
-  ${m.killingTest !== undefined ? `<p class="killed-by">killed by <b>${esc(m.killingTest)}</b></p>` : ""}
-  ${tests !== "" ? `<details><summary>${(m.coveringTests ?? []).length} covering test(s)</summary><ul>${tests}</ul></details>` : ""}
+  ${tests !== "" ? `<details><summary>${covering.length} covering test(s)${testsNote === "" ? "" : ` — ${testsNote}`}</summary><ul class="tests">${tests}</ul></details>` : ""}
 </div>`;
 }
 
@@ -496,7 +519,12 @@ code i{font-style:normal}
 .diff>div{border:1px solid var(--line);border-radius:6px;padding:6px 8px;overflow-x:auto}
 .diff span{display:block;font-size:.72rem;color:var(--dim);text-transform:uppercase;letter-spacing:.05em}
 .diff code{font:12.5px/1.5 ui-monospace,monospace;white-space:pre-wrap}
-.killed-by{font-size:.85rem;color:var(--dim);margin:6px 0 0}
+.tests{margin:6px 0;padding-left:18px}
+.tests li{margin:2px 0}
+/* The killing test is the one thing in a card that DID its job, so it gets the checked colour and
+   the checked glyph. Nothing else in the list is coloured: on a kill the remaining tests may never
+   have run, and painting them would claim an outcome nobody measured. */
+.tests li.failed{list-style:none;margin-left:-18px;display:flex;align-items:center;gap:7px;color:var(--killed);font-weight:600}
 .warn{color:var(--warn)}
 summary:focus-visible,a:focus-visible{outline:2px solid var(--killed);outline-offset:2px;border-radius:3px}
 .legend li span.mark,.legend li span.rail{flex:0 0 auto}
