@@ -129,26 +129,36 @@ finding about precedence, not about this app.
 Each uncertainty was chased as far as it can be chased without a container. Two are now settled, one
 changed the demo, and one stays a reasoned prediction.
 
-### 1. Test isolation — PARTIALLY settled, and it changed the app
+### 1. Test isolation — SETTLED. The concern was unfounded and is withdrawn.
 
-Measured evidence exists and says writes DO roll back:
-`fixtures/sandbox-data-tests/src/DataTests.Codeunit.al` (R32 verification, 2026-07-27) records four
-fixture tables holding **0 rows in both companies after 432 fenced runs**, and that comment was
-written specifically to correct an earlier one claiming rows persist.
+This section first claimed the granularity of rollback (per test method, or per run) was unmeasured,
+and the suite briefly gained a `ClearAll()` helper to be safe either way. **Both the claim and the
+hedge were wrong, and both are reverted.** The transaction boundary is the test METHOD, three
+times over:
 
-What it does not settle is **granularity**: per TEST, or per RUN? Both models produce "nothing left
-afterwards". Every fixture here is written to be correct either way — idempotent
-delete-before-insert helpers, arms that reseed before counting — which is good practice and also the
-reason none of them distinguishes the two.
+1. **By definition.** Microsoft's
+   [TransactionModel attribute](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/attributes/devenv-transactionmodel-attribute)
+   applies to a *method* and governs "whether transactions are rolled back at the end of a test
+   method". Under `AutoRollback`, "After the test method is completed, the transaction is rolled
+   back and the database is returned to its initial state." These tests declare no attribute, so
+   they take the platform default, `AutoRollback`. Leaking writes to a later test requires opting
+   out — `AutoCommit`, `None`, or an explicit `Commit()`, which under `AutoRollback` is an error
+   rather than a leak.
+2. **The server enforces it.** `extensions/lethal-control/src/RunMethod.Codeunit.al` says so in the
+   comment explaining why the fence uses `Codeunit.Run` rather than a `[TryFunction]`:
+   "`Test Suite Mgt.RunAllTests` drives the platform test runner, whose **per-test isolation** and
+   result persistence commit between methods".
+3. **LethAL runs one method per invocation anyway.** `RunOneMethod` builds a single-method
+   `AL Test Suite` per call, so there is no multi-test run for a transaction to span even
+   hypothetically.
 
-That distinction decides whether this demo works. Under per-RUN rollback, four earlier tests' entries
-are still present when `RedeemReducesBalance` runs, the unfiltered sum is not 60, and row #23 —
-the whole point of the demo — comes back **killed**.
+The measured evidence in `fixtures/sandbox-data-tests` (R32 verification, 2026-07-27: four tables
+holding 0 rows in both companies after 432 fenced runs) is consistent with all of this and never
+contradicted it.
 
-**Action taken:** the suite now calls a `ClearAll()` helper at the top of every test, so it is
-correct under either model. The prediction for #23 stands unchanged, and now rests on the test's own
-setup rather than on an unmeasured platform property. Filed as `docs/roadmap/R156.md`, which stays
-open because the underlying question is still unanswered for whoever writes the next fixture.
+**Row #23's prediction is unchanged** and now rests on the correct reason: each test method's writes
+are rolled back at its end, so when `RedeemReducesBalance` runs, its one card's entries are the only
+entries there are. `docs/roadmap/R156.md` records the withdrawn claim rather than deleting it.
 
 ### 2. The two `Init()` deletions — NOT settled, and deliberately left alone
 

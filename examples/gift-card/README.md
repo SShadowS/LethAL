@@ -37,8 +37,9 @@ Delete the `SetRange` and `GetBalance` sums **every entry in the table**: one cu
 balance becomes the store's entire outstanding liability. Ship that and the first customer with a
 second card in the system gets someone else's money.
 
-The suite does not notice, and the reason is the interesting part: **every test clears both tables
-and creates exactly one gift card.** With one card in the table, "all entries" and "this card's entries" are the same set,
+The suite does not notice, and the reason is the interesting part: **every test creates exactly one
+gift card**, and each test method's writes are rolled back at its end (`TransactionModel::AutoRollback`,
+the platform default), so one card is all that is ever there. With one card in the table, "all entries" and "this card's entries" are the same set,
 so the filter is never load-bearing and every balance assertion passes either way. The test that
 looks like it covers this — `RedeemReducesBalance`, which asserts `GetBalance = 60` — is green with
 the line deleted.
