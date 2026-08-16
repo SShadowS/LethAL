@@ -106,7 +106,7 @@ lethal run --project examples/gift-card \
            --backend bcdev \
            --config  examples/gift-card/lethal.config.local.json \
            --out     report.json
-lethal explain report.json --top 5
+lethal explain report.json --top 10
 ```
 
 Copy `lethal.config.example.json` to `lethal.config.local.json` and fill in your own server. That
@@ -122,10 +122,16 @@ compile failure at publish time that has nothing to do with your code. The fixtu
 ## What is NOT yet measured
 
 The mutant inventory above came from a real dry run. **The verdicts have not been measured against a
-live server yet** — the killed/survived/no-coverage split, and which specific mutants land where, are
-predictions until a run against a container confirms them. Before presenting this, do a rehearsal
-run and freeze it (`lethal campaign freeze`), so any drift between then and the stage shows up as a
-diff rather than a surprise.
+live server yet.** They are predicted, all 36 of them, in
+[`docs/superpowers/specs/2026-08-16-gift-card-demo-precommitment.md`](../../docs/superpowers/specs/2026-08-16-gift-card-demo-precommitment.md):
+20 killed, 9 survived, 7 no-coverage, score 68.97%. That file was written before any run, so a
+disagreement with a container is a finding rather than something to reconcile quietly. Do a
+rehearsal run, compare per-mutant, then freeze it (`lethal campaign freeze`) so drift between then
+and the stage shows up as a diff.
+
+One thing from that exercise matters on stage: **use `--top 10`, not `--top 5`.** `explain` ranks
+survivors by how much evidence each carries, ties broken by file and line, and with nine survivors
+the planted bug at `:53` sorts sixth. `--top 5` would cut it off the list.
 
 Both projects are compiled offline by `bun run compile:fixtures`, which covers `examples/` as well
 as `fixtures/`. A demo app that has stopped compiling is not something to discover in front of a
