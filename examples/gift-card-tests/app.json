@@ -1,0 +1,35 @@
+{
+  "id": "5d7e706d-33e7-4a46-8eb1-2fc80e9e83a3",
+  "name": "Gift Card Demo Tests",
+  "publisher": "LethAL",
+  "version": "1.0.0.0",
+  "brief": "The test suite for the gift card demo: green, plausible, and blind to one real bug.",
+  "description": "Test codeunit for examples/gift-card. Raises through Error() and asserterror only, so it needs no Library Assert dependency. Contains no TestPage test, which LethAL cannot score. Not for production use.",
+  "privacyStatement": "",
+  "EULA": "",
+  "help": "",
+  "url": "",
+  "logo": "",
+  "dependencies": [
+    {
+      "id": "4c29c981-10e1-4eb4-a0af-983e8b30b270",
+      "name": "Gift Card Demo",
+      "publisher": "LethAL",
+      "version": "1.0.0.0"
+    }
+  ],
+  "screenshots": [],
+  "idRanges": [
+    {
+      "from": 90150,
+      "to": 90180
+    }
+  ],
+  "resourceExposurePolicy": {
+    "allowDebugging": true,
+    "allowDownloadingSource": true,
+    "includeSourceInSymbolFile": true
+  },
+  "runtime": "13.0",
+  "features": []
+}

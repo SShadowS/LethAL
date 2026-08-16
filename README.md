@@ -147,6 +147,11 @@ lethal explain report.json
 Start scoped. An unscoped run on a real project is refused by default: it costs days and usually
 cannot even publish (see [Limits](#limits)).
 
+**Not ready to point it at your own app?** [`examples/gift-card`](examples/gift-card/README.md) is a
+small, complete BC extension whose test suite is green and misses a real bug. It runs in seconds,
+and it shows what a survivor, a `no-coverage` row and a killed mutant each look like on code you can
+read in one sitting.
+
 ## A worked example
 
 **1. Your app code** (`--project`). The only thing LethAL ever mutates. One procedure, one comparison:

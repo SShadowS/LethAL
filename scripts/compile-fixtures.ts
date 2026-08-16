@@ -23,7 +23,16 @@ import { existsSync, readdirSync, rmSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
-const FIXTURES_DIR = join(import.meta.dir, "..", "fixtures");
+/**
+ * Every root holding AL projects that must keep compiling. `examples/` joined `fixtures/` when the
+ * gift card demo landed, and for the same reason R56 gives: the demo app is published to a live
+ * server from a stage, so "it stopped compiling" must be a red check here rather than a discovery
+ * in front of a room.
+ */
+const PROJECT_ROOTS = [
+  join(import.meta.dir, "..", "fixtures"),
+  join(import.meta.dir, "..", "examples"),
+];
 
 /**
  * Newest `alc.exe` from the installed AL VS Code extension.
@@ -46,11 +55,20 @@ function findAlc(): string | null {
 }
 
 function fixtureProjects(): string[] {
-  if (!existsSync(FIXTURES_DIR)) return [];
-  return readdirSync(FIXTURES_DIR)
-    .map((d) => join(FIXTURES_DIR, d))
-    .filter((d) => existsSync(join(d, "app.json")))
-    .sort();
+  return PROJECT_ROOTS.filter((root) => existsSync(root)).flatMap((root) =>
+    readdirSync(root)
+      .map((d) => join(root, d))
+      .filter((d) => existsSync(join(d, "app.json")))
+      .sort(),
+  );
+}
+
+/** `fixtures/sandbox-app` rather than `sandbox-app`: with two roots, the bare directory name no
+ *  longer says which project failed. */
+function projectLabel(project: string): string {
+  const root = PROJECT_ROOTS.find((r) => project.startsWith(r));
+  if (root === undefined) return project;
+  return `${root.split(/[\\/]/).pop()}/${project.slice(root.length + 1)}`;
 }
 
 const alc = findAlc();
@@ -68,14 +86,14 @@ if (alc === null) {
 const projects = fixtureProjects();
 if (projects.length === 0) {
   throw new Error(
-    `compile-fixtures: no fixture project (a directory with app.json) under ${FIXTURES_DIR}`,
+    `compile-fixtures: no AL project (a directory with app.json) under ${PROJECT_ROOTS.join(" or ")}`,
   );
 }
 
 console.log(`compile-fixtures: ${projects.length} project(s) with ${alc}\n`);
 let failed = 0;
 for (const project of projects) {
-  const name = project.slice(FIXTURES_DIR.length + 1);
+  const name = projectLabel(project);
   const packageCache = join(project, ".alpackages");
   if (!existsSync(packageCache)) {
     console.error(`  SKIP  ${name} — no .alpackages (symbols are gitignored; download them first)`);
@@ -83,7 +101,12 @@ for (const project of projects) {
   }
   // Output to a scratch path, never into the fixture: a stray `.app` beside the source is exactly
   // what makes a stale published build hard to notice, which is the bug this script exists for.
-  const out = join(tmpdir(), `lethal-fixture-compile-${name}.app`);
+  //
+  // The separator in `name` (`examples/gift-card`) is flattened, because a `/` here would aim the
+  // compiler at a subdirectory of the temp dir that nothing creates. A failure to WRITE is not a
+  // compile error, so the run could end up reporting OK for a compile whose output went nowhere —
+  // the "passes for the wrong reason" shape this repository keeps finding.
+  const out = join(tmpdir(), `lethal-fixture-compile-${name.replace(/[\\/]/g, "-")}.app`);
   const r = spawnSync(
     alc,
     [`/project:${project}`, `/packagecachepath:${packageCache}`, `/out:${out}`],
