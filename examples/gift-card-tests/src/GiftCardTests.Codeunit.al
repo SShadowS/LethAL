@@ -1,6 +1,10 @@
 codeunit 90150 "Gift Card Tests"
 {
     Subtype = Test;
+    // Without this, AL's Restrictive default strips a test body of write permission on its own
+    // app's tables, and every test that inserts a gift card fails at the platform before it can
+    // assert anything. Measured on Cronus281 on 2026-08-16: omitting it failed 5 of these 8 tests.
+    TestPermissions = Disabled;
 
     var
         GiftCardMgt: Codeunit "Gift Card Mgt";

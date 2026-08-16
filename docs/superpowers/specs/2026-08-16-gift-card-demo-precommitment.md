@@ -211,6 +211,47 @@ file with `--only`. This is not a defect in the ranking — it ranks by how much
 carries, which is what it promises, not by how interesting a human finds it — but it is exactly the
 kind of thing to learn in a pre-commitment rather than in front of a room.
 
+## THE RESULT — measured 2026-08-16 on Cronus281, all 36 matched
+
+```
+score: 69.0%  (killed 20, survived 9, no-coverage 7, error 0)
+baseline batch 0: 8/8 passed
+TIMING: total 13.8s = generate 0.0s + deploy 3.9s + baseline 0.8s + mutants 6.8s + overhead 2.3s
+reliability: full        caveats: ["kills-without-assertion"]
+```
+
+**36 of 36 predicted verdicts matched, including every row this file flagged as uncertain.**
+
+- **#23, the planted bug: SURVIVED**, with `coverageAttribution: "exact"`, `guardObserved: true`,
+  covered by `Gift Card Tests.RedeemReducesBalance`. The demo works, and it works for exactly the
+  stated reason: a test provably executed the line and did not notice.
+- **#7 and #34, the two `Init()` deletions: both SURVIVED**, as reasoned. The least confident
+  predictions in the file were right.
+- **#12, the `Insert(true)` flag swap: KILLED by `IssueCreatesCard`, and `platformArtifactKills` is
+  `null`.** R143's narrowing behaves on an app it has never seen, live, not just in the static probe.
+- Totals, score (0.6896551724137931 against a predicted 68.97%) and the 7-row no-coverage block all
+  match exactly.
+- `reliability: full` — no narrowing, green baseline, nothing degraded.
+
+The stage-mechanics finding below was also confirmed live: `explain --top 10` lists the planted bug
+**sixth** of nine. `--top 5` would have cut it.
+
+### Two setup defects this run found, which no verdict prediction could have
+
+Neither is about the app's code, and both are exactly what a first-time user hits:
+
+1. **`TestPermissions = Disabled` was missing from the test codeunit.** AL's Restrictive default
+   strips a test body of write permission on its own app's tables, so **5 of 8 tests failed at the
+   platform** on the first attempt. The tool named the condition, named the fix, listed the five
+   tests, and recorded their mutants as score-excluded rather than as silent `no-coverage`. Fixed in
+   the test app; every fixture in this repository already declares it.
+2. **Publishing both apps globally makes the run fail before it starts.** `Publish-BcContainerApp`
+   defaults to global (AppSource) scope, and the dev endpoint then refuses to replace the target:
+   *"tries to replace the existing AppSource app 'Gift Card Demo' ... which is a dependency to the
+   following AppSource apps: 'Gift Card Demo Tests by LethAL'"*. Both must be published to the DEV
+   scope (`-useDevEndpoint`). Recorded in the example's README, because the error names a
+   dependency and not the scope, and reads like an app-design problem when it is a publishing one.
+
 ## What closes R155
 
 A run against a container, per-mutant verdicts compared against this file, every disagreement

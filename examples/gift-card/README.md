@@ -50,7 +50,7 @@ nothing checked it.
 
 ## What else the run finds
 
-Predicted, and the point of the exercise is that you check rather than take this list on faith:
+All three MEASURED on a live container (see The measured result, below), not predicted:
 
 - **`Redeem`'s balance guard** (`:40`), `if GiftCard."Remaining Amount" < Amount`. Flip `<` to `<=`
   and a customer can never spend a card down to exactly zero. No test redeems the exact balance:
@@ -58,7 +58,7 @@ Predicted, and the point of the exercise is that you check rather than take this
 - **`Redeem`'s expiry guard** (`:37`), `if GiftCard."Expiry Date" < WorkDate()`. Flip it and a card
   stops working ON its expiry date rather than after it. Is that a bug? Nobody wrote the rule down.
   This is the honest one: a survivor is a lead, not a verdict, and no tool can read your spec.
-- **`BlockExpiredCards`** is called by no test at all, so its mutants come back `no-coverage`.
+- **`BlockExpiredCards`** is called by no test at all, so all seven of its mutants come back `no-coverage`.
   Expiry *is* tested, at redeem time, which is exactly why a coverage-percentage mindset files
   expiry as handled. The nightly job that runs in production ran zero times in the suite.
 
@@ -95,6 +95,30 @@ test earns its place.
 The test suite raises through `Error()` and `asserterror` only, and contains no `TestPage` test
 (LethAL cannot score one, and one kind can hang a whole run).
 
+**Publish both apps to the DEV scope.** This is the one step that will waste an afternoon otherwise.
+`Publish-BcContainerApp` defaults to global (AppSource) scope, and the dev endpoint then refuses to
+let LethAL replace the target: *"tries to replace the existing AppSource app 'Gift Card Demo' ...
+which is a dependency to the following AppSource apps: 'Gift Card Demo Tests by LethAL'"*. The error
+names a dependency, so it reads like an app-design problem when it is a publishing one.
+
+```powershell
+docker context use desktop-windows
+$cred = Get-Credential
+Publish-BcContainerApp -containerName <container> -appFile GiftCardDemo.app `
+    -skipVerification -sync -install -useDevEndpoint -credential $cred
+Publish-BcContainerApp -containerName <container> -appFile GiftCardDemoTests.app `
+    -skipVerification -sync -install -useDevEndpoint -credential $cred
+```
+
+LethAL republishes the target itself on every run; publishing the TEST app stays your own workflow,
+which is why it is here and the target is only here to satisfy the dependency the first time.
+
+Note also that the test codeunit declares **`TestPermissions = Disabled`**. Without it, AL's
+Restrictive default strips a test body of write permission on its own app's tables and every test
+that inserts a card fails at the platform. Measured here on 2026-08-16: omitting it failed 5 of the
+8 tests. LethAL names the condition, names the fix and lists the tests, and records their mutants as
+score-excluded rather than as a silent `no-coverage`.
+
 **Use the `bcdev` backend.** Several kills depend on `asserterror`, which `al-runner` cannot fail —
 on that backend those mutants come back survived, which would make the demo look wrong for a reason
 that has nothing to do with the app.
@@ -120,19 +144,34 @@ builds, and their ids must fall inside an id range your app declares. This app r
 compile failure at publish time that has nothing to do with your code. The fixtures under
 `fixtures/` do the same thing with `79197..79199`.
 
-## What is NOT yet measured
+## The measured result
 
-The mutant inventory above came from a real dry run. **The verdicts have not been measured against a
-live server yet.** They are predicted, all 36 of them, in
-[`docs/superpowers/specs/2026-08-16-gift-card-demo-precommitment.md`](../../docs/superpowers/specs/2026-08-16-gift-card-demo-precommitment.md):
-20 killed, 9 survived, 7 no-coverage, score 68.97%. That file was written before any run, so a
-disagreement with a container is a finding rather than something to reconcile quietly. Do a
-rehearsal run, compare per-mutant, then freeze it (`lethal campaign freeze`) so drift between then
-and the stage shows up as a diff.
+Run against a BC 28 container on 2026-08-16:
 
-One thing from that exercise matters on stage: **use `--top 10`, not `--top 5`.** `explain` ranks
-survivors by how much evidence each carries, ties broken by file and line, and with nine survivors
-the planted bug at `:53` sorts sixth. `--top 5` would cut it off the list.
+```
+score: 69.0%  (killed 20, survived 9, no-coverage 7, error 0)
+baseline batch 0: 8/8 passed
+TIMING: total 13.8s = generate 0.0s + deploy 3.9s + baseline 0.8s + mutants 6.8s + overhead 2.3s
+reliability: full
+```
+
+**13.8 seconds**, which is what makes this runnable live rather than narrated. All 36 verdicts were
+PRE-COMMITTED in
+[`docs/superpowers/specs/2026-08-16-gift-card-demo-precommitment.md`](../../docs/superpowers/specs/2026-08-16-gift-card-demo-precommitment.md)
+before the run, and **all 36 matched** — including the two rows that file flagged as its least
+confident.
+
+The planted bug came back `survived` with `coverageAttribution: "exact"` and `guardObserved: true`,
+covered by `Gift Card Tests.RedeemReducesBalance`. That is the whole demo in one row: a test
+provably executed the line and did not notice.
+
+**Use `--top 10`, not `--top 5`.** `explain` ranks survivors by how much evidence each carries, ties
+broken by file and line, and the planted bug lands **sixth of nine**. Confirmed on the real report,
+not predicted: `--top 5` cuts the headline off the list.
+
+Before presenting, re-run and diff against the pre-commitment, or freeze it with
+`lethal campaign freeze`, so drift between rehearsal and stage shows up as a diff rather than a
+surprise.
 
 Both projects are compiled offline by `bun run compile:fixtures`, which covers `examples/` as well
 as `fixtures/`. A demo app that has stopped compiling is not something to discover in front of a
