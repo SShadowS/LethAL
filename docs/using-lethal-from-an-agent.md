@@ -99,6 +99,16 @@ Two of them have a published JSON Schema in [`../schemas/`](../schemas/) — the
 and `doctor --json`. Validate against those rather than trusting a shape you inferred from one
 example. The report and the event stream do not have one yet.
 
+**A real report is committed, so you can try this with no server at all:**
+
+```bash
+lethal explain docs/campaign/2026-08-16-gift-card/rehearsal.report.json --top 10
+```
+
+It is the gift card demo's rehearsal run — 36 mutants, 20 killed, 9 survived, 7 no-coverage — and it
+is kept unredacted because that app is ours. Every other committed report has its source stripped;
+see `scripts/redact-first-party-reports.json` for the rule and how it is enforced.
+
 ### `--out report.json` — the record
 
 `schemaVersion: 2`. The full result: `counts`, `mutationScore`, `validity`, and every mutant with

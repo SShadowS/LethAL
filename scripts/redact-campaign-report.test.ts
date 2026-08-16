@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Glob } from "bun";
@@ -22,6 +22,19 @@ import { Glob } from "bun";
 
 const SCRIPT = join(import.meta.dir, "redact-campaign-report.ts");
 const MARKER = "[redacted: third-party source, see this directory's README]";
+
+interface FirstPartyEntry {
+  readonly path: string;
+  readonly projectDir: string;
+  readonly reason: string;
+}
+
+/** The committed exemption list. Read fresh rather than imported so a malformed file fails the test
+ *  that checks it rather than the module load of every test in this file. */
+function firstParty(): readonly FirstPartyEntry[] {
+  const raw = readFileSync(join(import.meta.dir, "redact-first-party-reports.json"), "utf8");
+  return (JSON.parse(raw) as { reports: FirstPartyEntry[] }).reports;
+}
 
 function reportFixture(): { path: string; original: Record<string, unknown> } {
   const dir = mkdtempSync(join(tmpdir(), "lethal-redact-"));
@@ -143,7 +156,46 @@ describe("redact-campaign-report", () => {
     // never lower it to make a red test green.
     expect(reports.length).toBeGreaterThanOrEqual(8);
 
-    const r = run(["--check", ...reports.map((p) => join(repoRoot, p))]);
+    // First-party reports are exempt, and the exemption is PROVEN rather than trusted — see the
+    // test below. Everything else must be redacted.
+    const exempt = new Set(firstParty().map((e) => e.path));
+    const mustBeClean = reports.filter((p) => !exempt.has(p.replace(/\\/g, "/")));
+    expect(mustBeClean.length).toBeGreaterThanOrEqual(8);
+
+    const r = run(["--check", ...mustBeClean.map((p) => join(repoRoot, p))]);
     expect(r.status).toBe(0);
+  });
+
+  test("every first-party exemption is MECHANICALLY first-party, not just claimed", () => {
+    // The exemption exists because our own MIT-licensed demo app's source is already in this
+    // repository, so redacting a report of it would destroy the artifact — it is the sample report
+    // the docs point `lethal explain` at — for no gain. The ruling is about THIRD-PARTY source.
+    //
+    // A comment saying "this one is ours" would be exactly the hand-maintained claim that let six
+    // reports sit unswept. So each entry names a projectDir, and every mutant's `file` must resolve
+    // inside it: a report of someone else's app cannot satisfy that, because their source is not in
+    // this repository.
+    const repoRoot = join(import.meta.dir, "..");
+    const entries = firstParty();
+    expect(entries.length).toBeGreaterThan(0);
+
+    for (const entry of entries) {
+      expect(entry.reason.length, `${entry.path} needs a reason`).toBeGreaterThan(40);
+      expect(existsSync(join(repoRoot, entry.path)), `${entry.path} does not exist`).toBe(true);
+      expect(
+        existsSync(join(repoRoot, entry.projectDir)),
+        `${entry.projectDir} does not exist`,
+      ).toBe(true);
+
+      const report = JSON.parse(readFileSync(join(repoRoot, entry.path), "utf8")) as {
+        mutants?: Array<{ file?: string }>;
+      };
+      const mutants = report.mutants ?? [];
+      expect(mutants.length, `${entry.path} has no mutants to check`).toBeGreaterThan(0);
+      const foreign = mutants
+        .map((m) => m.file ?? "")
+        .filter((f) => !existsSync(join(repoRoot, entry.projectDir, f)));
+      expect(foreign, `${entry.path} mutates files outside ${entry.projectDir}`).toEqual([]);
+    }
   });
 });

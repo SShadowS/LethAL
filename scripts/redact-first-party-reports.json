@@ -1,0 +1,10 @@
+{
+  "comment": "Campaign reports whose target app lives in THIS repository, so their originalText/mutatedText is our own MIT-licensed source rather than a third party's. The 2026-08-09 ruling is about third-party source; redacting our own would destroy the artifact for no gain. Every entry is checked mechanically by scripts/redact-campaign-report.test.ts: the projectDir must exist and every mutant's file must resolve inside it, so 'first-party' is proven rather than asserted. Anything not listed here must be redacted.",
+  "reports": [
+    {
+      "path": "docs/campaign/2026-08-16-gift-card/rehearsal.report.json",
+      "projectDir": "examples/gift-card",
+      "reason": "The gift card demo app, written for this repository and published under its MIT licence. Kept unredacted on purpose: it is the sample report the docs point at, so `lethal explain report.json --top 10` can be run with no server, and the survivors' originalText/mutatedText are the whole point of showing it."
+    }
+  ]
+}

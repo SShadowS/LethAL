@@ -169,9 +169,15 @@ provably executed the line and did not notice.
 broken by file and line, and the planted bug lands **sixth of nine**. Confirmed on the real report,
 not predicted: `--top 5` cuts the headline off the list.
 
-Before presenting, re-run and diff against the pre-commitment, or freeze it with
-`lethal campaign freeze`, so drift between rehearsal and stage shows up as a diff rather than a
-surprise.
+That run is FROZEN under [`docs/campaign/2026-08-16-gift-card/`](../../docs/campaign/2026-08-16-gift-card/):
+the report, the per-mutant baseline, and the pre-commitment it was checked against. Before
+presenting, re-run and `lethal campaign compare` against that baseline, so drift between the
+rehearsal and the stage is a diff rather than a surprise.
+
+The archived report is also the sample the docs point at: `lethal explain
+docs/campaign/2026-08-16-gift-card/rehearsal.report.json --top 10` works with no server. It keeps its
+source text, unlike every other committed report, because this app is ours -- see
+`scripts/redact-first-party-reports.json`.
 
 Both projects are compiled offline by `bun run compile:fixtures`, which covers `examples/` as well
 as `fixtures/`. A demo app that has stopped compiling is not something to discover in front of a
