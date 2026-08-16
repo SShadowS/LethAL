@@ -295,7 +295,7 @@ function siteCard(s: RenderedSite): string {
       : (m.triggerName ?? "(trigger)");
   const tests = (m.coveringTests ?? []).map((t) => `<li>${esc(t)}</li>`).join("");
   return `<div class="card ${s.state}">
-  <div class="cardhead"><b>${esc(m.operatorName)}</b> <span class="verdict">${esc(m.verdict)}</span> <span class="chip">${esc(where)}</span></div>
+  <div class="cardhead"><span class="mark ${s.state}" aria-hidden="true"></span><b>${esc(m.operatorName)}</b> <span class="verdict">${esc(m.verdict)}</span> <span class="chip">${esc(where)}</span></div>
   <p class="meaning">${esc(STATE_MEANING[s.state])}</p>
   <div class="diff"><div class="was"><span>was</span><code>${esc(m.originalText)}</code></div><div class="now"><span>became</span><code>${esc(m.mutatedText) || "<em>(deleted)</em>"}</code></div></div>
   <p class="badges"><span class="badge">attribution: ${esc(m.coverageAttribution ?? "n/a")}</span><span class="badge">executionProven: ${m.coverageAttribution === "exact"}</span><span class="badge">guardObserved: ${String(m.guardObserved ?? "not measured")}</span></p>
@@ -381,12 +381,8 @@ h2{font-size:1rem;margin:28px 0 8px;font-family:ui-monospace,SFMono-Regular,Menl
 .row code{font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre;flex:1 1 auto}
 .detail{flex:0 0 100%;margin:2px 0 8px 3.6em}
 .detail>summary{cursor:pointer;color:var(--dim);font-size:.8rem}
-.card{border:1px solid var(--line);border-left:3px solid var(--line);border-radius:8px;padding:10px 12px;margin:8px 0;background:var(--bg)}
-.card.survived-proven{border-left-color:var(--proven)}
-.card.survived-unproven{border-left-color:var(--unproven)}
-.card.killed{border-left-color:var(--killed)}
-.card.no-coverage{border-left-color:var(--uncov)}
-.cardhead{font-family:ui-monospace,monospace;font-size:.85rem}
+.card{border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin:8px 0;background:var(--bg)}
+.cardhead{font-family:ui-monospace,monospace;font-size:.85rem;display:flex;align-items:center;gap:7px;flex-wrap:wrap}
 .verdict{color:var(--dim)}
 .meaning{margin:6px 0;font-size:.9rem}
 .diff{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:8px;margin:8px 0}
