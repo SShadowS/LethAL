@@ -75,9 +75,10 @@ else is not.
 
 ## Tagging a release
 
-Added 2026-08-16 with `.github/workflows/release.yml`. **Neither workflow has ever run**, because
-no tag has ever been pushed and CI was added the same day. Read the two files before trusting
-either; the first tag is as much a test of them as of the release.
+Added 2026-08-16 with `.github/workflows/release.yml`. **This workflow has never run**, because no
+tag has ever been pushed. Read it before trusting it: the first tag is as much a test of the
+workflow as of the release. (`ci.yml`, its sibling, is verified — run 31961823874, 2430 pass on
+`windows-latest` — but nothing that is specific to the release path has been exercised by it.)
 
 ```bash
 git tag v0.1.0-alpha.1     # must equal the root package.json version
@@ -97,10 +98,14 @@ Draft, not published, because two things still need a human:
 2. **Read the generated notes.** They come from commit subjects, which were written for this
    repository's own record rather than for a stranger.
 
-`.github/workflows/ci.yml` runs the same typecheck-and-test gate on every push and pull request. It
-does NOT run `biome check .` repo-wide (pre-existing format debt in `engine`/`builtin-tier1` would
-fail every build) and it does NOT run the live integration gates, which need a Business Central
-container. Those stay a local, human-invoked gate.
+`.github/workflows/ci.yml` runs the same typecheck-and-test gate on every push, on every branch,
+and on every pull request. It does NOT run `biome check .` repo-wide (pre-existing format debt in
+`engine`/`builtin-tier1` would fail every build) and it does NOT run the live integration gates,
+which need a Business Central container. Those stay a local, human-invoked gate.
+
+Its first run cost a fix worth knowing about: the trigger was `push: branches: [master]` plus
+`pull_request`, so pushing a feature branch ran nothing at all, and a workflow that only fires
+after a merge reports a problem that has already shipped. Corrected in `af0b056`.
 
 ## What the build produces
 
