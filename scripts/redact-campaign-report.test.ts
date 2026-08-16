@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Glob } from "bun";
 
 /**
  * The public-repo guard, and the two properties that make it worth having rather than a checklist
@@ -123,15 +124,26 @@ describe("redact-campaign-report", () => {
     expect(r.stderr).toContain("not a SessionReport");
   });
 
-  test("both committed campaign reports are clean", () => {
+  test("EVERY committed campaign report is clean, and the set is DISCOVERED not listed", () => {
     // The regression guard that matters: if a future campaign commits a raw report here, this
     // reddens in `bun test` rather than waiting for someone to notice on GitHub.
+    //
+    // This used to name two paths by hand, and that hand-maintained pair is exactly how the guard
+    // failed: the six reports in `docs/campaign/2026-08-03-do/` predate the 2026-08-09 ruling, were
+    // never swept, and sat unguarded next to the two that were — 1,857 fields of a commercial
+    // product's AL source in a PUBLIC repository, found 2026-08-16 and redacted the same day. A
+    // list cannot cover a file nobody remembered to add to it, so the set is now globbed.
     const repoRoot = join(import.meta.dir, "..");
-    const r = run([
-      "--check",
-      join(repoRoot, "docs/campaign/2026-08-07-r85-swap-rate/rung1.report.json"),
-      join(repoRoot, "docs/campaign/2026-08-08-r85-swap-population/rung2.report.json"),
-    ]);
+    const reports = [...new Glob("docs/campaign/**/*.report.json").scanSync({ cwd: repoRoot })];
+
+    // A glob that stops matching — a directory rename, a changed suffix convention — would make
+    // `--check` pass over NOTHING and read exactly like "everything is clean". That is this
+    // repository's signature bug (CLAUDE.md), so the count is asserted before the content. The
+    // floor is the number committed on 2026-08-16; raise it when a campaign adds reports, and
+    // never lower it to make a red test green.
+    expect(reports.length).toBeGreaterThanOrEqual(8);
+
+    const r = run(["--check", ...reports.map((p) => join(repoRoot, p))]);
     expect(r.status).toBe(0);
   });
 });

@@ -265,8 +265,8 @@
       "procedureName": "",
       "startIndex": 151,
       "endIndex": 327,
-      "originalText": "begin\r\n        if DOCoreEventHandler.IsFeatureEnabled('AUTSTATEMENT') then\r\n            CreateOrSendAutStatements()\r\n        else\r\n            SendPeriodStatements();\r\n    end;",
-      "mutatedText": "begin end",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "CDO Aut Stat Bal Check Tests.DirectCreateStatementCall_ZeroBalanceCustomer_ShouldNotCreateJournalLineWhenNoPDF",
         "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenNoLastDate_ShouldReturnFalse",
@@ -307,8 +307,8 @@
       "procedureName": "SendPeriodStatements",
       "startIndex": 626,
       "endIndex": 1767,
-      "originalText": "begin\r\n        if GuiAllowed then\r\n            Window.Open(Text001);\r\n        DOCustSetup.SetRange(\"CDO Automatic statement\", DOCustSetup.\"CDO Automatic statement\"::Automatic);\r\n        DOCustSetup.SetFilter(\"CDO Send Statement Code\", '<>%1', '');\r\n        if DOCustSetup.FindSet() then\r\n            repeat\r\n                if SendCustStatement.Get(DOCustSetup.\"CDO Send Statement Code\") then\r\n                    if ChangeAuatomaticToManual(DOCustSetup.\"No.\", DOCustSetup.\"CDO Last Automatic Date\", SendCustStatement) then begin\r\n                        DOCustSetup.\"CDO Automatic statement\" := DOCu… [truncated 541 chars]",
-      "mutatedText": "begin end",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
@@ -331,7 +331,7 @@
       "procedureName": "SendPeriodStatements",
       "startIndex": 704,
       "endIndex": 801,
-      "originalText": "DOCustSetup.SetRange(\"CDO Automatic statement\", DOCustSetup.\"CDO Automatic statement\"::Automatic)",
+      "originalText": "[redacted: third-party source, see this directory's README]",
       "mutatedText": "",
       "coveringTests": [
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
@@ -354,7 +354,7 @@
       "procedureName": "SendPeriodStatements",
       "startIndex": 812,
       "endIndex": 872,
-      "originalText": "DOCustSetup.SetFilter(\"CDO Send Statement Code\", '<>%1', '')",
+      "originalText": "[redacted: third-party source, see this directory's README]",
       "mutatedText": "",
       "coveringTests": [
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
@@ -377,8 +377,8 @@
       "procedureName": "SendPeriodStatements",
       "startIndex": 1150,
       "endIndex": 1340,
-      "originalText": "begin\r\n                        DOCustSetup.\"CDO Automatic statement\" := DOCustSetup.\"CDO Automatic statement\"::Manual;\r\n                        DOCustSetup.Modify();\r\n                    end",
-      "mutatedText": "begin end",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
@@ -400,7 +400,7 @@
       "procedureName": "SendPeriodStatements",
       "startIndex": 1294,
       "endIndex": 1314,
-      "originalText": "DOCustSetup.Modify()",
+      "originalText": "[redacted: third-party source, see this directory's README]",
       "mutatedText": "",
       "coveringTests": [
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
@@ -423,8 +423,8 @@
       "procedureName": "SendPeriodStatements",
       "startIndex": 1346,
       "endIndex": 1687,
-      "originalText": "begin\r\n                        DOCustSetup.CreateAutomaticPeriodStatement();\r\n                        DOCustSetup.CreateAutBalanceDueStatement();\r\n                        DOCustSetup.Find();\r\n                        DOCustSetup.\"CDO Last Automatic Date\" := WorkDate();\r\n                        DOCustSetup.Modify();\r\n                    end;",
-      "mutatedText": "begin end",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
@@ -447,7 +447,7 @@
       "procedureName": "SendPeriodStatements",
       "startIndex": 1377,
       "endIndex": 1421,
-      "originalText": "DOCustSetup.CreateAutomaticPeriodStatement()",
+      "originalText": "[redacted: third-party source, see this directory's README]",
       "mutatedText": "",
       "coveringTests": [
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
@@ -471,7 +471,7 @@
       "procedureName": "SendPeriodStatements",
       "startIndex": 1448,
       "endIndex": 1490,
-      "originalText": "DOCustSetup.CreateAutBalanceDueStatement()",
+      "originalText": "[redacted: third-party source, see this directory's README]",
       "mutatedText": "",
       "coveringTests": [
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
@@ -494,7 +494,7 @@
       "procedureName": "SendPeriodStatements",
       "startIndex": 1517,
       "endIndex": 1535,
-      "originalText": "DOCustSetup.Find()",
+      "originalText": "[redacted: third-party source, see this directory's README]",
       "mutatedText": "",
       "coveringTests": [
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
@@ -517,7 +517,7 @@
       "procedureName": "SendPeriodStatements",
       "startIndex": 1640,
       "endIndex": 1660,
-      "originalText": "DOCustSetup.Modify()",
+      "originalText": "[redacted: third-party source, see this directory's README]",
       "mutatedText": "",
       "coveringTests": [
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
@@ -541,7 +541,7 @@
       "procedureName": "SendPeriodStatements",
       "startIndex": 1705,
       "endIndex": 1713,
-      "originalText": "Commit()",
+      "originalText": "[redacted: third-party source, see this directory's README]",
       "mutatedText": "",
       "coveringTests": [
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
@@ -564,8 +564,8 @@
       "procedureName": "SendPeriodStatements",
       "startIndex": 1734,
       "endIndex": 1756,
-      "originalText": "DOCustSetup.Next() = 0",
-      "mutatedText": "DOCustSetup.Next() <> 0",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "CDO Send Cust. Statement Tests.SendPeriodStatements_WhenCustomerSetToAutomatic_ShouldProcessCustomer"
       ],
@@ -587,8 +587,8 @@
       "procedureName": "ChangeAuatomaticToManual",
       "startIndex": 1915,
       "endIndex": 2090,
-      "originalText": "begin\r\n        exit(ChangeAutomaticToManual(CustNo, LastDate, SendCustStatement.\"Change to manual on Reminder\", SendCustStatement.\"Change to manual on Fin.Chr.M.\"));\r\n    end;",
-      "mutatedText": "begin end",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenNoLastDate_ShouldReturnFalse",
         "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenBothFlagsAreFalse_ShouldReturnFalse",
@@ -616,8 +616,8 @@
       "procedureName": "ChangeAuatomaticToManual",
       "startIndex": 1930,
       "endIndex": 2079,
-      "originalText": "exit(ChangeAutomaticToManual(CustNo, LastDate, SendCustStatement.\"Change to manual on Reminder\", SendCustStatement.\"Change to manual on Fin.Chr.M.\"))",
-      "mutatedText": "exit(not (ChangeAutomaticToManual(CustNo, LastDate, SendCustStatement.\"Change to manual on Reminder\", SendCustStatement.\"Change to manual on Fin.Chr.M.\")))",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenNoLastDate_ShouldReturnFalse",
         "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenBothFlagsAreFalse_ShouldReturnFalse",
@@ -645,8 +645,8 @@
       "procedureName": "ChangeAutomaticToManual",
       "startIndex": 2313,
       "endIndex": 3330,
-      "originalText": "begin\r\n        if LastDate = 0D then\r\n            exit;\r\n        if (ChangeManualFinCharge = false) and (ChangeManualReminder = false) then\r\n            exit;\r\n\r\n        CustLedgerEntry.SetCurrentKey(\"Customer No.\", \"Posting Date\");\r\n        CustLedgerEntry.SetRange(\"Customer No.\", CustNo);\r\n        CustLedgerEntry.SetFilter(\"Posting Date\", '>%1', LastDate);\r\n\r\n        if ChangeManualFinCharge and ChangeManualReminder then\r\n            CustLedgerEntry.SetFilter(\"Document Type\", '%1|%2',\r\n              CustLedgerEntry.\"Document Type\"::\"Finance Charge Memo\",\r\n              CustLedgerEntry.\"Docum… [truncated 417 chars]",
-      "mutatedText": "begin end",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenNoLastDate_ShouldReturnFalse",
         "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenBothFlagsAreFalse_ShouldReturnFalse",
@@ -674,8 +674,8 @@
       "procedureName": "ChangeAutomaticToManual",
       "startIndex": 2331,
       "endIndex": 2344,
-      "originalText": "LastDate = 0D",
-      "mutatedText": "LastDate <> 0D",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenNoLastDate_ShouldReturnFalse",
         "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenBothFlagsAreFalse_ShouldReturnFalse",
@@ -703,8 +703,8 @@
       "procedureName": "ChangeAutomaticToManual",
       "startIndex": 2381,
       "endIndex": 2447,
-      "originalText": "(ChangeManualFinCharge = false) and (ChangeManualReminder = false)",
-      "mutatedText": "(ChangeManualFinCharge = false) or (ChangeManualReminder = false)",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenNoLastDate_ShouldReturnFalse",
         "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenBothFlagsAreFalse_ShouldReturnFalse",
@@ -732,8 +732,8 @@
       "procedureName": "ChangeAutomaticToManual",
       "startIndex": 2382,
       "endIndex": 2411,
-      "originalText": "ChangeManualFinCharge = false",
-      "mutatedText": "ChangeManualFinCharge <> false",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenNoLastDate_ShouldReturnFalse",
         "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenBothFlagsAreFalse_ShouldReturnFalse",
@@ -761,8 +761,8 @@
       "procedureName": "ChangeAutomaticToManual",
       "startIndex": 2418,
       "endIndex": 2446,
-      "originalText": "ChangeManualReminder = false",
-      "mutatedText": "ChangeManualReminder <> false",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenNoLastDate_ShouldReturnFalse",
         "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenBothFlagsAreFalse_ShouldReturnFalse",
@@ -790,7 +790,7 @@
       "procedureName": "ChangeAutomaticToManual",
       "startIndex": 2483,
       "endIndex": 2544,
-      "originalText": "CustLedgerEntry.SetCurrentKey(\"Customer No.\", \"Posting Date\")",
+      "originalText": "[redacted: third-party source, see this directory's README]",
       "mutatedText": "",
       "coveringTests": [
         "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenNoLastDate_ShouldReturnFalse",
@@ -818,7 +818,7 @@
       "procedureName": "ChangeAutomaticToManual",
       "startIndex": 2555,
       "endIndex": 2603,
-      "originalText": "CustLedgerEntry.SetRange(\"Customer No.\", CustNo)",
+      "originalText": "[redacted: third-party source, see this directory's README]",
       "mutatedText": "",
       "coveringTests": [
         "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenNoLastDate_ShouldReturnFalse",
@@ -846,7 +846,7 @@
       "procedureName": "ChangeAutomaticToManual",
       "startIndex": 2614,
       "endIndex": 2672,
-      "originalText": "CustLedgerEntry.SetFilter(\"Posting Date\", '>%1', LastDate)",
+      "originalText": "[redacted: third-party source, see this directory's README]",
       "mutatedText": "",
       "coveringTests": [
         "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenNoLastDate_ShouldReturnFalse",
@@ -874,8 +874,8 @@
       "procedureName": "ChangeAutomaticToManual",
       "startIndex": 2688,
       "endIndex": 2734,
-      "originalText": "ChangeManualFinCharge and ChangeManualReminder",
-      "mutatedText": "ChangeManualFinCharge or ChangeManualReminder",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenNoLastDate_ShouldReturnFalse",
         "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenBothFlagsAreFalse_ShouldReturnFalse",
@@ -902,8 +902,8 @@
       "procedureName": "ChangeAutomaticToManual",
       "startIndex": 3286,
       "endIndex": 3319,
-      "originalText": "exit(not CustLedgerEntry.IsEmpty)",
-      "mutatedText": "exit(not (not CustLedgerEntry.IsEmpty))",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenNoLastDate_ShouldReturnFalse",
         "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenBothFlagsAreFalse_ShouldReturnFalse",
@@ -931,8 +931,8 @@
       "procedureName": "CreateOrSendAutStatements",
       "startIndex": 3703,
       "endIndex": 5131,
-      "originalText": "begin\r\n        if GuiAllowed then\r\n            Window.Open(Text001);\r\n\r\n        //DOCustSetup.SETFILTER(\"Customer No.\",'10000|20000');\r\n\r\n        Customer.SetRange(\"CDO Automatic statement\", Customer.\"CDO Automatic statement\"::Automatic);\r\n        Customer.SetFilter(Customer.\"CDO Automatic Documents\", '<>%1', '');\r\n        if Customer.FindSet() then\r\n            repeat\r\n                if AutomaticDocument.Get(Customer.\"CDO Automatic Documents\") then begin\r\n                    if AutomaticDocument.\"Automatic Period Statement\" <> '' then\r\n                        if AutomaticPeriodStatement.Get(… [truncated 828 chars]",
-      "mutatedText": "begin end",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": []
     },
     {
@@ -950,7 +950,7 @@
       "procedureName": "CreateOrSendAutStatements",
       "startIndex": 3849,
       "endIndex": 3940,
-      "originalText": "Customer.SetRange(\"CDO Automatic statement\", Customer.\"CDO Automatic statement\"::Automatic)",
+      "originalText": "[redacted: third-party source, see this directory's README]",
       "mutatedText": "",
       "coveringTests": []
     },
@@ -969,7 +969,7 @@
       "procedureName": "CreateOrSendAutStatements",
       "startIndex": 3951,
       "endIndex": 4017,
-      "originalText": "Customer.SetFilter(Customer.\"CDO Automatic Documents\", '<>%1', '')",
+      "originalText": "[redacted: third-party source, see this directory's README]",
       "mutatedText": "",
       "coveringTests": []
     },
@@ -988,8 +988,8 @@
       "procedureName": "CreateOrSendAutStatements",
       "startIndex": 4158,
       "endIndex": 5081,
-      "originalText": "begin\r\n                    if AutomaticDocument.\"Automatic Period Statement\" <> '' then\r\n                        if AutomaticPeriodStatement.Get(AutomaticDocument.\"Automatic Period Statement\") then begin\r\n                            AutomaticPeriodStatement.TestField(\"E-Mail Template Code\");\r\n                            CreateAutomaticPeriodStatement(Customer, AutomaticPeriodStatement);\r\n                            Commit();\r\n                        end;\r\n                    if AutomaticDocument.\"Automatic Due Date Statement\" <> '' then\r\n                        if AutDueDateStatement.Get(Autom… [truncated 323 chars]",
-      "mutatedText": "begin end",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": []
     },
     {
@@ -1007,8 +1007,8 @@
       "procedureName": "CreateOrSendAutStatements",
       "startIndex": 4188,
       "endIndex": 4240,
-      "originalText": "AutomaticDocument.\"Automatic Period Statement\" <> ''",
-      "mutatedText": "AutomaticDocument.\"Automatic Period Statement\" = ''",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": []
     },
     {
@@ -1026,8 +1026,8 @@
       "procedureName": "CreateOrSendAutStatements",
       "startIndex": 4356,
       "endIndex": 4616,
-      "originalText": "begin\r\n                            AutomaticPeriodStatement.TestField(\"E-Mail Template Code\");\r\n                            CreateAutomaticPeriodStatement(Customer, AutomaticPeriodStatement);\r\n                            Commit();\r\n                        end;",
-      "mutatedText": "begin end",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": []
     },
     {
@@ -1045,7 +1045,7 @@
       "procedureName": "CreateOrSendAutStatements",
       "startIndex": 4391,
       "endIndex": 4449,
-      "originalText": "AutomaticPeriodStatement.TestField(\"E-Mail Template Code\")",
+      "originalText": "[redacted: third-party source, see this directory's README]",
       "mutatedText": "",
       "coveringTests": []
     },
@@ -1064,7 +1064,7 @@
       "procedureName": "CreateOrSendAutStatements",
       "startIndex": 4480,
       "endIndex": 4546,
-      "originalText": "CreateAutomaticPeriodStatement(Customer, AutomaticPeriodStatement)",
+      "originalText": "[redacted: third-party source, see this directory's README]",
       "mutatedText": "",
       "coveringTests": []
     },
@@ -1083,7 +1083,7 @@
       "procedureName": "CreateOrSendAutStatements",
       "startIndex": 4577,
       "endIndex": 4585,
-      "originalText": "Commit()",
+      "originalText": "[redacted: third-party source, see this directory's README]",
       "mutatedText": "",
       "coveringTests": []
     },
@@ -1102,8 +1102,8 @@
       "procedureName": "CreateOrSendAutStatements",
       "startIndex": 4641,
       "endIndex": 4695,
-      "originalText": "AutomaticDocument.\"Automatic Due Date Statement\" <> ''",
-      "mutatedText": "AutomaticDocument.\"Automatic Due Date Statement\" = ''",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": []
     },
     {
@@ -1121,8 +1121,8 @@
       "procedureName": "CreateOrSendAutStatements",
       "startIndex": 4808,
       "endIndex": 5059,
-      "originalText": "begin\r\n                            AutDueDateStatement.TestField(\"E-Mail Template Code\");\r\n                            CreateAutomaticDueDateStatement(Customer, AutDueDateStatement);\r\n                            Commit();\r\n                        end;",
-      "mutatedText": "begin end",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": []
     },
     {
@@ -1140,7 +1140,7 @@
       "procedureName": "CreateOrSendAutStatements",
       "startIndex": 4843,
       "endIndex": 4896,
-      "originalText": "AutDueDateStatement.TestField(\"E-Mail Template Code\")",
+      "originalText": "[redacted: third-party source, see this directory's README]",
       "mutatedText": "",
       "coveringTests": []
     },
@@ -1159,7 +1159,7 @@
       "procedureName": "CreateOrSendAutStatements",
       "startIndex": 4927,
       "endIndex": 4989,
-      "originalText": "CreateAutomaticDueDateStatement(Customer, AutDueDateStatement)",
+      "originalText": "[redacted: third-party source, see this directory's README]",
       "mutatedText": "",
       "coveringTests": []
     },
@@ -1178,7 +1178,7 @@
       "procedureName": "CreateOrSendAutStatements",
       "startIndex": 5020,
       "endIndex": 5028,
-      "originalText": "Commit()",
+      "originalText": "[redacted: third-party source, see this directory's README]",
       "mutatedText": "",
       "coveringTests": []
     },
@@ -1197,8 +1197,8 @@
       "procedureName": "CreateOrSendAutStatements",
       "startIndex": 5101,
       "endIndex": 5120,
-      "originalText": "Customer.Next() = 0",
-      "mutatedText": "Customer.Next() <> 0",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": []
     },
     {
@@ -1216,8 +1216,8 @@
       "procedureName": "CreateAutomaticDueDateStatement",
       "startIndex": 5377,
       "endIndex": 6292,
-      "originalText": "begin\r\n        if Format(AutDueDateStatement.\"Send statement if Bal.Due D.F.\") <> '' then begin\r\n            AutDueDateStatement.TestField(\"E-Mail Template Code\");\r\n\r\n            EndDate := CalcDate(AutDueDateStatement.\"Send statement if Bal.Due D.F.\", WorkDate());\r\n\r\n            LastStatementDate := GetLastStatementSendingDate(Customer.\"No.\", AutDueDateStatement.\"E-Mail Template Code\"); // ToDo\r\n\r\n            if LastStatementDate >= EndDate then\r\n                exit;\r\n\r\n            if LastStatementDate <> 0D then\r\n                StartDate := LastStatementDate + 1\r\n            else\r\n        … [truncated 315 chars]",
-      "mutatedText": "begin end",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "CDO Aut Stat Bal Check Tests.DirectCreateStatementCall_ZeroBalanceCustomer_ShouldNotCreateJournalLineWhenNoPDF",
         "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenNoLastDate_ShouldReturnFalse",
@@ -1247,8 +1247,8 @@
       "procedureName": "CreateAutomaticDueDateStatement",
       "startIndex": 5395,
       "endIndex": 5461,
-      "originalText": "Format(AutDueDateStatement.\"Send statement if Bal.Due D.F.\") <> ''",
-      "mutatedText": "Format(AutDueDateStatement.\"Send statement if Bal.Due D.F.\") = ''",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "CDO Aut Stat Bal Check Tests.DirectCreateStatementCall_ZeroBalanceCustomer_ShouldNotCreateJournalLineWhenNoPDF",
         "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenNoLastDate_ShouldReturnFalse",
@@ -1278,8 +1278,8 @@
       "procedureName": "CreateAutomaticDueDateStatement",
       "startIndex": 5467,
       "endIndex": 6282,
-      "originalText": "begin\r\n            AutDueDateStatement.TestField(\"E-Mail Template Code\");\r\n\r\n            EndDate := CalcDate(AutDueDateStatement.\"Send statement if Bal.Due D.F.\", WorkDate());\r\n\r\n            LastStatementDate := GetLastStatementSendingDate(Customer.\"No.\", AutDueDateStatement.\"E-Mail Template Code\"); // ToDo\r\n\r\n            if LastStatementDate >= EndDate then\r\n                exit;\r\n\r\n            if LastStatementDate <> 0D then\r\n                StartDate := LastStatementDate + 1\r\n            else\r\n                StartDate := CalcDate('<-1M>', EndDate);\r\n\r\n            if OpenEntriesInDueDatePer… [truncated 215 chars]",
-      "mutatedText": "begin end",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "CDO Aut Stat Bal Check Tests.DirectCreateStatementCall_ZeroBalanceCustomer_ShouldNotCreateJournalLineWhenNoPDF",
         "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenNoLastDate_ShouldReturnFalse",
@@ -1309,7 +1309,7 @@
       "procedureName": "CreateAutomaticDueDateStatement",
       "startIndex": 5486,
       "endIndex": 5539,
-      "originalText": "AutDueDateStatement.TestField(\"E-Mail Template Code\")",
+      "originalText": "[redacted: third-party source, see this directory's README]",
       "mutatedText": "",
       "coveringTests": [
         "CDO Aut Stat Bal Check Tests.DirectCreateStatementCall_ZeroBalanceCustomer_ShouldNotCreateJournalLineWhenNoPDF",
@@ -1341,8 +1341,8 @@
       "procedureName": "CreateAutomaticDueDateStatement",
       "startIndex": 5794,
       "endIndex": 5822,
-      "originalText": "LastStatementDate >= EndDate",
-      "mutatedText": "LastStatementDate > EndDate",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "CDO Aut Stat Bal Check Tests.DirectCreateStatementCall_ZeroBalanceCustomer_ShouldNotCreateJournalLineWhenNoPDF",
         "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenNoLastDate_ShouldReturnFalse",
@@ -1372,8 +1372,8 @@
       "procedureName": "CreateAutomaticDueDateStatement",
       "startIndex": 5869,
       "endIndex": 5892,
-      "originalText": "LastStatementDate <> 0D",
-      "mutatedText": "LastStatementDate = 0D",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "CDO Aut Stat Bal Check Tests.DirectCreateStatementCall_ZeroBalanceCustomer_ShouldNotCreateJournalLineWhenNoPDF",
         "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenNoLastDate_ShouldReturnFalse",
@@ -1403,8 +1403,8 @@
       "procedureName": "CreateAutomaticDueDateStatement",
       "startIndex": 6044,
       "endIndex": 6106,
-      "originalText": "OpenEntriesInDueDatePeriod(Customer.\"No.\", StartDate, EndDate)",
-      "mutatedText": "OpenEntriesInDueDatePeriod(Customer.\"No.\", EndDate, StartDate)",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "CDO Aut Stat Bal Check Tests.DirectCreateStatementCall_ZeroBalanceCustomer_ShouldNotCreateJournalLineWhenNoPDF",
         "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenNoLastDate_ShouldReturnFalse",
@@ -1434,8 +1434,8 @@
       "procedureName": "CreateAutomaticDueDateStatement",
       "startIndex": 6129,
       "endIndex": 6267,
-      "originalText": "CreateStatement(1, AutDueDateStatement.Output, Customer.\"No.\", WorkDate(), StartDate, EndDate, AutDueDateStatement.\"E-Mail Template Code\")",
-      "mutatedText": "CreateStatement(1, AutDueDateStatement.Output, Customer.\"No.\", WorkDate(), EndDate, StartDate, AutDueDateStatement.\"E-Mail Template Code\")",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "CDO Aut Stat Bal Check Tests.DirectCreateStatementCall_ZeroBalanceCustomer_ShouldNotCreateJournalLineWhenNoPDF",
         "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenNoLastDate_ShouldReturnFalse",
@@ -1465,8 +1465,8 @@
       "procedureName": "OpenEntriesInDueDatePeriod",
       "startIndex": 6471,
       "endIndex": 6855,
-      "originalText": "begin\r\n        CustLedgerEntry.SetCurrentKey(\"Customer No.\", Open, Positive, \"Due Date\", \"Currency Code\");\r\n        CustLedgerEntry.SetRange(\"Customer No.\", CustNo);\r\n        CustLedgerEntry.SetRange(Open, true);\r\n        CustLedgerEntry.SetRange(Positive, true);\r\n        CustLedgerEntry.SetRange(\"Due Date\", StartDate, EndDate);\r\n        exit(not CustLedgerEntry.IsEmpty);\r\n    end;",
-      "mutatedText": "begin end",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "CDO Aut Stat Bal Check Tests.DirectCreateStatementCall_ZeroBalanceCustomer_ShouldNotCreateJournalLineWhenNoPDF",
         "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenNoLastDate_ShouldReturnFalse",
@@ -1496,7 +1496,7 @@
       "procedureName": "OpenEntriesInDueDatePeriod",
       "startIndex": 6486,
       "endIndex": 6576,
-      "originalText": "CustLedgerEntry.SetCurrentKey(\"Customer No.\", Open, Positive, \"Due Date\", \"Currency Code\")",
+      "originalText": "[redacted: third-party source, see this directory's README]",
       "mutatedText": "",
       "coveringTests": [
         "CDO Aut Stat Bal Check Tests.DirectCreateStatementCall_ZeroBalanceCustomer_ShouldNotCreateJournalLineWhenNoPDF",
@@ -1527,7 +1527,7 @@
       "procedureName": "OpenEntriesInDueDatePeriod",
       "startIndex": 6744,
       "endIndex": 6800,
-      "originalText": "CustLedgerEntry.SetRange(\"Due Date\", StartDate, EndDate)",
+      "originalText": "[redacted: third-party source, see this directory's README]",
       "mutatedText": "",
       "coveringTests": [
         "CDO Aut Stat Bal Check Tests.DirectCreateStatementCall_ZeroBalanceCustomer_ShouldNotCreateJournalLineWhenNoPDF",
@@ -1558,8 +1558,8 @@
       "procedureName": "OpenEntriesInDueDatePeriod",
       "startIndex": 6744,
       "endIndex": 6800,
-      "originalText": "CustLedgerEntry.SetRange(\"Due Date\", StartDate, EndDate)",
-      "mutatedText": "CustLedgerEntry.SetRange(\"Due Date\", EndDate, StartDate)",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "CDO Aut Stat Bal Check Tests.DirectCreateStatementCall_ZeroBalanceCustomer_ShouldNotCreateJournalLineWhenNoPDF",
         "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenNoLastDate_ShouldReturnFalse",
@@ -1589,8 +1589,8 @@
       "procedureName": "CreateAutomaticPeriodStatement",
       "startIndex": 7149,
       "endIndex": 8501,
-      "originalText": "begin\r\n        LastSendingDate := GetLastPerStatementSendingDate(Customer.\"No.\", AutomaticPeriodStatement.\"E-Mail Template Code\");\r\n\r\n        if ChangeAutomaticToManual(Customer.\"No.\", LastSendingDate, AutomaticPeriodStatement.\"Change to manual on Reminder\", AutomaticPeriodStatement.\"Change to manual on Fin.Chr.M.\") then begin\r\n            Customer.\"CDO Automatic statement\" := Customer.\"CDO Automatic statement\"::Manual;\r\n            Customer.Modify();\r\n            exit(false);\r\n        end;\r\n\r\n        if LastSendingDate = 0D then\r\n            LastSendingDate := CalcDate('<-1M>', WorkDate());\r\n… [truncated 752 chars]",
-      "mutatedText": "begin end",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "CDO Aut Stat Bal Check Tests.DirectCreateStatementCall_ZeroBalanceCustomer_ShouldNotCreateJournalLineWhenNoPDF",
         "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenNoLastDate_ShouldReturnFalse",
@@ -1620,8 +1620,8 @@
       "procedureName": "CreateAutomaticPeriodStatement",
       "startIndex": 7472,
       "endIndex": 7644,
-      "originalText": "begin\r\n            Customer.\"CDO Automatic statement\" := Customer.\"CDO Automatic statement\"::Manual;\r\n            Customer.Modify();\r\n            exit(false);\r\n        end;",
-      "mutatedText": "begin end",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "CDO Aut Stat Bal Check Tests.DirectCreateStatementCall_ZeroBalanceCustomer_ShouldNotCreateJournalLineWhenNoPDF",
         "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenNoLastDate_ShouldReturnFalse",
@@ -1651,8 +1651,8 @@
       "procedureName": "CreateAutomaticPeriodStatement",
       "startIndex": 7849,
       "endIndex": 7877,
-      "originalText": "NextSendingDate > WorkDate()",
-      "mutatedText": "NextSendingDate >= WorkDate()",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "CDO Aut Stat Bal Check Tests.DirectCreateStatementCall_ZeroBalanceCustomer_ShouldNotCreateJournalLineWhenNoPDF",
         "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenNoLastDate_ShouldReturnFalse",
@@ -1682,8 +1682,8 @@
       "procedureName": "CreateAutomaticPeriodStatement",
       "startIndex": 7911,
       "endIndex": 8003,
-      "originalText": "AutomaticPeriodStatement.GetPeriodDates(StartDate, EndDate, NextSendingDate, Customer.\"No.\")",
-      "mutatedText": "AutomaticPeriodStatement.GetPeriodDates(EndDate, StartDate, NextSendingDate, Customer.\"No.\")",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "CDO Aut Stat Bal Check Tests.DirectCreateStatementCall_ZeroBalanceCustomer_ShouldNotCreateJournalLineWhenNoPDF",
         "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenNoLastDate_ShouldReturnFalse",
@@ -1713,7 +1713,7 @@
       "procedureName": "CreateAutomaticPeriodStatement",
       "startIndex": 7911,
       "endIndex": 8003,
-      "originalText": "AutomaticPeriodStatement.GetPeriodDates(StartDate, EndDate, NextSendingDate, Customer.\"No.\")",
+      "originalText": "[redacted: third-party source, see this directory's README]",
       "mutatedText": "",
       "coveringTests": [
         "CDO Aut Stat Bal Check Tests.DirectCreateStatementCall_ZeroBalanceCustomer_ShouldNotCreateJournalLineWhenNoPDF",
@@ -1744,8 +1744,8 @@
       "procedureName": "CreateAutomaticPeriodStatement",
       "startIndex": 8019,
       "endIndex": 8098,
-      "originalText": "CheckForStatement(Customer.\"No.\", StartDate, EndDate, AutomaticPeriodStatement)",
-      "mutatedText": "CheckForStatement(Customer.\"No.\", EndDate, StartDate, AutomaticPeriodStatement)",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "CDO Aut Stat Bal Check Tests.DirectCreateStatementCall_ZeroBalanceCustomer_ShouldNotCreateJournalLineWhenNoPDF",
         "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenNoLastDate_ShouldReturnFalse",
@@ -1775,8 +1775,8 @@
       "procedureName": "CreateAutomaticPeriodStatement",
       "startIndex": 8120,
       "endIndex": 8273,
-      "originalText": "CreateStatement(0, AutomaticPeriodStatement.Output, Customer.\"No.\", NextSendingDate, StartDate, EndDate, AutomaticPeriodStatement.\"E-Mail Template Code\")",
-      "mutatedText": "CreateStatement(0, AutomaticPeriodStatement.Output, Customer.\"No.\", StartDate, NextSendingDate, EndDate, AutomaticPeriodStatement.\"E-Mail Template Code\")",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "CDO Aut Stat Bal Check Tests.DirectCreateStatementCall_ZeroBalanceCustomer_ShouldNotCreateJournalLineWhenNoPDF",
         "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenNoLastDate_ShouldReturnFalse",
@@ -1806,8 +1806,8 @@
       "procedureName": "CreateAutomaticPeriodStatement",
       "startIndex": 8296,
       "endIndex": 8306,
-      "originalText": "exit(true)",
-      "mutatedText": "exit(not (true))",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "CDO Aut Stat Bal Check Tests.DirectCreateStatementCall_ZeroBalanceCustomer_ShouldNotCreateJournalLineWhenNoPDF",
         "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenNoLastDate_ShouldReturnFalse",
@@ -1837,8 +1837,8 @@
       "procedureName": "CreateStatement",
       "startIndex": 8828,
       "endIndex": 10194,
-      "originalText": "begin\r\n        Void := StatementJournalLine.FindLast();\r\n\r\n        StatementJournalLine.Init();\r\n        StatementJournalLine.\"Line No.\" += 1;\r\n        StatementJournalLine.Type := Type;\r\n        StatementJournalLine.\"Customer No.\" := CustomerNo;\r\n        StatementJournalLine.\"Planned Sending Date\" := SendingDate;\r\n        StatementJournalLine.\"Start Date\" := StartDate;\r\n        StatementJournalLine.\"End Date\" := EndDate;\r\n        StatementJournalLine.\"E-Mail Template Code\" := EMailTemplateCode;\r\n\r\n        case Handle of\r\n            Handle::Journal:\r\n                if not StatementJournalLin… [truncated 766 chars]",
-      "mutatedText": "begin end",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "CDO Aut Stat Bal Check Tests.DirectCreateStatementCall_ZeroBalanceCustomer_ShouldNotCreateJournalLineWhenNoPDF",
         "CDO Send Cust. Statement Tests.CreateStatement_WithJournalHandle_WhenRecordExists_ShouldNotDuplicate",
@@ -1863,8 +1863,8 @@
       "procedureName": "CreateStatement",
       "startIndex": 9447,
       "endIndex": 9813,
-      "originalText": "begin\r\n                    StatementJournalLine.CreatePDF();\r\n                    // Only insert journal line if PDF was actually created\r\n                    if StatementJournalLine.\"Statement PDF\".HasValue() then begin\r\n                        StatementJournalLine.Insert();\r\n                        Created := true;\r\n                    end;\r\n                end;",
-      "mutatedText": "begin end",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "CDO Aut Stat Bal Check Tests.DirectCreateStatementCall_ZeroBalanceCustomer_ShouldNotCreateJournalLineWhenNoPDF",
         "CDO Send Cust. Statement Tests.CreateStatement_WithJournalHandle_WhenRecordExists_ShouldNotDuplicate",
@@ -1889,8 +1889,8 @@
       "procedureName": "CreateStatement",
       "startIndex": 9662,
       "endIndex": 9791,
-      "originalText": "begin\r\n                        StatementJournalLine.Insert();\r\n                        Created := true;\r\n                    end;",
-      "mutatedText": "begin end",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "CDO Aut Stat Bal Check Tests.DirectCreateStatementCall_ZeroBalanceCustomer_ShouldNotCreateJournalLineWhenNoPDF",
         "CDO Send Cust. Statement Tests.CreateStatement_WithJournalHandle_WhenRecordExists_ShouldNotDuplicate",
@@ -1915,8 +1915,8 @@
       "procedureName": "CreateStatement",
       "startIndex": 10000,
       "endIndex": 10148,
-      "originalText": "begin\r\n                        StatementJournalLine.SendMail(true, true, false);\r\n                        Created := true;\r\n                    end;",
-      "mutatedText": "begin end",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "CDO Aut Stat Bal Check Tests.DirectCreateStatementCall_ZeroBalanceCustomer_ShouldNotCreateJournalLineWhenNoPDF",
         "CDO Send Cust. Statement Tests.CreateStatement_WithJournalHandle_WhenRecordExists_ShouldNotDuplicate",
@@ -1940,7 +1940,7 @@
       "procedureName": "CreateStatement",
       "startIndex": 10031,
       "endIndex": 10079,
-      "originalText": "StatementJournalLine.SendMail(true, true, false)",
+      "originalText": "[redacted: third-party source, see this directory's README]",
       "mutatedText": "",
       "coveringTests": [
         "CDO Aut Stat Bal Check Tests.DirectCreateStatementCall_ZeroBalanceCustomer_ShouldNotCreateJournalLineWhenNoPDF",
@@ -1965,8 +1965,8 @@
       "procedureName": "GetLastPerStatementSendingDate",
       "startIndex": 10376,
       "endIndex": 11490,
-      "originalText": "begin\r\n        if EMailTemplateCode = '' then\r\n            exit;\r\n\r\n        EMailLog.SetCurrentKey(\"Table No.\", \"Primary Key Field 1 Value\", \"Primary Key Field 2 Value\");\r\n        EMailLog.SetRange(\"E-Mail Template Code\", EMailTemplateCode);\r\n        EMailLog.SetRange(\"Table No.\", Database::Customer);\r\n        EMailLog.SetRange(\"Primary Key Field 1 Value\", CustomerNo);\r\n        EMailLog.SetRange(\"Document Type\", EMailLog.\"Document Type\"::\"Period Statement\");\r\n\r\n        EMailLog.SetFilter(\"Planned Sending Date\", '<>%1', 0D);\r\n        if EMailLog.IsEmpty then\r\n            EMailLog.SetRange(\"Plan… [truncated 514 chars]",
-      "mutatedText": "begin end",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "CDO Aut Stat Bal Check Tests.DirectCreateStatementCall_ZeroBalanceCustomer_ShouldNotCreateJournalLineWhenNoPDF",
         "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenNoLastDate_ShouldReturnFalse",
@@ -1996,7 +1996,7 @@
       "procedureName": "GetLastPerStatementSendingDate",
       "startIndex": 10757,
       "endIndex": 10837,
-      "originalText": "EMailLog.SetRange(\"Document Type\", EMailLog.\"Document Type\"::\"Period Statement\")",
+      "originalText": "[redacted: third-party source, see this directory's README]",
       "mutatedText": "",
       "coveringTests": [
         "CDO Aut Stat Bal Check Tests.DirectCreateStatementCall_ZeroBalanceCustomer_ShouldNotCreateJournalLineWhenNoPDF",
@@ -2027,8 +2027,8 @@
       "procedureName": "GetLastStatementSendingDate",
       "startIndex": 11669,
       "endIndex": 12820,
-      "originalText": "begin\r\n        if EMailTemplateCode = '' then\r\n            exit;\r\n\r\n        EMailLog.SetCurrentKey(\"Table No.\", \"Primary Key Field 1 Value\", \"Primary Key Field 2 Value\");\r\n        EMailLog.SetRange(\"E-Mail Template Code\", EMailTemplateCode);\r\n        EMailLog.SetRange(\"Table No.\", Database::Customer);\r\n        EMailLog.SetRange(\"Primary Key Field 1 Value\", CustomerNo);\r\n        EMailLog.SetRange(\"Document Type\", EMailLog.\"Document Type\"::\"Period Statement\", EMailLog.\"Document Type\"::Statement);\r\n\r\n        EMailLog.SetFilter(\"Planned Sending Date\", '<>%1', 0D);\r\n        if EMailLog.IsEmpty then… [truncated 551 chars]",
-      "mutatedText": "begin end",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "CDO Aut Stat Bal Check Tests.DirectCreateStatementCall_ZeroBalanceCustomer_ShouldNotCreateJournalLineWhenNoPDF",
         "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenNoLastDate_ShouldReturnFalse",
@@ -2058,7 +2058,7 @@
       "procedureName": "GetLastStatementSendingDate",
       "startIndex": 12050,
       "endIndex": 12167,
-      "originalText": "EMailLog.SetRange(\"Document Type\", EMailLog.\"Document Type\"::\"Period Statement\", EMailLog.\"Document Type\"::Statement)",
+      "originalText": "[redacted: third-party source, see this directory's README]",
       "mutatedText": "",
       "coveringTests": [
         "CDO Aut Stat Bal Check Tests.DirectCreateStatementCall_ZeroBalanceCustomer_ShouldNotCreateJournalLineWhenNoPDF",
@@ -2089,8 +2089,8 @@
       "procedureName": "CheckForStatement",
       "startIndex": 13040,
       "endIndex": 14301,
-      "originalText": "begin\r\n        if not Cust.Get(CustomerNo) then\r\n            exit(false);\r\n\r\n        if AutomaticPeriodStatement.\"Do not send if neg. balance\" then begin\r\n            Cust.SetFilter(\"Date Filter\", '..%1', EndDate);\r\n            Cust.CalcFields(\"Net Change (LCY)\");\r\n            if Cust.\"Net Change (LCY)\" < 0 then\r\n                exit(false);\r\n        end;\r\n\r\n        case AutomaticPeriodStatement.\"Send statement if\" of\r\n            AutomaticPeriodStatement.\"Send statement if\"::\"Entries in period\":\r\n                exit(EntriesInPeriod(CustomerNo, StartDate, EndDate));\r\n\r\n            AutomaticPe… [truncated 661 chars]",
-      "mutatedText": "begin end",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "CDO Aut Stat Bal Check Tests.DirectCreateStatementCall_ZeroBalanceCustomer_ShouldNotCreateJournalLineWhenNoPDF",
         "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenNoLastDate_ShouldReturnFalse",
@@ -2120,8 +2120,8 @@
       "procedureName": "CheckForStatement",
       "startIndex": 13188,
       "endIndex": 13397,
-      "originalText": "begin\r\n            Cust.SetFilter(\"Date Filter\", '..%1', EndDate);\r\n            Cust.CalcFields(\"Net Change (LCY)\");\r\n            if Cust.\"Net Change (LCY)\" < 0 then\r\n                exit(false);\r\n        end;",
-      "mutatedText": "begin end",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "CDO Aut Stat Bal Check Tests.DirectCreateStatementCall_ZeroBalanceCustomer_ShouldNotCreateJournalLineWhenNoPDF",
         "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenNoLastDate_ShouldReturnFalse",
@@ -2151,7 +2151,7 @@
       "procedureName": "CheckForStatement",
       "startIndex": 13207,
       "endIndex": 13253,
-      "originalText": "Cust.SetFilter(\"Date Filter\", '..%1', EndDate)",
+      "originalText": "[redacted: third-party source, see this directory's README]",
       "mutatedText": "",
       "coveringTests": [
         "CDO Aut Stat Bal Check Tests.DirectCreateStatementCall_ZeroBalanceCustomer_ShouldNotCreateJournalLineWhenNoPDF",
@@ -2182,7 +2182,7 @@
       "procedureName": "CheckForStatement",
       "startIndex": 13268,
       "endIndex": 13303,
-      "originalText": "Cust.CalcFields(\"Net Change (LCY)\")",
+      "originalText": "[redacted: third-party source, see this directory's README]",
       "mutatedText": "",
       "coveringTests": [
         "CDO Aut Stat Bal Check Tests.DirectCreateStatementCall_ZeroBalanceCustomer_ShouldNotCreateJournalLineWhenNoPDF",
@@ -2213,8 +2213,8 @@
       "procedureName": "CheckForStatement",
       "startIndex": 13321,
       "endIndex": 13348,
-      "originalText": "Cust.\"Net Change (LCY)\" < 0",
-      "mutatedText": "Cust.\"Net Change (LCY)\" <= 0",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "CDO Aut Stat Bal Check Tests.DirectCreateStatementCall_ZeroBalanceCustomer_ShouldNotCreateJournalLineWhenNoPDF",
         "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenNoLastDate_ShouldReturnFalse",
@@ -2244,8 +2244,8 @@
       "procedureName": "CheckForStatement",
       "startIndex": 13559,
       "endIndex": 13612,
-      "originalText": "exit(EntriesInPeriod(CustomerNo, StartDate, EndDate))",
-      "mutatedText": "exit(not (EntriesInPeriod(CustomerNo, StartDate, EndDate)))",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "CDO Aut Stat Bal Check Tests.DirectCreateStatementCall_ZeroBalanceCustomer_ShouldNotCreateJournalLineWhenNoPDF",
         "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenNoLastDate_ShouldReturnFalse",
@@ -2275,8 +2275,8 @@
       "procedureName": "CheckForStatement",
       "startIndex": 13564,
       "endIndex": 13611,
-      "originalText": "EntriesInPeriod(CustomerNo, StartDate, EndDate)",
-      "mutatedText": "EntriesInPeriod(CustomerNo, EndDate, StartDate)",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "CDO Aut Stat Bal Check Tests.DirectCreateStatementCall_ZeroBalanceCustomer_ShouldNotCreateJournalLineWhenNoPDF",
         "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenNoLastDate_ShouldReturnFalse",
@@ -2306,8 +2306,8 @@
       "procedureName": "CheckForStatement",
       "startIndex": 13701,
       "endIndex": 13733,
-      "originalText": "exit(CalcBalance(Cust, EndDate))",
-      "mutatedText": "exit(not (CalcBalance(Cust, EndDate)))",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [],
       "failureNote": "not re-run on resume: a prior run's execution of this mutant could not be confirmed complete and stranded the tier. A mutant that never terminates (e.g. a negated loop-exit condition) reproduces this every time and blocks every mutant behind it, so it is skipped rather than retried — pass --retry-stranded to attempt it anyway. It is NOT scored either way."
     },
@@ -2326,8 +2326,8 @@
       "procedureName": "CheckForStatement",
       "startIndex": 13828,
       "endIndex": 13859,
-      "originalText": "exit(BalanceDue(Cust, EndDate))",
-      "mutatedText": "exit(not (BalanceDue(Cust, EndDate)))",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [],
       "failureNote": "not re-run on resume: a prior run's execution of this mutant could not be confirmed complete and stranded the tier. A mutant that never terminates (e.g. a negated loop-exit condition) reproduces this every time and blocks every mutant behind it, so it is skipped rather than retried — pass --retry-stranded to attempt it anyway. It is NOT scored either way."
     },
@@ -2346,8 +2346,8 @@
       "procedureName": "CheckForStatement",
       "startIndex": 13976,
       "endIndex": 14023,
-      "originalText": "EntriesInPeriod(CustomerNo, StartDate, EndDate)",
-      "mutatedText": "EntriesInPeriod(CustomerNo, EndDate, StartDate)",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "CDO Aut Stat Bal Check Tests.DirectCreateStatementCall_ZeroBalanceCustomer_ShouldNotCreateJournalLineWhenNoPDF",
         "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenNoLastDate_ShouldReturnFalse",
@@ -2377,8 +2377,8 @@
       "procedureName": "CheckForStatement",
       "startIndex": 14175,
       "endIndex": 14222,
-      "originalText": "EntriesInPeriod(CustomerNo, StartDate, EndDate)",
-      "mutatedText": "EntriesInPeriod(CustomerNo, EndDate, StartDate)",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "CDO Aut Stat Bal Check Tests.DirectCreateStatementCall_ZeroBalanceCustomer_ShouldNotCreateJournalLineWhenNoPDF",
         "CDO Send Cust. Statement Tests.ChangeAutomaticToManual_WhenNoLastDate_ShouldReturnFalse",
@@ -2408,7 +2408,7 @@
       "procedureName": "EntriesInPeriod",
       "startIndex": 14484,
       "endIndex": 14545,
-      "originalText": "CustLedgerEntry.SetCurrentKey(\"Customer No.\", \"Posting Date\")",
+      "originalText": "[redacted: third-party source, see this directory's README]",
       "mutatedText": "",
       "coveringTests": [
         "CDO Aut Stat Bal Check Tests.DirectCreateStatementCall_ZeroBalanceCustomer_ShouldNotCreateJournalLineWhenNoPDF",
@@ -2439,7 +2439,7 @@
       "procedureName": "CalcBalance",
       "startIndex": 14833,
       "endIndex": 14879,
-      "originalText": "Cust.SetFilter(\"Date Filter\", '..%1', EndDate)",
+      "originalText": "[redacted: third-party source, see this directory's README]",
       "mutatedText": "",
       "coveringTests": [
         "CDO Aut Stat Bal Check Tests.DirectCreateStatementCall_ZeroBalanceCustomer_ShouldNotCreateJournalLineWhenNoPDF",
@@ -2470,7 +2470,7 @@
       "procedureName": "CalcBalance",
       "startIndex": 14890,
       "endIndex": 14925,
-      "originalText": "Cust.CalcFields(\"Net Change (LCY)\")",
+      "originalText": "[redacted: third-party source, see this directory's README]",
       "mutatedText": "",
       "coveringTests": [
         "CDO Aut Stat Bal Check Tests.DirectCreateStatementCall_ZeroBalanceCustomer_ShouldNotCreateJournalLineWhenNoPDF",
@@ -2501,7 +2501,7 @@
       "procedureName": "BalanceDue",
       "startIndex": 15083,
       "endIndex": 15129,
-      "originalText": "Cust.SetFilter(\"Date Filter\", '..%1', EndDate)",
+      "originalText": "[redacted: third-party source, see this directory's README]",
       "mutatedText": "",
       "coveringTests": [
         "CDO Aut Stat Bal Check Tests.DirectCreateStatementCall_ZeroBalanceCustomer_ShouldNotCreateJournalLineWhenNoPDF",
@@ -2532,8 +2532,8 @@
       "procedureName": "IsCustomerStatementReport",
       "startIndex": 16020,
       "endIndex": 16030,
-      "originalText": "exit(true)",
-      "mutatedText": "exit(not (true))",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "CDO Aut Stat Bal Check Tests.DirectCreateStatementCall_ZeroBalanceCustomer_ShouldNotCreateJournalLineWhenNoPDF",
         "CDO Send Cust. Statement Tests.IsCustomerStatementReport_WithNonCustomerTable_ShouldReturnFalse",
@@ -2565,8 +2565,8 @@
       "procedureName": "IsCustomerStatementReport",
       "startIndex": 16284,
       "endIndex": 16294,
-      "originalText": "exit(true)",
-      "mutatedText": "exit(not (true))",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "CDO Aut Stat Bal Check Tests.DirectCreateStatementCall_ZeroBalanceCustomer_ShouldNotCreateJournalLineWhenNoPDF",
         "CDO Send Cust. Statement Tests.IsCustomerStatementReport_WithNonCustomerTable_ShouldReturnFalse",
