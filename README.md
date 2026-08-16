@@ -607,7 +607,7 @@ a LethAL feature or a mode.
 ---
 
 **Author**: Torben Leth (sshadows@sshadows.dk)
-**License**: none declared yet. Add a `LICENSE` file before distributing.
+**License**: MIT. See [`LICENSE`](LICENSE).
 
 ## Architecture
 
