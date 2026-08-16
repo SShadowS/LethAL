@@ -182,6 +182,105 @@ const STATE_MEANING: Record<SiteState, string> = {
 const esc = (s: string): string =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
+/**
+ * AL keywords worth colouring. Deliberately small: statement keywords and the object/member
+ * declarations, not every property name BC accepts. A highlighter that tries to know every property
+ * gets some wrong, and a wrongly-plain property reads as a mistake in the SOURCE rather than in the
+ * highlighter.
+ */
+const AL_KEYWORDS = new Set(
+  [
+    "and",
+    "array",
+    "begin",
+    "case",
+    "codeunit",
+    "do",
+    "downto",
+    "else",
+    "end",
+    "enum",
+    "exit",
+    "extends",
+    "false",
+    "field",
+    "fields",
+    "for",
+    "foreach",
+    "if",
+    "implements",
+    "in",
+    "interface",
+    "internal",
+    "key",
+    "keys",
+    "local",
+    "mod",
+    "not",
+    "of",
+    "or",
+    "page",
+    "pageextension",
+    "procedure",
+    "protected",
+    "query",
+    "record",
+    "repeat",
+    "report",
+    "table",
+    "tableextension",
+    "then",
+    "to",
+    "trigger",
+    "true",
+    "until",
+    "value",
+    "var",
+    "while",
+    "with",
+    "xmlport",
+    "xor",
+    "asserterror",
+    "div",
+  ].map((k) => k.toLowerCase()),
+);
+
+/**
+ * Colour one line of AL.
+ *
+ * Line-local by design: a `/* *&#47;` block comment spanning lines is not tracked, because the page
+ * renders each line independently and a highlighter that guessed at state would mis-colour a whole
+ * file after one unbalanced delimiter. AL's own convention here is `//`, which is handled.
+ *
+ * Escapes per TOKEN rather than escaping the line first, so a `<` in the source can never be
+ * mistaken for markup by the tokenizer or the browser.
+ */
+function alHighlight(line: string): string {
+  const TOKEN =
+    /(\/\/.*$)|('(?:''|[^'])*')|("(?:[^"]*)")|(\b\d+(?:\.\d+)?\b)|(\b[A-Za-z_][A-Za-z0-9_]*\b)/g;
+  let out = "";
+  let last = 0;
+  for (const m of line.matchAll(TOKEN)) {
+    const at = m.index ?? 0;
+    out += esc(line.slice(last, at));
+    last = at + m[0].length;
+    const [, comment, str, quoted, num, word] = m;
+    if (comment !== undefined) out += `<i class="t-com">${esc(comment)}</i>`;
+    else if (str !== undefined) out += `<i class="t-str">${esc(str)}</i>`;
+    else if (quoted !== undefined) out += `<i class="t-id">${esc(quoted)}</i>`;
+    else if (num !== undefined) out += `<i class="t-num">${esc(num)}</i>`;
+    else if (word !== undefined) {
+      out += AL_KEYWORDS.has(word.toLowerCase()) ? `<i class="t-kw">${esc(word)}</i>` : esc(word);
+    }
+  }
+  return out + esc(line.slice(last));
+}
+
+/** `alHighlight` for a snippet that may span lines — the mutated text in a detail card. */
+function highlightBlock(text: string): string {
+  return text.split(/\r?\n/).map(alHighlight).join("\n");
+}
+
 /** Sites grouped by the file they were measured in. */
 const byFile = new Map<string, Mutant[]>();
 for (const m of report.mutants) {
@@ -277,7 +376,7 @@ for (const [file, mutants] of [...byFile.entries()].sort()) {
             .map((s) => siteCard(s))
             .join("")}</details>`;
     rows.push(
-      `<div class="row${tint}"><span class="rail ${rail.cls}" title="${esc(rail.label)}"></span>${mark}<span class="ln">${lineNo}</span><code>${esc(text) || "&nbsp;"}</code>${detail}</div>`,
+      `<div class="row${tint}"><span class="rail ${rail.cls}" title="${esc(rail.label)}"></span>${mark}<span class="ln">${lineNo}</span><code>${alHighlight(text) || "&nbsp;"}</code>${detail}</div>`,
     );
   });
 
@@ -297,7 +396,7 @@ function siteCard(s: RenderedSite): string {
   return `<div class="card ${s.state}">
   <div class="cardhead"><span class="mark ${s.state}" aria-hidden="true"></span><b>${esc(m.operatorName)}</b> <span class="verdict">${esc(m.verdict)}</span> <span class="chip">${esc(where)}</span></div>
   <p class="meaning">${esc(STATE_MEANING[s.state])}</p>
-  <div class="diff"><div class="was"><span>was</span><code>${esc(m.originalText)}</code></div><div class="now"><span>became</span><code>${esc(m.mutatedText) || "<em>(deleted)</em>"}</code></div></div>
+  <div class="diff"><div class="was"><span>was</span><code>${highlightBlock(m.originalText)}</code></div><div class="now"><span>became</span><code>${highlightBlock(m.mutatedText) || "<em>(deleted)</em>"}</code></div></div>
   <p class="badges"><span class="badge">attribution: ${esc(m.coverageAttribution ?? "n/a")}</span><span class="badge">executionProven: ${m.coverageAttribution === "exact"}</span><span class="badge">guardObserved: ${String(m.guardObserved ?? "not measured")}</span></p>
   ${m.killingTest !== undefined ? `<p class="killed-by">killed by <b>${esc(m.killingTest)}</b></p>` : ""}
   ${tests !== "" ? `<details><summary>${(m.coveringTests ?? []).length} covering test(s)</summary><ul>${tests}</ul></details>` : ""}
@@ -334,9 +433,9 @@ const projectName = (
 
 const html = `<title>${esc(projectName === "" ? "Mutation" : projectName)} Overlay</title>
 <style>
-:root{--bg:#f7f8f9;--fg:#171b1f;--dim:#657079;--line:#dfe4e8;--card:#fff;--killed:#2b8a7e;--proven:#c0392b;--unproven:#c0392b;--uncov:#7a5ea8;--tint:#fdf0ee;--railc:#8fa3b0;--warn:#8a6d00;--warnbg:#fff8e1}
-@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#16181a;--fg:#e8e6e3;--dim:#9b978f;--line:#2c2f33;--card:#1d2023;--killed:#4fc3b0;--proven:#ff6b5a;--unproven:#ff6b5a;--uncov:#b08fe0;--tint:#2a1e1d;--railc:#5b6a75;--warn:#e0c060;--warnbg:#2a2417}}
-:root[data-theme="dark"]{--bg:#16181a;--fg:#e8e6e3;--dim:#9b978f;--line:#2c2f33;--card:#1d2023;--killed:#4fc3b0;--proven:#ff6b5a;--unproven:#ff6b5a;--uncov:#b08fe0;--tint:#2a1e1d;--railc:#5b6a75;--warn:#e0c060;--warnbg:#2a2417}
+:root{--bg:#f7f8f9;--fg:#171b1f;--dim:#657079;--line:#dfe4e8;--card:#fff;--killed:#2b8a7e;--proven:#c0392b;--unproven:#c0392b;--uncov:#7a5ea8;--tint:#fdf0ee;--railc:#8fa3b0;--warn:#8a6d00;--warnbg:#fff8e1;--kw:#1c5fa8;--str:#7a4a12;--com:#8a8f95;--num:#6a4bab;--qid:#116149}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#16181a;--fg:#e8e6e3;--dim:#9b978f;--line:#2c2f33;--card:#1d2023;--killed:#4fc3b0;--proven:#ff6b5a;--unproven:#ff6b5a;--uncov:#b08fe0;--tint:#2a1e1d;--railc:#5b6a75;--warn:#e0c060;--warnbg:#2a2417;--kw:#7fb3f0;--str:#d9a35c;--com:#7c8288;--num:#b79ef0;--qid:#5fc9a8}}
+:root[data-theme="dark"]{--bg:#16181a;--fg:#e8e6e3;--dim:#9b978f;--line:#2c2f33;--card:#1d2023;--killed:#4fc3b0;--proven:#ff6b5a;--unproven:#ff6b5a;--uncov:#b08fe0;--tint:#2a1e1d;--railc:#5b6a75;--warn:#e0c060;--warnbg:#2a2417;--kw:#7fb3f0;--str:#d9a35c;--com:#7c8288;--num:#b79ef0;--qid:#5fc9a8}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
 .wrap{max-width:1180px;margin:0 auto;padding:28px 20px 80px}
@@ -379,6 +478,14 @@ h2{font-size:1rem;margin:28px 0 8px;font-family:ui-monospace,SFMono-Regular,Menl
 .row.tint{background:var(--tint)}
 .ln{color:var(--dim);font:12px/1.5 ui-monospace,monospace;width:2.4em;text-align:right;flex:0 0 auto}
 .row code{font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre;flex:1 1 auto}
+/* AL tokens. Italic is never used for emphasis here, so <i> is free to carry the token class
+   without competing with anything the reader must notice. */
+code i{font-style:normal}
+.t-kw{color:var(--kw);font-weight:600}
+.t-str{color:var(--str)}
+.t-com{color:var(--com);font-style:italic}
+.t-num{color:var(--num)}
+.t-id{color:var(--qid)}
 .detail{flex:0 0 100%;margin:2px 0 8px 3.6em}
 .detail>summary{cursor:pointer;color:var(--dim);font-size:.8rem}
 .card{border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin:8px 0;background:var(--bg)}
@@ -396,7 +503,7 @@ summary:focus-visible,a:focus-visible{outline:2px solid var(--killed);outline-of
 footer{margin-top:44px;color:var(--dim);font-size:.83rem;border-top:1px solid var(--line);padding-top:14px}
 </style>
 <div class="wrap">
-<h1>Mutation overlay</h1>
+<h1>${esc(projectName === "" ? "Mutation" : projectName)} overlay</h1>
 <p class="sub">${esc(report.validity.scoreDescribes)}</p>
 ${firstParty ? "" : '<p class="banner"><b>Contains full application source.</b> This page embeds the files it measured, which is more than the report it was generated from carries. Do not publish it.</p>'}
 
