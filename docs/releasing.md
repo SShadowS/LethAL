@@ -65,13 +65,42 @@ else is not.
    behaviour. See `CLAUDE.md` for the frozen per-gate numbers.
 5. Build the binaries: `bun run build:binaries`.
 6. Smoke-test the host binary against a fixture (see [Verifying a build](#verifying-a-build)).
-7. Tag and publish the artifacts.
+7. Tag and publish the artifacts — see [Tagging a release](#tagging-a-release) below.
 
 > **Corrected 2026-08-08.** This said the repository had no configured git remote, which was true
 > on 2026-07-27 and is not now: `origin` is `https://github.com/SShadowS/LethAL.git`, and it is
 > PUBLIC. What remains true is that **no release has been cut** — step 7 has never been run, and
 > nothing below step 6 has been exercised. Scan for secrets before any push, not only before a
 > release.
+
+## Tagging a release
+
+Added 2026-08-16 with `.github/workflows/release.yml`. **Neither workflow has ever run**, because
+no tag has ever been pushed and CI was added the same day. Read the two files before trusting
+either; the first tag is as much a test of them as of the release.
+
+```bash
+git tag v0.1.0-alpha.1     # must equal the root package.json version
+git push origin v0.1.0-alpha.1
+```
+
+The workflow refuses a tag that disagrees with `package.json`, runs typecheck and the unit suite,
+builds all five targets, smoke-tests the Windows binary with `--version`, and opens a **draft**
+release with the binaries attached and generated notes.
+
+Draft, not published, because two things still need a human:
+
+1. **Attach `lethal-control.app` by hand.** Building it needs `alc` from the AL VS Code extension,
+   which no hosted runner has, and `*.app` is gitignored so there is no committed copy to attach.
+   Say in the release notes which control-app version it is: a user pointing `controlSymbolPath` at
+   the wrong one gets a version mismatch at run time, not at publish time.
+2. **Read the generated notes.** They come from commit subjects, which were written for this
+   repository's own record rather than for a stranger.
+
+`.github/workflows/ci.yml` runs the same typecheck-and-test gate on every push and pull request. It
+does NOT run `biome check .` repo-wide (pre-existing format debt in `engine`/`builtin-tier1` would
+fail every build) and it does NOT run the live integration gates, which need a Business Central
+container. Those stay a local, human-invoked gate.
 
 ## What the build produces
 

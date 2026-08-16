@@ -1,0 +1,43 @@
+name: CI
+
+# Runs on every push and pull request. Deliberately does NOT run the integration gates: those
+# publish to a live Business Central container, are env-gated (LETHAL_ITEST_*), and take minutes
+# each. They stay a human-invoked, machine-local gate — see CLAUDE.md.
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  check:
+    # windows-latest, not ubuntu, because this is a Windows-first tool: the AL compiler, altool and
+    # the BC containers it drives are Windows, the development machine is Windows, and the unit
+    # suite has never been run on Linux. Building the Linux and macOS binaries is a separate job on
+    # a tag (release.yml) and does not need the suite to have passed on those platforms.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - run: bun install --frozen-lockfile
+
+      # The order matters and is the one in CLAUDE.md. `tsc --build` regenerates packages/*/dist,
+      # whose stale compiled *.test.js are then picked up by `bun test` as phantom failures, so the
+      # clean sits BETWEEN the two rather than before both.
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Remove compiled dist before testing
+        shell: bash
+        run: rm -rf packages/*/dist
+
+      - name: Unit tests
+        run: bun test
+
+      # `biome check .` is not run repo-wide on purpose: it reports pre-existing organizeImports and
+      # format debt in engine/ and builtin-tier1/, so a repo-wide run would fail every build and
+      # teach everyone to ignore this job. Formatting is enforced per-file by a local PostToolUse
+      # hook instead. Making the whole repository clean is the prerequisite for adding it here.

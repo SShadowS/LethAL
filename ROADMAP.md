@@ -194,6 +194,7 @@ that ordering is the priority.
 - **R148** · The al-runner fixture's test bundle resolves its own target to a stale symbol-only .app, and al-runner warns that calls into it will fail · [R148.md](docs/roadmap/R148.md) · open — observed 2026-08-15 while measuring R147 on al-runner 2.1.2.0. Harmless today; the gate is 3/13/0…
 - **R149** · After R147 the R123 contract probe measures an argv no mutant sends, and its own promise is that it does not · [R149.md](docs/roadmap/R149.md) · open — filed 2026-08-15 out of the spec-adversary review of R147, before R147 landed
 - **R108** · A batch whose TOTAL guard count exceeds the measured publish ceiling still pays for the failure — R90 refuses… · [R108.md](docs/roadmap/R108.md) · done (`pending`) — `batchCeilingWarning` warns (never refuses) when a batch TOTAL crosses the tier bracket…
+- **R154** · CI and the release workflow exist but have NEVER run, so the first tag tests the workflow as much as the release · [R154.md](docs/roadmap/R154.md) · open — filed 2026-08-16 with the workflows themselves; closes when a push and a tag have both gone green
 
 ---
 

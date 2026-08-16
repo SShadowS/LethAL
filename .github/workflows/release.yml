@@ -1,0 +1,89 @@
+name: Release
+
+# Fires on a version tag. Builds all five standalone binaries and publishes them, plus the LethAL
+# Control app, as a GitHub release.
+#
+# The tag is the trigger, not the source of truth: `scripts/build-binary.ts` stamps the version from
+# the root package.json, and the guard below refuses a tag that disagrees with it. A release whose
+# filenames say one version and whose tag says another is exactly the confusion R88 exists to stop.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    # Cross-compiles every target from one machine — `bun build --compile --target` downloads the
+    # target's runtime, so no matrix is needed. Windows, to match CI and the development machine.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - run: bun install --frozen-lockfile
+
+      - name: Tag must match the version in package.json
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(bun --print 'require("./package.json").version')"
+          if [ "$tag" != "$pkg" ]; then
+            echo "tag $GITHUB_REF_NAME says $tag, package.json says $pkg — bump one of them" >&2
+            exit 1
+          fi
+
+      # The same gate a human runs before cutting a release (docs/releasing.md step 3). The live
+      # integration gates are NOT here and cannot be: they need a Business Central container.
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Remove compiled dist before testing
+        shell: bash
+        run: rm -rf packages/*/dist
+
+      - name: Unit tests
+        run: bun test
+
+      - name: Build all five targets
+        run: bun run build:binaries
+
+      - name: Smoke-test the host binary
+        shell: bash
+        run: |
+          exe="$(ls build/lethal-*-windows-x64.exe)"
+          # --version prints three lines: version, build provenance, operator list (R88). A binary
+          # that cannot answer this is not one to publish.
+          "$exe" --version
+
+      - name: Publish the release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          generate_release_notes: true
+          # Binaries only. `lethal-control.app` is NOT here and cannot be: building it needs `alc`
+          # from the AL VS Code extension, which no hosted runner has, and `*.app` is gitignored so
+          # there is no committed copy to attach either. The release is created as a DRAFT for
+          # exactly this reason — attach the control app by hand before publishing, and say which
+          # version it is. See docs/releasing.md.
+          files: |
+            build/lethal-*
+          body: |
+            See CHANGELOG.md for what shipped.
+
+            **Install:** download the binary for your platform. It is standalone and needs no Bun,
+            Node or npm. Check it with `lethal --version`, which prints the commit it was built
+            from and the mutation operators it can actually apply.
+
+            **`lethal-control.app`** is the LethAL Control extension, attached to this release by
+            hand (it needs the AL compiler to build, which no CI runner has). Publish it to your
+            sandbox or dev container once, and point `controlSymbolPath` at it. See the README's
+            Quick start.
+
+            **Driving it from an agent or CI:** `docs/using-lethal-from-an-agent.md`, and a copyable
+            skill at `skills/lethal-mutation-testing/SKILL.md`.
