@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { Glob } from "bun";
 import {
   DOCTOR_AL_RUNNER_ONLY_CAVEAT,
   DOCTOR_CAVEAT_KINDS,
@@ -9,6 +11,7 @@ import {
   DOCTOR_SCHEMA_VERSION,
   doctorJson,
 } from "../src/cli";
+import { STREAM_SCHEMA_VERSION } from "../src/events";
 import { EXPLAIN_SCHEMA_VERSION, SURVIVOR_RANKINGS, TOOL_CONDITIONS } from "../src/explain";
 import { assertExplainableReport, explain } from "../src/explain";
 import {
@@ -16,6 +19,7 @@ import {
   ERROR_CAUSE_INTERPRETATIONS,
   GUARD_EVIDENCE_INTERPRETATIONS,
   REACH_INTERPRETATIONS,
+  REPORT_SCHEMA_VERSION,
 } from "../src/report";
 import { ATTRIBUTION_INTERPRETATIONS } from "../src/selection";
 import { typeLeafPaths } from "./helpers/type-leaf-paths";
@@ -102,6 +106,22 @@ function conformsTo(root: Schema, value: unknown, node: Schema = root, path = "$
   if (schema.const !== undefined && value !== schema.const) {
     out.push({ path, problem: `expected const ${JSON.stringify(schema.const)}` });
   }
+  // `anyOf` — the stream's root is a union of event shapes, and a validator that ignored it would
+  // return [] for EVERY document against that schema. That is exactly the empty-vs-empty pass this
+  // file exists to prevent, and it was a real bug here until the header line failed to fail.
+  const anyOf = schema.anyOf as Schema[] | undefined;
+  if (anyOf !== undefined) {
+    const branches = anyOf.map((branch) => conformsTo(root, value, branch, path));
+    if (branches.some((v) => v.length === 0)) return [];
+    const best = branches.reduce((a, b) => (a.length <= b.length ? a : b));
+    return [
+      {
+        path,
+        problem: `matches no branch of anyOf; closest complaint: ${best[0]?.problem ?? "?"}`,
+      },
+    ];
+  }
+
   const enumValues = schema.enum as unknown[] | undefined;
   if (enumValues !== undefined && !enumValues.includes(value)) {
     out.push({
@@ -314,5 +334,108 @@ describe("published JSON Schemas (R152)", () => {
     expect(conformsTo(explainSchema, badEnum).map((v) => v.path)).toContain(
       "$.survivorSelection.rankedBy",
     );
+  });
+});
+
+/**
+ * The two BIG surfaces are GENERATED (`scripts/generate-schemas.ts`) rather than hand-written:
+ * `SessionReport` has 130 leaves and the stream is a union of 20 event shapes, and at that size a
+ * hand-written file is a second copy of the type rather than a guarantee. So the tests differ too —
+ * freshness against the generator replaces the leaf-path pin, and both are checked against real
+ * committed data.
+ */
+describe("generated JSON Schemas — report and stream (R152)", () => {
+  const reportSchema = loadSchema("report-v2.schema.json");
+  const streamSchema = loadSchema("stream-v1.schema.json");
+
+  test("the committed schemas are what the generator produces from today's types", () => {
+    // The whole guarantee for a generated artifact: edit the type, forget to regenerate, and this
+    // reddens instead of a consumer discovering it.
+    const r = spawnSync("bun", [join(REPO_ROOT, "scripts/generate-schemas.ts"), "--check"], {
+      encoding: "utf8",
+      cwd: REPO_ROOT,
+    });
+    expect(r.stdout + r.stderr).not.toContain("STALE");
+    expect(r.status).toBe(0);
+  });
+
+  test("each pins its own version constant, and its filename agrees", () => {
+    const props = reportSchema.properties as Record<string, Schema>;
+    expect(props.schemaVersion?.const).toBe(REPORT_SCHEMA_VERSION);
+    expect(reportSchema.$id).toContain(`report-v${REPORT_SCHEMA_VERSION}`);
+    expect(streamSchema.$id).toContain(`stream-v${STREAM_SCHEMA_VERSION}`);
+  });
+
+  test("a report written by THIS build validates against the report schema", () => {
+    // Real data, and redacted data: redaction replaces two string fields, so a report that stopped
+    // validating afterwards would mean the schema disagrees with the redactor.
+    const doc = JSON.parse(
+      readFileSync(
+        join(REPO_ROOT, "docs/campaign/2026-08-16-gift-card/rehearsal.report.json"),
+        "utf8",
+      ),
+    );
+    expect(conformsTo(reportSchema, doc)).toEqual([]);
+  });
+
+  test("OLDER reports are also v2 and do NOT validate — the schema is one BUILD's shape (R157)", () => {
+    // Pinned rather than hidden. `declarativeSites` and `preprocessorSymbols` are REQUIRED by
+    // today's SessionReport and absent from reports written before they existed, while
+    // schemaVersion stayed 2 throughout, because the versioning rule treats an added field as
+    // additive. A required added field is not backward compatible for a VALIDATOR even when it is
+    // for a reader, and a consumer validating an archived report meets that as a false rejection.
+    const older = JSON.parse(
+      readFileSync(
+        join(REPO_ROOT, "docs/campaign/2026-08-08-r85-swap-population/rung2.report.json"),
+        "utf8",
+      ),
+    );
+    const missing = conformsTo(reportSchema, older)
+      .filter((v) => v.problem === "required but absent")
+      .map((v) => v.path)
+      .sort();
+    expect(missing).toEqual(["$.declarativeSites", "$.preprocessorSymbols"]);
+  });
+
+  test("every line of the committed event stream validates, header excepted", () => {
+    // The header is NOT a RunEvent — the sink writes it itself, and it carries `ndjsonHeader: true`
+    // with no `seq` precisely so a consumer can tell the two apart. A schema that accepted it would
+    // erase that distinction.
+    const text = readFileSync(
+      join(REPO_ROOT, "docs/campaign/2026-08-16-gift-card/rehearsal.events.ndjson"),
+      "utf8",
+    );
+    const lines = text.split(/\r?\n/).filter((l) => l.trim() !== "");
+    expect(lines.length).toBeGreaterThan(10);
+
+    const header = JSON.parse(lines[0] ?? "{}") as Record<string, unknown>;
+    expect(header.ndjsonHeader).toBe(true);
+    expect(header.seq).toBeUndefined();
+    expect(conformsTo(streamSchema, header).length).toBeGreaterThan(0);
+
+    for (const [i, line] of lines.slice(1).entries()) {
+      const event = JSON.parse(line) as Record<string, unknown>;
+      expect(conformsTo(streamSchema, event), `line ${i + 2} (${String(event.type)})`).toEqual([]);
+    }
+  });
+
+  test("the report schema REFUSES a document it should refuse", () => {
+    // Without this the four green tests above could all be passing on a validator that says yes to
+    // everything.
+    const doc = JSON.parse(
+      readFileSync(
+        join(REPO_ROOT, "docs/campaign/2026-08-16-gift-card/rehearsal.report.json"),
+        "utf8",
+      ),
+    ) as Record<string, unknown>;
+    expect(conformsTo(reportSchema, { ...doc, schemaVersion: 99 }).length).toBeGreaterThan(0);
+    expect(conformsTo(reportSchema, { ...doc, surprise: true }).map((v) => v.problem)).toContain(
+      "not described by the schema",
+    );
+    const { counts: _dropped, ...missing } = doc;
+    expect(conformsTo(reportSchema, missing)).toContainEqual({
+      path: "$.counts",
+      problem: "required but absent",
+    });
   });
 });

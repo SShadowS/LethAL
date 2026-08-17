@@ -95,9 +95,11 @@ code.
 
 Three surfaces, three purposes, each versioned separately.
 
-Two of them have a published JSON Schema in [`../schemas/`](../schemas/) — the `explain` projection
-and `doctor --json`. Validate against those rather than trusting a shape you inferred from one
-example. The report and the event stream do not have one yet.
+All four have a published JSON Schema in [`../schemas/`](../schemas/). Validate against those rather
+than trusting a shape you inferred from one example. Two caveats that file spells out: the stream
+schema describes an EVENT line, not the header the sink writes first, and the report schema
+describes the shape the current build writes, so an archived report of the same version can lack a
+now-required property.
 
 **A real report is committed, so you can try this with no server at all:**
 

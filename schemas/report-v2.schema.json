@@ -1,0 +1,873 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/SShadowS/LethAL/blob/master/schemas/report-v2.schema.json",
+  "title": "LethAL session report",
+  "description": "The JSON report a run writes with --out. GENERATED from the SessionReport TypeScript declaration by scripts/generate-schemas.ts — edit the type, not this file. It describes the shape THIS build writes: additive fields do not bump schemaVersion, so a report written by an older build of the same version can lack a property this schema requires. Read `validity` before quoting `mutationScore`.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "validity",
+    "survivorsByProcedure",
+    "testFiles",
+    "backend",
+    "authoritative",
+    "baselineGreen",
+    "batches",
+    "counts",
+    "mutationScore",
+    "mutants",
+    "unsupportedTests",
+    "notInstrumented",
+    "declarativeSites",
+    "timings",
+    "preprocessorSymbols",
+    "untargetedTriggerCount"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "number",
+      "const": 2
+    },
+    "validity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reliability",
+        "caveats",
+        "scoreDescribes",
+        "baselineTests",
+        "scoredMutants",
+        "executionContexts"
+      ],
+      "properties": {
+        "reliability": {
+          "type": "string",
+          "enum": [
+            "full",
+            "narrowed",
+            "degraded",
+            "narrowed-degraded"
+          ]
+        },
+        "caveats": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "baseline-red",
+              "narrowed",
+              "operator-narrowed",
+              "tests-narrowed",
+              "uninstrumentable-files",
+              "stale-test-app",
+              "tests-permission-refused",
+              "tests-testpage-unsupported",
+              "runner-disagreement",
+              "stop-hung-sessions",
+              "resumed",
+              "untargeted-triggers",
+              "platform-artifact-kills",
+              "kills-without-assertion",
+              "declarative-sites-dropped"
+            ]
+          }
+        },
+        "scoreDescribes": {
+          "type": "string"
+        },
+        "baselineTests": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "total",
+            "failing"
+          ],
+          "properties": {
+            "total": {
+              "type": "number"
+            },
+            "failing": {
+              "type": "number"
+            }
+          }
+        },
+        "scoredMutants": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "scored",
+            "recorded"
+          ],
+          "properties": {
+            "scored": {
+              "type": "number"
+            },
+            "recorded": {
+              "type": "number"
+            }
+          }
+        },
+        "executionContexts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "runner",
+              "guiAllowed",
+              "clientType",
+              "basis",
+              "verdictCount"
+            ],
+            "properties": {
+              "runner": {
+                "type": "string",
+                "enum": [
+                  "fenced",
+                  "client-services"
+                ]
+              },
+              "guiAllowed": {
+                "type": "boolean"
+              },
+              "clientType": {
+                "type": "string"
+              },
+              "basis": {
+                "type": "string"
+              },
+              "verdictCount": {
+                "type": "number"
+              },
+              "bcBuild": {
+                "type": "string"
+              },
+              "bcBuildAnnouncement": {
+                "type": "string"
+              },
+              "platformAppsDir": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "survivorsByProcedure": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "file",
+          "codeunitName",
+          "procedureName",
+          "survived",
+          "noCoverage",
+          "killed",
+          "survivorCodes"
+        ],
+        "properties": {
+          "file": {
+            "type": "string"
+          },
+          "codeunitName": {
+            "type": "string"
+          },
+          "procedureName": {
+            "type": "string"
+          },
+          "survived": {
+            "type": "number"
+          },
+          "noCoverage": {
+            "type": "number"
+          },
+          "killed": {
+            "type": "number"
+          },
+          "survivorCodes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "testFiles": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "backend": {
+      "type": "string"
+    },
+    "authoritative": {
+      "type": "boolean"
+    },
+    "baselineGreen": {
+      "type": "boolean"
+    },
+    "batches": {
+      "type": "number"
+    },
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "killed",
+        "survived",
+        "noCoverage",
+        "timeoutKilled",
+        "knownSurvivors",
+        "unstable",
+        "errors",
+        "deadlineExceeded"
+      ],
+      "properties": {
+        "killed": {
+          "type": "number"
+        },
+        "survived": {
+          "type": "number"
+        },
+        "noCoverage": {
+          "type": "number"
+        },
+        "timeoutKilled": {
+          "type": "number"
+        },
+        "knownSurvivors": {
+          "type": "number"
+        },
+        "unstable": {
+          "type": "number"
+        },
+        "errors": {
+          "type": "number"
+        },
+        "deadlineExceeded": {
+          "type": "number"
+        }
+      }
+    },
+    "mutationScore": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "mutants": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "mutantCode",
+          "file",
+          "line",
+          "operatorName",
+          "verdict",
+          "batchIndex",
+          "durationMs",
+          "procedureName",
+          "startIndex",
+          "endIndex",
+          "originalText",
+          "mutatedText",
+          "coveringTests",
+          "runner",
+          "astHash",
+          "codeunitName",
+          "operatorMajor"
+        ],
+        "properties": {
+          "mutantCode": {
+            "type": "string"
+          },
+          "file": {
+            "type": "string"
+          },
+          "line": {
+            "type": "number"
+          },
+          "operatorName": {
+            "type": "string"
+          },
+          "verdict": {
+            "type": "string",
+            "enum": [
+              "killed",
+              "survived",
+              "no-coverage",
+              "timeout-killed",
+              "known-survivor",
+              "error"
+            ]
+          },
+          "batchIndex": {
+            "type": "number"
+          },
+          "killingTest": {
+            "type": "string"
+          },
+          "failureNote": {
+            "type": "string"
+          },
+          "killingTestFailure": {
+            "type": "string"
+          },
+          "cause": {
+            "type": "string",
+            "enum": [
+              "deadline-exceeded",
+              "unstable",
+              "stranded",
+              "result-lost"
+            ]
+          },
+          "platformKillMechanism": {
+            "type": "string"
+          },
+          "durationMs": {
+            "type": "number"
+          },
+          "procedureName": {
+            "type": "string"
+          },
+          "triggerName": {
+            "type": "string"
+          },
+          "startIndex": {
+            "type": "number"
+          },
+          "endIndex": {
+            "type": "number"
+          },
+          "originalText": {
+            "type": "string"
+          },
+          "mutatedText": {
+            "type": "string"
+          },
+          "coveringTests": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "coverageAttribution": {
+            "type": "string",
+            "enum": [
+              "exact",
+              "object",
+              "all-green"
+            ]
+          },
+          "guardObserved": {
+            "type": "boolean"
+          },
+          "carried": {
+            "type": "boolean"
+          },
+          "runner": {
+            "type": "string",
+            "enum": [
+              "fenced",
+              "client-services"
+            ]
+          },
+          "astHash": {
+            "type": "string"
+          },
+          "codeunitName": {
+            "type": "string"
+          },
+          "operatorMajor": {
+            "type": "number"
+          }
+        }
+      }
+    },
+    "unsupportedTests": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "notInstrumented": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "totalFiles",
+        "fileCount",
+        "siteCount",
+        "files"
+      ],
+      "properties": {
+        "totalFiles": {
+          "type": "number"
+        },
+        "fileCount": {
+          "type": "number"
+        },
+        "siteCount": {
+          "type": "number"
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "file",
+              "kinds",
+              "sites"
+            ],
+            "properties": {
+              "file": {
+                "type": "string"
+              },
+              "kinds": {
+                "type": "string"
+              },
+              "sites": {
+                "type": "number"
+              }
+            }
+          }
+        }
+      }
+    },
+    "declarativeSites": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "siteCount",
+        "fileCount",
+        "files"
+      ],
+      "properties": {
+        "siteCount": {
+          "type": "number"
+        },
+        "fileCount": {
+          "type": "number"
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "file",
+              "kinds",
+              "sites"
+            ],
+            "properties": {
+              "file": {
+                "type": "string"
+              },
+              "kinds": {
+                "type": "string"
+              },
+              "sites": {
+                "type": "number"
+              }
+            }
+          }
+        }
+      }
+    },
+    "only": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "patterns",
+        "excludedFileCount"
+      ],
+      "properties": {
+        "patterns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "excludedFileCount": {
+          "type": "number"
+        }
+      }
+    },
+    "operators": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "names",
+        "excludedSiteCount"
+      ],
+      "properties": {
+        "names": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "excludedSiteCount": {
+          "type": "number"
+        }
+      }
+    },
+    "testsOnly": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "staleTestApp": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "missingTests"
+      ],
+      "properties": {
+        "missingTests": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "permissionsRefused": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tests",
+        "diagnosis"
+      ],
+      "properties": {
+        "tests": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "diagnosis": {
+          "type": "string"
+        }
+      }
+    },
+    "testPageUnsupported": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tests",
+        "diagnosis"
+      ],
+      "properties": {
+        "tests": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "diagnosis": {
+          "type": "string"
+        }
+      }
+    },
+    "platformArtifactKills": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "killedCount",
+        "byMechanism",
+        "diagnosis"
+      ],
+      "properties": {
+        "killedCount": {
+          "type": "number"
+        },
+        "byMechanism": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "mechanism",
+              "mutants",
+              "explanation"
+            ],
+            "properties": {
+              "mechanism": {
+                "type": "string"
+              },
+              "mutants": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "explanation": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "diagnosis": {
+          "type": "string"
+        }
+      }
+    },
+    "assertionScreen": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kills",
+        "killsWithText",
+        "killsWithoutText",
+        "flagged",
+        "flaggedMutants",
+        "discrimination",
+        "discriminationNote",
+        "runnerRefusals",
+        "runnerRefusalMutants",
+        "diagnosis"
+      ],
+      "properties": {
+        "kills": {
+          "type": "number"
+        },
+        "killsWithText": {
+          "type": "number"
+        },
+        "killsWithoutText": {
+          "type": "number"
+        },
+        "flagged": {
+          "type": "number"
+        },
+        "flaggedMutants": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "discrimination": {
+          "type": "string",
+          "enum": [
+            "vacuous",
+            "partial",
+            "none",
+            "no-text"
+          ]
+        },
+        "discriminationNote": {
+          "type": "string"
+        },
+        "runnerRefusals": {
+          "type": "number"
+        },
+        "runnerRefusalMutants": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "diagnosis": {
+          "type": "string"
+        }
+      }
+    },
+    "runnerDisagreement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tests",
+        "explanation"
+      ],
+      "properties": {
+        "tests": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "explanation": {
+          "type": "string"
+        }
+      }
+    },
+    "resumedFrom": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "runId",
+        "carriedMutants",
+        "skippedStranded"
+      ],
+      "properties": {
+        "runId": {
+          "type": "number"
+        },
+        "carriedMutants": {
+          "type": "number"
+        },
+        "skippedStranded": {
+          "type": "number"
+        }
+      }
+    },
+    "timings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "totalMs",
+        "generateMutationSetMs",
+        "deployMs",
+        "baselineMs",
+        "mutantsMs",
+        "perMutant"
+      ],
+      "properties": {
+        "totalMs": {
+          "type": "number"
+        },
+        "generateMutationSetMs": {
+          "type": "number"
+        },
+        "deployMs": {
+          "type": "number"
+        },
+        "baselineMs": {
+          "type": "number"
+        },
+        "mutantsMs": {
+          "type": "number"
+        },
+        "perMutant": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "count",
+            "meanMs",
+            "medianMs",
+            "p95Ms",
+            "maxMs"
+          ],
+          "properties": {
+            "count": {
+              "type": "number"
+            },
+            "meanMs": {
+              "type": "number"
+            },
+            "medianMs": {
+              "type": "number"
+            },
+            "p95Ms": {
+              "type": "number"
+            },
+            "maxMs": {
+              "type": "number"
+            }
+          }
+        }
+      }
+    },
+    "preprocessorSymbols": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "untargetedTriggerCount": {
+      "type": "number"
+    },
+    "quarantined": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reason"
+      ],
+      "properties": {
+        "reason": {
+          "type": "string"
+        }
+      }
+    },
+    "alRunnerCanary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "asserterror",
+        "tableGlobalVar"
+      ],
+      "properties": {
+        "asserterror": {
+          "type": "string",
+          "enum": [
+            "defect-confirmed",
+            "defect-not-reproduced",
+            "inconclusive"
+          ]
+        },
+        "tableGlobalVar": {
+          "type": "string",
+          "enum": [
+            "defect-confirmed",
+            "defect-not-reproduced",
+            "inconclusive"
+          ]
+        },
+        "asserterrorDetail": {
+          "type": "string"
+        },
+        "tableGlobalVarDetail": {
+          "type": "string"
+        }
+      }
+    },
+    "permissionCanary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "verdict"
+      ],
+      "properties": {
+        "verdict": {
+          "type": "string",
+          "enum": [
+            "mocked",
+            "not-mocked",
+            "inconclusive"
+          ]
+        },
+        "readPermission": {
+          "type": "boolean"
+        },
+        "writePermission": {
+          "type": "boolean"
+        },
+        "insertSucceeded": {
+          "type": "boolean"
+        },
+        "baselineReadPermission": {
+          "type": "boolean"
+        },
+        "baselineWritePermission": {
+          "type": "boolean"
+        },
+        "mockInstalled": {
+          "type": "boolean"
+        },
+        "detail": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

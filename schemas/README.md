@@ -7,10 +7,23 @@ generate types rather than discover a shape change by crashing on it. Draft 2020
 |---|---|---|
 | [`explain-v4.schema.json`](explain-v4.schema.json) | `lethal explain <report.json>` on stdout | `EXPLAIN_SCHEMA_VERSION` = 4 |
 | [`doctor-v1.schema.json`](doctor-v1.schema.json) | `lethal doctor --json` on stdout | `DOCTOR_SCHEMA_VERSION` = 1 |
+| [`report-v2.schema.json`](report-v2.schema.json) | the JSON report written with `--out` | `REPORT_SCHEMA_VERSION` = 2 |
+| [`stream-v1.schema.json`](stream-v1.schema.json) | one line of the NDJSON stream written with `--progress-out` | `STREAM_SCHEMA_VERSION` = 1 |
 
-**Not published yet:** the JSON report written by `--out` (`REPORT_SCHEMA_VERSION` = 2) and the
-NDJSON event stream written by `--progress-out` (`STREAM_SCHEMA_VERSION` = 1). Both are versioned in
-the code and neither has a schema here. See `docs/roadmap/R152.md`.
+**Two are hand-written, two are generated, and the split is about SIZE rather than principle.**
+`explain` (34 leaves) and `doctor` (8) are hand-written and pinned against their declarations.
+`SessionReport` walks out to 130 leaves and the stream is a union of 20 event shapes; at that size a
+hand-written file stops being a guarantee and becomes a second copy of the type that someone
+forgets, so `bun scripts/generate-schemas.ts` emits both, and `--check` fails when a committed file
+no longer matches the type.
+
+Two caveats worth reading before you validate against these:
+
+- The stream schema describes one EVENT line. The first line of a `--progress-out` file is a header
+  the sink writes itself (`ndjsonHeader: true`, no `seq`), and it deliberately does NOT validate.
+- The report schema describes the shape THIS build writes. Required fields have been added without
+  bumping `schemaVersion`, so an archived report of the same version can lack a property the schema
+  requires — see `docs/roadmap/R157.md`, which pins both halves of that.
 
 ## What keeps these true
 
