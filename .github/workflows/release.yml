@@ -17,8 +17,16 @@ permissions:
 jobs:
   build:
     # Cross-compiles every target from one machine — `bun build --compile --target` downloads the
-    # target's runtime, so no matrix is needed. Windows, to match CI and the development machine.
+    # target's runtime, so no matrix is needed. Windows, to match CI and the development machine,
+    # and because the Windows binary is the one that gets Authenticode-signed.
     runs-on: windows-latest
+    permissions:
+      contents: write
+      id-token: write # OIDC for azure/login (Windows signing)
+    # The Entra federated credential's subject is `repo:SShadowS/LethAL:environment:release`;
+    # wildcard-tag credentials are rejected by the tenant, so the job binds to a GitHub environment
+    # to get a stable OIDC subject. Borrowed from claude-code-lsps, which learned it the hard way.
+    environment: release
     steps:
       - uses: actions/checkout@v4
 
@@ -53,6 +61,52 @@ jobs:
       - name: Build all five targets
         run: bun run build:binaries
 
+      # Authenticode-signs the WINDOWS binary via Azure Trusted Signing. Only that one: Authenticode
+      # is a PE format, the Linux ELF binaries have no equivalent, and the macOS binaries would need
+      # Apple notarisation, which is a different account and a different tool. Saying so here stops
+      # the next reader assuming all five are signed.
+      #
+      # Every step SKIPS cleanly until the Azure side is configured, so an unsigned release is still
+      # a working release. The three `vars` are the SWITCH: set them LAST, after the secrets and the
+      # federated credential exist, or the job will try to sign and fail. See
+      # `.claude/skills/release/SKILL.md`.
+      - name: Azure login
+        if: vars.AZURE_SIGNING_ACCOUNT != ''
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Sign the Windows binary
+        if: vars.AZURE_SIGNING_ACCOUNT != ''
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.AZURE_SIGNING_PROFILE }}
+          # The action requires rooted paths, and the filename carries the version.
+          files-folder: ${{ github.workspace }}\build
+          files-folder-filter: exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Verify the signature
+        if: vars.AZURE_SIGNING_ACCOUNT != ''
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem build/lethal-*-windows-x64.exe)[0].FullName
+          $sig = Get-AuthenticodeSignature $exe
+          "$($sig.Status) — $($sig.SignerCertificate.Subject)"
+          if ($sig.Status -ne 'Valid') {
+            # A release that claims to be signed and is not is worse than an unsigned one: the
+            # claim is what a user checks instead of checking the binary.
+            throw "signature is $($sig.Status), expected Valid"
+          }
+
+      # AFTER signing, deliberately: signing rewrites the PE, so this proves the binary a user
+      # downloads still runs, not the one that existed before the certificate went on.
       - name: Smoke-test the host binary
         shell: bash
         run: |
@@ -60,6 +114,36 @@ jobs:
           # --version prints three lines: version, build provenance, operator list (R88). A binary
           # that cannot answer this is not one to publish.
           "$exe" --version
+
+      # The release body is the CHANGELOG's own section for this version. A hand-written body would
+      # be a second account of the same release, free to disagree with the first; the script refuses
+      # a missing or empty section rather than shipping a release with no notes.
+      - name: Release notes from the changelog
+        shell: bash
+        run: |
+          bun scripts/changelog-section.ts "${GITHUB_REF_NAME}" > release-notes.md
+          signed="not signed — Azure Trusted Signing is not configured for this repository"
+          if [ -n "${{ vars.AZURE_SIGNING_ACCOUNT }}" ]; then
+            signed="Authenticode-signed via Azure Trusted Signing, and the signature is verified in CI before publishing. The Linux and macOS binaries are NOT signed: Authenticode is a Windows PE format and macOS needs separate notarisation"
+          fi
+          cat >> release-notes.md <<EOF
+
+          ---
+
+          **Install:** download the binary for your platform. It is standalone and needs no Bun,
+          Node or npm. Check it with \`lethal --version\`, which prints the commit it was built from
+          and the mutation operators it can actually apply, so a stale binary cannot pass for a
+          current one.
+
+          **Windows binary:** $signed.
+
+          **\`lethal-control.app\`** is the LethAL Control extension, attached to this release by
+          hand (building it needs \`alc\` from the AL VS Code extension, which no hosted runner has).
+          Publish it to your sandbox or dev container once and point \`controlSymbolPath\` at it.
+
+          **Driving it from an agent or CI:** \`docs/using-lethal-from-an-agent.md\`, and a copyable
+          skill at \`skills/lethal-mutation-testing/SKILL.md\`.
+          EOF
 
       - name: Publish the release
         uses: softprops/action-gh-release@v2
@@ -73,17 +157,6 @@ jobs:
           # version it is. See docs/releasing.md.
           files: |
             build/lethal-*
-          body: |
-            See CHANGELOG.md for what shipped.
-
-            **Install:** download the binary for your platform. It is standalone and needs no Bun,
-            Node or npm. Check it with `lethal --version`, which prints the commit it was built
-            from and the mutation operators it can actually apply.
-
-            **`lethal-control.app`** is the LethAL Control extension, attached to this release by
-            hand (it needs the AL compiler to build, which no CI runner has). Publish it to your
-            sandbox or dev container once, and point `controlSymbolPath` at it. See the README's
-            Quick start.
-
-            **Driving it from an agent or CI:** `docs/using-lethal-from-an-agent.md`, and a copyable
-            skill at `skills/lethal-mutation-testing/SKILL.md`.
+          # The changelog section, then a fixed footer, then GitHub's generated commit list beneath
+          # both. `body_path` and `body` cannot both be set, so the footer is appended to the file.
+          body_path: release-notes.md

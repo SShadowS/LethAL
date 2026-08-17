@@ -75,6 +75,10 @@ else is not.
 
 ## Tagging a release
 
+> The step-by-step procedure, including the Azure Trusted Signing setup and the order the pieces
+> must be configured in, is `.claude/skills/release/SKILL.md` (`/release`). This section is the
+> reference for what the workflow does; that skill is the order of operations.
+
 Added 2026-08-16 with `.github/workflows/release.yml`. **This workflow has never run**, because no
 tag has ever been pushed. Read it before trusting it: the first tag is as much a test of the
 workflow as of the release. (`ci.yml`, its sibling, is verified — run 31961823874, 2430 pass on
