@@ -174,31 +174,31 @@ The payoff sentence is "this suite is green, and this bug ships". Make sure the 
 and that the surviving mutant is one an experienced BC developer will immediately recognise as
 dangerous, not a contrived off-by-one.
 
-### C3. Rehearse the failure paths (1 day)
+### C3. Rehearse the failure paths — WRITTEN 2026-08-18, not yet rehearsed
 
 Know what the screen shows and have one sentence ready for each: quarantine (exit code 3), a red
 baseline, a stopped container, a publish refusal from the ceiling. An unrehearsed failure on stage
 reads as a broken tool; a narrated one reads as an honest tool, which is the whole positioning.
 
-### C4. Assume no usable network (1 day)
+### C4. Assume no usable network — documented; the adapter-off test is still yours to run
 
 Conference wifi. Everything local: Docker container on the laptop, images pre-pulled, symbols
 cached, no step that downloads at demo time. Verify by disabling the machine's network adapter and
 running the demo start to finish.
 
-### C5. Reset script (0.5 day)
+### C5. Reset script — DONE 2026-08-18 (`bun scripts/demo-reset.ts`)
 
 One command back to a known state between rehearsals and after a bad take: clear quarantine, clear
 the publish ceiling, republish the control app, delete `lethal.sqlite`, restore the demo app's
 source. You will use this more than anything else on this list.
 
-### C6. Backups (0.5 day)
+### C6. Backups — two of three exist; the recording is still to make
 
 A recorded video of the same run, and a pre-generated `report.json` so `lethal explain` still has
 something to show if the container dies. Both on the laptop, not in the cloud, for the reason in
 C4.
 
-### C7. Legibility (0.5 day)
+### C7. Legibility — guidance written; the projector test is yours
 
 Terminal font size, colour scheme and output width tested on a projector, or at least at 1080p
 from across a room. The console renderer's output is dense.
@@ -249,7 +249,7 @@ or plays as a recording, and build the recording either way.
 
 ---
 
-## E. Questions from the floor. Have the answer, with the number.
+## E. Questions from the floor — WRITTEN 2026-08-18, `docs/directions-emea-2026-runbook.md` §7
 
 - **E1. TestPage.** Someone will ask. README has the measured table: fenced hangs and quarantines
   the whole run, the hub path completes, mutant verdicts remain unscoreable either way. R69 was
