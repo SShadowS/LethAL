@@ -76,8 +76,13 @@ release is cut.
 Four steps from a checkout to a first result. Do them against a **sandbox or dev container**, never
 a production tenant, for the reason in step 3.
 
-**1. Write `lethal.config.json` next to your AL app.** Every field below is required; LethAL refuses
-to start and names any that are missing. The user and password are placeholders, so put your own in:
+**1. Write `lethal.config.json` next to your AL app.** `lethal init --project path/to/your-al-app`
+writes one for you, including the three injected object ids picked from your own app.json id ranges
+(the one field nobody can guess, and the one whose absence fails at publish time). Fill in the
+server and credentials it leaves as placeholders.
+
+To write it by hand instead, every field below is required; LethAL refuses to start and names any
+that are missing. The user and password are placeholders, so put your own in:
 
 ```json
 {

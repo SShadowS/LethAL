@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { closeSync, existsSync, openSync, writeSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, readdir } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { parseArgs } from "node:util";
@@ -15,6 +15,7 @@ import {
   type TierResolver,
   dedupeSpecs,
   parseIdRanges,
+  pickSelectorIds,
   scanDeclaredObjects,
   validateSelectorIds,
 } from "@lethal/schemata";
@@ -480,6 +481,28 @@ export interface ForceResetLeaseCliConfig {
  * command might reference (env-tool.ts's `renderCommand`) — doctor runs no session, so it has no
  * `testDir`/`runId` of its own the way `lethal run` does.
  */
+/**
+ * `lethal init --project <dir>` — write a `lethal.config.json` this project can actually run with.
+ *
+ * The quick start's ugliest moment is a nine-field config typed by hand, and one of those fields is
+ * not typeable at all without knowing something a first-time user has no reason to know: LethAL
+ * injects three AL objects into the copy of the target it builds, and their ids must fall inside an
+ * id range the target's own app.json declares. Get that wrong and the failure arrives at PUBLISH
+ * time, from `alc`, naming an id the user never chose.
+ *
+ * So this reads the target's app.json and picks those three ids from its declared ranges
+ * (`pickSelectorIds`), leaving only the things it genuinely cannot know — server, company,
+ * credentials — as placeholders it names in the printed next steps.
+ */
+export interface InitCliConfig {
+  readonly mode: "init";
+  readonly projectDir: string;
+  /** Where to write. Defaults to `<project>/lethal.config.json`. */
+  readonly outPath?: string;
+  /** Overwrite an existing file. Off by default: a config holds credentials someone typed. */
+  readonly force?: boolean;
+}
+
 export interface DoctorCliConfig {
   readonly mode: "doctor";
   readonly configPath: string;
@@ -558,11 +581,13 @@ export type CliConfig =
   | DoctorCliConfig
   | ExplainCliConfig
   | CampaignCliConfig
+  | InitCliConfig
   | HelpCliConfig
   | VersionCliConfig;
 
 const VALID_SUBCOMMANDS = [
   "run",
+  "init",
   "clear-quarantine",
   "clear-ceiling",
   "force-reset-lease",
@@ -656,6 +681,7 @@ export function helpText(version: string): string {
 USAGE
   lethal run               --project <dir> --tests <dir> --backend <bcdev|al-runner> [options]
   lethal run               --project <dir> --dry-run
+  lethal init              --project <dir> [--out <path>] [--force]
   lethal clear-quarantine  --server <url> --instance <name>
   lethal clear-ceiling     --project <dir> (--server <url> --instance <name> | --config <path>) [--db <path>] [--file <name>]
   lethal force-reset-lease --server <url> --instance <name> --config <path> [--project <dir>]
@@ -741,6 +767,19 @@ CLEAR-CEILING — undo a publish-ceiling measurement (R90)
   is real evidence loss, and it cost a live publish failure to learn. A clear that removes NOTHING
   reports 'nothing-matched'/'nothing-recorded' and exits 1 — it did not undo anything, and the
   next run will be refused identically.
+
+INIT — write a lethal.config.json this project can actually run with
+  The templating is the small half. The real one is the three object ids LethAL injects into the
+  copy of your app it builds: they must fall inside an idRange your own app.json declares, and
+  getting that wrong fails at PUBLISH time naming an id you never chose. 'init' reads your ranges
+  and picks three free ids from the top of the highest one, which is the convention this repo's
+  own fixtures use by hand.
+  --project <dir>            the AL project to write a config for (its app.json is read)
+  --out <path>               where to write (default: <project>/lethal.config.json)
+  --force                    overwrite an existing file. Off by default: a config holds
+                             credentials someone typed
+  Server, company and credentials are left as placeholders and named in the printed next steps,
+  because nothing here can know them. Follow with 'lethal doctor --config <path>'.
 
 DOCTOR — every pre-flight refusal, read-only, all at once (R109)
   'lethal run' discovers a stopped environment, a stale control app, a quarantined server, or a
@@ -905,6 +944,8 @@ export const RUN_FLAGS = {
   // R151: `lethal doctor --json`. Shared table, same reason; refused for every other subcommand at
   // the top of `parseCliConfig` rather than silently ignored there.
   json: { type: "boolean", default: false },
+  // `lethal init --force`: overwrite an existing config. Shared table, same strict-mode reason.
+  force: { type: "boolean", default: false },
 } as const;
 
 /**
@@ -1104,6 +1145,23 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
       serverInstance,
       configPath,
       ...(project !== undefined && project !== "" ? { projectDir: project } : {}),
+    };
+  }
+
+  if (subcommand === "init") {
+    const project = values.project;
+    if (project === undefined || project === "") {
+      throw new Error(
+        "missing required --project <dir> (the AL project to write a config for — `init` reads its " +
+          "app.json to choose the three injected object ids)",
+      );
+    }
+    const out = values.out;
+    return {
+      mode: "init",
+      projectDir: project,
+      ...(out !== undefined && out !== "" ? { outPath: out } : {}),
+      ...(values.force === true ? { force: true } : {}),
     };
   }
 
@@ -3577,6 +3635,69 @@ export function renderDoctorReport(report: DoctorReport, createModeCaveat?: stri
 }
 
 /**
+ * `lethal init` — write a config the target project can actually run with, and say what is left.
+ *
+ * The value is NOT the templating. It is the three injected object ids: they must fall inside an id
+ * range the target's own app.json declares (AL0297, verified against a real server), a first-time
+ * user has no reason to know that, and getting it wrong fails at PUBLISH time with a message naming
+ * an id they never chose. `pickSelectorIds` reads their ranges and picks; `validateSelectorIds`
+ * re-checks the pick, so the two can never disagree.
+ *
+ * REFUSES to overwrite without `--force`, because a config holds credentials someone typed once.
+ */
+export async function initFromCli(parsed: InitCliConfig): Promise<number> {
+  const outPath = parsed.outPath ?? join(parsed.projectDir, "lethal.config.json");
+  if (existsSync(outPath) && parsed.force !== true) {
+    throw new Error(
+      `init: ${outPath} already exists. It may hold credentials, so this refuses rather than overwriting — pass --force if replacing it is what you meant.`,
+    );
+  }
+
+  const manifest = await readTargetAppManifestForIdCheck(parsed.projectDir);
+  const appName = typeof manifest.name === "string" ? manifest.name : parsed.projectDir;
+  const idRanges = parseIdRanges(manifest);
+  const existingCodeunits = await scanProjectCodeunitIds(parsed.projectDir);
+  const picked = pickSelectorIds(idRanges, existingCodeunits);
+  if (picked === null) {
+    // Loud, and with the fix in it: the alternative is writing an out-of-range id that fails at
+    // publish time, which is the exact round trip this command exists to remove.
+    throw new Error(
+      `init: ${appName} declares no id range with three free ids for the objects LethAL injects (ranges: ${idRanges.map((r) => `${r.from}..${r.to}`).join(", ")}). Widen idRanges in the target app.json — three consecutive free ids at the top of a range is the convention this repository's own fixtures use.`,
+    );
+  }
+  validateSelectorIds(picked, idRanges, existingCodeunits);
+
+  const config = {
+    bcdev: {
+      mcpCommand: ["bun", "x", "bc-dev-mcp"],
+      server: "http://YourContainer",
+      serverInstance: "BC",
+      company: "CRONUS",
+      username: "admin",
+      password: "pw",
+      packageCachePath: join(parsed.projectDir, ".alpackages"),
+      controlSymbolPath: "C:/path/to/LethAL/extensions/lethal-control/lethal-control.app",
+      env: { BC_DEV_USER: "admin", BC_DEV_PASSWORD: "pw" },
+    },
+    selectorIds: picked,
+  };
+  await writeFile(outPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+
+  console.log(`init: wrote ${outPath} for ${appName}`);
+  console.log(
+    `  selectorIds ${picked.selectorId}/${picked.controlId}/${picked.tableId} — inside this app's own idRanges, so the objects LethAL injects will compile`,
+  );
+  console.log("\nStill yours to fill in, because nothing here can know them:");
+  console.log("  bcdev.server / serverInstance / company   your container");
+  console.log(
+    "  bcdev.username / password + env.*         the same credentials, twice: bc-dev-mcp reads them from the environment, not from parameters",
+  );
+  console.log("  bcdev.controlSymbolPath                   the lethal-control.app you published");
+  console.log(`\nThen: lethal doctor --config ${outPath}`);
+  return 0;
+}
+
+/**
  * R151. `lethal doctor --json` — the same report, as the object `renderDoctorReport` renders.
  *
  * Versioned like every other machine surface this tool publishes (`REPORT_SCHEMA_VERSION`,
@@ -3974,6 +4095,9 @@ async function main(): Promise<number> {
   }
   if (parsed.mode === "campaign") {
     return await campaignFromCli(parsed);
+  }
+  if (parsed.mode === "init") {
+    return await initFromCli(parsed);
   }
   const report = await runFromCli(parsed);
   console.log(renderConsole(report));

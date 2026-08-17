@@ -137,7 +137,7 @@ Hand the release to a BC developer who has never seen the tool. Do not help. Eve
 stall is a work item, and this test finds the ones no amount of re-reading your own README will.
 Budget a follow-up day for what it finds.
 
-### B5. Config friction (2 days, not strictly blocking)
+### B5. Config friction — DONE 2026-08-18 (`lethal init`)
 
 `lethal.config.json` requires `mcpCommand`, `server`, `serverInstance`, `company`, `username`,
 `password`, `packageCachePath`, `controlSymbolPath`, and an `env` block that the README has to

@@ -124,3 +124,44 @@ export function validateSelectorIds(
     }
   }
 }
+
+/**
+ * Choose three injected object ids that a target app can actually compile, or return `null`.
+ *
+ * `validateSelectorIds` above answers "are these three ids usable here?". This answers "which three
+ * SHOULD I use?", which is the question a first-time user is really asking when the tool refuses
+ * `50000` against their app's own id band. `lethal init` uses it to write a config that compiles on
+ * the first run instead of on the second.
+ *
+ * WHY THE TOP OF THE HIGHEST RANGE. The injected objects are LethAL's, not the app's, so they want
+ * to sit where an app is least likely to grow into them — and an app grows upward from the bottom of
+ * its range. Both fixtures here follow that shape by hand (`79197..79199` inside `79000..79199`), and
+ * so does the gift card demo (`90197..90199`), so picking downward from the top matches what a human
+ * chose three times independently.
+ *
+ * `null` rather than a throw, and rather than a plausible guess: a project whose declared ranges hold
+ * fewer than three free ids has a real problem the caller must SAY out loud (widen `idRanges`), and
+ * inventing an out-of-range id here would move that failure to the compile step in the middle of a
+ * live run.
+ *
+ * Collision checking is codeunit-only, exactly as `validateSelectorIds` documents: an id is unique
+ * only within an AL object type, and all three injected objects are codeunits.
+ */
+export function pickSelectorIds(
+  idRanges: readonly AppIdRange[],
+  existingObjects: ReadonlyMap<number, DeclaredObject> = new Map(),
+): SelectorConfig | null {
+  const chosen: number[] = [];
+  // Highest range first, and within a range downward from its top.
+  for (const range of [...idRanges].sort((a, b) => b.to - a.to)) {
+    for (let id = range.to; id >= range.from && chosen.length < 3; id -= 1) {
+      if (existingObjects.has(id)) continue;
+      if (chosen.includes(id)) continue;
+      chosen.push(id);
+    }
+    if (chosen.length === 3) break;
+  }
+  const [selectorId, controlId, tableId] = chosen;
+  if (selectorId === undefined || controlId === undefined || tableId === undefined) return null;
+  return { selectorId, controlId, tableId };
+}

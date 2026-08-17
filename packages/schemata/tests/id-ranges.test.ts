@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { AppIdRange, DeclaredObject } from "../src/id-ranges";
-import { parseIdRanges, validateSelectorIds } from "../src/id-ranges";
+import { parseIdRanges, pickSelectorIds, validateSelectorIds } from "../src/id-ranges";
 import type { SelectorConfig } from "../src/selector";
 
 const DEFAULT_IDS: SelectorConfig = { selectorId: 79199, controlId: 79198, tableId: 79197 };
@@ -120,5 +120,56 @@ describe("validateSelectorIds — collision with an existing object", () => {
   test("an empty existing-objects map never collides", () => {
     const ids: SelectorConfig = { selectorId: 5, controlId: 6, tableId: 7 };
     expect(() => validateSelectorIds(ids, RANGE, new Map())).not.toThrow();
+  });
+});
+
+describe("pickSelectorIds", () => {
+  const codeunit = (id: number, name: string): [number, DeclaredObject] => [
+    id,
+    { type: "codeunit", id, name },
+  ];
+
+  test("picks the top three of the declared range, which is what a human picks by hand", () => {
+    // The two fixtures and the gift card demo all reserve the top three of their band
+    // independently; matching that means `init` writes what a careful author would have written.
+    expect(pickSelectorIds([{ from: 79000, to: 79199 }])).toEqual({
+      selectorId: 79199,
+      controlId: 79198,
+      tableId: 79197,
+    });
+  });
+
+  test("prefers the HIGHEST range when several are declared", () => {
+    const picked = pickSelectorIds([
+      { from: 50000, to: 50099 },
+      { from: 90100, to: 90199 },
+    ]);
+    expect(picked).toEqual({ selectorId: 90199, controlId: 90198, tableId: 90197 });
+  });
+
+  test("skips ids the project already uses, rather than proposing a collision", () => {
+    const used = new Map([codeunit(79199, "Existing One"), codeunit(79198, "Existing Two")]);
+    expect(pickSelectorIds([{ from: 79000, to: 79199 }], used)).toEqual({
+      selectorId: 79197,
+      controlId: 79196,
+      tableId: 79195,
+    });
+  });
+
+  test("what it picks always passes validateSelectorIds — the two agree by construction", () => {
+    const ranges: AppIdRange[] = [{ from: 60000, to: 60005 }];
+    const used = new Map([codeunit(60005, "Taken")]);
+    const picked = pickSelectorIds(ranges, used);
+    expect(picked).not.toBeNull();
+    if (picked !== null) expect(() => validateSelectorIds(picked, ranges, used)).not.toThrow();
+  });
+
+  test("returns NULL when fewer than three ids are free, never an out-of-range guess", () => {
+    // A guess here would move the failure to `alc` in the middle of a live run, which is exactly
+    // the round trip this whole check exists to avoid.
+    expect(pickSelectorIds([{ from: 100, to: 101 }])).toBeNull();
+    const used = new Map([codeunit(100, "A"), codeunit(101, "B")]);
+    expect(pickSelectorIds([{ from: 100, to: 102 }], used)).toBeNull();
+    expect(pickSelectorIds([])).toBeNull();
   });
 });
