@@ -20,10 +20,18 @@ and are estimates, not measurements.
 `LICENSE` written and README updated. All six reports redacted and the guard widened from a
 hand-written pair of paths to a glob, red-checked. Continia may be named. No history rewrite.
 
-**Also landed 2026-08-16, in the working tree and not yet committed:** D1, D2 and D3 in full
-(`explain --top`, `doctor --json`, the agent reference and the copyable skill, each with tests and
-a red-check), plus B1's two workflow files. Roadmap rows R150 to R154 record all of it. What
-remains untouched from this plan: B2 to B5, C in full, D4, E and F.
+**Landed 2026-08-16:** D1, D2, D3 in full (`explain --top`, `doctor --json`, the agent reference
+and the copyable skill, each with tests and a red-check), D4 half (published schemas for explain and
+doctor), B1's two workflow files, and C1/C2 — the gift card demo app, measured live at 20 killed /
+9 survived / 7 no-coverage in 13.8 s with all 36 pre-committed verdicts matching, then frozen.
+
+**Landed 2026-08-17:** B1 fully verified (both workflows green on real runs), **B2 — release
+0.1.0-alpha.2 cut and staged as a draft with all five binaries attached**, a `/release` skill
+carrying the order of operations, release notes generated from the CHANGELOG rather than written by
+hand, and Azure Trusted Signing wired but not yet switched on. Roadmap rows R150 to R156 record all
+of it.
+
+**Still untouched: B3, B4, B5, C3 to C7, D4's other half, D5, E and F.**
 
 ### A1. There is no LICENSE file (1 day, mostly the decision) — DONE
 
@@ -101,10 +109,13 @@ Business Central branding in a session title and slides.
 untested — see `docs/roadmap/R154.md` for the specific untested claims and the three deliberate
 limits (windows-latest only, no repo-wide biome, no CI-built control app).
 
-**The remaining work here is to push and watch.** Budget a day for what the first run finds; a
-workflow written from a local build loop almost never passes first time.
+**DONE 2026-08-17.** `ci.yml` verified on run 31961823874 — and its first push found a real trigger
+defect, fixed in `af0b056`. `release.yml` verified on run 32063692530: 1m44s, five targets, draft
+release, notes from the changelog. R154 is closed. The SIGNING path is the one part still
+unexercised, deliberately: the three Azure repo variables that switch it on are unset, so the
+guarded steps skip and the release publishes unsigned.
 
-### B2. Cut a real release (1 day)
+### B2. Cut a real release — DONE 2026-08-17, draft awaiting publication
 
 `docs/releasing.md` exists and its numbers are measured rather than estimated, which is more than
 most projects have. It has not been executed as a release. Do it once, end to end, from a clean
@@ -138,7 +149,7 @@ and worth demoing if it exists.
 
 ## C. Demo mechanics. Live, on stage.
 
-### C1. Build the demo app (3 to 5 days)
+### C1. Build the demo app — DONE 2026-08-16, measured live and frozen
 
 Sizing is already measured, so this can be designed rather than guessed at
 (`docs/benchmarks/runs.jsonl`):
@@ -157,7 +168,7 @@ dead air. Design the result before writing the code. You want a survivor that is
 `no-coverage` finding, and a healthy killed majority, so the report tells a three-part story
 rather than showing a number.
 
-### C2. Plant one real bug behind a green suite (included in C1)
+### C2. Plant one real bug behind a green suite — DONE, and it survived as predicted
 
 The payoff sentence is "this suite is green, and this bug ships". Make sure the demo app earns it,
 and that the surviving mutant is one an experienced BC developer will immediately recognise as
