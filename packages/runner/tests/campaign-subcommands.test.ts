@@ -38,8 +38,43 @@ import type { MutantOutcome, SessionReport } from "../src/report";
 // Real-git fixtures
 // ---------------------------------------------------------------------------------------------
 
+/**
+ * A HERMETIC git environment for the fixture repositories.
+ *
+ * Measured on a hosted `windows-latest` runner (CI run 32075875426, 2026-08-17): `git commit` in a
+ * fresh temp repo exceeded the 5 s default test timeout and was killed, so the suite failed with
+ * `git commit ... failed (143)` — SIGTERM, empty stderr — on a commit that only touched a markdown
+ * file. It had passed on the commit before and the commit after, which is the signature of a flaky
+ * gate rather than a defect, and a flaky gate is how people learn to ignore a red build.
+ *
+ * Disabling the global and system config is both the speed fix and a correctness one: a fixture
+ * repository should not inherit the machine's `hooksPath`, `commit.gpgsign`, or anything else the
+ * developer happens to have set. `GIT_TERMINAL_PROMPT=0` makes any credential prompt an error
+ * instead of a hang, which is the other way a spawned git eats a timeout.
+ */
+/**
+ * Bun applies the same 5 s default timeout to a HOOK as to a test, and a `beforeAll` here spawns
+ * git four or five times against a fresh temp directory. That fits comfortably on a developer
+ * machine and did not on a cold hosted runner (CI 32075875426). Generous on purpose: this number
+ * exists to stop a slow filesystem reading as a failure, so there is nothing to gain by tuning it
+ * close to the observed cost.
+ */
+const HOOK_TIMEOUT_MS = 60_000;
+
+const HERMETIC_GIT_ENV = {
+  ...process.env,
+  GIT_CONFIG_GLOBAL: join(tmpdir(), "lethal-nonexistent-gitconfig"),
+  GIT_CONFIG_SYSTEM: join(tmpdir(), "lethal-nonexistent-gitconfig"),
+  GIT_TERMINAL_PROMPT: "0",
+};
+
 async function git(cwd: string, args: readonly string[]): Promise<string> {
-  const proc = Bun.spawn(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" });
+  const proc = Bun.spawn(["git", ...args], {
+    cwd,
+    stdout: "pipe",
+    stderr: "pipe",
+    env: HERMETIC_GIT_ENV,
+  });
   const [stdout, stderr] = await Promise.all([
     new Response(proc.stdout).text(),
     new Response(proc.stderr).text(),
@@ -289,7 +324,7 @@ describe("assertCampaignPathsCommitted — the wiring assertCommitted trusts", (
     await writeAt(repo, "docs/staged.md", "written and `git add`ed after the run\n");
     await git(repo, ["add", "--", "docs/staged.md"]);
     deps = { git: createRepoGitRunner(repo), repoRoot: repo };
-  });
+  }, HOOK_TIMEOUT_MS);
 
   afterAll(async () => {
     await rm(repo, { recursive: true, force: true });
@@ -578,7 +613,7 @@ describe("lethal campaign freeze | anchors | compare", () => {
     await writeFile(reportPath, JSON.stringify(TWO_MUTANTS), "utf8");
     await writeFile(threeMutantReportPath, JSON.stringify(THREE_MUTANTS), "utf8");
     await writeFile(changedReportPath, JSON.stringify(TWO_MUTANTS_CHANGED), "utf8");
-  });
+  }, HOOK_TIMEOUT_MS);
 
   afterAll(async () => {
     await rm(repo, { recursive: true, force: true });
@@ -923,7 +958,7 @@ describe("lethal campaign — the manifest itself must be committed", () => {
       "campaign.json",
       JSON.stringify({ recordsDir: RECORDS_DIR, campaignId: "redirected-after-the-run" }, null, 2),
     );
-  });
+  }, HOOK_TIMEOUT_MS);
 
   afterAll(async () => {
     await rm(repo, { recursive: true, force: true });
@@ -1016,7 +1051,7 @@ describe("lethal campaign (exit code + dispatch, spawned)", () => {
     await writeFile(threeMutantReport, JSON.stringify(THREE_MUTANTS), "utf8");
     await writeFile(changedReport, JSON.stringify(TWO_MUTANTS_CHANGED), "utf8");
     await writeFile(reconReport, JSON.stringify(RECON_REPORT), "utf8");
-  });
+  }, HOOK_TIMEOUT_MS);
 
   afterAll(async () => {
     await rm(repo, { recursive: true, force: true });
