@@ -11,8 +11,51 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ## [Unreleased]
 
+## [0.1.0-alpha.2] — 2026-08-17
+
+The first release with a machine-readable surface for agents and CI, a demo application you can
+point the tool at, and a licence. Roughly thirty roadmap rows closed since alpha.1; the ones a user
+can see are below, each citing its `R<n>` for the evidence.
+
 ### Added
 
+- **A licence.** MIT. There was none, so nobody could legally use a binary they downloaded.
+- **`lethal explain --top <n>`** (R150), because the projection built for agents did not fit one:
+  a 473-mutant report projects to 243 KB. The output now always carries `survivorSelection`
+  (`total`, `shown`, `omitted`, `rankedBy`), present even when nothing was capped, so a truncated
+  list can never read as a complete one. A cap ranks survivors by how much evidence each carries,
+  in a total order, so the same report and cap give the same rows on any machine.
+- **`lethal doctor --json`** (R151). The read-only pre-flight was the one surface an agent could not
+  parse. Emits `doctorSchemaVersion`, `ok`, per-check `name`/`ok`/`detail`, `notChecked` tokens for
+  what a GREEN report does not cover, and a caveat with a machine `kind`. Same exit code; only the
+  rendering changes. `--json` is refused elsewhere rather than ignored.
+- **An agent contract** (R153): `docs/using-lethal-from-an-agent.md` and a copyable skill at
+  `skills/lethal-mutation-testing/SKILL.md`, both checked against the code by a test — every flag
+  they name must exist, and the exit codes and schema versions they promise must match the
+  constants.
+- **Published JSON Schemas** for the `explain` projection and `doctor --json`, under `schemas/`
+  (R152). Pinned against the TypeScript declarations in both directions, with every enum asserted
+  equal to its runtime constant. The report and the event stream do not have one yet.
+- **A demo application**, `examples/gift-card` (R155): a small store-credit extension whose eight
+  tests are green and do not notice that deleting one `SetRange` makes a card's balance the whole
+  store's liability. Measured live: 36 mutants, 20 killed / 9 survived / 7 no-coverage, 13.8 s, and
+  all 36 verdicts were pre-committed before the run and all 36 matched. Its rehearsal report ships
+  too, so `lethal explain` can be exercised with no server.
+- **`--operator <name>`** (R127) to scope a run by operator, so measuring one operator on a real
+  project no longer costs every other operator's mutants in the same files.
+- **Four Tier-2 operators and one extension**: `flip-filter-literal` (R134, the first operator that
+  mutates a filter string BC re-parses at runtime rather than AL that `alc` compiles),
+  `swap-find-direction`, `validate-to-assign`, and `swap-modify-flag` extended from `Modify` to
+  `Insert`/`Delete` (R136). Every one landed with its per-mutant verdicts pre-committed and matched
+  against a live container.
+- **`declarativeSites` in the report** (R144). Sites LethAL declines to mutate because they are
+  declarative properties were counted and then thrown away in a warning; the report now carries
+  them.
+- **The BC build that produced the verdicts** is recorded on the al-runner path (R129).
+- **`lethal doctor` works for an al-runner-only project** (R146) instead of refusing it.
+- A source-overlay renderer, `scripts/render-overlay.ts`: a run drawn on the code it measured, with
+  "ran" at procedure granularity (which is all coverage knows) and "checked" per site.
+- CI and release workflows (R154).
 - **`validity.executionContext` on every report** (R60). LethAL executes every mutant headlessly,
   so every verdict describes your app's NON-interactive branch, while a developer running the same
   suite from VS Code runs GUI-allowed — the two are not measuring the same code, and nothing said
@@ -23,9 +66,37 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   `GuiAllowed`/`Confirm`-guarded branch**, which is why this is a stated limit rather than a
   per-site signal. Note the three constructs differ: `Message` is a no-op, `Confirm` forces its
   DEFAULT answer (so the non-default arm is the unreachable one), and `Page.RunModal` errors.
+- **`bcdev.altoolPath` config override** (R64) to pin the publish tool, alongside the existing
+  `bcdev.alcPath` (R43) for the compiler. The publish tool build is not interchangeable either: the
+  AL extension's bundled `altool` 17.0.2273547 silently ignores `BC_SERVER_USERNAME`/
+  `BC_SERVER_PASSWORD` for `publishapp` and its `auth login` is AAD-only, while the
+  `microsoft.dynamics.businesscentral.development.tools` 18.x dotnet tool reads them and publishes.
+  The two overrides are independent, so compile and publish can run on different builds — and,
+  set together, they now satisfy the "no AL extension installed" gate on the container path as
+  well, which previously demanded the extension no matter what the config named.
+
+### Changed
+- **Vendored tree-sitter-al 3.2.1 to 4.0.1** (R133), a breaking grammar release that moves named
+  trees LethAL hashes. Thirty-two empty-block identity hashes were re-keyed with per-site proof and
+  all six live gates re-measured unchanged.
+- **al-runner stops re-downloading 230 MB of platform apps per invocation** (R147, R130): the
+  platform-app directory is pinned with `--package-cache`, and the double provisioning inside a
+  single invocation is gone. 17.1 s per invocation became 6.8 s.
+- The platform-artifact screen no longer tags every `Insert` mutant (R143): the tag is dropped when
+  the receiver's `OnInsert` provably does not assign the primary key, so the screen stops
+  over-reporting. A receiver that cannot be resolved keeps the tag.
 
 ### Fixed
-
+- **A trigger mutant could score `survived` when its only covering test was red** (R140), where
+  member-level attribution correctly declines to score at all.
+- **A stale published TEST app was indistinguishable from genuinely failing tests** (R139) and cost
+  a full gate run to diagnose.
+- **Conformance refusals that asserted nothing** (R137, R142): an empty expectation passed on any
+  input, and a non-empty one never checked for extra specs.
+- **Two more `error` shapes recorded no `cause`**, one of them labelled `deadline-exceeded` when it
+  was not one (R122).
+- Eight `scripts/` files did not compile under the repo's own strict flags, and two had produced
+  numbers a roadmap decision was made on (R120).
 - **A permissions refusal at baseline discovery no longer reads as an unsupported test type**
   (R35). R27 taught LethAL to name the `TestPermissions` cause, but only on the `unstable` path.
   A test BC refused at *baseline discovery* never reaches it: the test was dropped from the green
@@ -54,16 +125,11 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   `authoritative`, `baselineGreen` — against a live Linux Docker BC 28.1 container, with the run
   costs recorded in `docs/benchmarks/runs.jsonl` (the ledger's first plain-container rows).
 
-### Added
-
-- **`bcdev.altoolPath` config override** (R64) to pin the publish tool, alongside the existing
-  `bcdev.alcPath` (R43) for the compiler. The publish tool build is not interchangeable either: the
-  AL extension's bundled `altool` 17.0.2273547 silently ignores `BC_SERVER_USERNAME`/
-  `BC_SERVER_PASSWORD` for `publishapp` and its `auth login` is AAD-only, while the
-  `microsoft.dynamics.businesscentral.development.tools` 18.x dotnet tool reads them and publishes.
-  The two overrides are independent, so compile and publish can run on different builds — and,
-  set together, they now satisfy the "no AL extension installed" gate on the container path as
-  well, which previously demanded the extension no matter what the config named.
+### Security
+- **Six committed campaign reports carried 1,857 fields of a third party's AL source** in this
+  public repository. They predate the redaction ruling and were never swept. Redacted, and the
+  guard now discovers the report set by glob instead of naming two paths by hand, which is how it
+  missed them.
 
 ## [0.1.0-alpha.1] — 2026-07-27
 
