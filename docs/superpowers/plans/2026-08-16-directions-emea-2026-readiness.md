@@ -274,10 +274,10 @@ or plays as a recording, and build the recording either way.
 
 - **F1. CFP deadline.** Find it today. If the abstract is not in, this is the only deadline that
   exists and everything above is contingent.
-- **F2. Slides.** The room will contain people who have never heard of mutation testing. The
+- **F2. Slides — DRAFTED 2026-08-18**, `docs/directions-emea-2026-talk.md`: slide by slide with the words and the measured number behind each claim. The room will contain people who have never heard of mutation testing. The
   concept needs one slide and one sentence, not a lecture: coverage says a line ran, mutation says
   a line is checked.
-- **F3. Positioning.** Alpha or beta on the slide. The README's current voice ("honest about its
+- **F3. Positioning — DECIDED 2026-08-18: call it alpha, on the title slide.** The reasoning is in the talk outline. Alpha or beta on the slide. The README's current voice ("honest about its
   limits rather than complete") is a real asset in a room full of people who have been oversold
   before. Do not lose it in the marketing pass.
 
