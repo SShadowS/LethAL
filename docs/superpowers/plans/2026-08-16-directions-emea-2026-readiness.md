@@ -31,7 +31,14 @@ carrying the order of operations, release notes generated from the CHANGELOG rat
 hand, and Azure Trusted Signing wired but not yet switched on. Roadmap rows R150 to R156 record all
 of it.
 
-**Still untouched: B3, B4, B5, C3 to C7, D4's other half, D5, E and F.**
+**Landed 2026-08-18:** C3 to C7 (the stage runbook and `scripts/demo-reset.ts`), E (the floor
+answers, with their numbers), F2 and F3 (the talk outline, and the decision to call it alpha on the
+title slide), B5 (`lethal init`), and D4's other half (the report and stream schemas, generated).
+
+**Still open, and all of it needs someone other than the tool:** B3 (publish the draft release with
+the control app attached), B4 (watch a stranger install it), the rehearsals themselves — C3's
+failure paths are written but not practised, C4's adapter-off test, C6's recording, C7's projector
+check — D5's live-or-recorded decision, F1 the CFP deadline, and A4 the branding check.
 
 ### A1. There is no LICENSE file (1 day, mostly the decision) — DONE
 
@@ -231,7 +238,7 @@ they name must exist, and the exit codes and schema versions they promise must m
 **What is left for the talk is not writing these, it is rehearsing them.** The skill is what people
 copy after the session; put its path on a slide.
 
-### D4. Publish JSON Schemas (1 day) — still open, filed as `docs/roadmap/R152.md`
+### D4. Publish JSON Schemas — DONE 2026-08-18, all four (`docs/roadmap/R152.md`)
 
 Now four versioned surfaces with no schema artifact: report `schemaVersion` 2, explain
 `explainSchemaVersion` 4, stream `streamSchemaVersion` 1, doctor `doctorSchemaVersion` 1.
