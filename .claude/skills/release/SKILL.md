@@ -150,15 +150,37 @@ reference.
 | Repo variable | `AZURE_SIGNING_ENDPOINT` | `https://neu.codesigning.azure.net/` |
 | Repo variable | `AZURE_SIGNING_ACCOUNT` | `signingshadow` |
 | Repo variable | `AZURE_SIGNING_PROFILE` | `sign1` |
-| Repo secret | `AZURE_CLIENT_ID` | the app registration's client id |
-| Repo secret | `AZURE_TENANT_ID` | the Entra tenant id |
-| Repo secret | `AZURE_SUBSCRIPTION_ID` | the subscription holding the signing account |
+| Repo secret | `AZURE_CLIENT_ID` | `6f5cb67e-5e0c-4aab-bd31-e5e5d0791296` (app registration `github-actions-artifact-signing`) |
+| Repo secret | `AZURE_TENANT_ID` | `29c079c8-7296-4cb9-816e-032a9eefc645` |
+| Repo secret | `AZURE_SUBSCRIPTION_ID` | `0f3dc485-b037-4d5c-8dfe-37d813cecd51` (Visual Studio Enterprise) |
+
+None of those three is a credential — they are identifiers, and they are stored as secrets only
+because that is where the workflow reads them from. The **tenant is not the one that owns the
+`sshadows.dk` domain**: that domain is verified in a different tenant ("Epic Consult"), while the
+signing account lives under the personal Microsoft account's own directory. Domain-to-tenant
+discovery answers the wrong question here.
 
 Authentication is **OIDC federated credential, no client secret**. The job declares
-`id-token: write` and `environment: release` — that environment is not decoration: the federated
-credential's subject is `repo:SShadowS/LethAL:environment:release`, because the Entra tenant rejects
-wildcard-tag credentials. A job without the environment gets an OIDC subject the credential does not
-match, and `azure/login` fails with an unhelpful audience error.
+`id-token: write` and `environment: release` — that environment is not decoration, and neither is the
+exact spelling of the subject.
+
+**The subject is not `repo:OWNER/REPO:environment:release`.** This account emits the immutable-id
+form, and the credential must match it character for character:
+
+```
+repo:SShadowS@3491765/LethAL@1314825145:environment:release
+```
+
+`3491765` is the owner id and `1314825145` is the repository id. Read them, never guess:
+
+```bash
+gh api repos/SShadowS/LethAL/actions/oidc/customization/sub   # returns the sub_claim_prefix verbatim
+```
+
+A credential written in the documented `repo:OWNER/REPO:...` form simply never matches, and
+`azure/login` then fails with an audience error that names nothing useful. The same is true of a job
+that omits `environment: release`, and of flexible wildcard-tag credentials, which this tenant
+rejects outright.
 
 ### Order matters here too
 
@@ -176,9 +198,23 @@ gh variable set AZURE_SIGNING_ACCOUNT  --repo SShadowS/LethAL --body "signingsha
 gh variable set AZURE_SIGNING_PROFILE  --repo SShadowS/LethAL --body "sign1"
 ```
 
-The Azure-side pieces (the federated credential, and granting the app registration the
-`Trusted Signing Certificate Profile Signer` role on the signing account) are portal or `az` work
-and are the user's to do — the values above are the ones `claude-code-lsps` already uses.
+**Both Azure-side pieces are already done for LethAL** (2026-08-18): the federated credential
+`lethal-release-env` exists on that app registration, and the app holds
+**Artifact Signing Certificate Profile Signer** at the signing ACCOUNT scope — account scope, so it
+covers every repository using this identity and a new repo needs no new role assignment. Certificate
+profile `sign1` is Active, PublicTrust.
+
+For a NEW repository, all that is needed is one more federated credential with that repo's own
+subject:
+
+```bash
+az ad app federated-credential create --id 6f5cb67e-5e0c-4aab-bd31-e5e5d0791296 --parameters '{
+  "name": "<repo>-release-env",
+  "issuer": "https://token.actions.githubusercontent.com",
+  "subject": "<the sub_claim_prefix from gh api>:environment:release",
+  "audiences": ["api://AzureADTokenExchange"]
+}'
+```
 
 ### The verification step is the point
 
