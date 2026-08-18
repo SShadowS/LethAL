@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * "Is there an AL construct we never mutate?" — answered mechanically rather than by brainstorm.
+ * "Is there an AL construct we never mutate?", answered mechanically rather than by brainstorm.
  *
  * The operator set was grown one justified operator at a time, and every REFUSAL is written down
  * (`RemoveSetLoadFields`, the three Tier-3 candidates). What was never written down is the
@@ -18,7 +18,7 @@
  * kinds we chose to name are the kinds we handle. The blind spot this instrument exists to find
  * would be invisible in exactly that way.
  *
- * A kind is counted as EXECUTABLE when it has a `procedure` or `trigger_declaration` ancestor —
+ * A kind is counted as EXECUTABLE when it has a `procedure` or `trigger_declaration` ancestor,
  * an object property or a `var` declaration is not a statement any test can run, so counting it as
  * unmutated surface would inflate the gap with nodes no mutation operator could ever target.
  */
@@ -65,7 +65,7 @@ for (const rel of entries) {
 }
 if (files.length === 0) throw new Error(`census: no .al files under ${projectDir}`);
 
-// ONE context over the whole corpus — same reason as census-tier1-sites.ts: a per-file context
+// ONE context over the whole corpus, same reason as census-tier1-sites.ts: a per-file context
 // answers `null` for anything declared elsewhere, and type-consulting operators would claim fewer
 // sites for a reason that has nothing to do with the grammar.
 const ctx = buildSemanticContext(files);
@@ -122,13 +122,13 @@ console.log(`never claimed:    ${unclaimed.length} of those ${executableKinds.le
 console.log("");
 console.log(`${"kind".padEnd(34)}${"exec".padStart(8)}${"claimed".padStart(9)}  operators`);
 for (const r of executableKinds) {
-  const ops = r.claimants.size === 0 ? "—  NEVER MUTATED" : [...r.claimants].sort().join(", ");
+  const ops = r.claimants.size === 0 ? " NEVER MUTATED" : [...r.claimants].sort().join(", ");
   console.log(
     `${r.kind.padEnd(34)}${String(r.executable).padStart(8)}${String(r.claimed).padStart(9)}  ${ops}`,
   );
 }
 
-// The raw count above includes kinds no operator SHOULD target — keywords, type nodes, comments,
+// The raw count above includes kinds no operator SHOULD target, keywords, type nodes, comments,
 // `var` sections. Quoting "109 of 115 never claimed" as the gap would overstate it. So the headline
 // is narrowed by a MECHANICAL rule on the grammar's own naming convention rather than by a
 // hand-curated taste list: a kind whose name ends in `_statement` or `_expression`, plus the literal
