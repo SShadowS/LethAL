@@ -4111,7 +4111,26 @@ if (import.meta.main) {
       process.exit(exitCode);
     })
     .catch((err: unknown) => {
-      console.error(err instanceof Error ? (err.stack ?? String(err)) : String(err));
+      // A REFUSAL is not a crash, and printing a stack trace for one says the opposite. Measured in
+      // a clean-room container against the released binary: `lethal doctor --config typo.json` --
+      // the very first command the README tells a new user to run -- answered a mistyped path with
+      // four frames of `/$bunfs/root/...`, which reads as "this tool is broken" rather than "that
+      // file is not there". The message was already good; the presentation buried it.
+      //
+      // So: the message by default, the stack behind LETHAL_DEBUG=1, and a line saying so, because
+      // an unexplained absence of detail is its own problem when someone is filing a bug. Nothing
+      // is swallowed and the exit code does not move.
+      if (!(err instanceof Error)) {
+        console.error(String(err));
+        process.exit(1);
+      }
+      if (process.env.LETHAL_DEBUG === "1") {
+        console.error(err.stack ?? `${err.name}: ${err.message}`);
+        process.exit(1);
+      }
+      const named = err.name !== "Error" ? `${err.name}: ` : "";
+      console.error(`${named}${err.message}`);
+      console.error("(set LETHAL_DEBUG=1 for the stack trace)");
       process.exit(1);
     });
 }

@@ -138,7 +138,19 @@ named by version, and say in the README that it is the one. Separately decide wh
 app goes to AppSource or stays a side-load, because "publish this unsigned app to your server" is
 a sentence some IT departments will refuse.
 
-### B4. Watch one stranger install it (1 day, highest value on this list)
+### B4. Watch one stranger install it — HALF DONE 2026-08-18: the mechanical half runs in a container
+
+`bash scripts/clean-room.sh` drives the PUBLISHED Linux binary through an attendee's first fifteen
+minutes inside a stock `ubuntu:24.04`: does it run at all, does `--version` carry its provenance,
+does `explain` work on the shipped sample report with no server, does `init` pick ids that fit, does
+`--dry-run` size a job, and do the failure paths refuse by name. Steps for features that postdate
+the artifact under test report SKIP with the version, not FAIL.
+
+It found one real defect on the first run — every refusal reached the user as a stack trace,
+including `doctor --config <typo>`, which is the first command the quick start names (R158, fixed).
+
+**This does not replace the human half and must not be described as if it does.** A container cannot
+be confused, cannot give up, and cannot tell you which sentence it read three times. Still yours:
 
 Hand the release to a BC developer who has never seen the tool. Do not help. Every place they
 stall is a work item, and this test finds the ones no amount of re-reading your own README will.
