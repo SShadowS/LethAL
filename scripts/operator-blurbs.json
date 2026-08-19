@@ -1,0 +1,28 @@
+{
+  "_readme": [
+    "One line per registered operator: the WEAK TEST it catches. This is the single fact the",
+    "registry cannot supply — name, tier, version, target kinds and a verified example all come from",
+    "the operator object itself, and only the 'why a reader should care' is prose.",
+    "",
+    "scripts/operator-tables.ts REFUSES to generate when a registered operator has no entry here, so",
+    "adding an operator without saying what it is for fails the check rather than emitting a blank",
+    "cell. Keys are operator names verbatim, including the 'lethal.' prefix."
+  ],
+  "blurbs": {
+    "lethal.conditional-boundary": "an off-by-one at a boundary no test pins",
+    "lethal.negate-conditional": "a branch that is taken but never checked",
+    "lethal.void-method-call": "a call whose effect nothing observes",
+    "lethal.return-value": "a return value the caller never asserts",
+    "lethal.empty-block": "a whole body nothing depends on",
+    "lethal.swap-call-arguments": "two same-typed arguments passed in the wrong order",
+    "lethal.remove-testfield": "validation tests with weak assertions",
+    "lethal.remove-setrange": "tests that never verify the filter",
+    "lethal.remove-calcfields": "no assertion on a computed FlowField",
+    "lethal.remove-commit": "reliance on an implicit commit",
+    "lethal.swap-modify-flag": "trigger execution that no test checks",
+    "lethal.swap-rec-xrec": "before-value gaps in `OnValidate` and `OnRename`",
+    "lethal.swap-find-direction": "a suite whose fixture only ever holds one row",
+    "lethal.validate-to-assign": "the field value asserted, the `OnValidate` side effect not",
+    "lethal.flip-filter-literal": "a filter string BC re-parses at run time, never asserted"
+  }
+}

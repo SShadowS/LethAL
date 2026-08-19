@@ -113,28 +113,47 @@ Bloats the statement; only one branch executes at runtime so no duplicate side e
 
 Conservative set with documented effectiveness in the mutation testing literature.
 
-| Operator | Example |
-|---|---|
-| ConditionalBoundary | `>` to `>=`, `<` to `<=` |
-| NegateConditional | `=` to `<>`, `and` to `or` |
-| VoidMethodCall | remove statement if return value unused |
-| ReturnValue | flip boolean, zero numeric |
-| EmptyBlock | delete statement body |
+**The two tables below are GENERATED from the registry** (`packages/builtin-tier1/src/index.ts` and
+`packages/builtin-tier2/src/index.ts`) by `bun scripts/operator-tables.ts`; never hand-edit them, and
+`scripts/operator-tables.test.ts` fails when they disagree with the code. They were hand-written
+until 2026-08-19 and had drifted: they listed `RemoveSetLoadFields` and `EmptyTrigger`, neither of
+which is built, and omitted four operators that ship. Every example is lifted from the operator's
+own conformance suite, which runs at registration, so an example that stops being true fails a gate
+rather than misleading a reader.
+
+<!-- operators: tier1 -->
+| Operator | Version | Example | What weak test it catches |
+|---|---|---|---|
+| `lethal.conditional-boundary` | 1.0.0 | `A > 0` → `A >= 0` | an off-by-one at a boundary no test pins |
+| `lethal.negate-conditional` | 1.0.0 | `A = 0` → `A <> 0` | a branch that is taken but never checked |
+| `lethal.void-method-call` | 1.1.0 | `DoThing()` → _(deleted)_ | a call whose effect nothing observes |
+| `lethal.return-value` | 1.0.0 | `exit(42)` → `exit(0)` | a return value the caller never asserts |
+| `lethal.empty-block` | 1.0.0 | `begin DoThing(); end` → `begin end` | a whole body nothing depends on |
+| `lethal.swap-call-arguments` | 1.0.0 | `Foo(A, B)` → `Foo(B, A)` | two same-typed arguments passed in the wrong order |
+<!-- /operators: tier1 -->
 
 ### Tier 2 · AL-specific, high value
 
 Operators that exploit AL/BC semantics to surface weak tests.
 
-| Operator | Example | What weak test it catches |
-|---|---|---|
-| RemoveCalcFields | delete `Rec.CalcFields(...)` | Tests that don't assert on computed fields |
-| RemoveSetLoadFields | delete `SetLoadFields` | Partial-record load assumptions |
-| RemoveTestField | delete `TestField(...)` | Validation tests with weak assertions |
-| RemoveSetRange | delete filter calls before `FindSet` | Tests not verifying filter correctness |
-| SwapModifyFlag | `Modify(true)` to `Modify(false)` | Tests not verifying trigger execution |
-| RemoveCommit | delete `Commit` | Tests relying on implicit commits |
-| EmptyTrigger | empty `OnValidate`, `OnInsert`, `OnModify` | Missing validation coverage |
-| SwapRecXRec | swap `Rec`/`xRec` in triggers | Before-value assertion gaps |
+<!-- operators: tier2 -->
+| Operator | Version | Example | What weak test it catches |
+|---|---|---|---|
+| `lethal.remove-testfield` | 1.1.0 | `Rec.TestField("No.")` → _(deleted)_ | validation tests with weak assertions |
+| `lethal.remove-setrange` | 1.1.0 | `Cust.SetRange("No.", 'A')` → _(deleted)_ | tests that never verify the filter |
+| `lethal.remove-calcfields` | 1.1.0 | `Rec.CalcFields("No.")` → _(deleted)_ | no assertion on a computed FlowField |
+| `lethal.swap-modify-flag` | 1.1.0 | `Cust.Modify(true)` → `Cust.Modify(false)` | trigger execution that no test checks |
+| `lethal.remove-commit` | 1.1.0 | `Commit()` → _(deleted)_ | reliance on an implicit commit |
+| `lethal.swap-rec-xrec` | 1.0.0 | `xRec.Amount` → `Rec.Amount` | before-value gaps in `OnValidate` and `OnRename` |
+| `lethal.swap-find-direction` | 1.0.0 | `Cust.FindFirst()` → `Cust.FindLast()` | a suite whose fixture only ever holds one row |
+| `lethal.validate-to-assign` | 1.1.0 | `Rec.Validate(Name, NewName)` → `Rec.Name := NewName` | the field value asserted, the `OnValidate` side effect not |
+| `lethal.flip-filter-literal` | 1.0.0 | `Cust.SetFilter("No.", '<>%1', No)` → `Cust.SetFilter("No.", '=%1', No)` | a filter string BC re-parses at run time, never asserted |
+<!-- /operators: tier2 -->
+
+Two operators named in earlier drafts of this table are **not built**, each for a recorded reason:
+`RemoveSetLoadFields` is refused on cost after a live measurement proved it killable but
+near-universally surviving on real code (see `packages/builtin-tier2/src/index.ts`), and
+`EmptyTrigger` is subsumed by `empty-block`, which empties a trigger body like any other.
 
 ### Tier 3 · Advanced — **not built; the category was measured away (R13)**
 

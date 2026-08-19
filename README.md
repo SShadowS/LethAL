@@ -512,6 +512,50 @@ Exit codes: `0` ok, `1` error, `3` quarantined, meaning the run refused to vouch
 
 Design detail for all of the above lives in [`design.md`](design.md).
 
+## The changes it makes
+
+Fifteen operators, in two tiers. **Tier 1** is the conservative set the mutation-testing literature
+has evidence for; **Tier 2** exploits AL and Business Central semantics to plant bugs a generic tool
+cannot express. Where both claim the same site, Tier 2 wins.
+
+Scope a run to a subset with `--operator <name>` (repeatable; the `lethal.` prefix is optional).
+That selects which mutants run and cannot change a verdict.
+
+### Tier 1, generic
+
+<!-- operators: tier1 -->
+| Operator | Version | Example | What weak test it catches |
+|---|---|---|---|
+| `lethal.conditional-boundary` | 1.0.0 | `A > 0` → `A >= 0` | an off-by-one at a boundary no test pins |
+| `lethal.negate-conditional` | 1.0.0 | `A = 0` → `A <> 0` | a branch that is taken but never checked |
+| `lethal.void-method-call` | 1.1.0 | `DoThing()` → _(deleted)_ | a call whose effect nothing observes |
+| `lethal.return-value` | 1.0.0 | `exit(42)` → `exit(0)` | a return value the caller never asserts |
+| `lethal.empty-block` | 1.0.0 | `begin DoThing(); end` → `begin end` | a whole body nothing depends on |
+| `lethal.swap-call-arguments` | 1.0.0 | `Foo(A, B)` → `Foo(B, A)` | two same-typed arguments passed in the wrong order |
+<!-- /operators: tier1 -->
+
+### Tier 2, AL-specific
+
+<!-- operators: tier2 -->
+| Operator | Version | Example | What weak test it catches |
+|---|---|---|---|
+| `lethal.remove-testfield` | 1.1.0 | `Rec.TestField("No.")` → _(deleted)_ | validation tests with weak assertions |
+| `lethal.remove-setrange` | 1.1.0 | `Cust.SetRange("No.", 'A')` → _(deleted)_ | tests that never verify the filter |
+| `lethal.remove-calcfields` | 1.1.0 | `Rec.CalcFields("No.")` → _(deleted)_ | no assertion on a computed FlowField |
+| `lethal.swap-modify-flag` | 1.1.0 | `Cust.Modify(true)` → `Cust.Modify(false)` | trigger execution that no test checks |
+| `lethal.remove-commit` | 1.1.0 | `Commit()` → _(deleted)_ | reliance on an implicit commit |
+| `lethal.swap-rec-xrec` | 1.0.0 | `xRec.Amount` → `Rec.Amount` | before-value gaps in `OnValidate` and `OnRename` |
+| `lethal.swap-find-direction` | 1.0.0 | `Cust.FindFirst()` → `Cust.FindLast()` | a suite whose fixture only ever holds one row |
+| `lethal.validate-to-assign` | 1.1.0 | `Rec.Validate(Name, NewName)` → `Rec.Name := NewName` | the field value asserted, the `OnValidate` side effect not |
+| `lethal.flip-filter-literal` | 1.0.0 | `Cust.SetFilter("No.", '<>%1', No)` → `Cust.SetFilter("No.", '=%1', No)` | a filter string BC re-parses at run time, never asserted |
+<!-- /operators: tier2 -->
+
+The tables are generated from the operator registry, and every example is taken from the operator's
+own conformance suite, which runs at registration. The one to understand is `validate-to-assign`:
+the assignment leaves the field's **value correct** and deletes only the `OnValidate` trigger chain,
+so a test that checks the field still passes and a test that checks the side effect does not. It is
+the only operator that separates those two.
+
 ## Limits
 
 The short version, before the evidence:
