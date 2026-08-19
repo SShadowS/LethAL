@@ -172,7 +172,22 @@ const EXPECTED = {
   // that shares a statement with an existing mutant (`Category`'s `remove-calcfields`) becomes its
   // SIBLING in one dispatch chain rather than replacing it. All four verdicts pre-committed in
   // docs/superpowers/specs/2026-08-19-r161-branch-slot-precommitment.md BEFORE this run.
-  totalMutantSites: 256,
+  // !! R163's numbers here are PREDICTED AND NOT YET MEASURED LIVE. The fixture container was
+  // !! unavailable when the operator landed (Cronus283 had been force-terminated and came back with
+  // !! no LethAL Control app published), so this gate has not run against them. Until it does, the
+  // !! four R163 figures below are a pre-commitment, not a frozen measurement. Run
+  // !! `LETHAL_ITEST_TABLES=1 bun run itest:tables` and, if it agrees, delete this note. If it
+  // !! disagrees, that is a finding: see
+  // !! docs/superpowers/specs/2026-08-19-r163-remove-not-precommitment.md.
+  //
+  // R161 moved this from 252 to 256; R163 moves it to 257. One operator, `lethal.remove-not`
+  // (Tier 1, 1.0.0), which strips a `not` from a bare call, identifier or member access —
+  // `negate-conditional` reaches a negation only through a comparison, so this fixture's
+  // `if not DataMain.Get(CommitRunNoLbl) then` was claimed by nothing. Exactly ONE site here, and
+  // the census said so before the run; a second would be a finding. No displacement: nothing else
+  // claims a `unary_expression`. Verdict pre-committed in
+  // docs/superpowers/specs/2026-08-19-r163-remove-not-precommitment.md.
+  totalMutantSites: 257,
   // R36 moved this from 63/10 to 64/9, deliberately and in one direction only.
   //
   // `RequireCategoryAFails` used to assert merely that AN error occurred, so deleting
@@ -253,7 +268,11 @@ const EXPECTED = {
   // by an `asserterror` whose whole purpose is that guard. `BlankNoValidateFails`,
   // `CategoryGuardNeedsCalcFields` and `TooLongNoValidateFails` all stop seeing an error the moment
   // the `Error(...)` is deleted, which is the most direct kill in the fixture.
-  killed: 194,
+  // R163 moves this from 194 to 195. `Data Commit Target.OnRun` guards on
+  // `if not DataMain.Get(CommitRunNoLbl) then exit;`. With the `not` gone the Get SUCCEEDS, the
+  // trigger exits immediately and never sets `Flagged`, which both covering tests assert by name.
+  // Assertion-earned, not a platform artifact: the mutated program completes and simply does less.
+  killed: 195,
   // R73 moved this from 9 to 12, and TWO of the three additions are worth reading rather than
   // accepting:
   //
@@ -353,7 +372,7 @@ const EXPECTED = {
   // stating: three of the four new mutants are killed and one survives, so a wave that is 75% kills
   // still lowers a score sitting at 86%. A score that only ever rises is a score nobody is testing
   // against new ground.
-  mutationScore: 194 / (194 + 32),
+  mutationScore: 195 / (195 + 32),
   /**
    * R72, extended by R138: the screen must fire, and on exactly these mutants under exactly these
    * mechanisms.

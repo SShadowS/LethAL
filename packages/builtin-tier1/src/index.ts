@@ -2,6 +2,7 @@ import type { MutationOperator } from "@lethal/operator-sdk";
 import { conditionalBoundary } from "./conditional-boundary";
 import { emptyBlock } from "./empty-block";
 import { negateConditional } from "./negate-conditional";
+import { removeNot } from "./remove-not";
 import { returnValue } from "./return-value";
 import { swapCallArguments } from "./swap-call-arguments";
 import { voidMethodCall } from "./void-method-call";
@@ -9,6 +10,7 @@ import { voidMethodCall } from "./void-method-call";
 export { conditionalBoundary } from "./conditional-boundary";
 export { emptyBlock } from "./empty-block";
 export { negateConditional } from "./negate-conditional";
+export { removeNot } from "./remove-not";
 export { returnValue } from "./return-value";
 export { swapCallArguments } from "./swap-call-arguments";
 export { voidMethodCall } from "./void-method-call";
@@ -22,4 +24,8 @@ export const tier1Operators: readonly MutationOperator[] = [
   returnValue,
   emptyBlock,
   swapCallArguments,
+  // R163: `not` on a bare call, identifier or member access, which `negate-conditional` cannot
+  // reach because it targets comparisons and logical expressions only. 1,051 claimable sites on
+  // `do-rel2/Cloud`, none of them claimed by anything before this.
+  removeNot,
 ];

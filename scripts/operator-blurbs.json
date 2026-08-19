@@ -11,6 +11,7 @@
   "blurbs": {
     "lethal.conditional-boundary": "an off-by-one at a boundary no test pins",
     "lethal.negate-conditional": "a branch that is taken but never checked",
+    "lethal.remove-not": "a negated guard whose two branches nobody tells apart",
     "lethal.void-method-call": "a call whose effect nothing observes",
     "lethal.return-value": "a return value the caller never asserts",
     "lethal.empty-block": "a whole body nothing depends on",
