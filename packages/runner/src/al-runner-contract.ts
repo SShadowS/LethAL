@@ -118,6 +118,27 @@ export const CONTRACT_FACT_CONSEQUENCES: Record<ContractFactName, string> = {
 export interface AlRunnerContractResult {
   readonly facts: readonly ContractFact[];
   /**
+   * The provisioning flag the probe's own invocations carried, DERIVED from the argv it built
+   * rather than asserted. R149.
+   *
+   * `contractSummary` calls itself "one line stating what was measured … so a run records the
+   * contract its verdicts were produced under". R147 made that half false: every per-mutant
+   * invocation now carries `--package-cache <pin>` and no `--auto-provision`, while this probe still
+   * builds its invocations with no pin, because it runs from `cli.ts` BEFORE `runSession` and
+   * therefore before a pin exists. So the contract is measured under one argv and the verdicts come
+   * from another, differing by exactly the flag R147 changed.
+   *
+   * Closing that properly means changing R123's own design — moving the probe after provisioning,
+   * giving it a throwaway provisioning, or adding a second pinned measurement — which R149 records
+   * and this does not attempt. What this does is stop the two being silently conflated: the summary
+   * now SAYS which argv it measured, so a reader comparing the contract line against a verdict can
+   * see the difference instead of assuming there is none.
+   *
+   * Derived so it cannot rot: if R123 ever gains a pin, this follows the argv rather than needing a
+   * second edit somewhere else.
+   */
+  readonly measuredProvisioning: "auto-provision" | "package-cache";
+  /**
    * Whether stdout carried a progress banner ahead of the JSON envelope. INFORMATIONAL — no
    * refusal. `parseAlRunnerPayload` handles both, and the two releases measured disagreed:
    * 2.0.0.0 emitted one, 2.0.1.0 did not on the paths probed. Recorded because a reader debugging
@@ -306,6 +327,11 @@ export async function runAlRunnerContractProbe(
 ): Promise<AlRunnerContractResult> {
   const facts: ContractFact[] = [];
   let bannerOnStdout = false;
+  /**
+   * R149. DERIVED from the argv this probe actually built, on the first invocation that builds one,
+   * rather than hardcoded to the value that is true today. If R123 ever gains a pin, this follows.
+   */
+  let measuredProvisioning: AlRunnerContractResult["measuredProvisioning"] = "auto-provision";
   let root: string | undefined;
 
   /**
@@ -412,14 +438,18 @@ export async function runAlRunnerContractProbe(
     const wantedName = qualifiedTestName(CONTRACT_TESTS_CODEUNIT_ID, PASSING_METHOD);
 
     // 3. the qualified test-name shape, plus the banner reading, from one real run
-    const passRun = await run(
-      buildAlRunnerArgv(alRunnerPath, {
-        sourceDir: dirs.appDir,
-        testDir: dirs.testDir,
-        qualifiedTest: wantedName,
-      }),
-      alRunnerEnv(HANG_TIMEOUT_SECONDS),
-    );
+    const passArgv = buildAlRunnerArgv(alRunnerPath, {
+      sourceDir: dirs.appDir,
+      testDir: dirs.testDir,
+      qualifiedTest: wantedName,
+    });
+    // R149: read the provisioning flag off the argv this probe is about to SEND, so the summary
+    // reports what was measured rather than what someone believed at writing time. `buildAlRunnerArgv`
+    // makes the pin and `--auto-provision` mutually exclusive, so one of the two is always present.
+    measuredProvisioning = passArgv.includes("--package-cache")
+      ? "package-cache"
+      : "auto-provision";
+    const passRun = await run(passArgv, alRunnerEnv(HANG_TIMEOUT_SECONDS));
     if ("error" in passRun) {
       facts.push(fact("qualified-test-name", "unmeasurable", wantedName, passRun.error));
     } else {
@@ -565,7 +595,7 @@ export async function runAlRunnerContractProbe(
     }
   }
 
-  return { facts, bannerOnStdout };
+  return { facts, bannerOnStdout, measuredProvisioning };
 }
 
 /**
@@ -601,5 +631,14 @@ const REFUSAL_FOOTER =
 export function contractSummary(result: AlRunnerContractResult): string {
   const version = result.facts.find((f) => f.fact === "version")?.measured ?? "<unknown>";
   const shape = result.facts.map((f) => `${f.fact}=${f.verdict}`).join(" ");
-  return `[lethal] al-runner wire contract: ${version} | ${shape} | banner=${result.bannerOnStdout}`;
+  // R149: the argv is NAMED rather than left implied. This line's own promise is that a run records
+  // the contract its verdicts were produced under, and since R147 that is only true when the session
+  // did not pin: a pinned session measures the contract under `--auto-provision` and produces its
+  // verdicts under `--package-cache <pin>`. Saying which was measured is the difference between a
+  // reader who can see that gap and one who assumes there is none.
+  return (
+    `[lethal] al-runner wire contract: ${version} | ${shape} | banner=${result.bannerOnStdout}` +
+    ` | measured-under=--${result.measuredProvisioning}` +
+    " (a session that PINS produces its verdicts under --package-cache instead; R149)"
+  );
 }
