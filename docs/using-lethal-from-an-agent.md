@@ -107,7 +107,7 @@ now-required property.
 lethal explain docs/campaign/2026-08-16-gift-card/rehearsal.report.json --top 10
 ```
 
-It is the gift card demo's rehearsal run — 41 mutants, 25 killed, 9 survived, 7 no-coverage — and it
+It is the gift card demo's rehearsal run — 43 mutants, 25 killed, 11 survived, 7 no-coverage — and it
 is kept unredacted because that app is ours. Every other committed report has its source stripped;
 see `scripts/redact-first-party-reports.json` for the rule and how it is enforced.
 

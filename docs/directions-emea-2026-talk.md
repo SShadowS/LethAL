@@ -73,7 +73,7 @@ audience would cost you the room.
 Two things worth saying out loud because they are the objections forming in the room:
 
 - **Your source tree is never modified.** The copy is mutated, not your code.
-- **It is one compile and one publish**, not one per mutant. That is what makes 41 mutants take 18
+- **It is one compile and one publish**, not one per mutant. That is what makes 43 mutants take 18
   seconds instead of an afternoon.
 
 ## 5. The demo
@@ -83,7 +83,7 @@ Runbook §4 has the beat-by-beat and the exact commands. The narrative arc:
 1. Eight tests, all green. Would you ship it?
 2. Start the run. Talk about the suite while it goes — error paths, a trigger assertion, an
    audit-trail check. Let them believe it. It is a *good* suite by everyday standards.
-3. 25 killed, 9 survived, 7 no-coverage.
+3. 25 killed, 11 survived, 7 no-coverage.
 4. **The survivor:** one deleted `SetRange`, every test still green, and the function now returns the
    whole store's outstanding balance instead of one card's. `executionProven: true` — a test
    provably ran that line and did not notice.

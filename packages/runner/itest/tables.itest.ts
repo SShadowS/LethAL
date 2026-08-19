@@ -172,14 +172,6 @@ const EXPECTED = {
   // that shares a statement with an existing mutant (`Category`'s `remove-calcfields`) becomes its
   // SIBLING in one dispatch chain rather than replacing it. All four verdicts pre-committed in
   // docs/superpowers/specs/2026-08-19-r161-branch-slot-precommitment.md BEFORE this run.
-  // !! R163's numbers here are PREDICTED AND NOT YET MEASURED LIVE. The fixture container was
-  // !! unavailable when the operator landed (Cronus283 had been force-terminated and came back with
-  // !! no LethAL Control app published), so this gate has not run against them. Until it does, the
-  // !! four R163 figures below are a pre-commitment, not a frozen measurement. Run
-  // !! `LETHAL_ITEST_TABLES=1 bun run itest:tables` and, if it agrees, delete this note. If it
-  // !! disagrees, that is a finding: see
-  // !! docs/superpowers/specs/2026-08-19-r163-remove-not-precommitment.md.
-  //
   // R161 moved this from 252 to 256; R163 moves it to 257. One operator, `lethal.remove-not`
   // (Tier 1, 1.0.0), which strips a `not` from a bare call, identifier or member access —
   // `negate-conditional` reaches a negation only through a comparison, so this fixture's

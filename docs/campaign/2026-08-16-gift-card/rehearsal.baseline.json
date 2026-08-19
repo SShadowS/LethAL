@@ -203,6 +203,20 @@
     "errorClass": null
   },
   {
+    "key": "874b2243d7853bd15f267f33138ff89c80f4cb724cfadca92ef32368b78bb712|Gift Card Mgt|lethal.swap-enum-member|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "874b2243d7853bd15f267f33138ff89c80f4cb724cfadca92ef32368b78bb712|Gift Card Mgt|lethal.swap-enum-member|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "9b228c746ca7b9a031c42bf3b7b9676ff48370fab12e7759c4ad4fc198cb02d9|Gift Card Mgt|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "IssueCreatesCard",

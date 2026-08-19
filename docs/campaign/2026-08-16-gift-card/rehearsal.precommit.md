@@ -53,3 +53,29 @@ planted `remove-setrange` in `GetBalance` still survives, the `conditional-bound
 still survives, and `BlockExpiredCards` is still seven no-coverage. The demo now shows both halves
 at once: a suite that catches every guard clause and still misses the thing nobody asserted.
 
+---
+
+## Amended 2026-08-19 again by R162: the stage is re-frozen at 43 mutants
+
+`lethal.swap-enum-member` landed and this app gained **two** mutants, both in `Gift Card Mgt`:
+`"Gift Card Entry Type"::Issue` swapped to `::Redemption` inside `Issue`, and the mirror inside
+`Redeem`. Both are predicted and measured **survived**.
+
+They are worth more to the demo than the count suggests. `PostEntry` writes the value straight into
+`GiftCardEntry."Entry Type"` and changes nothing else, and the string `Entry Type` appears nowhere in
+the suite. So the ledger records whether an entry was an issue or a redemption and **nothing checks
+it** — a statement or a report summing by entry type would be wrong and the suite would stay green.
+That is a second survivor class FOUND rather than planted, sitting beside the deliberately planted
+`remove-setrange`.
+
+Totals move 41 -> 43 and survivors 9 -> 11; killed and no-coverage are unchanged. The score falls
+from 73.5% to **69.4%**, which is the right direction: an operator that finds two real unasserted
+behaviours should lower a score.
+
+Nothing above is edited. The two predictions were written before their run in
+`docs/superpowers/specs/2026-08-19-r162-swap-enum-member-precommitment.md` and both matched.
+
+**The three rows that carry the demo are still unchanged**: the planted `remove-setrange` in
+`GetBalance` survives, the `conditional-boundary` in `Redeem` survives, and `BlockExpiredCards` is
+still seven no-coverage.
+
