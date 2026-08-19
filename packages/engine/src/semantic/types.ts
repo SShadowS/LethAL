@@ -16,7 +16,7 @@ import { ALNodeKind, isBinaryExpressionKind } from "../ast/node-kinds";
  *     (mapped via ALNodeKind.integer_literal etc.).
  */
 import type { ALSyntaxNode } from "../ast/syntax-node";
-import { enclosingObjectScopeKey } from "./symbol-table";
+import { enclosingObjectScopeKey, objectScopeKey } from "./symbol-table";
 import type { SourceFile, SymbolTable } from "./symbol-table";
 
 export interface TypeTable {
@@ -58,9 +58,100 @@ function computeType(node: ALSyntaxNode, symbols: SymbolTable): string | null {
     }
     case ALNodeKind.identifier:
       return resolveIdentifierType(node, symbols);
+    case ALNodeKind.field_access:
+      return memberType(node, symbols);
+    case ALNodeKind.procedure_call:
+      return callType(node, symbols);
     default:
       return null;
   }
+}
+
+/** `Record "Data Main"` / `Record DataMain` -> `Data Main`; anything else -> `null`. */
+function recordTableName(typeText: string | null): string | null {
+  if (typeText === null) return null;
+  const match = /^\s*Record\s+(.+?)\s*$/i.exec(typeText);
+  const raw = match?.[1];
+  if (raw === undefined) return null;
+  const unquoted = raw.startsWith('"') && raw.endsWith('"') ? raw.slice(1, -1) : raw;
+  return unquoted.length === 0 ? null : unquoted;
+}
+
+/**
+ * The declared type of `<receiver>.<member>`, when the receiver resolves to a project table and
+ * that table (or a `tableextension` on it) declares the member as a field.
+ *
+ * R160. `computeType` had no case for this at all and answered `null`, which is where BC keeps its
+ * numbers: measured on `do-rel2/Cloud`, 49 of the 170 untypeable arithmetic operands were a
+ * `member_expression`.
+ *
+ * Deliberately narrow. It resolves ONE shape, a field on a record variable, and answers `null` for
+ * everything else a `member_expression` can be — a page control, a chained access, an enum value,
+ * a member of a codeunit. For a type table the unsafe direction is a confident wrong answer:
+ * `swap-call-arguments` emits AL from a type equality, and R87 is the row recording what a wrong
+ * type there costs (`AL0133`, a whole-project compile failure after the expensive step).
+ */
+function memberType(node: ALSyntaxNode, symbols: SymbolTable): string | null {
+  const objectNode = node.childForFieldName("object");
+  const memberNode = node.childForFieldName("member");
+  if (objectNode === null || memberNode === null) return null;
+  // Only a plain identifier receiver. A chained `A.B.C` would need the middle to resolve to a
+  // record type, which this layer does not model, so it refuses rather than guessing.
+  if (objectNode.kind !== ALNodeKind.identifier) return null;
+  const tableName = recordTableName(resolveIdentifierType(objectNode, symbols));
+  if (tableName === null) return null;
+  const memberName = stripQuotes(memberNode.text).toLowerCase();
+  for (const field of symbols.fieldsOf(tableName)) {
+    if (field.name.toLowerCase() === memberName) return field.typeText;
+  }
+  return null;
+}
+
+/**
+ * The declared return type of a call, when the call resolves to a procedure THIS PROJECT declares.
+ *
+ * R160. 81 of the 170 untypeable arithmetic operands on `do-rel2/Cloud` were a `call_expression`,
+ * the largest single group.
+ *
+ * A platform method (`Rec.Count()`, `StrLen(...)`, `Rec.Get(...)`) keeps answering `null`, and that
+ * is the honest shape rather than a gap to fill later: this project indexes the AL it can see, and
+ * inventing return types for the base application would be a table of guesses that goes stale
+ * silently. Answering `null` costs sites; answering wrongly costs a compile.
+ */
+function callType(node: ALSyntaxNode, symbols: SymbolTable): string | null {
+  const callee = node.childForFieldName("function");
+  if (callee === null) return null;
+
+  if (callee.kind === ALNodeKind.identifier) {
+    // Unqualified: a procedure of the object the call sits in.
+    const owner = enclosingObjectScopeKey(node);
+    if (owner === null) return null;
+    return symbols.resolveProcedure(owner, callee.text)?.returnType ?? null;
+  }
+
+  if (callee.kind === ALNodeKind.field_access) {
+    const receiver = callee.childForFieldName("object");
+    const method = callee.childForFieldName("member");
+    if (receiver === null || method === null) return null;
+    if (receiver.kind !== ALNodeKind.identifier) return null;
+    const receiverType = resolveIdentifierType(receiver, symbols);
+    if (receiverType === null) return null;
+    // `Codeunit "X"` and `Record "X"` are the two receivers whose procedures this project declares.
+    const match = /^\s*(?:Codeunit|Record)\s+(.+?)\s*$/i.exec(receiverType);
+    const raw = match?.[1];
+    if (raw === undefined) return null;
+    const ownerName = stripQuotes(raw);
+    const kind = /^\s*Codeunit\b/i.test(receiverType) ? "codeunit" : "table";
+    return (
+      symbols.resolveProcedure(objectScopeKey(kind, ownerName), method.text)?.returnType ?? null
+    );
+  }
+
+  return null;
+}
+
+function stripQuotes(text: string): string {
+  return text.startsWith('"') && text.endsWith('"') && text.length >= 2 ? text.slice(1, -1) : text;
 }
 
 function binaryType(node: ALSyntaxNode, symbols: SymbolTable): string | null {

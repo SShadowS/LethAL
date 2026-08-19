@@ -72,6 +72,26 @@ export interface VarSymbol {
   readonly node: ALSyntaxNode;
 }
 
+/**
+ * One `field(<id>; <name>; <type>)` declaration of a table.
+ *
+ * R160. Indexed because `types.ts` could not type `Rec.Amount` at all — `computeType` had no
+ * `member_expression` case and fell through to `null` — and BC code does its arithmetic and its
+ * comparisons on record fields. Measured on `do-rel2/Cloud` while spiking R159: of 170 arithmetic
+ * expressions whose operands could not be typed, 49 were a `member_expression`.
+ *
+ * `typeText` is VERBATIM, `Code[20]` and not `Code`, matching `VarSymbol.typeText`. Consumers
+ * compare declared types for equality (`swap-call-arguments`) or test them for membership in a
+ * numeric set, and both want the declaration as written rather than a normalisation this layer
+ * invented.
+ */
+export interface FieldSymbol {
+  /** Quote-stripped, so `"No."` indexes as `No.`. */
+  readonly name: string;
+  readonly typeText: string;
+  readonly node: ALSyntaxNode;
+}
+
 export interface ProcedureSymbol {
   readonly name: string;
   readonly owner: string;
@@ -89,6 +109,14 @@ export interface SymbolTable {
   resolveProcedure(ownerName: string, procName: string): ProcedureSymbol | null;
   globalsOf(ownerName: string): readonly VarSymbol[];
   localsOf(ownerName: string, procName: string): readonly VarSymbol[];
+  /**
+   * Every field of a table, by the table's own name, INCLUDING fields a project `tableextension`
+   * adds to it. Empty for a name that is not a project table, never absent.
+   *
+   * Case-insensitive on the table name, because AL is: a variable declared `Record "data main"`
+   * names the same table as `table 79300 "Data Main"`.
+   */
+  fieldsOf(tableName: string): readonly FieldSymbol[];
   readonly objects: readonly ObjectSymbol[];
   /** Every `tableextension` in the project — see `ExtensionSymbol`. Empty, never absent. */
   readonly tableExtensions: readonly ExtensionSymbol[];
@@ -207,6 +235,32 @@ export function buildSymbolTable(files: readonly SourceFile[]): SymbolTable {
   const globals = new Map<string, VarSymbol[]>();
 
   const tableExtensions: ExtensionSymbol[] = [];
+  /** Keyed on the LOWERCASED table name — AL is case-insensitive and declarations disagree. */
+  const fields = new Map<string, FieldSymbol[]>();
+
+  /**
+   * Index a `fields { ... }` section onto `tableName`, appending rather than replacing.
+   *
+   * Appending is what makes a `tableextension` work: it adds fields to a table declared elsewhere,
+   * so its section has to join the base table's list rather than overwrite it. A base table parsed
+   * after its extension must not lose the extension's fields either, which is why this never
+   * `set`s a fresh array.
+   */
+  const indexFields = (objectNode: ALSyntaxNode, tableName: string): void => {
+    const section = declarationMembers(objectNode).find((c) => c.rawKind === "fields_section");
+    if (section === undefined) return;
+    const body = section.namedChildren.find((c) => c.rawKind === "fields_body") ?? section;
+    const key = tableName.toLowerCase();
+    const list = fields.get(key) ?? [];
+    for (const decl of body.namedChildren) {
+      if (decl.rawKind !== "field_declaration") continue;
+      const nameNode = decl.childForFieldName("name");
+      const typeNode = decl.childForFieldName("type");
+      if (nameNode === null || typeNode === null) continue;
+      list.push({ name: stripQuotes(nameNode.text), typeText: typeNode.text, node: decl });
+    }
+    fields.set(key, list);
+  };
 
   /**
    * Index one declaration's members (globals, procedures with their locals and parameters) under
@@ -265,11 +319,16 @@ export function buildSymbolTable(files: readonly SourceFile[]): SymbolTable {
         // 17 sites in its `tableextension`s and 18 more in a `pageextension`
         // (`scripts/probe-r30-pageext.ts`), which is why BOTH kinds are indexed here.
         indexMembers(objectNode, extensionScopeKey(extension.kind, extension.name));
+        // R160: a `tableextension`'s fields belong to the table it EXTENDS, which is the name any
+        // expression uses to reach them. Keyed on `baseObject` for that reason, never on the
+        // extension's own name.
+        if (extension.kind === "tableextension") indexFields(objectNode, extension.baseObject);
         continue;
       }
       const header = parseObjectHeader(objectNode);
       if (header === null) continue;
       objects.push({ ...header, node: objectNode });
+      if (header.kind === "table") indexFields(objectNode, header.name);
       // R70: scope is keyed by (kind, name). A bare-name key let a page named after its table
       // overwrite the table's variables wholesale.
       indexMembers(objectNode, objectScopeKey(header.kind, header.name));
@@ -293,6 +352,9 @@ export function buildSymbolTable(files: readonly SourceFile[]): SymbolTable {
       return null;
     },
     resolveProcedure,
+    fieldsOf(tableName) {
+      return fields.get(tableName.toLowerCase()) ?? [];
+    },
     globalsOf(ownerName) {
       return globals.get(ownerName) ?? [];
     },

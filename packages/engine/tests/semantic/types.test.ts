@@ -231,4 +231,77 @@ codeunit 50323 "Zzz Scope Victim"
       ),
     ).toBeNull();
   });
+  /**
+   * R160. `computeType` had no case for `member_expression` or `call_expression`, so it answered
+   * `null` for `Rec.Amount` and `GetAmount()` alike, which is exactly where Business Central keeps
+   * its numbers. Measured on `do-rel2/Cloud` while spiking R159: of 170 arithmetic expressions whose
+   * operands could not be typed, 81 were a call and 49 a record field.
+   *
+   * The change is provably INERT for every shipped operator: the tier-1 site census over the same
+   * 554-file corpus is byte-identical before and after, 20,844 sites, 0 added and 0 removed. What it
+   * moves is the arithmetic spike's claimable set, 100 to 120 sites.
+   */
+  describe("R160: record fields and project procedure returns", () => {
+    const TABLE = `table 79400 "R160 Tbl" { fields { field(1; "No."; Code[20]) { } field(2; Amount; Decimal) { } field(3; Qty; Integer) { } } }`;
+    const EXTENSION = `tableextension 79401 "R160 Ext" extends "R160 Tbl" { fields { field(50; Extra; Integer) { } } }`;
+    const HELPER = `codeunit 79402 "R160 Helper" { procedure Compute(): Decimal begin exit(1); end; }`;
+
+    const typeOfIn = async (body: string, extra = ""): Promise<string | null> =>
+      typeOfExitExprIn(
+        // The object under test comes FIRST: `typeOfExitExpr` types the argument of the first
+        // `exit_statement` in the source, so a helper codeunit placed ahead of it would silently
+        // type the helper's own `exit(1)` and every case would answer Integer.
+        `codeunit 79403 "R160 C" { procedure P() var R: Record "R160 Tbl"; H: Codeunit "R160 Helper"; begin exit(${body}); end; ${extra} }
+` +
+          `${TABLE}
+${EXTENSION}
+${HELPER}`,
+      );
+
+    it("types a record field through its declared table", async () => {
+      expect(await typeOfIn("R.Amount")).toBe("Decimal");
+      expect(await typeOfIn("R.Qty")).toBe("Integer");
+    });
+
+    it("keeps the field type VERBATIM, matching VarSymbol.typeText", async () => {
+      // `Code[20]`, not `Code`. Consumers compare declared types for equality or test membership in
+      // a numeric set, and both want the declaration as written rather than a normalisation this
+      // layer invented.
+      expect(await typeOfIn('R."No."')).toBe("Code[20]");
+    });
+
+    it("sees a field a tableextension adds to the table", async () => {
+      expect(await typeOfIn("R.Extra")).toBe("Integer");
+    });
+
+    it("types an unqualified call to a procedure of the same object", async () => {
+      expect(await typeOfIn("Local()", "procedure Local(): Integer begin exit(1); end;")).toBe(
+        "Integer",
+      );
+    });
+
+    it("types a qualified call to another project codeunit's procedure", async () => {
+      expect(await typeOfIn("H.Compute()")).toBe("Decimal");
+    });
+
+    it("REFUSES a platform method rather than guessing a return type", async () => {
+      // `Count()` is the base application's, not this project's. Inventing return types for the
+      // platform would be a table of guesses that goes stale silently; answering null costs sites,
+      // answering wrongly costs a compile (R87, AL0133 on a whole project).
+      expect(await typeOfIn("R.Count()")).toBeNull();
+    });
+
+    it("REFUSES a member that is not a field of the resolved table", async () => {
+      expect(await typeOfIn("R.NotAField")).toBeNull();
+    });
+
+    it("REFUSES a receiver that resolves to no project table", async () => {
+      expect(await typeOfIn("Unknown.Amount")).toBeNull();
+    });
+
+    it("REFUSES a chained member access rather than resolving half of it", async () => {
+      // `A.B.C` would need the middle to resolve to a record type, which this layer does not model.
+      expect(await typeOfIn("R.Amount.Something")).toBeNull();
+    });
+  });
 });
