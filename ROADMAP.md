@@ -102,7 +102,7 @@ that ordering is the priority.
 - **R162** · `swap-enum-member` is the largest unclaimed BC-semantic surface: 2,355 sites, nothing touches them · [R162.md](docs/roadmap/R162.md) · open, censused 2026-08-19 but not spiked; no compile probe, no overlap check, no live arm
 - **R163** · `not` on a bare call or identifier is invisible to every operator: 1,093 unclaimed sites · [R163.md](docs/roadmap/R163.md) · open, censused 2026-08-19 but not spiked; the duplicate-key false kill needs a screen decision first
 - **R164** · 290 loop-exit negations score only with an opt-in flag that ends a session on the user's server · [R164.md](docs/roadmap/R164.md) · open, measured 2026-08-19; this is a DEFAULT-PATH cost, not a correctness bug, and R53 is the reason
-- **R165** · `swap-modify-flag` flips `true` to `false` and claims 62 sites; the missing direction is worth 419 · [R165.md](docs/roadmap/R165.md) · open, measured 2026-08-19; the forward direction needs its own platform-kill screen, which is why it is not a…
+- **R165** · `swap-modify-flag` flips `true` to `false` and claims 62 sites; the missing direction is worth 419 · [R165.md](docs/roadmap/R165.md) · open, PROBED 2026-08-19 (`scripts/r165-probe/`) and the footprint is 49, not 419. Still above R13's bar of…
 
 ## Backends and tooling
 
