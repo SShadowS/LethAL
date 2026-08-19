@@ -3719,6 +3719,28 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       announcement: observedBcBuild.announcement,
     });
   }
+  // R148: al-runner tells us when dependency resolution picked a SYMBOL-ONLY package for an app the
+  // tests call into, and until now nothing read it. On the fixture it is harmless — the run also
+  // compiles the target from source and an implementation package wins at execution time — but on a
+  // real project the same line means every mutant in that app was scored against a program whose
+  // procedure bodies are absent. The line does not distinguish the two, which is why it has to reach
+  // the report rather than the scrollback. Structural check for the same reason `observedBcBuild` is
+  // one: no other backend has the concept.
+  const missingImplSource = cfg.backend as {
+    observedMissingImplementation?: () => { app: string; announcement: string } | undefined;
+  };
+  const observedMissingImpl = missingImplSource.observedMissingImplementation?.();
+  if (observedMissingImpl !== undefined) {
+    emit({
+      type: "warning",
+      code: "al-runner-missing-implementation",
+      message:
+        `al-runner resolved ${observedMissingImpl.app} to a package with NO IMPLEMENTATION, and said calls into ` +
+        "it will fail. If that app is one this session mutated or called, its procedure bodies were absent and " +
+        "every verdict touching it describes a program that cannot run. Runner said: " +
+        observedMissingImpl.announcement,
+    });
+  }
   const totalMs = Date.now() - sessionStartedMs;
   emit({ type: "session-finished", elapsedMs: totalMs });
   // buildReport(statics, events) (spec 2026-08-05 §A): the closed statics set this run was GIVEN —

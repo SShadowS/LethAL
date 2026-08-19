@@ -49,6 +49,8 @@ export interface AlRunnerTransport {
    * pinned by us with `--bc-version`.
    */
   observedBcBuild(): AlRunnerBcBuild | undefined;
+  /** R148 — the first "NO IMPLEMENTATION" warning any invocation printed, if any. */
+  observedMissingImplementation(): AlRunnerMissingImplementation | undefined;
 }
 
 /** R129 — the BC runtime an al-runner invocation announced, plus the line it was read from. */
@@ -89,6 +91,49 @@ export interface AlRunnerBcBuild {
  * Returns `undefined` when nothing matched. That is the honest "the runner did not say", never a
  * defaulted version — a wrong BC build recorded as fact is worse than an absent one.
  */
+/** R148 — an app al-runner resolved to a package carrying NO procedure bodies. */
+export interface AlRunnerMissingImplementation {
+  /** The app as al-runner named it, e.g. `LethAL/LethAL Sandbox App v1.0.0.999`. */
+  readonly app: string;
+  /** The runner's own first line, verbatim, so a reader can grep the transcript for it. */
+  readonly announcement: string;
+}
+
+/**
+ * Reads al-runner's "resolved to a package with NO IMPLEMENTATION" warning out of its output. R148.
+ *
+ * al-runner prints this when dependency resolution picks a SYMBOL-ONLY package for an app the tests
+ * call into:
+ *
+ *     [dep] LethAL/LethAL Sandbox App v1.0.0.999 resolved to a package with NO IMPLEMENTATION
+ *           (no publishedartifacts DLL, no src/*.al) and no other copy was found in the package
+ *           caches: ... Calls into this app will fail with "The object with ID 0 does not have a
+ *           member with that ID".
+ *
+ * **Why this is worth reading rather than ignoring.** On the fixture it is harmless — the run also
+ * compiles the target from source and an implementation package wins at execution time, so
+ * resolution names one package and execution uses another, and the gate has been green either way
+ * for months. On a REAL project the same line means the session is measuring an app whose procedure
+ * bodies are absent, which is a whole-session correctness problem: every mutant in that app would be
+ * scored against a program that cannot run. The difference between the two is not visible from the
+ * line, which is exactly why it has to reach the report rather than the terminal scrollback.
+ *
+ * Anchored on `[dep] ` at line start, like `parseAlRunnerBcBuild`'s `[bc] `, so the phrase appearing
+ * inside a test's own failure text can never be mistaken for the runner's announcement.
+ *
+ * Returns `undefined` when nothing matched. Absence is "the runner did not say it", never "there is
+ * no problem".
+ */
+export function parseAlRunnerMissingImplementation(
+  output: string,
+): AlRunnerMissingImplementation | undefined {
+  const match = /^\[dep\] (.+?) resolved to a package with NO IMPLEMENTATION\b.*$/m.exec(output);
+  if (match === null) return undefined;
+  const [line, app] = match;
+  if (app === undefined) return undefined;
+  return { app: app.trim(), announcement: line.trim() };
+}
+
 export function parseAlRunnerBcBuild(output: string): AlRunnerBcBuild | undefined {
   // Anchored on `[bc] ` at line start so a version number appearing in a test's own failure text
   // can never be mistaken for the runner's announcement.
@@ -412,6 +457,12 @@ export class OneShotTransport implements AlRunnerTransport {
    * evidence the selection changed.
    */
   private lastBcBuild: AlRunnerBcBuild | undefined;
+  /**
+   * R148. The FIRST one wins rather than the last: al-runner repeats the line identically on every
+   * invocation, so keeping the first records when it started without the record changing under a
+   * long run.
+   */
+  private firstMissingImplementation: AlRunnerMissingImplementation | undefined;
 
   constructor(
     private readonly alRunnerPath: string,
@@ -420,6 +471,10 @@ export class OneShotTransport implements AlRunnerTransport {
 
   observedBcBuild(): AlRunnerBcBuild | undefined {
     return this.lastBcBuild;
+  }
+
+  observedMissingImplementation(): AlRunnerMissingImplementation | undefined {
+    return this.firstMissingImplementation;
   }
 
   async send(req: AlRunnerRequest): Promise<AlRunnerResult> {
@@ -447,6 +502,14 @@ export class OneShotTransport implements AlRunnerTransport {
       // future release moving its banner to stdout would otherwise silently stop being recorded.
       const bcBuild = parseAlRunnerBcBuild(`${res.stderr}\n${res.stdout}`);
       if (bcBuild !== undefined) this.lastBcBuild = bcBuild;
+      // R148: read on the same pass and from the same two streams, for the same reason — the cost
+      // is a regex over text already in memory, and a release moving the line to stdout would
+      // otherwise silently stop being recorded.
+      if (this.firstMissingImplementation === undefined) {
+        this.firstMissingImplementation = parseAlRunnerMissingImplementation(
+          `${res.stderr}\n${res.stdout}`,
+        );
+      }
       // v2 exit codes, from its own --help: 0 = all passed, 1 = at least one test FAILED or
       // ERRORED, 2 = a bundle could not EXECUTE, 3 = a bundle could not COMPILE.
       //

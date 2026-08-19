@@ -78,9 +78,22 @@ const BASELINE_PATH = join(HERE, "al-runner.baseline.json");
 // packages/builtin-tier1/src/mutate-helpers.ts): ClampPercent's `(Value < 0) or
 // (Value > 100)` now yields its negate-conditional mutant, which survives.
 const EXPECTED = {
-  totalMutantSites: 16,
+  // R159 moves this from 16 to 17 and survived from 13 to 14. `lethal.swap-additive` claims
+  // `DiscountedPrice`'s `Price - (Price * Pct / 100)`, the fixture's only site where both operands
+  // are provably numeric.
+  //
+  // It lands SURVIVED here and `no-coverage` on `itest:bcdev`, from the same mutant on the same
+  // fixture, and that difference is this gate's whole character rather than a discrepancy: al-runner
+  // reports no coverage data, so every mutant runs against the whole suite and nothing can be
+  // classified as unreached. `Sandbox Pricing` is called by neither test either way.
+  //
+  // NOT pre-committed with the other nine: R159's pre-commitment named `itest:tables` and
+  // `itest:bcdev` and missed that this gate shares the sandbox-app fixture. The verdict follows from
+  // the rule this gate already documents, but it was written down after the refusal, not before, and
+  // that is recorded rather than smoothed over.
+  totalMutantSites: 17,
   killed: 3,
-  survived: 13,
+  survived: 14,
   noCoverage: 0,
 };
 
@@ -209,8 +222,12 @@ function assertVerdictTable(report: SessionReport): void {
   );
   assert.equal(
     survivedFromPricing.length,
-    3,
-    "DiscountedPrice is never called by any test — its 3 mutants must survive, not be killed",
+    4,
+    // R159 made this four: `lethal.swap-additive` claims the `Price - (Price * Pct / 100)` this
+    // procedure returns. The count is pinned rather than the shape, so a mutant arriving here is a
+    // deliberate edit; the CLAIM it makes is unchanged, that nothing in this suite calls
+    // `DiscountedPrice` and therefore nothing here may be killed.
+    "DiscountedPrice is never called by any test — its 4 mutants must survive, not be killed",
   );
 }
 

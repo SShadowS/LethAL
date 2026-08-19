@@ -13,7 +13,11 @@ import {
   parseAlRunnerPlatformAppsDir,
   qualifiedTestName,
 } from "./al-runner-transport";
-import type { AlRunnerBcBuild, AlRunnerTransport } from "./al-runner-transport";
+import type {
+  AlRunnerBcBuild,
+  AlRunnerMissingImplementation,
+  AlRunnerTransport,
+} from "./al-runner-transport";
 import type { CompiledArtifact } from "./artifact";
 import type {
   BackendCapabilities,
@@ -276,6 +280,10 @@ export class AlRunnerBackend implements ExecutionBackend {
    * answer `undefined` forever. `runSession` reaches it through a narrow structural check instead,
    * which is honest about there being exactly one backend that can answer.
    */
+  observedMissingImplementation(): AlRunnerMissingImplementation | undefined {
+    return this.transport.observedMissingImplementation();
+  }
+
   observedBcBuild(): AlRunnerBcBuild | undefined {
     return this.transport.observedBcBuild();
   }
