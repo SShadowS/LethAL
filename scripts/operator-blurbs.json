@@ -24,6 +24,7 @@
     "lethal.swap-rec-xrec": "before-value gaps in `OnValidate` and `OnRename`",
     "lethal.swap-find-direction": "a suite whose fixture only ever holds one row",
     "lethal.validate-to-assign": "the field value asserted, the `OnValidate` side effect not",
-    "lethal.flip-filter-literal": "a filter string BC re-parses at run time, never asserted"
+    "lethal.flip-filter-literal": "a filter string BC re-parses at run time, never asserted",
+    "lethal.swap-enum-member": "a state machine whose resulting state nothing asserts"
   }
 }

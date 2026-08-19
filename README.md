@@ -549,6 +549,7 @@ That selects which mutants run and cannot change a verdict.
 | `lethal.swap-find-direction` | 1.0.0 | `Cust.FindFirst()` → `Cust.FindLast()` | a suite whose fixture only ever holds one row |
 | `lethal.validate-to-assign` | 1.1.0 | `Rec.Validate(Name, NewName)` → `Rec.Name := NewName` | the field value asserted, the `OnValidate` side effect not |
 | `lethal.flip-filter-literal` | 1.0.0 | `Cust.SetFilter("No.", '<>%1', No)` → `Cust.SetFilter("No.", '=%1', No)` | a filter string BC re-parses at run time, never asserted |
+| `lethal.swap-enum-member` | 1.0.0 | `"S"::Open` → `"S"::Released` | a state machine whose resulting state nothing asserts |
 <!-- /operators: tier2 -->
 
 The tables are generated from the operator registry, and every example is taken from the operator's

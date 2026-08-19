@@ -35,6 +35,12 @@ const EXPECTED_OPERATORS = [
   // flip, boundary shift, open-range flip, drop a placeholder-free alternative). The first Tier-2
   // operator to put SetFilter on claimsRecordMethod's shadowing-guard surface.
   "lethal.flip-filter-literal",
+  // R162: replace a qualified enum value with a sibling of the same enum, chosen as the NEXT member
+  // in declaration order so the mutant is deterministic. Scoped to enums this project declares,
+  // because a base-app enum's members are invisible here and inventing them would emit a value that
+  // may not exist. Its duplicate-case-label guard is a COMPILE constraint measured before the
+  // operator was written: `alc` rejects a repeated label with AL0402.
+  "lethal.swap-enum-member",
 ] as const;
 
 describe("tier2Operators", () => {

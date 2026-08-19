@@ -4,6 +4,7 @@ import { removeCalcFields } from "./remove-calcfields";
 import { removeCommit } from "./remove-commit";
 import { removeSetRange } from "./remove-setrange";
 import { removeTestField } from "./remove-testfield";
+import { swapEnumMember } from "./swap-enum-member";
 import { swapFindDirection } from "./swap-find-direction";
 import { swapModifyFlag } from "./swap-modify-flag";
 import { swapRecXRec } from "./swap-rec-xrec";
@@ -15,6 +16,7 @@ export { removeCalcFields } from "./remove-calcfields";
 export { swapModifyFlag } from "./swap-modify-flag";
 export { removeCommit } from "./remove-commit";
 export { swapRecXRec } from "./swap-rec-xrec";
+export { swapEnumMember } from "./swap-enum-member";
 export { swapFindDirection } from "./swap-find-direction";
 export { validateToAssign } from "./validate-to-assign";
 export { flipFilterLiteral } from "./flip-filter-literal";
@@ -80,4 +82,8 @@ export const tier2Operators: readonly MutationOperator[] = [
   // boundary shift, open-range flip, drop a placeholder-free alternative). See
   // `flip-filter-literal.ts`.
   flipFilterLiteral,
+  // R162: replace a qualified enum value with a sibling of the same enum. 2,355 unclaimed sites on
+  // `do-rel2/Cloud`, the largest unclaimed BC-semantic surface measured. The duplicate-case-label
+  // guard is a COMPILE constraint, not caution: `alc` rejects a repeated label with AL0402.
+  swapEnumMember,
 ];

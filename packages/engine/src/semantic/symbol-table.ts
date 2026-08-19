@@ -92,6 +92,24 @@ export interface FieldSymbol {
   readonly node: ALSyntaxNode;
 }
 
+/**
+ * One `value(<id>; <name>)` of an `enum`, in DECLARATION ORDER.
+ *
+ * R162. `lethal.swap-enum-member` replaces a qualified enum value with a sibling of the same type,
+ * which needs the sibling list and needs it ordered: picking "the next member, wrapping" is what
+ * makes the mutant deterministic, so the same source always yields the same mutant and a diff of
+ * two runs means something.
+ *
+ * `text` is the value name VERBATIM, quotes included when the declaration quoted it, because the
+ * operator emits it back into AL. `name` is the same thing unquoted, for comparison.
+ */
+export interface EnumValueSymbol {
+  /** Unquoted, for matching. */
+  readonly name: string;
+  /** As written, including quotes — this is what gets emitted. */
+  readonly text: string;
+}
+
 export interface ProcedureSymbol {
   readonly name: string;
   readonly owner: string;
@@ -117,6 +135,13 @@ export interface SymbolTable {
    * names the same table as `table 79300 "Data Main"`.
    */
   fieldsOf(tableName: string): readonly FieldSymbol[];
+  /**
+   * Every value of an `enum` this project declares, in declaration order, INCLUDING values an
+   * `enumextension` adds. Empty for a name this project does not declare, never absent.
+   *
+   * Case-insensitive on the enum name, because AL is.
+   */
+  enumValuesOf(enumName: string): readonly EnumValueSymbol[];
   readonly objects: readonly ObjectSymbol[];
   /** Every `tableextension` in the project — see `ExtensionSymbol`. Empty, never absent. */
   readonly tableExtensions: readonly ExtensionSymbol[];
@@ -235,6 +260,30 @@ export function buildSymbolTable(files: readonly SourceFile[]): SymbolTable {
   const globals = new Map<string, VarSymbol[]>();
 
   const tableExtensions: ExtensionSymbol[] = [];
+  /** Keyed on the LOWERCASED enum name, same reason as `fields`. */
+  const enumValues = new Map<string, EnumValueSymbol[]>();
+
+  /**
+   * Index an `enum`'s or `enumextension`'s values onto `enumName`, appending rather than replacing.
+   *
+   * Appending is what makes an `enumextension` work, exactly as it does for `tableextension` fields:
+   * the extension adds values to an enum declared elsewhere, and a base enum parsed afterwards must
+   * not drop them.
+   */
+  const indexEnumValues = (objectNode: ALSyntaxNode, enumName: string): void => {
+    const body = objectNode.namedChildren.find((c) => c.rawKind === "declaration_body");
+    if (body === undefined) return;
+    const key = enumName.toLowerCase();
+    const list = enumValues.get(key) ?? [];
+    for (const decl of body.namedChildren) {
+      if (decl.rawKind !== "enum_value_declaration") continue;
+      const nameNode = decl.childForFieldName("value_name");
+      if (nameNode === null) continue;
+      list.push({ name: stripQuotes(nameNode.text), text: nameNode.text });
+    }
+    enumValues.set(key, list);
+  };
+
   /** Keyed on the LOWERCASED table name — AL is case-insensitive and declarations disagree. */
   const fields = new Map<string, FieldSymbol[]>();
 
@@ -291,6 +340,18 @@ export function buildSymbolTable(files: readonly SourceFile[]): SymbolTable {
 
   for (const file of files) {
     for (const objectNode of file.root.children) {
+      // R162: enums are indexed for their VALUES only. They declare no procedures and no variables,
+      // so they deliberately do not enter `objects` and nothing below needs to know about them.
+      if (objectNode.rawKind === "enum_declaration") {
+        const name = objectNode.childForFieldName("object_name");
+        if (name !== null) indexEnumValues(objectNode, stripQuotes(name.text));
+        continue;
+      }
+      if (objectNode.rawKind === "enumextension_declaration") {
+        const base = objectNode.childForFieldName("base_object");
+        if (base !== null) indexEnumValues(objectNode, stripQuotes(base.text));
+        continue;
+      }
       const extension = parseExtensionHeader(objectNode);
       if (extension !== null) {
         // Only TABLE extensions enter `tableExtensions`. That array is the rule-3 shadowing
@@ -354,6 +415,9 @@ export function buildSymbolTable(files: readonly SourceFile[]): SymbolTable {
     resolveProcedure,
     fieldsOf(tableName) {
       return fields.get(tableName.toLowerCase()) ?? [];
+    },
+    enumValuesOf(enumName) {
+      return enumValues.get(enumName.toLowerCase()) ?? [];
     },
     globalsOf(ownerName) {
       return globals.get(ownerName) ?? [];
