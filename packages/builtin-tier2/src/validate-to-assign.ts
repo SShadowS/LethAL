@@ -4,12 +4,18 @@ import {
   type MutationOperator,
   type MutationSpec,
   type SemanticContext,
-  isStatementPosition,
+  isStatementSlot,
 } from "@lethal/operator-sdk";
 import { exactArguments, synthesizeAfter } from "./mutate-helpers";
 import { calleeNameNode, claimsRecordMethod } from "./receiver";
 
-const OPERATOR_VERSION = "1.0.0";
+/**
+ * R161 bumped this to 1.1.0: MINOR, not major. The operator gained sites (the un-braced body of a
+ * branch or loop) and changed nothing about the mutants it already emitted, so every existing
+ * mutant keeps its identity and its history. `design.md` §5.1 resets history on a MAJOR bump only,
+ * which is exactly what a widening must not do. `swap-modify-flag`'s 1.1.0 is the precedent.
+ */
+const OPERATOR_VERSION = "1.1.0";
 const METHOD_NAME = "Validate";
 const VALUE_ARGUMENT_COUNT = 2;
 
@@ -28,15 +34,19 @@ const QUOTED_IDENTIFIER = "quoted_identifier";
  *
  * Four guards, all in `targets()`:
  *
- *   1. `isStatementPosition(node)`. This is a REWRITE, not a deletion, but the guard exists for a
+ *   1. `isStatementSlot(node)`. This is a REWRITE, not a deletion, but the guard exists for a
  *      different reason than it does for the three deletion operators. The guarded dispatch chain
  *      replaces the enclosing statement's span with a branch whose body is that statement's text
  *      with the mutant's span substituted, so an assignment can only be spliced where a STATEMENT is
- *      expected. `isStatementPosition` is the only predicate in the product that measures that, and
- *      it measures `false` for an un-braced then-branch. The cost: `if Cond then Rec.Validate(F, V);`
- *      is refused, even though `if Cond then Rec.F := V;` would be perfectly legal AL. That is the
- *      safe direction and stands for this wave; widening it later is a MINOR bump on this operator,
- *      by the same identity reasoning `swap-modify-flag`'s 1.1.0 bump used.
+ *      expected.
+ *
+ *      **R161 replaced `isStatementPosition` here.** That predicate asks the narrower question "is
+ *      this one of SEVERAL statements inside a `begin ... end`", and this comment used to record the
+ *      consequence as an accepted cost: `if Cond then Rec.Validate(F, V);` was refused even though
+ *      `if Cond then Rec.F := V;` is perfectly legal AL. It was refused for no reason but the
+ *      predicate. `isStatementSlot` admits the un-braced body of a branch or loop, which is where
+ *      the grammar requires a statement, and this operator gained 19 sites on `do-rel2/Cloud`, 112
+ *      to 131. No emit change was needed for a rewrite; the compiler already braced such a site.
  *   2. `claimsRecordMethod(node, ctx, "Validate")` (`./receiver.ts`). Carries the receiver proof,
  *      case-insensitivity, and the project-declared-procedure shadowing refusal, same as the other
  *      two Tier-2 operators in this wave.
@@ -110,7 +120,7 @@ export const validateToAssign: MutationOperator = {
 
   targets(node: ALSyntaxNode, ctx: SemanticContext): boolean {
     if (node.kind !== ALNodeKind.procedure_call) return false;
-    if (!isStatementPosition(node)) return false;
+    if (!isStatementSlot(node)) return false;
     if (!claimsRecordMethod(node, ctx, METHOD_NAME)) return false;
     const args = validateArguments(node);
     if (args === null) return false;

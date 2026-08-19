@@ -1,3 +1,4 @@
+import { isStatementPosition, isStatementSlot } from "@lethal/engine";
 import type { Component, ComponentMember } from "./components";
 
 /**
@@ -59,5 +60,37 @@ function spliceIntoRoot(root: Component["root"], m: ComponentMember): string {
   // emission in both directions once already (Task 3).
   const consumed = text.slice(relStart, relEnd);
   const needsTerminator = consumed.trimEnd().endsWith(";") && !m.afterText.trimEnd().endsWith(";");
-  return text.slice(0, relStart) + m.afterText + (needsTerminator ? ";" : "") + text.slice(relEnd);
+  const filler = emptiedSlotFiller(text, relEnd, m);
+  return (
+    text.slice(0, relStart) +
+    m.afterText +
+    filler +
+    (needsTerminator ? ";" : "") +
+    text.slice(relEnd)
+  );
+}
+
+/**
+ * `;` when a DELETION would leave a single-statement slot with no statement in it at all, otherwise
+ * the empty string.
+ *
+ * R161. `if Cond then Foo();` puts the call in the `then_branch` slot, and the branch's own `;` is
+ * the enclosing statement's, sitting OUTSIDE the component root's span since grammar 4.0.0 moved
+ * the terminator out. So splicing a deletion's empty `afterText` in emits `if Cond then` followed by
+ * the chain's `end`, which is not AL. Measured on the four slot shapes before this existed: the
+ * `then_branch`, `else_branch` and `while` body cases all emitted a dangling `then`/`do`, and only
+ * the `case_branch` body survived, because there the arm's `;` sits INSIDE the root and survives the
+ * splice.
+ *
+ * That asymmetry is why the condition is "does a `;` already follow within the root" rather than
+ * "is this a single-statement slot": emitting one unconditionally would give the case arm `1: ;;`,
+ * a second empty statement in a position where the grammar wants the next label.
+ *
+ * `if Cond then ;` is legal AL, verified by an offline `alc` compile of all five shapes this touches
+ * (`then ;`, `else ;`, an empty case arm, `then begin end`, and a braced nested if/else).
+ */
+function emptiedSlotFiller(rootText: string, relEnd: number, m: ComponentMember): string {
+  if (m.afterText.trim() !== "") return "";
+  if (isStatementPosition(m.spec.before) || !isStatementSlot(m.spec.before)) return "";
+  return rootText.slice(relEnd).trimStart().startsWith(";") ? "" : ";";
 }

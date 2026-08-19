@@ -22,6 +22,7 @@ export {
   findEnclosingProcedure,
   findEnclosingCodeBlock,
   isStatementPosition,
+  isStatementSlot,
 } from "@lethal/engine";
 
 // SDK-owned surface

@@ -4,7 +4,7 @@ import {
   type MutationOperator,
   type MutationSpec,
   type SemanticContext,
-  isStatementPosition,
+  isStatementSlot,
 } from "@lethal/operator-sdk";
 import { countArguments, synthesizeAfter } from "./mutate-helpers";
 import { claimsRecordMethod } from "./receiver";
@@ -24,7 +24,7 @@ const MIN_VALUE_ARGUMENTS = 2;
  *
  * Three independent guards, each load-bearing on its own:
  *
- *   1. `isStatementPosition` — deletion requires statement position, same reasoning as
+ *   1. `isStatementSlot` — deletion requires a statement SLOT (R161), same reasoning as
  *      `RemoveTestField` and `void-method-call`.
  *   2. `claimsRecordMethod` — is this actually the AL record method `SetRange`, on a record?
  *      (Task 2, `./receiver.ts`.)
@@ -46,7 +46,7 @@ const MIN_VALUE_ARGUMENTS = 2;
  */
 export const removeSetRange: MutationOperator = {
   name: "lethal.remove-setrange",
-  version: "1.0.0",
+  version: "1.1.0",
   tier: 2,
   targetNodeKinds: [ALNodeKind.procedure_call],
   producesNodeKinds: [ALNodeKind.procedure_call],
@@ -54,7 +54,7 @@ export const removeSetRange: MutationOperator = {
 
   targets(node: ALSyntaxNode, ctx: SemanticContext): boolean {
     if (node.kind !== ALNodeKind.procedure_call) return false;
-    if (!isStatementPosition(node)) return false;
+    if (!isStatementSlot(node)) return false;
     if (!claimsRecordMethod(node, ctx, METHOD_NAME)) return false;
     return hasValueArguments(node);
   },
@@ -63,7 +63,7 @@ export const removeSetRange: MutationOperator = {
     return [
       {
         operatorName: "lethal.remove-setrange",
-        operatorVersion: "1.0.0",
+        operatorVersion: "1.1.0",
         astNodeId: `${node.startIndex}-${node.endIndex}`,
         before: node,
         after: synthesizeAfter(node, ""),

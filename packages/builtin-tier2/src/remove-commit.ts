@@ -4,7 +4,7 @@ import {
   type MutationOperator,
   type MutationSpec,
   type SemanticContext,
-  isStatementPosition,
+  isStatementSlot,
 } from "@lethal/operator-sdk";
 import { countArguments, synthesizeAfter } from "./mutate-helpers";
 import { claimsSystemCall } from "./receiver";
@@ -24,7 +24,7 @@ const CALL_NAME = "Commit";
  *
  * Three guards:
  *
- *   1. `isStatementPosition` — deletion needs statement position, as for every deletion operator.
+ *   1. `isStatementSlot` — deletion needs a statement SLOT (R161), as for every deletion operator.
  *   2. `claimsSystemCall` — receiverless, and neither the enclosing object nor a `tableextension`
  *      of the enclosing table declares a procedure of that name. A project may legally declare its
  *      own `Commit`, and the fixture does (`Data Shadow`): claiming that call would mislabel the
@@ -54,7 +54,7 @@ const CALL_NAME = "Commit";
  */
 export const removeCommit: MutationOperator = {
   name: "lethal.remove-commit",
-  version: "1.0.0",
+  version: "1.1.0",
   tier: 2,
   targetNodeKinds: [ALNodeKind.procedure_call],
   producesNodeKinds: [ALNodeKind.procedure_call],
@@ -62,7 +62,7 @@ export const removeCommit: MutationOperator = {
 
   targets(node: ALSyntaxNode, ctx: SemanticContext): boolean {
     if (node.kind !== ALNodeKind.procedure_call) return false;
-    if (!isStatementPosition(node)) return false;
+    if (!isStatementSlot(node)) return false;
     if (!claimsSystemCall(node, ctx, CALL_NAME)) return false;
     return countArguments(node) === 0;
   },
@@ -75,7 +75,7 @@ export const removeCommit: MutationOperator = {
     return [
       {
         operatorName: "lethal.remove-commit",
-        operatorVersion: "1.0.0",
+        operatorVersion: "1.1.0",
         astNodeId: `${node.startIndex}-${node.endIndex}`,
         before: node,
         after: synthesizeAfter(node, ""),

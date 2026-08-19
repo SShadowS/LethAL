@@ -4,7 +4,7 @@ import {
   type MutationOperator,
   type MutationSpec,
   type SemanticContext,
-  isStatementPosition,
+  isStatementSlot,
 } from "@lethal/operator-sdk";
 import { synthesizeAfter } from "./mutate-helpers";
 import { claimsRecordMethod } from "./receiver";
@@ -19,7 +19,7 @@ const METHOD_NAME = "TestField";
  *
  * The predicate is intentionally two independent guards, each load-bearing on its own:
  *
- *   1. `isStatementPosition` — deletion requires statement position. Deleting a call that sits
+ *   1. `isStatementSlot` — deletion requires a statement SLOT (R161). Deleting a call that sits
  *      as an `if`'s then-branch would leave `if Cond then ;`, which changes control flow rather
  *      than removing a statement. This is `void-method-call`'s own guard (§4: "The three deletion
  *      operators are statement-position only"); reused via `@lethal/operator-sdk`, not
@@ -42,7 +42,7 @@ const METHOD_NAME = "TestField";
  */
 export const removeTestField: MutationOperator = {
   name: "lethal.remove-testfield",
-  version: "1.0.0",
+  version: "1.1.0",
   tier: 2,
   targetNodeKinds: [ALNodeKind.procedure_call],
   producesNodeKinds: [ALNodeKind.procedure_call],
@@ -50,7 +50,7 @@ export const removeTestField: MutationOperator = {
 
   targets(node: ALSyntaxNode, ctx: SemanticContext): boolean {
     if (node.kind !== ALNodeKind.procedure_call) return false;
-    if (!isStatementPosition(node)) return false;
+    if (!isStatementSlot(node)) return false;
     return claimsRecordMethod(node, ctx, METHOD_NAME);
   },
 
@@ -58,7 +58,7 @@ export const removeTestField: MutationOperator = {
     return [
       {
         operatorName: "lethal.remove-testfield",
-        operatorVersion: "1.0.0",
+        operatorVersion: "1.1.0",
         astNodeId: `${node.startIndex}-${node.endIndex}`,
         before: node,
         after: synthesizeAfter(node, ""),

@@ -912,4 +912,63 @@ describe("compileSchemataForFile — selector var injection into extension objec
       expect(canCarryMutationSelectorVar(wrapRoot(parseAL(src)))).toBe(true);
     }
   });
+  /**
+   * R161. Six operators now claim the un-braced body of a branch, so the compiler emits a dispatch
+   * chain whose component root is the enclosing `if`/`case`/loop. Two things have to hold and
+   * neither is obvious from reading the emitter.
+   *
+   * Compilation itself is proven separately and for real by `scripts/r161-emit-proof.ts`, which runs
+   * `alc` over the emitted artifact for all four slot shapes and keeps a negative control that must
+   * be REJECTED. These tests pin the SHAPE so a regression names itself here in milliseconds rather
+   * than in a live run.
+   */
+  describe("R161 branch-slot sites", () => {
+    const deletionAtFoo = (src: string): string => {
+      const root = wrapRoot(parseAL(src));
+      const calls = findAll(root, ALNodeKind.procedure_call).filter((c) =>
+        c.text.startsWith("Foo"),
+      );
+      const call = calls[0];
+      if (call === undefined) throw new Error("no Foo() call in fixture");
+      return compileSchemataForFile(src, root, [spec(call, "", "lethal.void-method-call")]);
+    };
+
+    it("fills an emptied then-branch with an empty statement, not nothing", () => {
+      const out = deletionAtFoo(
+        `codeunit 51040 "C" { procedure P(Cond: Boolean) begin if Cond then Foo(); end; }`,
+      );
+      // Without the filler this reads `if Cond then` immediately followed by the chain's `end`,
+      // which alc rejects with AL0224 "Expression expected".
+      expect(out).toContain("if Cond then ;");
+      expect(out).toContain("if Cond then Foo()");
+    });
+
+    it("fills an emptied else-branch the same way", () => {
+      const out = deletionAtFoo(
+        `codeunit 51041 "C" { procedure P(Cond: Boolean) begin if Cond then Bar() else Foo(); end; }`,
+      );
+      expect(out).toContain("else ;");
+    });
+
+    it("does NOT double the separator in a case arm, whose own `;` survives the splice", () => {
+      const out = deletionAtFoo(
+        `codeunit 51042 "C" { procedure P(W: Integer) begin case W of 1: Foo(); 2: Bar(); end; end; }`,
+      );
+      expect(out).toContain("case W of 1: ; 2: Bar(); end");
+      expect(out).not.toContain(";;");
+    });
+
+    it("adds no filler for an ordinary statement-list deletion", () => {
+      const out = deletionAtFoo(`codeunit 51043 "C" { procedure P() begin Foo(); Bar(); end; }`);
+      // The chain replaces the call's own span; a filler here would be a stray empty statement.
+      expect(out).not.toContain("; ;");
+    });
+
+    it("still parses when the site is a branch body", () => {
+      const out = deletionAtFoo(
+        `codeunit 51044 "C" { procedure P(Cond: Boolean) begin if Cond then Foo(); Bar(); end; }`,
+      );
+      expect(countErrorNodes(out)).toBe(0);
+    });
+  });
 });

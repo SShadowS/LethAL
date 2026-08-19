@@ -1,9 +1,20 @@
 import { describe, expect, it } from "bun:test";
 import { emitDispatch } from "../src/dispatch";
 
-/** Minimal stand-ins — emitDispatch only reads ranges and text. */
+/**
+ * Minimal stand-ins. `parent` is explicit and `null` rather than absent: R161's `emptiedSlotFiller`
+ * asks whether the deleted node sits in a single-statement slot, which reads `parent`, and
+ * `ALSyntaxNode` declares it required. A stub that omitted it threw rather than answering, and a
+ * stub that does not satisfy the interface is the test double's bug, not the caller's.
+ */
 function node(text: string, startIndex: number) {
-  return { text, startIndex, endIndex: startIndex + text.length } as never;
+  return {
+    text,
+    startIndex,
+    endIndex: startIndex + text.length,
+    parent: null,
+    fieldName: null,
+  } as never;
 }
 
 function member(mutantId: string, beforeText: string, beforeStart: number, afterText: string) {

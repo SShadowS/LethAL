@@ -119,8 +119,18 @@ describe("removeSetRange", () => {
     expect(specs.map((s) => s.before.text)).toEqual(["Cust.SETRANGE(\"No.\", 'A')"]);
   });
 
-  it("is statement-position only: does not claim an if's then-branch call", () => {
+  /**
+   * R161 FLIPPED this test. It asserted the refusal of an un-braced then-branch, which was
+   * `isStatementPosition` standing in for "is this a statement"; a `then_branch` is a statement slot
+   * and the site was refused for no reason but the predicate. The emit hazard the old test guarded
+   * is now guarded where it can actually be measured: `scripts/r161-emit-proof.ts` compiles the
+   * instrumented output with `alc` and carries a negative control that must be REJECTED.
+   */
+  it("claims a SetRange sitting as an if's then-branch (R161)", () => {
     const src = `codeunit 50126 "C" { procedure P() var Cust: Record Customer; begin if Cust.Find() then Cust.SetRange("No.", 'A'); end; }`;
-    expect(specsFor(src)).toEqual([]);
+    const specs = specsFor(src);
+    expect(specs).toHaveLength(1);
+    expect(specs[0]?.before.text).toBe(`Cust.SetRange("No.", 'A')`);
+    expect(specs[0]?.after.text).toBe("");
   });
 });

@@ -116,7 +116,14 @@ describe("validateToAssign", () => {
     expect(specsFor(src)).toEqual([]);
   });
 
-  it("refuses Validate sitting as an if's then-branch: not statement position", () => {
+  /**
+   * R161 FLIPPED this test. The operator's guard 1 documented the refusal as an accepted cost, on
+   * the grounds that the guarded dispatch chain can only be spliced where a statement is expected.
+   * A `then_branch` is exactly where a statement is expected; the predicate was the narrower
+   * `isStatementPosition`, which asks whether the node is one of SEVERAL statements in a block.
+   * Measured on `do-rel2/Cloud`: this operator alone claims 19 more sites, 112 to 131.
+   */
+  it("claims a Validate sitting as an if's then-branch (R161)", () => {
     const src = `codeunit 50207 "T" {
       procedure P(NewName: Text; Cond: Boolean)
       var Rec: Record Customer;
@@ -124,7 +131,9 @@ describe("validateToAssign", () => {
         if Cond then Rec.Validate(Name, NewName);
       end;
     }`;
-    expect(specsFor(src)).toEqual([]);
+    const specs = specsFor(src);
+    expect(specs).toHaveLength(1);
+    expect(specs[0]?.after.text).toBe("Rec.Name := NewName");
   });
 
   /**

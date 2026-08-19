@@ -4,7 +4,7 @@ import {
   type MutationOperator,
   type MutationSpec,
   type SemanticContext,
-  isStatementPosition,
+  isStatementSlot,
 } from "@lethal/operator-sdk";
 import { synthesizeAfter } from "./mutate-helpers";
 import { claimsRecordMethod } from "./receiver";
@@ -18,7 +18,7 @@ const METHOD_NAME = "CalcFields";
  *
  * Same two-guard shape as `RemoveTestField`/`RemoveSetRange`:
  *
- *   1. `isStatementPosition` — deletion requires statement position, same reasoning as the other
+ *   1. `isStatementSlot` — deletion requires a statement SLOT (R161), same reasoning as the other
  *      two deletion operators and `void-method-call`'s own guard.
  *   2. `claimsRecordMethod` — is this actually the AL record method `CalcFields`, on a record?
  *      (Task 2, `./receiver.ts`.)
@@ -27,14 +27,16 @@ const METHOD_NAME = "CalcFields";
  * it has a Boolean return (whether every FlowField was successfully calculated) that CAN be
  * consumed — `if Rec.CalcFields(X) then ...`, `Success := Rec.CalcFields(X);`. Deleting a call
  * whose return is consumed would change control flow or leave a dangling assignment RHS — exactly
- * the hazard `isStatementPosition` already exists to prevent.
+ * the hazard this guard exists to prevent.
  *
- * No second guard is needed for this, because "return value unused" and "statement position" are
- * the same fact about this call, seen from two angles: whenever the return value IS consumed, the
- * call is necessarily not a direct member of a `statement_block`/`block` — it sits inside the
- * `if_statement`'s condition field, or inside the assignment's RHS expression — so
- * `isStatementPosition` already returns `false` there. The guard does double duty rather than
- * needing a re-derivation specific to this operator.
+ * No second guard is needed for this, because "return value unused" and "occupies a statement slot"
+ * are the same fact about this call, seen from two angles: whenever the return value IS consumed,
+ * the call sits inside the `if_statement`'s CONDITION field or inside the assignment's RHS
+ * expression, and neither is a statement slot. **R161 widened the predicate from
+ * `isStatementPosition` to `isStatementSlot` and this argument survives the widening unchanged**,
+ * which is why the widening was safe here: the slots it adds are `then_branch`, `else_branch`, a
+ * case arm body and a loop body, and a call in any of those is a statement whose value nothing
+ * reads. The guard still does double duty rather than needing a re-derivation.
  *
  * Argument count is deliberately NOT inspected, mirroring `RemoveTestField`: `CalcFields(X)` and
  * the multi-field form `CalcFields(X, Y)` are both claimed identically — there is no arg-count
@@ -49,7 +51,7 @@ const METHOD_NAME = "CalcFields";
  */
 export const removeCalcFields: MutationOperator = {
   name: "lethal.remove-calcfields",
-  version: "1.0.0",
+  version: "1.1.0",
   tier: 2,
   targetNodeKinds: [ALNodeKind.procedure_call],
   producesNodeKinds: [ALNodeKind.procedure_call],
@@ -57,7 +59,7 @@ export const removeCalcFields: MutationOperator = {
 
   targets(node: ALSyntaxNode, ctx: SemanticContext): boolean {
     if (node.kind !== ALNodeKind.procedure_call) return false;
-    if (!isStatementPosition(node)) return false;
+    if (!isStatementSlot(node)) return false;
     return claimsRecordMethod(node, ctx, METHOD_NAME);
   },
 
@@ -65,7 +67,7 @@ export const removeCalcFields: MutationOperator = {
     return [
       {
         operatorName: "lethal.remove-calcfields",
-        operatorVersion: "1.0.0",
+        operatorVersion: "1.1.0",
         astNodeId: `${node.startIndex}-${node.endIndex}`,
         before: node,
         after: synthesizeAfter(node, ""),

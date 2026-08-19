@@ -86,10 +86,14 @@ describe("removeTestField", () => {
     expect(specsFor(src)).toEqual([]);
   });
 
-  it("is statement-position only: does not claim an if's then-branch call", () => {
-    // Deleting this would leave `if Rec.Find() then ;`, which changes control
-    // flow rather than deleting a statement — the reasoning `void-method-call`
-    // already applies, reused here rather than re-derived.
+  /**
+   * R161 FLIPPED this test, and the comment it carried is the reason it was worth flipping: it said
+   * deleting here "would leave `if Rec.Find() then ;`, which changes control flow rather than
+   * deleting a statement". Deleting a statement IS a change of what runs, which is the point of a
+   * deletion mutant, and `if Rec.Find() then ;` was verified to compile. The emit hazard is now
+   * guarded by `scripts/r161-emit-proof.ts`, which compiles the instrumented output with `alc`.
+   */
+  it("claims a TestField sitting as an if's then-branch (R161)", () => {
     const src = `table 50105 "T"
 {
     fields { field(1; "No."; Code[20]) { } }
@@ -99,6 +103,9 @@ describe("removeTestField", () => {
         if Rec.Find() then Rec.TestField("No.");
     end;
 }`;
-    expect(specsFor(src)).toEqual([]);
+    const specs = specsFor(src);
+    expect(specs).toHaveLength(1);
+    expect(specs[0]?.before.text).toBe('Rec.TestField("No.")');
+    expect(specs[0]?.after.text).toBe("");
   });
 });

@@ -15,6 +15,7 @@ export {
   findEnclosingProcedure,
   findEnclosingCodeBlock,
   isStatementPosition,
+  isStatementSlot,
   declarationMembers,
 } from "./ast/tree-walks";
 

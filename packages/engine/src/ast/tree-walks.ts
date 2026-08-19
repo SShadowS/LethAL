@@ -37,6 +37,47 @@ export function isStatementPosition(node: ALSyntaxNode): boolean {
 }
 
 /**
+ * The `<parent kind>.<field name>` pairs where the grammar puts a SINGLE statement rather than a
+ * statement list: the un-braced body of a branch or a loop.
+ *
+ * Read off the grammar rather than guessed. A `case_else_branch`'s contents and a `repeat`'s body
+ * are NOT here, and deliberately: both wrap their statements in a `statement_block`, so those are
+ * already statement position and `isStatementPosition` answers for them.
+ */
+const SINGLE_STATEMENT_SLOTS: ReadonlySet<string> = new Set([
+  `${ALNodeKind.if_statement}.then_branch`,
+  `${ALNodeKind.if_statement}.else_branch`,
+  "case_branch.body",
+  `${ALNodeKind.while_statement}.body`,
+  `${ALNodeKind.for_statement}.body`,
+  "foreach_statement.body",
+]);
+
+/**
+ * Does this node occupy a slot where a STATEMENT belongs?
+ *
+ * `isStatementPosition` answers a narrower question, "is this one of several statements inside a
+ * `begin ... end`", and ten operators used it as a proxy for "is this a statement at all". It is
+ * not one: `if Cond then Rec.Validate(F, V);` puts the call in the `then_branch` slot, where a
+ * statement is exactly what the grammar requires, and every one of those operators refused the site.
+ * Measured on `do-rel2/Cloud` (R161): **1,118 call sites**, 723 in a `then_branch`, 253 in a
+ * `case_branch` body, 138 in an `else_branch`, 4 in loop bodies.
+ *
+ * The two predicates are kept SEPARATE rather than one widened, because the schemata compiler reads
+ * `isStatementPosition` for the opposite purpose: `wrapIfSingleStatementSlot` braces a dispatch
+ * chain precisely when the site is NOT a member of a statement list, and an un-braced branch is the
+ * case it braces for. Widening the one predicate would have silently turned that bracing OFF at the
+ * 1,118 sites this exists to admit, and an unbraced chain there is an `if` whose `else` binds to the
+ * inner `if` — a wrong mutant that compiles and scores, not a compile error.
+ */
+export function isStatementSlot(node: ALSyntaxNode): boolean {
+  if (isStatementPosition(node)) return true;
+  const parent = node.parent;
+  if (parent === null || node.fieldName === null) return false;
+  return SINGLE_STATEMENT_SLOTS.has(`${parent.rawKind}.${node.fieldName}`);
+}
+
+/**
  * Narrowest ancestor that the grammar treats as a statement.
  *
  * Includes the statement kinds plus two positional cases:

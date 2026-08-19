@@ -8,6 +8,7 @@ import {
   findFirst,
   initParser,
   isStatementPosition,
+  isStatementSlot,
   parseAL,
   visit,
   wrapRoot,
@@ -93,4 +94,67 @@ describe("tree-walks", () => {
     expect(calls.length).toBe(1);
     expect(isStatementPosition(calls[0] as ALSyntaxNode)).toBe(false);
   });
+  /**
+   * R161. `isStatementSlot` is a STRICT superset of `isStatementPosition`, and the six operators
+   * that guard on it gained 1,280 sites on `do-rel2/Cloud` with 0 lost. Each slot below is a
+   * grammar field name read off a real parse, not guessed, and each negative is a position where
+   * admitting a statement would be wrong.
+   */
+  const firstNamed = (src: string, text: string): ALSyntaxNode => {
+    const root = wrapRoot(parseAL(src));
+    const hits: ALSyntaxNode[] = [];
+    visit(root, (n) => {
+      if (n.kind === ALNodeKind.procedure_call && n.text.startsWith(text)) hits.push(n);
+    });
+    const first = hits[0];
+    if (first === undefined) throw new Error(`no call starting ${text} in ${src}`);
+    return first;
+  };
+
+  const SLOT_CASES: readonly [string, string][] = [
+    ["un-braced then-branch", "codeunit 50001 T { procedure P() begin if X then Foo(); end; }"],
+    [
+      "un-braced else-branch",
+      "codeunit 50002 T { procedure P() begin if X then Bar() else Foo(); end; }",
+    ],
+    ["case-arm body", "codeunit 50003 T { procedure P() begin case X of 1: Foo(); end; end; }"],
+    ["while body", "codeunit 50004 T { procedure P() begin while X do Foo(); end; }"],
+    ["for body", "codeunit 50005 T { procedure P() begin for I := 1 to 3 do Foo(); end; }"],
+    ["foreach body", "codeunit 50006 T { procedure P() begin foreach I in L do Foo(); end; }"],
+  ];
+
+  for (const [name, src] of SLOT_CASES) {
+    it(`isStatementSlot accepts a call in a ${name}, where isStatementPosition refuses`, () => {
+      const call = firstNamed(src, "Foo");
+      expect(isStatementSlot(call)).toBe(true);
+      expect(isStatementPosition(call)).toBe(false);
+    });
+  }
+
+  it("isStatementSlot still accepts an ordinary statement-list member", () => {
+    const call = firstNamed("codeunit 50007 T { procedure P() begin Foo(); end; }", "Foo");
+    expect(isStatementSlot(call)).toBe(true);
+    expect(isStatementPosition(call)).toBe(true);
+  });
+
+  const NON_SLOT_CASES: readonly [string, string][] = [
+    ["an if condition", "codeunit 50008 T { procedure P() begin if Foo() then Bar(); end; }"],
+    ["an argument", "codeunit 50009 T { procedure P() begin Bar(Foo()); end; }"],
+    ["an assignment right-hand side", "codeunit 50010 T { procedure P() begin X := Foo(); end; }"],
+    [
+      "a case pattern",
+      "codeunit 50011 T { procedure P() begin case X of Foo(): Bar(); end; end; }",
+    ],
+    [
+      "a repeat until condition",
+      "codeunit 50012 T { procedure P() begin repeat Bar(); until Foo(); end; }",
+    ],
+  ];
+
+  for (const [name, src] of NON_SLOT_CASES) {
+    it(`isStatementSlot refuses a call in ${name}`, () => {
+      const call = firstNamed(src, "Foo");
+      expect(isStatementSlot(call)).toBe(false);
+    });
+  }
 });
