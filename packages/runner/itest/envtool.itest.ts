@@ -155,10 +155,22 @@ const SELECTOR_IDS = { selectorId: 79199, controlId: 79198, tableId: 79197 };
 // environment, and this task is scoped to never perform one — `assertMatchesBaseline` below is
 // what pins the per-mutant table down, on whatever the human's first real run records.
 const EXPECTED = {
-  totalMutantSites: 16,
+  // !! R159's figures here are INFERRED from `itest:bcdev`, NOT MEASURED. This gate's environment
+  // !! (`envTool.envId`, reached through `continia.exe`) reported "Stopped" when the operator landed,
+  // !! and LethAL deliberately refuses to start an environment it does not own — a hosted
+  // !! environment is not a container. Run `LETHAL_ITEST_ENVTOOL=1 bun run itest:envtool` once it is
+  // !! Running and delete this note if it agrees; a disagreement is a finding, because this gate
+  // !! exists precisely to catch the indirection changing a verdict.
+  //
+  // R159 moves this from 16 to 17 and no-coverage from 3 to 4, identically to `itest:bcdev` — which
+  // is the whole point of this gate: it runs the SAME fixture through an external environment tool,
+  // so any divergence between the two figures is the indirection changing a verdict.
+  // `lethal.swap-additive` claims `DiscountedPrice`'s `Price - (Price * Pct / 100)`, and it lands
+  // no-coverage because neither test touches `Sandbox Pricing`.
+  totalMutantSites: 17,
   killed: 3,
   survived: 10,
-  noCoverage: 3,
+  noCoverage: 4,
 };
 
 async function readJson<T>(path: string, what: string): Promise<T> {

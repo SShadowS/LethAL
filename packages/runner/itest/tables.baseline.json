@@ -567,6 +567,13 @@
     "errorClass": null
   },
   {
+    "key": "46d6cf5bb896cfc420d70e88277475b714790e98a02eb2ba5289a2b868b868ab|Data Main List Ext|lethal.swap-modify-flag|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
     "key": "46d6cf5bb896cfc420d70e88277475b714790e98a02eb2ba5289a2b868b868ab|Data Main List Ext|lethal.void-method-call|1",
     "verdict": "no-coverage",
     "killingTest": null,
