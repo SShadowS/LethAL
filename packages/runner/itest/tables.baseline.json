@@ -84,6 +84,13 @@
     "errorClass": null
   },
   {
+    "key": "1c7f31c8ee6e40da96b0888e7c02e8a3484f8cf46ecf000ca6650d3453cfa251|Data Filter Ops|lethal.swap-additive|1",
+    "verdict": "killed",
+    "killingTest": "NotBlankFilterCountsOnlyTaggedRows",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "1da41b373cdc3cddf07c393c4ed8afd7ff646640807c6d41eed2d2068ea09dc9|Data Ops|lethal.return-value|1",
     "verdict": "killed",
     "killingTest": "LoadAmountReadsField",
@@ -847,6 +854,34 @@
     "errorClass": null
   },
   {
+    "key": "78d263bdf45458172865b270cf8c37ce220abae7feec90e4dd915b0eabc69b89|Data Swap Ops|lethal.swap-additive|1",
+    "verdict": "killed",
+    "killingTest": "SwapRedirectsTheAccumulatorWriteback",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "78d263bdf45458172865b270cf8c37ce220abae7feec90e4dd915b0eabc69b89|Data Validator|lethal.swap-additive|1",
+    "verdict": "killed",
+    "killingTest": "UserDefinedBuiltinsRun",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Data Main|lethal.swap-additive|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Data Main|lethal.swap-additive|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "7cc1652df445bc6414e653b89cf278163567b4e02880a9d1b987d35cd1e8b915|Data Main|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "BlankNoValidateFails",
@@ -876,6 +911,13 @@
   },
   {
     "key": "7f35bd1725ae5b0ae88c94918d62d0512dbc6f8ca0999646c0657ed122ed23b9|Data Builder|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "UserDefinedBuiltinsRun",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "8020eee8facb4274055b63fee3382e7d127a6197ea718cc38db0bb9b6846b613|Data Ops|lethal.swap-additive|1",
     "verdict": "killed",
     "killingTest": "UserDefinedBuiltinsRun",
     "coverageFiltered": false,
@@ -1281,6 +1323,13 @@
     "errorClass": null
   },
   {
+    "key": "cf448de40a66093bf74c689272083867229a79f53e8be4f3b404e16a84d13dc4|Data Ops|lethal.swap-additive|1",
+    "verdict": "killed",
+    "killingTest": "UserDefinedBuiltinsRun",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "cf930879e9bc95f2becb1747d85a31acc0aad731dc2f0d4954280d9a1a9a732a|Data Flag Ops|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "DeleteRunTriggerLeavesTombstone",
@@ -1606,6 +1655,13 @@
     "key": "edd24106928f6fff5f6b88d46ca9bf432ba418242248863a8bbc9937ded32ee3|Data Main|lethal.empty-block|1",
     "verdict": "survived",
     "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "eef6d8e81fd4fed479dc4d361b5659773e7bc7701c4979e492d5698229e30863|Data Filter Ops|lethal.swap-additive|1",
+    "verdict": "killed",
+    "killingTest": "ClosedRangeCountIsScopedByMainNo",
     "coverageFiltered": false,
     "errorClass": null
   },

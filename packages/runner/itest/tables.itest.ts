@@ -179,7 +179,13 @@ const EXPECTED = {
   // the census said so before the run; a second would be a finding. No displacement: nothing else
   // claims a `unary_expression`. Verdict pre-committed in
   // docs/superpowers/specs/2026-08-19-r163-remove-not-precommitment.md.
-  totalMutantSites: 257,
+  // R159 moves this from 257 to 265. `lethal.swap-additive` (Tier 1, 1.0.0) flips `+` and `-`
+  // where BOTH operands are provably numeric. Eight sites here, no displacement — nothing else
+  // claims an `additive_expression`. Two of them are NESTED (the outer and inner additive of
+  // `Data Ops.RunUserDefinedBuiltins`'s total), so they share a containment component and become
+  // siblings in one dispatch chain while staying two mutants. All eight verdicts pre-committed in
+  // docs/superpowers/specs/2026-08-19-r159-swap-additive-precommitment.md.
+  totalMutantSites: 265,
   // R36 moved this from 63/10 to 64/9, deliberately and in one direction only.
   //
   // `RequireCategoryAFails` used to assert merely that AN error occurred, so deleting
@@ -264,7 +270,11 @@ const EXPECTED = {
   // `if not DataMain.Get(CommitRunNoLbl) then exit;`. With the `not` gone the Get SUCCEEDS, the
   // trigger exits immediately and never sets `Flagged`, which both covering tests assert by name.
   // Assertion-earned, not a platform artifact: the mutated program completes and simply does less.
-  killed: 195,
+  // R159 moves this from 195 to 201. Six of the eight new arithmetic mutants are killed by an
+  // assertion that names an exact number: two filter arms whose range inverts and counts nothing,
+  // the two halves of `RunUserDefinedBuiltins`'s 372, `Data Validator.TestField`'s accumulator that
+  // feeds it, and `Data Swap Ops.Accumulate`'s 15.
+  killed: 201,
   // R73 moved this from 9 to 12, and TWO of the three additions are worth reading rather than
   // accepting:
   //
@@ -324,7 +334,12 @@ const EXPECTED = {
   // answers `false` and the deleted statement never runs. Coverage is procedure-level, so the site
   // is COVERED and the verdict is `survived` rather than `no-coverage` — the distinction the
   // `reach` field exists to carry.
-  survived: 32,
+  // R159 moves this from 32 to 34, and the two are worth reading. `Data Main`'s `Touched` field is
+  // incremented by two different `OnValidate` triggers and READ BY NOTHING in the suite — the string
+  // does not appear in the test codeunit — so decrementing it instead is invisible. A genuine
+  // unasserted behaviour in a fixture that exists to prove operators work, found by arithmetic
+  // rather than planted.
+  survived: 34,
   // R78 moved this from 6 to 9. The three new sites all belong to the TestPage-only pair
   // (`Data Value Source` / `Data Value Card`), and all three land `no-coverage` because the one
   // test that reaches them is refused on the fenced path. That is the measured statement of the
@@ -364,7 +379,7 @@ const EXPECTED = {
   // stating: three of the four new mutants are killed and one survives, so a wave that is 75% kills
   // still lowers a score sitting at 86%. A score that only ever rises is a score nobody is testing
   // against new ground.
-  mutationScore: 195 / (195 + 32),
+  mutationScore: 201 / (201 + 34),
   /**
    * R72, extended by R138: the screen must fire, and on exactly these mutants under exactly these
    * mechanisms.
@@ -1110,9 +1125,15 @@ function assertFilterLiteralEvidence(report: SessionReport): void {
       "string before classification, a different refusal from arm H's ladder exhaustion (R141)",
   );
 
-  // Arm I's own four mutants, and the failure text that earned each kill. Asserting the verdicts
-  // alone would pass if BC had rejected a spliced filter instead of the test asserting anything,
-  // which is the exact false kill this arm exists to detect.
+  // Arm I's own collateral mutants, and the failure text that earned each kill. Asserting the
+  // verdicts alone would pass if BC had rejected a spliced filter instead of the test asserting
+  // anything, which is the exact false kill this arm exists to detect.
+  //
+  // R159 made this FIVE. `lethal.swap-additive` claims the arm's `LowBound + 3`, and it belongs
+  // here: mutated, the `SetRange` becomes `79200..79197`, an inverted range that matches nothing,
+  // so the arm's own count assertion fires. The list is pinned by NAME rather than by length
+  // precisely so a new operator arriving at a measured arm is a deliberate edit with a reason,
+  // never a silent widening.
   const armI = report.mutants.filter((m) => m.procedureName === "CountTaggedInBand");
   assert.deepEqual(
     armI.map((m) => m.operatorName).sort(),
@@ -1120,9 +1141,10 @@ function assertFilterLiteralEvidence(report: SessionReport): void {
       "lethal.empty-block",
       "lethal.remove-setrange",
       "lethal.return-value",
+      "lethal.swap-additive",
       "lethal.void-method-call",
     ],
-    `arm I (CountTaggedInBand): expected exactly its four collateral mutants, got ${armI.map((m) => `${m.operatorName}=${m.verdict}`).join(", ")}`,
+    `arm I (CountTaggedInBand): expected exactly its five collateral mutants, got ${armI.map((m) => `${m.operatorName}=${m.verdict}`).join(", ")}`,
   );
   for (const m of armI) {
     assert.equal(m.verdict, "killed", `arm I (${m.operatorName}): verdict`);

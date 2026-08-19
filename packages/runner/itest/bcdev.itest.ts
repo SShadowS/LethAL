@@ -74,11 +74,16 @@ const SELECTOR_IDS = { selectorId: 79199, controlId: 79198, tableId: 79197 };
 // (Value > 100)` now yields its negate-conditional mutant. It survives — ClampPercentRuns
 // calls ClampPercent(50) and asserts nothing, and 50 satisfies neither operand, so or/and
 // is not observable there anyway.
+// R159 moves this from 16 to 17 and no-coverage from 3 to 4. `lethal.swap-additive` claims
+// `DiscountedPrice`'s `Price - (Price * Pct / 100)`, the fixture's only site where both operands are
+// provably numeric. It lands `no-coverage` for the same reason the other three do: neither test
+// touches `Sandbox Pricing`. Pre-committed in
+// docs/superpowers/specs/2026-08-19-r159-swap-additive-precommitment.md.
 const EXPECTED = {
-  totalMutantSites: 16,
+  totalMutantSites: 17,
   killed: 3,
   survived: 10,
-  noCoverage: 3,
+  noCoverage: 4,
   /**
    * R132: this gate now carries the VACUOUS case for R121's assertion screen, which `itest:tables`
    * used to pin and gave up when its fixture grew a Library Assert arm.

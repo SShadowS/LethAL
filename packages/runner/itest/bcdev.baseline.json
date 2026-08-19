@@ -7,6 +7,13 @@
     "errorClass": null
   },
   {
+    "key": "2b34811c1b253fde93b24824f30d18d933316b7f64723b67d413a3b0d16956a6|Sandbox Logic|lethal.empty-block|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "4004a181f8c0dc8bbe0c7c3051d719211b1ca22dadad08ae600b2df9f72fbe82|Sandbox Logic|lethal.return-value|1",
     "verdict": "killed",
     "killingTest": "OverBudgetDetected",
@@ -63,13 +70,6 @@
     "errorClass": null
   },
   {
-    "key": "7f9598a6e5967d4f80e59cb2e93f397782a77e8b3f13df55547e612cae4b2610|Sandbox Logic|lethal.void-method-call|1",
-    "verdict": "survived",
-    "killingTest": null,
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
     "key": "82a8a37831dd57841652a34ad1f5567a0c073ca19774f619b2022729a64fb9dc|Sandbox Logic|lethal.conditional-boundary|1",
     "verdict": "killed",
     "killingTest": "OverBudgetDetected",
@@ -84,6 +84,13 @@
     "errorClass": null
   },
   {
+    "key": "9b4f290c51c1ef232af4a294bb9a0a4c404064f20bac6e893fab28b45cdf7785|Sandbox Logic|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "b03dba085d6a4498f41e5e223ecb64c66e6eee1d2d2ef7ab55f84fa7c63835d7|Sandbox Logic|lethal.empty-block|1",
     "verdict": "survived",
     "killingTest": null,
@@ -91,17 +98,17 @@
     "errorClass": null
   },
   {
-    "key": "e7216a276891ae7f02f66d83d4fad98fdc3ca56552d617d1f70fa371f7cfc667|Sandbox Pricing|lethal.empty-block|1",
+    "key": "d7143458adf859fcca3a104795916421514185dbe83b5e6366d0f68f86e9389d|Sandbox Pricing|lethal.swap-additive|1",
     "verdict": "no-coverage",
     "killingTest": null,
     "coverageFiltered": true,
     "errorClass": null
   },
   {
-    "key": "e916a17f72dabdb8c19d15a128f9917639a221cb341ff6022deb52b71b9b929d|Sandbox Logic|lethal.empty-block|1",
-    "verdict": "survived",
+    "key": "e7216a276891ae7f02f66d83d4fad98fdc3ca56552d617d1f70fa371f7cfc667|Sandbox Pricing|lethal.empty-block|1",
+    "verdict": "no-coverage",
     "killingTest": null,
-    "coverageFiltered": false,
+    "coverageFiltered": true,
     "errorClass": null
   },
   {
