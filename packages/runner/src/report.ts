@@ -128,9 +128,26 @@ export interface DeclarativeSiteFile {
 }
 
 /**
- * Bumped whenever a field is renamed, removed, or changes meaning. Additive fields do not require
- * a bump. A machine-consumed contract with no version breaks silently the first time it changes,
+ * Bumped whenever a field is renamed, removed, or changes meaning, and whenever a field is added as
+ * REQUIRED. A machine-consumed contract with no version breaks silently the first time it changes,
  * and the consumer has no way to notice.
+ *
+ * **R157 narrowed this rule, which used to read "additive fields do not require a bump".** That is
+ * true for a READER — a consumer that does not know a field is unaffected by it — and false for a
+ * VALIDATOR. `declarativeSites` and `preprocessorSymbols` were both added as required while this
+ * number stayed 2, so `docs/campaign/2026-08-08-r85-swap-population/rung2.report.json` is a genuine
+ * v2 report that the published v2 schema REJECTS, and a consumer validating an archive meets that
+ * as a false rejection with the schema looking like the thing at fault.
+ *
+ * So: an added OPTIONAL field is still free. An added REQUIRED field is a new shape and bumps.
+ * The rule is enforced rather than remembered — `packages/runner/tests/schemas.test.ts` pins the
+ * root `required` set of every published schema, so adding a required field reddens a test that
+ * names this decision instead of shipping a second shape under one number.
+ *
+ * The existing v2 drift is NOT retroactively fixed by a bump to 3: that would relabel reports
+ * already written and archived as v2, which is a worse lie than the one it corrects. v2 is recorded
+ * as having two shapes, the schema describes the one this build writes, and the rule applies from
+ * here.
  */
 export const REPORT_SCHEMA_VERSION = 2;
 

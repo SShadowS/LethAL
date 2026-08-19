@@ -397,6 +397,70 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
     expect(missing).toEqual(["$.declarativeSites", "$.preprocessorSymbols"]);
   });
 
+  /**
+   * R157's decision, made EXECUTABLE rather than written down and forgotten.
+   *
+   * The old rule said "additive fields do not require a bump". True for a reader, false for a
+   * validator: `declarativeSites` and `preprocessorSymbols` were both added as REQUIRED while
+   * `schemaVersion` stayed 2, so an archived v2 report is rejected by the published v2 schema. The
+   * narrowed rule is that an added OPTIONAL field is free and an added REQUIRED field bumps.
+   *
+   * Pinning the root `required` SET of every published schema is what enforces it. Adding a
+   * required field regenerates the schema (the freshness test forces that), which changes this set,
+   * which reddens here with the decision named — instead of a second shape shipping under one
+   * number the way it did twice already.
+   *
+   * The set is pinned per FILE rather than per version constant so a new surface cannot be added
+   * without landing in this list.
+   */
+  test("the root required set of every published schema is pinned (R157)", () => {
+    const rootRequired: Record<string, readonly string[]> = {};
+    for (const file of [
+      ...new Glob("*.schema.json").scanSync({ cwd: join(REPO_ROOT, "schemas") }),
+    ]) {
+      const doc = JSON.parse(readFileSync(join(REPO_ROOT, "schemas", file), "utf8")) as {
+        required?: readonly string[];
+      };
+      rootRequired[file] = [...(doc.required ?? [])].sort();
+    }
+    expect(rootRequired).toEqual({
+      "doctor-v1.schema.json": ["checks", "doctorSchemaVersion", "notChecked", "ok"],
+      "explain-v4.schema.json": [
+        "caveats",
+        "contract",
+        "derivedFromReportSchemaVersion",
+        "explainSchemaVersion",
+        "notMeasured",
+        "score",
+        "survivorSelection",
+        "survivors",
+        "toolConditions",
+      ],
+      "report-v2.schema.json": [
+        "authoritative",
+        "backend",
+        "baselineGreen",
+        "batches",
+        "counts",
+        "declarativeSites",
+        "mutants",
+        "mutationScore",
+        "notInstrumented",
+        "preprocessorSymbols",
+        "schemaVersion",
+        "survivorsByProcedure",
+        "testFiles",
+        "timings",
+        "unsupportedTests",
+        "untargetedTriggerCount",
+        "validity",
+      ],
+      // The stream schema describes ONE EVENT, a union whose members carry their own required
+      // fields, so an empty root set is correct here and not an omission.
+      "stream-v1.schema.json": [],
+    });
+  });
+
   test("every line of the committed event stream validates, header excepted", () => {
     // The header is NOT a RunEvent — the sink writes it itself, and it carries `ndjsonHeader: true`
     // with no `seq` precisely so a consumer can tell the two apart. A schema that accepted it would
