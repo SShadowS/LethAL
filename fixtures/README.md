@@ -1009,6 +1009,26 @@ altool publishapp <tests>\.alpackages\<app>.app --server ... --authentication Us
 altool publishapp <tmp>\tests.app              --server ... --authentication UserPassword
 ```
 
+**Put exactly ONE copy of the target in `<tests>/.alpackages`, and make it the one carrying source.**
+R148: this cache held two — an implementation package at the declared dependency version `1.0.0.0`
+(8 zip entries, `src/*.al` present) and a SYMBOL-ONLY stub at `1.0.0.999` (3 entries, no `src`, no
+DLL), both the same app id and name. al-runner resolves by version, so the `999` stub won every time
+and the runner said so on every gate run for months:
+
+```
+[dep] LethAL/LethAL Sandbox App v1.0.0.999 resolved to a package with NO IMPLEMENTATION …
+      Calls into this app will fail with "The object with ID 0 does not have a member with that ID".
+```
+
+It was harmless here only because the run ALSO compiles the target from source and an implementation
+package wins at execution time — resolution named one package and execution used another. Nothing in
+LethAL writes a `999`: `reserveAppVersion` mints `<major>.<minor>.<daysSinceEpoch>.<secondsOfDay/2>`,
+never a hand-round number. The stub was placed by hand when the fixture was built and outlived its
+reason. Removing it changed nothing: `itest:alrunner` passes 3/14/0 without it.
+
+`.alpackages` is gitignored, so this is a note rather than a fix anyone inherits — if you repopulate
+symbols and see the `[dep]` line, that stub is back.
+
 **3. App version monotonicity.** The instrumented app is published as
 `1.0.<runId>.<batchIdx>`. BC rejects any version lower than the one installed:
 
