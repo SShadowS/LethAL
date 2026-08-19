@@ -86,6 +86,74 @@ LETHAL_ITEST_BCDEV=1 bun run itest:bcdev
 Expect **3 killed / 10 survived / 3 no-coverage**, twice. If it still reports the old version, the
 publish went to the wrong container or the wrong context.
 
+## Rebuilding a container that came back EMPTY
+
+A restarted container can come back as clean BC with every non-Microsoft app gone. Measured
+2026-08-19: all six Cronus containers reported 192 apps, every one Microsoft, so `doctor` failed with
+`HarnessInfo … HTTP 404` and no gate could run.
+
+Check before assuming a version problem:
+
+```powershell
+$env:DOCKER_CONTEXT='desktop-windows'
+Get-BcContainerAppInfo -containerName <name> | Where-Object { $_.Publisher -ne 'Microsoft' }
+```
+
+Nothing returned means a full rebuild, in this order.
+
+**1. The control app, at GLOBAL scope.** Nothing depends on it and LethAL never replaces it, so the
+ordinary `Publish-BcContainerApp -sync -install` above is right.
+
+**2. Every fixture target and test app, through the DEV ENDPOINT.** This is the part that is easy to
+get wrong, and the failure arrives late:
+
+```
+The extension could not be deployed, because it tries to replace the existing AppSource app
+'LethAL Sandbox Data' … which is a dependency to the following AppSource apps:
+'LethAL Sandbox Data Tests by LethAL'.
+```
+
+Published at global scope a target becomes an AppSource app that its own test app depends on, and BC
+then refuses the replace LethAL performs on **every run**. The publish succeeds; the first gate
+fails. So:
+
+```powershell
+$cfg  = Get-Content '<fixture>\lethal.config.local.json' -Raw | ConvertFrom-Json
+$cred = New-Object System.Management.Automation.PSCredential(
+          $cfg.bcdev.username, (ConvertTo-SecureString $cfg.bcdev.password -AsPlainText -Force))
+Publish-BcContainerApp -containerName <name> -appFile <app> `
+  -skipVerification -sync -install -useDevEndpoint -credential $cred
+```
+
+`-useDevEndpoint` REQUIRES `-credential` ("You need to specify credentials when you are not using
+Windows Authentication"); the fixture config already holds them, so read them from there rather than
+prompting, and never echo them.
+
+If the apps were already published globally, unpublish DEPENDENTS FIRST and then their targets
+(`UnPublish-BcContainerApp -unInstall -force`), then republish both through the dev endpoint.
+
+**3. Which apps, and where.** Read the containers from the configs, never from memory. As of
+2026-08-19:
+
+| container | apps |
+| --- | --- |
+| Cronus283 | `sandbox-data`, `sandbox-data-tests` |
+| Cronus281 | `sandbox-app`, `sandbox-tests`, `gift-card`, `gift-card-tests`, `sandbox-probes`, `sandbox-hang`, `sandbox-hang-tests` |
+
+`sandbox-probes` and the `sandbox-hang` pair are the two easy to forget, and each fails a DIFFERENT
+gate in a way that does not name the missing app. Without `sandbox-probes`, `itest:bcdev`'s verdicts
+are correct and its protocol-invariant probe fails with *"expected exactly one method
+ZzFailsIfMarkerPresent, found 0"*. Without the hang pair, `itest:hang` refuses with
+`StaleTestAppError`.
+
+**4. Microsoft's test libraries** (`Library Assert`, `Test Runner`, `Any`, `Library Variable
+Storage`, `Permissions Mock`) must be installed Global. They were already present on a fresh
+container; check rather than assume, because R132's twin pair depends on `Library Assert`.
+
+**5. Verify all four gates**, not just the one you were working on:
+`itest:bcdev` 3/10/3 plus its invariant probes, `itest:tables` at its frozen figures, `itest:hang`
+PASS, and `campaign compare` on the demo.
+
 ## Notes
 
 - Publishing to a container is **outward-facing**: confirm before doing it unless the user has
