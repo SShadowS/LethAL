@@ -7427,3 +7427,105 @@ describe("runSession propagates al-runner's pinned platform-app directory (R147)
     store.close();
   });
 });
+
+/**
+ * R148 — al-runner's "NO IMPLEMENTATION" warning must reach the event stream, not the scrollback.
+ *
+ * The line means dependency resolution picked a SYMBOL-ONLY package for an app the tests call into.
+ * On the fixture it is harmless, because the run also compiles the target from source and an
+ * implementation package wins at execution time. On a real project the identical line means every
+ * mutant in that app was scored against a program whose procedure bodies are absent. Nothing in the
+ * line distinguishes the two, so it has to be recorded rather than read.
+ *
+ * Tested here rather than only on the live gate for a specific reason: LethAL CAPTURES al-runner's
+ * stderr instead of inheriting it, so the gate's own transcript shows no `[dep]` line at all and
+ * cannot answer whether the warning was emitted. This drives the same emission path with a stub.
+ */
+describe("runSession surfaces al-runner's NO IMPLEMENTATION warning (R148)", () => {
+  const caps: BackendCapabilities = {
+    coverage: "none",
+    deploy: "none",
+    isolation: "full-reset",
+    authoritative: false,
+  };
+
+  /** The `AlRunnerBackend` shape for this one question: it saw the line, or it did not. */
+  class MissingImplStub extends StubBackend {
+    constructor(private readonly seen: { app: string; announcement: string } | null) {
+      super(caps, (mutant) => (mutant === null ? "pass" : "fail"));
+    }
+    observedMissingImplementation(): { app: string; announcement: string } | undefined {
+      return this.seen ?? undefined;
+    }
+  }
+
+  const ANNOUNCEMENT =
+    "[dep] LethAL/LethAL Sandbox App v1.0.0.999 resolved to a package with NO IMPLEMENTATION (no publishedartifacts DLL,";
+
+  test("emits a warning naming the app and quoting the runner", async () => {
+    const dirs = await makeProject();
+    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
+    const store = new ResultsStore(":memory:");
+    const events: RunEvent[] = [];
+    await runSession({
+      backend: new MissingImplStub({
+        app: "LethAL/LethAL Sandbox App v1.0.0.999",
+        announcement: ANNOUNCEMENT,
+      }),
+      store,
+      ...dirs,
+      selectorIds,
+      emit: [createEmitter([(e) => events.push(e)])],
+    });
+    const warning = events.find(
+      (e) => e.type === "warning" && e.code === "al-runner-missing-implementation",
+    );
+    expect(warning).toBeDefined();
+    // The app must be NAMED: a warning that says something is wrong without saying what sends the
+    // reader back to a transcript LethAL already threw away.
+    expect((warning as { message: string }).message).toContain("LethAL Sandbox App v1.0.0.999");
+    // And the runner's own words carried through, so the report is greppable for the line itself.
+    expect((warning as { message: string }).message).toContain("NO IMPLEMENTATION");
+    store.close();
+  });
+
+  test("CONTROL: a backend that saw nothing emits NO such warning", async () => {
+    // Without this, "the warning fires" would be indistinguishable from "the warning always fires",
+    // and a wiring that emitted unconditionally would look identical on the test above.
+    const dirs = await makeProject();
+    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
+    const store = new ResultsStore(":memory:");
+    const events: RunEvent[] = [];
+    await runSession({
+      backend: new MissingImplStub(null),
+      store,
+      ...dirs,
+      selectorIds,
+      emit: [createEmitter([(e) => events.push(e)])],
+    });
+    expect(
+      events.some((e) => e.type === "warning" && e.code === "al-runner-missing-implementation"),
+    ).toBe(false);
+    store.close();
+  });
+
+  test("a backend WITHOUT the method at all is fine — no throw, no warning", async () => {
+    // Every non-al-runner backend is this shape. The orchestrator asks structurally rather than
+    // widening `ExecutionBackend`, so a backend that has never heard of the method must simply pass.
+    const dirs = await makeProject();
+    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
+    const store = new ResultsStore(":memory:");
+    const events: RunEvent[] = [];
+    await runSession({
+      backend: new StubBackend(caps, (mutant) => (mutant === null ? "pass" : "fail")),
+      store,
+      ...dirs,
+      selectorIds,
+      emit: [createEmitter([(e) => events.push(e)])],
+    });
+    expect(
+      events.some((e) => e.type === "warning" && e.code === "al-runner-missing-implementation"),
+    ).toBe(false);
+    store.close();
+  });
+});
