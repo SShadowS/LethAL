@@ -185,7 +185,13 @@ const EXPECTED = {
   // `Data Ops.RunUserDefinedBuiltins`'s total), so they share a containment component and become
   // siblings in one dispatch chain while staying two mutants. All eight verdicts pre-committed in
   // docs/superpowers/specs/2026-08-19-r159-swap-additive-precommitment.md.
-  totalMutantSites: 265,
+  // R165 moves this from 265 to 266. `swap-modify-flag` 1.2.0 also claims the ARGUMENT-LESS form
+  // (`Rec.Modify()` means RunTrigger = false, so the mutant runs the trigger). Exactly ONE site
+  // here, in `pageextension Data Main List Ext`'s `OnOpenPage`, and the fixture's own comment states
+  // the mechanism: `Modify()` is deliberate there because running `OnModify` would add 1 to the very
+  // field the test asserts. Verdict pre-committed in
+  // docs/superpowers/specs/2026-08-19-r165-forced-trigger-precommitment.md.
+  totalMutantSites: 266,
   // R36 moved this from 63/10 to 64/9, deliberately and in one direction only.
   //
   // `RequireCategoryAFails` used to assert merely that AN error occurred, so deleting
@@ -368,7 +374,12 @@ const EXPECTED = {
   // of `codeunit 79317 "Data Filter Ops"` called directly by one new test.
   // R132 leaves this at 10 for the same reason: both new procedures are called directly by their
   // own new test.
-  noCoverage: 10,
+  // R165 moves this from 10 to 11, and the new one is NOT killed for a reason worth knowing: the
+  // test that would catch it, `PageExtCountsMatchingRelated`, no longer exists. It was removed after
+  // being measured twice against Cronus283 to wedge the fenced session — `in-flight-unknown` at
+  // baseline, the whole run quarantined. That is why this pageextension's four other mutants are
+  // already `no-coverage`; the fifth joins them.
+  noCoverage: 11,
   // 183 / 214 does not reduce (183 is 3 x 61, 214 is 2 x 107). It is about 0.8551, DOWN from
   // 0.8626: a wave that adds six deliberate survivors is SUPPOSED to move the score down, and a
   // score that rose instead would mean the survivors did not arrive.

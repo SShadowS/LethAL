@@ -8,8 +8,9 @@ import {
   type SemanticContext,
   isStatementPosition,
 } from "@lethal/operator-sdk";
+import { forcedTriggerCanRaise, resolveForcedTrigger } from "./forced-trigger-raise";
 import { insertSkipCanRaise } from "./insert-key-assignment";
-import { soleArgument, synthesizeAfter } from "./mutate-helpers";
+import { exactArguments, soleArgument, synthesizeAfter } from "./mutate-helpers";
 import { claimsRecordMethod } from "./receiver";
 
 const TRUE_LITERAL = "true";
@@ -44,6 +45,15 @@ const PLATFORM_KILL_METHOD = "Insert";
 const RUN_TRIGGER_SKIPPED_INSERT: PlatformKillMechanism = "run-trigger-skipped-insert";
 
 /**
+ * R165. The tag the FORWARD direction carries, declared the same typed way so a value the engine's
+ * union does not know is a compile error at the one place that writes it.
+ */
+const RUN_TRIGGER_FORCED: PlatformKillMechanism = "run-trigger-forced";
+
+/** What the forward direction writes into an argument-less call. */
+const TRUE_REPLACEMENT = "true";
+
+/**
  * Single source of truth for both places this operator's version must agree
  * (docs/superpowers/specs/2026-08-12-r136-tier2-trio-design.md §2.1): the `version` field below and
  * the `operatorVersion` literal `generate()` writes into every `MutationSpec`. The manifest, and
@@ -51,7 +61,12 @@ const RUN_TRIGGER_SKIPPED_INSERT: PlatformKillMechanism = "run-trigger-skipped-i
  * `packages/runner/tests/operator-version-invariant.test.ts`, which asserts the two can never
  * diverge for any registered operator, this one included.
  */
-const OPERATOR_VERSION = "1.1.0";
+/**
+ * R165 bumped this to 1.2.0: MINOR. The operator GAINED the argument-less form and changed nothing
+ * about the mutants it already emitted, so every existing mutant keeps its identity and its history
+ * (design.md §5.1 resets history on a MAJOR bump only).
+ */
+const OPERATOR_VERSION = "1.2.0";
 
 /**
  * `SwapModifyFlag`: rewrite `<rec>.Modify(true)` -> `<rec>.Modify(false)`, and, since 1.1.0, the
@@ -168,13 +183,17 @@ export const swapModifyFlag: MutationOperator = {
 
   targets(node: ALSyntaxNode, ctx: SemanticContext): boolean {
     if (node.kind !== ALNodeKind.procedure_call) return false;
-    if (claimedRunTriggerMethod(node, ctx) === null) return false;
-    return booleanTrueArgument(node) !== null;
+    const method = claimedRunTriggerMethod(node, ctx);
+    if (method === null) return false;
+    // The SKIP direction: an explicit `true` to flip to `false`.
+    if (booleanTrueArgument(node) !== null) return true;
+    // R165, the FORWARD direction: an argument-less call, which means `RunTrigger = false`.
+    return forcedTriggerSite(node, ctx, method) !== null;
   },
 
   generate(node: ALSyntaxNode, ctx: SemanticContext): readonly MutationSpec[] {
     const arg = booleanTrueArgument(node);
-    if (arg === null) return [];
+    if (arg === null) return generateForced(node, ctx);
     const mutatedText = replaceArgument(node, arg, FALSE_REPLACEMENT);
     if (mutatedText === null) return [];
     // R138: the tag follows the matched METHOD, not the operator. Re-asking rather than threading
@@ -265,6 +284,64 @@ export const swapModifyFlag: MutationOperator = {
     },
   ],
 };
+
+/**
+ * R165 — the forward direction's site test: an ARGUMENT-LESS run-trigger call whose receiver's table
+ * this project declares AND which declares the matching trigger. Returns the trigger node, or `null`
+ * to refuse.
+ *
+ * Both halves of that scope are refusals with reasons, measured before the operator was written
+ * (`scripts/r165-probe/`, 394 argument-less calls on `do-rel2/Cloud`):
+ *
+ *   - **table not declared here** (81 sites, plus 93 with an implicit `Rec` receiver). This project
+ *     cannot see a base-app trigger, so no screen could classify a kill at such a site, and R143's
+ *     "tag when unresolvable" answer would tag every one of them, which separates nothing.
+ *   - **table declared but no matching trigger** (171 sites). Forcing a trigger that does not exist
+ *     is close to equivalent, and a wave of near-universal survivors is exactly what
+ *     `RemoveSetLoadFields` was refused for. "Close to" rather than "provably": running triggers
+ *     also raises the platform's integration events, which a subscriber elsewhere can observe. So
+ *     this is a scoping COST, recorded as one, not an equivalence proof.
+ *
+ * That leaves 49 claimable sites on that corpus — above R13's bar of 13, and smaller than the 62 the
+ * SKIP direction claims there, which is the opposite of what R165 first estimated.
+ */
+function forcedTriggerSite(
+  node: ALSyntaxNode,
+  ctx: SemanticContext,
+  method: string,
+): ALSyntaxNode | null {
+  if (exactArguments(node, 0) === null) return null;
+  return resolveForcedTrigger(node, ctx, method);
+}
+
+/** R165 — emit `<receiver>.<Method>(true)` for an argument-less run-trigger call. */
+function generateForced(node: ALSyntaxNode, ctx: SemanticContext): readonly MutationSpec[] {
+  const method = claimedRunTriggerMethod(node, ctx);
+  if (method === null) return [];
+  const trigger = forcedTriggerSite(node, ctx, method);
+  if (trigger === null) return [];
+  // The call's own text with `true` placed inside its empty parentheses. Sliced rather than rebuilt
+  // so the receiver, casing and any interior trivia survive exactly as written.
+  const text = node.text;
+  const open = text.lastIndexOf("(");
+  const close = text.lastIndexOf(")");
+  if (open < 0 || close < open) return [];
+  const mutatedText = `${text.slice(0, open + 1)}${TRUE_REPLACEMENT}${text.slice(close)}`;
+  return [
+    {
+      operatorName: "lethal.swap-modify-flag",
+      operatorVersion: OPERATOR_VERSION,
+      astNodeId: `${node.startIndex}-${node.endIndex}`,
+      before: node,
+      after: synthesizeAfter(node, mutatedText),
+      parentContext: parentContextOf(node),
+      // Tagged only where the trigger body PROVABLY contains a raise-capable statement. Unlike the
+      // skip direction's blanket tag, this one is emitted from the trigger itself, which is
+      // available precisely because the site test refused everything it could not resolve.
+      ...(forcedTriggerCanRaise(trigger) ? { platformKillMechanism: RUN_TRIGGER_FORCED } : {}),
+    },
+  ];
+}
 
 /**
  * WHICH of `RUN_TRIGGER_METHODS` does `node` call on a proven record receiver, or `null` for none?

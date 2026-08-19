@@ -49,7 +49,20 @@ export type AstNodeId = string;
  * nor the rule (so a text rule would fire on any platform-stopped transaction) and which localises
  * (R66), making a text rule English-only. A syntactic marker has neither ceiling.
  */
-export type PlatformKillMechanism = "write-txn-codeunit-run" | "run-trigger-skipped-insert";
+export type PlatformKillMechanism =
+  | "write-txn-codeunit-run"
+  | "run-trigger-skipped-insert"
+  /**
+   * R165 — the MIRROR of the one above. `Rec.Modify()` means `RunTrigger = false`, so rewriting it
+   * to `Rec.Modify(true)` makes the table's `OnModify` run where it did not. Forcing a trigger
+   * writes MORE than the unmutated program, so unlike SKIPPING one it can add an error: an `Error`,
+   * a `TestField`, a `FieldError`, or a write to another table that hits a duplicate key.
+   *
+   * Emitted only where the trigger body PROVABLY contains a raise-capable statement, which is
+   * possible here and not for the skip direction because the forward operator is scoped to tables
+   * this project declares and that declare the trigger. See `forcedTriggerCanRaise`.
+   */
+  | "run-trigger-forced";
 
 export interface MutationSpec {
   readonly operatorName: string;

@@ -34,7 +34,7 @@ an action breaks nothing.
 are kept as a record:
 
 ```bash
-ALC=$(ls -d ~/.vscode/extensions/ms-dynamics-smb.al-*/bin/win32/alc.exe | tail -1)
+ALC=$(ls ~/.vscode/extensions/ms-dynamics-smb.al-*/bin/win32/alc.exe ~/.vscode/extensions/ms-dynamics-smb.al-*/bin/alc.exe 2>/dev/null | sort | tail -1)
 VER=$(python -c "import json,io;print(json.load(io.open('extensions/lethal-control/app.json',encoding='utf-8-sig'))['version'])")
 "$ALC" "/project:U:/Git/LethAL/extensions/lethal-control" \
        "/packagecachepath:U:/Git/LethAL/extensions/lethal-control/.alpackages" \

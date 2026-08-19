@@ -83,4 +83,14 @@ export const PLATFORM_KILL_MECHANISM_EXPLANATIONS: Record<PlatformKillMechanism,
     "every `Insert` mutant carries this tag, because whether the target table's `OnInsert` touches " +
     "the primary key is not visible at the call site, and for a base-app record it is not visible " +
     "at all. Treat it as a prompt to read the kill, not as a verdict on it.",
+  "run-trigger-forced":
+    "rewriting `Modify()` to `Modify(true)` makes the table's `OnModify` RUN where it did not — " +
+    "`Rec.Modify()` means `RunTrigger = false`. Forcing a trigger writes more than the unmutated " +
+    "program, so unlike skipping one it can add an error the suite never had to catch: an " +
+    "`Error`, a `TestField`, a `FieldError`, or a write to another table hitting a duplicate key " +
+    "or a locked row. STRONGER THAN `run-trigger-skipped-insert`: this operator is scoped to " +
+    "tables this project declares AND that declare the trigger, so the tag is emitted only where " +
+    "the trigger body PROVABLY contains a raise-capable statement, never as a blanket. It " +
+    "under-tags for a raise reached through a project procedure, which is the honest direction " +
+    "for a screen whose value is that a tag means something.",
 };

@@ -144,7 +144,7 @@ Operators that exploit AL/BC semantics to surface weak tests.
 | `lethal.remove-testfield` | 1.1.0 | `Rec.TestField("No.")` → _(deleted)_ | validation tests with weak assertions |
 | `lethal.remove-setrange` | 1.1.0 | `Cust.SetRange("No.", 'A')` → _(deleted)_ | tests that never verify the filter |
 | `lethal.remove-calcfields` | 1.1.0 | `Rec.CalcFields("No.")` → _(deleted)_ | no assertion on a computed FlowField |
-| `lethal.swap-modify-flag` | 1.1.0 | `Cust.Modify(true)` → `Cust.Modify(false)` | trigger execution that no test checks |
+| `lethal.swap-modify-flag` | 1.2.0 | `Cust.Modify(true)` → `Cust.Modify(false)` | trigger execution that no test checks |
 | `lethal.remove-commit` | 1.1.0 | `Commit()` → _(deleted)_ | reliance on an implicit commit |
 | `lethal.swap-rec-xrec` | 1.0.0 | `xRec.Amount` → `Rec.Amount` | before-value gaps in `OnValidate` and `OnRename` |
 | `lethal.swap-find-direction` | 1.0.0 | `Cust.FindFirst()` → `Cust.FindLast()` | a suite whose fixture only ever holds one row |

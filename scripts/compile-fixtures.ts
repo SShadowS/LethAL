@@ -44,9 +44,15 @@ const PROJECT_ROOTS = [
 function findAlc(): string | null {
   const extRoot = join(homedir(), ".vscode", "extensions");
   if (!existsSync(extRoot)) return null;
+  // R167: the AL extension ships BOTH layouts across versions — `bin/win32/alc.exe` on the
+  // multi-platform VSIX (18.0.2498801) and `bin/alc.exe` on the per-platform one (18.0.2668733),
+  // which has no `win32` directory at all. Probe both, newest first, and take the one that exists.
   const candidates = readdirSync(extRoot)
     .filter((d) => d.startsWith("ms-dynamics-smb.al-"))
-    .map((d) => join(extRoot, d, "bin", "win32", "alc.exe"))
+    .flatMap((d) => [
+      join(extRoot, d, "bin", "win32", "alc.exe"),
+      join(extRoot, d, "bin", "alc.exe"),
+    ])
     .filter((p) => existsSync(p));
   // Lexical sort is wrong across a major bump ("al-9" vs "al-18"), so order by mtime: the newest
   // installed extension is the one a developer is actually building against.

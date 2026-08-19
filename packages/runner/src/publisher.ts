@@ -1,4 +1,4 @@
-import { readFile, readdir } from "node:fs/promises";
+import { access, readFile, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { CompiledArtifact } from "./artifact";
@@ -225,15 +225,41 @@ export async function defaultAlToolPaths(
     return compareVersions(versionA, versionB);
   });
 
-  const al = sorted.at(-1);
-  if (!al) return undefined;
-  // Hardcoding bin/win32/ here made every bcdev run on a Linux or macOS host spawn a Windows PE
-  // binary that cannot execute, surfacing as an opaque empty-message spawn ENOENT several layers
-  // up (ArtifactCompiler.compile's catch stringifies a message-less error) — and the released
-  // Linux/macOS binaries advertise the bcdev backend, so that was every non-Windows user.
-  const bin = join(extensionsDir, al, "bin", layout.dir);
-  return {
-    alcPath: join(bin, `alc${layout.exeSuffix}`),
-    altoolPath: join(bin, `altool${layout.exeSuffix}`),
-  };
+  // R167 — walk NEWEST FIRST and return the first extension that actually HAS the tools, rather
+  // than building a path from the newest and trusting it.
+  //
+  // This used to take `sorted.at(-1)` and join a fixed layout onto it. On 2026-08-19 the AL
+  // extension shipped 18.0.2668733 as a PER-PLATFORM VSIX: the Windows binaries sit directly in
+  // `bin/` and there is no `bin/win32/` at all, where 18.0.2498801 shipped `bin/win32`, `bin/linux`
+  // and `bin/darwin` side by side. Both were installed, the newest was chosen, the path did not
+  // exist, and every live gate died mid-run with `could not run alc (...): Executable not found`.
+  // Nothing about the failure named the layout, and it arrived AFTER instrumenting and publishing.
+  //
+  // So existence is CHECKED, and both layouts are tried. The per-RID directory is tried first
+  // because on an older multi-platform VSIX it is the correct one for this host, and the `bin/`
+  // root there holds a different platform's binaries.
+  //
+  // The suffix keeps the fallback honest across hosts: a Windows-only VSIX on a Linux box has
+  // `bin/alc.exe` and no `bin/alc`, so the Linux probe finds nothing and moves on rather than
+  // returning a Windows PE this host cannot execute — the exact failure the per-RID split fixed.
+  for (const al of [...sorted].reverse()) {
+    const bin = join(extensionsDir, al, "bin");
+    const candidates = [join(bin, layout.dir), bin];
+    for (const dir of candidates) {
+      const alcPath = join(dir, `alc${layout.exeSuffix}`);
+      const altoolPath = join(dir, `altool${layout.exeSuffix}`);
+      if (await pathExists(alcPath)) return { alcPath, altoolPath };
+    }
+  }
+  return undefined;
+}
+
+/** Does this path exist? Used only to choose between AL extension layouts (R167). */
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
 }

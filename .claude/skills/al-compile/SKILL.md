@@ -14,7 +14,7 @@ Compile an AL project offline and report diagnostics. AL edits have no `bun test
 ## Procedure
 ```bash
 cd U:/Git/LethAL
-ALC=$(ls ~/.vscode/extensions/ms-dynamics-smb.al-*/bin/win32/alc.exe 2>/dev/null | sort | tail -1)
+ALC=$(ls ~/.vscode/extensions/ms-dynamics-smb.al-*/bin/win32/alc.exe ~/.vscode/extensions/ms-dynamics-smb.al-*/bin/alc.exe 2>/dev/null | sort | tail -1)
 PROJ="${1:-U:/Git/LethAL/extensions/lethal-control}"
 CACHE="$PROJ/.alpackages"
 OUT="$PROJ/.al-compile-check.app"

@@ -244,8 +244,11 @@ describe("swap-modify-flag extension to Insert/Delete (R136)", () => {
     expect(specsFor(src)).toEqual([]);
   });
 
-  it("reports version 1.1.0 so existing Modify mutant identities do not move", () => {
-    expect(swapModifyFlag.version).toBe("1.1.0");
+  it("reports version 1.2.0 so existing Modify mutant identities do not move", () => {
+    // R165 bumped 1.1.0 -> 1.2.0 for the forward direction. MINOR either time, and the reason is
+    // the same: the operator GAINED sites and changed nothing about the mutants it already emitted,
+    // so `design.md` §5.1's history reset (MAJOR only) must not fire.
+    expect(swapModifyFlag.version).toBe("1.2.0");
     const src = `codeunit 50159 "T" {
       procedure P()
       var Rec: Record Customer;
@@ -256,7 +259,7 @@ describe("swap-modify-flag extension to Insert/Delete (R136)", () => {
     const specs = specsFor(src);
     expect(specs).toHaveLength(1);
     const only = specs[0];
-    expect(only?.operatorVersion).toBe("1.1.0");
+    expect(only?.operatorVersion).toBe("1.2.0");
   });
 
   /**

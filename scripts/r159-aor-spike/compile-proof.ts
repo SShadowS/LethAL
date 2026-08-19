@@ -52,9 +52,15 @@ const GROUPS: readonly AorGroup[] = ["additive", "multiplicative"];
 function findAlc(): string | null {
   const extRoot = join(homedir(), ".vscode", "extensions");
   if (!existsSync(extRoot)) return null;
+  // R167: the AL extension ships BOTH layouts across versions — `bin/win32/alc.exe` on the
+  // multi-platform VSIX (18.0.2498801) and `bin/alc.exe` on the per-platform one (18.0.2668733),
+  // which has no `win32` directory at all. Probe both, newest first, and take the one that exists.
   const candidates = readdirSync(extRoot)
     .filter((d) => d.startsWith("ms-dynamics-smb.al-"))
-    .map((d) => join(extRoot, d, "bin", "win32", "alc.exe"))
+    .flatMap((d) => [
+      join(extRoot, d, "bin", "win32", "alc.exe"),
+      join(extRoot, d, "bin", "alc.exe"),
+    ])
     .filter((p) => existsSync(p));
   candidates.sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs);
   return candidates[0] ?? null;
