@@ -162,7 +162,17 @@ const EXPECTED = {
   // the assertion screen does with them, which is why this fixture's `discrimination` moves from
   // `vacuous` to `partial` below. Pre-committed in
   // docs/superpowers/specs/2026-08-14-r132-assertion-arm-precommitment.md BEFORE this run.
-  totalMutantSites: 252,
+  // R161 moved this from 252 to 256. Six operators' guard widened from `isStatementPosition` to
+  // `isStatementSlot`, so a call that is the UN-BRACED BODY of a branch is claimed. All four new
+  // sites are the same shape and it is the shape that matters: `if <bad condition> then Error(...)`,
+  // the ordinary BC guard clause, at which this tool previously emitted NOTHING. Three are the
+  // `Error` in a field `OnValidate` (`Data Main`'s `"No."` and `Category`, `Data No Trigger`'s
+  // `"No."`) and the fourth is `DataMain.Delete(false)` inside `if DataMain.Get(MainNo) then` in
+  // `Data Ops.InsertWithoutTrigger`. No displacement: all four are `void-method-call`, and the one
+  // that shares a statement with an existing mutant (`Category`'s `remove-calcfields`) becomes its
+  // SIBLING in one dispatch chain rather than replacing it. All four verdicts pre-committed in
+  // docs/superpowers/specs/2026-08-19-r161-branch-slot-precommitment.md BEFORE this run.
+  totalMutantSites: 256,
   // R36 moved this from 63/10 to 64/9, deliberately and in one direction only.
   //
   // `RequireCategoryAFails` used to assert merely that AN error occurred, so deleting
@@ -239,7 +249,11 @@ const EXPECTED = {
   // by an `Assert.AreEqual` and two by a bare `Error(...)`. Identical verdicts are the CONTROL here
   // — with the verdicts equal, the only thing separating the four is the screen, which is what the
   // arm exists to measure.
-  killed: 191,
+  // R161 moved this from 191 to 194: three of the four new guard-clause deletions are killed, each
+  // by an `asserterror` whose whole purpose is that guard. `BlankNoValidateFails`,
+  // `CategoryGuardNeedsCalcFields` and `TooLongNoValidateFails` all stop seeing an error the moment
+  // the `Error(...)` is deleted, which is the most direct kill in the fixture.
+  killed: 194,
   // R73 moved this from 9 to 12, and TWO of the three additions are worth reading rather than
   // accepting:
   //
@@ -293,7 +307,13 @@ const EXPECTED = {
   // shape that made `remove-setrange` survivors uninformative before the fixture seeded decoys.
   // R132 leaves this at 31: both halves of the twin pair assert an exact non-zero value, so an
   // emptied body and a zeroed `exit` are both observable.
-  survived: 31,
+  // R161 moved this from 31 to 32, by ONE, and the one is a `covered-but-unreached` case worth
+  // knowing: deleting `DataMain.Delete(false)` in `Data Ops.InsertWithoutTrigger` is unobservable
+  // because the only covering test calls `DeleteMain('T-INS')` first, so `DataMain.Get(MainNo)`
+  // answers `false` and the deleted statement never runs. Coverage is procedure-level, so the site
+  // is COVERED and the verdict is `survived` rather than `no-coverage` — the distinction the
+  // `reach` field exists to carry.
+  survived: 32,
   // R78 moved this from 6 to 9. The three new sites all belong to the TestPage-only pair
   // (`Data Value Source` / `Data Value Card`), and all three land `no-coverage` because the one
   // test that reaches them is refused on the fenced path. That is the measured statement of the
@@ -329,7 +349,11 @@ const EXPECTED = {
   // R141 moves it to 187 / 218, about 0.8578, back UP: an arm of four predicted kills and no
   // survivors should raise it. The direction is the readable part, not the digits.
   // R132 moves it to 191 / 222, about 0.8604, up again for the same reason.
-  mutationScore: 191 / (191 + 31),
+  // R161 moves it to 194 / 226, about 0.8584, DOWN slightly. That direction is right and worth
+  // stating: three of the four new mutants are killed and one survives, so a wave that is 75% kills
+  // still lowers a score sitting at 86%. A score that only ever rises is a score nobody is testing
+  // against new ground.
+  mutationScore: 194 / (194 + 32),
   /**
    * R72, extended by R138: the screen must fire, and on exactly these mutants under exactly these
    * mechanisms.

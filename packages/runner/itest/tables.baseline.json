@@ -126,6 +126,13 @@
     "errorClass": null
   },
   {
+    "key": "0a4aa6ba624a968a10ed0a7f498acecfcece91cce81f92a0459538ca3df0b35c|Data Ops|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "0a4aa6ba624a968a10ed0a7f498acecfcece91cce81f92a0459538ca3df0b35c|Data Trigger Probe|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "DeleteRunTriggerLeavesTombstone",
@@ -630,6 +637,13 @@
     "errorClass": null
   },
   {
+    "key": "6a7734dcfc7da96667868d526c4492d69d0f5ebe643500d032d3de6e7ad3914c|Data No Trigger|lethal.void-method-call|1",
+    "verdict": "killed",
+    "killingTest": "TooLongNoValidateFails",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "6e6f446554f674d6e9e64a7a5e5142825ad0c351f756064ad55471679a28d776|Data Filter Ops|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "ClosedRangeCountIsScopedByMainNo",
@@ -826,6 +840,13 @@
     "errorClass": null
   },
   {
+    "key": "797d6d57551b0599021fae297945c7a88457aff014d67f0c9b58b32ca392849e|Data Main|lethal.void-method-call|1",
+    "verdict": "killed",
+    "killingTest": "CategoryGuardNeedsCalcFields",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "7ad4ff1f2662520bea5fc027ae8a6958a90791e71d4f5a927b7e7072b648f63d|Data Filter Ops|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "GapAtTheBoundaryMakesTheShiftEquivalent",
@@ -1011,6 +1032,13 @@
     "key": "9cc0c19b90a90844f2f20d97afc6b5ad22e6f2d2547f97ed45a76cd5d11f4163|Data Ops|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "ModifyWithFlagVariableRuns",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "9e4a6d0d4aee261e95730f3de9baac753120c76419d9580dd00376333a1f9f16|Data Main|lethal.void-method-call|1",
+    "verdict": "killed",
+    "killingTest": "BlankNoValidateFails",
     "coverageFiltered": false,
     "errorClass": null
   },

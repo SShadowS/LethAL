@@ -4,7 +4,7 @@ Everything needed to run the LethAL demo live, in the order you need it. The pla
 before the conference is `docs/superpowers/plans/2026-08-16-directions-emea-2026-readiness.md`; this
 file is what you hold on the day.
 
-**The demo is `examples/gift-card`.** 36 mutants, and the last measured run took **13.8 seconds**.
+**The demo is `examples/gift-card`.** 41 mutants, and the last measured run took **17.5 seconds**.
 Its expected verdicts are frozen at `docs/campaign/2026-08-16-gift-card/`.
 
 ---
@@ -116,7 +116,7 @@ middle, not the tool.
 |---|---|---|
 | 0:00 | One slide: three objects, eight tests, all green. **Start the run immediately.** | "You have all written this app. Eight tests, all passing. Would you ship it?" |
 | 0:20 | The run streams verdicts while you walk the test list | Name the tests: error paths, a trigger assertion, an audit-trail check. Let them believe the suite. |
-| 0:40 | Run finishes. Read the summary. | "20 killed, 9 survived, 7 no-coverage. Coverage on `GetBalance` was 100% the whole time." |
+| 0:40 | Run finishes. Read the summary. | "25 killed, 9 survived, 7 no-coverage. Coverage on `GetBalance` was 100% the whole time." |
 | 1:00 | `lethal explain report.json --top 10` | **Use `--top 10`, not `--top 5`** — the planted bug ranks sixth of nine and a cap of five cuts it. |
 | 1:20 | The planted survivor: the deleted `SetRange` | "One line gone, every test green. This function now returns the whole store's outstanding balance instead of this card's. `executionProven: true` — a test provably ran this line and did not notice." |
 | 2:10 | The `no-coverage` cluster: `BlockExpiredCards` | "Seven mutants, no test executed any of them. That is the nightly job. Expiry *is* tested — at redeem time, which is different code." |

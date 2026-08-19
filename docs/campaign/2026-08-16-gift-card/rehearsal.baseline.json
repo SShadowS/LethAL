@@ -182,6 +182,20 @@
     "errorClass": null
   },
   {
+    "key": "7f9598a6e5967d4f80e59cb2e93f397782a77e8b3f13df55547e612cae4b2610|Gift Card Mgt|lethal.void-method-call|1",
+    "verdict": "killed",
+    "killingTest": "IssueRejectsNegativeAmount",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "7f9598a6e5967d4f80e59cb2e93f397782a77e8b3f13df55547e612cae4b2610|Gift Card|lethal.void-method-call|1",
+    "verdict": "killed",
+    "killingTest": "IssueRequiresCustomer",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "801574c78b97545d548499490849cb89988e9e9032a13a4f0c514dd35a875b7b|Gift Card Mgt|lethal.remove-setrange|1",
     "verdict": "survived",
     "killingTest": null,
@@ -213,6 +227,27 @@
     "key": "acbee55d3b7c4a21a57fd5bd826eb80920e63886d3e0726be2f577483b3c33bc|Gift Card Mgt|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "RedeemReducesBalance",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|Gift Card Mgt|lethal.void-method-call|1",
+    "verdict": "killed",
+    "killingTest": "RedeemBlockedCardFails",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|Gift Card Mgt|lethal.void-method-call|1",
+    "verdict": "killed",
+    "killingTest": "RedeemExpiredCardFails",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ad0866805baeb46c4190b0710f7d6b11d65a636b2adfbb98f913a735ba6cf06c|Gift Card Mgt|lethal.void-method-call|1",
+    "verdict": "killed",
+    "killingTest": "RedeemMoreThanBalanceFails",
     "coverageFiltered": false,
     "errorClass": null
   },

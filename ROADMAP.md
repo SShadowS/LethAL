@@ -62,6 +62,7 @@ that ordering is the priority.
 - **R156** · Test-isolation granularity was filed as unmeasured; it is defined at procedure level by the NST, and LethAL runs ONE method per invocation · [R156.md](docs/roadmap/R156.md) · closed 2026-08-16 — filed and withdrawn the same day: the premise was wrong. Isolation is per test procedure…
 - **R157** · REQUIRED fields were added to the report without bumping `schemaVersion`, so one version number describes several shapes · [R157.md](docs/roadmap/R157.md) · open — found 2026-08-18 by generating the report schema and validating the committed reports against it
 - **R160** · `typeOf` cannot type a call or a record field, which is where BC arithmetic actually lives · [R160.md](docs/roadmap/R160.md) · open, measured but not fixed (`docs/superpowers/specs/2026-08-19-r159-aor-spike.md` §1)
+- **R166** · `astSubtreeHash` erases method and label names, so three different guard deletions share one identity · [R166.md](docs/roadmap/R166.md) · open, measured 2026-08-19; surfaced by R161's re-freeze, NOT caused by it
 
 ## Product gaps a real project hits
 
@@ -97,7 +98,7 @@ that ordering is the priority.
 - **R155** · The gift card demo app's VERDICTS have never been measured against a live server, only its mutant inventory · [R155.md](docs/roadmap/R155.md) · done (this commit) — measured on Cronus281 2026-08-16: 20 killed / 9 survived / 7 no-coverage over 36, score…
 - **R158** · Every refusal reached the user as a stack trace, including the first command the README tells them to run · [R158.md](docs/roadmap/R158.md) · done (this commit) — the message by default, the stack behind LETHAL_DEBUG=1, and a line saying where it went
 - **R159** · 26 of 31 behaviour-carrying AL node kinds are never claimed by any operator, and arithmetic is the one with no recorded reason · [R159.md](docs/roadmap/R159.md) · open, arithmetic SPIKED and decided (`docs/superpowers/specs/2026-08-19-r159-aor-spike.md`): build the…
-- **R161** · 1,118 call sites are refused because they are an un-braced branch body, and ten operators share the loss · [R161.md](docs/roadmap/R161.md) · open, measured 2026-08-19 on `do-rel2/Cloud`; the recovery needs the compiler to brace the enclosing branch…
+- **R161** · 1,118 call sites are refused because they are an un-braced branch body, and ten operators share the loss · [R161.md](docs/roadmap/R161.md) · done (`6e0a64b` + this commit) — 1,280 sites gained, 0 lost, set-diffed per operator; `itest:tables`…
 - **R162** · `swap-enum-member` is the largest unclaimed BC-semantic surface: 2,355 sites, nothing touches them · [R162.md](docs/roadmap/R162.md) · open, censused 2026-08-19 but not spiked; no compile probe, no overlap check, no live arm
 - **R163** · `not` on a bare call or identifier is invisible to every operator: 1,093 unclaimed sites · [R163.md](docs/roadmap/R163.md) · open, censused 2026-08-19 but not spiked; the duplicate-key false kill needs a screen decision first
 - **R164** · 290 loop-exit negations score only with an opt-in flag that ends a session on the user's server · [R164.md](docs/roadmap/R164.md) · open, measured 2026-08-19; this is a DEFAULT-PATH cost, not a correctness bug, and R53 is the reason
