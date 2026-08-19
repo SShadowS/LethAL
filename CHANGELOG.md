@@ -11,6 +11,26 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ## [Unreleased]
 
+### Changed
+
+- **Mutants are now generated at the un-braced body of a branch or loop** (R161). Six operators
+  guarded on a predicate that asks "is this one of several statements inside a `begin ... end`",
+  and used it to mean "is this a statement". It is not: `if Cond then Rec.Validate(F, V);` puts the
+  call in a slot where the grammar requires a statement, and every one of those operators refused
+  it. Measured on a real 554-file app, set-diffed per operator: **1,280 sites gained, 0 lost**
+  (`void-method-call` 9,218 to 10,336, `remove-setrange` 810 to 932, `validate-to-assign` 112 to
+  131, and three smaller).
+
+  What this is worth is not the count. The commonest shape it unlocks is `if <bad condition> then
+  Error(...)`, the ordinary Business Central guard clause, at which LethAL previously emitted
+  **nothing at all**. A suite that never checks a guard now gets a mutant that says so. On the
+  bundled demo app all five new mutants are exactly that, and the demo moves from 36 mutants /
+  20 killed to 41 / 25.
+
+  Expect more mutants, and therefore longer runs, on any project with un-braced branches. The six
+  operators bump to 1.1.0: MINOR, so existing mutants keep their history.
+
+
 ## [0.1.0-alpha.2] — 2026-08-17
 
 The first release with a machine-readable surface for agents and CI, a demo application you can

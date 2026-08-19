@@ -34,3 +34,22 @@ The three rows that carry the demo, and that a diff must never silently lose:
 - `Redeem` / `conditional-boundary` at the remaining-amount guard — **survived**. The genuine
   shippable bug.
 - `BlockExpiredCards` — all seven mutants **no-coverage**. The nightly job no test calls.
+
+---
+
+## Amended 2026-08-19 by R161: the stage is re-frozen at 41 mutants, not 36
+
+This document's predictions were made and met at 36 mutants. R161 widened six operators' guard from
+`isStatementPosition` to `isStatementSlot`, so a call that is the un-braced body of a branch is now
+claimed, and this app gained **five** mutants: the `Error(...)` in each of its guard clauses, which
+no operator could reach before. All five are killed, each by the `asserterror` test written for that
+guard. Totals move 36 -> 41 and 20 -> 25 killed; survivors and no-coverage are unchanged.
+
+Nothing above is edited. The five new predictions were written down BEFORE their run, in
+`docs/superpowers/specs/2026-08-19-r161-branch-slot-precommitment.md`, and all five matched.
+
+**The three rows that carry the demo are all unchanged**, which is the point of checking: the
+planted `remove-setrange` in `GetBalance` still survives, the `conditional-boundary` in `Redeem`
+still survives, and `BlockExpiredCards` is still seven no-coverage. The demo now shows both halves
+at once: a suite that catches every guard clause and still misses the thing nobody asserted.
+
