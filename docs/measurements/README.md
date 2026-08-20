@@ -965,6 +965,18 @@ against **`al-runner v2.0.0.0`** (the NuGet release, not a local build of `main`
 measurements in R93-R101 were taken against a local Release build of upstream `main` plus PR #1657;
 where the two disagree, this section is the one that describes the binary a gate would actually run.
 
+**Re-verified against `al-runner v2.3.1.0` on 2026-08-20** and unchanged. That bump skipped 2.2
+entirely (NuGet publishes no 2.2.x) and made the **parity-verified bundled mode the default**, with
+`--per-suite` demoted to "Legacy per-Compilation path" and `--bundled` a deprecated no-op alias — the
+kind of change that could have moved every verdict and moved none: all 17 per-mutant verdicts on
+`itest:alrunner` are identical, R129's `[bc]` runtime announcement still parses, R147's platform-app
+pin still parses, and R149's pinned contract re-measurement ran without refusing, so all five wire
+facts below still hold under `--package-cache`.
+
+2.3.1 ADDS surface this section does not describe and no gate exercises: `--precompile`,
+`--emit-app`, `--guide`, `--print-cache-key`, `--watch`, and `--cache`/`--no-cache` for a new
+AL-output cache. None is on any path LethAL uses; the cache tree it implies is [ROADMAP R168](../roadmap/R168.md).
+
 ### It runs on Windows
 
 R98 recorded that upstream `main` P/Invoked `libc`'s `mprotect` and died before any test ran. On the
