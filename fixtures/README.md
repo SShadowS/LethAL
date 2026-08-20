@@ -47,8 +47,9 @@ artifactId, mutantId)`; the target carries no active-mutant table of its own.
 | `Order Matters Probe` (codeunit) | 79210 | `sandbox-probes` | Two `[Test]` methods proving single-method selection. |
 | `Fail Probe` (codeunit) | 79211 | `sandbox-probes` | Exact-error round-trip witness. |
 
-The instrumented target also emits, into its own id window (79197–79199), a `Mutation Register`
-install codeunit **and** a `Mutation Upgrade` codeunit (object id 79197, the freed `tableId`) — both
+The instrumented target also emits, into whichever three ids `selectorIds` resolves to for that
+project (`79197`–`79199` for `sandbox-app`, `79397`–`79399` for `sandbox-data` since R169), a
+`Mutation Register` install codeunit **and** a `Mutation Upgrade` codeunit (on the freed `tableId`) — both
 read identity from the `Mutation Selector` and call `LC Control State.RegisterArtifact`, so the
 target self-registers its baked `artifactId` on a fresh install AND on every ForceSync republish
 (`OnUpgradePerCompany` fires on an altool dev-endpoint ForceSync republish when the app version

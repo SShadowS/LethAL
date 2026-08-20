@@ -45,7 +45,8 @@ confirm file, line and operator match at the same code. An unverified join pairs
 and reports nonsense with complete confidence.
 
 **A passing fixture can pass on its SHAPE.** `sandbox-data` matched verdicts exactly while its
-fenced run named ONE member (`Codeunit:79199::Active`, LethAL's own selector) plus two object-level
+fenced run named ONE member (`Codeunit:79199::Active`, LethAL's own selector; that fixture's
+selector is `79399` since R169, so a rerun today reads `Codeunit:79399::Active`) plus two object-level
 entries — its table-trigger mutants matched through `coverageFilter`'s `byObject` fallback, which
 is trigger-only by design (R29). That comparison is honest but exercises almost none of the
 line→procedure mapping. Always read how many MEMBER-level entries each side produced, not just the

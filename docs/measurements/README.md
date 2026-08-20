@@ -234,7 +234,8 @@ is why they had never been visible. Filed as R61.
 
 **Read the last column before trusting the table.** `sandbox-data` passing proves less than it
 looks: the fenced run named exactly one member (`Codeunit:79199::Active`, the emitted selector
-codeunit) plus two object-level entries, and its verdicts matched because table-trigger mutants
+codeunit; `sandbox-data`'s selector moved to `79399` in R169, so a rerun today reads
+`Codeunit:79399::Active`) plus two object-level entries, and its verdicts matched because table-trigger mutants
 take `coverageFilter`'s `byObject` fallback, which object-level entries satisfy. The hub is equally
 memberless there — `SymbolReference.json` records no trigger — so the comparison is honest, but it
 exercises almost none of the line -> procedure mapping. Only `sandbox-app` does, on four members.
