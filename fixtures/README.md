@@ -43,6 +43,7 @@ artifactId, mutantId)`; the target carries no active-mutant table of its own.
 | `LC Control State` (codeunit) | 91002 | `LethAL Control` | SingleInstance state: active tuple, registry, per-run attestation. |
 | `LC Control API` (codeunit) | 91003 | `LethAL Control` | OData surface: `HarnessInfo`, `RegisteredArtifact` (read), `RunMutant`. |
 | `LC Control Install` / `Upgrade` | 91004 / 91005 | `LethAL Control` | Reconcile the `LethALControl` web-service row on install/upgrade. |
+| `Data Set Ops` (codeunit) | 79319 | `sandbox-data` | R171's cession-seam arm: `not (X in [set])`, `not (A = B)` and a bare `in` guard, a control set pinning the split between `remove-not` and `negate-guard`. |
 | `Sandbox Probe Marker` (table) | 79200 | `sandbox-probes` | Order-matters witness (shared row across two probe methods). |
 | `Order Matters Probe` (codeunit) | 79210 | `sandbox-probes` | Two `[Test]` methods proving single-method selection. |
 | `Fail Probe` (codeunit) | 79211 | `sandbox-probes` | Exact-error round-trip witness. |

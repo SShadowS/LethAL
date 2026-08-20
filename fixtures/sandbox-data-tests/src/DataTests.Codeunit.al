@@ -1156,6 +1156,55 @@ codeunit 79310 "Data Tests"
             Error('expected 75 from the tripled level, got %1', Actual);
     end;
 
+    // R171's cession-seam arm. See fixtures/sandbox-data/src/DataSetOps.Codeunit.al for why the
+    // three procedures are a control set rather than three tests of one thing.
+
+    [Test]
+    procedure RegionRankSeparatesInsideAndOutsideTheSet()
+    var
+        SetOps: Codeunit "Data Set Ops";
+        Inside: Integer;
+        Outside: Integer;
+    begin
+        Inside := SetOps.RegionRank('DK');
+        Outside := SetOps.RegionRank('DE');
+        // Both directions, so stripping the `not` cannot pass by accident on one of them.
+        if Inside <> 1 then
+            Error('expected rank 1 for a country inside the set, got %1', Inside);
+        if Outside <> 0 then
+            Error('expected rank 0 for a country outside the set, got %1', Outside);
+    end;
+
+    [Test]
+    procedure BothOutsideRangeSeparatesEqualAndUnequal()
+    var
+        SetOps: Codeunit "Data Set Ops";
+        Equal: Integer;
+        Unequal: Integer;
+    begin
+        Equal := SetOps.BothOutsideRange(7, 7);
+        Unequal := SetOps.BothOutsideRange(7, 9);
+        if Equal <> 1 then
+            Error('expected 1 when the two values are equal, got %1', Equal);
+        if Unequal <> 0 then
+            Error('expected 0 when the two values differ, got %1', Unequal);
+    end;
+
+    [Test]
+    procedure PlainMembershipSeparatesInsideAndOutsideTheSet()
+    var
+        SetOps: Codeunit "Data Set Ops";
+        Inside: Integer;
+        Outside: Integer;
+    begin
+        Inside := SetOps.PlainMembership('SE');
+        Outside := SetOps.PlainMembership('DE');
+        if Inside <> 1 then
+            Error('expected 1 for a country inside the set, got %1', Inside);
+        if Outside <> 0 then
+            Error('expected 0 for a country outside the set, got %1', Outside);
+    end;
+
     // ---------------------------------------------------------------------------------------------
     // Seeding helpers. All idempotent — see InsertDoublesAmountWeak's comment for why that is
     // kept even though the persistence claim behind it was measured false.
