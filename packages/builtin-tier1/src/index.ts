@@ -2,6 +2,7 @@ import type { MutationOperator } from "@lethal/operator-sdk";
 import { conditionalBoundary } from "./conditional-boundary";
 import { emptyBlock } from "./empty-block";
 import { negateConditional } from "./negate-conditional";
+import { negateGuard } from "./negate-guard";
 import { removeNot } from "./remove-not";
 import { returnValue } from "./return-value";
 import { swapAdditive } from "./swap-additive";
@@ -11,6 +12,7 @@ import { voidMethodCall } from "./void-method-call";
 export { conditionalBoundary } from "./conditional-boundary";
 export { emptyBlock } from "./empty-block";
 export { negateConditional } from "./negate-conditional";
+export { negateGuard } from "./negate-guard";
 export { removeNot } from "./remove-not";
 export { returnValue } from "./return-value";
 export { swapAdditive } from "./swap-additive";
@@ -22,6 +24,7 @@ export { synthesizeAfter } from "./mutate-helpers";
 export const tier1Operators: readonly MutationOperator[] = [
   conditionalBoundary,
   negateConditional,
+  negateGuard,
   voidMethodCall,
   returnValue,
   emptyBlock,

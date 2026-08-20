@@ -13,16 +13,31 @@ const OPERATOR_VERSION = "1.0.0";
 /**
  * Operand kinds this operator will strip a `not` from.
  *
- * A `parenthesized_expression` is deliberately ABSENT. That is where a comparison hides
- * (`not (A = B)`), and `negate-conditional` already owns comparisons; claiming it here would put two
- * operators on one condition for the same reason. Measured on `do-rel2/Cloud`: 43 of the 1,094 `not`
- * sites, so the cession costs 4% and buys a clean split.
+ * A `parenthesized_expression` is ABSENT here and handled separately below, because the cession it
+ * represents holds only PARTLY. `not (A = B)` hides a comparison and `negate-conditional` owns
+ * comparisons, so claiming it here would put two operators on one condition for the same reason. But
+ * that operator claims comparisons and logical expressions and NOTHING else, so `not (X in [...])`
+ * was ceded to an operator that does not want it and reached by neither (R171). `CEDED_INNER_KINDS`
+ * is the corrected line. Measured on `do-rel2/Cloud`: 43 parenthesized `not` sites, of which 15 come
+ * back.
  */
 const STRIPPABLE_OPERAND_KINDS: ReadonlySet<string> = new Set([
   ALNodeKind.procedure_call,
   ALNodeKind.identifier,
   ALNodeKind.field_access,
   "quoted_identifier",
+]);
+
+/**
+ * Inner expression kinds a `parenthesized_expression` operand is still ceded for.
+ *
+ * These are exactly what `negate-conditional` claims. The original cession sent EVERY parenthesized
+ * operand there, which was right for `not (A = B)` and wrong for `not (X in [...])`: that operator
+ * does not claim `in_expression`, so each operator assumed the other covered it and neither did.
+ */
+const CEDED_INNER_KINDS: ReadonlySet<string> = new Set([
+  ALNodeKind.comparison_expression,
+  ALNodeKind.logical_expression,
 ]);
 
 /**
@@ -59,7 +74,9 @@ const STRIPPABLE_OPERAND_KINDS: ReadonlySet<string> = new Set([
  * walking to that statement. The hint is not a claim that the `not` is itself a statement.
  *
  * **Documented limits:**
- *   - `not (A = B)` is refused, ceded to `negate-conditional` (see `STRIPPABLE_OPERAND_KINDS`).
+ *   - `not (A = B)` and `not (A and B)` are refused, ceded to `negate-conditional`, which does claim
+ *     those. `not (X in [...])` and `not (Rec.Field)` are NOT refused (R171): that operator claims
+ *     neither, so ceding them reached nothing. See `CEDED_INNER_KINDS`.
  *   - `not not X` yields `not X`, which is a smaller mutation than a reader might expect but is a
  *     genuine behaviour change and compiles; the inner `not` remains a site of its own.
  *   - Equivalence is not detected. `if not X then A else B` with the branches symmetric is an
@@ -127,9 +144,36 @@ export const removeNot: MutationOperator = {
       ],
     },
     {
-      name: "REFUSES a parenthesized operand, which negate-conditional owns",
+      name: "REFUSES a parenthesized COMPARISON, which negate-conditional owns",
       sourceAL: `codeunit 51503 "C" { procedure P(A: Integer; B: Integer) begin if not (A = B) then exit; end; }`,
       expectedSpecs: [],
+    },
+    {
+      name: "REFUSES a parenthesized LOGICAL expression, which negate-conditional also owns",
+      sourceAL: `codeunit 51504 "C" { procedure P(A: Boolean; B: Boolean) begin if not (A and B) then exit; end; }`,
+      expectedSpecs: [],
+    },
+    {
+      name: "R171: strips not from a parenthesized `in`, which negate-conditional never claimed",
+      sourceAL: `codeunit 51505 "C" { procedure P(C: Code[10]) begin if not (C in ['DK', 'DE']) then exit; end; }`,
+      expectedSpecs: [
+        {
+          parentContext: "statement-position",
+          beforeText: "not (C in ['DK', 'DE'])",
+          afterText: "(C in ['DK', 'DE'])",
+        },
+      ],
+    },
+    {
+      name: "R171: strips not from a parenthesized member access",
+      sourceAL: `codeunit 51506 "C" { procedure P() var Cust: Record Customer; begin if not (Cust.Blocked) then exit; end; }`,
+      expectedSpecs: [
+        {
+          parentContext: "statement-position",
+          beforeText: "not (Cust.Blocked)",
+          afterText: "(Cust.Blocked)",
+        },
+      ],
     },
   ],
 };
@@ -149,6 +193,17 @@ function strippableOperand(node: ALSyntaxNode): ALSyntaxNode | null {
   const [op, operand] = kids;
   if (op === undefined || operand === undefined) return null;
   if (op.text.toLowerCase() !== "not") return null;
-  if (!STRIPPABLE_OPERAND_KINDS.has(operand.rawKind)) return null;
-  return operand;
+  if (STRIPPABLE_OPERAND_KINDS.has(operand.rawKind)) return operand;
+  // R171: the cession above is to `negate-conditional`, and it only holds where that operator
+  // actually claims the inner expression. It claims comparisons and logical expressions, and
+  // nothing else — so `not (X in [...])` and `not (Rec.Field)` were ceded to an operator that does
+  // not want them and reached by neither. Measured on do-rel2/Cloud: 15 `if` guards, 13 of them
+  // marginal. Take back exactly the operands the cession never covered.
+  if (operand.rawKind === "parenthesized_expression") {
+    const inner = operand.namedChildren[0];
+    if (inner === undefined) return null;
+    if (CEDED_INNER_KINDS.has(inner.rawKind)) return null;
+    return operand;
+  }
+  return null;
 }
