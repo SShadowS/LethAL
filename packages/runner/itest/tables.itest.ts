@@ -62,9 +62,20 @@ const CONFIG_LOCAL_PATH = join(PROJECT_DIR, "lethal.config.local.json");
 // RECORDS it and says so. Never hand-write this file; it must come from a live run.
 const BASELINE_PATH = join(HERE, "tables.baseline.json");
 
-// Must live inside sandbox-data's declared idRanges (79197-79199 + 79300-79399, see its
+// Must live inside sandbox-data's declared idRanges (79300-79399, see its
 // app.json) — real alc.exe enforces app.json idRanges (AL0297) for the injected objects too.
-const SELECTOR_IDS = { selectorId: 79199, controlId: 79198, tableId: 79197 };
+// The injected selector objects live at the TOP OF THIS FIXTURE'S OWN BLOCK (79300-79399).
+//
+// They used to sit at 79197-79199, which is `LethAL Sandbox App`'s block, kept legal only by a
+// three-id island `{79197..79199}` grafted onto this app's `idRanges` — the signature of a fixture
+// cloned from App whose selector triple was never renumbered. Both apps then declared codeunits
+// 79197/79198/79199 with the SAME names (`Mutation Upgrade`/`Mutation Register`/`Mutation
+// Selector`), and they coexisted only because they are published to DIFFERENT containers.
+// Co-installing them fails to publish.
+//
+// NOT 79297-79299, which would swap one collision for another: `LethAL Sandbox Probes` declares
+// 79200-79299.
+const SELECTOR_IDS = { selectorId: 79399, controlId: 79398, tableId: 79397 };
 
 /**
  * The 81-site fixture's expected aggregate result.

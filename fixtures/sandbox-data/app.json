@@ -4,7 +4,7 @@
   "publisher": "LethAL",
   "version": "1.0.0.4",
   "brief": "Tier-2 Phase 0 fixture: table mutation target with object-level and field-level triggers.",
-  "description": "Two AL tables used as the mutation target for LethAL's Tier-2 Phase 0 live proof (docs/superpowers/plans/2026-07-25-tier2-phase0.md Task 4). Not for production use — see fixtures/README.md.",
+  "description": "Two AL tables used as the mutation target for LethAL's Tier-2 Phase 0 live proof (docs/superpowers/plans/2026-07-25-tier2-phase0.md Task 4). Not for production use \u2014 see fixtures/README.md.",
   "privacyStatement": "",
   "EULA": "",
   "help": "",
@@ -13,10 +13,6 @@
   "dependencies": [],
   "screenshots": [],
   "idRanges": [
-    {
-      "from": 79197,
-      "to": 79199
-    },
     {
       "from": 79300,
       "to": 79399
