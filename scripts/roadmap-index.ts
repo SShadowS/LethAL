@@ -182,6 +182,34 @@ export function shortStatus(status: string, max = 110): string {
   return `${trimToBalanced(full.slice(0, space > 0 ? space : max - 1))}…`;
 }
 
+/**
+ * Is this row still OPEN? The single answer to "how many are open".
+ *
+ * Written because the question had two answers depending on who asked. A shell filter matching
+ * statuses that START with `done` or `closed` reported 20 open rows; the real number was 8, because
+ * several statuses open with `**done` (markdown bold), which the filter did not strip. Getting a
+ * wrong count out of the durable record is the failure this exists to prevent, and CLAUDE.md already
+ * requires the count to accept BOTH closing forms — `done (<commit>)` and `closed <date> — <ruling>`
+ * — since a row closed by a ruling has no commit to name.
+ *
+ * A row is CLOSED only when its status OPENS with one of those two words, after markdown emphasis
+ * and whitespace are stripped. Everything else is open, and the borderline cases are open on
+ * purpose:
+ *
+ *   - `PARTIALLY fixed …`      work remains, and R166 sat here for a day
+ *   - `additive half DONE …`   R159: one half shipped, the rest undecided
+ *   - `SPIKED … recommended`   evidence gathered, nothing built
+ *   - `recurring …`            R14 is a standing watch, never finished
+ *   - `blocked (<on what>)`    not done, and not being worked
+ *
+ * Reading any of those as closed is how a real gap disappears from the record, which is the whole
+ * thing this file is the index of.
+ */
+export function isOpen(status: string): boolean {
+  const head = status.replaceAll("*", "").trim().toLowerCase();
+  return !(head.startsWith("done") || head.startsWith("closed"));
+}
+
 /** One index line. `·` separates the fields; titles are full of em dashes, so `—` cannot. */
 export function indexLine(row: RoadmapRow): string {
   const title = row.title.replaceAll("**", "").trim();
@@ -213,9 +241,23 @@ export function renderIndex(template: string, rows: readonly RoadmapRow[]): stri
     else list.push(row);
   }
 
+  const openCount = rows.filter((r) => isOpen(r.status)).length;
   const seen = new Set<string>();
   const out: string[] = [];
   for (const line of template.split("\n")) {
+    // Generated, never hand-written: the count is the thing readers get wrong, so it comes from
+    // `isOpen` over the same rows this index is built from.
+    if (line.includes("<!-- open-count -->")) {
+      out.push(
+        line.replace(
+          "<!-- open-count -->",
+          `${openCount} of ${rows.length} items are OPEN. A row counts as closed only when its ` +
+            "status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, " +
+            "`SPIKED` and `blocked` are all open.",
+        ),
+      );
+      continue;
+    }
     const marker = MARKER_RE.exec(line);
     if (marker === null) {
       out.push(line);

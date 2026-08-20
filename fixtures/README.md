@@ -18,6 +18,13 @@ manual smoke-testing, and the env-gated integration scripts in
 
 The injected Mutation Selector/Control/Active object ids (`79197`–`79199`, see
 `DEFAULT_SELECTOR_IDS` in `packages/runner/src/cli.ts`) must also fall inside this window.
+
+**The convention, in one line: the highest range the app declares, counting DOWN from its top.**
+`pickSelectorIds` (`packages/schemata/src/id-ranges.ts`) implements it and `lethal init` writes it;
+`validateSelectorIds` refuses an id outside every declared range, a duplicate among the three, or one
+the project already declares. Every fixture here follows it against its own ranges — `sandbox-app`
+79197-79199, `sandbox-data` 79397-79399, `sandbox-hang` 79447-79449, `gift-card` 90197-90199 — and
+two fixtures must never share the three ids, which is R169.
 They didn't always: the original ids (`50000`–`50002`) compiled fine against al-runner but
 fail real `alc.exe` with `AL0297` ("object identifier is not valid ... allowed ranges") —
 verified against a real BC server 2026-07-18. al-runner's compiler simply doesn't enforce

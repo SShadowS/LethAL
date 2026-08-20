@@ -139,12 +139,20 @@ filename is the one `.gitignore` covers, and it holds credentials: a config name
 one `git add` away from being published, in a repository that is public.
 
 **Note the `selectorIds` block in it.** LethAL injects three objects into the copy of your app it
-builds, and their ids must fall inside an id range your app declares. This app reserves
-`90197..90199` for exactly that, and the config points LethAL at those three. Without it you get a
-compile failure at publish time that has nothing to do with your code. `fixtures/sandbox-app`
-does the same thing with `79197..79199`, which is also LethAL's built-in default, and
-`fixtures/sandbox-data` uses `79397..79399` at the top of its own block: it used to borrow
-App's three ids, which made two apps that could not be installed side by side.
+builds, and their ids must fall inside an id range your app declares. Without that you get a compile
+failure at publish time that has nothing to do with your code.
+
+**You do not have to choose them yourself.** `lethal init` reads your `app.json` and picks: the
+highest range you declare, counting DOWN from its top. The reasoning is that the injected objects are
+LethAL's rather than yours, and an app grows upward from the bottom of its range, so the top is where
+you are least likely to collide with your own future objects. `lethal run` refuses an id that falls
+outside every declared range, that duplicates another of the three, or that an object in your project
+already uses — before it compiles or publishes anything.
+
+This app declares a dedicated `90197..90199` range so the rule lands there; every fixture under
+`fixtures/` follows the same rule against its own ranges. Two apps must not share the three ids: they
+publish fine separately and collide the moment both are installed on one service instance, which is
+what happened to two of these fixtures (ROADMAP R169).
 
 ## The measured result
 

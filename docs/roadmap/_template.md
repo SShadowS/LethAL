@@ -30,6 +30,8 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
+**<!-- open-count -->**
+
 ---
 
 ## Next up

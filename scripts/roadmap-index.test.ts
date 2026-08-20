@@ -7,6 +7,7 @@ import {
   type RoadmapRow,
   buildIndex,
   indexLine,
+  isOpen,
   parseRowFile,
   renderIndex,
   rowFileName,
@@ -102,6 +103,55 @@ describe("parseRowFile", () => {
   test("refuses a non-integer order and an id that is not R<n>", () => {
     expect(() => parseRowFile(file({ ...FIELDS, order: "1.5" }, "B."), "x")).toThrow(/integer/);
     expect(() => parseRowFile(file({ ...FIELDS, id: '"42"' }, "B."), "x")).toThrow(/is not R<n>/);
+  });
+});
+
+describe("isOpen", () => {
+  /**
+   * Every one of these prefixes appears in a real row today. The count this drives was measured
+   * WRONG once — a shell filter matching statuses that start with `done`/`closed` reported 20 open
+   * when the answer was 8, because several statuses open with `**done`.
+   */
+  test("closed only when the status OPENS with done or closed, emphasis stripped", () => {
+    for (const closed of [
+      "done (a343b5f) — measured",
+      "**done (`b95426b`)** — the header carries both",
+      "closed 2026-08-09 — the ruling, which has no commit to name",
+      "DONE (this commit)",
+    ]) {
+      expect(isOpen(closed)).toBe(false);
+    }
+  });
+
+  test("borderline statuses are OPEN, deliberately", () => {
+    // Reading any of these as closed is how a real gap disappears from the durable record.
+    for (const open of [
+      "open — filed 2026-08-20",
+      "PARTIALLY fixed 2026-08-19 — names now hash distinctly; the headline case still collides",
+      "additive half DONE (this commit) — the other census candidates remain undecided",
+      "SPIKED 2026-08-20 and recommended for build — committed UNREGISTERED",
+      "recurring — RE-CHECKED 2026-08-19",
+      "blocked (upstream #1657)",
+      "in progress",
+    ]) {
+      expect(isOpen(open)).toBe(true);
+    }
+  });
+
+  test("the generated index states the count, and it matches isOpen over the rows", () => {
+    const rows: RoadmapRow[] = [
+      row({ id: "R1", status: "done (abc)" }),
+      row({ id: "R2", status: "**done (def)**" }),
+      row({ id: "R3", status: "PARTIALLY fixed" }),
+      row({ id: "R4", status: "open" }),
+    ];
+    const out = renderIndex(
+      `<!-- open-count -->
+<!-- rows: next-up -->
+`,
+      rows,
+    );
+    expect(out).toContain("2 of 4 items are OPEN");
   });
 });
 

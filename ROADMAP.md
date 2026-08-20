@@ -30,6 +30,8 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
+**6 of 169 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+
 ---
 
 ## Next up
@@ -211,7 +213,7 @@ that ordering is the priority.
 - **R154** · CI and the release workflow existed but had never run — both are now verified on real runs · [R154.md](docs/roadmap/R154.md) · done (release run 32063692530, 2026-08-17) — both workflows are now verified on real runs: ci.yml green on…
 - **R168** · al-runner keeps a SECOND cache tree (149 MB) that `doctor`'s cache accounting does not read · [R168.md](docs/roadmap/R168.md) · open — measured 2026-08-20 on al-runner 2.3.1; reporting only, the same read-never-touch rule R131 set
 - **R169** · LethAL's own object ids collided with a real product's, and two fixtures could not be co-installed · [R169.md](docs/roadmap/R169.md) · done (this commit) — `LethAL Control` moved 71000-71010 -> 91000-91010, and `sandbox-data`'s selector triple…
-- **R170** · Fixture selector-id placement follows two different rules, and the safer one is the minority · [R170.md](docs/roadmap/R170.md) · open — filed 2026-08-20 alongside R169, which fixed the collision but not the convention
+- **R170** · The selector-id convention was already implemented and enforced; only the docs never said it · [R170.md](docs/roadmap/R170.md) · done (this commit) — and the row's original premise was WRONG. `pickSelectorIds` has implemented one rule all…
 
 ---
 
