@@ -8,8 +8,8 @@
  *
  * WHY THIS EXISTS (full design:
  * docs/superpowers/specs/2026-07-24-layer-5c-b1-lease-fence-design.md): Tasks 1-5
- * added a machine-global lease (table 71006 "LC Lease") and a two-phase RunMutant fence to codeunits
- * 71002 "LC Control State" / 71003 "LC Control API", but the production TypeScript client
+ * added a machine-global lease (table 91006 "LC Lease") and a two-phase RunMutant fence to codeunits
+ * 91002 "LC Control State" / 91003 "LC Control API", but the production TypeScript client
  * (packages/runner/src/harness.ts, run-mutant-transport.ts) has NOT been updated yet — Tasks 6-8 do
  * that. The v1 client cannot even construct a valid v2 `HarnessInfo`/`RunMutant` call (protocol v2
  * requires `clientProtocol`, `leaseEpoch` is now an Integer, not the reserved-empty-string v1
@@ -108,7 +108,7 @@ const OVER_BUDGET_METHOD = "OverBudgetDetected"; // fast, deterministic pass und
 
 /**
  * D5's catchable-boundary probe: an existing AL object id that is NOT a Subtype=Test codeunit.
- * "LC Control API" itself (71003) — guaranteed to exist (this very script talks to it) and
+ * "LC Control API" itself (91003) — guaranteed to exist (this very script talks to it) and
  * guaranteed not to be a test codeunit. See probe-author-report.md for why the exact internal AL
  * mechanism this trips (RunMethod.Codeunit.al's own "expected exactly one method, found 0"
  * fail-closed return vs. a genuine platform throw caught by ControlApi.RunMutant's
@@ -117,7 +117,7 @@ const OVER_BUDGET_METHOD = "OverBudgetDetected"; // fast, deterministic pass und
  * caller's side (both land as `status: 'ran'` with an `{"error": ...}` codeunitResults), which is
  * exactly the client-observable contract D5 exists to check.
  */
-const NOT_A_TEST_CODEUNIT_ID = 71003;
+const NOT_A_TEST_CODEUNIT_ID = 91003;
 
 /**
  * D3 (duplicate-claim) / D4 (lock-release) timing. Checked fixtures/sandbox-tests,

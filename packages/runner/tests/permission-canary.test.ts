@@ -601,11 +601,11 @@ describe("describeTestPermissionsRefusal", () => {
 // future tidy-up will read as an oversight, and getting either wrong turns the canary into a
 // confident liar rather than a broken one:
 //
-//   - codeunit 71010 MUST declare `TestPermissions = Disabled`. Without it the codeunit is
+//   - codeunit 91010 MUST declare `TestPermissions = Disabled`. Without it the codeunit is
 //     Restrictive (the AL default) and its write is refused on EVERY server, including ones where a
 //     real suite writes fine — the canary would then be measuring its own declaration. That is the
 //     defect control app 1.0.0.6 fixed, and it shipped for weeks reporting `mocked` about itself.
-//   - table 71008 MUST NOT declare `InherentPermissions`. With it the write could never fail, and
+//   - table 91008 MUST NOT declare `InherentPermissions`. With it the write could never fail, and
 //     the light could never turn red.
 //
 // COMMENT LINES ARE STRIPPED FIRST, deliberately. Both files' doc comments repeat these exact
@@ -625,17 +625,17 @@ function codeLinesOf(file: string): string[] {
 }
 
 describe("LethAL Control AL declarations the canary's meaning depends on", () => {
-  test("codeunit 71010 declares `TestPermissions = Disabled` in CODE, not just in a comment", () => {
+  test("codeunit 91010 declares `TestPermissions = Disabled` in CODE, not just in a comment", () => {
     const code = codeLinesOf("PermissionCanary.Codeunit.al");
     // Sanity: we are reading the right object, and reading it as code.
-    expect(code).toContain('codeunit 71010 "LC Permission Canary"');
+    expect(code).toContain('codeunit 91010 "LC Permission Canary"');
     expect(code).toContain("Subtype = Test;");
     expect(code).toContain("TestPermissions = Disabled;");
   });
 
-  test("table 71008 declares no InherentPermissions in CODE — the omission is the measurement", () => {
+  test("table 91008 declares no InherentPermissions in CODE — the omission is the measurement", () => {
     const code = codeLinesOf("PermissionProbe.Table.al");
-    expect(code).toContain('table 71008 "LC Permission Probe"');
+    expect(code).toContain('table 91008 "LC Permission Probe"');
     expect(code.filter((l) => l.includes("InherentPermissions"))).toEqual([]);
   });
 });

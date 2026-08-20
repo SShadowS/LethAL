@@ -3,7 +3,7 @@ namespace LethAL.Control;
 /// <summary>Maps a target app id to the artifact id it registered. Written by the target's
 /// own install/upgrade (target -> control, dependency-legal), so LethAL Control knows the
 /// deployed artifact id WITHOUT depending on the target. DataPerCompany=false.</summary>
-table 71001 "LC Target Artifact Registry"
+table 91001 "LC Target Artifact Registry"
 {
     DataClassification = SystemMetadata;
     DataPerCompany = false;

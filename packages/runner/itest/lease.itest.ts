@@ -171,11 +171,11 @@ const CONFIG_LOCAL_PATH = join(PROJECT_DIR, "lethal.config.local.json");
 // Frozen sandbox target app id (fixtures/sandbox-app/app.json "id"), same constant bcdev.itest.ts /
 // stale-publish.itest.ts already use.
 const TARGET_APP_ID = "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a";
-/** P6's catchable-boundary target: "LC Control API" itself (71003) — guaranteed to exist, guaranteed
+/** P6's catchable-boundary target: "LC Control API" itself (91003) — guaranteed to exist, guaranteed
  *  not a Subtype=Test codeunit. Same trick as `scripts/probe-5cb1.ts`'s D5 check (already live-proven
  *  21/21 there): `RunMethod.Codeunit.al` fails closed against it, caught by `RunMutant`'s
  *  `if Runner.Run() then ... else BuildRunError` — a server-known terminal, never an HTTP error. */
-const NOT_A_TEST_CODEUNIT_ID = 71003;
+const NOT_A_TEST_CODEUNIT_ID = 91003;
 /** P9B's genuinely-slow target: `fixtures/sandbox-probes/src/SlowRunProbe.Codeunit.al`'s "Slow Run
  *  Probe" — a `[Test]` method that sleeps ~23s server-side, entirely inside `SleepsAcrossRenewWindow`
  *  itself. Requires `sandbox-probes` republished at `app.json` version >= 1.0.1.0. */

@@ -10,7 +10,7 @@ using System.TestTools.CodeCoverage;
 
 /// <summary>The OData-exposed control surface (registered as a web service by the install codeunit;
 /// procedures are OData V4 unbound actions /ODataV4/LethALControl_&lt;Proc&gt;). Layer 5C-A.</summary>
-codeunit 71003 "LC Control API"
+codeunit 91003 "LC Control API"
 {
     /// <summary>Identity + capabilities the client verifies before any execution. PROTOCOL V2 (design
     /// §7, R4 sol#8): ClientProtocol is a REQUIRED argument, not an optional one with a default — a v1
@@ -547,7 +547,7 @@ codeunit 71003 "LC Control API"
     /// test is refused (`describeTestPermissionsRefusal`, `packages/runner/src/permission-canary.ts`).
     ///
     /// IT MUST TRAVEL THE SAME PATH IT CHARACTERISES. The canary runs through "LC Run Method"
-    /// (71007) — the identical `Test Suite Mgt.RunAllTests` mechanism `RunMutant` phase 2 uses,
+    /// (91007) — the identical `Test Suite Mgt.RunAllTests` mechanism `RunMutant` phase 2 uses,
     /// invoked through the same catchable `Codeunit.Run` boundary — not through a second,
     /// convenient-looking route. A canary reached by a different path measures that path, not the
     /// one mutants are scored on, and would be worse than no canary at all.
@@ -722,7 +722,7 @@ codeunit 71003 "LC Control API"
     ///
     /// It holds itself to that contract's FULL strictness, exactly as the TS side does: EXACTLY ONE
     /// element, and that element's `method` must be the canary's own. Taking index 0 and trusting it
-    /// is harmless only while codeunit 71010 declares a single [Test]; the moment a second one is
+    /// is harmless only while codeunit 91010 declares a single [Test]; the moment a second one is
     /// added, the consistency guard above would read a foreign line and quote the wrong message —
     /// a fail-closed check today is cheaper than the confusing verdict that would produce.
     ///

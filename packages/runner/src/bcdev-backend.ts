@@ -1050,7 +1050,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
    *
    * - **R61: only the artifact's own objects are eligible.** The payload covers everything the
    *   platform observed — Base App, the test framework, LethAL's own control app — and nothing
-   *   downstream can tell an object-level entry for `Codeunit:71002` from one for the target.
+   *   downstream can tell an object-level entry for `Codeunit:91002` from one for the target.
    *   An object outside the compiled artifact's SymbolReference is SKIPPED, same rule the fenced
    *   path applies (`line-map.ts`, scoped by `declaredObjects()`).
    *

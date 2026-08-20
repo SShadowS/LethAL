@@ -38,7 +38,7 @@
 namespace LethAL.Control;
 using System.TestTools.TestRunner;
 
-codeunit 71098 "LC Runner Probe"
+codeunit 91098 "LC Runner Probe"
 {
     Subtype = TestRunner;
 
@@ -52,7 +52,7 @@ codeunit 71098 "LC Runner Probe"
     end;
 }
 
-codeunit 71099 "LC Suite Runner Probe"
+codeunit 91099 "LC Suite Runner Probe"
 {
     procedure SetRunner(SuiteName: Code[10]; RunnerId: Integer)
     var

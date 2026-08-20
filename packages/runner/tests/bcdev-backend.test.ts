@@ -502,7 +502,7 @@ describe("BcDevMcpBackend.run", () => {
 
   // R61, measured on `sandbox-data` and again on Document Output: the hub payload covers
   // everything the platform executed — Base App (`Codeunit:423`), the test framework
-  // (`Codeunit:130011/130012`), LethAL's own control app (`Codeunit:71002`) — and the old code
+  // (`Codeunit:130011/130012`), LethAL's own control app (`Codeunit:91002`) — and the old code
   // emitted object-level entries for all of it: byObject credit for code the run does not own,
   // one manifest-id coincidence away from R29's shape. Objects outside the compiled artifact's
   // SymbolReference are now skipped, same scope rule the fenced path applies.
@@ -538,7 +538,7 @@ describe("BcDevMcpBackend.run", () => {
             coveredProcedures: [
               { objectType: 5, objectId: 79000, methodId: 333 }, // own, resolves
               { objectType: 5, objectId: 423, methodId: 42 }, // Base App — foreign
-              { objectType: 5, objectId: 71002, methodId: 7 }, // LethAL Control — foreign
+              { objectType: 5, objectId: 91002, methodId: 7 }, // LethAL Control — foreign
               { objectType: 5, objectId: 130011, methodId: 1 }, // test framework — foreign
             ],
           },

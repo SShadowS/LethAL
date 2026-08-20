@@ -28,7 +28,7 @@ first live bcdev compile.
 
 Since Layer 5C-A the bcdev backend no longer drives per-mutant tests through the hub. Instead a
 separate BC extension, **`LethAL Control`** (`extensions/lethal-control/`, app id
-`5e7a1c00-1111-4c00-8c00-1e7a1c000701`, runtime 16, ids 71000–71099), owns a single OData action
+`5e7a1c00-1111-4c00-8c00-1e7a1c000701`, runtime 16, ids 91000–91099), owns a single OData action
 `LethALControl_RunMutant` that, in one server-side call, **activates a mutant → runs exactly one
 named test method under Codeunit isolation → clears the active mutant** (always, on every terminal
 path, so the container is left unmutated after each call). The instrumented target's
@@ -38,11 +38,11 @@ artifactId, mutantId)`; the target carries no active-mutant table of its own.
 ### Objects added
 | Object | Id | App | Purpose |
 |---|---|---|---|
-| `LC Mutation Active` (table) | 71000 | `LethAL Control` | The single active-mutant tuple (DataPerCompany=false). |
-| `LC Target Artifact Registry` (table) | 71001 | `LethAL Control` | `targetAppId → artifactId` the target self-registered. |
-| `LC Control State` (codeunit) | 71002 | `LethAL Control` | SingleInstance state: active tuple, registry, per-run attestation. |
-| `LC Control API` (codeunit) | 71003 | `LethAL Control` | OData surface: `HarnessInfo`, `RegisteredArtifact` (read), `RunMutant`. |
-| `LC Control Install` / `Upgrade` | 71004 / 71005 | `LethAL Control` | Reconcile the `LethALControl` web-service row on install/upgrade. |
+| `LC Mutation Active` (table) | 91000 | `LethAL Control` | The single active-mutant tuple (DataPerCompany=false). |
+| `LC Target Artifact Registry` (table) | 91001 | `LethAL Control` | `targetAppId → artifactId` the target self-registered. |
+| `LC Control State` (codeunit) | 91002 | `LethAL Control` | SingleInstance state: active tuple, registry, per-run attestation. |
+| `LC Control API` (codeunit) | 91003 | `LethAL Control` | OData surface: `HarnessInfo`, `RegisteredArtifact` (read), `RunMutant`. |
+| `LC Control Install` / `Upgrade` | 91004 / 91005 | `LethAL Control` | Reconcile the `LethALControl` web-service row on install/upgrade. |
 | `Sandbox Probe Marker` (table) | 79200 | `sandbox-probes` | Order-matters witness (shared row across two probe methods). |
 | `Order Matters Probe` (codeunit) | 79210 | `sandbox-probes` | Two `[Test]` methods proving single-method selection. |
 | `Fail Probe` (codeunit) | 79211 | `sandbox-probes` | Exact-error round-trip witness. |
@@ -92,7 +92,7 @@ the one just compiled, closing the "silent all-survived on a wrong binary" hole.
 ## Layer 5C-B1 — machine-global lease + two-phase fence
 
 Layer 5C-B1 closes the gap the "Preconditions" list above states but does not enforce: it gives
-`LethAL Control` a machine-global lease (table `LC Lease`, id 71006) and turns `RunMutant` into a
+`LethAL Control` a machine-global lease (table `LC Lease`, id 91006) and turns `RunMutant` into a
 two-phase fence, so two concurrent LethAL sessions against one container can no longer interleave a
 publish with a mutant run and record a false verdict. See `design.md` §6.8 for the mechanism and
 `docs/superpowers/specs/2026-07-24-layer-5c-b1-lease-fence-design.md` for the full design, review

@@ -8,8 +8,8 @@ namespace LethAL.Control;
 /// #  DO NOT ADD `InherentPermissions` TO THIS TABLE. THE OMISSION IS THE POINT OF THE OBJECT. #
 /// ############################################################################################
 ///
-/// Every OTHER table in this extension — "LC Mutation Active" (71000), "LC Target Artifact
-/// Registry" (71001), "LC Lease" (71006) — declares `InherentPermissions = RIMD` deliberately:
+/// Every OTHER table in this extension — "LC Mutation Active" (91000), "LC Target Artifact
+/// Registry" (91001), "LC Lease" (91006) — declares `InherentPermissions = RIMD` deliberately:
 /// they are read and written by the control codeunits from an OData session running under the
 /// CALLING USER, who does not hold this extension's permission set (5C-A live spike). Each of
 /// those carries a comment saying so. This table is the one place in the extension where the
@@ -33,7 +33,7 @@ namespace LethAL.Control;
 /// convinced this table should match the others, delete the canary outright instead — at least then
 /// its absence is visible in the report rather than disguised as a clean result.
 /// </summary>
-table 71008 "LC Permission Probe"
+table 91008 "LC Permission Probe"
 {
     DataClassification = SystemMetadata;
     DataPerCompany = false;

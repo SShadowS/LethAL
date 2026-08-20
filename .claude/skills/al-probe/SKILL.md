@@ -15,17 +15,17 @@ that one does not know LethAL, and three of its landmines cost real time here.
 
 ## The three landmines, and how to avoid them
 
-### 1. Id range 71000–71099 is TAKEN
+### 1. Id range 91000–91099 is TAKEN
 
-`LethAL Control` owns it. A probe scaffolded from the generic template (71000–71010) fails at
+`LethAL Control` owns it. A probe scaffolded from the generic template (91000–91010) fails at
 publish, not at compile:
 
 ```
-The application object of type 'Table' with the ID '71000' is defined in multiple apps.
+The application object of type 'Table' with the ID '91000' is defined in multiple apps.
 The apps are: <probe>; LethAL Control by LethAL 1.0.0.x
 ```
 
-**Use 71500+.** Set it in `app.json` `idRanges` *and* on every object.
+**Use 91500+.** Set it in `app.json` `idRanges` *and* on every object.
 
 ### 2. The schema ghost, and the order that clears it
 
@@ -67,7 +67,7 @@ probe must reproduce that topology — register the probe codeunit as a web serv
 Register it the way the control app does (`extensions/lethal-control/src/Install.Codeunit.al`):
 
 ```al
-codeunit 71504 "<Probe> Install"
+codeunit 91504 "<Probe> Install"
 {
     Subtype = Install;
     trigger OnInstallAppPerCompany()

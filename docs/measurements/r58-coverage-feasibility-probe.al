@@ -1,4 +1,4 @@
-codeunit 71098 "LC Coverage Feasibility"
+codeunit 91098 "LC Coverage Feasibility"
 {
     // R58 FEASIBILITY PROBE — does not ship.
     //

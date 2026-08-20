@@ -74,7 +74,7 @@ namespace LethAL.Control;
 /// property "LC Control State"'s attestation already depends on for every KILLED (i.e. failing)
 /// mutant on this same path.
 /// </summary>
-codeunit 71010 "LC Permission Canary"
+codeunit 91010 "LC Permission Canary"
 {
     Subtype = Test;
     // LOAD-BEARING, not boilerplate. See the summary above: without it this codeunit is Restrictive

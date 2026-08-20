@@ -22,7 +22,7 @@ using System.TestTools.TestRunner;
 /// a codeunit VARIABLE executes that variable's own instance, so globals set by SetRequest are visible
 /// in OnRun, and Results() is read only on the success path (where nothing rolled back).
 /// </summary>
-codeunit 71007 "LC Run Method"
+codeunit 91007 "LC Run Method"
 {
     var
         SuiteName: Code[10];

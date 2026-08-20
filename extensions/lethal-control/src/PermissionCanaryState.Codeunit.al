@@ -14,7 +14,7 @@ namespace LethAL.Control;
 ///
 /// WHY A SINGLEINSTANCE CODEUNIT AT ALL. In-memory globals on a `SingleInstance` codeunit live in
 /// the session, not the database, so neither the aborting error nor the test runner's per-test
-/// rollback touches them. This is NOT a new mechanism: "LC Control State" (71002) already carries
+/// rollback touches them. This is NOT a new mechanism: "LC Control State" (91002) already carries
 /// the per-run attestation (`ObservedAny` / `ObservedIdentityMismatch`) across exactly this
 /// boundary — set from inside a test body by the instrumented target's guard, read back by
 /// `RunMutant` after `Runner.Run()` returns — and it does so for KILLED mutants too, i.e. for test
@@ -26,7 +26,7 @@ namespace LethAL.Control;
 /// widening that object's surface, and a bug here must not be able to reach anything the fence
 /// depends on.
 /// </summary>
-codeunit 71009 "LC Permission Canary State"
+codeunit 91009 "LC Permission Canary State"
 {
     SingleInstance = true;
 

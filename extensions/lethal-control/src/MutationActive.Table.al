@@ -2,7 +2,7 @@ namespace LethAL.Control;
 
 /// <summary>The single active-mutant tuple. DataPerCompany=false: one row, keyed by a
 /// constant primary key. Owned by LethAL Control so a target republish cannot reset it.</summary>
-table 71000 "LC Mutation Active"
+table 91000 "LC Mutation Active"
 {
     DataClassification = SystemMetadata;
     DataPerCompany = false;

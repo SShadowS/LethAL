@@ -30,11 +30,11 @@ import type { ActivationConfig, FetchFn } from "./activation";
  * future in which fenced runs start losing kills for a reason no target-side declaration can fix.
  * It is NOT a scoring caveat any more, and the warning lines say so.
  *
- * The server-side probe (`extensions/lethal-control`: table 71008 "LC Permission Probe", codeunit
- * 71010 "LC Permission Canary", carried out on codeunit 71009 "LC Permission Canary State") runs
+ * The server-side probe (`extensions/lethal-control`: table 91008 "LC Permission Probe", codeunit
+ * 91010 "LC Permission Canary", carried out on codeunit 91009 "LC Permission Canary State") runs
  * through the SAME `LC Run Method` / `Test Suite Mgt.RunAllTests` mechanism `RunMutant` uses — a
  * canary travelling a different path than the thing it characterises measures nothing. Codeunit
- * 71010 declares `TestPermissions = Disabled` (without it the canary measures its OWN declaration
+ * 91010 declares `TestPermissions = Disabled` (without it the canary measures its OWN declaration
  * and reports `"mocked"` on every server), and the probe table deliberately has NO
  * `InherentPermissions`, unlike every one of its siblings (with it, the write could never fail and
  * the light could never turn red). Read both AL doc comments before touching either object.

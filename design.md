@@ -334,7 +334,7 @@ Baseline test subset time × 2. Timeout counts as killed (mutation caused observ
 
 ### 6.8 Machine-Global Lease + Fence (Layer 5C-B1)
 
-**As built:** `LethAL Control` owns a machine-global lease (table `LC Lease`, id 71006, single row)
+**As built:** `LethAL Control` owns a machine-global lease (table `LC Lease`, id 91006, single row)
 so two concurrent LethAL sessions against one container cannot interleave a publish with a
 `RunMutant` and record a false verdict — the gap §6.2's 5C-A preconditions documented but did not
 enforce. The row carries a `Server Generation` (random, minted at pre-seed and by every

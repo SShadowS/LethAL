@@ -4,7 +4,7 @@ namespace LethAL.Control;
 /// constant primary key. Owned by LethAL Control so a target republish cannot reset it. Seeded
 /// once at install/upgrade with a fresh Server Generation, which recovery logic (later tasks)
 /// uses to detect a restarted service instance.</summary>
-table 71006 "LC Lease"
+table 91006 "LC Lease"
 {
     DataClassification = SystemMetadata;
     DataPerCompany = false;

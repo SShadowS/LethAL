@@ -10,7 +10,7 @@ namespace LethAL.Control;
 /// current permissions prevented the action"). Declaring the permissions inherently lets this
 /// codeunit access its own tables regardless of the caller's assigned permission sets.
 /// </summary>
-codeunit 71002 "LC Control State"
+codeunit 91002 "LC Control State"
 {
     SingleInstance = true;
 

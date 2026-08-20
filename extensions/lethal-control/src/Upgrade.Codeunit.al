@@ -3,7 +3,7 @@ namespace LethAL.Control;
 /// <summary>Re-reconciles the web-service registration on every upgrade, so a version that changed
 /// the API object id (or a row that drifted) is corrected rather than left routing to the wrong
 /// codeunit.</summary>
-codeunit 71005 "LC Control Upgrade"
+codeunit 91005 "LC Control Upgrade"
 {
     Subtype = Upgrade;
 
