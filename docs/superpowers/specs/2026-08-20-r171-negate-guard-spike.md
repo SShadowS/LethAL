@@ -216,7 +216,7 @@ recorded here so nobody later reads these four kills as evidence the screen was 
 
 ### Status
 
-The operator is committed **unregistered**, and the `remove-not` seam change was reverted, both
-deliberately: registering moves `itest:tables` (+4) and the demo (+2), and the seam fix should land
-with the fixture arm §4 asks for. Those are build steps, and this document is the evidence they are
-worth taking.
+BUILT. The recommendation above was taken in full: `negate-guard` is registered, the seam fix landed
+WITH the `sandbox-data` arm §4 asked for (`codeunit 79319 "Data Set Ops"`), and both gates are
+re-frozen — `itest:tables` at 213/34/12 over 259, the demo at 45. All thirteen build verdicts were
+pre-committed in `2026-08-20-r171-build-precommitment.md` and all thirteen matched.
