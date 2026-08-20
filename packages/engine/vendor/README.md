@@ -123,7 +123,15 @@ turned out to insert container nodes. So it was measured anyway.
 | `exits` | 2,536 | 2,536 |
 
 And the PER-SITE half this document demands and had no instrument for until now:
-`scripts/census-tier1-sites.ts` emits one row per (operator, file, line, column,
+**Renamed from `census-tier1-sites.ts` 2026-08-20, and widened to EVERY registered operator.** It
+ran Tier 1 alone while this section named it as the per-site proof, so a bump could move which sites
+the ten Tier-2 operators claim and this procedure would not have seen it. Tier 2 is where the
+sensitivity is worst: its receiver and shadowing predicates read node kinds and field names directly,
+and R120 records that `ALNodeKind` is a curated subset which `ALSyntaxNode.kind` CASTS into, so a
+renamed or re-parented node changes what a comparison matches with no type error anywhere. Site
+counts from before that date therefore cover Tier 1 only and are not comparable with later ones.
+
+`scripts/census-operator-sites.ts` emits one row per (operator, file, line, column,
 before, after) for every Tier-1 operator over the whole corpus. **31,110 sites,
 and the two JSON files are BYTE-IDENTICAL** — 0 sites only in the old, 0 only in
 the new, per operator:
@@ -180,7 +188,7 @@ same-snapshot:
 | `procedures` | 4,443 | 4,443 |
 | `exits` | 2,533 | 2,533 |
 
-**Per-site census** (`census-tier1-sites.ts`, position-keyed): 30,823 -> 30,751
+**Per-site census** (`census-operator-sites.ts`, position-keyed): 30,823 -> 30,751
 sites. Every moved site maps to a named upstream change:
 
 - **94 removed**, all `lethal.negate-conditional`, every one a single-entry
@@ -273,7 +281,7 @@ all of this:
 
    ```bash
    bun run scripts/probe-grammar-corpus.ts <flat-corpus-dir> --json /tmp/after.json
-   bun scripts/census-tier1-sites.ts <corpus-dir> /tmp/sites-after.json
+   bun scripts/census-operator-sites.ts <corpus-dir> /tmp/sites-after.json
    ```
 
    A drop in `statementCalls`, `blocks`, `triggerBlocks`, `procedures` or
@@ -281,11 +289,11 @@ all of this:
    counts cannot see a bump that keeps every total while moving WHICH sites are
    claimed, and R120 established that is reachable at runtime with no type error:
    `ALNodeKind` is a CURATED subset and `ALSyntaxNode.kind` CASTS the raw
-   tree-sitter type into it. `census-tier1-sites.ts` emits the site LIST for
+   tree-sitter type into it. `census-operator-sites.ts` emits the site LIST for
    every Tier-1 operator, so the two runs diff directly.
 
    Note `probe-grammar-corpus.ts` reads a FLAT directory (no recursion) while
-   `census-tier1-sites.ts` recurses. Stage a flat copy for the first.
+   `census-operator-sites.ts` recurses. Stage a flat copy for the first.
 5. Run the live gate (`itest:bcdev`, `itest:alrunner`, `itest:lease`,
    `itest:stale-publish`). Expect the per-mutant baselines to flag a difference
    if any operator's target subtree changed shape: `empty-block`'s identity hash

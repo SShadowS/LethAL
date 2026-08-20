@@ -65,7 +65,7 @@ for (const rel of entries) {
 }
 if (files.length === 0) throw new Error(`census: no .al files under ${projectDir}`);
 
-// ONE context over the whole corpus, same reason as census-tier1-sites.ts: a per-file context
+// ONE context over the whole corpus, same reason as census-operator-sites.ts: a per-file context
 // answers `null` for anything declared elsewhere, and type-consulting operators would claim fewer
 // sites for a reason that has nothing to do with the grammar.
 const ctx = buildSemanticContext(files);

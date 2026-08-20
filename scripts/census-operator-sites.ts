@@ -12,9 +12,10 @@
  * changes what a comparison matches at runtime with no type error anywhere.
  *
  * So this emits the actual claimed sites — one row per (operator, file, line, column, text) —
- * which a bump can be diffed against directly.
+ * which a bump can be diffed against directly. Covers EVERY registered operator in both tiers;
+ * see `operators` below for why Tier 1 alone was not enough.
  *
- *   bun scripts/census-tier1-sites.ts <project-dir> <out.json>
+ *   bun scripts/census-operator-sites.ts <project-dir> <out.json>
  *
  * Point it at a scratch corpus: the intended input is real customer AL, which must never be
  * committed here.
@@ -22,6 +23,7 @@
 import { readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tier1Operators } from "../packages/builtin-tier1/src/index";
+import { tier2Operators } from "../packages/builtin-tier2/src/index";
 import { initParser, parseAL } from "../packages/engine/src/ast/parser";
 import { type ALSyntaxNode, wrapRoot } from "../packages/engine/src/ast/syntax-node";
 import { buildSemanticContext } from "../packages/engine/src/semantic/context";
@@ -29,7 +31,7 @@ import type { SourceFile } from "../packages/engine/src/semantic/symbol-table";
 
 const [projectDir, outPath] = process.argv.slice(2);
 if (projectDir === undefined || outPath === undefined) {
-  console.error("usage: bun scripts/census-tier1-sites.ts <project-dir> <out.json>");
+  console.error("usage: bun scripts/census-operator-sites.ts <project-dir> <out.json>");
   process.exit(2);
 }
 
@@ -42,6 +44,25 @@ interface SiteRow {
   readonly before: string;
   readonly after: string;
 }
+
+/**
+ * EVERY registered operator, both tiers.
+ *
+ * This script was `census-tier1-sites.ts` and ran Tier 1 alone, while
+ * `packages/engine/vendor/README.md` names it as THE per-site proof a grammar bump must pass and
+ * ROADMAP R14's whole policy rests on that proof. So a bump could move which sites the ten Tier-2
+ * operators claim and the documented procedure would not have seen it — and Tier 2 is where the
+ * grammar-sensitivity is WORST: its receiver and shadowing predicates read node kinds and field
+ * names directly, and R120 records that `ALNodeKind` is a curated subset which `ALSyntaxNode.kind`
+ * CASTS into, so a renamed or re-parented node changes what a comparison matches with no type error
+ * anywhere.
+ *
+ * Tier 2 needs the same one-context-per-corpus treatment Tier 1 does, which this script already
+ * builds: its operators resolve receivers through the symbol table, so a per-file context would
+ * answer `null` for anything declared elsewhere and they would claim fewer sites for a reason that
+ * has nothing to do with the grammar.
+ */
+const operators = [...tier1Operators, ...tier2Operators];
 
 function walk(node: ALSyntaxNode, visit: (n: ALSyntaxNode) => void): void {
   visit(node);
@@ -68,7 +89,7 @@ const ctx = buildSemanticContext(files);
 const rows: SiteRow[] = [];
 for (const file of files) {
   walk(file.root, (node) => {
-    for (const op of tier1Operators) {
+    for (const op of operators) {
       let claims = false;
       try {
         claims = op.targets(node, ctx);
@@ -135,7 +156,8 @@ console.log(`sites: ${rows.length}`);
 for (const [op, n] of [...byOperator].sort()) console.log(`  ${op.padEnd(34)} ${n}`);
 // Fail loudly rather than write an empty baseline someone would later diff against and call clean.
 // Empty-vs-empty "matches" is this project's signature bug.
-if (rows.length === 0) throw new Error("census-tier1-sites: no sites claimed — refusing to write");
+if (rows.length === 0)
+  throw new Error("census-operator-sites: no sites claimed — refusing to write");
 
 await writeFile(outPath, `${JSON.stringify(rows, null, 1)}\n`, "utf8");
 console.log(`wrote ${outPath}`);
