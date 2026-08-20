@@ -79,3 +79,26 @@ Nothing above is edited. The two predictions were written before their run in
 `GetBalance` survives, the `conditional-boundary` in `Redeem` survives, and `BlockExpiredCards` is
 still seven no-coverage.
 
+## Amended 2026-08-20 by R171: the stage is re-frozen at 45 mutants
+
+`lethal.negate-guard` ships (Tier 1, 1.0.0). It negates an `if` guard whose condition is a bare
+Boolean, which `negate-conditional` never reached: that operator claims `comparison_expression` and
+`logical_expression` only, so `if GiftCard.Blocked then` and `if GiftCard.FindSet() then` had no
+polarity mutant at all. Two sites here, both in `Gift Card Mgt`.
+
+| site | mutation | verdict | note |
+| --- | --- | --- | --- |
+| `Redeem`, `if GiftCard.Blocked then Error(...)` | `if not (GiftCard.Blocked) then` | **killed** by `RedeemReducesBalance` | every redeem test uses an unblocked card, so the flip raises `CardBlockedErr` on the happy path |
+| `BlockExpiredCards`, `if GiftCard.FindSet() then` | `if not (GiftCard.FindSet()) then` | **no-coverage** | no test calls `BlockExpiredCards`; this joins its other seven |
+
+Totals move 43 -> 45, killed 25 -> 26, no-coverage 7 -> 8; survivors are unchanged at 11. The score
+rises from 69.4% to **70.3%**, which is the right direction: an arm that adds one kill and one
+uncovered row and no survivors should raise it.
+
+Nothing above is edited. Both predictions were written before the run, in
+`docs/superpowers/specs/2026-08-20-r171-negate-guard-spike.md` §5, and both matched.
+
+**The three rows that carry the demo are still unchanged**: the planted `remove-setrange` in
+`GetBalance` survives and still ranks EIGHTH of eleven under `explain --top 10`, the
+`conditional-boundary` in `Redeem` survives, and `BlockExpiredCards` is now eight no-coverage rather
+than seven.

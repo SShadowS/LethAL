@@ -202,7 +202,16 @@ const EXPECTED = {
   // the mechanism: `Modify()` is deliberate there because running `OnModify` would add 1 to the very
   // field the test asserts. Verdict pre-committed in
   // docs/superpowers/specs/2026-08-19-r165-forced-trigger-precommitment.md.
-  totalMutantSites: 266,
+  // R171 moves this from 266 to 279. Thirteen new mutants: `negate-guard` claims FOUR guards that
+  // were already here (`Data Find Ops` twice, `Data Ops.InsertWithoutTrigger`, and the pageextension
+  // `OnOpenPage`), and `codeunit 79319 "Data Set Ops"` adds NINE more. That arm exists for the
+  // `remove-not` cession seam: the operator refused every parenthesized operand and ceded them to
+  // `negate-conditional`, which claims comparisons and logical expressions and nothing else, so
+  // `not (X in [...])` was ceded to an operator that does not want it. The fix adds ZERO sites on
+  // every other fixture, which is why the arm had to be written rather than the fix landed alone.
+  // All thirteen verdicts pre-committed in
+  // docs/superpowers/specs/2026-08-20-r171-build-precommitment.md.
+  totalMutantSites: 279,
   // R36 moved this from 63/10 to 64/9, deliberately and in one direction only.
   //
   // `RequireCategoryAFails` used to assert merely that AN error occurred, so deleting
@@ -291,7 +300,11 @@ const EXPECTED = {
   // assertion that names an exact number: two filter arms whose range inverts and counts nothing,
   // the two halves of `RunUserDefinedBuiltins`'s 372, `Data Validator.TestField`'s accumulator that
   // feeds it, and `Data Swap Ops.Accumulate`'s 15.
-  killed: 201,
+  // R171 moves this from 201 to 213. Twelve of its thirteen new mutants are killed: three of the
+  // four `negate-guard` guards on existing code (the fourth is in the uncovered pageextension), and
+  // all nine in the new arm, whose three tests each assert BOTH directions so nothing there can
+  // survive on a one-sided assertion.
+  killed: 213,
   // R73 moved this from 9 to 12, and TWO of the three additions are worth reading rather than
   // accepting:
   //
@@ -390,7 +403,10 @@ const EXPECTED = {
   // being measured twice against Cronus283 to wedge the fenced session — `in-flight-unknown` at
   // baseline, the whole run quarantined. That is why this pageextension's four other mutants are
   // already `no-coverage`; the fifth joins them.
-  noCoverage: 11,
+  // R171 moves this from 11 to 12. The new one is `negate-guard` on the same pageextension
+  // `OnOpenPage` whose other five mutants are already `no-coverage`, for the reason above: the test
+  // that would cover it was removed after wedging the fenced session twice.
+  noCoverage: 12,
   // 183 / 214 does not reduce (183 is 3 x 61, 214 is 2 x 107). It is about 0.8551, DOWN from
   // 0.8626: a wave that adds six deliberate survivors is SUPPOSED to move the score down, and a
   // score that rose instead would mean the survivors did not arrive.
@@ -401,7 +417,9 @@ const EXPECTED = {
   // stating: three of the four new mutants are killed and one survives, so a wave that is 75% kills
   // still lowers a score sitting at 86%. A score that only ever rises is a score nobody is testing
   // against new ground.
-  mutationScore: 201 / (201 + 34),
+  // R171 moves it to 213 / 247, about 0.8623, UP from 0.8553. An arm of nine predicted kills and
+  // no survivors should raise it; a score that fell would mean the arm did not land.
+  mutationScore: 213 / (213 + 34),
   /**
    * R72, extended by R138: the screen must fire, and on exactly these mutants under exactly these
    * mechanisms.

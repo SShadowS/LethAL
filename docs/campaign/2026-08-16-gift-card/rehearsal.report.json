@@ -5,14 +5,14 @@
     "caveats": [
       "kills-without-assertion"
     ],
-    "scoreDescribes": "36 scored mutant(s) in 4 .al file(s)",
+    "scoreDescribes": "37 scored mutant(s) in 4 .al file(s)",
     "baselineTests": {
       "total": 8,
       "failing": 0
     },
     "scoredMutants": {
-      "scored": 36,
-      "recorded": 43
+      "scored": 37,
+      "recorded": 45
     },
     "executionContexts": [
       {
@@ -20,15 +20,15 @@
         "guiAllowed": false,
         "clientType": "ODataV4",
         "basis": "measured on the fenced RunMutant path (R57): every mutant executes in a GuiAllowed=No, ClientType=ODataV4 session",
-        "verdictCount": 43
+        "verdictCount": 45
       }
     ]
   },
   "assertionScreen": {
-    "kills": 25,
-    "killsWithText": 25,
+    "kills": 26,
+    "killsWithText": 26,
     "killsWithoutText": 0,
-    "flagged": 25,
+    "flagged": 26,
     "flaggedMutants": [
       "M0001",
       "M0002",
@@ -46,15 +46,16 @@
       "M0018",
       "M0019",
       "M0020",
-      "M0022",
-      "M0024",
-      "M0026",
+      "M0021",
+      "M0023",
+      "M0025",
       "M0027",
-      "M0029",
-      "M0031",
+      "M0028",
+      "M0030",
       "M0032",
-      "M0040",
-      "M0043"
+      "M0033",
+      "M0042",
+      "M0045"
     ],
     "discrimination": "vacuous",
     "discriminationNote": "EVERY kill carrying failure text was flagged, so this screen separated nothing on this suite. That is a property of the suite's assertion style, not of the mutants: a suite that raises via bare `Error(...)` has no assertion prefix for the rule to find. Treat the count as 'not measured here', not as a finding.",
@@ -69,12 +70,12 @@
       "procedureName": "Redeem",
       "survived": 4,
       "noCoverage": 0,
-      "killed": 7,
+      "killed": 8,
       "survivorCodes": [
-        "M0021",
-        "M0023",
-        "M0025",
-        "M0028"
+        "M0022",
+        "M0024",
+        "M0026",
+        "M0029"
       ]
     },
     {
@@ -98,8 +99,8 @@
       "noCoverage": 0,
       "killed": 2,
       "survivorCodes": [
-        "M0041",
-        "M0042"
+        "M0043",
+        "M0044"
       ]
     },
     {
@@ -121,7 +122,7 @@
       "noCoverage": 0,
       "killed": 3,
       "survivorCodes": [
-        "M0030"
+        "M0031"
       ]
     }
   ],
@@ -133,16 +134,16 @@
   "baselineGreen": true,
   "batches": 1,
   "counts": {
-    "killed": 25,
+    "killed": 26,
     "survived": 11,
-    "noCoverage": 7,
+    "noCoverage": 8,
     "timeoutKilled": 0,
     "knownSurvivors": 0,
     "unstable": 0,
     "errors": 0,
     "deadlineExceeded": 0
   },
-  "mutationScore": 0.6944444444444444,
+  "mutationScore": 0.7027027027027027,
   "mutants": [
     {
       "mutantCode": "M0001",
@@ -155,12 +156,12 @@
       "codeunitName": "Gift Card",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 193,
+      "durationMs": 208,
       "procedureName": "",
       "startIndex": 333,
       "endIndex": 446,
-      "originalText": "begin\n                if \"Customer No.\" = '' then\n                    Error(CustomerRequiredErr);\n            end",
-      "mutatedText": "begin end",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "Gift Card Tests.IssueCreatesCard",
         "Gift Card Tests.IssueRequiresCustomer",
@@ -174,7 +175,7 @@
       "guardObserved": true,
       "triggerName": "OnValidate",
       "killingTest": "IssueRequiresCustomer",
-      "killingTestFailure": "Microsoft.Dynamics.Nav.Types.Exceptions.NavNCLAssertErrorException: An error was expected inside an ASSERTERROR statement.\\   at Microsoft.Dynamics.Nav.Runtime.NavMethodScope.AssertErrorAsync(Func`1 body)\\   at Microsoft.Dynamics.Nav.BusinessApplication.Codeunit90150.IssueRequiresCustomer()\\   at Microsoft.Dynamics.Nav.Runtime.NavTestCodeunit.ExecuteTestMethodAsync(MethodInfo method, TestTransactionModel transactionModel, Boolean isAsync)\nGift Card Tests(CodeUnit 90150).IssueRequiresCustomer line 2 - Gift Card Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 71007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 71007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 71003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
+      "killingTestFailure": "Microsoft.Dynamics.Nav.Types.Exceptions.NavNCLAssertErrorException: An error was expected inside an ASSERTERROR statement.\\   at Microsoft.Dynamics.Nav.Runtime.NavMethodScope.AssertErrorAsync(Func`1 body)\\   at Microsoft.Dynamics.Nav.BusinessApplication.Codeunit90150.IssueRequiresCustomer()\\   at Microsoft.Dynamics.Nav.Runtime.NavTestCodeunit.ExecuteTestMethodAsync(MethodInfo method, TestTransactionModel transactionModel, Boolean isAsync)\nGift Card Tests(CodeUnit 90150).IssueRequiresCustomer line 2 - Gift Card Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 91007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 91003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
     },
     {
       "mutantCode": "M0002",
@@ -187,12 +188,12 @@
       "codeunitName": "Gift Card",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 98,
+      "durationMs": 95,
       "procedureName": "",
       "startIndex": 358,
       "endIndex": 377,
-      "originalText": "\"Customer No.\" = ''",
-      "mutatedText": "\"Customer No.\" <> ''",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "Gift Card Tests.IssueCreatesCard",
         "Gift Card Tests.IssueRequiresCustomer",
@@ -206,7 +207,7 @@
       "guardObserved": true,
       "triggerName": "OnValidate",
       "killingTest": "IssueCreatesCard",
-      "killingTestFailure": "A gift card must belong to a customer.\nGift Card(Table 90100).Customer No. - OnValidate(Trigger) line 12 - Gift Card Demo by LethAL version 1.0.20684.36958;Gift Card Mgt(CodeUnit 90102).Issue line 189 - Gift Card Demo by LethAL version 1.0.20684.36958;Gift Card Tests(CodeUnit 90150).IssueCreatesCard line 4 - Gift Card Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 71007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 71007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 71003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
+      "killingTestFailure": "A gift card must belong to a customer.\nGift Card(Table 90100).Customer No. - OnValidate(Trigger) line 12 - Gift Card Demo by LethAL version 1.0.20685.20504;Gift Card Mgt(CodeUnit 90102).Issue line 189 - Gift Card Demo by LethAL version 1.0.20685.20504;Gift Card Tests(CodeUnit 90150).IssueCreatesCard line 4 - Gift Card Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 91007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 91003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
     },
     {
       "mutantCode": "M0003",
@@ -219,11 +220,11 @@
       "codeunitName": "Gift Card",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 194,
+      "durationMs": 213,
       "procedureName": "",
       "startIndex": 403,
       "endIndex": 429,
-      "originalText": "Error(CustomerRequiredErr)",
+      "originalText": "[redacted: third-party source, see this directory's README]",
       "mutatedText": "",
       "coveringTests": [
         "Gift Card Tests.IssueCreatesCard",
@@ -238,7 +239,7 @@
       "guardObserved": true,
       "triggerName": "OnValidate",
       "killingTest": "IssueRequiresCustomer",
-      "killingTestFailure": "Microsoft.Dynamics.Nav.Types.Exceptions.NavNCLAssertErrorException: An error was expected inside an ASSERTERROR statement.\\   at Microsoft.Dynamics.Nav.Runtime.NavMethodScope.AssertErrorAsync(Func`1 body)\\   at Microsoft.Dynamics.Nav.BusinessApplication.Codeunit90150.IssueRequiresCustomer()\\   at Microsoft.Dynamics.Nav.Runtime.NavTestCodeunit.ExecuteTestMethodAsync(MethodInfo method, TestTransactionModel transactionModel, Boolean isAsync)\nGift Card Tests(CodeUnit 90150).IssueRequiresCustomer line 2 - Gift Card Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 71007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 71007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 71003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
+      "killingTestFailure": "Microsoft.Dynamics.Nav.Types.Exceptions.NavNCLAssertErrorException: An error was expected inside an ASSERTERROR statement.\\   at Microsoft.Dynamics.Nav.Runtime.NavMethodScope.AssertErrorAsync(Func`1 body)\\   at Microsoft.Dynamics.Nav.BusinessApplication.Codeunit90150.IssueRequiresCustomer()\\   at Microsoft.Dynamics.Nav.Runtime.NavTestCodeunit.ExecuteTestMethodAsync(MethodInfo method, TestTransactionModel transactionModel, Boolean isAsync)\nGift Card Tests(CodeUnit 90150).IssueRequiresCustomer line 2 - Gift Card Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 91007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 91003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
     },
     {
       "mutantCode": "M0004",
@@ -251,12 +252,12 @@
       "codeunitName": "Gift Card",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 105,
+      "durationMs": 104,
       "procedureName": "",
       "startIndex": 1163,
       "endIndex": 1239,
-      "originalText": "begin\n        TestField(\"No.\");\n        \"Issued Date\" := WorkDate();\n    end",
-      "mutatedText": "begin end",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "Gift Card Tests.IssueCreatesCard",
         "Gift Card Tests.IssueRequiresCustomer",
@@ -270,7 +271,7 @@
       "guardObserved": true,
       "triggerName": "OnInsert",
       "killingTest": "IssueCreatesCard",
-      "killingTestFailure": "Expected the issued date to be stamped, got .\nGift Card Tests(CodeUnit 90150).IssueCreatesCard line 11 - Gift Card Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 71007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 71007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 71003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
+      "killingTestFailure": "Expected the issued date to be stamped, got .\nGift Card Tests(CodeUnit 90150).IssueCreatesCard line 11 - Gift Card Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 91007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 91003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
     },
     {
       "mutantCode": "M0005",
@@ -283,11 +284,11 @@
       "codeunitName": "Gift Card",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 656,
+      "durationMs": 723,
       "procedureName": "",
       "startIndex": 1177,
       "endIndex": 1193,
-      "originalText": "TestField(\"No.\")",
+      "originalText": "[redacted: third-party source, see this directory's README]",
       "mutatedText": "",
       "coveringTests": [
         "Gift Card Tests.IssueCreatesCard",
@@ -313,12 +314,12 @@
       "codeunitName": "Gift Card Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 91,
+      "durationMs": 97,
       "procedureName": "Issue",
       "startIndex": 591,
       "endIndex": 1082,
-      "originalText": "begin\n        if Amount <= 0 then\n            Error(AmountMustBePositiveErr);\n\n        GiftCard.Init();\n        GiftCard.\"No.\" := CardNo;\n        GiftCard.Validate(\"Customer No.\", CustomerNo);\n        GiftCard.\"Initial Amount\" := Amount;\n        GiftCard.\"Remaining Amount\" := Amount;\n        GiftCard.\"Expiry Date\" := ExpiryDate;\n        GiftCard.TestField(\"Expiry Date\");\n        GiftCard.Insert(true);\n\n        PostEntry(CardNo, CustomerNo, \"Gift Card Entry Type\"::Issue, Amount);\n    end",
-      "mutatedText": "begin end",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "Gift Card Tests.IssueCreatesCard",
         "Gift Card Tests.IssueRequiresCustomer",
@@ -332,7 +333,7 @@
       "coverageAttribution": "exact",
       "guardObserved": true,
       "killingTest": "IssueCreatesCard",
-      "killingTestFailure": "Issue did not create the gift card.\nGift Card Tests(CodeUnit 90150).IssueCreatesCard line 7 - Gift Card Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 71007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 71007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 71003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
+      "killingTestFailure": "Issue did not create the gift card.\nGift Card Tests(CodeUnit 90150).IssueCreatesCard line 7 - Gift Card Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 91007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 91003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
     },
     {
       "mutantCode": "M0007",
@@ -345,12 +346,12 @@
       "codeunitName": "Gift Card Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 785,
+      "durationMs": 771,
       "procedureName": "Issue",
       "startIndex": 608,
       "endIndex": 619,
-      "originalText": "Amount <= 0",
-      "mutatedText": "Amount < 0",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "Gift Card Tests.IssueCreatesCard",
         "Gift Card Tests.IssueRequiresCustomer",
@@ -375,11 +376,11 @@
       "codeunitName": "Gift Card Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 374,
+      "durationMs": 379,
       "procedureName": "Issue",
       "startIndex": 637,
       "endIndex": 667,
-      "originalText": "Error(AmountMustBePositiveErr)",
+      "originalText": "[redacted: third-party source, see this directory's README]",
       "mutatedText": "",
       "coveringTests": [
         "Gift Card Tests.IssueCreatesCard",
@@ -394,7 +395,7 @@
       "coverageAttribution": "exact",
       "guardObserved": true,
       "killingTest": "IssueRejectsNegativeAmount",
-      "killingTestFailure": "Microsoft.Dynamics.Nav.Types.Exceptions.NavNCLAssertErrorException: An error was expected inside an ASSERTERROR statement.\\   at Microsoft.Dynamics.Nav.Runtime.NavMethodScope.AssertErrorAsync(Func`1 body)\\   at Microsoft.Dynamics.Nav.BusinessApplication.Codeunit90150.IssueRejectsNegativeAmount()\\   at Microsoft.Dynamics.Nav.Runtime.NavTestCodeunit.ExecuteTestMethodAsync(MethodInfo method, TestTransactionModel transactionModel, Boolean isAsync)\nGift Card Tests(CodeUnit 90150).IssueRejectsNegativeAmount line 2 - Gift Card Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 71007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 71007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 71003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
+      "killingTestFailure": "Microsoft.Dynamics.Nav.Types.Exceptions.NavNCLAssertErrorException: An error was expected inside an ASSERTERROR statement.\\   at Microsoft.Dynamics.Nav.Runtime.NavMethodScope.AssertErrorAsync(Func`1 body)\\   at Microsoft.Dynamics.Nav.BusinessApplication.Codeunit90150.IssueRejectsNegativeAmount()\\   at Microsoft.Dynamics.Nav.Runtime.NavTestCodeunit.ExecuteTestMethodAsync(MethodInfo method, TestTransactionModel transactionModel, Boolean isAsync)\nGift Card Tests(CodeUnit 90150).IssueRejectsNegativeAmount line 2 - Gift Card Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 91007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 91003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
     },
     {
       "mutantCode": "M0009",
@@ -407,11 +408,11 @@
       "codeunitName": "Gift Card Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 754,
+      "durationMs": 808,
       "procedureName": "Issue",
       "startIndex": 678,
       "endIndex": 693,
-      "originalText": "GiftCard.Init()",
+      "originalText": "[redacted: third-party source, see this directory's README]",
       "mutatedText": "",
       "coveringTests": [
         "Gift Card Tests.IssueCreatesCard",
@@ -437,12 +438,12 @@
       "codeunitName": "Gift Card Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 181,
+      "durationMs": 200,
       "procedureName": "Issue",
       "startIndex": 737,
       "endIndex": 782,
-      "originalText": "GiftCard.Validate(\"Customer No.\", CustomerNo)",
-      "mutatedText": "GiftCard.\"Customer No.\" := CustomerNo",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "Gift Card Tests.IssueCreatesCard",
         "Gift Card Tests.IssueRequiresCustomer",
@@ -456,7 +457,7 @@
       "coverageAttribution": "exact",
       "guardObserved": true,
       "killingTest": "IssueRequiresCustomer",
-      "killingTestFailure": "Microsoft.Dynamics.Nav.Types.Exceptions.NavNCLAssertErrorException: An error was expected inside an ASSERTERROR statement.\\   at Microsoft.Dynamics.Nav.Runtime.NavMethodScope.AssertErrorAsync(Func`1 body)\\   at Microsoft.Dynamics.Nav.BusinessApplication.Codeunit90150.IssueRequiresCustomer()\\   at Microsoft.Dynamics.Nav.Runtime.NavTestCodeunit.ExecuteTestMethodAsync(MethodInfo method, TestTransactionModel transactionModel, Boolean isAsync)\nGift Card Tests(CodeUnit 90150).IssueRequiresCustomer line 2 - Gift Card Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 71007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 71007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 71003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
+      "killingTestFailure": "Microsoft.Dynamics.Nav.Types.Exceptions.NavNCLAssertErrorException: An error was expected inside an ASSERTERROR statement.\\   at Microsoft.Dynamics.Nav.Runtime.NavMethodScope.AssertErrorAsync(Func`1 body)\\   at Microsoft.Dynamics.Nav.BusinessApplication.Codeunit90150.IssueRequiresCustomer()\\   at Microsoft.Dynamics.Nav.Runtime.NavTestCodeunit.ExecuteTestMethodAsync(MethodInfo method, TestTransactionModel transactionModel, Boolean isAsync)\nGift Card Tests(CodeUnit 90150).IssueRequiresCustomer line 2 - Gift Card Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 91007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 91003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
     },
     {
       "mutantCode": "M0011",
@@ -469,11 +470,11 @@
       "codeunitName": "Gift Card Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 207,
+      "durationMs": 196,
       "procedureName": "Issue",
       "startIndex": 737,
       "endIndex": 782,
-      "originalText": "GiftCard.Validate(\"Customer No.\", CustomerNo)",
+      "originalText": "[redacted: third-party source, see this directory's README]",
       "mutatedText": "",
       "coveringTests": [
         "Gift Card Tests.IssueCreatesCard",
@@ -488,7 +489,7 @@
       "coverageAttribution": "exact",
       "guardObserved": true,
       "killingTest": "IssueRequiresCustomer",
-      "killingTestFailure": "Microsoft.Dynamics.Nav.Types.Exceptions.NavNCLAssertErrorException: An error was expected inside an ASSERTERROR statement.\\   at Microsoft.Dynamics.Nav.Runtime.NavMethodScope.AssertErrorAsync(Func`1 body)\\   at Microsoft.Dynamics.Nav.BusinessApplication.Codeunit90150.IssueRequiresCustomer()\\   at Microsoft.Dynamics.Nav.Runtime.NavTestCodeunit.ExecuteTestMethodAsync(MethodInfo method, TestTransactionModel transactionModel, Boolean isAsync)\nGift Card Tests(CodeUnit 90150).IssueRequiresCustomer line 2 - Gift Card Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 71007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 71007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 71003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
+      "killingTestFailure": "Microsoft.Dynamics.Nav.Types.Exceptions.NavNCLAssertErrorException: An error was expected inside an ASSERTERROR statement.\\   at Microsoft.Dynamics.Nav.Runtime.NavMethodScope.AssertErrorAsync(Func`1 body)\\   at Microsoft.Dynamics.Nav.BusinessApplication.Codeunit90150.IssueRequiresCustomer()\\   at Microsoft.Dynamics.Nav.Runtime.NavTestCodeunit.ExecuteTestMethodAsync(MethodInfo method, TestTransactionModel transactionModel, Boolean isAsync)\nGift Card Tests(CodeUnit 90150).IssueRequiresCustomer line 2 - Gift Card Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 91007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 91003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
     },
     {
       "mutantCode": "M0012",
@@ -501,11 +502,11 @@
       "codeunitName": "Gift Card Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 313,
+      "durationMs": 284,
       "procedureName": "Issue",
       "startIndex": 930,
       "endIndex": 963,
-      "originalText": "GiftCard.TestField(\"Expiry Date\")",
+      "originalText": "[redacted: third-party source, see this directory's README]",
       "mutatedText": "",
       "coveringTests": [
         "Gift Card Tests.IssueCreatesCard",
@@ -520,7 +521,7 @@
       "coverageAttribution": "exact",
       "guardObserved": true,
       "killingTest": "IssueRequiresExpiryDate",
-      "killingTestFailure": "Microsoft.Dynamics.Nav.Types.Exceptions.NavNCLAssertErrorException: An error was expected inside an ASSERTERROR statement.\\   at Microsoft.Dynamics.Nav.Runtime.NavMethodScope.AssertErrorAsync(Func`1 body)\\   at Microsoft.Dynamics.Nav.BusinessApplication.Codeunit90150.IssueRequiresExpiryDate()\\   at Microsoft.Dynamics.Nav.Runtime.NavTestCodeunit.ExecuteTestMethodAsync(MethodInfo method, TestTransactionModel transactionModel, Boolean isAsync)\nGift Card Tests(CodeUnit 90150).IssueRequiresExpiryDate line 2 - Gift Card Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 71007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 71007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 71003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
+      "killingTestFailure": "Microsoft.Dynamics.Nav.Types.Exceptions.NavNCLAssertErrorException: An error was expected inside an ASSERTERROR statement.\\   at Microsoft.Dynamics.Nav.Runtime.NavMethodScope.AssertErrorAsync(Func`1 body)\\   at Microsoft.Dynamics.Nav.BusinessApplication.Codeunit90150.IssueRequiresExpiryDate()\\   at Microsoft.Dynamics.Nav.Runtime.NavTestCodeunit.ExecuteTestMethodAsync(MethodInfo method, TestTransactionModel transactionModel, Boolean isAsync)\nGift Card Tests(CodeUnit 90150).IssueRequiresExpiryDate line 2 - Gift Card Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 91007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 91003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
     },
     {
       "mutantCode": "M0013",
@@ -533,12 +534,12 @@
       "codeunitName": "Gift Card Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 101,
+      "durationMs": 89,
       "procedureName": "Issue",
       "startIndex": 973,
       "endIndex": 994,
-      "originalText": "GiftCard.Insert(true)",
-      "mutatedText": "GiftCard.Insert(false)",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "Gift Card Tests.IssueCreatesCard",
         "Gift Card Tests.IssueRequiresCustomer",
@@ -552,7 +553,7 @@
       "coverageAttribution": "exact",
       "guardObserved": true,
       "killingTest": "IssueCreatesCard",
-      "killingTestFailure": "Expected the issued date to be stamped, got .\nGift Card Tests(CodeUnit 90150).IssueCreatesCard line 11 - Gift Card Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 71007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 71007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 71003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
+      "killingTestFailure": "Expected the issued date to be stamped, got .\nGift Card Tests(CodeUnit 90150).IssueCreatesCard line 11 - Gift Card Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 91007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 91003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
     },
     {
       "mutantCode": "M0014",
@@ -565,11 +566,11 @@
       "codeunitName": "Gift Card Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 94,
+      "durationMs": 98,
       "procedureName": "Issue",
       "startIndex": 973,
       "endIndex": 994,
-      "originalText": "GiftCard.Insert(true)",
+      "originalText": "[redacted: third-party source, see this directory's README]",
       "mutatedText": "",
       "coveringTests": [
         "Gift Card Tests.IssueCreatesCard",
@@ -584,7 +585,7 @@
       "coverageAttribution": "exact",
       "guardObserved": true,
       "killingTest": "IssueCreatesCard",
-      "killingTestFailure": "Issue did not create the gift card.\nGift Card Tests(CodeUnit 90150).IssueCreatesCard line 7 - Gift Card Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 71007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 71007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 71003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
+      "killingTestFailure": "Issue did not create the gift card.\nGift Card Tests(CodeUnit 90150).IssueCreatesCard line 7 - Gift Card Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 91007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 91003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
     },
     {
       "mutantCode": "M0015",
@@ -597,12 +598,12 @@
       "codeunitName": "Gift Card Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 504,
+      "durationMs": 458,
       "procedureName": "Issue",
       "startIndex": 1005,
       "endIndex": 1073,
-      "originalText": "PostEntry(CardNo, CustomerNo, \"Gift Card Entry Type\"::Issue, Amount)",
-      "mutatedText": "PostEntry(CustomerNo, CardNo, \"Gift Card Entry Type\"::Issue, Amount)",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "Gift Card Tests.IssueCreatesCard",
         "Gift Card Tests.IssueRequiresCustomer",
@@ -616,7 +617,7 @@
       "coverageAttribution": "exact",
       "guardObserved": true,
       "killingTest": "RedeemReducesBalance",
-      "killingTestFailure": "Expected a balance of 60, got -40.\nGift Card Tests(CodeUnit 90150).RedeemReducesBalance line 12 - Gift Card Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 71007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 71007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 71003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
+      "killingTestFailure": "Expected a balance of 60, got -40.\nGift Card Tests(CodeUnit 90150).RedeemReducesBalance line 12 - Gift Card Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 91007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 91003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
     },
     {
       "mutantCode": "M0016",
@@ -629,11 +630,11 @@
       "codeunitName": "Gift Card Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 493,
+      "durationMs": 469,
       "procedureName": "Issue",
       "startIndex": 1005,
       "endIndex": 1073,
-      "originalText": "PostEntry(CardNo, CustomerNo, \"Gift Card Entry Type\"::Issue, Amount)",
+      "originalText": "[redacted: third-party source, see this directory's README]",
       "mutatedText": "",
       "coveringTests": [
         "Gift Card Tests.IssueCreatesCard",
@@ -648,7 +649,7 @@
       "coverageAttribution": "exact",
       "guardObserved": true,
       "killingTest": "RedeemReducesBalance",
-      "killingTestFailure": "Expected a balance of 60, got -40.\nGift Card Tests(CodeUnit 90150).RedeemReducesBalance line 12 - Gift Card Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 71007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 71007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 71003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
+      "killingTestFailure": "Expected a balance of 60, got -40.\nGift Card Tests(CodeUnit 90150).RedeemReducesBalance line 12 - Gift Card Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 91007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 91003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
     },
     {
       "mutantCode": "M0017",
@@ -661,12 +662,12 @@
       "codeunitName": "Gift Card Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 855,
+      "durationMs": 779,
       "procedureName": "Issue",
       "startIndex": 1035,
       "endIndex": 1064,
-      "originalText": "\"Gift Card Entry Type\"::Issue",
-      "mutatedText": "\"Gift Card Entry Type\"::Redemption",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "Gift Card Tests.IssueCreatesCard",
         "Gift Card Tests.IssueRequiresCustomer",
@@ -691,12 +692,12 @@
       "codeunitName": "Gift Card Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 126,
+      "durationMs": 94,
       "procedureName": "Redeem",
       "startIndex": 1191,
       "endIndex": 1689,
-      "originalText": "begin\n        GiftCard.Get(CardNo);\n\n        if GiftCard.Blocked then\n            Error(CardBlockedErr, CardNo);\n\n        if GiftCard.\"Expiry Date\" < WorkDate() then\n            Error(CardExpiredErr, CardNo);\n\n        if GiftCard.\"Remaining Amount\" < Amount then\n            Error(InsufficientBalanceErr, CardNo);\n\n        GiftCard.\"Remaining Amount\" -= Amount;\n        GiftCard.Modify(true);\n\n        PostEntry(CardNo, GiftCard.\"Customer No.\", \"Gift Card Entry Type\"::Redemption, -Amount);\n    end",
-      "mutatedText": "begin end",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "Gift Card Tests.RedeemReducesBalance",
         "Gift Card Tests.RedeemMoreThanBalanceFails",
@@ -706,7 +707,7 @@
       "coverageAttribution": "exact",
       "guardObserved": true,
       "killingTest": "RedeemReducesBalance",
-      "killingTestFailure": "Expected 60 remaining on the card, got 100.\nGift Card Tests(CodeUnit 90150).RedeemReducesBalance line 10 - Gift Card Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 71007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 71007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 71003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
+      "killingTestFailure": "Expected 60 remaining on the card, got 100.\nGift Card Tests(CodeUnit 90150).RedeemReducesBalance line 10 - Gift Card Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 91007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 91003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
     },
     {
       "mutantCode": "M0019",
@@ -719,11 +720,11 @@
       "codeunitName": "Gift Card Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 107,
+      "durationMs": 100,
       "procedureName": "Redeem",
       "startIndex": 1205,
       "endIndex": 1225,
-      "originalText": "GiftCard.Get(CardNo)",
+      "originalText": "[redacted: third-party source, see this directory's README]",
       "mutatedText": "",
       "coveringTests": [
         "Gift Card Tests.RedeemReducesBalance",
@@ -734,10 +735,38 @@
       "coverageAttribution": "exact",
       "guardObserved": true,
       "killingTest": "RedeemReducesBalance",
-      "killingTestFailure": "Gift card GC-REDEEM has expired.\nGift Card Mgt(CodeUnit 90102).Redeem line 176 - Gift Card Demo by LethAL version 1.0.20684.36958;Gift Card Tests(CodeUnit 90150).RedeemReducesBalance line 6 - Gift Card Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 71007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 71007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 71003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
+      "killingTestFailure": "Gift card GC-REDEEM has expired.\nGift Card Mgt(CodeUnit 90102).Redeem line 176 - Gift Card Demo by LethAL version 1.0.20685.20504;Gift Card Tests(CodeUnit 90150).RedeemReducesBalance line 6 - Gift Card Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 91007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 91003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
     },
     {
       "mutantCode": "M0020",
+      "file": "src\\GiftCardMgt.Codeunit.al",
+      "line": 34,
+      "operatorName": "lethal.negate-guard",
+      "verdict": "killed",
+      "batchIndex": 0,
+      "astHash": "d756d8caf231db9901369e33ee609ae2614f4094f7a804227b1dea6f1d9cb676",
+      "codeunitName": "Gift Card Mgt",
+      "operatorMajor": 1,
+      "runner": "fenced",
+      "durationMs": 105,
+      "procedureName": "Redeem",
+      "startIndex": 1239,
+      "endIndex": 1255,
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
+      "coveringTests": [
+        "Gift Card Tests.RedeemReducesBalance",
+        "Gift Card Tests.RedeemMoreThanBalanceFails",
+        "Gift Card Tests.RedeemBlockedCardFails",
+        "Gift Card Tests.RedeemExpiredCardFails"
+      ],
+      "coverageAttribution": "exact",
+      "guardObserved": true,
+      "killingTest": "RedeemReducesBalance",
+      "killingTestFailure": "Gift card GC-REDEEM is blocked.\nGift Card Mgt(CodeUnit 90102).Redeem line 191 - Gift Card Demo by LethAL version 1.0.20685.20504;Gift Card Tests(CodeUnit 90150).RedeemReducesBalance line 6 - Gift Card Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 91007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 91003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
+    },
+    {
+      "mutantCode": "M0021",
       "file": "src\\GiftCardMgt.Codeunit.al",
       "line": 35,
       "operatorName": "lethal.void-method-call",
@@ -747,11 +776,11 @@
       "codeunitName": "Gift Card Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 340,
+      "durationMs": 291,
       "procedureName": "Redeem",
       "startIndex": 1273,
       "endIndex": 1302,
-      "originalText": "Error(CardBlockedErr, CardNo)",
+      "originalText": "[redacted: third-party source, see this directory's README]",
       "mutatedText": "",
       "coveringTests": [
         "Gift Card Tests.RedeemReducesBalance",
@@ -762,10 +791,10 @@
       "coverageAttribution": "exact",
       "guardObserved": true,
       "killingTest": "RedeemBlockedCardFails",
-      "killingTestFailure": "Microsoft.Dynamics.Nav.Types.Exceptions.NavNCLAssertErrorException: An error was expected inside an ASSERTERROR statement.\\   at Microsoft.Dynamics.Nav.Runtime.NavMethodScope.AssertErrorAsync(Func`1 body)\\   at Microsoft.Dynamics.Nav.BusinessApplication.Codeunit90150.RedeemBlockedCardFails()\\   at Microsoft.Dynamics.Nav.Runtime.NavTestCodeunit.ExecuteTestMethodAsync(MethodInfo method, TestTransactionModel transactionModel, Boolean isAsync)\nGift Card Tests(CodeUnit 90150).RedeemBlockedCardFails line 9 - Gift Card Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 71007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 71007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 71003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
+      "killingTestFailure": "Microsoft.Dynamics.Nav.Types.Exceptions.NavNCLAssertErrorException: An error was expected inside an ASSERTERROR statement.\\   at Microsoft.Dynamics.Nav.Runtime.NavMethodScope.AssertErrorAsync(Func`1 body)\\   at Microsoft.Dynamics.Nav.BusinessApplication.Codeunit90150.RedeemBlockedCardFails()\\   at Microsoft.Dynamics.Nav.Runtime.NavTestCodeunit.ExecuteTestMethodAsync(MethodInfo method, TestTransactionModel transactionModel, Boolean isAsync)\nGift Card Tests(CodeUnit 90150).RedeemBlockedCardFails line 9 - Gift Card Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 91007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 91003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
     },
     {
-      "mutantCode": "M0021",
+      "mutantCode": "M0022",
       "file": "src\\GiftCardMgt.Codeunit.al",
       "line": 37,
       "operatorName": "lethal.conditional-boundary",
@@ -775,12 +804,12 @@
       "codeunitName": "Gift Card Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 400,
+      "durationMs": 372,
       "procedureName": "Redeem",
       "startIndex": 1316,
       "endIndex": 1351,
-      "originalText": "GiftCard.\"Expiry Date\" < WorkDate()",
-      "mutatedText": "GiftCard.\"Expiry Date\" <= WorkDate()",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "Gift Card Tests.RedeemReducesBalance",
         "Gift Card Tests.RedeemMoreThanBalanceFails",
@@ -791,7 +820,7 @@
       "guardObserved": true
     },
     {
-      "mutantCode": "M0022",
+      "mutantCode": "M0023",
       "file": "src\\GiftCardMgt.Codeunit.al",
       "line": 38,
       "operatorName": "lethal.void-method-call",
@@ -801,11 +830,11 @@
       "codeunitName": "Gift Card Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 390,
+      "durationMs": 398,
       "procedureName": "Redeem",
       "startIndex": 1369,
       "endIndex": 1398,
-      "originalText": "Error(CardExpiredErr, CardNo)",
+      "originalText": "[redacted: third-party source, see this directory's README]",
       "mutatedText": "",
       "coveringTests": [
         "Gift Card Tests.RedeemReducesBalance",
@@ -816,10 +845,10 @@
       "coverageAttribution": "exact",
       "guardObserved": true,
       "killingTest": "RedeemExpiredCardFails",
-      "killingTestFailure": "Microsoft.Dynamics.Nav.Types.Exceptions.NavNCLAssertErrorException: An error was expected inside an ASSERTERROR statement.\\   at Microsoft.Dynamics.Nav.Runtime.NavMethodScope.AssertErrorAsync(Func`1 body)\\   at Microsoft.Dynamics.Nav.BusinessApplication.Codeunit90150.RedeemExpiredCardFails()\\   at Microsoft.Dynamics.Nav.Runtime.NavTestCodeunit.ExecuteTestMethodAsync(MethodInfo method, TestTransactionModel transactionModel, Boolean isAsync)\nGift Card Tests(CodeUnit 90150).RedeemExpiredCardFails line 9 - Gift Card Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 71007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 71007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 71003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
+      "killingTestFailure": "Microsoft.Dynamics.Nav.Types.Exceptions.NavNCLAssertErrorException: An error was expected inside an ASSERTERROR statement.\\   at Microsoft.Dynamics.Nav.Runtime.NavMethodScope.AssertErrorAsync(Func`1 body)\\   at Microsoft.Dynamics.Nav.BusinessApplication.Codeunit90150.RedeemExpiredCardFails()\\   at Microsoft.Dynamics.Nav.Runtime.NavTestCodeunit.ExecuteTestMethodAsync(MethodInfo method, TestTransactionModel transactionModel, Boolean isAsync)\nGift Card Tests(CodeUnit 90150).RedeemExpiredCardFails line 9 - Gift Card Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 91007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 91003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
     },
     {
-      "mutantCode": "M0023",
+      "mutantCode": "M0024",
       "file": "src\\GiftCardMgt.Codeunit.al",
       "line": 40,
       "operatorName": "lethal.conditional-boundary",
@@ -829,12 +858,12 @@
       "codeunitName": "Gift Card Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 455,
+      "durationMs": 367,
       "procedureName": "Redeem",
       "startIndex": 1412,
       "endIndex": 1448,
-      "originalText": "GiftCard.\"Remaining Amount\" < Amount",
-      "mutatedText": "GiftCard.\"Remaining Amount\" <= Amount",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "Gift Card Tests.RedeemReducesBalance",
         "Gift Card Tests.RedeemMoreThanBalanceFails",
@@ -845,7 +874,7 @@
       "guardObserved": true
     },
     {
-      "mutantCode": "M0024",
+      "mutantCode": "M0025",
       "file": "src\\GiftCardMgt.Codeunit.al",
       "line": 41,
       "operatorName": "lethal.void-method-call",
@@ -855,11 +884,11 @@
       "codeunitName": "Gift Card Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 200,
+      "durationMs": 189,
       "procedureName": "Redeem",
       "startIndex": 1466,
       "endIndex": 1503,
-      "originalText": "Error(InsufficientBalanceErr, CardNo)",
+      "originalText": "[redacted: third-party source, see this directory's README]",
       "mutatedText": "",
       "coveringTests": [
         "Gift Card Tests.RedeemReducesBalance",
@@ -870,10 +899,10 @@
       "coverageAttribution": "exact",
       "guardObserved": true,
       "killingTest": "RedeemMoreThanBalanceFails",
-      "killingTestFailure": "Microsoft.Dynamics.Nav.Types.Exceptions.NavNCLAssertErrorException: An error was expected inside an ASSERTERROR statement.\\   at Microsoft.Dynamics.Nav.Runtime.NavMethodScope.AssertErrorAsync(Func`1 body)\\   at Microsoft.Dynamics.Nav.BusinessApplication.Codeunit90150.RedeemMoreThanBalanceFails()\\   at Microsoft.Dynamics.Nav.Runtime.NavTestCodeunit.ExecuteTestMethodAsync(MethodInfo method, TestTransactionModel transactionModel, Boolean isAsync)\nGift Card Tests(CodeUnit 90150).RedeemMoreThanBalanceFails line 4 - Gift Card Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 71007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 71007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 71003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
+      "killingTestFailure": "Microsoft.Dynamics.Nav.Types.Exceptions.NavNCLAssertErrorException: An error was expected inside an ASSERTERROR statement.\\   at Microsoft.Dynamics.Nav.Runtime.NavMethodScope.AssertErrorAsync(Func`1 body)\\   at Microsoft.Dynamics.Nav.BusinessApplication.Codeunit90150.RedeemMoreThanBalanceFails()\\   at Microsoft.Dynamics.Nav.Runtime.NavTestCodeunit.ExecuteTestMethodAsync(MethodInfo method, TestTransactionModel transactionModel, Boolean isAsync)\nGift Card Tests(CodeUnit 90150).RedeemMoreThanBalanceFails line 4 - Gift Card Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 91007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 91003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
     },
     {
-      "mutantCode": "M0025",
+      "mutantCode": "M0026",
       "file": "src\\GiftCardMgt.Codeunit.al",
       "line": 44,
       "operatorName": "lethal.swap-modify-flag",
@@ -883,12 +912,12 @@
       "codeunitName": "Gift Card Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 414,
+      "durationMs": 378,
       "procedureName": "Redeem",
       "startIndex": 1561,
       "endIndex": 1582,
-      "originalText": "GiftCard.Modify(true)",
-      "mutatedText": "GiftCard.Modify(false)",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "Gift Card Tests.RedeemReducesBalance",
         "Gift Card Tests.RedeemMoreThanBalanceFails",
@@ -899,7 +928,7 @@
       "guardObserved": true
     },
     {
-      "mutantCode": "M0026",
+      "mutantCode": "M0027",
       "file": "src\\GiftCardMgt.Codeunit.al",
       "line": 44,
       "operatorName": "lethal.void-method-call",
@@ -909,11 +938,11 @@
       "codeunitName": "Gift Card Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 124,
+      "durationMs": 94,
       "procedureName": "Redeem",
       "startIndex": 1561,
       "endIndex": 1582,
-      "originalText": "GiftCard.Modify(true)",
+      "originalText": "[redacted: third-party source, see this directory's README]",
       "mutatedText": "",
       "coveringTests": [
         "Gift Card Tests.RedeemReducesBalance",
@@ -924,10 +953,10 @@
       "coverageAttribution": "exact",
       "guardObserved": true,
       "killingTest": "RedeemReducesBalance",
-      "killingTestFailure": "Expected 60 remaining on the card, got 100.\nGift Card Tests(CodeUnit 90150).RedeemReducesBalance line 10 - Gift Card Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 71007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 71007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 71003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
+      "killingTestFailure": "Expected 60 remaining on the card, got 100.\nGift Card Tests(CodeUnit 90150).RedeemReducesBalance line 10 - Gift Card Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 91007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 91003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
     },
     {
-      "mutantCode": "M0027",
+      "mutantCode": "M0028",
       "file": "src\\GiftCardMgt.Codeunit.al",
       "line": 46,
       "operatorName": "lethal.void-method-call",
@@ -937,11 +966,11 @@
       "codeunitName": "Gift Card Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 103,
+      "durationMs": 94,
       "procedureName": "Redeem",
       "startIndex": 1593,
       "endIndex": 1680,
-      "originalText": "PostEntry(CardNo, GiftCard.\"Customer No.\", \"Gift Card Entry Type\"::Redemption, -Amount)",
+      "originalText": "[redacted: third-party source, see this directory's README]",
       "mutatedText": "",
       "coveringTests": [
         "Gift Card Tests.RedeemReducesBalance",
@@ -952,10 +981,10 @@
       "coverageAttribution": "exact",
       "guardObserved": true,
       "killingTest": "RedeemReducesBalance",
-      "killingTestFailure": "Expected a balance of 60, got 100.\nGift Card Tests(CodeUnit 90150).RedeemReducesBalance line 12 - Gift Card Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 71007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 71007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 71003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
+      "killingTestFailure": "Expected a balance of 60, got 100.\nGift Card Tests(CodeUnit 90150).RedeemReducesBalance line 12 - Gift Card Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 91007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 91003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
     },
     {
-      "mutantCode": "M0028",
+      "mutantCode": "M0029",
       "file": "src\\GiftCardMgt.Codeunit.al",
       "line": 46,
       "operatorName": "lethal.swap-enum-member",
@@ -965,12 +994,12 @@
       "codeunitName": "Gift Card Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 445,
+      "durationMs": 385,
       "procedureName": "Redeem",
       "startIndex": 1636,
       "endIndex": 1670,
-      "originalText": "\"Gift Card Entry Type\"::Redemption",
-      "mutatedText": "\"Gift Card Entry Type\"::Issue",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "Gift Card Tests.RedeemReducesBalance",
         "Gift Card Tests.RedeemMoreThanBalanceFails",
@@ -981,7 +1010,7 @@
       "guardObserved": true
     },
     {
-      "mutantCode": "M0029",
+      "mutantCode": "M0030",
       "file": "src\\GiftCardMgt.Codeunit.al",
       "line": 52,
       "operatorName": "lethal.empty-block",
@@ -991,22 +1020,22 @@
       "codeunitName": "Gift Card Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 102,
+      "durationMs": 94,
       "procedureName": "GetBalance",
       "startIndex": 1805,
       "endIndex": 1951,
-      "originalText": "begin\n        GiftCardEntry.SetRange(\"Gift Card No.\", CardNo);\n        GiftCardEntry.CalcSums(Amount);\n        exit(GiftCardEntry.Amount);\n    end",
-      "mutatedText": "begin end",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "Gift Card Tests.RedeemReducesBalance"
       ],
       "coverageAttribution": "exact",
       "guardObserved": true,
       "killingTest": "RedeemReducesBalance",
-      "killingTestFailure": "Expected a balance of 60, got 0.\nGift Card Tests(CodeUnit 90150).RedeemReducesBalance line 12 - Gift Card Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 71007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 71007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 71003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
+      "killingTestFailure": "Expected a balance of 60, got 0.\nGift Card Tests(CodeUnit 90150).RedeemReducesBalance line 12 - Gift Card Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 91007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 91003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
     },
     {
-      "mutantCode": "M0030",
+      "mutantCode": "M0031",
       "file": "src\\GiftCardMgt.Codeunit.al",
       "line": 53,
       "operatorName": "lethal.remove-setrange",
@@ -1016,11 +1045,11 @@
       "codeunitName": "Gift Card Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 109,
+      "durationMs": 98,
       "procedureName": "GetBalance",
       "startIndex": 1819,
       "endIndex": 1866,
-      "originalText": "GiftCardEntry.SetRange(\"Gift Card No.\", CardNo)",
+      "originalText": "[redacted: third-party source, see this directory's README]",
       "mutatedText": "",
       "coveringTests": [
         "Gift Card Tests.RedeemReducesBalance"
@@ -1029,7 +1058,7 @@
       "guardObserved": true
     },
     {
-      "mutantCode": "M0031",
+      "mutantCode": "M0032",
       "file": "src\\GiftCardMgt.Codeunit.al",
       "line": 54,
       "operatorName": "lethal.void-method-call",
@@ -1039,11 +1068,11 @@
       "codeunitName": "Gift Card Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 105,
+      "durationMs": 94,
       "procedureName": "GetBalance",
       "startIndex": 1876,
       "endIndex": 1906,
-      "originalText": "GiftCardEntry.CalcSums(Amount)",
+      "originalText": "[redacted: third-party source, see this directory's README]",
       "mutatedText": "",
       "coveringTests": [
         "Gift Card Tests.RedeemReducesBalance"
@@ -1051,10 +1080,10 @@
       "coverageAttribution": "exact",
       "guardObserved": true,
       "killingTest": "RedeemReducesBalance",
-      "killingTestFailure": "Expected a balance of 60, got 0.\nGift Card Tests(CodeUnit 90150).RedeemReducesBalance line 12 - Gift Card Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 71007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 71007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 71003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
+      "killingTestFailure": "Expected a balance of 60, got 0.\nGift Card Tests(CodeUnit 90150).RedeemReducesBalance line 12 - Gift Card Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 91007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 91003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
     },
     {
-      "mutantCode": "M0032",
+      "mutantCode": "M0033",
       "file": "src\\GiftCardMgt.Codeunit.al",
       "line": 55,
       "operatorName": "lethal.return-value",
@@ -1064,22 +1093,22 @@
       "codeunitName": "Gift Card Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 99,
+      "durationMs": 94,
       "procedureName": "GetBalance",
       "startIndex": 1916,
       "endIndex": 1942,
-      "originalText": "exit(GiftCardEntry.Amount)",
-      "mutatedText": "exit(0.0)",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "Gift Card Tests.RedeemReducesBalance"
       ],
       "coverageAttribution": "exact",
       "guardObserved": true,
       "killingTest": "RedeemReducesBalance",
-      "killingTestFailure": "Expected a balance of 60, got 0.\nGift Card Tests(CodeUnit 90150).RedeemReducesBalance line 12 - Gift Card Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 71007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 71007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 71003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
+      "killingTestFailure": "Expected a balance of 60, got 0.\nGift Card Tests(CodeUnit 90150).RedeemReducesBalance line 12 - Gift Card Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 91007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 91003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
     },
     {
-      "mutantCode": "M0033",
+      "mutantCode": "M0034",
       "file": "src\\GiftCardMgt.Codeunit.al",
       "line": 61,
       "operatorName": "lethal.empty-block",
@@ -1093,12 +1122,12 @@
       "procedureName": "BlockExpiredCards",
       "startIndex": 2038,
       "endIndex": 2330,
-      "originalText": "begin\n        GiftCard.SetRange(Blocked, false);\n        GiftCard.SetFilter(\"Expiry Date\", '<%1', WorkDate());\n        if GiftCard.FindSet() then\n            repeat\n                GiftCard.Blocked := true;\n                GiftCard.Modify(true);\n            until GiftCard.Next() = 0;\n    end",
-      "mutatedText": "begin end",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": []
     },
     {
-      "mutantCode": "M0034",
+      "mutantCode": "M0035",
       "file": "src\\GiftCardMgt.Codeunit.al",
       "line": 62,
       "operatorName": "lethal.remove-setrange",
@@ -1112,12 +1141,12 @@
       "procedureName": "BlockExpiredCards",
       "startIndex": 2052,
       "endIndex": 2085,
-      "originalText": "GiftCard.SetRange(Blocked, false)",
+      "originalText": "[redacted: third-party source, see this directory's README]",
       "mutatedText": "",
       "coveringTests": []
     },
     {
-      "mutantCode": "M0035",
+      "mutantCode": "M0036",
       "file": "src\\GiftCardMgt.Codeunit.al",
       "line": 63,
       "operatorName": "lethal.flip-filter-literal",
@@ -1131,12 +1160,12 @@
       "procedureName": "BlockExpiredCards",
       "startIndex": 2095,
       "endIndex": 2147,
-      "originalText": "GiftCard.SetFilter(\"Expiry Date\", '<%1', WorkDate())",
-      "mutatedText": "GiftCard.SetFilter(\"Expiry Date\", '<=%1', WorkDate())",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": []
     },
     {
-      "mutantCode": "M0036",
+      "mutantCode": "M0037",
       "file": "src\\GiftCardMgt.Codeunit.al",
       "line": 63,
       "operatorName": "lethal.void-method-call",
@@ -1150,12 +1179,31 @@
       "procedureName": "BlockExpiredCards",
       "startIndex": 2095,
       "endIndex": 2147,
-      "originalText": "GiftCard.SetFilter(\"Expiry Date\", '<%1', WorkDate())",
+      "originalText": "[redacted: third-party source, see this directory's README]",
       "mutatedText": "",
       "coveringTests": []
     },
     {
-      "mutantCode": "M0037",
+      "mutantCode": "M0038",
+      "file": "src\\GiftCardMgt.Codeunit.al",
+      "line": 64,
+      "operatorName": "lethal.negate-guard",
+      "verdict": "no-coverage",
+      "batchIndex": 0,
+      "astHash": "4650354ebe38f5989ecbd1dce5eaec6ea4913495121151000954685ba2d9d116",
+      "codeunitName": "Gift Card Mgt",
+      "operatorMajor": 1,
+      "runner": "fenced",
+      "durationMs": 0,
+      "procedureName": "BlockExpiredCards",
+      "startIndex": 2160,
+      "endIndex": 2178,
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
+      "coveringTests": []
+    },
+    {
+      "mutantCode": "M0039",
       "file": "src\\GiftCardMgt.Codeunit.al",
       "line": 67,
       "operatorName": "lethal.swap-modify-flag",
@@ -1169,12 +1217,12 @@
       "procedureName": "BlockExpiredCards",
       "startIndex": 2261,
       "endIndex": 2282,
-      "originalText": "GiftCard.Modify(true)",
-      "mutatedText": "GiftCard.Modify(false)",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": []
     },
     {
-      "mutantCode": "M0038",
+      "mutantCode": "M0040",
       "file": "src\\GiftCardMgt.Codeunit.al",
       "line": 67,
       "operatorName": "lethal.void-method-call",
@@ -1188,12 +1236,12 @@
       "procedureName": "BlockExpiredCards",
       "startIndex": 2261,
       "endIndex": 2282,
-      "originalText": "GiftCard.Modify(true)",
+      "originalText": "[redacted: third-party source, see this directory's README]",
       "mutatedText": "",
       "coveringTests": []
     },
     {
-      "mutantCode": "M0039",
+      "mutantCode": "M0041",
       "file": "src\\GiftCardMgt.Codeunit.al",
       "line": 68,
       "operatorName": "lethal.negate-conditional",
@@ -1207,12 +1255,12 @@
       "procedureName": "BlockExpiredCards",
       "startIndex": 2302,
       "endIndex": 2321,
-      "originalText": "GiftCard.Next() = 0",
-      "mutatedText": "GiftCard.Next() <> 0",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": []
     },
     {
-      "mutantCode": "M0040",
+      "mutantCode": "M0042",
       "file": "src\\GiftCardMgt.Codeunit.al",
       "line": 74,
       "operatorName": "lethal.empty-block",
@@ -1222,12 +1270,12 @@
       "codeunitName": "Gift Card Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 204,
+      "durationMs": 188,
       "procedureName": "PostEntry",
       "startIndex": 2521,
       "endIndex": 2842,
-      "originalText": "begin\n        GiftCardEntry.Init();\n        GiftCardEntry.\"Gift Card No.\" := CardNo;\n        GiftCardEntry.\"Customer No.\" := CustomerNo;\n        GiftCardEntry.\"Entry Type\" := EntryType;\n        GiftCardEntry.Amount := Amount;\n        GiftCardEntry.\"Posting Date\" := WorkDate();\n        GiftCardEntry.Insert(true);\n    end",
-      "mutatedText": "begin end",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "Gift Card Tests.IssueCreatesCard",
         "Gift Card Tests.RedeemReducesBalance",
@@ -1238,10 +1286,10 @@
       "coverageAttribution": "exact",
       "guardObserved": true,
       "killingTest": "RedeemReducesBalance",
-      "killingTestFailure": "Expected a balance of 60, got 0.\nGift Card Tests(CodeUnit 90150).RedeemReducesBalance line 12 - Gift Card Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 71007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 71007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 71003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
+      "killingTestFailure": "Expected a balance of 60, got 0.\nGift Card Tests(CodeUnit 90150).RedeemReducesBalance line 12 - Gift Card Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 91007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 91003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
     },
     {
-      "mutantCode": "M0041",
+      "mutantCode": "M0043",
       "file": "src\\GiftCardMgt.Codeunit.al",
       "line": 75,
       "operatorName": "lethal.void-method-call",
@@ -1251,11 +1299,11 @@
       "codeunitName": "Gift Card Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 476,
+      "durationMs": 464,
       "procedureName": "PostEntry",
       "startIndex": 2535,
       "endIndex": 2555,
-      "originalText": "GiftCardEntry.Init()",
+      "originalText": "[redacted: third-party source, see this directory's README]",
       "mutatedText": "",
       "coveringTests": [
         "Gift Card Tests.IssueCreatesCard",
@@ -1268,7 +1316,7 @@
       "guardObserved": true
     },
     {
-      "mutantCode": "M0042",
+      "mutantCode": "M0044",
       "file": "src\\GiftCardMgt.Codeunit.al",
       "line": 81,
       "operatorName": "lethal.swap-modify-flag",
@@ -1282,8 +1330,8 @@
       "procedureName": "PostEntry",
       "startIndex": 2807,
       "endIndex": 2833,
-      "originalText": "GiftCardEntry.Insert(true)",
-      "mutatedText": "GiftCardEntry.Insert(false)",
+      "originalText": "[redacted: third-party source, see this directory's README]",
+      "mutatedText": "[redacted: third-party source, see this directory's README]",
       "coveringTests": [
         "Gift Card Tests.IssueCreatesCard",
         "Gift Card Tests.RedeemReducesBalance",
@@ -1295,7 +1343,7 @@
       "guardObserved": true
     },
     {
-      "mutantCode": "M0043",
+      "mutantCode": "M0045",
       "file": "src\\GiftCardMgt.Codeunit.al",
       "line": 81,
       "operatorName": "lethal.void-method-call",
@@ -1305,11 +1353,11 @@
       "codeunitName": "Gift Card Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 230,
+      "durationMs": 187,
       "procedureName": "PostEntry",
       "startIndex": 2807,
       "endIndex": 2833,
-      "originalText": "GiftCardEntry.Insert(true)",
+      "originalText": "[redacted: third-party source, see this directory's README]",
       "mutatedText": "",
       "coveringTests": [
         "Gift Card Tests.IssueCreatesCard",
@@ -1321,7 +1369,7 @@
       "coverageAttribution": "exact",
       "guardObserved": true,
       "killingTest": "RedeemReducesBalance",
-      "killingTestFailure": "Expected a balance of 60, got 0.\nGift Card Tests(CodeUnit 90150).RedeemReducesBalance line 12 - Gift Card Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 71007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 71007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 71003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
+      "killingTestFailure": "Expected a balance of 60, got 0.\nGift Card Tests(CodeUnit 90150).RedeemReducesBalance line 12 - Gift Card Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 91007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 91003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
     }
   ],
   "unsupportedTests": [],
@@ -1339,17 +1387,17 @@
   "preprocessorSymbols": [],
   "untargetedTriggerCount": 0,
   "timings": {
-    "totalMs": 20129,
-    "generateMutationSetMs": 49,
-    "deployMs": 4878,
-    "baselineMs": 917,
-    "mutantsMs": 10908,
+    "totalMs": 19027,
+    "generateMutationSetMs": 50,
+    "deployMs": 4486,
+    "baselineMs": 868,
+    "mutantsMs": 10538,
     "perMutant": {
-      "count": 36,
-      "meanMs": 303,
-      "medianMs": 204,
-      "p95Ms": 785,
-      "maxMs": 855
+      "count": 37,
+      "meanMs": 285,
+      "medianMs": 200,
+      "p95Ms": 779,
+      "maxMs": 808
     }
   },
   "permissionCanary": {

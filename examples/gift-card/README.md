@@ -151,14 +151,14 @@ App's three ids, which made two apps that could not be installed side by side.
 Run against a BC 28 container, last re-measured 2026-08-20:
 
 ```
-score: 69.4%  (killed 25, survived 11, no-coverage 7, error 0)
+score: 70.3%  (killed 26, survived 11, no-coverage 8, error 0)
 baseline batch 0: 8/8 passed
-TIMING: total 20.2s = generate 0.0s + deploy 4.5s + baseline 1.0s + mutants 11.3s + overhead 3.4s
+TIMING: total 19.0s = generate 0.1s + deploy 4.5s + baseline 0.9s + mutants 10.5s + overhead 3.0s
 reliability: full
 ```
 
-**About twenty seconds** for 43 mutants, which is what makes this runnable live rather than
-narrated. The score covers the 36 that are scorable; the seven `no-coverage` rows are excluded from
+**About twenty seconds** for 45 mutants, which is what makes this runnable live rather than
+narrated. The score covers the 37 that are scorable; the eight `no-coverage` rows are excluded from
 it and reported separately.
 
 The first rehearsal, on 2026-08-16, was 36 mutants at 69.0% in 13.8s. All 36 verdicts were

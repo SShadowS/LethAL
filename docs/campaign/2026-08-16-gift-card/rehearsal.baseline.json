@@ -77,6 +77,13 @@
     "errorClass": null
   },
   {
+    "key": "4650354ebe38f5989ecbd1dce5eaec6ea4913495121151000954685ba2d9d116|Gift Card Mgt|lethal.negate-guard|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
     "key": "4d3fee8b8146e7387e3ae807c8ca19657cc63bb0dbdca3ab5bf05f5e899bb483|Gift Card Mgt|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "IssueCreatesCard",
@@ -228,6 +235,13 @@
     "verdict": "no-coverage",
     "killingTest": null,
     "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "d756d8caf231db9901369e33ee609ae2614f4094f7a804227b1dea6f1d9cb676|Gift Card Mgt|lethal.negate-guard|1",
+    "verdict": "killed",
+    "killingTest": "RedeemReducesBalance",
+    "coverageFiltered": false,
     "errorClass": null
   },
   {
