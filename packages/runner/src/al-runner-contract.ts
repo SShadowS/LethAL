@@ -324,6 +324,15 @@ export async function runAlRunnerContractProbe(
   alRunnerPath: string,
   spawn: SpawnFn = defaultSpawn,
   deadlineMs: number = PROBE_DEADLINE_MS,
+  /**
+   * R149 — the platform-app directory to PIN, when the caller has one.
+   *
+   * `undefined` reproduces the pre-session invocation exactly: no pin, so `buildAlRunnerArgv` sends
+   * `--auto-provision`. A caller that HAS a pin (the orchestrator, after provisioning) passes it and
+   * the probe then measures the same argv the mutants will actually run under, which is the gap this
+   * parameter exists to close.
+   */
+  platformAppsDir?: string,
 ): Promise<AlRunnerContractResult> {
   const facts: ContractFact[] = [];
   let bannerOnStdout = false;
@@ -442,6 +451,7 @@ export async function runAlRunnerContractProbe(
       sourceDir: dirs.appDir,
       testDir: dirs.testDir,
       qualifiedTest: wantedName,
+      ...(platformAppsDir !== undefined ? { platformAppsDir } : {}),
     });
     // R149: read the provisioning flag off the argv this probe is about to SEND, so the summary
     // reports what was measured rather than what someone believed at writing time. `buildAlRunnerArgv`
@@ -484,6 +494,7 @@ export async function runAlRunnerContractProbe(
         sourceDir: dirs.appDir,
         testDir: dirs.testDir,
         qualifiedTest: hangName,
+        ...(platformAppsDir !== undefined ? { platformAppsDir } : {}),
       }),
       alRunnerEnv(HANG_TIMEOUT_SECONDS),
     );
@@ -537,6 +548,7 @@ export async function runAlRunnerContractProbe(
         sourceDir: dirs.brokenDir,
         testDir: dirs.testDir,
         qualifiedTest: wantedName,
+        ...(platformAppsDir !== undefined ? { platformAppsDir } : {}),
       }),
       alRunnerEnv(HANG_TIMEOUT_SECONDS),
     );

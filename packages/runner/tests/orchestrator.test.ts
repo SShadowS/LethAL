@@ -7291,6 +7291,7 @@ describe("runSession — R108: a batch whose TOTAL crosses the bracket warns bef
  */
 describe("runSession propagates al-runner's pinned platform-app directory (R147)", () => {
   const PIN = "C:/cache/28.0.46665.53671/platform-apps";
+
   const caps: BackendCapabilities = {
     coverage: "none",
     deploy: "none",
@@ -7526,6 +7527,143 @@ describe("runSession surfaces al-runner's NO IMPLEMENTATION warning (R148)", () 
     expect(
       events.some((e) => e.type === "warning" && e.code === "al-runner-missing-implementation"),
     ).toBe(false);
+    store.close();
+  });
+});
+
+/**
+ * R149 — the wire contract must be re-measured UNDER THE SESSION'S PIN.
+ *
+ * `cli.ts` runs the probe before the session, which is what refuses early, before anything is
+ * generated or published. But it runs before provisioning exists, so it builds its argv unpinned and
+ * sends `--auto-provision`, while every mutant from that point sends `--package-cache <pin>`. The
+ * probe's own doc comment promises it measures "the SAME argv and env the transport sends, because a
+ * probe that blesses a command line nobody runs measures nothing", and R147 made that half false.
+ *
+ * Both measurements now happen, so the early refusal is kept AND the decode is guarded under the
+ * flags the verdicts are actually produced with.
+ *
+ * Driven through a stub because the LIVE gate cannot show this: `itest:alrunner` calls `runSession`
+ * directly rather than `runFromCli`, and the result is emitted as a warning EVENT rather than
+ * printed, so a green gate is silent either way.
+ */
+describe("runSession re-measures the al-runner contract under its pin (R149)", () => {
+  const caps: BackendCapabilities = {
+    coverage: "none",
+    deploy: "none",
+    isolation: "full-reset",
+    authoritative: false,
+  };
+  const PIN = "C:/cache/28.0.46665.53671/platform-apps";
+
+  /** A probe that measures nothing and refuses nothing — the subject here is WHETHER it is called
+   *  and with what, not what al-runner answers. */
+  const fakeProbe = async (
+    _path: string,
+    _spawn?: unknown,
+    _deadline?: unknown,
+    platformAppsDir?: string,
+  ) =>
+    ({
+      facts: [],
+      bannerOnStdout: false,
+      measuredProvisioning: platformAppsDir !== undefined ? "package-cache" : "auto-provision",
+    }) as never;
+
+  /** Provisions, can be pinned, and knows its al-runner path — the real backend's shape. */
+  class ProbeableStub extends StubBackend {
+    constructor(private readonly path: string | null = "al-runner.exe") {
+      super(caps, (mutant) => (mutant === null ? "pass" : "fail"));
+    }
+    async provisionOnce(): Promise<{
+      elapsedMs: number;
+      ran: boolean;
+      downloaded: boolean;
+      detail: string;
+      platformAppsDir?: string;
+      platformAppsRefusal?: string;
+    }> {
+      return { elapsedMs: 1, ran: true, downloaded: false, detail: "", platformAppsDir: PIN };
+    }
+    usePlatformAppsDir(_dir: string): void {}
+    alRunnerPath(): string | undefined {
+      return this.path ?? undefined;
+    }
+  }
+
+  test("emits the pinned contract summary, carrying the pin", async () => {
+    const dirs = await makeProject();
+    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
+    const store = new ResultsStore(":memory:");
+    const events: RunEvent[] = [];
+    await runSession({
+      backend: new ProbeableStub(),
+      store,
+      ...dirs,
+      selectorIds,
+      alRunnerContractProbe: fakeProbe,
+      emit: [createEmitter([(e) => events.push(e)])],
+    });
+    const warning = events.find(
+      (e) => e.type === "warning" && e.code === "al-runner-contract-pinned",
+    );
+    expect(warning).toBeDefined();
+    // It must say WHICH argv it measured, or the reader cannot tell it apart from the pre-session
+    // measurement that this exists to complement.
+    expect((warning as { message: string }).message).toContain("measured-under=--package-cache");
+    store.close();
+  });
+
+  test("CONTROL: a backend with no al-runner path emits NO pinned summary", async () => {
+    // Without this, "the re-measurement runs" would be indistinguishable from "it always runs", and
+    // a bcdev session must not spawn an al-runner probe.
+    const dirs = await makeProject();
+    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
+    const store = new ResultsStore(":memory:");
+    const events: RunEvent[] = [];
+    await runSession({
+      backend: new ProbeableStub(null),
+      store,
+      ...dirs,
+      selectorIds,
+      alRunnerContractProbe: fakeProbe,
+      emit: [createEmitter([(e) => events.push(e)])],
+    });
+    expect(events.some((e) => e.type === "warning" && e.code === "al-runner-contract-pinned")).toBe(
+      false,
+    );
+    store.close();
+  });
+
+  test("a backend that establishes NO pin does not re-measure", async () => {
+    // Nothing to re-measure against: the pre-session probe already measured the unpinned argv, which
+    // is the one such a session actually uses.
+    class UnpinnedStub extends ProbeableStub {
+      override async provisionOnce() {
+        return {
+          elapsedMs: 1,
+          ran: true,
+          downloaded: false,
+          detail: "",
+          platformAppsRefusal: "measured nothing, on purpose",
+        };
+      }
+    }
+    const dirs = await makeProject();
+    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
+    const store = new ResultsStore(":memory:");
+    const events: RunEvent[] = [];
+    await runSession({
+      backend: new UnpinnedStub(),
+      store,
+      ...dirs,
+      selectorIds,
+      alRunnerContractProbe: fakeProbe,
+      emit: [createEmitter([(e) => events.push(e)])],
+    });
+    expect(events.some((e) => e.type === "warning" && e.code === "al-runner-contract-pinned")).toBe(
+      false,
+    );
     store.close();
   });
 });

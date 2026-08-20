@@ -28,6 +28,7 @@ import {
   writeInstrumentedProject,
 } from "@lethal/schemata";
 import type { AlRunnerProvisionResult } from "./al-runner-backend";
+import { contractRefusals, contractSummary, runAlRunnerContractProbe } from "./al-runner-contract";
 import type { AlRunnerBcBuild } from "./al-runner-transport";
 import { nextAbove, parseVersionConflict, reserveAppVersion } from "./app-version";
 import { AlcCompileError, ArtifactPrepareError, DeploymentError } from "./artifact";
@@ -599,6 +600,14 @@ export async function generateMutationSet(
 
 export interface SessionConfig {
   readonly backend: ExecutionBackend;
+  /**
+   * R149 — the al-runner wire-contract probe, injectable so the pinned re-measurement is testable
+   * without spawning a real binary.
+   *
+   * Defaults to the real `runAlRunnerContractProbe`. Only ever called when the session established a
+   * platform-app PIN and the backend knows its al-runner path, so a bcdev session never touches it.
+   */
+  readonly alRunnerContractProbe?: typeof runAlRunnerContractProbe;
   readonly store: ResultsStore;
   readonly projectDir: string; // target AL project (source of truth)
   readonly testDir: string;
@@ -2385,6 +2394,42 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       pinPlatformAppsDir(cfg.backend, provisioned.platformAppsDir, "the session backend");
       platformAppsDir = provisioned.platformAppsDir;
       emit({ type: "al-runner-platform-apps", dir: provisioned.platformAppsDir });
+      // R149 — re-measure the wire contract UNDER THE PIN.
+      //
+      // `cli.ts` already ran the probe before the session, and that run is what refuses early,
+      // before anything is generated or published. But it runs before provisioning exists, so it
+      // builds its argv with no pin and therefore sends `--auto-provision`, while every mutant from
+      // here on sends `--package-cache <pin>`. The probe's own doc comment promises it measures
+      // "the SAME argv and env the transport sends, because a probe that blesses a command line
+      // nobody runs measures nothing", and R147 made that half false.
+      //
+      // This closes it WITHOUT giving up the early refusal: both measurements happen. The
+      // pre-session one guards the expensive work; this one guards the decode, under the argv the
+      // verdicts are actually produced with. `compile-failure-not-scorable` is the reason it is
+      // worth a second measurement rather than a note — it is what stands between a project that
+      // failed to compile and a batch of false SURVIVED verdicts, and until now no run had ever
+      // measured it under the flags its own mutants use.
+      //
+      // Refuses at the same severity as the pre-session probe, and for the same reason: "we could
+      // not confirm the contract" is not "the contract holds".
+      const alRunnerPath = (
+        cfg.backend as { alRunnerPath?: () => string | undefined }
+      ).alRunnerPath?.();
+      if (alRunnerPath !== undefined) {
+        const probe = cfg.alRunnerContractProbe ?? runAlRunnerContractProbe;
+        const pinned = await probe(alRunnerPath, undefined, undefined, provisioned.platformAppsDir);
+        emit({
+          type: "warning",
+          code: "al-runner-contract-pinned",
+          message: `${contractSummary(pinned)} (re-measured under the session's pin, R149)`,
+        });
+        const refusals = contractRefusals(pinned);
+        if (refusals.length > 0) {
+          throw new Error(
+            `${refusals.join("\n")}\nRefusing to run: al-runner's wire contract differs UNDER THIS SESSION'S PIN (--package-cache ${provisioned.platformAppsDir}) from what it reported unpinned before the session. The verdicts this run would produce are decoded by assumptions measured under different flags (R149).`,
+          );
+        }
+      }
     } else {
       // NEVER silent. A build whose parse had gone stale would otherwise be indistinguishable from
       // a build that never had this feature: same verdicts, same counts, no line anywhere. The

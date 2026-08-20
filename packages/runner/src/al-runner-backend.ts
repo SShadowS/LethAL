@@ -280,6 +280,14 @@ export class AlRunnerBackend implements ExecutionBackend {
    * answer `undefined` forever. `runSession` reaches it through a narrow structural check instead,
    * which is honest about there being exactly one backend that can answer.
    */
+  /**
+   * R149 — the al-runner binary this backend runs, so `runSession` can re-measure the wire contract
+   * under the session's pin. Structural, like `observedBcBuild`: no other backend has an al-runner.
+   */
+  alRunnerPath(): string {
+    return this.cfg.alRunnerPath;
+  }
+
   observedMissingImplementation(): AlRunnerMissingImplementation | undefined {
     return this.transport.observedMissingImplementation();
   }
