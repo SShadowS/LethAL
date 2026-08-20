@@ -35,6 +35,8 @@ export interface MutantRow {
   readonly mutantCode: string;
   readonly astHash: string;
   readonly codeunitName: string;
+  /** Enclosing procedure or trigger, empty at object level. Part of the identity since R166. */
+  readonly procedureName: string;
   readonly operatorName: string;
   readonly operatorMajor: number;
   readonly file: string;
@@ -87,13 +89,19 @@ export interface MutantRow {
  * Carries the IDENTITY components rather than `mutant_code`: `assignMutantIds` restarts numbering
  * per batch, so "M0013" names a different mutant depending on how the run was batched, and a
  * resume that re-planned into different batches would silently reattribute every verdict. The
- * `(astHash, codeunitName, operatorName, operatorMajor)` tuple is stable across batching AND
- * encodes the mutated subtree, so a source edit changes it and the stale verdict simply stops
- * matching instead of being carried onto changed code.
+ * `(astHash, codeunitName, procedureName, operatorName, operatorMajor)` tuple is stable across
+ * batching AND encodes the mutated subtree, so a source edit changes it and the stale verdict
+ * simply stops matching instead of being carried onto changed code.
+ *
+ * `procedureName` joined the tuple in R166. Rows written before that column existed read back as
+ * `null`, and `resumeIndex` treats a null as NOT MATCHING rather than as a wildcard: the unsafe
+ * direction here is carrying a verdict onto the wrong mutant, and re-running one mutant is the
+ * cheap failure.
  */
 export interface MutantVerdictRow {
   readonly astHash: string;
   readonly codeunitName: string;
+  readonly procedureName: string | null;
   readonly operatorName: string;
   readonly operatorMajor: number;
   readonly verdict: MutantVerdict;
@@ -161,6 +169,7 @@ CREATE TABLE IF NOT EXISTS mutants (
   mutant_code TEXT NOT NULL,
   ast_hash TEXT NOT NULL,
   codeunit_name TEXT NOT NULL,
+  procedure_name TEXT,
   operator_name TEXT NOT NULL,
   operator_major INTEGER NOT NULL,
   file TEXT NOT NULL,
@@ -173,8 +182,11 @@ CREATE TABLE IF NOT EXISTS mutants (
   batch_index INTEGER,
   runner TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_mutants_identity
-  ON mutants(ast_hash, codeunit_name, operator_name, operator_major);
+-- idx_mutants_identity is created by migrate(), NOT here. It covers procedure_name, which R166
+-- added by ALTER, and SCHEMA runs BEFORE migrate() -- so naming that column here throws
+-- "no such column" on every pre-R166 database, from inside the constructor, which also leaks the
+-- open handle. The index has to be created after the column is guaranteed to exist.
+-- (No backticks in this comment: SCHEMA is a template literal and a backtick ends it.)
 CREATE TABLE IF NOT EXISTS test_results (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   run_id INTEGER NOT NULL REFERENCES runs(id),
@@ -250,6 +262,29 @@ export class ResultsStore {
     // hazard as the three above — `recordMutant`'s INSERT names the column explicitly, so an
     // older lethal.sqlite would throw mid-run. Pre-R86 rows keep NULL, which reads as "no text was
     // recorded", not as "the platform produced no text": those runs never asked the question.
+    // R166: `mutants` gained `procedure_name`, which joined the semantic identity (see
+    // `IdentityKey` in selection.ts). Same hazard as the three above — `recordMutant`'s INSERT
+    // names the column explicitly, so an older lethal.sqlite would throw mid-run. Pre-R166 rows
+    // keep NULL, and both readers DROP a null rather than coercing it to `""`: an empty procedure
+    // name is a real value (object-level mutants carry it), so coercing would let an old row match
+    // a genuine object-level mutant and either skip it as a known survivor or carry a stale verdict
+    // onto it. Dropping costs one re-run; matching wrongly costs a verdict.
+    if (!cols.some((c) => c.name === "procedure_name")) {
+      this.db.exec("ALTER TABLE mutants ADD COLUMN procedure_name TEXT");
+    }
+    // The identity index lives here rather than in `SCHEMA` (see the note there). Rebuilt only when
+    // the stored definition does not already cover `procedure_name`, so this is a one-time cost on
+    // an old database rather than a DROP/CREATE on every open.
+    const idx = this.db
+      .query("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'idx_mutants_identity'")
+      .get() as { sql: string | null } | null;
+    if (idx === null || !(idx.sql ?? "").includes("procedure_name")) {
+      this.db.exec("DROP INDEX IF EXISTS idx_mutants_identity");
+      this.db.exec(
+        "CREATE INDEX idx_mutants_identity " +
+          "ON mutants(ast_hash, codeunit_name, procedure_name, operator_name, operator_major)",
+      );
+    }
     if (!cols.some((c) => c.name === "killing_test_failure")) {
       this.db.exec("ALTER TABLE mutants ADD COLUMN killing_test_failure TEXT");
     }
@@ -380,12 +415,14 @@ export class ResultsStore {
   mutantVerdicts(runId: number): MutantVerdictRow[] {
     const rows = this.db
       .query(
-        "SELECT ast_hash, codeunit_name, operator_name, operator_major, verdict, killing_test, " +
-          "failure_note, killing_test_failure, duration_ms, runner FROM mutants WHERE run_id = ?",
+        "SELECT ast_hash, codeunit_name, procedure_name, operator_name, operator_major, verdict, " +
+          "killing_test, failure_note, killing_test_failure, duration_ms, runner " +
+          "FROM mutants WHERE run_id = ?",
       )
       .all(runId) as Array<{
       ast_hash: string;
       codeunit_name: string;
+      procedure_name: string | null;
       operator_name: string;
       operator_major: number;
       verdict: string;
@@ -398,6 +435,7 @@ export class ResultsStore {
     return rows.map((r) => ({
       astHash: r.ast_hash,
       codeunitName: r.codeunit_name,
+      procedureName: r.procedure_name,
       operatorName: r.operator_name,
       operatorMajor: r.operator_major,
       verdict: r.verdict as MutantVerdict,
@@ -449,16 +487,17 @@ export class ResultsStore {
   recordMutant(runId: number, row: MutantRow): number {
     const r = this.db
       .query(
-        `INSERT INTO mutants (run_id, mutant_code, ast_hash, codeunit_name, operator_name,
-         operator_major, file, line, verdict, killing_test, failure_note, killing_test_failure,
-         duration_ms, batch_index, runner)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+        `INSERT INTO mutants (run_id, mutant_code, ast_hash, codeunit_name, procedure_name,
+         operator_name, operator_major, file, line, verdict, killing_test, failure_note,
+         killing_test_failure, duration_ms, batch_index, runner)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
       )
       .get(
         runId,
         row.mutantCode,
         row.astHash,
         row.codeunitName,
+        row.procedureName,
         row.operatorName,
         row.operatorMajor,
         row.file,
@@ -549,24 +588,32 @@ export class ResultsStore {
     if (!run) return new Set();
     const rows = this.db
       .query(
-        "SELECT ast_hash, codeunit_name, operator_name, operator_major FROM mutants " +
+        "SELECT ast_hash, codeunit_name, procedure_name, operator_name, operator_major FROM mutants " +
           "WHERE run_id = ? AND verdict IN ('survived', 'known-survivor')",
       )
       .all(run.id) as Array<{
       ast_hash: string;
       codeunit_name: string;
+      procedure_name: string | null;
       operator_name: string;
       operator_major: number;
     }>;
+    // A row written before R166 added the column has `procedure_name = null`. It is DROPPED rather
+    // than keyed with an empty procedure: an empty name is a real value (object-level mutants use
+    // it), so treating null as empty would let a pre-R166 row match a genuine object-level mutant
+    // and skip it as a known survivor. Dropping costs one re-run; matching wrongly costs a verdict.
     return new Set(
-      rows.map((r) =>
-        serializeKey({
-          astHash: r.ast_hash,
-          codeunitName: r.codeunit_name,
-          operatorName: r.operator_name,
-          operatorMajor: r.operator_major,
-        } satisfies IdentityKey),
-      ),
+      rows
+        .filter((r) => r.procedure_name !== null)
+        .map((r) =>
+          serializeKey({
+            astHash: r.ast_hash,
+            codeunitName: r.codeunit_name,
+            procedureName: r.procedure_name ?? "",
+            operatorName: r.operator_name,
+            operatorMajor: r.operator_major,
+          } satisfies IdentityKey),
+        ),
     );
   }
 

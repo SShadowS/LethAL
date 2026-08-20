@@ -132,9 +132,15 @@ export function buildResumeIndex(
 ): ResumeIndex {
   const seen = new Map<string, MutantVerdictRow[]>();
   for (const r of rows) {
+    // R166: a row recorded before `procedure_name` existed reads back null. Skip it rather than
+    // keying it as `""`, which is a REAL value for an object-level mutant: coercing would carry a
+    // pre-R166 verdict onto a genuine object-level mutant of the same subtree. The mutant is simply
+    // re-run, which is the cheap direction.
+    if (r.procedureName === null) continue;
     const key = serializeKey({
       astHash: r.astHash,
       codeunitName: r.codeunitName,
+      procedureName: r.procedureName,
       operatorName: r.operatorName,
       operatorMajor: r.operatorMajor,
     });

@@ -34,6 +34,7 @@ describe("identityKeyOf", () => {
     expect(k).toEqual({
       astHash: "abc123",
       codeunitName: "Sample",
+      procedureName: "Post",
       operatorName: "conditional-boundary",
       operatorMajor: 2,
     });

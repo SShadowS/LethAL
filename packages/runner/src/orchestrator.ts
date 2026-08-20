@@ -4964,6 +4964,7 @@ export function record(
     mutantCode: m.mutantId,
     astHash: key.astHash,
     codeunitName: key.codeunitName,
+    procedureName: key.procedureName,
     operatorName: key.operatorName,
     operatorMajor: key.operatorMajor,
     file: m.file,

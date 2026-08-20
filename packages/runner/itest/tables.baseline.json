@@ -1,1812 +1,1812 @@
 [
   {
-    "key": "011800dc3dc096db219e3ab1e9c8fa68ff80c5820a45247198b4fe96d636c4b4|Data Filter Ops|lethal.empty-block|1",
+    "key": "011800dc3dc096db219e3ab1e9c8fa68ff80c5820a45247198b4fe96d636c4b4|Data Filter Ops|CountDecoyOrTarget|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "DroppedPlaceholderFreeAlternativeChangesTheCount",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "013f722b915e863b9e7ab32c78b20e60a0eeec8e9dbc00684cfeb7106c7387c9|Data Scope Probe|lethal.swap-rec-xrec|1",
+    "key": "013f722b915e863b9e7ab32c78b20e60a0eeec8e9dbc00684cfeb7106c7387c9|Data Scope Probe|OnValidate|lethal.swap-rec-xrec|1",
     "verdict": "killed",
     "killingTest": "ScopeProbeTracksFieldChange",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "05bc581f9d2241861c8788259e809971033cff570b12b942c70fe20c8b282d0c|Data Filter Ops|lethal.empty-block|1",
+    "key": "05bc581f9d2241861c8788259e809971033cff570b12b942c70fe20c8b282d0c|Data Filter Ops|CountBelowThreshold|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "BoundaryShiftAdmitsTheThresholdRow",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "08b5df0c6213325221a366d8032c0fe4713b3b1fe95a37656c29cc9ef9b8dc65|Data Assert Ops|lethal.return-value|1",
+    "key": "08b5df0c6213325221a366d8032c0fe4713b3b1fe95a37656c29cc9ef9b8dc65|Data Assert Ops|TripledLevel|lethal.return-value|1",
     "verdict": "killed",
     "killingTest": "AssertScreenSeesABareErrorFailure",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "0d7da310f51fbb78e8946d28a87eb77b68fbfa560ec8b41f9f22843bea5d562c|Data Swap Ops|lethal.return-value|1",
+    "key": "0d7da310f51fbb78e8946d28a87eb77b68fbfa560ec8b41f9f22843bea5d562c|Data Swap Ops|AmountWithinCap|lethal.return-value|1",
     "verdict": "killed",
     "killingTest": "SwapReversesTheRangeComparison",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "1283f96266078e5dafc6a5fba6cc274cd91aaf23742021f1c409e43eba762a05|Data Ops|lethal.void-method-call|1",
+    "key": "1283f96266078e5dafc6a5fba6cc274cd91aaf23742021f1c409e43eba762a05|Data Ops|RunUserDefinedBuiltins|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "UserDefinedBuiltinsRun",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "1539beaffea36af3b078ae2d7424bca9827efcfd209c4ba34dec17e66438bc2d|Data Scope Probe|lethal.negate-conditional|1",
+    "key": "1539beaffea36af3b078ae2d7424bca9827efcfd209c4ba34dec17e66438bc2d|Data Scope Probe|OnValidate|lethal.negate-conditional|1",
     "verdict": "killed",
     "killingTest": "ScopeProbeTracksFieldChange",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "155d9ff01dc824b9730dceac2411636b0947021ceac1c2d6ca794393d5f9892c|Data Main|lethal.remove-setrange|1",
+    "key": "155d9ff01dc824b9730dceac2411636b0947021ceac1c2d6ca794393d5f9892c|Data Main|CountInCategory|lethal.remove-setrange|1",
     "verdict": "killed",
     "killingTest": "CountInCategoryUppercaseSetRange",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "1701648b41a6435489d1f359b5158486610bf11e366e128e3391eab4aa3d29ec|Data Main Ext|lethal.remove-testfield|1",
+    "key": "1701648b41a6435489d1f359b5158486610bf11e366e128e3391eab4aa3d29ec|Data Main Ext|ExtRequireCategory|lethal.remove-testfield|1",
     "verdict": "killed",
     "killingTest": "ExtRequireCategoryFails",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "1701648b41a6435489d1f359b5158486610bf11e366e128e3391eab4aa3d29ec|Data Main|lethal.remove-testfield|1",
+    "key": "1701648b41a6435489d1f359b5158486610bf11e366e128e3391eab4aa3d29ec|Data Main|OnValidate|lethal.remove-testfield|1",
     "verdict": "killed",
     "killingTest": "ProcessedRequiresCategory",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "19aec4d7102aac040d82f6d869feda3542cd31645e21a9d06d8ab1fc30a64a36|Data Trigger Probe|lethal.empty-block|1",
+    "key": "19aec4d7102aac040d82f6d869feda3542cd31645e21a9d06d8ab1fc30a64a36|Data Trigger Probe|OnInsert|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "InsertRunTriggerSetsTheTriggerField",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "1abf6565f3e08de4e8484609517e8556b7748861988c88ddcfe5198b51768e00|Data Swap Ops|lethal.empty-block|1",
+    "key": "1abf6565f3e08de4e8484609517e8556b7748861988c88ddcfe5198b51768e00|Data Swap Ops|StampWithNarrow|lethal.empty-block|1",
     "verdict": "survived",
     "killingTest": null,
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "1c7f31c8ee6e40da96b0888e7c02e8a3484f8cf46ecf000ca6650d3453cfa251|Data Filter Ops|lethal.swap-additive|1",
+    "key": "1c7f31c8ee6e40da96b0888e7c02e8a3484f8cf46ecf000ca6650d3453cfa251|Data Filter Ops|CountTaggedInBand|lethal.swap-additive|1",
     "verdict": "killed",
     "killingTest": "NotBlankFilterCountsOnlyTaggedRows",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "1da41b373cdc3cddf07c393c4ed8afd7ff646640807c6d41eed2d2068ea09dc9|Data Ops|lethal.return-value|1",
+    "key": "1da41b373cdc3cddf07c393c4ed8afd7ff646640807c6d41eed2d2068ea09dc9|Data Ops|LoadAmount|lethal.return-value|1",
     "verdict": "killed",
     "killingTest": "LoadAmountReadsField",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "1def6fd5cf57c556799ca80a66fd0306dcf6fa959f0827829d98ad453fb92eaf|Data Swap Ops|lethal.return-value|1",
+    "key": "1def6fd5cf57c556799ca80a66fd0306dcf6fa959f0827829d98ad453fb92eaf|Data Swap Ops|InRange|lethal.return-value|1",
     "verdict": "killed",
     "killingTest": "SwapReversesTheRangeComparison",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "1e8d4b5d852eb9866783efe534c387413c3b76e9f0d7d50bb0829619e239fdc4|Data Set Ops|lethal.empty-block|1",
+    "key": "1e8d4b5d852eb9866783efe534c387413c3b76e9f0d7d50bb0829619e239fdc4|Data Set Ops|RegionRank|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "RegionRankSeparatesInsideAndOutsideTheSet",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "20aee8f9773c9ea9a8e7b90bd1b338ea9a6c871e10f9b4ec8af5b0204f201da4|Data Value Source|lethal.return-value|1",
+    "key": "20aee8f9773c9ea9a8e7b90bd1b338ea9a6c871e10f9b4ec8af5b0204f201da4|Data Value Source|GetValue|lethal.return-value|1",
     "verdict": "no-coverage",
     "killingTest": null,
     "coverageFiltered": true,
     "errorClass": null
   },
   {
-    "key": "20ce234c773e1a3b768298ee0f4d2e2b2cbbfa8dca4f7a97d5a03229a14690ef|Data Main|lethal.empty-block|1",
+    "key": "20ce234c773e1a3b768298ee0f4d2e2b2cbbfa8dca4f7a97d5a03229a14690ef|Data Main|OnModify|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "FlaggedFiresModifyTrigger",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "2193900eb67c719caf2466e8d2e620a2c39c2f54dd9aedeabe7a002ca0510df5|Data Scope Probe|lethal.empty-block|1",
+    "key": "2193900eb67c719caf2466e8d2e620a2c39c2f54dd9aedeabe7a002ca0510df5|Data Scope Probe|OnOpenPage|lethal.empty-block|1",
     "verdict": "no-coverage",
     "killingTest": null,
     "coverageFiltered": true,
     "errorClass": null
   },
   {
-    "key": "21b9d09e6b335a9ea96efe2e73caa285daff8086160ab3e20da1f26d24269d6f|Data Commit Ops|lethal.void-method-call|1",
+    "key": "21b9d09e6b335a9ea96efe2e73caa285daff8086160ab3e20da1f26d24269d6f|Data Commit Ops|CommitThenFail|lethal.void-method-call|1",
     "verdict": "survived",
     "killingTest": null,
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "21b9d09e6b335a9ea96efe2e73caa285daff8086160ab3e20da1f26d24269d6f|Data Commit Ops|lethal.void-method-call|1",
+    "key": "21b9d09e6b335a9ea96efe2e73caa285daff8086160ab3e20da1f26d24269d6f|Data Commit Ops|CommitThenRun|lethal.void-method-call|1",
     "verdict": "survived",
     "killingTest": null,
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "21b9d09e6b335a9ea96efe2e73caa285daff8086160ab3e20da1f26d24269d6f|Data Commit Ops|lethal.void-method-call|1",
+    "key": "21b9d09e6b335a9ea96efe2e73caa285daff8086160ab3e20da1f26d24269d6f|Data Commit Ops|CommitThenRunValueForm|lethal.void-method-call|1",
     "verdict": "survived",
     "killingTest": null,
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "21b9d09e6b335a9ea96efe2e73caa285daff8086160ab3e20da1f26d24269d6f|Data Flag Ops|lethal.void-method-call|1",
+    "key": "21b9d09e6b335a9ea96efe2e73caa285daff8086160ab3e20da1f26d24269d6f|Data Flag Ops|InsertTwiceWithKeyTrigger|lethal.void-method-call|1",
     "verdict": "survived",
     "killingTest": null,
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "21b9d09e6b335a9ea96efe2e73caa285daff8086160ab3e20da1f26d24269d6f|Data Ops|lethal.void-method-call|1",
+    "key": "21b9d09e6b335a9ea96efe2e73caa285daff8086160ab3e20da1f26d24269d6f|Data Ops|InsertWithoutTrigger|lethal.void-method-call|1",
     "verdict": "survived",
     "killingTest": null,
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "23236637fb998b8eab4fd6a198ff80b9445f586f9c413386d108b2760809777d|Data Filter Ops|lethal.empty-block|1",
+    "key": "23236637fb998b8eab4fd6a198ff80b9445f586f9c413386d108b2760809777d|Data Filter Ops|CountTaggedInBand|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "NotBlankFilterCountsOnlyTaggedRows",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "23ceafc6215919e9b70f5f07397877bba50f3f5859fb8ebacc116eb86f9decc4|Data Main|lethal.empty-block|1",
+    "key": "23ceafc6215919e9b70f5f07397877bba50f3f5859fb8ebacc116eb86f9decc4|Data Main|OnValidate|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "ProcessedRequiresCategory",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "2455a74f88d440d352c663e6a032c25e91cf145a60ab62ad1888cc8d2b081092|Data Main|lethal.conditional-boundary|1",
+    "key": "2455a74f88d440d352c663e6a032c25e91cf145a60ab62ad1888cc8d2b081092|Data Main|OnValidate|lethal.conditional-boundary|1",
     "verdict": "survived",
     "killingTest": null,
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "24e2b3ece85960a8249aca16a38bcf15647aeaefe55e536f5fdc5f26f3a7781a|Data Filter Ops|lethal.flip-filter-literal|1",
+    "key": "24e2b3ece85960a8249aca16a38bcf15647aeaefe55e536f5fdc5f26f3a7781a|Data Filter Ops|AnyExcluding|lethal.flip-filter-literal|1",
     "verdict": "survived",
     "killingTest": null,
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "24e2b3ece85960a8249aca16a38bcf15647aeaefe55e536f5fdc5f26f3a7781a|Data Filter Ops|lethal.void-method-call|1",
+    "key": "24e2b3ece85960a8249aca16a38bcf15647aeaefe55e536f5fdc5f26f3a7781a|Data Filter Ops|AnyExcluding|lethal.void-method-call|1",
     "verdict": "survived",
     "killingTest": null,
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "254c401be60253968afe1290d7a9a9ffafd2ca5ca7ca61b8a2d6829e134f7d47|Data Set Ops|lethal.negate-conditional|1",
+    "key": "254c401be60253968afe1290d7a9a9ffafd2ca5ca7ca61b8a2d6829e134f7d47|Data Set Ops|BothOutsideRange|lethal.negate-conditional|1",
     "verdict": "killed",
     "killingTest": "BothOutsideRangeSeparatesEqualAndUnequal",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "26725a0933de87fd5079866a6ab5244e23e170884960325c02c5d378ec5e2e6f|Data Filter Ops|lethal.flip-filter-literal|1",
+    "key": "26725a0933de87fd5079866a6ab5244e23e170884960325c02c5d378ec5e2e6f|Data Filter Ops|CountDecoyOrTarget|lethal.flip-filter-literal|1",
     "verdict": "killed",
     "killingTest": "DroppedPlaceholderFreeAlternativeChangesTheCount",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "26725a0933de87fd5079866a6ab5244e23e170884960325c02c5d378ec5e2e6f|Data Filter Ops|lethal.void-method-call|1",
+    "key": "26725a0933de87fd5079866a6ab5244e23e170884960325c02c5d378ec5e2e6f|Data Filter Ops|CountDecoyOrTarget|lethal.void-method-call|1",
     "verdict": "survived",
     "killingTest": null,
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "270591515cd81bcf8015397af29575530aa13cff4fd690339c61d8429d07931d|Data Ops|lethal.empty-block|1",
+    "key": "270591515cd81bcf8015397af29575530aa13cff4fd690339c61d8429d07931d|Data Ops|CountIgnoringMainFilter|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "ClearingMainFilterCountsEverything",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "2772f4ce1b8d0d772bc247954ada11e7e69516b9db0724ac520e2f393b535019|Data Filter Ops|lethal.empty-block|1",
+    "key": "2772f4ce1b8d0d772bc247954ada11e7e69516b9db0724ac520e2f393b535019|Data Filter Ops|AnyExcluding|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "ExistenceOnlyAssertionMissesTheNegationFlip",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "28201dcb9ce4f9b0f7b10674dedb6eaa7108b48adb15c4396f61db3e96698bca|Data Ops|lethal.void-method-call|1",
+    "key": "28201dcb9ce4f9b0f7b10674dedb6eaa7108b48adb15c4396f61db3e96698bca|Data Ops|CountIgnoringMainFilter|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "ClearingMainFilterCountsEverything",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "2843906687fd2e4a93ac17cd4b6ac53fb9d653594105f0cb8e125617722ac7a6|Data Swap Ops|lethal.empty-block|1",
+    "key": "2843906687fd2e4a93ac17cd4b6ac53fb9d653594105f0cb8e125617722ac7a6|Data Swap Ops|NoteFlags|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "CommutativeCalleeMakesTheSwapEquivalent",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "295648365765ad52611d71cfbf231f8f957e2356b01172716e42f85121b03cf8|Data Swap Ops|lethal.swap-call-arguments|1",
+    "key": "295648365765ad52611d71cfbf231f8f957e2356b01172716e42f85121b03cf8|Data Swap Ops|StampWithNarrow|lethal.swap-call-arguments|1",
     "verdict": "killed",
     "killingTest": "NarrowParameterOverflowsUnderTheSwap",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "295648365765ad52611d71cfbf231f8f957e2356b01172716e42f85121b03cf8|Data Swap Ops|lethal.void-method-call|1",
+    "key": "295648365765ad52611d71cfbf231f8f957e2356b01172716e42f85121b03cf8|Data Swap Ops|StampWithNarrow|lethal.void-method-call|1",
     "verdict": "survived",
     "killingTest": null,
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "2a9df97b8715bbd3a052ec6b3e614cc828fa46fdcc437ac37761fbb42ef7da14|Data Validate Ops|lethal.empty-block|1",
+    "key": "2a9df97b8715bbd3a052ec6b3e614cc828fa46fdcc437ac37761fbb42ef7da14|Data Validate Ops|SetLevelWeak|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "ValueOnlyAssertionMissesTheTriggerSkip",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "2c803bfacb04b831e6e6f26b4d200a42bad5b7cdb0014239df7d51bbeeb65aad|Data Commit Ops|lethal.remove-commit|1",
-    "verdict": "killed",
-    "killingTest": "CommitBeforeValueFormCodeunitRunSucceeds",
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "2c803bfacb04b831e6e6f26b4d200a42bad5b7cdb0014239df7d51bbeeb65aad|Data Commit Ops|lethal.remove-commit|1",
+    "key": "2c803bfacb04b831e6e6f26b4d200a42bad5b7cdb0014239df7d51bbeeb65aad|Data Commit Ops|CommitThenFail|lethal.remove-commit|1",
     "verdict": "killed",
     "killingTest": "CommittedWriteSurvivesFailure",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "2c803bfacb04b831e6e6f26b4d200a42bad5b7cdb0014239df7d51bbeeb65aad|Data Commit Ops|lethal.remove-commit|1",
+    "key": "2c803bfacb04b831e6e6f26b4d200a42bad5b7cdb0014239df7d51bbeeb65aad|Data Commit Ops|CommitThenRun|lethal.remove-commit|1",
     "verdict": "survived",
     "killingTest": null,
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "2c803bfacb04b831e6e6f26b4d200a42bad5b7cdb0014239df7d51bbeeb65aad|Data Shadow|lethal.void-method-call|1",
+    "key": "2c803bfacb04b831e6e6f26b4d200a42bad5b7cdb0014239df7d51bbeeb65aad|Data Commit Ops|CommitThenRunValueForm|lethal.remove-commit|1",
+    "verdict": "killed",
+    "killingTest": "CommitBeforeValueFormCodeunitRunSucceeds",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "2c803bfacb04b831e6e6f26b4d200a42bad5b7cdb0014239df7d51bbeeb65aad|Data Shadow|BumpViaCommit|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "ShadowedBuiltinsRun",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "2cf954f5054b6d2af3f94e3e9d569e50d073569edf25ad14104358af62017e01|Data Ops|lethal.void-method-call|1",
+    "key": "2cf954f5054b6d2af3f94e3e9d569e50d073569edf25ad14104358af62017e01|Data Ops|LoadAmount|lethal.void-method-call|1",
     "verdict": "survived",
     "killingTest": null,
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "2d119c2ec73ab1ae52dbba9a46ff0f4bc4d1489684b7064c985ef4a94112ee7e|Data Key Probe|lethal.negate-conditional|1",
+    "key": "2d119c2ec73ab1ae52dbba9a46ff0f4bc4d1489684b7064c985ef4a94112ee7e|Data Key Probe|OnInsert|lethal.negate-conditional|1",
     "verdict": "killed",
     "killingTest": "DoubleInsertWithoutKeyTriggerRaises",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "2d119c2ec73ab1ae52dbba9a46ff0f4bc4d1489684b7064c985ef4a94112ee7e|Data Main|lethal.negate-conditional|1",
+    "key": "2d119c2ec73ab1ae52dbba9a46ff0f4bc4d1489684b7064c985ef4a94112ee7e|Data Main|OnValidate|lethal.negate-conditional|1",
     "verdict": "killed",
     "killingTest": "BlankNoValidateFails",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "2da3ca7f46a6c3dfeeeed7451ce15b85f06ae7d852403b97f918f4c184c63656|Data Shadow|lethal.void-method-call|1",
+    "key": "2da3ca7f46a6c3dfeeeed7451ce15b85f06ae7d852403b97f918f4c184c63656|Data Shadow|SelfShadowed|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "SelfShadowedRun",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "3059d6f5b6bb02f183680af63bedc7a978922dde08c82eb82147726709413461|Data Find Ops|lethal.return-value|1",
+    "key": "3059d6f5b6bb02f183680af63bedc7a978922dde08c82eb82147726709413461|Data Find Ops|FirstLevelInRange|lethal.return-value|1",
     "verdict": "killed",
     "killingTest": "FindFirstPicksTheLowestKeyInRange",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "3059d6f5b6bb02f183680af63bedc7a978922dde08c82eb82147726709413461|Data Find Ops|lethal.return-value|1",
+    "key": "3059d6f5b6bb02f183680af63bedc7a978922dde08c82eb82147726709413461|Data Find Ops|LastLevelInRange|lethal.return-value|1",
     "verdict": "killed",
     "killingTest": "FindLastPicksTheHighestKeyInRange",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "3059d6f5b6bb02f183680af63bedc7a978922dde08c82eb82147726709413461|Data Validate Ops|lethal.return-value|1",
+    "key": "3059d6f5b6bb02f183680af63bedc7a978922dde08c82eb82147726709413461|Data Validate Ops|SetLevelWeak|lethal.return-value|1",
     "verdict": "killed",
     "killingTest": "ValueOnlyAssertionMissesTheTriggerSkip",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "33880a1aced9249c8c382656ef30f8da90465d9dab7ba9dc12aae0665e0fdea6|Data Find Ops|lethal.negate-guard|1",
-    "verdict": "killed",
-    "killingTest": "FindFirstPicksTheLowestKeyInRange",
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "33880a1aced9249c8c382656ef30f8da90465d9dab7ba9dc12aae0665e0fdea6|Data Find Ops|lethal.swap-find-direction|1",
-    "verdict": "killed",
-    "killingTest": "FindFirstPicksTheLowestKeyInRange",
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "33880a1aced9249c8c382656ef30f8da90465d9dab7ba9dc12aae0665e0fdea6|Data Find Ops|lethal.swap-find-direction|1",
+    "key": "33880a1aced9249c8c382656ef30f8da90465d9dab7ba9dc12aae0665e0fdea6|Data Find Ops|AnyRow|lethal.swap-find-direction|1",
     "verdict": "survived",
     "killingTest": null,
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "33f3da7f532b108c4d4ef7ec269308be3813a227b096b60301db960d325992fe|Data Filter Ops|lethal.return-value|1",
+    "key": "33880a1aced9249c8c382656ef30f8da90465d9dab7ba9dc12aae0665e0fdea6|Data Find Ops|FirstLevelInRange|lethal.negate-guard|1",
+    "verdict": "killed",
+    "killingTest": "FindFirstPicksTheLowestKeyInRange",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "33880a1aced9249c8c382656ef30f8da90465d9dab7ba9dc12aae0665e0fdea6|Data Find Ops|FirstLevelInRange|lethal.swap-find-direction|1",
+    "verdict": "killed",
+    "killingTest": "FindFirstPicksTheLowestKeyInRange",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "33f3da7f532b108c4d4ef7ec269308be3813a227b096b60301db960d325992fe|Data Filter Ops|AnyExcluding|lethal.return-value|1",
     "verdict": "killed",
     "killingTest": "ExistenceOnlyAssertionMissesTheNegationFlip",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "3462b8815d2d0f77e7069c0a04250895fe835fc81ba460d26d3873cece05a355|Data Ops|lethal.remove-testfield|1",
+    "key": "3462b8815d2d0f77e7069c0a04250895fe835fc81ba460d26d3873cece05a355|Data Ops|TouchCategory|lethal.remove-testfield|1",
     "verdict": "survived",
     "killingTest": null,
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "34e66d5ba58540580c0bc08164cd525a87397a0d018b9d17c213e6235fb0ed24|Data Ops|lethal.void-method-call|1",
+    "key": "34e66d5ba58540580c0bc08164cd525a87397a0d018b9d17c213e6235fb0ed24|Data Ops|ShadowedBuiltins|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "ShadowedBuiltinsRun",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "36f07088f37805ba659cb0e8d5e1e9d7ea844628ddb7bf59cd3c47a88ad9fa1e|Data Swap Ops|lethal.swap-call-arguments|1",
+    "key": "36f07088f37805ba659cb0e8d5e1e9d7ea844628ddb7bf59cd3c47a88ad9fa1e|Data Swap Ops|AmountWithinCap|lethal.swap-call-arguments|1",
     "verdict": "killed",
     "killingTest": "SwapReversesTheRangeComparison",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "3afe10ce8658f8de551bb09af57eb19026f2b30e323192a1f224b096db80c695|Data Find Ops|lethal.empty-block|1",
+    "key": "3afe10ce8658f8de551bb09af57eb19026f2b30e323192a1f224b096db80c695|Data Find Ops|LastLevelInRange|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "FindLastPicksTheHighestKeyInRange",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "3fbca8eaf11a092c3e99c78c405edfc95154d9c2ed3473fe247a7e972bf47b3c|Data Filter Ops|lethal.return-value|1",
+    "key": "3fbca8eaf11a092c3e99c78c405edfc95154d9c2ed3473fe247a7e972bf47b3c|Data Filter Ops|CountBelowThreshold|lethal.return-value|1",
     "verdict": "killed",
     "killingTest": "BoundaryShiftAdmitsTheThresholdRow",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "3fbca8eaf11a092c3e99c78c405edfc95154d9c2ed3473fe247a7e972bf47b3c|Data Filter Ops|lethal.return-value|1",
+    "key": "3fbca8eaf11a092c3e99c78c405edfc95154d9c2ed3473fe247a7e972bf47b3c|Data Filter Ops|CountBelowThresholdSparse|lethal.return-value|1",
     "verdict": "killed",
-    "killingTest": "ClosedRangeCountIsScopedByMainNo",
+    "killingTest": "GapAtTheBoundaryMakesTheShiftEquivalent",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "3fbca8eaf11a092c3e99c78c405edfc95154d9c2ed3473fe247a7e972bf47b3c|Data Filter Ops|lethal.return-value|1",
+    "key": "3fbca8eaf11a092c3e99c78c405edfc95154d9c2ed3473fe247a7e972bf47b3c|Data Filter Ops|CountDecoyOrTarget|lethal.return-value|1",
     "verdict": "killed",
     "killingTest": "DroppedPlaceholderFreeAlternativeChangesTheCount",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "3fbca8eaf11a092c3e99c78c405edfc95154d9c2ed3473fe247a7e972bf47b3c|Data Filter Ops|lethal.return-value|1",
-    "verdict": "killed",
-    "killingTest": "GapAtTheBoundaryMakesTheShiftEquivalent",
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "3fbca8eaf11a092c3e99c78c405edfc95154d9c2ed3473fe247a7e972bf47b3c|Data Filter Ops|lethal.return-value|1",
+    "key": "3fbca8eaf11a092c3e99c78c405edfc95154d9c2ed3473fe247a7e972bf47b3c|Data Filter Ops|CountExcluding|lethal.return-value|1",
     "verdict": "killed",
     "killingTest": "NegationFlipChangesTheCount",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "3fbca8eaf11a092c3e99c78c405edfc95154d9c2ed3473fe247a7e972bf47b3c|Data Filter Ops|lethal.return-value|1",
+    "key": "3fbca8eaf11a092c3e99c78c405edfc95154d9c2ed3473fe247a7e972bf47b3c|Data Filter Ops|CountInRange|lethal.return-value|1",
+    "verdict": "killed",
+    "killingTest": "ClosedRangeCountIsScopedByMainNo",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "3fbca8eaf11a092c3e99c78c405edfc95154d9c2ed3473fe247a7e972bf47b3c|Data Filter Ops|CountTaggedInBand|lethal.return-value|1",
     "verdict": "killed",
     "killingTest": "NotBlankFilterCountsOnlyTaggedRows",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "3fbca8eaf11a092c3e99c78c405edfc95154d9c2ed3473fe247a7e972bf47b3c|Data Filter Ops|lethal.return-value|1",
+    "key": "3fbca8eaf11a092c3e99c78c405edfc95154d9c2ed3473fe247a7e972bf47b3c|Data Filter Ops|CountUpToBound|lethal.return-value|1",
     "verdict": "killed",
     "killingTest": "RangeFlipChangesTheCountRegardlessOfInclusivity",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "3fbca8eaf11a092c3e99c78c405edfc95154d9c2ed3473fe247a7e972bf47b3c|Data Main Ext|lethal.return-value|1",
+    "key": "3fbca8eaf11a092c3e99c78c405edfc95154d9c2ed3473fe247a7e972bf47b3c|Data Main Ext|ExtCountRelated|lethal.return-value|1",
     "verdict": "killed",
     "killingTest": "ExtCountRelatedIgnoresDecoys",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "3fbca8eaf11a092c3e99c78c405edfc95154d9c2ed3473fe247a7e972bf47b3c|Data Main|lethal.return-value|1",
+    "key": "3fbca8eaf11a092c3e99c78c405edfc95154d9c2ed3473fe247a7e972bf47b3c|Data Main|CountInCategory|lethal.return-value|1",
     "verdict": "killed",
     "killingTest": "CountInCategoryUppercaseSetRange",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "3fbca8eaf11a092c3e99c78c405edfc95154d9c2ed3473fe247a7e972bf47b3c|Data Ops|lethal.return-value|1",
+    "key": "3fbca8eaf11a092c3e99c78c405edfc95154d9c2ed3473fe247a7e972bf47b3c|Data Ops|CountForMain|lethal.return-value|1",
+    "verdict": "killed",
+    "killingTest": "CountForMainIgnoresDecoys",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "3fbca8eaf11a092c3e99c78c405edfc95154d9c2ed3473fe247a7e972bf47b3c|Data Ops|CountIgnoringMainFilter|lethal.return-value|1",
     "verdict": "killed",
     "killingTest": "ClearingMainFilterCountsEverything",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "3fbca8eaf11a092c3e99c78c405edfc95154d9c2ed3473fe247a7e972bf47b3c|Data Ops|lethal.return-value|1",
-    "verdict": "killed",
-    "killingTest": "CountForMainIgnoresDecoys",
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "40277aa121cd95030531672f906db4dc1f238ef3179b8c58d7815e6a8fe957f5|Data Builder|lethal.return-value|1",
+    "key": "40277aa121cd95030531672f906db4dc1f238ef3179b8c58d7815e6a8fe957f5|Data Builder|RangeWidth|lethal.return-value|1",
     "verdict": "killed",
     "killingTest": "UserDefinedBuiltinsRun",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "40277aa121cd95030531672f906db4dc1f238ef3179b8c58d7815e6a8fe957f5|Data Commit Ops|lethal.return-value|1",
+    "key": "40277aa121cd95030531672f906db4dc1f238ef3179b8c58d7815e6a8fe957f5|Data Commit Ops|CommitThenRunValueForm|lethal.return-value|1",
     "verdict": "killed",
     "killingTest": "CommitBeforeValueFormCodeunitRunSucceeds",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "40277aa121cd95030531672f906db4dc1f238ef3179b8c58d7815e6a8fe957f5|Data Loader|lethal.return-value|1",
+    "key": "40277aa121cd95030531672f906db4dc1f238ef3179b8c58d7815e6a8fe957f5|Data Loader|LoadedFieldNo|lethal.return-value|1",
     "verdict": "killed",
     "killingTest": "UserDefinedBuiltinsRun",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "40277aa121cd95030531672f906db4dc1f238ef3179b8c58d7815e6a8fe957f5|Data Main|lethal.return-value|1",
+    "key": "40277aa121cd95030531672f906db4dc1f238ef3179b8c58d7815e6a8fe957f5|Data Main|TouchCount|lethal.return-value|1",
     "verdict": "no-coverage",
     "killingTest": null,
     "coverageFiltered": true,
     "errorClass": null
   },
   {
-    "key": "40277aa121cd95030531672f906db4dc1f238ef3179b8c58d7815e6a8fe957f5|Data Shadow|lethal.return-value|1",
+    "key": "40277aa121cd95030531672f906db4dc1f238ef3179b8c58d7815e6a8fe957f5|Data Shadow|BumpViaCommit|lethal.return-value|1",
     "verdict": "killed",
     "killingTest": "ShadowedBuiltinsRun",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "40277aa121cd95030531672f906db4dc1f238ef3179b8c58d7815e6a8fe957f5|Data Swap Ops|lethal.return-value|1",
+    "key": "40277aa121cd95030531672f906db4dc1f238ef3179b8c58d7815e6a8fe957f5|Data Swap Ops|AnyFlagSeen|lethal.return-value|1",
     "verdict": "killed",
     "killingTest": "CommutativeCalleeMakesTheSwapEquivalent",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "40277aa121cd95030531672f906db4dc1f238ef3179b8c58d7815e6a8fe957f5|Data Swap Ops|lethal.return-value|1",
+    "key": "40277aa121cd95030531672f906db4dc1f238ef3179b8c58d7815e6a8fe957f5|Data Swap Ops|RunningTotal|lethal.return-value|1",
     "verdict": "killed",
     "killingTest": "SwapRedirectsTheAccumulatorWriteback",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "40277aa121cd95030531672f906db4dc1f238ef3179b8c58d7815e6a8fe957f5|Data Validator|lethal.return-value|1",
+    "key": "40277aa121cd95030531672f906db4dc1f238ef3179b8c58d7815e6a8fe957f5|Data Validator|SeenTotal|lethal.return-value|1",
     "verdict": "killed",
     "killingTest": "UserDefinedBuiltinsRun",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "4029c46ca7d3c50dd5a22ac724af1f221ecfd945c53827314781883e6a8dd975|Data No Trigger|lethal.empty-block|1",
+    "key": "4029c46ca7d3c50dd5a22ac724af1f221ecfd945c53827314781883e6a8dd975|Data No Trigger|OnValidate|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "TooLongNoValidateFails",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "40940a286b7c9ef47ff4923f6198d20c44ca57b8f1b2c281d09020a8955eaac6|Data Ops|lethal.empty-block|1",
+    "key": "40940a286b7c9ef47ff4923f6198d20c44ca57b8f1b2c281d09020a8955eaac6|Data Ops|ShadowedBuiltins|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "ShadowedBuiltinsRun",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "423bc431f2d8d5a4e01bcece0de15421f2576828369b58437e82015671381af9|Data Main Ext|lethal.empty-block|1",
+    "key": "423bc431f2d8d5a4e01bcece0de15421f2576828369b58437e82015671381af9|Data Main Ext|ExtRequireCategory|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "ExtRequireCategoryFails",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "42dfed154cf71d42645b8be2ee0b5f2668621042f4133d93702dc0b0a588d412|Data Flag Ops|lethal.return-value|1",
+    "key": "42dfed154cf71d42645b8be2ee0b5f2668621042f4133d93702dc0b0a588d412|Data Flag Ops|InsertCounted|lethal.return-value|1",
     "verdict": "killed",
     "killingTest": "WeakInsertAssertionMissesTheFlag",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "435b6ac475cfc4492d6304b5106ffc0fed87dd1d6c36b068599314be71acf141|Data Scope Probe|lethal.remove-setrange|1",
+    "key": "435b6ac475cfc4492d6304b5106ffc0fed87dd1d6c36b068599314be71acf141|Data Scope Probe|OnInsert|lethal.remove-setrange|1",
     "verdict": "killed",
     "killingTest": "ScopeProbeCountsOnlyFilteredRelated",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "4361e50c375e40305819b2dc3eae9e1dc245b3115684696da23bf724133c00aa|Data Commit Ops|lethal.empty-block|1",
+    "key": "4361e50c375e40305819b2dc3eae9e1dc245b3115684696da23bf724133c00aa|Data Commit Ops|CommitThenRun|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "CommitBeforeCodeunitRunSucceeds",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "439ca12105ef070a298f1cdbae7084a7aac910d8701cebbc750cb983fcfbe3a9|Data Filter Ops|lethal.remove-setrange|1",
+    "key": "439ca12105ef070a298f1cdbae7084a7aac910d8701cebbc750cb983fcfbe3a9|Data Filter Ops|CountInRange|lethal.remove-setrange|1",
     "verdict": "killed",
     "killingTest": "ClosedRangeCountIsScopedByMainNo",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "46d6cf5bb896cfc420d70e88277475b714790e98a02eb2ba5289a2b868b868ab|Data Main List Ext|lethal.swap-modify-flag|1",
+    "key": "46d6cf5bb896cfc420d70e88277475b714790e98a02eb2ba5289a2b868b868ab|Data Main List Ext|OnOpenPage|lethal.swap-modify-flag|1",
     "verdict": "no-coverage",
     "killingTest": null,
     "coverageFiltered": true,
     "errorClass": null
   },
   {
-    "key": "46d6cf5bb896cfc420d70e88277475b714790e98a02eb2ba5289a2b868b868ab|Data Main List Ext|lethal.void-method-call|1",
+    "key": "46d6cf5bb896cfc420d70e88277475b714790e98a02eb2ba5289a2b868b868ab|Data Main List Ext|OnOpenPage|lethal.void-method-call|1",
     "verdict": "no-coverage",
     "killingTest": null,
     "coverageFiltered": true,
     "errorClass": null
   },
   {
-    "key": "473f8aabd89fb3776cd184869a26a1c95377d88cd9b8b6de8951a4d5feaddea4|Data Assert Ops|lethal.empty-block|1",
+    "key": "473f8aabd89fb3776cd184869a26a1c95377d88cd9b8b6de8951a4d5feaddea4|Data Assert Ops|DoubledLevel|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "AssertScreenSeesAnAssertionFailure",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "479449927b57b80c234dd61c6e77a2f77343a1f6b8aba9222e35154c8339cb10|Data Find Ops|lethal.negate-guard|1",
+    "key": "479449927b57b80c234dd61c6e77a2f77343a1f6b8aba9222e35154c8339cb10|Data Find Ops|LastLevelInRange|lethal.negate-guard|1",
     "verdict": "killed",
     "killingTest": "FindLastPicksTheHighestKeyInRange",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "479449927b57b80c234dd61c6e77a2f77343a1f6b8aba9222e35154c8339cb10|Data Find Ops|lethal.swap-find-direction|1",
+    "key": "479449927b57b80c234dd61c6e77a2f77343a1f6b8aba9222e35154c8339cb10|Data Find Ops|LastLevelInRange|lethal.swap-find-direction|1",
     "verdict": "killed",
     "killingTest": "FindLastPicksTheHighestKeyInRange",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "488189ca355f348cb13b3373d137f86e7d780195e81f13f33d948f12c0205b15|Data Main List Ext|lethal.empty-block|1",
+    "key": "488189ca355f348cb13b3373d137f86e7d780195e81f13f33d948f12c0205b15|Data Main List Ext|OnOpenPage|lethal.empty-block|1",
     "verdict": "no-coverage",
     "killingTest": null,
     "coverageFiltered": true,
     "errorClass": null
   },
   {
-    "key": "4a9ebf873ffbb11f34f891dc4d1e93fc0ee51edf0b7f84478d13c62e28723460|Data Flag Ops|lethal.empty-block|1",
+    "key": "4a9ebf873ffbb11f34f891dc4d1e93fc0ee51edf0b7f84478d13c62e28723460|Data Flag Ops|InsertTwiceWithKeyTrigger|lethal.empty-block|1",
     "verdict": "survived",
     "killingTest": null,
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "4ab4f450ec66d4c4901cec0320dcb447658d3f93d92784789908dae3c00a5f63|Data Trigger Probe|lethal.validate-to-assign|1",
+    "key": "4ab4f450ec66d4c4901cec0320dcb447658d3f93d92784789908dae3c00a5f63|Data Trigger Probe|ValidateLevelImplicit|lethal.validate-to-assign|1",
     "verdict": "killed",
     "killingTest": "ImplicitValidateRunsInsideTheTable",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "4ab4f450ec66d4c4901cec0320dcb447658d3f93d92784789908dae3c00a5f63|Data Trigger Probe|lethal.void-method-call|1",
+    "key": "4ab4f450ec66d4c4901cec0320dcb447658d3f93d92784789908dae3c00a5f63|Data Trigger Probe|ValidateLevelImplicit|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "ImplicitValidateRunsInsideTheTable",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "503b94e9346f4e0aa30556f7fa40c5665b41b758cd199e246ea5c12274f6a558|Data Scope Probe|lethal.empty-block|1",
+    "key": "503b94e9346f4e0aa30556f7fa40c5665b41b758cd199e246ea5c12274f6a558|Data Scope Probe|OnInsert|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "ScopeProbeCountsOnlyFilteredRelated",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "51a7f927d0aa77fb56a17a3ef4e2a54083742ed4b7199973b7816f35d212ae1f|Data Set Ops|lethal.negate-guard|1",
+    "key": "51a7f927d0aa77fb56a17a3ef4e2a54083742ed4b7199973b7816f35d212ae1f|Data Set Ops|PlainMembership|lethal.negate-guard|1",
     "verdict": "killed",
     "killingTest": "PlainMembershipSeparatesInsideAndOutsideTheSet",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "522c832da2a50e60ad3655483ecdc066816b8c4664416a6ee8e73e7c2eae845c|Data Flag Ops|lethal.return-value|1",
+    "key": "522c832da2a50e60ad3655483ecdc066816b8c4664416a6ee8e73e7c2eae845c|Data Flag Ops|InsertWithTrigger|lethal.return-value|1",
     "verdict": "killed",
     "killingTest": "InsertRunTriggerSetsTheTriggerField",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "52cfeddc3ca2123aff7e4b1a8871006a9c67ff3b6b3de193b48d47471f8f5441|Data Filter Ops|lethal.conditional-boundary|1",
+    "key": "52cfeddc3ca2123aff7e4b1a8871006a9c67ff3b6b3de193b48d47471f8f5441|Data Filter Ops|AnyExcluding|lethal.conditional-boundary|1",
     "verdict": "survived",
     "killingTest": null,
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "5395202f33877f761ae7dddda0d6dcb2cd2ec9137c2d849556ab246dbf69f057|Data Shadow|lethal.void-method-call|1",
+    "key": "5395202f33877f761ae7dddda0d6dcb2cd2ec9137c2d849556ab246dbf69f057|Data Shadow|SelfShadowed|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "SelfShadowedRun",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "54a3bd73817bb4cebf96ebcdd0435c1667555bc55da51912bd1d4457da6e8944|Data Swap Ops|lethal.empty-block|1",
+    "key": "54a3bd73817bb4cebf96ebcdd0435c1667555bc55da51912bd1d4457da6e8944|Data Swap Ops|AmountWithinCap|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "SwapReversesTheRangeComparison",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "558715310b91bcdacc3c5612e1004d40cca2efc4c2f884a65a7b84644db7a60c|Data Main|lethal.void-method-call|1",
+    "key": "558715310b91bcdacc3c5612e1004d40cca2efc4c2f884a65a7b84644db7a60c|Data Main|OnValidate|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "CategoryGuardNeedsCalcFields",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "55d33b49120d562c7f9a08e17c04eafa3c41fde4ad80973975e2df05ca5b54e9|Data Find Ops|lethal.empty-block|1",
+    "key": "55d33b49120d562c7f9a08e17c04eafa3c41fde4ad80973975e2df05ca5b54e9|Data Find Ops|FirstLevelInRange|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "FindFirstPicksTheLowestKeyInRange",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "579df3815ee985ce5aada968ea1afec8f9cc9f078e1436865626e1a20a0a94c3|Data Swap Ops|lethal.empty-block|1",
+    "key": "579df3815ee985ce5aada968ea1afec8f9cc9f078e1436865626e1a20a0a94c3|Data Swap Ops|LinkPair|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "LinkedPairIsStamped",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "586587a3782ebd0e3b9725b66bc812d0c6676a9ab2da3767b1b7e3ab918bcf35|Data Ops|lethal.negate-guard|1",
+    "key": "586587a3782ebd0e3b9725b66bc812d0c6676a9ab2da3767b1b7e3ab918bcf35|Data Ops|InsertWithoutTrigger|lethal.negate-guard|1",
     "verdict": "killed",
     "killingTest": "InsertWithoutTriggerKeepsAmount",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "586587a3782ebd0e3b9725b66bc812d0c6676a9ab2da3767b1b7e3ab918bcf35|Data Ops|lethal.void-method-call|1",
+    "key": "586587a3782ebd0e3b9725b66bc812d0c6676a9ab2da3767b1b7e3ab918bcf35|Data Ops|LoadAmount|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "LoadAmountReadsField",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "586587a3782ebd0e3b9725b66bc812d0c6676a9ab2da3767b1b7e3ab918bcf35|Data Ops|lethal.void-method-call|1",
+    "key": "586587a3782ebd0e3b9725b66bc812d0c6676a9ab2da3767b1b7e3ab918bcf35|Data Ops|MarkProcessed|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "MarkProcessedFiresModifyTrigger",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "586587a3782ebd0e3b9725b66bc812d0c6676a9ab2da3767b1b7e3ab918bcf35|Data Ops|lethal.void-method-call|1",
+    "key": "586587a3782ebd0e3b9725b66bc812d0c6676a9ab2da3767b1b7e3ab918bcf35|Data Ops|MarkWithFlag|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "ModifyWithFlagVariableRuns",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "586587a3782ebd0e3b9725b66bc812d0c6676a9ab2da3767b1b7e3ab918bcf35|Data Ops|lethal.void-method-call|1",
+    "key": "586587a3782ebd0e3b9725b66bc812d0c6676a9ab2da3767b1b7e3ab918bcf35|Data Ops|RequireCategoryA|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "RequireCategoryAFails",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "586587a3782ebd0e3b9725b66bc812d0c6676a9ab2da3767b1b7e3ab918bcf35|Data Ops|lethal.void-method-call|1",
+    "key": "586587a3782ebd0e3b9725b66bc812d0c6676a9ab2da3767b1b7e3ab918bcf35|Data Ops|TouchCategory|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "TouchCategoryWeak",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "589ad2d30d6276e5f4ba3e93622b38428d87002fb4caa5115659dabaf58abe13|Data Flag Ops|lethal.swap-modify-flag|1",
+    "key": "589ad2d30d6276e5f4ba3e93622b38428d87002fb4caa5115659dabaf58abe13|Data Flag Ops|DeleteWithTrigger|lethal.swap-modify-flag|1",
     "verdict": "killed",
     "killingTest": "DeleteRunTriggerLeavesTombstone",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "589ad2d30d6276e5f4ba3e93622b38428d87002fb4caa5115659dabaf58abe13|Data Flag Ops|lethal.void-method-call|1",
+    "key": "589ad2d30d6276e5f4ba3e93622b38428d87002fb4caa5115659dabaf58abe13|Data Flag Ops|DeleteWithTrigger|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "DeleteRunTriggerLeavesTombstone",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "61072b504235d286afe416a0e5277e8826b3e54d1bda6d4fe7af367f156b93f0|Data Ops|lethal.void-method-call|1",
+    "key": "61072b504235d286afe416a0e5277e8826b3e54d1bda6d4fe7af367f156b93f0|Data Ops|ShadowedBuiltins|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "ShadowedBuiltinsRun",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "6427f3b7115d5b36f3415613eeb54125f67d8efe101847a821617cd28f57b887|Data Set Ops|lethal.empty-block|1",
+    "key": "6427f3b7115d5b36f3415613eeb54125f67d8efe101847a821617cd28f57b887|Data Set Ops|BothOutsideRange|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "BothOutsideRangeSeparatesEqualAndUnequal",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "64e7d951d350c836298da4fad1dec257d9f62b02f1ebfd8012992c7e1c52905a|Data Filter Ops|lethal.remove-setrange|1",
+    "key": "64e7d951d350c836298da4fad1dec257d9f62b02f1ebfd8012992c7e1c52905a|Data Filter Ops|CountUpToBound|lethal.remove-setrange|1",
     "verdict": "killed",
     "killingTest": "RangeFlipChangesTheCountRegardlessOfInclusivity",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "655a0653b1c900093fdca79066d89863d9a0b4e76e61449503381aeb1a6e1d1f|Data No Trigger|lethal.conditional-boundary|1",
+    "key": "655a0653b1c900093fdca79066d89863d9a0b4e76e61449503381aeb1a6e1d1f|Data No Trigger|OnValidate|lethal.conditional-boundary|1",
     "verdict": "survived",
     "killingTest": null,
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "668e2e62a1072637f5516f0fa8a23aab98709ecd33970dfd91f47470ab503762|Data Main|lethal.empty-block|1",
+    "key": "668e2e62a1072637f5516f0fa8a23aab98709ecd33970dfd91f47470ab503762|Data Main|CountInCategory|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "CountInCategoryUppercaseSetRange",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "69ab2635d97b4a033d6979b89c9577ff9099ed31bfcdea22e425161990f85c56|Data Commit Ops|lethal.void-method-call|1",
-    "verdict": "killed",
-    "killingTest": "CommitBeforeCodeunitRunSucceeds",
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "69ab2635d97b4a033d6979b89c9577ff9099ed31bfcdea22e425161990f85c56|Data Commit Ops|lethal.void-method-call|1",
-    "verdict": "killed",
-    "killingTest": "CommitBeforeValueFormCodeunitRunSucceeds",
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "69ab2635d97b4a033d6979b89c9577ff9099ed31bfcdea22e425161990f85c56|Data Commit Ops|lethal.void-method-call|1",
+    "key": "69ab2635d97b4a033d6979b89c9577ff9099ed31bfcdea22e425161990f85c56|Data Commit Ops|CommitThenFail|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "CommittedWriteSurvivesFailure",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "69ab2635d97b4a033d6979b89c9577ff9099ed31bfcdea22e425161990f85c56|Data Ops|lethal.void-method-call|1",
+    "key": "69ab2635d97b4a033d6979b89c9577ff9099ed31bfcdea22e425161990f85c56|Data Commit Ops|CommitThenRun|lethal.void-method-call|1",
+    "verdict": "killed",
+    "killingTest": "CommitBeforeCodeunitRunSucceeds",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "69ab2635d97b4a033d6979b89c9577ff9099ed31bfcdea22e425161990f85c56|Data Commit Ops|CommitThenRunValueForm|lethal.void-method-call|1",
+    "verdict": "killed",
+    "killingTest": "CommitBeforeValueFormCodeunitRunSucceeds",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "69ab2635d97b4a033d6979b89c9577ff9099ed31bfcdea22e425161990f85c56|Data Ops|InsertWithoutTrigger|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "InsertWithoutTriggerKeepsAmount",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "69ab2635d97b4a033d6979b89c9577ff9099ed31bfcdea22e425161990f85c56|Data Trigger Probe|lethal.void-method-call|1",
+    "key": "69ab2635d97b4a033d6979b89c9577ff9099ed31bfcdea22e425161990f85c56|Data Trigger Probe|OnDelete|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "DeleteRunTriggerLeavesTombstone",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "6c1023749258da6a79e8827eacf2b81d0d6198ff6376c8066b2dc58478fd0fb0|Data Ops|lethal.empty-block|1",
+    "key": "6c1023749258da6a79e8827eacf2b81d0d6198ff6376c8066b2dc58478fd0fb0|Data Ops|CountForMain|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "CountForMainIgnoresDecoys",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "6e73a621241a45f3998ca2f3c6131aec8b1e9806054070946dbe657bfe020128|Data Ops|lethal.return-value|1",
+    "key": "6e73a621241a45f3998ca2f3c6131aec8b1e9806054070946dbe657bfe020128|Data Ops|RunUserDefinedBuiltins|lethal.return-value|1",
     "verdict": "killed",
     "killingTest": "UserDefinedBuiltinsRun",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "71f50c693e5fd6fa39380b8d18ffbbeb2086e5abee6dbfc094c696fc6d217f59|Data Trigger Probe|lethal.empty-block|1",
+    "key": "71f50c693e5fd6fa39380b8d18ffbbeb2086e5abee6dbfc094c696fc6d217f59|Data Trigger Probe|OnValidate|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "ValidateRunsTheFieldTrigger",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "71fd7b940e62c731eebd1df55059c7e8e49191daf400664a9ad612e5c6a99bbc|Data Main List Ext|lethal.empty-block|1",
+    "key": "71fd7b940e62c731eebd1df55059c7e8e49191daf400664a9ad612e5c6a99bbc|Data Main List Ext|OnOpenPage|lethal.empty-block|1",
     "verdict": "no-coverage",
     "killingTest": null,
     "coverageFiltered": true,
     "errorClass": null
   },
   {
-    "key": "7269c3cf0f98827d4cce162889c3b9e7b9f5a13f383cfefe7fd9068c5668d8e5|Data Ops|lethal.void-method-call|1",
+    "key": "7269c3cf0f98827d4cce162889c3b9e7b9f5a13f383cfefe7fd9068c5668d8e5|Data Ops|MarkWithFlag|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "ModifyWithFlagVariableRuns",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "7269ddcc6ba5ebf3ba1b61ff2f9327a59b27b58b2db00ff8d90413d0e0a99acf|Data Flag Ops|lethal.empty-block|1",
+    "key": "7269ddcc6ba5ebf3ba1b61ff2f9327a59b27b58b2db00ff8d90413d0e0a99acf|Data Flag Ops|InsertCounted|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "WeakInsertAssertionMissesTheFlag",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "728a6906b0c4d20b99c442b3708113f224bd70c643f0cfc5e0d411fafad5b765|Data Set Ops|lethal.remove-not|1",
+    "key": "728a6906b0c4d20b99c442b3708113f224bd70c643f0cfc5e0d411fafad5b765|Data Set Ops|RegionRank|lethal.remove-not|1",
     "verdict": "killed",
     "killingTest": "RegionRankSeparatesInsideAndOutsideTheSet",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "732641f51e59d13ba91a83c6bb143250fb26a12a973c15aaa4935bf338cd8f53|Data Swap Ops|lethal.swap-call-arguments|1",
+    "key": "732641f51e59d13ba91a83c6bb143250fb26a12a973c15aaa4935bf338cd8f53|Data Swap Ops|StampFromPair|lethal.swap-call-arguments|1",
     "verdict": "survived",
     "killingTest": null,
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "732641f51e59d13ba91a83c6bb143250fb26a12a973c15aaa4935bf338cd8f53|Data Swap Ops|lethal.void-method-call|1",
+    "key": "732641f51e59d13ba91a83c6bb143250fb26a12a973c15aaa4935bf338cd8f53|Data Swap Ops|StampFromPair|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "WeakStampAssertionMissesTheSwap",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "74c53f7b1632d4d0ad098dcae1e49934de524ee6e8f9369d05e7458659088da8|Data Ops|lethal.remove-setrange|1",
+    "key": "74c53f7b1632d4d0ad098dcae1e49934de524ee6e8f9369d05e7458659088da8|Data Ops|CountForMain|lethal.remove-setrange|1",
     "verdict": "killed",
     "killingTest": "CountForMainIgnoresDecoys",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "777a93c224045f499fe6e2f379b4fbe79c19fa8baabacff83ec70655ee447a02|Data Shadow|lethal.empty-block|1",
+    "key": "777a93c224045f499fe6e2f379b4fbe79c19fa8baabacff83ec70655ee447a02|Data Shadow|BumpViaCommit|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "ShadowedBuiltinsRun",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "78d263bdf45458172865b270cf8c37ce220abae7feec90e4dd915b0eabc69b89|Data Swap Ops|lethal.swap-additive|1",
+    "key": "78d263bdf45458172865b270cf8c37ce220abae7feec90e4dd915b0eabc69b89|Data Swap Ops|Accumulate|lethal.swap-additive|1",
     "verdict": "killed",
     "killingTest": "SwapRedirectsTheAccumulatorWriteback",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "78d263bdf45458172865b270cf8c37ce220abae7feec90e4dd915b0eabc69b89|Data Validator|lethal.swap-additive|1",
+    "key": "78d263bdf45458172865b270cf8c37ce220abae7feec90e4dd915b0eabc69b89|Data Validator|TestField|lethal.swap-additive|1",
     "verdict": "killed",
     "killingTest": "UserDefinedBuiltinsRun",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "7977865555164bf1784dad75d231b9434607fadb317e5a41ff5ebb15b40b0ada|Data Set Ops|lethal.return-value|1",
+    "key": "7977865555164bf1784dad75d231b9434607fadb317e5a41ff5ebb15b40b0ada|Data Set Ops|BothOutsideRange|lethal.return-value|1",
     "verdict": "killed",
     "killingTest": "BothOutsideRangeSeparatesEqualAndUnequal",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "7977865555164bf1784dad75d231b9434607fadb317e5a41ff5ebb15b40b0ada|Data Set Ops|lethal.return-value|1",
+    "key": "7977865555164bf1784dad75d231b9434607fadb317e5a41ff5ebb15b40b0ada|Data Set Ops|PlainMembership|lethal.return-value|1",
     "verdict": "killed",
     "killingTest": "PlainMembershipSeparatesInsideAndOutsideTheSet",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "7977865555164bf1784dad75d231b9434607fadb317e5a41ff5ebb15b40b0ada|Data Set Ops|lethal.return-value|1",
+    "key": "7977865555164bf1784dad75d231b9434607fadb317e5a41ff5ebb15b40b0ada|Data Set Ops|RegionRank|lethal.return-value|1",
     "verdict": "killed",
     "killingTest": "RegionRankSeparatesInsideAndOutsideTheSet",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Data Main|lethal.swap-additive|1",
+    "key": "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Data Main|OnValidate|lethal.swap-additive|1",
     "verdict": "survived",
     "killingTest": null,
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Data Main|lethal.swap-additive|1",
+    "key": "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Data Main|OnValidate|lethal.swap-additive|1",
     "verdict": "survived",
     "killingTest": null,
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "7cc1652df445bc6414e653b89cf278163567b4e02880a9d1b987d35cd1e8b915|Data Main|lethal.empty-block|1",
+    "key": "7cc1652df445bc6414e653b89cf278163567b4e02880a9d1b987d35cd1e8b915|Data Main|OnValidate|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "BlankNoValidateFails",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "7cf11c2bac815ad2fcc14f47ac4375d6324a62200f9dcf28d91944167809e67a|Data Ops|lethal.empty-block|1",
+    "key": "7cf11c2bac815ad2fcc14f47ac4375d6324a62200f9dcf28d91944167809e67a|Data Ops|MarkWithFlag|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "ModifyWithFlagVariableRuns",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "7d3ddeba69c14e4bda7203a05e4c9a717c415e813d48cbfe8ead4481372ecc9c|Data Flag Ops|lethal.empty-block|1",
+    "key": "7d3ddeba69c14e4bda7203a05e4c9a717c415e813d48cbfe8ead4481372ecc9c|Data Flag Ops|InsertWithTrigger|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "InsertRunTriggerSetsTheTriggerField",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "7d508c5eb94a173eed5a539a342d5fca07fa151a40e24f3681c8a743134f9896|Data Swap Ops|lethal.empty-block|1",
+    "key": "7d508c5eb94a173eed5a539a342d5fca07fa151a40e24f3681c8a743134f9896|Data Swap Ops|RunningTotal|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "SwapRedirectsTheAccumulatorWriteback",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "7f35bd1725ae5b0ae88c94918d62d0512dbc6f8ca0999646c0657ed122ed23b9|Data Builder|lethal.empty-block|1",
+    "key": "7f35bd1725ae5b0ae88c94918d62d0512dbc6f8ca0999646c0657ed122ed23b9|Data Builder|SetRange|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "UserDefinedBuiltinsRun",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "8020eee8facb4274055b63fee3382e7d127a6197ea718cc38db0bb9b6846b613|Data Ops|lethal.swap-additive|1",
+    "key": "8020eee8facb4274055b63fee3382e7d127a6197ea718cc38db0bb9b6846b613|Data Ops|RunUserDefinedBuiltins|lethal.swap-additive|1",
     "verdict": "killed",
     "killingTest": "UserDefinedBuiltinsRun",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "838403be01f03c7c84547a31a3f5e3dfa35bced285ab562df00f244a3e89407c|Data Ops|lethal.empty-block|1",
+    "key": "838403be01f03c7c84547a31a3f5e3dfa35bced285ab562df00f244a3e89407c|Data Ops|RunUserDefinedBuiltins|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "UserDefinedBuiltinsRun",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "84c847b650bf8648e34378707b482a1468e5cc8759ea3b61e0c8b3057312314d|Data Commit Ops|lethal.empty-block|1",
+    "key": "84c847b650bf8648e34378707b482a1468e5cc8759ea3b61e0c8b3057312314d|Data Commit Ops|CommitThenRunValueForm|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "CommitBeforeValueFormCodeunitRunSucceeds",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "87bf6f6ec66540cf51cca1abca841d5a9b3e7b61fe0becc8355ea5f47bdc8c1c|Data Find Ops|lethal.remove-setrange|1",
+    "key": "87bf6f6ec66540cf51cca1abca841d5a9b3e7b61fe0becc8355ea5f47bdc8c1c|Data Find Ops|FirstLevelInRange|lethal.remove-setrange|1",
     "verdict": "killed",
     "killingTest": "FindFirstPicksTheLowestKeyInRange",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "87bf6f6ec66540cf51cca1abca841d5a9b3e7b61fe0becc8355ea5f47bdc8c1c|Data Find Ops|lethal.remove-setrange|1",
-    "verdict": "killed",
-    "killingTest": "FindLastPicksTheHighestKeyInRange",
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "87bf6f6ec66540cf51cca1abca841d5a9b3e7b61fe0becc8355ea5f47bdc8c1c|Data Find Ops|lethal.swap-call-arguments|1",
+    "key": "87bf6f6ec66540cf51cca1abca841d5a9b3e7b61fe0becc8355ea5f47bdc8c1c|Data Find Ops|FirstLevelInRange|lethal.swap-call-arguments|1",
     "verdict": "killed",
     "killingTest": "FindFirstPicksTheLowestKeyInRange",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "87bf6f6ec66540cf51cca1abca841d5a9b3e7b61fe0becc8355ea5f47bdc8c1c|Data Find Ops|lethal.swap-call-arguments|1",
+    "key": "87bf6f6ec66540cf51cca1abca841d5a9b3e7b61fe0becc8355ea5f47bdc8c1c|Data Find Ops|LastLevelInRange|lethal.remove-setrange|1",
     "verdict": "killed",
     "killingTest": "FindLastPicksTheHighestKeyInRange",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "87c847f3958df6e32da7abfe20434126fe4c06f8736f2ea9cfb469e2f8cb0ec5|Data Main|lethal.void-method-call|1",
+    "key": "87bf6f6ec66540cf51cca1abca841d5a9b3e7b61fe0becc8355ea5f47bdc8c1c|Data Find Ops|LastLevelInRange|lethal.swap-call-arguments|1",
+    "verdict": "killed",
+    "killingTest": "FindLastPicksTheHighestKeyInRange",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "87c847f3958df6e32da7abfe20434126fe4c06f8736f2ea9cfb469e2f8cb0ec5|Data Main|OnValidate|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "BlankNoValidateFails",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "8870326feb303ad5a15907cb9e3a5dada8a3afaba3a64e9c1c69611207570a11|Data Flag Ops|lethal.empty-block|1",
+    "key": "8870326feb303ad5a15907cb9e3a5dada8a3afaba3a64e9c1c69611207570a11|Data Flag Ops|InsertTwiceWithKeyTrigger|lethal.empty-block|1",
     "verdict": "survived",
     "killingTest": null,
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "89a8f14203bc6c1a5b29130d054755d7cefe81df70216cb61972f009ff752f23|Data Commit Ops|lethal.void-method-call|1",
+    "key": "89a8f14203bc6c1a5b29130d054755d7cefe81df70216cb61972f009ff752f23|Data Commit Ops|CommitThenFail|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "CommittedWriteSurvivesFailure",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "8d1aa26d8efa64be0bedd88ee0a6a0e4fad6c74c8abe291011b8159bce5fb96c|Data Main List Ext|lethal.remove-setrange|1",
+    "key": "8d1aa26d8efa64be0bedd88ee0a6a0e4fad6c74c8abe291011b8159bce5fb96c|Data Main List Ext|OnOpenPage|lethal.remove-setrange|1",
     "verdict": "no-coverage",
     "killingTest": null,
     "coverageFiltered": true,
     "errorClass": null
   },
   {
-    "key": "8d3265a035d395a9103fde90e4b3956da896faf8fedf932bc18e60974030b0d2|Data Main|lethal.empty-block|1",
+    "key": "8d3265a035d395a9103fde90e4b3956da896faf8fedf932bc18e60974030b0d2|Data Main|OnValidate|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "CategoryGuardNeedsCalcFields",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "8e53e05fee347aab2b9dfbf00024f0fed469875bf2cf6b59a3637ed5e7a656ed|Data Filter Ops|lethal.flip-filter-literal|1",
+    "key": "8e53e05fee347aab2b9dfbf00024f0fed469875bf2cf6b59a3637ed5e7a656ed|Data Filter Ops|CountExcluding|lethal.flip-filter-literal|1",
     "verdict": "killed",
     "killingTest": "NegationFlipChangesTheCount",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "8e53e05fee347aab2b9dfbf00024f0fed469875bf2cf6b59a3637ed5e7a656ed|Data Filter Ops|lethal.void-method-call|1",
+    "key": "8e53e05fee347aab2b9dfbf00024f0fed469875bf2cf6b59a3637ed5e7a656ed|Data Filter Ops|CountExcluding|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "NegationFlipChangesTheCount",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "913b605498121fdb94c76da8110bf5ca92d4f5139b408b5b16d681b0e2307139|Data Swap Ops|lethal.empty-block|1",
+    "key": "913b605498121fdb94c76da8110bf5ca92d4f5139b408b5b16d681b0e2307139|Data Swap Ops|RecordFlags|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "CommutativeCalleeMakesTheSwapEquivalent",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "93bd96d69f211dd205aecc3b89564e852d93da1caa1d6eda69f4f3421b07c7a6|Data Commit Target|lethal.empty-block|1",
+    "key": "93bd96d69f211dd205aecc3b89564e852d93da1caa1d6eda69f4f3421b07c7a6|Data Commit Target|OnRun|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "CommitBeforeCodeunitRunSucceeds",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "96a7c9494093fe6d24be905288e9a47eb81e761e3aa075432ba841587be549ea|Data Set Ops|lethal.empty-block|1",
+    "key": "96a7c9494093fe6d24be905288e9a47eb81e761e3aa075432ba841587be549ea|Data Set Ops|PlainMembership|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "PlainMembershipSeparatesInsideAndOutsideTheSet",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "9791edda9ee5977f39cb58933fea5e43192757df272dbd3e149665eca45fa84d|Data Loader|lethal.empty-block|1",
+    "key": "9791edda9ee5977f39cb58933fea5e43192757df272dbd3e149665eca45fa84d|Data Loader|SetLoadFields|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "UserDefinedBuiltinsRun",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "9b029cf89caffa363e62fd5d0a3573bf24f0889fc752137aacb9db634a1b10ba|Data Swap Ops|lethal.swap-call-arguments|1",
+    "key": "9b029cf89caffa363e62fd5d0a3573bf24f0889fc752137aacb9db634a1b10ba|Data Swap Ops|NoteFlags|lethal.swap-call-arguments|1",
     "verdict": "survived",
     "killingTest": null,
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "9b029cf89caffa363e62fd5d0a3573bf24f0889fc752137aacb9db634a1b10ba|Data Swap Ops|lethal.void-method-call|1",
+    "key": "9b029cf89caffa363e62fd5d0a3573bf24f0889fc752137aacb9db634a1b10ba|Data Swap Ops|NoteFlags|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "CommutativeCalleeMakesTheSwapEquivalent",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "9d4134f907df4a8d8a003c43a4a8574ac5b0198d153b2ecc1f803b1874c18f58|Data Main Ext|lethal.empty-block|1",
+    "key": "9d4134f907df4a8d8a003c43a4a8574ac5b0198d153b2ecc1f803b1874c18f58|Data Main Ext|ExtCountRelated|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "ExtCountRelatedIgnoresDecoys",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "9e2a3a8521a1d38206faafb5b3589cc7df8fe22d72b5ea4ba4b6b5532718096e|Data Ops|lethal.empty-block|1",
+    "key": "9e2a3a8521a1d38206faafb5b3589cc7df8fe22d72b5ea4ba4b6b5532718096e|Data Ops|LoadAmount|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "LoadAmountReadsField",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "9e4b188f67531610153e7049c200a2cc47f1e53c01c649038c9c3396f21036d0|Data Main List Ext|lethal.negate-guard|1",
+    "key": "9e4b188f67531610153e7049c200a2cc47f1e53c01c649038c9c3396f21036d0|Data Main List Ext|OnOpenPage|lethal.negate-guard|1",
     "verdict": "no-coverage",
     "killingTest": null,
     "coverageFiltered": true,
     "errorClass": null
   },
   {
-    "key": "9f31e623d8d0bbe588f7611b1b007e9714872b9e191ef11ad72bd4ac7db3609e|Data Swap Ops|lethal.empty-block|1",
+    "key": "9f31e623d8d0bbe588f7611b1b007e9714872b9e191ef11ad72bd4ac7db3609e|Data Swap Ops|Link|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "LinkedPairIsStamped",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "9fd571ad6d971592ebb0f56a6f8c5a250e6946a4e63f64cdc7b128c9d1ca1657|Data Ops|lethal.void-method-call|1",
+    "key": "9fd571ad6d971592ebb0f56a6f8c5a250e6946a4e63f64cdc7b128c9d1ca1657|Data Ops|RunUserDefinedBuiltins|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "UserDefinedBuiltinsRun",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "a22445ff2842966e67c6ea9b5ac40270a678c214cc0851b15dee61484a6188b4|Data Swap Ops|lethal.conditional-boundary|1",
+    "key": "a22445ff2842966e67c6ea9b5ac40270a678c214cc0851b15dee61484a6188b4|Data Swap Ops|InRange|lethal.conditional-boundary|1",
     "verdict": "killed",
     "killingTest": "SwapReversesTheRangeComparison",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "a3ff2f07cb3fafe10a4c4d09eb29ec137e71650c546666db4e0d2458af6ab95a|Data Filter Ops|lethal.empty-block|1",
+    "key": "a3ff2f07cb3fafe10a4c4d09eb29ec137e71650c546666db4e0d2458af6ab95a|Data Filter Ops|CountExcluding|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "NegationFlipChangesTheCount",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "a4d0dfb5330c2417d08747866743788a5142cf7722e37774e46ed4561ef23a98|Data Filter Ops|lethal.remove-setrange|1",
+    "key": "a4d0dfb5330c2417d08747866743788a5142cf7722e37774e46ed4561ef23a98|Data Filter Ops|CountTaggedInBand|lethal.remove-setrange|1",
     "verdict": "killed",
     "killingTest": "NotBlankFilterCountsOnlyTaggedRows",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "a75c8d5c57533c2919fb66da9ae2c5d5a15b02f9e5dea53154756d69ced184a2|Data Assert Ops|lethal.empty-block|1",
+    "key": "a75c8d5c57533c2919fb66da9ae2c5d5a15b02f9e5dea53154756d69ced184a2|Data Assert Ops|TripledLevel|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "AssertScreenSeesABareErrorFailure",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "a7edb118b0c9ba8188c4324520378a8f9ffeb7c6112a2ad38b3c7df21246c2de|Data Ops|lethal.empty-block|1",
+    "key": "a7edb118b0c9ba8188c4324520378a8f9ffeb7c6112a2ad38b3c7df21246c2de|Data Ops|MarkProcessed|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "MarkProcessedFiresModifyTrigger",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "a8ee39646a0ad5ea316601ac48a3c045788c3cc8ecc8ae493c84c6a56093ded2|Data Swap Ops|lethal.negate-conditional|1",
+    "key": "a8ee39646a0ad5ea316601ac48a3c045788c3cc8ecc8ae493c84c6a56093ded2|Data Swap Ops|RecordFlags|lethal.negate-conditional|1",
     "verdict": "killed",
     "killingTest": "CommutativeCalleeMakesTheSwapEquivalent",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "ada68d63036475dddcc02e0199c036876c8b7e62486669fc3c0b3333fd602ccc|Data Ops|lethal.empty-block|1",
+    "key": "ada68d63036475dddcc02e0199c036876c8b7e62486669fc3c0b3333fd602ccc|Data Ops|TouchCategory|lethal.empty-block|1",
     "verdict": "survived",
     "killingTest": null,
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "addaff0f391e44f6d065225abd5e7f78c4726c2155b0d550d508f6f15bb2ab67|Data Trigger Probe|lethal.return-value|1",
+    "key": "addaff0f391e44f6d065225abd5e7f78c4726c2155b0d550d508f6f15bb2ab67|Data Trigger Probe|ValidateLevelImplicit|lethal.return-value|1",
     "verdict": "killed",
     "killingTest": "ImplicitValidateRunsInsideTheTable",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "b16780813e5863d007c340c524b2497dd35f7cc5851dd844d3cbfda271790c90|Data Main|lethal.empty-block|1",
+    "key": "b16780813e5863d007c340c524b2497dd35f7cc5851dd844d3cbfda271790c90|Data Main|OnValidate|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "FlaggedFiresModifyTrigger",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "b228556f558cde901cceafd22267eeddb45e54c77ebbb1b3c3b0682fe333a6d7|Data Ops|lethal.return-value|1",
+    "key": "b228556f558cde901cceafd22267eeddb45e54c77ebbb1b3c3b0682fe333a6d7|Data Ops|ShadowedBuiltins|lethal.return-value|1",
     "verdict": "killed",
     "killingTest": "ShadowedBuiltinsRun",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "b2e7c7c0f2d09096ca94a9bfd789f960356ba137db389cc73309842c807add99|Data Filter Ops|lethal.void-method-call|1",
+    "key": "b2e7c7c0f2d09096ca94a9bfd789f960356ba137db389cc73309842c807add99|Data Filter Ops|CountInRange|lethal.void-method-call|1",
     "verdict": "survived",
     "killingTest": null,
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "b473f0f8762594047a5f52777f0ab590b94174b0b7816a51a572d18cad81f853|Data Commit Ops|lethal.empty-block|1",
+    "key": "b473f0f8762594047a5f52777f0ab590b94174b0b7816a51a572d18cad81f853|Data Commit Ops|CommitThenFail|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "CommittedWriteSurvivesFailure",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "b53a85a39b58b67f9c943801aea22196099fb5586982d8fd3bdc03d3bbf6974f|Data Filter Ops|lethal.empty-block|1",
+    "key": "b53a85a39b58b67f9c943801aea22196099fb5586982d8fd3bdc03d3bbf6974f|Data Filter Ops|CountInRange|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "ClosedRangeCountIsScopedByMainNo",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "b5f78ce898ec594a3b9c24e8d4a1f60ebb27ff152e9984fa3fd50f04181fca73|Data Find Ops|lethal.empty-block|1",
+    "key": "b5f78ce898ec594a3b9c24e8d4a1f60ebb27ff152e9984fa3fd50f04181fca73|Data Find Ops|AnyRow|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "ExistenceOnlyAssertionMissesTheDirection",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "ba57b8a23dc6a3b34719619f2473665fc8064e6bb05617e81d5bebf3c4364457|Data Validate Ops|lethal.return-value|1",
-    "verdict": "killed",
-    "killingTest": "TouchLevelRunsTheTriggerAgain",
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "ba57b8a23dc6a3b34719619f2473665fc8064e6bb05617e81d5bebf3c4364457|Data Validate Ops|lethal.return-value|1",
+    "key": "ba57b8a23dc6a3b34719619f2473665fc8064e6bb05617e81d5bebf3c4364457|Data Validate Ops|SetLevel|lethal.return-value|1",
     "verdict": "killed",
     "killingTest": "ValidateRunsTheFieldTrigger",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "bba118b66705b6a03404fc9d3c52631193a2418a4d70bad0e6a72212a87e6f8d|Data Ops|lethal.empty-block|1",
+    "key": "ba57b8a23dc6a3b34719619f2473665fc8064e6bb05617e81d5bebf3c4364457|Data Validate Ops|TouchLevel|lethal.return-value|1",
+    "verdict": "killed",
+    "killingTest": "TouchLevelRunsTheTriggerAgain",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "bba118b66705b6a03404fc9d3c52631193a2418a4d70bad0e6a72212a87e6f8d|Data Ops|RequireCategoryA|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "RequireCategoryAFails",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "bbbac7d951e4666a3e1ef38b31066baeb23014a13f47e4e4ffe425a1912e3c4a|Data Ops|lethal.void-method-call|1",
+    "key": "bbbac7d951e4666a3e1ef38b31066baeb23014a13f47e4e4ffe425a1912e3c4a|Data Ops|LoadAmount|lethal.void-method-call|1",
     "verdict": "survived",
     "killingTest": null,
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "bd3c21130473b40925ce71fca8bf4dd7c896303038d956fc9742625c3cd6b403|Data Main Ext|lethal.remove-setrange|1",
+    "key": "bd3c21130473b40925ce71fca8bf4dd7c896303038d956fc9742625c3cd6b403|Data Main Ext|ExtCountRelated|lethal.remove-setrange|1",
     "verdict": "killed",
     "killingTest": "ExtCountRelatedIgnoresDecoys",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "be99bd808e7c564330214c222affe4f78d23be74eeab76b0dab9fcf755f0176a|Data Ops|lethal.remove-testfield|1",
+    "key": "be99bd808e7c564330214c222affe4f78d23be74eeab76b0dab9fcf755f0176a|Data Ops|RequireCategoryA|lethal.remove-testfield|1",
     "verdict": "killed",
     "killingTest": "RequireCategoryAFails",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "c384b379ff278dcf878b3f9a84cc5efcfdb4bb6e3e364fa91ac41c452ec7168d|Data Swap Ops|lethal.void-method-call|1",
+    "key": "c384b379ff278dcf878b3f9a84cc5efcfdb4bb6e3e364fa91ac41c452ec7168d|Data Swap Ops|LinkPair|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "LinkedPairIsStamped",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "c3ad0133a594bdcda453d6356d7f363351bede0c37c658750a3a22e227ba75fc|Data Commit Target|lethal.void-method-call|1",
+    "key": "c3ad0133a594bdcda453d6356d7f363351bede0c37c658750a3a22e227ba75fc|Data Commit Target|OnRun|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "CommitBeforeCodeunitRunSucceeds",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "c3dd5c7779577e7022ef3ad3f3f0614f454190d455f86d0c38a31b7c8e4ddb15|Data Ops|lethal.empty-block|1",
+    "key": "c3dd5c7779577e7022ef3ad3f3f0614f454190d455f86d0c38a31b7c8e4ddb15|Data Ops|InsertWithoutTrigger|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "InsertWithoutTriggerKeepsAmount",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "c418f4efb9e88904a396ba326ed4e788592cd0b41c807f2df0eda67c887d28b3|Data Value Source|lethal.empty-block|1",
+    "key": "c418f4efb9e88904a396ba326ed4e788592cd0b41c807f2df0eda67c887d28b3|Data Value Source|GetValue|lethal.empty-block|1",
     "verdict": "no-coverage",
     "killingTest": null,
     "coverageFiltered": true,
     "errorClass": null
   },
   {
-    "key": "c5d13f4c274de395aeca5e10fd74eda35c8b02bb3b7465f3f22ab9365fbc68f3|Data Validate Ops|lethal.empty-block|1",
+    "key": "c5d13f4c274de395aeca5e10fd74eda35c8b02bb3b7465f3f22ab9365fbc68f3|Data Validate Ops|TouchLevel|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "TouchLevelRunsTheTriggerAgain",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "c5db30537074bbfbf03a6bd3b50b0df97e1163847b8fed450a42586ec22cf71f|Data Filter Ops|lethal.void-method-call|1",
+    "key": "c5db30537074bbfbf03a6bd3b50b0df97e1163847b8fed450a42586ec22cf71f|Data Filter Ops|CountTaggedInBand|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "NotBlankFilterCountsOnlyTaggedRows",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "c6b8a794c3ec8276bd7159fe11adfe85a18a1fad08153f4bf2893471aac0a06a|Data Shadow|lethal.empty-block|1",
+    "key": "c6b8a794c3ec8276bd7159fe11adfe85a18a1fad08153f4bf2893471aac0a06a|Data Shadow|SetRange|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "ShadowedBuiltinsRun",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "c6fa2763c35a144644d3c59d2f6b667cd0c976ec4cac4ce9e7d27d0cdc8b0c42|Data Trigger Probe|lethal.empty-block|1",
+    "key": "c6fa2763c35a144644d3c59d2f6b667cd0c976ec4cac4ce9e7d27d0cdc8b0c42|Data Trigger Probe|OnDelete|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "DeleteRunTriggerLeavesTombstone",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "c90be1867a261184d51eb1ff3673aaa7d42ac142c5076019c031ea53f5f18fdc|Data Scope Probe|lethal.empty-block|1",
+    "key": "c90be1867a261184d51eb1ff3673aaa7d42ac142c5076019c031ea53f5f18fdc|Data Scope Probe|OnValidate|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "ScopeProbeTracksFieldChange",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "ca09a9083aadf35327107c52452e3d766efadd78727a20a0cffcb0f14630ca86|Data Main|lethal.remove-calcfields|1",
+    "key": "ca09a9083aadf35327107c52452e3d766efadd78727a20a0cffcb0f14630ca86|Data Main|OnValidate|lethal.remove-calcfields|1",
     "verdict": "killed",
     "killingTest": "CategoryGuardNeedsCalcFields",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "ca182a91ff025490fe701cc89844af9aafe8c535275684344db66b9871f982fe|Data Swap Ops|lethal.empty-block|1",
+    "key": "ca182a91ff025490fe701cc89844af9aafe8c535275684344db66b9871f982fe|Data Swap Ops|StampFromPair|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "WeakStampAssertionMissesTheSwap",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "cc8317f3018759ab8d5178fa9aff18f1c4de59a37d62241236cb641c95e55eca|Data Commit Ops|lethal.void-method-call|1",
+    "key": "cc8317f3018759ab8d5178fa9aff18f1c4de59a37d62241236cb641c95e55eca|Data Commit Ops|CommitThenRun|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "CommitBeforeCodeunitRunSucceeds",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "ccaaa68618f9dc18389747acd981847da95357575096acdea910385a2a6c02fe|Data Shadow|lethal.empty-block|1",
+    "key": "ccaaa68618f9dc18389747acd981847da95357575096acdea910385a2a6c02fe|Data Shadow|TestField|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "ShadowedBuiltinsRun",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "ccaaa68618f9dc18389747acd981847da95357575096acdea910385a2a6c02fe|Data Swap Ops|lethal.empty-block|1",
+    "key": "ccaaa68618f9dc18389747acd981847da95357575096acdea910385a2a6c02fe|Data Swap Ops|Accumulate|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "SwapRedirectsTheAccumulatorWriteback",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "ccaaa68618f9dc18389747acd981847da95357575096acdea910385a2a6c02fe|Data Validator|lethal.empty-block|1",
+    "key": "ccaaa68618f9dc18389747acd981847da95357575096acdea910385a2a6c02fe|Data Validator|TestField|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "UserDefinedBuiltinsRun",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "cf448de40a66093bf74c689272083867229a79f53e8be4f3b404e16a84d13dc4|Data Ops|lethal.swap-additive|1",
+    "key": "cf448de40a66093bf74c689272083867229a79f53e8be4f3b404e16a84d13dc4|Data Ops|RunUserDefinedBuiltins|lethal.swap-additive|1",
     "verdict": "killed",
     "killingTest": "UserDefinedBuiltinsRun",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "cf930879e9bc95f2becb1747d85a31acc0aad731dc2f0d4954280d9a1a9a732a|Data Flag Ops|lethal.empty-block|1",
+    "key": "cf930879e9bc95f2becb1747d85a31acc0aad731dc2f0d4954280d9a1a9a732a|Data Flag Ops|DeleteWithTrigger|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "DeleteRunTriggerLeavesTombstone",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "d36581a980ee091d62faf54b2a4512ee7cb1db33aea2a4f417a5edde7ef9d79f|Data Builder|lethal.empty-block|1",
+    "key": "d36581a980ee091d62faf54b2a4512ee7cb1db33aea2a4f417a5edde7ef9d79f|Data Builder|RangeWidth|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "UserDefinedBuiltinsRun",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "d36581a980ee091d62faf54b2a4512ee7cb1db33aea2a4f417a5edde7ef9d79f|Data Commit Target|lethal.empty-block|1",
+    "key": "d36581a980ee091d62faf54b2a4512ee7cb1db33aea2a4f417a5edde7ef9d79f|Data Commit Target|CommitRunNo|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "CommitBeforeCodeunitRunSucceeds",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "d36581a980ee091d62faf54b2a4512ee7cb1db33aea2a4f417a5edde7ef9d79f|Data Loader|lethal.empty-block|1",
+    "key": "d36581a980ee091d62faf54b2a4512ee7cb1db33aea2a4f417a5edde7ef9d79f|Data Loader|LoadedFieldNo|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "UserDefinedBuiltinsRun",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "d36581a980ee091d62faf54b2a4512ee7cb1db33aea2a4f417a5edde7ef9d79f|Data Main|lethal.empty-block|1",
+    "key": "d36581a980ee091d62faf54b2a4512ee7cb1db33aea2a4f417a5edde7ef9d79f|Data Main|TouchCount|lethal.empty-block|1",
     "verdict": "no-coverage",
     "killingTest": null,
     "coverageFiltered": true,
     "errorClass": null
   },
   {
-    "key": "d36581a980ee091d62faf54b2a4512ee7cb1db33aea2a4f417a5edde7ef9d79f|Data Swap Ops|lethal.empty-block|1",
+    "key": "d36581a980ee091d62faf54b2a4512ee7cb1db33aea2a4f417a5edde7ef9d79f|Data Swap Ops|AnyFlagSeen|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "CommutativeCalleeMakesTheSwapEquivalent",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "d36581a980ee091d62faf54b2a4512ee7cb1db33aea2a4f417a5edde7ef9d79f|Data Swap Ops|lethal.empty-block|1",
+    "key": "d36581a980ee091d62faf54b2a4512ee7cb1db33aea2a4f417a5edde7ef9d79f|Data Swap Ops|PrimaryStamp|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "WeakStampAssertionMissesTheSwap",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "d36581a980ee091d62faf54b2a4512ee7cb1db33aea2a4f417a5edde7ef9d79f|Data Validator|lethal.empty-block|1",
+    "key": "d36581a980ee091d62faf54b2a4512ee7cb1db33aea2a4f417a5edde7ef9d79f|Data Validator|SeenTotal|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "UserDefinedBuiltinsRun",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "d49678309c75c78499251a18ca1773c863365359c49e0626a1fa7901c2194462|Data Shadow|lethal.return-value|1",
+    "key": "d49678309c75c78499251a18ca1773c863365359c49e0626a1fa7901c2194462|Data Shadow|SelfShadowed|lethal.return-value|1",
     "verdict": "killed",
     "killingTest": "SelfShadowedRun",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "d742d30a1cc6b49b64a743ba22d6e4c5c9762f52243f8615a7c1a0907ff3d56a|Data Filter Ops|lethal.empty-block|1",
+    "key": "d742d30a1cc6b49b64a743ba22d6e4c5c9762f52243f8615a7c1a0907ff3d56a|Data Filter Ops|CountBelowThresholdSparse|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "GapAtTheBoundaryMakesTheShiftEquivalent",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "d78c8773e4e6573167437c7246925798c555a8d525a94fdc14b3c0922d7d906a|Data Filter Ops|lethal.remove-setrange|1",
+    "key": "d78c8773e4e6573167437c7246925798c555a8d525a94fdc14b3c0922d7d906a|Data Filter Ops|CountBelowThreshold|lethal.remove-setrange|1",
     "verdict": "killed",
     "killingTest": "BoundaryShiftAdmitsTheThresholdRow",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "d8463f6e7506e407c06b2142164c3c18fa3b4ae9857a1eeea38fb344bcc0aa7f|Data Flag Ops|lethal.return-value|1",
+    "key": "d8463f6e7506e407c06b2142164c3c18fa3b4ae9857a1eeea38fb344bcc0aa7f|Data Flag Ops|DeleteWithTrigger|lethal.return-value|1",
     "verdict": "killed",
     "killingTest": "DeleteRunTriggerLeavesTombstone",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "d872e156841257b8eb4e58d5d89df3c24e021bbfe24f43ffee43ce59931c40fe|Data Swap Ops|lethal.swap-call-arguments|1",
+    "key": "d872e156841257b8eb4e58d5d89df3c24e021bbfe24f43ffee43ce59931c40fe|Data Swap Ops|RunningTotal|lethal.swap-call-arguments|1",
     "verdict": "killed",
     "killingTest": "SwapRedirectsTheAccumulatorWriteback",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "d872e156841257b8eb4e58d5d89df3c24e021bbfe24f43ffee43ce59931c40fe|Data Swap Ops|lethal.void-method-call|1",
+    "key": "d872e156841257b8eb4e58d5d89df3c24e021bbfe24f43ffee43ce59931c40fe|Data Swap Ops|RunningTotal|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "SwapRedirectsTheAccumulatorWriteback",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "dbbde7dbc4dfada938aaaeb60f9744bae7495e8eec20f48583039a7f32d01faa|Data Shadow|lethal.empty-block|1",
+    "key": "dbbde7dbc4dfada938aaaeb60f9744bae7495e8eec20f48583039a7f32d01faa|Data Shadow|SelfShadowed|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "SelfShadowedRun",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "dc163959e27f18f7fac841fc750f3aca67d4c1c66de23fd6555791c827d092c2|Data Value Card|lethal.empty-block|1",
+    "key": "dc163959e27f18f7fac841fc750f3aca67d4c1c66de23fd6555791c827d092c2|Data Value Card|OnAction|lethal.empty-block|1",
     "verdict": "no-coverage",
     "killingTest": null,
     "coverageFiltered": true,
     "errorClass": null
   },
   {
-    "key": "dd0e48b81e7e8de78dc791913952d1ac99d7bea6d416e9cd1c57cd7da35fa0da|Data Validate Ops|lethal.empty-block|1",
+    "key": "dd0e48b81e7e8de78dc791913952d1ac99d7bea6d416e9cd1c57cd7da35fa0da|Data Validate Ops|SetLevel|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "ValidateRunsTheFieldTrigger",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "dd3aa023aa7fb2b7893efe181ccbf517d3ca97cbfacec07f3818c25c45c127dc|Data Key Probe|lethal.empty-block|1",
+    "key": "dd3aa023aa7fb2b7893efe181ccbf517d3ca97cbfacec07f3818c25c45c127dc|Data Key Probe|OnInsert|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "DoubleInsertWithoutKeyTriggerRaises",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "de228a1a68871e89d3dfc974fa1dda4d0fb9161e8cc9980f2d08c12e61ee9309|Data No Trigger|lethal.void-method-call|1",
+    "key": "de228a1a68871e89d3dfc974fa1dda4d0fb9161e8cc9980f2d08c12e61ee9309|Data No Trigger|OnValidate|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "TooLongNoValidateFails",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "de62e31f221b8cc07201911d00b8a1279cb58877ebf5d628b162987e0d8d71a8|Data Filter Ops|lethal.flip-filter-literal|1",
+    "key": "de62e31f221b8cc07201911d00b8a1279cb58877ebf5d628b162987e0d8d71a8|Data Filter Ops|CountBelowThresholdSparse|lethal.flip-filter-literal|1",
     "verdict": "survived",
     "killingTest": null,
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "de62e31f221b8cc07201911d00b8a1279cb58877ebf5d628b162987e0d8d71a8|Data Filter Ops|lethal.void-method-call|1",
+    "key": "de62e31f221b8cc07201911d00b8a1279cb58877ebf5d628b162987e0d8d71a8|Data Filter Ops|CountBelowThresholdSparse|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "GapAtTheBoundaryMakesTheShiftEquivalent",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "ded708d9dbf82231b3a6fe5be155517fbde77cc7fdbc89599aa9b29099379780|Data Filter Ops|lethal.flip-filter-literal|1",
+    "key": "ded708d9dbf82231b3a6fe5be155517fbde77cc7fdbc89599aa9b29099379780|Data Filter Ops|CountBelowThreshold|lethal.flip-filter-literal|1",
     "verdict": "killed",
     "killingTest": "BoundaryShiftAdmitsTheThresholdRow",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "ded708d9dbf82231b3a6fe5be155517fbde77cc7fdbc89599aa9b29099379780|Data Filter Ops|lethal.void-method-call|1",
+    "key": "ded708d9dbf82231b3a6fe5be155517fbde77cc7fdbc89599aa9b29099379780|Data Filter Ops|CountBelowThreshold|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "BoundaryShiftAdmitsTheThresholdRow",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "e0227de3081ca2802aff69f83c9c34df2332781f4eb548dca858bad5f4f9c193|Data Assert Ops|lethal.return-value|1",
+    "key": "e0227de3081ca2802aff69f83c9c34df2332781f4eb548dca858bad5f4f9c193|Data Assert Ops|DoubledLevel|lethal.return-value|1",
     "verdict": "killed",
     "killingTest": "AssertScreenSeesAnAssertionFailure",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "e058a84e0a07da986e0fd5c8d5fc8f07817ec74c6a3d91b6eeb18ba45ecef824|Data Filter Ops|lethal.remove-setrange|1",
+    "key": "e058a84e0a07da986e0fd5c8d5fc8f07817ec74c6a3d91b6eeb18ba45ecef824|Data Filter Ops|CountBelowThresholdSparse|lethal.remove-setrange|1",
     "verdict": "killed",
     "killingTest": "GapAtTheBoundaryMakesTheShiftEquivalent",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "e0f68dcd382f5bb5c34d7cfa92475779f3d905f8334e5f30775cc181c3d5c05f|Data Ops|lethal.void-method-call|1",
+    "key": "e0f68dcd382f5bb5c34d7cfa92475779f3d905f8334e5f30775cc181c3d5c05f|Data Ops|CountIgnoringMainFilter|lethal.void-method-call|1",
     "verdict": "survived",
     "killingTest": null,
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "e102f15f214dc97acd4772a5b45b25e11b8b2991c335e6b3823ddbc0581f8941|Data Filter Ops|lethal.flip-filter-literal|1",
+    "key": "e102f15f214dc97acd4772a5b45b25e11b8b2991c335e6b3823ddbc0581f8941|Data Filter Ops|CountUpToBound|lethal.flip-filter-literal|1",
     "verdict": "killed",
     "killingTest": "RangeFlipChangesTheCountRegardlessOfInclusivity",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "e102f15f214dc97acd4772a5b45b25e11b8b2991c335e6b3823ddbc0581f8941|Data Filter Ops|lethal.void-method-call|1",
+    "key": "e102f15f214dc97acd4772a5b45b25e11b8b2991c335e6b3823ddbc0581f8941|Data Filter Ops|CountUpToBound|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "RangeFlipChangesTheCountRegardlessOfInclusivity",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "e120d9e17e95dcc77685935c69440fd5684261efc3aacb87589ccae089aa564e|Data Ops|lethal.void-method-call|1",
+    "key": "e120d9e17e95dcc77685935c69440fd5684261efc3aacb87589ccae089aa564e|Data Ops|RunUserDefinedBuiltins|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "UserDefinedBuiltinsRun",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "e315168a52168bfbb4fcedaf685fb51f456c87a33eb1879f610f29a75cfaebed|Data Commit Target|lethal.remove-not|1",
+    "key": "e315168a52168bfbb4fcedaf685fb51f456c87a33eb1879f610f29a75cfaebed|Data Commit Target|OnRun|lethal.remove-not|1",
     "verdict": "killed",
     "killingTest": "CommitBeforeCodeunitRunSucceeds",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "e4204ad1d6e63079dffcea06507852f0f4031cb32bfecd3be29e48b9810a0afe|Data Validate Ops|lethal.validate-to-assign|1",
+    "key": "e4204ad1d6e63079dffcea06507852f0f4031cb32bfecd3be29e48b9810a0afe|Data Validate Ops|SetLevel|lethal.validate-to-assign|1",
     "verdict": "killed",
     "killingTest": "ValidateRunsTheFieldTrigger",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "e4204ad1d6e63079dffcea06507852f0f4031cb32bfecd3be29e48b9810a0afe|Data Validate Ops|lethal.validate-to-assign|1",
+    "key": "e4204ad1d6e63079dffcea06507852f0f4031cb32bfecd3be29e48b9810a0afe|Data Validate Ops|SetLevel|lethal.void-method-call|1",
+    "verdict": "killed",
+    "killingTest": "ValidateRunsTheFieldTrigger",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "e4204ad1d6e63079dffcea06507852f0f4031cb32bfecd3be29e48b9810a0afe|Data Validate Ops|SetLevelWeak|lethal.validate-to-assign|1",
     "verdict": "survived",
     "killingTest": null,
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "e4204ad1d6e63079dffcea06507852f0f4031cb32bfecd3be29e48b9810a0afe|Data Validate Ops|lethal.void-method-call|1",
-    "verdict": "killed",
-    "killingTest": "ValidateRunsTheFieldTrigger",
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "e4204ad1d6e63079dffcea06507852f0f4031cb32bfecd3be29e48b9810a0afe|Data Validate Ops|lethal.void-method-call|1",
+    "key": "e4204ad1d6e63079dffcea06507852f0f4031cb32bfecd3be29e48b9810a0afe|Data Validate Ops|SetLevelWeak|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "ValueOnlyAssertionMissesTheTriggerSkip",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "e5d461db397dfd9a8a6bdf4e72bf542229101c7010abee01b8ca2730ea85d47c|Data Trigger Probe|lethal.empty-block|1",
+    "key": "e5d461db397dfd9a8a6bdf4e72bf542229101c7010abee01b8ca2730ea85d47c|Data Trigger Probe|ValidateLevelImplicit|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "ImplicitValidateRunsInsideTheTable",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "e70c9a6fe4de62e55fb227f5aacc8e7190b61e22ab1793dc2a0d5e49d26b070e|Data Shadow|lethal.empty-block|1",
+    "key": "e70c9a6fe4de62e55fb227f5aacc8e7190b61e22ab1793dc2a0d5e49d26b070e|Data Shadow|Commit|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "ShadowedBuiltinsRun",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "e75f9a0967677be80d3659fdc47e601d3764ac75077fb4d25c54b5f1322b2a8a|Data Flag Ops|lethal.swap-modify-flag|1",
-    "verdict": "killed",
-    "killingTest": "DoubleInsertWithoutKeyTriggerRaises",
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "e75f9a0967677be80d3659fdc47e601d3764ac75077fb4d25c54b5f1322b2a8a|Data Flag Ops|lethal.swap-modify-flag|1",
-    "verdict": "killed",
-    "killingTest": "InsertRunTriggerSetsTheTriggerField",
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "e75f9a0967677be80d3659fdc47e601d3764ac75077fb4d25c54b5f1322b2a8a|Data Flag Ops|lethal.swap-modify-flag|1",
+    "key": "e75f9a0967677be80d3659fdc47e601d3764ac75077fb4d25c54b5f1322b2a8a|Data Flag Ops|InsertCounted|lethal.swap-modify-flag|1",
     "verdict": "survived",
     "killingTest": null,
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "e75f9a0967677be80d3659fdc47e601d3764ac75077fb4d25c54b5f1322b2a8a|Data Flag Ops|lethal.void-method-call|1",
-    "verdict": "killed",
-    "killingTest": "InsertRunTriggerSetsTheTriggerField",
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "e75f9a0967677be80d3659fdc47e601d3764ac75077fb4d25c54b5f1322b2a8a|Data Flag Ops|lethal.void-method-call|1",
+    "key": "e75f9a0967677be80d3659fdc47e601d3764ac75077fb4d25c54b5f1322b2a8a|Data Flag Ops|InsertCounted|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "WeakInsertAssertionMissesTheFlag",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "e75f9a0967677be80d3659fdc47e601d3764ac75077fb4d25c54b5f1322b2a8a|Data Flag Ops|lethal.void-method-call|1",
+    "key": "e75f9a0967677be80d3659fdc47e601d3764ac75077fb4d25c54b5f1322b2a8a|Data Flag Ops|InsertTwiceWithKeyTrigger|lethal.swap-modify-flag|1",
+    "verdict": "killed",
+    "killingTest": "DoubleInsertWithoutKeyTriggerRaises",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "e75f9a0967677be80d3659fdc47e601d3764ac75077fb4d25c54b5f1322b2a8a|Data Flag Ops|InsertTwiceWithKeyTrigger|lethal.void-method-call|1",
     "verdict": "survived",
     "killingTest": null,
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "e79b7cbcd0836aeb23ea6a1051bf79daee0d79b5e5a35768aca05574965a751d|Data Ops|lethal.void-method-call|1",
+    "key": "e75f9a0967677be80d3659fdc47e601d3764ac75077fb4d25c54b5f1322b2a8a|Data Flag Ops|InsertWithTrigger|lethal.swap-modify-flag|1",
+    "verdict": "killed",
+    "killingTest": "InsertRunTriggerSetsTheTriggerField",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "e75f9a0967677be80d3659fdc47e601d3764ac75077fb4d25c54b5f1322b2a8a|Data Flag Ops|InsertWithTrigger|lethal.void-method-call|1",
+    "verdict": "killed",
+    "killingTest": "InsertRunTriggerSetsTheTriggerField",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "e79b7cbcd0836aeb23ea6a1051bf79daee0d79b5e5a35768aca05574965a751d|Data Ops|InsertWithoutTrigger|lethal.void-method-call|1",
     "verdict": "survived",
     "killingTest": null,
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "e85f78adae8297d79c01ec0df8f20c746dc0f2b7c3e1d951252ac19a6b6c163f|Data Main|lethal.swap-modify-flag|1",
+    "key": "e85f78adae8297d79c01ec0df8f20c746dc0f2b7c3e1d951252ac19a6b6c163f|Data Main|OnValidate|lethal.swap-modify-flag|1",
     "verdict": "killed",
     "killingTest": "FlaggedFiresModifyTrigger",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "e85f78adae8297d79c01ec0df8f20c746dc0f2b7c3e1d951252ac19a6b6c163f|Data Main|lethal.void-method-call|1",
+    "key": "e85f78adae8297d79c01ec0df8f20c746dc0f2b7c3e1d951252ac19a6b6c163f|Data Main|OnValidate|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "FlaggedFiresModifyTrigger",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "e91f0cf15d47cc7b585c548d36f3837072460e0c75ef6ac73661c7c2800950b9|Data Swap Ops|lethal.empty-block|1",
+    "key": "e91f0cf15d47cc7b585c548d36f3837072460e0c75ef6ac73661c7c2800950b9|Data Swap Ops|InRange|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "SwapReversesTheRangeComparison",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "edd24106928f6fff5f6b88d46ca9bf432ba418242248863a8bbc9937ded32ee3|Data Main|lethal.empty-block|1",
+    "key": "edd24106928f6fff5f6b88d46ca9bf432ba418242248863a8bbc9937ded32ee3|Data Main|OnInsert|lethal.empty-block|1",
     "verdict": "survived",
     "killingTest": null,
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "eef6d8e81fd4fed479dc4d361b5659773e7bc7701c4979e492d5698229e30863|Data Filter Ops|lethal.swap-additive|1",
+    "key": "eef6d8e81fd4fed479dc4d361b5659773e7bc7701c4979e492d5698229e30863|Data Filter Ops|CountInRange|lethal.swap-additive|1",
     "verdict": "killed",
     "killingTest": "ClosedRangeCountIsScopedByMainNo",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "f6cb2f57859a72cc35a7fad65c7d3c962b1bfa82fe6346ee15740c46055196e8|Data Ops|lethal.swap-modify-flag|1",
+    "key": "f6cb2f57859a72cc35a7fad65c7d3c962b1bfa82fe6346ee15740c46055196e8|Data Ops|MarkProcessed|lethal.swap-modify-flag|1",
     "verdict": "killed",
     "killingTest": "MarkProcessedFiresModifyTrigger",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "f6cb2f57859a72cc35a7fad65c7d3c962b1bfa82fe6346ee15740c46055196e8|Data Ops|lethal.void-method-call|1",
+    "key": "f6cb2f57859a72cc35a7fad65c7d3c962b1bfa82fe6346ee15740c46055196e8|Data Ops|MarkProcessed|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "MarkProcessedFiresModifyTrigger",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "f6dcffb0af04702b421107cf8f00c20baa828ab21d0acd744e9743c026f995a4|Data Swap Ops|lethal.empty-block|1",
-    "verdict": "killed",
-    "killingTest": "WeakStampAssertionMissesTheSwap",
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "f6dcffb0af04702b421107cf8f00c20baa828ab21d0acd744e9743c026f995a4|Data Swap Ops|lethal.empty-block|1",
+    "key": "f6dcffb0af04702b421107cf8f00c20baa828ab21d0acd744e9743c026f995a4|Data Swap Ops|NarrowStamp|lethal.empty-block|1",
     "verdict": "survived",
     "killingTest": null,
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "f9db3975b805daf14889772ac6dda73e28211c5ee6ac8b66afdb6c50d16d468c|Data Find Ops|lethal.return-value|1",
+    "key": "f6dcffb0af04702b421107cf8f00c20baa828ab21d0acd744e9743c026f995a4|Data Swap Ops|StampCodes|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "WeakStampAssertionMissesTheSwap",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "f9db3975b805daf14889772ac6dda73e28211c5ee6ac8b66afdb6c50d16d468c|Data Find Ops|AnyRow|lethal.return-value|1",
     "verdict": "killed",
     "killingTest": "ExistenceOnlyAssertionMissesTheDirection",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "fa09e3bae77e5aac80cc84ccbbf6898217be803b4761e6455d1b2633aa2ecc46|Data Validate Ops|lethal.void-method-call|1",
+    "key": "fa09e3bae77e5aac80cc84ccbbf6898217be803b4761e6455d1b2633aa2ecc46|Data Validate Ops|TouchLevel|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "TouchLevelRunsTheTriggerAgain",
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "fe4839068dcf5e406fa780639e70c02b11decea74e50bcc063e7eddd135f778a|Data Filter Ops|lethal.empty-block|1",
+    "key": "fe4839068dcf5e406fa780639e70c02b11decea74e50bcc063e7eddd135f778a|Data Filter Ops|CountUpToBound|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "RangeFlipChangesTheCountRegardlessOfInclusivity",
     "coverageFiltered": false,

@@ -106,21 +106,21 @@ describe("normalizeForComparison", () => {
     const normalized = normalizeForComparison(r);
     expect(normalized).toEqual([
       {
-        key: "hash-M0001|Sandbox Logic|conditional-boundary|1",
+        key: "hash-M0001|Sandbox Logic|Post|conditional-boundary|1",
         verdict: "killed",
         killingTest: "OverBudgetDetected",
         coverageFiltered: false,
         errorClass: null,
       },
       {
-        key: "hash-M0002|Sandbox Pricing|return-value|1",
+        key: "hash-M0002|Sandbox Pricing|Post|return-value|1",
         verdict: "no-coverage",
         killingTest: null,
         coverageFiltered: true,
         errorClass: null,
       },
       {
-        key: "hash-M0003|Sandbox Logic|conditional-boundary|1",
+        key: "hash-M0003|Sandbox Logic|Post|conditional-boundary|1",
         verdict: "error",
         killingTest: null,
         coverageFiltered: false,
@@ -216,7 +216,7 @@ describe("diffMutants", () => {
     );
     const diffs = diffMutants(before, after);
     expect(diffs).toEqual([
-      'mutant hash-M0002|Sandbox Logic|conditional-boundary|1: present in "before" but missing from "after"',
+      'mutant hash-M0002|Sandbox Logic|Post|conditional-boundary|1: present in "before" but missing from "after"',
     ]);
   });
 
@@ -232,7 +232,7 @@ describe("diffMutants", () => {
     );
     const diffs = diffMutants(before, after);
     expect(diffs).toEqual([
-      'mutant hash-M0002|Sandbox Logic|conditional-boundary|1: present in "after" but missing from "before"',
+      'mutant hash-M0002|Sandbox Logic|Post|conditional-boundary|1: present in "after" but missing from "before"',
     ]);
   });
 
@@ -329,7 +329,7 @@ describe("diffMutants", () => {
     );
     const diffs = diffMutants(before, after);
     expect(diffs).toEqual([
-      "mutant hash-M0001|Sandbox Logic|conditional-boundary|1: errorClass unstable -> deadline-exceeded",
+      "mutant hash-M0001|Sandbox Logic|Post|conditional-boundary|1: errorClass unstable -> deadline-exceeded",
     ]);
   });
 });
@@ -346,6 +346,102 @@ describe("diffMutants", () => {
  * remembering to extend this, and so a DELETED one (tables.baseline.json is deleted pending a
  * live re-record) does not fail the suite.
  */
+/**
+ * R166 — two mutants that differ ONLY by their enclosing procedure must not share an identity.
+ *
+ * `astSubtreeHash` hashes the mutated subtree, so `exit(1)` in three procedures of one codeunit
+ * hashed identically and the identity key `(astHash, codeunitName, operatorName, operatorMajor)`
+ * could not tell them apart. Measured on `fixtures/sandbox-data` before the procedure name was
+ * added: 26 groups shared a key, covering 89 of 280 specs, and SIX of those groups held mutants
+ * with DIFFERING verdicts.
+ *
+ * `diffMutants` compares each key's group as a MULTISET, deliberately, so that a re-record cannot
+ * differ as text while being semantically equal. That is right, and it means a swap WITHIN a group
+ * is invisible: `['killed','survived']` stays `['killed','survived']` however the two are dealt.
+ * The fix therefore belongs in the identity, not the comparison — and it has to be a stable
+ * semantic property rather than a within-key ordinal, which would reintroduce exactly the
+ * report-order sensitivity the multiset comparison exists to avoid.
+ *
+ * The identity is also read by `resume.ts` to carry a verdict into a resumed run and by
+ * `selection.ts` to skip known survivors, so a shared key there carries a verdict onto the WRONG
+ * mutant. That is a worse failure than a quiet gate, and it is what makes this more than tidiness.
+ */
+describe("identity separates mutants by enclosing procedure (R166)", () => {
+  const inProc = (mutantCode: string, procedureName: string, verdict: string): MutantOutcome =>
+    outcome({
+      mutantCode,
+      procedureName,
+      verdict,
+      // Identical mutation of an identical subtree in one codeunit: the case that collided.
+      astHash: "same-subtree-hash",
+      originalText: "exit(1)",
+      mutatedText: "exit(0)",
+      // The SAME killing-test name on both, deliberately. A first draft of this test used
+      // `T_${procedureName}` and PASSED before the fix — the swap was caught through the differing
+      // killingTest string, not through identity, so the test proved nothing about the thing it
+      // names. Two mutants that a shared identity genuinely cannot separate must be identical in
+      // every compared field except the verdict being exchanged.
+      ...(verdict === "killed" ? { killingTest: "CoveringTest" } : {}),
+    } as Partial<MutantOutcome> & Pick<MutantOutcome, "mutantCode">);
+
+  it("SEES a verdict swap between two same-subtree mutants in different procedures", () => {
+    const before = report([
+      inProc("M1", "RegionRank", "killed"),
+      inProc("M2", "PlainMembership", "survived"),
+    ]);
+    // The same two mutations, with which one is killed exchanged. Every aggregate count is
+    // identical, and so is the per-key multiset: only a procedure-qualified identity can see it.
+    const after = report([
+      inProc("M1", "RegionRank", "survived"),
+      inProc("M2", "PlainMembership", "killed"),
+    ]);
+    expect(diffMutants(normalizeForComparison(before), normalizeForComparison(after))).not.toEqual(
+      [],
+    );
+  });
+
+  it("does NOT flag the same report against itself", () => {
+    // The other half of the property: separating the two must not make a re-record fail, which is
+    // the self-reinforcing trap `diffMutants`'s multiset comparison was introduced to escape.
+    const r = normalizeForComparison(
+      report([inProc("M1", "RegionRank", "killed"), inProc("M2", "PlainMembership", "survived")]),
+    );
+    expect(diffMutants(r, r)).toEqual([]);
+  });
+
+  it("uses the TRIGGER name when there is no enclosing procedure", () => {
+    // A trigger mutant has no enclosing procedure, so `procedureName` is empty and every trigger in
+    // one object would collapse into a single scope. `itest:tables` does not catch this — its
+    // trigger mutants have distinct subtree hashes, so the count is the same either way — which is
+    // exactly why it is pinned here rather than left to a gate that cannot see it.
+    const trig = (mutantCode: string, triggerName: string, verdict: string): MutantOutcome =>
+      outcome({
+        mutantCode,
+        procedureName: "",
+        triggerName,
+        verdict,
+        astHash: "same-subtree-hash",
+        ...(verdict === "killed" ? { killingTest: "CoveringTest" } : {}),
+      } as Partial<MutantOutcome> & Pick<MutantOutcome, "mutantCode">);
+
+    const before = report([trig("M1", "OnInsert", "killed"), trig("M2", "OnModify", "survived")]);
+    const after = report([trig("M1", "OnInsert", "survived"), trig("M2", "OnModify", "killed")]);
+    expect(diffMutants(normalizeForComparison(before), normalizeForComparison(after))).not.toEqual(
+      [],
+    );
+  });
+
+  it("still groups two mutants that share a procedure AND a subtree", () => {
+    // Not everything separates, and the identity must not pretend otherwise: two identical
+    // statements in ONE procedure remain indistinguishable, which is honest rather than a gap
+    // this test should paper over.
+    const r = normalizeForComparison(
+      report([inProc("M1", "RegionRank", "killed"), inProc("M2", "RegionRank", "killed")]),
+    );
+    expect(new Set(r.map((m) => m.key)).size).toBe(1);
+  });
+});
+
 describe("committed itest baselines", () => {
   const ITEST_DIR = join(import.meta.dir, "..", "itest");
   const names = readdirSync(ITEST_DIR).filter((f) => f.endsWith(".baseline.json"));

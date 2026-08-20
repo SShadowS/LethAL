@@ -12,6 +12,7 @@ function mutantRow(verdict: MutantVerdict, over: Record<string, unknown> = {}) {
     mutantCode: "M0001",
     astHash: "abc123",
     codeunitName: "Sample",
+    procedureName: "Post",
     operatorName: "conditional-boundary",
     operatorMajor: 1,
     file: "Sample.Codeunit.al",
@@ -34,7 +35,7 @@ describe("ResultsStore", () => {
     store.recordMutant(runId, mutantRow("survived", { mutantCode: "M0002", astHash: "def456" }));
     store.finishRun(runId, { batchCount: 1, baselineGreen: true });
     expect(store.priorSurvivorKeys("/p")).toEqual(
-      new Set(["def456|Sample|conditional-boundary|1"]),
+      new Set(["def456|Sample|Post|conditional-boundary|1"]),
     );
     store.close();
   });
@@ -57,7 +58,7 @@ describe("ResultsStore", () => {
   // after that, not just the one where it was still "survived".
   test("known-survivor verdicts count as prior survivors just like survived (I4)", () => {
     const store = new ResultsStore(":memory:");
-    const key = "abc123|Sample|conditional-boundary|1";
+    const key = "abc123|Sample|Post|conditional-boundary|1";
 
     const r1 = store.createRun({ projectPath: "/p", backend: "bcdev", appVersion: "1" });
     store.recordMutant(r1, mutantRow("survived"));
@@ -193,6 +194,54 @@ CREATE TABLE IF NOT EXISTS mutants (
   duration_ms INTEGER NOT NULL
 );
 `;
+
+    /**
+     * R166 — opening an EXISTING lethal.sqlite must not throw.
+     *
+     * `procedure_name` joined the semantic identity, and the identity INDEX names it. The first
+     * draft put that index in `SCHEMA`, which `new ResultsStore` runs BEFORE `migrate()` adds the
+     * column — so every database created before R166 threw `no such column: procedure_name` from
+     * inside the constructor, and because the constructor threw, its `Database` handle was never
+     * closed and the file stayed locked. It surfaced as an EBUSY in an unrelated test's cleanup,
+     * which is exactly how a constructor-thrown error hides.
+     *
+     * This asserts the open SUCCEEDS and the index ends up covering the column, so a future schema
+     * change cannot quietly reintroduce the ordering bug.
+     */
+    test("a pre-R166 database opens, gains procedure_name, and gets an identity index covering it", () => {
+      const dir = mkdtempSync(join(tmpdir(), "lethal-store-"));
+      const dbPath = join(dir, "lethal.sqlite");
+      try {
+        const old = new Database(dbPath, { create: true });
+        old.exec(PRE_43_SCHEMA);
+        // The identity index as it stood before R166 — present, and WITHOUT the new column.
+        old.exec(
+          "CREATE INDEX idx_mutants_identity ON mutants(ast_hash, codeunit_name, operator_name, operator_major)",
+        );
+        old.close();
+
+        const store = new ResultsStore(dbPath);
+        const runId = store.createRun({ projectPath: "/p", backend: "bcdev", appVersion: "1" });
+        store.recordMutant(runId, mutantRow("survived"));
+        store.finishRun(runId, { batchCount: 1, baselineGreen: true });
+        // The identity must round-trip through the new column, not silently key on the old tuple.
+        expect(store.priorSurvivorKeys("/p")).toEqual(
+          new Set(["abc123|Sample|Post|conditional-boundary|1"]),
+        );
+        store.close();
+
+        const check = new Database(dbPath);
+        const idx = check
+          .query(
+            "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'idx_mutants_identity'",
+          )
+          .get() as { sql: string | null };
+        check.close();
+        expect(idx.sql ?? "").toContain("procedure_name");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
 
     test("a pre-4.3 database is migrated on open and then accepts a failure_note write", () => {
       const dir = mkdtempSync(join(tmpdir(), "lethal-store-"));

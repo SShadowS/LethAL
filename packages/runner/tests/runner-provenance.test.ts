@@ -197,6 +197,7 @@ describe("ResultsStore runner provenance (R69 Phase 2 Task 5)", () => {
       mutantCode: "M0001",
       astHash: "abc123",
       codeunitName: "Sample",
+      procedureName: "P",
       operatorName: "conditional-boundary",
       operatorMajor: 1,
       file: "Sample.Codeunit.al",
@@ -315,6 +316,7 @@ describe("buildResumeIndex carries runner (R69 Phase 2 — the resume hole)", ()
     return {
       astHash: "hash-a",
       codeunitName: "Sandbox Logic",
+      procedureName: "P",
       operatorName: "lethal.negate-conditional",
       operatorMajor: 1,
       verdict: "killed",

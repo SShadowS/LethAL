@@ -32,7 +32,10 @@ export interface NormalizedMutant {
 }
 
 function keyOf(m: MutantOutcome): string {
-  return `${m.astHash}|${m.codeunitName}|${m.operatorName}|${m.operatorMajor}`;
+  // `procedureName` joined the identity in R166 — see `IdentityKey` (selection.ts) for the
+  // measurement and for why it is a procedure NAME rather than a within-key ordinal.
+  const scope = m.procedureName || m.triggerName || "";
+  return `${m.astHash}|${m.codeunitName}|${scope}|${m.operatorName}|${m.operatorMajor}`;
 }
 
 /**

@@ -3640,6 +3640,9 @@ function seedPriorSurvivor(
     mutantCode: "SEED",
     astHash: target.astHash,
     codeunitName: target.codeunitName,
+    // From the TARGET, like every other identity component here: R166 put `procedureName` into the
+    // key, so a hardcoded value seeds a row that can never match the mutant it is meant to name.
+    procedureName: target.procedureName,
     operatorName: target.operatorName,
     operatorMajor: Number(target.operatorVersion.split(".")[0] ?? "0"),
     file: target.file,

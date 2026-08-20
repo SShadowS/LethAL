@@ -5,6 +5,24 @@ import type { Interpretation } from "./interpretation";
 export interface IdentityKey {
   readonly astHash: string;
   readonly codeunitName: string;
+  /**
+   * The enclosing procedure or trigger, empty for an object-level mutant. Part of the identity
+   * since R166.
+   *
+   * `astSubtreeHash` hashes the mutated SUBTREE, so `exit(1)` in three procedures of one codeunit
+   * hashes identically and the other three components cannot separate them. Measured on
+   * `fixtures/sandbox-data`: 26 groups shared a key covering 89 of 280 specs, and six of those
+   * groups held mutants with DIFFERING verdicts. Adding this takes it to 2 groups over 4 specs.
+   *
+   * It has to be a stable SEMANTIC property rather than a within-key ordinal. An ordinal would
+   * separate the same number of mutants and reintroduce report-order sensitivity, which is exactly
+   * what `diffMutants`'s multiset comparison exists to avoid; a procedure name does not move when
+   * the report order does.
+   *
+   * The two groups that remain are honest: two identical statements inside ONE procedure, or two
+   * field `OnValidate` triggers of one table, genuinely cannot be told apart at this grain.
+   */
+  readonly procedureName: string;
   readonly operatorName: string;
   readonly operatorMajor: number;
 }
@@ -13,13 +31,17 @@ export function identityKeyOf(m: MutantManifestEntry): IdentityKey {
   return {
     astHash: m.astHash,
     codeunitName: m.codeunitName,
+    // A trigger mutant has no enclosing procedure, so `procedureName` is empty and every trigger in
+    // one object would collapse together. `triggerName` is the same grain by another name, and the
+    // report already carries both for exactly this reason.
+    procedureName: m.procedureName || m.triggerName || "",
     operatorName: m.operatorName,
     operatorMajor: Number(m.operatorVersion.split(".")[0] ?? "0"),
   };
 }
 
 export function serializeKey(k: IdentityKey): string {
-  return `${k.astHash}|${k.codeunitName}|${k.operatorName}|${k.operatorMajor}`;
+  return `${k.astHash}|${k.codeunitName}|${k.procedureName}|${k.operatorName}|${k.operatorMajor}`;
 }
 
 export interface HistorySplit {

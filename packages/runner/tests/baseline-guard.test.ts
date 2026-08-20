@@ -103,14 +103,14 @@ describe("assertMatchesBaseline", () => {
     const written = JSON.parse(await readFile(path, "utf8"));
     expect(written).toEqual([
       {
-        key: "hash-M0001|Sandbox Logic|conditional-boundary|1",
+        key: "hash-M0001|Sandbox Logic|Post|conditional-boundary|1",
         verdict: "killed",
         killingTest: "OverBudgetDetected",
         coverageFiltered: false,
         errorClass: null,
       },
       {
-        key: "hash-M0002|Sandbox Logic|conditional-boundary|1",
+        key: "hash-M0002|Sandbox Logic|Post|conditional-boundary|1",
         verdict: "survived",
         killingTest: null,
         coverageFiltered: false,
