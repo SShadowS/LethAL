@@ -58,7 +58,7 @@ All three MEASURED on a live container (see The measured result, below), not pre
 - **`Redeem`'s expiry guard** (`:37`), `if GiftCard."Expiry Date" < WorkDate()`. Flip it and a card
   stops working ON its expiry date rather than after it. Is that a bug? Nobody wrote the rule down.
   This is the honest one: a survivor is a lead, not a verdict, and no tool can read your spec.
-- **`BlockExpiredCards`** is called by no test at all, so all seven of its mutants come back `no-coverage`.
+- **`BlockExpiredCards`** is called by no test at all, so all eight of its mutants come back `no-coverage`.
   Expiry *is* tested, at redeem time, which is exactly why a coverage-percentage mindset files
   expiry as handled. The nightly job that runs in production ran zero times in the suite.
 
@@ -67,9 +67,9 @@ All three MEASURED on a live container (see The measured result, below), not pre
 From `lethal run --project examples/gift-card --dry-run`, which executes nothing:
 
 ```
-dry run: 2 file(s), 40 mutant site(s), 36 deployed mutant(s), 1 batch(es)
-  src\GiftCardMgt.Codeunit.al  sites=35  deployed=32
-  src\GiftCard.Table.al        sites=5   deployed=4
+dry run: 2 file(s), 49 mutant site(s), 45 deployed mutant(s), 1 batch(es)
+  src\GiftCardMgt.Codeunit.al  sites=43  deployed=40
+  src\GiftCard.Table.al        sites=6   deployed=5
 ```
 
 Four sites are raw-but-not-deployed: a Tier-2 operator claimed the site and displaced the Tier-1
@@ -173,7 +173,7 @@ The first rehearsal, on 2026-08-16, was 36 mutants at 69.0% in 13.8s. All 36 ver
 PRE-COMMITTED in
 [`docs/superpowers/specs/2026-08-16-gift-card-demo-precommitment.md`](../../docs/superpowers/specs/2026-08-16-gift-card-demo-precommitment.md)
 before that run, and **all 36 matched**, including the two rows that file flagged as its least
-confident. The seven mutants added since come from operators that landed later, and each batch was
+confident. The nine mutants added since come from operators that landed later, and each batch was
 pre-committed before its own run in the same way. The stage record
 [`docs/campaign/2026-08-16-gift-card/rehearsal.precommit.md`](../../docs/campaign/2026-08-16-gift-card/rehearsal.precommit.md)
 is AMENDED rather than edited, so what was predicted when is still readable, and it records that

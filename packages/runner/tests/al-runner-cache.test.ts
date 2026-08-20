@@ -138,6 +138,8 @@ describe("lethal doctor — the al-runner cache check", () => {
     present: false,
     totalBytes: 0,
     builds: [],
+    secondaryBytes: null,
+    secondaryDir: "/nonexistent-cache",
   };
 
   test("is reported as its own named check", async () => {
@@ -165,6 +167,8 @@ describe("lethal doctor — the al-runner cache check", () => {
       present: true,
       totalBytes: 500 * 1024 * 1024 * 1024,
       builds: [{ version: "28.0.1.1", bytes: 500 * 1024 * 1024 * 1024, superseded: true }],
+      secondaryBytes: null,
+      secondaryDir: "/nonexistent-cache",
     };
     const r = await runDoctor(
       { envReady: "Running" },
@@ -193,5 +197,33 @@ describe("lethal doctor — the al-runner cache check", () => {
     expect(check?.ok).toBe(false);
     expect(check?.detail).toContain("EACCES");
     expect(r.checks.find((c) => c.name === "tool-paths")?.ok).toBe(true);
+  });
+
+  test("R168: reports the second cache tree, and reports it even when the artifact root is absent", () => {
+    // A machine can fill ~/.cache/al-runner while the artifact root is missing, so the clause has to
+    // survive the not-present branch too — reporting 0 there is the incomplete answer this fixes.
+    const absent = describeAlRunnerCache({
+      dir: "/nope",
+      present: false,
+      totalBytes: 0,
+      builds: [],
+      secondaryBytes: 156_000_000,
+      secondaryDir: "/home/u/.cache/al-runner",
+    });
+    expect(absent).toContain("/home/u/.cache/al-runner");
+    expect(absent).toContain("per-PROJECT cache");
+    // Reported, never analysed: no superseded verdict is invented for a tree al-runner evicts.
+    expect(absent).not.toContain("superseded (");
+
+    // A machine that has never run al-runner at all: nothing to say about the second tree.
+    const none = describeAlRunnerCache({
+      dir: "/nope",
+      present: false,
+      totalBytes: 0,
+      builds: [],
+      secondaryBytes: null,
+      secondaryDir: "/home/u/.cache/al-runner",
+    });
+    expect(none).not.toContain("/home/u/.cache/al-runner");
   });
 });

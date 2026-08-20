@@ -42,6 +42,23 @@ export interface AlRunnerCacheBuild {
 
 export interface AlRunnerCacheReport {
   readonly dir: string;
+  /**
+   * al-runner's SECOND cache tree, reported as a plain total (R168).
+   *
+   * `dir` above is the BC ARTIFACT cache, which grows per BC build and is the one the superseded
+   * analysis can say something actionable about. al-runner also keeps `~/.cache/al-runner/`, which
+   * grows per PROJECT: measured at 149 MB across six directories on al-runner 2.3.1 here, against
+   * 1.5 GB of artifacts. Only `al-out` is documented in `--help`.
+   *
+   * Reported and never touched, the same R131 ruling `dir` carries: removing directories from a
+   * cache another tool owns is a destructive act on state LethAL does not manage. No superseded
+   * analysis is invented for it either — `al-out` is content-keyed and al-runner evicts it, so
+   * "superseded" has no meaning there that this project has measured.
+   *
+   * `null` when the directory does not exist.
+   */
+  readonly secondaryBytes: number | null;
+  readonly secondaryDir: string;
   /** False when the directory does not exist — a machine that has never run al-runner. Reported
    *  rather than skipped: "no cache" and "a cache nobody measured" must not look alike. */
   readonly present: boolean;
@@ -54,6 +71,11 @@ export interface AlRunnerCacheReport {
  *  different root passes it in rather than this module guessing. */
 export function defaultAlRunnerCacheDir(): string {
   return join(homedir(), ".local", "share", "al-runner", "artifacts");
+}
+
+/** al-runner's second cache tree — see `AlRunnerCacheReport.secondaryBytes` (R168). */
+export function defaultAlRunnerSecondaryCacheDir(): string {
+  return join(homedir(), ".cache", "al-runner");
 }
 
 /** Numeric, component-wise. `28.0.46665.53508` must sort above `28.0.46665.53492`, which a string
@@ -99,14 +121,27 @@ async function directoryBytes(dir: string): Promise<number> {
  * that silently said "0 bytes" for an unreadable cache is exactly the empty-vs-empty agreement
  * this project refuses to ship.
  */
-export async function readAlRunnerCache(dir?: string): Promise<AlRunnerCacheReport> {
+export async function readAlRunnerCache(
+  dir?: string,
+  secondaryDir?: string,
+): Promise<AlRunnerCacheReport> {
   const root = dir ?? defaultAlRunnerCacheDir();
+  const secondRoot = secondaryDir ?? defaultAlRunnerSecondaryCacheDir();
+  // A plain total, never a build analysis: see `AlRunnerCacheReport.secondaryBytes` for why.
+  const secondaryBytes = await directoryBytes(secondRoot).catch(() => null);
   let entries: string[];
   try {
     entries = await readdir(root);
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-      return { dir: root, present: false, totalBytes: 0, builds: [] };
+      return {
+        dir: root,
+        present: false,
+        totalBytes: 0,
+        builds: [],
+        secondaryBytes,
+        secondaryDir: secondRoot,
+      };
     }
     throw err;
   }
@@ -135,6 +170,8 @@ export async function readAlRunnerCache(dir?: string): Promise<AlRunnerCacheRepo
     present: true,
     totalBytes: builds.reduce((n, b) => n + b.bytes, 0),
     builds,
+    secondaryBytes,
+    secondaryDir: secondRoot,
   };
 }
 
@@ -158,20 +195,27 @@ export function formatBytes(bytes: number): string {
  * will not clean it has been handed a chore with no owner.
  */
 export function describeAlRunnerCache(report: AlRunnerCacheReport): string {
+  // R168: the second tree is appended to every branch, including the two that report no artifact
+  // cache at all — a machine can have run al-runner enough to fill `~/.cache/al-runner` while the
+  // artifact root is missing, and reporting 0 there would be the incomplete answer this fixes.
+  const second =
+    report.secondaryBytes === null
+      ? ""
+      : ` Separately, al-runner keeps ${formatBytes(report.secondaryBytes)} in ${report.secondaryDir}, its per-PROJECT cache — reported, not analysed and never deleted, the same rule as above (ROADMAP R131/R168).`;
   if (!report.present) {
-    return `no al-runner artifact cache at ${report.dir} (nothing has provisioned one on this machine)`;
+    return `no al-runner artifact cache at ${report.dir} (nothing has provisioned one on this machine).${second}`;
   }
   if (report.builds.length === 0) {
-    return `${report.dir} exists but holds no BC build directories`;
+    return `${report.dir} exists but holds no BC build directories.${second}`;
   }
   const superseded = report.builds.filter((b) => b.superseded);
   const supersededBytes = superseded.reduce((n, b) => n + b.bytes, 0);
   const head = `${formatBytes(report.totalBytes)} across ${report.builds.length} BC build(s) in ${report.dir}`;
   if (superseded.length === 0) {
-    return `${head}; none superseded`;
+    return `${head}; none superseded.${second}`;
   }
   const names = superseded.map((b) => b.version).join(", ");
   const ruling =
     "al-runner resolves a version PREFIX forward, so these will not be selected again unless a run pins one with `--bc-version`. This cache belongs to al-runner and LethAL will not delete from it (ROADMAP R131) — remove them yourself if you want the space back.";
-  return `${head}; ${superseded.length} superseded (${formatBytes(supersededBytes)}): ${names}. ${ruling}`;
+  return `${head}; ${superseded.length} superseded (${formatBytes(supersededBytes)}): ${names}. ${ruling}${second}`;
 }

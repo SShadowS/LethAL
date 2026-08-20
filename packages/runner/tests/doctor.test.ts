@@ -24,7 +24,14 @@ function cfgFixture(): DoctorConfig {
  * reading the REAL `~/.local/share/al-runner` would make these tests depend on whoever ran a gate
  * last. The check's own behaviour is tested in `al-runner-cache.test.ts`.
  */
-const EMPTY_CACHE = { dir: "/nonexistent", present: false, totalBytes: 0, builds: [] } as const;
+const EMPTY_CACHE = {
+  dir: "/nonexistent",
+  present: false,
+  totalBytes: 0,
+  builds: [],
+  secondaryBytes: null,
+  secondaryDir: "/nonexistent-cache",
+} as const;
 
 describe("lethal doctor", () => {
   test("reports every check, not just the first failure", async () => {
