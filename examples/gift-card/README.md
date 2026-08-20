@@ -141,33 +141,44 @@ one `git add` away from being published, in a repository that is public.
 **Note the `selectorIds` block in it.** LethAL injects three objects into the copy of your app it
 builds, and their ids must fall inside an id range your app declares. This app reserves
 `90197..90199` for exactly that, and the config points LethAL at those three. Without it you get a
-compile failure at publish time that has nothing to do with your code. The fixtures under
-`fixtures/` do the same thing with `79197..79199`.
+compile failure at publish time that has nothing to do with your code. `fixtures/sandbox-app`
+does the same thing with `79197..79199`, which is also LethAL's built-in default, and
+`fixtures/sandbox-data` uses `79397..79399` at the top of its own block: it used to borrow
+App's three ids, which made two apps that could not be installed side by side.
 
 ## The measured result
 
-Run against a BC 28 container on 2026-08-16:
+Run against a BC 28 container, last re-measured 2026-08-20:
 
 ```
-score: 69.0%  (killed 20, survived 9, no-coverage 7, error 0)
+score: 69.4%  (killed 25, survived 11, no-coverage 7, error 0)
 baseline batch 0: 8/8 passed
-TIMING: total 13.8s = generate 0.0s + deploy 3.9s + baseline 0.8s + mutants 6.8s + overhead 2.3s
+TIMING: total 20.2s = generate 0.0s + deploy 4.5s + baseline 1.0s + mutants 11.3s + overhead 3.4s
 reliability: full
 ```
 
-**13.8 seconds**, which is what makes this runnable live rather than narrated. All 36 verdicts were
+**About twenty seconds** for 43 mutants, which is what makes this runnable live rather than
+narrated. The score covers the 36 that are scorable; the seven `no-coverage` rows are excluded from
+it and reported separately.
+
+The first rehearsal, on 2026-08-16, was 36 mutants at 69.0% in 13.8s. All 36 verdicts were
 PRE-COMMITTED in
 [`docs/superpowers/specs/2026-08-16-gift-card-demo-precommitment.md`](../../docs/superpowers/specs/2026-08-16-gift-card-demo-precommitment.md)
-before the run, and **all 36 matched** — including the two rows that file flagged as its least
-confident.
+before that run, and **all 36 matched**, including the two rows that file flagged as its least
+confident. The seven mutants added since come from operators that landed later, and each batch was
+pre-committed before its own run in the same way. The stage record
+[`docs/campaign/2026-08-16-gift-card/rehearsal.precommit.md`](../../docs/campaign/2026-08-16-gift-card/rehearsal.precommit.md)
+is AMENDED rather than edited, so what was predicted when is still readable, and it records that
+**the three rows that carry the demo never moved**.
 
 The planted bug came back `survived` with `coverageAttribution: "exact"` and `guardObserved: true`,
 covered by `Gift Card Tests.RedeemReducesBalance`. That is the whole demo in one row: a test
 provably executed the line and did not notice.
 
 **Use `--top 10`, not `--top 5`.** `explain` ranks survivors by how much evidence each carries, ties
-broken by file and line, and the planted bug lands **sixth of nine**. Confirmed on the real report,
-not predicted: `--top 5` cuts the headline off the list.
+broken by file and line, and the planted bug lands **eighth of eleven** (it was sixth of nine before
+two operators added survivors above it). Confirmed on the real report, not predicted: `--top 5` cuts
+the headline off the list, and `--top 10` still shows it with one row omitted below it.
 
 That run is FROZEN under [`docs/campaign/2026-08-16-gift-card/`](../../docs/campaign/2026-08-16-gift-card/):
 the report, the per-mutant baseline, and the pre-commitment it was checked against. Before

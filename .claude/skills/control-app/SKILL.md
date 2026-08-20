@@ -101,8 +101,11 @@ Get-BcContainerAppInfo -containerName <name> | Where-Object { $_.Publisher -ne '
 
 Nothing returned means a full rebuild, in this order.
 
-**1. The control app, at GLOBAL scope.** Nothing depends on it and LethAL never replaces it, so the
-ordinary `Publish-BcContainerApp -sync -install` above is right.
+**1. The control app, at GLOBAL scope.** LethAL never replaces it, so the ordinary
+`Publish-BcContainerApp -sync -install` above is right. It goes FIRST because every
+instrumented target declares a dependency on it: that is what makes `-unInstall -force`
+cascade (see below), and it is why a target cannot be published back before the control app
+is up.
 
 **2. Every fixture target and test app, through the DEV ENDPOINT.** This is the part that is easy to
 get wrong, and the failure arrives late:
@@ -174,7 +177,7 @@ PASS, and `campaign compare` on the demo.
   Install-BcContainerApp -containerName <name> -appName "<name>" -appVersion "<ver>"
   ```
 - **Deleting a TABLE from the control app cannot ship as an upgrade.** BC refuses:
-  *"Table 71011 LC Batch Queue :: The table cannot be located. Removing tables is not allowed unless
+  *"Table 91011 LC Batch Queue :: The table cannot be located. Removing tables is not allowed unless
   they are temporary or are being moved by migration to another app."* `Publish-BcContainerApp
   -sync -upgrade` publishes the new version but leaves it UNINSTALLED. The sequence that works on a
   dev container, whose tenant data is disposable: unpublish the old version (see the cascade warning
@@ -185,3 +188,23 @@ PASS, and `campaign compare` on the demo.
   schema ghost. Unpublish first, THEN `Sync-NAVApp -ServerInstance BC -Name "LethAL Control" -Mode
   Clean -Force` inside the container, then publish. Order matters — cleaning while it is still
   published does nothing.
+- **A dev-endpoint publish can be refused by a version that no longer exists.** After unpublishing
+  the fixture apps (2026-08-20, the R169 id move), republishing `LethAL Sandbox Data 1.0.0.4`
+  failed with *"Cannot install the extension ... because a newer version 1.0.20685.12603 was
+  already installed"* while `Get-NAVAppInfo` on the same container listed the app not at all, at
+  any scope, on any tenant. Both facts are true: the tenant kept an install record the unpublish
+  did not clear. The number is not BC's, it is LethAL's own — `reserveAppVersion`
+  (`packages/runner/src/app-version.ts`) mints `<major>.<minor>.<daysSinceEpoch>.<secondsOfDay/2>`
+  for every instrumented publish, so a fixture that has ever been run against carries a resident
+  version far above its `app.json`, and the ORIGINAL app is a downgrade. Same remedy as the schema
+  ghost and it works for any app, not just the control app:
+  ```powershell
+  Invoke-ScriptInBcContainer -containerName <name> -scriptblock {
+    foreach ($n in @('LethAL Sandbox Data','LethAL Sandbox Data Tests')) {
+      Sync-NAVApp -ServerInstance BC -Name $n -Mode Clean -Force
+    }
+  }
+  ```
+  All eight fixture apps needed it, and all eight published on the retry. Do NOT reach for a
+  version bump to clear it: that leaves the container carrying a fixture whose version does not
+  match the `app.json` in the repo, which is the state this whole section exists to avoid.
