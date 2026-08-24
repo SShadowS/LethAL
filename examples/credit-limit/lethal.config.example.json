@@ -1,0 +1,21 @@
+{
+  "bcdev": {
+    "mcpCommand": ["bun", "x", "bc-dev-mcp"],
+    "server": "http://YourContainer",
+    "serverInstance": "BC",
+    "company": "CRONUS",
+    "username": "admin",
+    "password": "pw",
+    "packageCachePath": "C:/path/to/LethAL/examples/credit-limit/.alpackages",
+    "controlSymbolPath": "C:/path/to/LethAL/extensions/lethal-control/lethal-control.app",
+    "env": {
+      "BC_DEV_USER": "admin",
+      "BC_DEV_PASSWORD": "pw"
+    }
+  },
+  "selectorIds": {
+    "selectorId": 90299,
+    "controlId": 90298,
+    "tableId": 90297
+  }
+}

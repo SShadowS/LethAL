@@ -1,0 +1,35 @@
+{
+  "id": "b98a0577-fef7-4c7b-a0cf-d6f335ac60f5",
+  "name": "Credit Limit Demo Tests",
+  "publisher": "LethAL",
+  "version": "1.0.0.0",
+  "brief": "The test suite for the credit limit demo: green, plausible, and blind to three real gaps.",
+  "description": "Test codeunit for examples/credit-limit. Raises through Error() and asserterror only, so it needs no Library Assert dependency. Contains no TestPage test, which LethAL cannot score. Not for production use.",
+  "privacyStatement": "",
+  "EULA": "",
+  "help": "",
+  "url": "",
+  "logo": "",
+  "dependencies": [
+    {
+      "id": "94ec65e2-c527-41d0-8ba9-75feac54e6d8",
+      "name": "Credit Limit Demo",
+      "publisher": "LethAL",
+      "version": "1.0.0.0"
+    }
+  ],
+  "screenshots": [],
+  "idRanges": [
+    {
+      "from": 90250,
+      "to": 90280
+    }
+  ],
+  "resourceExposurePolicy": {
+    "allowDebugging": true,
+    "allowDownloadingSource": true,
+    "includeSourceInSymbolFile": true
+  },
+  "runtime": "13.0",
+  "features": []
+}

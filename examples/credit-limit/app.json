@@ -1,0 +1,32 @@
+{
+  "id": "94ec65e2-c527-41d0-8ba9-75feac54e6d8",
+  "name": "Credit Limit Demo",
+  "publisher": "LethAL",
+  "version": "1.0.0.0",
+  "brief": "A small credit limit extension whose test suite is green and misses three real gaps.",
+  "description": "The second demo application for LethAL: check a customer's exposure against their credit limit before registering an order. Its test suite passes and is blind to a boundary, a stale FlowField and a missing filter. Complements examples/gift-card by reading a FlowField through CalcFields, which that app deliberately does not. See examples/credit-limit/README.md. Not for production use.",
+  "privacyStatement": "",
+  "EULA": "",
+  "help": "",
+  "url": "",
+  "logo": "",
+  "dependencies": [],
+  "screenshots": [],
+  "idRanges": [
+    {
+      "from": 90297,
+      "to": 90299
+    },
+    {
+      "from": 90200,
+      "to": 90249
+    }
+  ],
+  "resourceExposurePolicy": {
+    "allowDebugging": true,
+    "allowDownloadingSource": true,
+    "includeSourceInSymbolFile": true
+  },
+  "runtime": "13.0",
+  "features": []
+}
