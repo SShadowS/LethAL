@@ -181,6 +181,8 @@ function reportFixture(over: Partial<SessionReport> = {}): SessionReport {
       perMutant: { count: 1, meanMs: 120, medianMs: 120, p95Ms: 120, maxMs: 120 },
     },
     preprocessorSymbols: [],
+    unplaceableCount: 0,
+    unplaceableMutants: [],
     untargetedTriggerCount: 0,
   };
   return { ...base, ...over };

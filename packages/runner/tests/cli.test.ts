@@ -1584,6 +1584,8 @@ describe("withAlRunnerCanary (R7/R8 report persistence)", () => {
       perMutant: { count: 0, meanMs: 0, medianMs: 0, p95Ms: 0, maxMs: 0 },
     },
     preprocessorSymbols: [],
+    unplaceableCount: 0,
+    unplaceableMutants: [],
     untargetedTriggerCount: 0,
   };
 

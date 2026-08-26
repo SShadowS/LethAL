@@ -100,6 +100,20 @@ export interface CoverageIndex {
    * object level would manufacture vacuous `survived` verdicts (R63's measured failure).
    */
   readonly byObjectUnnamed: ReadonlyMap<string, ReadonlySet<string>>;
+  /**
+   * R175. Object keys where the backend reported a line it could place in NO known member.
+   *
+   * This is the MEASURED replacement for a guess. The `procedureScope === "local"` gate below
+   * encodes a claim about `SymbolReference.json`, which lists no locals — true on the HUB path.
+   * The default path is FENCED, where `line-map.ts` indexes procedures by parsing the source and
+   * does not filter on scope at all, so locals resolve exactly like publics. MEASURED 2026-08-26 on
+   * `fixtures/sandbox-app`: all five mutants of the local `LogAudit`, the very procedure the gate's
+   * own comment cites as its reason to exist, come back `coverageAttribution: "exact"`.
+   *
+   * So on the fenced path scope says nothing about nameability, and the question that actually
+   * matters is whether the resolver FAILED here. That is what this set answers.
+   */
+  readonly byObjectNamingGap: ReadonlySet<string>;
 }
 
 /**
@@ -170,6 +184,23 @@ export interface CoverageSplit {
    * where coverage attribution produced 10 false survivors out of 20.
    */
   readonly attribution: ReadonlyMap<string, CoverageAttribution>;
+  /**
+   * R175. Mutant ids that are in `uncovered` NOT because coverage saw nothing, but because
+   * coverage saw this object execute a member it COULD NOT NAME and we declined to guess whether
+   * that member was this one.
+   *
+   * These are a subset of `uncovered` and are scored identically (excluded), so nothing about the
+   * mutation score moves. What changes is what a reader is told. `no-coverage` on its own reads as
+   * "your tests do not reach this code", which is a statement about the USER'S SUITE; for these it
+   * is a statement about OUR attribution, and the two were indistinguishable in every report until
+   * now.
+   *
+   * Measured downstream before this existed: 223 of 2058 mutants across 17 reports (10.8%) were
+   * reported `no-coverage` without ever executing, and the proof was a contradiction inside one
+   * report — a callee killed by a test while its only caller was `no-coverage` with zero covering
+   * tests. See docs/roadmap/R175.md.
+   */
+  readonly unplaceable: ReadonlySet<string>;
 }
 
 /** How `coverageFilter` placed a mutant's covering tests — see `CoverageSplit.attribution`. */
@@ -220,7 +251,15 @@ export function buildCoverageIndex(
   const byMember = new Map<string, Set<string>>();
   const byObject = new Map<string, Set<string>>();
   const byObjectUnnamed = new Map<string, Set<string>>();
+  const byObjectNamingGap = new Set<string>();
   for (const b of baseline) {
+    // R175: the backend's own admission that it could not place a line in this object. Accumulated
+    // before the entries, because it qualifies how every miss in that object should be read.
+    for (const g of b.coverage?.namingGaps ?? []) {
+      byObjectNamingGap.add(
+        objectKeyOf(g.objectType, g.objectId, `naming gap from ${testKeyOf(b.ref)}`),
+      );
+    }
     for (const e of b.coverage?.entries ?? []) {
       const context = `coverage entry from ${testKeyOf(b.ref)} for object id ${e.objectId}`;
       // OBJECT level first, and unconditionally. EVERY observation — member-named or not — is
@@ -273,7 +312,7 @@ export function buildCoverageIndex(
       memberSet.add(testKeyOf(b.ref));
     }
   }
-  return { byMember, byObject, byObjectUnnamed };
+  return { byMember, byObject, byObjectUnnamed, byObjectNamingGap };
 }
 
 export function coverageFilter(
@@ -288,6 +327,30 @@ export function coverageFilter(
    * as its primary one, where a further non-green index would be meaningless.
    */
   nonGreenIndex?: CoverageIndex,
+  /**
+   * R175. Whether THIS run's resolver can name a local procedure.
+   *
+   * The unnamed-member widening below exists because `SymbolReference.json` lists no locals, so on
+   * the HUB path a local's member key must miss however thoroughly it executed. That is a fact about
+   * one resolver, and the DEFAULT resolver is the other one: `coverageMode: "fenced"` places lines
+   * through `line-map.ts`, which indexes procedures by parsing the source and never looks at scope.
+   *
+   * MEASURED 2026-08-26, both directions. All five mutants of the local `LogAudit` on
+   * `fixtures/sandbox-app` — the procedure this branch's own comment cites as its reason to exist —
+   * come back `coverageAttribution: "exact"` on the fenced path. And across 424 mutants on three
+   * fixtures, the widening fired for a non-trigger mutant exactly **zero** times; every
+   * `attribution: "object"` was a trigger taking FALLBACK 1, a different branch.
+   *
+   * So on fenced the widening is not merely unnecessary, it is harmful in the one case it can still
+   * fire: a local whose member key misses THERE means the line map failed to place it, and widening
+   * turns that failure into confident object-level coverage. That is R63's manufactured-coverage
+   * shape reached from the other side. Such a mutant is now reported `unplaceable` instead, which
+   * says what actually happened.
+   *
+   * Defaults to `true` so an omitted argument keeps the historical behaviour rather than silently
+   * changing attribution for a caller that has not been updated.
+   */
+  localsAreUnnameable = true,
 ): CoverageSplit {
   const byKey = new Map(allTests.map((t) => [testKeyOf(t), t]));
   const covered = new Map<string, TestMethodRef[]>();
@@ -298,6 +361,8 @@ export function coverageFilter(
   // having to notice a stderr line.
   let untargetedTriggerCount = 0;
   const attribution = new Map<string, CoverageAttribution>();
+  /** R175 — see `CoverageSplit.unplaceable`. A subset of `uncovered`, scored identically. */
+  const unplaceable = new Set<string>();
   for (const m of mutants) {
     const context = `mutant ${m.mutantId} (${m.file})`;
     // Member-level first: precise, and correct for every ordinary procedure.
@@ -346,7 +411,8 @@ export function coverageFilter(
     if (
       (testKeys === undefined || testKeys.size === 0) &&
       !isTrigger &&
-      m.procedureScope === "local"
+      m.procedureScope === "local" &&
+      localsAreUnnameable
     ) {
       testKeys = index.byObjectUnnamed.get(objectKeyOf(m.objectType, m.codeunitId, context));
     }
@@ -400,6 +466,44 @@ export function coverageFilter(
       continue;
     }
     if (!testKeys || testKeys.size === 0) {
+      // R175 — WHY is this uncovered? Two different answers, and only one of them is an
+      // observation.
+      //
+      //   (a) coverage named members of this object and none of them was ours, or saw nothing in
+      //       this object at all. "It did not execute" is then well supported.
+      //   (b) coverage saw this object execute a member it could not NAME. That unnameable member
+      //       may BE this procedure. Reporting `no-coverage` here asserts a negative we cannot
+      //       observe, and the premise it rested on ("a public execution always resolves by name")
+      //       is the one step in this chain that was never measured.
+      //
+      // The fix is deliberately NOT to widen (b) to object level. That would manufacture vacuous
+      // `survived` verdicts, which is R63's measured failure on Document Output and the reason the
+      // `local` gate above exists at all. Both directions are wrong; the honest answer is to keep
+      // declining to place it AND to stop calling it a statement about the user's tests. This
+      // module's own rule is to fail toward "say less" rather than "guess", and neither branch was
+      // that until now.
+      //
+      // A trigger is excluded: it has already had fallback 1 and, for a table, fallback 2, so its
+      // arrival here means something stronger than an unnameable observation.
+      // The discriminator is the resolver's OWN admission, not a guess about scope.
+      //
+      // The first version of this asked "did anything unnameable execute in this object?" and
+      // over-flagged badly: in a table whose triggers fire constantly the answer is always yes,
+      // because triggers are deliberately unnameable. MEASURED on `fixtures/sandbox-data`, it
+      // flagged both mutants of `Data Main.TouchCount`, which that fixture documents as genuinely
+      // uncovered. A signal that fires on every uncovered procedure of every trigger-carrying table
+      // is worse than none: it would retire the word `no-coverage` without replacing it.
+      //
+      // `byObjectNamingGap` is different in kind. It is populated only where the backend reported a
+      // line it could place in NO known member, procedure or trigger — a resolver built from the
+      // source LethAL itself emitted, failing on that source. Where that happened, a member-level
+      // miss is not evidence of anything about the test suite.
+      if (
+        !isTrigger &&
+        index.byObjectNamingGap.has(objectKeyOf(m.objectType, m.codeunitId, context))
+      ) {
+        unplaceable.add(m.mutantId);
+      }
       uncovered.push(m);
       continue;
     }
@@ -416,5 +520,10 @@ export function coverageFilter(
       `[lethal] ${untargetedTriggerCount} table trigger mutant(s) could not be coverage-matched (no green test reported executing anything in that table, and no trigger is nameable at member level) — running each against all ${allTests.length} green test(s).`,
     );
   }
-  return { covered, uncovered, untargetedTriggerCount, attribution };
+  if (unplaceable.size > 0) {
+    console.warn(
+      `[lethal] ${unplaceable.size} mutant(s) are reported no-coverage because coverage saw their object execute a member it could not NAME, not because nothing executed them (R175). That is a limit of LethAL's attribution, NOT a statement that your tests miss this code. Re-run with coverageMode "none" to score them: it runs every mutant against every green test and uses no attribution at all.`,
+    );
+  }
+  return { covered, uncovered, untargetedTriggerCount, attribution, unplaceable };
 }

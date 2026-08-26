@@ -476,6 +476,8 @@ exports[`buildReport output is stable across the event-stream refactor an event 
     },
     "totalMs": 125000,
   },
+  "unplaceableCount": 0,
+  "unplaceableMutants": [],
   "unsupportedTests": [
     "Sales Permission Tests.WritesToAppTable",
     "Sales Post Tests.ValidatePostingRejectsClosed",

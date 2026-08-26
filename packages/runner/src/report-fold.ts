@@ -113,6 +113,10 @@ export interface FoldedReport {
   };
   readonly baselineTests: readonly { readonly codeunitName: string; readonly file?: string }[];
   readonly untargetedTriggerCount: number;
+  /** R175 — see `SessionReport.unplaceableCount`. */
+  readonly unplaceableCount: number;
+  /** R175 — `mutantId`s of those, sorted. See `SessionReport.unplaceableMutants`. */
+  readonly unplaceableMutants: readonly string[];
   readonly quarantined?: { readonly reason: string };
   readonly permissionCanary?: PermissionCanaryResult;
   /** R129 — the BC artifact build al-runner announced it executed against, when it announced one.
@@ -186,6 +190,8 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
   // `instrumentableFiles`/`batchPublishedCount` reasoning above, and is deferred rather than adding
   // scope to this task without a concrete failure it is known to prevent.
   let untargetedTriggerCount = 0;
+  let unplaceableCount = 0;
+  const unplaceableMutants = new Set<string>();
   /** R106: whether any `coverage-split` arrived, and whether one was ever OWED — see the check at
    *  the end of the fold for why the second half cannot simply be "a batch published". */
   let sawCoverageSplit = false;
@@ -267,6 +273,8 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
       case "coverage-split":
         sawCoverageSplit = true;
         untargetedTriggerCount += e.untargetedTriggerCount;
+        unplaceableCount += e.unplaceableCount ?? 0;
+        for (const id of e.unplaceableMutants ?? []) unplaceableMutants.add(id);
         break;
       case "permission-canary":
         permissionCanary = e.result;
@@ -493,6 +501,8 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
     timings: { totalMs, generateMutationSetMs, deployMs, baselineMs },
     baselineTests,
     untargetedTriggerCount,
+    unplaceableCount,
+    unplaceableMutants: [...unplaceableMutants].sort(),
     ...(quarantinedReason !== undefined ? { quarantined: { reason: quarantinedReason } } : {}),
     ...(permissionCanary !== undefined ? { permissionCanary } : {}),
     ...(alRunnerBcBuild !== undefined ? { alRunnerBcBuild } : {}),

@@ -158,6 +158,77 @@ describe("coverage: unnamed-member fallback (locals)", () => {
     expect(split.uncovered.length).toBe(1);
   });
 
+  test("R175: on a resolver that NAMES locals, the local widening does not fire", () => {
+    // The widening exists for `SymbolReference.json`, which lists no locals. The fenced default
+    // resolves through the line map, which parses the source and never looks at scope, so a local
+    // that executed WOULD have been named. MEASURED: all five `LogAudit` mutants on sandbox-app
+    // come back `exact` there, and the widening fired zero times across 424 mutants on three
+    // fixtures. Passing `false` here is what the orchestrator does for coverageMode "fenced".
+    const index = buildCoverageIndex(baseline);
+    const m = entry({ procedureName: "LogAudit", procedureScope: "local" });
+    const widened = coverageFilter([m], index, [t1, t2]);
+    expect(widened.covered.get("M0001")).toEqual([t1]);
+    const notWidened = coverageFilter([m], index, [t1, t2], undefined, false);
+    expect(notWidened.covered.size).toBe(0);
+    expect(notWidened.uncovered.length).toBe(1);
+    // And it is NOT flagged unplaceable: this object reported no naming gap, so the miss is an
+    // honest observation rather than a resolver failure.
+    expect(notWidened.unplaceable.size).toBe(0);
+  });
+
+  test("R175: an unnameable observation ALONE does not flag — a trigger is unnameable by design", () => {
+    const index = buildCoverageIndex(baseline);
+    const m = entry({ procedureName: "TouchCount", procedureScope: "public" });
+    const split = coverageFilter([m], index, [t1, t2]);
+    expect(split.uncovered.length).toBe(1);
+    // The first version of this flagged here, and it was WRONG. Object 70000 shows an unnameable
+    // execution, but "something we decline to name ran" is the normal state of any object with a
+    // trigger. MEASURED: that version flagged both mutants of `Data Main.TouchCount` on
+    // fixtures/sandbox-data, which that fixture documents as genuinely uncovered.
+    expect(split.unplaceable.size).toBe(0);
+  });
+
+  test("R175: a NAMING GAP flags every ordinary mutant in that object, whatever its scope", () => {
+    // The backend reporting a line it could place in NO known member is the resolver admitting it
+    // failed on source LethAL itself emitted. A member-level miss in that object is then evidence
+    // about LethAL, not about the suite — and that holds for a local exactly as for a public,
+    // because on the fenced default the line map names both.
+    const withGap = [
+      {
+        ref: t1,
+        coverage: {
+          granularity: "procedure" as const,
+          entries: [{ objectType: "Codeunit", objectId: 70000, procedure: "ApplyAudit" }],
+          namingGaps: [{ objectType: "Codeunit", objectId: 70000 }],
+        },
+      },
+    ];
+    const index = buildCoverageIndex(withGap);
+    const pub = entry({ procedureName: "TouchCount", procedureScope: "public" });
+    const loc = entry({ mutantId: "M0002", procedureName: "Hidden", procedureScope: "local" });
+    const split = coverageFilter([pub, loc], index, [t1]);
+    expect(split.uncovered.length).toBe(2);
+    expect([...split.unplaceable].sort()).toEqual(["M0001", "M0002"]);
+  });
+
+  test("R175: a naming gap in ANOTHER object does not flag this one", () => {
+    const withGap = [
+      {
+        ref: t1,
+        coverage: {
+          granularity: "procedure" as const,
+          entries: [{ objectType: "Codeunit", objectId: 70000, procedure: "ApplyAudit" }],
+          namingGaps: [{ objectType: "Codeunit", objectId: 70001 }],
+        },
+      },
+    ];
+    const index = buildCoverageIndex(withGap);
+    const m = entry({ procedureName: "TouchCount", procedureScope: "public" });
+    const split = coverageFilter([m], index, [t1]);
+    expect(split.uncovered.length).toBe(1);
+    expect(split.unplaceable.size).toBe(0);
+  });
+
   test("a mutant whose manifest predates procedureScope is not widened either (fail closed)", () => {
     const index = buildCoverageIndex(baseline);
     const m = entry({ procedureName: "LogAudit" }); // no procedureScope — old manifest shape

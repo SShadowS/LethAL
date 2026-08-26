@@ -170,6 +170,7 @@ export type Caveat =
   | "stop-hung-sessions"
   | "resumed"
   | "untargeted-triggers"
+  | "attribution-unplaceable"
   | "platform-artifact-kills"
   | "kills-without-assertion"
   | "declarative-sites-dropped";
@@ -325,6 +326,20 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
       "everything rather than be dropped as `no-coverage`. It is a number to pin, and a rise " +
       "in it is the thing to explain.",
     basis: "R29",
+  },
+  "attribution-unplaceable": {
+    meaning:
+      "Some mutants are counted in `no-coverage` because coverage saw their object execute a " +
+      "member it could NOT NAME, and LethAL declined to guess whether that member was theirs. " +
+      "`unplaceableCount` is how many.",
+    entailedNegative:
+      "NOT a statement about the test suite, and the single most important thing not to read it " +
+      "as one: plain `no-coverage` says 'your tests do not reach this code', and for these it " +
+      "says 'LethAL could not tell'. Measured downstream at 223 of 2058 mutants across 17 " +
+      "reports before this caveat existed, where it was reported as the suite's own gap. It is " +
+      "also not a wrong verdict: excluding them from the score is still honest, because we do " +
+      'not know. Re-run with coverageMode "none" to score them properly.',
+    basis: "R175",
   },
   "platform-artifact-kills": {
     meaning: PLATFORM_ARTIFACT_KILL_DIAGNOSIS,
@@ -969,6 +984,41 @@ export interface SessionReport {
    */
   readonly preprocessorSymbols: readonly string[];
   readonly untargetedTriggerCount: number;
+  /**
+   * R175. How many `no-coverage` verdicts in this run are LethAL's limitation rather than a
+   * statement about the suite.
+   *
+   * A `no-coverage` mutant has one of two very different histories, and until this field they were
+   * indistinguishable in every report:
+   *
+   *   - coverage named members of the object and none was ours, or saw nothing in it at all. "Your
+   *     tests do not reach this code" is then a fair reading.
+   *   - coverage saw the object execute a member it could NOT NAME, and LethAL declined to guess
+   *     whether that member was this one. Nothing here is known about the user's tests.
+   *
+   * This counts the second kind. They remain excluded from `mutationScore` exactly as before,
+   * because "we do not know" is still the honest verdict; what changes is that a reader can see how
+   * much of their no-coverage total is ours.
+   *
+   * MEASURED downstream before the field existed: 223 of 2058 mutants across 17 reports (10.8%)
+   * were reported `no-coverage` without ever executing. The proof was a contradiction inside one
+   * report, a callee killed by a test whose only caller was `no-coverage` with zero covering tests,
+   * and it took a human reading two facts side by side because nothing in the report connected
+   * them. See docs/roadmap/R175.md.
+   *
+   * A non-zero value here is not a defect in the project under test and must never be presented as
+   * one. `coverageMode: "none"` scores these properly: it runs every mutant against every green
+   * test and uses no attribution at all.
+   */
+  readonly unplaceableCount: number;
+  /**
+   * R175. WHICH mutants those are, as `mutantCode`s, sorted.
+   *
+   * The count alone says a report is partly ours rather than the project's; only these say which
+   * rows to re-run under `coverageMode: "none"`. Without them a reader who wants to act has to
+   * re-run the WHOLE project attribution-free, which on a real app is a full cross-product.
+   */
+  readonly unplaceableMutants: readonly string[];
   /**
    * Set only when the session latched unsafe (spec §8/§12) — see `QUARANTINE_INTERPRETATION` for
    * what its presence means to a reader and how to recover. `reason` is `SessionSafety.reason`
@@ -1664,6 +1714,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
   // See CAVEAT_INTERPRETATIONS.resumed for what this caveat means to a reader.
   if (input.resumedFrom !== undefined) caveats.push("resumed");
   if (input.untargetedTriggerCount > 0) caveats.push("untargeted-triggers");
+  if (input.unplaceableCount > 0) caveats.push("attribution-unplaceable");
   // R72 — see CAVEAT_INTERPRETATIONS["platform-artifact-kills"]. Built from the mutant rows just
   // assembled rather than from `input.outcomes`, so the codes it lists are the same strings the
   // report's own `mutants` array carries and a reader can join the two without a second lookup.
@@ -1842,6 +1893,8 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     declarativeSites,
     preprocessorSymbols: statics.preprocessorSymbols ?? [],
     untargetedTriggerCount: input.untargetedTriggerCount,
+    unplaceableCount: input.unplaceableCount,
+    unplaceableMutants: input.unplaceableMutants,
     ...(input.only !== undefined ? { only: input.only } : {}),
     ...(input.operators !== undefined ? { operators: input.operators } : {}),
     ...(input.testsOnly !== undefined ? { testsOnly: input.testsOnly } : {}),
@@ -2182,6 +2235,17 @@ export function renderConsole(r: SessionReport): string {
   // These mutants were scored against EVERY green test rather than against tests coverage placed
   // in their table — honest (better than dropping them as no-coverage) but slower and coarser, and
   // a rise here is the visible symptom of coverage attribution regressing.
+  if (r.unplaceableCount > 0) {
+    lines.push(
+      `ATTRIBUTION COULD NOT PLACE ${r.unplaceableCount} MUTANT(S): they are counted in no-coverage, ` +
+        "but NOT because your tests miss them. Coverage saw their object execute a member it could " +
+        "not NAME, and LethAL declined to guess whether that member was theirs — so nothing here is " +
+        "a statement about your test suite, and they must not be read as one. They are excluded " +
+        "from the score because the honest verdict is 'we do not know', which is unchanged. To " +
+        'score them, re-run with coverageMode "none": it runs every mutant against every green ' +
+        "test and uses no attribution at all (R175).",
+    );
+  }
   if (r.untargetedTriggerCount > 0) {
     lines.push(
       `COVERAGE FALLBACK: ${r.untargetedTriggerCount} table trigger mutant(s) coverage could place nowhere — each was run against every green test rather than against an attributed set.`,

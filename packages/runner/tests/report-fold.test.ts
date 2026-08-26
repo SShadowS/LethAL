@@ -71,6 +71,8 @@ function baseEvents(): RunEventInput[] {
       untargetedTriggerCount: 0,
       coveredCount: 1,
       noCoverageCount: 0,
+      unplaceableCount: 0,
+      unplaceableMutants: [],
     },
   ];
 }

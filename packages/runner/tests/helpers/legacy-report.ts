@@ -307,6 +307,8 @@ export function legacyBuildReport(input: LegacyBuildReportInput): SessionReport 
       untargetedTriggerCount: input.untargetedTriggerCount,
       coveredCount: 0,
       noCoverageCount: 0,
+      unplaceableCount: 0,
+      unplaceableMutants: [],
     });
   }
 

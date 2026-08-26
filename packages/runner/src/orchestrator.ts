@@ -3308,6 +3308,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           index,
           greenTests.map((b) => b.ref),
           unsupportedIndex,
+          // R175: only the HUB resolver is blind to locals. `fenced` names them by parsing the
+          // source, measured, so there the widening would fire only on a naming FAILURE and would
+          // hide it as object-level coverage.
+          caps.coverage !== "fenced",
         );
         perMutantTests = split.covered;
         coverageAttribution = split.attribution;
@@ -3322,6 +3326,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           untargetedTriggerCount: split.untargetedTriggerCount,
           coveredCount: split.covered.size,
           noCoverageCount: split.uncovered.length,
+          unplaceableCount: split.unplaceable.size,
+          unplaceableMutants: [...split.unplaceable].sort(),
         });
       }
       // A mutant uncovered by any GREEN test but covered by a non-passing

@@ -381,6 +381,8 @@ function buildScenarioReport(): SessionReport {
       untargetedTriggerCount: 2,
       coveredCount: 0,
       noCoverageCount: 0,
+      unplaceableCount: 0,
+      unplaceableMutants: [],
     },
     { type: "phase-left", phase: "generate", elapsedMs: 8000 },
     { type: "phase-left", phase: "deploy", elapsedMs: 42000 },

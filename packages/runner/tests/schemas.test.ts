@@ -394,7 +394,12 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
       .filter((v) => v.problem === "required but absent")
       .map((v) => v.path)
       .sort();
-    expect(missing).toEqual(["$.declarativeSites", "$.preprocessorSymbols"]);
+    expect(missing).toEqual([
+      "$.declarativeSites",
+      "$.preprocessorSymbols",
+      "$.unplaceableCount",
+      "$.unplaceableMutants",
+    ]);
   });
 
   /**
@@ -451,6 +456,8 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "survivorsByProcedure",
         "testFiles",
         "timings",
+        "unplaceableCount",
+        "unplaceableMutants",
         "unsupportedTests",
         "untargetedTriggerCount",
         "validity",

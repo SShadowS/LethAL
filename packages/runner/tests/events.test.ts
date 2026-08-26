@@ -276,6 +276,8 @@ describe("createEmitter", () => {
         untargetedTriggerCount: 0,
         coveredCount: 1,
         noCoverageCount: 0,
+        unplaceableCount: 0,
+        unplaceableMutants: [],
       },
       { type: "permission-canary", result: { verdict: "not-mocked" } },
       {

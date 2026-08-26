@@ -17,6 +17,7 @@ import type {
   CoverageMap,
   CoverageMode,
   ExecutionBackend,
+  NamingGap,
   RunOpts,
   TestMethodRef,
   TestVerdict,
@@ -859,11 +860,24 @@ export class BcDevMcpBackend implements ExecutionBackend {
     const seen = new Set<string>();
     let declaredRows = 0;
     let memberEntries = 0;
+    // R175: objects where a row landed in NO known span — not a procedure, not a trigger. The map
+    // is built from the source LethAL emitted and compiled, so it should be able to place every
+    // executable line of every object it declares; a row it cannot place is attribution FAILING,
+    // and until now it was indistinguishable from a trigger line the map declines to name.
+    const namingGapKeys = new Set<string>();
+    const namingGaps: NamingGap[] = [];
     for (const row of rows) {
       const objectType = objectTypeName(row.objectType);
       if (!lineMap.declares(objectType, row.objectId)) continue; // rule 1
       declaredRows += 1;
       const procedure = lineMap.lookup(objectType, row.objectId, row.lineNo);
+      if (procedure === undefined && lineMap.isNamingGap(objectType, row.objectId, row.lineNo)) {
+        const gapKey = `${objectType}:${row.objectId}`;
+        if (!namingGapKeys.has(gapKey)) {
+          namingGapKeys.add(gapKey);
+          namingGaps.push({ objectType, objectId: row.objectId });
+        }
+      }
       const key = `${objectType}:${row.objectId}:${procedure ?? ""}`;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -875,7 +889,11 @@ export class BcDevMcpBackend implements ExecutionBackend {
       });
     }
     this.warnOnThinFencedCoverage(ref, rows.length, declaredRows, memberEntries, stats);
-    return { granularity: "procedure", entries };
+    return {
+      granularity: "procedure",
+      entries,
+      ...(namingGaps.length > 0 ? { namingGaps } : {}),
+    };
   }
 
   /**

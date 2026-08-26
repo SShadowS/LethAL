@@ -114,6 +114,8 @@ describe("progress renderer", () => {
         untargetedTriggerCount: 0,
         coveredCount: 34,
         noCoverageCount: 66,
+        unplaceableCount: 0,
+        unplaceableMutants: [],
       }),
     );
     expect(out[0]).toContain("34");

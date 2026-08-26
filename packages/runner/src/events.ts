@@ -219,6 +219,17 @@ export type RunEventInput =
       readonly untargetedTriggerCount: number;
       readonly coveredCount: number;
       readonly noCoverageCount: number;
+      /**
+       * R175. How many of `noCoverageCount` are `no-coverage` because attribution could not NAME
+       * the member that ran, rather than because nothing ran. A subset, never a separate bucket.
+       */
+      readonly unplaceableCount: number;
+      /**
+       * R175. WHICH ones, as `mutantId`s. A count tells a reader there is a problem; only the
+       * identities tell them which mutants to re-run under coverageMode "none", which is the whole
+       * remedy. Sorted, so a gate can assert on it.
+       */
+      readonly unplaceableMutants: readonly string[];
     }
   | {
       /** The once-per-session permission canary's measured verdict — one observation. */

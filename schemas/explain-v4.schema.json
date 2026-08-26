@@ -103,6 +103,7 @@
               "stop-hung-sessions",
               "resumed",
               "untargeted-triggers",
+              "attribution-unplaceable",
               "platform-artifact-kills",
               "kills-without-assertion",
               "declarative-sites-dropped"

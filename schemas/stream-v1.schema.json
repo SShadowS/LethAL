@@ -487,6 +487,8 @@
         "untargetedTriggerCount",
         "coveredCount",
         "noCoverageCount",
+        "unplaceableCount",
+        "unplaceableMutants",
         "seq"
       ],
       "properties": {
@@ -504,6 +506,15 @@
         },
         "noCoverageCount": {
           "type": "number"
+        },
+        "unplaceableCount": {
+          "type": "number"
+        },
+        "unplaceableMutants": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         },
         "seq": {
           "type": "number"

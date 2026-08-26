@@ -25,6 +25,22 @@ interface ProcedureSpan {
 interface ObjectLines {
   /** Procedures only — triggers are deliberately absent. See `lookup`'s rule 4. */
   readonly procedures: readonly ProcedureSpan[];
+  /**
+   * R175: trigger spans, indexed for CLASSIFICATION ONLY and never for naming.
+   *
+   * `lookup` still returns `undefined` for a trigger line, for the reason rule 4 gives: naming one
+   * would land in `byMember` under a key no mutant queries, so it would be harmless and invisible.
+   * What was missing is the ability to tell the two kinds of `undefined` apart:
+   *
+   *   - the line is inside a TRIGGER, which this map deliberately declines to name. Expected.
+   *   - the line is inside NOTHING this map knows about. That is a naming GAP, and it means the
+   *     map could not place a line the server says executed.
+   *
+   * Until R175 those were one answer, and the difference is the whole of `isNamingGap`: an
+   * unnameable observation of the first kind says nothing, while one of the second kind is direct
+   * evidence that attribution failed in this object.
+   */
+  readonly triggers: readonly ProcedureSpan[];
 }
 
 /** Key for the `(objectType, objectId)` pair. Never the bare id: a table and a codeunit may share
@@ -92,7 +108,7 @@ export class LineMap {
       // file, so an undeclared object still consumes the lines its declared neighbours are numbered
       // relative to.
       if (!declared.has(key)) continue;
-      this.byObject.set(key, { procedures: procedureSpans(e.root, e.baseLine) });
+      this.byObject.set(key, spansOf(e.root, e.baseLine));
     }
   }
 
@@ -119,6 +135,30 @@ export class LineMap {
    * caller-contract violation — the artifact was compiled from source LethAL wrote — and the
    * project's rule is to fail loudly rather than return a plausible empty default.
    */
+  /**
+   * R175: did this line fall inside NOTHING this map knows about, procedure or trigger?
+   *
+   * `true` is evidence that naming FAILED for this object rather than that the line belongs to a
+   * member we decline to name. It is the signal `coverageFilter` needs to tell "your tests do not
+   * reach this code" from "LethAL could not place what your tests did".
+   *
+   * Deliberately conservative in the safe direction. A var section, a blank line between
+   * procedures and an object-level `lineNo` 0 row are all "no known span" without being naming
+   * failures, so this returns `false` for line 0 (BC's object-level row, measured) and callers
+   * treat the answer as evidence about the OBJECT rather than about any one line: one gap row in
+   * an object is enough to say attribution is unreliable there, and a handful of var-section rows
+   * cannot be told from a real gap, so the object is flagged either way. Over-flagging costs a
+   * report line; under-flagging is the R175 defect itself.
+   */
+  isNamingGap(objectType: string, objectId: number, lineNo: number): boolean {
+    const entry = this.byObject.get(keyOf(objectType, objectId));
+    if (entry === undefined) return false;
+    if (lineNo <= 0) return false;
+    const inSpan = (spans: readonly ProcedureSpan[]) =>
+      spans.some((p) => lineNo >= p.firstLine && lineNo <= p.lastLine);
+    return !inSpan(entry.procedures) && !inSpan(entry.triggers);
+  }
+
   lookup(objectType: string, objectId: number, lineNo: number): string | undefined {
     const key = keyOf(objectType, objectId);
     const entry = this.byObject.get(key);
@@ -152,27 +192,36 @@ export class LineMap {
  * was regex-based; it is gone, and the over-credit it produced is exactly what this module
  * must not reintroduce.)
  */
-function procedureSpans(objectRoot: ALSyntaxNode, baseLine: number): ProcedureSpan[] {
-  const spans: ProcedureSpan[] = [];
+function spansOf(objectRoot: ALSyntaxNode, baseLine: number): ObjectLines {
+  const procedures: ProcedureSpan[] = [];
+  const triggers: ProcedureSpan[] = [];
+  const span = (n: ALSyntaxNode, name: string): ProcedureSpan => ({
+    name,
+    firstLine: n.startPosition.row + 1 - baseLine + 1,
+    lastLine: n.endPosition.row + 1 - baseLine + 1,
+  });
   const walk = (n: ALSyntaxNode): void => {
+    // R175: trigger spans are collected for CLASSIFICATION only — see `ObjectLines.triggers`.
+    // They never reach `procedures`, so `lookup` cannot name one and rule 4 is unchanged.
+    if (n.kind === ALNodeKind.trigger) {
+      const nameNode = n.childForFieldName("name");
+      triggers.push(span(n, nameNode === null ? "" : stripQuotes(nameNode.text)));
+      return;
+    }
     if (n.kind === ALNodeKind.procedure) {
       const nameNode = n.childForFieldName("name");
       const name = nameNode === null ? null : stripQuotes(nameNode.text);
       if (name !== null && name !== "") {
         // Measured: BC's rows span a procedure CONTIGUOUSLY from its declaration line through its
         // closing `end;`, so the node's own line extent is exactly the right range.
-        spans.push({
-          name,
-          firstLine: n.startPosition.row + 1 - baseLine + 1,
-          lastLine: n.endPosition.row + 1 - baseLine + 1,
-        });
+        procedures.push(span(n, name));
       }
       return; // do not descend: a nested construct belongs to this procedure, not its own span
     }
     for (const c of n.children) walk(c);
   };
   walk(objectRoot);
-  return spans;
+  return { procedures, triggers };
 }
 
 function stripQuotes(s: string): string {

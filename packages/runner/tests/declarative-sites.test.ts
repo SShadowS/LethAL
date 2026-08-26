@@ -182,6 +182,8 @@ function foldWith(
       untargetedTriggerCount: 0,
       coveredCount: 1,
       noCoverageCount: 0,
+      unplaceableCount: 0,
+      unplaceableMutants: [],
     },
     { type: "session-finished", elapsedMs: 10 },
   ];

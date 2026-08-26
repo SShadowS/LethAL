@@ -48,6 +48,16 @@ export type TestOutcome = "pass" | "fail" | "skip" | "timeout" | "deadline-excee
  * would masquerade as an exact member match. `buildCoverageIndex` therefore skips an absent
  * `procedure` structurally and refuses a blank-but-present one loudly.
  */
+/**
+ * R175: an object in which coverage reported a line the resolver could place in NO known member,
+ * procedure or trigger. Direct evidence that attribution failed for this object, as distinct from
+ * an observation of a member we deliberately decline to name.
+ */
+export interface NamingGap {
+  readonly objectType: string;
+  readonly objectId: number;
+}
+
 export interface CoverageEntry {
   readonly objectType: string;
   readonly objectId: number;
@@ -58,6 +68,16 @@ export interface CoverageEntry {
 export interface CoverageMap {
   readonly granularity: "procedure" | "line";
   readonly entries: readonly CoverageEntry[];
+  /**
+   * R175. Objects where a reported line fell inside nothing this backend could name.
+   *
+   * Optional because only the FENCED path can compute it: it resolves lines through a map built
+   * from the source LethAL emitted, so it knows what it should have been able to place. The hub
+   * path resolves an opaque `methodId` against `SymbolReference.json` and cannot tell a local (never
+   * listed, expected) from a public whose id did not match (a real gap), so it reports none rather
+   * than guess.
+   */
+  readonly namingGaps?: readonly NamingGap[];
 }
 
 export interface TestVerdict {

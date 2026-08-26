@@ -22,7 +22,9 @@
     "declarativeSites",
     "timings",
     "preprocessorSymbols",
-    "untargetedTriggerCount"
+    "untargetedTriggerCount",
+    "unplaceableCount",
+    "unplaceableMutants"
   ],
   "properties": {
     "schemaVersion": {
@@ -67,6 +69,7 @@
               "stop-hung-sessions",
               "resumed",
               "untargeted-triggers",
+              "attribution-unplaceable",
               "platform-artifact-kills",
               "kills-without-assertion",
               "declarative-sites-dropped"
@@ -841,6 +844,15 @@
     },
     "untargetedTriggerCount": {
       "type": "number"
+    },
+    "unplaceableCount": {
+      "type": "number"
+    },
+    "unplaceableMutants": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
     },
     "quarantined": {
       "type": "object",

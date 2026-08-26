@@ -61,6 +61,8 @@ describe("renderConsole — al-runner canary reiteration (R7/R8)", () => {
       perMutant: { count: 0, meanMs: 0, medianMs: 0, p95Ms: 0, maxMs: 0 },
     },
     preprocessorSymbols: [],
+    unplaceableCount: 0,
+    unplaceableMutants: [],
     untargetedTriggerCount: 0,
   };
 
@@ -169,6 +171,8 @@ describe("renderConsole — permission canary reiteration (R26)", () => {
       perMutant: { count: 0, meanMs: 0, medianMs: 0, p95Ms: 0, maxMs: 0 },
     },
     preprocessorSymbols: [],
+    unplaceableCount: 0,
+    unplaceableMutants: [],
     untargetedTriggerCount: 0,
   };
 
@@ -253,10 +257,11 @@ describe("Caveat union", () => {
       "stop-hung-sessions": true,
       resumed: true,
       "untargeted-triggers": true,
+      "attribution-unplaceable": true,
       "platform-artifact-kills": true,
       "kills-without-assertion": true,
       "declarative-sites-dropped": true,
     };
-    expect(Object.keys(all).length).toBe(15);
+    expect(Object.keys(all).length).toBe(16);
   });
 });
