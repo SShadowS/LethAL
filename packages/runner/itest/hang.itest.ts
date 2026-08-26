@@ -93,29 +93,58 @@ const STOP_GRACE_MS = 30_000;
  * monotonically false with no dependence on data, clock or I/O.
  */
 const EXPECTED_ON: ReadonlyArray<{ line: number; operator: string; verdict: string }> = [
-  { line: 32, operator: "lethal.empty-block", verdict: "killed" },
+  // --- `CountUpTo` / `Advance`, the original R53 arm. R164 shifted every line down two, because
+  // --- its arm added two `var` declarations at the top of the codeunit.
+  { line: 34, operator: "lethal.empty-block", verdict: "killed" },
+  { line: 35, operator: "lethal.remove-assignment", verdict: "survived" },
+  { line: 35, operator: "lethal.shift-integer", verdict: "survived" },
   // The advancing call, deleted: the loop can never progress.
-  { line: 35, operator: "lethal.void-method-call", verdict: "timeout-killed" },
-  { line: 36, operator: "lethal.conditional-boundary", verdict: "killed" },
-  { line: 37, operator: "lethal.return-value", verdict: "killed" },
+  { line: 37, operator: "lethal.void-method-call", verdict: "timeout-killed" },
+  // THE CESSION CONTROL. R164 cedes a `repeat` exit condition from `negate-conditional` to
+  // `loop-truncate`, and only from that operator. `conditional-boundary` still claims this same
+  // span, it still terminates, and it is still killed. A cession that was too broad would delete
+  // this row, which is an operator-NAME change the per-mutant table catches and a total would not.
+  { line: 38, operator: "lethal.conditional-boundary", verdict: "killed" },
+  // R164: `until Counter >= Limit` -> `until true`. `CountUpTo(3)` advances once and returns 1
+  // against a test expecting 3, so this is `loop-truncate`'s killability proof and it needed no new
+  // fixture code at all.
+  { line: 38, operator: "lethal.loop-truncate", verdict: "killed" },
+  { line: 39, operator: "lethal.return-value", verdict: "killed" },
   // The advancing procedure's body, emptied: same property, different operator.
-  { line: 41, operator: "lethal.empty-block", verdict: "timeout-killed" },
+  { line: 43, operator: "lethal.empty-block", verdict: "timeout-killed" },
   // R159's `remove-assignment` adds both of these, and they are a matched pair worth reading
-  // together. Deleting `Counter := 0` changes nothing — a local `Integer` already defaults to 0, so
-  // it is an equivalent mutant by inspection. Deleting `Counter += 1` removes the loop's only
-  // progress and is the fixture's THIRD non-terminating mutant, reached by a third operator.
-  { line: 33, operator: "lethal.remove-assignment", verdict: "survived" },
-  { line: 42, operator: "lethal.remove-assignment", verdict: "timeout-killed" },
-  // R159's `shift-integer` adds the same two lines through a third operator, and line 33 is now the
-  // clearest EQUIVALENT-MUTANT site in the repository: two operators, one statement, both honest
-  // survivors. `remove-assignment` deletes `Counter := 0` (a fresh codeunit instance starts it at 0
-  // anyway) and this shifts it to 1, from which the loop walks 2, 3 instead of 1, 2, 3 and still
-  // returns 3. Neither is distinguishable in the report from a real coverage gap, which is R172.
-  { line: 33, operator: "lethal.shift-integer", verdict: "survived" },
-  // `Counter += 1` -> `+= 2` walks 0, 2, 4 and exits at 4 against a test expecting 3. It TERMINATES,
-  // which is the point: this operator refuses loop-exit CONDITIONS (R164) but claims the loop body,
-  // and the non-terminating count below must stay at 3 for that cession to be doing its job.
-  { line: 42, operator: "lethal.shift-integer", verdict: "killed" },
+  // together. Deleting `Counter := 0` changes nothing, a codeunit `Integer` global is 0 on a fresh
+  // instance, so it is an equivalent mutant by inspection. Deleting `Counter += 1` removes the
+  // loop's only progress and is non-terminating, reached by a third operator.
+  { line: 44, operator: "lethal.remove-assignment", verdict: "timeout-killed" },
+  { line: 44, operator: "lethal.shift-integer", verdict: "killed" },
+
+  // --- `NextRow` / `WalkOneRow`, R164's arm. It reproduces BC's `Rec.Next()` CONTRACT with no
+  // --- table behind it, so the canonical hang is deterministic rather than data-dependent.
+  { line: 62, operator: "lethal.empty-block", verdict: "survived" },
+  { line: 63, operator: "lethal.conditional-boundary", verdict: "killed" },
+  // `exit(1)` is only reached while rows remain, and a ONE-row walk never reaches it. Covered but
+  // unreached, which is a survivor rather than no-coverage: the procedure itself did execute.
+  { line: 65, operator: "lethal.return-value", verdict: "survived" },
+  { line: 69, operator: "lethal.empty-block", verdict: "killed" },
+  { line: 70, operator: "lethal.remove-assignment", verdict: "survived" },
+  { line: 70, operator: "lethal.shift-integer", verdict: "killed" },
+  { line: 71, operator: "lethal.remove-assignment", verdict: "survived" },
+  { line: 71, operator: "lethal.shift-integer", verdict: "killed" },
+  // The arm's SECOND non-terminating mutant, and it is not the exit condition's. Deleting
+  // `Walked += 1` removes the loop's only progress, which is why R164's cession does not remove it:
+  // any loop whose progress is arithmetic can be stranded by an operator that touches that
+  // arithmetic, and no cession at the exit condition can help.
+  { line: 73, operator: "lethal.remove-assignment", verdict: "timeout-killed" },
+  { line: 73, operator: "lethal.shift-integer", verdict: "killed" },
+  // THE ROW R164 EXISTS FOR. Before the cession this span carried TWO mutants: this one, and a
+  // `lethal.negate-conditional` scored `timeout-killed` (MEASURED, stage 1 of
+  // docs/superpowers/specs/2026-08-26-r164-loop-truncate-precommitment.md). After it, exactly one,
+  // and it cannot hang. `loop-truncate` SURVIVES here, honestly: truncating a one-iteration loop to
+  // one iteration changes nothing, which is the operator's documented equivalence limit seen from
+  // the inside. A SECOND mutant appearing at this line is the regression to look for.
+  { line: 74, operator: "lethal.loop-truncate", verdict: "survived" },
+  { line: 75, operator: "lethal.return-value", verdict: "killed" },
 ];
 
 async function readJson<T>(path: string, what: string): Promise<T> {
@@ -274,11 +303,13 @@ function assertOnLeg(leg: LegResult): void {
   const timeoutKilled = report.mutants.filter((m) => m.verdict === "timeout-killed");
   assert.equal(
     timeoutKilled.length,
-    3,
-    "the fixture has exactly three non-terminating mutants (R159's `remove-assignment` added the " +
-      "third). This count is also the live half of `shift-integer`'s loop cession: that operator " +
-      "puts two mutants into this very fixture, one of them INSIDE the loop, and a fourth " +
-      "non-terminating mutant here would mean it had reached a loop-exit condition after all (R164)",
+    4,
+    "the fixture has exactly four non-terminating mutants, and each is reached by a DIFFERENT " +
+      "operator: void-method-call and empty-block on the original arm, remove-assignment twice " +
+      "(R159), once on each arm. None of them is a loop EXIT CONDITION, and that is the point of " +
+      "the count: R164 ceded the exit condition from `negate-conditional` to `loop-truncate`, " +
+      "which cannot hang, and `shift-integer` refuses that position outright. A FIFTH " +
+      "non-terminating mutant means one of those two cessions has stopped holding",
   );
 
   // THE ASSERTION THAT CANNOT PASS FOR THE WRONG REASON. A verdict check alone would still hold if

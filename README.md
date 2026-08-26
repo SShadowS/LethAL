@@ -542,7 +542,7 @@ That selects which mutants run and cannot change a verdict.
 |---|---|---|---|
 | `lethal.conditional-boundary` | 1.0.0 | `A > 0` → `A >= 0` | an off-by-one at a boundary no test pins |
 | `lethal.flip-boolean-literal` | 1.0.0 | `true` → `false` | a flag nobody checks the other setting of |
-| `lethal.negate-conditional` | 1.0.0 | `A = 0` → `A <> 0` | a branch that is taken but never checked |
+| `lethal.negate-conditional` | 1.0.0 | `Cust.Next() = 0` → `Cust.Next() <> 0` | a branch that is taken but never checked |
 | `lethal.negate-guard` | 1.0.0 | `Cust.Get('X')` → `not (Cust.Get('X'))` | a plain `if Rec.Get(...) then` guard nobody tests the other side of |
 | `lethal.toggle-blank-string` | 1.0.0 | `'FOO'` → `''` | a blank check nobody drives with a blank value |
 | `lethal.void-method-call` | 1.1.0 | `DoThing()` → _(deleted)_ | a call whose effect nothing observes |
@@ -553,6 +553,7 @@ That selects which mutants run and cannot change a verdict.
 | `lethal.remove-not` | 1.0.0 | `not Cust.IsEmpty()` → `Cust.IsEmpty()` | a negated guard whose two branches nobody tells apart |
 | `lethal.swap-additive` | 1.0.0 | `A + B` → `A - B` | a sum or difference whose value no test checks |
 | `lethal.shift-integer` | 1.0.0 | `5` → `6` | an off-by-one nothing notices, at a constant the test never varies |
+| `lethal.loop-truncate` | 1.0.0 | `Cust.Next() = 0` → `true` | a loop no test drives over more than one row |
 <!-- /operators: tier1 -->
 
 ### Tier 2, AL-specific

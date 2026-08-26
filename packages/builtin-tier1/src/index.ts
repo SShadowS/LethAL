@@ -2,6 +2,7 @@ import type { MutationOperator } from "@lethal/operator-sdk";
 import { conditionalBoundary } from "./conditional-boundary";
 import { emptyBlock } from "./empty-block";
 import { flipBooleanLiteral } from "./flip-boolean-literal";
+import { loopTruncate } from "./loop-truncate";
 import { negateConditional } from "./negate-conditional";
 import { negateGuard } from "./negate-guard";
 import { removeAssignment } from "./remove-assignment";
@@ -17,6 +18,7 @@ export { conditionalBoundary } from "./conditional-boundary";
 export { emptyBlock } from "./empty-block";
 export { flipBooleanLiteral } from "./flip-boolean-literal";
 export { negateConditional } from "./negate-conditional";
+export { loopTruncate } from "./loop-truncate";
 export { negateGuard } from "./negate-guard";
 export { removeAssignment } from "./remove-assignment";
 export { removeNot } from "./remove-not";
@@ -54,4 +56,9 @@ export const tier1Operators: readonly MutationOperator[] = [
   // conditions go to R164's non-termination hazard, and ordering comparisons to
   // `conditional-boundary`, which already shifts the same boundary from the operator side.
   shiftInteger,
+  // R164: a `repeat` loop's exit condition -> `true`, so the body runs exactly once. 334 sites on
+  // `do-rel2/Cloud`. It ships WITH a cession: `negate-conditional` refuses the same position,
+  // because its mutant there does not terminate on a one-row set and §3.2 dedup cannot displace it
+  // (dedup keys on replacement TEXT, so `<> 0` and `true` are two identities and both would ship).
+  loopTruncate,
 ];

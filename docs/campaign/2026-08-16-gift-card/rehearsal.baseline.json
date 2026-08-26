@@ -231,7 +231,7 @@
     "errorClass": null
   },
   {
-    "key": "a04daf56d57a253ce4f374b9074c62b50fe27cf227ac4c04715c4ad51d7335df|Gift Card Mgt|BlockExpiredCards|lethal.negate-conditional|1",
+    "key": "a04daf56d57a253ce4f374b9074c62b50fe27cf227ac4c04715c4ad51d7335df|Gift Card Mgt|BlockExpiredCards|lethal.loop-truncate|1",
     "verdict": "no-coverage",
     "killingTest": null,
     "coverageFiltered": true,

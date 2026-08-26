@@ -2,6 +2,8 @@ codeunit 79400 "Hang Logic"
 {
     var
         Counter: Integer;
+        Rows: Integer;
+        Walked: Integer;
 
     /// <summary>
     /// R53's shape, made deterministic.
@@ -40,5 +42,36 @@ codeunit 79400 "Hang Logic"
     local procedure Advance()
     begin
         Counter += 1;
+    end;
+
+    /// <summary>
+    /// R164's arm, and the same design principle as `CountUpTo` above: the canonical BC hang made
+    /// DETERMINISTIC.
+    ///
+    /// The shape R164 is about is `repeat BODY until Rec.Next() = 0`, whose `negate-conditional`
+    /// mutant (`&lt;&gt; 0`) never terminates once the recordset is exhausted. A real recordset would make
+    /// the fixture depend on table data, so `NextRow` reproduces BC's `Next()` CONTRACT instead:
+    /// 1 while rows remain, 0 once exhausted, and 0 forever after. No table, same property.
+    ///
+    /// `WalkOneRow` drives it over exactly ONE row, which is the case that hangs. It is also the
+    /// case where `loop-truncate` is an EQUIVALENT mutant: truncating a one-iteration loop to one
+    /// iteration changes nothing, and the operator's doc comment says so before the verdict arrives.
+    /// Killability is proven by the OTHER loop in this file, `CountUpTo`, whose test drives three.
+    /// </summary>
+    local procedure NextRow(): Integer
+    begin
+        if Walked >= Rows then
+            exit(0);
+        exit(1);
+    end;
+
+    procedure WalkOneRow(): Integer
+    begin
+        Rows := 1;
+        Walked := 0;
+        repeat
+            Walked += 1;
+        until NextRow() = 0;
+        exit(Walked);
     end;
 }

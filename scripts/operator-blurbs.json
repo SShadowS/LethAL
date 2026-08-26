@@ -31,6 +31,7 @@
     "lethal.flip-boolean-literal": "a flag nobody checks the other setting of",
     "lethal.remove-assignment": "a value written that nothing downstream depends on",
     "lethal.toggle-blank-string": "a blank check nobody drives with a blank value",
-    "lethal.shift-integer": "an off-by-one nothing notices, at a constant the test never varies"
+    "lethal.shift-integer": "an off-by-one nothing notices, at a constant the test never varies",
+    "lethal.loop-truncate": "a loop no test drives over more than one row"
   }
 }
