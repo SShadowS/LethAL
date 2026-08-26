@@ -1,18 +1,24 @@
 #!/usr/bin/env bun
 /**
- * R159: where do AL string literals actually SIT?
+ * R159: where do AL literals of a given kind actually SIT?
  *
- * `string_literal` is the largest kind the node-kind census leaves unclaimed, and a raw count of it
- * is the wrong input to a build-or-refuse decision. A literal's context decides whether mutating it
- * changes BEHAVIOUR, changes a MESSAGE, or changes nothing an operator may touch at all — and those
- * three answers want three different verdicts.
+ * A raw kind count is the wrong input to a build-or-refuse decision. A literal's context decides
+ * whether mutating it changes BEHAVIOUR, changes a MESSAGE, or changes nothing an operator may touch
+ * at all — and those three answers want three different verdicts.
+ *
+ * `toggle-blank-string` is why this is parameterised rather than string-specific. Sizing it took
+ * three passes: 4,892 raw, 1,102 in behavioural contexts, 281 once no-op mutations were removed. An
+ * operator scoped from the first number would have shipped covering a quarter of its own ground, and
+ * the same caution applies to every remaining candidate.
  *
  * So this classifies every literal by its enclosing construct rather than counting them. It reads
  * RAW tree-sitter node types, never `ALNodeKind`, for the reason `census-node-kind-coverage.ts`
  * gives: the curated enum is a subset chosen by us, so censusing it could only report that the kinds
  * we named are the kinds we handle.
  *
- *   bun scripts/census-string-literals.ts <project-dir> [<project-dir> ...]
+ *   bun scripts/census-literal-contexts.ts <node-kind> <project-dir> [<project-dir> ...]
+ *
+ * e.g. `string_literal`, `integer`, `boolean` — the RAW tree-sitter kind, not an `ALNodeKind` key.
  *
  * Point it at real AL, which must never be committed here. It prints COUNTS and node kinds only,
  * never literal text: the 2026-08-09 ruling is that a measured project's source does not get
@@ -27,9 +33,9 @@ import { type ALSyntaxNode, wrapRoot } from "../packages/engine/src/ast/syntax-n
 import { buildSemanticContext } from "../packages/engine/src/semantic/context";
 import type { SourceFile } from "../packages/engine/src/semantic/symbol-table";
 
-const dirs = process.argv.slice(2);
-if (dirs.length === 0) {
-  console.error("usage: bun scripts/census-string-literals.ts <project-dir> [...]");
+const [kind, ...dirs] = process.argv.slice(2);
+if (kind === undefined || dirs.length === 0) {
+  console.error("usage: bun scripts/census-literal-contexts.ts <node-kind> <project-dir> [...]");
   process.exit(2);
 }
 const shipped = [...tier1Operators, ...tier2Operators];
@@ -100,6 +106,8 @@ for (const dir of dirs) {
 const ctx = buildSemanticContext(files);
 
 const byContext = new Map<string, number>();
+/** For numeric kinds the VALUE carries idiom: `Next() = 0` is a loop exit, not an arithmetic 0. */
+const byValue = new Map<string, number>();
 let total = 0;
 let inBody = 0;
 let alreadyClaimed = 0;
@@ -120,7 +128,7 @@ for (const file of files) {
     }
   });
   walk(file.root, (n) => {
-    if (n.rawKind !== "string_literal") return;
+    if (n.rawKind !== kind) return;
     total++;
     let body = false;
     for (let p = n.parent; p !== null; p = p.parent) {
@@ -133,15 +141,22 @@ for (const file of files) {
     if (claims.has(`${n.startIndex}-${n.endIndex}`)) alreadyClaimed++;
     const k = classify(n);
     byContext.set(k, (byContext.get(k) ?? 0) + 1);
+    const v = n.text.length <= 6 ? n.text : "(longer)";
+    byValue.set(v, (byValue.get(v) ?? 0) + 1);
   });
 }
 
 console.log(`files: ${files.length}`);
-console.log(`string literals: ${total} (${inBody} inside a procedure or trigger body)`);
+console.log(`${kind}: ${total} (${inBody} inside a procedure or trigger body)`);
 console.log(`  already claimed at the SAME span by a shipped operator: ${alreadyClaimed}\n`);
 console.log(`${"context".padEnd(38)} ${"count".padStart(6)}  share`);
 for (const [k, v] of [...byContext].sort((a, b) => b[1] - a[1])) {
   console.log(`${k.padEnd(38)} ${String(v).padStart(6)}  ${((100 * v) / total).toFixed(1)}%`);
+}
+
+console.log(`\n${"literal value".padEnd(38)} ${"count".padStart(6)}`);
+for (const [k, v] of [...byValue].sort((a, b) => b[1] - a[1]).slice(0, 8)) {
+  console.log(`${k.padEnd(38)} ${String(v).padStart(6)}`);
 }
 
 const behavioural = [...byContext]
@@ -151,4 +166,10 @@ console.log(
   `\nBEHAVIOURAL (a value the program branches on or stores): ${behavioural} of ${total}, ` +
     `${((100 * behavioural) / total).toFixed(1)}%`,
 );
-if (total === 0) throw new Error("census-string-literals: no literals found — refusing to report");
+if (total === 0) {
+  throw new Error(
+    `census-literal-contexts: no ${kind} nodes found — refusing to report. Check the RAW kind ` +
+      "name: an `ALNodeKind` KEY and its VALUE differ for several kinds (`text_literal` holds " +
+      "`string_literal`), and a wrong name reports zero, which reads exactly like a refusal.",
+  );
+}

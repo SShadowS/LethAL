@@ -27,7 +27,7 @@ const BLANK = "''";
 /**
  * Parent kinds where a string literal is a value the program BRANCHES ON or STORES.
  *
- * Measured by `scripts/census-string-literals.ts` on `do-rel2/Cloud`: of 12,835 literals, 54.2% are
+ * Measured by `scripts/census-literal-contexts.ts` on `do-rel2/Cloud`: of 12,835 literals, 54.2% are
  * declarative properties (Caption, ToolTip) that R135 already refuses, 16.7% are call arguments whose
  * meaning depends on a callee this layer cannot resolve, 2.0% are filter arguments belonging to
  * `flip-filter-literal`, and 2.0% are message text where a mutation changes what a user reads rather
