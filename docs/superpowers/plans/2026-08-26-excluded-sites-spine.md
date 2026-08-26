@@ -363,7 +363,7 @@ describe("buildReport derives both legacy fields from excludedSites (not in para
   test("the report's own views equal the views of its own excludedSites", () => {
     // Build a report through the real fold, with a mutation-set-generated event carrying both
     // populations. Replace the helper call below with this repo's existing fold-test harness if
-    // one is already present in packages/runner/tests — do NOT invent a second harness.
+    // one is already present in packages/runner/tests. Do NOT invent a second harness.
     const report = buildReportForTest({
       totalFiles: 40,
       notInstrumentedFiles: [
@@ -537,7 +537,7 @@ assert.equal(
 assert.deepEqual(
   report.notInstrumented.files.map((f) => f.file).sort(),
   [...EXPECTED.notInstrumented.files].sort(),
-  "notInstrumented files mismatch — a permanently-empty derived view passes a count check but not this one",
+  "notInstrumented files mismatch: a permanently-empty derived view passes a count check but not this one",
 );
 ```
 
