@@ -131,3 +131,15 @@ Totals 47 -> 59, killed 26 -> 33, survived 11 -> 15, no-coverage 10 -> 11. Score
 
 **The three rows that carry the demo never moved**: the planted `remove-setrange` in `GetBalance`
 survives, the `conditional-boundary` in `Redeem` survives, and `BlockExpiredCards` is uncovered.
+
+## Amended 2026-08-26 by R159: the stage is re-frozen at 60 mutants
+
+`lethal.toggle-blank-string` ships. One site here: `Gift Card.OnValidate`'s `if "Customer No." = ''`,
+with the blank literal made non-blank.
+
+**Killed, by `IssueRequiresCustomer`** — MEASURED in the operator's spike, where it was the one
+prediction of seven that missed. It was predicted survived on the grounds that no test validates a
+blank customer; that test drives the guard through `Issue` and names neither the error constant nor
+the field, so a grep for either found nothing.
+
+Totals 59 -> 60, killed 33 -> 34; survivors and no-coverage unchanged. Score 68.8% -> **69.4%**.

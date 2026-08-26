@@ -1156,6 +1156,21 @@ codeunit 79310 "Data Tests"
             Error('expected 75 from the tripled level, got %1', Actual);
     end;
 
+    // R159's assertion-screen arm for `toggle-blank-string`. See
+    // fixtures/sandbox-data/src/DataBlankOps.Codeunit.al for why the kill must come through
+    // Library Assert rather than a bare Error.
+
+    [Test]
+    procedure BlankStringKillIsAssertionEarned()
+    var
+        BlankOps: Codeunit "Data Blank Ops";
+        LibraryAssert: Codeunit "Library Assert";
+    begin
+        // Both directions, so blanking the literal cannot pass by accident on one of them.
+        LibraryAssert.AreEqual(1, BlankOps.ClassifyCode('ALPHA'), 'ALPHA classifies as 1');
+        LibraryAssert.AreEqual(0, BlankOps.ClassifyCode('BETA'), 'BETA classifies as 0');
+    end;
+
     // R171's cession-seam arm. See fixtures/sandbox-data/src/DataSetOps.Codeunit.al for why the
     // three procedures are a control set rather than three tests of one thing.
 

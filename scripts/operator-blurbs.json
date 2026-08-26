@@ -29,6 +29,7 @@
     "lethal.swap-additive": "a sum or difference whose value no test checks",
     "lethal.negate-guard": "a plain `if Rec.Get(...) then` guard nobody tests the other side of",
     "lethal.flip-boolean-literal": "a flag nobody checks the other setting of",
-    "lethal.remove-assignment": "a value written that nothing downstream depends on"
+    "lethal.remove-assignment": "a value written that nothing downstream depends on",
+    "lethal.toggle-blank-string": "a blank check nobody drives with a blank value"
   }
 }

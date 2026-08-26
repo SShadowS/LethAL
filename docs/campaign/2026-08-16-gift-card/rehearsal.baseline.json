@@ -294,6 +294,13 @@
     "errorClass": null
   },
   {
+    "key": "c88702df06dca2c0edbdf144edf99c2682ad63278023dbd7e46f42c9875e0364|Gift Card|OnValidate|lethal.toggle-blank-string|1",
+    "verdict": "killed",
+    "killingTest": "IssueRequiresCustomer",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "cd233fd463e30202221e72233e674d398fcb7dd9fd9c5cb0345f61d84401a819|Gift Card Mgt|Issue|lethal.remove-assignment|1",
     "verdict": "killed",
     "killingTest": "IssueCreatesCard",

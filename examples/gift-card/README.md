@@ -67,7 +67,7 @@ All three MEASURED on a live container (see The measured result, below), not pre
 From `lethal run --project examples/gift-card --dry-run`, which executes nothing:
 
 ```
-dry run: 2 file(s), 63 mutant site(s), 59 deployed mutant(s), 1 batch(es)
+dry run: 2 file(s), 64 mutant site(s), 60 deployed mutant(s), 1 batch(es)
   src\GiftCardMgt.Codeunit.al  sites=43  deployed=40
   src\GiftCard.Table.al        sites=6   deployed=5
 ```
@@ -159,14 +159,14 @@ what happened to two of these fixtures (ROADMAP R169).
 Run against a BC 28 container, last re-measured 2026-08-20:
 
 ```
-score: 68.8%  (killed 33, survived 15, no-coverage 11, error 0)
+score: 69.4%  (killed 34, survived 15, no-coverage 11, error 0)
 baseline batch 0: 8/8 passed
 TIMING: total 19.0s = generate 0.1s + deploy 4.5s + baseline 0.9s + mutants 10.5s + overhead 3.0s
 reliability: full
 ```
 
-**About twenty seconds** for 59 mutants, which is what makes this runnable live rather than
-narrated. The score covers the 48 that are scorable; the eleven `no-coverage` rows are excluded
+**About twenty seconds** for 60 mutants, which is what makes this runnable live rather than
+narrated. The score covers the 49 that are scorable; the eleven `no-coverage` rows are excluded
 from it and reported separately.
 
 The first rehearsal, on 2026-08-16, was 36 mutants at 69.0% in 13.8s. All 36 verdicts were

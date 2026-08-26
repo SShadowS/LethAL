@@ -221,7 +221,11 @@ const EXPECTED = {
   // (6,850 corpus occurrences, zero exact-span overlap). All 52 verdicts were MEASURED in the spike
   // before this build and are restated, not re-predicted, in
   // docs/superpowers/specs/2026-08-26-r159-remove-assignment-build-precommitment.md.
-  totalMutantSites: 344,
+  // R159's `toggle-blank-string` adds 10: seven of its own sites plus the three other mutants in
+  // `codeunit 79320 "Data Blank Ops"`, the arm that makes R121's screen SEPARATE on this operator
+  // instead of flagging everything. Pre-committed in
+  // docs/superpowers/specs/2026-08-26-r159-toggle-blank-string-build-precommitment.md.
+  totalMutantSites: 354,
   // R36 moved this from 63/10 to 64/9, deliberately and in one direction only.
   //
   // `RequireCategoryAFails` used to assert merely that AN error occurred, so deleting
@@ -317,7 +321,8 @@ const EXPECTED = {
   // R159's `flip-boolean-literal` moves this from 213 to 219. Six of its thirteen are killed, all
   // by an assertion that names the field the flipped boolean writes.
   // R159's `remove-assignment` moves this from 219 to 252: 33 of its 52 killed.
-  killed: 252,
+  // R159's `toggle-blank-string` moves this from 252 to 259.
+  killed: 259,
   // R73 moved this from 9 to 12, and TWO of the three additions are worth reading rather than
   // accepting:
   //
@@ -395,7 +400,9 @@ const EXPECTED = {
   // operator has added here, and it is the expected shape rather than a regression: an assignment
   // whose target is never read again is an equivalent mutant, and nothing in a source-derived layer
   // can see that without dataflow. The operator's doc comment says so before the number arrives.
-  survived: 57,
+  // R159's `toggle-blank-string` moves this from 57 to 60: the three `Category := 'A'` arms, whose
+  // covering tests assert the row exists and that `Flagged` is set and never read its other fields.
+  survived: 60,
   // R78 moved this from 6 to 9. The three new sites all belong to the TestPage-only pair
   // (`Data Value Source` / `Data Value Card`), and all three land `no-coverage` because the one
   // test that reaches them is refused on the fenced path. That is the measured statement of the
@@ -451,7 +458,8 @@ const EXPECTED = {
   // part: a wave adding seven deliberate survivors and six kills must lower the score.
   // R159 moves it to 252 / 309, about 0.8155, DOWN from 0.8423 — the right direction for a wave
   // adding 16 survivors against 33 kills.
-  mutationScore: 252 / (252 + 57),
+  // R159 moves it to 259 / 319, about 0.8119 — three survivors against seven kills.
+  mutationScore: 259 / (259 + 60),
   /**
    * R72, extended by R138: the screen must fire, and on exactly these mutants under exactly these
    * mechanisms.
@@ -884,6 +892,7 @@ function assertVerdictTable(report: SessionReport): void {
     `partial requires UNflagged kills — the Library Assert arm — got killsWithText=${assertionScreen.killsWithText} flagged=${assertionScreen.flagged}`,
   );
   assertAssertionScreenTwinPair(report, assertionScreen.flaggedMutants);
+  assertBlankStringScreenSeparates(report, assertionScreen.flaggedMutants);
   assert.equal(
     assertionScreen.runnerRefusals,
     0,
@@ -1097,6 +1106,57 @@ function assertTrioTextEvidence(report: SessionReport): void {
  * that happens to begin with `Assert.`. Naming the four mutants is what makes this an assertion
  * about the RULE.
  */
+/**
+ * R159: the assertion screen, measured ON `toggle-blank-string` rather than assumed.
+ *
+ * That operator declares no `PlatformKillMechanism`, and two of its kills here die on a DUPLICATE
+ * PRIMARY KEY with nothing asserted — the shape R138 tagged for `swap-modify-flag`'s `Insert`. The
+ * ruling is that changing a written VALUE is ordinary changed behaviour and R121's screen is what
+ * tells a reader such a kill carried no assertion.
+ *
+ * Its spike could not test that ruling: every kill it produced was flagged, because this suite raises
+ * through bare `Error(...)` and the rule has nothing to separate on. `Data Blank Ops.ClassifyCode`
+ * exists so it does — killed through `Library Assert`, beside two duplicate-key kills.
+ *
+ * Pinned BY MUTANT, never by a count: a flagged total reads identically whether the screen separated
+ * anything or not, which is the whole failure mode R132 built the twin pair to prevent.
+ */
+function assertBlankStringScreenSeparates(
+  report: SessionReport,
+  flaggedMutants: readonly string[],
+): void {
+  const flagged = new Set(flaggedMutants);
+  const CASES = [
+    // procedure, how its kill is produced, whether the screen must flag it
+    ["ClassifyCode", "Assert.AreEqual (Library Assert)", false],
+    ["InsertTwiceWithKeyTrigger", "a duplicate primary key, nothing asserted", true],
+    ["OnInsert", "a duplicate primary key, nothing asserted", true],
+  ] as const;
+
+  for (const [procedureName, how, mustBeFlagged] of CASES) {
+    const mutants = report.mutants.filter(
+      (m) =>
+        m.operatorName === "lethal.toggle-blank-string" &&
+        (m.procedureName === procedureName || m.triggerName === procedureName),
+    );
+    assert.equal(
+      mutants.length,
+      1,
+      `${procedureName}: expected exactly one toggle-blank-string mutant, got ${mutants.length}`,
+    );
+    const m = mutants[0];
+    assert.ok(m !== undefined, `${procedureName}: mutant missing`);
+    assert.equal(m.verdict, "killed", `${procedureName}: verdict`);
+    assert.equal(
+      flagged.has(m.mutantCode),
+      mustBeFlagged,
+      `${procedureName} is killed by ${how}, so the assertion screen must ${mustBeFlagged ? "" : "NOT "}` +
+        `flag it. Both directions must hold or the screen separated nothing here. killingTestFailure: ` +
+        `${JSON.stringify(m.killingTestFailure ?? null)}`,
+    );
+  }
+}
+
 function assertAssertionScreenTwinPair(
   report: SessionReport,
   flaggedMutants: readonly string[],

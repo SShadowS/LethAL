@@ -9,6 +9,7 @@ import { removeNot } from "./remove-not";
 import { returnValue } from "./return-value";
 import { swapAdditive } from "./swap-additive";
 import { swapCallArguments } from "./swap-call-arguments";
+import { toggleBlankString } from "./toggle-blank-string";
 import { voidMethodCall } from "./void-method-call";
 
 export { conditionalBoundary } from "./conditional-boundary";
@@ -21,6 +22,7 @@ export { removeNot } from "./remove-not";
 export { returnValue } from "./return-value";
 export { swapAdditive } from "./swap-additive";
 export { swapCallArguments } from "./swap-call-arguments";
+export { toggleBlankString } from "./toggle-blank-string";
 export { voidMethodCall } from "./void-method-call";
 export { synthesizeAfter } from "./mutate-helpers";
 
@@ -30,6 +32,7 @@ export const tier1Operators: readonly MutationOperator[] = [
   flipBooleanLiteral,
   negateConditional,
   negateGuard,
+  toggleBlankString,
   voidMethodCall,
   returnValue,
   emptyBlock,
