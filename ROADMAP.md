@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**6 of 172 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**7 of 173 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -67,6 +67,7 @@ that ordering is the priority.
 - **R166** · `astSubtreeHash` erases method and label names, so three different guard deletions share one identity · [R166.md](docs/roadmap/R166.md) · done (this commit) — the enclosing PROCEDURE (or trigger) joined the identity. `itest:tables` goes from 225…
 - **R167** · The AL extension moved `alc.exe` out of `bin/win32/`, and tool discovery built a path it never checked · [R167.md](docs/roadmap/R167.md) · done (this commit) — discovery walks newest-first and verifies the tool EXISTS, trying the per-RID directory…
 - **R172** · An equivalent mutant and a coverage gap both report `survived`, and nothing in the record separates them · [R172.md](docs/roadmap/R172.md) · open, measured 2026-08-26 on `sandbox-hang` during R159's `shift-integer` spike: one survivor that is…
+- **R175** · `no-coverage` on a PUBLIC procedure is an inference, not an observation, and the inference is wrong · [R175.md](docs/roadmap/R175.md) · open — reported 2026-08-26 from a 17-report batch: 223 of 2058 mutants (10.8%) never executed. The asymmetry…
 
 ## Product gaps a real project hits
 
