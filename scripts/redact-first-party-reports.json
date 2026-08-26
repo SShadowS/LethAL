@@ -5,6 +5,11 @@
       "path": "docs/campaign/2026-08-16-gift-card/rehearsal.report.json",
       "projectDir": "examples/gift-card",
       "reason": "The gift card demo app, written for this repository and published under its MIT licence. Kept unredacted on purpose: it is the sample report the docs point at, so `lethal explain report.json --top 10` can be run with no server, and the survivors' originalText/mutatedText are the whole point of showing it."
+    },
+    {
+      "path": "examples/credit-limit/demo.report.json",
+      "projectDir": "examples/credit-limit",
+      "reason": "The credit limit demo app, written for this repository and published under its MIT licence. Kept unredacted for the same reason as the gift card demo: it is the report its README quotes mutant by mutant (M0015, M0019, M0025), and redacting the originalText those ids refer to would leave the README pointing at nothing."
     }
   ]
 }

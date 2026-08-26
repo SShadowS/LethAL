@@ -152,10 +152,24 @@ lethal explain report.json
 Start scoped. An unscoped run on a real project is refused by default: it costs days and usually
 cannot even publish (see [Limits](#limits)).
 
-**Not ready to point it at your own app?** [`examples/gift-card`](examples/gift-card/README.md) is a
-small, complete BC extension whose test suite is green and misses a real bug. It runs in seconds,
-and it shows what a survivor, a `no-coverage` row and a killed mutant each look like on code you can
-read in one sitting.
+**Not ready to point it at your own app?** There are two complete BC extensions to run it against,
+both of which have a green test suite that misses something real. Each runs in seconds and shows
+what a survivor, a `no-coverage` row and a killed mutant look like on code you can read in one
+sitting.
+
+- [`examples/gift-card`](examples/gift-card/README.md) — one planted bug in a balance calculation,
+  and the shortest path to seeing the point. 45 mutants, 70.3%.
+- [`examples/credit-limit`](examples/credit-limit/README.md) — three gaps rather than one, and the
+  only demo that can show `remove-calcfields`: it reads a FlowField through `CalcFields`, which the
+  gift-card app deliberately does not. 32 mutants, 70.8%.
+
+Both are frozen per mutant, so you can check a re-run against the committed baseline rather than
+against a total:
+
+```bash
+lethal campaign compare --manifest examples/credit-limit/campaign.json \
+                        --stage demo --report your-rerun.json
+```
 
 ## A worked example
 

@@ -147,14 +147,48 @@ describe("redact-campaign-report", () => {
     // product's AL source in a PUBLIC repository, found 2026-08-16 and redacted the same day. A
     // list cannot cover a file nobody remembered to add to it, so the set is now globbed.
     const repoRoot = join(import.meta.dir, "..");
-    const reports = [...new Glob("docs/campaign/**/*.report.json").scanSync({ cwd: repoRoot })];
+
+    // WIDENED 2026-08-26. The glob was `docs/campaign/**/*.report.json`, and a measured report
+    // committed at `examples/credit-limit/report.json` on 2026-08-24 was invisible to it for TWO
+    // independent reasons: the wrong directory, and a bare `report.json` that does not match the
+    // `*.report.json` suffix. That one was ours and MIT, so nothing leaked — but the same two
+    // misses would hide a third party's source just as completely, and "a list cannot cover a file
+    // nobody remembered to add" applies to a glob's SCOPE exactly as it applied to the old list.
+    //
+    // So: both roots where a MEASURED report can legitimately land, and any filename containing
+    // `report`. Discovery then narrows by CONTENT rather than by name — a session report is one
+    // with a `mutants` array — because `schemas/report-v2.schema.json` and
+    // `scripts/redact-first-party-reports.json` also contain the word.
+    //
+    // Deliberately OUT of scope: `packages/**/tests/fixtures/**`. `golden-report-before.json` there
+    // is a session report by shape and carries `Codeunit 50100 Sales Helper.al`, which is authored
+    // test input rather than anything measured from a project. It cannot satisfy the first-party
+    // proof (its files exist in no project directory) and redacting it would break the tests that
+    // read it. That is a scope boundary stated here, not a gap nobody noticed.
+    const candidates = [
+      ...new Glob("docs/**/*report*.json").scanSync({ cwd: repoRoot }),
+      ...new Glob("examples/**/*report*.json").scanSync({ cwd: repoRoot }),
+    ];
+    const reports = candidates.filter((p) => {
+      try {
+        const parsed = JSON.parse(readFileSync(join(repoRoot, p), "utf8")) as {
+          mutants?: unknown;
+        };
+        return Array.isArray(parsed.mutants);
+      } catch {
+        return false;
+      }
+    });
 
     // A glob that stops matching — a directory rename, a changed suffix convention — would make
     // `--check` pass over NOTHING and read exactly like "everything is clean". That is this
     // repository's signature bug (CLAUDE.md), so the count is asserted before the content. The
     // floor is the number committed on 2026-08-16; raise it when a campaign adds reports, and
     // never lower it to make a red test green.
-    expect(reports.length).toBeGreaterThanOrEqual(8);
+    // Raised from 8 to 9 when the scope widened to `examples/`. Never lower it to make a red test
+    // green: a glob that stops matching makes `--check` pass over NOTHING and read exactly like
+    // "everything is clean", which is this repository's signature bug.
+    expect(reports.length).toBeGreaterThanOrEqual(9);
 
     // First-party reports are exempt, and the exemption is PROVEN rather than trusted — see the
     // test below. Everything else must be redacted.
