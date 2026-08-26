@@ -8,9 +8,9 @@ import {
   looksLikeAssertionFailure,
   looksLikeRunnerRefusal,
 } from "./assertion-screen";
-import type { ExcludedSites } from "./excluded-sites";
 import type { BackendCapabilities } from "./backend";
 import type { RunEvent } from "./events";
+import type { ExcludedSites } from "./excluded-sites";
 import type { Interpretation } from "./interpretation";
 import { type PermissionCanaryResult, permissionCanaryWarnings } from "./permission-canary";
 import {
@@ -697,7 +697,7 @@ export interface SessionReport {
     readonly files: readonly DeclarativeSiteFile[];
   };
   /**
-   * Every site or file LethAL deliberately did not mutate, in ONE record keyed by reason — the
+   * Every site or file LethAL deliberately did not mutate, in ONE record keyed by reason, the
    * merge of `notInstrumented` and `declarativeSites`, which remain as views derived from it.
    *
    * OPTIONAL, deliberately. R157's rule is that an added optional field is free and an added
