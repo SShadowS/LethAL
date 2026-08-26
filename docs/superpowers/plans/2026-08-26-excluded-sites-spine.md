@@ -559,9 +559,132 @@ git add fixtures/sandbox-data/src/DataScopeQuery.Query.al \
 git commit -m "test(tables): pin notInstrumented on a real non-carrier object, so the view can fail"
 ```
 
-- [ ] **Step 7: Red-check the assertion**
+- [ ] **Step 7: Red-check the assertion, OFFLINE**
 
-Use the `mutation-red-checker` subagent, or by hand: make `notInstrumentedView` return `{ ...view, files: [] }`, re-run `itest:tables`, confirm the new assertion goes RED naming the file mismatch, then restore and confirm green. **Report both outputs.** An assertion that stays green under a gutted view is the exact failure this task exists to prevent.
+The obvious red-check is to gut `notInstrumentedView`, re-run `itest:tables`, and watch it go red. That works, and it costs a **second billed live run** for a mechanism we can already describe exactly. Do this instead.
+
+The claim to prove is a composition of two independent halves, neither of which needs a container:
+
+**(a) A gutted view produces a report with the counts intact and `files` empty.** This is what makes a count-only assertion useless, and it is a property of `notInstrumentedView` alone: it computes `fileCount` and `siteCount` from `files` *before* any spread, so `{ ...view, files: [] }` leaves 1 and 5 in place while the list empties.
+
+**(b) The gate's assertion rejects exactly that report.** This is a property of the assertion, and the assertion is a pure function of a `SessionReport`.
+
+Prove (a) and (b) separately and offline, and the live run in Step 5 is the only one you pay for.
+
+- [ ] **Step 7.1: Extract the assertion into its own module — NOT into `tables.itest.ts`**
+
+> **Do not export the helper from `tables.itest.ts` and import that.** That file is a script, not a library: it calls `main()` at top level, and before that it does `process.exit(0)` when `LETHAL_ITEST_TABLES` is unset. Importing it from a unit test would therefore kill the `bun test` process at module load with no failure message, and importing it with the gate variable set would fire a **billed live run from a unit test**. Both are worse than the second live run this step exists to avoid.
+
+The precedent to copy is `packages/runner/itest/baseline-guard.ts`: a pure module living in `itest/`, exporting `assertMatchesBaseline`, with no top-level execution. Do the same.
+
+Create `packages/runner/itest/notinstrumented-evidence.ts`:
+
+```ts
+import assert from "node:assert/strict";
+import type { SessionReport } from "../src/report";
+
+/** What the gate pins about the `notInstrumented` population. */
+export interface NotInstrumentedExpectation {
+  readonly fileCount: number;
+  readonly siteCount: number;
+  readonly files: readonly string[];
+}
+
+/**
+ * Task 4 (excluded-sites-spine). Extracted from `tables.itest.ts` so the red-check can call it
+ * offline against a doctored report: a second live gate run would prove the same thing and cost a
+ * billed environment. Lives in its own module rather than being exported from the itest, because
+ * that file exits the process at import time when its env gate is unset.
+ */
+export function assertNotInstrumentedEvidence(
+  report: SessionReport,
+  expected: NotInstrumentedExpectation,
+): void {
+  // ... the four assertions from Step 4, moved verbatim, with `EXPECTED.notInstrumented`
+  // replaced by `expected`.
+}
+```
+
+Then in `tables.itest.ts`, delete the four inline assertions and call it where they were:
+
+```ts
+assertNotInstrumentedEvidence(report, EXPECTED.notInstrumented);
+```
+
+**This is a pure move: no assertion text changes, no logic changes, no change to what is pinned.** The check is `bun run typecheck` plus `bun test`, because a pure move cannot change a verdict. Do not re-run the live gate for it.
+
+- [ ] **Step 7.2: Write the offline red-check**
+
+Add to `packages/runner/tests/excluded-sites.test.ts`:
+
+```ts
+import { assertNotInstrumentedEvidence } from "../itest/notinstrumented-evidence";
+
+// The offline half of Task 4's red-check. A second live gate run would prove the same thing and
+// cost a billed environment; this proves it from the two properties that compose to it.
+describe("the notInstrumented gate assertion rejects a gutted view", () => {
+  const EXPECTED = { fileCount: 1, siteCount: 5, files: ["src/DataScopeQuery.Query.al"] };
+
+  // Property (a): gutting the view leaves the COUNTS untouched, which is why a count-only
+  // assertion would have passed and why this task exists at all.
+  test("a gutted view keeps fileCount and siteCount and empties files", () => {
+    const merged = buildExcludedSites({
+      skipped: [{ file: "src/DataScopeQuery.Query.al", kinds: "query_declaration", sites: 5 }],
+      declarative: [],
+      totalFiles: 29,
+    });
+    const honest = notInstrumentedView(merged);
+    const gutted = { ...honest, files: [] };
+    expect(gutted.fileCount).toBe(honest.fileCount); // 1, unchanged
+    expect(gutted.siteCount).toBe(honest.siteCount); // 5, unchanged
+    expect(gutted.files).toEqual([]);
+  });
+
+  // Property (b): the gate's own assertion rejects that report.
+  test("the gate assertion throws on the gutted report and passes on the honest one", () => {
+    const merged = buildExcludedSites({
+      skipped: [{ file: "src/DataScopeQuery.Query.al", kinds: "query_declaration", sites: 5 }],
+      declarative: [],
+      totalFiles: 29,
+    });
+    const honest = notInstrumentedView(merged);
+
+    const reportWith = (ni: typeof honest): SessionReport =>
+      ({
+        notInstrumented: ni,
+        validity: { caveats: ["uninstrumentable-files"] },
+      }) as unknown as SessionReport;
+
+    // GREEN on the honest view.
+    expect(() => assertNotInstrumentedEvidence(reportWith(honest), EXPECTED)).not.toThrow();
+
+    // RED on the gutted one, and specifically on the FILES assertion, not the counts.
+    expect(() =>
+      assertNotInstrumentedEvidence(reportWith({ ...honest, files: [] }), EXPECTED),
+    ).toThrow(/notInstrumented files mismatch/);
+  });
+});
+```
+
+The `as unknown as SessionReport` cast is deliberate and is the one place in this plan where a cast is correct: the assertion reads exactly two fields, and constructing a whole valid `SessionReport` would add fifty irrelevant ones without making the test prove more. Say so in a comment.
+
+- [ ] **Step 7.3: Verify and commit**
+
+```bash
+bun run typecheck
+rm -rf packages/*/dist
+bun test packages/runner/tests/excluded-sites.test.ts
+```
+Expected: PASS. Then confirm the red half is real by inverting it: change `.toThrow(/notInstrumented files mismatch/)` to `.not.toThrow()`, re-run, confirm THAT fails, and restore. **Report both outputs.** A red-check whose red half was never seen red is the failure this whole step exists to prevent, and it applies to the red-check itself.
+
+```bash
+git add packages/runner/itest/notinstrumented-evidence.ts \
+        packages/runner/itest/tables.itest.ts \
+        packages/runner/tests/excluded-sites.test.ts
+git commit -m "test: offline red-check that the notInstrumented gate assertion rejects a gutted view"
+```
+
+**If you would rather have the live proof anyway**, the original form still stands: gut `notInstrumentedView`, re-run `itest:tables`, confirm red, restore, confirm green. It costs one more billed run and proves the same composition end to end rather than in two halves.
 
 ---
 
