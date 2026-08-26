@@ -158,8 +158,43 @@ regressions this task is designed to catch:
 
 ---
 
-## OUTCOME
+## OUTCOME, appended after the run. Nothing above is edited.
 
-Not yet run. Steps 5-7 (the live `itest:tables` run, appending the outcome here, and the
-mutation-red-check of the new assertion) are explicitly out of scope for the agent that wrote this
-pre-commitment and Steps 1-4; the live gate is reserved for the user to trigger.
+**PASS, and every pre-committed value matched.** Run 2026-08-26 against Cronus283, exit code 0,
+`tables itest: PASS`.
+
+The `notInstrumented` population, which is the point of the whole arm:
+
+```
+[lethal] skipped 1 file(s) holding 5 mutation site(s): only codeunit, table, page, report,
+pageextension, tableextension can carry the injected `var MutationSelector: Codeunit
+"Mutation Selector";` declaration, so a guard in any other object kind cannot compile (AL0118).
+Not mutated; published unchanged: src\DataScopeQuery.Query.al (query_declaration, 5 site(s)).
+```
+
+`fileCount` 1, `siteCount` 5, file `src\DataScopeQuery.Query.al`, kinds `query_declaration`. All
+four pre-committed values, matched exactly.
+
+Both determinism passes, identical:
+
+```
+verdicts: killed=267 survived=63 noCoverage=15 baselineGreen=false score=0.8090909090909091
+          untargetedTriggers=0 declarativeSites=1
+```
+
+**The mutant totals did not move**, which is the load-bearing negative result rather than a
+formality: it is the live proof that a non-carrier object contributes zero DEPLOYABLE mutants, so
+the fixture bought a non-zero `notInstrumented` population without disturbing a single verdict. Had
+`query` turned out to be a carrier kind after all, the totals would have risen and the arm would
+have proved nothing.
+
+`declarativeSites` stayed at 1, so the query's trigger body was not misclassified as declarative,
+which section 5 named as a refusal condition.
+
+`baselineGreen=false` is the expected single failure this gate has always carried,
+`Data Tests.PageActionComputesNonZero`, and the report names it: its fenced coverage returns rows
+for no object this artifact declares. Not a regression and not caused by this arm.
+
+Incidentally validated in the same run: the `uninstrumentable-files` caveat assertion added by the
+final review's fix wave. That caveat had never fired on any gate before this fixture existed, so
+folding it in before the run rather than after is what let one billed run cover both.
