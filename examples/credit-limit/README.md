@@ -59,8 +59,18 @@ TIMING: total 16.3s = generate 0.1s + deploy 6.4s + baseline 0.9s + mutants 6.8s
 reliability: full
 ```
 
-The report this section quotes is `report.json` next to this file (with `events.ndjson`), produced
-by the command in Running it below.
+The report this section quotes is `demo.report.json` next to this file (with
+`demo.events.ndjson`), produced by the command in Running it below. It is FROZEN:
+`demo.baseline.json` holds the same run's verdicts per mutant, so a re-run is checked mutant by
+mutant rather than by total.
+
+```bash
+lethal campaign compare --manifest examples/credit-limit/campaign.json \
+                        --stage demo --report your-rerun.json
+```
+
+Run that before quoting these numbers anywhere. Every id above (`M0015`, `M0019`, `M0025`) is a
+claim about one mutant, and a total that still reads 17 / 7 / 8 can hide a verdict that moved.
 
 Note that `InvoicedOrdersStopCounting` flips an order to Invoiced without posting anything. That is
 a demo shortcut, and it is also what keeps gap 2 clean: the suite never touches the ledger at all.
@@ -80,7 +90,7 @@ lethal run --project examples/credit-limit \
            --backend bcdev \
            --config  examples/credit-limit/lethal.config.local.json \
            --out     report.json
-lethal explain report.json --top 10
+lethal explain demo.report.json --top 10
 ```
 
 Copy `lethal.config.example.json` to `lethal.config.local.json` and fill in your own server. That
