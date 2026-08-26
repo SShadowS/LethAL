@@ -342,7 +342,7 @@ git commit -m "feat(report): SessionReport.excludedSites, optional so it costs n
 ### Task 3: Make the views the only path
 
 **Files:**
-- Modify: `packages/runner/src/report-fold.ts` (`buildReport`'s return, where `notInstrumented` and `declarativeSites` are assembled)
+- Modify: `packages/runner/src/report-fold.ts` (`foldEvents`'s return, where `notInstrumented` and `declarativeSites` are assembled)
 - Modify: `packages/runner/src/report.ts` (`buildReport`'s count computation, where `fileCount` / `siteCount` are derived)
 - Test: `packages/runner/tests/report-fold.test.ts` if it exists, otherwise `packages/runner/tests/excluded-sites.test.ts`
 
@@ -357,7 +357,7 @@ git commit -m "feat(report): SessionReport.excludedSites, optional so it costs n
 Append to `packages/runner/tests/excluded-sites.test.ts`:
 
 ```ts
-import { buildReport } from "../src/report-fold";
+import { buildReport } from "../src/report";
 
 describe("buildReport derives both legacy fields from excludedSites (not in parallel)", () => {
   test("the report's own views equal the views of its own excludedSites", () => {
@@ -404,7 +404,7 @@ Expected: FAIL, `excludedSites must be present on every report`.
 
 - [ ] **Step 3: Populate `excludedSites` in the fold**
 
-In `packages/runner/src/report-fold.ts`, replace the two assembled fields in `buildReport`'s returned object. Where it currently reads:
+In `packages/runner/src/report-fold.ts`, replace the two assembled fields in `foldEvents`'s returned object (the `FoldedReport` interface). Where it currently reads:
 
 ```ts
     notInstrumented: { totalFiles, files: notInstrumentedFiles },

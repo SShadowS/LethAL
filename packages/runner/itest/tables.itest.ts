@@ -996,6 +996,11 @@ function assertVerdictTable(report: SessionReport): void {
     [...EXPECTED.notInstrumented.files].sort(),
     "notInstrumented files mismatch: a permanently-empty derived view passes a count check but not this one",
   );
+  assert.ok(
+    report.validity.caveats.includes("uninstrumentable-files"),
+    "a run that skipped an uninstrumentable file must CARRY the caveat — the count without the " +
+      "caveat leaves a reader to discover the refusal by reading a number they were never pointed at",
+  );
   // Per-mutant verdicts are asserted by `assertMatchesBaseline` (tables.baseline.json), not here
   // — see EXPECTED's doc comment for why the old inline 7-entry map was removed rather than
   // extended by hand.

@@ -32,7 +32,14 @@ export interface ExcludedSiteFile {
    */
   readonly sites: number;
   readonly reason: ExclusionReason;
-  /** Free-text detail for reasons that have one. Neither current reason does. */
+  /**
+   * Free-text detail for reasons that have one. Neither current reason does.
+   *
+   * MUST NEVER carry target source (no `originalText`, no snippet of the excluded site's AL):
+   * `scripts/redact-campaign-report.ts` redacts only `originalText`/`mutatedText` inside
+   * `mutants`, so a future reason that put source text here would publish it from a public repo
+   * unredacted (see CLAUDE.md's "Committing a campaign report" section).
+   */
   readonly detail?: string;
 }
 
@@ -55,9 +62,24 @@ export function buildExcludedSites(input: {
   readonly declarative: readonly DeclarativeSiteFile[];
   readonly totalFiles: number;
 }): ExcludedSites {
+  // Mapped explicitly, field by field — never `{ ...f, reason }` — so a field later added to
+  // `NotInstrumentedFile` or `DeclarativeSiteFile` is a TYPE ERROR here, not a runtime surprise
+  // that reaches `excludedSites.files` and is caught only by the published schema's
+  // `additionalProperties: false` at validation time. `rowsOf` below already maps explicitly in
+  // the other direction; this keeps both directions consistent.
   const files: ExcludedSiteFile[] = [
-    ...input.skipped.map((f) => ({ ...f, reason: "not-instrumentable" as const })),
-    ...input.declarative.map((f) => ({ ...f, reason: "declarative" as const })),
+    ...input.skipped.map((f) => ({
+      file: f.file,
+      kinds: f.kinds,
+      sites: f.sites,
+      reason: "not-instrumentable" as const,
+    })),
+    ...input.declarative.map((f) => ({
+      file: f.file,
+      kinds: f.kinds,
+      sites: f.sites,
+      reason: "declarative" as const,
+    })),
   ];
   return {
     totalFiles: input.totalFiles,

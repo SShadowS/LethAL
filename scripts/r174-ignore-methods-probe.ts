@@ -129,6 +129,20 @@ const calls: CallRec[] = [];
 const specs: SpecRec[] = [];
 const calleeCount = new Map<string, number>();
 const voidMethodCall = tier1Operators.find((o) => o.name === "lethal.void-method-call");
+// CLAUDE.md: "Fail loudly on caller-contract violations... throw, never return a plausible empty
+// default." A renamed or removed `lethal.void-method-call` must not silently turn every call
+// non-statement-slot and print a wrong percentage with no warning — R174's finding 2 (43% not in a
+// statement slot) rests entirely on this classification.
+if (voidMethodCall === undefined) {
+  throw new Error(
+    "operator 'lethal.void-method-call' not found in tier1Operators — this probe's statement-slot " +
+      "classification (R174 finding 2) depends on it. If it was renamed, update this probe to match.",
+  );
+}
+// A `targets` call that throws is counted rather than silently treated as `false`, and the count is
+// printed prominently: silently swallowing throws would let the statement-slot percentage drift
+// without any signal that the classification itself misbehaved on some node shape.
+let statementSlotClassifyThrows = 0;
 
 for (const file of files) {
   walk(file.root, (node) => {
@@ -137,9 +151,9 @@ for (const file of files) {
       calleeCount.set(callee, (calleeCount.get(callee) ?? 0) + 1);
       let statementSlot = false;
       try {
-        statementSlot = voidMethodCall?.targets(node, ctx) ?? false;
+        statementSlot = voidMethodCall.targets(node, ctx);
       } catch {
-        statementSlot = false;
+        statementSlotClassifyThrows++;
       }
       calls.push({
         file: file.path,
@@ -179,6 +193,11 @@ console.log(
   `  statement-slot (void-method-call claims, so VISIBLE in a report): ${statementSlotCalls}`,
 );
 console.log(`  not statement-slot (INVISIBLE in any report): ${calls.length - statementSlotCalls}`);
+if (statementSlotClassifyThrows > 0) {
+  console.log(
+    `  WARNING: void-method-call.targets() THREW on ${statementSlotClassifyThrows} node(s) and those were counted as not-statement-slot — the percentages above may undercount the statement-slot population`,
+  );
+}
 console.log(`raw mutation specs (pre-dedup, pre-instrumentability): ${specs.length}\n`);
 
 if (patterns.length === 0) {
