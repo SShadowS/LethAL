@@ -31,6 +31,7 @@ AL extension: `extensions/lethal-control` (the `LethAL Control` BC extension, ru
    every run but treats publishing the TEST APP as the user's own workflow, so a broken test fixture
    leaves the live gate happily measuring the previously published build. That is not hypothetical —
    a docs-only commit deleted a procedure's body and `itest:tables` stayed green for days (R56).
+- `bun run mutate` — StrykerJS over LethAL's OWN TypeScript (currently `selection.ts` + `line-map.ts`, ~20 s). Optional, never gates. **Read `docs/mutation-testing-ourselves.md` before reading a score**: it would NOT have caught R175, because that was a wrong belief about BC encoded in the code AND in the test pinning it, and mutating such a gate kills the mutant. It catches the OTHER hazard, a test that would pass either way, and found one in hour-old code on its first run.
 - Lint: `biome check .` is noisy (pre-existing organizeImports/format debt in `engine`/`builtin-tier1`). Run biome **only on files you touched**: `bunx biome check <paths>`. (A PostToolUse hook auto-formats touched `*.ts` — see settings.)
 
 ## Integration tests (env-gated, live BC, minutes each — run foreground, never poll)

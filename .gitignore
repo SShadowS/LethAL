@@ -34,3 +34,5 @@ lethal.sqlite-wal
 
 # AL Test Runner VS Code extension scratch — machine-local, not project source
 .altestrunner/
+.stryker-tmp/
+reports/mutation/

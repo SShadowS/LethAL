@@ -1,0 +1,46 @@
+{
+  "$schema": "./node_modules/@stryker-mutator/core/schema/stryker-schema.json",
+  "_comment": [
+    "Mutation testing for LethAL's OWN TypeScript. See docs/mutation-testing-ourselves.md for what",
+    "this can and cannot catch — it was added the day R175 proved it would NOT have caught R175,",
+    "and that limit is the first thing to understand before reading a score from it.",
+    "",
+    "The `command` test runner is deliberate: it needs no third-party plugin. Stryker ships no",
+    "official Bun runner (stryker-js#4439, #5424) and the two community ones execute inside the test",
+    "process, which is a supply-chain decision this public repo should make on purpose rather than",
+    "by `bun add`. The cost is no per-test coverage analysis, so every mutant runs the whole command;",
+    "that is why `commandRunner.command` is narrowed to the suite covering the mutated files rather",
+    "than the full 2561-test run.",
+    "No `packageManager` key: Stryker 10 accepts only npm/yarn/pnpm, and it is used solely to offer install hints for missing plugins. We install our own, so omitting it is correct rather than a workaround."
+  ],
+  "testRunner": "command",
+  "commandRunner": {
+    "command": "bun test packages/runner/tests/selection.test.ts packages/runner/tests/line-map.test.ts"
+  },
+  "mutate": [
+    "packages/runner/src/selection.ts",
+    "packages/runner/src/line-map.ts"
+  ],
+  "reporters": [
+    "clear-text",
+    "html",
+    "json"
+  ],
+  "htmlReporter": {
+    "fileName": "reports/mutation/index.html"
+  },
+  "jsonReporter": {
+    "fileName": "reports/mutation/mutation.json"
+  },
+  "tempDirName": ".stryker-tmp",
+  "cleanTempDir": true,
+  "timeoutMS": 60000,
+  "concurrency": 4,
+  "thresholds": {
+    "high": 90,
+    "low": 70,
+    "break": null
+  },
+  "disableTypeChecks": true,
+  "ignoreStatic": true
+}

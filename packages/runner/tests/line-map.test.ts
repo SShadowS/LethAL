@@ -351,3 +351,85 @@ xmlport 79303 "X"
     }
   });
 });
+
+/**
+ * R175: `isNamingGap` is the discriminator that decides whether a `no-coverage` verdict is a
+ * statement about the user's tests or about LethAL's own attribution, so it is worth testing
+ * directly rather than only through its effect.
+ *
+ * These tests exist because MUTATION TESTING of this repository's own source said they were
+ * missing: every mutant of `isNamingGap` survived, including one that emptied the whole method
+ * body. `selection.test.ts` exercised the CONSEQUENCE with a hand-built `namingGaps` array and
+ * proved nothing about whether this function computes one. That is the "test passes for the wrong
+ * reason" shape CLAUDE.md names as this project's recurring hazard, found in code less than an hour
+ * old. See docs/mutation-testing-ourselves.md.
+ */
+describe("R175: isNamingGap tells a declined name from a failed one", () => {
+  //  1 table 50100 "T"
+  //  2 {
+  //  3     fields
+  //  4     {
+  //  5         field(1; "No."; Code[20])
+  //  6         {
+  //  7             trigger OnValidate()
+  //  8             begin
+  //  9                 Touch();
+  // 10             end;
+  // 11         }
+  // 12     }
+  // 13
+  // 14     procedure Touch()
+  // 15     begin
+  // 16     end;
+  // 17 }
+  const WITH_TRIGGER = `table 50100 "T"
+{
+    fields
+    {
+        field(1; "No."; Code[20])
+        {
+            trigger OnValidate()
+            begin
+                Touch();
+            end;
+        }
+    }
+
+    procedure Touch()
+    begin
+    end;
+}
+`;
+
+  test("a line inside a PROCEDURE is not a gap — it was named", () => {
+    const map = mapFor(WITH_TRIGGER);
+    expect(map.lookup("Table", 50100, 15)).toBe("Touch");
+    expect(map.isNamingGap("Table", 50100, 15)).toBe(false);
+  });
+
+  test("a line inside a TRIGGER is not a gap — the name is DECLINED, not missing", () => {
+    // This is the case the first version of R175's detector got wrong. `lookup` returns undefined
+    // here exactly as it does for a real gap, and treating the two alike flagged every uncovered
+    // procedure of every trigger-carrying table.
+    const map = mapFor(WITH_TRIGGER);
+    expect(map.lookup("Table", 50100, 9)).toBeUndefined();
+    expect(map.isNamingGap("Table", 50100, 9)).toBe(false);
+  });
+
+  test("a line inside NOTHING known IS a gap — the resolver failed on our own emitted source", () => {
+    const map = mapFor(WITH_TRIGGER);
+    // Line 13 is the blank between the `fields` block and `Touch`: no procedure, no trigger.
+    expect(map.lookup("Table", 50100, 13)).toBeUndefined();
+    expect(map.isNamingGap("Table", 50100, 13)).toBe(true);
+  });
+
+  test("line 0 is BC's object-level row and is never a gap", () => {
+    const map = mapFor(WITH_TRIGGER);
+    expect(map.isNamingGap("Table", 50100, 0)).toBe(false);
+  });
+
+  test("an object this map never indexed is not a gap — it is not ours to place", () => {
+    const map = mapFor(WITH_TRIGGER);
+    expect(map.isNamingGap("Codeunit", 99999, 5)).toBe(false);
+  });
+});
