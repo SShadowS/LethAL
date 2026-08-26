@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**6 of 171 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**6 of 172 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -109,6 +109,7 @@ that ordering is the priority.
 - **R165** · `swap-modify-flag` has no forward direction; probed at 49 honestly-claimable sites, not the 419 first counted · [R165.md](docs/roadmap/R165.md) · done (this commit) — `swap-modify-flag` 1.2.0 claims the argument-less form, scoped to tables this project…
 - **R171** · A bare-Boolean `if` guard has no polarity mutant: 1,891 marginal sites, and the ceiling does not collapse · [R171.md](docs/roadmap/R171.md) · done (this commit) — `lethal.negate-guard` (Tier 1, 1.0.0) and `remove-not`'s corrected cession, landed with…
 - **R173** · Three operators can still strand a loop, and R164's cession deliberately did not cover them · [R173.md](docs/roadmap/R173.md) · open — filed 2026-08-26 by R164's build, with the residual counted rather than estimated: 19 claims at…
+- **R174** · A Stryker.NET-style `ignoreMethods` call-site ignore list — designed, measured on real AL, refused on value · [R174.md](docs/roadmap/R174.md) · closed 2026-08-26 — refused on VALUE after measurement: 0.38% of raw specs for the safe pattern set, 1.70%…
 
 ## Backends and tooling
 
