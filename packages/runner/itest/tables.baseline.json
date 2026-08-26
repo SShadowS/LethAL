@@ -735,6 +735,20 @@
     "errorClass": null
   },
   {
+    "key": "463500c950a1e73ea5862b4b2de4df893e579300be711120f5f478ed65ca8e77|Data Shift Ops|BandedViaAssert|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "ShiftKillIsAssertionEarned",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "463500c950a1e73ea5862b4b2de4df893e579300be711120f5f478ed65ca8e77|Data Shift Ops|BandedViaError|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "ShiftKillIsBareErrorRaised",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "46d6cf5bb896cfc420d70e88277475b714790e98a02eb2ba5289a2b868b868ab|Data Main List Ext|OnOpenPage|lethal.swap-modify-flag|1",
     "verdict": "no-coverage",
     "killingTest": null,
@@ -1043,6 +1057,13 @@
     "errorClass": null
   },
   {
+    "key": "68807988b56909e3568b38e2441cfed9a27441ece816cf15fd358ffb9231098e|Data Commit Ops|CommitThenRun|lethal.shift-integer|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "69ab2635d97b4a033d6979b89c9577ff9099ed31bfcdea22e425161990f85c56|Data Commit Ops|CommitThenFail|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "CommittedWriteSurvivesFailure",
@@ -1197,6 +1218,20 @@
     "errorClass": null
   },
   {
+    "key": "7977865555164bf1784dad75d231b9434607fadb317e5a41ff5ebb15b40b0ada|Data Shift Ops|BandedViaAssert|lethal.return-value|1",
+    "verdict": "killed",
+    "killingTest": "ShiftKillIsAssertionEarned",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "7977865555164bf1784dad75d231b9434607fadb317e5a41ff5ebb15b40b0ada|Data Shift Ops|BandedViaError|lethal.return-value|1",
+    "verdict": "killed",
+    "killingTest": "ShiftKillIsBareErrorRaised",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "7a4abe60f790f1954622728e22c6d09f079325bc5b3156301f52bf4492307eb2|Data Main|OnModify|lethal.remove-assignment|1",
     "verdict": "killed",
     "killingTest": "FlaggedFiresModifyTrigger",
@@ -1284,6 +1319,13 @@
     "key": "8037f4fe0779cc1f3fea01b2c23fc93c6270188c71e99326f772d656a0f32981|Data Shadow|Commit|lethal.remove-assignment|1",
     "verdict": "killed",
     "killingTest": "ShadowedBuiltinsRun",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "82190937ce0dbddcf71b05b35fd9eb0f09f2a141e69489fc6a34db4db510a3b7|Data Commit Ops|CommitThenRunValueForm|lethal.shift-integer|1",
+    "verdict": "survived",
+    "killingTest": null,
     "coverageFiltered": false,
     "errorClass": null
   },
@@ -1449,6 +1491,20 @@
     "errorClass": null
   },
   {
+    "key": "90f410fc5a5548fa38c7f617cc5a6625f0084798a2430a53a0e5b4a942e34e3a|Data Shift Ops|BandedViaAssert|lethal.negate-conditional|1",
+    "verdict": "killed",
+    "killingTest": "ShiftKillIsAssertionEarned",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "90f410fc5a5548fa38c7f617cc5a6625f0084798a2430a53a0e5b4a942e34e3a|Data Shift Ops|BandedViaError|lethal.negate-conditional|1",
+    "verdict": "killed",
+    "killingTest": "ShiftKillIsBareErrorRaised",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "913b605498121fdb94c76da8110bf5ca92d4f5139b408b5b16d681b0e2307139|Data Swap Ops|RecordFlags|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "CommutativeCalleeMakesTheSwapEquivalent",
@@ -1589,6 +1645,20 @@
     "errorClass": null
   },
   {
+    "key": "b0f4101cecb0db49fbb114da27e514484c17ada9cb4d1f3872bda2154ca828d9|Data Shift Ops|BandedViaAssert|lethal.shift-integer|1",
+    "verdict": "killed",
+    "killingTest": "ShiftKillIsAssertionEarned",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "b0f4101cecb0db49fbb114da27e514484c17ada9cb4d1f3872bda2154ca828d9|Data Shift Ops|BandedViaError|lethal.shift-integer|1",
+    "verdict": "killed",
+    "killingTest": "ShiftKillIsBareErrorRaised",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "b16780813e5863d007c340c524b2497dd35f7cc5851dd844d3cbfda271790c90|Data Main|OnValidate|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "FlaggedFiresModifyTrigger",
@@ -1683,6 +1753,13 @@
     "key": "b5f78ce898ec594a3b9c24e8d4a1f60ebb27ff152e9984fa3fd50f04181fca73|Data Find Ops|AnyRow|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "ExistenceOnlyAssertionMissesTheDirection",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "b7639fc5337117f99a11c177444ce8ba186aec121acbabc26086c752caa4f696|Data Commit Ops|CommitThenFail|lethal.shift-integer|1",
+    "verdict": "survived",
+    "killingTest": null,
     "coverageFiltered": false,
     "errorClass": null
   },

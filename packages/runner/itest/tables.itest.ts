@@ -225,7 +225,14 @@ const EXPECTED = {
   // `codeunit 79320 "Data Blank Ops"`, the arm that makes R121's screen SEPARATE on this operator
   // instead of flagging everything. Pre-committed in
   // docs/superpowers/specs/2026-08-26-r159-toggle-blank-string-build-precommitment.md.
-  totalMutantSites: 354,
+  // R159's `shift-integer` adds 11: three of its own sites in `Data Commit Ops`, plus all EIGHT
+  // mutants of `codeunit 79325 "Data Shift Ops"`. That arm is a TWIN PAIR in R132's sense, and it
+  // turned out to control four operators rather than one. Its shape yields `empty-block`,
+  // `negate-conditional`, `shift-integer` and `return-value` per half, all eight killed, so the
+  // VERDICTS are constant and the only variable across the pair is which side of R121's screen each
+  // kill lands on. Pre-committed in
+  // docs/superpowers/specs/2026-08-26-r159-shift-integer-build-precommitment.md.
+  totalMutantSites: 365,
   // R36 moved this from 63/10 to 64/9, deliberately and in one direction only.
   //
   // `RequireCategoryAFails` used to assert merely that AN error occurred, so deleting
@@ -322,7 +329,10 @@ const EXPECTED = {
   // by an assertion that names the field the flipped boolean writes.
   // R159's `remove-assignment` moves this from 219 to 252: 33 of its 52 killed.
   // R159's `toggle-blank-string` moves this from 252 to 259.
-  killed: 259,
+  // R159's `shift-integer` moves this from 259 to 267: all eight of the twin pair's mutants kill,
+  // for the same reason in both halves (the mutated procedure returns 0 where 1 is expected),
+  // which is exactly what makes the pair a control.
+  killed: 267,
   // R73 moved this from 9 to 12, and TWO of the three additions are worth reading rather than
   // accepting:
   //
@@ -402,7 +412,10 @@ const EXPECTED = {
   // can see that without dataflow. The operator's doc comment says so before the number arrives.
   // R159's `toggle-blank-string` moves this from 57 to 60: the three `Category := 'A'` arms, whose
   // covering tests assert the row exists and that `Flagged` is set and never read its other fields.
-  survived: 60,
+  // R159's `shift-integer` moves this from 60 to 63: the same three `Data Commit Ops` arms every
+  // value-mutating operator survives, whose tests assert the row exists and that `Flagged` is set
+  // and never read `Amount`.
+  survived: 63,
   // R78 moved this from 6 to 9. The three new sites all belong to the TestPage-only pair
   // (`Data Value Source` / `Data Value Card`), and all three land `no-coverage` because the one
   // test that reaches them is refused on the fenced path. That is the measured statement of the
@@ -459,7 +472,10 @@ const EXPECTED = {
   // R159 moves it to 252 / 309, about 0.8155, DOWN from 0.8423 — the right direction for a wave
   // adding 16 survivors against 33 kills.
   // R159 moves it to 259 / 319, about 0.8119 — three survivors against seven kills.
-  mutationScore: 259 / (259 + 60),
+  // R159's `shift-integer` moves it to 267 / 330, about 0.8091, DOWN from 0.8119: an arm of eight
+  // kills raises it and three survivors elsewhere lower it, and the survivors win. Worth reading as
+  // the direction rather than the digits.
+  mutationScore: 267 / (267 + 63),
   /**
    * R72, extended by R138: the screen must fire, and on exactly these mutants under exactly these
    * mechanisms.
@@ -893,6 +909,7 @@ function assertVerdictTable(report: SessionReport): void {
   );
   assertAssertionScreenTwinPair(report, assertionScreen.flaggedMutants);
   assertBlankStringScreenSeparates(report, assertionScreen.flaggedMutants);
+  assertShiftScreenTwinPair(report, assertionScreen.flaggedMutants);
   assert.equal(
     assertionScreen.runnerRefusals,
     0,
@@ -1154,6 +1171,59 @@ function assertBlankStringScreenSeparates(
         `flag it. Both directions must hold or the screen separated nothing here. killingTestFailure: ` +
         `${JSON.stringify(m.killingTestFailure ?? null)}`,
     );
+  }
+}
+
+/**
+ * R159: the assertion screen, measured ON `shift-integer`, and on three other operators for free.
+ *
+ * `Data Shift Ops` is a TWIN PAIR in R132's sense: `BandedViaAssert` and `BandedViaError` are
+ * identical in shape and differ only in how their covering test raises. The shape yields FOUR
+ * mutants per half (`empty-block`, `negate-conditional`, `shift-integer`, `return-value`), and every
+ * one of the eight kills for the same reason: the mutated procedure returns 0 where 1 is expected.
+ *
+ * That is what makes this a control rather than eight observations. The verdicts are constant across
+ * the pair, so the ONLY variable is which side of the screen each kill lands on, and a difference
+ * cannot be blamed on the mutants differing. A per-operator loop over both halves is the assertion;
+ * a count of flagged kills would read identically if the screen had separated nothing.
+ */
+function assertShiftScreenTwinPair(report: SessionReport, flaggedMutants: readonly string[]): void {
+  const flagged = new Set(flaggedMutants);
+  const OPERATORS = [
+    "lethal.empty-block",
+    "lethal.negate-conditional",
+    "lethal.shift-integer",
+    "lethal.return-value",
+  ] as const;
+  const HALVES = [
+    // procedure, how its covering test raises, whether the screen must flag its kills
+    ["BandedViaAssert", "Library Assert", false],
+    ["BandedViaError", "a bare Error(...)", true],
+  ] as const;
+
+  for (const [procedureName, how, mustBeFlagged] of HALVES) {
+    for (const operatorName of OPERATORS) {
+      const mutants = report.mutants.filter(
+        (m) => m.operatorName === operatorName && m.procedureName === procedureName,
+      );
+      assert.equal(
+        mutants.length,
+        1,
+        `${procedureName}/${operatorName}: expected exactly one mutant, got ${mutants.length}. The two halves must stay identical in shape or they are no longer a control.`,
+      );
+      const m = mutants[0];
+      assert.ok(m !== undefined, `${procedureName}/${operatorName}: mutant missing`);
+      assert.equal(
+        m.verdict,
+        "killed",
+        `${procedureName}/${operatorName}: every mutant of this pair must be killed. A survivor here makes the screen evidence worthless, because a screen difference could then be a verdict difference.`,
+      );
+      assert.equal(
+        flagged.has(m.mutantCode),
+        mustBeFlagged,
+        `${procedureName}/${operatorName} is killed through ${how}, so the screen must ${mustBeFlagged ? "" : "NOT "}flag it. Both directions must hold across all four operators, or the screen is reading something other than the assertion style. killingTestFailure: ${JSON.stringify(m.killingTestFailure ?? null)}`,
+      );
+    }
   }
 }
 

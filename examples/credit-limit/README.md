@@ -50,12 +50,13 @@ real gap.
 
 ## The measured result
 
-Run against Cronus283 (BC 28), 2026-08-24:
+Run against Cronus283 (BC 28), 2026-08-24, and re-frozen 2026-08-26 when
+`lethal.shift-integer` shipped:
 
 ```
-dry run: 2 file(s), 45 mutant site(s), 41 deployed mutant(s), 1 batch(es)
-score: 73.3%  (killed 22, survived 8, no-coverage 11, error 0)
-TIMING: total 16.3s = generate 0.1s + deploy 6.4s + baseline 0.9s + mutants 6.8s + overhead 2.3s
+dry run: 2 file(s), 46 mutant site(s), 42 deployed mutant(s), 1 batch(es)
+score: 74.2%  (killed 23, survived 8, no-coverage 11, error 0)
+TIMING: total 16.6s = generate 0.1s + deploy 4.8s + baseline 0.5s + mutants 8.5s + overhead 2.7s
 reliability: full
 ```
 

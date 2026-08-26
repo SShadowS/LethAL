@@ -5,17 +5,17 @@ Written before the live half. §4's verdicts were fixed before the operator was 
 ## 1. Sizing: 3,016 to 677, in three measured deductions
 
 `integer` was the largest kind the node-kind census left unclaimed. The raw count is not the
-candidate, and this row's own caution — count the CONTEXTS first — removed three quarters of it.
+candidate, and this row's own caution, count the CONTEXTS first, removed three quarters of it.
 
 | deduction | remaining | why |
 | --- | ---: | --- |
 | raw, in bodies | 3,016 | the kind count |
 | behavioural contexts only | **1,212** | comparison operand 777, assigned value 435. The discarded 1,804 are other things wearing the same node kind: `Code[20]` and `Text[250]` are type LENGTHS (530 and 181 occurrences of those two values alone), and field declarations, enum values and page properties are declarative surfaces R135 refuses |
-| minus loop conditions | **873** | 339 sit in a `repeat`/`while` condition, 336 of those against `.Next(...)`. Shifting the `0` in `until Rec.Next() = 0` never terminates on a one-row set — R164's measured hazard, 290 such loops, each costing a session where `--stop-hung-sessions` is off |
+| minus loop conditions | **873** | 339 sit in a `repeat`/`while` condition, 336 of those against `.Next(...)`. Shifting the `0` in `until Rec.Next() = 0` never terminates on a one-row set, R164's measured hazard, 290 such loops, each costing a session where `--stop-hung-sessions` is off |
 | minus ordering comparisons | **677** | 196 are `<`, `<=`, `>`, `>=`, where `conditional-boundary` ALREADY shifts that boundary: `if X < 5` becomes `X <= 5` there and `X < 6` here, and those admit exactly the same values |
 
 **677 marginal, 52x R13's bar**, with **0** exact-span overlap. The ordering-comparison cession is the
-third time this row's point 1 has decided a design, and §3.2 dedup would not have caught it — that
+third time this row's point 1 has decided a design, and §3.2 dedup would not have caught it, that
 rule compares SPANS, and the comparison node and the literal inside it are different spans. Exactly
 how `flip-boolean-literal` came to duplicate `swap-modify-flag`.
 
@@ -25,7 +25,7 @@ how `flip-boolean-literal` came to duplicate `swap-modify-flag`.
   target, and every refused shape, on a baseline proven clean first.
 - **Real emit path:** instrumented artifact compiles with **0 errors**, 14 of 172 mutants from this
   operator, dispatch verified.
-- **Conformance: 6 cases, PASS**, including four refusals — ordering comparison, loop-exit condition,
+- **Conformance: 6 cases, PASS**, including four refusals, ordering comparison, loop-exit condition,
   a literal at AL's 32-bit ceiling, and a declarative type length.
 
 The loop refusal is POSITIONAL, not whole-loop, and the compile proof shows it: in `LoopExit` the
@@ -53,12 +53,12 @@ Derived: `sandbox-data` **0 killed / 3 survived**, `credit-limit` **1 / 0**, `sa
 `sandbox-hang` **1 / 1**.
 
 **I6 is the row worth watching.** It is an equivalent mutant produced by arithmetic rather than by
-dead code, and the operator cannot see it — an honest survivor that no source-derived layer could
+dead code, and the operator cannot see it, an honest survivor that no source-derived layer could
 refuse in advance. If it comes back killed, my arithmetic is wrong and the fixture is more sensitive
 than it looks.
 
 **The threshold.** 2 kills of 7 is a thin live half and is expected: these fixtures were built to
-exercise other operators. What would refuse this candidate is not a low count but a WRONG one — I4 or
+exercise other operators. What would refuse this candidate is not a low count but a WRONG one, I4 or
 I7 surviving would mean the mutation is not observable even where the arithmetic says it must be.
 
 ---
@@ -92,7 +92,7 @@ sandbox-hang (Cronus281)
 
 Both kill messages carry the arithmetic the pre-commitment predicted, not just the verdict. I4's is
 the app's own guard text firing on a customer whose limit no longer short-circuits, and I7's names
-the value **4** — the `0, 2, 4` walk §4 derived, so the kill is the mutation and not something else
+the value **4**, the `0, 2, 4` walk §4 derived, so the kill is the mutation and not something else
 that happened to fail.
 
 ### I6, the equivalent mutant, survived exactly as predicted
@@ -125,7 +125,7 @@ rather than by a unit test alone.
 Both kills were flagged, both suites raise through bare `Error(...)`, and the screen reported
 **`vacuous`** on each. Same answer, same reason, as `toggle-blank-string`'s spike: not a finding
 about this operator, and not a pass. `codeunit 79320 "Data Blank Ops"` is where that operator's
-build settled the question, and this operator has **no site there** — its only `sandbox-data` sites
+build settled the question, and this operator has **no site there**, its only `sandbox-data` sites
 are the three in `Data Commit Ops`.
 
 ## Recommendation
@@ -134,7 +134,7 @@ are the three in `Data Commit Ops`.
 `sandbox-data`:
 
 1. **A loop-condition arm**, so the R164 refusal is proven live. Its load-bearing result is an
-   ABSENCE — the site produces no mutant — which is the assertion `assertFilterLiteralEvidence`
+   ABSENCE, the site produces no mutant, which is the assertion `assertFilterLiteralEvidence`
    already makes for `flip-filter-literal`'s two refusal kinds, by procedure name.
 2. **An assertion-raised kill**, so R121's screen SEPARATES on this operator instead of reporting
    `vacuous`. `Data Blank Ops` is the precedent and the natural home: it already carries the
@@ -147,4 +147,4 @@ Everything else is settled: 677 marginal sites at 52x R13's bar with 0 overlap, 
 `sandbox-app` +1, which moves `itest:bcdev`, `itest:alrunner` AND `itest:envtool` together.
 gift-card has no site. Note that `itest:envtool`'s environment expired on 2026-08-26 and its
 baseline is deliberately stale, so the build must either restore that environment or state plainly
-that the third gate went unverified — it cannot quietly re-record.
+that the third gate went unverified, it cannot quietly re-record.

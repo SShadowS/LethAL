@@ -84,9 +84,15 @@ const SELECTOR_IDS = { selectorId: 79199, controlId: 79198, tableId: 79197 };
 // observable, so it is an equivalent mutant by inspection and a useful one to have on record.
 // Pre-committed in docs/superpowers/specs/2026-08-26-r159-remove-assignment-build-precommitment.md.
 const EXPECTED = {
-  totalMutantSites: 18,
+  // R159's `shift-integer` moves this from 18 to 19: `LogAudit`'s `Amount <> 0` is an
+  // equality-family comparison, so the operator claims the literal.
+  totalMutantSites: 19,
   killed: 3,
-  survived: 11,
+  // R159's `shift-integer` moves this from 11 to 12: `Sandbox Logic.LogAudit`'s `Amount <> 0`
+  // becomes `<> 1`. It survives because the guarded block is `Amount := Amount`, a self-assignment,
+  // so changing WHICH inputs enter a block that does nothing is unobservable. Measured in the spike,
+  // docs/superpowers/specs/2026-08-26-r159-shift-integer-spike.md.
+  survived: 12,
   noCoverage: 4,
   /**
    * R132: this gate now carries the VACUOUS case for R121's assertion screen, which `itest:tables`

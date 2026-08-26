@@ -16,7 +16,7 @@ const AL_MAX_INTEGER = 2147483647;
 /**
  * Comparison operators this operator CEDES to `conditional-boundary`.
  *
- * `if X < 5` becomes `X <= 5` there and `X < 6` here, and those two admit exactly the same values —
+ * `if X < 5` becomes `X <= 5` there and `X < 6` here, and those two admit exactly the same values:
  * the same mutation reached through the operator instead of the constant. §3.2 dedup would NOT catch
  * it, because that rule compares SPANS and these differ (the comparison node against the literal
  * inside it), which is precisely how `flip-boolean-literal` came to duplicate `swap-modify-flag`
@@ -28,7 +28,7 @@ const CEDED_TO_CONDITIONAL_BOUNDARY: ReadonlySet<string> = new Set(["<", "<=", "
 const CLAIMED_COMPARISONS: ReadonlySet<string> = new Set(["=", "<>"]);
 
 /**
- * `ShiftInteger`: rewrite an integer literal `n` to `n + 1` — the off-by-one probe.
+ * `ShiftInteger`: rewrite an integer literal `n` to `n + 1`, the off-by-one probe.
  *
  * ROADMAP R159. `integer` was the largest kind the node-kind census left unclaimed, and sizing it is
  * the whole story: the raw count is 3,016 inside procedure and trigger bodies and the claimable
@@ -48,13 +48,13 @@ const CLAIMED_COMPARISONS: ReadonlySet<string> = new Set(["=", "<>"]);
  * **Loop conditions are refused, not claimed.** 339 behavioural integers sit in a `repeat` or
  * `while` condition and 336 of those compare against `.Next(...)`. Shifting the `0` in
  * `until Rec.Next() = 0` makes the loop non-terminating on a one-row set, which is R164's measured
- * hazard — 290 such loops on this corpus, each costing a session on the default path where
+ * hazard, 290 such loops on this corpus, each costing a session on the default path where
  * `--stop-hung-sessions` is off. `negate-guard` refuses loop conditions for the same reason.
  *
  * **Why it compiles.** `n + 1` is an integer literal wherever `n` was, so the replacement is the same
  * type in the same position. The one shape that does not fit is a literal already at AL's 32-bit
  * ceiling, which `AL_MAX_INTEGER` refuses rather than emitting an overflow whose kill would say
- * nothing about the test — the false-kill shape `swap-multiplicative` was refused over.
+ * nothing about the test, the false-kill shape `swap-multiplicative` was refused over.
  *
  * **No `PlatformKillMechanism`.** Changing a constant is ordinary changed behaviour, the same ruling
  * `remove-assignment` and `toggle-blank-string` carry, and R121's screen reports a kill that carried
@@ -152,7 +152,7 @@ function shifted(node: ALSyntaxNode): string | null {
 }
 
 /**
- * Inside a procedure or trigger body — an ALLOW-list, because a deny-list of declarative parents is
+ * Inside a procedure or trigger body, an ALLOW-list, because a deny-list of declarative parents is
  * only ever as complete as the last person's memory. `flip-boolean-literal` paid for that lesson
  * when a table key's `Clustered = true` reached the emit path and the artifact would not build.
  */
@@ -163,7 +163,7 @@ function inExecutableBody(node: ALSyntaxNode): boolean {
   return false;
 }
 
-/** In the CONDITION of a `repeat` or `while` — see the doc comment for why those are refused. */
+/** In the CONDITION of a `repeat` or `while`, see the doc comment for why those are refused. */
 function inLoopCondition(node: ALSyntaxNode): boolean {
   for (let p: ALSyntaxNode | null = node.parent; p !== null; p = p.parent) {
     if (p.rawKind === "repeat_statement" || p.rawKind === "while_statement") {

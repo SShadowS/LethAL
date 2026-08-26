@@ -155,12 +155,19 @@ const SELECTOR_IDS = { selectorId: 79199, controlId: 79198, tableId: 79197 };
 // environment, and this task is scoped to never perform one — `assertMatchesBaseline` below is
 // what pins the per-mutant table down, on whatever the human's first real run records.
 const EXPECTED = {
-  // !! R159's figures here are INFERRED from `itest:bcdev`, NOT MEASURED. This gate's environment
-  // !! (`envTool.envId`, reached through `continia.exe`) reported "Stopped" when the operator landed,
-  // !! and LethAL deliberately refuses to start an environment it does not own — a hosted
-  // !! environment is not a container. Run `LETHAL_ITEST_ENVTOOL=1 bun run itest:envtool` once it is
-  // !! Running and delete this note if it agrees; a disagreement is a finding, because this gate
-  // !! exists precisely to catch the indirection changing a verdict.
+  // !! R159's figures here are INFERRED from `itest:bcdev`, NOT MEASURED, and this is now the
+  // !! SECOND operator to move them without a run. The environment was "Stopped" when the first one
+  // !! landed (LethAL deliberately refuses to start an environment it does not own: a hosted
+  // !! environment is not a container), and it EXPIRED AND WAS DELETED on 2026-08-26, so the next
+  // !! run needs a new one provisioned before it can say anything.
+  // !!
+  // !! Two accumulated unreviewed numbers is the point at which a baseline stops being evidence, so
+  // !! read the next run's disagreement as a finding about the INDIRECTION only after checking it
+  // !! against `itest:bcdev` on the same day. The two gates share a fixture: they must report the
+  // !! same mutants with the same verdicts, and a divergence is this gate's entire reason to exist.
+  // !! Do NOT re-freeze whatever the first successful run reports. Confirm both accumulated moves
+  // !! by name first: `remove-assignment` and `shift-integer`, both at `Sandbox Logic.LogAudit`,
+  // !! both predicted `survived`.
   //
   // R159 moves this from 16 to 17 and no-coverage from 3 to 4, identically to `itest:bcdev` — which
   // is the whole point of this gate: it runs the SAME fixture through an external environment tool,
@@ -169,9 +176,15 @@ const EXPECTED = {
   // no-coverage because neither test touches `Sandbox Pricing`.
   // R159's `remove-assignment` adds one site (`LogAudit`'s self-assignment `Amount := Amount`),
   // which survives as an equivalent mutant. Same fixture as `itest:bcdev`, so the same move.
-  totalMutantSites: 18,
+  // R159's `shift-integer` moves this from 18 to 19: `LogAudit`'s `Amount <> 0` is an
+  // equality-family comparison, so the operator claims the literal.
+  totalMutantSites: 19,
   killed: 3,
-  survived: 11,
+  // R159's `shift-integer` moves this from 11 to 12: `Sandbox Logic.LogAudit`'s `Amount <> 0`
+  // becomes `<> 1`. It survives because the guarded block is `Amount := Amount`, a self-assignment,
+  // so changing WHICH inputs enter a block that does nothing is unobservable. Measured in the spike,
+  // docs/superpowers/specs/2026-08-26-r159-shift-integer-spike.md.
+  survived: 12,
   noCoverage: 4,
 };
 

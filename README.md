@@ -552,6 +552,7 @@ That selects which mutants run and cannot change a verdict.
 | `lethal.remove-assignment` | 1.0.0 | `Total := 5` → _(deleted)_ | a value written that nothing downstream depends on |
 | `lethal.remove-not` | 1.0.0 | `not Cust.IsEmpty()` → `Cust.IsEmpty()` | a negated guard whose two branches nobody tells apart |
 | `lethal.swap-additive` | 1.0.0 | `A + B` → `A - B` | a sum or difference whose value no test checks |
+| `lethal.shift-integer` | 1.0.0 | `5` → `6` | an off-by-one nothing notices, at a constant the test never varies |
 <!-- /operators: tier1 -->
 
 ### Tier 2, AL-specific

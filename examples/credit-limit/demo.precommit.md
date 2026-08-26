@@ -74,3 +74,20 @@ operator instead.
 which is exactly where they should land.
 
 Totals 33 -> 41, killed 18 -> 22, survived 7 -> 8, no-coverage 8 -> 11. Score 72.0% -> **73.3%**.
+
+## Amended 2026-08-26 by R159: the stage is re-frozen at 42 mutants
+
+`lethal.shift-integer` ships (Tier 1, 1.0.0). One site here: `WouldExceedLimit`'s
+`if "Credit Limit" = 0`, shifted to `= 1`.
+
+**Killed, by `NoCreditLimitMeansNoBlock`**, and predicted killed in the spike before the run. It is
+the same test and the same branch `flip-boolean-literal` reached from the other side, which is the
+part worth reading: the zero-limit customer stops short-circuiting, exposure of 400 exceeds a limit
+of 0, and the order the test expects to register is blocked. Two operators, one branch, one test,
+and both kills are earned rather than incidental.
+
+Totals 41 -> 42, killed 22 -> 23; survivors and no-coverage are unchanged at 8 and 11. The score
+rises from 73.3% to **74.2%**, the right direction for an arm that adds one kill and no survivors.
+
+The re-run behind this freeze was executed TWICE against Cronus283 and the two runs are per-mutant
+identical, so the demo is reproducible and not merely recorded.

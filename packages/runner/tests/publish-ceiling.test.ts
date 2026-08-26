@@ -404,6 +404,11 @@ const TEST_AL = `codeunit 79100 "Sandbox Tests"
  * reported rather than silently absorbed; it could not keep that promise while the arithmetic
  * producing the file was itself a guess.
  *
+ * That promise was then KEPT, once, and it is worth recording how: R159's `shift-integer` took the
+ * small shape's yield to 3, equal to the big one's, and this function refused with both numbers in
+ * the message rather than letting a mis-sized file reach eleven tests. The fix was to the SHAPE, not
+ * to a constant. See `smallShape`.
+ *
  * `measureShapeYields` runs both shapes through `generateMutationSet` + `dedupeSpecs` and
  * `solveShapeMix` picks the counts. A future operator changes a measured number here instead of a
  * result three tests away.
@@ -450,10 +455,18 @@ function bigShape(i: number): string {
 `;
 }
 
+/**
+ * The small shape assigns a PARAMETER, not a literal, and that is load-bearing rather than
+ * incidental. It used to be `G := <n>`, which put an integer literal in the one file whose exact
+ * mutant count these tests depend on, so every operator that claims a literal changed the yield.
+ * `remove-assignment` took it from 1 to 2, and `shift-integer` from 2 to 3, at which point it was no
+ * longer strictly smaller than the big shape and `measureShapeYields` refused. Nothing here is
+ * constant-valued any more, so a literal operator cannot reach it.
+ */
 function smallShape(i: number): string {
-  return `    procedure Q${i}()
+  return `    procedure Q${i}(V: Integer)
     begin
-        G := ${i + 1};
+        G := V;
     end;
 `;
 }

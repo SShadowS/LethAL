@@ -1,40 +1,86 @@
 import { beforeAll, describe, expect, it } from "bun:test";
-import { initParser } from "@lethal/engine";
-import { runConformance } from "@lethal/operator-sdk";
-import { tier1Operators } from "../src";
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
+import {
+  type ALSyntaxNode,
+  type MutationSpec,
+  buildSemanticContext,
+  initParser,
+  parseAL,
+  visit,
+  wrapRoot,
+} from "@lethal/engine";
 import { shiftInteger } from "../src/shift-integer";
 
 /**
- * `lethal.shift-integer` is SPIKED and RECOMMENDED but deliberately NOT registered — R159, see
- * `docs/superpowers/specs/2026-08-26-r159-shift-integer-spike.md`. The build owes it two
- * `sandbox-data` fixture arms first: a loop-condition refusal witness, and an assertion-raised kill
- * so R121's screen separates on it.
+ * R159. The interesting half of this operator is what it REFUSES, and one refusal cannot be proven
+ * by any live gate: R164 rules that a hang-capable site must not enter a scored gate, and there is
+ * no safe version of one. A loop whose exit depends on a counter is turned non-terminating by
+ * `remove-assignment`, by `swap-additive`, and by this operator itself, so an arm that witnessed
+ * the loop refusal live would plant a landmine to prove an ABSENCE.
  *
- * Which leaves the operator in a state nothing else in this package is in: `tests/conformance.test.ts`
- * enumerates `tier1Operators`, so an unregistered operator's six cases would never run, and a later
- * change to `mutate-helpers` or `ALNodeKind` could rot the spike's proof with no test going red. The
- * file would still be there and would still look measured. This runs them directly.
- *
- * DELETE this file when the build registers the operator — `conformance.test.ts` covers it then, and
- * the assertion below is what enforces the swap rather than leaving both to run forever.
+ * An absence needs no server. A refused site produces no mutant, so the server never sees one
+ * either way, and the mutant INVENTORY is computed offline and deterministically from the AST.
+ * That makes this file the whole proof of the loop cession, and it asserts it POSITIONALLY: the
+ * literal in the loop's exit condition is refused while the one in its body is still claimed.
  */
-describe("shift-integer (spiked, unregistered)", () => {
+describe("shiftInteger", () => {
+  let root: ALSyntaxNode;
+  let specs: MutationSpec[];
+
   beforeAll(async () => {
     await initParser();
+    const src = await readFile(resolve(__dirname, "./fixtures/al/shift-integer.al"), "utf8");
+    root = wrapRoot(parseAL(src));
+    const ctx = buildSemanticContext([{ path: "fixture.al", root }]);
+    specs = [];
+    visit(root, (n) => {
+      if (shiftInteger.targets(n, ctx)) specs.push(...shiftInteger.generate(n, ctx));
+    });
   });
 
-  it("passes its conformance suite even though nothing registers it", async () => {
-    const result = await runConformance(shiftInteger);
-    if (!result.allPassed) {
-      console.error(JSON.stringify(result.failures, null, 2));
+  it("claims equality-comparison operands and assigned values, and nothing else", () => {
+    // `1` here is `Seen += 1` in the loop BODY. The `exit(1)`/`exit(0)` literals three procedures
+    // over are call arguments and are absent, which is why this list can be compared by text at all.
+    expect(specs.map((s) => `${s.before.text}->${s.after.text}`).sort()).toEqual([
+      "1->2",
+      "41->42",
+      "5->6",
+      "7->8",
+      "9->10",
+    ]);
+    for (const s of specs) {
+      expect(s.operatorName).toBe("lethal.shift-integer");
+      expect(s.parentContext).toBe("statement-position");
     }
-    expect(result.allPassed).toBe(true);
   });
 
-  it("is still unregistered, so this file is still the only thing running those cases", () => {
-    // Reverse the guard: once the build registers it, `conformance.test.ts` runs the same six cases
-    // and this file is redundant. Failing HERE is the signal to delete it, not to relax the check.
-    const registered = tier1Operators.some((op) => op.name === shiftInteger.name);
-    expect(registered).toBe(false);
+  it("refuses the loop's EXIT CONDITION while still claiming its BODY", () => {
+    let condition: ALSyntaxNode | null = null;
+    let body: ALSyntaxNode | null = null;
+    visit(root, (n) => {
+      if (n.rawKind !== "repeat_statement") return;
+      condition = n.childForFieldName("condition");
+      body = n;
+    });
+    const cond = condition as ALSyntaxNode | null;
+    const loop = body as ALSyntaxNode | null;
+    if (cond === null || loop === null) throw new Error("fixture lost its repeat loop");
+
+    const inside = (s: MutationSpec, n: ALSyntaxNode): boolean =>
+      s.before.startIndex >= n.startIndex && s.before.endIndex <= n.endIndex;
+
+    // The `0` of `until Cust.Next() = 0`, shifting it never terminates once the set is exhausted.
+    expect(specs.filter((s) => inside(s, cond))).toEqual([]);
+    // ...but `Seen += 1`, in the same loop, is claimed. A whole-loop refusal would lose this.
+    expect(specs.filter((s) => inside(s, loop)).map((s) => s.before.text)).toEqual(["1"]);
+  });
+
+  it("refuses a literal at AL's 32-bit ceiling, where n + 1 does not fit", () => {
+    expect(specs.some((s) => s.before.text === "2147483647")).toBe(false);
+  });
+
+  it("cedes an ordering comparison to conditional-boundary, which shifts the same boundary", () => {
+    expect(specs.some((s) => s.before.text === "13")).toBe(false);
   });
 });

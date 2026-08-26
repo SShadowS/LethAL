@@ -106,6 +106,16 @@ const EXPECTED_ON: ReadonlyArray<{ line: number; operator: string; verdict: stri
   // progress and is the fixture's THIRD non-terminating mutant, reached by a third operator.
   { line: 33, operator: "lethal.remove-assignment", verdict: "survived" },
   { line: 42, operator: "lethal.remove-assignment", verdict: "timeout-killed" },
+  // R159's `shift-integer` adds the same two lines through a third operator, and line 33 is now the
+  // clearest EQUIVALENT-MUTANT site in the repository: two operators, one statement, both honest
+  // survivors. `remove-assignment` deletes `Counter := 0` (a fresh codeunit instance starts it at 0
+  // anyway) and this shifts it to 1, from which the loop walks 2, 3 instead of 1, 2, 3 and still
+  // returns 3. Neither is distinguishable in the report from a real coverage gap, which is R172.
+  { line: 33, operator: "lethal.shift-integer", verdict: "survived" },
+  // `Counter += 1` -> `+= 2` walks 0, 2, 4 and exits at 4 against a test expecting 3. It TERMINATES,
+  // which is the point: this operator refuses loop-exit CONDITIONS (R164) but claims the loop body,
+  // and the non-terminating count below must stay at 3 for that cession to be doing its job.
+  { line: 42, operator: "lethal.shift-integer", verdict: "killed" },
 ];
 
 async function readJson<T>(path: string, what: string): Promise<T> {
@@ -265,7 +275,10 @@ function assertOnLeg(leg: LegResult): void {
   assert.equal(
     timeoutKilled.length,
     3,
-    "the fixture has exactly three non-terminating mutants (R159 added the third)",
+    "the fixture has exactly three non-terminating mutants (R159's `remove-assignment` added the " +
+      "third). This count is also the live half of `shift-integer`'s loop cession: that operator " +
+      "puts two mutants into this very fixture, one of them INSIDE the loop, and a fourth " +
+      "non-terminating mutant here would mean it had reached a loop-exit condition after all (R164)",
   );
 
   // THE ASSERTION THAT CANNOT PASS FOR THE WRONG REASON. A verdict check alone would still hold if

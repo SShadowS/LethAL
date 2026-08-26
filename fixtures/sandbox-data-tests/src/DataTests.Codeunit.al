@@ -1171,6 +1171,38 @@ codeunit 79310 "Data Tests"
         LibraryAssert.AreEqual(0, BlankOps.ClassifyCode('BETA'), 'BETA classifies as 0');
     end;
 
+    // R159's assertion-screen arm for `shift-integer`. See
+    // fixtures/sandbox-data/src/DataShiftOps.Codeunit.al for why the two procedures are a twin pair
+    // rather than two tests of one thing: they are identical in shape, and the only difference
+    // between their mutants is which side of R121's screen each kill lands on.
+
+    [Test]
+    procedure ShiftKillIsAssertionEarned()
+    var
+        ShiftOps: Codeunit "Data Shift Ops";
+        LibraryAssert: Codeunit "Library Assert";
+    begin
+        // Both directions, so shifting the literal cannot pass by accident on one of them.
+        LibraryAssert.AreEqual(1, ShiftOps.BandedViaAssert(10), '10 is in the band');
+        LibraryAssert.AreEqual(0, ShiftOps.BandedViaAssert(11), '11 is outside the band');
+    end;
+
+    [Test]
+    procedure ShiftKillIsBareErrorRaised()
+    var
+        ShiftOps: Codeunit "Data Shift Ops";
+        Actual: Integer;
+    begin
+        // Both directions, exactly as the Library Assert twin checks both, so the ONLY difference
+        // between the two halves of this pair is how the failure is raised.
+        Actual := ShiftOps.BandedViaError(10);
+        if Actual <> 1 then
+            Error('expected 1 from the banded value at 10, got %1', Actual);
+        Actual := ShiftOps.BandedViaError(11);
+        if Actual <> 0 then
+            Error('expected 0 from the banded value at 11, got %1', Actual);
+    end;
+
     // R171's cession-seam arm. See fixtures/sandbox-data/src/DataSetOps.Codeunit.al for why the
     // three procedures are a control set rather than three tests of one thing.
 

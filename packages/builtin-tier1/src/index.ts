@@ -7,6 +7,7 @@ import { negateGuard } from "./negate-guard";
 import { removeAssignment } from "./remove-assignment";
 import { removeNot } from "./remove-not";
 import { returnValue } from "./return-value";
+import { shiftInteger } from "./shift-integer";
 import { swapAdditive } from "./swap-additive";
 import { swapCallArguments } from "./swap-call-arguments";
 import { toggleBlankString } from "./toggle-blank-string";
@@ -20,6 +21,7 @@ export { negateGuard } from "./negate-guard";
 export { removeAssignment } from "./remove-assignment";
 export { removeNot } from "./remove-not";
 export { returnValue } from "./return-value";
+export { shiftInteger } from "./shift-integer";
 export { swapAdditive } from "./swap-additive";
 export { swapCallArguments } from "./swap-call-arguments";
 export { toggleBlankString } from "./toggle-blank-string";
@@ -47,4 +49,9 @@ export const tier1Operators: readonly MutationOperator[] = [
   // concatenation, which does not compile as a subtraction. The multiplicative half is deliberately
   // a separate future operator — division by zero is a false kill needing its own screen.
   swapAdditive,
+  // R159: an integer literal `n` -> `n + 1`, the off-by-one probe. 677 claimable sites on
+  // `do-rel2/Cloud` after two cessions that had to be measured rather than assumed: loop-exit
+  // conditions go to R164's non-termination hazard, and ordering comparisons to
+  // `conditional-boundary`, which already shifts the same boundary from the operator side.
+  shiftInteger,
 ];

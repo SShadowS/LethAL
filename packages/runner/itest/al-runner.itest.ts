@@ -91,13 +91,19 @@ const EXPECTED = {
   // `itest:bcdev` and missed that this gate shares the sandbox-app fixture. The verdict follows from
   // the rule this gate already documents, but it was written down after the refusal, not before, and
   // that is recorded rather than smoothed over.
-// R159's `remove-assignment` moves this to 18 and survived to 15. Its one site here is
-// `Sandbox Logic.LogAudit`'s `Amount := Amount`, a SELF-ASSIGNMENT: deleting it changes nothing
-// observable, so it is an equivalent mutant by inspection and a useful one to have on record.
-// Pre-committed in docs/superpowers/specs/2026-08-26-r159-remove-assignment-build-precommitment.md.
-  totalMutantSites: 18,
+  // R159's `remove-assignment` moves this to 18 and survived to 15. Its one site here is
+  // `Sandbox Logic.LogAudit`'s `Amount := Amount`, a SELF-ASSIGNMENT: deleting it changes nothing
+  // observable, so it is an equivalent mutant by inspection and a useful one to have on record.
+  // Pre-committed in docs/superpowers/specs/2026-08-26-r159-remove-assignment-build-precommitment.md.
+  // R159's `shift-integer` moves this from 18 to 19: `LogAudit`'s `Amount <> 0` is an
+  // equality-family comparison, so the operator claims the literal.
+  totalMutantSites: 19,
   killed: 3,
-  survived: 15,
+  // R159's `shift-integer` moves this from 15 to 16: `Sandbox Logic.LogAudit`'s `Amount <> 0`
+  // becomes `<> 1`. It survives because the guarded block is `Amount := Amount`, a self-assignment,
+  // so changing WHICH inputs enter a block that does nothing is unobservable. Measured in the spike,
+  // docs/superpowers/specs/2026-08-26-r159-shift-integer-spike.md.
+  survived: 16,
   noCoverage: 0,
 };
 

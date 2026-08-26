@@ -2,7 +2,7 @@
   "id": "ae4589f8-4376-41a5-acf3-8df73772fefd",
   "name": "LethAL Sandbox Data Tests",
   "publisher": "LethAL",
-  "version": "1.0.0.15",
+  "version": "1.0.0.16",
   "brief": "Tier-2 Phase 0 fixture: test app for the sandbox-data mutation target.",
   "description": "Test codeunit exercising fixtures/sandbox-data's table triggers. Asserts via Error()/asserterror throughout, EXCEPT R132's twin-pair test, which raises through Microsoft's Library Assert so the assertion screen has both kinds of failure text to separate. Not for production use \u2014 see fixtures/README.md.",
   "privacyStatement": "",
