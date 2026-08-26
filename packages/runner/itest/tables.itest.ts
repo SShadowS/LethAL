@@ -43,6 +43,7 @@ import type { SessionReport } from "../src/report";
 import { RunMutantTransport } from "../src/run-mutant-transport";
 import { ResultsStore } from "../src/store";
 import { assertMatchesBaseline } from "./baseline-guard";
+import { assertNotInstrumentedEvidence } from "./notinstrumented-evidence";
 
 if (!process.env.LETHAL_ITEST_TABLES) {
   console.log(
@@ -978,29 +979,9 @@ function assertVerdictTable(report: SessionReport): void {
       "leaves a reader to discover the refusal by reading a number they were never pointed at",
   );
   // Task 4 (excluded-sites-spine): the `notInstrumented` twin of the declarative-refusal block
-  // above. Asserted BY FILE, not just by count: a count-only check would pass identically against
-  // a permanently-empty derived view (`notInstrumentedView` returning `{ ...view, files: [] }`),
-  // which is the exact gap this fixture and this assertion exist to close.
-  assert.equal(
-    report.notInstrumented.fileCount,
-    EXPECTED.notInstrumented.fileCount,
-    "notInstrumented fileCount mismatch",
-  );
-  assert.equal(
-    report.notInstrumented.siteCount,
-    EXPECTED.notInstrumented.siteCount,
-    "notInstrumented siteCount mismatch",
-  );
-  assert.deepEqual(
-    report.notInstrumented.files.map((f) => f.file.replaceAll("\\", "/")).sort(),
-    [...EXPECTED.notInstrumented.files].sort(),
-    "notInstrumented files mismatch: a permanently-empty derived view passes a count check but not this one",
-  );
-  assert.ok(
-    report.validity.caveats.includes("uninstrumentable-files"),
-    "a run that skipped an uninstrumentable file must CARRY the caveat — the count without the " +
-      "caveat leaves a reader to discover the refusal by reading a number they were never pointed at",
-  );
+  // above. Extracted into its own module (`notinstrumented-evidence.ts`) so the offline red-check
+  // can call the identical assertion against a doctored report without a second billed live run.
+  assertNotInstrumentedEvidence(report, EXPECTED.notInstrumented);
   // Per-mutant verdicts are asserted by `assertMatchesBaseline` (tables.baseline.json), not here
   // — see EXPECTED's doc comment for why the old inline 7-entry map was removed rather than
   // extended by hand.
