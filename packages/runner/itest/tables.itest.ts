@@ -540,6 +540,27 @@ const EXPECTED = {
    */
   untargetedTriggerCount: 0,
   /**
+   * Task 4 (excluded-sites-spine): the `notInstrumented` half's ONLY live proof, added because it
+   * had none. Every other file in this fixture is a CARRIER kind (`CARRIER_KINDS` in
+   * packages/schemata/src/compile.ts), so this population read zero on every gate run before this,
+   * and `notInstrumentedView` returning `{ ...view, files: [] }` would have passed unnoticed.
+   *
+   * `query 79332 "Data Scope Query"` (`fixtures/sandbox-data/src/DataScopeQuery.Query.al`) is one
+   * of the two kinds (with `xmlport`) that still hold executable code but are NOT in
+   * `CARRIER_KINDS`. Its `OnBeforeOpen` trigger has one `if Threshold = 0 then Threshold := 10;`,
+   * which yields 5 raw specs (`empty-block`, `negate-conditional`, two `shift-integer`,
+   * `remove-assignment`), measured directly against `generateMutationSet` offline, matching the
+   * census script. All 5 land in `skipped` and never reach `files`, so `totalMutantSites` and
+   * `counts.*` above are UNCHANGED by this fixture; see
+   * docs/superpowers/specs/2026-08-26-excluded-sites-fixture-precommitment.md for the measurement
+   * and the reasoning pre-committed before any live run.
+   */
+  notInstrumented: {
+    fileCount: 1,
+    siteCount: 5,
+    files: ["src/DataScopeQuery.Query.al"],
+  },
+  /**
    * R144: the declarative surface LethAL REFUSES to mutate, which R135 ruled out permanently and
    * which the report now has to say out loud.
    *
@@ -955,6 +976,25 @@ function assertVerdictTable(report: SessionReport): void {
     report.validity.caveats.includes("declarative-sites-dropped"),
     "a run that declined a declarative site must CARRY the caveat — the count without the caveat " +
       "leaves a reader to discover the refusal by reading a number they were never pointed at",
+  );
+  // Task 4 (excluded-sites-spine): the `notInstrumented` twin of the declarative-refusal block
+  // above. Asserted BY FILE, not just by count: a count-only check would pass identically against
+  // a permanently-empty derived view (`notInstrumentedView` returning `{ ...view, files: [] }`),
+  // which is the exact gap this fixture and this assertion exist to close.
+  assert.equal(
+    report.notInstrumented.fileCount,
+    EXPECTED.notInstrumented.fileCount,
+    "notInstrumented fileCount mismatch",
+  );
+  assert.equal(
+    report.notInstrumented.siteCount,
+    EXPECTED.notInstrumented.siteCount,
+    "notInstrumented siteCount mismatch",
+  );
+  assert.deepEqual(
+    report.notInstrumented.files.map((f) => f.file.replaceAll("\\", "/")).sort(),
+    [...EXPECTED.notInstrumented.files].sort(),
+    "notInstrumented files mismatch: a permanently-empty derived view passes a count check but not this one",
   );
   // Per-mutant verdicts are asserted by `assertMatchesBaseline` (tables.baseline.json), not here
   // — see EXPECTED's doc comment for why the old inline 7-entry map was removed rather than
