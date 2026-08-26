@@ -482,6 +482,61 @@
         }
       }
     },
+    "excludedSites": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "totalFiles",
+        "siteCount",
+        "fileCount",
+        "files"
+      ],
+      "properties": {
+        "totalFiles": {
+          "type": "number"
+        },
+        "siteCount": {
+          "type": "number"
+        },
+        "fileCount": {
+          "type": "number"
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "file",
+              "kinds",
+              "sites",
+              "reason"
+            ],
+            "properties": {
+              "file": {
+                "type": "string"
+              },
+              "kinds": {
+                "type": "string"
+              },
+              "sites": {
+                "type": "number"
+              },
+              "reason": {
+                "type": "string",
+                "enum": [
+                  "not-instrumentable",
+                  "declarative"
+                ]
+              },
+              "detail": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
     "only": {
       "type": "object",
       "additionalProperties": false,

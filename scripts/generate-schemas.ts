@@ -36,6 +36,7 @@ const FILES = [
   "al-runner-canary.ts",
   "permission-canary.ts",
   "assertion-screen.ts",
+  "excluded-sites.ts",
   "operation-outcome.ts",
 ].map((f) => join(SRC, f));
 

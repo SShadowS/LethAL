@@ -8,6 +8,7 @@ import {
   looksLikeAssertionFailure,
   looksLikeRunnerRefusal,
 } from "./assertion-screen";
+import type { ExcludedSites } from "./excluded-sites";
 import type { BackendCapabilities } from "./backend";
 import type { RunEvent } from "./events";
 import type { Interpretation } from "./interpretation";
@@ -695,6 +696,17 @@ export interface SessionReport {
     readonly fileCount: number;
     readonly files: readonly DeclarativeSiteFile[];
   };
+  /**
+   * Every site or file LethAL deliberately did not mutate, in ONE record keyed by reason — the
+   * merge of `notInstrumented` and `declarativeSites`, which remain as views derived from it.
+   *
+   * OPTIONAL, deliberately. R157's rule is that an added optional field is free and an added
+   * REQUIRED field is a new shape and bumps `REPORT_SCHEMA_VERSION`; `declarativeSites` and
+   * `preprocessorSymbols` were both added as required while this number stayed 2, which is why an
+   * archived v2 report is rejected by the published v2 schema. This field becomes required in the
+   * same release that DELETES the two views, so the removal costs one bump instead of two.
+   */
+  readonly excludedSites?: ExcludedSites;
   /**
    * R41: the `--only` narrowing this run was asked for, if any. Absent means the whole project
    * was considered. See `CAVEAT_INTERPRETATIONS.narrowed` for what this means to a reader.
