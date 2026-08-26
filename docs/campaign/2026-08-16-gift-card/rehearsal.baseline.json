@@ -56,6 +56,13 @@
     "errorClass": null
   },
   {
+    "key": "31c85a76e65c13426a668219969e39a8142b616aa307306f94a35e771add3abe|Gift Card Mgt|BlockExpiredCards|lethal.flip-boolean-literal|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
     "key": "326ca9cd3469e1153a4f205d61792250557d6cb3f1540f8114c6501db9ff3dea|Gift Card Mgt|Redeem|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "RedeemReducesBalance",
@@ -99,6 +106,13 @@
   },
   {
     "key": "5a8456c0f88ea8a372330df3eda97de19959c7ede14aca3155567c307b52763c|Gift Card Mgt|BlockExpiredCards|lethal.remove-setrange|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "637aa2af14e55ecf9861ea851a23f1ede61feeb72f8de7759d4fe738d201f242|Gift Card Mgt|BlockExpiredCards|lethal.flip-boolean-literal|1",
     "verdict": "no-coverage",
     "killingTest": null,
     "coverageFiltered": true,

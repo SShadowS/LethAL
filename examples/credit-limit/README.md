@@ -30,22 +30,22 @@ limit.
 All three MEASURED on a Cronus283 container (BC 28), first run 2026-08-24, not predicted:
 
 1. **Nobody orders exactly the limit.** The tests go under (400 of 1000) and over (1200 of 1000),
-   never to exactly 1000. `conditional-boundary` on `Exposure > "Credit Limit"` (M0019, line 39):
+   never to exactly 1000. `conditional-boundary` on `Exposure > "Credit Limit"` (`WouldExceedLimit`, line 39):
    **survived**.
 2. **Nobody ever owes anything.** No test writes a ledger entry, so `Balance` is 0 in every test
-   and `CalcFields` never changes anything. `remove-calcfields` (M0015, line 36): **survived**,
+   and `CalcFields` never changes anything. `remove-calcfields` (`WouldExceedLimit`, line 36): **survived**,
    with `attribution: "exact"` and `executionProven: true`, covered by all five tests. The posting
    helpers (`PostInvoice`, `PostPayment`, `PostEntry`) are called by no test, so all 8 of their
    mutants came back `no-coverage`.
 3. **There is only ever one customer.** Every test creates `C-10000` and nothing else, so the
    `SetRange("Customer No.", ...)` in `OutstandingOrderAmount` is never load-bearing.
-   `remove-setrange` on it (M0025, line 56): **survived**. The Status filter next to it: **killed**
+   `remove-setrange` on it (`OutstandingOrderAmount`, line 56): **survived**. The Status filter next to it: **killed**
    by `InvoicedOrdersStopCounting`, as intended.
 
-Also measured, not planted: four more survivors. `CreditOrder.Init()` removed (M0005) and
-`Insert(true)` flipped to `Insert(false)` (M0006) both survive as near-equivalent mutants (a fresh
+Also measured, not planted: four more survivors. `CreditOrder.Init()` removed and
+`Insert(true)` flipped to `Insert(false)`, both in `RegisterOrder`, survive as near-equivalent mutants (a fresh
 record variable, and a table with no OnInsert trigger), and both `Credit Customer.OnInsert` mutants
-(M0001, M0002) survive because no test inserts a customer with a blank `No.`. Two shrugs, one small
+survive because no test inserts a customer with a blank `No.`. Two shrugs, one small
 real gap.
 
 ## The measured result
@@ -53,8 +53,8 @@ real gap.
 Run against Cronus283 (BC 28), 2026-08-24:
 
 ```
-dry run: 2 file(s), 36 mutant site(s), 32 deployed mutant(s), 1 batch(es)
-score: 70.8%  (killed 17, survived 7, no-coverage 8, error 0)
+dry run: 2 file(s), 37 mutant site(s), 33 deployed mutant(s), 1 batch(es)
+score: 72.0%  (killed 18, survived 7, no-coverage 8, error 0)
 TIMING: total 16.3s = generate 0.1s + deploy 6.4s + baseline 0.9s + mutants 6.8s + overhead 2.3s
 reliability: full
 ```
@@ -69,8 +69,12 @@ lethal campaign compare --manifest examples/credit-limit/campaign.json \
                         --stage demo --report your-rerun.json
 ```
 
-Run that before quoting these numbers anywhere. Every id above (`M0015`, `M0019`, `M0025`) is a
-claim about one mutant, and a total that still reads 17 / 7 / 8 can hide a verdict that moved.
+Run that before quoting these numbers anywhere. Each survivor named above is a claim about ONE
+mutant, and a total that still reads 18 / 7 / 8 can hide a verdict that moved.
+
+Named by procedure and operator, never by mutant code. Codes are per-run labels that renumber
+the moment an operator lands earlier in the file — `flip-boolean-literal` shifted all three of
+these by one — which is why the frozen baseline keys on the mutated subtree's hash instead.
 
 Note that `InvoicedOrdersStopCounting` flips an order to Invoiced without posting anything. That is
 a demo shortcut, and it is also what keeps gap 2 clean: the suite never touches the ledger at all.

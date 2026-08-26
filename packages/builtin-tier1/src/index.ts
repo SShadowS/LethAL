@@ -1,6 +1,7 @@
 import type { MutationOperator } from "@lethal/operator-sdk";
 import { conditionalBoundary } from "./conditional-boundary";
 import { emptyBlock } from "./empty-block";
+import { flipBooleanLiteral } from "./flip-boolean-literal";
 import { negateConditional } from "./negate-conditional";
 import { negateGuard } from "./negate-guard";
 import { removeNot } from "./remove-not";
@@ -11,6 +12,7 @@ import { voidMethodCall } from "./void-method-call";
 
 export { conditionalBoundary } from "./conditional-boundary";
 export { emptyBlock } from "./empty-block";
+export { flipBooleanLiteral } from "./flip-boolean-literal";
 export { negateConditional } from "./negate-conditional";
 export { negateGuard } from "./negate-guard";
 export { removeNot } from "./remove-not";
@@ -23,6 +25,7 @@ export { synthesizeAfter } from "./mutate-helpers";
 /** Convenience bundle for registering all Tier 1 operators at once. */
 export const tier1Operators: readonly MutationOperator[] = [
   conditionalBoundary,
+  flipBooleanLiteral,
   negateConditional,
   negateGuard,
   voidMethodCall,

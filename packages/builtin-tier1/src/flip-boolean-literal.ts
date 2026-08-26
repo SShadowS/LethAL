@@ -171,8 +171,12 @@ export const flipBooleanLiteral: MutationOperator = {
       expectedSpecs: [],
     },
     {
-      name: "CEDES Insert's run-trigger flag",
-      sourceAL: `codeunit 51704 "C" { procedure P() var Cust: Record Customer; begin Cust.Insert(false); end; }`,
+      // `true` only. The first draft of this case used `Insert(false)` and went red the moment the
+      // cession was narrowed correctly — `swap-modify-flag` has no false -> true direction, so that
+      // literal is this operator's. The conformance suite caught a stale expectation, which is what
+      // it is for.
+      name: "CEDES Insert's run-trigger flag when it is `true`",
+      sourceAL: `codeunit 51704 "C" { procedure P() var Cust: Record Customer; begin Cust.Insert(true); end; }`,
       expectedSpecs: [],
     },
     {

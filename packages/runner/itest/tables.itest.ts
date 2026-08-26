@@ -211,7 +211,11 @@ const EXPECTED = {
   // every other fixture, which is why the arm had to be written rather than the fix landed alone.
   // All thirteen verdicts pre-committed in
   // docs/superpowers/specs/2026-08-20-r171-build-precommitment.md.
-  totalMutantSites: 279,
+  // R171 moved this to 279; `flip-boolean-literal` (R159) adds 13 more. Every one is a `true` or
+  // `false` LITERAL that no operator claimed before — the node-kind census had `boolean` at 3,620
+  // corpus occurrences with nothing touching it. Verdicts pre-committed in
+  // docs/superpowers/specs/2026-08-26-r159-flip-boolean-build-precommitment.md.
+  totalMutantSites: 292,
   // R36 moved this from 63/10 to 64/9, deliberately and in one direction only.
   //
   // `RequireCategoryAFails` used to assert merely that AN error occurred, so deleting
@@ -304,7 +308,9 @@ const EXPECTED = {
   // four `negate-guard` guards on existing code (the fourth is in the uncovered pageextension), and
   // all nine in the new arm, whose three tests each assert BOTH directions so nothing there can
   // survive on a one-sided assertion.
-  killed: 213,
+  // R159's `flip-boolean-literal` moves this from 213 to 219. Six of its thirteen are killed, all
+  // by an assertion that names the field the flipped boolean writes.
+  killed: 219,
   // R73 moved this from 9 to 12, and TWO of the three additions are worth reading rather than
   // accepting:
   //
@@ -369,7 +375,16 @@ const EXPECTED = {
   // does not appear in the test codeunit — so decrementing it instead is invisible. A genuine
   // unasserted behaviour in a fixture that exists to prove operators work, found by arithmetic
   // rather than planted.
-  survived: 34,
+  // R159 moves this from 34 to 41, and the seven are the point rather than a regression. Four are
+  // behaviours this suite does not assert: `CommitBeforeCodeunitRunSucceeds` checks the row exists
+  // and `Flagged` is set but never reads `Amount`, which three of them double through `OnInsert`;
+  // and `DeleteRunTriggerLeavesTombstone` checks a RETURN VALUE, not the tombstone's own field.
+  //
+  // They also answer R159's own point 2, the strongest argument against building this operator:
+  // `empty-block` KILLS those procedures while the fine-grained flip SURVIVES. Coarse and fine
+  // disagree at the same sites, which is discrimination evidence no aggregate can fake. A survivor
+  // count that stayed at 34 would mean the operator added nothing.
+  survived: 41,
   // R78 moved this from 6 to 9. The three new sites all belong to the TestPage-only pair
   // (`Data Value Source` / `Data Value Card`), and all three land `no-coverage` because the one
   // test that reaches them is refused on the fenced path. That is the measured statement of the
@@ -419,7 +434,9 @@ const EXPECTED = {
   // against new ground.
   // R171 moves it to 213 / 247, about 0.8623, UP from 0.8553. An arm of nine predicted kills and
   // no survivors should raise it; a score that fell would mean the arm did not land.
-  mutationScore: 213 / (213 + 34),
+  // R159 moves it to 219 / 260, about 0.8423, DOWN from 0.8623. That direction is the readable
+  // part: a wave adding seven deliberate survivors and six kills must lower the score.
+  mutationScore: 219 / (219 + 41),
   /**
    * R72, extended by R138: the screen must fire, and on exactly these mutants under exactly these
    * mechanisms.

@@ -350,6 +350,55 @@
     "errorClass": null
   },
   {
+    "key": "31c85a76e65c13426a668219969e39a8142b616aa307306f94a35e771add3abe|Data Commit Ops|CommitThenFail|lethal.flip-boolean-literal|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "31c85a76e65c13426a668219969e39a8142b616aa307306f94a35e771add3abe|Data Commit Ops|CommitThenRun|lethal.flip-boolean-literal|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "31c85a76e65c13426a668219969e39a8142b616aa307306f94a35e771add3abe|Data Commit Ops|CommitThenRunValueForm|lethal.flip-boolean-literal|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "31c85a76e65c13426a668219969e39a8142b616aa307306f94a35e771add3abe|Data Commit Target|OnRun|lethal.flip-boolean-literal|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "31c85a76e65c13426a668219969e39a8142b616aa307306f94a35e771add3abe|Data Ops|InsertWithoutTrigger|lethal.flip-boolean-literal|1",
+    "verdict": "killed",
+    "killingTest": "InsertWithoutTriggerKeepsAmount",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "31c85a76e65c13426a668219969e39a8142b616aa307306f94a35e771add3abe|Data Ops|InsertWithoutTrigger|lethal.flip-boolean-literal|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "31c85a76e65c13426a668219969e39a8142b616aa307306f94a35e771add3abe|Data Trigger Probe|OnDelete|lethal.flip-boolean-literal|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "33880a1aced9249c8c382656ef30f8da90465d9dab7ba9dc12aae0665e0fdea6|Data Find Ops|AnyRow|lethal.swap-find-direction|1",
     "verdict": "survived",
     "killingTest": null,
@@ -773,6 +822,48 @@
     "key": "61072b504235d286afe416a0e5277e8826b3e54d1bda6d4fe7af367f156b93f0|Data Ops|ShadowedBuiltins|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "ShadowedBuiltinsRun",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "637aa2af14e55ecf9861ea851a23f1ede61feeb72f8de7759d4fe738d201f242|Data Commit Target|OnRun|lethal.flip-boolean-literal|1",
+    "verdict": "killed",
+    "killingTest": "CommitBeforeCodeunitRunSucceeds",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "637aa2af14e55ecf9861ea851a23f1ede61feeb72f8de7759d4fe738d201f242|Data Ops|MarkProcessed|lethal.flip-boolean-literal|1",
+    "verdict": "killed",
+    "killingTest": "MarkProcessedFiresModifyTrigger",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "637aa2af14e55ecf9861ea851a23f1ede61feeb72f8de7759d4fe738d201f242|Data Ops|MarkWithFlag|lethal.flip-boolean-literal|1",
+    "verdict": "killed",
+    "killingTest": "ModifyWithFlagVariableRuns",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "637aa2af14e55ecf9861ea851a23f1ede61feeb72f8de7759d4fe738d201f242|Data Scope Probe|OnValidate|lethal.flip-boolean-literal|1",
+    "verdict": "killed",
+    "killingTest": "ScopeProbeTracksFieldChange",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "637aa2af14e55ecf9861ea851a23f1ede61feeb72f8de7759d4fe738d201f242|Data Trigger Probe|OnDelete|lethal.flip-boolean-literal|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "637aa2af14e55ecf9861ea851a23f1ede61feeb72f8de7759d4fe738d201f242|Data Trigger Probe|OnInsert|lethal.flip-boolean-literal|1",
+    "verdict": "killed",
+    "killingTest": "InsertRunTriggerSetsTheTriggerField",
     "coverageFiltered": false,
     "errorClass": null
   },

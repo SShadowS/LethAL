@@ -27,6 +27,7 @@
     "lethal.flip-filter-literal": "a filter string BC re-parses at run time, never asserted",
     "lethal.swap-enum-member": "a state machine whose resulting state nothing asserts",
     "lethal.swap-additive": "a sum or difference whose value no test checks",
-    "lethal.negate-guard": "a plain `if Rec.Get(...) then` guard nobody tests the other side of"
+    "lethal.negate-guard": "a plain `if Rec.Get(...) then` guard nobody tests the other side of",
+    "lethal.flip-boolean-literal": "a flag nobody checks the other setting of"
   }
 }

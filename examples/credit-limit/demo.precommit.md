@@ -46,3 +46,22 @@ prediction would have been. That is the evidence this stage rests on.
 Three of the seven survivors are the planted gaps the README explains; two more are near-equivalent
 mutants and two are a small real gap in `Credit Customer.OnInsert`. The README says which is which,
 and that split is the thing a re-run must preserve — not the count.
+
+## Amended 2026-08-26 by R159: the stage is re-frozen at 33 mutants
+
+`lethal.flip-boolean-literal` ships (Tier 1, 1.0.0). One site here: `WouldExceedLimit`'s
+`exit(false)` on the zero-limit branch, flipped to `exit(true)`.
+
+**Killed, by `NoCreditLimitMeansNoBlock`.** The suite creates a customer with a limit of 0, which the
+app treats as "no limit"; flipped, that customer always exceeds and the order the test expects to
+register is blocked instead. Predicted killed in the spike before the run, and killed.
+
+Totals move 32 -> 33 and killed 17 -> 18; survivors and no-coverage are unchanged. The score rises
+from 70.8% to **72.0%**, the right direction for an arm that adds one kill and no survivors.
+
+**A note for anyone quoting this app in writing.** The README used to name three survivors by mutant
+CODE (`M0015`, `M0019`, `M0025`). This operator inserted a mutant at line 34 and every code after it
+shifted by one, so all three then named a different mutant. Codes are per-run labels —
+`assignMutantIds` restarts numbering per batch, which is exactly why the frozen baseline keys on the
+mutated subtree's hash and never on the code. The README now names survivors by procedure and
+operator instead.

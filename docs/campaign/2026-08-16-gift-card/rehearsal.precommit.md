@@ -102,3 +102,16 @@ Nothing above is edited. Both predictions were written before the run, in
 `GetBalance` survives and still ranks EIGHTH of eleven under `explain --top 10`, the
 `conditional-boundary` in `Redeem` survives, and `BlockExpiredCards` is now eight no-coverage rather
 than seven.
+
+## Amended 2026-08-26 by R159: the stage is re-frozen at 47 mutants
+
+`lethal.flip-boolean-literal` ships. Two sites here, both in `BlockExpiredCards`:
+`GiftCard.SetRange(Blocked, false)` and `GiftCard.Blocked := true`.
+
+Both **no-coverage**, predicted before the run and matched. No test calls `BlockExpiredCards`, so
+they join its other eight. Totals move 45 -> 47 and no-coverage 8 -> 10; killed, survived and the
+score are all unchanged, because a `no-coverage` row is excluded from the score.
+
+**The three rows that carry the demo never moved**: the planted `remove-setrange` in `GetBalance`
+survives and still ranks eighth of eleven, the `conditional-boundary` in `Redeem` survives, and
+`BlockExpiredCards` is now ten no-coverage rather than eight.

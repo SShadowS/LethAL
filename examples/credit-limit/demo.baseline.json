@@ -77,6 +77,13 @@
     "errorClass": null
   },
   {
+    "key": "31c85a76e65c13426a668219969e39a8142b616aa307306f94a35e771add3abe|Credit Limit Mgt|WouldExceedLimit|lethal.flip-boolean-literal|1",
+    "verdict": "killed",
+    "killingTest": "NoCreditLimitMeansNoBlock",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "3a5790cd2c14b6b69b5c9e514dd09b23989a59b58b6b91a404cf58cbf2f65e6e|Credit Limit Mgt|CheckCreditLimit|lethal.negate-guard|1",
     "verdict": "killed",
     "killingTest": "OrderUnderLimitIsAllowed",
