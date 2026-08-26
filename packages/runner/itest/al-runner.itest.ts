@@ -91,9 +91,13 @@ const EXPECTED = {
   // `itest:bcdev` and missed that this gate shares the sandbox-app fixture. The verdict follows from
   // the rule this gate already documents, but it was written down after the refusal, not before, and
   // that is recorded rather than smoothed over.
-  totalMutantSites: 17,
+// R159's `remove-assignment` moves this to 18 and survived to 15. Its one site here is
+// `Sandbox Logic.LogAudit`'s `Amount := Amount`, a SELF-ASSIGNMENT: deleting it changes nothing
+// observable, so it is an equivalent mutant by inspection and a useful one to have on record.
+// Pre-committed in docs/superpowers/specs/2026-08-26-r159-remove-assignment-build-precommitment.md.
+  totalMutantSites: 18,
   killed: 3,
-  survived: 14,
+  survived: 15,
   noCoverage: 0,
 };
 

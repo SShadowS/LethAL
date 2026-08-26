@@ -395,33 +395,87 @@ const TEST_AL = `codeunit 79100 "Sandbox Tests"
 `;
 
 /**
- * A codeunit carrying EXACTLY `guards` deployed mutants. Measured against the real pipeline
- * (`generateMutationSet` + `dedupeSpecs`): the `exit(A > B)` procedure shape yields 3 (empty-block
- * on the body, return-value on the `exit`, conditional-boundary on the `>`), and the `G := n`
- * procedure shape yields exactly 1 — so `3n + r` reaches any count. The exact number is asserted
- * by the tests below rather than assumed: if the operator set changes, they say so instead of
- * silently measuring a different file.
+ * A codeunit carrying EXACTLY `guards` deployed mutants.
+ *
+ * Two procedure shapes, whose yields are MEASURED against the real pipeline rather than hardcoded.
+ * They used to be constants — `exit(A > B)` gives 3, `G := n` gives 1, solve `3n + r` — and R159's
+ * `remove-assignment` made the second give 2, so every requested size came out one high and three
+ * tests failed at once. The comment here already promised that a changed operator set would be
+ * reported rather than silently absorbed; it could not keep that promise while the arithmetic
+ * producing the file was itself a guess.
+ *
+ * `measureShapeYields` runs both shapes through `generateMutationSet` + `dedupeSpecs` and
+ * `solveShapeMix` picks the counts. A future operator changes a measured number here instead of a
+ * result three tests away.
  */
-function codeunitWithGuards(objectId: number, name: string, guards: number): string {
-  const triples = Math.floor(guards / 3);
-  const singles = guards % 3;
-  const procs = Array.from(
-    { length: triples },
-    (_, i) => `    procedure P${i}(A: Decimal; B: Decimal): Boolean
+async function measureShapeYields(): Promise<{ big: number; small: number }> {
+  const measure = async (source: string) => {
+    const dirs = await makeCeilingProject([{ name: "Probe.Codeunit.al", source }]);
+    try {
+      const { files } = await generateMutationSet(dirs.projectDir, {});
+      return files.reduce((n, f) => n + dedupeSpecs(f.specs, tierOf).length, 0);
+    } finally {
+      await rm(dirs.root, { recursive: true, force: true });
+    }
+  };
+  const big = await measure(rawCodeunit(79000, "ProbeBig", [bigShape(0)]));
+  const small = await measure(rawCodeunit(79000, "ProbeSmall", [smallShape(0)]));
+  if (big <= 0 || small <= 0 || small >= big) {
+    throw new Error(
+      `publish-ceiling: shape yields look wrong (big=${big}, small=${small}). The generator needs a ` +
+        "large shape and a strictly smaller one to hit an arbitrary target.",
+    );
+  }
+  return { big, small };
+}
+
+/** Counts of each shape summing to exactly `guards`, or `null` when the target is unreachable. */
+function solveShapeMix(
+  guards: number,
+  big: number,
+  small: number,
+): { bigCount: number; smallCount: number } | null {
+  for (let bigCount = Math.floor(guards / big); bigCount >= 0; bigCount--) {
+    const rest = guards - bigCount * big;
+    if (rest % small === 0) return { bigCount, smallCount: rest / small };
+  }
+  return null;
+}
+
+function bigShape(i: number): string {
+  return `    procedure P${i}(A: Decimal; B: Decimal): Boolean
     begin
         exit(A > B);
     end;
-`,
-  );
-  const fillers = Array.from(
-    { length: singles },
-    (_, i) => `    procedure Q${i}()
+`;
+}
+
+function smallShape(i: number): string {
+  return `    procedure Q${i}()
     begin
         G := ${i + 1};
     end;
-`,
-  );
-  return `codeunit ${objectId} "${name}"\n{\n    var G: Integer;\n\n${[...procs, ...fillers].join("\n")}}\n`;
+`;
+}
+
+function rawCodeunit(objectId: number, name: string, procs: readonly string[]): string {
+  return `codeunit ${objectId} "${name}"\n{\n    var G: Integer;\n\n${procs.join("\n")}}\n`;
+}
+
+async function codeunitWithGuards(objectId: number, name: string, guards: number): Promise<string> {
+  const { big, small } = await measureShapeYields();
+  const mix = solveShapeMix(guards, big, small);
+  if (mix === null) {
+    throw new Error(
+      `publish-ceiling: cannot build exactly ${guards} deployed mutants from shapes yielding ` +
+        `${big} and ${small}. Pick a reachable size rather than letting the file be a different one.`,
+    );
+  }
+  const procs = [
+    ...Array.from({ length: mix.bigCount }, (_, i) => bigShape(i)),
+    ...Array.from({ length: mix.smallCount }, (_, i) => smallShape(i)),
+  ];
+  return rawCodeunit(objectId, name, procs);
 }
 
 async function makeCeilingProject(files: ReadonlyArray<{ name: string; source: string }>) {
@@ -440,7 +494,7 @@ describe("the fixture generator itself", () => {
   test("produces EXACTLY the requested deployed guard count — otherwise the refusal tests measure a file of unknown size", async () => {
     for (const want of [9, 229, 331]) {
       const dirs = await makeCeilingProject([
-        { name: "Sized.Codeunit.al", source: codeunitWithGuards(79000, "Sized", want) },
+        { name: "Sized.Codeunit.al", source: await codeunitWithGuards(79000, "Sized", want) },
       ]);
       try {
         const { files } = await generateMutationSet(dirs.projectDir, {});
@@ -566,7 +620,7 @@ const tierOf: TierResolver = (name) => operatorTiers.get(name);
 describe("publish ceiling — wired into the session (R90)", () => {
   test("a demonstrated publish failure leaves a (tier, guardCount, 'failed') row behind", async () => {
     const dirs = await makeCeilingProject([
-      { name: "Small.Codeunit.al", source: codeunitWithGuards(79000, "Small", 9) },
+      { name: "Small.Codeunit.al", source: await codeunitWithGuards(79000, "Small", 9) },
     ]);
     const store = new ResultsStore(":memory:");
     // A fake deployer that THROWS plus a verifier reporting a different artifact:
@@ -605,7 +659,7 @@ describe("publish ceiling — wired into the session (R90)", () => {
 
   test("an accepted publish is recorded too — largestSuccess is what the refusal quotes back", async () => {
     const dirs = await makeCeilingProject([
-      { name: "Small.Codeunit.al", source: codeunitWithGuards(79000, "Small", 9) },
+      { name: "Small.Codeunit.al", source: await codeunitWithGuards(79000, "Small", 9) },
     ]);
     const store = new ResultsStore(":memory:");
     try {
@@ -631,7 +685,7 @@ describe("publish ceiling — wired into the session (R90)", () => {
     // The measured bracket, verbatim: 331 guards timed out on the campaign's hosted tier; 229
     // published. The fixture file carries exactly 331 — the `>=` boundary, the strongest form.
     const dirs = await makeCeilingProject([
-      { name: "Big.Codeunit.al", source: codeunitWithGuards(79000, "Big", 331) },
+      { name: "Big.Codeunit.al", source: await codeunitWithGuards(79000, "Big", 331) },
     ]);
     const store = new ResultsStore(":memory:");
     const backend = new CeilingBackend();
@@ -662,7 +716,7 @@ describe("publish ceiling — wired into the session (R90)", () => {
 
   test("a file BELOW the seeded failure still publishes — the refusal is a bracket, not a wall", async () => {
     const dirs = await makeCeilingProject([
-      { name: "Mid.Codeunit.al", source: codeunitWithGuards(79000, "Mid", 229) },
+      { name: "Mid.Codeunit.al", source: await codeunitWithGuards(79000, "Mid", 229) },
     ]);
     const store = new ResultsStore(":memory:");
     const backend = new CeilingBackend();
@@ -692,8 +746,8 @@ describe("publish ceiling — wired into the session (R90)", () => {
     // is refused. Two files that only exceed it TOGETHER are exactly what the batch budget exists
     // for, so refusing them would be the false-refusal direction.
     const dirs = await makeCeilingProject([
-      { name: "A.Codeunit.al", source: codeunitWithGuards(79000, "A", 30) },
-      { name: "B.Codeunit.al", source: codeunitWithGuards(79001, "B", 30) },
+      { name: "A.Codeunit.al", source: await codeunitWithGuards(79000, "A", 30) },
+      { name: "B.Codeunit.al", source: await codeunitWithGuards(79001, "B", 30) },
     ]);
     const store = new ResultsStore(":memory:");
     const backend = new CeilingBackend();
@@ -723,7 +777,7 @@ describe("publish ceiling — wired into the session (R90)", () => {
     // not from any recorded failure anywhere. Same file, same size, failure filed under a
     // different tier — it must publish.
     const dirs = await makeCeilingProject([
-      { name: "Big.Codeunit.al", source: codeunitWithGuards(79000, "Big", 331) },
+      { name: "Big.Codeunit.al", source: await codeunitWithGuards(79000, "Big", 331) },
     ]);
     const store = new ResultsStore(":memory:");
     const backend = new CeilingBackend();
@@ -753,7 +807,7 @@ describe("publish ceiling — wired into the session (R90)", () => {
     // records a `failed` row that permanently refuses every file that size — a refused file can
     // never publish, so it can never produce the counter-evidence that would widen the bracket.
     const dirs = await makeCeilingProject([
-      { name: "Big.Codeunit.al", source: codeunitWithGuards(79000, "Big", 331) },
+      { name: "Big.Codeunit.al", source: await codeunitWithGuards(79000, "Big", 331) },
     ]);
     const store = new ResultsStore(":memory:");
     const session = () =>
@@ -799,7 +853,7 @@ describe("publish ceiling — wired into the session (R90)", () => {
 
   test("the refusal a real session throws carries the copy-pasteable clear-ceiling command", async () => {
     const dirs = await makeCeilingProject([
-      { name: "Big.Codeunit.al", source: codeunitWithGuards(79000, "Big", 331) },
+      { name: "Big.Codeunit.al", source: await codeunitWithGuards(79000, "Big", 331) },
     ]);
     const store = new ResultsStore(":memory:");
     try {
@@ -832,7 +886,7 @@ describe("publish ceiling — wired into the session (R90)", () => {
     // R107's shape, end to end: the publish call itself SUCCEEDS while the deployment is not ours.
     // The row must land (so the R107 fix is measurable as a mode flip) and must not become a wall.
     const dirs = await makeCeilingProject([
-      { name: "Small.Codeunit.al", source: codeunitWithGuards(79000, "Small", 9) },
+      { name: "Small.Codeunit.al", source: await codeunitWithGuards(79000, "Small", 9) },
     ]);
     const store = new ResultsStore(":memory:");
     try {
@@ -904,7 +958,7 @@ describe("--dry-run reports both counts and the measured bracket (R92/R90)", () 
   test("names BOTH the site count and the deployed count per file, largest first — never one number standing for the other", async () => {
     const dirs = await makeCeilingProject([
       { name: "Collisions.Codeunit.al", source: COLLISION_AL },
-      { name: "Small.Codeunit.al", source: codeunitWithGuards(79000, "Small", 3) },
+      { name: "Small.Codeunit.al", source: await codeunitWithGuards(79000, "Small", 3) },
     ]);
     try {
       const out = await captureDryRun(dirs.projectDir, {
@@ -942,7 +996,7 @@ describe("--dry-run reports both counts and the measured bracket (R92/R90)", () 
 
   test("reports the tier's measured bracket as MEASUREMENT, and says what will be refused", async () => {
     const dirs = await makeCeilingProject([
-      { name: "Small.Codeunit.al", source: codeunitWithGuards(79000, "Small", 3) },
+      { name: "Small.Codeunit.al", source: await codeunitWithGuards(79000, "Small", 3) },
     ]);
     const dbPath = join(dirs.root, "lethal.sqlite");
     const configPath = join(dirs.root, "lethal.config.json");
@@ -970,7 +1024,7 @@ describe("--dry-run reports both counts and the measured bracket (R92/R90)", () 
 
   test("a project with no config and no database still dry-runs, and creates neither", async () => {
     const dirs = await makeCeilingProject([
-      { name: "Small.Codeunit.al", source: codeunitWithGuards(79000, "Small", 3) },
+      { name: "Small.Codeunit.al", source: await codeunitWithGuards(79000, "Small", 3) },
     ]);
     const dbPath = join(dirs.root, "lethal.sqlite");
     const configPath = join(dirs.root, "lethal.config.json");
@@ -987,7 +1041,7 @@ describe("--dry-run reports both counts and the measured bracket (R92/R90)", () 
 
   test("a tier with a database but no recorded outcome says so, rather than staying silent", async () => {
     const dirs = await makeCeilingProject([
-      { name: "Small.Codeunit.al", source: codeunitWithGuards(79000, "Small", 3) },
+      { name: "Small.Codeunit.al", source: await codeunitWithGuards(79000, "Small", 3) },
     ]);
     const dbPath = join(dirs.root, "lethal.sqlite");
     const configPath = join(dirs.root, "lethal.config.json");
@@ -1295,7 +1349,7 @@ describe("R112 — the ceiling is reachable on an env-tool project", () => {
     configPath: string;
   }> {
     const dirs = await makeCeilingProject([
-      { name: "Sized.Codeunit.al", source: codeunitWithGuards(79000, "Sized", 9) },
+      { name: "Sized.Codeunit.al", source: await codeunitWithGuards(79000, "Sized", 9) },
     ]);
     const configPath = join(dirs.projectDir, "lethal.config.json");
     await Bun.write(configPath, JSON.stringify(ENVTOOL_CONFIG));

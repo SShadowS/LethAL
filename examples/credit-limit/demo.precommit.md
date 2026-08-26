@@ -65,3 +65,12 @@ shifted by one, so all three then named a different mutant. Codes are per-run la
 `assignMutantIds` restarts numbering per batch, which is exactly why the frozen baseline keys on the
 mutated subtree's hash and never on the code. The README now names survivors by procedure and
 operator instead.
+
+## Amended 2026-08-26 by R159: the stage is re-frozen at 41 mutants
+
+`lethal.remove-assignment` ships. Eight sites here, all MEASURED in its spike before this build:
+**4 killed, 1 survived, 3 no-coverage**. The three uncovered ones are in `PostInvoice`,
+`PostPayment` and `PostEntry` — the posting helpers this README already names as called by no test,
+which is exactly where they should land.
+
+Totals 33 -> 41, killed 18 -> 22, survived 7 -> 8, no-coverage 8 -> 11. Score 72.0% -> **73.3%**.

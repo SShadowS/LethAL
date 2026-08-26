@@ -53,8 +53,8 @@ real gap.
 Run against Cronus283 (BC 28), 2026-08-24:
 
 ```
-dry run: 2 file(s), 37 mutant site(s), 33 deployed mutant(s), 1 batch(es)
-score: 72.0%  (killed 18, survived 7, no-coverage 8, error 0)
+dry run: 2 file(s), 45 mutant site(s), 41 deployed mutant(s), 1 batch(es)
+score: 73.3%  (killed 22, survived 8, no-coverage 11, error 0)
 TIMING: total 16.3s = generate 0.1s + deploy 6.4s + baseline 0.9s + mutants 6.8s + overhead 2.3s
 reliability: full
 ```
@@ -70,7 +70,7 @@ lethal campaign compare --manifest examples/credit-limit/campaign.json \
 ```
 
 Run that before quoting these numbers anywhere. Each survivor named above is a claim about ONE
-mutant, and a total that still reads 18 / 7 / 8 can hide a verdict that moved.
+mutant, and a total that still reads 22 / 8 / 11 can hide a verdict that moved.
 
 Named by procedure and operator, never by mutant code. Codes are per-run labels that renumber
 the moment an operator lands earlier in the file — `flip-boolean-literal` shifted all three of

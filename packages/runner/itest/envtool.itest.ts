@@ -167,9 +167,11 @@ const EXPECTED = {
   // so any divergence between the two figures is the indirection changing a verdict.
   // `lethal.swap-additive` claims `DiscountedPrice`'s `Price - (Price * Pct / 100)`, and it lands
   // no-coverage because neither test touches `Sandbox Pricing`.
-  totalMutantSites: 17,
+  // R159's `remove-assignment` adds one site (`LogAudit`'s self-assignment `Amount := Amount`),
+  // which survives as an equivalent mutant. Same fixture as `itest:bcdev`, so the same move.
+  totalMutantSites: 18,
   killed: 3,
-  survived: 10,
+  survived: 11,
   noCoverage: 4,
 };
 

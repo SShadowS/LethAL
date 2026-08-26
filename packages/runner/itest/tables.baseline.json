@@ -7,6 +7,13 @@
     "errorClass": null
   },
   {
+    "key": "0121538c88a9342b484d6597b43bf7bc9d138149790fb204378e0afae2086339|Data Key Probe|OnInsert|lethal.remove-assignment|1",
+    "verdict": "killed",
+    "killingTest": "DoubleInsertWithoutKeyTriggerRaises",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "013f722b915e863b9e7ab32c78b20e60a0eeec8e9dbc00684cfeb7106c7387c9|Data Scope Probe|OnValidate|lethal.swap-rec-xrec|1",
     "verdict": "killed",
     "killingTest": "ScopeProbeTracksFieldChange",
@@ -28,9 +35,30 @@
     "errorClass": null
   },
   {
+    "key": "09ff97d93f42f97e455749d5569a45d6915c6c97429e86e2a519ac315ea17f9b|Data Value Card|OnAction|lethal.remove-assignment|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "0b2cbc6383eedc0c491fc776c5f3d811196ea87e212a775ddcd96dd886761bc4|Data Main|OnInsert|lethal.remove-assignment|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "0d7da310f51fbb78e8946d28a87eb77b68fbfa560ec8b41f9f22843bea5d562c|Data Swap Ops|AmountWithinCap|lethal.return-value|1",
     "verdict": "killed",
     "killingTest": "SwapReversesTheRangeComparison",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "121fb3a86e2ec80399ccf1a41d2bf5320d3ddfcc9ac3d7606d93a055c34989da|Data Validate Ops|TouchLevel|lethal.remove-assignment|1",
+    "verdict": "killed",
+    "killingTest": "TouchLevelRunsTheTriggerAgain",
     "coverageFiltered": false,
     "errorClass": null
   },
@@ -203,6 +231,27 @@
     "errorClass": null
   },
   {
+    "key": "251dd6161cf958c3f6113c2cd5b026ef28eea56795fffeae72fb0e4012b6bffe|Data Commit Ops|CommitThenFail|lethal.remove-assignment|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "251dd6161cf958c3f6113c2cd5b026ef28eea56795fffeae72fb0e4012b6bffe|Data Commit Ops|CommitThenRun|lethal.remove-assignment|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "251dd6161cf958c3f6113c2cd5b026ef28eea56795fffeae72fb0e4012b6bffe|Data Commit Ops|CommitThenRunValueForm|lethal.remove-assignment|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "254c401be60253968afe1290d7a9a9ffafd2ca5ca7ca61b8a2d6829e134f7d47|Data Set Ops|BothOutsideRange|lethal.negate-conditional|1",
     "verdict": "killed",
     "killingTest": "BothOutsideRangeSeparatesEqualAndUnequal",
@@ -269,6 +318,13 @@
     "key": "2a9df97b8715bbd3a052ec6b3e614cc828fa46fdcc437ac37761fbb42ef7da14|Data Validate Ops|SetLevelWeak|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "ValueOnlyAssertionMissesTheTriggerSkip",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "2ae1e72ce458b4ca8ca0c07ba68e016980151aed9f4bab24c6ea2f48cc0657ae|Data Ops|InsertWithoutTrigger|lethal.remove-assignment|1",
+    "verdict": "killed",
+    "killingTest": "InsertWithoutTriggerKeepsAmount",
     "coverageFiltered": false,
     "errorClass": null
   },
@@ -437,6 +493,13 @@
     "key": "34e66d5ba58540580c0bc08164cd525a87397a0d018b9d17c213e6235fb0ed24|Data Ops|ShadowedBuiltins|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "ShadowedBuiltinsRun",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "36aa6c656ce535d1f8e169d85419fcc897eec77e830ec1df81f4fe55b0704890|Data Commit Ops|CommitThenRunValueForm|lethal.remove-assignment|1",
+    "verdict": "killed",
+    "killingTest": "CommitBeforeValueFormCodeunitRunSucceeds",
     "coverageFiltered": false,
     "errorClass": null
   },
@@ -616,6 +679,13 @@
     "errorClass": null
   },
   {
+    "key": "432904ca544d2186a3561c83a8fd3c99ded7988bb615d5f752c1cd0b12fb89d7|Data Trigger Probe|OnDelete|lethal.remove-assignment|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "435b6ac475cfc4492d6304b5106ffc0fed87dd1d6c36b068599314be71acf141|Data Scope Probe|OnInsert|lethal.remove-setrange|1",
     "verdict": "killed",
     "killingTest": "ScopeProbeCountsOnlyFilteredRelated",
@@ -672,6 +742,13 @@
     "errorClass": null
   },
   {
+    "key": "4871fcc592ebf717981d1a48f0d25f55fa6f6ef6279f5fc33745361ebe73efca|Data Swap Ops|LinkPair|lethal.remove-assignment|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "488189ca355f348cb13b3373d137f86e7d780195e81f13f33d948f12c0205b15|Data Main List Ext|OnOpenPage|lethal.empty-block|1",
     "verdict": "no-coverage",
     "killingTest": null,
@@ -700,6 +777,13 @@
     "errorClass": null
   },
   {
+    "key": "4b5ee16c6833a6a085ba19e0a30efe7bbcc6632028a062a2d4071fa18829c3d5|Data Shadow|SetRange|lethal.remove-assignment|1",
+    "verdict": "killed",
+    "killingTest": "ShadowedBuiltinsRun",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "503b94e9346f4e0aa30556f7fa40c5665b41b758cd199e246ea5c12274f6a558|Data Scope Probe|OnInsert|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "ScopeProbeCountsOnlyFilteredRelated",
@@ -710,6 +794,13 @@
     "key": "51a7f927d0aa77fb56a17a3ef4e2a54083742ed4b7199973b7816f35d212ae1f|Data Set Ops|PlainMembership|lethal.negate-guard|1",
     "verdict": "killed",
     "killingTest": "PlainMembershipSeparatesInsideAndOutsideTheSet",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "51c6e78adf06c3aa8581ffef24239e94d80d1bba49338f443290f9c3c885d01c|Data Commit Ops|CommitThenRunValueForm|lethal.remove-assignment|1",
+    "verdict": "survived",
+    "killingTest": null,
     "coverageFiltered": false,
     "errorClass": null
   },
@@ -819,9 +910,23 @@
     "errorClass": null
   },
   {
+    "key": "5d20f7290c6ad64b11ad606b1fbd5070da7e0b2913bb5399fc91b699f5323b53|Data Scope Probe|OnInsert|lethal.remove-assignment|1",
+    "verdict": "killed",
+    "killingTest": "ScopeProbeCountsOnlyFilteredRelated",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "61072b504235d286afe416a0e5277e8826b3e54d1bda6d4fe7af367f156b93f0|Data Ops|ShadowedBuiltins|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "ShadowedBuiltinsRun",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "62c04a6be11a180cf46d6c011b0700a891749b44dca1780ff2e501c6de19acb1|Data Commit Ops|CommitThenRun|lethal.remove-assignment|1",
+    "verdict": "survived",
+    "killingTest": null,
     "coverageFiltered": false,
     "errorClass": null
   },
@@ -892,6 +997,20 @@
     "key": "668e2e62a1072637f5516f0fa8a23aab98709ecd33970dfd91f47470ab503762|Data Main|CountInCategory|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "CountInCategoryUppercaseSetRange",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "67781caf8c94ac1261cceeb9c879fbc476206f8d4190b0e8ec7d992a3c72465b|Data Ops|MarkProcessed|lethal.remove-assignment|1",
+    "verdict": "killed",
+    "killingTest": "MarkProcessedFiresModifyTrigger",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "67781caf8c94ac1261cceeb9c879fbc476206f8d4190b0e8ec7d992a3c72465b|Data Ops|MarkWithFlag|lethal.remove-assignment|1",
+    "verdict": "killed",
+    "killingTest": "ModifyWithFlagVariableRuns",
     "coverageFiltered": false,
     "errorClass": null
   },
@@ -1043,6 +1162,13 @@
     "errorClass": null
   },
   {
+    "key": "7a4abe60f790f1954622728e22c6d09f079325bc5b3156301f52bf4492307eb2|Data Main|OnModify|lethal.remove-assignment|1",
+    "verdict": "killed",
+    "killingTest": "FlaggedFiresModifyTrigger",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Data Main|OnValidate|lethal.swap-additive|1",
     "verdict": "survived",
     "killingTest": null,
@@ -1085,6 +1211,13 @@
     "errorClass": null
   },
   {
+    "key": "7e98b8560c75d925240ac27476f6c620a3d738243b11b2d3a969f33225b65b99|Data Main List Ext|OnOpenPage|lethal.remove-assignment|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
     "key": "7f35bd1725ae5b0ae88c94918d62d0512dbc6f8ca0999646c0657ed122ed23b9|Data Builder|SetRange|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "UserDefinedBuiltinsRun",
@@ -1099,6 +1232,69 @@
     "errorClass": null
   },
   {
+    "key": "8037f4fe0779cc1f3fea01b2c23fc93c6270188c71e99326f772d656a0f32981|Data Main|OnValidate|lethal.remove-assignment|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "8037f4fe0779cc1f3fea01b2c23fc93c6270188c71e99326f772d656a0f32981|Data Main|OnValidate|lethal.remove-assignment|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "8037f4fe0779cc1f3fea01b2c23fc93c6270188c71e99326f772d656a0f32981|Data Shadow|Commit|lethal.remove-assignment|1",
+    "verdict": "killed",
+    "killingTest": "ShadowedBuiltinsRun",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "835565180cc5c8787adf0255e105ebb308eeb1338b48576812c5b5c9fdebb0d3|Data Commit Ops|CommitThenFail|lethal.remove-assignment|1",
+    "verdict": "killed",
+    "killingTest": "CommittedWriteSurvivesFailure",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "835565180cc5c8787adf0255e105ebb308eeb1338b48576812c5b5c9fdebb0d3|Data Flag Ops|DeleteWithTrigger|lethal.remove-assignment|1",
+    "verdict": "killed",
+    "killingTest": "DeleteRunTriggerLeavesTombstone",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "835565180cc5c8787adf0255e105ebb308eeb1338b48576812c5b5c9fdebb0d3|Data Flag Ops|InsertCounted|lethal.remove-assignment|1",
+    "verdict": "killed",
+    "killingTest": "WeakInsertAssertionMissesTheFlag",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "835565180cc5c8787adf0255e105ebb308eeb1338b48576812c5b5c9fdebb0d3|Data Flag Ops|InsertWithTrigger|lethal.remove-assignment|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "835565180cc5c8787adf0255e105ebb308eeb1338b48576812c5b5c9fdebb0d3|Data Ops|InsertWithoutTrigger|lethal.remove-assignment|1",
+    "verdict": "killed",
+    "killingTest": "InsertWithoutTriggerKeepsAmount",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "835565180cc5c8787adf0255e105ebb308eeb1338b48576812c5b5c9fdebb0d3|Data Swap Ops|LinkPair|lethal.remove-assignment|1",
+    "verdict": "killed",
+    "killingTest": "LinkedPairIsStamped",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "838403be01f03c7c84547a31a3f5e3dfa35bced285ab562df00f244a3e89407c|Data Ops|RunUserDefinedBuiltins|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "UserDefinedBuiltinsRun",
@@ -1109,6 +1305,34 @@
     "key": "84c847b650bf8648e34378707b482a1468e5cc8759ea3b61e0c8b3057312314d|Data Commit Ops|CommitThenRunValueForm|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "CommitBeforeValueFormCodeunitRunSucceeds",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "8583acc40cc80e309acbaf5a850f8d3a4650081a028c3ac82513d45786430b5b|Data Shadow|TestField|lethal.remove-assignment|1",
+    "verdict": "killed",
+    "killingTest": "ShadowedBuiltinsRun",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "8583acc40cc80e309acbaf5a850f8d3a4650081a028c3ac82513d45786430b5b|Data Swap Ops|Accumulate|lethal.remove-assignment|1",
+    "verdict": "killed",
+    "killingTest": "SwapRedirectsTheAccumulatorWriteback",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "8583acc40cc80e309acbaf5a850f8d3a4650081a028c3ac82513d45786430b5b|Data Validator|TestField|lethal.remove-assignment|1",
+    "verdict": "killed",
+    "killingTest": "UserDefinedBuiltinsRun",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "85ad034d478d1c4757f3a838804f880807ac7ba2c6d5612fce8732cd67b930ce|Data Builder|SetRange|lethal.remove-assignment|1",
+    "verdict": "killed",
+    "killingTest": "UserDefinedBuiltinsRun",
     "coverageFiltered": false,
     "errorClass": null
   },
@@ -1302,6 +1526,13 @@
     "errorClass": null
   },
   {
+    "key": "a811b46c95a74b761966dc4d0fd260793ba4c503b9cc6c7efd6e554acb7563d8|Data Flag Ops|InsertTwiceWithKeyTrigger|lethal.remove-assignment|1",
+    "verdict": "killed",
+    "killingTest": "DoubleInsertWithoutKeyTriggerRaises",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "a8ee39646a0ad5ea316601ac48a3c045788c3cc8ecc8ae493c84c6a56093ded2|Data Swap Ops|RecordFlags|lethal.negate-conditional|1",
     "verdict": "killed",
     "killingTest": "CommutativeCalleeMakesTheSwapEquivalent",
@@ -1344,6 +1575,55 @@
     "errorClass": null
   },
   {
+    "key": "b33128a504176dc0c15bc9455809ffd0e6e8894eb35f3a120fc8417d1212d82c|Data Loader|SetLoadFields|lethal.remove-assignment|1",
+    "verdict": "killed",
+    "killingTest": "UserDefinedBuiltinsRun",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "b33128a504176dc0c15bc9455809ffd0e6e8894eb35f3a120fc8417d1212d82c|Data Swap Ops|NarrowStamp|lethal.remove-assignment|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "b33128a504176dc0c15bc9455809ffd0e6e8894eb35f3a120fc8417d1212d82c|Data Swap Ops|NarrowStamp|lethal.remove-assignment|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "b33128a504176dc0c15bc9455809ffd0e6e8894eb35f3a120fc8417d1212d82c|Data Swap Ops|RunningTotal|lethal.remove-assignment|1",
+    "verdict": "killed",
+    "killingTest": "SwapRedirectsTheAccumulatorWriteback",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "b33128a504176dc0c15bc9455809ffd0e6e8894eb35f3a120fc8417d1212d82c|Data Swap Ops|RunningTotal|lethal.remove-assignment|1",
+    "verdict": "killed",
+    "killingTest": "SwapRedirectsTheAccumulatorWriteback",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "b33128a504176dc0c15bc9455809ffd0e6e8894eb35f3a120fc8417d1212d82c|Data Swap Ops|StampCodes|lethal.remove-assignment|1",
+    "verdict": "killed",
+    "killingTest": "WeakStampAssertionMissesTheSwap",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "b33128a504176dc0c15bc9455809ffd0e6e8894eb35f3a120fc8417d1212d82c|Data Swap Ops|StampCodes|lethal.remove-assignment|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "b473f0f8762594047a5f52777f0ab590b94174b0b7816a51a572d18cad81f853|Data Commit Ops|CommitThenFail|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "CommittedWriteSurvivesFailure",
@@ -1361,6 +1641,13 @@
     "key": "b5f78ce898ec594a3b9c24e8d4a1f60ebb27ff152e9984fa3fd50f04181fca73|Data Find Ops|AnyRow|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "ExistenceOnlyAssertionMissesTheDirection",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ba313d6fdbc3283a56e6a1edc914d1263266d1fd2f3f483465b1a86ea2ea0397|Data Scope Probe|OnValidate|lethal.remove-assignment|1",
+    "verdict": "killed",
+    "killingTest": "ScopeProbeTracksFieldChange",
     "coverageFiltered": false,
     "errorClass": null
   },
@@ -1403,6 +1690,20 @@
     "key": "be99bd808e7c564330214c222affe4f78d23be74eeab76b0dab9fcf755f0176a|Data Ops|RequireCategoryA|lethal.remove-testfield|1",
     "verdict": "killed",
     "killingTest": "RequireCategoryAFails",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "c26a0352dd867ea75f70b4b0bf99771e3bc838482b57fa9794099fafe15799ad|Data Commit Ops|CommitThenRun|lethal.remove-assignment|1",
+    "verdict": "killed",
+    "killingTest": "CommitBeforeCodeunitRunSucceeds",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "c26a0352dd867ea75f70b4b0bf99771e3bc838482b57fa9794099fafe15799ad|Data Commit Ops|CommitThenRunValueForm|lethal.remove-assignment|1",
+    "verdict": "killed",
+    "killingTest": "CommitBeforeValueFormCodeunitRunSucceeds",
     "coverageFiltered": false,
     "errorClass": null
   },
@@ -1470,6 +1771,13 @@
     "errorClass": null
   },
   {
+    "key": "ca03e7de5d868e018e122d4dac889646e338f75ed2cc3e073bed40be863c7bee|Data Commit Target|OnRun|lethal.remove-assignment|1",
+    "verdict": "killed",
+    "killingTest": "CommitBeforeCodeunitRunSucceeds",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "ca09a9083aadf35327107c52452e3d766efadd78727a20a0cffcb0f14630ca86|Data Main|OnValidate|lethal.remove-calcfields|1",
     "verdict": "killed",
     "killingTest": "CategoryGuardNeedsCalcFields",
@@ -1522,6 +1830,27 @@
     "key": "cf930879e9bc95f2becb1747d85a31acc0aad731dc2f0d4954280d9a1a9a732a|Data Flag Ops|DeleteWithTrigger|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "DeleteRunTriggerLeavesTombstone",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "cffd95ba1f6277ebd102f12df8c8ef3ef00b6d6a1af198e8049c2b29f646b9d3|Data Trigger Probe|OnDelete|lethal.remove-assignment|1",
+    "verdict": "killed",
+    "killingTest": "DeleteRunTriggerLeavesTombstone",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "d15e08235aa3c09dd4023cff2d05ecdf0ddfad254da6c0f01337975c78c26724|Data Commit Ops|CommitThenFail|lethal.remove-assignment|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "d2dd0895fe152d7f33e93e8ccd4b0b1291a5f55e6798145eaaea376ea9dfb1c0|Data Swap Ops|RecordFlags|lethal.remove-assignment|1",
+    "verdict": "killed",
+    "killingTest": "CommutativeCalleeMakesTheSwapEquivalent",
     "coverageFiltered": false,
     "errorClass": null
   },
@@ -1617,6 +1946,20 @@
     "errorClass": null
   },
   {
+    "key": "d880fb21a252b9f9912f0de3a06364816f25160dfb1a28bc6967edab44a5b232|Data Scope Probe|OnOpenPage|lethal.remove-assignment|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "d880fb21a252b9f9912f0de3a06364816f25160dfb1a28bc6967edab44a5b232|Data Swap Ops|Link|lethal.remove-assignment|1",
+    "verdict": "killed",
+    "killingTest": "LinkedPairIsStamped",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "dbbde7dbc4dfada938aaaeb60f9744bae7495e8eec20f48583039a7f32d01faa|Data Shadow|SelfShadowed|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "SelfShadowedRun",
@@ -1628,6 +1971,13 @@
     "verdict": "no-coverage",
     "killingTest": null,
     "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "dc31dd558a8cc080674ab52782adbebc8627b4014efed8025979ccc4610342d4|Data Trigger Probe|OnValidate|lethal.remove-assignment|1",
+    "verdict": "killed",
+    "killingTest": "ValidateRunsTheFieldTrigger",
+    "coverageFiltered": false,
     "errorClass": null
   },
   {
@@ -1725,6 +2075,13 @@
     "key": "e315168a52168bfbb4fcedaf685fb51f456c87a33eb1879f610f29a75cfaebed|Data Commit Target|OnRun|lethal.remove-not|1",
     "verdict": "killed",
     "killingTest": "CommitBeforeCodeunitRunSucceeds",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "e37288baffd606cbddd148d8dbf7bd355a92b344d6dbcea40254211732998e48|Data Swap Ops|Link|lethal.remove-assignment|1",
+    "verdict": "survived",
+    "killingTest": null,
     "coverageFiltered": false,
     "errorClass": null
   },
@@ -1837,6 +2194,13 @@
     "key": "e91f0cf15d47cc7b585c548d36f3837072460e0c75ef6ac73661c7c2800950b9|Data Swap Ops|InRange|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "SwapReversesTheRangeComparison",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "e9d8f1370a7b70b0d34199711154df00d31153465361bf8d287b9e797deed10b|Data Trigger Probe|OnInsert|lethal.remove-assignment|1",
+    "verdict": "killed",
+    "killingTest": "InsertRunTriggerSetsTheTriggerField",
     "coverageFiltered": false,
     "errorClass": null
   },

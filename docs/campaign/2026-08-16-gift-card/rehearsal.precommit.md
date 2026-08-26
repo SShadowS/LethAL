@@ -115,3 +115,19 @@ score are all unchanged, because a `no-coverage` row is excluded from the score.
 **The three rows that carry the demo never moved**: the planted `remove-setrange` in `GetBalance`
 survives and still ranks eighth of eleven, the `conditional-boundary` in `Redeem` survives, and
 `BlockExpiredCards` is now ten no-coverage rather than eight.
+
+## Amended 2026-08-26 by R159: the stage is re-frozen at 59 mutants
+
+`lethal.remove-assignment` ships. Twelve sites, PREDICTED before the run because this fixture was
+never run with the operator during its spike. **Eleven of twelve matched: 7 killed, 4 survived, 1
+no-coverage** against a predicted 6 / 5 / 1.
+
+The miss is worth keeping. `GiftCard.OnInsert`'s `"Issued Date" := WorkDate()` was predicted
+**survived** on the grounds that the README names the stamp but no test reads it. It is **killed**, by
+`IssueCreatesCard` — that test does assert the issued date, and the prediction was a guess about the
+suite made without reading it.
+
+Totals 47 -> 59, killed 26 -> 33, survived 11 -> 15, no-coverage 10 -> 11. Score 70.3% -> **68.8%**.
+
+**The three rows that carry the demo never moved**: the planted `remove-setrange` in `GetBalance`
+survives, the `conditional-boundary` in `Redeem` survives, and `BlockExpiredCards` is uncovered.

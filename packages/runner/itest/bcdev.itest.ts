@@ -79,10 +79,14 @@ const SELECTOR_IDS = { selectorId: 79199, controlId: 79198, tableId: 79197 };
 // provably numeric. It lands `no-coverage` for the same reason the other three do: neither test
 // touches `Sandbox Pricing`. Pre-committed in
 // docs/superpowers/specs/2026-08-19-r159-swap-additive-precommitment.md.
+// R159's `remove-assignment` moves this to 18 and survived to 11. Its one site here is
+// `Sandbox Logic.LogAudit`'s `Amount := Amount`, a SELF-ASSIGNMENT: deleting it changes nothing
+// observable, so it is an equivalent mutant by inspection and a useful one to have on record.
+// Pre-committed in docs/superpowers/specs/2026-08-26-r159-remove-assignment-build-precommitment.md.
 const EXPECTED = {
-  totalMutantSites: 17,
+  totalMutantSites: 18,
   killed: 3,
-  survived: 10,
+  survived: 11,
   noCoverage: 4,
   /**
    * R132: this gate now carries the VACUOUS case for R121's assertion screen, which `itest:tables`

@@ -215,7 +215,13 @@ const EXPECTED = {
   // `false` LITERAL that no operator claimed before — the node-kind census had `boolean` at 3,620
   // corpus occurrences with nothing touching it. Verdicts pre-committed in
   // docs/superpowers/specs/2026-08-26-r159-flip-boolean-build-precommitment.md.
-  totalMutantSites: 292,
+  // R159's `remove-assignment` adds 52 — the largest single wave this fixture has taken. It deletes
+  // an assignment STATEMENT, the direct analogue of `void-method-call` on the other statement form
+  // AL has, and `assignment_statement` was the largest kind the node-kind census left unclaimed
+  // (6,850 corpus occurrences, zero exact-span overlap). All 52 verdicts were MEASURED in the spike
+  // before this build and are restated, not re-predicted, in
+  // docs/superpowers/specs/2026-08-26-r159-remove-assignment-build-precommitment.md.
+  totalMutantSites: 344,
   // R36 moved this from 63/10 to 64/9, deliberately and in one direction only.
   //
   // `RequireCategoryAFails` used to assert merely that AN error occurred, so deleting
@@ -310,7 +316,8 @@ const EXPECTED = {
   // survive on a one-sided assertion.
   // R159's `flip-boolean-literal` moves this from 213 to 219. Six of its thirteen are killed, all
   // by an assertion that names the field the flipped boolean writes.
-  killed: 219,
+  // R159's `remove-assignment` moves this from 219 to 252: 33 of its 52 killed.
+  killed: 252,
   // R73 moved this from 9 to 12, and TWO of the three additions are worth reading rather than
   // accepting:
   //
@@ -384,7 +391,11 @@ const EXPECTED = {
   // `empty-block` KILLS those procedures while the fine-grained flip SURVIVES. Coarse and fine
   // disagree at the same sites, which is discrimination evidence no aggregate can fake. A survivor
   // count that stayed at 34 would mean the operator added nothing.
-  survived: 41,
+  // R159's `remove-assignment` moves this from 41 to 57. Sixteen survivors is the highest any one
+  // operator has added here, and it is the expected shape rather than a regression: an assignment
+  // whose target is never read again is an equivalent mutant, and nothing in a source-derived layer
+  // can see that without dataflow. The operator's doc comment says so before the number arrives.
+  survived: 57,
   // R78 moved this from 6 to 9. The three new sites all belong to the TestPage-only pair
   // (`Data Value Source` / `Data Value Card`), and all three land `no-coverage` because the one
   // test that reaches them is refused on the fenced path. That is the measured statement of the
@@ -421,7 +432,9 @@ const EXPECTED = {
   // R171 moves this from 11 to 12. The new one is `negate-guard` on the same pageextension
   // `OnOpenPage` whose other five mutants are already `no-coverage`, for the reason above: the test
   // that would cover it was removed after wedging the fenced session twice.
-  noCoverage: 12,
+  // R159's `remove-assignment` moves this from 12 to 15: three of its sites sit in procedures no
+  // test calls.
+  noCoverage: 15,
   // 183 / 214 does not reduce (183 is 3 x 61, 214 is 2 x 107). It is about 0.8551, DOWN from
   // 0.8626: a wave that adds six deliberate survivors is SUPPOSED to move the score down, and a
   // score that rose instead would mean the survivors did not arrive.
@@ -436,7 +449,9 @@ const EXPECTED = {
   // no survivors should raise it; a score that fell would mean the arm did not land.
   // R159 moves it to 219 / 260, about 0.8423, DOWN from 0.8623. That direction is the readable
   // part: a wave adding seven deliberate survivors and six kills must lower the score.
-  mutationScore: 219 / (219 + 41),
+  // R159 moves it to 252 / 309, about 0.8155, DOWN from 0.8423 — the right direction for a wave
+  // adding 16 survivors against 33 kills.
+  mutationScore: 252 / (252 + 57),
   /**
    * R72, extended by R138: the screen must fire, and on exactly these mutants under exactly these
    * mechanisms.

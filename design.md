@@ -132,6 +132,7 @@ rather than misleading a reader.
 | `lethal.return-value` | 1.0.0 | `exit(42)` → `exit(0)` | a return value the caller never asserts |
 | `lethal.empty-block` | 1.0.0 | `begin DoThing(); end` → `begin end` | a whole body nothing depends on |
 | `lethal.swap-call-arguments` | 1.0.0 | `Foo(A, B)` → `Foo(B, A)` | two same-typed arguments passed in the wrong order |
+| `lethal.remove-assignment` | 1.0.0 | `Total := 5` → _(deleted)_ | a value written that nothing downstream depends on |
 | `lethal.remove-not` | 1.0.0 | `not Cust.IsEmpty()` → `Cust.IsEmpty()` | a negated guard whose two branches nobody tells apart |
 | `lethal.swap-additive` | 1.0.0 | `A + B` → `A - B` | a sum or difference whose value no test checks |
 <!-- /operators: tier1 -->

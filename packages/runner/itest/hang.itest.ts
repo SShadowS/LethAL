@@ -100,6 +100,12 @@ const EXPECTED_ON: ReadonlyArray<{ line: number; operator: string; verdict: stri
   { line: 37, operator: "lethal.return-value", verdict: "killed" },
   // The advancing procedure's body, emptied: same property, different operator.
   { line: 41, operator: "lethal.empty-block", verdict: "timeout-killed" },
+  // R159's `remove-assignment` adds both of these, and they are a matched pair worth reading
+  // together. Deleting `Counter := 0` changes nothing — a local `Integer` already defaults to 0, so
+  // it is an equivalent mutant by inspection. Deleting `Counter += 1` removes the loop's only
+  // progress and is the fixture's THIRD non-terminating mutant, reached by a third operator.
+  { line: 33, operator: "lethal.remove-assignment", verdict: "survived" },
+  { line: 42, operator: "lethal.remove-assignment", verdict: "timeout-killed" },
 ];
 
 async function readJson<T>(path: string, what: string): Promise<T> {
@@ -256,7 +262,11 @@ function assertOnLeg(leg: LegResult): void {
   }
 
   const timeoutKilled = report.mutants.filter((m) => m.verdict === "timeout-killed");
-  assert.equal(timeoutKilled.length, 2, "the fixture has exactly two non-terminating mutants");
+  assert.equal(
+    timeoutKilled.length,
+    3,
+    "the fixture has exactly three non-terminating mutants (R159 added the third)",
+  );
 
   // THE ASSERTION THAT CANNOT PASS FOR THE WRONG REASON. A verdict check alone would still hold if
   // someone routed `deadline-exceeded` — our own abort, which says nothing about the server — into

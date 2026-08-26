@@ -4,6 +4,7 @@ import { emptyBlock } from "./empty-block";
 import { flipBooleanLiteral } from "./flip-boolean-literal";
 import { negateConditional } from "./negate-conditional";
 import { negateGuard } from "./negate-guard";
+import { removeAssignment } from "./remove-assignment";
 import { removeNot } from "./remove-not";
 import { returnValue } from "./return-value";
 import { swapAdditive } from "./swap-additive";
@@ -15,6 +16,7 @@ export { emptyBlock } from "./empty-block";
 export { flipBooleanLiteral } from "./flip-boolean-literal";
 export { negateConditional } from "./negate-conditional";
 export { negateGuard } from "./negate-guard";
+export { removeAssignment } from "./remove-assignment";
 export { removeNot } from "./remove-not";
 export { returnValue } from "./return-value";
 export { swapAdditive } from "./swap-additive";
@@ -35,6 +37,7 @@ export const tier1Operators: readonly MutationOperator[] = [
   // R163: `not` on a bare call, identifier or member access, which `negate-conditional` cannot
   // reach because it targets comparisons and logical expressions only. 1,051 claimable sites on
   // `do-rel2/Cloud`, none of them claimed by anything before this.
+  removeAssignment,
   removeNot,
   // R159: `+` <-> `-` where BOTH operands are provably numeric. The type guard is the operator:
   // 1,006 of 1,121 arithmetic tokens on `do-rel2/Cloud` are `+`, and most of those are string

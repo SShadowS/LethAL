@@ -58,7 +58,7 @@ All three MEASURED on a live container (see The measured result, below), not pre
 - **`Redeem`'s expiry guard** (`:37`), `if GiftCard."Expiry Date" < WorkDate()`. Flip it and a card
   stops working ON its expiry date rather than after it. Is that a bug? Nobody wrote the rule down.
   This is the honest one: a survivor is a lead, not a verdict, and no tool can read your spec.
-- **`BlockExpiredCards`** is called by no test at all, so all ten of its mutants come back `no-coverage`.
+- **`BlockExpiredCards`** is called by no test at all, so all eleven of its mutants come back `no-coverage`.
   Expiry *is* tested, at redeem time, which is exactly why a coverage-percentage mindset files
   expiry as handled. The nightly job that runs in production ran zero times in the suite.
 
@@ -67,7 +67,7 @@ All three MEASURED on a live container (see The measured result, below), not pre
 From `lethal run --project examples/gift-card --dry-run`, which executes nothing:
 
 ```
-dry run: 2 file(s), 51 mutant site(s), 47 deployed mutant(s), 1 batch(es)
+dry run: 2 file(s), 63 mutant site(s), 59 deployed mutant(s), 1 batch(es)
   src\GiftCardMgt.Codeunit.al  sites=43  deployed=40
   src\GiftCard.Table.al        sites=6   deployed=5
 ```
@@ -159,15 +159,15 @@ what happened to two of these fixtures (ROADMAP R169).
 Run against a BC 28 container, last re-measured 2026-08-20:
 
 ```
-score: 70.3%  (killed 26, survived 11, no-coverage 10, error 0)
+score: 68.8%  (killed 33, survived 15, no-coverage 11, error 0)
 baseline batch 0: 8/8 passed
 TIMING: total 19.0s = generate 0.1s + deploy 4.5s + baseline 0.9s + mutants 10.5s + overhead 3.0s
 reliability: full
 ```
 
-**About twenty seconds** for 47 mutants, which is what makes this runnable live rather than
-narrated. The score covers the 37 that are scorable; the ten `no-coverage` rows are excluded from
-it and reported separately.
+**About twenty seconds** for 59 mutants, which is what makes this runnable live rather than
+narrated. The score covers the 48 that are scorable; the eleven `no-coverage` rows are excluded
+from it and reported separately.
 
 The first rehearsal, on 2026-08-16, was 36 mutants at 69.0% in 13.8s. All 36 verdicts were
 PRE-COMMITTED in

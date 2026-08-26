@@ -14,6 +14,20 @@
     "errorClass": null
   },
   {
+    "key": "0cd56f4baccb05aa031327082dff149977f2af506479054d7f9ebf148eaae72e|Credit Limit Mgt|PostEntry|lethal.remove-assignment|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "0cd56f4baccb05aa031327082dff149977f2af506479054d7f9ebf148eaae72e|Credit Limit Mgt|RegisterOrder|lethal.remove-assignment|1",
+    "verdict": "killed",
+    "killingTest": "OpenOrdersCountTowardTheLimit",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "0d74f8e54aa0559697f8a69e8671157c30ee59f121d649dc9671b6bbc11bf7f3|Credit Limit Mgt|OutstandingOrderAmount|lethal.remove-setrange|1",
     "verdict": "survived",
     "killingTest": null,
@@ -70,6 +84,20 @@
     "errorClass": null
   },
   {
+    "key": "2ae1e72ce458b4ca8ca0c07ba68e016980151aed9f4bab24c6ea2f48cc0657ae|Credit Limit Mgt|PostEntry|lethal.remove-assignment|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
+    "key": "2ae1e72ce458b4ca8ca0c07ba68e016980151aed9f4bab24c6ea2f48cc0657ae|Credit Limit Mgt|RegisterOrder|lethal.remove-assignment|1",
+    "verdict": "killed",
+    "killingTest": "OrderUnderLimitIsAllowed",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "2cad5884655b3eba10164d7dea3abea3323d78cbd52e3d41d657c78f5d5c87ba|Credit Limit Mgt|WouldExceedLimit|lethal.return-value|1",
     "verdict": "killed",
     "killingTest": "OrderUnderLimitIsAllowed",
@@ -88,6 +116,13 @@
     "verdict": "killed",
     "killingTest": "OrderUnderLimitIsAllowed",
     "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "4b04bd489a844285260fdf0c924b7c5f8240de69e14368a414713fa8505f90aa|Credit Limit Mgt|PostEntry|lethal.remove-assignment|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
     "errorClass": null
   },
   {
@@ -119,6 +154,13 @@
     "errorClass": null
   },
   {
+    "key": "6cba66e047c7e4fe36a39adeb25470e125130d65be16d3108b71e3983e03185f|Credit Limit Mgt|WouldExceedLimit|lethal.remove-assignment|1",
+    "verdict": "killed",
+    "killingTest": "OrderOverLimitIsBlocked",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "6f761dcb2a99cea47b958dc637146c36d829109f939e5eb60357b47e9df8b1bd|Credit Limit Mgt|OutstandingOrderAmount|lethal.remove-setrange|1",
     "verdict": "killed",
     "killingTest": "InvoicedOrdersStopCounting",
@@ -126,9 +168,23 @@
     "errorClass": null
   },
   {
+    "key": "7a22066faf12aa71b80cec1ae1e8257d0fe0b5ba3e87c7c547c0fb95eda99eac|Credit Limit Mgt|RegisterOrder|lethal.remove-assignment|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "7bd2a085469b7aaa9647a40fc911d4dddc8dcbf7a57dab971084d255e2b78f13|Credit Limit Mgt|WouldExceedLimit|lethal.conditional-boundary|1",
     "verdict": "survived",
     "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "835565180cc5c8787adf0255e105ebb308eeb1338b48576812c5b5c9fdebb0d3|Credit Limit Mgt|RegisterOrder|lethal.remove-assignment|1",
+    "verdict": "killed",
+    "killingTest": "OrderUnderLimitIsAllowed",
     "coverageFiltered": false,
     "errorClass": null
   },
