@@ -10,7 +10,7 @@ import {
 } from "./assertion-screen";
 import type { BackendCapabilities } from "./backend";
 import type { RunEvent } from "./events";
-import type { ExcludedSites } from "./excluded-sites";
+import { type ExcludedSites, declarativeSitesView, notInstrumentedView } from "./excluded-sites";
 import type { Interpretation } from "./interpretation";
 import { type PermissionCanaryResult, permissionCanaryWarnings } from "./permission-canary";
 import {
@@ -1482,6 +1482,11 @@ function buildExecutionContexts(
  */
 export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): SessionReport {
   const input = foldEvents(statics, events);
+  // The two legacy fields are VIEWS over `input.excludedSites`, not a parallel computation — see
+  // `FoldedReport.excludedSites`'s doc comment (report-fold.ts). Computed once here and reused
+  // below, both in the caveats/scope-text derivations and in the final returned object.
+  const notInstrumented = notInstrumentedView(input.excludedSites);
+  const declarativeSites = declarativeSitesView(input.excludedSites);
   const counts = {
     killed: 0,
     survived: 0,
@@ -1561,7 +1566,6 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
   }
 
   const denom = counts.killed + counts.timeoutKilled + counts.survived;
-  const notInstrumentedSites = input.notInstrumented.files.reduce((n, f) => n + f.sites, 0);
   // Only mutants that actually RAN carry a duration; `no-coverage` and known-survivor skips
   // record 0. Including those zeros would drag the mean toward a cost nothing paid, which is the
   // opposite of useful when the number exists to extrapolate a bigger run.
@@ -1632,12 +1636,11 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
   if (input.operators !== undefined) caveats.push("operator-narrowed");
   // See CAVEAT_INTERPRETATIONS["tests-narrowed"] for what this caveat means to a reader.
   if (input.testsOnly !== undefined && input.testsOnly.length > 0) caveats.push("tests-narrowed");
-  if (input.notInstrumented.files.length > 0) caveats.push("uninstrumentable-files");
+  if (notInstrumented.files.length > 0) caveats.push("uninstrumentable-files");
   // R144 — see CAVEAT_INTERPRETATIONS["declarative-sites-dropped"]. Pushed on the SITE count, not
   // the file count, for the same reason the caveat exists at all: a run that declined one site and
   // a run that declined 154 must not read alike.
-  const declarativeSiteCount = input.declarativeSites.reduce((n, f) => n + f.sites, 0);
-  if (declarativeSiteCount > 0) caveats.push("declarative-sites-dropped");
+  if (declarativeSites.siteCount > 0) caveats.push("declarative-sites-dropped");
   if (input.staleTestApp !== undefined) caveats.push("stale-test-app");
   // See CAVEAT_INTERPRETATIONS["tests-permission-refused"] for what this caveat means to a reader.
   const permissionsRefusedTests = input.permissionsRefusedTests ?? [];
@@ -1757,8 +1760,8 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
   // empty-patterns " (40 of 40 .al files)" that named a narrowing on the wrong axis.
   const fileScope =
     input.only !== undefined
-      ? `${input.only.patterns.join(", ")} (${input.notInstrumented.totalFiles - input.only.excludedFileCount} of ${input.notInstrumented.totalFiles} .al files)`
-      : `${input.notInstrumented.totalFiles} .al file(s)`;
+      ? `${input.only.patterns.join(", ")} (${notInstrumented.totalFiles - input.only.excludedFileCount} of ${notInstrumented.totalFiles} .al files)`
+      : `${notInstrumented.totalFiles} .al file(s)`;
   const scopeText =
     input.operators !== undefined
       ? `${fileScope}, operators ${input.operators.names.join(", ")} only (${input.operators.excludedSiteCount} site(s) from other operators excluded)`
@@ -1834,17 +1837,9 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     mutationScore: denom === 0 ? null : (counts.killed + counts.timeoutKilled) / denom,
     mutants,
     unsupportedTests: input.unsupportedTests,
-    notInstrumented: {
-      totalFiles: input.notInstrumented.totalFiles,
-      fileCount: input.notInstrumented.files.length,
-      siteCount: notInstrumentedSites,
-      files: input.notInstrumented.files,
-    },
-    declarativeSites: {
-      siteCount: declarativeSiteCount,
-      fileCount: input.declarativeSites.length,
-      files: input.declarativeSites,
-    },
+    excludedSites: input.excludedSites,
+    notInstrumented,
+    declarativeSites,
     preprocessorSymbols: statics.preprocessorSymbols ?? [],
     untargetedTriggerCount: input.untargetedTriggerCount,
     ...(input.only !== undefined ? { only: input.only } : {}),

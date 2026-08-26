@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { RunEvent, RunEventInput } from "../src/events";
+import { declarativeSitesView } from "../src/excluded-sites";
 import { generateMutationSet } from "../src/orchestrator";
 import { CAVEAT_INTERPRETATIONS, renderConsole } from "../src/report";
 import { foldEvents } from "../src/report-fold";
@@ -195,13 +196,13 @@ describe("foldEvents — the declarative count reaches the report", () => {
     const folded = foldWith([
       { file: "Al/Page/Probe.Page.al", kinds: "page_declaration", sites: 2 },
     ]);
-    expect(folded.declarativeSites).toEqual([
+    expect(declarativeSitesView(folded.excludedSites).files).toEqual([
       { file: "Al/Page/Probe.Page.al", kinds: "page_declaration", sites: 2 },
     ]);
   });
 
   test("an empty list folds to an empty list, not to undefined", () => {
-    expect(foldWith([]).declarativeSites).toEqual([]);
+    expect(declarativeSitesView(foldWith([]).excludedSites).files).toEqual([]);
   });
 });
 

@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import type { RunEvent, RunEventInput } from "../src/events";
 import {
   buildExcludedSites,
   declarativeSitesView,
   notInstrumentedView,
 } from "../src/excluded-sites";
+import { buildReport } from "../src/report";
 
 // Hand-written, deliberately NON-EMPTY, and deliberately including a file that appears under
 // BOTH reasons. The whole point of this suite is that it cannot pass on an all-zero input:
@@ -107,5 +109,71 @@ describe("the derived views reproduce today's shapes exactly", () => {
     for (const f of notInstrumentedView(merged).files) {
       expect(Object.keys(f).sort()).toEqual(["file", "kinds", "sites"]);
     }
+  });
+});
+
+/**
+ * Task 3: `buildReport`'s `notInstrumented` and `declarativeSites` must be VIEWS over its own
+ * `excludedSites`, not a third parallel computation that happens to agree. Built as real events +
+ * statics, the same pattern `operator-filter.test.ts`'s `reportFor` helper uses (report-fold.test.ts
+ * established the pattern) — NOT the legacy bag shim, which predates `excludedSites` and could not
+ * exercise this path.
+ */
+describe("buildReport derives both legacy fields from excludedSites (not in parallel)", () => {
+  const CAPS = {
+    authoritative: true,
+    coverage: "procedure",
+    deploy: "publish",
+    isolation: "session",
+  } as const;
+
+  function buildReportForTest(input: {
+    readonly totalFiles: number;
+    readonly notInstrumentedFiles: readonly { file: string; kinds: string; sites: number }[];
+    readonly declarativeSiteFiles: readonly { file: string; kinds: string; sites: number }[];
+  }) {
+    const events: RunEvent[] = (
+      [
+        {
+          type: "mutation-set-generated",
+          siteCount: 3,
+          deployedCount: 3,
+          totalFiles: input.totalFiles,
+          instrumentableFiles: input.totalFiles,
+          notInstrumentedFiles: input.notInstrumentedFiles,
+          declarativeSiteFiles: input.declarativeSiteFiles,
+          excludedByOnly: 0,
+          excludedByOperator: 0,
+        },
+        { type: "baseline-batch-finished", batchIndex: 0, verdicts: [] },
+        { type: "session-finished", elapsedMs: 10 },
+      ] as RunEventInput[]
+    ).map((e, i) => ({ ...e, seq: i + 1 }) as RunEvent);
+    return buildReport({ caps: CAPS }, events);
+  }
+
+  test("the report's own views equal the views of its own excludedSites", () => {
+    const report = buildReportForTest({
+      totalFiles: 40,
+      notInstrumentedFiles: [
+        { file: "src/Both.Page.al", kinds: "page_declaration", sites: 3 },
+        { file: "src/OnlySkipped.Query.al", kinds: "query_declaration", sites: 2 },
+      ],
+      declarativeSiteFiles: [
+        { file: "src/Both.Page.al", kinds: "page_declaration", sites: 5 },
+        { file: "src/OnlyDeclarative.Page.al", kinds: "page_declaration", sites: 1 },
+      ],
+    });
+
+    const excluded = report.excludedSites;
+    if (excluded === undefined) throw new Error("excludedSites must be present on every report");
+
+    expect(report.notInstrumented).toEqual(notInstrumentedView(excluded));
+    expect(report.declarativeSites).toEqual(declarativeSitesView(excluded));
+
+    // And the merged record is not just the sum of the two views: Both.Page.al is ONE file.
+    expect(excluded.fileCount).toBe(3);
+    expect(report.notInstrumented.fileCount).toBe(2);
+    expect(report.declarativeSites.fileCount).toBe(2);
   });
 });

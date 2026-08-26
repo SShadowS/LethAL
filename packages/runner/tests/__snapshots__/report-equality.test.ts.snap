@@ -33,6 +33,25 @@ exports[`buildReport output is stable across the event-stream refactor an event 
     "files": [],
     "siteCount": 0,
   },
+  "excludedSites": {
+    "fileCount": 2,
+    "files": [
+      {
+        "file": "Al/Page/Page 50120 Sales Approval Card.al",
+        "kinds": "page_declaration",
+        "reason": "not-instrumentable",
+        "sites": 6,
+      },
+      {
+        "file": "Al/Report/Report 50121 Sales Batch Summary.al",
+        "kinds": "report_declaration",
+        "reason": "not-instrumentable",
+        "sites": 3,
+      },
+    ],
+    "siteCount": 9,
+    "totalFiles": 13,
+  },
   "mutants": [
     {
       "astHash": "hashA1",

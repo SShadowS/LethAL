@@ -1,5 +1,6 @@
 import type { BackendCapabilities } from "./backend";
 import type { RunEvent } from "./events";
+import { type ExcludedSites, buildExcludedSites } from "./excluded-sites";
 import type { PermissionCanaryResult } from "./permission-canary";
 import type { DeclarativeSiteFile, NotInstrumentedFile, SessionOutcome } from "./report";
 
@@ -77,13 +78,13 @@ export interface FoldedReport {
   readonly batches: number;
   readonly outcomes: readonly SessionOutcome[];
   readonly unsupportedTests: readonly string[];
-  readonly notInstrumented: {
-    readonly totalFiles: number;
-    readonly files: readonly NotInstrumentedFile[];
-  };
-  /** R144: per-file declarative drops, off `mutation-set-generated`. Required and possibly empty —
-   *  see `SessionReport.declarativeSites`. */
-  readonly declarativeSites: readonly DeclarativeSiteFile[];
+  /**
+   * The merged record of every site or file this run deliberately did not mutate — see
+   * `buildExcludedSites` (excluded-sites.ts). `notInstrumented` and `declarativeSites` on the
+   * final `SessionReport` are views over this, computed in report.ts; this is the only place that
+   * assembles the merge, so those two cannot drift into a parallel computation of their own.
+   */
+  readonly excludedSites: ExcludedSites;
   readonly only?: {
     readonly patterns: readonly string[];
     readonly excludedFileCount: number;
@@ -447,8 +448,11 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
     batches: deployPhaseEntries,
     outcomes,
     unsupportedTests: [...unsupportedTests].sort(),
-    notInstrumented: { totalFiles, files: notInstrumentedFiles },
-    declarativeSites: declarativeSiteFiles,
+    excludedSites: buildExcludedSites({
+      skipped: notInstrumentedFiles,
+      declarative: declarativeSiteFiles,
+      totalFiles,
+    }),
     // R41: reunite the GIVEN patterns (statics) with the LEARNED exclusion count
     // (mutation-set-generated.excludedByOnly) — see `FoldStatics.only`'s doc comment. Same
     // condition orchestrator.ts used to gate this field: non-empty patterns, not just "defined".
