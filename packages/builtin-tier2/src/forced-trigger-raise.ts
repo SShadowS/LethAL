@@ -1,10 +1,10 @@
 import {
   ALNodeKind,
   type ALSyntaxNode,
+  resolveReceiverTable,
   type SemanticContext,
   type SymbolTable,
 } from "@lethal/engine";
-import { resolveReceiverTable } from "./receiver";
 
 /**
  * R165: can FORCING a table trigger to run add an error the unmutated program cannot raise?

@@ -1,3 +1,4 @@
+import { claimsRecordMethod } from "@lethal/engine";
 import {
   ALNodeKind,
   type ALSyntaxNode,
@@ -19,14 +20,16 @@ const OPERATOR_VERSION = "1.0.0";
  * compares SPANS and the two differ (the call node against the literal inside it). Measured on
  * `do-rel2/Cloud`: 72 sites, 2% of the candidate's footprint.
  *
- * This is a cession by NAME, which is the weak part of it and is why the fixture arm pins the split
- * rather than trusting this list to stay in step. `remove-not`'s cession to `negate-conditional` was
- * correct for comparisons and silently wrong for everything else (R171) precisely because nothing
- * checked the two operators against each other on a live site. The names mirror
- * `RUN_TRIGGER_METHODS` in `swap-modify-flag.ts`; if that operator gains a fourth, this list and the
- * arm must gain it too.
+ * The cession asks `claimsRecordMethod` — the SAME predicate `swap-modify-flag` claims with — rather
+ * than restating it. The first draft tested the method NAME alone, and that is not what that operator
+ * claims: it requires a name AND a receiver that resolves to a Record. Measured on the corpus, the
+ * mismatch ORPHANED 55 sites — `Modify`/`Insert`/`Delete` calls whose receiver is unresolvable, which
+ * this operator refused and that one never claimed. R171 is the same bug one operator earlier, and
+ * `receiver.ts` moved into `@lethal/engine` so a shared predicate makes it structurally impossible
+ * instead of a thing to remember. This list still has to track `RUN_TRIGGER_METHODS`, which is what
+ * the fixture arm pins.
  */
-const CEDED_TO_MODIFY_FLAG: ReadonlySet<string> = new Set(["modify", "insert", "delete"]);
+const CEDED_TO_MODIFY_FLAG = ["Modify", "Insert", "Delete"] as const;
 
 /**
  * A boolean is EXECUTABLE only inside a procedure or trigger body. Everything else is a declarative
@@ -109,14 +112,14 @@ export const flipBooleanLiteral: MutationOperator = {
   tier: 1,
   targetNodeKinds: ["boolean"],
   producesNodeKinds: ["boolean"],
-  requiresSemantic: [],
+  requiresSemantic: ["symbol-table"],
 
-  targets(node: ALSyntaxNode, _ctx: SemanticContext): boolean {
-    return flipped(node) !== null;
+  targets(node: ALSyntaxNode, ctx: SemanticContext): boolean {
+    return flipped(node, ctx) !== null;
   },
 
-  generate(node: ALSyntaxNode, _ctx: SemanticContext): readonly MutationSpec[] {
-    const after = flipped(node);
+  generate(node: ALSyntaxNode, ctx: SemanticContext): readonly MutationSpec[] {
+    const after = flipped(node, ctx);
     if (after === null) return [];
     return [
       {
@@ -173,6 +176,13 @@ export const flipBooleanLiteral: MutationOperator = {
       expectedSpecs: [],
     },
     {
+      name: "does NOT cede Modify(false): swap-modify-flag has no false -> true direction",
+      sourceAL: `codeunit 51707 "C" { procedure P() var Cust: Record Customer; begin Cust.Modify(false); end; }`,
+      expectedSpecs: [
+        { parentContext: "statement-position", beforeText: "false", afterText: "true" },
+      ],
+    },
+    {
       name: "does NOT cede a boolean argument to some OTHER method",
       sourceAL: `codeunit 51705 "C" { procedure P() var Cust: Record Customer; begin Cust.SetAutoCalcFields(false); end; }`,
       expectedSpecs: [
@@ -183,13 +193,13 @@ export const flipBooleanLiteral: MutationOperator = {
 };
 
 /** The flipped text for a boolean this operator will claim, else `null`. */
-function flipped(node: ALSyntaxNode): string | null {
+function flipped(node: ALSyntaxNode, ctx: SemanticContext): string | null {
   if (node.rawKind !== "boolean") return null;
   const text = node.text.toLowerCase();
   if (text !== "true" && text !== "false") return null;
   if (!inExecutableBody(node)) return null;
   if (isCaseLabel(node)) return null;
-  if (isCededRunTriggerFlag(node)) return null;
+  if (isCededRunTriggerFlag(node, ctx)) return null;
   return text === "true" ? "false" : "true";
 }
 
@@ -213,20 +223,17 @@ function inExecutableBody(node: ALSyntaxNode): boolean {
  * Walks only as far as the ARGUMENT LIST's own call, never further: a `true` nested inside another
  * call that happens to sit within a `Modify(...)` argument is not that call's flag.
  */
-function isCededRunTriggerFlag(node: ALSyntaxNode): boolean {
+function isCededRunTriggerFlag(node: ALSyntaxNode, ctx: SemanticContext): boolean {
   const args = node.parent;
   if (args === null || args.rawKind !== "argument_list") return false;
   const call = args.parent;
   if (call === null || call.rawKind !== ALNodeKind.procedure_call) return false;
-  const callee = call.childForFieldName("function");
-  if (callee === null) return false;
-  // `Rec.Modify(true)` parses the callee as a member expression; the method is its last identifier.
-  const name = callee.rawKind === ALNodeKind.field_access ? lastIdentifier(callee) : callee.text;
-  return CEDED_TO_MODIFY_FLAG.has(name.toLowerCase());
-}
-
-function lastIdentifier(node: ALSyntaxNode): string {
-  const kids = node.namedChildren;
-  const last = kids[kids.length - 1];
-  return last === undefined ? node.text : last.text;
+  // Only `true` is ceded. `swap-modify-flag` claims the SKIP direction (an explicit `true` to flip
+  // to `false`) and, since 1.2.0, the argument-LESS call; it has no `false` -> `true` direction, so
+  // `Rec.Modify(false)` is claimed by nobody and belongs here. Measured: ceding `false` as well
+  // orphaned a further 39 corpus sites.
+  if (node.text.toLowerCase() !== "true") return false;
+  // Ask the SAME predicate that operator claims with, never a restatement of it. A name-only test
+  // here refused 55 sites it does not claim, leaving them to nobody — R171's seam bug exactly.
+  return CEDED_TO_MODIFY_FLAG.some((method) => claimsRecordMethod(call, ctx, method));
 }

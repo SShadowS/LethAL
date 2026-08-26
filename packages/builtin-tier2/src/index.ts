@@ -20,7 +20,9 @@ export { swapEnumMember } from "./swap-enum-member";
 export { swapFindDirection } from "./swap-find-direction";
 export { validateToAssign } from "./validate-to-assign";
 export { flipFilterLiteral } from "./flip-filter-literal";
-export { claimsRecordMethod, claimsSystemCall, calleeNameNode } from "./receiver";
+// `claimsRecordMethod` / `claimsSystemCall` / `calleeNameNode` moved to @lethal/engine in the
+// R159 spike so a Tier-1 operator can cede to a Tier-2 one against the SAME predicate.
+export { claimsRecordMethod, claimsSystemCall, calleeNameNode } from "@lethal/engine";
 
 /**
  * Tier 2 operator registry.

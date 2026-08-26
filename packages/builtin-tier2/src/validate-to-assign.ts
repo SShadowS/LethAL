@@ -1,3 +1,4 @@
+import { calleeNameNode, claimsRecordMethod } from "@lethal/engine";
 import {
   ALNodeKind,
   type ALSyntaxNode,
@@ -7,7 +8,6 @@ import {
   isStatementSlot,
 } from "@lethal/operator-sdk";
 import { exactArguments, synthesizeAfter } from "./mutate-helpers";
-import { calleeNameNode, claimsRecordMethod } from "./receiver";
 
 /**
  * R161 bumped this to 1.1.0: MINOR, not major. The operator gained sites (the un-braced body of a

@@ -1,3 +1,4 @@
+import { claimsSystemCall } from "@lethal/engine";
 import {
   ALNodeKind,
   type ALSyntaxNode,
@@ -7,7 +8,6 @@ import {
   isStatementSlot,
 } from "@lethal/operator-sdk";
 import { countArguments, synthesizeAfter } from "./mutate-helpers";
-import { claimsSystemCall } from "./receiver";
 import { detectWriteTxnCodeunitRun } from "./write-txn-codeunit-run";
 
 const CALL_NAME = "Commit";

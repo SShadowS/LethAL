@@ -19,7 +19,7 @@ import {
   initParser,
   visit,
 } from "@lethal/engine";
-import { claimsRecordMethod } from "../src/receiver";
+import { claimsRecordMethod } from "@lethal/engine";
 import { contextFor, parseClean, projectContextFor } from "./parse-clean";
 
 // --- fixture plumbing ------------------------------------------------------

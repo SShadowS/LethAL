@@ -1,3 +1,4 @@
+import { claimsRecordMethod } from "@lethal/engine";
 import {
   ALNodeKind,
   type ALSyntaxNode,
@@ -11,7 +12,6 @@ import {
 import { forcedTriggerCanRaise, resolveForcedTrigger } from "./forced-trigger-raise";
 import { insertSkipCanRaise } from "./insert-key-assignment";
 import { exactArguments, soleArgument, synthesizeAfter } from "./mutate-helpers";
-import { claimsRecordMethod } from "./receiver";
 
 const TRUE_LITERAL = "true";
 const FALSE_REPLACEMENT = "false";

@@ -130,3 +130,105 @@ zero sites.
 - **Equivalent-mutant rate.** A flipped boolean that no path reads is invisible to this operator, as
   it is to every Tier-1 operator.
 - **One corpus, one vendor.**
+
+---
+
+## 6. AMENDED: the cession fixed, and a kill measurement pre-committed
+
+Nothing above is edited. §5's Cronus281 run stands; this adds what it could not show.
+
+### The cession is now exact, in both directions
+
+`receiver.ts` moved from `builtin-tier2/src/` into `packages/engine/src/semantic/`, and the cession
+asks `claimsRecordMethod` — the predicate `swap-modify-flag` itself claims with — instead of
+restating it. Neither tier package depends on the other, so nothing inverted; 10 Tier-2 files now
+import it from `@lethal/engine`.
+
+That alone was not enough, and the second correction is the interesting one. `swap-modify-flag`
+claims the SKIP direction (an explicit `true`) or the argument-less call. It has no `false` -> `true`
+direction at all, so `Rec.Modify(false)` is claimed by nobody — and ceding it left a second hole:
+
+| cession | claimed | duplicates | ORPHANS |
+| --- | ---: | ---: | ---: |
+| by method name | 3,456 | 0 | **55** |
+| by `claimsRecordMethod` | 3,472 | 0 | **39** |
+| by `claimsRecordMethod`, `true` only | **3,511** | **0** | **0** |
+
+### Pre-committed verdicts, Cronus283
+
+`credit-limit` (1 site) and `sandbox-data` (13, up from 6 now that the `false` forms are no longer
+ceded away). `sandbox-app` and `sandbox-hang` still have 0, so `itest:bcdev`, `itest:alrunner` and
+`itest:hang` cannot move.
+
+| # | site | mutation | predicted |
+| --- | --- | --- | --- |
+| C1 | `credit-limit` `WouldExceedLimit:34`, `exit(false)` | -> `exit(true)` | **killed** — the suite has a zero-limit customer (`CreateCustomer('C-10000', 0)`), and a flipped guard blocks the order it should allow |
+| D1 | `Data Commit Ops.CommitThenFail:38`, `Insert(false)` | -> `Insert(true)` | **killed** — `Data Main.OnInsert` doubles `Amount`, and the persisted amount is asserted |
+| D2 | `CommitThenRun:52`, `Insert(false)` | -> `Insert(true)` | **killed** — same shape |
+| D3 | `CommitThenRunValueForm:89`, `Insert(false)` | -> `Insert(true)` | **killed** — same shape |
+| D4 | `Data Commit Target.OnRun:17`, `Flagged := true` | -> `false` | **killed** — two tests assert `Flagged` persists |
+| D5 | `Data Commit Target.OnRun:18`, `Modify(false)` | -> `Modify(true)` | **survived** — LEAST CONFIDENT. Runs `Data Main.OnModify`, whose effect on an asserted field I did not trace |
+| D6 | `Data Ops.MarkProcessed:68`, `Processed := true` | -> `false` | **killed** — asserted by name |
+| D7 | `Data Ops.MarkWithFlag:80`, `Processed := true` | -> `false` | **killed** — asserted by name |
+| D8 | `Data Ops.InsertWithoutTrigger:92`, `Delete(false)` | -> `Delete(true)` | **survived** — the only covering test deletes the row first, so `Get` is false and the branch never runs (R161, R171) |
+| D9 | `Data Ops.InsertWithoutTrigger:96`, `Insert(false)` | -> `Insert(true)` | **killed** — `InsertWithoutTriggerKeepsAmount` asserts the amount is NOT doubled |
+| D10 | `Data Scope Probe.OnValidate:61`, `Bumped := true` | -> `false` | **killed** — asserted by name |
+| D11 | `Data Trigger Probe.OnInsert:53`, `"Inserted By Trigger" := true` | -> `false` | **killed** — the arm asserts this field |
+| D12 | `Data Trigger Probe.OnDelete:61`, `Tombstone := true` | -> `false` | **killed** — `DeleteRunTriggerLeavesTombstone` asserts the tombstone |
+| D13 | `Data Trigger Probe.OnDelete:62`, `Tomb.Insert(false)` | -> `Insert(true)` | **survived** — runs `OnInsert` on the TOMB row, setting a field the tombstone assertion does not read |
+
+Derived for the narrowed `sandbox-data` run: **10 killed, 3 survived, 0 no-coverage** over 13.
+`credit-limit` moves 32 -> 33 recorded with one more kill: killed 17 -> 18, score 70.8% -> **72.0%**
+(18 of 25 scored).
+
+**This is the measurement §5 could not make.** If the kills land, a flipped boolean is demonstrably
+killable by an ordinary BC suite. If they do not, the operator is emitting mutants nothing separates
+and the recommendation changes.
+
+---
+
+## OUTCOME of §6, appended after the runs. Nothing above is edited.
+
+### The question this spike existed to answer: YES
+
+`credit-limit`, Cronus283 — **C1 killed by `NoCreditLimitMeansNoBlock`**, exactly as predicted, and
+the score moved 70.8% -> **72.0%** as derived. A flipped boolean is killable by an ordinary BC suite.
+
+### `sandbox-data`: 9 of 13 matched, and the 4 misses are the interesting part
+
+Predicted 10 killed / 3 survived. Measured **6 killed / 7 survived**. Every correct prediction of a
+SURVIVOR held (D5, D8, D13). Every miss went the same way — I credited the suite with an assertion it
+does not make:
+
+| # | predicted | measured | why I was wrong |
+| --- | --- | --- | --- |
+| D1 | killed | **survived** | `Insert(false)` -> `Insert(true)` runs `Data Main.OnInsert`, which doubles `Amount`. `CommitBeforeCodeunitRunSucceeds` asserts the row EXISTS and that `Flagged` is set. It never reads `Amount`. |
+| D2 | killed | **survived** | same |
+| D3 | killed | **survived** | same |
+| D12 | killed | **survived** | `DeleteRunTriggerLeavesTombstone` asserts the RETURN VALUE of `DeleteWithTrigger`, not the tombstone's `Tombstone` field, so flipping that assignment is invisible |
+
+**Those four survivors are findings about the FIXTURE, not about the operator.** `sandbox-data` is
+the most worked-over suite in this repository — 259 mutants, thirteen operators, six re-freezes — and
+a boolean flip found four behaviours nothing asserts. That is the product working on its own test
+data.
+
+It also means the operator is not redundant with `empty-block`, which was R159's point 2 and the
+strongest argument against building it: a whole-block deletion of these procedures IS killed, while
+the fine-grained boolean flip is not. Coarse and fine disagree at the same sites, which is
+discrimination evidence no count could fake.
+
+Scored alone on that fixture the operator reads 46.2% — over half its mutants survive. On a mature
+suite that is a signal worth having, not noise.
+
+### Verdict
+
+**Build it.** Every question a spike can close is closed: 3,511 claimed sites against a bar of 13,
+zero duplicates and zero orphans after the cession fix, compile-proven on both halves, 9 conformance
+cases, and live runs on two containers where the kill question is now answered YES with a named
+killing test.
+
+Landing cost, measured: `itest:tables` +13, `credit-limit` +1, the gift-card demo +2.
+`itest:bcdev`, `itest:alrunner` and `itest:hang` cannot move.
+
+The build's pre-commitment must carry all 16 verdicts, and the four D-row corrections above are the
+measured values to use — not the predictions that produced them.

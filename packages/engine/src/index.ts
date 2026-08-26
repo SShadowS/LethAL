@@ -39,6 +39,12 @@ export type { CFG, BasicBlock } from "./semantic/cfg";
 export { buildCFG } from "./semantic/cfg";
 export type { TypeTable } from "./semantic/types";
 export { buildTypeTable } from "./semantic/types";
+export {
+  claimsRecordMethod,
+  claimsSystemCall,
+  calleeNameNode,
+  resolveReceiverTable,
+} from "./semantic/receiver";
 export type { CallerIndex, CallSite } from "./semantic/callers";
 export { buildCallerIndex } from "./semantic/callers";
 export type { SemanticContext } from "./semantic/context";

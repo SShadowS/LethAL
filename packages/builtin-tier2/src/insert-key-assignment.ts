@@ -56,13 +56,13 @@
 import {
   ALNodeKind,
   type ALSyntaxNode,
-  type SemanticContext,
-  type SymbolTable,
   declarationMembers,
   findAll,
+  resolveReceiverTable,
+  type SemanticContext,
+  type SymbolTable,
   visit,
 } from "@lethal/engine";
-import { resolveReceiverTable } from "./receiver";
 
 /** Grammar node kinds this module reads. Local consts for the same reason `receiver.ts` keeps its
  *  own: `ALNodeKind` enumerates what the mutation pipeline TARGETS, and widening it widens

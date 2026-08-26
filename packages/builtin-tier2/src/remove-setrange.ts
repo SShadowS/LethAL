@@ -1,3 +1,4 @@
+import { claimsRecordMethod } from "@lethal/engine";
 import {
   ALNodeKind,
   type ALSyntaxNode,
@@ -7,7 +8,6 @@ import {
   isStatementSlot,
 } from "@lethal/operator-sdk";
 import { countArguments, synthesizeAfter } from "./mutate-helpers";
-import { claimsRecordMethod } from "./receiver";
 
 const METHOD_NAME = "SetRange";
 /**

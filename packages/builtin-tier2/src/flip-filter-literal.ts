@@ -1,3 +1,4 @@
+import { claimsRecordMethod } from "@lethal/engine";
 import {
   ALNodeKind,
   type ALSyntaxNode,
@@ -14,7 +15,6 @@ import {
   unquoteALString,
 } from "./filter-expression";
 import { countArguments, exactArguments, synthesizeAfter } from "./mutate-helpers";
-import { claimsRecordMethod } from "./receiver";
 
 const OPERATOR_NAME = "lethal.flip-filter-literal";
 const OPERATOR_VERSION = "1.0.0";

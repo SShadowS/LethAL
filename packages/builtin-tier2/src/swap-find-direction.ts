@@ -1,3 +1,4 @@
+import { calleeNameNode, claimsRecordMethod } from "@lethal/engine";
 import {
   ALNodeKind,
   type ALSyntaxNode,
@@ -8,7 +9,6 @@ import {
   isStatementPosition,
 } from "@lethal/operator-sdk";
 import { countArguments, synthesizeAfter } from "./mutate-helpers";
-import { calleeNameNode, claimsRecordMethod } from "./receiver";
 
 const OPERATOR_VERSION = "1.0.0";
 

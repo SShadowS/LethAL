@@ -1,5 +1,12 @@
 /**
- * Receiver resolution — the single predicate every Tier-2 operator depends on.
+ * Receiver resolution — the single predicate every operator that needs it depends on.
+ *
+ * MOVED here from `builtin-tier2/src/receiver.ts` (R159 spike, 2026-08-26). It served Tier 2
+ * alone, so a Tier-1 operator that had to CEDE to a Tier-2 one could not ask the same question
+ * and had to re-state the predicate — which is how `flip-boolean-literal` came to cede by method
+ * name while `swap-modify-flag` claims by name AND a resolved receiver, orphaning 55 sites that
+ * neither then claimed. That is R171's seam bug, and a shared predicate is what makes it
+ * structurally impossible rather than a thing to remember.
  *
  * Spec: docs/superpowers/specs/2026-07-25-tier2-mutation-operators-design.md §4.1.
  *
@@ -32,19 +39,18 @@
  * `declarationMembers`, `SymbolTable`, `ObjectSymbol` and `VarSymbol` are
  * engine surface. Both are declared dependencies of this package.
  */
+import { ALNodeKind } from "../ast/node-kinds";
+import type { ALSyntaxNode } from "../ast/syntax-node";
+import { declarationMembers, findEnclosingProcedure } from "../ast/tree-walks";
+import type { SemanticContext } from "./context";
 import {
-  ALNodeKind,
-  type ALSyntaxNode,
   type ObjectSymbol,
-  type SemanticContext,
   type SymbolTable,
   type VarSymbol,
   collectVarDeclarations,
-  declarationMembers,
   extensionScopeKey,
-  findEnclosingProcedure,
   objectScopeKeyOfNode,
-} from "@lethal/engine";
+} from "./symbol-table";
 
 /**
  * Object declaration kinds a call SITE can sit inside.
