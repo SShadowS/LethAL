@@ -172,10 +172,12 @@ try {
       // Must be a DISPATCH line, not a comment that happens to contain the same text: a green
       // compile plus an unverified emission is the empty-vs-empty shape this repo keeps hitting.
       const lines = emitted.split("\n");
-      const idx = lines.findIndex((l) => l.includes("not (") && !l.trimStart().startsWith("//"));
+      const idx = lines.findIndex(
+        (l) => l.includes("MutationSelector.Active(") && !l.trimStart().startsWith("//"),
+      );
       if (idx === -1) {
         throw new Error(
-          "r171-emit-probe: artifact compiled but carries no emitted `not (` dispatch — the compile proved nothing",
+          "r171-emit-probe: artifact compiled but carries no emitted dispatch — the compile proved nothing",
         );
       }
       console.log("\nemitted dispatch, verbatim:");
