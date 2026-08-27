@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**7 of 177 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**8 of 178 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -114,6 +114,7 @@ that ordering is the priority.
 - **R174** · A Stryker.NET-style `ignoreMethods` call-site ignore list — designed, measured on real AL, refused on value · [R174.md](docs/roadmap/R174.md) · closed 2026-08-26 — refused on VALUE after measurement: 0.38% of raw specs for the safe pattern set, 1.70%…
 - **R176** · Six shared CLI flags were accepted by subcommands that ignore them, and R151 had already named the hazard · [R176.md](docs/roadmap/R176.md) · done (`cae7057`) — the per-flag guard R151 built for `--json` is now a table over every shared flag, refusing…
 - **R178** · No CI system can display a LethAL run: four bespoke JSON surfaces and no interchange format · [R178.md](docs/roadmap/R178.md) · done (`854cdca`) — `lethal export <report.json> --format mutation-elements --project <dir> --out <path>`…
+- **R180** · `empty-block` names the wrong parent for a case arm, so 291 arm bodies have no mutant at all · [R180.md](docs/roadmap/R180.md) · open — MEASURED 2026-08-28 on `do-rel2/Cloud`: 291 block bodies under case arms…
 
 ## Backends and tooling
 
