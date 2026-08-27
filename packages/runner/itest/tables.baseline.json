@@ -56,9 +56,23 @@
     "errorClass": null
   },
   {
+    "key": "0c987d9064d20f80faf415e35c7c31646e57a863b4d59d755367d4decd3869f6|Data Case Ops|ClassifyLevel|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "CaseArmsScoreByLevel",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "0d7da310f51fbb78e8946d28a87eb77b68fbfa560ec8b41f9f22843bea5d562c|Data Swap Ops|AmountWithinCap|lethal.return-value|1",
     "verdict": "killed",
     "killingTest": "SwapReversesTheRangeComparison",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "1113c3d76eb8850f0e67cb216087ef491621662a0d74ec18c46041e16b9a4820|Data Case Ops|ClassifyLevel|lethal.remove-assignment|1",
+    "verdict": "killed",
+    "killingTest": "CaseArmsScoreByLevel",
     "coverageFiltered": false,
     "errorClass": null
   },
@@ -525,6 +539,13 @@
     "errorClass": null
   },
   {
+    "key": "3639fdd4c7a91572386bf27ae14fdf74064b1cc62f4371893d4a84d3878cda38|Data Case Ops|ClassifyLevel|lethal.remove-assignment|1",
+    "verdict": "killed",
+    "killingTest": "CaseArmsScoreByLevel",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "36aa6c656ce535d1f8e169d85419fcc897eec77e830ec1df81f4fe55b0704890|Data Commit Ops|CommitThenRunValueForm|lethal.remove-assignment|1",
     "verdict": "killed",
     "killingTest": "CommitBeforeValueFormCodeunitRunSucceeds",
@@ -626,6 +647,13 @@
     "key": "40277aa121cd95030531672f906db4dc1f238ef3179b8c58d7815e6a8fe957f5|Data Builder|RangeWidth|lethal.return-value|1",
     "verdict": "killed",
     "killingTest": "UserDefinedBuiltinsRun",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "40277aa121cd95030531672f906db4dc1f238ef3179b8c58d7815e6a8fe957f5|Data Case Ops|ClassifyLevel|lethal.return-value|1",
+    "verdict": "killed",
+    "killingTest": "CaseArmsScoreByLevel",
     "coverageFiltered": false,
     "errorClass": null
   },
@@ -854,6 +882,13 @@
     "errorClass": null
   },
   {
+    "key": "52bfb4c04273db1917c28a3cc4744ea709e91c9826360c614c328c095f7294f0|Data Case Ops|ClassifyLevel|lethal.remove-assignment|1",
+    "verdict": "killed",
+    "killingTest": "CaseArmsScoreByLevel",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "52cfeddc3ca2123aff7e4b1a8871006a9c67ff3b6b3de193b48d47471f8f5441|Data Filter Ops|AnyExcluding|lethal.conditional-boundary|1",
     "verdict": "survived",
     "killingTest": null,
@@ -962,6 +997,13 @@
     "key": "61072b504235d286afe416a0e5277e8826b3e54d1bda6d4fe7af367f156b93f0|Data Ops|ShadowedBuiltins|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "ShadowedBuiltinsRun",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "61fdafd81c74a5ca153dcc35b92f3b4ca0ecdc430474e2a4d102aa5ea564c4b6|Data Case Ops|ClassifyLevel|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "CaseArmsScoreByLevel",
     "coverageFiltered": false,
     "errorClass": null
   },
@@ -1232,6 +1274,13 @@
     "errorClass": null
   },
   {
+    "key": "7992fa8e2042db45ca24525a1e73b764bf4d9aa5f9f1ad974c19dc9a555bda53|Data Case Ops|ClassifyLevel|lethal.shift-integer|1",
+    "verdict": "killed",
+    "killingTest": "CaseArmsScoreByLevel",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "7a4abe60f790f1954622728e22c6d09f079325bc5b3156301f52bf4492307eb2|Data Main|OnModify|lethal.remove-assignment|1",
     "verdict": "killed",
     "killingTest": "FlaggedFiresModifyTrigger",
@@ -1319,6 +1368,13 @@
     "key": "8037f4fe0779cc1f3fea01b2c23fc93c6270188c71e99326f772d656a0f32981|Data Shadow|Commit|lethal.remove-assignment|1",
     "verdict": "killed",
     "killingTest": "ShadowedBuiltinsRun",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "82190937ce0dbddcf71b05b35fd9eb0f09f2a141e69489fc6a34db4db510a3b7|Data Case Ops|ClassifyLevel|lethal.shift-integer|1",
+    "verdict": "killed",
+    "killingTest": "CaseArmsScoreByLevel",
     "coverageFiltered": false,
     "errorClass": null
   },
@@ -1631,6 +1687,13 @@
     "errorClass": null
   },
   {
+    "key": "ad3589177a6f31143e4cd2e648e9d83f8c096490a9dae343e8ae1e1872227e45|Data Case Ops|ClassifyLevel|lethal.remove-assignment|1",
+    "verdict": "killed",
+    "killingTest": "CaseArmsScoreByLevel",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "ada68d63036475dddcc02e0199c036876c8b7e62486669fc3c0b3333fd602ccc|Data Ops|TouchCategory|lethal.empty-block|1",
     "verdict": "survived",
     "killingTest": null,
@@ -1641,6 +1704,13 @@
     "key": "addaff0f391e44f6d065225abd5e7f78c4726c2155b0d550d508f6f15bb2ab67|Data Trigger Probe|ValidateLevelImplicit|lethal.return-value|1",
     "verdict": "killed",
     "killingTest": "ImplicitValidateRunsInsideTheTable",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "b0f4101cecb0db49fbb114da27e514484c17ada9cb4d1f3872bda2154ca828d9|Data Case Ops|ClassifyLevel|lethal.shift-integer|1",
+    "verdict": "killed",
+    "killingTest": "CaseArmsScoreByLevel",
     "coverageFiltered": false,
     "errorClass": null
   },
@@ -1729,6 +1799,13 @@
     "errorClass": null
   },
   {
+    "key": "b46ac7cd7b8fc65353b7bef0d28fe9715fea6954a041166c72948c647b818978|Data Case Ops|ClassifyLevel|lethal.shift-integer|1",
+    "verdict": "killed",
+    "killingTest": "CaseArmsScoreByLevel",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "b473f0f8762594047a5f52777f0ab590b94174b0b7816a51a572d18cad81f853|Data Commit Ops|CommitThenFail|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "CommittedWriteSurvivesFailure",
@@ -1757,6 +1834,13 @@
     "errorClass": null
   },
   {
+    "key": "b7639fc5337117f99a11c177444ce8ba186aec121acbabc26086c752caa4f696|Data Case Ops|ClassifyLevel|lethal.shift-integer|1",
+    "verdict": "killed",
+    "killingTest": "CaseArmsScoreByLevel",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "b7639fc5337117f99a11c177444ce8ba186aec121acbabc26086c752caa4f696|Data Commit Ops|CommitThenFail|lethal.shift-integer|1",
     "verdict": "survived",
     "killingTest": null,
@@ -1781,6 +1865,13 @@
     "key": "ba57b8a23dc6a3b34719619f2473665fc8064e6bb05617e81d5bebf3c4364457|Data Validate Ops|TouchLevel|lethal.return-value|1",
     "verdict": "killed",
     "killingTest": "TouchLevelRunsTheTriggerAgain",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "bb8d7395867a5bf6d685a37a33f4a08922a12ab3a98e8303ad55b546395374d3|Data Case Ops|ClassifyLevel|lethal.remove-assignment|1",
+    "verdict": "killed",
+    "killingTest": "CaseArmsScoreByLevel",
     "coverageFiltered": false,
     "errorClass": null
   },

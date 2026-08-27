@@ -1171,6 +1171,25 @@ codeunit 79310 "Data Tests"
         LibraryAssert.AreEqual(0, BlankOps.ClassifyCode('BETA'), 'BETA classifies as 0');
     end;
 
+    // R180's arm. See fixtures/sandbox-data/src/DataCaseOps.Codeunit.al for why the three arms are a
+    // control set: the SINGLE-statement arm must gain nothing from the fix, which is what separates
+    // "claims arm BLOCKS" from "claims arms".
+
+    [Test]
+    procedure CaseArmsScoreByLevel()
+    var
+        CaseOps: Codeunit "Data Case Ops";
+    begin
+        // All three arms, so every mutant in the codeunit has a covering test and a survivor there
+        // is a real assertion gap rather than an unexercised branch.
+        if CaseOps.ClassifyLevel(1) <> 15 then
+            Error('level 1 should score 15, got %1', CaseOps.ClassifyLevel(1));
+        if CaseOps.ClassifyLevel(2) <> 20 then
+            Error('level 2 should score 20, got %1', CaseOps.ClassifyLevel(2));
+        if CaseOps.ClassifyLevel(7) <> 99 then
+            Error('an unmatched level should fall to the else and score 99, got %1', CaseOps.ClassifyLevel(7));
+    end;
+
     // R159's assertion-screen arm for `shift-integer`. See
     // fixtures/sandbox-data/src/DataShiftOps.Codeunit.al for why the two procedures are a twin pair
     // rather than two tests of one thing: they are identical in shape, and the only difference

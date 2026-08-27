@@ -233,7 +233,12 @@ const EXPECTED = {
   // VERDICTS are constant and the only variable across the pair is which side of R121's screen each
   // kill lands on. Pre-committed in
   // docs/superpowers/specs/2026-08-26-r159-shift-integer-build-precommitment.md.
-  totalMutantSites: 365,
+  // R180 adds 13: `codeunit 79326 "Data Case Ops"`, the arm that exercises `empty-block` finally
+  // claiming a case ARM's body. Its parent list named `case_statement`, which matches nothing (an
+  // arm's body is a `code_block` whose parent is `case_branch`), so 233 such blocks on
+  // `do-rel2/Cloud` went unmutated behind an entry that looked like it covered them. Pre-committed
+  // in docs/superpowers/specs/2026-08-28-r180-case-arm-precommitment.md.
+  totalMutantSites: 378,
   // R36 moved this from 63/10 to 64/9, deliberately and in one direction only.
   //
   // `RequireCategoryAFails` used to assert merely that AN error occurred, so deleting
@@ -333,7 +338,9 @@ const EXPECTED = {
   // R159's `shift-integer` moves this from 259 to 267: all eight of the twin pair's mutants kill,
   // for the same reason in both halves (the mutated procedure returns 0 where 1 is expected),
   // which is exactly what makes the pair a control.
-  killed: 267,
+  // R180 moves this from 267 to 280: all thirteen of the new arm's mutants kill, because its one
+  // test asserts all three case paths.
+  killed: 280,
   // R73 moved this from 9 to 12, and TWO of the three additions are worth reading rather than
   // accepting:
   //
@@ -476,7 +483,9 @@ const EXPECTED = {
   // R159's `shift-integer` moves it to 267 / 330, about 0.8091, DOWN from 0.8119: an arm of eight
   // kills raises it and three survivors elsewhere lower it, and the survivors win. Worth reading as
   // the direction rather than the digits.
-  mutationScore: 267 / (267 + 63),
+  // R180 moves it to 280 / 343, about 0.8163, UP from 0.8091. An arm that is thirteen kills and no
+  // survivors is supposed to raise it.
+  mutationScore: 280 / (280 + 63),
   /**
    * R72, extended by R138: the screen must fire, and on exactly these mutants under exactly these
    * mechanisms.

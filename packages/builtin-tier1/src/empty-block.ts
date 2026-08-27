@@ -14,7 +14,17 @@ const BODY_PARENT_KINDS: ReadonlySet<string> = new Set([
   ALNodeKind.while_statement,
   ALNodeKind.for_statement,
   ALNodeKind.repeat_statement,
-  ALNodeKind.case_statement,
+  // R180: a case ARM's body. `case_statement` used to be listed here and matched NOTHING — an arm's
+  // body is a `code_block` whose parent is `case_branch`, never the `case_statement` itself, so
+  // every `begin ... end` case arm in every AL project went unmutated while the list looked like it
+  // covered them. MEASURED on `do-rel2/Cloud`: 233 such blocks, 0 claimed before this. R161's shape
+  // one construct over, a guard naming a plausible node kind rather than the one the grammar emits.
+  //
+  // The `else` arm is NOT covered by this and is deliberately left: its block parses as
+  // `code_block <- statement_block <- case_else_branch`, so the parent is a `statement_block` and no
+  // parent-kind entry reaches it. Only 9 else arms on that corpus hold a block at all (the other 49
+  // are a single statement, which has no block to empty), which is under R13's bar on its own.
+  "case_branch",
 ]);
 
 export const emptyBlock: MutationOperator = {

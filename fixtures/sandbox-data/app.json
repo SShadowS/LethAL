@@ -2,7 +2,7 @@
   "id": "aa2f0691-47c3-470e-a351-5bfe955d4f13",
   "name": "LethAL Sandbox Data",
   "publisher": "LethAL",
-  "version": "1.0.0.7",
+  "version": "1.0.0.8",
   "brief": "Tier-2 Phase 0 fixture: table mutation target with object-level and field-level triggers.",
   "description": "Two AL tables used as the mutation target for LethAL's Tier-2 Phase 0 live proof (docs/superpowers/plans/2026-07-25-tier2-phase0.md Task 4). Not for production use \u2014 see fixtures/README.md.",
   "privacyStatement": "",
