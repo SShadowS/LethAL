@@ -54,6 +54,7 @@ describe("parseAlRunnerPlatformAppsDir (R147)", () => {
       kind: "found",
       dir: "C:\\x\\28.0.46665.53671\\platform-apps",
       appCount: 6,
+      basis: "downloaded",
     });
   });
 
@@ -96,6 +97,7 @@ describe("parseAlRunnerPlatformAppsDir (R147)", () => {
       kind: "found",
       dir: "C:\\x\\28.0.46665.53671\\platform-apps",
       appCount: 6,
+      basis: "downloaded",
     });
   });
 
@@ -130,6 +132,7 @@ describe("parseAlRunnerPlatformAppsDir (R147)", () => {
       kind: "found",
       dir: "C:\\x\\28.0.46665.53671\\platform-apps",
       appCount: 6,
+      basis: "downloaded",
     });
   });
 
@@ -146,6 +149,7 @@ describe("parseAlRunnerPlatformAppsDir (R147)", () => {
       kind: "found",
       dir: "~/.local/share/al-runner/artifacts/28.0.46665.53671/platform-apps",
       appCount: 6,
+      basis: "downloaded",
     });
   });
 });
@@ -357,5 +361,81 @@ describe("AlRunnerBackend.usePlatformAppsDir reaches the argv of every later run
     const argv = calls[0] ?? [];
     expect(argv).not.toContain("--auto-provision");
     expect(argv).toContain("C:/cache/pa");
+  });
+});
+
+/**
+ * The WARM-CACHE sentences, verbatim from al-runner 2.7.0.0 on 2026-08-28.
+ *
+ * `itest:alrunner` failed on this build with "no execution context carries a `platformAppsDir`",
+ * and the cause was not a reworded runner: the `Downloaded` sentence is unchanged and still parses.
+ * It was that LethAL had never read the sentence a HEALTHY cache prints, so R147's optimisation
+ * could only ever engage on a run that actually downloaded — off exactly when things are working.
+ */
+const ALREADY_COMPLETE =
+  "[provision] platform apps already complete at C:\\x\\28.0.46665.53952\\platform-apps.";
+/** Same phrasing, the ENGINE directory. Must never be pinned as a package cache. */
+const ENGINE_COMPLETE =
+  "[provision] BC 28.1.49838.50794 engine artifacts already complete at C:\\x\\28.1.49838.50794.";
+/** Same run again, the test toolkit. Different noun phrase AND a different directory. */
+const TOOLKIT_PRESENT =
+  "[provision] test toolkit already present at C:\\x\\28.1.49838.50794\\test-apps.";
+
+describe("R147: the warm-cache sentence pins too, and its siblings do not", () => {
+  test("`platform apps already complete at <dir>` is read, with NO invented count", () => {
+    const p = parseAlRunnerPlatformAppsDir(ALREADY_COMPLETE);
+    expect(p.kind).toBe("found");
+    if (p.kind !== "found") return;
+    expect(p.dir).toBe("C:\\x\\28.0.46665.53952\\platform-apps");
+    expect(p.basis).toBe("already-complete");
+    // Stating a count the runner did not state is the guess this parser refuses to make.
+    expect(p.appCount).toBe(0);
+  });
+
+  test("the trailing full stop belongs to the SENTENCE, not the path", () => {
+    const p = parseAlRunnerPlatformAppsDir(ALREADY_COMPLETE);
+    if (p.kind !== "found") throw new Error("expected found");
+    expect(p.dir.endsWith(".")).toBe(false);
+    expect(p.dir.endsWith("platform-apps")).toBe(true);
+  });
+
+  test("the ENGINE 'already complete' line is NOT pinned — same phrasing, wrong directory", () => {
+    expect(parseAlRunnerPlatformAppsDir(ENGINE_COMPLETE).kind).toBe("no-completion-line");
+  });
+
+  test("the test-toolkit line is NOT pinned", () => {
+    expect(parseAlRunnerPlatformAppsDir(TOOLKIT_PRESENT).kind).toBe("no-completion-line");
+  });
+
+  test("a whole warm run: only the platform-apps line survives its two siblings", () => {
+    const p = parseAlRunnerPlatformAppsDir(
+      [
+        ENGINE_COMPLETE,
+        "[provision] Resolving BC version prefix '28.0'...",
+        ALREADY_COMPLETE,
+        TOOLKIT_PRESENT,
+      ].join("\n"),
+    );
+    expect(p.kind).toBe("found");
+    if (p.kind !== "found") return;
+    expect(p.dir).toBe("C:\\x\\28.0.46665.53952\\platform-apps");
+  });
+
+  test("a COLD run printing both sentences keeps the counted basis, which is the stronger check", () => {
+    // R130: `--auto-provision` provisions twice, so the second pass finds what the first wrote.
+    const p = parseAlRunnerPlatformAppsDir(
+      `${DOWNLOADED}\n[provision] platform apps already complete at C:\\x\\28.0.46665.53671\\platform-apps.`,
+    );
+    expect(p.kind).toBe("found");
+    if (p.kind !== "found") return;
+    expect(p.basis).toBe("downloaded");
+    expect(p.appCount).toBe(6);
+  });
+
+  test("the two sentences naming DIFFERENT directories still conflict and pin nothing", () => {
+    const p = parseAlRunnerPlatformAppsDir(
+      `${DOWNLOADED}\n[provision] platform apps already complete at C:\\other\\platform-apps.`,
+    );
+    expect(p.kind).toBe("conflicting");
   });
 });

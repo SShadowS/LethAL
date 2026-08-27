@@ -449,6 +449,16 @@ export class AlRunnerBackend implements ExecutionBackend {
         platformAppsRefusal: `al-runner said it wrote ${parsed.appCount} platform app(s) to ${parsed.dir}, but that directory holds ${apps} — a provisioning that stopped part-way. Not pinned (R147); every invocation keeps --auto-provision, as before.`,
       };
     }
+    // The warm-cache sentence states NO count, so the floor above is vacuous (`apps < 0` never
+    // holds) and an EMPTY directory would sail through it. That is the one failure this check
+    // exists to catch, so require at least one app when the runner only claimed completeness.
+    // Weaker than the counted check and deliberately so: inventing an expected number here would be
+    // the guess `parseAlRunnerPlatformAppsDir` refuses to make.
+    if (parsed.basis === "already-complete" && apps === 0) {
+      return {
+        platformAppsRefusal: `al-runner reported the platform apps at ${parsed.dir} as already complete, but that directory holds no *.app files at all, so "complete" cannot be believed. Not pinned (R147); every invocation keeps --auto-provision, as before.`,
+      };
+    }
     return { platformAppsDir: parsed.dir };
   }
 

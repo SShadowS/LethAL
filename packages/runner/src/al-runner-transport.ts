@@ -159,8 +159,25 @@ export type AlRunnerPlatformAppsParse =
       /** The path exactly as the runner printed it, never normalised — the normalised form exists
        *  only to compare two spellings, and an operator reading a refusal wants the real string. */
       readonly dir: string;
-      /** How many `.app` files the runner said it wrote there. The caller turns this into a floor. */
+      /**
+       * How many `.app` files the runner said it wrote there. The caller turns this into a floor.
+       *
+       * ZERO when `basis` is `"already-complete"`: that sentence states no count, and inventing one
+       * is the guess this parser exists to avoid. The caller applies a weaker but honest check
+       * instead — see `basis`.
+       */
       readonly appCount: number;
+      /**
+       * WHICH sentence established the pin, because the two support different checks.
+       *
+       * `"downloaded"` — the runner said it wrote N apps, so the caller can require the directory to
+       * hold at least N and catch a provisioning that stopped part-way.
+       *
+       * `"already-complete"` — the runner said the directory is already complete and stated no
+       * count. The caller can only require it to be non-empty. That is weaker, and it is recorded
+       * here rather than hidden so the difference is visible at the call site.
+       */
+      readonly basis: "downloaded" | "already-complete";
     }
   | { readonly kind: "no-completion-line" }
   | { readonly kind: "conflicting"; readonly dirs: readonly string[] };
@@ -216,6 +233,39 @@ export function isChildChosenExit(exitCode: number): boolean {
 const PLATFORM_APPS_COMPLETION =
   /^\[provision\] Downloaded (\d+) app\(s\)[^\n]*?\s((?:[A-Za-z]:[\\/]|[\\/]|~[\\/])[^\n]*platform-apps[\\/]?)[ \t\r]*$/gm;
 
+/**
+ * The WARM-CACHE sentence, which names the same directory without downloading anything.
+ *
+ * Measured 2026-08-28 on al-runner 2.7.0.0, verbatim:
+ *
+ *     [provision] platform apps already complete at C:\...\28.0.46665.53952\platform-apps.
+ *
+ * **Why this had to exist, and why its absence was a real defect rather than a cosmetic gap.**
+ * R147's whole purpose is to stop paying `--auto-provision` on every mutant invocation. Reading only
+ * the `Downloaded` sentence meant the pin could be established ONLY on a run that actually
+ * downloaded — so the optimisation switched itself off precisely when the cache was healthy, which
+ * is the normal case. `itest:alrunner` caught it as a failed assertion the first time the gate ran
+ * on a warm cache. The refusal message had named this possibility all along ("the cache was already
+ * complete and the runner said nothing"); nothing had ever acted on it.
+ *
+ * Two things keep this from matching the wrong line, and both are exercised by the sibling
+ * sentences in the SAME output:
+ *
+ * - **The directory must still end in `platform-apps`.** The same run prints
+ *   `[provision] BC 28.1.49838.50794 engine artifacts already complete at C:\...\28.1.49838.50794.`
+ *   — the same "already complete at" phrasing for the ENGINE, which must never be pinned as a
+ *   package cache.
+ * - **The noun phrase is `platform apps`, not `test toolkit`.** The run also prints
+ *   `[provision] test toolkit already present at C:\...\test-apps.`, rejected twice over: different
+ *   wording and a different directory.
+ *
+ * The trailing `.` is part of the SENTENCE, not the path, so it is consumed outside the capture
+ * group. The cold sentence has no full stop, which is why the two patterns cannot be merged into one
+ * without making the period optional for both and quietly accepting a path that ends in one.
+ */
+const PLATFORM_APPS_ALREADY_COMPLETE =
+  /^\[provision\] platform apps already complete at ((?:[A-Za-z]:[\\/]|[\\/]|~[\\/])[^\n]*platform-apps[\\/]?)\.?[ \t\r]*$/gm;
+
 /** Separator and trailing-separator insensitive, and case-insensitive on win32 — the three ways one
  *  directory gets two spellings. Used ONLY to compare; the reported path stays verbatim. */
 function normalisePlatformAppsPath(p: string): string {
@@ -246,13 +296,26 @@ function normalisePlatformAppsPath(p: string): string {
  */
 export function parseAlRunnerPlatformAppsDir(output: string): AlRunnerPlatformAppsParse {
   PLATFORM_APPS_COMPLETION.lastIndex = 0;
+  PLATFORM_APPS_ALREADY_COMPLETE.lastIndex = 0;
   const seen = new Map<string, string>();
   let appCount = 0;
+  let downloaded = false;
   for (const m of output.matchAll(PLATFORM_APPS_COMPLETION)) {
     const [, count, dir] = m;
     if (count === undefined || dir === undefined) continue;
     seen.set(normalisePlatformAppsPath(dir), dir);
     appCount = Math.max(appCount, Number(count));
+    downloaded = true;
+  }
+  // The warm-cache sentence names the same directory and states no count. Both are scanned because
+  // ONE invocation can print both: `--auto-provision` provisions twice (R130), and the second pass
+  // finds what the first wrote, so a cold run says "Downloaded ..." then "already complete at ...".
+  // They must agree on the directory or this is `conflicting`, exactly as two `Downloaded` lines
+  // naming different places would be.
+  for (const m of output.matchAll(PLATFORM_APPS_ALREADY_COMPLETE)) {
+    const [, dir] = m;
+    if (dir === undefined) continue;
+    seen.set(normalisePlatformAppsPath(dir), dir);
   }
   if (seen.size === 0) return { kind: "no-completion-line" };
   if (seen.size > 1) return { kind: "conflicting", dirs: [...seen.values()] };
@@ -260,7 +323,15 @@ export function parseAlRunnerPlatformAppsDir(output: string): AlRunnerPlatformAp
   // one directory every pass agreed on.
   const [dir] = [...seen.values()];
   if (dir === undefined) return { kind: "no-completion-line" };
-  return { kind: "found", dir, appCount };
+  // A stated count outranks a bare completeness claim: if ANY pass said how many it wrote, the
+  // caller gets the stronger floor. `appCount` stays 0 when only the warm sentence appeared, and
+  // `basis` is what tells the caller which check it may apply.
+  return {
+    kind: "found",
+    dir,
+    appCount,
+    basis: downloaded ? "downloaded" : "already-complete",
+  };
 }
 
 /**

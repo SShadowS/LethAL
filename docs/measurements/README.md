@@ -978,6 +978,37 @@ facts below still hold under `--package-cache`.
 `--emit-app`, `--guide`, `--print-cache-key`, `--watch`, and `--cache`/`--no-cache` for a new
 AL-output cache. None is on any path LethAL uses; the cache tree it implies is [ROADMAP R168](../roadmap/R168.md).
 
+**Re-verified against `al-runner v2.7.0.0` on 2026-08-28**, a FOUR-minor jump (2.4, 2.5, 2.6, 2.7 —
+the gate had seen none of them). **All 19 per-mutant verdicts on `itest:alrunner` are identical**,
+3 / 16 / 0, and R129's `[bc]` announcement still parses (`28.1.49838.50794`). But two contract
+facts moved, and one of them broke the gate:
+
+1. **`--auto-provision` is now ON BY DEFAULT** (the help cites upstream issue #2024). The flag is
+   "kept for explicit scripts/back-compat", so LethAL's argv still parses and behaves, and a new
+   `--no-auto-provision` turns it off. There is also now a first-class `provision [<bundle-dir>]`
+   subcommand, described as "the supported way to obtain artifacts on a fresh machine". LethAL still
+   does NOT use it, for the reason recorded in `provisionOnce`: it resolves the test toolkit at the
+   BINARY's version rather than the project's, so the first mutant downloads one anyway. Re-checked
+   on 2.7.0 and still true — `[provision] test toolkit already present at .../28.1.49838.50794/test-apps`
+   while the platform apps resolve to `28.0.46665.53952`.
+2. **A WARM cache prints a different sentence, and LethAL could not read it.** R147 pins the
+   platform-app directory by parsing `[provision] Downloaded <N> app(s) ... to <dir>`. On a warm
+   cache 2.7.0 prints instead:
+
+   ```
+   [provision] platform apps already complete at C:\Users\...\artifacts\28.0.46665.53952\platform-apps.
+   ```
+
+   **This was a LethAL defect, not an al-runner regression**, and the version bump only exposed it:
+   the pin could be established ONLY on a run that actually downloaded, so R147's optimisation
+   switched itself off exactly when the cache was healthy. The refusal message had named the
+   possibility all along ("the cache was already complete and the runner said nothing") and nothing
+   ever acted on it. Fixed and red-checked; the gate now prints
+   `platform apps pinned at: ...` on a warm cache. Two sibling sentences in the SAME output are the
+   traps the parser must not fall into, and both are pinned by test:
+   `[provision] BC <build> engine artifacts already complete at <dir>.` (same phrasing, the ENGINE
+   directory) and `[provision] test toolkit already present at <dir>/test-apps.`
+
 ### It runs on Windows
 
 R98 recorded that upstream `main` P/Invoked `libc`'s `mprotect` and died before any test ran. On the
