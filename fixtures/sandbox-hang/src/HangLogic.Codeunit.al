@@ -74,4 +74,36 @@ codeunit 79400 "Hang Logic"
         until NextRow() = 0;
         exit(Walked);
     end;
+
+    /// <summary>
+    /// R179's arm: a `while` loop whose BODY advances its own condition, which is every terminating
+    /// `while` loop by construction (if the body did not move the condition, the original would
+    /// never end).
+    ///
+    /// That is what makes `empty-block` on a `while` body structurally non-terminating: emptying the
+    /// body freezes the condition forever. MEASURED on `do-rel2/Cloud` at 19 `while` bodies, the
+    /// largest of the three non-termination sources found so far, and larger than R173's 7.
+    ///
+    /// `loop-skip` asks the same question -- does anything notice if this body never runs -- as
+    /// `while false`, which cannot hang on any input. This arm exists so the cession is MEASURED
+    /// rather than argued: `empty-block`'s mutant here is scored `timeout-killed` BEFORE the cession
+    /// lands, and afterwards that row is gone.
+    ///
+    /// `conditional-boundary` on `Pending > 0` is the CONTROL. It is R173's shape, `>` to `>=`, and
+    /// here it TERMINATES: `Pending` reaches 0, runs one extra lap, reaches -1 and the test fails.
+    /// R173's 7 hazardous sites are all `StrPos(...) > 0`, where the value cannot go below 0. Same
+    /// syntax, opposite outcome, which is exactly why R173 refuses to cede on syntax alone.
+    /// </summary>
+    procedure DrainQueue(Depth: Integer): Integer
+    var
+        Pending: Integer;
+        Drained: Integer;
+    begin
+        Pending := Depth;
+        while Pending > 0 do begin
+            Pending -= 1;
+            Drained += 1;
+        end;
+        exit(Drained);
+    end;
 }

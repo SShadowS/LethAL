@@ -2,6 +2,7 @@ import type { MutationOperator } from "@lethal/operator-sdk";
 import { conditionalBoundary } from "./conditional-boundary";
 import { emptyBlock } from "./empty-block";
 import { flipBooleanLiteral } from "./flip-boolean-literal";
+import { loopSkip } from "./loop-skip";
 import { loopTruncate } from "./loop-truncate";
 import { negateConditional } from "./negate-conditional";
 import { negateGuard } from "./negate-guard";
@@ -18,6 +19,7 @@ export { conditionalBoundary } from "./conditional-boundary";
 export { emptyBlock } from "./empty-block";
 export { flipBooleanLiteral } from "./flip-boolean-literal";
 export { negateConditional } from "./negate-conditional";
+export { loopSkip } from "./loop-skip";
 export { loopTruncate } from "./loop-truncate";
 export { negateGuard } from "./negate-guard";
 export { removeAssignment } from "./remove-assignment";
@@ -61,4 +63,9 @@ export const tier1Operators: readonly MutationOperator[] = [
   // because its mutant there does not terminate on a one-row set and §3.2 dedup cannot displace it
   // (dedup keys on replacement TEXT, so `<> 0` and `true` are two identities and both would ship).
   loopTruncate,
+  // R179: a `while` loop's condition -> `false`, so the body never runs. A HAZARD candidate: on
+  // coverage it fails R13's bar (33 sites, 28 already carrying an `empty-block` body mutant), and on
+  // hazard it passes, because at 19 of those 28 the existing mutant cannot terminate. `empty-block`
+  // cedes a `while` body to it.
+  loopSkip,
 ];

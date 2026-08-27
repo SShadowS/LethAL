@@ -145,6 +145,33 @@ const EXPECTED_ON: ReadonlyArray<{ line: number; operator: string; verdict: stri
   // the inside. A SECOND mutant appearing at this line is the regression to look for.
   { line: 74, operator: "lethal.loop-truncate", verdict: "survived" },
   { line: 75, operator: "lethal.return-value", verdict: "killed" },
+
+  // --- `DrainQueue`, R179's arm: a `while` loop whose BODY advances its own condition, which every
+  // --- terminating `while` loop does by construction.
+  { line: 101, operator: "lethal.empty-block", verdict: "killed" },
+  { line: 102, operator: "lethal.remove-assignment", verdict: "killed" },
+  // THE CONTROL for R173. `>` -> `>=` is that row's hazardous shape, and here it TERMINATES:
+  // `Pending` reaches 0, takes one extra lap and returns 4. R173's 7 hazardous sites are all
+  // `StrPos(...) > 0`, where the value cannot go below 0. Same syntax, opposite outcome, which is
+  // why R173 must not cede on syntax alone.
+  { line: 103, operator: "lethal.conditional-boundary", verdict: "killed" },
+  // THE ROW R179 EXISTS FOR. Before the cession this span's `while` BODY also carried a
+  // `lethal.empty-block` mutant scored `timeout-killed` (MEASURED, stage 1 of
+  // docs/superpowers/specs/2026-08-27-r179-loop-skip-precommitment.md). `empty-block` now cedes a
+  // `while` body, and `loop-skip` asks the same question in a way that cannot hang. A SECOND mutant
+  // appearing at line 103's body is the regression to look for.
+  { line: 103, operator: "lethal.loop-skip", verdict: "killed" },
+  // Killed by ARITHMETIC OVERFLOW, not by the budget, and worth knowing. Deleting `Pending -= 1`
+  // freezes the condition exactly as emptying the body does, but the surviving `Drained += 1` keeps
+  // accumulating and overflows Int32 in ~4.4 s ("Arithmetic operation resulted in an overflow").
+  // A frozen loop only STRANDS when nothing in it accumulates, which is why `empty-block` (whole
+  // body gone) hangs and this does not. Predicted `timeout-killed` and measured `killed`: the one
+  // miss in that pre-commitment, and its cause is measured rather than reasoned.
+  { line: 104, operator: "lethal.remove-assignment", verdict: "killed" },
+  { line: 104, operator: "lethal.shift-integer", verdict: "killed" },
+  { line: 105, operator: "lethal.remove-assignment", verdict: "killed" },
+  { line: 105, operator: "lethal.shift-integer", verdict: "killed" },
+  { line: 107, operator: "lethal.return-value", verdict: "killed" },
 ];
 
 async function readJson<T>(path: string, what: string): Promise<T> {
@@ -305,6 +332,9 @@ function assertOnLeg(leg: LegResult): void {
     timeoutKilled.length,
     4,
     "the fixture has exactly four non-terminating mutants, and each is reached by a DIFFERENT " +
+      "operator. R179's arm did NOT change this number, which is the point: it added a fifth " +
+      "(`empty-block` on a `while` body, MEASURED `timeout-killed` in stage 1) and the cession to " +
+      "`loop-skip` removed it again. " +
       "operator: void-method-call and empty-block on the original arm, remove-assignment twice " +
       "(R159), once on each arm. None of them is a loop EXIT CONDITION, and that is the point of " +
       "the count: R164 ceded the exit condition from `negate-conditional` to `loop-truncate`, " +

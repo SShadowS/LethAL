@@ -40,4 +40,19 @@ codeunit 79450 "Hang Tests"
         if Got <> 1 then
             Error('WalkOneRow() returned %1, expected 1', Got);
     end;
+
+    /// <summary>
+    /// R179. Drives `DrainQueue` over three laps, so `while false` returns 0 and dies. Before the
+    /// cession, `empty-block` on that loop's body freezes `Pending` and never returns.
+    /// </summary>
+    [Test]
+    procedure DrainQueueEmptiesTheQueue()
+    var
+        Logic: Codeunit "Hang Logic";
+        Got: Integer;
+    begin
+        Got := Logic.DrainQueue(3);
+        if Got <> 3 then
+            Error('DrainQueue(3) returned %1, expected 3', Got);
+    end;
 }

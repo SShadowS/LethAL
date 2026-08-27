@@ -29,6 +29,29 @@ export const emptyBlock: MutationOperator = {
     if (node.kind !== ALNodeKind.block) return false;
     if (node.parent === null) return false;
     if (!BODY_PARENT_KINDS.has(node.parent.kind)) return false;
+    // R179: CEDE a `while` loop's body to `lethal.loop-skip`.
+    //
+    // A `while` loop's body is what advances its condition — it must be, or the original would never
+    // end — so emptying the body freezes the condition and the mutant CANNOT terminate. MEASURED on
+    // `do-rel2/Cloud` at 19 of the 28 `while` bodies claimed here, and MEASURED live on
+    // `itest:hang`'s `DrainQueue` arm, where this exact mutant was scored `timeout-killed` before
+    // this cession landed. Each one strands its tier on the default path, where
+    // `--stop-hung-sessions` is off because it ends a session on the user's own server.
+    //
+    // `loop-skip` asks the same question, "does anything notice if this body does not run", as
+    // `while false`, and cannot hang on any input. This is `loop-truncate`'s relationship to
+    // `negate-conditional` at `repeat` (R164), one visibility level out.
+    //
+    // POSITIONAL on purpose. The precise rule would be "refuse where the body advances the
+    // condition", which is an inference about VALUES — the class of reasoning R175 was. Reading the
+    // parent node is checkable; guessing what a loop does is not. Cost: at the 9 `while` bodies
+    // where this mutant currently terminates, it is replaced by `loop-skip`'s, which asks nearly the
+    // same question.
+    //
+    // `repeat` is NOT ceded: its body always runs once, so `until true` does not remove the body's
+    // effect and `loop-truncate` is no substitute. The 6 frozen `repeat` bodies on the corpus stay,
+    // and stay recorded on R179.
+    if (node.parent.kind === ALNodeKind.while_statement) return false;
     // Skip already-empty blocks. Cheapest signal: whether the block has any
     // namedChildren that aren't `begin` / `end` keywords. The grammar exposes
     // these tokens as named nodes with rawKind `begin_keyword` / `end_keyword`
