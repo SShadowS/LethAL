@@ -11,7 +11,46 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ## [Unreleased]
 
+
+## [0.1.0-alpha.3] — 2026-08-27
+
+The operator set goes from **15 to 24**, and `no-coverage` stops claiming something it cannot
+observe. Twenty-two roadmap rows closed since alpha.2; the ones a user can see are below.
+
+### Added
+
+- **Nine new mutation operators.** Every one was sized against a real 554-file Business Central app
+  BEFORE it was written, and the sizing repeatedly collapsed by an order of magnitude once contexts
+  were counted rather than node kinds, so several candidates were refused on measurement instead of
+  shipped.
+  - `negate-guard` (R171): `if Cust.Get(X) then` becomes `if not (Cust.Get(X)) then`. A bare Boolean
+    guard had no polarity mutant at all; 1,891 sites.
+  - `remove-not` (R163): drops `not` from a bare call or identifier, which no operator could see.
+  - `swap-additive`, `flip-boolean-literal`, `remove-assignment`, `toggle-blank-string` and
+    `shift-integer` (R159), the five behaviour-carrying node kinds the coverage census left
+    unclaimed. `remove-assignment` alone claims 6,850 corpus sites.
+  - `loop-truncate` (R164): a `repeat` loop's exit condition becomes `true`, so the body runs once.
+    A survivor is unusually specific, meaning no test drives this loop over more than one row.
+  - `swap-enum-member` (R162) and `swap-modify-flag`'s forward direction (R165).
+- **The report says which `no-coverage` verdicts are ours** (R175): `unplaceableCount`,
+  `unplaceableMutants` and an `attribution-unplaceable` caveat. Excluded from the score exactly as
+  before, so no verdict moves; what is new is that a reader can tell a statement about their tests
+  from a statement about LethAL's attribution.
+- **Survivors likelier to be equivalent say so** (R172): `likelyEquivalentSurvivors` groups survivors
+  whose operator declares an elevated equivalence risk, with the reason. A hint attached to a verdict
+  rather than a change to it, so nothing is subtracted from the score.
+
 ### Changed
+
+- **`negate-conditional` no longer claims a `repeat` loop's exit condition** (R164). On the canonical
+  BC shape its mutant does not terminate: `until Rec.Next() <> 0` never ends once the recordset is
+  exhausted, which is the common one-row fixture. 326 such mutants on one real corpus are replaced by
+  `loop-truncate`, which cannot hang. Measured, not argued: the arm's mutant was scored
+  `timeout-killed` before the cession landed.
+- **On the fenced coverage path, a local procedure's member miss is no longer widened to object
+  level** (R175). That widening existed because `SymbolReference.json` lists no locals, which is true
+  of the hub resolver and false of the default one: the line map parses source and does not look at
+  scope. Measured on a fixture, all five mutants of a local came back exactly attributed.
 
 - **Mutants are now generated at the un-braced body of a branch or loop** (R161). Six operators
   guarded on a predicate that asks "is this one of several statements inside a `begin ... end`",
@@ -29,6 +68,30 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
   Expect more mutants, and therefore longer runs, on any project with un-braced branches. The six
   operators bump to 1.1.0: MINOR, so existing mutants keep their history.
+
+### Fixed
+
+- **`no-coverage` was asserting a negative it could not observe** (R175). When coverage saw an object
+  execute a member it could not NAME, a mutant in a public procedure there was reported `no-coverage`
+  without ever being run, which reads as "your tests do not reach this code" and was a statement about
+  LethAL instead. Reported downstream at 223 of 2,058 mutants across 17 reports, and proven by a
+  contradiction inside one report: a callee killed by a test whose only caller was `no-coverage`.
+- **Six CLI flags were accepted and silently ignored** (R176). `lethal run --report r.json` completed
+  normally and wrote nothing, because `--report` belongs to `campaign` and a run writes with `--out`.
+  All six now refuse and name the flag to use instead.
+- **Mutant identity erased the enclosing procedure name** (R166), so three different guard deletions
+  in one object shared one identity and a per-mutant baseline could not tell them apart.
+- **`alc.exe` discovery broke on the current AL extension** (R167), which moved it out of `bin/win32/`.
+- **LethAL's own object ids collided with a real product's** (R169), so two fixtures could not be
+  published beside it.
+- **Every refusal reached the user as a stack trace** (R158), including the first command the README
+  tells them to run.
+- **The al-runner backend resolved its target to a stale symbol-only `.app`** (R148), and its second
+  cache tree went unaccounted for by `doctor` (R168).
+- **Arithmetic types could not be resolved for a call or a record field** (R160), which is where BC
+  arithmetic actually lives.
+- **A required report field was added without bumping `schemaVersion`** (R157), so one version number
+  described two shapes.
 
 
 ## [0.1.0-alpha.2] — 2026-08-17

@@ -14,7 +14,7 @@ not estimated.
 ## Versioning
 
 The **root `package.json` `version` is the single source of truth.** It is currently
-`0.1.0-alpha.2`.
+`0.1.0-alpha.3`.
 
 Workspace packages under `packages/` stay pinned at `0.0.0` and are never bumped. They are not
 published and not independently consumable, so a version on them would be a number nobody reads and
@@ -85,8 +85,8 @@ workflow as of the release. (`ci.yml`, its sibling, is verified — run 31961823
 `windows-latest` — but nothing that is specific to the release path has been exercised by it.)
 
 ```bash
-git tag v0.1.0-alpha.2     # must equal the root package.json version
-git push origin v0.1.0-alpha.2
+git tag v0.1.0-alpha.3     # must equal the root package.json version
+git push origin v0.1.0-alpha.3
 ```
 
 The workflow refuses a tag that disagrees with `package.json`, runs typecheck and the unit suite,
