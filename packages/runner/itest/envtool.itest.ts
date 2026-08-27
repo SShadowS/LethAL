@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import assert from "node:assert/strict";
 /**
  * Env-gated integration test against a real Business Central environment reached through a
  * config-declared external environment tool (Layer 6C — spec:
@@ -103,7 +104,7 @@
  * environment costs real time and money, and the only existing one belongs to someone else's work
  * item).
  */
-import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -325,6 +326,44 @@ function assertVerdictTable(report: SessionReport): void {
   }
 }
 
+/**
+ * Mutants that moved this gate's constants WITHOUT a run, newest last. Each entry must be confirmed
+ * BY NAME against `itest:bcdev` on the same day before this baseline is re-recorded.
+ *
+ * This gate shares `fixtures/sandbox-app` with `itest:bcdev`, and its whole purpose is to prove the
+ * external-environment indirection changes no verdict. That proof is worthless if the baseline is
+ * re-derived from the first run that happens to succeed: a matching 3/12/4 looks identical whether
+ * the indirection preserved the verdicts or quietly changed WHICH mutants they belong to.
+ */
+const UNVERIFIED_MOVES: readonly string[] = [
+  "R159 `remove-assignment` at `Sandbox Logic.LogAudit` (predicted survived)",
+  "R159 `shift-integer` at `Sandbox Logic.LogAudit` (predicted survived)",
+  "R164 `loop-truncate` — sandbox-app has no `repeat` loop, so this gate should gain NOTHING from it",
+];
+
+/**
+ * Refuse to let a missing baseline be silently re-recorded while moves are unconfirmed.
+ *
+ * `assertMatchesBaseline` RECORDS a baseline when the file is absent, which is right for a gate
+ * whose fixture legitimately grew. It is wrong here: the environment expired and was deleted
+ * 2026-08-26, the constants above were updated from PREDICTIONS twice, and the documented remedy for
+ * a per-mutant mismatch is "delete the baseline and re-run" — which would turn two unreviewed
+ * predictions into a committed measurement in one step. That reflex is exactly how a gate stops
+ * being evidence, so it is blocked here rather than warned about in a comment.
+ */
+function refuseSelfRecordWhileUnverified(): void {
+  if (UNVERIFIED_MOVES.length === 0) return;
+  if (existsSync(BASELINE_PATH)) return;
+  throw new Error(
+    `envtool itest: the committed baseline is absent and ${UNVERIFIED_MOVES.length} constant move(s) ` +
+      "here were never verified against a live environment, so recording one now would publish a " +
+      "prediction as a measurement. Confirm each of these BY NAME against `itest:bcdev` run on the " +
+      "same day, then clear UNVERIFIED_MOVES in this file in the same commit that records the " +
+      `baseline:` +
+      UNVERIFIED_MOVES.map((m) => "\n  - " + m).join(""),
+  );
+}
+
 async function main(): Promise<void> {
   const { files } = await generateMutationSet(join(PROJECT_DIR, "src"));
   const total = files.reduce((n, f) => n + f.specs.length, 0);
@@ -341,6 +380,7 @@ async function main(): Promise<void> {
     // Per-mutant regression guard against the committed baseline, keyed on semantic identity
     // (astHash/codeunitName/operatorName/operatorMajor) rather than mutant code. Absent on the
     // first real run — it RECORDS one instead of failing (baseline-guard.ts).
+    refuseSelfRecordWhileUnverified();
     await assertMatchesBaseline(report, BASELINE_PATH, "envtool itest");
   } finally {
     await rm(scratch, { recursive: true, force: true });

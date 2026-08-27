@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**7 of 174 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**8 of 175 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -219,6 +219,7 @@ that ordering is the priority.
 - **R168** · al-runner keeps a SECOND cache tree (149 MB) that `doctor`'s cache accounting does not read · [R168.md](docs/roadmap/R168.md) · done (this commit) — `doctor` now reports both roots. The second is a plain total, deliberately: no…
 - **R169** · LethAL's own object ids collided with a real product's, and two fixtures could not be co-installed · [R169.md](docs/roadmap/R169.md) · done (this commit) — `LethAL Control` moved 71000-71010 -> 91000-91010, and `sandbox-data`'s selector triple…
 - **R170** · The selector-id convention was already implemented and enforced; only the docs never said it · [R170.md](docs/roadmap/R170.md) · done (this commit) — and the row's original premise was WRONG. `pickSelectorIds` has implemented one rule all…
+- **R177** · `itest:envtool` cannot run and its published figures are inferred, so one of four gates is not evidence · [R177.md](docs/roadmap/R177.md) · open — the gate REFUSES correctly (environment reports `Deleted`) and can no longer self-record a prediction…
 
 ---
 
