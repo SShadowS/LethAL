@@ -250,7 +250,10 @@ because BC rejects a duplicate packageId — now treated as already-published,
 `publishFile` only, since compiled mutant artifacts carry fresh versions and a
 duplicate THERE stays loud. The gate now runs against environment
 `1a15baa8-914a-4806-ad7b-354dfeefc593` (DK 28.1, expires 2026-08-26; the
-gitignored config names it).
+gitignored config names it). That environment DID expire and was deleted on that
+date; the gate was restored 2026-08-28 against a new DK 28.0 one. See
+[[R177]] — this paragraph is left as the record of what the 4.0.0 bump ran
+against, not as a pointer to a live environment.
 
 Also verified: all 41 curated `ALNodeKind` values still exist in 4.0.0's
 `node-types.json` (nothing renamed or removed that LethAL names), so no kind

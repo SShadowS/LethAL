@@ -156,19 +156,17 @@ const SELECTOR_IDS = { selectorId: 79199, controlId: 79198, tableId: 79197 };
 // environment, and this task is scoped to never perform one — `assertMatchesBaseline` below is
 // what pins the per-mutant table down, on whatever the human's first real run records.
 const EXPECTED = {
-  // !! R159's figures here are INFERRED from `itest:bcdev`, NOT MEASURED, and this is now the
-  // !! SECOND operator to move them without a run. The environment was "Stopped" when the first one
-  // !! landed (LethAL deliberately refuses to start an environment it does not own: a hosted
-  // !! environment is not a container), and it EXPIRED AND WAS DELETED on 2026-08-26, so the next
-  // !! run needs a new one provisioned before it can say anything.
-  // !!
-  // !! Two accumulated unreviewed numbers is the point at which a baseline stops being evidence, so
-  // !! read the next run's disagreement as a finding about the INDIRECTION only after checking it
-  // !! against `itest:bcdev` on the same day. The two gates share a fixture: they must report the
-  // !! same mutants with the same verdicts, and a divergence is this gate's entire reason to exist.
-  // !! Do NOT re-freeze whatever the first successful run reports. Confirm both accumulated moves
-  // !! by name first: `remove-assignment` and `shift-integer`, both at `Sandbox Logic.LogAudit`,
-  // !! both predicted `survived`.
+  // MEASURED 2026-08-28 on a restored environment, and no longer inferred. These figures spent
+  // 2026-08-26 to 2026-08-28 as PREDICTIONS carried over from `itest:bcdev` because this gate's
+  // environment expired and was deleted; that state is over, and the history is kept in
+  // `docs/roadmap/R177.md` rather than re-litigated here.
+  //
+  // The restoration was pre-committed before it ran, in
+  // `docs/superpowers/specs/2026-08-28-r177-envtool-restoration.md`: the stale baseline held 17
+  // mutants, the run had to produce 19, and the only permitted difference was two ADDED mutants at
+  // `Sandbox Logic.LogAudit`, named in advance. That is exactly what came back, with zero removed
+  // and zero verdict changes, and the 19-mutant table is IDENTICAL to `itest:bcdev`'s on the same
+  // day. Which is this gate's entire point: the external-environment indirection changes no verdict.
   //
   // R159 moves this from 16 to 17 and no-coverage from 3 to 4, identically to `itest:bcdev` — which
   // is the whole point of this gate: it runs the SAME fixture through an external environment tool,
@@ -336,9 +334,17 @@ function assertVerdictTable(report: SessionReport): void {
  * the indirection preserved the verdicts or quietly changed WHICH mutants they belong to.
  */
 const UNVERIFIED_MOVES: readonly string[] = [
-  "R159 `remove-assignment` at `Sandbox Logic.LogAudit` (predicted survived)",
-  "R159 `shift-integer` at `Sandbox Logic.LogAudit` (predicted survived)",
-  "R164 `loop-truncate` — sandbox-app has no `repeat` loop, so this gate should gain NOTHING from it",
+  // CLEARED 2026-08-28, in the same commit that re-recorded the baseline, which is what the guard
+  // below requires. All three were confirmed BY NAME against `itest:bcdev` run the SAME DAY, and
+  // then measured here on a restored environment:
+  //   - `remove-assignment` at `Sandbox Logic.LogAudit`, the self-assignment `Amount := Amount`
+  //     -> survived
+  //   - `shift-integer` at `Sandbox Logic.LogAudit`, the `Amount <> 0` guard -> survived
+  //   - `loop-truncate` added NOTHING: sandbox-app contains no `repeat` and no `while`, grepped.
+  // The run produced exactly two ADDED mutants and zero removed, zero changed, and its 19-mutant
+  // table is IDENTICAL to `itest:bcdev`'s on the same day, mutant for mutant. See
+  // `docs/superpowers/specs/2026-08-28-r177-envtool-restoration.md`, where all of it was
+  // pre-committed before the run.
 ];
 
 /**
