@@ -48,6 +48,63 @@ import { quarantineResourceKey } from "../src/resource-key";
  * `--resume-run`), not merely that something threw — a guard that rejected everything, including
  * the legitimate `campaign` verbs, would pass a presence-only assertion.
  */
+describe("parseCliConfig: a shared flag the subcommand does not own is REFUSED", () => {
+  const base = ["--project", "P", "--tests", "T", "--backend", "bcdev"];
+
+  // `parseArgs` runs strict over ONE option table for every subcommand, so `campaign`'s flags parse
+  // fine on `run` and then do nothing. R151 refused `--json` for exactly that reason and applied it
+  // to that one flag; six others were still silently accepted, measured 2026-08-27.
+  //
+  // Pinned as a TABLE rather than one case each, so a flag added to the shared option set without an
+  // owner shows up here as a gap rather than as a silent acceptance a year later.
+  const UNOWNED_ON_RUN: ReadonlyArray<readonly [string, readonly string[]]> = [
+    ["json", ["--json"]],
+    ["report", ["--report", "x.json"]],
+    ["manifest", ["--manifest", "x.json"]],
+    ["stage", ["--stage", "demo"]],
+    ["expect-mutants", ["--expect-mutants", "5"]],
+    ["top", ["--top", "3"]],
+    ["force", ["--force"]],
+  ];
+
+  for (const [flag, argv] of UNOWNED_ON_RUN) {
+    test(`--${flag} on \`run\` throws, and names the subcommand that owns it`, () => {
+      expect(() => parseCliConfig(["run", ...argv, ...base])).toThrow(
+        new RegExp(`--${flag} is only accepted by`),
+      );
+    });
+  }
+
+  test("--report names --out, because that is the mistake it is actually made for", () => {
+    // The failure this closes: `lethal run --report r.json` completed normally and wrote NOTHING.
+    // A run that wrote no report and a run that wrote one elsewhere looked identical.
+    expect(() => parseCliConfig(["run", "--report", "r.json", ...base])).toThrow(/--out/);
+  });
+
+  test("the owning subcommand still accepts its own flag", () => {
+    // The refusal must not be so broad that it breaks the flag's real home. `campaign` gets past
+    // argv parsing here; whether the manifest exists is a later concern.
+    expect(() =>
+      parseCliConfig([
+        "campaign",
+        "compare",
+        "--manifest",
+        "m.json",
+        "--stage",
+        "s",
+        "--report",
+        "r.json",
+      ]),
+    ).not.toThrow(/is only accepted by/);
+  });
+
+  test("a boolean flag is refused only when actually PASSED, never on its default", () => {
+    // `force`/`json` default to `false` in the shared table, so "absent" and "false" are one value.
+    // Refusing on falsiness would reject every ordinary run — this is the red-check for that.
+    expect(() => parseCliConfig(["run", ...base])).not.toThrow();
+  });
+});
+
 describe("parseCliConfig — R89, a stray positional is refused, never ignored", () => {
   const base = ["--project", "P", "--tests", "T", "--backend", "bcdev"];
 

@@ -949,6 +949,75 @@ export const RUN_FLAGS = {
 } as const;
 
 /**
+ * Which subcommand OWNS each flag in the shared option table, and what to suggest instead.
+ *
+ * `parseArgs` runs in strict mode over ONE option set for every subcommand (see `OPTIONS`), so a
+ * flag belonging to `campaign` parses happily on `run` and then does nothing. R151 named that
+ * hazard for `--json` and refused it — "REFUSED elsewhere rather than ignored", because a
+ * silently-dropped `--json` hands a caller the prose rendering while they believe they asked for a
+ * machine surface. The principle was right and was applied to exactly one flag.
+ *
+ * MEASURED 2026-08-27: six others were still silently accepted by `run`. `--report` is the one that
+ * cost real time — it is `campaign`'s flag, `run` writes its report with `--out`, and a run given
+ * `--report` completes normally and writes nothing, which is indistinguishable from a run that
+ * wrote a report somewhere else. Empty-vs-empty, this project's signature bug, in the argv layer.
+ *
+ * Flags NOT listed here are shared on purpose (`--project`, `--config`) and are owned by nobody.
+ */
+const FLAG_OWNERS: ReadonlyArray<{
+  readonly flag: string;
+  readonly owners: readonly string[];
+  readonly instead: string;
+}> = [
+  {
+    flag: "json",
+    owners: ["doctor"],
+    instead:
+      "For a run, the machine surfaces are --out (the JSON report), --progress-out (the NDJSON event stream), and `lethal explain <report.json>`.",
+  },
+  {
+    flag: "report",
+    owners: ["campaign"],
+    instead: "`lethal run` writes its JSON report with --out.",
+  },
+  { flag: "manifest", owners: ["campaign"], instead: "It names a campaign manifest." },
+  { flag: "stage", owners: ["campaign"], instead: "It names a campaign stage." },
+  {
+    flag: "expect-mutants",
+    owners: ["campaign"],
+    instead: "It pre-commits a mutant count for `lethal campaign freeze`.",
+  },
+  { flag: "top", owners: ["explain"], instead: "It bounds `lethal explain`'s survivor list." },
+  {
+    flag: "force",
+    owners: ["init"],
+    instead: "It lets `lethal init` overwrite an existing config.",
+  },
+];
+
+/**
+ * Refuse any shared flag the given subcommand does not own, rather than ignoring it.
+ *
+ * A boolean flag counts as present only when TRUE: the shared table defaults them to `false`, so
+ * "absent" and "explicitly false" are the same value here and refusing on `false` would reject
+ * every invocation.
+ */
+function refuseFlagsThisSubcommandDoesNotOwn(
+  subcommand: string,
+  values: Record<string, unknown>,
+): void {
+  for (const { flag, owners, instead } of FLAG_OWNERS) {
+    const given = values[flag];
+    const present = typeof given === "boolean" ? given : given !== undefined;
+    if (!present || owners.includes(subcommand)) continue;
+    const list = owners.map((o) => `\`lethal ${o}\``).join(" or ");
+    throw new Error(
+      `--${flag} is only accepted by ${list}, not \`lethal ${subcommand}\`. ${instead}`,
+    );
+  }
+}
+
+/**
  * `lethal campaign <verb> --manifest <path> --stage <name> --report <path> [...]`.
  *
  * Every flag that does not apply to the given verb is REFUSED rather than ignored, matching
@@ -1051,15 +1120,7 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
 
   const subcommand = requireKnownSubcommand(positionals);
 
-  // R151: `--json` belongs to `doctor` alone, and is REFUSED elsewhere rather than ignored. A
-  // silently-dropped `--json` on `run` would hand a caller the prose rendering while they believed
-  // they had asked for a machine surface — and `run` already has two of those, so the refusal can
-  // say where to look instead.
-  if (values.json === true && subcommand !== "doctor") {
-    throw new Error(
-      `--json is only accepted by \`lethal doctor\`, not \`lethal ${subcommand}\`. For a run, the machine surfaces are --out (the JSON report), --progress-out (the NDJSON event stream), and \`lethal explain <report.json>\`.`,
-    );
-  }
+  refuseFlagsThisSubcommandDoesNotOwn(subcommand, values);
 
   if (subcommand === "clear-quarantine") {
     const server = values.server;
