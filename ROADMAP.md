@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**8 of 176 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**9 of 177 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -68,6 +68,7 @@ that ordering is the priority.
 - **R167** · The AL extension moved `alc.exe` out of `bin/win32/`, and tool discovery built a path it never checked · [R167.md](docs/roadmap/R167.md) · done (this commit) — discovery walks newest-first and verifies the tool EXISTS, trying the per-RID directory…
 - **R172** · An equivalent mutant and a coverage gap both report `survived`, and nothing in the record separates them · [R172.md](docs/roadmap/R172.md) · PARTLY fixed (this commit): proposal 1 shipped. An operator can declare an `EquivalenceRisk` and the report…
 - **R175** · `no-coverage` on a PUBLIC procedure is an inference, not an observation, and the inference is wrong · [R175.md](docs/roadmap/R175.md) · FIXED for the fenced default (this commit), and the mechanism is now measured rather than guessed: the gate…
+- **R179** · `empty-block` on a loop body is the largest non-termination source measured, and it was never counted · [R179.md](docs/roadmap/R179.md) · open — MEASURED 2026-08-27 on `do-rel2/Cloud`: 25 loop bodies (19 `while`, 6 `repeat`) where emptying the…
 
 ## Product gaps a real project hits
 
