@@ -110,9 +110,7 @@ for (const [relRaw, mutants] of byFile) {
     source = await readFile(join(projectDir, rel), "utf8");
   } catch (err) {
     throw new Error(
-      `cannot read ${join(projectDir, rel)} for its source, which the schema REQUIRES so the HTML ` +
-        `can highlight each mutant: ${err instanceof Error ? err.message : String(err)}. Pass the ` +
-        "--project the report was produced against.",
+      `cannot read ${join(projectDir, rel)} for its source, which the schema REQUIRES so the HTML can highlight each mutant: ${err instanceof Error ? err.message : String(err)}. Pass the --project the report was produced against.`,
     );
   }
   files[rel] = {
@@ -142,8 +140,7 @@ for (const [relRaw, mutants] of byFile) {
 
 if (unmapped.size > 0) {
   throw new Error(
-    `no schema status for LethAL verdict(s): ${[...unmapped].join(", ")}. Add them to STATUS ` +
-      "rather than letting them land on `Pending`, which reads as 'not yet run'.",
+    `no schema status for LethAL verdict(s): ${[...unmapped].join(", ")}. Add them to STATUS rather than letting them land on \`Pending\`, which reads as 'not yet run'.`,
   );
 }
 
@@ -173,8 +170,7 @@ if (htmlPath !== undefined) {
     bundle = await readFile(bundlePath, "utf8");
   } catch {
     throw new Error(
-      `--html needs the renderer at ${bundlePath}. Install it with \`bun add -D mutation-testing-elements\`, ` +
-        "or drop --html and publish the JSON to the Stryker dashboard instead.",
+      `--html needs the renderer at ${bundlePath}. Install it with \`bun add -D mutation-testing-elements\`, or drop --html and publish the JSON to the Stryker dashboard instead.`,
     );
   }
   // `</script>` inside the embedded JSON would close the tag early; escaping the slash is the
@@ -204,34 +200,28 @@ if (htmlPath !== undefined) {
 const lost: string[] = [];
 if ((report.unplaceableCount ?? 0) > 0) {
   lost.push(
-    `${report.unplaceableCount} mutant(s) LethAL reports as attribution-unplaceable (R175) flatten ` +
-      "into NoCoverage, which reads as 'your tests do not reach this code' — the exact conflation " +
-      "that field exists to prevent",
+    `${report.unplaceableCount} mutant(s) LethAL reports as attribution-unplaceable (R175) flatten into NoCoverage, which reads as 'your tests do not reach this code' — the exact conflation that field exists to prevent`,
   );
 }
 if (report.likelyEquivalentSurvivors !== undefined) {
   lost.push(
-    `${report.likelyEquivalentSurvivors.count} survivor(s) flagged as likely-equivalent (R172) lose ` +
-      "that flag; the schema has no field for it",
+    `${report.likelyEquivalentSurvivors.count} survivor(s) flagged as likely-equivalent (R172) lose that flag; the schema has no field for it`,
   );
 }
 if (report.platformArtifactKills !== undefined) {
   lost.push(
-    `${report.platformArtifactKills.killedCount} kill(s) screened as platform artifacts (R138) ` +
-      "become ordinary kills",
+    `${report.platformArtifactKills.killedCount} kill(s) screened as platform artifacts (R138) become ordinary kills`,
   );
 }
 if (report.assertionScreen !== undefined) {
   lost.push(
-    `the assertion screen's discrimination ("${report.assertionScreen.discrimination}", R121) has ` +
-      "no schema equivalent",
+    `the assertion screen's discrimination ("${report.assertionScreen.discrimination}", R121) has no schema equivalent`,
   );
 }
 const attributed = report.mutants.filter((m) => m.coverageAttribution !== undefined).length;
 if (attributed > 0) {
   lost.push(
-    `${attributed} mutant(s) carry a coverageAttribution (exact / object / all-green) that the ` +
-      "schema cannot express, so an approximate covering set renders as an exact one",
+    `${attributed} mutant(s) carry a coverageAttribution (exact / object / all-green) that the schema cannot express, so an approximate covering set renders as an exact one`,
   );
 }
 if (lost.length > 0) {
