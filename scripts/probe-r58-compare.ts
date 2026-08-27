@@ -119,6 +119,8 @@ const moves = new Map<string, number>();
 let identityMismatches = 0;
 let coveringChanged = 0;
 let attributionChanged = 0;
+/** R175: mutants the ATTRIBUTED side called no-coverage that the other side KILLED. */
+const attributionLostMutants: string[] = [];
 for (const mb of b.mutants) {
   const ma = byCode.get(mb.mutantCode);
   if (ma === undefined) {
@@ -141,6 +143,25 @@ for (const mb of b.mutants) {
     console.log(`  ${mb.mutantCode} ${mb.file}:${mb.line} ${mb.operatorName}: ${move}`);
     if (ma.verdict === "killed" && mb.verdict === "survived") {
       blocking.push(`${mb.mutantCode} moved killed -> survived (a killing test was lost — R59)`);
+    }
+    // R175, and the reason to run one side as `--mode none`. That mode uses NO attribution: it runs
+    // every mutant against every green test.
+    //
+    // Only a KILL is proof. `no-coverage -> survived` is the ORDINARY outcome for a genuinely
+    // uncovered mutant, because running it against tests that never call its procedure leaves it
+    // inert and it survives having been reached by nothing — measured immediately on
+    // `fixtures/sandbox-app`, where all four `Sandbox Pricing` mutants move that way and the fixture
+    // documents them as legitimately untouched by any test. Reporting those as attribution failures
+    // would flag every honestly-uncovered mutant in every project, which is the same over-flagging
+    // R175's own first detector had to be narrowed out of.
+    //
+    // `no-coverage -> killed` cannot be explained that way: a green test executed the mutated code
+    // and noticed. Attribution lost a real killing test, per mutant, by name.
+    const provenReached = mb.verdict === "killed" || mb.verdict === "timeout-killed";
+    if (ma.verdict === "no-coverage" && provenReached) {
+      attributionLostMutants.push(
+        `${mb.mutantCode} ${mb.file}:${mb.line} ${mb.operatorName}: A said no-coverage, B scored it ${mb.verdict}`,
+      );
     }
   }
   const av = ma.coveringTests.join(",");
@@ -174,6 +195,20 @@ for (const [move, n] of [...moves].sort()) console.log(`    ${n} x ${move}`);
 console.log(`  covering-set changes: ${coveringChanged}`);
 console.log(`  attribution changes:  ${attributionChanged}`);
 console.log(`  identity mismatches:  ${identityMismatches}\n`);
+
+if (attributionLostMutants.length > 0) {
+  console.log("");
+  console.log(`## ATTRIBUTION LOST ${attributionLostMutants.length} MUTANT(S) (R175)`);
+  console.log("");
+  console.log(
+    "Each was reported `no-coverage` by A and SCORED by B. If B is `--mode none` this is proof, " +
+      "not inference: that mode runs every mutant against every green test, so the mutant ran " +
+      "under the same suite A called it uncovered by.",
+  );
+  console.log("");
+  for (const line of attributionLostMutants) console.log(`  ${line}`);
+  console.log("");
+}
 
 // ------------------------------------------------------------------- 3. aggregate, last
 console.log("## Counts (weakest signal, reported last)\n");

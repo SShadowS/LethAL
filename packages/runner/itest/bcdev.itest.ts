@@ -583,6 +583,16 @@ function assertVerdictTable(report: SessionReport): void {
   assert.equal(report.counts.killed, EXPECTED.killed, "killed count mismatch");
   assert.equal(report.counts.survived, EXPECTED.survived, "survived count mismatch");
   assert.equal(report.counts.noCoverage, EXPECTED.noCoverage, "no-coverage count mismatch");
+  // R175: pins the ABSENCE. A naming gap means the line map could not place a line BC says executed,
+  // in source LethAL itself emitted, and every mutant in that object then reports `no-coverage` for
+  // a reason that is ours rather than the suite's. No valid AL should produce one, so a rise here is
+  // a regression in attribution, not a change in the fixture — and it would otherwise be invisible,
+  // because those mutants keep the same verdict and the same counts.
+  assert.equal(
+    report.unplaceableCount,
+    0,
+    `attribution could not place ${report.unplaceableCount} mutant(s): ${report.unplaceableMutants.join(", ")}`,
+  );
 
   const killed = report.mutants.filter((m) => m.verdict === "killed");
   assert.equal(killed.length, EXPECTED.killed);

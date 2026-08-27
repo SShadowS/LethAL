@@ -28,6 +28,33 @@ bun scripts/probe-r58-differential.ts --project fixtures/sandbox-app \
 bun scripts/probe-r58-compare.ts <scratch>/a.json <scratch>/b.json
 ```
 
+## The GROUND-TRUTH comparison, which is the one that can prove attribution wrong
+
+`--mode none` uses no attribution at all: it runs every mutant against every green test. So run the
+mode you are changing against `none`, and any mutant the attributed side called `no-coverage` that
+`none` **KILLED** is a proven attribution failure, per mutant, by name. Not an inference: a green
+test executed the mutated code and noticed, so a real killing test was lost.
+
+**Only a kill is proof.** `no-coverage -> survived` is the ORDINARY outcome for a genuinely
+uncovered mutant: run against tests that never call its procedure it stays inert and survives having
+been reached by nothing. Measured on `fixtures/sandbox-app`, all four `Sandbox Pricing` mutants move
+that way and are legitimately untouched by any test. Treating those as failures would flag every
+honestly-uncovered mutant in every project.
+
+```bash
+bun scripts/probe-r58-differential.ts --project <p> --tests <t> --mode fenced --out <scratch>/a.json
+bun scripts/probe-r58-differential.ts --project <p> --tests <t> --mode none   --out <scratch>/b.json
+bun scripts/probe-r58-compare.ts <scratch>/a.json <scratch>/b.json
+```
+
+`probe-r58-compare.ts` reports these under **ATTRIBUTION LOST N MUTANT(S) (R175)**, above the
+aggregate counts.
+
+This skill documented only `procedure` vs `fenced` until 2026-08-27, so the one comparison that can
+catch an R175-class failure was the one nobody was told to run — while `--mode none` had been
+supported by the probe the whole time. R175 reached us from a downstream user reporting 223 of 2058
+mutants (10.8%) across 17 reports that were never executed.
+
 For a real project behind an environment tool, drive `lethal run` twice with two configs differing
 ONLY in `bcdev.coverageMode` and pass the two `--out` reports to the same compare script — it
 accepts either shape and says so when per-test coverage is unavailable.

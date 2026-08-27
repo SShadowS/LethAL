@@ -68,6 +68,15 @@ export interface LineMapEntry {
    * The rule is: objects PARTITION the file — each begins one line after the previous one ends,
    * with the first beginning at line 1. Leading blank lines belong to the object that FOLLOWS them.
    *
+   * The FIRST object's base was the weak half of that rule for a long time: every row measured above
+   * is a second or third object, where "previous end + 1" and "own keyword line" differ, and for a
+   * first object under a file header they differ by the header's length while every measurement
+   * agreed. DISCRIMINATED 2026-08-27 on a gated fixture: `DataShiftOps.Codeunit.al` carries a
+   * 31-line comment header, so its `codeunit` keyword is at FILE line 32, and all twelve of its
+   * mutants at file lines 37..47 come back `coverageAttribution: "exact"`. Under "own keyword line"
+   * the map would be looking up lines 6..16 and would name nothing. So the header IS part of the
+   * first object's numbering, and base 1 is right.
+   *
    * The third row is the one that proves it. With a single blank line, "previous end + 1" and
    * "keyword − 1" coincide, so the first two measurements agreed with each other AND with a wrong
    * hypothesis. Two blank lines separate them: object 79324's `Third` spans FILE lines 46-49, and
