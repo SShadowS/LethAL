@@ -90,6 +90,8 @@ export const toggleBlankString: MutationOperator = {
   targetNodeKinds: [ALNodeKind.text_literal],
   producesNodeKinds: [ALNodeKind.text_literal],
   requiresSemantic: [],
+  // R172: R172 names it beside the other two; it rewrites a written string.
+  equivalenceRisk: "value-rewrite",
 
   targets(node: ALSyntaxNode, _ctx: SemanticContext): boolean {
     return toggled(node) !== null;

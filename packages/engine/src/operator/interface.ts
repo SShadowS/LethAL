@@ -87,6 +87,29 @@ export interface ConformanceCase {
   }>;
 }
 
+/**
+ * R172: this operator's survivors are LIKELIER than average to be equivalent mutants, and why.
+ *
+ * An equivalent mutant is a survivor that no test could ever kill, because the mutated program
+ * behaves identically. It is reported exactly like a survivor that IS a lead, so a reader chases it
+ * and loses the time the tool exists to save. Deciding equivalence in general is undecidable and the
+ * tractable cases need dataflow the AST layer does not have, so this does NOT claim any particular
+ * mutant is equivalent. It says which operators' survivors are worth reading with that in mind.
+ *
+ * Only declared where a spike MEASURED an equivalent survivor, not wherever one seems plausible.
+ * Over-declaring makes the hint useless the same way R175's first detector did: a flag that fires on
+ * most survivors retires the word "survivor" without replacing it.
+ *
+ * Nothing about a verdict or the score moves. See `SessionReport.likelyEquivalentSurvivors`.
+ */
+export type EquivalenceRisk =
+  /** The operator rewrites a WRITTEN or COMPARED value. If nothing downstream reads it, the mutant
+   *  is equivalent and no source-derived layer can see that. */
+  | "value-rewrite"
+  /** The operator bounds a LOOP. Where the covering test drives exactly one iteration, truncating to
+   *  one iteration changes nothing. */
+  | "loop-truncation";
+
 export interface MutationOperator {
   readonly name: string;
   readonly version: string;
@@ -97,5 +120,7 @@ export interface MutationOperator {
   targets(node: ALSyntaxNode, ctx: SemanticContext): boolean;
   generate(node: ALSyntaxNode, ctx: SemanticContext): readonly MutationSpec[];
   isEquivalent?(spec: MutationSpec, ctx: SemanticContext): boolean;
+  /** R172 — see `EquivalenceRisk`. Absent means no elevated risk is claimed. */
+  readonly equivalenceRisk?: EquivalenceRisk;
   readonly conformanceTests: readonly ConformanceCase[];
 }

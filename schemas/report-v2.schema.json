@@ -854,6 +854,45 @@
         "type": "string"
       }
     },
+    "likelyEquivalentSurvivors": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "count",
+        "byRisk"
+      ],
+      "properties": {
+        "count": {
+          "type": "number"
+        },
+        "byRisk": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "risk",
+              "mutants",
+              "meaning"
+            ],
+            "properties": {
+              "risk": {
+                "type": "string"
+              },
+              "mutants": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "meaning": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
     "quarantined": {
       "type": "object",
       "additionalProperties": false,

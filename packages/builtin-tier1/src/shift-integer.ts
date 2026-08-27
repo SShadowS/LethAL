@@ -75,6 +75,8 @@ export const shiftInteger: MutationOperator = {
   targetNodeKinds: [ALNodeKind.integer_literal],
   producesNodeKinds: [ALNodeKind.integer_literal],
   requiresSemantic: [],
+  // R172: MEASURED equivalent on `sandbox-hang`: `Counter := 0` -> `1` still returns 3, because the loop walks 2,3 instead of 1,2,3.
+  equivalenceRisk: "value-rewrite",
 
   targets(node: ALSyntaxNode, _ctx: SemanticContext): boolean {
     return shifted(node) !== null;

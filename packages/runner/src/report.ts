@@ -1,3 +1,5 @@
+import { tier1Operators } from "@lethal/builtin-tier1";
+import { tier2Operators } from "@lethal/builtin-tier2";
 import type { MutantManifestEntry } from "@lethal/schemata";
 import { type AlRunnerCanaryResult, alRunnerCanaryWarnings } from "./al-runner-canary";
 import {
@@ -1020,6 +1022,28 @@ export interface SessionReport {
    */
   readonly unplaceableMutants: readonly string[];
   /**
+   * R172. Survivors whose OPERATOR declares an elevated equivalence risk, grouped by that risk.
+   *
+   * An equivalent mutant is a survivor no test could ever kill, because the mutated program behaves
+   * identically. It is reported exactly like a survivor that IS a lead, so a reader chases it and
+   * loses the time this tool exists to save. Deciding equivalence is undecidable in general, so this
+   * claims nothing about any particular mutant: it says which survivors are worth reading with that
+   * possibility in mind, the way `platformArtifactKills` hints at a kill's mechanism without moving
+   * the verdict.
+   *
+   * Absent when no survivor came from a declaring operator. Nothing here is subtracted from
+   * `mutationScore` and no verdict moves.
+   */
+  readonly likelyEquivalentSurvivors?: {
+    readonly count: number;
+    readonly byRisk: ReadonlyArray<{
+      readonly risk: string;
+      /** `mutantCode`s, sorted — a stable list a gate can assert on. */
+      readonly mutants: readonly string[];
+      readonly meaning: string;
+    }>;
+  };
+  /**
    * Set only when the session latched unsafe (spec §8/§12) — see `QUARANTINE_INTERPRETATION` for
    * what its presence means to a reader and how to recover. `reason` is `SessionSafety.reason`
    * verbatim: it names the stranded op (method + mutant id) that tripped the latch.
@@ -1530,6 +1554,30 @@ function buildExecutionContexts(
  * folded from `events` by `foldEvents` (report-fold.ts), which throws rather than defaulting when a
  * mandatory event is missing. See that file's doc comment for the full rationale.
  */
+/**
+ * R172: what each `EquivalenceRisk` means to a reader. Prose lives HERE and only here.
+ */
+const EQUIVALENCE_RISK_EXPLANATIONS: Readonly<Record<string, string>> = {
+  "value-rewrite":
+    "This operator rewrites a written or compared VALUE. Where nothing downstream reads that value, " +
+    "the mutant is equivalent and no source-derived layer can see it without dataflow. Read these " +
+    "survivors as leads only after checking that something actually depends on the value.",
+  "loop-truncation":
+    "This operator bounds a LOOP. Where the covering test drives exactly one iteration, truncating " +
+    "to one iteration changes nothing and the mutant is equivalent. A survivor here may mean the " +
+    "test drives one row, which is itself the finding.",
+};
+
+/**
+ * Operator name -> declared risk, built from the registry so a newly-tagged operator needs no change
+ * here. Tier 2 is included for the same reason, even though none declares a risk today.
+ */
+const EQUIVALENCE_RISK_BY_OPERATOR: ReadonlyMap<string, string> = new Map(
+  [...tier1Operators, ...tier2Operators]
+    .filter((o) => o.equivalenceRisk !== undefined)
+    .map((o) => [o.name, o.equivalenceRisk as string]),
+);
+
 export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): SessionReport {
   const input = foldEvents(statics, events);
   // The two legacy fields are VIEWS over `input.excludedSites`, not a parallel computation — see
@@ -1731,6 +1779,31 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     else list.push(m.mutantCode);
   }
   if (platformKillsByMechanism.size > 0) caveats.push("platform-artifact-kills");
+  // R172: survivors whose OPERATOR declares an elevated equivalence risk. Looked up by operator NAME
+  // against the registry rather than carried per mutant, because the risk is a property of the
+  // operator and duplicating it into every manifest entry would let the two drift.
+  const equivalentByRisk = new Map<string, string[]>();
+  for (const m of mutants) {
+    if (m.verdict !== "survived") continue;
+    const risk = EQUIVALENCE_RISK_BY_OPERATOR.get(m.operatorName);
+    if (risk === undefined) continue;
+    const list = equivalentByRisk.get(risk);
+    if (list === undefined) equivalentByRisk.set(risk, [m.mutantCode]);
+    else list.push(m.mutantCode);
+  }
+  const likelyEquivalentSurvivors =
+    equivalentByRisk.size === 0
+      ? undefined
+      : {
+          count: [...equivalentByRisk.values()].reduce((n, l) => n + l.length, 0),
+          byRisk: [...equivalentByRisk.entries()]
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([risk, list]) => ({
+              risk,
+              mutants: [...list].sort(),
+              meaning: EQUIVALENCE_RISK_EXPLANATIONS[risk] ?? risk,
+            })),
+        };
   const platformArtifactKills =
     platformKillsByMechanism.size === 0
       ? undefined
@@ -1861,6 +1934,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
         }
       : {}),
     ...(platformArtifactKills !== undefined ? { platformArtifactKills } : {}),
+    ...(likelyEquivalentSurvivors !== undefined ? { likelyEquivalentSurvivors } : {}),
     ...(assertionScreen !== undefined ? { assertionScreen } : {}),
     ...(runnerDisagreementTests.length > 0
       ? {
@@ -2062,6 +2136,20 @@ export function renderConsole(r: SessionReport): string {
   // R72: same prominence, and the reader's default reading is the one to interrupt — a kill counts
   // as evidence the suite works. This says which kills cannot carry that weight, and says it
   // without moving a single verdict.
+  if (r.likelyEquivalentSurvivors !== undefined) {
+    const e = r.likelyEquivalentSurvivors;
+    lines.push(
+      `LIKELY-EQUIVALENT SURVIVORS: ${e.count} survivor(s) come from operators whose survivors are ` +
+        "likelier than average to be EQUIVALENT — mutants no test could ever kill, because the " +
+        "mutated program behaves identically. Nothing here is subtracted from the score and no " +
+        "verdict moved; this only says which survivors to read with that possibility in mind, so a " +
+        "reader does not spend the time on them that this tool exists to save (R172).",
+    );
+    for (const g of e.byRisk) {
+      lines.push(`  ${g.risk} (${g.mutants.length}): ${g.meaning}`);
+      lines.push(`    ${g.mutants.join(", ")}`);
+    }
+  }
   if (r.platformArtifactKills !== undefined) {
     lines.push(
       `PLATFORM-ARTIFACT KILL SCREEN: ${r.platformArtifactKills.killedCount} killed mutant(s) sit at a site BC is measured to refuse. ${r.platformArtifactKills.diagnosis}`,

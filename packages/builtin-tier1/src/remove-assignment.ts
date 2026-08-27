@@ -59,6 +59,8 @@ export const removeAssignment: MutationOperator = {
   targetNodeKinds: [ALNodeKind.assignment_statement],
   producesNodeKinds: [ALNodeKind.assignment_statement],
   requiresSemantic: [],
+  // R172: 16 survivors on `itest:tables` in one wave, and its own doc comment names an assignment whose target is never read again as the shape it cannot see.
+  equivalenceRisk: "value-rewrite",
 
   targets(node: ALSyntaxNode, _ctx: SemanticContext): boolean {
     if (node.rawKind !== ALNodeKind.assignment_statement) return false;

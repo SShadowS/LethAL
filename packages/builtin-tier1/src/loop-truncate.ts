@@ -59,6 +59,8 @@ export const loopTruncate: MutationOperator = {
   targetNodeKinds: [ALNodeKind.repeat_statement],
   producesNodeKinds: [ALNodeKind.boolean_literal],
   requiresSemantic: [],
+  // R172: MEASURED equivalent on `sandbox-hang`'s `WalkOneRow`: truncating a one-iteration loop to one iteration changes nothing.
+  equivalenceRisk: "loop-truncation",
 
   targets(node: ALSyntaxNode, _ctx: SemanticContext): boolean {
     return exitCondition(node) !== null;
