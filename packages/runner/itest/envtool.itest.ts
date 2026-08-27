@@ -355,12 +355,7 @@ function refuseSelfRecordWhileUnverified(): void {
   if (UNVERIFIED_MOVES.length === 0) return;
   if (existsSync(BASELINE_PATH)) return;
   throw new Error(
-    `envtool itest: the committed baseline is absent and ${UNVERIFIED_MOVES.length} constant move(s) ` +
-      "here were never verified against a live environment, so recording one now would publish a " +
-      "prediction as a measurement. Confirm each of these BY NAME against `itest:bcdev` run on the " +
-      "same day, then clear UNVERIFIED_MOVES in this file in the same commit that records the " +
-      `baseline:` +
-      UNVERIFIED_MOVES.map((m) => "\n  - " + m).join(""),
+    `envtool itest: the committed baseline is absent and ${UNVERIFIED_MOVES.length} constant move(s) here were never verified against a live environment, so recording one now would publish a prediction as a measurement. Confirm each of these BY NAME against \`itest:bcdev\` run on the same day, then clear UNVERIFIED_MOVES in this file in the same commit that records the baseline:${UNVERIFIED_MOVES.map((m) => `\n  - ${m}`).join("")}`,
   );
 }
 
