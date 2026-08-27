@@ -36,3 +36,8 @@ lethal.sqlite-wal
 .altestrunner/
 .stryker-tmp/
 reports/mutation/
+
+# R178: `lethal export` output embeds full source; never commit it (guarded in
+# scripts/redact-campaign-report.test.ts).
+mutation-report.json
+mutation-report.html

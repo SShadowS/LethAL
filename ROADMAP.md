@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**9 of 176 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**8 of 176 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -112,7 +112,7 @@ that ordering is the priority.
 - **R173** · Three operators can still strand a loop, and R164's cession deliberately did not cover them · [R173.md](docs/roadmap/R173.md) · open, and NARROWED by measurement 2026-08-27. The residual is not 57 vague sites, it is ONE operator on ONE…
 - **R174** · A Stryker.NET-style `ignoreMethods` call-site ignore list — designed, measured on real AL, refused on value · [R174.md](docs/roadmap/R174.md) · closed 2026-08-26 — refused on VALUE after measurement: 0.38% of raw specs for the safe pattern set, 1.70%…
 - **R176** · Six shared CLI flags were accepted by subcommands that ignore them, and R151 had already named the hazard · [R176.md](docs/roadmap/R176.md) · done (this commit) — the per-flag guard R151 built for `--json` is now a table over every shared flag…
-- **R178** · No CI system can display a LethAL run: four bespoke JSON surfaces and no interchange format · [R178.md](docs/roadmap/R178.md) · open, and SPIKED 2026-08-27: `scripts/export-mutation-elements.ts` projects a `SessionReport` into…
+- **R178** · No CI system can display a LethAL run: four bespoke JSON surfaces and no interchange format · [R178.md](docs/roadmap/R178.md) · done (this commit) — `lethal export <report.json> --format mutation-elements --project <dir> --out <path>`…
 
 ## Backends and tooling
 

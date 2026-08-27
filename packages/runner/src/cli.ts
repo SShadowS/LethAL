@@ -59,6 +59,7 @@ import { assertExplainableReport, explain } from "./explain";
 import { HarnessVerifier } from "./harness";
 import type { LeaseSnapshot } from "./harness";
 import { LeaseClient } from "./lease";
+import { toMutationElements } from "./mutation-elements";
 import {
   LARGE_RUN_MUTANT_THRESHOLD,
   MIN_MUTANT_BUDGET_MS,
@@ -518,6 +519,36 @@ export interface DoctorCliConfig {
  * <file>` command, and reads nothing else: no server, no database, no config. It is the only
  * subcommand that touches no environment at all.
  */
+/**
+ * `lethal export <report.json> --format mutation-elements --project <dir>` — R178.
+ *
+ * Projects a finished report into an interchange format a CI system can DISPLAY. Like `explain`, it
+ * takes its input as a positional and reads no server, database or config; unlike `explain` it needs
+ * `--project`, because the target format embeds each file's SOURCE so the rendered report can
+ * highlight the mutated span.
+ *
+ * `--format` is required with a single valid value today rather than defaulting: a default would
+ * make the next format a silent behaviour change for everyone already scripting this.
+ */
+export interface ExportCliConfig {
+  readonly mode: "export";
+  readonly reportPath: string;
+  readonly format: "mutation-elements";
+  readonly projectDir: string;
+  /** Where the JSON goes. */
+  readonly outPath: string;
+  /**
+   * Deliberately NO html option. Rendering needs the `mutation-testing-elements` bundle, and this
+   * CLI ships as a standalone signed binary, so supporting it would mean EMBEDDING 238 KB of
+   * third-party JavaScript into a signed executable. That is a supply-chain decision this command
+   * should not make on a user's behalf, and the ecosystem already renders the JSON: `npx
+   * mutation-testing-elements`, or any Stryker html reporter. `scripts/export-mutation-elements.ts`
+   * still writes a self-contained file for local use, where node_modules exists.
+   */
+  /** The schema requires these and LethAL has no such concept — see `ElementsOptions.thresholds`. */
+  readonly thresholds: { readonly high: number; readonly low: number };
+}
+
 export interface ExplainCliConfig {
   readonly mode: "explain";
   readonly reportPath: string;
@@ -580,6 +611,7 @@ export type CliConfig =
   | ForceResetLeaseCliConfig
   | DoctorCliConfig
   | ExplainCliConfig
+  | ExportCliConfig
   | CampaignCliConfig
   | InitCliConfig
   | HelpCliConfig
@@ -593,6 +625,7 @@ const VALID_SUBCOMMANDS = [
   "force-reset-lease",
   "doctor",
   "explain",
+  "export",
   "campaign",
 ] as const;
 
@@ -608,7 +641,11 @@ const CAMPAIGN_ACTIONS = ["freeze", "anchors", "compare"] as const;
  * positional has to be added here deliberately, which is a decision someone makes rather than a
  * silence that spreads.
  */
-const SUBCOMMANDS_TAKING_POSITIONALS: ReadonlySet<string> = new Set(["campaign", "explain"]);
+const SUBCOMMANDS_TAKING_POSITIONALS: ReadonlySet<string> = new Set([
+  "campaign",
+  "explain",
+  "export",
+]);
 
 type CampaignAction = (typeof CAMPAIGN_ACTIONS)[number];
 
@@ -687,9 +724,27 @@ USAGE
   lethal force-reset-lease --server <url> --instance <name> --config <path> [--project <dir>]
   lethal doctor            --config <path> [--project <dir>] [--json]
   lethal explain           <report.json> [--top <n>]
+  lethal export            <report.json> --format mutation-elements --project <dir> --out <path>
+                                         [--thresholds <high,low>]
   lethal campaign freeze   --manifest <path> --stage <name> --report <path> --expect-mutants <n>
   lethal campaign anchors  --manifest <path> --stage <name> --report <path> [--project <dir>]
   lethal campaign compare  --manifest <path> --stage <name> --report <path>
+
+EXPORT — R178. Projects a finished report into a format a CI system can DISPLAY.
+  --format <name>            required, no default. Only 'mutation-elements' today: the Stryker
+                             interchange schema that Azure DevOps' PublishMutationReport task, the
+                             Stryker dashboard and the GitLab/GitHub renderers all read. No default
+                             on purpose — one would make the next format a silent behaviour change
+  --project <dir>            the project the report was produced against. REQUIRED here because the
+                             schema embeds each file's SOURCE so the rendered report can highlight
+                             the mutated span, which also means the output must not be published for
+                             a third party's code
+  --out <path>               where the JSON goes
+  --thresholds <high,low>    mutation-score thresholds written into the report, 0..100, default
+                             80,60. They colour the rendered report; LethAL itself gates on nothing,
+                             and has no threshold concept of its own
+  Render the JSON to HTML with 'npx mutation-testing-elements'; this command does not, because it
+  ships as a signed standalone binary and that would mean embedding third-party JavaScript in it.
 
 RUN — required
   --project <dir>            AL project to mutate (the app under test)
@@ -941,6 +996,10 @@ export const RUN_FLAGS = {
   // R150: `lethal explain --top <n>`. In the shared table for the same reason as every flag above —
   // `parseArgs` runs in strict mode over ONE option set for every subcommand.
   top: { type: "string" },
+  // R178: `lethal export`. In the shared table for the same strict-mode reason as every flag above,
+  // and owned by `export` alone in FLAG_OWNERS so another subcommand cannot swallow one silently.
+  format: { type: "string" },
+  thresholds: { type: "string" },
   // R151: `lethal doctor --json`. Shared table, same reason; refused for every other subcommand at
   // the top of `parseCliConfig` rather than silently ignored there.
   json: { type: "boolean", default: false },
@@ -988,6 +1047,16 @@ const FLAG_OWNERS: ReadonlyArray<{
     instead: "It pre-commits a mutant count for `lethal campaign freeze`.",
   },
   { flag: "top", owners: ["explain"], instead: "It bounds `lethal explain`'s survivor list." },
+  {
+    flag: "format",
+    owners: ["export"],
+    instead: "It selects `lethal export`'s output format.",
+  },
+  {
+    flag: "thresholds",
+    owners: ["export"],
+    instead: "It sets the mutation-score thresholds `lethal export` writes into the report.",
+  },
   {
     flag: "force",
     owners: ["init"],
@@ -1239,6 +1308,65 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
       configPath,
       ...(project !== undefined && project !== "" ? { projectDir: project } : {}),
       ...(values.json === true ? { json: true } : {}),
+    };
+  }
+
+  if (subcommand === "export") {
+    const [, reportPath] = positionals;
+    if (reportPath === undefined || reportPath === "") {
+      throw new Error(
+        "missing required <report.json> (the finished report to convert, e.g. the file a run wrote " +
+          "with --out). `lethal export` reads only that file and the project's sources.",
+      );
+    }
+    if (values.format !== "mutation-elements") {
+      throw new Error(
+        `--format is required and the only value today is "mutation-elements" (the Stryker interchange schema, which Azure DevOps' PublishMutationReport, the Stryker dashboard and the GitLab/GitHub renderers all read); got ${JSON.stringify(values.format ?? null)}. It has no default on purpose: a default would make the next format a silent behaviour change for everyone already scripting this.`,
+      );
+    }
+    const projectDir = values.project;
+    if (projectDir === undefined || projectDir === "") {
+      throw new Error(
+        "missing required --project <dir>. The target schema embeds each file's SOURCE so the " +
+          "rendered report can highlight the mutated span, so the projection has to read the " +
+          "project this report was produced against.",
+      );
+    }
+    const outPath = values.out;
+    if (outPath === undefined || outPath === "") {
+      throw new Error("missing required --out <file> (where the JSON report is written).");
+    }
+    // `high,low`. Refused rather than defaulted-past when malformed: these end up in the rendered
+    // report as the pass/fail colouring, so a typo would silently recolour someone's build.
+    let thresholds = { high: 80, low: 60 };
+    if (values.thresholds !== undefined) {
+      const parts = values.thresholds.split(",").map((x) => Number(x.trim()));
+      const [high, low] = parts;
+      if (
+        parts.length !== 2 ||
+        high === undefined ||
+        low === undefined ||
+        !Number.isFinite(high) ||
+        !Number.isFinite(low) ||
+        high < 0 ||
+        low < 0 ||
+        high > 100 ||
+        low > 100 ||
+        low > high
+      ) {
+        throw new Error(
+          `--thresholds must be "<high>,<low>", both 0..100 with high >= low, got ${JSON.stringify(values.thresholds)}. They colour the rendered report; LethAL itself gates on nothing.`,
+        );
+      }
+      thresholds = { high, low };
+    }
+    return {
+      mode: "export",
+      reportPath,
+      format: "mutation-elements",
+      projectDir,
+      outPath,
+      thresholds,
     };
   }
 
@@ -3899,6 +4027,59 @@ export async function doctorFromCli(
  * `MalformedReportError`'s own message. There is no "explained what it could" path, deliberately —
  * see `assertExplainableReport`.
  */
+/**
+ * R178: `lethal export`. Projects a finished report into the Stryker interchange schema and,
+ * optionally, the self-contained HTML a CI system renders.
+ *
+ * SOURCE IS EMBEDDED, by the schema's own requirement, so the rendered report can highlight each
+ * mutated span. Against a project's own code in its own pipeline that is necessary and fine; it is
+ * also exactly what the 2026-08-09 redaction ruling forbids PUBLISHING for a third party. The notice
+ * below is printed every time rather than documented once, because the person who needs it is the
+ * one about to commit the output somewhere.
+ */
+export async function exportFromCli(parsed: ExportCliConfig): Promise<number> {
+  let raw: string;
+  try {
+    raw = await readFile(parsed.reportPath, "utf8");
+  } catch (err) {
+    throw new Error(
+      `export: could not read ${parsed.reportPath} — ${err instanceof Error ? err.message : String(err)}. Pass the JSON report a run wrote with --out.`,
+    );
+  }
+  const report = JSON.parse(raw) as SessionReport;
+  const { report: projected, losses } = await toMutationElements(report, {
+    projectDir: parsed.projectDir,
+    thresholds: parsed.thresholds,
+  });
+  await writeFile(parsed.outPath, `${JSON.stringify(projected, null, 2)}${"\n"}`, "utf8");
+  const fileCount = Object.keys(projected.files).length;
+  console.log(
+    `wrote ${parsed.outPath}: ${report.mutants.length} mutant(s) across ${fileCount} file(s)`,
+  );
+
+  console.log(
+    "  Render it with `npx mutation-testing-elements` (or any Stryker html reporter) to get the " +
+      "HTML that Azure DevOps' PublishMutationReport task displays; the JSON alone is what the " +
+      "Stryker dashboard and the GitLab/GitHub renderers take.",
+  );
+
+  console.log(
+    `${"\n"}NOTE: this output EMBEDS the full source of every mutated file, because the schema requires it to highlight each mutant. That is correct for your own code in your own pipeline. Do not commit it anywhere public for a THIRD PARTY's source — see docs/roadmap/R175.md's sibling ruling in scripts/redact-campaign-report.ts.`,
+  );
+  if (losses.length > 0) {
+    console.log(
+      `${"\n"}NOT CARRIED ACROSS — the schema describes MUTANTS and has one status each:`,
+    );
+    for (const l of losses) console.log(`  - ${l}`);
+    console.log(
+      "  (Per-mutant qualifications ARE carried, in each mutant's `description`, which the renderer " +
+        "shows: R175 unplaceable, R172 likely-equivalent, carried survivors, approximate covering " +
+        "sets.)",
+    );
+  }
+  return 0;
+}
+
 export async function explainFromCli(parsed: ExplainCliConfig): Promise<number> {
   let raw: string;
   try {
@@ -4153,6 +4334,9 @@ async function main(): Promise<number> {
   }
   if (parsed.mode === "explain") {
     return await explainFromCli(parsed);
+  }
+  if (parsed.mode === "export") {
+    return await exportFromCli(parsed);
   }
   if (parsed.mode === "campaign") {
     return await campaignFromCli(parsed);

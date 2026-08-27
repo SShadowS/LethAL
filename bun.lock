@@ -8,6 +8,7 @@
         "@biomejs/biome": "^1.9.4",
         "@stryker-mutator/core": "^10.0.0",
         "@types/bun": "latest",
+        "mutation-testing-report-schema": "^3.9.0",
         "typescript": "^5.6.3",
       },
     },
@@ -435,7 +436,7 @@
 
     "mutation-testing-metrics": ["mutation-testing-metrics@3.8.4", "", { "dependencies": { "mutation-testing-report-schema": "3.8.4" } }, "sha512-DZcmndJBH6nrNs3tpiB3OcMVq9KkG2cHCpJSnDxSxPwi9qrafRmoec40xjhkbzOoX1n7/4UkDqg5tIj4A6nvCw=="],
 
-    "mutation-testing-report-schema": ["mutation-testing-report-schema@3.8.4", "", {}, "sha512-s4G71R6Lt/PpZ0cqeglIcgyBdzLM8E+SeCHZAPg1wkSsPtRBa4XfPzAozYKdiJk/TLbNEEb7En9t0/bveuPuxA=="],
+    "mutation-testing-report-schema": ["mutation-testing-report-schema@3.9.0", "", {}, "sha512-28CobrcLdQm35zySemaLMKrUpVccLMA1DekUGtfezOSmnI0Xq8oJisixYnO0BQYIwKCkKL7+AE71/uWq/vFSJQ=="],
 
     "mute-stream": ["mute-stream@3.0.0", "", {}, "sha512-dkEJPVvun4FryqBmZ5KhDo0K9iDXAwn08tMLDinNdRBNPcYEDiWYysLcc6k3mjTMlbP9KyylvRpd4wFtwrT9rw=="],
 
@@ -557,6 +558,10 @@
 
     "zod-to-json-schema": ["zod-to-json-schema@3.25.2", "", { "peerDependencies": { "zod": "^3.25.28 || ^4" } }, "sha512-O/PgfnpT1xKSDeQYSCfRI5Gy3hPf91mKVDuYLUHZJMiDFptvP41MSnWofm8dnCm0256ZNfZIM7DSzuSMAFnjHA=="],
 
+    "@stryker-mutator/api/mutation-testing-report-schema": ["mutation-testing-report-schema@3.8.4", "", {}, "sha512-s4G71R6Lt/PpZ0cqeglIcgyBdzLM8E+SeCHZAPg1wkSsPtRBa4XfPzAozYKdiJk/TLbNEEb7En9t0/bveuPuxA=="],
+
+    "@stryker-mutator/core/mutation-testing-report-schema": ["mutation-testing-report-schema@3.8.4", "", {}, "sha512-s4G71R6Lt/PpZ0cqeglIcgyBdzLM8E+SeCHZAPg1wkSsPtRBa4XfPzAozYKdiJk/TLbNEEb7En9t0/bveuPuxA=="],
+
     "body-parser/content-type": ["content-type@2.0.0", "", {}, "sha512-j/O/d7GcZCyNl7/hwZAb606rzqkyvaDctLmckbxLzHvFBzTJHuGEdodATcP3yIRoDrLHkIATJuvzbFlp/ki2cQ=="],
 
     "body-parser/qs": ["qs@6.15.3", "", { "dependencies": { "es-define-property": "^1.0.1", "side-channel": "^1.1.1" } }, "sha512-O9gl3zCl5h5blw1KGUzQKhA5oUXSl8rwUIM5o0S3nCXMliSvy5Dzx7/DJcI+SwgICv+IneSZwhBh1oSyEHA71A=="],
@@ -566,6 +571,8 @@
     "express/qs": ["qs@6.15.3", "", { "dependencies": { "es-define-property": "^1.0.1", "side-channel": "^1.1.1" } }, "sha512-O9gl3zCl5h5blw1KGUzQKhA5oUXSl8rwUIM5o0S3nCXMliSvy5Dzx7/DJcI+SwgICv+IneSZwhBh1oSyEHA71A=="],
 
     "mutation-server-protocol/zod": ["zod@4.4.3", "", {}, "sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ=="],
+
+    "mutation-testing-metrics/mutation-testing-report-schema": ["mutation-testing-report-schema@3.8.4", "", {}, "sha512-s4G71R6Lt/PpZ0cqeglIcgyBdzLM8E+SeCHZAPg1wkSsPtRBa4XfPzAozYKdiJk/TLbNEEb7En9t0/bveuPuxA=="],
 
     "type-is/content-type": ["content-type@2.0.0", "", {}, "sha512-j/O/d7GcZCyNl7/hwZAb606rzqkyvaDctLmckbxLzHvFBzTJHuGEdodATcP3yIRoDrLHkIATJuvzbFlp/ki2cQ=="],
   }

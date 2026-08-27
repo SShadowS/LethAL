@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -198,6 +198,19 @@ describe("redact-campaign-report", () => {
 
     const r = run(["--check", ...mustBeClean.map((p) => join(repoRoot, p))]);
     expect(r.status).toBe(0);
+  });
+
+  test("R178: no exported mutation report is COMMITTED, because it embeds full source", () => {
+    // `lethal export --format mutation-elements` writes a file whose schema REQUIRES each mutated
+    // file's complete source, so the renderer can highlight the span. That is correct for a
+    // project's own code in its own pipeline and is exactly what the 2026-08-09 ruling forbids
+    // publishing for a third party's. The command warns on every run, but a warning is not a
+    // control: this is, because it fails if one is ever committed to this public repository.
+    const repoRoot = join(import.meta.dir, "..");
+    const tracked = execFileSync("git", ["ls-files"], { cwd: repoRoot, encoding: "utf8" })
+      .split(/\r?\n/)
+      .filter((f) => /mutation-report.*\.(json|html)$/i.test(f));
+    expect(tracked).toEqual([]);
   });
 
   test("every first-party exemption is MECHANICALLY first-party, not just claimed", () => {
