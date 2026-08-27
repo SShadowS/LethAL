@@ -192,8 +192,42 @@ Stated so a consumer does not read an absence as a finding.
 - A test that opens a `TestPage` cannot be scored, and on the default path one such test can hang
   and quarantine the whole run. The report names the refusal rather than guessing at a verdict.
 - A mutant that never terminates is recorded as an unmeasured error, not scored. AL cannot preempt
-  a running loop.
+  a running loop, so on the default path (`--stop-hung-sessions` off) it strands its tier and every
+  mutant queued behind it is left unmeasured too. **This is the one limit that costs you a whole
+  run rather than one verdict**, so the shapes that can cause it are named below.
 - Coverage is procedure-level, and object-level for extension objects.
+
+
+### Which mutants can fail to terminate
+
+Three shapes have been found and two were fixed by giving the same question a form that cannot hang.
+What remains is small and named, so a stranded run is diagnosable rather than mysterious.
+
+**Fixed, and listed so an older report reads correctly:**
+
+- `negate-conditional` at a `repeat` exit condition. `until Rec.Next() <> 0` never ends once the
+  recordset is exhausted, which is the ordinary one-row fixture. Ceded to `loop-truncate`
+  (`until true`), which runs the body once and cannot hang (R164).
+- `empty-block` on a `while` loop's body. A `while` loop's body is what advances its condition, so
+  emptying it freezes the loop forever. Ceded to `loop-skip` (`while false`), which runs the body
+  zero times (R179).
+
+**Remaining, accepted and documented rather than fixed:**
+
+- `conditional-boundary` at a `while` condition of the form `<position> > 0`. Mutated to `>= 0` it
+  never ends where the value cannot go below zero, which is the `StrPos(S, Find) > 0` scanning
+  idiom. **Seven such sites on one real 554-file app.** It is NOT refused, because the identical
+  syntax on a decrementing counter terminates and is a good mutant, and telling them apart requires
+  reasoning about values rather than syntax (R173).
+- `empty-block` on a `repeat` body whose condition its body advances. `repeat` always runs its body
+  once, so there is no "run it zero times" rewrite to cede to. A handful of sites on the same app,
+  and the count is an estimate rather than a measurement (R179).
+
+**What to do about it.** Nothing, on a first run: the shapes are rare and the report names a
+stranded tier rather than reporting a plausible score. If a run does strand, `--resume` continues it
+and skips the stranded mutant by default. `--stop-hung-sessions` scores these properly as
+`timeout-killed` instead, and it is off by default because it ENDS a session on your server, so do
+not turn it on unless you have been asked to.
 
 Full evidence for each is in [`../README.md`](../README.md) under Limits.
 
