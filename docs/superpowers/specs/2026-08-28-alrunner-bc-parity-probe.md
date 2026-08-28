@@ -159,3 +159,33 @@ because the library never compiled — `[dep-load-fail] Microsoft_Library Assert
 `--precompile` with `BCCOMPILER_DIAG=1` names three independent causes, recorded in the artifact
 handed to upstream. The fourth, `PageActionComputesNonZero`, opens a `TestPage` and fails on bcdev
 too, so it is not a divergence.
+
+---
+
+## CORRECTION, appended 2026-08-28 after building [[R183]]'s canary probe
+
+**"Error-rollback IS modelled on 2.7.0" is too broad, and this document said it.** Building a probe
+to re-measure that claim per session refuted it within the hour. Measured with three tests against
+al-runner 2.7.0.0:
+
+| error caught by | writes rolled back |
+| --- | --- |
+| `asserterror`, no preceding `Commit()` | **YES** |
+| `asserterror`, after an explicit `Commit()` | **YES** |
+| `Codeunit.Run` | **NO** |
+
+The OUTCOME section above is otherwise unchanged and its verdicts stand — but the explanation now has
+one cause rather than two loose ends:
+
+- `CommitThenFail` uses `asserterror`, which rolls back here, so it agrees with bcdev. Its kill is
+  not evidence that transactions work in general.
+- `CommitThenRunValueForm` uses `Codeunit.Run`, which does not, so it diverges.
+
+**The residual is the `Codeunit.Run` transaction boundary and nothing wider.** BC rolls back a failed
+`Codeunit.Run`; al-runner does not. That is one sentence, checkable, and it replaces both "there are
+no transactions" (upstream, too broad in one direction) and "error-rollback is modelled" (this
+document, too broad in the other).
+
+Worth carrying forward: this document's §"What a difference would mean" set out what a divergence
+would prove, and got the reasoning right while getting the mechanism wrong. **A verdict difference
+names the site, not the cause.** The cause needed a separate probe that varied one thing at a time.

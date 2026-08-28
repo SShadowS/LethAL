@@ -1540,6 +1540,7 @@ describe("announceAlRunnerCanary (R7/R8)", () => {
     const canned: AlRunnerCanaryResult = {
       asserterror: "defect-confirmed",
       tableGlobalVar: "defect-not-reproduced",
+      transactionRollback: "defect-not-reproduced",
     };
     let result: AlRunnerCanaryResult | undefined;
     try {
@@ -1569,7 +1570,14 @@ describe("announceAlRunnerCanary (R7/R8)", () => {
     try {
       result = await announceAlRunnerCanary(
         {},
-        fakeCanary({ asserterror: "defect-confirmed", tableGlobalVar: "defect-confirmed" }, calls),
+        fakeCanary(
+          {
+            asserterror: "defect-confirmed",
+            tableGlobalVar: "defect-confirmed",
+            transactionRollback: "defect-not-reproduced",
+          },
+          calls,
+        ),
       );
     } finally {
       console.warn = originalWarn;
@@ -1650,6 +1658,7 @@ describe("withAlRunnerCanary (R7/R8 report persistence)", () => {
     const canary: AlRunnerCanaryResult = {
       asserterror: "defect-confirmed",
       tableGlobalVar: "defect-confirmed",
+      transactionRollback: "defect-not-reproduced",
     };
     const result = withAlRunnerCanary(baseReport, canary);
     expect(result).toEqual({ ...baseReport, alRunnerCanary: canary });

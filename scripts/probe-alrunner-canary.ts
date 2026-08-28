@@ -38,3 +38,9 @@ console.log(
 if (result.tableGlobalVarDetail !== undefined) {
   console.log(`    detail: ${result.tableGlobalVarDetail}`);
 }
+console.log(
+  `R183 transaction rollback: ${result.transactionRollback.padEnd(22)} ${LEGEND[result.transactionRollback] ?? ""}`,
+);
+if (result.transactionRollbackDetail !== undefined) {
+  console.log(`    detail: ${result.transactionRollbackDetail}`);
+}

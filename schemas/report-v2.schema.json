@@ -910,7 +910,8 @@
       "additionalProperties": false,
       "required": [
         "asserterror",
-        "tableGlobalVar"
+        "tableGlobalVar",
+        "transactionRollback"
       ],
       "properties": {
         "asserterror": {
@@ -929,10 +930,21 @@
             "inconclusive"
           ]
         },
+        "transactionRollback": {
+          "type": "string",
+          "enum": [
+            "defect-confirmed",
+            "defect-not-reproduced",
+            "inconclusive"
+          ]
+        },
         "asserterrorDetail": {
           "type": "string"
         },
         "tableGlobalVarDetail": {
+          "type": "string"
+        },
+        "transactionRollbackDetail": {
           "type": "string"
         }
       }

@@ -18,9 +18,23 @@ import { defaultSpawn } from "./publisher";
  * twice. It stays exactly because the binary is not pinned — a machine with an older al-runner
  * on its PATH still gets told, and `alRunnerCanaryWarnings` says which of the two happened.
  *
- * Two independent probes, run ONCE per `--backend al-runner` session (never per mutant — the
- * ~2.5s cost of two al-runner invocations is immaterial against a real mutation run, though it
- * would not be against a single-mutant smoke test):
+ * Three independent probes, run ONCE per `--backend al-runner` session (never per mutant — the
+ * ~4s cost of three al-runner invocations is immaterial against a real mutation run, though it
+ * would not be against a single-mutant smoke test).
+ *
+ * **The third probe's polarity is INVERTED relative to the first two, and misreading it is the
+ * hazard.** R7 and R8 are historical DEFECTS: `defect-not-reproduced` is the expected result and
+ * `defect-confirmed` means an old build. R183's probe pins a gap that is PRESENT on the newest
+ * build, so `defect-confirmed` is the status quo there and `defect-not-reproduced` is the line that
+ * should make someone look, because it would mean the gap has closed.
+ *
+ * It exists because the claim it replaces went stale silently: `AlRunnerBackend.capabilities()`
+ * asserted "`Commit()` and `Rollback()` are no-ops", quoted from upstream docs. A live differential
+ * measured that as too broad — and then this probe measured the first correction ("error-rollback is
+ * modelled") as too broad in the other direction. The accurate statement is per-mechanism, and it is
+ * in `AlRunnerCanaryResult.transactionRollback`.
+ *
+ * The probes:
  *
  * - `asserterror` (R7): `asserterror I := 1;` is a statement that CANNOT raise. A correct AL
  *   interpreter therefore fails this test (asserterror expected an error and none came). The
@@ -38,8 +52,12 @@ import { defaultSpawn } from "./publisher";
  *   the return from `Validate()` back into a later, separate top-level dispatch on the same
  *   variable. So the defect is scoped precisely to table-object globals crossing that one
  *   boundary, not a general "record instance not shared" failure.
+ * - transaction rollback (R183): a codeunit invoked through `Codeunit.Run` inserts a row and then
+ *   raises. `Codeunit.Run` returning FALSE is the error being caught; the question is whether the
+ *   row is still there afterwards. A runtime modelling BC's write transaction discards it. This
+ *   pins the CORRECTED justification for `authoritative: false` — see `AlRunnerCanaryResult`.
  *
- * Both probes are written as a plain (unguarded) `Error()` failure/success rather than as an
+ * All three probes are written as a plain (unguarded) `Error()` failure/success rather than as an
  * `asserterror` assertion themselves — deliberately, since the R7 defect would otherwise
  * contaminate the R8 probe's own signal. An unguarded `Error()` is already proven to fail a
  * test correctly on al-runner (`OverBudgetDetected`'s kills in fixtures/README.md's expected
@@ -51,13 +69,43 @@ export type CanaryVerdict = "defect-confirmed" | "defect-not-reproduced" | "inco
 export interface AlRunnerCanaryResult {
   readonly asserterror: CanaryVerdict;
   readonly tableGlobalVar: CanaryVerdict;
+  /**
+   * R183 — does an error caught by **`Codeunit.Run`** discard the writes made before it?
+   *
+   * **Read the mechanism, not just the word "rollback": al-runner 2.7.0.0 rolls back for one and
+   * not the other, and that is the whole finding.** Measured 2026-08-28 with a three-test probe:
+   *
+   * | error caught by | writes rolled back on al-runner 2.7.0.0 |
+   * | --- | --- |
+   * | `asserterror` | YES, with or without a preceding `Commit()` |
+   * | `Codeunit.Run` | **NO** |
+   *
+   * On BC both roll back. So the residual is precisely the `Codeunit.Run` transaction boundary,
+   * which is also exactly what LethAL's live differential found: `remove-commit` at
+   * `Data Commit Ops.CommitThenFail` (an `asserterror` shape) agrees with bcdev, while
+   * `Data Commit Ops.CommitThenRunValueForm` (a `Codeunit.Run` shape) is killed on bcdev and
+   * survives here. One mechanism, two symptoms.
+   *
+   * This probe measures the `Codeunit.Run` case, so **`defect-confirmed` is the CURRENT, correct
+   * answer on 2.7.0.0** — unlike R7 and R8, where `defect-confirmed` means an old build.
+   * `defect-not-reproduced` here would be an IMPROVEMENT worth acting on, because it would mean the
+   * residual named in `AlRunnerBackend.capabilities()` has closed and that comment needs revisiting.
+   *
+   * It exists because the claim it replaces went stale silently: `capabilities()` asserted
+   * "`Commit()` and `Rollback()` are no-ops", quoted from upstream docs, and that is too broad —
+   * `asserterror` demonstrably rolls back. A comment nobody re-measures is how the R7 justification
+   * went stale before it, so this is the answer R99 reached for that one: measure every session.
+   */
+  readonly transactionRollback: CanaryVerdict;
   /** Present only when the corresponding verdict carries a diagnostic worth surfacing. */
   readonly asserterrorDetail?: string;
   readonly tableGlobalVarDetail?: string;
+  readonly transactionRollbackDetail?: string;
 }
 
 const ASSERTERROR_METHOD = "AsserterrorNeverRaises";
 const TABLE_GLOBAL_VAR_METHOD = "GlobalVarSurvivesValidate";
+const TRANSACTION_ROLLBACK_METHOD = "ErrorDiscardsUncommittedWrite";
 
 // Fixed, arbitrary GUIDs for the two throwaway canary "apps" — never published anywhere, never
 // touching a real project's id space, so there is no reason for these to be random per run.
@@ -68,6 +116,9 @@ const CANARY_TESTS_APP_ID = "f7e1b3a0-2c4d-4e8f-9a1b-3d5c7e9f1a2b";
 // clear of it purely for readability.
 const CANARY_TABLE_ID = 50000;
 const CANARY_TESTS_CODEUNIT_ID = 50001;
+// R183's probe needs a codeunit `Codeunit.Run` can invoke. It lives in the TESTS app, not the data
+// app, purely so the data app's single-id range does not have to widen across the tests app's id.
+const CANARY_WRITER_CODEUNIT_ID = 50002;
 
 function baseAppJson(overrides: {
   id: string;
@@ -160,6 +211,41 @@ const CANARY_TESTS_AL = `codeunit ${CANARY_TESTS_CODEUNIT_ID} "Lethal Canary Tes
         if Rec.TouchCount() <> 1 then
             Error('canary-mismatch TouchCount=%1', Rec.TouchCount());
     end;
+
+    [Test]
+    procedure ${TRANSACTION_ROLLBACK_METHOD}()
+    var
+        Rec: Record "Lethal Canary Data";
+    begin
+        // R183. The writer inserts a row and then raises, so a runtime that models BC's write
+        // transaction discards the row when the error unwinds. \`Codeunit.Run\` returning FALSE is
+        // the error being caught; the row still existing afterwards is the defect.
+        if Codeunit.Run(Codeunit::"Lethal Canary Writer") then
+            Error('canary-probe-broken: the writer returned true, but it always raises');
+        if Rec.Get('ROLLBACK') then
+            Error('canary-rollback-not-modelled: the row written before the error survived it');
+    end;
+}
+`;
+
+/**
+ * The codeunit `${TRANSACTION_ROLLBACK_METHOD}` runs. NOT \`Subtype = Test\` — it must be an ordinary
+ * codeunit, or al-runner would collect its \`OnRun\` as a test and the deliberate \`Error\` would be
+ * reported as a failing test of its own.
+ */
+const CANARY_WRITER_AL = `codeunit ${CANARY_WRITER_CODEUNIT_ID} "Lethal Canary Writer"
+{
+    trigger OnRun()
+    var
+        Rec: Record "Lethal Canary Data";
+    begin
+        Rec.Init();
+        // Assigned, not Validated: the field's OnValidate touches the table global this file's
+        // OTHER probe measures, and one probe must not disturb the other.
+        Rec."No." := 'ROLLBACK';
+        Rec.Insert();
+        Error('canary-rollback-probe: deliberate failure after an uncommitted write');
+    end;
 }
 `;
 
@@ -188,7 +274,7 @@ async function writeCanaryProject(root: string): Promise<{ dataDir: string; test
       id: CANARY_TESTS_APP_ID,
       name: "LethAL AlRunner Canary Tests",
       idFrom: CANARY_TESTS_CODEUNIT_ID,
-      idTo: CANARY_TESTS_CODEUNIT_ID,
+      idTo: CANARY_WRITER_CODEUNIT_ID,
       dependencies: [
         {
           id: CANARY_DATA_APP_ID,
@@ -201,6 +287,7 @@ async function writeCanaryProject(root: string): Promise<{ dataDir: string; test
     "utf8",
   );
   await writeFile(join(testDir, "CanaryTests.Codeunit.al"), CANARY_TESTS_AL, "utf8");
+  await writeFile(join(testDir, "CanaryWriter.Codeunit.al"), CANARY_WRITER_AL, "utf8");
   return { dataDir, testDir };
 }
 
@@ -319,6 +406,7 @@ export async function runAlRunnerCanary(
     try {
       const asserterrorProbe = await probe(transport, dataDir, testDir, ASSERTERROR_METHOD);
       const tableProbe = await probe(transport, dataDir, testDir, TABLE_GLOBAL_VAR_METHOD);
+      const rollbackProbe = await probe(transport, dataDir, testDir, TRANSACTION_ROLLBACK_METHOD);
       // asserterror: a correct backend FAILS this probe. "pass" is the defect.
       const asserterror: CanaryVerdict =
         asserterrorProbe.kind === "inconclusive"
@@ -333,13 +421,25 @@ export async function runAlRunnerCanary(
           : tableProbe.kind === "fail"
             ? "defect-confirmed"
             : "defect-not-reproduced";
+      // transaction rollback: a correct backend PASSES this probe (the row is gone). "fail" means
+      // the row written before the error survived it, which is the absent-transaction defect.
+      const transactionRollback: CanaryVerdict =
+        rollbackProbe.kind === "inconclusive"
+          ? "inconclusive"
+          : rollbackProbe.kind === "fail"
+            ? "defect-confirmed"
+            : "defect-not-reproduced";
       return {
         asserterror,
         tableGlobalVar,
+        transactionRollback,
         ...(asserterrorProbe.note !== undefined
           ? { asserterrorDetail: asserterrorProbe.note }
           : {}),
         ...(tableProbe.note !== undefined ? { tableGlobalVarDetail: tableProbe.note } : {}),
+        ...(rollbackProbe.note !== undefined
+          ? { transactionRollbackDetail: rollbackProbe.note }
+          : {}),
       };
     } finally {
       await transport.close();
@@ -349,8 +449,10 @@ export async function runAlRunnerCanary(
     return {
       asserterror: "inconclusive",
       tableGlobalVar: "inconclusive",
+      transactionRollback: "inconclusive",
       asserterrorDetail: detail,
       tableGlobalVarDetail: detail,
+      transactionRollbackDetail: detail,
     };
   } finally {
     if (root !== undefined) await cleanUpQuietly(root, fsOps);
@@ -405,6 +507,30 @@ export function alRunnerCanaryWarnings(result: AlRunnerCanaryResult): string[] {
   } else {
     lines.push(
       `[lethal] al-runner canary could not determine the table-global-var defect's (R8) status on this build (${result.tableGlobalVarDetail ?? "no detail"}).`,
+    );
+  }
+
+  // R183. The polarity is the OPPOSITE of R7 and R8 and saying so here is the point: this probe
+  // pins a gap that is PRESENT on the newest build, so `defect-confirmed` is the expected line and
+  // `defect-not-reproduced` is the one that should make someone look.
+  if (result.transactionRollback === "defect-confirmed") {
+    lines.push(
+      "[lethal] al-runner canary (R183): a row written inside `Codeunit.Run` SURVIVED the error " +
+        "that ended it, so this build does not scope a write transaction around `Codeunit.Run` " +
+        "the way BC does. This is the expected, measured state on 2.7.0.0, not a regression. " +
+        "`asserterror` does roll back here, so only the `Codeunit.Run` shape is affected — a " +
+        "`remove-commit` survivor on such a site is unconfirmed; re-run it under --backend bcdev.",
+    );
+  } else if (result.transactionRollback === "defect-not-reproduced") {
+    lines.push(
+      "[lethal] al-runner canary (R183): a row written inside `Codeunit.Run` was discarded by the " +
+        "error, which al-runner 2.7.0.0 did NOT do. That is an improvement, and it means the " +
+        "residual named in `AlRunnerBackend.capabilities()` may have closed — re-measure it " +
+        "against bcdev rather than leaving the comment claiming a gap that is gone.",
+    );
+  } else {
+    lines.push(
+      `[lethal] al-runner canary could not determine whether this build scopes a write transaction around \`Codeunit.Run\` (R183) (${result.transactionRollbackDetail ?? "no detail"}) — treat a \`remove-commit\` survivor as unconfirmed and re-run it under --backend bcdev.`,
     );
   }
 

@@ -51,13 +51,18 @@ function scriptedSpawn(
   return { calls, spawn };
 }
 
+// R183 added a THIRD probe, so every scripted payload names three methods. The rollback probe is
+// scripted "pass" in both fixtures below deliberately: they exist to exercise the R7/R8 verdict
+// combinations, and a third moving part would blur what each case is testing.
 const BOTH_CONFIRMED = {
   AsserterrorNeverRaises: { status: "pass" as const },
   GlobalVarSurvivesValidate: { status: "fail" as const, message: "canary-mismatch TouchCount=0" },
+  ErrorDiscardsUncommittedWrite: { status: "pass" as const },
 };
 const BOTH_FIXED = {
   AsserterrorNeverRaises: { status: "fail" as const, message: "asserterror expected an error" },
   GlobalVarSurvivesValidate: { status: "pass" as const },
+  ErrorDiscardsUncommittedWrite: { status: "pass" as const },
 };
 
 describe("runAlRunnerCanary", () => {
@@ -119,7 +124,7 @@ describe("runAlRunnerCanary", () => {
   test("passes two DISTINCT directories as sourceDir/testDir — al-runner double-loads a directory passed as both, producing AL0197 duplicate-declaration errors (verified against the real binary)", async () => {
     const { calls, spawn } = scriptedSpawn(BOTH_CONFIRMED);
     await runAlRunnerCanary("al-runner", spawn);
-    expect(calls.length).toBe(2);
+    expect(calls.length).toBe(3);
     for (const argv of calls) {
       // v2 argv: ... --test <qualifiedName> <sourceDir> <testDir> (bundle dirs are positional).
       const testIdx = argv.indexOf("--test");
@@ -248,12 +253,13 @@ describe("alRunnerCanaryWarnings", () => {
     return {
       asserterror: "defect-not-reproduced",
       tableGlobalVar: "defect-not-reproduced",
+      transactionRollback: "defect-not-reproduced",
       ...overrides,
     };
   }
 
   test("always emits exactly one line per probe", () => {
-    expect(alRunnerCanaryWarnings(result({}))).toHaveLength(2);
+    expect(alRunnerCanaryWarnings(result({}))).toHaveLength(3);
   });
 
   test("asserterror defect-confirmed names R7 and tells the operator to distrust survivors", () => {
@@ -303,5 +309,57 @@ describe("alRunnerCanaryWarnings", () => {
     const line = lines.find((l) => l.includes("R8"));
     expect(line).toBeDefined();
     expect(line).toContain("deadline");
+  });
+});
+
+describe("R183: the transaction-rollback probe, and its INVERTED polarity", () => {
+  test("a row surviving the error is `defect-confirmed` — the expected state on 2.7.0.0", async () => {
+    const { spawn } = scriptedSpawn({
+      AsserterrorNeverRaises: { status: "fail" as const, message: "asserterror expected an error" },
+      GlobalVarSurvivesValidate: { status: "pass" as const },
+      ErrorDiscardsUncommittedWrite: {
+        status: "fail" as const,
+        message: "canary-rollback-not-modelled: the row written before the error survived it",
+      },
+    });
+    const result = await runAlRunnerCanary("al-runner", spawn);
+    expect(result.transactionRollback).toBe("defect-confirmed");
+    expect(result.transactionRollbackDetail).toMatch(/rollback-not-modelled/);
+  });
+
+  test("the row being discarded is `defect-not-reproduced`, which would mean the gap CLOSED", async () => {
+    const { spawn } = scriptedSpawn({
+      AsserterrorNeverRaises: { status: "fail" as const, message: "asserterror expected an error" },
+      GlobalVarSurvivesValidate: { status: "pass" as const },
+      ErrorDiscardsUncommittedWrite: { status: "pass" as const },
+    });
+    expect((await runAlRunnerCanary("al-runner", spawn)).transactionRollback).toBe(
+      "defect-not-reproduced",
+    );
+  });
+
+  test("the CONFIRMED wording says it is the measured state, not a regression", () => {
+    // The whole hazard this probe carries: read with R7/R8's polarity, `defect-confirmed` looks
+    // like bad news about the build. Here it is the status quo, and the line has to say so or a
+    // reader re-derives the wrong conclusion every session.
+    const line = alRunnerCanaryWarnings({
+      asserterror: "defect-not-reproduced",
+      tableGlobalVar: "defect-not-reproduced",
+      transactionRollback: "defect-confirmed",
+    }).join(" ");
+    expect(line).toMatch(/Codeunit\.Run/);
+    expect(line).toMatch(/not a regression/);
+    // And it must NOT overstate the gap: `asserterror` does roll back, so only one shape is hit.
+    expect(line).toMatch(/asserterror` does roll back/);
+  });
+
+  test("the NOT-REPRODUCED wording tells the reader to revisit the capabilities comment", () => {
+    const line = alRunnerCanaryWarnings({
+      asserterror: "defect-not-reproduced",
+      tableGlobalVar: "defect-not-reproduced",
+      transactionRollback: "defect-not-reproduced",
+    }).join(" ");
+    expect(line).toMatch(/improvement/i);
+    expect(line).toMatch(/capabilities\(\)/);
   });
 });

@@ -70,6 +70,7 @@ describe("renderConsole — al-runner canary reiteration (R7/R8)", () => {
     const canary: AlRunnerCanaryResult = {
       asserterror: "defect-confirmed",
       tableGlobalVar: "defect-not-reproduced",
+      transactionRollback: "defect-not-reproduced",
     };
     const out = renderConsole({ ...baseReport, alRunnerCanary: canary });
     const scoreLineIdx = out.split("\n").findIndex((l) => l.startsWith("score:"));
@@ -93,6 +94,7 @@ describe("renderConsole — al-runner canary reiteration (R7/R8)", () => {
     const canary: AlRunnerCanaryResult = {
       asserterror: "defect-confirmed",
       tableGlobalVar: "defect-confirmed",
+      transactionRollback: "defect-not-reproduced",
     };
     const out = renderConsole({ ...baseReport, authoritative: true, alRunnerCanary: canary });
     expect(out).not.toContain("R7");
@@ -103,6 +105,7 @@ describe("renderConsole — al-runner canary reiteration (R7/R8)", () => {
     const canary: AlRunnerCanaryResult = {
       asserterror: "inconclusive",
       tableGlobalVar: "inconclusive",
+      transactionRollback: "defect-not-reproduced",
       asserterrorDetail: "spawn ENOENT",
       tableGlobalVarDetail: "spawn ENOENT",
     };

@@ -488,14 +488,44 @@ export class AlRunnerBackend implements ExecutionBackend {
    * v2.0.0.0). `runAlRunnerCanary` re-measures both every session rather than trusting either
    * this comment or that one.
    *
-   * What still makes this backend non-authoritative is architectural, and v2 does not close it:
-   * there is no BC service tier, so there are no transactions — `Commit()` and `Rollback()` are
-   * no-ops, `StartSession` runs inline instead of in a separate session, and the base
-   * application's tables are empty (upstream `docs/limitations.md`). A mutant whose only
-   * observable effect is on any of those is judged against semantics that are not BC's. Combined
-   * with `coverage: "none"` — no per-procedure coverage, so nothing here can narrow which tests
-   * matter — a verdict from this backend is a fast signal, not a result to act on. bcdev remains
-   * the authority.
+   * What still makes this backend non-authoritative, separated by WHO measured it — because the
+   * last version of this comment did not separate them, and that is how it went stale (R183).
+   *
+   * MEASURED BY LETHAL, against a real BC container on the same fixture (2026-08-28, al-runner
+   * 2.7.0.0, `docs/superpowers/specs/2026-08-28-alrunner-bc-parity-probe.md`):
+   *
+   * - `coverage: "none"`. No per-procedure coverage, so nothing here can narrow which tests matter
+   *   and every mutant runs against every green test. This is the big one for cost, not fidelity.
+   * - **`Codeunit.Run` does not scope a write transaction.** `remove-commit` at
+   *   `Data Commit Ops.CommitThenRunValueForm` is killed on bcdev and survives here, and a direct
+   *   probe confirms the mechanism: a row inserted inside `Codeunit.Run` survives the error that
+   *   ended it. That is the residual, and it is far narrower than "there are no transactions".
+   * - The default `--isolation codeunit` does not roll the record store back between tests, where
+   *   BC's same-named `Isol. Codeunit` does. LethAL never meets it (one test per invocation, and
+   *   the transport sends `--isolation test`), but a suite ported from BC does.
+   *
+   * **DO NOT repeat the claim this comment used to make — that `Commit()` and `Rollback()` are
+   * no-ops.** It was quoted from upstream `docs/limitations.md` and is too broad. What 2.7.0.0
+   * actually does depends on HOW the error is caught, measured with a three-test probe:
+   *
+   * | error caught by | writes rolled back |
+   * | --- | --- |
+   * | `asserterror` | YES, with or without a preceding `Commit()` |
+   * | `Codeunit.Run` | NO |
+   *
+   * That single distinction explains both live results above: `CommitThenFail` is an `asserterror`
+   * shape and agrees with bcdev; `CommitThenRunValueForm` is a `Codeunit.Run` shape and does not.
+   * `runAlRunnerCanary`'s third probe re-measures the `Codeunit.Run` case every session, so the next
+   * person to read this does not have to trust it either.
+   *
+   * INHERITED FROM UPSTREAM `docs/limitations.md`, and NOT verified by LethAL — no fixture here
+   * exercises any of them, so this is neither confirmation nor contradiction: no permission system,
+   * no company context, empty base-app and setup tables, `StartSession` running inline so there is
+   * no cross-session isolation.
+   *
+   * A mutant whose only observable effect is on any of the above is judged against semantics that
+   * are not BC's, so a verdict from this backend is a fast signal, not a result to act on. bcdev
+   * remains the authority.
    */
   capabilities(): BackendCapabilities {
     return { coverage: "none", deploy: "none", isolation: "full-reset", authoritative: false };
