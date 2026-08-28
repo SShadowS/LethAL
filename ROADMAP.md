@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**7 of 180 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**8 of 181 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -71,6 +71,7 @@ that ordering is the priority.
 - **R179** · `empty-block` on a loop body is the largest non-termination source measured, and it was never counted · [R179.md](docs/roadmap/R179.md) · done (`d0e6c6c`) — `lethal.loop-skip` (Tier 1, 1.0.0) ships and `empty-block` cedes a `while` body to it. The…
 - **R181** · R13's marginal-site bar is self-extinguishing: applied today it refuses `swap-additive`, which we shipped and value · [R181.md](docs/roadmap/R181.md) · open — measured 2026-08-28 on `do-rel2/Cloud`. `swap-additive`'s marginal footprint was 77 against the…
 - **R182** · R147's platform-app pin engaged only on a COLD cache, so the optimisation switched itself off whenever the cache was healthy · [R182.md](docs/roadmap/R182.md) · done (`al-runner-transport.ts`, `al-runner-backend.ts`) — the warm-cache sentence is now read, the two…
+- **R183** · `authoritative: false` rests on a justification that is now measurably wrong: al-runner DOES roll back on error · [R183.md](docs/roadmap/R183.md) · open — measured 2026-08-28 against al-runner 2.7.0.0. The FLAG is still right and must not flip; the stated…
 
 ## Product gaps a real project hits
 
