@@ -11,6 +11,7 @@ import {
   looksLikeRunnerRefusal,
 } from "./assertion-screen";
 import type { BackendCapabilities } from "./backend";
+import { type EquivalenceMarkReport, applyEquivalenceMarks } from "./equivalence-marks";
 import type { RunEvent } from "./events";
 import { type ExcludedSites, declarativeSitesView, notInstrumentedView } from "./excluded-sites";
 import type { Interpretation } from "./interpretation";
@@ -21,7 +22,7 @@ import {
 } from "./platform-artifact-kills";
 import { type FoldStatics, foldEvents } from "./report-fold";
 import type { CoverageAttribution } from "./selection";
-import { identityKeyOf } from "./selection";
+import { identityKeyOf, serializeKey } from "./selection";
 import type { MutantVerdict, RunnerKind } from "./store";
 import { TESTPAGE_DIAGNOSIS } from "./testpage-unsupported";
 
@@ -1044,6 +1045,40 @@ export interface SessionReport {
     }>;
   };
   /**
+   * R172 proposal 3 — the reader's own equivalence rulings, matched against this run.
+   *
+   * Where `likelyEquivalentSurvivors` hints at a CLASS of mutation, this records a human's judgement
+   * about ONE mutant, keyed on [[R166]]'s stable identity so it survives across runs. Absent when the
+   * run was given no marks file.
+   *
+   * **Nothing here moves a verdict or `mutationScore`.** A marked mutant is still `survived` and
+   * still scored: the mark is a note a reader left, and LethAL cannot verify it. What it buys is
+   * that nobody re-investigates the same survivor twice.
+   *
+   * `contradicted` is the half worth reading first, and the only part of this feature that PROVES
+   * anything: the mark says no test can distinguish the mutant, and this run reports a verdict that
+   * is not a survival. The measurement wins and the mark is wrong.
+   */
+  readonly readerMarkedEquivalent?: {
+    /** Marks that matched a surviving mutant in this run. */
+    readonly matched: ReadonlyArray<{
+      readonly mutantCode: string;
+      readonly key: string;
+      readonly reason: string;
+    }>;
+    /** Marks that matched NO mutant here. Editing the mutated code changes its `astHash`, so a mark
+     *  retires itself rather than drifting onto a different mutant — safe, but the ruling is lost
+     *  and saying so is the point. */
+    readonly stale: readonly string[];
+    /** Marks this run REFUTED: the mutant did not survive. */
+    readonly contradicted: ReadonlyArray<{
+      readonly mutantCode: string;
+      readonly key: string;
+      readonly reason: string;
+      readonly verdict: string;
+    }>;
+  };
+  /**
    * Set only when the session latched unsafe (spec §8/§12) — see `QUARANTINE_INTERPRETATION` for
    * what its presence means to a reader and how to recover. `reason` is `SessionSafety.reason`
    * verbatim: it names the stranded op (method + mutant id) that tripped the latch.
@@ -1804,6 +1839,41 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
               meaning: EQUIVALENCE_RISK_EXPLANATIONS[risk] ?? risk,
             })),
         };
+  // R172 proposal 3. Matched here rather than in the fold because it needs the finished per-mutant
+  // verdicts: whether a mark is "matched" or "contradicted" is a question about the OUTCOME, not
+  // about the input the run was given.
+  const marks = statics.equivalenceMarks;
+  let readerMarkedEquivalent: SessionReport["readerMarkedEquivalent"];
+  if (marks !== undefined && marks.length > 0) {
+    const marked: EquivalenceMarkReport = applyEquivalenceMarks(
+      marks,
+      mutants.map((m) => ({
+        mutantCode: m.mutantCode,
+        identity: serializeKey({
+          astHash: m.astHash,
+          codeunitName: m.codeunitName,
+          procedureName: m.procedureName ?? m.triggerName ?? "",
+          operatorName: m.operatorName,
+          operatorMajor: m.operatorMajor,
+        }),
+        verdict: m.verdict,
+      })),
+    );
+    readerMarkedEquivalent = {
+      matched: [...marked.matched]
+        .sort((a, b) => a.mutantCode.localeCompare(b.mutantCode))
+        .map((m) => ({ mutantCode: m.mutantCode, key: m.key, reason: m.reason })),
+      stale: marked.stale.map((m) => m.key).sort(),
+      contradicted: [...marked.contradicted]
+        .sort((a, b) => a.mutantCode.localeCompare(b.mutantCode))
+        .map((c) => ({
+          mutantCode: c.mutantCode,
+          key: c.key,
+          reason: c.reason,
+          verdict: c.verdict,
+        })),
+    };
+  }
   const platformArtifactKills =
     platformKillsByMechanism.size === 0
       ? undefined
@@ -1935,6 +2005,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
       : {}),
     ...(platformArtifactKills !== undefined ? { platformArtifactKills } : {}),
     ...(likelyEquivalentSurvivors !== undefined ? { likelyEquivalentSurvivors } : {}),
+    ...(readerMarkedEquivalent !== undefined ? { readerMarkedEquivalent } : {}),
     ...(assertionScreen !== undefined ? { assertionScreen } : {}),
     ...(runnerDisagreementTests.length > 0
       ? {
@@ -2148,6 +2219,32 @@ export function renderConsole(r: SessionReport): string {
     for (const g of e.byRisk) {
       lines.push(`  ${g.risk} (${g.mutants.length}): ${g.meaning}`);
       lines.push(`    ${g.mutants.join(", ")}`);
+    }
+  }
+  if (r.readerMarkedEquivalent !== undefined) {
+    const e = r.readerMarkedEquivalent;
+    // Contradictions FIRST and unconditionally: a refuted mark is the only thing here that is a
+    // finding rather than an annotation, and burying it under a list of accepted marks would put
+    // the one provable statement last.
+    if (e.contradicted.length > 0) {
+      lines.push(
+        `EQUIVALENCE MARK CONTRADICTED: ${e.contradicted.length} mutant(s) marked as equivalent did NOT survive this run. Someone recorded that no test could distinguish them and this run says otherwise: the VERDICT stands and the mark is wrong. Revise or remove each (R172):`,
+      );
+      for (const c of e.contradicted) {
+        lines.push(`  ${c.mutantCode} is ${c.verdict} — marked "${c.reason}"`);
+      }
+    }
+    if (e.stale.length > 0) {
+      lines.push(
+        `EQUIVALENCE MARKS STALE: ${e.stale.length} mark(s) matched no mutant here. The identity includes the mutated subtree's hash, so editing that code retires its mark rather than letting it drift onto a different mutant. Safe, but the ruling is gone unless someone makes it again (R172):`,
+      );
+      for (const k of e.stale) lines.push(`  ${k}`);
+    }
+    if (e.matched.length > 0) {
+      lines.push(
+        `EQUIVALENCE MARKS: ${e.matched.length} survivor(s) carry a reader's recorded ruling that they cannot be killed. They are STILL survivors and STILL in the mutation score: a mark records a human's reasoning, it does not change a measurement (R172).`,
+      );
+      for (const m of e.matched) lines.push(`  ${m.mutantCode}: ${m.reason}`);
     }
   }
   if (r.platformArtifactKills !== undefined) {

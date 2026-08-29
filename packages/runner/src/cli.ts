@@ -54,6 +54,7 @@ import {
   startEnvToolSession,
 } from "./env-tool-session";
 import type { EnvToolSession } from "./env-tool-session";
+import { type EquivalenceMark, parseEquivalenceMarks } from "./equivalence-marks";
 import type { EventSubscriber } from "./events";
 import { assertExplainableReport, explain } from "./explain";
 import { HarnessVerifier } from "./harness";
@@ -2786,6 +2787,39 @@ export function withAlRunnerCanary(
   return canary !== undefined ? { ...report, alRunnerCanary: canary } : report;
 }
 
+/**
+ * R172 proposal 3 — load the reader's equivalence rulings for this project, if any.
+ *
+ * Discovery is a fixed filename beside the project rather than a CLI flag: a mark is a durable
+ * property of the CODEBASE (this mutant, in this procedure, cannot be killed, and here is why), not
+ * a choice a particular invocation makes. A flag would let one run apply the rulings and the next
+ * one silently not, and two runs of the same project would then disagree about which survivors a
+ * human had already examined.
+ *
+ * Absent file means absent feature, silently — that is the overwhelmingly common case and warning
+ * about it every run would train people to ignore the line. A file that EXISTS and is malformed
+ * throws, because a partially-loaded set of rulings is indistinguishable from survivors nobody has
+ * looked at yet.
+ */
+export const EQUIVALENCE_MARKS_FILENAME = "lethal.equivalent.json";
+
+export async function loadEquivalenceMarks(
+  projectDir: string,
+  readFileFn: (p: string) => Promise<string> = (p) => readFile(p, "utf8"),
+): Promise<readonly EquivalenceMark[] | undefined> {
+  const path = join(projectDir, EQUIVALENCE_MARKS_FILENAME);
+  let text: string;
+  try {
+    text = await readFileFn(path);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return undefined;
+    throw new Error(
+      `cannot read ${path}: ${err instanceof Error ? err.message : String(err)}. Remove the file to run without equivalence marks; an unreadable one is not treated as an absent one.`,
+    );
+  }
+  return parseEquivalenceMarks(text, path);
+}
+
 export async function runFromCli(
   parsed: RunCliConfig,
   deps: {
@@ -2959,6 +2993,11 @@ export async function runFromCli(
       // (not a `WriteStream`) because a buffered stream can lose whatever sits in its in-process
       // buffer when the process is killed rather than exiting cleanly, which is exactly the case
       // this flag exists to survive.
+      // R172 proposal 3. Loaded here, once, before the session starts: a malformed marks file must
+      // stop the run BEFORE hours of execution, not after, and it must fail rather than load
+      // partially — a ruling that silently went missing looks exactly like a survivor nobody has
+      // examined yet.
+      const equivalenceMarks = await loadEquivalenceMarks(parsed.projectDir);
       const emitSubscribers: EventSubscriber[] = [progress];
       if (parsed.progressOutPath !== undefined) {
         progressOutFd = openSync(parsed.progressOutPath, "w");
@@ -2992,6 +3031,7 @@ export async function runFromCli(
         ...(parsed.resume !== undefined ? { resume: parsed.resume } : {}),
         ...(parsed.retryStranded === true ? { retryStranded: true } : {}),
         ...(parsed.stopHungSessions === true ? { stopHungSessions: true } : {}),
+        ...(equivalenceMarks !== undefined ? { equivalenceMarks } : {}),
         ...afterLeaseAcquiredFor(envSession),
         ...(parsed.allowLargeRun === true ? { allowLargeRun: true } : {}),
         ...(parsed.compileConcurrency !== undefined

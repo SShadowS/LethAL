@@ -38,6 +38,7 @@ import { PublishFailedError } from "./bcdev-backend";
 import { bisectFailingMutant } from "./bisect";
 import type { PublishOutcome } from "./deployment-verifier";
 import { discoverTests } from "./discovery";
+import type { EquivalenceMark } from "./equivalence-marks";
 import {
   type BaselineClassification,
   type EventSubscriber,
@@ -670,6 +671,14 @@ export interface SessionConfig {
    * call, not the tool's.
    */
   readonly stopHungSessions?: boolean;
+  /**
+   * R172 proposal 3: the reader's equivalence rulings, already parsed and validated by the caller.
+   *
+   * Carried here ONLY so the report can match them against the finished verdicts. Nothing in the
+   * run reads them: a mark must never change what is executed or how anything is scored, or a JSON
+   * file a reader edits would be able to move a measurement.
+   */
+  readonly equivalenceMarks?: readonly EquivalenceMark[];
   /**
    * R101(c): the AL preprocessor symbols the backends were built with, carried here ONLY so the
    * report can say which branch of the target it measured.
@@ -2281,6 +2290,11 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     ...(resolvedOperators !== undefined ? { operators: { names: resolvedOperators } } : {}),
     ...(cfg.testsOnly !== undefined ? { testsOnly: cfg.testsOnly } : {}),
     ...(cfg.stopHungSessions === true ? { stopHungSessions: true } : {}),
+    // R172 proposal 3. Passed through as GIVEN; `buildReport` decides which marks matched, went
+    // stale, or were contradicted, because those are questions about the finished verdicts.
+    ...(cfg.equivalenceMarks !== undefined && cfg.equivalenceMarks.length > 0
+      ? { equivalenceMarks: cfg.equivalenceMarks }
+      : {}),
   });
   // Layer 5C-B1 (design §6): an authoritative backend that CAN be fenced — it exposes `setLease`,
   // as bcdev does — MUST be given a lease. Without one every RunMutant runs unfenced, and a
@@ -3817,6 +3831,13 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       ? { testsOnly: cfg.testsOnly }
       : {}),
     ...(cfg.stopHungSessions === true ? { stopHungSessions: true } : {}),
+    // R172 proposal 3. Carried on BOTH statics assemblies in this file — this one and the
+    // quarantine/early-report path above — because a run that ends early still produced verdicts a
+    // mark can be contradicted by, and a feature that silently vanished on the abnormal path would
+    // be exactly the kind of "works when you are watching" gap the marks exist to close.
+    ...(cfg.equivalenceMarks !== undefined && cfg.equivalenceMarks.length > 0
+      ? { equivalenceMarks: cfg.equivalenceMarks }
+      : {}),
     // R101(c): ALWAYS carried, including as `[]`. "No symbol was defined" is the statement a reader
     // needs when a project has an `#if` — it is the difference between measuring the branch the
     // customer ships and measuring the other one, and the report was silent about it.

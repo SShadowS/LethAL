@@ -893,6 +893,73 @@
         }
       }
     },
+    "readerMarkedEquivalent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "matched",
+        "stale",
+        "contradicted"
+      ],
+      "properties": {
+        "matched": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "mutantCode",
+              "key",
+              "reason"
+            ],
+            "properties": {
+              "mutantCode": {
+                "type": "string"
+              },
+              "key": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "stale": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "contradicted": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "mutantCode",
+              "key",
+              "reason",
+              "verdict"
+            ],
+            "properties": {
+              "mutantCode": {
+                "type": "string"
+              },
+              "key": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "verdict": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
     "quarantined": {
       "type": "object",
       "additionalProperties": false,

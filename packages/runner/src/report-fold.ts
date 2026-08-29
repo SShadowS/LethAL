@@ -1,4 +1,5 @@
 import type { BackendCapabilities } from "./backend";
+import type { EquivalenceMark } from "./equivalence-marks";
 import type { RunEvent } from "./events";
 import { type ExcludedSites, buildExcludedSites } from "./excluded-sites";
 import type { PermissionCanaryResult } from "./permission-canary";
@@ -58,6 +59,14 @@ export interface FoldStatics {
   readonly testsOnly?: readonly string[];
   /** R53: whether this run was allowed to end BC sessions to score a non-terminating mutant. */
   readonly stopHungSessions?: boolean;
+  /**
+   * R172 proposal 3: the reader's equivalence rulings this run was GIVEN, already parsed.
+   *
+   * A static rather than something learned from events, for the same reason `only` and `operators`
+   * are: it is an INPUT to the run, and the interesting derived facts (which marks matched, which
+   * are stale, which this run contradicted) are computed against the mutants in `buildReport`.
+   */
+  readonly equivalenceMarks?: readonly EquivalenceMark[];
   /**
    * R101(c): the AL preprocessor symbols this run compiled the target WITH. Always present, even as
    * an empty array, because `[]` is a real configuration (it selects every `#else` branch) and not
