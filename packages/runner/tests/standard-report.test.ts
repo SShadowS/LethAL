@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import SCHEMA from "mutation-testing-report-schema/mutation-testing-report-schema.json";
+import { statusOf } from "../src/standard-report";
 
 // The schema is a third-party contract reached through a CARET range (^3.9.0), so an install can
 // float it. These are the parts the mapper depends on; a float that moves any of them reddens here
@@ -41,5 +42,36 @@ describe("the mutation-testing report schema contract", () => {
       "Survived",
       "Timeout",
     ]);
+  });
+});
+
+describe("verdict to MutantStatus", () => {
+  test("the four straightforward verdicts", () => {
+    expect(statusOf({ verdict: "killed" })).toBe("Killed");
+    expect(statusOf({ verdict: "survived" })).toBe("Survived");
+    expect(statusOf({ verdict: "no-coverage" })).toBe("NoCoverage");
+    expect(statusOf({ verdict: "timeout-killed" })).toBe("Timeout");
+  });
+
+  test("a carried survivor is Survived, not Pending", () => {
+    // `known-survivor` means a prior run recorded it surviving and this run did not re-execute it.
+    // Survived is what was MEASURED; that it was carried rather than re-run belongs in
+    // statusReason. Pending would claim the mutant is still queued, which is false.
+    expect(statusOf({ verdict: "known-survivor" })).toBe("Survived");
+  });
+
+  test("an error maps by cause, and a compile culprit is CompileError", () => {
+    expect(statusOf({ verdict: "error", cause: "unstable" })).toBe("RuntimeError");
+    expect(statusOf({ verdict: "error", cause: "stranded" })).toBe("RuntimeError");
+    expect(statusOf({ verdict: "error", cause: "deadline-exceeded" })).toBe("RuntimeError");
+    expect(statusOf({ verdict: "error", cause: "result-lost" })).toBe("RuntimeError");
+    expect(statusOf({ verdict: "error", compileCulprit: true })).toBe("CompileError");
+  });
+
+  test("an unmapped verdict throws rather than defaulting", () => {
+    // Fail loudly on a caller-contract violation: a new MutantVerdict must force a decision here,
+    // not silently inherit whatever the default branch returned. Empty-vs-empty agreement is this
+    // project's signature bug.
+    expect(() => statusOf({ verdict: "invented" as never })).toThrow(/unmapped verdict/);
   });
 });
