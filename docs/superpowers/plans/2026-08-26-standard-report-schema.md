@@ -18,7 +18,7 @@ Every fact below was verified against the installed package and the live schema 
 
 - **`mutation-testing-report-schema@^3.9.0` is ALREADY a devDependency** in `package.json`, installed at `node_modules/mutation-testing-report-schema`. Nothing needs vendoring or fetching.
 - Its pinned schema JSON is **byte-identical** to the current upstream master copy (compared by parsed equality).
-- It ships **generated TypeScript types** at `mutation-testing-report-schema/src-generated/schema.ts`: `MutationTestResult`, `FileResultDictionary`, `FileResult`, `MutantResult`, `MutantStatus`, `Location`, `Position`, `Thresholds`, `TestFile`, `TestDefinition`.
+- It ships **generated TypeScript types**, imported as `mutation-testing-report-schema/api`: `MutationTestResult`, `FileResultDictionary`, `FileResult`, `MutantResult`, `MutantStatus`, `Location`, `Position`, `Thresholds`, `TestFile`, `TestDefinition`.
 - `MutantStatus` is exactly `"Killed" | "Survived" | "NoCoverage" | "CompileError" | "RuntimeError" | "Timeout" | "Ignored" | "Pending"`.
 - Root `required` is `["schemaVersion", "thresholds", "files"]`.
 - `FileResult` is **inlined** at `properties.files.additionalProperties` (there is no `definitions.fileResult`), with `required` `["language", "source", "mutants"]`.
@@ -37,7 +37,7 @@ Every fact below was verified against the installed package and the live schema 
 - No `!` non-null assertions. `exactOptionalPropertyTypes` is ON; build optional props with `...(v !== undefined ? { k: v } : {})`. **This matters more here than usual**: most `MutantResult` fields are optional, so every one you populate conditionally needs the spread idiom.
 - Comments cite greppable NAMES, never `file.ts:123`. `scripts/line-citations.test.ts` enforces it.
 - **ASCII only** in code and comments you add. A raw Windows-1252 byte for an em dash once made biome refuse an entire file in this repo.
-- Build loop order: `bun run typecheck`, THEN `rm -rf packages/*/dist`, THEN `bun test`. Baseline is 2558 pass / 1 skip / 0 fail.
+- Build loop order: `bun run typecheck`, THEN `rm -rf packages/*/dist`, THEN `bun test`. Baseline on this branch is **2620** pass / 1 skip / 0 fail before Tasks 1 and 2, **2629** after them. (An earlier draft said 2558; that was master before eight commits from a concurrent session landed.)
 - Lint what you touched: `bunx biome check <paths>`.
 - **Never run anything that contacts a Business Central container.** Every task here is offline.
 
@@ -131,7 +131,7 @@ git commit -m "test(report): pin the mutation-testing report schema contract the
 - Test: `packages/runner/tests/standard-report.test.ts` (extend)
 
 **Interfaces:**
-- Consumes: `MutantStatus` from `mutation-testing-report-schema/src-generated/schema`; `MutantVerdict` from `./store`; `MutantErrorCause` from `./report`.
+- Consumes: `MutantStatus` from `mutation-testing-report-schema/api`; `MutantVerdict` from `./store`; `MutantErrorCause` from `./report`.
 - Produces: `export function statusOf(o: { verdict: MutantVerdict; cause?: MutantErrorCause; compileCulprit?: boolean }): MutantStatus`. Task 3 uses it.
 
 > **Why this is its own task.** The mapping is where a wrong decision becomes invisible: a verdict silently mapped to the wrong status produces a plausible report that misleads nobody into noticing. It also holds the one real judgement call, `known-survivor`, and deserves its own review.
@@ -185,7 +185,7 @@ Expected: FAIL, cannot resolve `../src/standard-report`.
 Create `packages/runner/src/standard-report.ts`. Import the status type from the package rather than redeclaring it, so a schema float that adds a status is a compile error here:
 
 ```ts
-import type { MutantStatus } from "mutation-testing-report-schema/src-generated/schema";
+import type { MutantStatus } from "mutation-testing-report-schema/api";
 ```
 
 The `error` branch reads `cause`; the compile-culprit branch is driven by the explicit flag rather than by sniffing a message. **The default branch throws**, naming the verdict:
@@ -197,7 +197,7 @@ throw new Error(
 );
 ```
 
-That specifier was VERIFIED to resolve during pre-flight. Bun strips types rather than checking them, so `bun run typecheck` is what actually proves the types line up; run it before committing. If `tsc` rejects the import, declare the union locally AND add a test asserting it equals the schema's enum so the two cannot drift, and say so in your report.
+**Use `mutation-testing-report-schema/api`, NOT `.../src-generated/schema`.** Pre-flight checked the latter under Bun, which erases a type-only import before resolving, so that check proved nothing; `tsc` rejects it with TS2307 because the subpath is absent from the package's `exports` map. `./api` is exported and points at the identical generated file. Task 2 hit this and corrected it.
 
 - [ ] **Step 4: Verify and commit**
 
@@ -355,7 +355,7 @@ rm -rf packages/*/dist
 bun test
 bunx biome check packages/runner/src/cli.ts scripts/redact-campaign-report.ts
 ```
-Expected: 2558+ pass, 0 fail.
+Expected: 2629+ pass, 0 fail.
 
 ```bash
 git add packages/runner/src/cli.ts scripts/redact-campaign-report.ts scripts/redact-campaign-report.test.ts .gitignore packages/runner/tests/standard-report.test.ts
