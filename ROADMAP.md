@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**6 of 183 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**6 of 184 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -74,6 +74,7 @@ that ordering is the priority.
 - **R183** · `authoritative: false` rests on a justification that is too broad: al-runner rolls back for `asserterror` but not for `Codeunit.Run` · [R183.md](docs/roadmap/R183.md) · done — the justification now separates what LethAL MEASURED from what it INHERITED from upstream docs, and…
 - **R184** · `lethal export --format mutation-elements` writes target SOURCE to a file this public repo has no guard against committing · [R184.md](docs/roadmap/R184.md) · done — filed and fixed 2026-08-31. NARROWED TWICE while fixing: of the three gaps first claimed, TWO were…
 - **R185** · `redact-campaign-report.ts --check` fails OPEN: given after the path, it silently runs in WRITE mode · [R185.md](docs/roadmap/R185.md) · done — filed and fixed 2026-08-31. `--check` is now read anywhere in argv, and an unrecognised dash-argument…
+- **R186** · A script with an unguarded CLI body, imported for one helper, executes on import and fails confusingly. It happened twice in one session and nothing pins the convention · [R186.md](docs/roadmap/R186.md) · done (`scripts/importable-scripts.test.ts`) — filed and built 2026-08-31. ZERO offenders existed, and the…
 
 ## Product gaps a real project hits
 
