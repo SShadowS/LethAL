@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**5 of 184 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**6 of 185 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -75,6 +75,7 @@ that ordering is the priority.
 - **R184** · `lethal export --format mutation-elements` writes target SOURCE to a file this public repo has no guard against committing · [R184.md](docs/roadmap/R184.md) · done — filed and fixed 2026-08-31. NARROWED TWICE while fixing: of the three gaps first claimed, TWO were…
 - **R185** · `redact-campaign-report.ts --check` fails OPEN: given after the path, it silently runs in WRITE mode · [R185.md](docs/roadmap/R185.md) · done — filed and fixed 2026-08-31. `--check` is now read anywhere in argv, and an unrecognised dash-argument…
 - **R186** · A script with an unguarded CLI body, imported for one helper, executes on import and fails confusingly. It happened twice in one session and nothing pins the convention · [R186.md](docs/roadmap/R186.md) · done (`scripts/importable-scripts.test.ts`) — filed and built 2026-08-31. ZERO offenders existed, and the…
+- **R187** · `do-lethal/Cloud` and `do-rel2/Cloud` are the SAME corpus, and measurements have been cross-checked against them as if they were two · [R187.md](docs/roadmap/R187.md) · open — filed 2026-08-31 after nearly validating a rule against the copy. Verified byte-identical: 554 files…
 
 ## Product gaps a real project hits
 

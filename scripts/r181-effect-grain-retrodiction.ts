@@ -87,6 +87,46 @@ function identityOf(file: string, before: ALSyntaxNode, afterText: string): stri
   return `${file}|${before.kind}:${before.startIndex}:${before.endIndex}:${afterText}`;
 }
 
+/**
+ * The CANONICAL MINIMAL edit: the same rewrite reduced to the bytes that actually change.
+ *
+ * `dedup.ts`'s identity is right for dedup and wrong for an admission bar, and the directions are
+ * opposite. Dedup wants to keep distinct mutants distinct, so OVER-splitting is its safe error. An
+ * admission bar prices redundancy, so over-splitting is its UNSAFE error: an operator that frames a
+ * wider span around the same rewrite mints a "new" edit that produces a byte-identical program to a
+ * shipped mutant. Measured instance: `shift-integer` rewrites the literal in `Arr[5]`, a subscript
+ * operator rewrites `[5]`, and `dedup.ts`'s identity calls those different edits although the
+ * resulting programs are identical.
+ *
+ * Trimming the common prefix and suffix of `before.text` against the replacement collapses both to
+ * the same key. The node KIND leaves the identity deliberately: once the span is reduced to the
+ * changed bytes it no longer corresponds to a node, and two operators framing different node kinds
+ * around one textual rewrite are exactly what this must collapse.
+ *
+ * Still textual, not semantic. Two edits that produce different bytes but equivalent programs do
+ * not collide here, and nothing in this script can see that they are equivalent.
+ */
+function canonicalIdentityOf(file: string, before: ALSyntaxNode, afterText: string): string {
+  const b = before.text;
+  const a = afterText;
+  let pre = 0;
+  while (pre < b.length && pre < a.length && b[pre] === a[pre]) pre++;
+  let suf = 0;
+  while (
+    suf < b.length - pre &&
+    suf < a.length - pre &&
+    b[b.length - 1 - suf] === a[a.length - 1 - suf]
+  )
+    suf++;
+  const start = before.startIndex + pre;
+  const end = before.endIndex - suf;
+  return `${file}|${start}:${end}:${a.slice(pre, a.length - suf)}`;
+}
+
+/** `--canonical` selects the reduced identity above; the default keeps `dedup.ts`'s, so the original
+ *  measurement stays reproducible and the two grains can be compared on one corpus. */
+const CANONICAL = process.argv.includes("--canonical");
+
 // identity -> the set of operators that emit exactly this edit
 const claimants = new Map<string, Set<string>>();
 const emitted = new Map<string, number>();
@@ -108,7 +148,9 @@ for (const file of files) {
         continue;
       }
       for (const s of specs) {
-        const id = identityOf(file.path, s.before, s.after.text);
+        const id = CANONICAL
+          ? canonicalIdentityOf(file.path, s.before, s.after.text)
+          : identityOf(file.path, s.before, s.after.text);
         const set = claimants.get(id);
         if (set === undefined) claimants.set(id, new Set([op.name]));
         else set.add(op.name);
