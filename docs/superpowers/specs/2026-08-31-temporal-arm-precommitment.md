@@ -104,3 +104,51 @@ is missing`, which is exactly what happened on the first attempt here.
 ---
 
 ## OUTCOME
+
+**PASS. Every one of the 19 verdicts matched, and no pre-existing mutant moved.**
+
+Run 2026-08-31 against Cronus283, `tables itest: PASS`, both determinism passes identical:
+
+```
+verdicts: killed=299 survived=63 noCoverage=15 baselineGreen=false
+          score=0.8259668508287292 untargetedTriggers=0 declarativeSites=1
+```
+
+All four §2 predictions matched exactly: 299 killed (280 + 19), survived and no-coverage unmoved at
+63 and 15, `declarativeSites` unmoved at 1, `totalMutantSites` 397.
+
+**All 19 arm mutants came back `killed`, at the predicted lines with the predicted operators**, and
+`toggle-blank-temporal` emitted exactly four: lines 36, 46, 53 and 61. Nineteen of nineteen was the
+pre-committed claim and it held.
+
+**The refusal control fired.** Lines 68 and 69 (`PassThrough`, holding `Consume(0D)`) carry only
+`empty-block` and `return-value`. No `toggle-blank-temporal` mutant exists anywhere in that
+procedure, so the operator refused the argument-list literal live, as it did offline.
+
+**The DateTime arm compiled after wrapping.** M0332 at line 53 replaces `0DT` with
+`CREATEDATETIME(17530101D, 000001T)` and was killed. That was the only mutant text longer than its
+original and the one arm `alc` alone could not vouch for; the instrumented artifact built and the
+mutant ran.
+
+**The per-mutant baseline gained entries and changed nothing.** `tables.baseline.json` 358 -> 377,
+and the diff is **133 insertions with 0 deletions**: 19 keys added, all in `Data Temporal Ops`, 0
+removed, and **0 with a changed verdict or killing test**. That is the independent proof of §5's
+"none of the 378 pre-existing mutants moving", stronger than the aggregate counts because it is keyed
+on semantic identity rather than position.
+
+### What this pre-commitment got wrong, which cost three extra billed runs
+
+The verdicts were right on the first run that produced any. Four runs happened because this document
+named the mutant COUNTS and not the other two things the gate pins, both of which follow mechanically
+from "19 mutants are added" and were knowable before any run:
+
+1. **`mutationScore`.** Pinned as a division, and fully derived from the killed and survived counts
+   already committed here (299/362). Not a new claim, but an unstated one, and the gate compares it.
+2. **The per-mutant baseline.** `diffMutants` reports a key present in "after" but missing from
+   "before" as a difference, so ADDING mutants necessarily fails the guard until the baseline is
+   re-recorded. The guard says so in its own failure message. A complete pre-commitment would have
+   said "the baseline will be deleted and re-recorded, and the review must show additions only".
+
+Neither is a defect in the operator, the arm, or the fixture. Both are gaps in this document, and
+they are recorded because the next arm's pre-commitment should list every pinned constant the change
+touches, not only the ones its author happened to think of.

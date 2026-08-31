@@ -28,6 +28,13 @@
     "errorClass": null
   },
   {
+    "key": "047dc321c85745309bbd41df868e2b3a0a1f11f6dbd5adc5dd89e154c54b4c64|Data Temporal Ops|Consume|lethal.return-value|1",
+    "verdict": "killed",
+    "killingTest": "PassThroughIgnoresItsDateArgument",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "05bc581f9d2241861c8788259e809971033cff570b12b942c70fe20c8b282d0c|Data Filter Ops|CountBelowThreshold|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "BoundaryShiftAdmitsTheThresholdRow",
@@ -66,6 +73,13 @@
     "key": "0d7da310f51fbb78e8946d28a87eb77b68fbfa560ec8b41f9f22843bea5d562c|Data Swap Ops|AmountWithinCap|lethal.return-value|1",
     "verdict": "killed",
     "killingTest": "SwapReversesTheRangeComparison",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "0edf8e2f8217af4a333b8bbc9f38478ca08a45d7eaf0b332ac0868e4bdc6ba08|Data Temporal Ops|PassThrough|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "PassThroughIgnoresItsDateArgument",
     "coverageFiltered": false,
     "errorClass": null
   },
@@ -115,6 +129,13 @@
     "key": "1701648b41a6435489d1f359b5158486610bf11e366e128e3391eab4aa3d29ec|Data Main|OnValidate|lethal.remove-testfield|1",
     "verdict": "killed",
     "killingTest": "ProcessedRequiresCategory",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "193a54195c20fa148c0612f7390e72d3bde6335c160e259338f8a6b3933e3ecc|Data Temporal Ops|StampFixedDate|lethal.remove-assignment|1",
+    "verdict": "killed",
+    "killingTest": "StampFixedDateReturnsTheNonBlankDate",
     "coverageFiltered": false,
     "errorClass": null
   },
@@ -861,6 +882,13 @@
     "errorClass": null
   },
   {
+    "key": "50edd52efe601b39b58c3fcf4e99e5886d2bf387cf368621563b63146bf17701|Data Temporal Ops|IsCutoffSet|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "IsCutoffSetSeparatesBlankFromSet",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "51a7f927d0aa77fb56a17a3ef4e2a54083742ed4b7199973b7816f35d212ae1f|Data Set Ops|PlainMembership|lethal.negate-guard|1",
     "verdict": "killed",
     "killingTest": "PlainMembershipSeparatesInsideAndOutsideTheSet",
@@ -924,6 +952,13 @@
     "errorClass": null
   },
   {
+    "key": "564c593c1d1fc122560cd8b340cdbf878c7ffa12f9c5b56c3efaeb787f410644|Data Temporal Ops|StampFixedDate|lethal.toggle-blank-temporal|1",
+    "verdict": "killed",
+    "killingTest": "StampFixedDateReturnsTheNonBlankDate",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "579df3815ee985ce5aada968ea1afec8f9cc9f078e1436865626e1a20a0a94c3|Data Swap Ops|LinkPair|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "LinkedPairIsStamped",
@@ -983,6 +1018,13 @@
     "key": "589ad2d30d6276e5f4ba3e93622b38428d87002fb4caa5115659dabaf58abe13|Data Flag Ops|DeleteWithTrigger|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "DeleteRunTriggerLeavesTombstone",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "5c119300787451f4f575f2b4181b4f55f750e9ac53455018fd8c0cb7f35cec1b|Data Temporal Ops|StampFixedDate|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "StampFixedDateReturnsTheNonBlankDate",
     "coverageFiltered": false,
     "errorClass": null
   },
@@ -1190,6 +1232,13 @@
     "errorClass": null
   },
   {
+    "key": "72acdca01ff41897591aae7f3ad4d9662857bdb755d0498c8bce594baf33f3fd|Data Temporal Ops|Consume|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "PassThroughIgnoresItsDateArgument",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "732641f51e59d13ba91a83c6bb143250fb26a12a973c15aaa4935bf338cd8f53|Data Swap Ops|StampFromPair|lethal.swap-call-arguments|1",
     "verdict": "survived",
     "killingTest": null,
@@ -1274,6 +1323,27 @@
     "errorClass": null
   },
   {
+    "key": "7977865555164bf1784dad75d231b9434607fadb317e5a41ff5ebb15b40b0ada|Data Temporal Ops|IsCutoffSet|lethal.return-value|1",
+    "verdict": "killed",
+    "killingTest": "IsCutoffSetSeparatesBlankFromSet",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "7977865555164bf1784dad75d231b9434607fadb317e5a41ff5ebb15b40b0ada|Data Temporal Ops|IsDueDateSet|lethal.return-value|1",
+    "verdict": "killed",
+    "killingTest": "IsDueDateSetSeparatesBlankFromSet",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "7977865555164bf1784dad75d231b9434607fadb317e5a41ff5ebb15b40b0ada|Data Temporal Ops|IsTimestampSet|lethal.return-value|1",
+    "verdict": "killed",
+    "killingTest": "IsTimestampSetSeparatesBlankFromSet",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "7992fa8e2042db45ca24525a1e73b764bf4d9aa5f9f1ad974c19dc9a555bda53|Data Case Ops|ClassifyLevel|lethal.shift-integer|1",
     "verdict": "killed",
     "killingTest": "CaseArmsScoreByLevel",
@@ -1316,6 +1386,13 @@
     "errorClass": null
   },
   {
+    "key": "7d10860e0a4009ee2bbcffafb671b9267a07b958a4069c396ff2221e50d06589|Data Temporal Ops|IsTimestampSet|lethal.negate-conditional|1",
+    "verdict": "killed",
+    "killingTest": "IsTimestampSetSeparatesBlankFromSet",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "7d3ddeba69c14e4bda7203a05e4c9a717c415e813d48cbfe8ead4481372ecc9c|Data Flag Ops|InsertWithTrigger|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "InsertRunTriggerSetsTheTriggerField",
@@ -1340,6 +1417,13 @@
     "key": "7f35bd1725ae5b0ae88c94918d62d0512dbc6f8ca0999646c0657ed122ed23b9|Data Builder|SetRange|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "UserDefinedBuiltinsRun",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "7f4a45b598623c54640e5d72a8f8467feb24a1da9c2626a4481d9922900dc994|Data Temporal Ops|IsTimestampSet|lethal.toggle-blank-temporal|1",
+    "verdict": "killed",
+    "killingTest": "IsTimestampSetSeparatesBlankFromSet",
     "coverageFiltered": false,
     "errorClass": null
   },
@@ -1431,6 +1515,13 @@
     "key": "838403be01f03c7c84547a31a3f5e3dfa35bced285ab562df00f244a3e89407c|Data Ops|RunUserDefinedBuiltins|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "UserDefinedBuiltinsRun",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "847ba9d8d67a876446b2b8b190b1619335d7bea08a189c3c54267824ccda4d42|Data Temporal Ops|IsTimestampSet|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "IsTimestampSetSeparatesBlankFromSet",
     "coverageFiltered": false,
     "errorClass": null
   },
@@ -1571,6 +1662,13 @@
     "key": "93bd96d69f211dd205aecc3b89564e852d93da1caa1d6eda69f4f3421b07c7a6|Data Commit Target|OnRun|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "CommitBeforeCodeunitRunSucceeds",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "968cb88a07ea047f0fff4e1e41780ee256cf8509f9c90d0b7965812bd7ba7cac|Data Temporal Ops|IsDueDateSet|lethal.toggle-blank-temporal|1",
+    "verdict": "killed",
+    "killingTest": "IsDueDateSetSeparatesBlankFromSet",
     "coverageFiltered": false,
     "errorClass": null
   },
@@ -2191,6 +2289,13 @@
     "errorClass": null
   },
   {
+    "key": "db0a03a2f50e1e1cc8affafadeb35ae87ec70ded19fd264743a5753f5831304e|Data Temporal Ops|IsCutoffSet|lethal.negate-conditional|1",
+    "verdict": "killed",
+    "killingTest": "IsCutoffSetSeparatesBlankFromSet",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "dbbde7dbc4dfada938aaaeb60f9744bae7495e8eec20f48583039a7f32d01faa|Data Shadow|SelfShadowed|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "SelfShadowedRun",
@@ -2257,6 +2362,13 @@
     "key": "ded708d9dbf82231b3a6fe5be155517fbde77cc7fdbc89599aa9b29099379780|Data Filter Ops|CountBelowThreshold|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "BoundaryShiftAdmitsTheThresholdRow",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "dfee43e4f0ed43472ba9c77d67d16f5f8fb8b36fae703c358df992ced8811ebe|Data Temporal Ops|PassThrough|lethal.return-value|1",
+    "verdict": "killed",
+    "killingTest": "PassThroughIgnoresItsDateArgument",
     "coverageFiltered": false,
     "errorClass": null
   },
@@ -2443,6 +2555,13 @@
     "errorClass": null
   },
   {
+    "key": "ede32964ea01f1bc5cefe19ceda10b5b466f7fd4daacef39e6ea56df4b8e12e1|Data Temporal Ops|IsDueDateSet|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "IsDueDateSetSeparatesBlankFromSet",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "eef6d8e81fd4fed479dc4d361b5659773e7bc7701c4979e492d5698229e30863|Data Filter Ops|CountInRange|lethal.swap-additive|1",
     "verdict": "killed",
     "killingTest": "ClosedRangeCountIsScopedByMainNo",
@@ -2485,6 +2604,13 @@
     "errorClass": null
   },
   {
+    "key": "f9d3abaa9df154de33fea823ca97d565388c2e67743ff84ec55df546761d051e|Data Temporal Ops|IsDueDateSet|lethal.negate-conditional|1",
+    "verdict": "killed",
+    "killingTest": "IsDueDateSetSeparatesBlankFromSet",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "f9db3975b805daf14889772ac6dda73e28211c5ee6ac8b66afdb6c50d16d468c|Data Find Ops|AnyRow|lethal.return-value|1",
     "verdict": "killed",
     "killingTest": "ExistenceOnlyAssertionMissesTheDirection",
@@ -2495,6 +2621,13 @@
     "key": "fa09e3bae77e5aac80cc84ccbbf6898217be803b4761e6455d1b2633aa2ecc46|Data Validate Ops|TouchLevel|lethal.void-method-call|1",
     "verdict": "killed",
     "killingTest": "TouchLevelRunsTheTriggerAgain",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "fe30e84bf8cb4c0094f6a177fd28435ab6d2bc856d164ba6c3f5fda56d259eae|Data Temporal Ops|IsCutoffSet|lethal.toggle-blank-temporal|1",
+    "verdict": "killed",
+    "killingTest": "IsCutoffSetSeparatesBlankFromSet",
     "coverageFiltered": false,
     "errorClass": null
   },

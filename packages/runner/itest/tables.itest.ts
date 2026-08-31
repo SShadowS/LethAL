@@ -238,7 +238,13 @@ const EXPECTED = {
   // arm's body is a `code_block` whose parent is `case_branch`), so 233 such blocks on
   // `do-rel2/Cloud` went unmutated behind an entry that looked like it covered them. Pre-committed
   // in docs/superpowers/specs/2026-08-28-r180-case-arm-precommitment.md.
-  totalMutantSites: 378,
+  //
+  // R159's `toggle-blank-temporal` adds 19: `codeunit 79333 "Data Temporal Ops"`, the arm for the
+  // first operator admitted under R013's amended bar. That operator claims ZERO sites on every
+  // fixture and example this repo owns, so without this arm it would ship exercised by no gate at
+  // all. Four of the nineteen are its own; fifteen are collateral from operators that already ship.
+  // Pre-committed in docs/superpowers/specs/2026-08-31-temporal-arm-precommitment.md.
+  totalMutantSites: 397,
   // R36 moved this from 63/10 to 64/9, deliberately and in one direction only.
   //
   // `RequireCategoryAFails` used to assert merely that AN error occurred, so deleting
@@ -340,7 +346,11 @@ const EXPECTED = {
   // which is exactly what makes the pair a control.
   // R180 moves this from 267 to 280: all thirteen of the new arm's mutants kill, because its one
   // test asserts all three case paths.
-  killed: 280,
+  // R159's `toggle-blank-temporal` moves this from 280 to 299: all nineteen of its arm's mutants
+  // kill. That is deliberate rather than lucky -- every covering test drives BOTH sides of its
+  // blank check, so a toggled literal cannot pass by accident on whichever input a test happened to
+  // pick. A survivor here would mean a test that does not actually separate the two states.
+  killed: 299,
   // R73 moved this from 9 to 12, and TWO of the three additions are worth reading rather than
   // accepting:
   //
@@ -485,7 +495,11 @@ const EXPECTED = {
   // the direction rather than the digits.
   // R180 moves it to 280 / 343, about 0.8163, UP from 0.8091. An arm that is thirteen kills and no
   // survivors is supposed to raise it.
-  mutationScore: 280 / (280 + 63),
+  // R159's `toggle-blank-temporal` moves it to 299 / 362, about 0.8260, for the same reason: an arm
+  // of nineteen kills and no survivors raises it. Fully DERIVED from the killed and survived counts
+  // pre-committed before the run, not an independent claim -- though the pre-commitment should have
+  // said so explicitly and did not, which cost a re-run.
+  mutationScore: 299 / (299 + 63),
   /**
    * R72, extended by R138: the screen must fire, and on exactly these mutants under exactly these
    * mechanisms.
