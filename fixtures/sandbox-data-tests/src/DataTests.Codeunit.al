@@ -1333,4 +1333,79 @@ codeunit 79310 "Data Tests"
         DataRelated.Amount := AmountValue;
         DataRelated.Insert(false);
     end;
+
+    // --- toggle-blank-temporal's arm (R159). Each test drives BOTH sides of the blank check, so a
+    // --- toggled literal cannot pass by accident on the one input the test happened to pick.
+
+    [Test]
+    procedure IsDueDateSetSeparatesBlankFromSet()
+    var
+        TemporalOps: Codeunit "Data Temporal Ops";
+        Blank: Integer;
+        Set_: Integer;
+    begin
+        Blank := TemporalOps.IsDueDateSet(0D);
+        Set_ := TemporalOps.IsDueDateSet(20240402D);
+        if Blank <> 0 then
+            Error('expected 0 for a blank due date, got %1', Blank);
+        if Set_ <> 1 then
+            Error('expected 1 for a set due date, got %1', Set_);
+    end;
+
+    [Test]
+    procedure StampFixedDateReturnsTheNonBlankDate()
+    var
+        TemporalOps: Codeunit "Data Temporal Ops";
+        Stamped: Date;
+    begin
+        Stamped := TemporalOps.StampFixedDate();
+        // Asserts NOT-BLANK rather than the exact date: the mutation under test blanks it, and
+        // pinning the exact value would also fail for an unrelated edit to the constant.
+        if Stamped = 0D then
+            Error('expected a non-blank stamped date, got a blank one');
+    end;
+
+    [Test]
+    procedure IsTimestampSetSeparatesBlankFromSet()
+    var
+        TemporalOps: Codeunit "Data Temporal Ops";
+        Blank: Integer;
+        Set_: Integer;
+    begin
+        Blank := TemporalOps.IsTimestampSet(0DT);
+        Set_ := TemporalOps.IsTimestampSet(CreateDateTime(20240402D, 120000T));
+        if Blank <> 0 then
+            Error('expected 0 for a blank timestamp, got %1', Blank);
+        if Set_ <> 1 then
+            Error('expected 1 for a set timestamp, got %1', Set_);
+    end;
+
+    [Test]
+    procedure IsCutoffSetSeparatesBlankFromSet()
+    var
+        TemporalOps: Codeunit "Data Temporal Ops";
+        Blank: Integer;
+        Set_: Integer;
+    begin
+        Blank := TemporalOps.IsCutoffSet(0T);
+        Set_ := TemporalOps.IsCutoffSet(120000T);
+        if Blank <> 0 then
+            Error('expected 0 for a blank cutoff, got %1', Blank);
+        if Set_ <> 1 then
+            Error('expected 1 for a set cutoff, got %1', Set_);
+    end;
+
+    [Test]
+    procedure PassThroughIgnoresItsDateArgument()
+    var
+        TemporalOps: Codeunit "Data Temporal Ops";
+        Result: Integer;
+    begin
+        // The refusal control's covering test. `Consume` ignores the date entirely, so if the
+        // operator ever DID claim that argument-list literal its mutant would survive here -- which
+        // is the visible symptom of an over-broad claim, not a silent one.
+        Result := TemporalOps.PassThrough();
+        if Result <> 7 then
+            Error('expected 7 from the pass-through, got %1', Result);
+    end;
 }
