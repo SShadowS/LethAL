@@ -89,6 +89,14 @@ export const ALNodeKind = {
   text_literal: "string_literal",
   /** Grammar names the boolean-literal node simply `boolean`. */
   boolean_literal: "boolean",
+  /** AL date literals, `0D` and `20240101D`. Raw name matches the key here. */
+  date_literal: "date_literal",
+  /** AL datetime literals. In practice only the blank form `0DT` occurs: AL has no non-blank
+   *  DateTime literal, so non-blank DateTimes are CONSTRUCTED (`CreateDateTime`). Measured 44 of 44
+   *  blank on `do-rel2/Cloud`. */
+  datetime_literal: "datetime_literal",
+  /** AL time literals, `0T` and `120000T`. */
+  time_literal: "time_literal",
   /** Record/object member access is expressed as `member_expression`. */
   field_access: "member_expression",
   /** Procedure and method invocations are both `call_expression`. */

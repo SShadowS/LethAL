@@ -13,6 +13,7 @@ import { shiftInteger } from "./shift-integer";
 import { swapAdditive } from "./swap-additive";
 import { swapCallArguments } from "./swap-call-arguments";
 import { toggleBlankString } from "./toggle-blank-string";
+import { toggleBlankTemporal } from "./toggle-blank-temporal";
 import { voidMethodCall } from "./void-method-call";
 
 export { conditionalBoundary } from "./conditional-boundary";
@@ -29,6 +30,7 @@ export { shiftInteger } from "./shift-integer";
 export { swapAdditive } from "./swap-additive";
 export { swapCallArguments } from "./swap-call-arguments";
 export { toggleBlankString } from "./toggle-blank-string";
+export { toggleBlankTemporal } from "./toggle-blank-temporal";
 export { voidMethodCall } from "./void-method-call";
 export { synthesizeAfter } from "./mutate-helpers";
 
@@ -39,6 +41,7 @@ export const tier1Operators: readonly MutationOperator[] = [
   negateConditional,
   negateGuard,
   toggleBlankString,
+  toggleBlankTemporal,
   voidMethodCall,
   returnValue,
   emptyBlock,

@@ -104,3 +104,36 @@ is not started without the pre-commitment committed first.
   is claimed here only as part of one temporal operator, which is how it was priced at 96.
 - **Constructing a semantically meaningful non-blank DateTime.** `CREATEDATETIME` with fixed
   arguments is enough to be not-blank, which is the whole question the mutation asks.
+
+---
+
+## CORRECTION appended after building, before any live run. Nothing above is edited.
+
+**The claimable count is 81, not 96. My census counted third-party dependency code.**
+
+`scripts/r181-effect-grain-retrodiction.ts`, the instrument [[R013]]'s rule actually cites, excludes
+`.dependencies` and parses 417 of the corpus's 554 `.al` files. My spike census walked all 554, so
+§1's figures include 137 files of vendored dependency AL that LethAL never mutates.
+
+Re-measured with the same filter the rule's instrument uses:
+
+| pass | as first written | corrected |
+| --- | ---: | ---: |
+| raw kind count in bodies | 125 | **101** |
+| in a behavioural parent | 96 | **81** |
+| of those, blank | 92 | **77** |
+
+The registered operator claims **81** on that corpus, 0 collisions, so the two instruments now agree
+to the digit. That agreement is the check worth having: it proves the enum kinds resolve, which is
+R120's hazard, since a wrong kind would have claimed 0 while type-checking cleanly.
+
+**The verdict does not move.** 81 against a floor of 36 is 2.25x and still clears the 36-to-44
+undecided band. That is precisely why this candidate was chosen over `subscript_expression`: its
+margin survives the measurement being wrong, and the measurement was wrong.
+
+§2's shape finding is unaffected in substance: 77 of 81 claimable literals are blank, so the toggle
+is still the shape the corpus forces and a date-shift operator would still have had four sites.
+
+**The transferable error**, which is the fourth of its kind today: I measured with a different file
+filter than the instrument the rule cites. Any figure offered against R13's bar must come from that
+script, or from a census that reproduces its exclusions exactly.
