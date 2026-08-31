@@ -149,6 +149,15 @@ export function lossesFor(report: SessionReport): string[] {
       `the assertion screen's discrimination ("${report.assertionScreen.discrimination}", R121) has no schema equivalent.`,
     );
   }
+  const excludedSites = report.excludedSites;
+  if (excludedSites !== undefined && excludedSites.siteCount > 0) {
+    // Carried, but LOSSILY, and the difference is worth stating rather than letting a reader assume
+    // the entries are per-site. Before this they were not carried at all and this loss was not even
+    // reported, which is the silent-projection failure the module's own doc comment names.
+    losses.push(
+      `${excludedSites.siteCount} refused site(s) across ${excludedSites.fileCount} file(s) are carried as ONE \`Ignored\` entry per file, at line 1, not one per site: \`excludedSites\` records a count and no spans, because a refused site never became a mutant with a location.`,
+    );
+  }
   losses.push(
     "the run's validity caveats, reliability and scope narrowing are not represented: the schema " +
       "describes MUTANTS, not the run that produced them, so a narrowed run renders like a full one.",
@@ -211,6 +220,46 @@ export async function toMutationElements(
         };
       }),
     };
+  }
+
+  // The refusals: sites LethAL deliberately did not mutate, carried as `Ignored` entries.
+  //
+  // Without this they were a SILENT loss, which is the one thing this module's own design forbids:
+  // a file the tool declined to touch rendered identically to a file it found nothing in, and
+  // `lossesFor` did not even mention the omission. `Ignored` is the schema's own word for "we chose
+  // not to run this", so the mapping is the schema's, not an invention.
+  //
+  // ONE entry per excluded FILE, not per refused site, and located at 1:1. `excludedSites` records
+  // a per-file COUNT and no spans, because a refused site never became a mutant with a location.
+  // Emitting one entry per site would mean fabricating N identical positions; the count goes in the
+  // description instead, where a reader sees it.
+  for (const row of report.excludedSites?.files ?? []) {
+    const rel = row.file.replaceAll("\\", "/");
+    let source: string;
+    try {
+      source = await read(join(opts.projectDir, rel));
+    } catch (err) {
+      throw new Error(
+        `cannot read ${join(opts.projectDir, rel)} for its source, which the schema REQUIRES even for a file LethAL refused to mutate: ${err instanceof Error ? err.message : String(err)}. Pass the --project this report was produced against.`,
+      );
+    }
+    const entry = files[rel] as { mutants?: unknown[] } | undefined;
+    const ignored = {
+      // Unique against every mutant id, which are `M####`, and against each other: one row per
+      // (file, reason), which is exactly what `excludedSites` holds.
+      id: `ignored:${row.reason}:${rel}`,
+      // The renderers GROUP and filter by this, so naming it for the reason makes every refusal of
+      // one kind selectable as a set in the rendered tab.
+      mutatorName: row.reason,
+      location: { start: { line: 1, column: 1 }, end: { line: 1, column: 1 } },
+      status: "Ignored" as const,
+      description: `${row.sites} mutation site(s) in this ${row.kinds} were not mutated (${row.reason}). LethAL refused them; they are not untested code.`,
+    };
+    if (entry?.mutants === undefined) {
+      files[rel] = { language: "al", source, mutants: [ignored] };
+    } else {
+      entry.mutants.push(ignored);
+    }
   }
 
   if (unmapped.size > 0) {

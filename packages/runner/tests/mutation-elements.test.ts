@@ -201,3 +201,70 @@ describe("R178: positions", () => {
     expect(p.line).toBeLessThanOrEqual(SOURCE.split("\n").length);
   });
 });
+
+describe("R184: refusals are carried as Ignored rather than dropped silently", () => {
+  const excluded = {
+    totalFiles: 9,
+    siteCount: 5,
+    fileCount: 1,
+    files: [
+      {
+        file: "src/Q.Query.al",
+        kinds: "query_declaration",
+        sites: 5,
+        reason: "not-instrumentable",
+      },
+    ],
+  };
+
+  test("an excluded file becomes an Ignored entry, and still validates", async () => {
+    // Before this the file rendered identically to one the tool found nothing in, which is the
+    // silent projection this module's own doc comment forbids.
+    const { report: out } = await toMutationElements(
+      report([mutant()], { excludedSites: excluded } as Partial<SessionReport>),
+      OPTS,
+    );
+    expect(violations(SCHEMA as Node, out)).toEqual([]);
+
+    const files = out.files as Record<string, { mutants: Record<string, unknown>[] }>;
+    const q = files["src/Q.Query.al"];
+    expect(q).toBeDefined();
+    expect(q?.mutants).toHaveLength(1);
+    const entry = q?.mutants[0];
+    expect(entry?.status).toBe("Ignored");
+    // Grouped under the REASON, so every refusal of one kind is selectable as a set in the renderer.
+    expect(entry?.mutatorName).toBe("not-instrumentable");
+    expect(entry?.description).toContain("5 mutation site(s)");
+    expect(entry?.description).toContain("not untested code");
+  });
+
+  test("a file with BOTH mutants and refusals keeps both, rather than one overwriting the other", async () => {
+    // The merge is the part that can silently lose data: a declarative site and a real mutant can
+    // live in the same file, and the refusal loop runs after the mutant loop has already built it.
+    const both = {
+      ...excluded,
+      files: [
+        { file: "src/X.Codeunit.al", kinds: "codeunit", sites: 2, reason: "declarative" as const },
+      ],
+    };
+    const { report: out } = await toMutationElements(
+      report([mutant()], { excludedSites: both } as Partial<SessionReport>),
+      OPTS,
+    );
+    const files = out.files as Record<string, { mutants: Record<string, unknown>[] }>;
+    const x = files["src/X.Codeunit.al"];
+    expect(x?.mutants).toHaveLength(2);
+    expect(x?.mutants.map((m) => m.status).sort()).toEqual(["Ignored", "Survived"]);
+  });
+
+  test("the lossy HALF is declared: one entry per file, not per site", () => {
+    const losses = lossesFor(
+      report([mutant()], { excludedSites: excluded } as Partial<SessionReport>),
+    );
+    expect(losses.some((l) => l.includes("5 refused site(s)") && l.includes("ONE"))).toBe(true);
+  });
+
+  test("a report with no refusals declares no such loss, so the line means something", () => {
+    expect(lossesFor(report([mutant()])).some((l) => l.includes("refused site"))).toBe(false);
+  });
+});
