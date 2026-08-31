@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**6 of 181 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**8 of 183 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -72,6 +72,8 @@ that ordering is the priority.
 - **R181** · R13's marginal-site bar is self-extinguishing: applied today it refuses `swap-additive`, which we shipped and value · [R181.md](docs/roadmap/R181.md) · open — DIAGNOSIS COMPLETE, one ruling left on R13. The bar never fixed a GRAIN…
 - **R182** · R147's platform-app pin engaged only on a COLD cache, so the optimisation switched itself off whenever the cache was healthy · [R182.md](docs/roadmap/R182.md) · done (`al-runner-transport.ts`, `al-runner-backend.ts`) — the warm-cache sentence is now read, the two…
 - **R183** · `authoritative: false` rests on a justification that is too broad: al-runner rolls back for `asserterror` but not for `Codeunit.Run` · [R183.md](docs/roadmap/R183.md) · done — the justification now separates what LethAL MEASURED from what it INHERITED from upstream docs, and…
+- **R184** · `lethal export --format mutation-elements` writes target SOURCE to a file this public repo has no guard against committing · [R184.md](docs/roadmap/R184.md) · open — filed 2026-08-31 by accident, while checking whether an unrelated workstream duplicated R178. NARROWED…
+- **R185** · `redact-campaign-report.ts --check` fails OPEN: given after the path, it silently runs in WRITE mode · [R185.md](docs/roadmap/R185.md) · open — filed 2026-08-31, reproduced live in this session by running the documented-looking invocation and…
 
 ## Product gaps a real project hits
 
