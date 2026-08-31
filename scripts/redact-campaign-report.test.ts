@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Glob } from "bun";
+import { isMutationElementsExport } from "./redact-campaign-report";
 
 /**
  * The public-repo guard, and the two properties that make it worth having rather than a checklist
@@ -206,11 +207,43 @@ describe("redact-campaign-report", () => {
     // project's own code in its own pipeline and is exactly what the 2026-08-09 ruling forbids
     // publishing for a third party's. The command warns on every run, but a warning is not a
     // control: this is, because it fails if one is ever committed to this public repository.
+    // R184 STRENGTHENED this from a filename regex to a SHAPE test. It used to filter
+    // `git ls-files` on /mutation-report.*\.(json|html)$/i, so the same dangerous file saved as
+    // `out.json` or `elements.json` passed straight through — and `--out` is the user's to name.
+    // A filename convention is exactly the hand-maintained claim the next test argues is what "let
+    // six reports sit unswept". The predicate is imported rather than redefined, so this guard and
+    // the script's own refusal cannot drift apart.
     const repoRoot = join(import.meta.dir, "..");
     const tracked = execFileSync("git", ["ls-files"], { cwd: repoRoot, encoding: "utf8" })
       .split(/\r?\n/)
-      .filter((f) => /mutation-report.*\.(json|html)$/i.test(f));
-    expect(tracked).toEqual([]);
+      .filter((f) => f.toLowerCase().endsWith(".json"));
+    const offenders = tracked.filter((f) => {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(readFileSync(join(repoRoot, f), "utf8"));
+      } catch {
+        return false; // not JSON we can read is not a report we produced
+      }
+      return isMutationElementsExport(parsed);
+    });
+    expect(offenders).toEqual([]);
+  });
+
+  test("the committed-file guard DETECTS one, so the test above is not vacuous", () => {
+    // Every tracked .json today is expected to be clean, so the assertion above passes whether the
+    // predicate works or is broken to always return false. This proves it fires: the same predicate
+    // the guard uses must recognise a real mutation-elements shape.
+    expect(
+      isMutationElementsExport({
+        schemaVersion: "1",
+        thresholds: { high: 80, low: 60 },
+        files: { "src/A.al": { language: "al", source: "codeunit 1 A { }", mutants: [] } },
+      }),
+    ).toBe(true);
+    // And must NOT fire on a SessionReport, or it would refuse the files it exists to clean.
+    expect(isMutationElementsExport({ mutants: [{ originalText: "x" }] })).toBe(false);
+    // Nor on a file-less document that merely has a schemaVersion, which every LethAL surface has.
+    expect(isMutationElementsExport({ schemaVersion: "2", mutants: [] })).toBe(false);
   });
 
   test("every first-party exemption is MECHANICALLY first-party, not just claimed", () => {
