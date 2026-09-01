@@ -3,6 +3,33 @@
 Probe sources kept so a claim can be re-checked rather than re-argued. A measurement nobody can
 re-run is barely better than a guess.
 
+## Corpora on this machine — identified by hash, not by path (R187)
+
+Read this before choosing a corpus for a cross-check. Two of the paths below are ONE corpus.
+
+| path | what it is | `.al` files parsed | sha256 (first 16) |
+| --- | --- | ---: | --- |
+| `U:/Git/do-rel2/Cloud` | Continia Document Output. **The reference corpus** R013's admission bar is calibrated on | 417 | `9a8e8831449208cc` |
+| `U:/Git/do-lethal/Cloud` | **THE SAME CORPUS.** A second worktree of the same repository at the same commit (`5f2a71d3`), on a different branch. Byte-identical today; will diverge the moment either branch moves | 417 | `9a8e8831449208cc` |
+| `U:/Git/DC/Cloud` | Continia Document Capture. Same vendor, different product. Genuinely distinct | 475 | `dcad155c4ecdb38e` |
+| `U:/Git/BusinessCentral.Sentinel` | Different vendor, small. Genuinely distinct | 67 | `9363656ed52020e0` |
+
+Rows cite both DO paths for different purposes (R174's probe ran on `do-lethal`; R13, R159 and R181
+ran on `do-rel2`), and read together they look like two projects. They are not, and on 2026-08-31 a
+rule calibrated on one was about to be "validated" against the other — which would have returned the
+same figures to the digit and read as corpus-independence. Measured on `DC/Cloud` instead, the same
+rule failed its own refutation test (R181's third correction).
+
+**The identity is the hash, and every corpus-taking instrument should print it first.**
+`scripts/corpus-fingerprint.ts` computes it over exactly the files the instruments parse (`.al`,
+excluding `.dependencies`), and `scripts/r181-effect-grain-retrodiction.ts` prints it as its first
+line. Two runs that print the same hash measured the same corpus, whatever their paths say. A figure
+offered against a rule calibrated on a named corpus should carry that corpus's hash beside it.
+
+```
+bun scripts/corpus-fingerprint.ts <corpus-dir>
+```
+
 ## `object-kind-selector-var-probe.al` — which AL object kinds can carry the selector var
 
 Answers R40. `canCarryMutationSelectorVar` (`packages/schemata/src/compile.ts`) refuses every

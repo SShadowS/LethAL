@@ -36,7 +36,7 @@
  * implemented; their refusals stand on R13's recorded measurement. What CAN be checked is that the
  * rule does not accidentally accept everything, which is what the collision column shows.
  */
-import { readFile, readdir } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tier1Operators } from "../packages/builtin-tier1/src/index";
 import { tier2Operators } from "../packages/builtin-tier2/src/index";
@@ -44,6 +44,7 @@ import { initParser, parseAL } from "../packages/engine/src/ast/parser";
 import { type ALSyntaxNode, wrapRoot } from "../packages/engine/src/ast/syntax-node";
 import { buildSemanticContext } from "../packages/engine/src/semantic/context";
 import type { SourceFile } from "../packages/engine/src/semantic/symbol-table";
+import { corpusEntries, describeFingerprint, fingerprintCorpus } from "./corpus-fingerprint";
 
 const [corpusDir] = process.argv.slice(2);
 if (corpusDir === undefined) {
@@ -62,9 +63,13 @@ function walk(node: ALSyntaxNode, visit: (n: ALSyntaxNode) => void): void {
 }
 
 await initParser();
-const entries = (await readdir(corpusDir, { recursive: true })).filter(
-  (f) => f.toLowerCase().endsWith(".al") && !f.includes(".dependencies"),
-);
+// R187: identify the corpus by CONTENT before measuring it, as the first line of output. Two
+// paths on this machine hold one corpus (worktrees of one repo at one commit), and a rule was
+// nearly "validated" against the copy. `corpusEntries` is also the file list parsed below, so the
+// fingerprint describes exactly the corpus the figures come from.
+const fingerprint = await fingerprintCorpus(corpusDir);
+console.log(describeFingerprint(corpusDir, fingerprint));
+const entries = await corpusEntries(corpusDir);
 const files: SourceFile[] = [];
 for (const rel of entries) {
   try {
