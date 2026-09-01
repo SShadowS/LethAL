@@ -88,9 +88,21 @@ function spliceIntoRoot(root: Component["root"], m: ComponentMember): string {
  *
  * `if Cond then ;` is legal AL, verified by an offline `alc` compile of all five shapes this touches
  * (`then ;`, `else ;`, an empty case arm, `then begin end`, and a braced nested if/else).
+ *
+ * EXCEPT when the slot is a then-branch whose `else` follows: `if Cond then ; else Bar()` is the
+ * "unnecessary semicolon before ELSE" that AL0110 names, because the empty statement's `;` closes
+ * the `if` before its `else` is reached. That shape was not among the four measured above, and it
+ * is the one that broke first on real code: the R175 re-run of `do rung1` (2026-09-02) emitted it
+ * at three sites of one codeunit, `alc` refused the whole artifact, and all 155 mutants scored
+ * `error`. An empty block is a statement the grammar accepts in every slot and closes nothing, so
+ * that is the filler there. It is used ONLY there, so the four measured shapes keep the emission
+ * `scripts/r161-emit-proof.ts` compiled; that script now carries this shape as a fifth case.
  */
 function emptiedSlotFiller(rootText: string, relEnd: number, m: ComponentMember): string {
   if (m.afterText.trim() !== "") return "";
   if (isStatementPosition(m.spec.before) || !isStatementSlot(m.spec.before)) return "";
-  return rootText.slice(relEnd).trimStart().startsWith(";") ? "" : ";";
+  const rest = rootText.slice(relEnd).trimStart();
+  if (rest.startsWith(";")) return "";
+  if (/^else(?![A-Za-z0-9_])/i.test(rest)) return "begin end";
+  return ";";
 }

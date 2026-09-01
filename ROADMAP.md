@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**5 of 186 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**6 of 188 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -76,6 +76,7 @@ that ordering is the priority.
 - **R185** · `redact-campaign-report.ts --check` fails OPEN: given after the path, it silently runs in WRITE mode · [R185.md](docs/roadmap/R185.md) · done — filed and fixed 2026-08-31. `--check` is now read anywhere in argv, and an unrecognised dash-argument…
 - **R186** · A script with an unguarded CLI body, imported for one helper, executes on import and fails confusingly. It happened twice in one session and nothing pins the convention · [R186.md](docs/roadmap/R186.md) · done (`scripts/importable-scripts.test.ts`) — filed and built 2026-08-31. ZERO offenders existed, and the…
 - **R187** · `do-lethal/Cloud` and `do-rel2/Cloud` are the SAME corpus, and measurements have been cross-checked against them as if they were two · [R187.md](docs/roadmap/R187.md) · done (`scripts/corpus-fingerprint.ts`) — 2026-09-01. Root cause established: two worktrees of ONE repository…
+- **R189** · A deletion in an un-braced then-branch FOLLOWED BY `else` emitted `then ; else`, which is AL0110, and one such site made a whole artifact refuse to compile · [R189.md](docs/roadmap/R189.md) · done (`packages/schemata/src/dispatch.ts`, `emptiedSlotFiller`) — found and fixed 2026-09-02 by the R175…
 
 ## Product gaps a real project hits
 
@@ -123,6 +124,7 @@ that ordering is the priority.
 - **R178** · No CI system can display a LethAL run: four bespoke JSON surfaces and no interchange format · [R178.md](docs/roadmap/R178.md) · done (`854cdca`) — `lethal export <report.json> --format mutation-elements --project <dir> --out <path>`…
 - **R180** · `empty-block` names the wrong parent for a case arm, so 291 arm bodies have no mutant at all · [R180.md](docs/roadmap/R180.md) · done (this commit) — `empty-block` now claims a case ARM's body via `case_branch`, replacing the…
 - **R188** · `excludedSites` is OPTIONAL by design, and the release that deletes its two legacy views owes ONE schema bump, not two — nothing on the roadmap records that debt · [R188.md](docs/roadmap/R188.md) · open — filed 2026-09-01. Not a defect and not scheduled; a recorded obligation, so the two views are not…
+- **R190** · A run in which EVERY mutant scored `error` exits 0, reports `null` for its score, and carries no caveat saying nothing was measured · [R190.md](docs/roadmap/R190.md) · open — filed 2026-09-02 from the run that found R189. Not scheduled
 
 ## Backends and tooling
 

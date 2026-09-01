@@ -943,6 +943,19 @@ describe("compileSchemataForFile — selector var injection into extension objec
       expect(out).toContain("if Cond then Foo()");
     });
 
+    it("fills an emptied then-branch with an empty BLOCK when an else follows, never `; else`", () => {
+      // The shape the four measured ones missed. `if Cond then ; else Bar()` is AL0110's own
+      // example ("an unnecessary semicolon placed just before the ELSE keyword"): the empty
+      // statement's `;` closes the `if` before its `else`. The R175 re-run of `do rung1` emitted
+      // it at three sites of one codeunit and every mutant of the run scored `error`.
+      const out = deletionAtFoo(
+        `codeunit 51045 "C" { procedure P(Cond: Boolean) begin if Cond then Foo() else Bar(); end; }`,
+      );
+      expect(out).toContain("if Cond then begin end else Bar()");
+      expect(out).not.toMatch(/then\s*;\s*else/);
+      expect(countErrorNodes(out)).toBe(0);
+    });
+
     it("fills an emptied else-branch the same way", () => {
       const out = deletionAtFoo(
         `codeunit 51041 "C" { procedure P(Cond: Boolean) begin if Cond then Bar() else Foo(); end; }`,

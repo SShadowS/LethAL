@@ -73,8 +73,21 @@ const CASES: readonly { readonly name: string; readonly src: string }[] = [
     src: `codeunit 79181 "R161 Else" { procedure P(Cond: Boolean) var R: Record "LethAL Sandbox Log"; begin if Cond then R.Insert() else R.Init(); end; }`,
   },
   {
+    // The shape the first four missed, and the one that failed on real code: a then-branch whose
+    // `else` follows INSIDE the root, where an empty statement orphans it (AL0110). The R175 re-run
+    // of `do rung1` hit it at three sites in one codeunit and scored all 155 mutants `error`.
+    name: "deletion in an un-braced then-branch followed by else",
+    src: `codeunit 79186 "R161 Then Else" { procedure P(Cond: Boolean) var R: Record "LethAL Sandbox Log"; begin if Cond then R.Init() else R.Insert(); end; }`,
+  },
+  {
     name: "deletion in a case-arm body",
     src: `codeunit 79182 "R161 Case" { procedure P(W: Integer) var R: Record "LethAL Sandbox Log"; begin case W of 1: R.Init(); 2: R.Insert(); end; end; }`,
+  },
+  {
+    // A case arm's `;` sits inside the root and survives the splice, so the filler stays empty
+    // there even when the case's own `else` follows: `1: ; else` is an empty arm, not an orphan.
+    name: "deletion in a case-arm body followed by the case's else",
+    src: `codeunit 79187 "R161 Case Else" { procedure P(W: Integer) var R: Record "LethAL Sandbox Log"; begin case W of 1: R.Init(); else R.Insert(); end; end; }`,
   },
   {
     name: "deletion in a while body",
@@ -208,8 +221,30 @@ if (negErrors.length > 0) {
   console.log("            so this proof no longer measures what it claims to");
 }
 
+// SECOND negative control, for the then-else shape: its empty BLOCK swapped back to the empty
+// STATEMENT the other shapes use must be REJECTED (AL0110). That is what says the block is
+// load-bearing there, rather than the shape compiling for some other reason.
+const thenElse = CASES.find((c) => c.name.endsWith("followed by else"));
+if (thenElse === undefined) throw new Error("r161-emit-proof: the then-else shape is missing");
+const thenElseEmission = instrument(thenElse.src, true);
+const withStatement = thenElseEmission.replace("then begin end else", "then ; else");
+if (withStatement === thenElseEmission) {
+  throw new Error("r161-emit-proof: the then-else emission does not contain `then begin end else`");
+}
+const negErrors2 = compileProject([...base, { name: "Probe.al", text: withStatement }]);
+if (negErrors2.length > 0) {
+  console.log("  REJECTED  the then-else emission with `;` in place of `begin end`");
+  console.log(`            ${negErrors2[0]}`);
+} else {
+  failures += 1;
+  console.log(
+    "  ESCAPED   the then-else emission with `;` compiled — the empty block is not load-bearing",
+  );
+}
+
 rmSync(scratch, { recursive: true, force: true });
+const negativesHeld = negErrors.length > 0 && negErrors2.length > 0;
 console.log(
-  `\n${CASES.length - (failures > 0 ? failures : 0)}/${CASES.length} shapes compile; negative control ${negErrors.length > 0 ? "rejected as required" : "ESCAPED"}`,
+  `\n${CASES.length - (failures > 0 ? failures : 0)}/${CASES.length} shapes compile; negative controls ${negativesHeld ? "rejected as required" : "ESCAPED"}`,
 );
 process.exit(failures > 0 ? 1 : 0);
