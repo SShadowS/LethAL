@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**6 of 188 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**7 of 189 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -77,6 +77,7 @@ that ordering is the priority.
 - **R186** · A script with an unguarded CLI body, imported for one helper, executes on import and fails confusingly. It happened twice in one session and nothing pins the convention · [R186.md](docs/roadmap/R186.md) · done (`scripts/importable-scripts.test.ts`) — filed and built 2026-08-31. ZERO offenders existed, and the…
 - **R187** · `do-lethal/Cloud` and `do-rel2/Cloud` are the SAME corpus, and measurements have been cross-checked against them as if they were two · [R187.md](docs/roadmap/R187.md) · done (`scripts/corpus-fingerprint.ts`) — 2026-09-01. Root cause established: two worktrees of ONE repository…
 - **R189** · A deletion in an un-braced then-branch FOLLOWED BY `else` emitted `then ; else`, which is AL0110, and one such site made a whole artifact refuse to compile · [R189.md](docs/roadmap/R189.md) · done (`packages/schemata/src/dispatch.ts`, `emptiedSlotFiller`) — found and fixed 2026-09-02 by the R175…
+- **R191** · A test that stalls AFTER BC has sent the RunMutant response headers is outside every LethAL timer: the budget, the R53 stop hook and the hard cap all end when `fetch` resolves, and the body read runs until the runtime gives up, then quarantines · [R191.md](docs/roadmap/R191.md) · open — filed 2026-09-02 from the second attempt of the R175 re-run on Cronus28. Not scheduled
 
 ## Product gaps a real project hits
 

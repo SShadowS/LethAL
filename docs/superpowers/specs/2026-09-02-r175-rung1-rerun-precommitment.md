@@ -104,3 +104,42 @@ provoke.
 ---
 
 ## OUTCOME
+
+**Not yet written. Two attempts have run and neither produced a verdict; both are recorded here so
+that the eventual outcome is read against what it cost. Nothing above the line is edited.**
+
+### Attempt 1, 2026-09-02 00:11, Cronus28: no verdict, a LethAL defect
+
+The instrumented artifact did not compile: `AL0110: Orphaned ELSE statement` at three sites. All
+155 mutants scored `error`, the score was `null`, and the process exited 0. Root cause is
+[[R189]]: R161's `emptiedSlotFiller` emitted `then ; else` for a deletion in a then-branch that an
+`else` follows, a shape none of its four measured cases had. Fixed in `2874544`, with the shape and
+an AL0110 negative control added to `scripts/r161-emit-proof.ts`. The run's own silence about
+having measured nothing is [[R190]].
+
+The same attempt warned that the published test app lacks the 24 tests
+`CDOAutStatementFeatureTests.Codeunit.al` declares in the source tree. That file is rung3's, and it
+is untracked in the worktree; §6 said it must be absent from the compiled app and it was, but the
+DIRECTORY glob still admitted it into the discovered baseline (80 tests, not 56). Attempt 2 names
+rung1's four test files explicitly instead.
+
+### Attempt 2, 2026-09-02 00:22, Cronus28: no verdict, an environment prerequisite
+
+The fix held: the artifact compiled and deployed in 20 s. The baseline discovered **56** tests,
+ran 21 green, and then `LegacySystem_CustomerWithBalance_ShouldCreateJournalLine` stalled for
+272 s, quarantined the tier (`in-flight-unknown`), exit 3.
+
+Diagnosed read-only afterwards: under bc-dev's own test runner the same test fails in 489 ms with
+**"App Document Output is not activated"** (`CSC Core.IsAppActiveOrAskToActivate`, reached from
+`CDO Statement Journal Line.CreatePDF`). Document Output needs Continia activation, which the hosted
+environment had and a local container does not. The Core Internal Activation App that was
+published only enables HttpClient for Core and reads secrets from an Azure Key Vault; activation
+itself talks to Continia Online with those secrets. So every PDF-creating test in the 56 fails here
+until DO is activated on Cronus28, and §6's first precondition (56 green) cannot hold.
+
+The 272 s stall rather than a 489 ms failure is [[R191]]: in the non-GUI fenced session the
+`Message` that fails the test under bc-dev is a no-op, the activation path continues, and its wait
+falls in a phase no LethAL timer covers.
+
+**Blocked on:** DO activated on Cronus28 (a Continia-internal step), then `/recover-tier` for the
+quarantine, then attempt 3 with the pre-commitment above unchanged.
