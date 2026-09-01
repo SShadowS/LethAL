@@ -34,10 +34,11 @@
  * VERIFIED by compiling both forms with real `alc.exe`, not asserted, in
  * `scripts/r159-paren-probe.py`.
  */
-import { readFile, readdir } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { initParser, parseAL } from "../packages/engine/src/ast/parser";
 import { type ALSyntaxNode, wrapRoot } from "../packages/engine/src/ast/syntax-node";
+import { corpusEntries, describeFingerprint, fingerprintCorpus } from "./corpus-fingerprint";
 
 const [projectDir] = process.argv.slice(2);
 if (projectDir === undefined) {
@@ -45,14 +46,18 @@ if (projectDir === undefined) {
   process.exit(2);
 }
 
+/**
+ * R187: the file list is the one the rule's own instrument parses (`.al`, excluding
+ * `.dependencies`), through the shared `corpusEntries`, so this census and
+ * `r181-effect-grain-retrodiction.ts` cannot disagree about what the corpus IS. This function used
+ * to walk every `.al` under the directory, dependencies included, and every remainder figure it
+ * produced was over-counted by vendored AL LethAL never mutates: `subscript_expression` read 53
+ * and is 29 once the filter matches the rule's, which moves it from clearing R013's floor to
+ * refused. Temporal read 125 and is 81. A count offered against the bar has to come from the bar's
+ * own file filter.
+ */
 async function alFiles(dir: string): Promise<string[]> {
-  const out: string[] = [];
-  for (const e of await readdir(dir, { withFileTypes: true })) {
-    const p = join(dir, e.name);
-    if (e.isDirectory()) out.push(...(await alFiles(p)));
-    else if (e.name.toLowerCase().endsWith(".al")) out.push(p);
-  }
-  return out;
+  return (await corpusEntries(dir)).map((rel) => join(dir, rel));
 }
 
 function inBody(node: ALSyntaxNode): boolean {
@@ -217,6 +222,7 @@ for (const f of files) {
   });
 }
 
+console.log(describeFingerprint(projectDir, await fingerprintCorpus(projectDir)));
 console.log(`corpus: ${parsed}/${files.length} .al files parsed\n`);
 console.log("kind                       raw   in-body  claimable  note");
 for (const [k, v] of Object.entries(counts)) {
