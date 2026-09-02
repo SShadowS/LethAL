@@ -1,7 +1,10 @@
+import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { MutantManifestEntry } from "@lethal/schemata";
 import type { CompiledArtifact } from "../src/artifact";
 import type {
   BackendCapabilities,
@@ -11,10 +14,12 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "../src/backend";
+import type { RunEvent } from "../src/events";
 import { runSession } from "../src/orchestrator";
 import {
   CARRYABLE_VERDICTS,
   STRANDED_NOTE_PREFIX,
+  batchCarriesEntirely,
   buildResumeIndex,
   isStrandedNote,
   sessionFingerprint,
@@ -213,6 +218,10 @@ class NeverAttestingBackend implements ExecutionBackend {
   }
 }
 
+function tmpdirSync(): string {
+  return mkdtempSync(join(tmpdir(), "lethal-store-"));
+}
+
 function row(over: Partial<MutantVerdictRow> = {}): MutantVerdictRow {
   return {
     astHash: "hash-a",
@@ -224,6 +233,25 @@ function row(over: Partial<MutantVerdictRow> = {}): MutantVerdictRow {
     durationMs: 42,
     ...over,
   };
+}
+
+/** A manifest entry whose identity key matches `row({ astHash })` — the same codeunit, procedure
+ *  and operator, so a `buildResumeIndex` built from rows can be asked about it. */
+function manifestEntry(astHash: string): MutantManifestEntry {
+  return {
+    mutantId: `M-${astHash}`,
+    file: "src/SandboxLogic.Codeunit.al",
+    startIndex: 0,
+    endIndex: 1,
+    startLine: 1,
+    operatorName: "lethal.negate-conditional",
+    operatorVersion: "1.0.0",
+    astHash,
+    objectType: "codeunit",
+    codeunitId: 79000,
+    codeunitName: "Sandbox Logic",
+    procedureName: "Post",
+  } as MutantManifestEntry;
 }
 
 /**
@@ -584,6 +612,98 @@ describe("ResultsStore resume queries (R47)", () => {
     ]);
   });
 
+  test("R192: mutantVerdicts reads back the coverage facts, and their absence stays an absence", () => {
+    const store = new ResultsStore(":memory:");
+    const id = store.createRun({ projectPath: "/p", backend: "bcdev", appVersion: "1.0.0.0" });
+    const base = {
+      codeunitName: "C",
+      procedureName: "Post",
+      operatorName: "op",
+      operatorMajor: 1,
+      file: "f.al",
+      line: 3,
+      durationMs: 1,
+      batchIndex: 0,
+    } as const;
+    store.recordMutant(id, {
+      ...base,
+      mutantCode: "M0001",
+      astHash: "with",
+      verdict: "survived",
+      coveringTests: ["Tests.A", "Tests.B"],
+      coverageAttribution: "exact",
+    });
+    store.recordMutant(id, {
+      ...base,
+      mutantCode: "M0002",
+      astHash: "unplaceable",
+      verdict: "no-coverage",
+      coveringTests: [],
+      unplaceable: true,
+    });
+    // A row written by a pre-R192 caller: nothing about coverage, and it must read back as
+    // nothing — not as an empty list, which would let `--resume` skip a batch on invented facts.
+    store.recordMutant(id, { ...base, mutantCode: "M0003", astHash: "without", verdict: "killed" });
+    const rows = new Map(store.mutantVerdicts(id).map((r) => [r.astHash, r]));
+    expect(rows.get("with")?.coveringTests).toEqual(["Tests.A", "Tests.B"]);
+    expect(rows.get("with")?.coverageAttribution).toBe("exact");
+    expect(rows.get("with")?.unplaceable).toBeUndefined();
+    expect(rows.get("unplaceable")?.coveringTests).toEqual([]);
+    expect(rows.get("unplaceable")?.unplaceable).toBe(true);
+    expect(rows.get("without")?.coveringTests).toBeUndefined();
+    expect(rows.get("without")?.coverageAttribution).toBeUndefined();
+    expect(rows.get("without")?.unplaceable).toBeUndefined();
+  });
+
+  test("R192: a database created before the coverage columns is migrated, and its rows read back without them", () => {
+    // The pre-R192 table, verbatim minus the three columns; `migrate()` must widen it.
+    const raw = new Database(":memory:");
+    raw.exec(`CREATE TABLE runs (id INTEGER PRIMARY KEY AUTOINCREMENT, started_at TEXT NOT NULL,
+      finished_at TEXT, project_path TEXT NOT NULL, backend TEXT NOT NULL, app_version TEXT NOT NULL,
+      batch_count INTEGER, baseline_green INTEGER, app_id TEXT, artifact_id TEXT, artifact_sha256 TEXT,
+      config_fingerprint TEXT)`);
+    raw.exec(`CREATE TABLE mutants (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id INTEGER NOT NULL,
+      mutant_code TEXT NOT NULL, ast_hash TEXT NOT NULL, codeunit_name TEXT NOT NULL,
+      procedure_name TEXT, operator_name TEXT NOT NULL, operator_major INTEGER NOT NULL,
+      file TEXT NOT NULL, line INTEGER NOT NULL, verdict TEXT NOT NULL, killing_test TEXT,
+      failure_note TEXT, killing_test_failure TEXT, duration_ms INTEGER NOT NULL, batch_index INTEGER,
+      runner TEXT)`);
+    raw.exec(
+      `INSERT INTO runs (started_at, project_path, backend, app_version) VALUES ('t', '/p', 'bcdev', '1')`,
+    );
+    raw.exec(`INSERT INTO mutants (run_id, mutant_code, ast_hash, codeunit_name, procedure_name, operator_name,
+      operator_major, file, line, verdict, duration_ms, batch_index)
+      VALUES (1, 'M0001', 'old', 'C', 'Post', 'op', 1, 'f.al', 1, 'survived', 5, 0)`);
+    const path = join(tmpdirSync(), "pre-r192.sqlite");
+    raw.exec(`VACUUM INTO '${path.replaceAll("\\", "/")}'`);
+    raw.close();
+    const store = new ResultsStore(path);
+    const [row] = store.mutantVerdicts(1);
+    expect(row?.verdict).toBe("survived");
+    expect(row?.coveringTests).toBeUndefined();
+    expect(row?.coverageAttribution).toBeUndefined();
+    // And the widened table accepts a new row WITH the facts.
+    store.recordMutant(1, {
+      mutantCode: "M0002",
+      astHash: "new",
+      codeunitName: "C",
+      procedureName: "Post",
+      operatorName: "op",
+      operatorMajor: 1,
+      file: "f.al",
+      line: 2,
+      verdict: "killed",
+      durationMs: 1,
+      batchIndex: 0,
+      coveringTests: ["Tests.A"],
+      coverageAttribution: "object",
+    });
+    expect(store.mutantVerdicts(1).find((r) => r.astHash === "new")?.coveringTests).toEqual([
+      "Tests.A",
+    ]);
+    store.close();
+  });
+
   /**
    * R86. `--resume` re-records a carried verdict rather than re-executing it, so anything the store
    * does not read back is silently dropped on the second run: the resumed report would say "killed"
@@ -739,6 +859,81 @@ describe("runSession --resume (R47)", () => {
       selectorIds,
     });
     expect(second.mutantRuns).toBeLessThan(control.mutantRuns);
+  });
+
+  test("R192: a batch where EVERY mutant carries is neither deployed nor baselined, and keeps its coverage facts", async () => {
+    // Measured on a hosted sandbox: twelve resumes each republished a fully-scored batch (40 s)
+    // and re-ran its 407-test baseline (215 s) to carry verdicts that could not change. The
+    // carried verdicts now keep the covering tests and attribution they were measured under, so
+    // the batch is recorded from the store and the deploy never happens.
+    const dirs = await makeProject({ secondFile: true });
+    const store = new ResultsStore(":memory:");
+    const first = new CountingBackend("pass", undefined, 2); // batch 0 fully scored, batch 1 aborts
+    const firstReport = await runSession({
+      backend: first,
+      store,
+      ...dirs,
+      selectorIds,
+      maxGuardsPerBatch: 1,
+    });
+    expect(firstReport.batches).toBe(2);
+    expect(first.deploys).toBe(2);
+    const batch0Before = firstReport.mutants.filter((m) => m.batchIndex === 0);
+    expect(batch0Before.length).toBeGreaterThan(0);
+    // Every batch-0 verdict was measured with a non-empty covering list, which is what makes
+    // the assertion below on the carried list a real one rather than [] equalling [].
+    expect(batch0Before.every((m) => (m.coveringTests?.length ?? 0) > 0)).toBe(true);
+
+    const second = new CountingBackend("pass");
+    const events: RunEvent[] = [];
+    const report = await runSession({
+      backend: second,
+      store,
+      ...dirs,
+      selectorIds,
+      maxGuardsPerBatch: 1,
+      resume: "last",
+      emit: [(e) => events.push(e)],
+    });
+    // ONE deploy: batch 1's. Batch 0 was recorded from the prior run without a publish.
+    expect(second.deploys).toBe(1);
+    const skipped = events.filter((e) => e.type === "warning" && e.code === "resume-batch-carried");
+    expect(skipped).toHaveLength(1);
+    expect(events.some((e) => e.type === "batch-published" && e.batchIndex === 0)).toBe(false);
+    expect(events.some((e) => e.type === "batch-published" && e.batchIndex === 1)).toBe(true);
+    // The carried rows keep what they were measured under, verdict for verdict.
+    const batch0After = report.mutants.filter((m) => m.batchIndex === 0);
+    expect(batch0After.map((m) => m.mutantCode).sort()).toEqual(
+      batch0Before.map((m) => m.mutantCode).sort(),
+    );
+    for (const after of batch0After) {
+      const before = batch0Before.find((m) => m.mutantCode === after.mutantCode);
+      if (before === undefined) throw new Error(`no prior verdict for ${after.mutantCode}`);
+      expect(after.verdict).toBe(before.verdict);
+      expect(after.coveringTests).toEqual(before.coveringTests);
+      expect(after.coverageAttribution).toBe(before.coverageAttribution);
+    }
+    expect(report.resumedFrom?.carriedMutants).toBe(batch0Before.length);
+    expect(report.quarantined).toBeUndefined();
+    // And the batch that DID have work still ran its baseline and mutants normally.
+    expect(report.counts.survived + report.counts.killed).toBeGreaterThan(batch0Before.length);
+  });
+
+  test("R192: a batch whose carried rows predate the coverage columns is deployed as before", () => {
+    // A pre-R192 database holds verdicts without covering tests. Skipping on those would record
+    // a carried survivor with an invented empty list, so the batch takes the ordinary path.
+    const withFacts = buildResumeIndex(
+      [row({ astHash: "a", coveringTests: ["T.one"], coverageAttribution: "exact" })],
+      false,
+    );
+    const withoutFacts = buildResumeIndex([row({ astHash: "a" })], false);
+    const mutant = manifestEntry("a");
+    expect(batchCarriesEntirely(withFacts, [mutant], false)).toBe(true);
+    expect(batchCarriesEntirely(withoutFacts, [mutant], false)).toBe(false);
+    // An empty batch carries nothing and is never "entirely carried".
+    expect(batchCarriesEntirely(withFacts, [], false)).toBe(false);
+    // One mutant that must execute is enough to take the ordinary path.
+    expect(batchCarriesEntirely(withFacts, [mutant, manifestEntry("b")], false)).toBe(false);
   });
 
   test("a batch where EVERY mutant carries does not trip the attestation gate", async () => {

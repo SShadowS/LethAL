@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import type { TestMethodRef, TestOutcome } from "./backend";
 import type { PublishOutcome } from "./deployment-verifier";
+import type { CoverageAttribution } from "./selection";
 import { type IdentityKey, serializeKey } from "./selection";
 
 export type MutantVerdict =
@@ -81,6 +82,21 @@ export interface MutantRow {
   /** R69 Phase 2 Task 5 — see `RunnerKind`. Absent means fenced (every call site that predates
    *  Task 6's routing). */
   readonly runner?: RunnerKind;
+  /**
+   * R192: the coverage facts this verdict was measured under, persisted so that `--resume` can
+   * carry a batch WITHOUT republishing and re-baselining it. Until R192 the covering-test list and
+   * attribution lived only in the report, which is why a resume had to redeploy every batch,
+   * including one whose every mutant it carried (measured: about 8.5 minutes per resume on a
+   * hosted sandbox, half of it on a batch with nothing left to run).
+   *
+   * `coveringTests` holds qualified test names; `coverageAttribution` is `CoverageAttribution`;
+   * `unplaceable` is R175's flag. All three are absent on a row recorded before the columns
+   * existed, and `--resume` treats that absence as "cannot skip this batch" rather than as an
+   * empty covering list, which would carry a verdict with a confidently wrong "no test ran it".
+   */
+  readonly coveringTests?: readonly string[];
+  readonly coverageAttribution?: CoverageAttribution;
+  readonly unplaceable?: boolean;
 }
 
 /**
@@ -118,6 +134,10 @@ export interface MutantVerdictRow {
    * fenced-only. Absent on every row recorded before this column existed.
    */
   readonly runner?: RunnerKind;
+  /** R192 — see `MutantRow.coveringTests`. Present only on rows written since the columns exist. */
+  readonly coveringTests?: readonly string[];
+  readonly coverageAttribution?: CoverageAttribution;
+  readonly unplaceable?: boolean;
 }
 
 /**
@@ -180,7 +200,10 @@ CREATE TABLE IF NOT EXISTS mutants (
   killing_test_failure TEXT,
   duration_ms INTEGER NOT NULL,
   batch_index INTEGER,
-  runner TEXT
+  runner TEXT,
+  covering_tests TEXT,
+  coverage_attribution TEXT,
+  unplaceable INTEGER
 );
 -- idx_mutants_identity is created by migrate(), NOT here. It covers procedure_name, which R166
 -- added by ALTER, and SCHEMA runs BEFORE migrate() -- so naming that column here throws
@@ -287,6 +310,14 @@ export class ResultsStore {
     }
     if (!cols.some((c) => c.name === "killing_test_failure")) {
       this.db.exec("ALTER TABLE mutants ADD COLUMN killing_test_failure TEXT");
+    }
+    // R192: the coverage facts behind a verdict (see `MutantRow.coveringTests`). NULL on every
+    // pre-R192 row, which `--resume` reads as "this batch cannot be skipped", never as "no test".
+    for (const col of ["covering_tests TEXT", "coverage_attribution TEXT", "unplaceable INTEGER"]) {
+      const name = col.split(" ")[0] ?? "";
+      if (!cols.some((c) => c.name === name)) {
+        this.db.exec(`ALTER TABLE mutants ADD COLUMN ${col}`);
+      }
     }
     // Layer 5A: runs gained deployment provenance. A pre-5A lethal.sqlite has a runs table
     // without these, against which recordArtifact's UPDATE would throw mid-run.
@@ -410,13 +441,46 @@ export class ResultsStore {
     );
   }
 
+  /** R192: `covering_tests` is a JSON array of strings, and anything else is a corrupt row, not a
+   *  plausible empty list — the same rule `parseRunnerKind` applies. */
+  private parseCoveringTests(
+    value: string,
+    row: { ast_hash: string; codeunit_name: string; operator_name: string },
+  ): readonly string[] {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      parsed = undefined;
+    }
+    if (Array.isArray(parsed) && parsed.every((t) => typeof t === "string")) return parsed;
+    throw new Error(
+      `store.ts: mutant row (astHash=${row.ast_hash}, codeunitName=${row.codeunit_name}, ` +
+        `operatorName=${row.operator_name}) has a corrupt "covering_tests" column value ` +
+        `${JSON.stringify(value.slice(0, 200))} — expected a JSON array of test names or NULL`,
+    );
+  }
+
+  private parseAttribution(
+    value: string,
+    row: { ast_hash: string; codeunit_name: string; operator_name: string },
+  ): CoverageAttribution {
+    if (value === "exact" || value === "object" || value === "all-green") return value;
+    throw new Error(
+      `store.ts: mutant row (astHash=${row.ast_hash}, codeunitName=${row.codeunit_name}, ` +
+        `operatorName=${row.operator_name}) has a corrupt "coverage_attribution" column value ` +
+        `${JSON.stringify(value)} — expected "exact", "object", "all-green", or NULL`,
+    );
+  }
+
   /** R47: every mutant verdict a prior run recorded, keyed by identity rather than mutant code —
    *  see `MutantVerdictRow`. */
   mutantVerdicts(runId: number): MutantVerdictRow[] {
     const rows = this.db
       .query(
         "SELECT ast_hash, codeunit_name, procedure_name, operator_name, operator_major, verdict, " +
-          "killing_test, failure_note, killing_test_failure, duration_ms, runner " +
+          "killing_test, failure_note, killing_test_failure, duration_ms, runner, " +
+          "covering_tests, coverage_attribution, unplaceable " +
           "FROM mutants WHERE run_id = ?",
       )
       .all(runId) as Array<{
@@ -431,8 +495,18 @@ export class ResultsStore {
       killing_test_failure: string | null;
       duration_ms: number;
       runner: string | null;
+      covering_tests: string | null;
+      coverage_attribution: string | null;
+      unplaceable: number | null;
     }>;
     return rows.map((r) => ({
+      ...(r.covering_tests !== null
+        ? { coveringTests: this.parseCoveringTests(r.covering_tests, r) }
+        : {}),
+      ...(r.coverage_attribution !== null
+        ? { coverageAttribution: this.parseAttribution(r.coverage_attribution, r) }
+        : {}),
+      ...(r.unplaceable !== null ? { unplaceable: r.unplaceable !== 0 } : {}),
       astHash: r.ast_hash,
       codeunitName: r.codeunit_name,
       procedureName: r.procedure_name,
@@ -489,8 +563,9 @@ export class ResultsStore {
       .query(
         `INSERT INTO mutants (run_id, mutant_code, ast_hash, codeunit_name, procedure_name,
          operator_name, operator_major, file, line, verdict, killing_test, failure_note,
-         killing_test_failure, duration_ms, batch_index, runner)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+         killing_test_failure, duration_ms, batch_index, runner,
+         covering_tests, coverage_attribution, unplaceable)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
       )
       .get(
         runId,
@@ -509,6 +584,9 @@ export class ResultsStore {
         row.durationMs,
         row.batchIndex,
         row.runner ?? null,
+        row.coveringTests !== undefined ? JSON.stringify(row.coveringTests) : null,
+        row.coverageAttribution ?? null,
+        row.unplaceable === undefined ? null : row.unplaceable ? 1 : 0,
       ) as { id: number };
     return r.id;
   }

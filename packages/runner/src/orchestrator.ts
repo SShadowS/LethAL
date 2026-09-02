@@ -85,6 +85,7 @@ import { quarantineResourceKey } from "./resource-key";
 import {
   CARRYABLE_VERDICTS,
   STRANDED_NOTE_PREFIX,
+  batchCarriesEntirely,
   buildResumeIndex,
   carriedVerdictFor,
   sessionFingerprint,
@@ -111,6 +112,14 @@ import type { MutantVerdict, RunnerKind } from "./store";
 import { describeTestPageUnsupported } from "./testpage-unsupported";
 
 const BASELINE_TIMEOUT_DEFAULT = 120_000;
+
+/**
+ * R53: what a mutant skipped on `--resume` because a prior run stranded the tier on it is recorded
+ * with. One constant for the two sites that write it (step 5b and R192's `replayCarriedBatch`), so
+ * the tests that read the prose cannot drift from one of them.
+ */
+const STRANDED_SKIP_NOTE =
+  "not re-run on resume: a prior run's execution of this mutant could not be confirmed complete and stranded the tier. A mutant that never terminates (e.g. a negated loop-exit condition) reproduces this every time and blocks every mutant behind it, so it is skipped rather than retried — pass --retry-stranded to attempt it anyway. It is NOT scored either way.";
 
 /**
  * Floor for a mutant run's time budget.
@@ -717,8 +726,11 @@ export interface SessionConfig {
    * already scored. `"last"` selects the most recent unfinished run matching this session's
    * configuration fingerprint; a number names one explicitly. Absent means a fresh run.
    *
-   * Everything else still happens — parse, instrument, deploy, baseline — so coverage attribution
-   * and covering-test lists come from THIS run, not from the database. See `resume.ts`.
+   * Parse and instrument still happen for every batch. A batch with at least one mutant left to
+   * execute is deployed and baselined, and its coverage attribution and covering-test lists come
+   * from THIS run. A batch whose every mutant carries a prior verdict WITH its persisted coverage
+   * facts is recorded from the database instead, with no deploy and no baseline (R192). See
+   * `resume.ts`.
    */
   readonly resume?: "last" | number;
   /**
@@ -2189,7 +2201,7 @@ function resolveResume(
   emit({
     type: "warning",
     code: "resume-reusing-run",
-    message: `[lethal] --resume: reusing run ${priorRunId} — ${index.carryable.size} mutant verdict(s) may be carried without re-executing. Deploy and baseline still run; coverage attribution and covering-test lists come from THIS run.${
+    message: `[lethal] --resume: reusing run ${priorRunId} — ${index.carryable.size} mutant verdict(s) may be carried without re-executing. A batch with any mutant left to run is deployed and baselined, and its coverage comes from THIS run; a batch whose every mutant carries is recorded from run ${priorRunId} without either (R192).${
       index.nonCarryableRows > 0
         ? ` ${index.nonCarryableRows} prior 'error' verdict(s) will be re-executed.`
         : ""
@@ -2835,6 +2847,25 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         await readFile(join(batchDir, "mutant-manifest.json"), "utf8"),
       ) as MutantManifest;
 
+      // 1b'. R192: a batch with nothing left to run is recorded from the prior run and NOT
+      // deployed or baselined. Measured on a hosted sandbox: every `--resume` republished a
+      // fully-scored 25-mutant batch (40 s) and re-ran its 407-test baseline (215 s) to carry 25
+      // verdicts that were never going to change, twelve times in one session. The carried
+      // verdicts keep the coverage facts they were measured under (persisted since R192), so a
+      // resumed survivor stays as actionable as it was in the run that scored it.
+      //
+      // Deliberately BEFORE the R90 ceiling check and the deploy: nothing below this line is
+      // needed for a verdict that already exists. A batch with one mutant to execute, one
+      // colliding key, or one carried row from before the coverage columns existed takes the
+      // ordinary path unchanged.
+      if (
+        resumeState !== undefined &&
+        batchCarriesEntirely(resumeState.index, manifest.mutants, cfg.retryStranded ?? false)
+      ) {
+        replayCarriedBatch(cfg, runId, manifest.mutants, batchIdx, resumeState, outcomes, emit);
+        continue;
+      }
+
       // 1c. R90 pre-flight: refuse a FILE this tier has already MEASURED to be unpublishable,
       // before the cost. This is the earliest point the DEPLOYED per-file guard counts exist
       // (post-§3.2 dedup — the raw spec count is 16% higher on real code, R92), and it is still
@@ -3308,6 +3339,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       // and no attribution happened at all — distinct from "attributed, then fell back".
       let coverageAttribution: ReadonlyMap<string, CoverageAttribution> = new Map();
       let uncovered: readonly MutantManifestEntry[] = [];
+      // R192: which of `uncovered` R175 flagged unplaceable, persisted with each `no-coverage` row.
+      let unplaceableIds: ReadonlySet<string> = new Set();
       if (caps.coverage === "none") {
         perMutantTests = new Map(execute.map((m) => [m.mutantId, greenTests.map((b) => b.ref)]));
       } else {
@@ -3330,6 +3363,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         perMutantTests = split.covered;
         coverageAttribution = split.attribution;
         uncovered = split.uncovered;
+        unplaceableIds = split.unplaceable;
         // coverage-split: accumulated per batch AT SPLIT TIME, and folded into
         // `SessionReport.untargetedTriggerCount` by report-fold.ts rather than a session-level
         // accumulator here — see events.ts's doc comment on why this is the strongest single
@@ -3382,7 +3416,31 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         if (covering !== undefined && covering.length > 0) {
           unsupportedOnlyCandidates.push({ mutant: m, covering });
         } else {
-          record(cfg.store, runId, m, "no-coverage", outcomes, batchIdx, emit);
+          record(
+            cfg.store,
+            runId,
+            m,
+            "no-coverage",
+            outcomes,
+            batchIdx,
+            emit,
+            undefined,
+            undefined,
+            undefined,
+            0,
+            [],
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            unplaceableIds.has(m.mutantId),
+          );
         }
       }
 
@@ -3423,7 +3481,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
               batchIdx,
               emit,
               undefined,
-              "not re-run on resume: a prior run's execution of this mutant could not be confirmed complete and stranded the tier. A mutant that never terminates (e.g. a negated loop-exit condition) reproduces this every time and blocks every mutant behind it, so it is skipped rather than retried — pass --retry-stranded to attempt it anyway. It is NOT scored either way.",
+              STRANDED_SKIP_NOTE,
               undefined,
               undefined,
               undefined,
@@ -4925,6 +4983,108 @@ export function noGreenBaselineNote(
     : `${NO_GREEN_BASELINE} — ${baseline.length} failed with ${distinct.length} distinct messages; the first was: ${shown}`;
 }
 
+/**
+ * R192: record every mutant of a batch from the prior run, with no deploy and no baseline.
+ *
+ * Only reachable when `batchCarriesEntirely` said yes, so every mutant here is either a stranded
+ * skip (the same recording step 5b makes) or a carried verdict WITH its coverage facts. The
+ * `coverage-split` this emits is the prior run's split for these mutants, rebuilt from the
+ * persisted rows, so the fold's `untargetedTriggerCount` and R175's `unplaceableCount` stay
+ * consistent with the verdicts beside them instead of silently reading lower on a resumed report.
+ */
+function replayCarriedBatch(
+  cfg: SessionConfig,
+  runId: number,
+  mutants: readonly MutantManifestEntry[],
+  batchIdx: number,
+  resumeState: { readonly index: ResumeIndex; readonly runId: number },
+  outcomes: SessionOutcome[],
+  emit: RunEmitter,
+): void {
+  let carried = 0;
+  let stranded = 0;
+  let covered = 0;
+  let noCoverage = 0;
+  let untargetedTriggers = 0;
+  const unplaceable: string[] = [];
+  for (const m of mutants) {
+    if (!(cfg.retryStranded ?? false) && wasStranded(resumeState.index, m)) {
+      stranded += 1;
+      record(
+        cfg.store,
+        runId,
+        m,
+        "error",
+        outcomes,
+        batchIdx,
+        emit,
+        undefined,
+        STRANDED_SKIP_NOTE,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        true, // strandedSkip
+      );
+      continue;
+    }
+    const prior = carriedVerdictFor(resumeState.index, m);
+    if (prior === undefined || prior.coveringTests === undefined) {
+      // `batchCarriesEntirely` proved this cannot happen; a caller that skipped it is a bug, and
+      // recording a made-up verdict here would be this project's signature empty-vs-empty match.
+      throw new Error(
+        `replayCarriedBatch: ${m.mutantId} in batch ${batchIdx} has no carried verdict with coverage facts — caller-contract violation`,
+      );
+    }
+    carried += 1;
+    if (prior.coveringTests.length > 0) covered += 1;
+    if (prior.verdict === "no-coverage") noCoverage += 1;
+    if (prior.coverageAttribution === "all-green") untargetedTriggers += 1;
+    if (prior.unplaceable === true) unplaceable.push(m.mutantId);
+    record(
+      cfg.store,
+      runId,
+      m,
+      prior.verdict,
+      outcomes,
+      batchIdx,
+      emit,
+      prior.killingTest,
+      prior.failureNote,
+      undefined,
+      prior.durationMs,
+      prior.coveringTests,
+      prior.coverageAttribution,
+      undefined,
+      true, // carried
+      undefined,
+      prior.runner,
+      undefined,
+      undefined,
+      resumeState.runId,
+      undefined,
+      prior.killingTestFailure,
+      prior.unplaceable,
+    );
+  }
+  emit({
+    type: "warning",
+    code: "resume-batch-carried",
+    message: `[lethal] --resume: batch ${batchIdx} was neither deployed nor baselined — all ${mutants.length} of its mutants were recorded from run ${resumeState.runId} (${carried} carried, ${stranded} skipped as stranded), with the covering tests and attribution they were measured under there. The baseline and coverage split reported for this batch are that run's.`,
+  });
+  emit({
+    type: "coverage-split",
+    batchIndex: batchIdx,
+    untargetedTriggerCount: untargetedTriggers,
+    coveredCount: covered,
+    noCoverageCount: noCoverage,
+    unplaceableCount: unplaceable.length,
+    unplaceableMutants: unplaceable.sort(),
+  });
+}
+
 export function record(
   store: ResultsStore,
   runId: number,
@@ -4985,6 +5145,11 @@ export function record(
   // run's text through unchanged. Every other call site records a verdict that is not a kill and
   // leaves it absent.
   killingTestFailure?: string,
+  // R192: R175's flag for a `no-coverage` verdict — coverage saw the object execute a member it
+  // could not name. Persisted with the covering tests and attribution so that `--resume` can
+  // carry a whole batch without re-baselining it; passed only by the step-5 `no-coverage` site
+  // and the resume replay, absent (NULL) everywhere else.
+  unplaceable?: boolean,
 ): number {
   const key = identityKeyOf(m);
   const mutantRowId = store.recordMutant(runId, {
@@ -5003,6 +5168,11 @@ export function record(
     ...(failureNote !== undefined ? { failureNote } : {}),
     ...(killingTestFailure !== undefined ? { killingTestFailure } : {}),
     ...(runner !== undefined ? { runner } : {}),
+    // R192: always written, `[]` included — an explicit empty list is "no test ran this", while
+    // NULL (a pre-R192 row) is "unknown", and `batchCarriesEntirely` refuses to skip on unknown.
+    coveringTests,
+    ...(coverageAttribution !== undefined ? { coverageAttribution } : {}),
+    ...(unplaceable !== undefined ? { unplaceable } : {}),
   });
   outcomes.push({
     mutant: m,
