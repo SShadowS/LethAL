@@ -1,0 +1,16 @@
+{
+  "id": "5c2f0e7a-8b41-4d3e-9a6f-2e1d7c4b9f83",
+  "name": "R198 Group Runner Probe",
+  "publisher": "lethal-measure",
+  "version": "1.0.0.0",
+  "brief": "R198: can one call run N test methods with per-method isolation and cross-session progress?",
+  "description": "Throwaway probe. Measures a custom TestRunner with TestIsolation = Function driven through Test Suite Mgt.: per-method rollback, whether a Commit in the runner triggers leaks test writes, whether progress written there is readable from a second session, and whether OnBeforeTestRun returning false stops at the first failure.",
+  "platform": "28.0.0.0",
+  "application": "28.0.0.0",
+  "runtime": "17.0",
+  "target": "OnPrem",
+  "dependencies": [
+    { "id": "23de40a6-dfe8-4f80-80db-d70f83ce8caf", "name": "Test Runner", "publisher": "Microsoft", "version": "28.0.0.0" }
+  ],
+  "idRanges": [{ "from": 71540, "to": 71549 }]
+}
