@@ -839,3 +839,74 @@ describe("isAlStopResponse (R53)", () => {
     expect(isAlStopResponse(408, "StopSession is not permitted for this user.")).toBe(false);
   });
 });
+
+/**
+ * R191. `fetch` resolves on HEADERS. Every timer used to be cleared right there, so a server that
+ * stalled AFTER sending a 200 sat outside the budget, outside the R53 stop hook and outside the
+ * hard cap: the body read ran until the runtime gave up (measured: 272 s, recorded as 2,800 ms,
+ * then a quarantine with no stop ever attempted). One abort controller now spans both phases.
+ */
+describe("RunMutantTransport.run — the budget covers the BODY phase too (R191)", () => {
+  /** A 200 whose body never completes; the stream honours the fetch signal like Bun's does. */
+  function stalledBody(): { readonly fetchFn: typeof fetch; readonly aborted: () => boolean } {
+    let sawAbort = false;
+    const fetchFn = (async (_url: unknown, init?: RequestInit) => {
+      const signal = init?.signal;
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('{"value":'));
+          signal?.addEventListener(
+            "abort",
+            () => {
+              sawAbort = true;
+              controller.error(new Error("The operation was aborted."));
+            },
+            { once: true },
+          );
+        },
+      });
+      return new Response(stream, { status: 200 });
+    }) as typeof fetch;
+    return { fetchFn, aborted: () => sawAbort };
+  }
+
+  test("without a stop hook, a stall after the headers hits the budget and is in-flight-unknown", async () => {
+    const { fetchFn, aborted } = stalledBody();
+    const started = Date.now();
+    const v = await transport(fetchFn).run({ ...REQ, timeoutMs: 30 });
+    expect(aborted()).toBe(true);
+    expect(v.outcome).toBe("deadline-exceeded");
+    expect(v.operation).toBe("in-flight-unknown");
+    expect(v.failureMessage).toContain("after headers");
+    // The duration now includes the stall, rather than stopping at the headers.
+    expect(v.durationMs).toBeGreaterThanOrEqual(25);
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+
+  test("with a stop hook, the hook FIRES during the body phase and the hard cap ends the wait", async () => {
+    const { fetchFn } = stalledBody();
+    let stopCalls = 0;
+    const v = await transport(fetchFn).run({
+      ...REQ,
+      timeoutMs: 20,
+      stopGraceMs: 30,
+      onBudgetExceeded: async () => {
+        stopCalls += 1;
+      },
+    });
+    expect(stopCalls).toBe(1);
+    expect(v.outcome).toBe("deadline-exceeded");
+    expect(v.operation).toBe("in-flight-unknown");
+    expect(v.failureMessage).toContain("after headers");
+    expect(v.failureMessage).toContain("server-side stop was attempted");
+  });
+
+  test("a body that arrives in time settles the timers and scores normally", async () => {
+    // The mirror image: a slow-but-finishing body must neither abort nor leak a timer that fires
+    // later. `okFetch` resolves its body immediately; a short budget still has to be cleared.
+    const v = await transport(okFetch(echo())).run({ ...REQ, timeoutMs: 20 });
+    expect(v.outcome).toBe("pass");
+    await new Promise((r) => setTimeout(r, 40));
+    expect(v.outcome).toBe("pass"); // nothing fired after the fact
+  });
+});

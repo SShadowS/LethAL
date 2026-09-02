@@ -427,6 +427,38 @@ export class RunMutantTransport {
       stopHook === undefined
         ? undefined
         : setTimeout(() => controller.abort(), timeoutMs + (req.stopGraceMs ?? 30_000));
+    // R191: the timers stay armed until the BODY is in hand, not until the headers are. `fetch`
+    // resolves on headers; BC can stall after them, and a stall there used to fall outside every
+    // LethAL timer, so the R53 stop hook never fired and the run ended only when the runtime gave
+    // up (measured: 272 s, then a quarantine). Bun honours the abort signal during `res.text()`
+    // (measured), so one controller now covers both phases and every exit settles the timers.
+    const settleTimers = () => {
+      clearTimeout(timer);
+      if (hardTimer !== undefined) clearTimeout(hardTimer);
+    };
+    /** Our own abort fired, in either phase: the call may have reached the server and left a
+     *  mutant active (clear unconfirmed) → in-flight-unknown, the orchestrator quarantines. */
+    const abortedVerdict = (
+      err: unknown,
+      phase: "before headers" | "after headers",
+    ): TestVerdict => {
+      // R53: if the stop hook fired and we still ended up aborting, BC never sent the 408 — so
+      // name why. A hook that THREW is the likeliest cause and is otherwise invisible here,
+      // which is R65's lesson: an unexplained quarantine costs a debugging session.
+      const stopDetail = !stopFired
+        ? ""
+        : stopHookError !== undefined
+          ? ` — the server-side stop was attempted and FAILED (${describeThrown(stopHookError)}), so this run could not be scored and is quarantined instead`
+          : " — the server-side stop was attempted but BC never answered this request with its stop confirmation, so this run is quarantined rather than scored";
+      return {
+        ref,
+        outcome: "deadline-exceeded",
+        durationMs: Date.now() - started,
+        failureMessage: `RunMutant timed out ${phase}: ${String(err)}${stopDetail}`,
+        operation: "in-flight-unknown",
+        fencedOp,
+      };
+    };
     let res: Response;
     try {
       res = await this.fetchFn(url, {
@@ -439,40 +471,18 @@ export class RunMutantTransport {
         signal: controller.signal,
       });
     } catch (err) {
-      const durationMs = Date.now() - started;
-      // Our own timeout aborted it → the call may have reached the server and left a mutant
-      // active (clear unconfirmed): in-flight-unknown, the orchestrator quarantines.
-      if (controller.signal.aborted) {
-        // R53: if the stop hook fired and we still ended up aborting, BC never sent the 408 — so
-        // name why. A hook that THREW is the likeliest cause and is otherwise invisible here,
-        // which is R65's lesson: an unexplained quarantine costs a debugging session.
-        const stopDetail = !stopFired
-          ? ""
-          : stopHookError !== undefined
-            ? ` — the server-side stop was attempted and FAILED (${describeThrown(stopHookError)}), so this run could not be scored and is quarantined instead`
-            : " — the server-side stop was attempted but BC never answered this request with its stop confirmation, so this run is quarantined rather than scored";
-        return {
-          ref,
-          outcome: "deadline-exceeded",
-          durationMs,
-          failureMessage: `RunMutant timed out: ${String(err)}${stopDetail}`,
-          operation: "in-flight-unknown",
-          fencedOp,
-        };
-      }
+      settleTimers();
+      if (controller.signal.aborted) return abortedVerdict(err, "before headers");
       // fetchFn was already invoked; a rejection here (e.g. connection reset) may have reached BC
       // AFTER the request was fully sent and left a mutant active — never retry-safe (parent §7).
       return {
         ref,
         outcome: "error",
-        durationMs,
+        durationMs: Date.now() - started,
         failureMessage: `RunMutant connection failed after dispatch: ${String(err)}`,
         operation: "in-flight-unknown",
         fencedOp,
       };
-    } finally {
-      clearTimeout(timer);
-      if (hardTimer !== undefined) clearTimeout(hardTimer);
     }
 
     // R53: BC's answer to the request we deliberately held open. Checked BEFORE the generic
@@ -485,6 +495,7 @@ export class RunMutantTransport {
     // absent: this is terminal.
     if (stopFired && res.status === 408) {
       const body = await res.text().catch(() => "");
+      settleTimers();
       if (isAlStopResponse(res.status, body)) {
         return {
           ref,
@@ -500,6 +511,7 @@ export class RunMutantTransport {
     }
 
     if (!res.ok) {
+      settleTimers();
       // Dispatched, then a non-2xx: RunMutant may have activated a mutant and not confirmed its
       // clear — the container could be left mutated. in-flight-unknown, never a verdict.
       return {
@@ -512,7 +524,6 @@ export class RunMutantTransport {
       };
     }
 
-    const durationMs = Date.now() - started;
     // Read the body as text FIRST, then parse. `res.json()` inside a try that collapses to
     // `undefined` cannot distinguish "the body was not JSON at all" from "the JSON had no
     // `value` key" — and this branch quarantines a tier, so the operator needs to know which.
@@ -521,13 +532,21 @@ export class RunMutantTransport {
     try {
       rawBody = await res.text();
     } catch (err) {
+      settleTimers();
+      // R191: the budget ran out while the body was still coming. Same answer as a stall before
+      // the headers, and the stop hook has had its chance by now, so the message says which it was.
+      if (controller.signal.aborted) return abortedVerdict(err, "after headers");
       return this.inFlightUnknown(
         ref,
-        durationMs,
+        Date.now() - started,
         `RunMutant 2xx body could not be read: ${String(err)}`,
         fencedOp,
       );
     }
+    settleTimers();
+    // R191: taken AFTER the body, so a stall between headers and body is in the number a reader
+    // sees. The R175 re-run recorded 2,800 ms for a mutant whose body read took 272 s.
+    const durationMs = Date.now() - started;
     let value: unknown;
     let parseError: string | undefined;
     try {
