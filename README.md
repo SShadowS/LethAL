@@ -490,7 +490,8 @@ Environment and output:
 | `--selector-id` / `--control-id` / `--table-id` | `79197` to `79199` | Override the injected object ids, e.g. when your `idRanges` exclude the defaults |
 | `--keep-env` / `--allow-expiring-env` | `false` | Env-tool session controls |
 
-Exit codes: `0` ok, `1` error, `3` quarantined, meaning the run refused to vouch for its own verdicts.
+Exit codes: `0` ok, `1` error, `3` quarantined, meaning the run refused to vouch for its own verdicts,
+`4` nothing scored, meaning every mutant errored and the run measured nothing.
 
 ## How it works, in short
 

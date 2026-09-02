@@ -3127,6 +3127,16 @@ export async function runFromCli(
 export const QUARANTINED_EXIT_CODE = 3;
 
 /**
+ * R190. Distinct exit code for a run that MEASURED NOTHING: every recorded mutant is an `error`
+ * (the report carries the `all-errors` caveat), so there is no score to read and nothing to act
+ * on except the failure notes. Found live: an instrumented artifact `alc` refused, all 155 mutants
+ * errored, and the process exited 0 with a `null` score. A CI script branching on 0 read that as
+ * success; one branching on 3 read it as a stranded tier. Neither was true. Quarantine still wins
+ * when both apply: a quarantined run's verdicts are unvouched-for, which is the stronger claim.
+ */
+export const NOTHING_SCORED_EXIT_CODE = 4;
+
+/**
  * Operator-proven clear (spec §10): reads the current quarantine record's generation and calls
  * `store.clear(key, gen)` — never an unconditional delete, so a clear computed against a
  * generation the store no longer holds (a NEWER strand was recorded on this tier since) comes
@@ -4340,6 +4350,17 @@ export async function forceResetLeaseFromCli(
 /** R49: the release version, bundled at build time — see the import at the top of this file. */
 export const LETHAL_VERSION: string = rootPackageJson.version;
 
+/** The exit code a finished run earns — see `QUARANTINED_EXIT_CODE` and `NOTHING_SCORED_EXIT_CODE`. */
+export function exitCodeForReport(
+  report: Pick<SessionReport, "quarantined"> & {
+    readonly validity: { readonly caveats: readonly string[] };
+  },
+): number {
+  if (report.quarantined !== undefined) return QUARANTINED_EXIT_CODE;
+  if (report.validity.caveats.includes("all-errors")) return NOTHING_SCORED_EXIT_CODE;
+  return 0;
+}
+
 async function main(): Promise<number> {
   const parsed = parseCliConfig(process.argv.slice(2));
   if (parsed.mode === "help") {
@@ -4388,7 +4409,7 @@ async function main(): Promise<number> {
   const report = await runFromCli(parsed);
   console.log(renderConsole(report));
   if (parsed.outPath !== undefined) await writeJsonReport(report, parsed.outPath);
-  return report.quarantined !== undefined ? QUARANTINED_EXIT_CODE : 0;
+  return exitCodeForReport(report);
 }
 
 if (import.meta.main) {

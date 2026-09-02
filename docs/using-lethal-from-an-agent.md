@@ -1,7 +1,7 @@
 # Driving LethAL from an agent
 
 Everything a program needs to run LethAL and read the result: the argv, the exit codes, which file
-answers which question, and the four rules that stop a caller reaching a confident wrong
+answers which question, and the five rules that stop a caller reaching a confident wrong
 conclusion. Written for an autonomous consumer (an agent, a CI job, a script). A human should read
 [`../README.md`](../README.md) instead.
 
@@ -83,10 +83,16 @@ never a false kill. Do not quote a score from it.
 | `0` | The run completed. This says nothing about whether mutants survived. |
 | `1` | Error. The run did not produce a result you can use. |
 | `3` | **Quarantined.** The run refused to vouch for its own verdicts. |
+| `4` | **Nothing scored.** Every mutant errored; the run measured nothing. |
 
 `3` is the one to handle deliberately. It does not mean the tests failed, and the verdicts it
 produced must not be reported as findings. It means LethAL could not prove the server was in a
 state where its answers mean anything. `--resume` continues such a run once the cause is fixed.
+
+`4` means the report exists but holds no verdict: every recorded mutant is an `error`, the score
+is `null`, and `validity.caveats` carries `all-errors`. The cause is in the mutants' `failureNote`
+(the one measured case was an instrumented build the compiler refused). Fix that and re-run; there
+is nothing to `--resume`. When a run is both quarantined and scored nothing, `3` wins.
 
 A non-zero exit is never "the test suite is bad". Mutation results live in the report, not the exit
 code.
@@ -172,7 +178,7 @@ acting on a fact the run itself no longer stands behind.
 
 Unknown event types are ignored by design, so a future event type does not break a consumer.
 
-## The four rules
+## The five rules
 
 1. **Read `validity` before quoting `mutationScore`.** The number without its caveats is not a
    result.
@@ -180,6 +186,8 @@ Unknown event types are ignored by design, so a future event type does not break
    test. Check `executionProven` before treating one as work.
 3. **Verdict lines in the NDJSON stream are provisional until `session-finished`.**
 4. **Exit `3` means the run does not vouch for its own verdicts.** Do not report them.
+5. **Exit `4` means the run measured nothing.** There is no score and no survivor; read the
+   failure notes.
 
 ## What LethAL cannot measure
 

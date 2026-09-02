@@ -68,7 +68,9 @@ lethal run --project <app-dir> \
 - Runs take minutes to hours. The baseline usually dominates. Do not poll `events.ndjson` in a tight
   loop; read it when the run ends, or tail it if the user wants progress.
 
-**Exit codes: `0` completed, `1` error, `3` quarantined.** `3` means the run refused to vouch for
+**Exit codes: `0` completed, `1` error, `3` quarantined, `4` nothing scored.** `4` means every
+mutant errored and the run measured nothing: no score, no survivors, read the failure notes and
+fix the cause (there is nothing to resume). `3` means the run refused to vouch for
 its own verdicts — not that the tests failed. Do not report verdicts from a quarantined run;
 `--resume` continues it once the cause is fixed.
 
@@ -104,6 +106,7 @@ For the full record rather than the interpretation, read `report.json` itself
 3. In `events.ndjson`, every verdict line is PROVISIONAL until a `session-finished` event appears —
    a later `batch-invalidated` can retract one.
 4. Exit `3` means the verdicts are not vouched for. Do not report them.
+5. Exit `4` means the run measured nothing. There is no result to report, only a cause to fix.
 
 ## What it cannot measure
 

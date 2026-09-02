@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { QUARANTINED_EXIT_CODE, RUN_FLAGS } from "../src/cli";
+import { NOTHING_SCORED_EXIT_CODE, QUARANTINED_EXIT_CODE, RUN_FLAGS } from "../src/cli";
 import { DOCTOR_SCHEMA_VERSION } from "../src/cli";
 import { STREAM_SCHEMA_VERSION } from "../src/events";
 import { EXPLAIN_SCHEMA_VERSION } from "../src/explain";
@@ -87,6 +87,15 @@ describe("the agent-facing documents (R153)", () => {
         flowed(text).toLowerCase(),
         `${name} must say what ${QUARANTINED_EXIT_CODE} means`,
       ).toContain("vouch for its own verdicts");
+      // R190: the same for the nothing-scored code. An agent that reads 4 as "tests failed" would
+      // report a finding from a run that executed no mutant at all.
+      expect(text, `${name} must state the nothing-scored exit code`).toContain(
+        `\`${NOTHING_SCORED_EXIT_CODE}\``,
+      );
+      expect(
+        flowed(text).toLowerCase(),
+        `${name} must say what ${NOTHING_SCORED_EXIT_CODE} means`,
+      ).toContain("measured nothing");
     }
   });
 
@@ -112,7 +121,7 @@ describe("the agent-facing documents (R153)", () => {
     }
   });
 
-  test("both documents carry the four rules that stop a wrong conclusion", () => {
+  test("both documents carry the five rules that stop a wrong conclusion", () => {
     // Each of these is a fact a consumer cannot derive from the output and will get wrong by
     // default. They are the reason these documents exist at all, so their absence is a failure
     // rather than a style note.
@@ -124,6 +133,8 @@ describe("the agent-facing documents (R153)", () => {
       expect(text, `${name}: executionProven decides a survivor's worth`).toContain(
         "executionProven",
       );
+      // R190: the fifth rule — a run that measured nothing is not a result.
+      expect(lower, `${name}: exit 4 is not a result`).toContain("measured nothing");
     }
   });
 

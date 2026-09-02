@@ -3449,7 +3449,11 @@ describe("runSession — bisection on compile failure", () => {
     expect(report.counts.errors).toBeGreaterThan(0);
     const noted = report.mutants.find((m) => m.verdict === "error");
     expect(noted).toBeDefined();
-    expect(noted?.failureNote).toContain("not attributable to any mutant");
+    expect(noted?.failureNote).toContain("not attributable to any SINGLE mutant");
+    // R190: bisection isolates ONE culprit; with two or more, this same branch is reached and the
+    // note must name that possibility beside the environmental one rather than point away from
+    // the artifact (measured: three AL0110 sites in one codeunit, all 155 mutants "environmental").
+    expect(noted?.failureNote).toContain("MORE THAN ONE mutant breaks the compile");
     expect(noted?.failureNote).toContain("resource limit exceeded");
     expect(noted?.failureNote).not.toContain("bisected to mutant");
     store.close();

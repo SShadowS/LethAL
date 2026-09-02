@@ -225,6 +225,34 @@ describe("SessionReport.validity — the score's own limits", () => {
     expect(r.validity.caveats).toEqual(expect.arrayContaining(["baseline-red", "narrowed"]));
   });
 
+  test("R190: a run whose every mutant errored says so, is degraded, and is not merely narrowed", () => {
+    // Measured live: an artifact alc refused, all 155 mutants errored, and the report read
+    // `narrowed` with no caveat about it.
+    const r = withScope({
+      only: { patterns: ["src/A.al"], excludedFileCount: 550 },
+      outcomes: [
+        { mutant: entry({ mutantId: "M1" }), verdict: "error", batchIndex: 0 },
+        { mutant: entry({ mutantId: "M2" }), verdict: "error", batchIndex: 0 },
+      ],
+    });
+    expect(r.validity.caveats).toContain("all-errors");
+    expect(r.validity.caveats).toContain("narrowed");
+    expect(r.validity.reliability).toBe("narrowed-degraded");
+    expect(r.mutationScore).toBeNull();
+    expect(r.validity.scoredMutants).toEqual({ scored: 0, recorded: 2 });
+    // One scored mutant is enough to make it an ordinary run with errors in it.
+    const partial = withScope({
+      outcomes: [
+        { mutant: entry({ mutantId: "M1" }), verdict: "error", batchIndex: 0 },
+        { mutant: entry({ mutantId: "M2" }), verdict: "survived", batchIndex: 0 },
+      ],
+    });
+    expect(partial.validity.caveats).not.toContain("all-errors");
+    expect(partial.validity.reliability).toBe("full");
+    // And an EMPTY run is not "all errors": there is nothing to have erred.
+    expect(withScope({ outcomes: [] }).validity.caveats).not.toContain("all-errors");
+  });
+
   test("scoredMutants names the denominator the score is actually computed over", () => {
     const r = withScope({
       outcomes: [

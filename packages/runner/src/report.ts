@@ -176,7 +176,8 @@ export type Caveat =
   | "attribution-unplaceable"
   | "platform-artifact-kills"
   | "kills-without-assertion"
-  | "declarative-sites-dropped";
+  | "declarative-sites-dropped"
+  | "all-errors";
 
 /**
  * What each `Caveat` MEANS for a reader, and — where the roadmap entry that filed it recorded one
@@ -375,6 +376,19 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
       "this report, `mutationScore` included. Nor does the number say how much risk hides there: " +
       "it counts specs operators happened to claim, which is not the same as sites worth mutating.",
     basis: "R144",
+  },
+  "all-errors": {
+    meaning:
+      "Every mutant this run recorded is an `error`: the run measured NOTHING. `mutationScore` is " +
+      "null, `counts.errors` equals the recorded total, and `reliability` is degraded on that " +
+      "ground alone. The cause is in each mutant's `failureNote` (measured 2026-09-02: an " +
+      "instrumented artifact `alc` refused, so all 155 mutants errored, and the run exited 0 with " +
+      "a `narrowed` validity and no word about it). The process exits 4 for this.",
+    entailedNegative:
+      "Not a statement about the target's tests in either direction. No mutant was executed, so " +
+      "there is no survivor to act on and no kill to credit; the only actionable item is the " +
+      "failure note.",
+    basis: "R190",
   },
 };
 
@@ -1764,6 +1778,10 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
   const scored = counts.killed + counts.timeoutKilled + counts.survived;
   const caveats: Caveat[] = [];
   if (!input.baselineGreen) caveats.push("baseline-red");
+  // R190 — see CAVEAT_INTERPRETATIONS["all-errors"]. Every recorded mutant errored, so nothing was
+  // measured; without this the report read as a completed, merely narrowed run.
+  const allErrors = input.outcomes.length > 0 && counts.errors === input.outcomes.length;
+  if (allErrors) caveats.push("all-errors");
   if (input.only !== undefined) caveats.push("narrowed");
   // See CAVEAT_INTERPRETATIONS["operator-narrowed"] for what this caveat means to a reader.
   if (input.operators !== undefined) caveats.push("operator-narrowed");
@@ -1938,7 +1956,8 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     input.only !== undefined ||
     input.operators !== undefined ||
     (input.testsOnly !== undefined && input.testsOnly.length > 0);
-  const degraded = !input.baselineGreen;
+  // R190: a run that measured nothing is degraded whatever its baseline said.
+  const degraded = !input.baselineGreen || allErrors;
   const reliability =
     narrowed && degraded
       ? "narrowed-degraded"

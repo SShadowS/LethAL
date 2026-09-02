@@ -264,7 +264,8 @@ describe("Caveat union", () => {
       "platform-artifact-kills": true,
       "kills-without-assertion": true,
       "declarative-sites-dropped": true,
+      "all-errors": true,
     };
-    expect(Object.keys(all).length).toBe(16);
+    expect(Object.keys(all).length).toBe(17);
   });
 });

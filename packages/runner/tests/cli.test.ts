@@ -6,6 +6,7 @@ import type { SelectorConfig } from "@lethal/schemata";
 import type { ActivationConfig } from "../src/activation";
 import type { AlRunnerCanaryResult } from "../src/al-runner-canary";
 import type { BcDevConfigSection, LethalConfigFile } from "../src/cli";
+import { NOTHING_SCORED_EXIT_CODE, QUARANTINED_EXIT_CODE, exitCodeForReport } from "../src/cli";
 import {
   announceAlRunnerCanary,
   clearQuarantine,
@@ -1826,5 +1827,29 @@ describe("prepareBcdevReadOnly — R111", () => {
     });
     expect(seen[0]?.publish).toBeUndefined();
     expect(seen[0]?.downloadSymbols).toBeUndefined();
+  });
+});
+
+describe("exitCodeForReport (R190)", () => {
+  const report = (over: { quarantined?: unknown; caveats?: readonly string[] }) => ({
+    ...(over.quarantined !== undefined ? { quarantined: over.quarantined as never } : {}),
+    validity: { caveats: over.caveats ?? [] },
+  });
+  test("a completed run exits 0, whatever its score", () => {
+    expect(exitCodeForReport(report({ caveats: ["narrowed", "baseline-red"] }))).toBe(0);
+  });
+  test("a run that measured nothing exits 4", () => {
+    expect(exitCodeForReport(report({ caveats: ["narrowed", "all-errors"] }))).toBe(
+      NOTHING_SCORED_EXIT_CODE,
+    );
+  });
+  test("a quarantined run exits 3, and quarantine wins over nothing-scored", () => {
+    expect(exitCodeForReport(report({ quarantined: { reason: "x" } }))).toBe(QUARANTINED_EXIT_CODE);
+    expect(
+      exitCodeForReport(report({ quarantined: { reason: "x" }, caveats: ["all-errors"] })),
+    ).toBe(QUARANTINED_EXIT_CODE);
+  });
+  test("the two codes are distinct from each other and from the plain error exit", () => {
+    expect(new Set([0, 1, QUARANTINED_EXIT_CODE, NOTHING_SCORED_EXIT_CODE]).size).toBe(4);
   });
 });

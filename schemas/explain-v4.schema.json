@@ -106,7 +106,8 @@
               "attribution-unplaceable",
               "platform-artifact-kills",
               "kills-without-assertion",
-              "declarative-sites-dropped"
+              "declarative-sites-dropped",
+              "all-errors"
             ]
           },
           "interpretation": { "$ref": "#/$defs/interpretation" }

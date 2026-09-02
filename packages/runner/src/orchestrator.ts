@@ -1146,7 +1146,12 @@ async function bisectAndNote(args: {
       case "no-repro":
         return String(args.originalErr);
       case "environmental":
-        return `deploy failed for a reason that is not attributable to any mutant (${outcome.detail}) — likely environmental (e.g. app-version monotonicity, transport, licence): ${String(args.originalErr)}`;
+        // R190: bisection isolates ONE culprit and confirms it by compiling the complement. With
+        // two or more independent culprits every complement still fails and this branch is
+        // reached with the failure being entirely mutant-caused (measured: three `then ; else`
+        // sites in one codeunit). Say so, beside the environmental candidates, rather than
+        // pointing a reader away from the artifact.
+        return `deploy failed for a reason that is not attributable to any SINGLE mutant (${outcome.detail}) — either environmental (e.g. app-version monotonicity, transport, licence) or MORE THAN ONE mutant breaks the compile, which bisection cannot separate; read the compiler output below for the sites it names: ${String(args.originalErr)}`;
       case "culprit":
         return `compile failed; bisected to mutant ${outcome.culprit.mutantId} (${outcome.culprit.file}:${outcome.culprit.startLine} ${outcome.culprit.operatorName}), confirmed: fails alone, complement compiles`;
     }
