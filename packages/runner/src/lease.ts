@@ -1,4 +1,5 @@
 import type { ActivationConfig, FetchFn } from "./activation";
+import { bcFetch } from "./bc-fetch";
 
 /**
  * OData client for the Layer 5C-B1 machine-global lease + operation-marker surface
@@ -331,7 +332,7 @@ export interface LeaseApi {
 export class LeaseClient implements LeaseApi {
   constructor(
     private readonly cfg: ActivationConfig,
-    private readonly fetchFn: FetchFn = fetch,
+    private readonly fetchFn: FetchFn = bcFetch,
   ) {}
 
   private post(action: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {

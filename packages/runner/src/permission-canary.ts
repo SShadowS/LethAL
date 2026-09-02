@@ -1,4 +1,5 @@
 import type { ActivationConfig, FetchFn } from "./activation";
+import { bcFetch } from "./bc-fetch";
 
 /**
  * The permissions module. Two halves, one subject:
@@ -161,7 +162,7 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 export class PermissionCanaryClient implements PermissionCanaryProbe {
   constructor(
     private readonly cfg: ActivationConfig,
-    private readonly fetchFn: FetchFn = fetch,
+    private readonly fetchFn: FetchFn = bcFetch,
   ) {}
 
   async probe(): Promise<Record<string, unknown>> {

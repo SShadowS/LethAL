@@ -37,6 +37,7 @@ import {
 import { contractRefusals, contractSummary, runAlRunnerContractProbe } from "./al-runner-contract";
 import { ArtifactCompiler, defaultArtifactIo } from "./artifact";
 import type { BackendStatus, ExecutionBackend } from "./backend";
+import { bcFetch } from "./bc-fetch";
 import { BcDevMcpBackend } from "./bcdev-backend";
 import type { BcDevConfig } from "./bcdev-backend";
 import { renderVersion } from "./build-info";
@@ -3744,7 +3745,7 @@ export async function buildDoctorDeps(
   const resolvedBcdev = readOnly.bcdev;
 
   const harnessVerifierFor = async (): Promise<HarnessVerifier> =>
-    new HarnessVerifier(odataCfgFor(await resolvedBcdev()), opts.fetchFn ?? fetch);
+    new HarnessVerifier(odataCfgFor(await resolvedBcdev()), opts.fetchFn ?? bcFetch);
 
   const envStatus = async (): Promise<string> => {
     const resolveBlocks = resolvedEnvCfg?.resolve;
@@ -4213,7 +4214,7 @@ export type ForceResetLeaseResult =
  */
 export async function performForceResetLease(
   cfg: ActivationConfig,
-  fetchFn: FetchFn = fetch,
+  fetchFn: FetchFn = bcFetch,
 ): Promise<ForceResetLeaseResult> {
   const { serverGeneration } = await new HarnessVerifier(cfg, fetchFn).verify();
   const resetOutcome = await new LeaseClient(cfg, fetchFn).forceResetLease(serverGeneration);
@@ -4317,7 +4318,7 @@ export async function forceResetLeaseFromCli(
 
   let result: ForceResetLeaseResult;
   try {
-    result = await performForceResetLease(odataCfg, deps.fetchFn ?? fetch);
+    result = await performForceResetLease(odataCfg, deps.fetchFn ?? bcFetch);
   } catch (err) {
     throw new Error(
       `force-reset-lease: could not complete the reset — the HarnessInfo/ForceResetLease call failed. Is the "LethAL Control" extension deployed and the NST at ${parsed.server}/${parsed.serverInstance} reachable? If you have not already, restart the NST/container first (design §8 step 1), then retry. Underlying error: ${err instanceof Error ? err.message : String(err)}`,

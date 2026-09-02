@@ -1,5 +1,6 @@
 import type { ActivationConfig, FetchFn } from "./activation";
 import { compareAppVersions } from "./app-version";
+import { bcFetch } from "./bc-fetch";
 
 /**
  * The `LethAL Control` extension's own app id and the protocol version this client speaks. A
@@ -273,7 +274,7 @@ export function parseLeaseSnapshot(info: {
 export class HarnessVerifier {
   constructor(
     private readonly cfg: ActivationConfig,
-    private readonly fetchFn: FetchFn = fetch,
+    private readonly fetchFn: FetchFn = bcFetch,
   ) {}
 
   /**

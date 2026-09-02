@@ -1,5 +1,6 @@
 import type { ActivationConfig, FetchFn } from "./activation";
 import type { TestMethodRef, TestOutcome, TestVerdict } from "./backend";
+import { bcFetch } from "./bc-fetch";
 import { describeThrown } from "./describe-error";
 import { assertAttemptId } from "./lease";
 import type { LeaseTuple } from "./lease";
@@ -234,7 +235,7 @@ export class RunMutantTransport {
     private readonly cfg: ActivationConfig,
     private readonly targetAppId: string,
     private readonly artifactId: string,
-    private readonly fetchFn: FetchFn = fetch,
+    private readonly fetchFn: FetchFn = bcFetch,
   ) {}
 
   /** One fenced mutant/baseline execution, no coverage collected — the unchanged Layer 5C-A path. */

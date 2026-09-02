@@ -1,3 +1,4 @@
+import { bcFetch } from "./bc-fetch";
 import { ActivationFailure } from "./failure-classes";
 
 export type FetchFn = typeof fetch;
@@ -84,7 +85,7 @@ export async function postOData(
 export class MutationControlClient {
   constructor(
     private readonly cfg: ActivationConfig,
-    private readonly fetchFn: FetchFn = fetch,
+    private readonly fetchFn: FetchFn = bcFetch,
   ) {}
 
   private post(action: string, body?: Record<string, unknown>): Promise<unknown> {

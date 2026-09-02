@@ -1,5 +1,6 @@
 import type { ActivationConfig, FetchFn } from "./activation";
 import type { CompiledArtifact } from "./artifact";
+import { bcFetch } from "./bc-fetch";
 
 /**
  * The only shape a generated artifact id, or an id `LethALControl_RegisteredArtifact` reports
@@ -71,7 +72,7 @@ export function decidePublishOutcome(
 export class DeploymentVerifier {
   constructor(
     private readonly cfg: ActivationConfig,
-    private readonly fetchFn: FetchFn = fetch,
+    private readonly fetchFn: FetchFn = bcFetch,
   ) {}
 
   async verify(expected: CompiledArtifact): Promise<DeploymentVerification> {

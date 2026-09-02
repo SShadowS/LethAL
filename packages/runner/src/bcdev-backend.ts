@@ -22,6 +22,7 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "./backend";
+import { bcFetch } from "./bc-fetch";
 import { decidePublishOutcome } from "./deployment-verifier";
 import type { DeploymentVerifier } from "./deployment-verifier";
 import { describeThrown } from "./describe-error";
@@ -351,7 +352,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
    */
   async fetchPublishedAppPackage(
     app: { readonly publisher: string; readonly name: string },
-    fetchFn: FetchLike = fetch,
+    fetchFn: FetchLike = bcFetch,
   ): Promise<Uint8Array | null | undefined> {
     // `undefined`, not `null`: this configuration cannot form the request at all, so there is
     // nothing for the caller to report. The env-tool path is the real instance — it reaches BC
