@@ -568,3 +568,62 @@ describe("parseLeaseSnapshot (R110)", () => {
     ).toThrow(/EMPTY leaseOpKind/);
   });
 });
+
+/**
+ * R195. The read `lethal doctor`'s company check is built on. It is the one probe here that does
+ * not go through the control app, so a server where LethAL Control was never published still
+ * answers it, and it must never send the configured company: a company that does not exist would
+ * fail the very call meant to report that.
+ */
+describe("HarnessVerifier.fetchCompanies (R195)", () => {
+  function capturing(status: number, body: unknown) {
+    const seen: { url: string; init?: RequestInit }[] = [];
+    const fetchFn = (async (url: unknown, init?: RequestInit) => {
+      seen.push({ url: String(url), ...(init !== undefined ? { init } : {}) });
+      return new Response(typeof body === "string" ? body : JSON.stringify(body), { status });
+    }) as typeof fetch;
+    return { seen, fetchFn };
+  }
+
+  test("GETs api/v2.0/companies with the tenant and basic auth, and never the company", async () => {
+    const { seen, fetchFn } = capturing(200, {
+      value: [
+        { id: "1", name: "CRONUS UK Ltd." },
+        { id: "2", name: "My Company" },
+      ],
+    });
+    const names = await new HarnessVerifier(CFG, fetchFn).fetchCompanies();
+    expect(names).toEqual(["CRONUS UK Ltd.", "My Company"]);
+    const [call] = seen;
+    if (call === undefined) throw new Error("no request was made");
+    expect(call.url).toBe("http://bc:7048/BC/api/v2.0/companies?tenant=default");
+    expect(call.url).not.toContain("company=");
+    expect(call.init?.method).toBe("GET");
+    expect(new Headers(call.init?.headers).get("authorization")).toBe(`Basic ${btoa("u:p")}`);
+  });
+
+  test("omits the tenant query when none is configured", async () => {
+    const { seen, fetchFn } = capturing(200, { value: [] });
+    const { tenant: _t, ...noTenant } = CFG;
+    await new HarnessVerifier(noTenant, fetchFn).fetchCompanies();
+    expect(seen[0]?.url).toBe("http://bc:7048/BC/api/v2.0/companies");
+  });
+
+  test("a 401 is an auth error, as it is for HarnessInfo", async () => {
+    const { fetchFn } = capturing(401, "unauthorized");
+    await expect(new HarnessVerifier(CFG, fetchFn).fetchCompanies()).rejects.toBeInstanceOf(
+      HarnessAuthError,
+    );
+  });
+
+  test("a body without a value array, or a row without a string name, is refused rather than read as no companies", async () => {
+    const noArray = capturing(200, { value: "CRONUS" });
+    await expect(new HarnessVerifier(CFG, noArray.fetchFn).fetchCompanies()).rejects.toThrow(
+      /no `value` array/,
+    );
+    const badRow = capturing(200, { value: [{ id: "1" }] });
+    await expect(new HarnessVerifier(CFG, badRow.fetchFn).fetchCompanies()).rejects.toThrow(
+      /without a string `name`/,
+    );
+  });
+});

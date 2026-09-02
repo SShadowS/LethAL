@@ -82,11 +82,24 @@ function info(over: Record<string, unknown> = {}): Record<string, unknown> {
   };
 }
 
-function okFetch(inner: Record<string, unknown>): typeof fetch {
-  return (async (_url: unknown, _init?: RequestInit) =>
-    new Response(JSON.stringify({ value: JSON.stringify(inner) }), {
-      status: 200,
-    })) as typeof fetch;
+/**
+ * Answers HarnessInfo with `inner` and, R195, BC's `api/v2.0/companies` with a list holding the
+ * company every fixture in this file configures (`"CRONUS"`) plus whatever `companies` adds — so
+ * the existing "every check passes" fixtures keep meaning what they say, and a test that wants
+ * the company check to FAIL passes a list without it.
+ */
+function okFetch(
+  inner: Record<string, unknown>,
+  companies: readonly string[] = ["CRONUS"],
+): typeof fetch {
+  return (async (url: unknown, _init?: RequestInit) => {
+    if (String(url).includes("/api/v2.0/companies")) {
+      return new Response(JSON.stringify({ value: companies.map((name) => ({ name })) }), {
+        status: 200,
+      });
+    }
+    return new Response(JSON.stringify({ value: JSON.stringify(inner) }), { status: 200 });
+  }) as typeof fetch;
 }
 
 function errorFetch(status: number, body: string): typeof fetch {

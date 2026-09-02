@@ -325,6 +325,77 @@ export class HarnessVerifier {
     return parseLeaseSnapshot(await this.fetchHarnessInfo());
   }
 
+  /**
+   * R195: the company names this server reports, from BC's own `api/v2.0/companies`. Read-only,
+   * and independent of the control app: it answers on a server where LethAL Control was never
+   * published, which is what lets `lethal doctor` say "the company you named does not exist,
+   * these do" BEFORE the control-version check fails with BC's 404 for the same reason. Measured
+   * 2026-09-02: a config named `CRONUS Danmark A/S` against a sandbox holding `CRONUS UK Ltd.`, and
+   * the operator found the real names by calling exactly this endpoint by hand.
+   *
+   * The company parameter is deliberately NOT sent: this endpoint lists across companies, and
+   * sending a company that does not exist would fail the very call meant to say so.
+   */
+  async fetchCompanies(): Promise<readonly string[]> {
+    const params = new URLSearchParams();
+    if (this.cfg.tenant !== undefined) params.set("tenant", this.cfg.tenant);
+    const query = params.size > 0 ? `?${params.toString()}` : "";
+    const url = `${this.cfg.baseUrl}/api/v2.0/companies${query}`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.cfg.timeoutMs ?? 30_000);
+    let res: Response;
+    try {
+      res = await this.fetchFn(url, {
+        method: "GET",
+        headers: {
+          authorization: `Basic ${btoa(`${this.cfg.username}:${this.cfg.password}`)}`,
+          accept: "application/json",
+        },
+        signal: controller.signal,
+      });
+    } catch (err) {
+      throw new HarnessVerificationError(`companies list unreachable: ${String(err)}`);
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!res.ok) {
+      let bodyText = "";
+      try {
+        bodyText = await res.text();
+      } catch {
+        // best-effort, as fetchHarnessInfo does
+      }
+      if (res.status === 401 || res.status === 403) {
+        throw new HarnessAuthError(
+          `companies list failed: HTTP ${res.status}${bodyText ? `: ${bodyText}` : ""} — an authentication failure; the request never reached the API.`,
+        );
+      }
+      throw new HarnessVerificationError(
+        `companies list failed: HTTP ${res.status}${bodyText ? `: ${bodyText}` : ""}`,
+      );
+    }
+    let value: unknown;
+    try {
+      value = ((await res.json()) as { value?: unknown }).value;
+    } catch {
+      value = undefined;
+    }
+    if (!Array.isArray(value)) {
+      throw new HarnessVerificationError("companies list returned no `value` array");
+    }
+    const names: string[] = [];
+    for (const row of value) {
+      const name = (row as { name?: unknown }).name;
+      if (typeof name !== "string") {
+        throw new HarnessVerificationError(
+          `companies list returned a row without a string \`name\`: ${JSON.stringify(row).slice(0, 200)}`,
+        );
+      }
+      names.push(name);
+    }
+    return names;
+  }
+
   async verify(): Promise<HarnessDetails> {
     const info = await this.fetchHarnessInfo();
 

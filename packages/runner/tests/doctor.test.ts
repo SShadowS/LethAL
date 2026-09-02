@@ -327,3 +327,83 @@ describe("lethal doctor — the lease check (R110)", () => {
     expect(calls).toBe(1);
   });
 });
+
+/**
+ * R195. Measured 2026-09-02: a config named `CRONUS Danmark A/S` against a sandbox holding
+ * `CRONUS UK Ltd.`, and doctor's only word on it was BC's 404 under `control-version`, naming the
+ * configured value and nothing else. The check exists to name what DOES exist, and to do so before
+ * the checks that need a company fail for the same reason.
+ */
+describe("lethal doctor — the company check (R195)", () => {
+  const live = {
+    envStatus: async () => "Running",
+    quarantine: async () => "clear",
+    controlVersion: async () => MIN_CONTROL_VERSION,
+    toolPaths: async () => ({ alc: "ok", altool: "ok" }),
+    alRunnerCache: async () => EMPTY_CACHE,
+  };
+
+  test("a company the server has passes, naming it", async () => {
+    const r = await runDoctor(cfgFixture(), {
+      ...live,
+      companies: async () => ({
+        configured: "CRONUS UK Ltd.",
+        names: ["CRONUS UK Ltd.", "My Company"],
+      }),
+    });
+    const c = r.checks.find((x) => x.name === "company");
+    expect(c?.ok).toBe(true);
+    expect(c?.detail).toContain('"CRONUS UK Ltd." exists');
+    expect(r.ok).toBe(true);
+  });
+
+  test("a company the server does NOT have fails and lists the ones it has", async () => {
+    const r = await runDoctor(cfgFixture(), {
+      ...live,
+      companies: async () => ({
+        configured: "CRONUS Danmark A/S",
+        names: ["CRONUS UK Ltd.", "My Company"],
+      }),
+    });
+    const c = r.checks.find((x) => x.name === "company");
+    expect(c?.ok).toBe(false);
+    expect(c?.detail).toContain('"CRONUS Danmark A/S" does not exist');
+    expect(c?.detail).toContain('"CRONUS UK Ltd."');
+    expect(c?.detail).toContain('"My Company"');
+    expect(r.ok).toBe(false);
+  });
+
+  test("a name that differs only in case passes and shows the server's spelling", async () => {
+    const r = await runDoctor(cfgFixture(), {
+      ...live,
+      companies: async () => ({ configured: "cronus uk ltd.", names: ["CRONUS UK Ltd."] }),
+    });
+    const c = r.checks.find((x) => x.name === "company");
+    expect(c?.ok).toBe(true);
+    expect(c?.detail).toContain('exists as "CRONUS UK Ltd."');
+  });
+
+  test("a server reporting no companies at all fails and says so", async () => {
+    const r = await runDoctor(cfgFixture(), {
+      ...live,
+      companies: async () => ({ configured: "CRONUS", names: [] }),
+    });
+    const c = r.checks.find((x) => x.name === "company");
+    expect(c?.ok).toBe(false);
+    expect(c?.detail).toContain("NO companies");
+  });
+
+  test("the check is listed before control-version, which fails for the same cause with less to say", async () => {
+    const r = await runDoctor(cfgFixture(), {
+      ...live,
+      companies: async () => ({ configured: "X", names: ["Y"] }),
+    });
+    const names = r.checks.map((c) => c.name);
+    expect(names.indexOf("company")).toBeLessThan(names.indexOf("control-version"));
+  });
+
+  test("an absent dep means no check, not a vacuous pass", async () => {
+    const r = await runDoctor(cfgFixture(), live);
+    expect(r.checks.some((c) => c.name === "company")).toBe(false);
+  });
+});

@@ -3801,6 +3801,14 @@ export async function buildDoctorDeps(
   const controlVersion = async (): Promise<string> =>
     (await harnessVerifierFor()).fetchControlVersion();
 
+  // R195: BC's own company list, read-only and independent of the control app. Compared against
+  // the RESOLVED company, which on an env-tool config is whatever the tool resolved, not the raw
+  // file — the same value every other live check sends.
+  const companies = async () => ({
+    configured: (await resolvedBcdev()).company,
+    names: await (await harnessVerifierFor()).fetchCompanies(),
+  });
+
   // R110: reads the lease WITHOUT taking it. `TryAcquire` mutates on grant (epoch++, token,
   // `Commit`), so probing by acquiring was never an option here — `DoctorDeps`'s contract is that
   // every probe is non-mutating, and this is the read that finally makes the lease answerable
@@ -3844,11 +3852,11 @@ export async function buildDoctorDeps(
       // branch, R21) — mirror `run`'s own leniency rather than being stricter than it.
       ...(configFile.envTool !== undefined ? { altoolRequired: false } : {}),
     },
-    // Create mode: omit the three deps ENTIRELY (not merely make them throw a friendlier error) —
+    // Create mode: omit the live deps ENTIRELY (not merely make them throw a friendlier error) —
     // `runDoctor` skips a check whose dep is absent, rather than reporting a failure for a
     // question that has no answer yet. See `DOCTOR_CREATE_MODE_CAVEAT` and `doctorFromCli` below.
     deps: {
-      ...(isCreateMode ? {} : { envStatus, quarantine, controlVersion, lease }),
+      ...(isCreateMode ? {} : { envStatus, quarantine, companies, controlVersion, lease }),
       toolPaths,
       ...(alRunner !== undefined ? { alRunner } : {}),
       alRunnerCache,

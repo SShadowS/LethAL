@@ -84,6 +84,20 @@ export interface DoctorDeps {
    *  never drift onto different comparison rules. Absent for a create-mode envTool config — same
    *  reasoning as `envStatus`: no control app is published anywhere yet to ask. */
   readonly controlVersion?: () => Promise<string>;
+  /**
+   * R195: the configured company beside the company names the server reports
+   * (`HarnessVerifier.fetchCompanies`, BC's own `api/v2.0/companies`). Both come from ONE lazy
+   * call, because on an env-tool config the configured company is itself resolved by the tool,
+   * and resolving it eagerly in `buildDoctorDeps` would turn a tool failure into an abort of the
+   * whole report instead of a failing check. Absent in create mode and on an al-runner-only
+   * project, like every other live-BC dep. Listed BEFORE `control-version` in the report because a
+   * wrong company makes that check fail too, with BC's 404 naming only the configured name; this
+   * one names the ones that exist.
+   */
+  readonly companies?: () => Promise<{
+    readonly configured: string;
+    readonly names: readonly string[];
+  }>;
   /** R110: the deployed lease, read WITHOUT taking it (`HarnessVerifier.fetchLease`). Absent for a
    *  create-mode envTool config — same reasoning as `envStatus`: no control app exists to ask yet.
    *
@@ -251,6 +265,35 @@ function checkLease(lease: LeaseSnapshot, now: Date): DoctorCheck {
   };
 }
 
+/**
+ * R195. Case-insensitive, because BC resolves the `company` query parameter that way; a name that
+ * differs only in case is reported as a pass naming the server's own spelling, and a name that
+ * differs otherwise fails naming every company the server has.
+ */
+function checkCompany(configured: string, names: readonly string[]): DoctorCheck {
+  const wanted = configured.trim().toLowerCase();
+  const match = names.find((n) => n.trim().toLowerCase() === wanted);
+  if (match !== undefined) {
+    return {
+      name: "company",
+      ok: true,
+      detail:
+        match === configured
+          ? `${JSON.stringify(configured)} exists`
+          : `${JSON.stringify(configured)} exists as ${JSON.stringify(match)}`,
+    };
+  }
+  const listed =
+    names.length === 0
+      ? "the server reported NO companies"
+      : `the server has: ${names.map((n) => JSON.stringify(n)).join(", ")}`;
+  return {
+    name: "company",
+    ok: false,
+    detail: `${JSON.stringify(configured)} does not exist on this server — ${listed}. Set bcdev.company to one of those; every other live check needs it and will fail with a 404 that names only the configured value.`,
+  };
+}
+
 function checkQuarantine(state: string): DoctorCheck {
   return state === "clear"
     ? { name: "quarantine", ok: true, detail: "tier is not quarantined" }
@@ -334,7 +377,16 @@ function checkAlRunner(status: { readonly ok: boolean; readonly details: string 
 export async function runDoctor(cfg: DoctorConfig, deps: DoctorDeps): Promise<DoctorReport> {
   const envReady = cfg.envReady ?? DEFAULT_ENV_READY;
   const altoolRequired = cfg.altoolRequired ?? DEFAULT_ALTOOL_REQUIRED;
-  const { envStatus, quarantine, controlVersion, lease, toolPaths, alRunner, alRunnerCache } = deps;
+  const {
+    envStatus,
+    quarantine,
+    controlVersion,
+    lease,
+    toolPaths,
+    alRunner,
+    alRunnerCache,
+    companies,
+  } = deps;
   const checkPromises: Promise<DoctorCheck>[] = [];
   if (envStatus !== undefined) {
     checkPromises.push(
@@ -343,6 +395,21 @@ export async function runDoctor(cfg: DoctorConfig, deps: DoctorDeps): Promise<Do
   }
   if (quarantine !== undefined) {
     checkPromises.push(runCheck("quarantine", async () => checkQuarantine(await quarantine())));
+  }
+  // R195: before `control-version`, which fails on a wrong company too but names only the
+  // configured value.
+  if (companies !== undefined) {
+    checkPromises.push(
+      runCheck("company", async () => {
+        const { configured, names } = await companies();
+        if (configured === "") {
+          throw new Error(
+            "the resolved bcdev.company is empty — nothing to compare the server's companies against",
+          );
+        }
+        return checkCompany(configured, names);
+      }),
+    );
   }
   if (controlVersion !== undefined) {
     checkPromises.push(
