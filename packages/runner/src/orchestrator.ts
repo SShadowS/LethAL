@@ -34,6 +34,8 @@ import { nextAbove, parseVersionConflict, reserveAppVersion } from "./app-versio
 import { AlcCompileError, ArtifactPrepareError, DeploymentError } from "./artifact";
 import type { CompiledArtifact } from "./artifact";
 import type { CoverageMode, ExecutionBackend, TestMethodRef, TestVerdict } from "./backend";
+import { hashAlTree, snapshotApplies, testAppHashFor } from "./baseline-snapshot";
+import type { BaselineObservation } from "./baseline-snapshot";
 import { PublishFailedError } from "./bcdev-backend";
 import { bisectFailingMutant } from "./bisect";
 import type { PublishOutcome } from "./deployment-verifier";
@@ -734,10 +736,11 @@ export interface SessionConfig {
    * configuration fingerprint; a number names one explicitly. Absent means a fresh run.
    *
    * Parse and instrument still happen for every batch. A batch with at least one mutant left to
-   * execute is deployed and baselined, and its coverage attribution and covering-test lists come
-   * from THIS run. A batch whose every mutant carries a prior verdict WITH its persisted coverage
-   * facts is recorded from the database instead, with no deploy and no baseline (R192). See
-   * `resume.ts`.
+   * execute is deployed; its baseline is re-run unless a prior run's COMPLETED baseline for the
+   * same instrumented source and the same test app is on record (`baseline-snapshot.ts`), in
+   * which case that baseline's verdicts, coverage and durations are reused. A batch whose every
+   * mutant carries a prior verdict WITH its persisted coverage facts is recorded from the
+   * database instead, with no deploy and no baseline (R192). See `resume.ts`.
    */
   readonly resume?: "last" | number;
   /**
@@ -2213,7 +2216,7 @@ function resolveResume(
   emit({
     type: "warning",
     code: "resume-reusing-run",
-    message: `[lethal] --resume: reusing run ${priorRunId} — ${index.carryable.size} mutant verdict(s) may be carried without re-executing. A batch with any mutant left to run is deployed and baselined, and its coverage comes from THIS run; a batch whose every mutant carries is recorded from run ${priorRunId} without either (R192).${
+    message: `[lethal] --resume: reusing run ${priorRunId} — ${index.carryable.size} mutant verdict(s) may be carried without re-executing. A batch with any mutant left to run is deployed, and baselined unless a prior run's completed baseline for the same instrumented source and test app is on record (then that baseline's verdicts, coverage and durations are reused); a batch whose every mutant carries is recorded from run ${priorRunId} without either (R192).${
       index.nonCarryableRows > 0
         ? ` ${index.nonCarryableRows} prior 'error' verdict(s) will be re-executed.`
         : ""
@@ -3118,7 +3121,52 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       const baselineStartedMs = Date.now();
       await activateOnce(cfg.backend, safety, null);
       const baseline: Array<{ ref: TestMethodRef; verdict: TestVerdict }> = [];
-      for (const ref of tests) {
+      // R192 (second half): on `--resume`, a prior run's COMPLETED baseline for this exact
+      // instrumented source against this exact test app stands in for re-running it. Both hashes
+      // are computed up front, once, so that a run whose baseline IS measured can record it under
+      // the same key for the next resume. The test-app hash is the published package where the
+      // backend can read it, else the test source tree; `undefined` means never reuse.
+      const batchHash = await hashAlTree(batchDir);
+      const packageReader = cfg.backend.fetchPublishedAppPackage;
+      const testAppHash = await testAppHashFor(
+        packageReader === undefined
+          ? undefined
+          : async () => {
+              const manifest = await readTestAppManifest(cfg.testDir);
+              return manifest === undefined
+                ? undefined
+                : packageReader.call(cfg.backend, {
+                    publisher: manifest.publisher,
+                    name: manifest.name,
+                  });
+            },
+        cfg.testDir,
+      );
+      const reusable =
+        resumeState !== undefined && testAppHash !== undefined
+          ? cfg.store.findBaselineSnapshot(batchHash, testAppHash)
+          : null;
+      const reused = snapshotApplies(reusable, batchHash, testAppHash) ? reusable : undefined;
+      if (reused !== undefined) {
+        emit({
+          type: "warning",
+          code: "resume-baseline-reused",
+          message: `[lethal] --resume: batch ${batchIdx}'s baseline was not re-run. Its instrumented source and the published test app hash the same as run ${reused.runId}'s batch ${reused.batchIndex}, so that run's ${reused.baseline.length} baseline verdict(s), coverage and durations are reused (R192). Not re-checked: the environment's DATA, which a re-run baseline would have observed; a test that has gone red since is not detected here.`,
+        });
+        for (const b of reused.baseline) {
+          baseline.push(b);
+          cfg.store.recordTestResult(
+            runId,
+            null,
+            null,
+            b.ref,
+            b.verdict.outcome,
+            b.verdict.durationMs,
+            b.verdict.failureMessage,
+          );
+        }
+      }
+      for (const ref of reused !== undefined ? [] : tests) {
         const v = await runOnce(
           cfg.backend,
           safety,
@@ -3179,6 +3227,20 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       const baselineElapsedMs = Date.now() - baselineStartedMs;
       emit({ type: "phase-left", phase: "baseline", elapsedMs: baselineElapsedMs });
       if (safety.isUnsafe) break; // stop the whole session — no mutant scheduling, no next batch
+      // R192 (second half): a baseline that ran EVERY test to a verdict is recorded under its two
+      // hashes for the next resume. `baseline.length === tests.length` is what "completed" means
+      // here: the lease and in-flight branches above `break` out of the loop short, and a partial
+      // baseline must never be reused as a whole one. A reused baseline is not re-recorded; the
+      // snapshot it came from is still there.
+      if (reused === undefined && testAppHash !== undefined && baseline.length === tests.length) {
+        cfg.store.recordBaselineSnapshot({
+          runId,
+          batchIndex: batchIdx,
+          batchHash,
+          testAppHash,
+          baseline: baseline as BaselineObservation[],
+        });
+      }
       // baseline-batch-finished: the moment of observation IS the batch's baseline RETURNING (see
       // events.ts's doc comment) — emitted here, unconditionally, so it still fires on the
       // all-red path below (`greenTests.length === 0`) rather than only on the happy path.
@@ -4064,6 +4126,21 @@ interface TestAppManifest {
   readonly name?: unknown;
   readonly publisher?: unknown;
   readonly version?: unknown;
+}
+
+/** R192: the test app's identity for the published-package read, or `undefined` when the test
+ *  project has no readable `app.json` naming both. */
+async function readTestAppManifest(
+  testDir: string,
+): Promise<{ readonly name: string; readonly publisher: string } | undefined> {
+  let manifest: TestAppManifest;
+  try {
+    manifest = JSON.parse(await readFile(join(testDir, "app.json"), "utf8")) as TestAppManifest;
+  } catch {
+    return undefined;
+  }
+  if (typeof manifest.name !== "string" || typeof manifest.publisher !== "string") return undefined;
+  return { name: manifest.name, publisher: manifest.publisher };
 }
 
 /**

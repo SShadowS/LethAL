@@ -112,6 +112,8 @@ async function makeProject(opts: { secondFile?: boolean } = {}) {
  */
 class CountingBackend implements ExecutionBackend {
   mutantRuns = 0;
+  /** R192 (second half): runs with NO mutant active, i.e. the baseline. */
+  baselineRuns = 0;
   deploys = 0;
   private activations: Array<string | null> = [];
   constructor(
@@ -139,6 +141,7 @@ class CountingBackend implements ExecutionBackend {
   async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
     const active = this.activations.at(-1) ?? null;
     if (active !== null) this.mutantRuns += 1;
+    else this.baselineRuns += 1;
     const aborts =
       active !== null &&
       ((this.abortAfter !== undefined && this.mutantRuns > this.abortAfter) ||
@@ -943,6 +946,102 @@ describe("runSession --resume (R47)", () => {
     expect(report.quarantined).toBeUndefined();
     // And the batch that DID have work still ran its baseline and mutants normally.
     expect(report.counts.survived + report.counts.killed).toBeGreaterThan(batch0Before.length);
+  });
+
+  test("R192 (second half): a batch with work left is deployed but its baseline is NOT re-run when nothing it measured changed", async () => {
+    // The other half of the measured cost: batch 1 still had mutants to run, so the first half
+    // could not skip it, and every resume re-ran its 407-test baseline (215 s). Its instrumented
+    // source and the test app are byte-identical to the prior run's, so the prior baseline stands.
+    const dirs = await makeProject({ secondFile: true });
+    const store = new ResultsStore(":memory:");
+    const first = new CountingBackend("pass", undefined, 2); // batch 1 aborts on its first mutant
+    const firstReport = await runSession({
+      backend: first,
+      store,
+      ...dirs,
+      selectorIds,
+      maxGuardsPerBatch: 1,
+    });
+    expect(firstReport.quarantined).toBeDefined();
+    expect(first.baselineRuns).toBeGreaterThan(0);
+
+    const second = new CountingBackend("pass");
+    const events: RunEvent[] = [];
+    const report = await runSession({
+      backend: second,
+      store,
+      ...dirs,
+      selectorIds,
+      maxGuardsPerBatch: 1,
+      resume: "last",
+      emit: [(e) => events.push(e)],
+    });
+    // Batch 0 was recorded from the store (first half); batch 1 was deployed for its mutants...
+    expect(second.deploys).toBe(1);
+    // ...and its baseline came from the snapshot: NOT ONE baseline test ran in this session.
+    expect(second.baselineRuns).toBe(0);
+    expect(second.mutantRuns).toBeGreaterThan(0);
+    const reused = events.filter(
+      (e) => e.type === "warning" && e.code === "resume-baseline-reused",
+    );
+    expect(reused).toHaveLength(1);
+    expect(reused[0]?.type === "warning" ? reused[0].message : "").toContain(
+      `run ${firstReport.resumedFrom?.runId ?? 1}`,
+    );
+    // The reused baseline still produced a coverage split and the same verdicts a fresh run gives.
+    expect(events.some((e) => e.type === "coverage-split" && e.batchIndex === 1)).toBe(true);
+    const control = await runSession({
+      backend: new CountingBackend("pass"),
+      store: new ResultsStore(":memory:"),
+      ...dirs,
+      selectorIds,
+      maxGuardsPerBatch: 1,
+    });
+    // The one mutant the first run stranded on is skipped as `error` on resume (R53), which is a
+    // resume property, not a baseline one; every other verdict must match the fresh run's.
+    const strandedSkips = report.mutants.filter(
+      (m) => m.failureNote?.includes("not re-run on resume") === true,
+    );
+    expect(strandedSkips).toHaveLength(1);
+    const key = (m: (typeof report.mutants)[number]) => `${m.file}|${m.line}|${m.operatorName}`;
+    const skipped = new Set(strandedSkips.map(key));
+    const verdictsOf = (r: typeof report) =>
+      r.mutants
+        .filter((m) => !skipped.has(key(m)))
+        .map((m) => `${key(m)}|${m.verdict}`)
+        .sort();
+    expect(verdictsOf(report)).toEqual(verdictsOf(control));
+    expect(report.validity.baselineTests).toEqual(control.validity.baselineTests);
+  });
+
+  test("R192 (second half): a changed test app means the baseline IS re-run", async () => {
+    const dirs = await makeProject({ secondFile: true });
+    const store = new ResultsStore(":memory:");
+    await runSession({
+      backend: new CountingBackend("pass", undefined, 2),
+      store,
+      ...dirs,
+      selectorIds,
+      maxGuardsPerBatch: 1,
+    });
+    // Edit the test project: the source-tree hash (no package concept on this backend) moves.
+    const { writeFile: write } = await import("node:fs/promises");
+    await write(join(dirs.testDir, "Extra.Codeunit.al"), 'codeunit 79999 "Extra" { }', "utf8");
+    const second = new CountingBackend("pass");
+    const events: RunEvent[] = [];
+    await runSession({
+      backend: second,
+      store,
+      ...dirs,
+      selectorIds,
+      maxGuardsPerBatch: 1,
+      resume: "last",
+      emit: [(e) => events.push(e)],
+    });
+    expect(second.baselineRuns).toBeGreaterThan(0);
+    expect(events.some((e) => e.type === "warning" && e.code === "resume-baseline-reused")).toBe(
+      false,
+    );
   });
 
   test("R192: a batch whose carried rows predate the coverage columns is deployed as before", () => {

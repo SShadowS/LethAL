@@ -315,10 +315,16 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
     meaning:
       "This run was assembled with `--resume`. The verdicts carried are real measurements " +
       "taken over the same source (identity-matched) and the same scope (fingerprint-matched) " +
-      "— a composite of two sessions.",
+      "— a composite of two sessions. A batch whose every mutant carried was not republished " +
+      "(R192), and a batch whose instrumented source and test app hash the same as a prior " +
+      "run's may have had that run's BASELINE reused rather than re-run; the run's warnings " +
+      "(`resume-batch-carried`, `resume-baseline-reused`) name which.",
     entailedNegative:
       "Not a reliability downgrade the way `baseline-red` is — calling a resumed run " +
-      "'degraded' would put an honest resume in the same bucket as a red baseline.",
+      "'degraded' would put an honest resume in the same bucket as a red baseline. What a " +
+      "reused baseline does NOT re-establish is the environment's DATA: a test that was green " +
+      "then and would be red now is not re-detected, which is the same exposure every run has " +
+      "between its baseline and its last mutant.",
     basis: "R47",
   },
   "untargeted-triggers": {

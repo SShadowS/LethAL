@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
 import type { TestMethodRef, TestOutcome } from "./backend";
+import type { BaselineObservation, BaselineSnapshot } from "./baseline-snapshot";
 import type { PublishOutcome } from "./deployment-verifier";
 import type { CoverageAttribution } from "./selection";
 import { type IdentityKey, serializeKey } from "./selection";
@@ -236,6 +237,18 @@ CREATE TABLE IF NOT EXISTS publish_outcomes (
   outcome TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_publish_outcomes_tier ON publish_outcomes(tier);
+-- R192 (second half): a batch's completed baseline, keyed by what it measured. Reused on --resume
+-- when both hashes match; see baseline-snapshot.ts.
+CREATE TABLE IF NOT EXISTS baseline_snapshots (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id INTEGER NOT NULL REFERENCES runs(id),
+  batch_index INTEGER NOT NULL,
+  batch_hash TEXT NOT NULL,
+  test_app_hash TEXT NOT NULL,
+  recorded_at TEXT NOT NULL DEFAULT (datetime('now')),
+  payload TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_baseline_snapshots_key ON baseline_snapshots(batch_hash, test_app_hash);
 `;
 
 export class ResultsStore {
@@ -567,6 +580,67 @@ export class ResultsStore {
         "UPDATE runs SET app_version = ?, app_id = ?, artifact_id = ?, artifact_sha256 = ? WHERE id = ?",
       )
       .run(info.appVersion, info.appId, info.artifactId, info.sha256, runId);
+  }
+
+  /**
+   * R192 (second half): persist a batch's COMPLETED baseline under the two hashes that identify
+   * what it measured. Only a baseline that ran every test to a verdict is worth storing; the caller
+   * decides that, this only writes.
+   */
+  recordBaselineSnapshot(input: {
+    readonly runId: number;
+    readonly batchIndex: number;
+    readonly batchHash: string;
+    readonly testAppHash: string;
+    readonly baseline: readonly BaselineObservation[];
+  }): void {
+    this.db
+      .query(
+        `INSERT INTO baseline_snapshots (run_id, batch_index, batch_hash, test_app_hash, payload)
+         VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(
+        input.runId,
+        input.batchIndex,
+        input.batchHash,
+        input.testAppHash,
+        JSON.stringify(input.baseline),
+      );
+  }
+
+  /** R192 (second half): the most recent snapshot for these hashes from ANY run, or null. */
+  findBaselineSnapshot(batchHash: string, testAppHash: string): BaselineSnapshot | null {
+    const row = this.db
+      .query(
+        `SELECT run_id, batch_index, batch_hash, test_app_hash, payload FROM baseline_snapshots
+         WHERE batch_hash = ? AND test_app_hash = ? ORDER BY id DESC LIMIT 1`,
+      )
+      .get(batchHash, testAppHash) as {
+      run_id: number;
+      batch_index: number;
+      batch_hash: string;
+      test_app_hash: string;
+      payload: string;
+    } | null;
+    if (row === null) return null;
+    let baseline: unknown;
+    try {
+      baseline = JSON.parse(row.payload);
+    } catch {
+      baseline = undefined;
+    }
+    if (!Array.isArray(baseline)) {
+      throw new Error(
+        `store.ts: baseline_snapshots row for run ${row.run_id} batch ${row.batch_index} has a corrupt payload — expected a JSON array of observations`,
+      );
+    }
+    return {
+      runId: row.run_id,
+      batchIndex: row.batch_index,
+      batchHash: row.batch_hash,
+      testAppHash: row.test_app_hash,
+      baseline: baseline as BaselineObservation[],
+    };
   }
 
   /** Returns the `mutants.id` row id SQLite assigned this insert (see I5: `mutant_code` alone
