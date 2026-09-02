@@ -4109,6 +4109,7 @@ export async function exportFromCli(parsed: ExportCliConfig): Promise<number> {
   const { report: projected, losses } = await toMutationElements(report, {
     projectDir: parsed.projectDir,
     thresholds: parsed.thresholds,
+    version: LETHAL_VERSION,
   });
   await writeFile(parsed.outPath, `${JSON.stringify(projected, null, 2)}${"\n"}`, "utf8");
   const fileCount = Object.keys(projected.files).length;

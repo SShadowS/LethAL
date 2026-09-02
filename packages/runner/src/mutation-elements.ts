@@ -63,12 +63,32 @@ export interface ElementsOptions {
   readonly thresholds: { readonly high: number; readonly low: number };
   /** Reads a file's text. Injected so the projection is testable without a disk. */
   readonly readSource?: (absPath: string) => Promise<string>;
+  /** LethAL's own version, for the schema's `framework.version`. */
+  readonly version?: string;
 }
 
 export interface ElementsReport {
   readonly schemaVersion: string;
   readonly thresholds: { readonly high: number; readonly low: number };
   readonly files: Record<string, unknown>;
+  /** The schema's `FrameworkInformation`: who produced this, so a dashboard can say so. */
+  readonly framework: { readonly name: string; readonly version?: string };
+  /**
+   * R199: the schema's free-format `config` block, carrying the run's `validity` verbatim. The
+   * schema describes MUTANTS, not the run, so a narrowed run's page renders like a full one (R178
+   * stated that rather than fixing it). The first real consumer (the DO 29 run, 2026-09-02) hit
+   * it within minutes of the run finishing and hand-wrote a scope banner. The viewer does not
+   * render `config`, but anything that reads the artifact can, and the `losses` list on stdout
+   * is gone the moment the process exits while this travels with the file.
+   */
+  readonly config: {
+    readonly lethal: {
+      readonly reportSchemaVersion: number;
+      readonly validity: SessionReport["validity"];
+      readonly counts: SessionReport["counts"];
+      readonly mutationScore: SessionReport["mutationScore"];
+    };
+  };
 }
 
 export interface ElementsProjection {
@@ -159,8 +179,12 @@ export function lossesFor(report: SessionReport): string[] {
     );
   }
   losses.push(
-    "the run's validity caveats, reliability and scope narrowing are not represented: the schema " +
-      "describes MUTANTS, not the run that produced them, so a narrowed run renders like a full one.",
+    "the run's validity caveats, reliability and scope narrowing are NOT RENDERED: the schema " +
+      "describes MUTANTS, not the run that produced them, so a narrowed run's page looks like a " +
+      "full project's. They travel with the file in `config.lethal.validity` (R199) for any " +
+      "consumer that reads the artifact rather than the page; a reader of the page still needs " +
+      "telling, and the score it shows 'of total' counts no-coverage against the suite where " +
+      "LethAL's does not.",
   );
   return losses;
 }
@@ -269,7 +293,23 @@ export async function toMutationElements(
   }
 
   return {
-    report: { schemaVersion: "1", thresholds: opts.thresholds, files },
+    report: {
+      schemaVersion: "1",
+      thresholds: opts.thresholds,
+      files,
+      framework: {
+        name: "LethAL",
+        ...(opts.version !== undefined ? { version: opts.version } : {}),
+      },
+      config: {
+        lethal: {
+          reportSchemaVersion: report.schemaVersion,
+          validity: report.validity,
+          counts: report.counts,
+          mutationScore: report.mutationScore,
+        },
+      },
+    },
     losses: lossesFor(report),
   };
 }

@@ -115,6 +115,28 @@ describe("R178: the projection validates against the published schema", () => {
     expect(violations(SCHEMA as Node, out)).toEqual([]);
   });
 
+  test("R199: the run's validity travels in the schema's config block, and the framework is named", async () => {
+    // The first real consumer hand-wrote a scope banner because the page for a narrowed run looks
+    // like a full project's. The viewer still renders nothing from `config`, but the artifact now
+    // carries what the stdout `losses` line said, for anything that reads the file.
+    const r = report([mutant({ mutantCode: "M0001", verdict: "survived" } as never)]);
+    const { report: out, losses } = await toMutationElements(r, { ...OPTS, version: "0.1.0-test" });
+    expect(violations(SCHEMA as Node, out)).toEqual([]);
+    expect(out.framework).toEqual({ name: "LethAL", version: "0.1.0-test" });
+    expect(out.config.lethal.validity).toEqual(r.validity);
+    expect(out.config.lethal.counts).toEqual(r.counts);
+    expect(out.config.lethal.mutationScore).toBe(r.mutationScore);
+    expect(out.config.lethal.reportSchemaVersion).toBe(r.schemaVersion);
+    // The loss is still declared: carrying the facts in `config` is not rendering them.
+    expect(
+      losses.some((l) => l.includes("NOT RENDERED") && l.includes("config.lethal.validity")),
+    ).toBe(true);
+    // Without a version the framework block still validates (version is optional in the schema).
+    const { report: noVersion } = await toMutationElements(r, OPTS);
+    expect(noVersion.framework).toEqual({ name: "LethAL" });
+    expect(violations(SCHEMA as Node, noVersion)).toEqual([]);
+  });
+
   test("an UNMAPPED verdict throws rather than landing on Pending", async () => {
     // `Pending` reads as "not yet run", so defaulting to it would report a mutant nobody scored as
     // one still in flight. A new verdict must be mapped deliberately.
