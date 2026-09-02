@@ -334,6 +334,16 @@ function assertVerdictTable(report: SessionReport): void {
  * the indirection preserved the verdicts or quietly changed WHICH mutants they belong to.
  */
 const UNVERIFIED_MOVES: readonly string[] = [
+  // R193/R197, 2026-09-02: the OTHER three gates re-recorded their baselines that day (identity
+  // ordinals for twins, covering tests tried killer-first). This gate could not run: the environment
+  // was deleted 2026-09-01. Its baseline is still the 2026-08-28 measurement and is NOT listed here
+  // because it is not a prediction, it is a measurement that may now be stale in ONE field:
+  // `killingTest`, where several tests kill one mutant and R197's last tie-break (baseline duration)
+  // decides differently on a hosted environment than on a container. sandbox-app has no identity
+  // twins (0 colliding keys, measured), so no key moves. The next live run should expect
+  // killingTest-only differences, delete the baseline, re-record, and treat a VERDICT difference as
+  // a regression.
+  //
   // CLEARED 2026-08-28, in the same commit that re-recorded the baseline, which is what the guard
   // below requires. All three were confirmed BY NAME against `itest:bcdev` run the SAME DAY, and
   // then measured here on a restored environment:

@@ -15,8 +15,12 @@
  * where more than one test kills. Every committed per-mutant baseline was re-recorded on that
  * understanding, with the proof that only `killingTest` moved.
  *
- * Deterministic by construction: the ledger is filled in scoring order, and ties fall through to
- * the qualified test name, so a resumed or repeated run over the same prior kills orders the same.
+ * Deterministic by construction, and that took one live failure to get right: the first version
+ * broke ties on baseline DURATION, and the tables gate's two-pass determinism check refused it on
+ * the spot (ten `killingTest` values differed between two consecutive runs of one invocation,
+ * because a test's duration differs between two runs of the same test). Every input here is now a
+ * function of the run's verdicts and coverage, which the gates already require to be stable, and
+ * the last tie-break is the test's name.
  */
 import type { MutantManifestEntry } from "@lethal/schemata";
 import type { TestMethodRef } from "./backend";
@@ -71,8 +75,11 @@ export function memberCountsByTest(
  *   1. tests that have already killed a mutant in the same procedure this session, most kills
  *      first (the 81% measurement above);
  *   2. then the narrowest test, by members covered at baseline, fewest first;
- *   3. then the fastest at baseline, so a wrong guess costs least;
- *   4. then the qualified name, so the order is total and repeatable.
+ *   3. then the qualified name, so the order is total and repeatable.
+ *
+ * Baseline duration is deliberately NOT a key. It was, as "fastest first, so a wrong guess costs
+ * least", and it made `killingTest` nondeterministic between two runs of the same session (see
+ * the module comment). A cost saving that costs the gates their determinism is not one.
  *
  * Returns a new array; `covering` is not modified, since it is the coverage index's own list.
  */
@@ -81,7 +88,6 @@ export function orderCoveringTests(
   m: MutantManifestEntry,
   ledger: KillLedger,
   memberCounts: ReadonlyMap<string, number>,
-  baselineDuration: ReadonlyMap<string, number>,
 ): TestMethodRef[] {
   const kills = ledger.killsByProcedure.get(procedureScopeOf(m));
   const rank = (ref: TestMethodRef) => {
@@ -89,7 +95,6 @@ export function orderCoveringTests(
     return {
       kills: kills?.get(key) ?? 0,
       members: memberCounts.get(key) ?? Number.POSITIVE_INFINITY,
-      ms: baselineDuration.get(key) ?? Number.POSITIVE_INFINITY,
       name: nameOf(ref),
     };
   };
@@ -97,10 +102,7 @@ export function orderCoveringTests(
     .map((ref) => ({ ref, r: rank(ref) }))
     .sort(
       (a, b) =>
-        b.r.kills - a.r.kills ||
-        a.r.members - b.r.members ||
-        a.r.ms - b.r.ms ||
-        a.r.name.localeCompare(b.r.name),
+        b.r.kills - a.r.kills || a.r.members - b.r.members || a.r.name.localeCompare(b.r.name),
     )
     .map((x) => x.ref);
 }

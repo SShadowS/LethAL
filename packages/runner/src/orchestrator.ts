@@ -4286,13 +4286,7 @@ async function runMutantsOnBackend(args: {
     let transportErrorRef: TestMethodRef | undefined;
     // R197: tests that already killed in this procedure first, then the narrowest, then the
     // fastest. A cost heuristic only; see test-order.ts for the measurement behind it.
-    const ordered = orderCoveringTests(
-      covering,
-      m,
-      args.killLedger,
-      args.memberCountsByTest,
-      args.baselineDuration,
-    );
+    const ordered = orderCoveringTests(covering, m, args.killLedger, args.memberCountsByTest);
     for (const ref of ordered) {
       const budget = Math.max(
         2 * (args.baselineDuration.get(testKeyOf(ref)) ?? args.fallbackTimeoutMs),

@@ -85,3 +85,41 @@ construction (see §1) and the number is what a reader wants.
 ---
 
 ## OUTCOME
+
+**PASS, on the second tables run. Every §4 refusal condition held; §2's predictions held exactly
+for keys and aggregates; and the first run refuted a claim §1 made about R197, which is recorded
+here rather than edited away.**
+
+### The refutation, first
+
+§1 called R197's order "deterministic by construction". The tables gate's own two-pass determinism
+check (R9) refused the first re-record: ten `killingTest` values differed between two consecutive
+runs of one invocation. The third sort key was baseline DURATION, and a test's duration differs
+between two runs of the same test, so where two tests both killed and covered the same members the
+run picked whichever was faster that time. The key was removed (`test-order.ts`: kills, then
+narrowness, then name; every input a function of verdicts and coverage), the unit test that had
+asserted "faster first" now asserts "name decides, never a duration", bcdev and al-runner were
+re-recorded under the fixed order (byte-identical to the committed files), and the tables gate was
+run again. That run passed both determinism passes.
+
+### The proof, per gate
+
+| gate | old entries / keys | new entries / keys | keys split | verdict changes | `killingTest` changes | gate |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| tables | 377 / 371 | 377 / 377 | **6 over 12 mutants** | **0** | 7, listed by the script | PASS, 299/63/15 |
+| bcdev | 19 / 19 | 19 / 19 | 0 | 0 | 0 | PASS, 3/12/4 |
+| al-runner | 19 / 19 | 19 / 19 | 0 | 0 | 0 | PASS, 3/16/0, on al-runner **2.10.0.0** |
+| envtool | not run | | | | | see §2; note added to `UNVERIFIED_MOVES` and CLAUDE.md |
+
+The seven tables `killingTest` moves are all kills with more than one killer: four in `Data
+Shadow` (`ShadowedBuiltinsRun` -> `SelfShadowedRun`), two in `Data Trigger Probe.OnValidate`
+(`ValidateRunsTheFieldTrigger` -> `ImplicitValidateRunsInsideTheTable`), one in `Data Swap
+Ops.PrimaryStamp` (`WeakStampAssertionMissesTheSwap` -> `LinkedPairIsStamped`). Each new killer is
+either the narrower test or a test that had already killed in that procedure, which is the order's
+rule; none is a verdict.
+
+### What else the gates found
+
+al-runner had moved to 2.10.0.0 and prints no provisioning sentence on a warm cache, so the
+R147 pin had nothing to read and the gate refused on `platformAppsDir`. Not this change's doing,
+verdicts identical, filed and fixed as [[R200]] in its own commit.

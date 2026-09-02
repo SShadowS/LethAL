@@ -498,15 +498,15 @@
   },
   {
     "key": "31c85a76e65c13426a668219969e39a8142b616aa307306f94a35e771add3abe|Data Ops|InsertWithoutTrigger|lethal.flip-boolean-literal|1",
-    "verdict": "killed",
-    "killingTest": "InsertWithoutTriggerKeepsAmount",
+    "verdict": "survived",
+    "killingTest": null,
     "coverageFiltered": false,
     "errorClass": null
   },
   {
-    "key": "31c85a76e65c13426a668219969e39a8142b616aa307306f94a35e771add3abe|Data Ops|InsertWithoutTrigger|lethal.flip-boolean-literal|1",
-    "verdict": "survived",
-    "killingTest": null,
+    "key": "31c85a76e65c13426a668219969e39a8142b616aa307306f94a35e771add3abe|Data Ops|InsertWithoutTrigger|lethal.flip-boolean-literal|1|1",
+    "verdict": "killed",
+    "killingTest": "InsertWithoutTriggerKeepsAmount",
     "coverageFiltered": false,
     "errorClass": null
   },
@@ -870,7 +870,7 @@
   {
     "key": "4b5ee16c6833a6a085ba19e0a30efe7bbcc6632028a062a2d4071fa18829c3d5|Data Shadow|SetRange|lethal.remove-assignment|1",
     "verdict": "killed",
-    "killingTest": "ShadowedBuiltinsRun",
+    "killingTest": "SelfShadowedRun",
     "coverageFiltered": false,
     "errorClass": null
   },
@@ -1199,7 +1199,7 @@
   {
     "key": "71f50c693e5fd6fa39380b8d18ffbbeb2086e5abee6dbfc094c696fc6d217f59|Data Trigger Probe|OnValidate|lethal.empty-block|1",
     "verdict": "killed",
-    "killingTest": "ValidateRunsTheFieldTrigger",
+    "killingTest": "ImplicitValidateRunsInsideTheTable",
     "coverageFiltered": false,
     "errorClass": null
   },
@@ -1365,7 +1365,7 @@
     "errorClass": null
   },
   {
-    "key": "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Data Main|OnValidate|lethal.swap-additive|1",
+    "key": "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Data Main|OnValidate|lethal.swap-additive|1|1",
     "verdict": "survived",
     "killingTest": null,
     "coverageFiltered": false,
@@ -1442,7 +1442,7 @@
     "errorClass": null
   },
   {
-    "key": "8037f4fe0779cc1f3fea01b2c23fc93c6270188c71e99326f772d656a0f32981|Data Main|OnValidate|lethal.remove-assignment|1",
+    "key": "8037f4fe0779cc1f3fea01b2c23fc93c6270188c71e99326f772d656a0f32981|Data Main|OnValidate|lethal.remove-assignment|1|1",
     "verdict": "survived",
     "killingTest": null,
     "coverageFiltered": false,
@@ -1535,7 +1535,7 @@
   {
     "key": "8583acc40cc80e309acbaf5a850f8d3a4650081a028c3ac82513d45786430b5b|Data Shadow|TestField|lethal.remove-assignment|1",
     "verdict": "killed",
-    "killingTest": "ShadowedBuiltinsRun",
+    "killingTest": "SelfShadowedRun",
     "coverageFiltered": false,
     "errorClass": null
   },
@@ -1862,7 +1862,7 @@
     "errorClass": null
   },
   {
-    "key": "b33128a504176dc0c15bc9455809ffd0e6e8894eb35f3a120fc8417d1212d82c|Data Swap Ops|NarrowStamp|lethal.remove-assignment|1",
+    "key": "b33128a504176dc0c15bc9455809ffd0e6e8894eb35f3a120fc8417d1212d82c|Data Swap Ops|NarrowStamp|lethal.remove-assignment|1|1",
     "verdict": "survived",
     "killingTest": null,
     "coverageFiltered": false,
@@ -1876,7 +1876,7 @@
     "errorClass": null
   },
   {
-    "key": "b33128a504176dc0c15bc9455809ffd0e6e8894eb35f3a120fc8417d1212d82c|Data Swap Ops|RunningTotal|lethal.remove-assignment|1",
+    "key": "b33128a504176dc0c15bc9455809ffd0e6e8894eb35f3a120fc8417d1212d82c|Data Swap Ops|RunningTotal|lethal.remove-assignment|1|1",
     "verdict": "killed",
     "killingTest": "SwapRedirectsTheAccumulatorWriteback",
     "coverageFiltered": false,
@@ -1890,7 +1890,7 @@
     "errorClass": null
   },
   {
-    "key": "b33128a504176dc0c15bc9455809ffd0e6e8894eb35f3a120fc8417d1212d82c|Data Swap Ops|StampCodes|lethal.remove-assignment|1",
+    "key": "b33128a504176dc0c15bc9455809ffd0e6e8894eb35f3a120fc8417d1212d82c|Data Swap Ops|StampCodes|lethal.remove-assignment|1|1",
     "verdict": "survived",
     "killingTest": null,
     "coverageFiltered": false,
@@ -2060,7 +2060,7 @@
   {
     "key": "c6b8a794c3ec8276bd7159fe11adfe85a18a1fad08153f4bf2893471aac0a06a|Data Shadow|SetRange|lethal.empty-block|1",
     "verdict": "killed",
-    "killingTest": "ShadowedBuiltinsRun",
+    "killingTest": "SelfShadowedRun",
     "coverageFiltered": false,
     "errorClass": null
   },
@@ -2130,7 +2130,7 @@
   {
     "key": "ccaaa68618f9dc18389747acd981847da95357575096acdea910385a2a6c02fe|Data Shadow|TestField|lethal.empty-block|1",
     "verdict": "killed",
-    "killingTest": "ShadowedBuiltinsRun",
+    "killingTest": "SelfShadowedRun",
     "coverageFiltered": false,
     "errorClass": null
   },
@@ -2221,7 +2221,7 @@
   {
     "key": "d36581a980ee091d62faf54b2a4512ee7cb1db33aea2a4f417a5edde7ef9d79f|Data Swap Ops|PrimaryStamp|lethal.empty-block|1",
     "verdict": "killed",
-    "killingTest": "WeakStampAssertionMissesTheSwap",
+    "killingTest": "LinkedPairIsStamped",
     "coverageFiltered": false,
     "errorClass": null
   },
@@ -2312,7 +2312,7 @@
   {
     "key": "dc31dd558a8cc080674ab52782adbebc8627b4014efed8025979ccc4610342d4|Data Trigger Probe|OnValidate|lethal.remove-assignment|1",
     "verdict": "killed",
-    "killingTest": "ValidateRunsTheFieldTrigger",
+    "killingTest": "ImplicitValidateRunsInsideTheTable",
     "coverageFiltered": false,
     "errorClass": null
   },
