@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**11 of 197 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**11 of 198 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -242,6 +242,7 @@ that ordering is the priority.
 - **R177** · `itest:envtool` cannot run and its published figures are inferred, so one of four gates is not evidence · [R177.md](docs/roadmap/R177.md) · done (`RESTORED 2026-08-28`) — a DK BC 28.0 environment was provisioned, the three unverified moves were…
 - **R194** · On a hosted sandbox the gateway drops idle keep-alive sockets, the next RunMutant write fails after dispatch, and a request the server provably never started is still reconciled as `unresolved` and quarantines the tier · [R194.md](docs/roadmap/R194.md) · in progress — half 1 (transport) done 2026-09-02 in `packages/runner/src/bc-fetch.ts`: every HTTPS request to…
 - **R198** · One RunMutant call runs one test method, so a survivor with 35 covering tests costs 35 round trips, and on a hosted sandbox the round trip is most of the cost: 0.46 s a call against 0.11 s for the same tests on a container · [R198.md](docs/roadmap/R198.md) · open — filed 2026-09-02 from the first DO 29 run. Not scheduled: it is a control-app protocol change…
+- **R200** · al-runner 2.10.0.0 prints NO `[provision]` sentence on a warm cache, so R147's platform-app pin had nothing to read and `itest:alrunner` refused on `platformAppsDir` again · [R200.md](docs/roadmap/R200.md) · done (`parseAlRunnerPlatformAppsDir`, basis `selected-artifact`) — 2026-09-02, same day. The pin now falls…
 
 ---
 

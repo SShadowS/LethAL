@@ -71,12 +71,23 @@ describe("parseAlRunnerPlatformAppsDir (R147)", () => {
   });
 
   test("output that never mentions one says so, rather than defaulting", () => {
+    // R200 changed one half of this: a `[bc] selected` line now DERIVES the directory (see the
+    // R200 block below), so the "never mentions one" case is an output without that line either.
     expect(
       parseAlRunnerPlatformAppsDir(
-        "[bc] selected BC 28.1.49838.50794 (C:\\x\\28.1.49838.50794)\n" +
-          "[provision] BC 28.1.49838.50794 engine artifacts already complete at C:\\x\\28.1.49838.50794.\n",
+        "[provision] BC 28.1.49838.50794 engine artifacts already complete at C:\\x\\28.1.49838.50794.\n",
       ),
     ).toEqual({ kind: "no-completion-line" });
+    // The engine line beside a `[bc] selected` line is still not read as the platform apps: the pin
+    // that results is the DERIVED one, with its own basis, never the engine directory.
+    const p = parseAlRunnerPlatformAppsDir(
+      "[bc] selected BC 28.1.49838.50794 (C:\\x\\28.1.49838.50794)\n" +
+        "[provision] BC 28.1.49838.50794 engine artifacts already complete at C:\\x\\28.1.49838.50794.\n",
+    );
+    expect(p.kind).toBe("found");
+    if (p.kind !== "found") return;
+    expect(p.basis).toBe("selected-artifact");
+    expect(p.dir).toBe(String.raw`C:\x\28.1.49838.50794\platform-apps`);
   });
 
   test("a `platform-apps` path on a line that is not the runner's own is ignored", () => {
@@ -437,5 +448,80 @@ describe("R147: the warm-cache sentence pins too, and its siblings do not", () =
       `${DOWNLOADED}\n[provision] platform apps already complete at C:\\other\\platform-apps.`,
     );
     expect(p.kind).toBe("conflicting");
+  });
+});
+
+/**
+ * R200. al-runner 2.10.0.0 prints NO provisioning sentence on a warm cache, measured 2026-09-02
+ * by invoking it exactly as the backend does. The `[bc] selected BC <build> (<artifact dir>)` line
+ * is still printed, and both earlier sentences named the platform apps at
+ * `<artifact dir>/platform-apps`, so the pin is derived from that line and verified on disk.
+ */
+describe("R200: a warm 2.10 run says nothing about provisioning, and the pin comes from `[bc] selected`", () => {
+  /** Verbatim from the 2026-09-02 invocation, path shortened. */
+  const SELECTED = String.raw`[bc] selected BC 28.1.49838.54169 (C:\x\artifacts\28.1.49838.54169)`;
+
+  test("the parser derives <artifact dir>/platform-apps with basis selected-artifact and no count", () => {
+    const p = parseAlRunnerPlatformAppsDir(
+      `[expectations] no manifest\n${SELECTED}\nal-runner - running 1 bundle(s)\n`,
+    );
+    expect(p).toEqual({
+      kind: "found",
+      dir: String.raw`C:\x\artifacts\28.1.49838.54169\platform-apps`,
+      appCount: 0,
+      basis: "selected-artifact",
+    });
+  });
+
+  test("a provisioning sentence still wins over the derivation", () => {
+    const p = parseAlRunnerPlatformAppsDir(`${SELECTED}\n${ALREADY_COMPLETE}`);
+    if (p.kind !== "found") throw new Error("expected found");
+    expect(p.basis).toBe("already-complete");
+    expect(p.dir).toBe(String.raw`C:\x\28.0.46665.53952\platform-apps`);
+  });
+
+  test("no `[bc] selected` line either: nothing to pin, as before", () => {
+    expect(parseAlRunnerPlatformAppsDir("al-runner - running 1 bundle(s)\n")).toEqual({
+      kind: "no-completion-line",
+    });
+  });
+
+  test("the backend pins the derived directory when it exists and holds apps", async () => {
+    const dir = await platformAppsDirWith(6);
+    const artifactDir = dir.slice(0, dir.length - "platform-apps".length - 1);
+    const { spawn } = spyingSpawn({
+      exitCode: 0,
+      stdout: "",
+      stderr: `[bc] selected BC 28.0.46665.53671 (${artifactDir})`,
+    });
+    const result = await (await makeBackend(spawn)).provisionOnce();
+    expect(result.platformAppsDir).toBe(dir);
+    expect(result.platformAppsRefusal).toBeUndefined();
+  });
+
+  test("the backend refuses a derived directory that is empty, naming the derivation", async () => {
+    const dir = await platformAppsDirWith(0);
+    const artifactDir = dir.slice(0, dir.length - "platform-apps".length - 1);
+    const { spawn } = spyingSpawn({
+      exitCode: 0,
+      stdout: "",
+      stderr: `[bc] selected BC 28.0.46665.53671 (${artifactDir})`,
+    });
+    const result = await (await makeBackend(spawn)).provisionOnce();
+    expect(result.platformAppsDir).toBeUndefined();
+    expect(result.platformAppsRefusal ?? "").toContain("[bc] selected");
+    expect(result.platformAppsRefusal ?? "").toContain("R200");
+  });
+
+  test("the backend refuses a derived directory that does not exist, by name", async () => {
+    const missing = join(tmpdir(), "lethal-r200-absent", "28.0.0.1");
+    const { spawn } = spyingSpawn({
+      exitCode: 0,
+      stdout: "",
+      stderr: `[bc] selected BC 28.0.0.1 (${missing})`,
+    });
+    const result = await (await makeBackend(spawn)).provisionOnce();
+    expect(result.platformAppsDir).toBeUndefined();
+    expect(result.platformAppsRefusal ?? "").toContain(missing);
   });
 });

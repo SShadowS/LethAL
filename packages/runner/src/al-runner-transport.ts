@@ -176,8 +176,14 @@ export type AlRunnerPlatformAppsParse =
        * `"already-complete"` — the runner said the directory is already complete and stated no
        * count. The caller can only require it to be non-empty. That is weaker, and it is recorded
        * here rather than hidden so the difference is visible at the call site.
+       *
+       * `"selected-artifact"` (R200) — the runner printed NO provisioning sentence at all (2.10.0.0
+       * on a warm cache), and the directory is `<artifact dir>/platform-apps` derived from its
+       * `[bc] selected BC <build> (<artifact dir>)` line, the layout both earlier sentences named
+       * verbatim. Same non-empty check as `already-complete`; the derivation is named in the
+       * refusal if the directory is not there.
        */
-      readonly basis: "downloaded" | "already-complete";
+      readonly basis: "downloaded" | "already-complete" | "selected-artifact";
     }
   | { readonly kind: "no-completion-line" }
   | { readonly kind: "conflicting"; readonly dirs: readonly string[] };
@@ -317,7 +323,23 @@ export function parseAlRunnerPlatformAppsDir(output: string): AlRunnerPlatformAp
     if (dir === undefined) continue;
     seen.set(normalisePlatformAppsPath(dir), dir);
   }
-  if (seen.size === 0) return { kind: "no-completion-line" };
+  if (seen.size === 0) {
+    // R200: al-runner 2.10.0.0 says nothing about provisioning on a warm cache. The `[bc] selected`
+    // line still names the artifact directory, and both provisioning sentences ever measured put
+    // the platform apps at `<that>/platform-apps` (2.1.2.0: `...\28.0.46665.53671\platform-apps`;
+    // 2.7.0.0: `...\28.0.46665.53952\platform-apps`), so the location is measured layout. The
+    // caller still refuses unless the directory exists and holds an `.app`.
+    const selected = /^\[bc\] selected BC [0-9]+(?:\.[0-9]+)+ \(([^)\n]+)\)[ \t\r]*$/m.exec(output);
+    const artifactDir = selected?.[1]?.trim();
+    if (artifactDir === undefined || artifactDir === "") return { kind: "no-completion-line" };
+    const sep = artifactDir.includes("\\") && !artifactDir.endsWith("/") ? "\\" : "/";
+    return {
+      kind: "found",
+      dir: `${artifactDir}${sep}platform-apps`,
+      appCount: 0,
+      basis: "selected-artifact",
+    };
+  }
   if (seen.size > 1) return { kind: "conflicting", dirs: [...seen.values()] };
   // Exactly one entry, and `Map` preserves insertion order, so this is the last spelling seen of the
   // one directory every pass agreed on.

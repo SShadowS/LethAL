@@ -424,9 +424,10 @@ export class AlRunnerBackend implements ExecutionBackend {
       return {
         platformAppsRefusal:
           "the provisioning invocation printed no completion sentence naming a platform-app " +
-          "directory (`[provision] Downloaded <N> app(s) ... to <dir>`), so there is nothing to pin " +
-          "(R147). Either the cache was already complete and the runner said nothing, or the wording " +
-          "moved. Every invocation keeps --auto-provision, as before.",
+          "directory (`[provision] Downloaded <N> app(s) ... to <dir>`, `platform apps already " +
+          "complete at <dir>`) and no `[bc] selected BC <build> (<artifact dir>)` line to derive one " +
+          "from, so there is nothing to pin (R147, R200). Either the wording moved or the runner " +
+          "selected no build. Every invocation keeps --auto-provision, as before.",
       };
     }
     if (parsed.kind === "conflicting") {
@@ -440,8 +441,12 @@ export class AlRunnerBackend implements ExecutionBackend {
         if (entry.toLowerCase().endsWith(".app")) apps++;
       }
     } catch (err) {
+      const said =
+        parsed.basis === "selected-artifact"
+          ? `al-runner printed no provisioning sentence, and the platform-app directory derived from its \`[bc] selected\` line, ${parsed.dir}, cannot be read (R200)`
+          : `al-runner said it wrote ${parsed.appCount} platform app(s) to ${parsed.dir}, but that directory cannot be read`;
       return {
-        platformAppsRefusal: `al-runner said it wrote ${parsed.appCount} platform app(s) to ${parsed.dir}, but that directory cannot be read (${err instanceof Error ? err.message : String(err)}), so it is not pinned (R147). Every invocation keeps --auto-provision, as before.`,
+        platformAppsRefusal: `${said} (${err instanceof Error ? err.message : String(err)}), so it is not pinned (R147). Every invocation keeps --auto-provision, as before.`,
       };
     }
     if (apps < parsed.appCount) {
@@ -457,6 +462,13 @@ export class AlRunnerBackend implements ExecutionBackend {
     if (parsed.basis === "already-complete" && apps === 0) {
       return {
         platformAppsRefusal: `al-runner reported the platform apps at ${parsed.dir} as already complete, but that directory holds no *.app files at all, so "complete" cannot be believed. Not pinned (R147); every invocation keeps --auto-provision, as before.`,
+      };
+    }
+    // R200: a derived directory is an inference about layout, so the same non-empty rule applies,
+    // and the refusal names the derivation rather than a sentence the runner never printed.
+    if (parsed.basis === "selected-artifact" && apps === 0) {
+      return {
+        platformAppsRefusal: `al-runner printed no provisioning sentence; the platform-app directory derived from its \`[bc] selected\` line, ${parsed.dir}, exists but holds no *.app files, so it is not pinned (R147, R200). Every invocation keeps --auto-provision, as before.`,
       };
     }
     return { platformAppsDir: parsed.dir };
