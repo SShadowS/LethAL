@@ -2,7 +2,7 @@
 #
 # Drives the probe's web service over OData from PowerShell, the topology LethAL's runner uses.
 # Every hang is bounded (T7_Hang ends itself after 45 s) so a negative result cannot wedge the
-# container. Results are appended to results.log next to this script.
+# container. Results are appended to results.log next to this script (the measured run is kept as results.measured.txt).
 
 $ErrorActionPreference = 'Stop'
 $base    = 'http://Cronus283:7048/BC/ODataV4'

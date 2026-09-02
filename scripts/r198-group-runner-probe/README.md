@@ -3,7 +3,7 @@
 Measured 2026-09-03 against **Cronus283** (BC 28, runtime 17.0), from a clean publish of this probe.
 Re-runnable: `deploy-probe.ps1 -ProjectPath <this dir> -ContainerName Cronus283 -SymbolPath
 fixtures/sandbox-data-tests/.alpackages` (the `bc-measure` skill), then `drive.ps1`. Raw output of
-the measured run is in `results.log`.
+the measured run is in `results.measured.txt` (`drive.ps1` writes `results.log`, which is gitignored).
 
 ## Why this exists
 
