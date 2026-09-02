@@ -24,7 +24,7 @@
 import type { MutantOutcome, SessionReport } from "../src/report";
 
 export interface NormalizedMutant {
-  readonly key: string; // astHash|codeunitName|operatorName|operatorMajor
+  readonly key: string; // astHash|codeunitName|procedureName|operatorName|operatorMajor[|ordinal]
   readonly verdict: string;
   readonly killingTest: string | null;
   readonly coverageFiltered: boolean;
@@ -32,10 +32,14 @@ export interface NormalizedMutant {
 }
 
 function keyOf(m: MutantOutcome): string {
-  // `procedureName` joined the identity in R166 — see `IdentityKey` (selection.ts) for the
-  // measurement and for why it is a procedure NAME rather than a within-key ordinal.
+  // `procedureName` joined the identity in R166; R193 added `identityOrdinal`, this mutant's
+  // position among byte-identical twins in SOURCE order (not report order, which is what R166
+  // rightly refused to key on). Appended only when non-zero, so every key without a twin is
+  // unchanged and a baseline with no collisions is byte-identical across the change.
   const scope = m.procedureName || m.triggerName || "";
-  return `${m.astHash}|${m.codeunitName}|${scope}|${m.operatorName}|${m.operatorMajor}`;
+  const tuple = `${m.astHash}|${m.codeunitName}|${scope}|${m.operatorName}|${m.operatorMajor}`;
+  const ordinal = m.identityOrdinal ?? 0;
+  return ordinal > 0 ? `${tuple}|${ordinal}` : tuple;
 }
 
 /**

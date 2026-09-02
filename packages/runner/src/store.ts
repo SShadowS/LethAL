@@ -40,6 +40,8 @@ export interface MutantRow {
   readonly procedureName: string;
   readonly operatorName: string;
   readonly operatorMajor: number;
+  /** R193: position among identity twins in source order; 0 (or absent) for a singleton. */
+  readonly identityOrdinal?: number;
   readonly file: string;
   readonly line: number;
   readonly verdict: MutantVerdict;
@@ -120,6 +122,9 @@ export interface MutantVerdictRow {
   readonly procedureName: string | null;
   readonly operatorName: string;
   readonly operatorMajor: number;
+  /** R193 — see `MutantRow.identityOrdinal`. A pre-R193 row reads back 0: its twins, if it had
+   *  any, then still collide on resume and are re-run, which is the cheap direction. */
+  readonly identityOrdinal: number;
   readonly verdict: MutantVerdict;
   readonly killingTest?: string;
   readonly failureNote?: string;
@@ -203,7 +208,8 @@ CREATE TABLE IF NOT EXISTS mutants (
   runner TEXT,
   covering_tests TEXT,
   coverage_attribution TEXT,
-  unplaceable INTEGER
+  unplaceable INTEGER,
+  identity_ordinal INTEGER
 );
 -- idx_mutants_identity is created by migrate(), NOT here. It covers procedure_name, which R166
 -- added by ALTER, and SCHEMA runs BEFORE migrate() -- so naming that column here throws
@@ -313,7 +319,13 @@ export class ResultsStore {
     }
     // R192: the coverage facts behind a verdict (see `MutantRow.coveringTests`). NULL on every
     // pre-R192 row, which `--resume` reads as "this batch cannot be skipped", never as "no test".
-    for (const col of ["covering_tests TEXT", "coverage_attribution TEXT", "unplaceable INTEGER"]) {
+    for (const col of [
+      "covering_tests TEXT",
+      "coverage_attribution TEXT",
+      "unplaceable INTEGER",
+      // R193: the sixth identity component. NULL on a pre-R193 row, read back as 0.
+      "identity_ordinal INTEGER",
+    ]) {
       const name = col.split(" ")[0] ?? "";
       if (!cols.some((c) => c.name === name)) {
         this.db.exec(`ALTER TABLE mutants ADD COLUMN ${col}`);
@@ -480,7 +492,7 @@ export class ResultsStore {
       .query(
         "SELECT ast_hash, codeunit_name, procedure_name, operator_name, operator_major, verdict, " +
           "killing_test, failure_note, killing_test_failure, duration_ms, runner, " +
-          "covering_tests, coverage_attribution, unplaceable " +
+          "covering_tests, coverage_attribution, unplaceable, identity_ordinal " +
           "FROM mutants WHERE run_id = ?",
       )
       .all(runId) as Array<{
@@ -498,8 +510,10 @@ export class ResultsStore {
       covering_tests: string | null;
       coverage_attribution: string | null;
       unplaceable: number | null;
+      identity_ordinal: number | null;
     }>;
     return rows.map((r) => ({
+      identityOrdinal: r.identity_ordinal ?? 0,
       ...(r.covering_tests !== null
         ? { coveringTests: this.parseCoveringTests(r.covering_tests, r) }
         : {}),
@@ -564,8 +578,8 @@ export class ResultsStore {
         `INSERT INTO mutants (run_id, mutant_code, ast_hash, codeunit_name, procedure_name,
          operator_name, operator_major, file, line, verdict, killing_test, failure_note,
          killing_test_failure, duration_ms, batch_index, runner,
-         covering_tests, coverage_attribution, unplaceable)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+         covering_tests, coverage_attribution, unplaceable, identity_ordinal)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
       )
       .get(
         runId,
@@ -587,6 +601,7 @@ export class ResultsStore {
         row.coveringTests !== undefined ? JSON.stringify(row.coveringTests) : null,
         row.coverageAttribution ?? null,
         row.unplaceable === undefined ? null : row.unplaceable ? 1 : 0,
+        row.identityOrdinal ?? 0,
       ) as { id: number };
     return r.id;
   }
@@ -666,7 +681,7 @@ export class ResultsStore {
     if (!run) return new Set();
     const rows = this.db
       .query(
-        "SELECT ast_hash, codeunit_name, procedure_name, operator_name, operator_major FROM mutants " +
+        "SELECT ast_hash, codeunit_name, procedure_name, operator_name, operator_major, identity_ordinal FROM mutants " +
           "WHERE run_id = ? AND verdict IN ('survived', 'known-survivor')",
       )
       .all(run.id) as Array<{
@@ -675,6 +690,7 @@ export class ResultsStore {
       procedure_name: string | null;
       operator_name: string;
       operator_major: number;
+      identity_ordinal: number | null;
     }>;
     // A row written before R166 added the column has `procedure_name = null`. It is DROPPED rather
     // than keyed with an empty procedure: an empty name is a real value (object-level mutants use
@@ -690,6 +706,7 @@ export class ResultsStore {
             procedureName: r.procedure_name ?? "",
             operatorName: r.operator_name,
             operatorMajor: r.operator_major,
+            ordinal: r.identity_ordinal ?? 0,
           } satisfies IdentityKey),
         ),
     );

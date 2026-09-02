@@ -21,8 +21,10 @@ import {
   STRANDED_NOTE_PREFIX,
   batchCarriesEntirely,
   buildResumeIndex,
+  carriedVerdictFor,
   isStrandedNote,
   sessionFingerprint,
+  wasStranded,
 } from "../src/resume";
 import type { SessionFingerprintInput } from "../src/resume";
 import { ResultsStore } from "../src/store";
@@ -229,6 +231,7 @@ function row(over: Partial<MutantVerdictRow> = {}): MutantVerdictRow {
     procedureName: "Post",
     operatorName: "lethal.negate-conditional",
     operatorMajor: 1,
+    identityOrdinal: 0,
     verdict: "survived",
     durationMs: 42,
     ...over,
@@ -321,6 +324,28 @@ describe("buildResumeIndex (R47)", () => {
       row({ astHash: "h2", verdict: "known-survivor" }),
     ]);
     expect(index.carryable.size).toBe(2);
+  });
+
+  test("R193: twins with ordinals are two keys, carried separately, and a strand excludes only its own", () => {
+    // Before R193 these two rows were ONE colliding key: neither verdict carried, and a strand on
+    // either excluded both. Measured on one real run: 15 colliding keys re-executed on every
+    // resume, 12 mutants excluded from 3 strands.
+    const index = buildResumeIndex([
+      row({ verdict: "killed", killingTest: "T1", identityOrdinal: 0 }),
+      row({
+        verdict: "error",
+        failureNote: `${STRANDED_NOTE_PREFIX} the second twin hung`,
+        identityOrdinal: 1,
+      }),
+    ]);
+    expect(index.ambiguousKeys).toBe(0);
+    expect(index.carryable.size).toBe(1);
+    const first = manifestEntry("hash-a");
+    const second = { ...manifestEntry("hash-a"), mutantId: "M-second", identityOrdinal: 1 };
+    expect(carriedVerdictFor(index, first)?.verdict).toBe("killed");
+    expect(carriedVerdictFor(index, second)).toBeUndefined();
+    expect(wasStranded(index, first)).toBe(false);
+    expect(wasStranded(index, second)).toBe(true);
   });
 
   test("drops a colliding identity key rather than guessing which verdict was whose", () => {
@@ -605,6 +630,7 @@ describe("ResultsStore resume queries (R47)", () => {
         procedureName: "Post",
         operatorName: "op",
         operatorMajor: 2,
+        identityOrdinal: 0,
         verdict: "killed",
         killingTest: "T",
         durationMs: 77,

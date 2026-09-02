@@ -109,6 +109,13 @@ import {
 } from "./stale-test-app";
 import type { ResultsStore } from "./store";
 import type { MutantVerdict, RunnerKind } from "./store";
+import {
+  type KillLedger,
+  memberCountsByTest,
+  newKillLedger,
+  orderCoveringTests,
+  recordKill,
+} from "./test-order";
 import { describeTestPageUnsupported } from "./testpage-unsupported";
 
 const BASELINE_TIMEOUT_DEFAULT = 120_000;
@@ -2789,6 +2796,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         workerBackends.push(worker);
       }
     }
+    // R197: one ledger for the whole session, so a kill in batch 0 orders batch 1's tests too.
+    const killLedger = newKillLedger();
     for (const [batchIdx, batchFiles] of artifacts.entries()) {
       // Layer 5C-B1 (design §6): a lease lost during THIS batch invalidates exactly THIS batch's
       // verdicts at session end — earlier batches stand, every RunMutant in them having been
@@ -3346,6 +3355,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       let uncovered: readonly MutantManifestEntry[] = [];
       // R192: which of `uncovered` R175 flagged unplaceable, persisted with each `no-coverage` row.
       let unplaceableIds: ReadonlySet<string> = new Set();
+      // R197: how narrow each test is, for the covering-test order. Empty under "none", where
+      // there is no attribution to be narrow about and the order falls through to duration.
+      let memberCounts: ReadonlyMap<string, number> = new Map();
       if (caps.coverage === "none") {
         perMutantTests = new Map(execute.map((m) => [m.mutantId, greenTests.map((b) => b.ref)]));
       } else {
@@ -3369,6 +3381,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         coverageAttribution = split.attribution;
         uncovered = split.uncovered;
         unplaceableIds = split.unplaceable;
+        memberCounts = memberCountsByTest(index.byMember);
         // coverage-split: accumulated per batch AT SPLIT TIME, and folded into
         // `SessionReport.untargetedTriggerCount` by report-fold.ts rather than a session-level
         // accumulator here — see events.ts's doc comment on why this is the strongest single
@@ -3573,6 +3586,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           nowIso,
           attestation,
           emit,
+          killLedger,
+          memberCountsByTest: memberCounts,
         });
       } else {
         const shards = shardEvenly(toExecute, workers);
@@ -3669,6 +3684,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
               nowIso,
               attestation,
               emit,
+              killLedger,
+              memberCountsByTest: memberCounts,
             });
           }),
         );
@@ -4188,6 +4205,10 @@ async function runMutantsOnBackend(args: {
    */
   readonly leaseSession?: LeaseSession | undefined;
   readonly emit: RunEmitter;
+  /** R197: kills seen so far this session, shared across batches and shards. */
+  readonly killLedger: KillLedger;
+  /** R197: members covered per test at THIS batch's baseline; empty under coverage "none". */
+  readonly memberCountsByTest: ReadonlyMap<string, number>;
 }): Promise<void> {
   const leaseSession = args.leaseSession;
   const resyncOpSeq =
@@ -4263,7 +4284,16 @@ async function runMutantsOnBackend(args: {
       failureMessage: string | undefined;
     }> = [];
     let transportErrorRef: TestMethodRef | undefined;
-    for (const ref of covering) {
+    // R197: tests that already killed in this procedure first, then the narrowest, then the
+    // fastest. A cost heuristic only; see test-order.ts for the measurement behind it.
+    const ordered = orderCoveringTests(
+      covering,
+      m,
+      args.killLedger,
+      args.memberCountsByTest,
+      args.baselineDuration,
+    );
+    for (const ref of ordered) {
       const budget = Math.max(
         2 * (args.baselineDuration.get(testKeyOf(ref)) ?? args.fallbackTimeoutMs),
         args.minMutantBudgetMs,
@@ -4413,6 +4443,7 @@ async function runMutantsOnBackend(args: {
         verdict = "timeout-killed";
         killingTest = ref.method;
         killingTestFailure = v.failureMessage;
+        recordKill(args.killLedger, m, ref);
         break;
       }
       if (v.outcome === "error") {
@@ -4514,6 +4545,7 @@ async function runMutantsOnBackend(args: {
         } else if (confirm.outcome === "pass") {
           verdict = "killed";
           killingTest = ref.method;
+          recordKill(args.killLedger, m, ref);
           // R86: `v`, the MUTATED run that failed — not `confirm`, which just passed. See the
           // `killingTestFailure` declaration above for why the distinction is the whole point.
           killingTestFailure = v.failureMessage;
@@ -5164,6 +5196,7 @@ export function record(
     procedureName: key.procedureName,
     operatorName: key.operatorName,
     operatorMajor: key.operatorMajor,
+    identityOrdinal: key.ordinal,
     file: m.file,
     line: m.startLine,
     verdict,

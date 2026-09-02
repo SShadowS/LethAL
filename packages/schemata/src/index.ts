@@ -27,6 +27,8 @@ export {
   CONTROL_UPGRADE_FILENAME,
   MAX_MUTATION_TEXT,
   clipMutationText,
+  identityTupleOf,
+  assignIdentityOrdinals,
 } from "./project";
 export type {
   InstrumentedFile,

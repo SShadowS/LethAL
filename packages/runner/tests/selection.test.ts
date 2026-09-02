@@ -37,7 +37,21 @@ describe("identityKeyOf", () => {
       procedureName: "Post",
       operatorName: "conditional-boundary",
       operatorMajor: 2,
+      ordinal: 0,
     });
+  });
+
+  test("R193: the ordinal is the sixth component, and a singleton's key is unchanged from before", () => {
+    // A manifest written before R193 has no `identityOrdinal`: it reads as 0 and serialises to
+    // the five-part key every committed baseline without collisions already holds.
+    const singleton = serializeKey(identityKeyOf(entry()));
+    expect(singleton).toBe("abc123|Sample|Post|conditional-boundary|1");
+    expect(serializeKey(identityKeyOf(entry({ identityOrdinal: 0 })))).toBe(singleton);
+    // A twin carries its position, so two byte-identical statements in one procedure no longer
+    // share a key.
+    const twin = serializeKey(identityKeyOf(entry({ mutantId: "M0002", identityOrdinal: 1 })));
+    expect(twin).toBe(`${singleton}|1`);
+    expect(twin).not.toBe(singleton);
   });
 });
 

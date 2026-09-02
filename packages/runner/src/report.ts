@@ -1335,6 +1335,13 @@ export interface MutantOutcome {
   readonly astHash: string;
   readonly codeunitName: string;
   readonly operatorMajor: number;
+  /**
+   * R193: the sixth identity component, this mutant's position among its twins in source order
+   * (`MutantManifestEntry.identityOrdinal`). Present only when non-zero, so a report of a project
+   * with no twins is byte-identical to one written before R193, and the JSON schema gained an
+   * optional field rather than a bump.
+   */
+  readonly identityOrdinal?: number;
 }
 
 /**
@@ -1680,6 +1687,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
       astHash: identity.astHash,
       codeunitName: identity.codeunitName,
       operatorMajor: identity.operatorMajor,
+      ...(identity.ordinal > 0 ? { identityOrdinal: identity.ordinal } : {}),
       // R69 Phase 2 Task 5: the one place an absent input `runner` is read as "fenced" — see
       // `MutantOutcome.runner`.
       runner: o.runner ?? "fenced",
@@ -1873,6 +1881,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
           procedureName: m.procedureName ?? m.triggerName ?? "",
           operatorName: m.operatorName,
           operatorMajor: m.operatorMajor,
+          ordinal: m.identityOrdinal ?? 0,
         }),
         verdict: m.verdict,
       })),

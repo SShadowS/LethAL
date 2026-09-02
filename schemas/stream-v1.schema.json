@@ -702,6 +702,9 @@
             "triggerName": {
               "type": "string"
             },
+            "identityOrdinal": {
+              "type": "number"
+            },
             "originalText": {
               "type": "string"
             },
@@ -869,6 +872,9 @@
             "triggerName": {
               "type": "string"
             },
+            "identityOrdinal": {
+              "type": "number"
+            },
             "originalText": {
               "type": "string"
             },
@@ -1014,6 +1020,9 @@
             },
             "triggerName": {
               "type": "string"
+            },
+            "identityOrdinal": {
+              "type": "number"
             },
             "originalText": {
               "type": "string"

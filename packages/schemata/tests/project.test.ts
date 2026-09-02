@@ -8,7 +8,9 @@ import {
   CONTROL_REGISTER_FILENAME,
   CONTROL_SELECTOR_FILENAME,
   CONTROL_UPGRADE_FILENAME,
+  assignIdentityOrdinals,
   attributeHeader,
+  identityTupleOf,
   scanDeclaredObjects,
   stripAlComments,
   writeInstrumentedProject,
@@ -1165,5 +1167,73 @@ page 51053 "Not Injectable"
       const justBeforeSecondHeader = attributeHeader(headers, fakeSpecAt(99), "test.al");
       expect(justBeforeSecondHeader.id).toBe(1);
     });
+  });
+});
+
+/**
+ * R193. The ordinal is the sixth identity component, and it is taken from SOURCE order so that a
+ * run's report order (which R166 rightly refused to key on) cannot move it.
+ */
+describe("assignIdentityOrdinals (R193)", () => {
+  const base = {
+    file: "src/A.Codeunit.al",
+    endIndex: 0,
+    startLine: 1,
+    operatorName: "lethal.flip-boolean-literal",
+    operatorVersion: "1.0.0",
+    astHash: "same",
+    objectType: "codeunit",
+    codeunitId: 1,
+    codeunitName: "A",
+    procedureName: "P",
+    originalText: "true",
+    mutatedText: "false",
+  };
+  const at = (mutantId: string, startIndex: number, over: Record<string, unknown> = {}) =>
+    ({ ...base, mutantId, startIndex, ...over }) as Parameters<
+      typeof assignIdentityOrdinals
+    >[0][number];
+
+  it("numbers twins in source order and leaves a singleton at 0", () => {
+    const out = assignIdentityOrdinals([
+      at("M0002", 200),
+      at("M0001", 100),
+      at("M0003", 300, { astHash: "other" }),
+    ]);
+    const byId = new Map(out.map((m) => [m.mutantId, m.identityOrdinal]));
+    expect(byId.get("M0001")).toBe(0);
+    expect(byId.get("M0002")).toBe(1);
+    expect(byId.get("M0003")).toBe(0); // no twin: the key is unchanged from before R193
+  });
+
+  it("is independent of input order, because it is source order", () => {
+    const a = assignIdentityOrdinals([at("M0001", 100), at("M0002", 200)]);
+    const b = assignIdentityOrdinals([at("M0002", 200), at("M0001", 100)]);
+    const pick = (xs: typeof a) => new Map(xs.map((m) => [m.mutantId, m.identityOrdinal]));
+    expect(pick(a)).toEqual(pick(b));
+    // And the returned array keeps the caller's order: it numbers, it does not sort.
+    expect(b.map((m) => m.mutantId)).toEqual(["M0002", "M0001"]);
+  });
+
+  it("scopes twins to their procedure, operator and object, never across them", () => {
+    const out = assignIdentityOrdinals([
+      at("M0001", 100),
+      at("M0002", 200, { procedureName: "Q" }),
+      at("M0003", 300, { operatorName: "lethal.remove-not" }),
+      at("M0004", 400, { codeunitName: "B" }),
+      at("M0005", 500),
+    ]);
+    const byId = new Map(out.map((m) => [m.mutantId, m.identityOrdinal]));
+    expect([...byId.values()]).toEqual([0, 0, 0, 0, 1]);
+  });
+
+  it("a trigger mutant's scope is its trigger name, as identityKeyOf reads it", () => {
+    const out = assignIdentityOrdinals([
+      at("M0001", 100, { procedureName: "", triggerName: "OnInsert" }),
+      at("M0002", 200, { procedureName: "", triggerName: "OnInsert" }),
+      at("M0003", 300, { procedureName: "", triggerName: "OnModify" }),
+    ]);
+    expect(out.map((m) => m.identityOrdinal)).toEqual([0, 1, 0]);
+    expect(identityTupleOf(out[0] as never)).toContain("|OnInsert|");
   });
 });

@@ -392,6 +392,9 @@
           },
           "operatorMajor": {
             "type": "number"
+          },
+          "identityOrdinal": {
+            "type": "number"
           }
         }
       }

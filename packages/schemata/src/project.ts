@@ -46,6 +46,52 @@ export interface WriteInput {
   readonly operatorTiers: ReadonlyMap<string, 1 | 2 | 3 | "custom">;
 }
 
+/**
+ * R193: the five-part semantic identity every consumer keys on, as one string, WITHOUT the
+ * ordinal. `identityKeyOf` (runner, selection.ts) builds the same tuple and adds the ordinal; this
+ * lives here so `assignIdentityOrdinals` and that function cannot drift onto two tuples.
+ */
+export function identityTupleOf(
+  m: Pick<
+    MutantManifestEntry,
+    | "astHash"
+    | "codeunitName"
+    | "procedureName"
+    | "triggerName"
+    | "operatorName"
+    | "operatorVersion"
+  >,
+): string {
+  const scope = m.procedureName || m.triggerName || "";
+  const major = Number(m.operatorVersion.split(".")[0] ?? "0");
+  return `${m.astHash}|${m.codeunitName}|${scope}|${m.operatorName}|${major}`;
+}
+
+/**
+ * R193: number each mutant among its identity twins in SOURCE order (file, then start offset,
+ * then mutant id as the last resort). Returns new entries; a mutant with no twin gets 0, so a
+ * manifest with no collisions is unchanged apart from the field being present.
+ */
+export function assignIdentityOrdinals(
+  entries: readonly MutantManifestEntry[],
+): MutantManifestEntry[] {
+  const order = [...entries].sort(
+    (a, b) =>
+      a.file.localeCompare(b.file) ||
+      a.startIndex - b.startIndex ||
+      a.mutantId.localeCompare(b.mutantId),
+  );
+  const next = new Map<string, number>();
+  const ordinalOf = new Map<MutantManifestEntry, number>();
+  for (const e of order) {
+    const tuple = identityTupleOf(e);
+    const n = next.get(tuple) ?? 0;
+    ordinalOf.set(e, n);
+    next.set(tuple, n + 1);
+  }
+  return entries.map((e) => ({ ...e, identityOrdinal: ordinalOf.get(e) ?? 0 }));
+}
+
 export interface MutantManifestEntry {
   readonly mutantId: string;
   readonly file: string;
@@ -86,6 +132,22 @@ export interface MutantManifestEntry {
    */
   readonly procedureScope?: "local" | "public";
   readonly triggerName?: string;
+  /**
+   * R193: this mutant's position, in SOURCE order, among the mutants of this artifact that share
+   * its semantic identity tuple (`identityTupleOf`): 0 for the first or only one, 1 for the next
+   * byte-identical shape in the same procedure under the same operator, and so on. Every `true`
+   * literal in a procedure hashes the same, so without this every `flip-boolean-literal` there
+   * shared one identity key: `--resume` re-executed all of them as a colliding key on every
+   * resume (15 keys on one real run), and a stranded mutant's key excluded every twin it had (12
+   * stranded from 3 events). Assigned by `assignIdentityOrdinals` over the whole manifest.
+   *
+   * SOURCE order, never report order: R166 rejected an ordinal on the ground that report order is
+   * not stable, and it is not; source order is, for an unchanged file. Inserting a twin ABOVE
+   * another shifts the ordinals below it, which is the same edit that moves their lines and is
+   * the honest answer, an edited procedure re-measures. Absent on a manifest written before
+   * R193, which readers treat as 0.
+   */
+  readonly identityOrdinal?: number;
   /**
    * The source text this mutant REPLACED, and what it replaced it with — the mutation itself,
    * stated rather than implied.
@@ -378,7 +440,7 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
   for (const f of input.files) specsByFile.set(f.path, dedupeSpecs(f.specs, tierOf));
   const idedByFile = assignMutantIds(specsByFile);
 
-  const manifest: MutantManifestEntry[] = [];
+  const unnumbered: MutantManifestEntry[] = [];
   for (const f of input.files) {
     const ided = idedByFile.get(f.path) ?? [];
     const deduped = specsByFile.get(f.path) ?? [];
@@ -397,7 +459,7 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
       // correct per-mutant (objectType, objectId) coverage-lookup keys.
       const header = attributeHeader(headers, spec, f.path);
       const procedureScope = procedureScopeOf(spec);
-      manifest.push({
+      unnumbered.push({
         mutantId,
         file: f.path,
         startIndex: spec.before.startIndex,
@@ -420,6 +482,11 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
       });
     }
   }
+
+  // R193: identity ordinals are assigned over the WHOLE manifest, after every file's entries exist,
+  // because a twin pair sits in one procedure and therefore one file, but numbering per file
+  // would still be a second implementation of the same rule.
+  const manifest = assignIdentityOrdinals(unnumbered);
 
   // The delegating selector (Active -> LC Control State.IsActive) and the register-install
   // codeunit (registers targetAppId -> artifactId on install). The in-target Mutation Active

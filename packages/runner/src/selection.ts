@@ -1,4 +1,4 @@
-import type { MutantManifestEntry } from "@lethal/schemata";
+import { type MutantManifestEntry, identityTupleOf } from "@lethal/schemata";
 import type { CoverageMap, TestMethodRef } from "./backend";
 import type { Interpretation } from "./interpretation";
 
@@ -14,17 +14,23 @@ export interface IdentityKey {
    * `fixtures/sandbox-data`: 26 groups shared a key covering 89 of 280 specs, and six of those
    * groups held mutants with DIFFERING verdicts. Adding this takes it to 2 groups over 4 specs.
    *
-   * It has to be a stable SEMANTIC property rather than a within-key ordinal. An ordinal would
-   * separate the same number of mutants and reintroduce report-order sensitivity, which is exactly
-   * what `diffMutants`'s multiset comparison exists to avoid; a procedure name does not move when
-   * the report order does.
-   *
-   * The two groups that remain are honest: two identical statements inside ONE procedure, or two
-   * field `OnValidate` triggers of one table, genuinely cannot be told apart at this grain.
+   * R166 rejected a within-key ORDINAL here because an ordinal taken from REPORT order would
+   * move whenever the report order did, which `diffMutants`'s multiset comparison exists to avoid.
+   * That objection does not apply to `ordinal` below, which is taken from SOURCE order, and R193
+   * measured what the remaining collisions cost on real code: 15 colliding keys re-executed on
+   * every `--resume`, and 12 mutants excluded as stranded from 3 events.
    */
   readonly procedureName: string;
   readonly operatorName: string;
   readonly operatorMajor: number;
+  /**
+   * R193: this mutant's position among its twins in SOURCE order (`MutantManifestEntry.
+   * identityOrdinal`), 0 for the first or only one. Two byte-identical statements inside ONE
+   * procedure under one operator differ by nothing else. `serializeKey` appends it only when it is
+   * non-zero, so a key with no twin reads exactly as it did before R193 and every committed
+   * baseline without collisions is byte-identical.
+   */
+  readonly ordinal: number;
 }
 
 export function identityKeyOf(m: MutantManifestEntry): IdentityKey {
@@ -37,11 +43,23 @@ export function identityKeyOf(m: MutantManifestEntry): IdentityKey {
     procedureName: m.procedureName || m.triggerName || "",
     operatorName: m.operatorName,
     operatorMajor: Number(m.operatorVersion.split(".")[0] ?? "0"),
+    ordinal: m.identityOrdinal ?? 0,
   };
 }
 
+/**
+ * The five-part tuple is `identityTupleOf` (schemata), the ONE definition; the ordinal rides as a
+ * sixth part only when non-zero, so a singleton's key is unchanged from before R193.
+ */
 export function serializeKey(k: IdentityKey): string {
-  return `${k.astHash}|${k.codeunitName}|${k.procedureName}|${k.operatorName}|${k.operatorMajor}`;
+  const tuple = identityTupleOf({
+    astHash: k.astHash,
+    codeunitName: k.codeunitName,
+    procedureName: k.procedureName,
+    operatorName: k.operatorName,
+    operatorVersion: `${k.operatorMajor}.0.0`,
+  });
+  return k.ordinal > 0 ? `${tuple}|${k.ordinal}` : tuple;
 }
 
 export interface HistorySplit {

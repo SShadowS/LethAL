@@ -152,6 +152,7 @@ export function buildResumeIndex(
       procedureName: r.procedureName,
       operatorName: r.operatorName,
       operatorMajor: r.operatorMajor,
+      ordinal: r.identityOrdinal,
     });
     const bucket = seen.get(key);
     if (bucket === undefined) seen.set(key, [r]);
