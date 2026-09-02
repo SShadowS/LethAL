@@ -1396,3 +1396,46 @@ whether it holds for composite primary keys or for inserts made through an indir
 `Codeunit.Run`. Only the single-`Code[20]`-key, same-procedure-loop shape arm K actually uses was
 measured. Full round-by-round investigation, including the three failed counting mechanisms, in
 `scripts/r136-armk-count-probe/README.md`.
+
+## First per-operator kill rates on REAL code, one codeunit, one PR suite (2026-09-02)
+
+The Support session's run of PR 53470 on DO 29 (four files, dominated by one 1,200-line matcher
+codeunit; 407 tests of the PR's own suite; hosted DemoPortal sandbox; 741 deployed mutants, read
+from the run's store after 660 were scored). This is the first table of its kind: every earlier
+kill-rate figure in this repository is from a fixture written to be killed. **One codeunit, one
+suite, survivors unclassified** (no reader has marked equivalents), so a low rate here is "this
+suite does not assert on what this operator changes", not "this operator is weak".
+
+| operator | killed | survived | no-coverage | kill rate |
+| --- | ---: | ---: | ---: | ---: |
+| negate-guard | 30 | 4 | 1 | 88% |
+| remove-not | 25 | 5 | 2 | 83% |
+| negate-conditional | 34 | 8 | 4 | 81% |
+| empty-block | 65 | 21 | 5 | 76% |
+| return-value | 42 | 17 | 11 | 71% |
+| remove-assignment | 66 | 32 | 6 | 67% |
+| conditional-boundary | 14 | 8 | 0 | 64% |
+| swap-call-arguments | 18 | 10 | 4 | 64% |
+| shift-integer | 10 | 7 | 3 | 59% |
+| void-method-call | 47 | 50 | 1 | 48% |
+| flip-boolean-literal | 25 | 27 | 6 | 48% |
+| swap-additive | 3 | 5 | 1 | 38% |
+| loop-truncate | 2 | 5 | 0 | 29% |
+| remove-setrange | 3 | 9 | 3 | 25% |
+| toggle-blank-string | 2 | 11 | 0 | 15% |
+| loop-skip, flip-filter-literal, swap-find-direction, swap-modify-flag | 3 | 4 | 1 | too few |
+
+Thirteen further mutants are `error`: the stranded set of [[R193]] (8 `remove-assignment`, 4
+`flip-boolean-literal`, 1 `empty-block`), from two loop-exit hangs ([[R196]]) and one socket drop
+([[R194]]).
+
+**What the table is good for.** [[R013]]'s admission rule counts marginal SITES on a reference
+corpus and says nothing about kill rates, because none had been measured on real code. This is the
+first calibration point for the other half of the question, which operators produce mutants a real
+suite tends to catch. `void-method-call`'s 50 survivors and `toggle-blank-string`'s 11 of 13 are
+where a reader-marked equivalent census ([[R172]]) would earn the most.
+
+**Cost shape from the same store.** Kills: 296 mutants, 3,068 calls, 5.3 s each on average.
+Survivors: 196 mutants, 6,895 calls, 17 s each. The killing test was first in the order tried for
+48% of kills and at position 9.4 on average ([[R197]]); a call averaged 0.46 s on the sandbox
+against 0.11 s on a container ([[R198]]).
