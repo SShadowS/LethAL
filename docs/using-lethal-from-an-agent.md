@@ -244,8 +244,11 @@ into a transcript and do not copy it into an issue.
   stays published until you republish your own app.
 - Your source tree is never modified. LethAL copies the project to a scratch directory and mutates
   the copy.
-- `--stop-hung-sessions` lets LethAL END a BC session on your server. It is off by default. Do not
-  turn it on without being asked to.
+- `--stop-hung-sessions` lets LethAL END a BC session on your server. It is off by default and needs
+  the user's yes; ask once, up front, and recommend it on a sandbox. A mutant that makes a loop
+  infinite is ordinary on real code, and without the flag each one costs the mutant budget, a
+  quarantine, and a full redeploy-and-baseline on `--resume` (measured 2026-09-02: about ten
+  minutes per hang on a hosted sandbox). With it the mutant is stopped and scored `timeout-killed`.
 - A report from a real project carries that project's source code in every mutant's `originalText`
   and `mutatedText`. Do not publish one, and run `bun scripts/redact-campaign-report.ts <report>`
   before committing one anywhere public.

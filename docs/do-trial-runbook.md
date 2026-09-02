@@ -91,11 +91,14 @@ bun packages/runner/src/cli.ts run \
   --db <run.sqlite> --out <report.json> \
   --only       "Al/Codeunit/Codeunit 6175297 CDO Send Cust. Statement Mgt.al" \
   --tests-only "Src/AutomaticDocuments/**" \
-  --max-guards-per-batch 800 \
-  --selector-id 6175469 --control-id 6175470 --table-id 6175471
+  --max-guards-per-batch 800
 ```
 
-- **selector ids** must sit inside DO's `idRanges` (6175271–6175490); 6175469–6175471 are free.
+- **selector ids** must sit inside DO's `idRanges`, and the range MOVES: it ended at 6175490 when this
+  runbook was written and ends at 6175468 on DO 29, so the 6175469–6175471 this page used to name
+  are out of range there (found 2026-09-02, first DO 29 run). Do not copy ids from a document; let
+  `lethal init --project <DO>/DocumentOutput/Cloud` read `app.json` and pick free ones, or put
+  `selectorIds` in the config. The campaign used 6175466–6175468, which are inside both ranges.
 - **`--only`** (R41) narrows mutants. Without it the artifact carries 19,832 guards and cannot be
   published at all — see below.
 - **`--tests-only`** (R45) narrows the BASELINE, which is otherwise ~78% of the run. It is the one

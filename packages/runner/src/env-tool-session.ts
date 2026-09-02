@@ -1,6 +1,6 @@
 import { mkdir, readFile, readdir, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { ActivationConfig } from "./activation";
 import type { BcDevConfigSection } from "./cli";
 import { EnvToolError, renderCommand } from "./env-tool";
@@ -104,11 +104,18 @@ export async function startEnvToolSession(args: {
   // Never deletes anything: LethAL cannot know whether another concurrent session owns a given
   // record, so this is strictly advisory.
   await warnStaleEnvRecords(stateDir, args.runId);
+  // Absolute, always. The tool runs with `cwd` defaulting to the project dir (env-tool.ts), so a
+  // relative `--project Cloud` handed through `{projectDir}` reaches it as `Cloud` and resolves to
+  // `Cloud/Cloud`. Measured 2026-09-02 on a hosted run: `deps download {envId} {projectDir}` failed
+  // with "No app.json found at ...\Cloud\Cloud" until the caller passed absolute paths by hand.
+  // The placeholder is a PATH, so it is resolved here, once, against the process cwd the caller's
+  // relative path was written for.
+  const projectDir = resolve(args.projectDir);
   const supplied: Record<string, string> = {
-    projectDir: args.projectDir,
-    testDir: args.testDir,
+    projectDir,
+    testDir: resolve(args.testDir),
     runId: args.runId,
-    packageCache: args.bcdevRaw.packageCachePath ?? join(args.projectDir, ".alpackages"),
+    packageCache: resolve(args.bcdevRaw.packageCachePath ?? join(projectDir, ".alpackages")),
   };
 
   // 1. envId — taken, or created.

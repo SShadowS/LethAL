@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**7 of 189 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**12 of 194 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -78,6 +78,8 @@ that ordering is the priority.
 - **R187** · `do-lethal/Cloud` and `do-rel2/Cloud` are the SAME corpus, and measurements have been cross-checked against them as if they were two · [R187.md](docs/roadmap/R187.md) · done (`scripts/corpus-fingerprint.ts`) — 2026-09-01. Root cause established: two worktrees of ONE repository…
 - **R189** · A deletion in an un-braced then-branch FOLLOWED BY `else` emitted `then ; else`, which is AL0110, and one such site made a whole artifact refuse to compile · [R189.md](docs/roadmap/R189.md) · done (`packages/schemata/src/dispatch.ts`, `emptiedSlotFiller`) — found and fixed 2026-09-02 by the R175…
 - **R191** · A test that stalls AFTER BC has sent the RunMutant response headers is outside every LethAL timer: the budget, the R53 stop hook and the hard cap all end when `fetch` resolves, and the body read runs until the runtime gives up, then quarantines · [R191.md](docs/roadmap/R191.md) · open — filed 2026-09-02 from the second attempt of the R175 re-run on Cronus28. Not scheduled
+- **R193** · The identity key still collides INSIDE a procedure, and every collision costs twice: a colliding key is re-executed on every `--resume`, and a stranded mutant's key excludes every twin it has · [R193.md](docs/roadmap/R193.md) · open — filed 2026-09-02 from the first DO 29 run. Not scheduled
+- **R196** · Deletion and value operators make a loop infinite when they hit its exit flag, and unlike `negate-conditional` on `until X.Next() = 0` nothing refuses or marks the site · [R196.md](docs/roadmap/R196.md) · open — filed 2026-09-02 from the first DO 29 run. Not scheduled
 
 ## Product gaps a real project hits
 
@@ -126,6 +128,8 @@ that ordering is the priority.
 - **R180** · `empty-block` names the wrong parent for a case arm, so 291 arm bodies have no mutant at all · [R180.md](docs/roadmap/R180.md) · done (this commit) — `empty-block` now claims a case ARM's body via `case_branch`, replacing the…
 - **R188** · `excludedSites` is OPTIONAL by design, and the release that deletes its two legacy views owes ONE schema bump, not two — nothing on the roadmap records that debt · [R188.md](docs/roadmap/R188.md) · open — filed 2026-09-01. Not a defect and not scheduled; a recorded obligation, so the two views are not…
 - **R190** · A run in which EVERY mutant scored `error` exits 0, reports `null` for its score, and carries no caveat saying nothing was measured · [R190.md](docs/roadmap/R190.md) · open — filed 2026-09-02 from the run that found R189. Not scheduled
+- **R192** · `--resume` redeploys and re-baselines EVERY batch, including one whose mutants are all carried, so each resume on a hosted sandbox costs about nine minutes before a single new mutant runs · [R192.md](docs/roadmap/R192.md) · open — filed 2026-09-02 from the first DO 29 run (transcript `eddf5798`, hosted DemoPortal sandbox). Not…
+- **R195** · `lethal doctor` has no company check, so a wrong `company` surfaces as a 404 inside the control-version check, with the configured name but not the ones that exist · [R195.md](docs/roadmap/R195.md) · open — filed 2026-09-02 from the first DO 29 run. Small
 
 ## Backends and tooling
 
@@ -234,6 +238,7 @@ that ordering is the priority.
 - **R169** · LethAL's own object ids collided with a real product's, and two fixtures could not be co-installed · [R169.md](docs/roadmap/R169.md) · done (this commit) — `LethAL Control` moved 71000-71010 -> 91000-91010, and `sandbox-data`'s selector triple…
 - **R170** · The selector-id convention was already implemented and enforced; only the docs never said it · [R170.md](docs/roadmap/R170.md) · done (this commit) — and the row's original premise was WRONG. `pickSelectorIds` has implemented one rule all…
 - **R177** · `itest:envtool` cannot run and its published figures are inferred, so one of four gates is not evidence · [R177.md](docs/roadmap/R177.md) · done (`RESTORED 2026-08-28`) — a DK BC 28.0 environment was provisioned, the three unverified moves were…
+- **R194** · On a hosted sandbox the gateway drops idle keep-alive sockets, the next RunMutant write fails after dispatch, and a request the server provably never started is still reconciled as `unresolved` and quarantines the tier · [R194.md](docs/roadmap/R194.md) · open — filed 2026-09-02 from the first DO 29 run against `demoportaldev.continiaonline.com`. Not scheduled
 
 ---
 

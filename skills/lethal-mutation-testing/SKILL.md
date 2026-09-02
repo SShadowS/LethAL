@@ -18,8 +18,12 @@ Full reference: `docs/using-lethal-from-an-agent.md` in the LethAL repository.
 - **Sandbox or dev container only. Never a production tenant.** The changed build stays published
   until the user republishes their own app.
 - The user's source tree is never modified; LethAL mutates a copy in a scratch directory.
-- Do not pass `--stop-hung-sessions` unless the user asks for it. It ends a BC session on their
-  server.
+- `--stop-hung-sessions` lets LethAL end a BC session on the user's server, so it needs their yes.
+  Ask for it ONCE, up front, and recommend it on a sandbox: a mutant that turns a loop into an
+  infinite one is ordinary on real code (`remove-assignment` on a loop's exit flag did it twice in
+  one run), and without the flag each one costs the whole budget, a quarantine, and a full
+  redeploy-and-baseline on `--resume`, roughly ten minutes on a hosted sandbox. With it the same
+  mutant is stopped and scored `timeout-killed`, and the run continues.
 - A report contains the project's source code. Do not paste one into anything public.
 
 ## 1. Check the setup

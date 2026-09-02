@@ -1,7 +1,7 @@
 import { describe, expect, it, spyOn } from "bun:test";
 import { mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { EnvToolClient, EnvToolError } from "../src/env-tool";
 import type { EnvToolConfigSection } from "../src/env-tool";
 import { startEnvToolSession } from "../src/env-tool-session";
@@ -393,6 +393,54 @@ describe("startEnvToolSession", () => {
   // at the very end, so a throw anywhere in between escaped with no teardown ever attempted. A
   // `downloadSymbols` failure is the most likely first-run failure mode (a wrong/expired token, a
   // typo'd command) and exercises exactly that window.
+  it("hands {projectDir} and {testDir} to the tool as ABSOLUTE paths, whatever the caller wrote", async () => {
+    // The tool runs with cwd = project dir by default, so a relative `Cloud` would resolve to
+    // `Cloud/Cloud` inside it. Measured live (2026-09-02, hosted sandbox): `deps download` refused
+    // with exactly that doubled path until the operator passed absolute paths by hand.
+    const h = harness({});
+    const cfg = {
+      ...h.cfg,
+      downloadSymbols: { command: ["deps", "download", "{envId}", "{projectDir}", "{testDir}"] },
+    };
+    const seen: string[][] = [];
+    const client = new EnvToolClient(cfg, {
+      spawn: async (argv) => {
+        const line = argv.join(" ");
+        if (line.includes("deps download")) {
+          seen.push([...argv]);
+          return { exitCode: 0, stdout: "{}", stderr: "" };
+        }
+        if (line.includes("env status")) {
+          return { exitCode: 0, stdout: '{"status":"Running"}', stderr: "" };
+        }
+        const out = resolveOut();
+        const key = Object.keys(out).find((k) => line.includes(k));
+        return { exitCode: 0, stdout: key === undefined ? "{}" : (out[key] ?? "{}"), stderr: "" };
+      },
+    });
+    const stateDir = await mkdtemp(join(tmpdir(), "lethal-envstate-"));
+    const session = await startEnvToolSession({
+      cfg,
+      bcdevRaw: BCDEV_RAW,
+      projectDir: "Cloud",
+      testDir: "Test",
+      runId: "r-abs",
+      client,
+      makePublisher: () => ({ publishFile: async () => {} }),
+      verifyHarness: async () => {},
+      stateDir,
+    });
+    await session.teardown({ keepEnv: true, quarantined: false });
+    expect(seen).toHaveLength(1);
+    const [argv] = seen;
+    if (argv === undefined) throw new Error("unreachable");
+    // argv is [tool, "deps", "download", envId, projectDir, testDir].
+    expect(argv[4]).toBe(resolve("Cloud"));
+    expect(argv[5]).toBe(resolve("Test"));
+    expect(isAbsolute(argv[4] ?? "")).toBe(true);
+    expect(argv[4]).not.toBe("Cloud");
+  });
+
   it("a downloadSymbols failure in create-mode attempts the delete and still propagates the original error (item 1)", async () => {
     const h = harness({ envId: undefined });
     const cfg = {
