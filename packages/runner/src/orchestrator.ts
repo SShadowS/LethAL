@@ -1513,7 +1513,19 @@ function classifyLeaseVerdict(v: Pick<TestVerdict, "operation" | "leaseInvalidRe
  *   - `"unresolved"` — anything we could not establish, including a failed status read and a marker
  *     that is not ours. The conservative durable quarantine applies.
  */
-type LostAckOutcome = "completed" | "unresolved";
+type LostAckOutcome = "completed" | "not-started" | "unresolved";
+
+/**
+ * R194 (second half), rule 2c: what a `lease-invalid` answer to a retry issued after a
+ * `not-started` reconciliation turned out to be, read off the marker.
+ *   - `original-completed`: the abandoned original arrived late, ran, and tombstoned `opSeq`. Its
+ *     result went to a socket nobody holds; the container is clean.
+ *   - `original-cleared`: the original was still executing when the retry was refused; it has
+ *     since tombstoned. Same consequence.
+ *   - `original-stuck`: the original is executing and did not clear within the budget. A strand.
+ *   - `genuine`: the marker says something else, and the lease loss is real.
+ */
+type RetryRefusal = "original-completed" | "original-cleared" | "original-stuck" | "genuine";
 
 /**
  * The lost-ack reconciliation as the two `in-flight-unknown` call sites see it (design §5).
@@ -1544,6 +1556,15 @@ interface FencedRunOutcome {
   readonly lostAck: LostAckOutcome | "none";
   /** Whether a proven-clean retry was dispatched — diagnostics only. */
   readonly retried: boolean;
+  /**
+   * R194 (second half): what the FIRST attempt's lost ack reconciled to when a retry was made,
+   * and that attempt's own fence coordinates. The loops need both: a retry issued after
+   * `not-started` that answers `lease-invalid` is not classified as a lease loss until the marker
+   * has been read for the ORIGINAL attempt id (rule 2c), because the original may have arrived
+   * late. Absent when no retry was made.
+   */
+  readonly retryAfter?: LostAckOutcome;
+  readonly original?: { readonly attemptId: string; readonly opSeq: number };
 }
 
 /**
@@ -1590,21 +1611,54 @@ async function runFenced(
     code: "lost-ack-unreadable",
     message: `[lethal] ${ref.method}: unreadable answer from RunMutant (${first.failureMessage ?? "no detail"}) — reconciling against the operation marker before deciding anything`,
   });
-  if ((await reconcileFencedLostAck(leaseSession, first)) === "unresolved") {
+  const firstOutcome = await reconcileFencedLostAck(leaseSession, first);
+  if (firstOutcome === "unresolved") {
     return { verdict: first, lostAck: "unresolved", retried: false };
   }
+  // R194 (second half): the two retry-safe outcomes say DIFFERENT things and the warning must
+  // not borrow one's words for the other. `completed`: the fence ran to phase 3 and only the
+  // result was lost. `not-started`: as of the reconciling read, phase 1 had not claimed our
+  // attempt, so nothing of ours executed; the request died on the wire or was refused.
   emit({
     type: "warning",
-    code: "lost-ack-retry",
-    message: `[lethal] ${ref.method}: the operation was confirmed COMPLETE server-side, so the container is clean and only the result was lost — retrying once as a fresh attempt`,
+    code: firstOutcome === "completed" ? "lost-ack-retry" : "lost-ack-not-started",
+    message:
+      firstOutcome === "completed"
+        ? `[lethal] ${ref.method}: the operation was confirmed COMPLETE server-side, so the container is clean and only the result was lost — retrying once as a fresh attempt`
+        : `[lethal] ${ref.method}: the server's operation marker shows this attempt was never claimed (idle, last completed op is the one before ours), so nothing of ours executed — the request died on the wire or was refused. Retrying once as a fresh attempt (R194)`,
   });
-  if (resyncOpSeq !== undefined) await resyncOpSeq();
+  // The resync is a lease call on the same transport that just failed. Unguarded it would throw
+  // out of the session with no report and no quarantine record; guarded, a failed resync is what
+  // it is: unresolved, and the ordinary quarantine applies.
+  if (resyncOpSeq !== undefined) {
+    try {
+      await resyncOpSeq();
+    } catch (err) {
+      emit({
+        type: "warning",
+        code: "lost-ack-resync-failed",
+        message: `[lethal] ${ref.method}: the op-seq resync before the retry failed (${messageOf(err)}) — treating the lost ack as unresolved rather than retrying on a counter that may be wrong`,
+      });
+      return { verdict: first, lostAck: "unresolved", retried: false };
+    }
+  }
+  const original = first.fencedOp;
   const retry = await runOnce(backend, safety, ref, opts, resyncOpSeq);
-  if (!isLostAck(retry)) return { verdict: retry, lostAck: "none", retried: true };
+  const provenance = {
+    retryAfter: firstOutcome,
+    ...(original !== undefined ? { original } : {}),
+  };
+  if (!isLostAck(retry)) return { verdict: retry, lostAck: "none", retried: true, ...provenance };
+  const retryOutcome = await reconcileFencedLostAck(leaseSession, retry);
+  // A retry whose ack was ALSO lost is reconciled once and never retried again. If it too reads as
+  // never claimed, that is evidence about the transport, not about the request, and the counter
+  // the retry consumed now sits one ahead of the server's: quarantine rather than continue on a
+  // counter that would refuse the next mutant as a lease loss (review finding F3).
   return {
     verdict: retry,
-    lostAck: await reconcileFencedLostAck(leaseSession, retry),
+    lostAck: retryOutcome === "not-started" ? "unresolved" : retryOutcome,
     retried: true,
+    ...provenance,
   };
 }
 
@@ -1927,8 +1981,78 @@ class LeaseSession {
       status.opKind === "run" &&
       status.opAttemptId === op.attemptId &&
       status.opSeq === op.opSeq;
-    if (!ours) return "unresolved";
-    return (await this.pollUntilOpClears()) ? "completed" : "unresolved";
+    if (ours) return (await this.pollUntilOpClears(op.opSeq)) ? "completed" : "unresolved";
+    // R194 (second half), rule 2b. Phase 1 (`TryBeginRun`) is the only writer that claims a run,
+    // and it writes before any AL executes; every writer that clears the marker also advances
+    // `Last Completed Op Seq` to the op it cleared, except `force-reset-lease`, which mints a new
+    // generation so any retry of ours is refused by the tuple check. So an IDLE marker whose last
+    // completed op is the one before ours says: as of this read, our attempt has not been claimed.
+    // Read twice, a settling delay apart, because "not yet" is what a request still in a gateway
+    // queue looks like too; a claim that lands in between is caught as `ours` and polled.
+    const neverClaimed = (s: typeof status) =>
+      s.opKind === OP_KIND_IDLE && s.lastCompletedOpSeq === op.opSeq - 1;
+    if (!neverClaimed(status)) return "unresolved";
+    await this.d.sleep(OP_POLL_DELAY_MS);
+    let again: typeof status;
+    try {
+      again = await this.d.client.getOperationStatus(this.d.lease, op.attemptId, op.opSeq);
+    } catch (err) {
+      this.d.emit({
+        type: "warning",
+        code: "lease-reconcile-failed",
+        message: `[lethal] the settling re-read for op ${op.opSeq} (attemptId ${op.attemptId}) failed: ${messageOf(err)} — treating the operation as unresolved`,
+      });
+      return "unresolved";
+    }
+    if (again.completed || op.opSeq <= again.lastCompletedOpSeq) return "completed";
+    if (again.opKind === "run" && again.opAttemptId === op.attemptId && again.opSeq === op.opSeq) {
+      return (await this.pollUntilOpClears(op.opSeq)) ? "completed" : "unresolved";
+    }
+    return neverClaimed(again) ? "not-started" : "unresolved";
+  }
+
+  /**
+   * R194 (second half), rule 2c. A retry issued after `not-started` answered `lease-invalid`. That
+   * is the phase-1 refusal a LATE ORIGINAL produces in two of the three orderings (it arrived and
+   * is executing, or it arrived, ran and tombstoned `opSeq` so the retry's seq is stale), and it is
+   * also what a genuine lease loss produces. Only the marker tells them apart, so it is read ONCE
+   * here, before anything is latched. Reads only; never `RecoverOp`, never a re-dispatch.
+   *
+   * `budgetMs` is the mutant's own budget: a late original is running a real test, and the 8 s
+   * rule-2 poll would call almost every one of them stuck (review finding F7).
+   */
+  async classifyRetryRefusal(
+    original: { readonly attemptId: string; readonly opSeq: number },
+    budgetMs: number,
+  ): Promise<RetryRefusal> {
+    let status: Awaited<ReturnType<LeaseApi["getOperationStatus"]>>;
+    try {
+      status = await this.d.client.getOperationStatus(
+        this.d.lease,
+        original.attemptId,
+        original.opSeq,
+      );
+    } catch (err) {
+      this.d.emit({
+        type: "warning",
+        code: "lease-reconcile-failed",
+        message: `[lethal] could not read the marker after a refused retry of op ${original.opSeq} (attemptId ${original.attemptId}): ${messageOf(err)} — classifying the refusal as a genuine lease loss`,
+      });
+      return "genuine";
+    }
+    if (status.completed || original.opSeq <= status.lastCompletedOpSeq) {
+      return "original-completed";
+    }
+    const originalRunning =
+      original.attemptId !== "" &&
+      status.opKind === "run" &&
+      status.opAttemptId === original.attemptId &&
+      status.opSeq === original.opSeq;
+    if (!originalRunning) return "genuine";
+    const attempts = Math.max(OP_POLL_ATTEMPTS, Math.ceil(budgetMs / OP_POLL_DELAY_MS));
+    return (await this.pollUntilOpClears(original.opSeq, attempts))
+      ? "original-cleared"
+      : "original-stuck";
   }
 
   /**
@@ -1936,8 +2060,8 @@ class LeaseSession {
    * Poll the marker — never re-dispatch, never `RecoverOp` (the op may still be running AL, which
    * is precisely what that rule forbids clearing). Returns whether it cleared within the budget.
    */
-  async pollUntilOpClears(): Promise<boolean> {
-    for (let attempt = 0; attempt < OP_POLL_ATTEMPTS; attempt++) {
+  async pollUntilOpClears(opSeq?: number, attempts = OP_POLL_ATTEMPTS): Promise<boolean> {
+    for (let attempt = 0; attempt < attempts; attempt++) {
       let status: Awaited<ReturnType<LeaseApi["getOperationStatus"]>>;
       try {
         status = await this.d.client.getOperationStatus(this.d.lease, "", 0);
@@ -1949,8 +2073,14 @@ class LeaseSession {
         });
         return false;
       }
-      if (status.opKind === OP_KIND_IDLE) return true;
-      if (attempt < OP_POLL_ATTEMPTS - 1) await this.d.sleep(OP_POLL_DELAY_MS);
+      // R194 (second half): "cleared" means TOMBSTONED when the caller names the op, not merely
+      // idle. `force-reset-lease` leaves the marker idle without advancing the tombstone, and an
+      // idle read on its own would call a reset-out-from-under-us op "completed".
+      if (status.opKind === OP_KIND_IDLE) {
+        if (opSeq === undefined || status.lastCompletedOpSeq >= opSeq) return true;
+        return false;
+      }
+      if (attempt < attempts - 1) await this.d.sleep(OP_POLL_DELAY_MS);
     }
     return false;
   }
@@ -4377,6 +4507,8 @@ async function runMutantsOnBackend(args: {
         verdict: v,
         lostAck,
         retried,
+        retryAfter,
+        original,
       } = await runFenced(
         args.backend,
         args.safety,
@@ -4412,6 +4544,38 @@ async function runMutantsOnBackend(args: {
       // for a same-attempt duplicate claim that is not a loss at all.
       const leaseKind = classifyLeaseVerdict(v);
       if (leaseKind === "lost") {
+        // R194 (second half), rule 2c: a retry issued because the ORIGINAL was never claimed can
+        // be refused by phase 1 for one benign reason, the original arrived late after all. The
+        // marker is read for the original's coordinates before this is called a lease loss.
+        const refusal =
+          retryAfter === "not-started" && original !== undefined && leaseSession !== undefined
+            ? await leaseSession.classifyRetryRefusal(original, budget)
+            : "genuine";
+        if (refusal === "original-completed" || refusal === "original-cleared") {
+          // The abandoned original ran and tombstoned its op; its answer went to a socket nobody
+          // holds. The lease was never lost and the container is clean. This mutant's result is
+          // lost, which `result-lost` already means: the op completed, only the answer did not
+          // arrive. `--resume` re-runs it.
+          verdict = "error";
+          failureNote = `lost ack running ${ref.method}: the first attempt was reconciled as never claimed and retried, but the abandoned original arrived late and ${refusal === "original-completed" ? "had already completed" : "was still executing, then completed"} — the retry was refused by the fence as it should be, the original's result went to a closed socket, and the lease was NOT lost (R194)`;
+          cause = "result-lost";
+          break;
+        }
+        if (refusal === "original-stuck") {
+          // The late original is executing and did not clear within the mutant's budget: a
+          // strand, with the same two-way statement every other strand makes.
+          verdict = "error";
+          failureNote = `${STRANDED_NOTE_PREFIX}${ref.method}: the first attempt was reconciled as never claimed and retried, but the abandoned original arrived late and is still executing after the budget — the container may be stranded on it (R194)`;
+          cause = "stranded";
+          await quarantineInFlight({
+            safety: args.safety,
+            quarantineStore: args.quarantineStore,
+            resourceKey: args.resourceKey,
+            nowIso: args.nowIso,
+            detail: `late original still executing after a never-claimed reconciliation and retry, running ${ref.method} (mutant ${m.mutantId})`,
+          });
+          break;
+        }
         // Genuine loss: latch `lease-lost`, stop scheduling. The current batch's verdicts are
         // invalidated at session end (design §6) — NOT here, because earlier mutants of this same
         // batch were already recorded and only `runSession` can rewrite them. No durable tier
@@ -4537,6 +4701,8 @@ async function runMutantsOnBackend(args: {
           verdict: confirm,
           lostAck: confirmLostAck,
           retried: confirmRetried,
+          retryAfter: confirmRetryAfter,
+          original: confirmOriginal,
         } = await runFenced(
           args.backend,
           args.safety,
@@ -4546,6 +4712,13 @@ async function runMutantsOnBackend(args: {
           args.emit,
           resyncOpSeq,
         );
+        const confirmRefusal =
+          classifyLeaseVerdict(confirm) === "lost" &&
+          confirmRetryAfter === "not-started" &&
+          confirmOriginal !== undefined &&
+          leaseSession !== undefined
+            ? await leaseSession.classifyRetryRefusal(confirmOriginal, budget)
+            : "genuine";
         testResultBuffer.push({
           mutantCode: null,
           ref,
@@ -4569,7 +4742,25 @@ async function runMutantsOnBackend(args: {
           // an op-in-flight duplicate is polled out, never re-dispatched, and never latched.
           const detail = `confirming ${ref.method} (mutant ${m.mutantId}): ${confirm.failureMessage ?? "RunMutant lease-invalid"}`;
           verdict = "error";
-          if (confirmLease === "lost") {
+          if (confirmLease === "lost" && confirmRefusal !== "genuine") {
+            // R194 (second half), rule 2c on the confirmation rerun: the late original ran the
+            // baseline confirmation and its answer was lost, or it is stuck. The kill stays
+            // unconfirmed either way; only the second is a strand.
+            if (confirmRefusal === "original-stuck") {
+              failureNote = `${STRANDED_NOTE_PREFIX}confirming ${ref.method}: the first confirmation attempt was reconciled as never claimed and retried, but the abandoned original arrived late and is still executing after the budget (R194)`;
+              cause = "stranded";
+              await quarantineInFlight({
+                safety: args.safety,
+                quarantineStore: args.quarantineStore,
+                resourceKey: args.resourceKey,
+                nowIso: args.nowIso,
+                detail: `late original still executing after a never-claimed reconciliation and retry, confirming ${ref.method} (mutant ${m.mutantId})`,
+              });
+            } else {
+              failureNote = `lost ack confirming ${ref.method}: the first confirmation attempt was reconciled as never claimed and retried, but the abandoned original arrived late and completed — the retry was refused as it should be, the original's answer went to a closed socket, so the kill could not be confirmed; the lease was NOT lost (R194)`;
+              cause = "result-lost";
+            }
+          } else if (confirmLease === "lost") {
             noteLeaseLostOrThrow(leaseSession, detail);
             failureNote = `lease-lost while ${detail} — the kill could not be confirmed under a provable lease`;
           } else {

@@ -6291,9 +6291,12 @@ describe("runSession — Layer 5C-B2: a lost RunMutant ack is reconciled, not bl
     const dir = freshTmpDir();
     const client = new FakeLeaseClient();
     client.reconcileStatus = stillOurs; // first look: the run op is still marked, and it is ours
-    // ...and the poll (which reads with an EMPTY attemptId) finds the marker idle.
+    // ...and the poll (which reads with an EMPTY attemptId) finds the marker idle AND the op
+    // tombstoned. R194 hardened the poll to require the tombstone (`lastCompletedOpSeq >= opSeq`):
+    // an idle marker whose last completed op is still below ours is what `force-reset-lease`
+    // leaves behind, and reading that as "cleared" would call a reset-out-from-under-us op done.
     client.statusQueue = [
-      { opKind: "none", opAttemptId: "", opSeq: 0, lastCompletedOpSeq: 7, completed: true },
+      { opKind: "none", opAttemptId: "", opSeq: 0, lastCompletedOpSeq: 304, completed: true },
     ];
     const { lease } = leaseCfg(client);
     const report = await runSessionForTest(lostAckAfterFirstMutant(), {
@@ -6705,6 +6708,283 @@ describe("runSession — Layer 5C-B2: a proven-complete lost ack earns one fresh
     expect(await new QuarantineStore(dir).read(TIER)).toBeNull();
     expect(report.quarantined).toBeUndefined();
     expect(client.recoverArgs).toHaveLength(0);
+  });
+});
+
+// ————————————————————————————————————————————————————————————————————————
+// R194 (second half). A lost ack whose marker reads IDLE with `lastCompletedOpSeq` one below ours
+// was never claimed: phase 1 is the only writer that claims a run and it writes before any AL
+// executes. Measured on a hosted sandbox: a keep-alive socket the gateway had closed failed on the
+// next write, the request never reached BC, and rule 3 quarantined a healthy tier. Rule 2b
+// retries such an attempt once; rule 2c reads the marker again when that retry is refused, because
+// the abandoned original may have arrived late. Every marker shape below is one the spec's table
+// names, and the negative cases are the histories the adversarial review made the design state.
+// ————————————————————————————————————————————————————————————————————————
+describe("runSession — R194: a lost ack the marker shows was NEVER CLAIMED is retried once, and its late original is recognised", () => {
+  const LOST_OP = { attemptId: "a10", opSeq: 304 } as const;
+  const TIER = "http://cronus281|BC";
+  const ATTESTED = { observedAny: true, identityMismatch: false };
+  const LOST_ANSWER: Partial<TestVerdict> = {
+    outcome: "error",
+    failureMessage:
+      "RunMutant connection failed after dispatch: Error: The socket connection was closed unexpectedly",
+    operation: "in-flight-unknown",
+    fencedOp: LOST_OP,
+  };
+  const REFUSED: Partial<TestVerdict> = {
+    outcome: "error",
+    failureMessage: "RunMutant refused: lease-invalid",
+    operation: "lease-lost",
+    leaseInvalidReason: "lease-invalid",
+  };
+
+  /** The rule-2b shape: idle, and the op before ours is the last completed one. */
+  function neverClaimed(_attemptId: string, opSeq: number): OperationStatus {
+    return {
+      opKind: "none",
+      opAttemptId: "",
+      opSeq: 0,
+      lastCompletedOpSeq: opSeq - 1,
+      completed: false,
+    };
+  }
+  /** Idle, but with a HOLE below ours: not the 2b shape, stays unresolved. */
+  function idleWithHole(_attemptId: string, opSeq: number): OperationStatus {
+    return {
+      opKind: "none",
+      opAttemptId: "",
+      opSeq: 0,
+      lastCompletedOpSeq: opSeq - 2,
+      completed: false,
+    };
+  }
+  function tombstoned(attemptId: string, opSeq: number): OperationStatus {
+    return {
+      opKind: "none",
+      opAttemptId: attemptId,
+      opSeq,
+      lastCompletedOpSeq: opSeq,
+      completed: true,
+    };
+  }
+  function runningAs(attemptId: string, opSeq: number): OperationStatus {
+    return {
+      opKind: "run",
+      opAttemptId: attemptId,
+      opSeq,
+      lastCompletedOpSeq: opSeq - 1,
+      completed: false,
+    };
+  }
+
+  function m2Answers(
+    answers: readonly Partial<TestVerdict>[],
+    dispatches: { count: number },
+  ): ExecutionBackend {
+    let activeMutant: string | null = null;
+    let issued = 0;
+    return leaseBackend({
+      activate: async (id) => {
+        activeMutant = id;
+      },
+      run: async (ref) => {
+        if (activeMutant === "M0002") {
+          dispatches.count++;
+          const answer = answers[Math.min(issued, answers.length - 1)] ?? LOST_ANSWER;
+          issued++;
+          return { ref, outcome: "error" as const, durationMs: 1, ...answer };
+        }
+        return { ref, outcome: "pass" as const, durationMs: 1, attestation: ATTESTED };
+      },
+    });
+  }
+
+  test("rule 2b: never claimed -> ONE fresh attempt, whose real verdict is recorded; no quarantine", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    client.reconcileStatus = neverClaimed;
+    // The resync read (empty attemptId) must land the counter on N again: last completed is N-1.
+    client.statusQueue = [
+      { opKind: "none", opAttemptId: "", opSeq: 0, lastCompletedOpSeq: 303, completed: false },
+    ];
+    const { lease, sleeps } = leaseCfg(client);
+    const dispatches = { count: 0 };
+    const warnings: string[] = [];
+    const report = await runSessionForTest(
+      m2Answers([LOST_ANSWER, { outcome: "pass", attestation: ATTESTED }], dispatches),
+      {
+        quarantineDir: dir,
+        lease,
+        emit: [
+          (e) => {
+            if (e.type === "warning") warnings.push(e.code);
+          },
+        ],
+      },
+    );
+    expect(dispatches.count).toBe(2); // one lost, exactly one retry
+    expect(report.mutants.find((m) => m.mutantCode === "M0002")?.verdict).toBe("survived");
+    expect(report.quarantined).toBeUndefined();
+    expect(await new QuarantineStore(dir).read(TIER)).toBeNull();
+    expect(client.recoverArgs).toHaveLength(0);
+    expect(warnings).toContain("lost-ack-not-started");
+    expect(warnings).not.toContain("lost-ack-retry"); // the "confirmed COMPLETE" words are not borrowed
+    // The settling re-read: two reconciling reads a delay apart before "never claimed" is believed.
+    expect(client.statusArgs.filter((a) => a.attemptId === "a10")).toHaveLength(2);
+    expect(sleeps.length).toBeGreaterThanOrEqual(1);
+  });
+
+  test("an idle marker with a HOLE below ours is NOT never-claimed: unresolved, quarantined as before", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    client.reconcileStatus = idleWithHole;
+    const { lease } = leaseCfg(client);
+    const dispatches = { count: 0 };
+    const report = await runSessionForTest(m2Answers([LOST_ANSWER], dispatches), {
+      quarantineDir: dir,
+      lease,
+    });
+    expect(dispatches.count).toBe(1); // no retry on evidence that establishes nothing
+    expect(report.quarantined).toBeDefined();
+    expect(await new QuarantineStore(dir).read(TIER)).not.toBeNull();
+  });
+
+  test("a claim that lands between the two reads is polled, never retried over", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    let reads = 0;
+    client.reconcileStatus = (a, n) => (reads++ === 0 ? neverClaimed(a, n) : runningAs(a, n));
+    // The poll then sees it tombstoned.
+    client.statusQueue = [tombstoned("a10", 304)];
+    const { lease } = leaseCfg(client);
+    const dispatches = { count: 0 };
+    const report = await runSessionForTest(
+      m2Answers([LOST_ANSWER, { outcome: "pass", attestation: ATTESTED }], dispatches),
+      { quarantineDir: dir, lease },
+    );
+    // Reconciled as COMPLETED via the poll (rule 2), so the one retry is the ordinary one.
+    expect(dispatches.count).toBe(2);
+    expect(report.mutants.find((m) => m.mutantCode === "M0002")?.verdict).toBe("survived");
+    expect(report.quarantined).toBeUndefined();
+  });
+
+  test("a SECOND never-claimed in a row is unresolved: the counter is one ahead and the transport is the story", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    client.reconcileStatus = neverClaimed;
+    client.statusQueue = [
+      { opKind: "none", opAttemptId: "", opSeq: 0, lastCompletedOpSeq: 303, completed: false },
+    ];
+    const { lease } = leaseCfg(client);
+    const dispatches = { count: 0 };
+    const report = await runSessionForTest(m2Answers([LOST_ANSWER], dispatches), {
+      quarantineDir: dir,
+      lease,
+    });
+    expect(dispatches.count).toBe(2); // bounded: one retry, never a third
+    expect(report.quarantined).toBeDefined();
+    expect(await new QuarantineStore(dir).read(TIER)).not.toBeNull();
+  });
+
+  test("rule 2c: the retry refused because the late original already COMPLETED is result-lost, not a lease loss", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    let reads = 0;
+    // Reconciling reads for the original: twice never-claimed (rule 2b), then, when the refused
+    // retry asks about the original, tombstoned (the late original ran to phase 3).
+    client.reconcileStatus = (a, n) => (reads++ < 2 ? neverClaimed(a, n) : tombstoned(a, n));
+    client.statusQueue = [
+      { opKind: "none", opAttemptId: "", opSeq: 0, lastCompletedOpSeq: 303, completed: false },
+    ];
+    const { lease } = leaseCfg(client);
+    const dispatches = { count: 0 };
+    const report = await runSessionForTest(m2Answers([LOST_ANSWER, REFUSED], dispatches), {
+      quarantineDir: dir,
+      lease,
+    });
+    const m2 = report.mutants.find((m) => m.mutantCode === "M0002");
+    expect(m2?.verdict).toBe("error");
+    expect(m2?.failureNote).toContain("lease was NOT lost");
+    // The session went on: M0001's verdict stands and M0003 was scored. No batch invalidation.
+    expect(report.mutants.find((m) => m.mutantCode === "M0001")?.verdict).toBe("survived");
+    expect(report.mutants.find((m) => m.mutantCode === "M0003")?.verdict).toBe("survived");
+    expect(report.quarantined).toBeUndefined();
+    expect(await new QuarantineStore(dir).read(TIER)).toBeNull();
+  });
+
+  test("rule 2c: the late original still EXECUTING is polled within the budget, and a strand is a strand", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    let reads = 0;
+    client.reconcileStatus = (a, n) => (reads++ < 2 ? neverClaimed(a, n) : runningAs(a, n));
+    // Every poll sees the original still running: it never clears.
+    client.statusQueue = [
+      { opKind: "none", opAttemptId: "", opSeq: 0, lastCompletedOpSeq: 303, completed: false },
+      runningAs("a10", 304),
+    ];
+    const { lease } = leaseCfg(client);
+    const dispatches = { count: 0 };
+    const report = await runSessionForTest(m2Answers([LOST_ANSWER, REFUSED], dispatches), {
+      quarantineDir: dir,
+      lease,
+    });
+    const m2 = report.mutants.find((m) => m.mutantCode === "M0002");
+    expect(m2?.verdict).toBe("error");
+    expect(isStrandedNote(m2?.failureNote ?? "")).toBe(true);
+    expect(report.quarantined).toBeDefined();
+    // Not a lease loss: M0001's verdict is NOT invalidated.
+    expect(report.mutants.find((m) => m.mutantCode === "M0001")?.verdict).toBe("survived");
+  });
+
+  test("rule 2c: a refused retry whose marker names a STRANGER is a genuine lease loss, as before", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    let reads = 0;
+    client.reconcileStatus = (a, n) =>
+      reads++ < 2 ? neverClaimed(a, n) : runningAs("someone-else", n);
+    client.statusQueue = [
+      { opKind: "none", opAttemptId: "", opSeq: 0, lastCompletedOpSeq: 303, completed: false },
+    ];
+    const { lease } = leaseCfg(client);
+    const dispatches = { count: 0 };
+    const report = await runSessionForTest(m2Answers([LOST_ANSWER, REFUSED], dispatches), {
+      quarantineDir: dir,
+      lease,
+    });
+    expect(report.quarantined?.reason).toContain("lease-lost");
+    // The batch's earlier verdict IS invalidated: this is the real thing.
+    expect(report.mutants.find((m) => m.mutantCode === "M0001")?.verdict).toBe("error");
+  });
+
+  test("a resync that THROWS on the way to the retry is unresolved, not an escaped exception", async () => {
+    const dir = freshTmpDir();
+    // The publish fence's own empty-attempt read succeeds; the resync read, made on the same bad
+    // network that lost the ack, is the first empty-attempt read AFTER the lost ack and throws.
+    class ResyncFails extends FakeLeaseClient {
+      lostAckSeen = false;
+      override async getOperationStatus(
+        lease: LeaseTuple,
+        attemptId: string,
+        opSeq: number,
+      ): Promise<OperationStatus> {
+        if (attemptId !== "") this.lostAckSeen = true;
+        if (attemptId === "" && this.lostAckSeen) throw new Error("HTTP 503");
+        return super.getOperationStatus(lease, attemptId, opSeq);
+      }
+    }
+    const client = new ResyncFails();
+    client.reconcileStatus = neverClaimed;
+    client.statusQueue = [
+      { opKind: "none", opAttemptId: "", opSeq: 0, lastCompletedOpSeq: 303, completed: false },
+    ];
+    const { lease } = leaseCfg(client);
+    const dispatches = { count: 0 };
+    const report = await runSessionForTest(m2Answers([LOST_ANSWER], dispatches), {
+      quarantineDir: dir,
+      lease,
+    });
+    expect(dispatches.count).toBe(1);
+    expect(report.quarantined).toBeDefined();
   });
 });
 
