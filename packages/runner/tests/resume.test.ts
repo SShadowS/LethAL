@@ -19,6 +19,7 @@ import { runSession } from "../src/orchestrator";
 import {
   CARRYABLE_VERDICTS,
   STRANDED_NOTE_PREFIX,
+  STRANDED_SKIP_NOTE,
   batchCarriesEntirely,
   buildResumeIndex,
   carriedVerdictFor,
@@ -1413,6 +1414,17 @@ describe("stranded-note detection (R53)", () => {
     );
     expect(isStrandedNote("no green baseline tests")).toBe(false);
     expect(isStrandedNote(undefined)).toBe(false);
+  });
+
+  test("R201: a skip written by an earlier resume is stranded too, so the skip is sticky", () => {
+    // `resolveResume` reads only the latest run. After one resume the latest row for a stranded
+    // mutant is the SKIP, not the original `quarantined: ` row; if the skip did not count, the
+    // next resume would re-run the hang. Measured on Document Output 2026-09-02 (M0023, a removed
+    // loop counter): the first field run patched its database between iterations to stay skipped.
+    expect(isStrandedNote(STRANDED_SKIP_NOTE)).toBe(true);
+    const index = buildResumeIndex([row({ verdict: "error", failureNote: STRANDED_SKIP_NOTE })]);
+    expect(index.strandedKeys.size).toBe(1);
+    expect(index.carryable.size).toBe(0);
   });
 
   test("a stranding row is detected even when its identity key collides", () => {

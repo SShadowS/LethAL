@@ -87,6 +87,7 @@ import { quarantineResourceKey } from "./resource-key";
 import {
   CARRYABLE_VERDICTS,
   STRANDED_NOTE_PREFIX,
+  STRANDED_SKIP_NOTE,
   batchCarriesEntirely,
   buildResumeIndex,
   carriedVerdictFor,
@@ -121,14 +122,6 @@ import {
 import { describeTestPageUnsupported } from "./testpage-unsupported";
 
 const BASELINE_TIMEOUT_DEFAULT = 120_000;
-
-/**
- * R53: what a mutant skipped on `--resume` because a prior run stranded the tier on it is recorded
- * with. One constant for the two sites that write it (step 5b and R192's `replayCarriedBatch`), so
- * the tests that read the prose cannot drift from one of them.
- */
-const STRANDED_SKIP_NOTE =
-  "not re-run on resume: a prior run's execution of this mutant could not be confirmed complete and stranded the tier. A mutant that never terminates (e.g. a negated loop-exit condition) reproduces this every time and blocks every mutant behind it, so it is skipped rather than retried — pass --retry-stranded to attempt it anyway. It is NOT scored either way.";
 
 /**
  * Floor for a mutant run's time budget.

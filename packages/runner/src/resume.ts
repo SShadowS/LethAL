@@ -49,6 +49,21 @@ export const CARRYABLE_VERDICTS: ReadonlySet<MutantVerdict> = new Set<MutantVerd
 export const STRANDED_NOTE_PREFIX = "quarantined: ";
 
 /**
+ * R53/R201: what a mutant skipped on `--resume` because a prior run stranded the tier on it is
+ * recorded with. One constant for the two sites that write it (step 5b and R192's
+ * `replayCarriedBatch`), so the tests that read the prose cannot drift from one of them.
+ *
+ * It lives HERE, beside the detector, because the detector must recognise it: `resolveResume`
+ * reads only the latest run's rows, and the latest row for a stranded mutant is this skip, not
+ * the original `quarantined: ` row. Before R201 the skip did not match `isStrandedNote`, so the
+ * resume AFTER a resume re-ran the hang (measured on Document Output 2026-09-02, M0023, a
+ * removed loop counter; the first field run patched its database between iterations to stay
+ * skipped).
+ */
+export const STRANDED_SKIP_NOTE =
+  "not re-run on resume: a prior run's execution of this mutant could not be confirmed complete and stranded the tier. A mutant that never terminates (e.g. a negated loop-exit condition) reproduces this every time and blocks every mutant behind it, so it is skipped rather than retried — pass --retry-stranded to attempt it anyway. It is NOT scored either way.";
+
+/**
  * Whether a prior `error` row records a mutant that STRANDED the tier rather than merely failing.
  *
  * The distinction decides whether re-running it is progress or an infinite loop. An ordinary error
@@ -63,7 +78,12 @@ export function isStrandedNote(failureNote: string | undefined): boolean {
   // `=== true`, not optional chaining alone: `failureNote?.startsWith(...)` is `boolean | undefined`
   // and an absent note must be FALSE, not undefined. A `biome --unsafe` autofix made exactly that
   // rewrite and the "an ordinary error is NOT stranded" test caught it.
-  return failureNote?.startsWith(STRANDED_NOTE_PREFIX) === true;
+  //
+  // R201: a skip written by an earlier resume is stranded too, or the skip lasts exactly one
+  // resume — see `STRANDED_SKIP_NOTE`.
+  return (
+    failureNote?.startsWith(STRANDED_NOTE_PREFIX) === true || failureNote === STRANDED_SKIP_NOTE
+  );
 }
 
 /** A prior verdict this run may record without re-executing the mutant. */

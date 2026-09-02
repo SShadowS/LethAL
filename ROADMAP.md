@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**7 of 198 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**7 of 199 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -132,6 +132,7 @@ that ordering is the priority.
 - **R195** · `lethal doctor` has no company check, so a wrong `company` surfaces as a 404 inside the control-version check, with the configured name but not the ones that exist · [R195.md](docs/roadmap/R195.md) · done (`HarnessVerifier.fetchCompanies`, doctor `company` check) — 2026-09-02, same day. Reads BC's own…
 - **R197** · Covering tests run in discovery order, so a kill lands at position 9.4 on average when a test that already killed in the same procedure would have landed it first 81% of the time: 2,476 passing calls, 21 minutes, on one real run · [R197.md](docs/roadmap/R197.md) · done (`packages/runner/src/test-order.ts`, `orderCoveringTests`) — 2026-09-02, same day, landed with R193 in…
 - **R199** · The mutation-elements export renders a narrowed run as a full project's page, and the first real consumer hand-wrote a scope banner within minutes of the run finishing · [R199.md](docs/roadmap/R199.md) · done in part (`config.lethal`, `framework`) — 2026-09-02. The run's `validity`, `counts` and `mutationScore`…
+- **R201** · A stranded mutant's skip lasted exactly one resume: the skip note did not match `isStrandedNote`, so the resume after a resume re-ran the hang, and the first field run patched its database between iterations to stay skipped · [R201.md](docs/roadmap/R201.md) · done (`STRANDED_SKIP_NOTE` moved beside the detector in `resume.ts`, `isStrandedNote` recognises it)…
 
 ## Backends and tooling
 
