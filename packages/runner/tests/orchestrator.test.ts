@@ -8492,6 +8492,17 @@ describe("R206: the warm confirmation and the session guard", () => {
     expect(m1(c)?.verdict).toBe("error");
     expect(m1(c)?.cause).toBe("warm-confirmation-incomplete");
     c.store.close();
+    // And the third clause on its own: k entries, all passing, but a `ranCount` that disagrees
+    // (red-checked: dropping `ranCount !== k` from the predicate survived every other test here).
+    const miscounted = makeBackend();
+    miscounted.manyOverride = (call, _opts, composed) => {
+      if (call !== 0 || composed.kind !== "verdicts") return composed;
+      return { ...composed, endedBy: "complete", ranCount: 1 };
+    };
+    const d = await session(miscounted);
+    expect(m1(d)?.verdict).toBe("error");
+    expect(m1(d)?.cause).toBe("warm-confirmation-incomplete");
+    d.store.close();
   });
 
   test("a position-1 fail takes the cold confirmation unchanged, and records killPosition 1", async () => {
