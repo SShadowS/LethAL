@@ -14,6 +14,8 @@ function Call([string]$action, [hashtable]$body) {
   (Invoke-RestMethod -Method Post -Uri "$base/R198ProbeApi_$action$q" -Headers $headers -Body ($body | ConvertTo-Json -Compress) -TimeoutSec 120).value
 }
 $tally = @{}
+$out = Join-Path $PSScriptRoot 'stop-race.measured.txt'
+"=== stop race $(Get-Date -Format s) against $base, $Rounds rounds, alternating group/loop" | Out-File $out -Append
 for ($i = 1; $i -le $Rounds; $i++) {
   $mode = if ($i % 2 -eq 1) { 'group' } else { 'loop' }
   $runner = if ($mode -eq 'group') { 71542 } else { 0 }
@@ -35,7 +37,9 @@ for ($i = 1; $i -le $Rounds; $i++) {
   $job | Wait-Job -Timeout 90 | Out-Null; $held = Receive-Job $job; Remove-Job $job -Force
   $code = ($held -split ' ')[0]
   $tally[$code] = 1 + [int]$tally[$code]
-  Write-Host ("round {0} {1,-5} stop: {2,-40} held: {3}" -f $i, $mode, $stop.Substring(0, [Math]::Min(40, $stop.Length)), $held)
+  $line = ("round {0} {1,-5} stop: {2,-40} held: {3}" -f $i, $mode, $stop.Substring(0, [Math]::Min(40, $stop.Length)), $held)
+  Write-Host $line; $line | Out-File $out -Append
   Start-Sleep -Seconds 2
 }
-Write-Host ("tally: " + (($tally.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ' '))
+$t = "tally: " + (($tally.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ' ')
+Write-Host $t; $t | Out-File $out -Append

@@ -1,0 +1,22 @@
+=== stop race 2026-09-03T08:00:29 against http://Cronus283:7048/BC/ODataV4, 20 rounds, alternating group/loop
+round 1 group stop: stopped session 1758 inside T7_Hang      held: 408 2877 Response status code does not indicate success: 408 (The operation has been canceled because the session has been stoppe
+round 2 loop  stop: stopped session 1761 inside T7_Hang      held: 408 2871 Response status code does not indicate success: 408 (The operation has been canceled because the session has been stoppe
+round 3 group stop: stopped session 1764 inside T7_Hang      held: 408 2857 Response status code does not indicate success: 408 (The operation has been canceled because the session has been stoppe
+round 4 loop  stop: stopped session 1767 inside T7_Hang      held: 408 2857 Response status code does not indicate success: 408 (The operation has been canceled because the session has been stoppe
+round 5 group stop: stopped session 1770 inside T7_Hang      held: 408 2854 Response status code does not indicate success: 408 (The operation has been canceled because the session has been stoppe
+round 6 loop  stop: stopped session 1773 inside T7_Hang      held: 408 2864 Response status code does not indicate success: 408 (The operation has been canceled because the session has been stoppe
+round 7 group stop: stopped session 1776 inside T7_Hang      held: 408 2857 Response status code does not indicate success: 408 (The operation has been canceled because the session has been stoppe
+round 8 loop  stop: stopped session 1779 inside T7_Hang      held: 408 2861 Response status code does not indicate success: 408 (The operation has been canceled because the session has been stoppe
+round 9 group stop: stopped session 1782 inside T7_Hang      held: 408 2871 Response status code does not indicate success: 408 (The operation has been canceled because the session has been stoppe
+round 10 loop  stop: stopped session 1785 inside T7_Hang      held: 408 2861 Response status code does not indicate success: 408 (The operation has been canceled because the session has been stoppe
+round 11 group stop: stopped session 1788 inside T7_Hang      held: 408 2867 Response status code does not indicate success: 408 (The operation has been canceled because the session has been stoppe
+round 12 loop  stop: stopped session 1791 inside T7_Hang      held: 408 2856 Response status code does not indicate success: 408 (The operation has been canceled because the session has been stoppe
+round 13 group stop: stopped session 1794 inside T7_Hang      held: 408 2864 Response status code does not indicate success: 408 (The operation has been canceled because the session has been stoppe
+round 14 loop  stop: stopped session 1797 inside T7_Hang      held: 408 2859 Response status code does not indicate success: 408 (The operation has been canceled because the session has been stoppe
+round 15 group stop: stopped session 1800 inside T7_Hang      held: 408 2869 Response status code does not indicate success: 408 (The operation has been canceled because the session has been stoppe
+round 16 loop  stop: stopped session 1803 inside T7_Hang      held: 408 2859 Response status code does not indicate success: 408 (The operation has been canceled because the session has been stoppe
+round 17 group stop: stopped session 1806 inside T7_Hang      held: 408 2865 Response status code does not indicate success: 408 (The operation has been canceled because the session has been stoppe
+round 18 loop  stop: stopped session 1809 inside T7_Hang      held: 408 2858 Response status code does not indicate success: 408 (The operation has been canceled because the session has been stoppe
+round 19 group stop: stopped session 1812 inside T7_Hang      held: 408 2868 Response status code does not indicate success: 408 (The operation has been canceled because the session has been stoppe
+round 20 loop  stop: stopped session 1815 inside T7_Hang      held: 408 2853 Response status code does not indicate success: 408 (The operation has been canceled because the session has been stoppe
+tally: 408=20
