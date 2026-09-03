@@ -102,6 +102,13 @@ const EXPECTED = {
    */
   groupedCalls: 15,
   /**
+   * R206: how many of this gate's kills were measured at group position > 1. MEASURED from run
+   * 304's store before the build (all three kills at position 1), and pre-committed in
+   * docs/superpowers/specs/2026-09-03-r206-build-precommitment.md. `groupedCalls` above is
+   * `scored + warmKills`, so a replay that ran here would move BOTH numbers.
+   */
+  warmKills: 0,
+  /**
    * R132: this gate now carries the VACUOUS case for R121's assertion screen, which `itest:tables`
    * used to pin and gave up when its fixture grew a Library Assert arm.
    *
@@ -232,6 +239,8 @@ async function readJson<T>(path: string, what: string): Promise<T> {
 interface RunOnceResult {
   readonly report: SessionReport;
   readonly odataCfg: ActivationConfig;
+  /** R206: `ResultsStore.sessionIdLiveness` for this run, read before the store closes. */
+  readonly sessionLiveness: ReturnType<ResultsStore["sessionIdLiveness"]>;
   readonly instrumentedDir: string;
 }
 
@@ -340,7 +349,9 @@ async function runOnce(scratchRoot: string): Promise<RunOnceResult> {
       // constructed from this path and nothing else — so do not "simplify" this back out.
       quarantineDir: join(scratchRoot, "quarantine"),
     });
-    return { report, odataCfg, instrumentedDir };
+    const runId = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
+    const sessionLiveness = store.sessionIdLiveness(runId);
+    return { report, odataCfg, instrumentedDir, sessionLiveness };
   } finally {
     store.close();
     // Without this the spawned bc-dev MCP child keeps the event loop alive and
@@ -560,6 +571,42 @@ async function runProtocolInvariantProbes(run: RunOnceResult): Promise<void> {
   }
 }
 
+/**
+ * R206 §6: the store-level liveness check on `session_id`, and the guard's own count. Scoped to
+ * rows that came from an answer (a 408 carries no id; an aborted call's row has none): every
+ * pass/fail row carries an id, the grouped rows' distinct ids equal the group calls that
+ * ANSWERED (`groupedCalls` minus `stoppedCalls`), and every single-call row is its own session.
+ * This is the anti-inertness control for `sessionId` now that the guard's predicate is
+ * `testRunsBefore`: scoped so it holds on every gate, never softened to "some row has an id".
+ */
+function assertSessionLiveness(
+  report: SessionReport,
+  live: ReturnType<ResultsStore["sessionIdLiveness"]>,
+  stoppedCalls: number,
+): void {
+  assert.equal(
+    report.mutants.filter((m) => m.cause === "session-reused").length,
+    0,
+    "R206: no mutant may be refused as session-reused on a container that hands every request a fresh session",
+  );
+  assert.equal(
+    live.missing,
+    0,
+    `R206: every pass/fail row must carry a session id; ${live.missing} do not`,
+  );
+  assert.ok(live.answered > 0, "R206: the store must hold answered rows to check");
+  assert.equal(
+    live.manyDistinct,
+    (report.groupedCalls ?? 0) - stoppedCalls,
+    `R206: distinct session ids among grouped pass/fail rows must equal the group calls that answered (${report.groupedCalls} minus ${stoppedCalls}); got ${live.manyDistinct}`,
+  );
+  assert.equal(
+    live.singleRows,
+    live.singleDistinct,
+    `R206: every single-call row must be its own session; ${live.singleRows} rows carry ${live.singleDistinct} distinct ids`,
+  );
+}
+
 function assertVerdictTable(report: SessionReport): void {
   // Always dump the per-mutant table BEFORE asserting. A bare "survived count mismatch 3 !== 10"
   // says nothing about which mutants moved or why, and this gate takes minutes to re-run against
@@ -595,7 +642,26 @@ function assertVerdictTable(report: SessionReport): void {
     EXPECTED.groupedCalls,
     `R198: expected exactly ${EXPECTED.groupedCalls} RunMutantMany calls (one per scored mutant); ` +
       `got ${report.groupedCalls}. Fewer means the grouped path silently stopped being used; more ` +
-      "means a chunk or a lost-ack retry happened on a container gate, which must be explained",
+      "means a chunk, a lost-ack retry or an unexpected replay happened on a container gate, which must be explained",
+  );
+  // R206: no kill here is warm (every killer is first in its call), every kill carries a
+  // position, and the session guard fired on nothing.
+  assert.equal(
+    report.warmKills,
+    EXPECTED.warmKills,
+    `R206: expected ${EXPECTED.warmKills} warm kills; got ${report.warmKills}`,
+  );
+  for (const m of report.mutants) {
+    if (m.verdict !== "killed" && m.verdict !== "timeout-killed") continue;
+    assert.equal(
+      m.killPosition,
+      1,
+      `R206: ${m.mutantCode} killPosition ${m.killPosition}, expected 1`,
+    );
+  }
+  assert.ok(
+    report.validity.caveats.includes("session-warm"),
+    `R206: a report with grouped calls must carry the session-warm caveat; got ${JSON.stringify(report.validity.caveats)}`,
   );
   // R175: pins the ABSENCE. A naming gap means the line map could not place a line BC says executed,
   // in source LethAL itself emitted, and every mutant in that object then reports `no-coverage` for
@@ -666,6 +732,7 @@ async function main(): Promise<void> {
   try {
     const first = await runOnce(scratchA);
     assertVerdictTable(first.report);
+    assertSessionLiveness(first.report, first.sessionLiveness, 0);
     // Per-mutant regression guard against the committed baseline — in addition to the aggregate
     // verdict counts assertVerdictTable already checked. A per-mutant difference fails the
     // itest even when killed/survived/no-coverage totals still match (Task 15, design spec §14).

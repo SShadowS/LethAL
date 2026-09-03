@@ -158,6 +158,21 @@ function assertVerdictTable(report: SessionReport): void {
   // R198: al-runner has no RunMutantMany; 0 is also what an unwired counter reports, so this pins
   // only that the backend is untouched. The container gates carry the anti-inertness numbers.
   assert.equal(report.groupedCalls, 0, "R198: al-runner must make no grouped call");
+  // R206: the sequential path records position 1 on every kill (one method per call, by
+  // definition), replays nothing, and carries no session-warm caveat (no grouped call ran).
+  assert.equal(report.warmKills, 0, "R206: al-runner cannot measure a warm kill");
+  for (const m of report.mutants) {
+    if (m.verdict !== "killed" && m.verdict !== "timeout-killed") continue;
+    assert.equal(
+      m.killPosition,
+      1,
+      `R206: ${m.mutantCode} killPosition ${m.killPosition}, expected 1 on the sequential path`,
+    );
+  }
+  assert.ok(
+    !report.validity.caveats.includes("session-warm"),
+    "R206: a report with no grouped call must not carry the session-warm caveat",
+  );
   assert.equal(report.counts.survived, EXPECTED.survived, "survived count mismatch");
   assert.equal(
     report.counts.noCoverage,

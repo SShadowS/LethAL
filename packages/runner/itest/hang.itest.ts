@@ -92,7 +92,13 @@ const STOP_GRACE_MS = 30_000;
  * Both hangs are STRUCTURAL, not slow: each freezes `Counter` at 0, so `until Counter >= Limit` is
  * monotonically false with no dependence on data, clock or I/O.
  */
-const EXPECTED_ON: ReadonlyArray<{ line: number; operator: string; verdict: string }> = [
+const EXPECTED_ON: ReadonlyArray<{
+  line: number;
+  operator: string;
+  verdict: string;
+  /** R206: pinned where the design pre-committed it; every kill is checked to carry ONE. */
+  killPosition?: number;
+}> = [
   // --- `CountUpTo` / `Advance`, the original R53 arm. R164 shifted every line down two, because
   // --- its arm added two `var` declarations at the top of the codeunit.
   { line: 34, operator: "lethal.empty-block", verdict: "killed" },
@@ -172,7 +178,31 @@ const EXPECTED_ON: ReadonlyArray<{ line: number; operator: string; verdict: stri
   { line: 105, operator: "lethal.remove-assignment", verdict: "killed" },
   { line: 105, operator: "lethal.shift-integer", verdict: "killed" },
   { line: 107, operator: "lethal.return-value", verdict: "killed" },
+
+  // --- `SpinUntil`, R206's arm: the only live exercise of a WARM timeout and of the warm
+  // --- confirmation's replay. Two tests cover it; `SpinUntilAtZeroExitsEarly` (T1) takes the
+  // --- early exit and asserts -1, `SpinUntilReachesTheTarget` (T2) drives the same unbounded
+  // --- loop as `CountUpTo`. T1 sorts first (fewer members, then the ledger, seeded by the
+  // --- guard-line kills below, which are scored first in manifest order), so every loop kill is
+  // --- T2's at group position 2 and is confirmed by replaying [T1, T2] unmutated. Every
+  // --- position was PRE-COMMITTED from the dry-run manifest in
+  // --- docs/superpowers/specs/2026-09-03-r206-build-precommitment.md before this gate ran.
+  { line: 140, operator: "lethal.empty-block", verdict: "killed", killPosition: 1 },
+  { line: 141, operator: "lethal.conditional-boundary", verdict: "killed", killPosition: 1 },
+  { line: 142, operator: "lethal.return-value", verdict: "killed", killPosition: 1 },
+  { line: 143, operator: "lethal.remove-assignment", verdict: "survived" },
+  { line: 143, operator: "lethal.shift-integer", verdict: "survived" },
+  { line: 146, operator: "lethal.loop-truncate", verdict: "killed", killPosition: 2 },
+  // THE ROW R206's ARM EXISTS FOR: the fifth non-terminating mutant, and the only one whose hang
+  // lands at group position 2, so it is scored `timeout-killed` only after methods 1..2 were
+  // replayed unmutated and method 2 completed inside its budget.
+  { line: 145, operator: "lethal.void-method-call", verdict: "timeout-killed", killPosition: 2 },
+  { line: 146, operator: "lethal.conditional-boundary", verdict: "killed", killPosition: 2 },
+  { line: 147, operator: "lethal.return-value", verdict: "killed", killPosition: 2 },
 ];
+
+/** R206: the warm kills of the ON leg, all in the new arm: three warm fails and one warm timeout. */
+const EXPECTED_WARM_KILLS = 4;
 
 async function readJson<T>(path: string, what: string): Promise<T> {
   let text: string;
@@ -198,6 +228,8 @@ interface LegResult {
   }>;
   readonly odataCfg: ActivationConfig;
   readonly quarantineDir: string;
+  /** R206: `ResultsStore.sessionIdLiveness` for this run, read before the store closes. */
+  readonly sessionLiveness: ReturnType<ResultsStore["sessionIdLiveness"]>;
 }
 
 async function runLeg(scratchRoot: string, stopHungSessions: boolean): Promise<LegResult> {
@@ -289,7 +321,9 @@ async function runLeg(scratchRoot: string, stopHungSessions: boolean): Promise<L
         "SELECT mutant_code, outcome, duration_ms, failure_message, op_kind FROM test_results ORDER BY id",
       )
       .all() as LegResult["testRows"];
-    return { report, testRows, odataCfg, quarantineDir };
+    const runId = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
+    const sessionLiveness = store.sessionIdLiveness(runId);
+    return { report, testRows, odataCfg, quarantineDir, sessionLiveness };
   } finally {
     store.close();
     // Without this the spawned bc-dev MCP child keeps the event loop alive and the script hangs —
@@ -326,21 +360,41 @@ function assertOnLeg(leg: LegResult): void {
       want.verdict,
       `${want.operator} at line ${want.line}: expected ${want.verdict}, got ${got.verdict}`,
     );
+    // R206: every kill carries a position, and the pinned ones carry the pre-committed number.
+    // A kill at position > 1 is a WARM kill, confirmed by a replay; a `killPosition` that moved
+    // means the kill ledger ordered the arm's tests differently from the design's argument.
+    if (got.verdict === "killed" || got.verdict === "timeout-killed") {
+      assert.ok(
+        got.killPosition !== undefined,
+        `${want.operator} at line ${want.line}: a kill without killPosition (R206 records one on every kill)`,
+      );
+      assert.equal(
+        got.killPosition,
+        want.killPosition ?? 1,
+        `${want.operator} at line ${want.line}: killPosition ${got.killPosition}, expected ${want.killPosition ?? 1}`,
+      );
+    }
   }
 
   const timeoutKilled = report.mutants.filter((m) => m.verdict === "timeout-killed");
   assert.equal(
     timeoutKilled.length,
-    4,
-    "the fixture has exactly four non-terminating mutants, and each is reached by a DIFFERENT " +
-      "operator. R179's arm did NOT change this number, which is the point: it added a fifth " +
-      "(`empty-block` on a `while` body, MEASURED `timeout-killed` in stage 1) and the cession to " +
-      "`loop-skip` removed it again. " +
-      "operator: void-method-call and empty-block on the original arm, remove-assignment twice " +
-      "(R159), once on each arm. None of them is a loop EXIT CONDITION, and that is the point of " +
-      "the count: R164 ceded the exit condition from `negate-conditional` to `loop-truncate`, " +
-      "which cannot hang, and `shift-integer` refuses that position outright. A FIFTH " +
-      "non-terminating mutant means one of those two cessions has stopped holding",
+    5,
+    "the fixture has exactly FIVE non-terminating mutants, and each is reached by a DIFFERENT " +
+      "operator or arm: void-method-call and empty-block on the original arm, remove-assignment " +
+      "twice (R159), once on each of R164's and the original arm, and R206's `void-method-call` on " +
+      "`SpinUntil`'s advancing call (line 145), the ONE the new arm adds, which shares `Advance()` " +
+      "rather than copying it precisely so it adds one and not three. R179's arm did NOT change " +
+      "this number: it added a hang (`empty-block` on a `while` body, MEASURED `timeout-killed` in " +
+      "stage 1) and the cession to `loop-skip` removed it again. None of the five is a loop EXIT " +
+      "CONDITION, and that is the point of the count: R164 ceded the exit condition from " +
+      "`negate-conditional` to `loop-truncate`, which cannot hang, and `shift-integer` refuses that " +
+      "position outright. A SIXTH non-terminating mutant means one of those two cessions has " +
+      "stopped holding, or that the arm stopped sharing `Advance()`",
+  );
+  assert.ok(
+    timeoutKilled.some((m) => m.line === 145 && m.operatorName === "lethal.void-method-call"),
+    "the fifth hang must be R206's arm at line 145, not some other mutant that started hanging",
   );
 
   // THE ASSERTION THAT CANNOT PASS FOR THE WRONG REASON. A verdict check alone would still hold if
@@ -385,10 +439,52 @@ function assertOnLeg(leg: LegResult): void {
   // its first failure). Pinned as the arithmetic of the counts rather than a bare "> 0", and the
   // timeout rows themselves must carry the grouped op kind, so the stop cannot have been scored
   // through the single-method path this gate used to pin.
+  // R206: a warm kill adds ONE replay call, so the pin is `scored + warmKills` with `warmKills`
+  // a NUMBER, never read back from the report (a `warmKills` that was never wired reads 0 and
+  // would make `scored + 0` pass on a build that replays nothing).
+  assert.equal(
+    report.warmKills,
+    EXPECTED_WARM_KILLS,
+    `R206: expected ${EXPECTED_WARM_KILLS} warm kills (the new arm's four loop kills at position 2); got warmKills=${report.warmKills}`,
+  );
   assert.equal(
     report.groupedCalls,
-    report.counts.killed + report.counts.survived + report.counts.timeoutKilled,
-    `R198: expected one RunMutantMany call per scored mutant; got groupedCalls=${report.groupedCalls}`,
+    report.counts.killed +
+      report.counts.survived +
+      report.counts.timeoutKilled +
+      EXPECTED_WARM_KILLS,
+    `R198/R206: expected one RunMutantMany call per scored mutant plus one replay per warm kill; got groupedCalls=${report.groupedCalls}`,
+  );
+  assert.ok(
+    report.validity.caveats.includes("session-warm"),
+    `a report with grouped calls must carry the session-warm caveat; got ${JSON.stringify(report.validity.caveats)}`,
+  );
+  // R206 §2.1: the session guard fired on nothing (the container hands every request a fresh
+  // session), and the session ids are LIVE data: every answered row carries one, the grouped
+  // rows' distinct ids equal the group calls that ANSWERED (the five 408s carry none), and every
+  // single-call row is its own session. Scoped, not softened: this is the anti-inertness control
+  // for `sessionId` now that the guard's predicate is `testRunsBefore`.
+  assert.equal(
+    report.mutants.filter((m) => m.cause === "session-reused").length,
+    0,
+    "no mutant may be refused as session-reused on a container that hands every request a fresh session",
+  );
+  const live = leg.sessionLiveness;
+  assert.equal(
+    live.missing,
+    0,
+    `every pass/fail row must carry a session id; ${live.missing} do not`,
+  );
+  assert.ok(live.answered > 0, "the store must hold answered rows to check");
+  assert.equal(
+    live.manyDistinct,
+    (report.groupedCalls ?? 0) - timeoutKilled.length,
+    `distinct session ids among grouped pass/fail rows must equal the group calls that answered (groupedCalls ${report.groupedCalls} minus ${timeoutKilled.length} stopped calls); got ${live.manyDistinct}`,
+  );
+  assert.equal(
+    live.singleRows,
+    live.singleDistinct,
+    `every single-call row must be its own session; ${live.singleRows} rows carry ${live.singleDistinct} distinct ids`,
   );
   for (const m of timeoutKilled) {
     const stopped = testRows.find((r) => r.mutant_code === m.mutantCode && r.outcome === "timeout");

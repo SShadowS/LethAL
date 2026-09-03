@@ -568,7 +568,22 @@ const EXPECTED = {
    * survived; the 15 no-coverage never reach it, and 299 + 63 + 15 = 377 deployed leaves no other
    * outcome to account for. A number, not a predicate, for the reason bcdev's 15 is one.
    */
-  groupedCalls: 362,
+  groupedCalls: 362 + 13,
+  /**
+   * R206: kills measured at group position > 1, each confirmed by replaying its call's prefix
+   * unmutated (one extra `RunMutantMany` each, hence the `+ 13` above). MEASURED from run 334's
+   * store before the build: 6 at position 2, 4 at 3, 2 at 4, 1 at 5, and pre-committed in
+   * docs/superpowers/specs/2026-09-03-r206-build-precommitment.md. This fixture has NO
+   * session-scoped state, so these are an ORDER fact (the killer is not always first in the
+   * ledger's order), which is why three named positions are pinned below as well: the field must
+   * measure the order and not which confirmation branch ran.
+   */
+  warmKills: 13,
+  killPositions: [
+    { mutantCode: "M0160", killingTest: "ProcessedRequiresCategory", killPosition: 5 },
+    { mutantCode: "M0164", killingTest: "FlaggedFiresModifyTrigger", killPosition: 4 },
+    { mutantCode: "M0156", killingTest: "CategoryGuardNeedsCalcFields", killPosition: 2 },
+  ],
   /**
    * Task 4 (excluded-sites-spine): the `notInstrumented` half's ONLY live proof, added because it
    * had none. Every other file in this fixture is a CARRIER kind (`CARRIER_KINDS` in
@@ -660,6 +675,8 @@ async function readOptionalLaunchConfig(): Promise<LaunchLocalConfig["configurat
 interface RunOnceResult {
   readonly report: SessionReport;
   readonly odataCfg: ActivationConfig;
+  /** R206: `ResultsStore.sessionIdLiveness` for this run, read before the store closes. */
+  readonly sessionLiveness: ReturnType<ResultsStore["sessionIdLiveness"]>;
 }
 
 async function runOnce(scratchRoot: string): Promise<RunOnceResult> {
@@ -765,13 +782,50 @@ async function runOnce(scratchRoot: string): Promise<RunOnceResult> {
       // operator deletes it by hand (observed live). Same reasoning as bcdev.itest.ts.
       quarantineDir: join(scratchRoot, "quarantine"),
     });
-    return { report, odataCfg };
+    const runId = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
+    const sessionLiveness = store.sessionIdLiveness(runId);
+    return { report, odataCfg, sessionLiveness };
   } finally {
     store.close();
     // Without this the spawned bc-dev MCP child keeps the event loop alive and this script never
     // exits, even on a fully successful run.
     await backend.close();
   }
+}
+
+/**
+ * R206 §6: the store-level liveness check on `session_id`, and the guard's own count. Scoped to
+ * rows that came from an answer: every pass/fail row carries an id, the grouped rows' distinct
+ * ids equal the group calls that ANSWERED (`groupedCalls` minus `stoppedCalls`, 0 here), and
+ * every single-call row is its own session. The anti-inertness control for `sessionId` now that
+ * the guard's predicate is `testRunsBefore`; scoped, never softened.
+ */
+function assertSessionLiveness(
+  report: SessionReport,
+  live: ReturnType<ResultsStore["sessionIdLiveness"]>,
+  stoppedCalls: number,
+): void {
+  assert.equal(
+    report.mutants.filter((m) => m.cause === "session-reused").length,
+    0,
+    "R206: no mutant may be refused as session-reused on a container that hands every request a fresh session",
+  );
+  assert.equal(
+    live.missing,
+    0,
+    `R206: every pass/fail row must carry a session id; ${live.missing} do not`,
+  );
+  assert.ok(live.answered > 0, "R206: the store must hold answered rows to check");
+  assert.equal(
+    live.manyDistinct,
+    (report.groupedCalls ?? 0) - stoppedCalls,
+    `R206: distinct session ids among grouped pass/fail rows must equal the group calls that answered (${report.groupedCalls} minus ${stoppedCalls}); got ${live.manyDistinct}`,
+  );
+  assert.equal(
+    live.singleRows,
+    live.singleDistinct,
+    `R206: every single-call row must be its own session; ${live.singleRows} rows carry ${live.singleDistinct} distinct ids`,
+  );
 }
 
 function assertVerdictTable(report: SessionReport): void {
@@ -833,7 +887,36 @@ function assertVerdictTable(report: SessionReport): void {
     EXPECTED.groupedCalls,
     `R198: expected exactly ${EXPECTED.groupedCalls} RunMutantMany calls (one per scored mutant); ` +
       `got ${report.groupedCalls}. Fewer means the grouped path silently stopped being used; more ` +
-      "means a chunk or a lost-ack retry happened on a container gate, which must be explained",
+      "means a chunk, a lost-ack retry or an unexpected replay happened on a container gate, which must be explained",
+  );
+  // R206: the warm kills are a NUMBER measured before the build, every kill carries a position,
+  // and three named mutants carry the positions run 334 measured, so the field measures the
+  // order and not which confirmation branch ran.
+  assert.equal(
+    report.warmKills,
+    EXPECTED.warmKills,
+    `R206: expected ${EXPECTED.warmKills} warm kills (kills at group position > 1, each replayed); got ${report.warmKills}`,
+  );
+  for (const m of report.mutants) {
+    if (m.verdict !== "killed" && m.verdict !== "timeout-killed") continue;
+    assert.ok(
+      m.killPosition !== undefined && m.killPosition >= 1,
+      `R206: ${m.mutantCode} is ${m.verdict} without a killPosition`,
+    );
+  }
+  for (const want of EXPECTED.killPositions) {
+    const got = report.mutants.find((m) => m.mutantCode === want.mutantCode);
+    assert.ok(got !== undefined, `R206: no mutant ${want.mutantCode}`);
+    assert.equal(got.killingTest, want.killingTest, `R206: ${want.mutantCode}'s killer`);
+    assert.equal(
+      got.killPosition,
+      want.killPosition,
+      `R206: ${want.mutantCode} (${want.killingTest}) killPosition ${got.killPosition}, expected ${want.killPosition}`,
+    );
+  }
+  assert.ok(
+    report.validity.caveats.includes("session-warm"),
+    `R206: a report with grouped calls must carry the session-warm caveat; got ${JSON.stringify(report.validity.caveats)}`,
   );
   assert.equal(
     report.untargetedTriggerCount,
@@ -1491,6 +1574,7 @@ async function main(): Promise<void> {
   try {
     const first = await runOnce(scratchA);
     assertVerdictTable(first.report);
+    assertSessionLiveness(first.report, first.sessionLiveness, 0);
     // The trigger claim itself, read off the manifests the run actually deployed (the scratch
     // dir is still on disk here — it is removed in the `finally` below).
     await assertTriggerKillAndSurvive(
