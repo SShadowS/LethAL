@@ -124,6 +124,8 @@ export interface FoldedReport {
   readonly untargetedTriggerCount: number;
   /** R198 — see `SessionReport.groupedCalls`. */
   readonly groupedCalls: number;
+  /** R206 — see `SessionReport.warmKills`. */
+  readonly warmKills: number;
   /** R175 — see `SessionReport.unplaceableCount`. */
   readonly unplaceableCount: number;
   /** R175 — `mutantId`s of those, sorted. See `SessionReport.unplaceableMutants`. */
@@ -202,6 +204,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
   // scope to this task without a concrete failure it is known to prevent.
   let untargetedTriggerCount = 0;
   let groupedCalls = 0;
+  let warmKills = 0;
   let unplaceableCount = 0;
   const unplaceableMutants = new Set<string>();
   /** R106: whether any `coverage-split` arrived, and whether one was ever OWED — see the check at
@@ -319,9 +322,13 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
           ...(e.killingTestFailure !== undefined
             ? { killingTestFailure: e.killingTestFailure }
             : {}),
+          ...(e.killPosition !== undefined ? { killPosition: e.killPosition } : {}),
           ...(e.cause !== undefined ? { cause: e.cause } : {}),
           ...(e.runner !== undefined ? { runner: e.runner } : {}),
         });
+        // R206: a warm kill is a kill whose position is KNOWN and greater than 1; a kill without a
+        // position is never counted (it predates the field), so this cannot read a default.
+        if (isKill(e.verdict) && e.killPosition !== undefined && e.killPosition > 1) warmKills += 1;
         if (e.runnerDisagreementTest !== undefined) {
           runnerDisagreementTests.add(e.runnerDisagreementTest);
         }
@@ -352,8 +359,10 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
           ...(e.killingTestFailure !== undefined
             ? { killingTestFailure: e.killingTestFailure }
             : {}),
+          ...(e.killPosition !== undefined ? { killPosition: e.killPosition } : {}),
           ...(e.runner !== undefined ? { runner: e.runner } : {}),
         });
+        if (isKill(e.verdict) && e.killPosition !== undefined && e.killPosition > 1) warmKills += 1;
         break;
       case "mutant-skipped-stranded":
         strandedSkipCount += 1;
@@ -517,6 +526,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
     baselineTests,
     untargetedTriggerCount,
     groupedCalls,
+    warmKills,
     unplaceableCount,
     unplaceableMutants: [...unplaceableMutants].sort(),
     ...(quarantinedReason !== undefined ? { quarantined: { reason: quarantinedReason } } : {}),
@@ -524,4 +534,9 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
     ...(alRunnerBcBuild !== undefined ? { alRunnerBcBuild } : {}),
     ...(alRunnerPlatformAppsDir !== undefined ? { alRunnerPlatformAppsDir } : {}),
   };
+}
+
+/** R206: the two verdicts `killPosition` is defined on. */
+function isKill(verdict: string): boolean {
+  return verdict === "killed" || verdict === "timeout-killed";
 }

@@ -7984,11 +7984,18 @@ const FIVE_TESTS_AL = `codeunit 79100 "Sandbox Tests"
 class GroupStubBackend extends StubBackend {
   /** Every `runMany` call this backend answered, with what it was asked. */
   readonly manyCalls: RunManyOpts[] = [];
-  /** When set, replaces the composed answer for the call whose (1-based) ordinal it names. */
+  /**
+   * When set, replaces the composed answer for the COVERING call whose (1-based) ordinal it
+   * names. R206's confirmation replays (`confirmation: true`) are numbered 0 here, so an override
+   * written for "the survivor's call" keeps naming it once replays interleave.
+   */
   manyOverride?: (call: number, opts: RunManyOpts, composed: RunManyResult) => RunManyResult;
   private manySeq = 0;
+  private coveringSeq = 0;
   async runMany(opts: RunManyOpts): Promise<RunManyResult> {
     this.manySeq += 1;
+    if (opts.confirmation !== true) this.coveringSeq += 1;
+    const call = opts.confirmation === true ? 0 : this.coveringSeq;
     this.manyCalls.push(opts);
     const fencedOp = { attemptId: `g${this.manySeq}`, opSeq: 100 + this.manySeq };
     const verdicts: TestVerdict[] = [];
@@ -8009,7 +8016,7 @@ class GroupStubBackend extends StubBackend {
       durationMs: verdicts.length * 5,
       fencedOp,
     };
-    return this.manyOverride?.(this.manySeq, opts, composed) ?? composed;
+    return this.manyOverride?.(call, opts, composed) ?? composed;
   }
 }
 
@@ -8065,12 +8072,37 @@ describe("R198: grouped covering runs", () => {
     expect(seq.report.counts.killed).toBeGreaterThan(0);
     expect(seq.report.counts.survived).toBeGreaterThan(0);
     expect(verdictTable(grp.report)).toEqual(verdictTable(seq.report));
-    // The counter is the anti-inertness pin: zero without the call, one per scored mutant with it.
+    // The counter is the anti-inertness pin: zero without the call, one per scored mutant with it,
+    // plus (R206) one replay per kill measured at group position > 1. M0001 is killed by T3 at
+    // position 3; the ledger then puts T3 first for M0002, which T1 kills at position 2. Both are
+    // warm, both replay, both confirm.
     expect(seq.report.groupedCalls).toBe(0);
-    expect(grp.report.groupedCalls).toBe(seq.report.counts.killed + seq.report.counts.survived);
+    expect(grp.report.warmKills).toBe(2);
+    expect(grp.report.groupedCalls).toBe(
+      seq.report.counts.killed + seq.report.counts.survived + (grp.report.warmKills ?? 0),
+    );
+    const m1 = grp.report.mutants.find((m) => m.mutantCode === "M0001");
+    const m2 = grp.report.mutants.find((m) => m.mutantCode === "M0002");
+    expect(m1?.killPosition).toBe(3);
+    expect(m2?.killPosition).toBe(2);
+    expect(grp.report.validity.caveats).toContain("session-warm");
+    expect(seq.report.validity.caveats).not.toContain("session-warm");
+    // The sequential path records position 1 on every kill: one method per call, by definition.
+    for (const m of seq.report.mutants.filter((x) => x.verdict === "killed")) {
+      expect(m.killPosition).toBe(1);
+    }
+    expect(seq.report.warmKills).toBe(0);
+    // The replays' rows are the confirmation's: mutantCode null, op_kind many.
+    expect(backend.manyCalls.filter((c) => c.confirmation === true).length).toBe(2);
     expect(backend.manyCalls.length).toBe(grp.report.groupedCalls ?? -1);
-    // Every call asked for the whole covering set (five tests) in one go.
-    for (const call of backend.manyCalls) expect(call.methods.length).toBe(5);
+    // Every COVERING call asked for the whole covering set (five tests) in one go; a replay asks
+    // for exactly the prefix through the killer (3 for M0001, 2 for M0002).
+    for (const call of backend.manyCalls.filter((c) => c.confirmation !== true)) {
+      expect(call.methods.length).toBe(5);
+    }
+    expect(
+      backend.manyCalls.filter((c) => c.confirmation === true).map((c) => c.methods.length),
+    ).toEqual([3, 2]);
     expect(grp.store.groupedRows(1).rows).toBeGreaterThan(0);
     seq.store.close();
     grp.store.close();
@@ -8086,9 +8118,19 @@ describe("R198: grouped covering runs", () => {
     expect(m1?.verdict).toBe("killed");
     expect(m1?.killingTest).toBe("T3");
     // Five covering tests: a survivor takes 3 calls (2+2+1). M0001 (killed at T3, entry 1 of
-    // chunk 2) takes 2; M0002 (killed at T1) takes 1.
+    // chunk 2) takes 2; M0002 (the ledger now puts T3 first, so chunk 1 is [T3, T1] and T1 kills
+    // at chunk position 2) takes 1 plus its R206 replay. `killPosition` is CALL-relative: M0001's
+    // killer sits at ordered position 3 and chunk position 1, so it is 1 and no replay ran for it.
     const survivors = grp.report.counts.survived;
-    expect(grp.report.groupedCalls).toBe(survivors * 3 + 2 + 1);
+    expect(m1?.killPosition).toBe(1);
+    const m2 = grp.report.mutants.find((m) => m.mutantCode === "M0002");
+    expect(m2?.killPosition).toBe(2);
+    expect(grp.report.warmKills).toBe(1);
+    expect(grp.report.groupedCalls).toBe(survivors * 3 + 2 + 1 + 1);
+    // The replay ran exactly chunk 1's prefix through position 2: [T3, T1], never `ordered`'s.
+    const replays = backend.manyCalls.filter((c) => c.confirmation === true);
+    expect(replays.length).toBe(1);
+    expect(replays[0]?.methods.map((x) => x.ref.method)).toEqual(["T3", "T1"]);
     seq.store.close();
     grp.store.close();
   });
@@ -8190,6 +8232,474 @@ describe("R198: grouped covering runs", () => {
     expect(stopped[0]?.verdict).toBe("error");
     expect(report.counts.killed + report.counts.survived).toBeGreaterThan(0);
     expect(report.validity.reliability).not.toBe("invalidated");
+    store.close();
+  });
+});
+/**
+ * R206: the warm confirmation and the session guard. A fake backend with a SESSION-SCOPED cache
+ * (a value that persists across the methods of one `runMany` call and resets between calls),
+ * monotone session ids, and a controllable `testRunsBefore`, so the group path can be made to
+ * see a kill the sequential path cannot, and the guard can be fed a reused session.
+ */
+class WarmStubBackend extends GroupStubBackend {
+  /** The session-scoped cache: cleared at the start of every call (a fresh session). */
+  session = new Map<string, unknown>();
+  nextSessionId = 1000;
+  /** What the server reports as `testRunsBefore` for the covering call with this ordinal (0 = fresh; a replay is call 0). */
+  testRunsBeforeFor?: (call: number, opts: RunManyOpts) => number;
+  /** A timeout the fake's own watchdog scores for this method under this mutant, with its duration. */
+  timeoutFor?: (mutant: string | null, ref: TestMethodRef, position: number) => number | undefined;
+  /** R206: `testRunsBefore` for a SINGLE-method call (the baseline and the cold confirmation). */
+  singleTestRunsBefore?: (mutant: string | null, ref: TestMethodRef) => number;
+  private warmSeq = 0;
+  private warmCoveringSeq = 0;
+  override async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
+    // A single-method call is its own session.
+    this.session = new Map();
+    const v = await super.run(ref, opts);
+    const sessionId = this.nextSessionId++;
+    const active = this.activations.at(-1) ?? null;
+    return { ...v, sessionId, testRunsBefore: this.singleTestRunsBefore?.(active, ref) ?? 0 };
+  }
+  override async runMany(opts: RunManyOpts): Promise<RunManyResult> {
+    this.warmSeq += 1;
+    if (opts.confirmation !== true) this.warmCoveringSeq += 1;
+    const call = opts.confirmation === true ? 0 : this.warmCoveringSeq;
+    this.session = new Map();
+    const sessionId = this.nextSessionId++;
+    const testRunsBefore = this.testRunsBeforeFor?.(call, opts) ?? 0;
+    this.manyCalls.push(opts);
+    const fencedOp = { attemptId: `w${this.warmSeq}`, opSeq: 500 + this.warmSeq };
+    const active = this.activations.at(-1) ?? null;
+    const verdicts: TestVerdict[] = [];
+    let endedBy: "complete" | "failure" | "cap" = "complete";
+    for (const [i, m] of opts.methods.entries()) {
+      const stopAt = this.timeoutFor?.(active, m.ref, i + 1);
+      if (stopAt !== undefined) {
+        return {
+          kind: "call",
+          methodIndex: i + 1,
+          verdict: {
+            ref: m.ref,
+            outcome: "timeout",
+            durationMs: stopAt,
+            failureMessage: `stopped ${m.ref.method} after ${stopAt} ms (fake 408)`,
+          },
+          fencedOp,
+        };
+      }
+      const v = await super.run(m.ref, { coverage: "none", timeoutMs: m.budgetMs });
+      verdicts.push({ ...v, sessionId, testRunsBefore });
+      if (v.outcome !== "pass") {
+        endedBy = "failure";
+        break;
+      }
+    }
+    const composed: RunManyResult = {
+      kind: "verdicts",
+      endedBy,
+      ranCount: verdicts.length,
+      verdicts,
+      durationMs: verdicts.length * 5,
+      fencedOp,
+    };
+    return this.manyOverride?.(call, opts, composed) ?? composed;
+  }
+}
+
+describe("R206: the warm confirmation and the session guard", () => {
+  // The cache: T1 populates it, and mutant M0002 (which "removes the invalidation") is caught by
+  // T2 ONLY when T2 sees T1's entry, i.e. warm. Cold, T2 passes: the sequential path survives.
+  // M0001, scored first, is an ordinary cold kill at T1, which also seeds the kill ledger with T1
+  // so the order stays [T1, T2, ...] for everything after (the ledger is the FIRST sort key).
+  const makeBackend = () => {
+    const backend: WarmStubBackend = new WarmStubBackend(
+      CAPS_NST,
+      (mutant, ref) => {
+        if (ref.method === "T1") backend.session.set("cache", "populated-by-T1");
+        if (mutant === "M0002" && ref.method === "T2" && backend.session.get("cache") !== undefined)
+          return "fail";
+        if (mutant === "M0001" && ref.method === "T1") return "fail";
+        return "pass";
+      },
+      ["IsOverBudget"],
+    );
+    backend.failureMessageFor = (mutant, ref) =>
+      `stale cache assertion in ${ref.method} under ${mutant}`;
+    return backend;
+  };
+  const session = async (
+    backend: ExecutionBackend,
+    extra: {
+      groupRuns?: { enabled?: boolean; maxMethodsPerCall?: number };
+      stopHungSessions?: boolean;
+      resume?: boolean;
+      store?: ResultsStore;
+      dirs?: Awaited<ReturnType<typeof makeProject>>;
+    } = {},
+  ) => {
+    const dirs = extra.dirs ?? (await makeProject(FIVE_TESTS_AL));
+    const store = extra.store ?? new ResultsStore(":memory:");
+    const events: RunEvent[] = [];
+    const report = await runSession({
+      backend,
+      store,
+      ...dirs,
+      selectorIds,
+      emit: [createEmitter([(e) => events.push(e)])],
+      ...(extra.groupRuns !== undefined ? { groupRuns: extra.groupRuns } : {}),
+      ...(extra.stopHungSessions === true ? { stopHungSessions: true } : {}),
+      ...(extra.resume === true ? { resume: "last" as const } : {}),
+    });
+    return { report, store, events, dirs };
+  };
+  /** The warm-only kill. */
+  const m1 = (r: Awaited<ReturnType<typeof session>>) =>
+    r.report.mutants.find((m) => m.mutantCode === "M0002");
+  /** The cold kill, scored first. */
+  const cold = (r: Awaited<ReturnType<typeof session>>) =>
+    r.report.mutants.find((m) => m.mutantCode === "M0001");
+
+  test("the group path kills a warm-only mutant at killPosition 2 after a replay that passes; the sequential path survives it (the stated semantic difference)", async () => {
+    const backend = makeBackend();
+    const grp = await session(backend);
+    const k = m1(grp);
+    expect(k?.verdict).toBe("killed");
+    expect(k?.killingTest).toBe("T2");
+    expect(k?.killPosition).toBe(2);
+    expect(k?.killingTestFailure).toContain("stale cache assertion in T2 under M0002");
+    expect(grp.report.warmKills).toBe(1);
+    expect(grp.report.validity.caveats).toContain("session-warm");
+    // The replay ran exactly [T1, T2], unmutated, and its rows are the confirmation's.
+    const replays = backend.manyCalls.filter((c) => c.confirmation === true);
+    expect(replays.map((c) => c.methods.map((x) => x.ref.method))).toEqual([["T1", "T2"]]);
+    expect(grp.store.groupedRows(1).rows).toBeGreaterThan(0);
+    // Store-level liveness: every answered row carries a session id, none missing.
+    const live = grp.store.sessionIdLiveness(1);
+    expect(live.missing).toBe(0);
+    expect(live.answered).toBeGreaterThan(0);
+    grp.store.close();
+    const seq = await session(makeBackend(), { groupRuns: { enabled: false } });
+    expect(m1(seq)?.verdict).toBe("survived");
+    expect(seq.report.warmKills).toBe(0);
+    seq.store.close();
+  });
+
+  test("a prefix method failing in the replay is warm-prefix-unstable naming THAT method; the killer failing is unstable with the warm wording and no R59 note", async () => {
+    const prefix = makeBackend();
+    prefix.manyOverride = (call, _opts, composed) => {
+      if (call !== 0 || composed.kind !== "verdicts") return composed;
+      const first = composed.verdicts[0];
+      if (first === undefined) return composed;
+      return {
+        ...composed,
+        endedBy: "failure",
+        ranCount: 1,
+        verdicts: [{ ...first, outcome: "fail", failureMessage: "T1 is order-sensitive" }],
+      };
+    };
+    const a = await session(prefix);
+    const ka = m1(a);
+    expect(ka?.verdict).toBe("error");
+    expect(ka?.cause).toBe("warm-prefix-unstable");
+    expect(ka?.failureNote).toContain("method 1 (T1)");
+    expect(ka?.failureNote).toContain("T1 is order-sensitive");
+    a.store.close();
+
+    const killer = makeBackend();
+    killer.manyOverride = (call, _opts, composed) => {
+      if (call !== 0 || composed.kind !== "verdicts") return composed;
+      const [t1, t2] = composed.verdicts;
+      if (t1 === undefined || t2 === undefined) return composed;
+      return {
+        ...composed,
+        endedBy: "failure",
+        ranCount: 2,
+        verdicts: [t1, { ...t2, outcome: "fail", failureMessage: "T2 fails warm on its own" }],
+      };
+    };
+    const b = await session(killer);
+    const kb = m1(b);
+    expect(kb?.verdict).toBe("error");
+    expect(kb?.cause).toBe("unstable");
+    expect(kb?.failureNote).toContain("fails unmutated at position 2 of the replay");
+    expect(b.report.counts.unstable).toBe(1);
+    expect(b.report.runnerDisagreement).toBeUndefined();
+    b.store.close();
+  });
+
+  test("permissionsRefused names the prefix method whose replay text is BC's permissions refusal", async () => {
+    const backend = makeBackend();
+    backend.manyOverride = (call, _opts, composed) => {
+      if (call !== 0 || composed.kind !== "verdicts") return composed;
+      const first = composed.verdicts[0];
+      if (first === undefined) return composed;
+      return {
+        ...composed,
+        endedBy: "failure",
+        ranCount: 1,
+        verdicts: [
+          {
+            ...first,
+            outcome: "fail",
+            failureMessage:
+              "The current permissions prevented the action. (TableData 79100 Sandbox Row Insert: LethAL Sandbox Tests)",
+          },
+        ],
+      };
+    };
+    const r = await session(backend);
+    expect(m1(r)?.cause).toBe("warm-prefix-unstable");
+    expect(r.report.permissionsRefused?.tests.join(",")).toContain("T1");
+    r.store.close();
+  });
+
+  test("a replay answering cap is warm-confirmation-incomplete; a replay answering complete with fewer entries confirms nothing", async () => {
+    const cap = makeBackend();
+    cap.manyOverride = (call, _opts, composed) => {
+      if (call !== 0 || composed.kind !== "verdicts") return composed;
+      return { ...composed, endedBy: "cap", ranCount: 1, verdicts: composed.verdicts.slice(0, 1) };
+    };
+    const a = await session(cap);
+    expect(m1(a)?.cause).toBe("warm-confirmation-incomplete");
+    expect(m1(a)?.failureNote).toContain("headroom cap");
+    a.store.close();
+    const short = makeBackend();
+    short.manyOverride = (call, _opts, composed) => {
+      if (call !== 0 || composed.kind !== "verdicts") return composed;
+      return {
+        ...composed,
+        endedBy: "complete",
+        ranCount: 1,
+        verdicts: composed.verdicts.slice(0, 1),
+      };
+    };
+    const b = await session(short);
+    expect(m1(b)?.verdict).toBe("error");
+    expect(m1(b)?.cause).toBe("warm-confirmation-incomplete");
+    b.store.close();
+    // A `complete` answer with k entries of which one FAILED is a shape the transport refuses; the
+    // orchestrator re-asserts it rather than trusting the transport, so a fake can prove that
+    // "every entry passed" is checked and not merely "ranCount === k".
+    const lying = makeBackend();
+    lying.manyOverride = (call, _opts, composed) => {
+      if (call !== 0 || composed.kind !== "verdicts") return composed;
+      const [t1, t2] = composed.verdicts;
+      if (t1 === undefined || t2 === undefined) return composed;
+      return { ...composed, endedBy: "complete", ranCount: 2, verdicts: [t1, { ...t2, outcome: "fail" }] };
+    };
+    const c = await session(lying);
+    expect(m1(c)?.verdict).toBe("error");
+    expect(m1(c)?.cause).toBe("warm-confirmation-incomplete");
+    c.store.close();
+  });
+
+  test("a position-1 fail takes the cold confirmation unchanged, and records killPosition 1", async () => {
+    const backend = makeBackend();
+    const r = await session(backend);
+    const c = cold(r);
+    expect(c?.verdict).toBe("killed");
+    expect(c?.killingTest).toBe("T1");
+    expect(c?.killPosition).toBe(1);
+    // M0001's confirmation was the single-method cold rerun, not a replay: exactly one replay in
+    // the whole session, and it was M0002's.
+    expect(backend.manyCalls.filter((c) => c.confirmation === true).length).toBe(1);
+    r.store.close();
+  });
+
+  test("a warm timeout whose replay completes k inside budget is timeout-killed with killPosition; outside budget it is warm-timeout-unconfirmed; a replay stop on k is the same cause", async () => {
+    // M0003 hangs at T2 (position 2) under the mutant; the replay runs T2 unmutated in 5 ms.
+    const fast = makeBackend();
+    fast.timeoutFor = (mutant, ref) =>
+      mutant === "M0003" && ref.method === "T2" ? 30_000 : undefined;
+    const a = await session(fast, { stopHungSessions: true });
+    const m3 = a.report.mutants.find((m) => m.mutantCode === "M0003");
+    expect(m3?.verdict).toBe("timeout-killed");
+    expect(m3?.killPosition).toBe(2);
+    expect(a.report.validity.caveats).toContain("stop-hung-sessions");
+    a.store.close();
+
+    // Same, but the replay's T2 takes longer than its cold budget.
+    const slow = makeBackend();
+    slow.timeoutFor = (mutant, ref) =>
+      mutant === "M0003" && ref.method === "T2" ? 30_000 : undefined;
+    slow.manyOverride = (call, _opts, composed) => {
+      if (call !== 0 || composed.kind !== "verdicts") return composed;
+      const [t1, t2] = composed.verdicts;
+      if (t1 === undefined || t2 === undefined) return composed;
+      return { ...composed, verdicts: [t1, { ...t2, durationMs: 10_000_000 }] };
+    };
+    const b = await session(slow, { stopHungSessions: true });
+    const m3b = b.report.mutants.find((m) => m.mutantCode === "M0003");
+    expect(m3b?.verdict).toBe("error");
+    expect(m3b?.cause).toBe("warm-timeout-unconfirmed");
+    expect(m3b?.failureNote).toContain("outside the");
+    b.store.close();
+
+    // Same, but the replay's own watchdog stops T2 (unmutated): the same cause.
+    const stopped = makeBackend();
+    stopped.timeoutFor = (mutant, ref) =>
+      ref.method === "T2" && (mutant === "M0003" || mutant === null) ? 30_000 : undefined;
+    const c = await session(stopped, { stopHungSessions: true });
+    const m3c = c.report.mutants.find((m) => m.mutantCode === "M0003");
+    expect(m3c?.verdict).toBe("error");
+    expect(m3c?.cause).toBe("warm-timeout-unconfirmed");
+    expect(m3c?.failureNote).toContain("stopped in the replay too");
+    c.store.close();
+  });
+
+  test("a replay stop BEFORE k is warm-prefix-unstable", async () => {
+    const backend = makeBackend();
+    // M0001 fails warm at T2; the replay's T1 (unmutated) hangs and is stopped.
+    backend.timeoutFor = (mutant, ref) =>
+      mutant === null && ref.method === "T1" ? 30_000 : undefined;
+    const r = await session(backend, { stopHungSessions: true });
+    expect(m1(r)?.cause).toBe("warm-prefix-unstable");
+    expect(m1(r)?.failureNote).toContain("method 1 (T1)");
+    r.store.close();
+  });
+
+  test("the replay runs exactly the CHUNK's prefix when the killer sits in chunk 2 under --max-methods-per-call 2", async () => {
+    // Order on the cold ledger is alphabetical: T1..T5. Make M0004 fail at T4 only when T3 ran in
+    // the same session (chunk 2 is [T3, T4]); the replay must be [T3, T4], never [T1..T4].
+    const backend: WarmStubBackend = new WarmStubBackend(
+      CAPS_NST,
+      (mutant, ref) => {
+        if (ref.method === "T3") backend.session.set("t3", true);
+        if (mutant === "M0003" && ref.method === "T4" && backend.session.get("t3") === true)
+          return "fail";
+        return "pass";
+      },
+      ["IsOverBudget"],
+    );
+    const r = await session(backend, { groupRuns: { maxMethodsPerCall: 2 } });
+    const m4 = r.report.mutants.find((m) => m.mutantCode === "M0003");
+    expect(m4?.verdict).toBe("killed");
+    expect(m4?.killPosition).toBe(2);
+    const replays = backend.manyCalls.filter((c) => c.confirmation === true);
+    expect(replays.map((c) => c.methods.map((x) => x.ref.method))).toEqual([["T3", "T4"]]);
+    r.store.close();
+  });
+
+  test("the guard: a reused session records session-reused on a failing mutated call from the FIRST call on, a passing one stays survived, and the warning fires once", async () => {
+    const backend = makeBackend();
+    backend.testRunsBeforeFor = () => 3;
+    const r = await session(backend);
+    const reused = r.report.mutants.filter((m) => m.cause === "session-reused");
+    // M0001 fails at T2 (warm) and M0002 fails at T1: both refused.
+    expect(reused.map((m) => m.mutantCode).sort()).toEqual(["M0001", "M0002"]);
+    for (const m of reused)
+      expect(m.failureNote).toContain("test method(s) had already run in session");
+    expect(r.report.mutants.filter((m) => m.verdict === "survived").length).toBe(
+      r.report.mutants.length - reused.length,
+    );
+    expect(r.report.counts.killed).toBe(0);
+    expect(
+      r.events.filter((e) => e.type === "warning" && e.code === "session-reuse-observed").length,
+    ).toBe(1);
+    r.store.close();
+  });
+
+  test("the guard on the replay: only the REPLAY's session reused leaves the kill unconfirmed as session-reused", async () => {
+    const backend = makeBackend();
+    backend.testRunsBeforeFor = (call) => (call === 0 ? 1 : 0);
+    const b = await session(backend);
+    expect(m1(b)?.cause).toBe("session-reused");
+    expect(m1(b)?.failureNote).toContain("before the replay started");
+    b.store.close();
+  });
+
+  test("the guard on the cold confirmation: a position-1 kill whose single-method rerun ran in a reused session is session-reused", async () => {
+    const backend = makeBackend();
+    backend.singleTestRunsBefore = (mutant, ref) =>
+      mutant === null && ref.method === "T1" ? 2 : 0;
+    const r = await session(backend);
+    const c = cold(r);
+    expect(c?.verdict).toBe("error");
+    expect(c?.cause).toBe("session-reused");
+    expect(c?.failureNote).toContain("confirming T1");
+    r.store.close();
+  });
+
+  test("a suite-unresolved answer (a call-level error with no cause and no operation) aborts the session with the server's reason", async () => {
+    const backend = makeBackend();
+    backend.manyOverride = (call, opts, composed) => {
+      if (call !== 1) return composed;
+      const first = opts.methods[0];
+      if (first === undefined) return composed;
+      return {
+        kind: "call",
+        methodIndex: 1,
+        verdict: {
+          ref: first.ref,
+          outcome: "error",
+          durationMs: 1,
+          failureMessage:
+            "RunMutantMany suite-unresolved: the server could not resolve this request's test methods to exactly one function line each, and ran nothing — expected exactly one method T1 in codeunit 79100, found 2",
+        },
+        fencedOp: composed.fencedOp,
+      };
+    };
+    await expect(session(backend)).rejects.toThrow(/found 2/);
+  });
+
+  test("a replay honours abortSession exactly as a covering step does", async () => {
+    const backend = makeBackend();
+    backend.manyOverride = (call, opts, composed) => {
+      if (call !== 0) return composed;
+      const first = opts.methods[0];
+      if (first === undefined) return composed;
+      return {
+        kind: "call",
+        methodIndex: 1,
+        verdict: {
+          ref: first.ref,
+          outcome: "error",
+          durationMs: 1,
+          failureMessage: "RunMutantMany failed: HTTP 404",
+          operation: "in-flight-unknown",
+          fencedOp: composed.fencedOp,
+        },
+        abortSession:
+          "control-app-route-missing: LethALControl_RunMutantMany answered 404 after the version gate passed",
+        fencedOp: composed.fencedOp,
+      };
+    };
+    await expect(session(backend)).rejects.toThrow(/control-app-route-missing/);
+  });
+
+  test("a resumed run carries killPosition", async () => {
+    const store = new ResultsStore(":memory:");
+    // The first run scores M0001 (cold) and M0002 (warm), then strands on M0003's call, so it
+    // is left unfinished and resumable.
+    const first = makeBackend();
+    first.manyOverride = (call, opts, composed) => {
+      if (call !== 3) return composed;
+      const head = opts.methods[0];
+      if (head === undefined) return composed;
+      return {
+        kind: "call",
+        methodIndex: 1,
+        verdict: {
+          ref: head.ref,
+          outcome: "error",
+          durationMs: 1,
+          failureMessage: "RunMutantMany returned no readable answer",
+          operation: "in-flight-unknown",
+          fencedOp: composed.fencedOp,
+        },
+        fencedOp: composed.fencedOp,
+      };
+    };
+    const a = await session(first, { store });
+    expect(m1(a)?.killPosition).toBe(2);
+    expect(a.report.quarantined).toBeDefined();
+    const second = await session(makeBackend(), { store, resume: true, dirs: a.dirs });
+    const carried = m1(second);
+    expect(carried?.verdict).toBe("killed");
+    expect(carried?.killPosition).toBe(2);
+    expect(second.report.warmKills).toBe(1);
+    expect(second.report.validity.caveats).toContain("resumed");
     store.close();
   });
 });

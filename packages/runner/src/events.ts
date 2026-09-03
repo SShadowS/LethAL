@@ -304,6 +304,8 @@ export type RunEventInput =
        * close. Set on `killed` and `timeout-killed` only, and never together with `cause`.
        */
       readonly killingTestFailure?: string;
+      /** R206 — see `MutantRow.killPosition` (store.ts). Set on `killed`/`timeout-killed` only. */
+      readonly killPosition?: number;
       readonly coveringTests: readonly string[];
       readonly coverageAttribution?: CoverageAttribution;
       readonly guardObserved?: boolean;
@@ -367,6 +369,8 @@ export type RunEventInput =
        *  a resumed kill keeps its own account of why it died rather than losing it on the
        *  second run. `CarriedVerdict` (resume.ts) is its source. */
       readonly killingTestFailure?: string;
+      /** R206 — see `MutantRow.killPosition`. Carried for the same reason. */
+      readonly killPosition?: number;
       readonly coveringTests: readonly string[];
       readonly coverageAttribution?: CoverageAttribution;
       readonly runner?: RunnerKind;

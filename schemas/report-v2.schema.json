@@ -73,7 +73,8 @@
               "platform-artifact-kills",
               "kills-without-assertion",
               "declarative-sites-dropped",
-              "all-errors"
+              "all-errors",
+              "session-warm"
             ]
           }
         },
@@ -324,6 +325,9 @@
           "killingTestFailure": {
             "type": "string"
           },
+          "killPosition": {
+            "type": "number"
+          },
           "cause": {
             "type": "string",
             "enum": [
@@ -335,7 +339,11 @@
               "group-answer-malformed",
               "group-coverage-incomplete",
               "op-stopped",
-              "stopped-after-completion"
+              "stopped-after-completion",
+              "session-reused",
+              "warm-prefix-unstable",
+              "warm-timeout-unconfirmed",
+              "warm-confirmation-incomplete"
             ]
           },
           "platformKillMechanism": {
@@ -858,6 +866,9 @@
       "type": "number"
     },
     "groupedCalls": {
+      "type": "number"
+    },
+    "warmKills": {
       "type": "number"
     },
     "unplaceableMutants": {

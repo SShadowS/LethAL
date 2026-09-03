@@ -533,5 +533,6 @@ exports[`buildReport output is stable across the event-stream refactor an event 
       "scored": 7,
     },
   },
+  "warmKills": 0,
 }
 `;

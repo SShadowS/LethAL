@@ -750,11 +750,18 @@
             "group-answer-malformed",
             "group-coverage-incomplete",
             "op-stopped",
-            "stopped-after-completion"
+            "stopped-after-completion",
+            "session-reused",
+            "warm-prefix-unstable",
+            "warm-timeout-unconfirmed",
+            "warm-confirmation-incomplete"
           ]
         },
         "killingTestFailure": {
           "type": "string"
+        },
+        "killPosition": {
+          "type": "number"
         },
         "coveringTests": {
           "type": "array",
@@ -919,6 +926,9 @@
         },
         "killingTestFailure": {
           "type": "string"
+        },
+        "killPosition": {
+          "type": "number"
         },
         "coveringTests": {
           "type": "array",

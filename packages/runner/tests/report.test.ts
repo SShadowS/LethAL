@@ -265,7 +265,8 @@ describe("Caveat union", () => {
       "kills-without-assertion": true,
       "declarative-sites-dropped": true,
       "all-errors": true,
+      "session-warm": true,
     };
-    expect(Object.keys(all).length).toBe(17);
+    expect(Object.keys(all).length).toBe(18);
   });
 });

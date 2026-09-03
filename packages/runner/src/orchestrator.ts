@@ -1802,6 +1802,16 @@ interface CoveringStep {
   readonly opKind: "single" | "many";
   readonly cause?: RunManyCause;
   readonly abortSession?: string;
+  /**
+   * R206 §2.4: the 1-based position of `ref` within the CALL that ran it (1 on the sequential
+   * path, where every call runs one method), and the call's methods 1..position with their
+   * budgets, which is exactly what a warm confirmation replays: never `ordered`'s prefix, which
+   * differs under chunking.
+   */
+  readonly groupPosition: number;
+  readonly chunkPrefix: readonly { readonly ref: TestMethodRef; readonly budgetMs: number }[];
+  /** The ceiling and grace the call ran under; the replay runs under the same. */
+  readonly callSettings: { readonly requestCeilingMs: number; readonly stopGraceMs: number };
 }
 
 /** R198: the group-run settings the covering loop dispatches under, or `undefined` for sequential. */
@@ -1856,6 +1866,9 @@ async function* coveringRuns(args: {
       testBudgetMs: budget,
       groupBudgetMs: budget,
       opKind: "single",
+      groupPosition: 1,
+      chunkPrefix: [{ ref, budgetMs: budget }],
+      callSettings: { requestCeilingMs: budget, stopGraceMs: 0 },
     };
   };
   const group = args.group;
@@ -1880,8 +1893,25 @@ async function* coveringRuns(args: {
       if (ref === undefined || !fits(ref)) break;
       methods.push({ ref, budgetMs: args.budgetOf(ref) });
     }
+    // R206 §3: two equal (codeunitId, method) pairs in one call is a caller-contract violation,
+    // refused HERE, before dispatch, where the message can name the mutant. The server's own
+    // collision check (`suite-unresolved`) is the second line, not the first.
+    const seenPairs = new Set<string>();
+    for (const { ref } of methods) {
+      const key = testKeyOf(ref);
+      if (seenPairs.has(key)) {
+        throw new Error(
+          `coveringRuns: mutant ${args.mutantId}'s covering set names ${ref.codeunitId}.${ref.method} twice in one call — a duplicate pair would resolve to one function line (R206)`,
+        );
+      }
+      seenPairs.add(key);
+    }
     const chunk: RunManyOpts = {
       methods,
+      requestCeilingMs: group.requestCeilingMs,
+      stopGraceMs: group.stopGraceMs,
+    };
+    const callSettings = {
       requestCeilingMs: group.requestCeilingMs,
       stopGraceMs: group.stopGraceMs,
     };
@@ -1902,7 +1932,8 @@ async function* coveringRuns(args: {
       ...(out.original !== undefined ? { original: out.original } : {}),
     };
     if (out.result.kind === "call") {
-      const { verdict, cause, abortSession } = out.result;
+      const { verdict, cause, abortSession, methodIndex } = out.result;
+      const position = Math.min(Math.max(methodIndex, 1), methods.length);
       yield {
         ...provenance,
         ref: verdict.ref,
@@ -1912,10 +1943,13 @@ async function* coveringRuns(args: {
         opKind: "many",
         ...(cause !== undefined ? { cause } : {}),
         ...(abortSession !== undefined ? { abortSession } : {}),
+        groupPosition: position,
+        chunkPrefix: methods.slice(0, position),
+        callSettings,
       };
       return;
     }
-    for (const verdict of out.result.verdicts) {
+    for (const [i, verdict] of out.result.verdicts.entries()) {
       yield {
         ...provenance,
         ref: verdict.ref,
@@ -1923,6 +1957,9 @@ async function* coveringRuns(args: {
         testBudgetMs: args.budgetOf(verdict.ref),
         groupBudgetMs,
         opKind: "many",
+        groupPosition: i + 1,
+        chunkPrefix: methods.slice(0, i + 1),
+        callSettings,
       };
     }
     // A `failure` ends the walk. `complete` means every method of THIS call ran (the transport
@@ -3235,6 +3272,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     }
     // R197: one ledger for the whole session, so a kill in batch 0 orders batch 1's tests too.
     const killLedger = newKillLedger();
+    // R206 §2.1: the session-reuse warning fires once per session, whichever batch or shard sees it.
+    const sessionReuse = { warned: false };
     for (const [batchIdx, batchFiles] of artifacts.entries()) {
       // Layer 5C-B1 (design §6): a lease lost during THIS batch invalidates exactly THIS batch's
       // verdicts at session end — earlier batches stand, every RunMutant in them having been
@@ -3597,6 +3636,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
             b.verdict.outcome,
             b.verdict.durationMs,
             b.verdict.failureMessage,
+            undefined,
+            b.verdict.sessionId,
           );
         }
       }
@@ -3611,7 +3652,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           },
           resyncSessionOpSeq,
         );
-        // Baseline test results are not tied to any mutant: mutant_row_id stays NULL.
+        // Baseline test results are not tied to any mutant: mutant_row_id stays NULL. R206: the
+        // session id rides along as data (the store's liveness check counts baseline rows too).
         cfg.store.recordTestResult(
           runId,
           null,
@@ -3620,6 +3662,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           v.outcome,
           v.durationMs,
           v.failureMessage,
+          undefined,
+          v.sessionId,
         );
         // Layer 5C-B1 (design §5/§6/§8): a lease answer must be classified BEFORE the generic
         // `requiresUnsafeLatch` quarantine below, which would otherwise record a durable tier
@@ -4040,6 +4084,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
             // Dropping it here would make a resumed report quietly less informative than the run it
             // resumed, which is the drift `carried.runner` was added to close for the runner tag.
             carried.killingTestFailure,
+            undefined, // unplaceable
+            carried.killPosition,
           );
         }
       }
@@ -4085,6 +4131,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           killLedger,
           memberCountsByTest: memberCounts,
           groupRuns,
+          sessionReuse,
         });
       } else {
         const shards = shardEvenly(toExecute, workers);
@@ -4184,6 +4231,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
               killLedger,
               memberCountsByTest: memberCounts,
               groupRuns,
+              sessionReuse,
             });
           }),
         );
@@ -4666,6 +4714,466 @@ async function closeIfSupported(backend: ExecutionBackend): Promise<void> {
 }
 
 /**
+ * R206 §2.2: the warm confirmation. A kill (a `fail` or a `timeout`) at group position k > 1 was
+ * measured in a session that had already run methods 1..k-1 of the same call, so it is confirmed
+ * by replaying EXACTLY that prefix unmutated, in another fresh session, through one ordinary
+ * `RunMutantMany` call (`confirmation: true`, `activate(null)` first). Confirmed iff the replay
+ * answers `complete` AND ran all k AND every entry passed (stated positively: a `cap` with one
+ * passing entry satisfies "every method that ran passed" and is NOT a confirmation), and for a
+ * timeout additionally iff entry k completed inside its own cold-measured budget.
+ *
+ * Every other ending is an error, never a kill: j < k failing → `warm-prefix-unstable`; j = k
+ * failing → `unstable` (today's cause, the warm wording); k completing outside its budget or
+ * being stopped → `warm-timeout-unconfirmed`; `cap` → `warm-confirmation-incomplete`; the
+ * replay's own non-verdict endings (a lease answer, a lost ack, a group cause, a transport error)
+ * through `classifyNonVerdictStep`, side effects included, with `stopped-after-completion` mapped
+ * to `warm-timeout-unconfirmed` (the replay could not establish k's duration) and `abortSession`
+ * honoured exactly as a covering step honours it. The replay's rows are buffered with
+ * `mutantCode: null`, `op_kind: many`, and its durations are NOT added to the mutant's `spent`,
+ * as the cold confirmation's is not. The R59 runner-disagreement note is never attached from a
+ * replay: it states a hub-green test failed under the hub's conditions, which a warm session is not.
+ */
+type WarmDecision =
+  | { readonly kind: "confirmed"; readonly killPosition: number }
+  | {
+      readonly kind: "error";
+      readonly cause: MutantErrorCause;
+      readonly failureNote: string;
+      readonly permissionRefusedTest?: string;
+      readonly transportError: boolean;
+    };
+
+async function confirmWarm(p: {
+  readonly args: {
+    readonly backend: ExecutionBackend;
+    readonly safety: SessionSafety;
+    readonly emit: RunEmitter;
+    readonly attestation: { clean: boolean };
+    readonly quarantineStore?: QuarantineStore | undefined;
+    readonly resourceKey?: string | undefined;
+    readonly nowIso: () => string;
+  };
+  readonly m: MutantManifestEntry;
+  readonly step: CoveringStep;
+  readonly leaseSession: LeaseSession | undefined;
+  readonly resyncOpSeq: (() => Promise<void>) | undefined;
+  readonly testResultBuffer: Array<{
+    mutantCode: string | null;
+    ref: TestMethodRef;
+    outcome: TestVerdict["outcome"];
+    durationMs: number;
+    failureMessage: string | undefined;
+    opKind?: "single" | "many";
+    sessionId?: number;
+  }>;
+}): Promise<WarmDecision> {
+  const { args, m, step, leaseSession, resyncOpSeq, testResultBuffer } = p;
+  const k = step.groupPosition;
+  const killer = step.ref;
+  const grain = step.verdict.outcome === "timeout" ? "timeout" : "fail";
+  const prefix = step.chunkPrefix;
+  const last = prefix[k - 1];
+  if (prefix.length !== k || last === undefined || testKeyOf(last.ref) !== testKeyOf(killer)) {
+    throw new Error(
+      `confirmWarm: mutant ${m.mutantId}'s step names position ${k} but its chunk prefix has ${prefix.length} method(s) ending in ${prefix[prefix.length - 1]?.ref.method ?? "nothing"}, not ${killer.method} — caller-contract violation`,
+    );
+  }
+  const what = `confirming ${killer.method} by replaying ${k} method(s) unmutated`;
+  const error = (
+    cause: MutantErrorCause,
+    failureNote: string,
+    extra?: { permissionRefusedTest?: string; transportError?: boolean },
+  ): WarmDecision => ({
+    kind: "error",
+    cause,
+    failureNote,
+    ...(extra?.permissionRefusedTest !== undefined
+      ? { permissionRefusedTest: extra.permissionRefusedTest }
+      : {}),
+    transportError: extra?.transportError === true,
+  });
+
+  await activateOnce(args.backend, args.safety, null);
+  const chunk: RunManyOpts = {
+    methods: prefix,
+    requestCeilingMs: step.callSettings.requestCeilingMs,
+    stopGraceMs: step.callSettings.stopGraceMs,
+    confirmation: true,
+  };
+  const out = await runFencedMany(
+    args.backend,
+    args.safety,
+    chunk,
+    leaseSession,
+    args.emit,
+    resyncOpSeq,
+    m.mutantId,
+  );
+  const provenance = {
+    lostAck: out.lostAck,
+    retried: out.retried,
+    ...(out.retryAfter !== undefined ? { retryAfter: out.retryAfter } : {}),
+    ...(out.original !== undefined ? { original: out.original } : {}),
+  };
+  const groupBudgetMs = chunk.requestCeilingMs + chunk.stopGraceMs;
+  const budgetOfIndex = (i: number) => prefix[i - 1]?.budgetMs ?? 0;
+
+  if (out.result.kind === "call") {
+    const { verdict, cause, abortSession, methodIndex } = out.result;
+    const j = Math.min(Math.max(methodIndex, 1), k);
+    testResultBuffer.push({
+      mutantCode: null,
+      ref: verdict.ref,
+      outcome: verdict.outcome,
+      durationMs: verdict.durationMs,
+      failureMessage: verdict.failureMessage,
+      opKind: "many",
+      ...(verdict.sessionId !== undefined ? { sessionId: verdict.sessionId } : {}),
+    });
+    if (
+      verdict.attestation?.observedAny === true &&
+      verdict.attestation.identityMismatch !== true
+    ) {
+      args.attestation.clean = true;
+    }
+    if (cause === "stopped-after-completion") {
+      // G3(a): R204's narrowing fired on the REPLAY's own 408; the covering call's wording would
+      // describe the mutated run. What it means here is that k's duration could not be established.
+      return error(
+        "warm-timeout-unconfirmed",
+        `warm-timeout-unconfirmed ${what}: the replay's method ${j} (${verdict.ref.method}) ran past its budget and was stopped, but the stop landed after its completion was recorded (R204), so the replay could not establish that it completes inside the budget measured cold; the ${grain} at position ${k} is not attributed to the mutant (R206)`,
+      );
+    }
+    const replayStep: CoveringStep = {
+      ...provenance,
+      ref: verdict.ref,
+      verdict,
+      testBudgetMs: budgetOfIndex(j),
+      groupBudgetMs,
+      opKind: "many",
+      ...(cause !== undefined ? { cause } : {}),
+      ...(abortSession !== undefined ? { abortSession } : {}),
+      groupPosition: j,
+      chunkPrefix: prefix.slice(0, j),
+      callSettings: step.callSettings,
+    };
+    const nonVerdict = await classifyNonVerdictStep(replayStep, {
+      m,
+      leaseSession,
+      safety: args.safety,
+      quarantineStore: args.quarantineStore,
+      resourceKey: args.resourceKey,
+      nowIso: args.nowIso,
+      what,
+    });
+    if (nonVerdict !== null) {
+      return error(
+        nonVerdict.cause ?? "warm-confirmation-incomplete",
+        nonVerdict.failureNote ?? `${what}: the replay ended without a readable answer`,
+        { transportError: nonVerdict.transportError },
+      );
+    }
+    if (verdict.outcome === "timeout") {
+      // The replay's own watchdog stopped method j unmutated.
+      if (j < k) {
+        return error(
+          "warm-prefix-unstable",
+          `warm-prefix-unstable ${what}: method ${j} (${verdict.ref.method}) ran past its budget and was stopped in the replay, without the mutant; the prefix does not complete on its own, so the ${grain} at position ${k} is the suite's own order sensitivity, not the mutant (R206)`,
+        );
+      }
+      return error(
+        "warm-timeout-unconfirmed",
+        `warm-timeout-unconfirmed ${what}: method ${k} (${verdict.ref.method}) ran past its cold-measured budget (${budgetOfIndex(k)} ms) and was stopped in the replay too, without the mutant; the warm session, not the mutant, makes it slow (R206)`,
+      );
+    }
+    // A `call` result that is neither a non-verdict nor a timeout is a shape this function does
+    // not know; refuse to confirm rather than guess.
+    return error(
+      "warm-confirmation-incomplete",
+      `warm-confirmation-incomplete ${what}: the replay answered at call level with outcome ${verdict.outcome}${verdict.failureMessage !== undefined ? ` (${verdict.failureMessage})` : ""}, which confirms nothing (R206)`,
+    );
+  }
+
+  const { endedBy, ranCount, verdicts } = out.result;
+  for (const rv of verdicts) {
+    testResultBuffer.push({
+      mutantCode: null,
+      ref: rv.ref,
+      outcome: rv.outcome,
+      durationMs: rv.durationMs,
+      failureMessage: rv.failureMessage,
+      opKind: "many",
+      ...(rv.sessionId !== undefined ? { sessionId: rv.sessionId } : {}),
+    });
+    if (rv.attestation?.observedAny === true && rv.attestation.identityMismatch !== true) {
+      args.attestation.clean = true;
+    }
+  }
+  const reusedIn = verdicts.find((rv) => rv.testRunsBefore !== undefined && rv.testRunsBefore > 0);
+  if (reusedIn !== undefined) {
+    return error(
+      "session-reused",
+      `session-reused ${what}: the server reported ${reusedIn.testRunsBefore} test method(s) had already run in session ${reusedIn.sessionId ?? "?"} before the replay started, so the replay did not start from a fresh session; the kill is unconfirmed (R206)`,
+    );
+  }
+  if (endedBy === "failure") {
+    const j = ranCount;
+    const failed = verdicts[j - 1];
+    const text = failed?.failureMessage;
+    const refusal = describeTestPermissionsRefusal(text);
+    const refused =
+      failed !== undefined && refusal !== undefined ? qualifiedTestName(failed.ref) : undefined;
+    if (j < k) {
+      return error(
+        "warm-prefix-unstable",
+        `warm-prefix-unstable ${what}: method ${j} (${failed?.ref.method ?? "?"}) failed in the replay, without the mutant, in the position it had; the suite's own order sensitivity, so the ${grain} at position ${k} is not attributed to the mutant${text !== undefined ? ` — replay failure: ${text.split("\n")[0] ?? ""}` : ""}${refusal !== undefined ? ` — ${refusal}` : ""} (R206)`,
+        { ...(refused !== undefined ? { permissionRefusedTest: refused } : {}) },
+      );
+    }
+    return error(
+      "unstable",
+      `unstable test ${killer.method}: fails unmutated at position ${k} of the replay (warm), so the failure the mutated run saw says nothing about the mutant${text !== undefined ? ` — replay failure: ${text.split("\n")[0] ?? ""}` : ""}${refusal !== undefined ? ` — ${refusal}` : ""} (R206)`,
+      { ...(refused !== undefined ? { permissionRefusedTest: refused } : {}) },
+    );
+  }
+  if (endedBy === "cap") {
+    return error(
+      "warm-confirmation-incomplete",
+      `warm-confirmation-incomplete ${what}: the replay ran ${ranCount} of ${k} method(s) and stopped at the server's headroom cap before reaching ${killer.method}; a replay is a slower re-run on wall clock, so the cap can fire on a prefix that fitted once. The kill is unconfirmed (R206)`,
+    );
+  }
+  // endedBy === "complete": the transport guarantees ranCount === methods.length and every
+  // entry passed; both are re-asserted here so the confirmation can never be satisfied by less.
+  if (ranCount !== k || verdicts.length !== k || !verdicts.every((rv) => rv.outcome === "pass")) {
+    return error(
+      "warm-confirmation-incomplete",
+      `warm-confirmation-incomplete ${what}: the replay answered complete with ${ranCount} entr${ranCount === 1 ? "y" : "ies"} (${verdicts.filter((rv) => rv.outcome === "pass").length} passing) where ${k} passing entries were required (R206)`,
+    );
+  }
+  if (grain === "timeout") {
+    const kth = verdicts[k - 1];
+    const budget = budgetOfIndex(k);
+    if (kth === undefined || kth.durationMs > budget) {
+      return error(
+        "warm-timeout-unconfirmed",
+        `warm-timeout-unconfirmed ${what}: method ${k} (${killer.method}) completed unmutated in ${kth?.durationMs ?? "?"} ms, outside the ${budget} ms budget measured for it cold; the warm session, not the mutant, makes it slow (R206)`,
+      );
+    }
+  }
+  return { kind: "confirmed", killPosition: k };
+}
+
+/**
+ * R206: what the covering loop and the warm confirmation's replay do with a step that carries NO
+ * verdict (a lease answer, a lost ack, the group call's own per-mutant causes, our own deadline,
+ * a transport error). Everything here used to be inline in `runMutantsOnBackend`'s loop; it is
+ * one function now so the replay classifies its non-verdict endings by the SAME branches as a
+ * covering call, side effects included (the lease latch, the op-in-flight poll, the tier
+ * quarantine). Returns `null` for a real outcome (`pass`, `fail`, `timeout`), which the caller
+ * decides. `what` names the activity for the notes ("running X" on a covering call).
+ */
+interface NonVerdictDecision {
+  readonly failureNote: string | undefined;
+  readonly cause?: MutantErrorCause;
+  /** Abort the session after this mutant is recorded (spec §11 / R198's abortSession). */
+  readonly transportError: boolean;
+}
+
+async function classifyNonVerdictStep(
+  step: CoveringStep,
+  ctx: {
+    readonly m: MutantManifestEntry;
+    readonly leaseSession: LeaseSession | undefined;
+    readonly safety: SessionSafety;
+    readonly quarantineStore: QuarantineStore | undefined;
+    readonly resourceKey: string | undefined;
+    readonly nowIso: () => string;
+    readonly what?: string;
+  },
+): Promise<NonVerdictDecision | null> {
+  const {
+    ref,
+    verdict: v,
+    lostAck,
+    retried,
+    retryAfter,
+    original,
+    testBudgetMs: budget,
+    groupBudgetMs,
+  } = step;
+  const what = ctx.what ?? `running ${ref.method}`;
+  let note: string | undefined;
+  let cause: MutantErrorCause | undefined;
+  let transportError = false;
+  // Layer 5C-B1 (design §5/§6/§8): classify a lease answer BEFORE the generic
+  // `requiresUnsafeLatch` branch below. That branch is right for `in-flight-unknown` and
+  // WRONG for both lease kinds: it would record a durable tier quarantine for a lease loss
+  // that leaves the container healthy, and it would latch (and so invalidate the whole batch)
+  // for a same-attempt duplicate claim that is not a loss at all.
+  const leaseKind = classifyLeaseVerdict(v);
+  if (leaseKind === "lost") {
+    // R194 (second half), rule 2c: a retry issued because the ORIGINAL was never claimed can
+    // be refused by phase 1 for one benign reason, the original arrived late after all. The
+    // marker is read for the original's coordinates before this is called a lease loss.
+    const refusal =
+      retryAfter === "not-started" && original !== undefined && ctx.leaseSession !== undefined
+        ? await ctx.leaseSession.classifyRetryRefusal(original, groupBudgetMs)
+        : "genuine";
+    if (refusal === "original-completed" || refusal === "original-cleared") {
+      // The abandoned original ran and tombstoned its op; its answer went to a socket nobody
+      // holds. The lease was never lost and the container is clean. This mutant's result is
+      // lost, which `result-lost` already means: the op completed, only the answer did not
+      // arrive. `--resume` re-runs it.
+      note = `lost ack ${what}: the first attempt was reconciled as never claimed and retried, but the abandoned original arrived late and ${refusal === "original-completed" ? "had already completed" : "was still executing, then completed"} — the retry was refused by the fence as it should be, the original's result went to a closed socket, and the lease was NOT lost (R194)`;
+      cause = "result-lost";
+      return { failureNote: note, ...(cause !== undefined ? { cause } : {}), transportError };
+    }
+    if (refusal === "original-stuck") {
+      // The late original is executing and did not clear within the mutant's budget: a
+      // strand, with the same two-way statement every other strand makes.
+      note = `${STRANDED_NOTE_PREFIX}${ref.method}: the first attempt was reconciled as never claimed and retried, but the abandoned original arrived late and is still executing after the budget — the container may be stranded on it (R194)`;
+      cause = "stranded";
+      await quarantineInFlight({
+        safety: ctx.safety,
+        quarantineStore: ctx.quarantineStore,
+        resourceKey: ctx.resourceKey,
+        nowIso: ctx.nowIso,
+        detail: `late original still executing after a never-claimed reconciliation and retry, ${what} (mutant ${ctx.m.mutantId})`,
+      });
+      return { failureNote: note, ...(cause !== undefined ? { cause } : {}), transportError };
+    }
+    // Genuine loss: latch `lease-lost`, stop scheduling. The current batch's verdicts are
+    // invalidated at session end (design §6) — NOT here, because earlier mutants of this same
+    // batch were already recorded and only `runSession` can rewrite them. No durable tier
+    // quarantine: a clean lease loss means the container itself is fine.
+    const detail = `${ref.method} (mutant ${ctx.m.mutantId}): ${v.failureMessage ?? "RunMutant lease-invalid"}`;
+    noteLeaseLostOrThrow(ctx.leaseSession, detail);
+    note = `lease-lost while ${what}: this run's result was refused by the fence and never recorded server-side`;
+    return { failureNote: note, ...(cause !== undefined ? { cause } : {}), transportError };
+  }
+  if (leaseKind === "op-in-flight") {
+    // OUR OWN (opSeq, attemptId) is still executing server-side. design §5: poll/wait — never
+    // re-dispatch (the server would refuse the duplicate again, forever), never `RecoverOp`
+    // (the op may still be running AL, which is exactly what that rule protects), and never
+    // treat this as lease loss. This mutant's result is simply lost; the session continues.
+    const cleared = (await ctx.leaseSession?.pollUntilOpClears()) ?? false;
+    if (cleared) {
+      note = `op-in-flight: RunMutant refused a duplicate claim on this attempt while it was still executing; the operation has since completed but its result was not returned, so ${ref.method}'s verdict for this mutant is discarded rather than re-dispatched (design §5)`;
+    } else {
+      // R122(a): a STRAND, and it says so two ways that must agree.
+      //
+      // This branch quarantines the tier because the operation never cleared and the container
+      // may still be executing — i.e. we do not know whether this mutant finished. That is the
+      // definition of a strand, and it is exactly what `deadline-exceeded` must NOT be used for:
+      // that cause promises a backend told us the run was over, which is the one thing nobody
+      // can say here. It also inflated `counts.deadlineExceeded` with runs no deadline produced.
+      //
+      // The note gains `STRANDED_NOTE_PREFIX` along with the cause, and the two go together on
+      // purpose: `buildResumeIndex` decides what `--resume` SKIPS by reading that prefix, so a
+      // cause without the prefix would leave `explain` calling this stranded while `--resume`
+      // re-ran it. Skipping is the right behaviour — a claim that never clears reproduces every
+      // time — and `--retry-stranded` is the escape.
+      note = `${STRANDED_NOTE_PREFIX}op-in-flight: RunMutant refused a duplicate claim on this attempt and the operation never cleared — the container may still be executing it. Raise the floor with --mutant-timeout-ms and re-run with --resume to keep this session's verdicts`;
+      cause = "stranded";
+      await quarantineInFlight({
+        safety: ctx.safety,
+        quarantineStore: ctx.quarantineStore,
+        resourceKey: ctx.resourceKey,
+        nowIso: ctx.nowIso,
+        detail: `operation never cleared after an op-in-flight refusal ${what} (mutant ${ctx.m.mutantId})`,
+      });
+    }
+    return { failureNote: note, ...(cause !== undefined ? { cause } : {}), transportError };
+  }
+  if (leaseKind === "op-stopped") {
+    // R203: our OWN stop tombstoned this op while its session was still finishing, and phase 3
+    // refused to record the result. No verdict, no lease loss, no quarantine: the container is
+    // clean and the next mutant is scored. Before R203 this latched `lease-lost` and
+    // invalidated the batch with a note naming a cause nobody caused.
+    note = `op-stopped ${what}: the run exceeded its budget (${budget} ms) and LethAL's stop was confirmed, but the session finished the test before the stop landed, so the fence refused to record its result — no verdict, the lease was NOT lost (R203). Raise the floor with --mutant-timeout-ms if the test is slow rather than hung, and re-run with --resume`;
+    cause = "op-stopped";
+    return { failureNote: note, ...(cause !== undefined ? { cause } : {}), transportError };
+  }
+  if (v.operation !== undefined && requiresUnsafeLatch(v.operation)) {
+    // Layer 5C-B2 (design §5): reaching here means `runFenced` could not turn this run into a
+    // readable answer — it already reconciled, and (when the op was proven complete) already
+    // spent its one fresh attempt on it. All that is left is which diagnosis to record.
+    if (lostAck === "completed") {
+      // Phase 3 ran: the op is tombstoned and the container is clean. This mutant's RESULT is
+      // genuinely lost (so `error`, never a verdict), but there is nothing to recycle, nothing
+      // to latch, and the session runs on to the next mutant.
+      note = `lost ack ${what}: RunMutant's response was unreadable${v.failureMessage !== undefined ? ` (${v.failureMessage})` : ""}, but GetOperationStatus confirms the operation COMPLETED server-side — the run was retried once and that attempt was unreadable too, so this mutant's result is discarded; the container is not stranded (design §5)`;
+      // R122(b): the third thing, and it had no machine value at all until now. Not
+      // `deadline-exceeded` (no budget elapsed) and emphatically not `stranded` (we KNOW the op
+      // finished — that is what the reconciling read just established, and it is why this
+      // branch writes no quarantine). `--resume` re-runs an `error` outcome, so this one fixes
+      // itself on the next pass; saying so is only possible with a cause to key on.
+      cause = "result-lost";
+      return { failureNote: note, ...(cause !== undefined ? { cause } : {}), transportError };
+    }
+    // Unresolved: latch unsafe, record a durable tier quarantine, and stop — no further
+    // work-plane call (spec §8, §12).
+    await quarantineInFlight({
+      safety: ctx.safety,
+      quarantineStore: ctx.quarantineStore,
+      resourceKey: ctx.resourceKey,
+      nowIso: ctx.nowIso,
+      // Carry the transport's own failure message into the record. Without it the operator
+      // is told to recycle a tier and clear a quarantine with no statement of what actually
+      // went wrong — and this record outlives the process that wrote it.
+      detail: `test in-flight-unknown ${what} (mutant ${ctx.m.mutantId})${retried ? " — a first, proven-complete attempt had already been retried once" : ""}${v.failureMessage !== undefined ? `: ${v.failureMessage}` : ""} [budget was ${budget} ms; raise the floor with --mutant-timeout-ms and continue with --resume]`,
+    });
+    // R47: the two things the operator needs are the budget this run used and the fact that
+    // the verdicts already measured are NOT lost. Both went unsaid until a real project hit
+    // this at mutant 13 of 138 and discarded the first twelve.
+    note = `${STRANDED_NOTE_PREFIX}${ref.method} returned no readable result and its operation could not be confirmed complete — container may be stranded. Its budget was ${budget} ms; if the mutant was merely slow rather than stranded, raise the floor with --mutant-timeout-ms and re-run with --resume to keep this session's verdicts`;
+    // R114: the machine value that goes with the prose above. Without it this outcome shipped
+    // `cause: undefined`, so `lethal explain`'s R91 prescription — keyed on `cause`, which is
+    // the right thing to key on — could never fire for the very case R91 measured. Deliberately
+    // NOT `deadline-exceeded`: that one means a backend told us the run was over, and the whole
+    // point of this branch is that nobody can say whether it is.
+    //
+    // Set at exactly the two sites that write `STRANDED_NOTE_PREFIX`, so this value and
+    // `isStrandedNote` (resume.ts) describe the same set of mutants. `--resume` still reads the
+    // prose, because rows recorded before this cause existed have nothing else to read.
+    cause = "stranded";
+    // R198: an identity disagreement or a missing route is reconciled and quarantined like any
+    // unreadable answer, and THEN aborts the session: the server is running something this
+    // request did not ask for, or is not the control app the version gate saw.
+    if (step.abortSession !== undefined) {
+      note = `${note} — ${step.abortSession}`;
+      transportError = true;
+    }
+    return { failureNote: note, ...(cause !== undefined ? { cause } : {}), transportError };
+  }
+  if (step.cause !== undefined) {
+    // R198: the group call's own per-mutant causes (the server's loop raised; its answer did
+    // not match the request; the stop landed after the method had recorded its completion).
+    // Recorded, never a verdict, never a session abort: the next mutant is scored.
+    note = v.failureMessage ?? `${step.cause} ${what}`;
+    cause = step.cause;
+    return { failureNote: note, ...(cause !== undefined ? { cause } : {}), transportError };
+  }
+  if (v.outcome === "deadline-exceeded") {
+    // Our timer, not the runner's: says nothing about the mutant.
+    note = `deadline exceeded ${what} (infrastructure, not a kill)`;
+    cause = "deadline-exceeded";
+    return { failureNote: note, ...(cause !== undefined ? { cause } : {}), transportError };
+  }
+  if (v.outcome === "error") {
+    // runOnce already retried a pre-dispatch-rejected run internally — reaching "error"
+    // here means either that retry also failed, or the first failure wasn't retry-safe
+    // (e.g. in-flight-unknown) and was rethrown as-is without a second attempt. Spec §11:
+    // that aborts the whole session, not just this mutant (unlike the "unstable test" error
+    // path below, which is a legitimate flakiness finding, not a transport failure).
+    note = v.failureMessage;
+    transportError = true;
+    return { failureNote: note, ...(cause !== undefined ? { cause } : {}), transportError };
+  }
+  return null;
+}
+
+/**
  * The per-mutant kill-detection loop, extracted so that `workers = 1` (one
  * shard containing every mutant, run on `cfg.backend`) and `workers > 1`
  * (N shards, each on its own backend from `backendFactory`) are the exact
@@ -4724,6 +5232,8 @@ async function runMutantsOnBackend(args: {
   readonly memberCountsByTest: ReadonlyMap<string, number>;
   /** R198: group-run settings, or `undefined` for the sequential loop. */
   readonly groupRuns?: GroupRunSettings | undefined;
+  /** R206 §2.1: session-scoped, shared across batches and shards: the once-only warning flag. */
+  readonly sessionReuse: { warned: boolean };
 }): Promise<void> {
   const leaseSession = args.leaseSession;
   const resyncOpSeq =
@@ -4753,6 +5263,8 @@ async function runMutantsOnBackend(args: {
      * green. Empty-vs-empty, which is this project's signature bug.
      */
     let killingTestFailure: string | undefined;
+    // R206 §2.4: the killer's position within its call; set beside `killingTest` at every kill site.
+    let killPosition: number | undefined;
     /**
      * Every `failureNote` this loop composes is copied VERBATIM into the report and out again
      * through `lethal explain` (`ExplainNotMeasured.failureNote`), so it reaches every consumer of
@@ -4798,6 +5310,7 @@ async function runMutantsOnBackend(args: {
       durationMs: number;
       failureMessage: string | undefined;
       opKind?: "single" | "many";
+      sessionId?: number;
     }> = [];
     let transportErrorRef: TestMethodRef | undefined;
     // R197: tests that already killed in this procedure first, then the narrowest, then the
@@ -4846,6 +5359,7 @@ async function runMutantsOnBackend(args: {
         durationMs: v.durationMs,
         failureMessage: v.failureMessage,
         opKind: step.opKind,
+        ...(v.sessionId !== undefined ? { sessionId: v.sessionId } : {}),
       });
       if (v.outcome === "pass" || v.outcome === "fail") attempted.add(testKeyOf(ref));
       spent += v.durationMs;
@@ -4860,185 +5374,104 @@ async function runMutantsOnBackend(args: {
       if (v.attestation !== undefined) {
         guardObserved = (guardObserved ?? false) || v.attestation.observedAny;
       }
-      // Layer 5C-B1 (design §5/§6/§8): classify a lease answer BEFORE the generic
-      // `requiresUnsafeLatch` branch below. That branch is right for `in-flight-unknown` and
-      // WRONG for both lease kinds: it would record a durable tier quarantine for a lease loss
-      // that leaves the container healthy, and it would latch (and so invalidate the whole batch)
-      // for a same-attempt duplicate claim that is not a loss at all.
-      const leaseKind = classifyLeaseVerdict(v);
-      if (leaseKind === "lost") {
-        // R194 (second half), rule 2c: a retry issued because the ORIGINAL was never claimed can
-        // be refused by phase 1 for one benign reason, the original arrived late after all. The
-        // marker is read for the original's coordinates before this is called a lease loss.
-        const refusal =
-          retryAfter === "not-started" && original !== undefined && leaseSession !== undefined
-            ? await leaseSession.classifyRetryRefusal(original, groupBudgetMs)
-            : "genuine";
-        if (refusal === "original-completed" || refusal === "original-cleared") {
-          // The abandoned original ran and tombstoned its op; its answer went to a socket nobody
-          // holds. The lease was never lost and the container is clean. This mutant's result is
-          // lost, which `result-lost` already means: the op completed, only the answer did not
-          // arrive. `--resume` re-runs it.
-          verdict = "error";
-          failureNote = `lost ack running ${ref.method}: the first attempt was reconciled as never claimed and retried, but the abandoned original arrived late and ${refusal === "original-completed" ? "had already completed" : "was still executing, then completed"} — the retry was refused by the fence as it should be, the original's result went to a closed socket, and the lease was NOT lost (R194)`;
-          cause = "result-lost";
-          break;
-        }
-        if (refusal === "original-stuck") {
-          // The late original is executing and did not clear within the mutant's budget: a
-          // strand, with the same two-way statement every other strand makes.
-          verdict = "error";
-          failureNote = `${STRANDED_NOTE_PREFIX}${ref.method}: the first attempt was reconciled as never claimed and retried, but the abandoned original arrived late and is still executing after the budget — the container may be stranded on it (R194)`;
-          cause = "stranded";
-          await quarantineInFlight({
-            safety: args.safety,
-            quarantineStore: args.quarantineStore,
-            resourceKey: args.resourceKey,
-            nowIso: args.nowIso,
-            detail: `late original still executing after a never-claimed reconciliation and retry, running ${ref.method} (mutant ${m.mutantId})`,
-          });
-          break;
-        }
-        // Genuine loss: latch `lease-lost`, stop scheduling. The current batch's verdicts are
-        // invalidated at session end (design §6) — NOT here, because earlier mutants of this same
-        // batch were already recorded and only `runSession` can rewrite them. No durable tier
-        // quarantine: a clean lease loss means the container itself is fine.
-        const detail = `${ref.method} (mutant ${m.mutantId}): ${v.failureMessage ?? "RunMutant lease-invalid"}`;
-        noteLeaseLostOrThrow(leaseSession, detail);
+      // R206: every non-verdict ending (a lease answer, a lost ack, a group cause, our own
+      // deadline, a transport error) is classified by `classifyNonVerdictStep`, the same branches
+      // the warm confirmation's replay is classified by. `null` means a real outcome, decided below.
+      const nonVerdict = await classifyNonVerdictStep(step, {
+        m,
+        leaseSession,
+        safety: args.safety,
+        quarantineStore: args.quarantineStore,
+        resourceKey: args.resourceKey,
+        nowIso: args.nowIso,
+      });
+      if (nonVerdict !== null) {
         verdict = "error";
-        failureNote = `lease-lost while running ${ref.method}: this run's result was refused by the fence and never recorded server-side`;
+        failureNote = nonVerdict.failureNote;
+        cause = nonVerdict.cause;
+        if (nonVerdict.transportError) transportErrorRef = ref;
         break;
       }
-      if (leaseKind === "op-in-flight") {
-        // OUR OWN (opSeq, attemptId) is still executing server-side. design §5: poll/wait — never
-        // re-dispatch (the server would refuse the duplicate again, forever), never `RecoverOp`
-        // (the op may still be running AL, which is exactly what that rule protects), and never
-        // treat this as lease loss. This mutant's result is simply lost; the session continues.
-        const cleared = (await leaseSession?.pollUntilOpClears()) ?? false;
-        verdict = "error";
-        if (cleared) {
-          failureNote = `op-in-flight: RunMutant refused a duplicate claim on this attempt while it was still executing; the operation has since completed but its result was not returned, so ${ref.method}'s verdict for this mutant is discarded rather than re-dispatched (design §5)`;
-        } else {
-          // R122(a): a STRAND, and it says so two ways that must agree.
-          //
-          // This branch quarantines the tier because the operation never cleared and the container
-          // may still be executing — i.e. we do not know whether this mutant finished. That is the
-          // definition of a strand, and it is exactly what `deadline-exceeded` must NOT be used for:
-          // that cause promises a backend told us the run was over, which is the one thing nobody
-          // can say here. It also inflated `counts.deadlineExceeded` with runs no deadline produced.
-          //
-          // The note gains `STRANDED_NOTE_PREFIX` along with the cause, and the two go together on
-          // purpose: `buildResumeIndex` decides what `--resume` SKIPS by reading that prefix, so a
-          // cause without the prefix would leave `explain` calling this stranded while `--resume`
-          // re-ran it. Skipping is the right behaviour — a claim that never clears reproduces every
-          // time — and `--retry-stranded` is the escape.
-          failureNote = `${STRANDED_NOTE_PREFIX}op-in-flight: RunMutant refused a duplicate claim on this attempt and the operation never cleared — the container may still be executing it. Raise the floor with --mutant-timeout-ms and re-run with --resume to keep this session's verdicts`;
-          cause = "stranded";
-          await quarantineInFlight({
-            safety: args.safety,
-            quarantineStore: args.quarantineStore,
-            resourceKey: args.resourceKey,
-            nowIso: args.nowIso,
-            detail: `operation never cleared after an op-in-flight refusal running ${ref.method} (mutant ${m.mutantId})`,
-          });
-        }
-        break;
-      }
-      if (leaseKind === "op-stopped") {
-        // R203: our OWN stop tombstoned this op while its session was still finishing, and phase 3
-        // refused to record the result. No verdict, no lease loss, no quarantine: the container is
-        // clean and the next mutant is scored. Before R203 this latched `lease-lost` and
-        // invalidated the batch with a note naming a cause nobody caused.
-        verdict = "error";
-        failureNote = `op-stopped running ${ref.method}: the run exceeded its budget (${budget} ms) and LethAL's stop was confirmed, but the session finished the test before the stop landed, so the fence refused to record its result — no verdict, the lease was NOT lost (R203). Raise the floor with --mutant-timeout-ms if the test is slow rather than hung, and re-run with --resume`;
-        cause = "op-stopped";
-        break;
-      }
-      if (v.operation !== undefined && requiresUnsafeLatch(v.operation)) {
-        // Layer 5C-B2 (design §5): reaching here means `runFenced` could not turn this run into a
-        // readable answer — it already reconciled, and (when the op was proven complete) already
-        // spent its one fresh attempt on it. All that is left is which diagnosis to record.
-        verdict = "error";
-        if (lostAck === "completed") {
-          // Phase 3 ran: the op is tombstoned and the container is clean. This mutant's RESULT is
-          // genuinely lost (so `error`, never a verdict), but there is nothing to recycle, nothing
-          // to latch, and the session runs on to the next mutant.
-          failureNote = `lost ack running ${ref.method}: RunMutant's response was unreadable${v.failureMessage !== undefined ? ` (${v.failureMessage})` : ""}, but GetOperationStatus confirms the operation COMPLETED server-side — the run was retried once and that attempt was unreadable too, so this mutant's result is discarded; the container is not stranded (design §5)`;
-          // R122(b): the third thing, and it had no machine value at all until now. Not
-          // `deadline-exceeded` (no budget elapsed) and emphatically not `stranded` (we KNOW the op
-          // finished — that is what the reconciling read just established, and it is why this
-          // branch writes no quarantine). `--resume` re-runs an `error` outcome, so this one fixes
-          // itself on the next pass; saying so is only possible with a cause to key on.
-          cause = "result-lost";
-          break;
-        }
-        // Unresolved: latch unsafe, record a durable tier quarantine, and stop — no further
-        // work-plane call (spec §8, §12).
-        await quarantineInFlight({
-          safety: args.safety,
-          quarantineStore: args.quarantineStore,
-          resourceKey: args.resourceKey,
-          nowIso: args.nowIso,
-          // Carry the transport's own failure message into the record. Without it the operator
-          // is told to recycle a tier and clear a quarantine with no statement of what actually
-          // went wrong — and this record outlives the process that wrote it.
-          detail: `test in-flight-unknown running ${ref.method} (mutant ${m.mutantId})${retried ? " — a first, proven-complete attempt had already been retried once" : ""}${v.failureMessage !== undefined ? `: ${v.failureMessage}` : ""} [budget was ${budget} ms; raise the floor with --mutant-timeout-ms and continue with --resume]`,
+      // R206 §2.1, the session guard: the server's own per-session count of test methods run
+      // BEFORE this call. Anything but 0 means the platform handed this call a session another
+      // call had run tests in, so the state at the call's start was that call's, possibly another
+      // mutant's. A failure or a timeout measured there is not attributable: an error, never a
+      // kill. A pass stands (a reused session can hide a kill, never manufacture one). A 408
+      // carries no keys, so a `timeout` is not asserted here; a warm one is, through its replay.
+      const reused = v.testRunsBefore !== undefined && v.testRunsBefore > 0;
+      if (reused && !args.sessionReuse.warned) {
+        args.sessionReuse.warned = true;
+        args.emit({
+          type: "warning",
+          code: "session-reuse-observed",
+          message: `[lethal] session-reuse-observed: the server reported ${v.testRunsBefore} test method(s) had already run in session ${v.sessionId ?? "?"} before the call for ${ref.method} (mutant ${m.mutantId}) started — this environment hands LethAL sessions other calls have used; a failure or timeout measured in such a session is recorded as \`session-reused\`, never as a kill (R206)`,
         });
-        // R47: the two things the operator needs are the budget this run used and the fact that
-        // the verdicts already measured are NOT lost. Both went unsaid until a real project hit
-        // this at mutant 13 of 138 and discarded the first twelve.
-        failureNote = `${STRANDED_NOTE_PREFIX}${ref.method} returned no readable result and its operation could not be confirmed complete — container may be stranded. Its budget was ${budget} ms; if the mutant was merely slow rather than stranded, raise the floor with --mutant-timeout-ms and re-run with --resume to keep this session's verdicts`;
-        // R114: the machine value that goes with the prose above. Without it this outcome shipped
-        // `cause: undefined`, so `lethal explain`'s R91 prescription — keyed on `cause`, which is
-        // the right thing to key on — could never fire for the very case R91 measured. Deliberately
-        // NOT `deadline-exceeded`: that one means a backend told us the run was over, and the whole
-        // point of this branch is that nobody can say whether it is.
-        //
-        // Set at exactly the two sites that write `STRANDED_NOTE_PREFIX`, so this value and
-        // `isStrandedNote` (resume.ts) describe the same set of mutants. `--resume` still reads the
-        // prose, because rows recorded before this cause existed have nothing else to read.
-        cause = "stranded";
-        // R198: an identity disagreement or a missing route is reconciled and quarantined like any
-        // unreadable answer, and THEN aborts the session: the server is running something this
-        // request did not ask for, or is not the control app the version gate saw.
-        if (step.abortSession !== undefined) {
-          failureNote = `${failureNote} — ${step.abortSession}`;
-          transportErrorRef = ref;
-        }
-        break;
       }
-      if (step.cause !== undefined) {
-        // R198: the group call's own per-mutant causes (the server's loop raised; its answer did
-        // not match the request; the stop landed after the method had recorded its completion).
-        // Recorded, never a verdict, never a session abort: the next mutant is scored.
+      if (reused && v.outcome !== "pass") {
         verdict = "error";
-        failureNote = v.failureMessage ?? `${step.cause} running ${ref.method}`;
-        cause = step.cause;
-        break;
-      }
-      if (v.outcome === "deadline-exceeded") {
-        // Our timer, not the runner's: says nothing about the mutant.
-        verdict = "error";
-        failureNote = `deadline exceeded running ${ref.method} (infrastructure, not a kill)`;
-        cause = "deadline-exceeded";
+        cause = "session-reused";
+        failureNote = `session-reused running ${ref.method}: the server reported ${v.testRunsBefore} test method(s) had already run in session ${v.sessionId ?? "?"} before this call started, so its state was another call's; a ${v.outcome} measured there is not attributable to this mutant (R206)`;
         break;
       }
       if (v.outcome === "timeout") {
+        if (step.groupPosition > 1) {
+          const warm = await confirmWarm({
+            args,
+            m,
+            step,
+            leaseSession,
+            resyncOpSeq,
+            testResultBuffer,
+          });
+          if (warm.kind === "confirmed") {
+            verdict = "timeout-killed";
+            killingTest = ref.method;
+            killingTestFailure = v.failureMessage;
+            killPosition = warm.killPosition;
+            recordKill(args.killLedger, m, ref);
+          } else {
+            verdict = "error";
+            cause = warm.cause;
+            failureNote = warm.failureNote;
+            if (warm.permissionRefusedTest !== undefined)
+              permissionRefusedTest = warm.permissionRefusedTest;
+            if (warm.transportError) transportErrorRef = ref;
+          }
+          break;
+        }
         verdict = "timeout-killed";
         killingTest = ref.method;
         killingTestFailure = v.failureMessage;
+        killPosition = 1;
         recordKill(args.killLedger, m, ref);
         break;
       }
-      if (v.outcome === "error") {
-        // runOnce already retried a pre-dispatch-rejected run internally — reaching "error"
-        // here means either that retry also failed, or the first failure wasn't retry-safe
-        // (e.g. in-flight-unknown) and was rethrown as-is without a second attempt. Spec §11:
-        // that aborts the whole session, not just this mutant (unlike the "unstable test" error
-        // path below, which is a legitimate flakiness finding, not a transport failure).
-        verdict = "error";
-        failureNote = v.failureMessage;
-        transportErrorRef = ref;
+      if (v.outcome === "fail" && step.groupPosition > 1) {
+        // R206 §2.2: a kill at group position k > 1 was measured WARM. Confirm it by replaying
+        // methods 1..k of the SAME call unmutated, in another fresh session.
+        const warm = await confirmWarm({
+          args,
+          m,
+          step,
+          leaseSession,
+          resyncOpSeq,
+          testResultBuffer,
+        });
+        if (warm.kind === "confirmed") {
+          verdict = "killed";
+          killingTest = ref.method;
+          // R86: the MUTATED run's text, never the replay's (which passed).
+          killingTestFailure = v.failureMessage;
+          killPosition = warm.killPosition;
+          recordKill(args.killLedger, m, ref);
+        } else {
+          verdict = "error";
+          cause = warm.cause;
+          failureNote = warm.failureNote;
+          if (warm.permissionRefusedTest !== undefined)
+            permissionRefusedTest = warm.permissionRefusedTest;
+          if (warm.transportError) transportErrorRef = ref;
+        }
         break;
       }
       if (v.outcome === "fail") {
@@ -5074,6 +5507,7 @@ async function runMutantsOnBackend(args: {
           outcome: confirm.outcome,
           durationMs: confirm.durationMs,
           failureMessage: confirm.failureMessage,
+          ...(confirm.sessionId !== undefined ? { sessionId: confirm.sessionId } : {}),
         });
         // Layer 5C-A Task 8, Task 10 (design §G): the kill-confirmation rerun is a
         // null-activation run that ALSO goes through the coverage:"none" transport path (see
@@ -5158,9 +5592,16 @@ async function runMutantsOnBackend(args: {
             // about whether a strand has a cause.
             cause = "stranded";
           }
+        } else if (confirm.testRunsBefore !== undefined && confirm.testRunsBefore > 0) {
+          // R206 §2.1: the confirmation ran in a session another call had run tests in, so it
+          // did not measure the killer cold. Not a kill.
+          verdict = "error";
+          cause = "session-reused";
+          failureNote = `session-reused confirming ${ref.method}: the server reported ${confirm.testRunsBefore} test method(s) had already run in session ${confirm.sessionId ?? "?"} before the confirmation started, so the killer was not re-run cold; the kill is unconfirmed (R206)`;
         } else if (confirm.outcome === "pass") {
           verdict = "killed";
           killingTest = ref.method;
+          killPosition = 1;
           recordKill(args.killLedger, m, ref);
           // R86: `v`, the MUTATED run that failed — not `confirm`, which just passed. See the
           // `killingTestFailure` declaration above for why the distinction is the whole point.
@@ -5245,6 +5686,8 @@ async function runMutantsOnBackend(args: {
       undefined, // fromRunId — not a carried verdict
       permissionRefusedTest,
       killingTestFailure,
+      undefined, // unplaceable
+      killPosition,
     );
     for (const t of testResultBuffer) {
       args.store.recordTestResult(
@@ -5256,6 +5699,7 @@ async function runMutantsOnBackend(args: {
         t.durationMs,
         t.failureMessage,
         t.opKind,
+        t.sessionId,
       );
     }
     if (transportErrorRef !== undefined) {
@@ -5733,6 +6177,7 @@ function replayCarriedBatch(
       undefined,
       prior.killingTestFailure,
       prior.unplaceable,
+      prior.killPosition,
     );
   }
   emit({
@@ -5816,6 +6261,10 @@ export function record(
   // carry a whole batch without re-baselining it; passed only by the step-5 `no-coverage` site
   // and the resume replay, absent (NULL) everywhere else.
   unplaceable?: boolean,
+  // R206 §2.4: the killer's 1-based position within the call that ran it — see
+  // `MutantOutcome.killPosition`. Passed by the two call sites that decide a kill and by the two
+  // resume replays; absent on every other verdict.
+  killPosition?: number,
 ): number {
   const key = identityKeyOf(m);
   const mutantRowId = store.recordMutant(runId, {
@@ -5834,6 +6283,7 @@ export function record(
     ...(killingTest !== undefined ? { killingTest } : {}),
     ...(failureNote !== undefined ? { failureNote } : {}),
     ...(killingTestFailure !== undefined ? { killingTestFailure } : {}),
+    ...(killPosition !== undefined ? { killPosition } : {}),
     ...(runner !== undefined ? { runner } : {}),
     // R192: always written, `[]` included — an explicit empty list is "no test ran this", while
     // NULL (a pre-R192 row) is "unknown", and `batchCarriesEntirely` refuses to skip on unknown.
@@ -5853,6 +6303,7 @@ export function record(
     ...(killingTest !== undefined ? { killingTest } : {}),
     ...(failureNote !== undefined ? { failureNote } : {}),
     ...(killingTestFailure !== undefined ? { killingTestFailure } : {}),
+    ...(killPosition !== undefined ? { killPosition } : {}),
     ...(cause !== undefined ? { cause } : {}),
     ...(runner !== undefined ? { runner } : {}),
   });
@@ -5872,6 +6323,7 @@ export function record(
       ...(killingTest !== undefined ? { killingTest } : {}),
       ...(failureNote !== undefined ? { failureNote } : {}),
       ...(killingTestFailure !== undefined ? { killingTestFailure } : {}),
+      ...(killPosition !== undefined ? { killPosition } : {}),
       coveringTests,
       ...(coverageAttribution !== undefined ? { coverageAttribution } : {}),
       ...(runner !== undefined ? { runner } : {}),
@@ -5893,6 +6345,7 @@ export function record(
       ...(killingTest !== undefined ? { killingTest } : {}),
       ...(failureNote !== undefined ? { failureNote } : {}),
       ...(killingTestFailure !== undefined ? { killingTestFailure } : {}),
+      ...(killPosition !== undefined ? { killPosition } : {}),
       ...(cause !== undefined ? { cause } : {}),
       coveringTests,
       ...(coverageAttribution !== undefined ? { coverageAttribution } : {}),

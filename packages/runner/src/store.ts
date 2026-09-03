@@ -75,6 +75,14 @@ export interface MutantRow {
    * evidence and leaves the judgement to a reader who can see it.
    */
   readonly killingTestFailure?: string;
+  /**
+   * R206 §2.4: on a `killed`/`timeout-killed`, one plus the number of test methods that ran before
+   * the killer IN THE SESSION THAT RAN IT, i.e. its 1-based position within its call (1 on the
+   * sequential path, where every call runs one method). Greater than 1 means the kill was
+   * measured warm: the session already held state the earlier methods had left. Absent on a row
+   * recorded before the field existed and on every non-kill verdict.
+   */
+  readonly killPosition?: number;
   readonly durationMs: number;
   /**
    * Which batch produced this verdict. Added by R47 so `invalidateBatch` can reach exactly the rows
@@ -132,6 +140,8 @@ export interface MutantVerdictRow {
   /** R86 — see `MutantRow.killingTestFailure`. Threaded through so `--resume` carries a kill's own
    *  account of why it died instead of quietly dropping it on the second run. */
   readonly killingTestFailure?: string;
+  /** R206 — see `MutantRow.killPosition`. Threaded through for the same reason. */
+  readonly killPosition?: number;
   readonly durationMs: number;
   /**
    * R69 Phase 2 Task 5 — see `RunnerKind`. Threaded through so `--resume` can carry it: without
@@ -204,6 +214,7 @@ CREATE TABLE IF NOT EXISTS mutants (
   killing_test TEXT,
   failure_note TEXT,
   killing_test_failure TEXT,
+  kill_position INTEGER,
   duration_ms INTEGER NOT NULL,
   batch_index INTEGER,
   runner TEXT,
@@ -227,7 +238,8 @@ CREATE TABLE IF NOT EXISTS test_results (
   outcome TEXT NOT NULL,
   duration_ms INTEGER NOT NULL,
   failure_message TEXT,
-  op_kind TEXT
+  op_kind TEXT,
+  session_id INTEGER
 );
 CREATE TABLE IF NOT EXISTS publish_outcomes (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -353,6 +365,15 @@ export class ResultsStore {
     }>;
     if (!trCols.some((c) => c.name === "op_kind")) {
       this.db.exec("ALTER TABLE test_results ADD COLUMN op_kind TEXT");
+    }
+    // R206: `mutants` gained `kill_position` and `test_results` gained `session_id`. Same hazard
+    // as the columns above (explicit INSERT lists); pre-R206 rows keep NULL, which both readers
+    // DROP rather than default: a kill without a position predates the field, and says so.
+    if (!cols.some((c) => c.name === "kill_position")) {
+      this.db.exec("ALTER TABLE mutants ADD COLUMN kill_position INTEGER");
+    }
+    if (!trCols.some((c) => c.name === "session_id")) {
+      this.db.exec("ALTER TABLE test_results ADD COLUMN session_id INTEGER");
     }
     // Layer 5A: runs gained deployment provenance. A pre-5A lethal.sqlite has a runs table
     // without these, against which recordArtifact's UPDATE would throw mid-run.
@@ -514,7 +535,7 @@ export class ResultsStore {
     const rows = this.db
       .query(
         "SELECT ast_hash, codeunit_name, procedure_name, operator_name, operator_major, verdict, " +
-          "killing_test, failure_note, killing_test_failure, duration_ms, runner, " +
+          "killing_test, failure_note, killing_test_failure, kill_position, duration_ms, runner, " +
           "covering_tests, coverage_attribution, unplaceable, identity_ordinal " +
           "FROM mutants WHERE run_id = ?",
       )
@@ -528,6 +549,7 @@ export class ResultsStore {
       killing_test: string | null;
       failure_note: string | null;
       killing_test_failure: string | null;
+      kill_position: number | null;
       duration_ms: number;
       runner: string | null;
       covering_tests: string | null;
@@ -554,6 +576,7 @@ export class ResultsStore {
       ...(r.killing_test !== null ? { killingTest: r.killing_test } : {}),
       ...(r.failure_note !== null ? { failureNote: r.failure_note } : {}),
       ...(r.killing_test_failure !== null ? { killingTestFailure: r.killing_test_failure } : {}),
+      ...(r.kill_position !== null ? { killPosition: r.kill_position } : {}),
       ...(r.runner !== null
         ? {
             runner: this.parseRunnerKind(r.runner, {
@@ -661,9 +684,9 @@ export class ResultsStore {
       .query(
         `INSERT INTO mutants (run_id, mutant_code, ast_hash, codeunit_name, procedure_name,
          operator_name, operator_major, file, line, verdict, killing_test, failure_note,
-         killing_test_failure, duration_ms, batch_index, runner,
+         killing_test_failure, kill_position, duration_ms, batch_index, runner,
          covering_tests, coverage_attribution, unplaceable, identity_ordinal)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
       )
       .get(
         runId,
@@ -679,6 +702,7 @@ export class ResultsStore {
         row.killingTest ?? null,
         row.failureNote ?? null,
         row.killingTestFailure ?? null,
+        row.killPosition ?? null,
         row.durationMs,
         row.batchIndex,
         row.runner ?? null,
@@ -719,7 +743,7 @@ export class ResultsStore {
         // this row is no longer a kill, so a leftover account of "why the test went red" would
         // describe a verdict that has just been withdrawn.
         "UPDATE mutants SET verdict = 'error', failure_note = ?, killing_test = NULL, " +
-          "killing_test_failure = NULL " +
+          "killing_test_failure = NULL, kill_position = NULL " +
           "WHERE run_id = ? AND batch_index = ? AND verdict NOT IN ('error', 'known-survivor')",
       )
       .run(note, runId, batchIndex);
@@ -736,11 +760,12 @@ export class ResultsStore {
     durationMs: number,
     failureMessage?: string,
     opKind?: "single" | "many",
+    sessionId?: number,
   ): void {
     this.db
       .query(
-        `INSERT INTO test_results (run_id, mutant_row_id, mutant_code, codeunit_id, method, outcome, duration_ms, failure_message, op_kind)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO test_results (run_id, mutant_row_id, mutant_code, codeunit_id, method, outcome, duration_ms, failure_message, op_kind, session_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         runId,
@@ -752,7 +777,47 @@ export class ResultsStore {
         durationMs,
         failureMessage ?? null,
         opKind ?? null,
+        sessionId ?? null,
       );
+  }
+
+  /**
+   * R206 §6: the store-level liveness check on `session_id`, scoped to the rows that came from an
+   * answer (a 408 body carries no id, so `timeout` rows have none; so does an aborted call's):
+   * among rows whose outcome is pass or fail, how many carry an id and how many do not, how many
+   * distinct ids the grouped rows carry, and how many single-call rows there are against how many
+   * distinct ids they carry. A gate asserts `missing === 0`, `manyDistinct === groupedCalls minus
+   * the calls that did not answer`, and `singleRows === singleDistinct`.
+   */
+  sessionIdLiveness(runId: number): {
+    answered: number;
+    missing: number;
+    manyDistinct: number;
+    singleRows: number;
+    singleDistinct: number;
+  } {
+    const counts = this.db
+      .query(
+        "SELECT COUNT(*) AS answered, SUM(CASE WHEN session_id IS NULL THEN 1 ELSE 0 END) AS missing FROM test_results WHERE run_id = ? AND outcome IN ('pass', 'fail')",
+      )
+      .get(runId) as { answered: number; missing: number | null };
+    const many = this.db
+      .query(
+        "SELECT COUNT(DISTINCT session_id) AS n FROM test_results WHERE run_id = ? AND outcome IN ('pass', 'fail') AND op_kind = 'many' AND session_id IS NOT NULL",
+      )
+      .get(runId) as { n: number };
+    const single = this.db
+      .query(
+        "SELECT COUNT(*) AS rows, COUNT(DISTINCT session_id) AS distinct_ids FROM test_results WHERE run_id = ? AND outcome IN ('pass', 'fail') AND (op_kind IS NULL OR op_kind = 'single') AND session_id IS NOT NULL",
+      )
+      .get(runId) as { rows: number; distinct_ids: number };
+    return {
+      answered: counts.answered,
+      missing: counts.missing ?? 0,
+      manyDistinct: many.n,
+      singleRows: single.rows,
+      singleDistinct: single.distinct_ids,
+    };
   }
 
   /** R198: how many `test_results` rows in a run came from group calls, and for how many mutants. */

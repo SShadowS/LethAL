@@ -38,6 +38,8 @@ export interface SessionOutcome {
   readonly failureNote?: string;
   /** R86 — see `MutantOutcome.killingTestFailure`. */
   readonly killingTestFailure?: string;
+  /** R206 — see `MutantOutcome.killPosition`. */
+  readonly killPosition?: number;
   /**
    * Structural reason for an "error" verdict, set only at the two call
    * sites in orchestrator.ts that actually know it — see
@@ -177,7 +179,8 @@ export type Caveat =
   | "platform-artifact-kills"
   | "kills-without-assertion"
   | "declarative-sites-dropped"
-  | "all-errors";
+  | "all-errors"
+  | "session-warm";
 
 /**
  * What each `Caveat` MEANS for a reader, and — where the roadmap entry that filed it recorded one
@@ -396,6 +399,27 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
       "failure note.",
     basis: "R190",
   },
+  "session-warm": {
+    meaning:
+      "At least one grouped call (`RunMutantMany`) ran in this session, so a mutant's covering " +
+      "tests ran back to back in ONE server session, and a kill is: the test fails (or exceeds its " +
+      "budget) with the mutant active, in a session that was fresh at the call's start, where the " +
+      "same ordered prefix of tests passes (and completes inside budget) without it in another " +
+      "fresh session. That is the context the target's own CI runs in and the product runs in " +
+      "(a warm `SingleInstance` cache, say); the older cold-per-test context was an accident of " +
+      "one session per request. A kill with `killPosition > 1` was measured warm and confirmed by " +
+      "replaying its prefix unmutated; `warmKills` counts them. A kill with `killPosition` 1 ran " +
+      "first in a session the server reported fresh (`testRunsBefore` 0), which is asserted per " +
+      "call and recorded as `session-reused` when it fails, never as a kill. A kill without " +
+      "`killPosition` predates the field (carried by `--resume`). Under `--resume` two mutants " +
+      "can have been ordered by different kill ledgers, so positions compare within one scoring.",
+    entailedNegative:
+      "A test that fails only COLD (passes warm) hides a kill here and is reported `survived`: the " +
+      "accepted direction, never a manufactured kill. `--no-group-runs` scores every test cold, " +
+      "at the pre-R198 cost. A 408 (a timeout) carries no session keys, so a `timeout-killed` at " +
+      "position 1 is not asserted fresh by the guard; one at position > 1 is, through its replay.",
+    basis: "R206",
+  },
 };
 
 /**
@@ -417,7 +441,12 @@ export type MutantErrorCause =
   | "group-answer-malformed"
   | "group-coverage-incomplete"
   | "op-stopped"
-  | "stopped-after-completion";
+  | "stopped-after-completion"
+  // R206: the session guard and the warm confirmation's own endings.
+  | "session-reused"
+  | "warm-prefix-unstable"
+  | "warm-timeout-unconfirmed"
+  | "warm-confirmation-incomplete";
 
 /**
  * What each `MutantErrorCause` MEANS for a reader, and — because both are facts about LethAL's OWN
@@ -558,6 +587,60 @@ export const ERROR_CAUSE_INTERPRETATIONS: Record<MutantErrorCause, Interpretatio
       "statement and its result being recorded would otherwise score a passing test as a kill. A " +
       "narrowing, not a proof: a session killed inside that write rolls it back and still scores.",
     basis: "R204",
+  },
+  "session-reused": {
+    meaning:
+      "The server reported that the session this call ran in had already run test methods before " +
+      "the call started (`testRunsBefore > 0`): the platform handed LethAL a session another call " +
+      "had used, so the state at the call's start (a `SingleInstance` cache, say) was that call's, " +
+      "possibly another mutant's. A failure or a timeout measured there is not attributable to " +
+      "this mutant and is recorded as an error, never a kill. Re-run with `--resume`; if it " +
+      "recurs across a run, the environment pools web-service sessions and no kill measured on it " +
+      "can be published under R206's ruling (R206).",
+    entailedNegative:
+      "Not a statement about the mutant or the test: neither was measured in a fresh session. A " +
+      "PASSING run in a reused session stays `survived`, because a reused session can hide a " +
+      "kill but cannot manufacture one.",
+    basis: "R206",
+  },
+  "warm-prefix-unstable": {
+    meaning:
+      "This mutant's killer failed at position k > 1 of its group call, and the confirmation " +
+      "replayed methods 1..k UNMUTATED in a fresh session: a method BEFORE the killer failed in " +
+      "the replay. The suite's own order sensitivity, not the mutant; the note names the method " +
+      "and its position. No verdict. Re-run with `--no-group-runs` to score this mutant cold, or " +
+      "fix the order dependence in the test suite (R206).",
+    entailedNegative:
+      "Not `unstable` in today's sense (that is the KILLER failing unmutated, kept under its own " +
+      "cause), and not a kill: the failure the mutated run saw may have been the prefix's, not " +
+      "the mutant's.",
+    basis: "R206",
+  },
+  "warm-timeout-unconfirmed": {
+    meaning:
+      "This mutant's killer exceeded its budget at position k > 1 of its group call and was " +
+      "stopped; the confirmation replayed methods 1..k unmutated, and method k either completed " +
+      "OUTSIDE the budget that was measured for it cold, or was stopped again. The warm session, " +
+      "not the mutant, made it slow, so the timeout is not attributed. No verdict. Raise " +
+      "`--mutant-timeout-ms`, or re-run with `--no-group-runs` (R206).",
+    entailedNegative:
+      "Not `timeout-killed`: that verdict rests on the mutant being what exceeded the budget, and " +
+      "the replay showed the unmutated method exceeds it in the same position too. Also a " +
+      "narrowing of R204 for k > 1: a method that merely finished just after its budget lands " +
+      "here rather than as a kill.",
+    basis: "R206",
+  },
+  "warm-confirmation-incomplete": {
+    meaning:
+      "This mutant's killer failed or timed out at position k > 1 of its group call, and the " +
+      "confirmation replay of methods 1..k unmutated ended at the server's headroom cap before " +
+      "reaching method k (a replay is a slower re-run on wall clock, so the cap can fire on a " +
+      "prefix that fitted once). The kill could not be confirmed. No verdict. Re-run with " +
+      "`--resume`, or raise `--request-ceiling-ms` (R206).",
+    entailedNegative:
+      "Not a malformed answer and not a server fault: the cap is a clean, expected ending. Not a " +
+      "kill: nothing established that the prefix passes unmutated.",
+    basis: "R206",
   },
 };
 
@@ -1114,6 +1197,15 @@ export interface SessionReport {
    */
   readonly groupedCalls?: number;
   /**
+   * R206. How many of this run's `killed`/`timeout-killed` verdicts carry `killPosition > 1`:
+   * kills measured WARM, in a session earlier covering tests had already run in, and confirmed by
+   * replaying that prefix unmutated. Folded from the scored and carried events, never from a
+   * defaulted position: a kill without `killPosition` (recorded before the field existed) is not
+   * counted. Optional in the schema for archived reports; always written by this build. The
+   * gates pin it (bcdev 0, tables 13) and pin `groupedCalls` as `scored + warmKills`.
+   */
+  readonly warmKills?: number;
+  /**
    * R175. WHICH mutants those are, as `mutantCode`s, sorted.
    *
    * The count alone says a report is partly ours rather than the project's; only these say which
@@ -1303,6 +1395,16 @@ export interface MutantOutcome {
    * which is the honest statement that none was reported, not a claim that the kill was clean.
    */
   readonly killingTestFailure?: string;
+  /**
+   * R206 §2.4: on a `killed`/`timeout-killed`, one plus the number of test methods that ran before
+   * the killer in the SESSION that ran it, i.e. its 1-based position within its call. 1 on the
+   * sequential path by definition. Greater than 1 means the kill was measured WARM: the session
+   * already held whatever state the earlier methods left (a `SingleInstance` cache, say), and the
+   * kill was confirmed by replaying that prefix unmutated in another fresh session. It equals the
+   * killer's position in the ledger's order only when the mutant's covering tests fitted one call.
+   * Absent on a kill recorded before the field existed (a resumed run can carry one).
+   */
+  readonly killPosition?: number;
   /**
    * Structural reason for an "error" verdict — mirrors `SessionOutcome.cause`, and see
    * `ERROR_CAUSE_INTERPRETATIONS` for what each value means to a reader. Present only for the two
@@ -1796,6 +1898,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
       ...(o.killingTest !== undefined ? { killingTest: o.killingTest } : {}),
       ...(o.failureNote !== undefined ? { failureNote: o.failureNote } : {}),
       ...(o.killingTestFailure !== undefined ? { killingTestFailure: o.killingTestFailure } : {}),
+      ...(o.killPosition !== undefined ? { killPosition: o.killPosition } : {}),
       ...(o.cause !== undefined ? { cause: o.cause } : {}),
       // R72: a SITE property, so it comes off the manifest entry and never off the outcome — it is
       // true of this mutant whatever happened when it ran.
@@ -1905,6 +2008,9 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
   if (input.stopHungSessions === true && counts.timeoutKilled > 0) {
     caveats.push("stop-hung-sessions");
   }
+  // R206 — see CAVEAT_INTERPRETATIONS["session-warm"]. Every report with a grouped call: the
+  // ruling applies to every verdict measured that way, not only to the kills it moved.
+  if ((input.groupedCalls ?? 0) > 0) caveats.push("session-warm");
   // See CAVEAT_INTERPRETATIONS.resumed for what this caveat means to a reader.
   if (input.resumedFrom !== undefined) caveats.push("resumed");
   if (input.untargetedTriggerCount > 0) caveats.push("untargeted-triggers");
@@ -2152,6 +2258,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     preprocessorSymbols: statics.preprocessorSymbols ?? [],
     untargetedTriggerCount: input.untargetedTriggerCount,
     groupedCalls: input.groupedCalls,
+    warmKills: input.warmKills,
     unplaceableCount: input.unplaceableCount,
     unplaceableMutants: input.unplaceableMutants,
     ...(input.only !== undefined ? { only: input.only } : {}),
@@ -2218,6 +2325,26 @@ function summarizeRunnerContexts(
   return { verdictCount, clientType: first.clientType, basisText };
 }
 
+/**
+ * R206: the banner's error breakdown. `counts.unstable` keeps counting `unstable` alone; the four
+ * R206 causes are listed beside it when non-zero, so a run full of them does not read
+ * `error N [unstable 0]`.
+ */
+function errorBreakdown(r: SessionReport): string {
+  const named: MutantErrorCause[] = [
+    "session-reused",
+    "warm-prefix-unstable",
+    "warm-timeout-unconfirmed",
+    "warm-confirmation-incomplete",
+  ];
+  const parts: string[] = [];
+  for (const cause of named) {
+    const n = r.mutants.filter((m) => m.cause === cause).length;
+    if (n > 0) parts.push(`, ${cause} ${n}`);
+  }
+  return parts.join("");
+}
+
 export function renderConsole(r: SessionReport): string {
   const lines: string[] = [];
   if (!r.authoritative) {
@@ -2256,8 +2383,14 @@ export function renderConsole(r: SessionReport): string {
       `(killed ${r.counts.killed}, survived ${r.counts.survived}, no-coverage ${r.counts.noCoverage}, ` +
       `deadline-exceeded ${r.counts.deadlineExceeded}, ` +
       `timeout-killed ${r.counts.timeoutKilled}, known-survivor ${r.counts.knownSurvivors}, ` +
-      `error ${r.counts.errors} [unstable ${r.counts.unstable}])`,
+      `error ${r.counts.errors} [unstable ${r.counts.unstable}${errorBreakdown(r)}])`,
   );
+  // R206: warm kills are a fact about HOW the kills were measured, stated beside the score.
+  if ((r.warmKills ?? 0) > 0) {
+    lines.push(
+      `warm kills: ${r.warmKills} of ${r.counts.killed + r.counts.timeoutKilled} were measured at group position > 1 (a session earlier tests had run in) and confirmed by replaying that prefix unmutated — see validity.caveats "session-warm"`,
+    );
+  }
   // R5: the score above is computed ONLY over instrumented sites — say so explicitly, right next
   // to it, whenever any file was dropped. A page-heavy project could otherwise read a confident
   // "100%" as full coverage when most of its code was never instrumented at all.
