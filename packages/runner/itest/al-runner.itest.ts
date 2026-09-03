@@ -16,7 +16,8 @@
  * CLI/JSON contract VERIFIED (2026-08-07) against al-runner v2.0.0.0: argv shape
  * `--output-json --isolation test --test <Codeunit<id>.<method>> <instrumentedDir>
  * <testDir> [--package-cache <dir>]`, with the bundle dirs POSITIONAL; the per-test
- * budget is the env var `AL_RUNNER_TEST_TIMEOUT_SEC`, not a flag. stdout carries a
+ * budget travels in the env var `AL_RUNNER_TEST_TIMEOUT_SEC` (2.0.0.0 had no flag for it;
+ * 2.10.0.0 accepts `--test-timeout` again, and LethAL still uses the variable). stdout carries a
  * human progress banner BEFORE the JSON, so the envelope has to be located rather
  * than parsed whole (`parseAlRunnerPayload`). Envelope: `{ tests: [{ name, status,
  * durationMs?, message?, stackTrace? }], passed, failed, errors, total, exitCode }` —
@@ -25,8 +26,10 @@
  * test failed or errored, 2 a bundle could not execute, 3 a bundle could not compile.
  *
  * The v1 argv this replaced (`--run`, `--packages`, `--stubs`, `--test-timeout`,
- * `--test-isolation method`) is not merely deprecated — v2 rejects each of those as an
- * unknown option (exit 2). See `src/al-runner-transport.ts` for the measurements.
+ * `--test-isolation method`) was not merely deprecated — 2.0.0.0 rejected each of those as an
+ * unknown option (exit 2). 2.10.0.0 has since re-admitted `--test-timeout` and
+ * `--test-isolation` as v1 carry-overs; `--run` is still rejected (measured 2026-09-03). See
+ * `src/al-runner-transport.ts` for the measurements.
  */
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";

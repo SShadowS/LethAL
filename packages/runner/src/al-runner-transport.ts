@@ -437,9 +437,13 @@ export function parseAlRunnerPayload(stdout: string): readonly AlRunnerRawTest[]
  * command nobody runs. So both call this.
  *
  * v2 argv, measured against the installed al-runner v2.0.0.0 (2026-08-07). The v1 shape it replaced
- * (`--run <method> ... --test-isolation method --packages --stubs --test-timeout`) is not merely
- * deprecated: v2 answers an unknown flag with `Unknown option '--run'.` and exit 2, so every one of
- * those spellings had to go.
+ * (`--run <method> ... --test-isolation method --packages --stubs --test-timeout`) was not merely
+ * deprecated: 2.0.0.0 answered an unknown flag with `Unknown option '--run'.` and exit 2, so every
+ * one of those spellings had to go. Re-measured on 2.10.0.0 (2026-09-03): `--run` is still
+ * rejected, but `--test-timeout` and `--test-isolation` are accepted again as v1 carry-overs
+ * (`--test-isolation` aliases `--isolation`, and `method` now aliases `test`, not `codeunit`).
+ * This argv does not depend on either: the budget travels in the env var and the isolation mode
+ * is named `test` outright.
  */
 export function buildAlRunnerArgv(
   alRunnerPath: string,
@@ -528,9 +532,11 @@ export function buildAlRunnerArgv(
 }
 
 /**
- * The env every al-runner invocation carries. v2 dropped `--test-timeout`; the per-test budget is
- * this variable, and the released build honours it (measured: `AL_RUNNER_TEST_TIMEOUT_SEC=15`
- * produced a 15.027 s test). `SpawnFn` merges this over `process.env`, so PATH survives.
+ * The env every al-runner invocation carries. 2.0.0.0 dropped `--test-timeout`; the per-test budget
+ * became this variable, and the released build honours it (measured: `AL_RUNNER_TEST_TIMEOUT_SEC=15`
+ * produced a 15.027 s test). 2.10.0.0 accepts the flag again and documents it as taking precedence
+ * over the variable; nothing here sets the flag, so the variable still decides. `SpawnFn` merges
+ * this over `process.env`, so PATH survives.
  *
  * Exported alongside `buildAlRunnerArgv` and for the same reason — the contract probe must spawn
  * with the budget the transport spawns with, or its timeout measurement describes a run nobody

@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**10 of 204 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**11 of 205 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -249,6 +249,7 @@ that ordering is the priority.
 - **R203** · A successful R53 stop whose session finishes the test before `StopSession` lands makes phase 3 refuse `lease-invalid`, which the client classifies as a GENUINE lease loss and invalidates the batch, with a note that names the wrong cause · [R203.md](docs/roadmap/R203.md) · done (`0451532`, with R198) — 2026-09-03. `TryFinishRun` answers `reason: op-stopped` when the lease tuple…
 - **R204** · R53's stop can land between a test's last statement and phase 3's commit, and the 408 then scores `timeout-killed` for a test that PASSED; the window is inherited by every stop and R198 makes each one smaller but adds one per method · [R204.md](docs/roadmap/R204.md) · open — NARROWED by R198's build (`0451532`, 2026-09-03): after BC's stop 408 the transport reads the op's…
 - **R206** · A grouped call runs a mutant's covering tests in ONE BC session, so `SingleInstance` state carries from test to test where the per-request path gave every test a cold session: 8 of 741 verdicts moved `survived` to `killed` on Document Output, all cache code, all killed at group position 2 or later · [R206.md](docs/roadmap/R206.md) · open — measured 2026-09-03 on the hosted sandbox (run 3 of the Templates slice, R198's first real run).…
+- **R207** · al-runner's `provision` subcommand is refused by `provisionOnce` for a reason that no longer reproduces: on v2.10.0.0 the run and the subcommand both resolve every artifact at the binary's build, so the toolkit-version gap measured on 2.1.1.0 is not visible on the fixture · [R207.md](docs/roadmap/R207.md) · open — filed 2026-09-03 while sweeping stale al-runner claims at the runner author's prompting; the reason…
 
 ---
 

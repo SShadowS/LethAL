@@ -1036,6 +1036,18 @@ facts moved, and one of them broke the gate:
    `[provision] BC <build> engine artifacts already complete at <dir>.` (same phrasing, the ENGINE
    directory) and `[provision] test toolkit already present at <dir>/test-apps.`
 
+**Re-verified against `al-runner v2.10.0.0` on 2026-09-03**, prompted by al-runner's author reading
+LethAL's docs and finding claims that were no longer true. The claims that had gone stale were
+user-facing prose, not code: `README.md`, the EMEA runbook and the agent guide all still said
+"its `asserterror` never fails a test", a v1 finding (R7) that v2 fixed and that
+`runAlRunnerCanary` has reported `defect-not-reproduced` on since 2.0.0.0. The canary on 2.10.0.0:
+`asserterror` and `tableGlobalVar` both `defect-not-reproduced`, `transactionRollback` still
+`defect-confirmed` (the `Codeunit.Run` residual in the table under §"al-runner v2" of
+`al-runner-backend.ts`). `itest:alrunner` is UNCHANGED at 3 / 16 / 0, all 19 per-mutant verdicts
+identical. Two flag-table rows above also moved, and are marked inline: `--test-timeout` is a flag
+again, and `--isolation method` now aliases `test` rather than `codeunit`. Neither touches LethAL's
+argv (`--isolation test` by name, the budget through the env var), so no code changed.
+
 ### It runs on Windows
 
 R98 recorded that upstream `main` P/Invoked `libc`'s `mprotect` and died before any test ran. On the
@@ -1051,8 +1063,8 @@ in R93 is blocked on the platform any more.
 | the project | positional | positional, repeatable; multiple bundle dirs run sequentially and aggregate |
 | symbol/package resolution | `--packages DIR` | `--package-cache PATH`, repeatable |
 | dependency stubs | `--stubs DIR` | **gone** — listed under NOT YET IMPLEMENTED and not accepted as a flag |
-| per-test budget | `--test-timeout <s>` | **no flag**; the env var `AL_RUNNER_TEST_TIMEOUT_SEC` — and it IS honoured (set to 15, measured a 15.027 s test) |
-| per-test reset | `--test-isolation method` | `--isolation test`. **`method` is accepted only as a v1 alias for `codeunit`** — the weaker mode — silently |
+| per-test budget | `--test-timeout <s>` | the env var `AL_RUNNER_TEST_TIMEOUT_SEC` — and it IS honoured (set to 15, measured a 15.027 s test). On 2.0.0.0 there was **no flag**; **2.10.0.0 accepts `--test-timeout SECONDS` again** ("v1 carryover", takes precedence over the env var), measured by argv acceptance. LethAL still sets the env var |
+| per-test reset | `--test-isolation method` | `--isolation test`. On 2.0.0.0 **`method` was accepted only as a v1 alias for `codeunit`**, the weaker mode, silently. **2.10.0.0's help says `method` is now the alias for `test`** ("v1's per-method reset"). LethAL sends `test` by name either way |
 | machine output | `--output-json` | `--output-json`, same envelope |
 
 An unrecognised flag prints `Unknown option '--run'. Run with --help for the supported flags.` to

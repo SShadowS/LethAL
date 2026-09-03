@@ -72,9 +72,12 @@ cannot change a verdict. `--tests-only` selects which TESTS run at baseline and 
 killing test and its mutant is reported survived. The report flags a narrowed run in
 `validity.caveats`, as `narrowed`, `operator-narrowed` or `tests-narrowed`.
 
-**Backends.** `bcdev` is authoritative. `al-runner` is offline and is NOT: its `asserterror` never
-fails a test, so mutants killable only that way come back survived there. Under-reporting only,
-never a false kill. Do not quote a score from it.
+**Backends.** `bcdev` is authoritative. `al-runner` is offline and is NOT: it reports no coverage,
+so an unreached mutant comes back survived rather than no-coverage, and `Codeunit.Run` does not
+scope a write transaction there, so a mutant killable only through that rollback survives.
+Under-reporting only, never a false kill. Do not quote a score from it. (Its `asserterror` DID
+fail to fail a test in 2026-07; that was fixed upstream in v2 and the startup canary re-measures
+it every session.)
 
 **Cost.** On `bcdev` a mutant's covering tests run in ONE call to the server (one per mutant, not
 one per test), stopping at the first failure, so a survivor with forty covering tests costs one

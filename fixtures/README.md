@@ -353,10 +353,20 @@ facts explain it, and only the second is a defect:
    empty. All three of bcdev's kills come from `asserterror` tests, so all three become false
    survivors.
 
-Consequence for users: **on the al-runner backend, any mutation whose only killer is an
-`asserterror` assertion is reported as survived.** That under-reports the mutation score
+Consequence for users AT THE TIME: **on the al-runner backend, any mutation whose only killer is
+an `asserterror` assertion is reported as survived.** That under-reports the mutation score
 (survivors are safe-direction, a missed kill is never a false kill) but it is silent, so the CLI
 warns whenever a non-authoritative backend is selected. Confirm survivors against bcdev.
+
+**SUPERSEDED (2026-09-03, al-runner v2.10.0.0).** Point 2 is a v1 finding and is FIXED in v2:
+the startup canary below runs `asserterror I := 1;` through the installed binary and reports
+`asserterror: defect-not-reproduced` (the runner raises `NavNCLAssertErrorException: An error was
+expected inside an ASSERTERROR statement.`, as BC does). What still separates the two backends is
+`coverage: "none"` (on `sandbox-app`, bcdev's 4 no-coverage mutants are run and survive there,
+hence `itest:alrunner`'s 3 / 16 / 0 against bcdev's 3 / 12 / 4) and, on `sandbox-data`,
+`Codeunit.Run` not scoping a write transaction (R183; the canary's third probe,
+`transactionRollback`, still reports `defect-confirmed`). The measurement above is kept as the
+record of why the canary exists, not as a description of the current binary.
 
 **R7 update, 2026-07-26 — a startup canary, not just a warning.** A static warning printed on
 every al-runner session names a defect frozen at the moment someone measured it by hand; it

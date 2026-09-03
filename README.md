@@ -655,10 +655,14 @@ a LethAL feature or a mode.
 - **Single-tenant servers only.** App publication is service-instance-wide, so a second tenant
   publishing to the same instance is outside the lease entirely. Documented, **not enforced**, since
   AL cannot enumerate tenants from an extension. Verify out of band with `Get-BcContainerTenants`.
-- **`al-runner` is not authoritative.** Measured: its `asserterror` never fails a test, so mutants
-  killable only that way come back survived there while `bcdev` kills them. Under-reporting only,
-  never a false kill; a startup canary measures the actual binary each session and says so. Use it
-  for offline smoke-testing, not for a score.
+- **`al-runner` is not authoritative,** though not for the reason earlier versions of this file
+  gave. The 2026-07 finding that its `asserterror` never fails a test was fixed upstream in v2, and
+  a startup canary re-measures it against the installed binary every session (`defect-not-reproduced`
+  on v2.10.0.0). What remains, measured against a real BC container on the same fixture: it reports
+  no coverage, so a mutant no test reaches is run against every test and comes back `survived`
+  rather than `no-coverage`; and `Codeunit.Run` does not scope a write transaction there, so a
+  mutant whose only killer relies on that rollback survives where `bcdev` kills it. Under-reporting
+  only, never a false kill. Use it for offline smoke-testing, not for a score.
 - **A mutant that never terminates is stepped over, not scored.** AL cannot preempt a running loop,
   so LethAL sees only its own abort and cannot tell it from "the server is still working". Such a
   mutant is recorded as an unmeasured error; `--resume` skips it so the run completes rather than
@@ -768,9 +772,9 @@ per-mutant baseline**, where a differing verdict is a regression, never "close e
 
 | Command | Proves | Frozen |
 |---------|--------|--------|
-| `LETHAL_ITEST_BCDEV=1 bun run itest:bcdev` | End-to-end verdicts against real BC | 3 killed / 10 survived / 3 no-coverage |
-| `LETHAL_ITEST_TABLES=1 bun run itest:tables` | Tier-2 operators, table-trigger and extension-object mutation | 109 / 17 / 10 over 136 deployed |
-| `LETHAL_ITEST_ENVTOOL=1 bun run itest:envtool` | An externally-owned environment, reached through config | 3 / 10 / 3 |
-| `LETHAL_ITEST_ALRUNNER=1 bun run itest:alrunner` | The al-runner backend | 3 / 13 / 0 |
+| `LETHAL_ITEST_BCDEV=1 bun run itest:bcdev` | End-to-end verdicts against real BC | 3 killed / 12 survived / 4 no-coverage |
+| `LETHAL_ITEST_TABLES=1 bun run itest:tables` | Tier-2 operators, table-trigger and extension-object mutation | 299 / 63 / 15 over 377 deployed |
+| `LETHAL_ITEST_ENVTOOL=1 bun run itest:envtool` | An externally-owned environment, reached through config | 3 / 12 / 4 |
+| `LETHAL_ITEST_ALRUNNER=1 bun run itest:alrunner` | The al-runner backend | 3 / 16 / 0 |
 | `LETHAL_ITEST_BCDEV=1 bun run itest:lease` | Lease lifecycle, contention, recovery | n/a |
 | `LETHAL_ITEST_BCDEV=1 bun run itest:stale-publish` | Publish serialization and staleness | n/a |

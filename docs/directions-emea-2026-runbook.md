@@ -221,9 +221,11 @@ own 36 verdicts were **pre-committed before the run and all 36 matched** — the
 dated before the run.
 
 **"Which backend should I use?"**
-`bcdev`. `al-runner` is offline and NOT authoritative: its `asserterror` never fails a test, so
-mutants killable only that way come back survived there. Under-reporting only, never a false kill,
-and a startup canary measures the actual binary each session.
+`bcdev`. `al-runner` is offline and NOT authoritative: it reports no coverage, so an unreached
+mutant comes back survived rather than no-coverage, and `Codeunit.Run` does not scope a write
+transaction there, so a mutant killable only through that rollback survives. Under-reporting only,
+never a false kill, and a startup canary measures the actual binary each session. (The older claim
+that its `asserterror` never fails a test was fixed upstream in v2; the canary confirms it.)
 
 **"You planted that bug."**
 Yes. The app is a plant; the mechanism is not. It is released, so point it at your own code — and
