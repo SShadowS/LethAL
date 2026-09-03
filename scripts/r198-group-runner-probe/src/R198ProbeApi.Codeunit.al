@@ -316,6 +316,61 @@ codeunit 71544 "R198 Probe API"
         Result := Outcome + ' | read-before=' + Before + ' | now=' + Progress."Method Name" + ' phase=' + Progress.Phase + ' mode=' + Progress."Progress Mode";
     end;
 
+    /// <summary>F2 of the third review. Records its session id under method 'WAITGO', then busy-waits
+    /// on the progress row until the driver flips "Progress Mode" to 'GO' (or MaxMs passes), then
+    /// returns NORMALLY. The driver issues the stop for 'WAITGO' and flips GO immediately after, so
+    /// this request ends before the stop can land (E8 measured ~4 s of stop latency) if that latency
+    /// is inherent. What happens to the pending stop is then read from Ping.</summary>
+    [ServiceEnabled]
+    procedure WaitForGo(MaxMs: Integer) Result: Text
+    var
+        Progress: Record "R198 Progress";
+        T0: DateTime;
+        Seen: Boolean;
+    begin
+        Progress.Get('CURRENT');
+        Progress."Method Index" := 1;
+        Progress."Method Name" := 'WAITGO';
+        Progress.Phase := 'before';
+        Progress."Session Id" := SessionId();
+        Progress.Stamp := CurrentDateTime();
+        Progress.Modify();
+        Commit();
+        T0 := CurrentDateTime();
+        while (CurrentDateTime() - T0 < MaxMs) and not Seen do begin
+            SelectLatestVersion();
+            Progress.Get('CURRENT');
+            Seen := Progress."Progress Mode" = 'GO';
+            if not Seen then
+                Sleep(20);
+        end;
+        Progress.Get('CURRENT');
+        Progress.Phase := 'after';
+        Progress.Stamp := CurrentDateTime();
+        Progress.Modify();
+        Commit();
+        Result := 'finished session ' + Format(SessionId()) + ' after ' + Format(CurrentDateTime() - T0) + ' ms, go=' + Format(Seen);
+    end;
+
+    [ServiceEnabled]
+    procedure Go() Result: Text
+    var
+        Progress: Record "R198 Progress";
+    begin
+        Progress.Get('CURRENT');
+        Progress."Progress Mode" := 'GO';
+        Progress.Modify();
+        Commit();
+        Result := 'go';
+    end;
+
+    /// <summary>Which session serves this request, and is it alive enough to answer.</summary>
+    [ServiceEnabled]
+    procedure Ping() Result: Text
+    begin
+        Result := 'session ' + Format(SessionId()) + ' at ' + Format(CurrentDateTime(), 0, 9);
+    end;
+
     local procedure ProgressJson() Out: JsonObject
     var
         Progress: Record "R198 Progress";

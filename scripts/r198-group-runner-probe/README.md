@@ -46,6 +46,7 @@ after every method in `PlatformAfterTestRun`) by delegating to `Test Runner - Mg
 | E8 | **Stop inside a group.** T1, T7 (a 45 s bounded loop), T5. A stop asked for T1, then one for T7 | **`stop for T1: refused: runner is at T7_Hang/before (index 7)`**, then `stopped session ... inside T7_Hang`, and the held call returned within **3.9 s**, not after 45 s: in the first run **HTTP 408** ("The session was stopped by an AL StopSession call"); in the committed run (`results.measured.txt`, session 1300) **HTTP 400** "Cannot establish a connection to the SQL Server/Database", the session equally dead. Progress after: still `T7_Hang/before`, the marker of a session that died inside method 7. LOOP mode (E8b): 408 after 3.9 s in both runs. |
 | E10 | **F4.** Session A reads the progress row unlocked, holds it 5 s while session B commits a change, then A `Modify()`s its stale copy | **Raised**: "Sorry, we just updated this page. Reopen it, and try again." B's values stayed. No silent overwrite; in the refused group draft that raise would have unwound the action past phase 3. |
 | E9 | Rows left behind by all of the above | **0.** Nothing leaked across calls, including from the stopped sessions. |
+| E11 | **Stop against a session that would finish first** (`drive-stop-after-finish.ps1`, 5 rounds, `stop-after-finish.measured.txt`). A request busy-waits on a database flag; a second session stops it and flips the flag right after; 16 pings follow over 8 s | **The stop landed first, every round**: the held call got its 408 at ~1.35 s, before the flag could be seen. E8's ~3.9 s was the cancellation granularity of a pure CPU spin; a session that touches the database is stopped at its next call, within tens of ms. **Session ids are never reused**: all 80 pings got fresh consecutive ids, none the stopped one. A pending stop therefore has nowhere to land but the session it named (and R53 measured `StopSession` on a dead id as a no-op). |
 | race | `drive-stop-race.ps1`, 30 rounds alternating group/loop (`stop-race.measured.txt` holds the 20 recorded ones; the first 10 were console-only, all 408) | In the COMMITTED files, **21 of 22 stops answered 408** naming the AL StopSession call (20 race rounds + E8b; the **one 400**, "Cannot establish a connection to the SQL Server/Database", is E8 of the committed run, GROUP mode, about 10 s after a fresh publish). Counting the first run's E8/E8b and the 10 console-only rounds, 33 of 34. Filed as [[R202]]: today's transport quarantines on it, and the R198 redraft deliberately does NOT score it, because a progress row that has not moved is what a slow, passing method looks like too. |
 
 Traces (`B<i>`/`A<i>` per trigger, from an instance global) also show that the platform keeps ONE
@@ -77,6 +78,6 @@ methods by declaration position.
   ~45 ms per looped method; the next hosted run measures it.
 - A group whose method count pushes one HTTP request past a gateway's idle timeout; the second
   draft caps the group.
-- The window between a method's last instruction and the loop's `after` write. It is AL
-  statements, not I/O, and the op-level tombstone (R53's `already-completed`) still stands behind
-  the per-method one.
+- The window between a method's last instruction and the loop's `after` write, beyond E11's
+  finding that a stop lands at the target's next database call: the op-level tombstone (R53's
+  `already-completed`) still stands behind the per-method one.
