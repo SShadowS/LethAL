@@ -1,13 +1,17 @@
-# Design: `RunMutantMany`, one call per mutant, a server-side loop of today's single-method run (R198, second draft, revision 5)
+# Design: `RunMutantMany`, one call per mutant, a server-side loop of today's single-method run (R198, second draft, revision 6)
 
-Status: DRAFT for adversarial review before any code. Second draft, revised four times. Revision 1
+Status: REVIEWED FIVE TIMES, revision 6 applies the fifth pass's five blockers and its carry notes;
+the design's shape has not changed since revision 1 and every pass since the third has found
+plumbing rather than design. Second draft, revised five times. Revision 1
 was reviewed on 2026-09-03 and refused with twelve findings; revision 2 applied them and was
 refused with ten, of which one (the non-408 kill rule for R202) was DELETED rather than repaired;
 revision 3 was refused with ten more, none class 1, of which one was a platform question and is
 MEASURED (E11); revision 4 was refused with ten more, none a design change: an inherited false-kill
 window the draft had claimed closed (now R204, with a narrowing), two ordering errors in the
-answer check, a scope narrowing on E11, and six wording or plumbing edits, all applied here. All
-five review tables are at the end. The first draft (`2026-09-02-r198-run-mutant-many.md`) was
+answer check, a scope narrowing on E11, and six wording or plumbing edits; revision 5 was refused
+with five plumbing blockers (the single grain's progress sequence, the narrowing's vehicle, the
+per-mutant causes' channel, three per-entry faults' consequence, the single path's write inside
+the boundary), applied here. All six review tables are at the end. The first draft (`2026-09-02-r198-run-mutant-many.md`) was
 refused with ten findings, also listed. Every platform fact this draft rests on was MEASURED on
 Cronus283 on 2026-09-03 (`scripts/r198-group-runner-probe/README.md`, experiments E1 to E10 and
 the stop race, raw output in `results.measured.txt` and `stop-race.measured.txt`); the
@@ -89,10 +93,19 @@ clients, and the long-budget fallback in §3.4); `RunMutant` gains ONE behaviour
   `RunAllTests` returns, before `TestResultsToJSON` or anything else**, `Last Completed Index := i`,
   `State := between`, `Commit()` (a named invariant, `PROGRESS_BETWEEN_FIRST`, pinned by a test on
   the AL source). E3/E7 measured that commits between test runs carry nothing of the test's
-  writes. `TryFinishRun` sets `State := done` in its transaction. **`RunMutant` (single method)
-  writes the same row** with index 1, so `GetOperationStatus` reports one shape for every op. A row
-  that is missing mid-loop (deleted under the loop) is a `runError` (`progress-row-missing`); the
-  loop never re-creates it.
+  writes. `TryFinishRun` sets `State := done` in its transaction, through a guarded `Get` that can never
+raise (never an `Insert`): it sits inside the one transaction whose failure strands the marker.
+**`RunMutant` (single method) performs the SAME three-write sequence** with index 1 (`running`
+before, `between` immediately after `RunAllTests` returns, `done` in phase 3), and its two phase-2
+writes happen INSIDE `LC Run Method`'s `Codeunit.Run` boundary (commits are permitted there, as
+that codeunit's header explains), never in the gap between phase 1's `Commit` and the boundary
+where a raise would unwind past phase 3 and strand the marker. `PROGRESS_BETWEEN_FIRST` is pinned
+on BOTH `LC Run Many` and `LC Run Method`. `LC Op Progress` declares `InherentPermissions = RIMD`
+and `DataPerCompany = false` like `LC Lease` and `LC Mutation Active` (the OData session runs as
+the calling user; the 5C-A spike measured the permission as necessary). A row that is missing
+mid-loop (deleted under the loop) is a `runError` (`progress-row-missing`); the loop never
+re-creates it. The loop's per-method lease read is a plain `Get`, never `LockTable`, so a
+watchdog poll's update lock cannot make it raise inside phase 2.
 - **Cleanup of old rows** happens only in `AcquireLease`'s GRANTING branch, under the lease lock,
   and deletes only rows with `Op Seq <= Last Completed Op Seq` of the lease being granted: a live
   op's row is never deleted by a competing acquire.
@@ -181,7 +194,10 @@ without the actions is refused by the existing version gate before any call. A 4
 but a path-routed portal can emit a 404 BC never saw, and one that arrives after phase 1 claimed
 the op is indistinguishable at the status line: so it is reconciled and, when unresolved,
 quarantined exactly as any non-2xx is today, and THEN the session aborts with
-`control-app-route-missing`; never retried. The other direction, a NEW server
+`control-app-route-missing`, carried to `runSession` as a typed error the covering loop rethrows
+after the quarantine record is written. `runFenced`'s single re-issue after a `completed`/
+`not-started` reconciliation is what "as today" means here; a second 404 on that re-issue ends
+the same way. The other direction, a NEW server
 with an OLDER client, keeps working unchanged: `RunMutant` and `StopHungRun` keep their
 signatures, and the progress row `RunMutant` now writes is invisible to a client that never asks.
 
@@ -199,8 +215,10 @@ connection and is the SOLE writer of `stopFired`:
 - **Identity second.** On a poll that IS ours, `opProgress.methodIndex` must be in `1..N` and
   `opProgress.codeunitId`/`method` must equal `req.methods[methodIndex - 1]`'s, checked against
   the CLIENT's own request array. A disagreement on OUR row means the server is running something
-  this request did not ask for at that index: the transport aborts the request and returns
-  `in-flight-unknown` with the disagreement in `failureMessage`. No stop is fired on such a row.
+  this request did not ask for at that index: the transport aborts the request and the outcome
+  takes §3.1's shape (reconcile the op, quarantine if unresolved, then abort the SESSION with the
+  disagreement in the message), never a plain `in-flight-unknown` that the lost-ack retry would
+  re-dispatch against a server it has just decided is misbehaving. No stop is fired on such a row.
 - From `opProgress.startedAt` and `serverNow` (server clocks only) it computes the running method's
   `elapsed`. When `elapsed > req.methods[methodIndex - 1].budgetMs` and `--stop-hung-sessions` is
   on, it fires `StopHungRunAt(methodIndex, token)` ONCE and records `stopDecision = {methodIndex,
@@ -210,7 +228,8 @@ connection and is the SOLE writer of `stopFired`:
   method. `already-completed` means the op finished: keep waiting for the answer. Any other refusal
   or a throw is kept as `stopHookError` for the quarantine note (today's rule). The transport
   keeps the LAST refusal reason and the row's `(state, methodIndex, lastCompletedIndex)`, and puts
-  them into the abort message if the hard cap fires, so a loop stalled BETWEEN methods (row at
+  them, together with the ref of the method the watchdog was WATCHING (never the chunk's first
+  method), into the abort message and the `[budget was N ms]` note if the hard cap fires, so a loop stalled BETWEEN methods (row at
   `between`, every stop refused `method-completed`, nothing over budget to stop) is quarantined
   with a note that says exactly that, not "BC never answered with its stop confirmation".
 - Without `--stop-hung-sessions`, a method over its budget aborts the request at that moment,
@@ -232,8 +251,15 @@ connection and is the SOLE writer of `stopFired`:
   grains keep that one predicate), with ONE narrowing for R204 that applies to both grains: before
   scoring, read `GetOperationStatus` once; if `opProgress.lastCompletedIndex >=
   stopDecision.methodIndex` (single grain: `>= 1`), the method's `between` write committed before
-  the session died, so the method finished, and the run is `in-flight-unknown` instead. A
-  narrowing, not a proof: a session killed inside its blocked `between` write rolls it back.
+  the session died, so the method finished, and the run is a PER-MUTANT `error` with its own
+  cause `stopped-after-completion` ("the stop was confirmed and the method's own completion was
+  recorded first, so this run is not scored"): no `operation`, no `fencedOp`, no reconciliation,
+  no retry, no quarantine, the next mutant is scored. NOT `in-flight-unknown`: that state means
+  "the server may still be executing" and re-enters the lost-ack retry, which would re-dispatch
+  the whole chunk against an op the 408 and the tombstone both prove has ended, and end labelled
+  `result-lost`. If the narrowing's evidence is unavailable (the status call throws, the row is
+  absent, or the row is not ours), the answer is today's: `timeout`. A narrowing, not a proof: a
+  session killed inside its blocked `between` write rolls it back.
 - Any other NON-2xx after a stop is `in-flight-unknown`, reconciled as today. Revision 2's rule
   for a non-408 answer (R202) is DELETED: the only termination proof in hand is BC's 408 naming the
   AL `StopSession` call; the stop's own answer is a decision, not a termination; a progress row
@@ -261,15 +287,23 @@ call-level echo (`targetAppId`, `artifactId`, `attemptId`, `mutantId`), then `ar
 `reserved-params`, `lease-invalid` with its `reason` (`op-stopped` among them, §2.3). Only a `ran`
 answer goes further. Two consequences, pinned separately in `orchestrator.test.ts`:
 
-**Session-aborting** (a bare `error` with no `operation`, which sets `transportErrorRef` and
-throws at the end of the batch, exactly as today's single-method path does): a call-level echo
-mismatch; `identityMismatch: true` (an answer produced while a stale or wrong binary was live
+**Session-aborting** (the shapes today's single-method path uses: the echo mismatch carries
+`operation: "completed-effect-unknown"`, the attestation mismatch is a bare `error` with no
+`operation`; both reach `orchestrator`'s transport-error branch, set `transportErrorRef` and throw
+at the end of the batch): a call-level echo mismatch; `identityMismatch: true` (an answer produced while a stale or wrong binary was live
 rejects the WHOLE call and the session, because the next mutant's "survived" would be measured
 against a binary the session already proved wrong). `observedAny` is OR'd into `guardObserved`
 only.
 
-**Per-mutant** (`error` with a cause, recorded, the session continues): a `runError` answer on a
-`ran` status (§2.1: a raise inside phase 2, `progress-row-missing` among them) becomes cause
+**Per-mutant** (`error` with a cause, recorded, the session continues, and the NEXT mutant is
+scored, which is what §7's test asserts rather than the absence of a latch alone). The plumbing,
+named so it is not discovered mid-build: the generator tuple (§3.4) gains `cause` and the ref it
+is recorded against, because these causes are per CALL and the loop body records per test;
+`LeaseVerdictKind` gains a third member, `"op-stopped"`, which `classifyLeaseVerdict` returns for
+`leaseInvalidReason = "op-stopped"` and the loop scores as the per-mutant `error` rather than
+calling `noteLeaseLostOrThrow` (today it returns `"lost"` for every reason but `op-in-flight`,
+which would latch, i.e. exactly what §6 refuses and R203 exists to stop). Then: a `runError`
+answer on a `ran` status (§2.1: a raise inside phase 2, `progress-row-missing` among them) becomes cause
 `group-run-error` with the server's own text appended verbatim, the way `runMutantLineCountMessage`
 carries a server statement today (R139: a wrong named cause is worse than silence); otherwise
 `GroupVerdict` is built only if ALL of the following hold, else cause `group-answer-malformed`
@@ -279,14 +313,20 @@ with the answer text recorded, never a per-method verdict:
 - the answer's methods are a PREFIX of the request: entry `i` has index `i`, and the same
   `codeunitId` and `method` as request entry `i` (the §I5 identity guard, per entry), and there are
   exactly `ranCount` entries;
-- every entry's `result` is `1` or `2` (BC's `0`, "not run", and `3`, "skipped", are real values
-  the platform emits, E5, and an entry carrying one was not run);
 - `endedBy = complete` implies `ranCount = N`; `endedBy = failure` implies entry `ranCount`'s result
   is `1` and every earlier entry's is `2`; `endedBy = cap` implies every entry's result is `2`;
-- each entry carries `codeunitResults` with EXACTLY one test line (today's `lines.length !== 1`
-  guard per entry, through `runMutantLineCountMessage` so the server's own `error` text travels),
-  whose INNER `method`, the value BC produced rather than the server's echo of the request, equals
-  the client's own request entry `i`'s method (today's per-line method check), and a `durationMs`.
+- each entry carries a `durationMs`.
+
+Three per-entry faults are NOT in that per-mutant list, because today each of them aborts the
+session (a bare `error`, `orchestrator`'s transport-error branch) and the group path keeps that
+consequence unchanged: an entry whose `codeunitResults` does not hold EXACTLY one test line
+(today's `lines.length !== 1` guard, through `runMutantLineCountMessage` so the server's own
+`error` text travels, the channel R139 and R56 use); an entry whose INNER `method`, the value BC
+produced rather than the server's echo of the request, differs from the client's own request
+entry `i`'s method; and an entry whose result is outside `{1, 2}` (BC's `0` "not run" and `3`
+"skipped" are real values, E5). A server that answers two lines per entry, or a method it was not
+asked for, or a "not run" result, stops the session loudly as it does today, rather than yielding
+N `error` mutants and a completed report.
 
 Three of thirty-five methods returned, all passing, with `endedBy = complete` is therefore an
 `error`, not a survivor; so is `endedBy = cap` with no entries. New `MutantErrorCause` values:
@@ -304,7 +344,8 @@ quotes ("raise the floor with `--mutant-timeout-ms`"), `groupBudgetMs` is what `
 and the lost-ack polls use (§3.5). Two meanings, two fields.
 
 - backend WITHOUT `runMany` (al-runner): one `runFenced` per test, byte-for-byte today's loop;
-- backend WITH it: the generator walks `ordered` with a cursor, IN ORDER, never skipping. A chunk
+- backend WITH it (the tuple gains `cause` and `causeRef` for the per-call errors of §3.3): the
+  generator walks `ordered` with a cursor, IN ORDER, never skipping. A chunk
   is a CONTIGUOUS run of fittable methods starting at the cursor, at most `--max-methods-per-call`
   (default unbounded) long, ending before the first unfittable method; an unfittable method
   (`budgetMs + STOP_GRACE_MS > REQUEST_CEILING_MS`) is dispatched alone, AT ITS POSITION in
@@ -312,7 +353,10 @@ and the lost-ack polls use (§3.5). Two meanings, two fields.
   cursor moves past it. R197's order is therefore preserved exactly, which is what keeps
   `killingTest` where the sequential path would put it; the server's method-1 exemption is never
   exercised by this client. Each `runFencedMany` call carries `StopAtFirstFailure: true`,
-  `RequestCeilingMs = REQUEST_CEILING_MS` (default 300 s; `--request-ceiling-ms`; the 360 s figure
+  `RequestCeilingMs = REQUEST_CEILING_MS` (default 300 s; a `--mutant-timeout-ms` above
+  `REQUEST_CEILING_MS - STOP_GRACE_MS`, 270 s at the defaults, makes EVERY method unfittable and
+  the feature silently inert with `groupedCalls: 0`, so the session emits a warning naming both
+  flags whenever the floor exceeds that bound; `--request-ceiling-ms`; the 360 s figure
   is the hosted proxy's ceiling recorded at `orchestrator.ts` "360 s is the hosting proxy's own
   ceiling" from the first field run, and §7 owes a probe that pins it) and `StopGraceMs = 30 s`.
   Each returned method's verdict is yielded in order; on `endedBy = cap` the cursor advances by
@@ -340,7 +384,9 @@ passes `RequestCeilingMs + StopGraceMs` for a group op, and BOTH of its polls (r
 `pollUntilOpClears` and the `again` branch) size their attempts from it the way
 `classifyRetryRefusal` already does (`max(OP_POLL_ATTEMPTS, ceil(budget / OP_POLL_DELAY_MS))`), so
 a group that is simply still running at 30 s is polled to its end rather than condemned as a
-stranded tier. A `completed`/`not-started` reconciliation retries the WHOLE call once as a fresh
+stranded tier. Stated cost: rule 2 is also the OFF-mode hang case, so a real hang without
+`--stop-hung-sessions` now polls for up to the group budget (~5.5 minutes at the defaults) before
+quarantining, where today it is 8 s; `itest:hang`'s OFF leg gets slower by that much. A `completed`/`not-started` reconciliation retries the WHOLE call once as a fresh
 attempt from the first method of that call (a chunk, not the mutant's whole set). **Stated
 honestly:** the retry's `killingTest` is the retry's first failure; under R197's order that is the
 same test unless the suite is flaky, and a flaky suite is what R122 exists to name.
@@ -428,7 +474,9 @@ Not claimed closed: R204's inherited window (§5), narrowed here, and R202.
 ## 7. Tests that must exist before the gate
 
 - `run-mutant-transport.test.ts`: `run` and `runMany` yield identical `operation` values for the
-  same HTTP conditions (the shared classifier); §3.3's assertions each red on a crafted answer
+  same HTTP-level conditions (non-2xx, 408, unreadable body; the shared classifier), while at the
+  payload level they deliberately differ (a `ran` answer with no `codeunitResults` is
+  `in-flight-unknown` on `run` and `group-answer-malformed` on `runMany`); §3.3's assertions each red on a crafted answer
   (missing `endedBy`, `ranCount = 0`, wrong `ranCount`, identity mismatch at entry 2, a `failure`
   whose last entry passed, an entry with result `0`, an entry with two test lines, a
   `lease-invalid` that also carries `runError` classified as the lease answer); the after-408
@@ -579,4 +627,15 @@ absorb.
 | 9 | 3 | a 404 never reconciled discards today's quarantine record | §3.1 reconcile and quarantine, then abort |
 | 10 | 3 | `TryFinishRun` has no `Reason` out-parameter and phase-3 `BuildStatus` hardcodes a blank | §2.3 names the plumbing at both call sites |
 | notes | 4 | duplicated clause; `elapsed` arithmetic; `NextSuiteName` per session; al-runner 0 vacuous; §1 "2 s"; `test_results` row parity; a third copy of `dispatch` | §3.4 fixed; §7 `elapsed > budget` with tests; §2.1 suite names; §8 note; §4 row parity; §3.3 shared classifier |
+
+## Findings of the sixth review (2026-09-03, revision 5), and what revision 6 does with each
+
+| # | class | finding | revision 6 |
+|---|---|---|---|
+| N1 | 2 | `RunMutant` "writes the same row" could mean the `running` write only, leaving the after-408 narrowing dead at the single grain and its unit test vacuous | §2.1: the full three-write sequence at both grains, `PROGRESS_BETWEEN_FIRST` pinned on both codeunits |
+| N2 | 3 | the narrowing's vehicle, `in-flight-unknown`, re-enters the lost-ack retry and ends as `result-lost`; the identity-disagreement abort had the same wrong vehicle | §3.2: a per-mutant `error`, cause `stopped-after-completion`, no reconciliation; the identity disagreement takes §3.1's reconcile-quarantine-abort shape; unavailable evidence yields today's `timeout` |
+| N3 | 3 | the four per-mutant causes had no channel: `op-stopped` would latch through `classifyLeaseVerdict`, the others would abort through the transport-error branch | §3.3/§3.4: `cause`/`causeRef` on the generator tuple, `LeaseVerdictKind` gains `op-stopped`, §7 asserts the next mutant is scored |
+| N4 | 3 | three per-entry faults that abort the session today were downgraded to per-mutant errors without saying so | §3.3: they keep aborting the session, stated with the reason |
+| N5 | 3 | `RunMutant`'s progress write sat between phase 1's `Commit` and the catchable boundary; the table's permissions unstated | §2.1: inside the boundary; `InherentPermissions = RIMD`, `DataPerCompany = false`; `done` through a guarded `Get`; the lease read a plain `Get` |
+| notes | 4 | narrowing with unavailable evidence; the watched method's ref in notes; operation-equality scope; `--mutant-timeout-ms` above the ceiling makes the feature inert; the OFF-mode poll cost; `State := done` must not raise; "never retried" vs "as today" | all applied in place |
 
