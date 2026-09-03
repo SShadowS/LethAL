@@ -464,6 +464,12 @@ function assertOnLeg(leg: LegResult): void {
   // rows' distinct ids equal the group calls that ANSWERED (the five 408s carry none), and every
   // single-call row is its own session. Scoped, not softened: this is the anti-inertness control
   // for `sessionId` now that the guard's predicate is `testRunsBefore`.
+  //
+  // "Calls that did not answer" is 408s HERE, but not in general: run 4 on the hosted sandbox
+  // (2026-09-04) matched 886 grouped sessions against 895 calls minus 8 stopped minus ONE lost
+  // ack, whose op completed server-side while its answer never arrived, so it recorded no rows.
+  // A container gate has no lost acks; a hosted run does. Subtract them too if this ever runs
+  // somewhere that produces them.
   assert.equal(
     report.mutants.filter((m) => m.cause === "session-reused").length,
     0,

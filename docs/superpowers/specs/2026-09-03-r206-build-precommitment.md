@@ -135,3 +135,57 @@ is a measurement of the cost cut rather than a defect in the confirmation.
   `warm-confirmation-incomplete` 0.**
 - **Survivors' total below 2,400 s** (run 3: 3,165 s over the same 237 survivors), which is §4's
   own measurement and the only number here that is a target rather than a reproduction.
+
+
+---
+
+## MEASURED: run 4, 2026-09-04 (binary `b0c8b0d`, control app 1.0.0.18, 86.2 min)
+
+Every load-bearing number held; two deviated and both are explained below, in the safe direction
+and as consequences of the cost cut rather than defects.
+
+### What held
+
+- **The verdict table is IDENTICAL to run 3 across all 741 mutants** - same verdict AND same
+  `killingTest` - with **0 errors**. 448 killed, 8 timeout-killed, 237 survived, 48 no-coverage.
+  Compared on a key of (file, line, operator, procedure/trigger, astHash, identityOrdinal), which
+  resolves all 741 uniquely.
+- **All four new causes are zero**: `session-reused`, `warm-prefix-unstable`,
+  `warm-timeout-unconfirmed`, `warm-confirmation-incomplete`, and `unstable` is zero too. Every
+  one of the 201 warm kills confirmed: its call's prefix passed unmutated in a fresh session.
+- **R206's eight moved verdicts all stand**, each now carrying a confirmed warm position:
+  `CDOVariantMatchCache` 82/82/83/84 at 7/2/9/4 and `CDOTemplateVariantMgt` 531/533/533/913 at
+  7/3/3/110.
+- **The named near-cap risk did not fire.** Both 158-method replays confirmed
+  (`CDOVariantMatchCache.Codeunit.al:70` and `:71`, `killPosition` 158), as did the 110-method one.
+  Predicted 0 `warm-confirmation-incomplete`, measured 0.
+- **The session guard fired on nothing**, and its data is live: 15,004 answered rows, **0** without
+  a session id, 2,357 distinct sessions.
+- **The cost cut landed and beat its target.** Per-method median **281 ms -> 105 ms** (target was
+  140-200 ms), p90 624 ms -> 152 ms. Survivors' total **3,165 s -> 1,082 s** against a 2,400 s
+  target. Wall clock **111.0 -> 86.2 min**, while doing strictly more work.
+
+### Deviation 1: `warmKills` 201, predicted 198 - the prediction was an undercount by construction
+
+198 was computed from run 3's stored row ORDER. A `timeout-killed` mutant records exactly ONE
+covering row, because BC's 408 discards the prefix's per-method answers (R198 s4), so that method
+forced **every** timeout to position 1 whether or not it was warm. Run 4's recorded positions show
+3 of the 8 timeouts are warm (positions 2, 2, 20): 198 + 3 = 201. The field measures something the
+old data structurally could not, which is the point of adding it.
+
+### Deviation 2: `groupedCalls` 895, predicted 896 - five fewer cap continuations
+
+Both runs scored 585 mutants through the covering loop. Run 3: 698 calls = 585 + **113**
+continuations (a call that hits the server's 90 s headroom cap answers `cap`, and the cursor
+continues in a new call). Run 4: 895 = 585 + **108** continuations + 201 replays + **1** lost-ack
+retry. At 105 ms per method instead of 281, five fewer calls reached the cap. The lost ack was a
+connection timeout on a 112-method call that R194 reconciled as COMPLETE server-side and re-ran
+once; run 3 had none.
+
+### A refinement the gates should carry
+
+The store-level liveness rule says the distinct session ids among grouped rows equal the group
+calls that ANSWERED. On the sandbox that is 13,533 rows across **886** sessions against
+`groupedCalls` 895 minus 8 stopped calls minus **1 lost ack** = 886. A hosted run shows that
+"calls that did not answer" includes a lost ack, not only a 408 - the container gates have no
+lost acks, so only this run could surface it.

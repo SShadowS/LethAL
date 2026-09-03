@@ -227,9 +227,11 @@ EITHER kind at group position 1 that stays, under the guard above. For a kill at
 - **`spent`.** The replay's k durations are recorded on its rows and are NOT added to the
   mutant's `spent`, exactly as today's cold confirmation's duration is not.
 
-Cost: one extra group call per warm kill, k methods long. **Run 3 had 198 warm kills of 456**,
-replaying 1,811 methods in place of 198 single-method cold confirmations (computed from run 3's
-store, 2026-09-04). An earlier draft of this line said 28, which was the count of mutants whose
+Cost: one extra group call per warm kill, k methods long. **Run 4 MEASURED 201 warm kills of
+456** (2026-09-04), replaying in place of 201 single-method cold confirmations. The figure computed
+from run 3's store beforehand was 198: a `timeout-killed` mutant records one covering row, because
+the 408 discards the prefix's answers (§4), so that computation forced every timeout to position 1
+and could not see the 3 warm ones. An earlier draft of this line said 28, which was the count of mutants whose
 VERDICT OR KILLER differed between run 2 and run 3 (8 + 20) and not the count of kills whose
 killer was not first in its call; the two are unrelated, and the correction is recorded in
 `2026-09-03-r206-build-precommitment.md`.
