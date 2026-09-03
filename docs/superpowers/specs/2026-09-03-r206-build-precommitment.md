@@ -74,3 +74,53 @@ kill `killPosition` 1 (the sequential path).
 
 The 8 R206 mutants `killed` with `killPosition` > 1 and a replay each; the 20 changed killers
 unchanged from run 3; zero `session-reused`; survivors' total below 2,400 s (run 3: 3,165 s).
+
+---
+
+## Addendum, written 2026-09-04 BEFORE run 4 starts: the warm-kill count was wrong by 7x
+
+The design's §2.2 says "Run 3 had 28 warm kills of 448". **That number is wrong, and it is wrong in
+a way worth naming:** 28 is 8 moved verdicts plus 20 changed killers, i.e. the mutants whose
+RESULT differed between run 2 and run 3. A warm kill is a different set: every kill whose killer
+was not first in its call. Computed from run 3's own store
+(`scratchpad/lethal-53470-run3/lethal.sqlite`, 693 grouped mutants, kill rows in call order):
+
+- **456 kills, 258 at position 1 (cold), 198 WARM.** Positions: 84 at 2, 40 at 3, 14 at 4, 12 at 5,
+  then a long tail to 158.
+- The replays therefore run **1,811 test methods** in 198 extra calls, against 198 single-method
+  cold confirmations they replace: about +1,613 method executions. At run 3's measured median of
+  281 ms that is ~8 minutes on a 111-minute run; at §4's target of 140 to 200 ms, ~4.
+
+### The named risk: two mutants sit within 2% of the server's headroom cap
+
+R206 §2.3 says a replay can hit the cap where the mutated call did not, because the server refuses
+to START a method when `elapsed + budget + grace > ceiling`, which with the 180 s budget floor and
+the 300 s / 30 s defaults means `elapsed > 90 s`. Run 3's own prefix elapsed times say which
+mutants are near it:
+
+| mutant | position | prefix elapsed in run 3 | site |
+|---|---|---|---|
+| **M0020** | 158 | **88.3 s** | `CDOVariantMatchCache.InvalidateCache` |
+| **M0021** | 158 | 72.9 s | `CDOVariantMatchCache.InvalidateCache` |
+| M0456 | 110 | 36.1 s | `CDOTemplateVariantMgt.UpdateLineFromCriteria` |
+
+Nothing else exceeds 45 s. M0020's replay has 1.9% of headroom at run 3's speed.
+
+**Predicted, and this is the point of writing it down:** §4's per-method cut lands, so both replays
+run in roughly half run 3's time (~45 s and ~37 s) and **`warm-confirmation-incomplete` is 0**. If
+the cut does NOT land, M0020 is the mutant that caps first, its kill becomes an `error`, and the
+count is 1 or 2 rather than 0 — which is the safe direction (a kill withheld, never invented) and
+is a measurement of the cost cut rather than a defect in the confirmation.
+
+### Run 4's numbers, pre-committed
+
+- **Verdict table identical to run 3's** for all 741 mutants: 448 killed, 237 survived, the same
+  8 cache mutants killed that run 2 had survive. Any mutant whose kill fails to confirm becomes an
+  `error` and is a FINDING, not an edit.
+- **`warmKills` 198**, **`groupedCalls` 896** (698 + 198).
+- **`session-reused` 0**, and no `session-reuse-observed` warning: run 3's 408 texts already
+  measured this environment handing every request a fresh session.
+- **`warm-prefix-unstable` 0, `unstable` 0, `warm-timeout-unconfirmed` 0,
+  `warm-confirmation-incomplete` 0.**
+- **Survivors' total below 2,400 s** (run 3: 3,165 s over the same 237 survivors), which is §4's
+  own measurement and the only number here that is a target rather than a reproduction.
