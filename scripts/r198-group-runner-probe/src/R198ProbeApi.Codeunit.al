@@ -108,6 +108,7 @@ codeunit 71544 "R198 Probe API"
         Out.Add('elapsedMs', CurrentDateTime() - T0);
         Out.Add('runnerId', ALTestSuite."Test Runner Id");
         Out.Add('k1VisibleAfterRun', Row.Get('K1'));
+        Out.Add('k2VisibleAfterRun', Row.Get('K2'));
         Out.Add('apiSession', SessionId());
         Out.Add('results', ResultsJson);
         Out.Add('progress', ProgressJson());
@@ -173,6 +174,7 @@ codeunit 71544 "R198 Probe API"
         Out.Add('mode', 'loop');
         Out.Add('elapsedMs', CurrentDateTime() - T0);
         Out.Add('k1VisibleAfterRun', Row.Get('K1'));
+        Out.Add('k2VisibleAfterRun', Row.Get('K2'));
         Out.Add('apiSession', SessionId());
         Out.Add('perMethod', PerMethod);
         Out.Add('progress', ProgressJson());
