@@ -1,11 +1,12 @@
 # Design: session-warm verdicts and the warm confirmation (R206), with the per-method cost cut (R198 follow-up)
 
-Status: DRAFT, revision 4, for a closure review before any code. Revision 1 was refused
-(2026-09-03) on ten findings; revision 2 the same day on nine more (three blocking: the
-session-freshness premise, the suite map's key, an unreachable abort channel); revision 3 the same
-evening on eight (two blocking: an OFF-mode replay bound that named a branch bcdev never takes, and
-the provenance of the per-entry `method` value), plus seven implementer notes. All are applied
-here and listed at the end. Amends
+Status: **APPROVED FOR IMPLEMENTATION**, revision 5. Revision 1 was refused (2026-09-03) on ten
+findings; revision 2 the same day on nine more (three blocking: the session-freshness premise,
+the suite map's key, an unreachable abort channel); revision 3 the same evening on eight (two
+blocking: an OFF-mode replay bound that named a branch bcdev never takes, and the provenance of
+the per-entry `method` value); revision 4 was judged SAFE with four local corrections (one class
+2: the predicate's field was one omission away from being silently zeroed) and five notes, all
+applied here as revision 5 and listed at the end. Amends
 `2026-09-03-r198-run-mutant-loop.md` §2.1, §3.4 and §5. Second opinion: gpt-5.6-sol,
 `scratchpad/pi-sol-run3.md`.
 
@@ -73,14 +74,33 @@ The control app stamps two numbers on every answer that ran a test method
 (`RunMutantWithCoverage`, `RunMutant`, `RunMutantMany` at call level), and `sessionId` on every
 `RunMutantMany` entry as well:
 
-- **`suitesBefore`**: `LC Control State`'s per-session suite counter (`SuiteCounter`, the global
-  behind `NextSuiteName`; the codeunit is `SingleInstance`, so the counter lives exactly as long as
-  the session), read at the top of the action BEFORE the call builds any suite. **This is the
-  guard's predicate.** A fresh session has never built a suite and reports 0. A session the platform
-  handed to this call after another call had run tests in it reports how many suites that call
-  built, whatever the id allocator did, and on the first test-running call of a process (under
-  `--resume`, R192 reuses the baseline snapshot, so that call is a MUTATED one) exactly as on any
-  other: the predicate needs no predecessor to compare against.
+- **`testRunsBefore`**: a DEDICATED counter on `LC Control State`, `TestMethodRuns`, with exactly
+  ONE writer, `NoteTestMethodRun()` (an increment), called immediately before the runner is
+  invoked at each of the two run sites (`LC Run Method`'s `RunAllTests` and `LC Run Many`'s
+  `RunTests`), and one reader, read ONCE at the top of `RunMutant` before anything else (the
+  coverage action delegates to `RunMutant` and re-opens its JSON, so both answers carry the same
+  number from that one read; `RunMutantMany` reads it at its own top). The codeunit is
+  `SingleInstance`, so the counter lives exactly as long as the session. **This is the guard's
+  predicate.** A fresh session has run no test method and reports 0. A session the platform handed
+  to this call after another call had run tests in it reports how many, whatever the id allocator
+  did, and on the first test-running call of a process (under `--resume`, R192 reuses the baseline
+  snapshot, so that call is a MUTATED one) exactly as on any other: the predicate needs no
+  predecessor to compare against. It is NOT the suite-name counter (`SuiteCounter` behind
+  `NextSuiteName`): that one exists to name suites, the next cost cut after §4 (one suite per
+  session) would stop incrementing it, and `ResetAttestationState`'s comment ("clears every
+  in-memory field the instance carries between calls") invites a `:= 0` that would make every
+  session read fresh with no test failing anywhere. The dedicated field carries a comment naming
+  it as the session-freshness predicate and saying it is never reset, `ResetAttestationState`
+  carries the same sentence, and a source test asserts no procedure but `NoteTestMethodRun`
+  assigns it and that both run sites call it. **Scope, stated honestly:** the predicate proves no
+  test OF OURS ran in this session; it cannot see a test some other consumer ran in a session the
+  platform then handed us, a narrower residual than the session id had. **Why it is the property
+  and not a proxy for it:** the counter is single-instance state exactly as the target's cache is,
+  so it shares the lifetime of the thing it stands for whatever BC's session handling turns out to
+  be. If BC ever pooled a session but re-instantiated single-instance codeunits per request, the
+  counter would read 0 AND the cache would be empty, both correctly; the guard no longer depends
+  on "a `SingleInstance` instance lives per session" being true, which is what closes revision-3
+  F3 rather than narrowing it.
 - **`sessionId`** (`SessionId()`): recorded on every row as data. Within-call constancy is asserted
   (every entry's id equals the call's), and the gates assert FROM THE STORE that the distinct ids
   among grouped rows equal `groupedCalls` and among single-call rows equal their row count, which
@@ -92,11 +112,16 @@ test, beside `endedBy` and `ranCount`: a phase-1 or phase-3 refusal (`lease-inva
 reason, `artifact-mismatch`, `reserved-params`, a `runError` whose loop raised before running) ran
 nothing, carries neither number, and keeps its own class, since reclassifying a confirmed lease
 refusal as a per-mutant malformed answer would let the session run on under a lease it cannot
-prove. **A call with `suitesBefore > 0` ran in a REUSED session**, whose state at the call's start
-was another call's, possibly another mutant's:
+prove. On the SINGLE path (`RunMutant`) the same rule: a `ran` answer without both numbers is a
+protocol fault and takes the malformed shape (a call-level error with no cause and no operation,
+so the session aborts with the words), never `inFlightUnknown`, which would quarantine a tier and
+latch a lease for a wire-shape mismatch; `MIN_CONTROL_VERSION` makes it unreachable in practice
+and the baseline is where it would land. **A call with `testRunsBefore > 0` ran in a REUSED
+session**, whose state at the call's start was another call's, possibly another mutant's:
 
 - a mutated call (single or many) that fails or times out in a reused session: `error`, cause
-  **`session-reused`** (NEW), never a kill; the note names the count and the session id;
+  **`session-reused`** (NEW), never a kill; the note names the session id (the thing a reader can
+  trace) and the count (which under §4 is the previous call's method count, not a suite count);
 - a mutated call that passes in a reused session: `survived` stands (a reused session can hide a
   kill, the accepted direction, never manufacture one) and the rows record it;
 - a confirmation of either kind (§2.2) in a reused session: `error`, cause `session-reused`;
@@ -165,7 +190,16 @@ EITHER kind at group position 1 that stays, under the guard above. For a kill at
   `result-lost`; a lease answer → classified as today; malformed → the existing
   `group-answer-malformed`; a per-entry fault (`mapRanResult` returning `error`: a result enum
   the client refuses, a line count that does not match) → a call-level error with no cause and no
-  operation, which ABORTS THE SESSION exactly as it does on a covering call today.
+  operation, which ABORTS THE SESSION exactly as it does on a covering call today; a
+  **`stopped-after-completion`** from the replay (R204's narrowing applied by the transport after
+  the replay's own 408: the stop landed on method k after its completion was committed) →
+  `warm-timeout-unconfirmed`, since the replay could not establish that k completes inside its
+  budget, with a note saying the stop happened DURING THE CONFIRMATION REPLAY, never the covering
+  call's R204 text, which would describe the mutated run; and the transport's **`abortSession`**
+  (a 404 on the action, or the watchdog's identity disagreement) honoured by the replay exactly as
+  a covering step honours it: the mutant is recorded and the session aborts at the end of it,
+  because a server answering something this request did not ask for is not one to keep scoring
+  against.
 - **The replay's watchdog and budgets: an ordinary group call, nothing special.** The replay runs
   with the same per-method budgets `budgetOf(i)` the mutated call had, in the same mode the session
   runs in. With `--stop-hung-sessions` the stop hook ends a method that hangs unmutated, and the
@@ -225,7 +259,7 @@ field is comparable within one scoring, and the caveat says so.
 
 ## 3. What changes on the wire, the client and the record
 
-- **Control app.** `suitesBefore` and `sessionId` on every test-running answer and `sessionId`
+- **Control app.** `testRunsBefore` and `sessionId` on every test-running answer and `sessionId`
   on every `RunMutantMany` entry (§2.1); every entry also echoes **`lineNo`**, the function line it
   ran, and the client refuses as malformed a call whose entries do not carry distinct line numbers
   (a second guard against §4 item 1's collision, independent of the map's key). `RunMutantMany`
@@ -235,7 +269,7 @@ field is comparable within one scoring, and the caveat says so.
   carries all of these. `BcDevMcpBackend.runMany` gains `confirmation: true`, which REQUIRES
   `pendingMutantId === null` (a throw otherwise, mirroring the `collectCoverage && pendingMutantId
   !== null` guard). No `enforceBudgets` switch: the replay is an ordinary group call (§2.2).
-- **In-memory carriers.** `sessionId?` and `suitesBefore?` on `TestVerdict` (`backend.ts`), on
+- **In-memory carriers.** `sessionId?` and `testRunsBefore?` on `TestVerdict` (`backend.ts`), on
   `RunMutantManyResult` and on `CoveringStep`, optional and spread-built (al-runner has neither).
 - **Client-side duplicate refusal.** The chunker refuses, before dispatch, a chunk carrying two
   equal `(codeunitId, method)` pairs, naming the mutant: a caller-contract violation (throw), so
@@ -410,16 +444,20 @@ survivors' total below 2,400 s (run 3: 3,165 s) on the same 237 survivors.
   `warm-confirmation-incomplete`; the replay runs exactly the chunk's prefix when the killer sits
   in chunk 2 under `--max-methods-per-call 2` (this is the chunked warm path's ONLY coverage,
   see the gates below); a resumed run carries `killPosition`. **The guard:** a backend that
-  answers `suitesBefore > 0` records `session-reused` on a failing mutated call, on a position-1
+  answers `testRunsBefore > 0` records `session-reused` on a failing mutated call, on a position-1
   kill's confirmation, on the FIRST call of a resumed run, and on a replay, and `survived` on a
   passing one, with the warning emitted once; a `suite-unresolved` answer aborts the session with
   the server's reason in the error; a chunk with two equal pairs throws before dispatch naming the
   mutant.
 - `run-mutant-transport.test.ts`: a blank-mutant `runMany` round-trips; a `ran` answer without
-  `sessionId` or without `suitesBefore`, an entry whose `sessionId` differs from the call's, and
+  `sessionId` or without `testRunsBefore`, an entry whose `sessionId` differs from the call's, and
   two entries with one `lineNo` are each malformed, while a `lease-invalid`, `artifact-mismatch`,
-  `reserved-params` or `runError` answer without either number keeps its own class;
-  `suite-unresolved` is a call-level error with no cause and no operation.
+  `reserved-params` or `runError` answer without either number keeps its own class; the same for
+  a single `ran` answer; `suite-unresolved` is a call-level error with no cause and no operation.
+  **And the guard's own two directions at the boundary:** a `ran` answer with `testRunsBefore = 0`
+  and one with `testRunsBefore > 0` each reach the orchestrator with that value on the verdict, so
+  the number is proven to TRAVEL, not only to be validated; a transport that always reported 0
+  would pass every other test here and disable the guard.
 - Report/schema: `killPosition` and `warmKills` optional, `session-warm` present iff
   `groupedCalls > 0`, the four causes in every enum, interpretation counts 18, snapshot updated,
   schemas regenerated, `explain` projection and test, the banner breakdown.
@@ -430,8 +468,17 @@ survivors' total below 2,400 s (run 3: 3,165 s) on the same 237 survivors.
   and **a new arm, the only live exercise of a warm timeout**, designed around the kill ledger,
   which is `orderCoveringTests`'s FIRST key and decides these positions before members or names
   do: a target procedure `if Target <= 0 then exit(-1);` followed by `Counter := 0` and the same
-  unbounded `repeat Advance() until Counter >= Target` loop as `CountUpTo`, and TWO tests, T1
-  asserting `-1` from `SpinUntil(0)` and T2 asserting `3` from `SpinUntil(3)`. T1 sorts first on
+  unbounded `repeat Advance() until Counter >= Target` loop as `CountUpTo` (SHARING `Advance()`,
+  not a private copy, so the arm adds exactly ONE hang; a copy would add its own `empty-block` and
+  `+= 1` `remove-assignment` hangs and the pin would be 7), and TWO tests, T1
+  `SpinUntilAtZeroExitsEarly` asserting `-1` from `SpinUntil(0)` and T2 `SpinUntilReachesTheTarget`
+  asserting `3` from `SpinUntil(3)`. **The names are load-bearing.** Sharing `Advance()` gives its
+  two EXISTING hang mutants T2 as a second covering test, tied with `CountUpToReachesTheLimit` on
+  members (2 each) and broken by NAME: `C` < `S`, so the existing rows keep `killPosition 1` and
+  their verdicts; a T2 name sorting before `CountUpTo...` would move them to position 2, make them
+  warm timeouts needing replays, and change `warmKills` and `groupedCalls`. And `A` < `R` keeps T1
+  before T2 on the name key alone, so the arm survives a run under `coverageMode: "none"`, where
+  `memberCountsByTest` is empty and the members key ties at infinity. T1 sorts first on
   the empty ledger (fewer members under the gate's fenced coverage, then name) and the guard line
   precedes the loop in manifest order, so every guard-line mutant (`negate-conditional`,
   `conditional-boundary`, `return-value`, the branch and whole-body `empty-block`s) is killed by
@@ -461,9 +508,14 @@ survivors' total below 2,400 s (run 3: 3,165 s) on the same 237 survivors.
   at chunk position > 1, so revision 2's "keeps R198 §7's two campaigns" was doubly untrue. The
   chunked replay (`chunkPrefix` versus `ordered`, the one place the difference is verdict-bearing)
   is covered by the `orchestrator.test.ts` case above only. Filed as a roadmap gap (R208).
-- Every gate: zero `session-reused` in the report, and from the store: every test row carries a
-  session id, the distinct ids among `op_kind = many` rows equal `groupedCalls`, and the distinct
-  ids among single-call rows equal their row count.
+- Every gate: zero `session-reused` in the report, and from the store, SCOPED to the rows that
+  came from an answer (a 408 body is not JSON and carries no id, so a `timeout` row has none, as
+  does an aborted call's): every row with outcome `pass` or `fail` carries a session id; the
+  distinct ids among such `op_kind = many` rows equal the number of group calls that ANSWERED,
+  which is `groupedCalls` minus the calls that ended in a 408 or an abort (on the hang gate's ON
+  leg, minus `counts.timeoutKilled`, 5); the distinct ids among such single-call rows equal their
+  row count. This is the anti-inertness control for `sessionId` now that the predicate is
+  `testRunsBefore`: scoped so it holds on all three gates, not softened to "some row has an id".
 - Run 4 on the sandbox: the 8 R206 mutants confirmed warm and still `killed`; the 20 changed
   killers unchanged from run 3; zero `session-reused` (the sandbox's own freshness number, §1);
   survivors' total below 2,400 s.
@@ -480,6 +532,23 @@ survivors' total below 2,400 s (run 3: 3,165 s) on the same 237 survivors.
 - Run 4 slower on survivors than run 3.
 
 ---
+
+## Findings of the review of revision 4 (2026-09-03), and what revision 5 does with each
+
+Verdict on revision 4: safe to implement, with four local corrections and five notes; no false-kill
+door, no rethink.
+
+| # | class | finding | revision 5 |
+|---|---|---|---|
+| G1 | 2 | the predicate read `SuiteCounter`, a field `ResetAttestationState`'s comment invites clearing and the next cost cut would stop incrementing; either makes every session read fresh with nothing failing | §2.1: a dedicated `TestMethodRuns` with one writer at the run sites, never reset, commented at both places, pinned by a source test; scope and lifetime property stated |
+| G2 | 3 | the store-level id check was false on any gate that scores a timeout (a 408 row has no id) | §6: scoped to `pass`/`fail` rows and to calls that answered; not softened |
+| G3 | 3 | two replay endings unenumerated: `stopped-after-completion` (would carry the covering call's R204 note) and the transport's `abortSession` | §2.2: the first maps to `warm-timeout-unconfirmed` with a replay-specific note; the second is honoured as on a covering step |
+| G4 | 3 | the arm's T2 name decides two EXISTING rows' positions (members tie with `CountUpToReachesTheLimit`), and `Advance()` must be shared | §6: names fixed and stated as load-bearing; `Advance()` shared |
+| m1 | 4 | read the counter once, at the top of `RunMutant`, for both actions | §2.1 |
+| m2 | 4 | the single-path malformed shape unstated (would land on `inFlightUnknown`) | §2.1: malformed, a session abort, never a quarantine |
+| m3 | 4 | the note's count carries no information the boolean does not | §2.1: the note leans on the session id |
+| m4 | 4 | `LC Op Progress` already carries `Session Id`, unreturned | noted; not needed by this design |
+| m5 | 4 | transport tests validated the value but did not prove it travels | §6: both directions reach the orchestrator |
 
 ## Findings of the review of revision 3 (2026-09-03), and what revision 4 does with each
 
