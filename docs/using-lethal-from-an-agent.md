@@ -76,6 +76,16 @@ killing test and its mutant is reported survived. The report flags a narrowed ru
 fails a test, so mutants killable only that way come back survived there. Under-reporting only,
 never a false kill. Do not quote a score from it.
 
+**Cost.** On `bcdev` a mutant's covering tests run in ONE call to the server (one per mutant, not
+one per test), stopping at the first failure, so a survivor with forty covering tests costs one
+round trip instead of forty. This needs LethAL Control 1.0.0.17 or newer on the server; an older
+one is refused before any test runs. The report's `groupedCalls` says how many such calls were
+made. Three flags touch it and you should not need them: `--max-methods-per-call <n>` caps one
+call, `--request-ceiling-ms <n>` bounds one call (keep it under the hosting gateway's idle
+timeout; the default is 300 s), and `--no-group-runs` goes back to one call per test. A
+`--mutant-timeout-ms` above the ceiling minus 30 s makes every test run alone again, and the run
+warns (`group-runs-inert`) when that happens.
+
 ### Exit codes
 
 | Code | Meaning |
