@@ -336,6 +336,16 @@ describe("runMany — refusals classify exactly as run's do (the shared classifi
 });
 
 describe("runMany — the watchdog (R198 §3.2)", () => {
+  test("the call returns when BC answers, not when the poll interval expires (measured: 4.7 s per call on the tables gate)", async () => {
+    const f = fakes({ many: "hold", status: () => statusOf({ opProgress: undefined }) });
+    const t0 = Date.now();
+    const p = transport(f.fetchFn).runMany(req({ watchdogPollMs: 5_000 }));
+    setTimeout(() => f.release(odata(answer())), 20);
+    const r = await p;
+    expect(r.kind).toBe("verdicts");
+    expect(Date.now() - t0).toBeLessThan(1_000);
+  });
+
   test("a row that is not ours is 'nothing yet': no stop, no abort, the answer is scored", async () => {
     // The marker idle and the residual row another op's: a start-up poll.
     const f = fakes({

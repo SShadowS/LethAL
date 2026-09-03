@@ -577,7 +577,22 @@ export class RunMutantTransport {
       abortReason ??= "hard-cap";
       controller.abort();
     }, hardCapMs);
-    const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+    // The poll interval must NOT outlive the request: `settle()` wakes a sleeping watchdog so the
+    // call returns when BC answers, not up to one interval later. Measured before this existed:
+    // the tables gate went from 3.5 to 32 minutes, ~4.7 s per grouped call, all of it this sleep.
+    let wake: (() => void) | undefined;
+    const sleep = (ms: number) =>
+      new Promise<void>((r) => {
+        const t = setTimeout(() => {
+          wake = undefined;
+          r();
+        }, ms);
+        wake = () => {
+          clearTimeout(t);
+          wake = undefined;
+          r();
+        };
+      });
     const watchdog = (async () => {
       while (!settled) {
         await sleep(pollMs);
@@ -662,6 +677,7 @@ export class RunMutantTransport {
     const settle = () => {
       settled = true;
       clearTimeout(hardTimer);
+      wake?.();
     };
     const stopDetail = () =>
       `${lastRefusal !== undefined ? ` last stop refusal: ${lastRefusal};` : ""}${lastRow !== undefined ? ` progress row: ${lastRow};` : ""}${stopHookError !== undefined ? ` stop hook: ${describeThrown(stopHookError)};` : ""}`;
