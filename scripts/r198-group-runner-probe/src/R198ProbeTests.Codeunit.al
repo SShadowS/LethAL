@@ -61,6 +61,30 @@ codeunit 71543 "R198 Probe Tests"
         Error('MEASURED inside-test: index=%1 name=%2 phase=%3 runnerSession=%4 thisSession=%5 trace=[%6]', Progress."Method Index", Progress."Method Name", Progress.Phase, Progress."Session Id", SessionId(), Progress.Trace);
     end;
 
+    /// <summary>E12 (R206 review F5): writes a fixed key AND Commit()s inside the test body, the
+    /// ordinary BC pattern. Does the per-codeunit rollback undo a committed write?</summary>
+    [Test]
+    procedure T8_InsertAndCommit()
+    var
+        Row: Record "R198 Probe Row";
+    begin
+        Row.Init();
+        Row."Key" := 'K2';
+        Row."Written By" := 'T8_InsertAndCommit';
+        Row."Session Id" := SessionId();
+        Row.Insert();
+        Commit();
+    end;
+
+    [Test]
+    procedure T9_AssertK2Absent()
+    var
+        Row: Record "R198 Probe Row";
+    begin
+        if Row.Get('K2') then
+            Error('LEAK: committed K2 written by %1 in session %2 is visible (this session %3)', Row."Written By", Row."Session Id", SessionId());
+    end;
+
     /// <summary>A bounded hang (45 s) for the stop experiment: long enough that only a stop ends
     /// it early, short enough that a failed stop cannot wedge the container.</summary>
     [Test]

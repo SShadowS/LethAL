@@ -1,0 +1,5 @@
+=== E12 2026-09-03T15:05:40
+clean before: deleted 0
+same call, T8 then T9: T8_InsertAndCommit=2 ; T9_AssertK2Absent=2 | k2VisibleAfterRun=False
+next call (new session), T9 alone: T9_AssertK2Absent=2 
+rows left (K2 committed?): deleted 0
