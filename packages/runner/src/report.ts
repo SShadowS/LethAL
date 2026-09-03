@@ -406,7 +406,18 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
  * third cause a COMPILE error until its interpretation exists. An inline union at each site could
  * grow a variant that no reader of the report has any way to interpret.
  */
-export type MutantErrorCause = "deadline-exceeded" | "unstable" | "stranded" | "result-lost";
+export type MutantErrorCause =
+  | "deadline-exceeded"
+  | "unstable"
+  | "stranded"
+  | "result-lost"
+  // R198: the per-mutant ways a grouped call (`RunMutantMany`) can end without scoring, and
+  // R203's `op-stopped`, which the single-method call can produce too.
+  | "group-run-error"
+  | "group-answer-malformed"
+  | "group-coverage-incomplete"
+  | "op-stopped"
+  | "stopped-after-completion";
 
 /**
  * What each `MutantErrorCause` MEANS for a reader, and — because both are facts about LethAL's OWN
@@ -490,6 +501,63 @@ export const ERROR_CAUSE_INTERPRETATIONS: Record<MutantErrorCause, Interpretatio
     // the two `lostAck === "completed"` sites already said all of this in prose that nothing could
     // key on, which is the same gap R114 closed for the strand.
     basis: "R122",
+  },
+  "group-run-error": {
+    meaning:
+      "The server's loop that runs this mutant's covering tests in one call (`RunMutantMany`, R198) " +
+      "RAISED inside a test run, and the call was not scored; the server's own error text is in " +
+      "the failure note. The op was still finished (phase 3 ran), so the container is clean and " +
+      "nothing is quarantined. Re-run with `--resume`, which re-executes an `error` outcome.",
+    entailedNegative:
+      "Not a verdict for any of the mutant's tests, including ones that may have passed before the " +
+      "raise: a group answer is scored whole or not at all.",
+    basis: "R198",
+  },
+  "group-answer-malformed": {
+    meaning:
+      "The server's answer to a grouped call (`RunMutantMany`, R198) did not match what was asked: " +
+      "a missing or impossible `endedBy`/`ranCount`, an entry at the wrong index or naming a " +
+      "different method, or a prefix that does not add up. The answer text is in the failure " +
+      "note. The mutant was not scored; the container is clean. Re-run with `--resume`.",
+    entailedNegative:
+      "Not a survivor, however many entries passed: three of thirty-five methods returned, all " +
+      "passing, is this cause and never `survived`.",
+    basis: "R198",
+  },
+  "group-coverage-incomplete": {
+    meaning:
+      "Every grouped call for this mutant answered, every returned method passed, and yet the set " +
+      "of methods actually attempted is not the mutant's covering set (a continuation skipped " +
+      "some). LethAL refuses to call that a survivor. Re-run with `--resume`.",
+    entailedNegative:
+      "Not `survived`: a survivor is a mutant that EVERY covering test ran against and none " +
+      "noticed; this is the guard that keeps a chunking bug from manufacturing one.",
+    basis: "R198",
+  },
+  "op-stopped": {
+    meaning:
+      "This mutant's run exceeded its budget, LethAL's stop was confirmed server-side, but the " +
+      "session finished the test before the stop landed and reached phase 3, which refused to " +
+      "record a result for an op our own stop had already tombstoned. No result, no verdict; the " +
+      "lease was NOT lost and the container is clean. Re-run with `--resume`, or raise " +
+      "`--mutant-timeout-ms` if the test is slow rather than hung (R203).",
+    entailedNegative:
+      "Not a lease loss: before R203 this exact answer latched `lease-lost` and invalidated the " +
+      "batch's verdicts, with a note naming a cause nobody caused. Not `timeout-killed` either, " +
+      "because no 408 proved the stop ended the run.",
+    basis: "R203",
+  },
+  "stopped-after-completion": {
+    meaning:
+      "LethAL's stop was confirmed and BC answered the held request with its stop 408, but the " +
+      "server's progress row shows the stopped method had already RECORDED its completion before " +
+      "the session died. The verdict that 408 would have earned is refused: the method finished. " +
+      "Re-run with `--resume`, or raise `--mutant-timeout-ms` for a slow test (R204).",
+    entailedNegative:
+      "Not `timeout-killed`: R204's narrowing exists because a stop landing between a test's last " +
+      "statement and its result being recorded would otherwise score a passing test as a kill. A " +
+      "narrowing, not a proof: a session killed inside that write rolls it back and still scores.",
+    basis: "R204",
   },
 };
 
@@ -1034,6 +1102,17 @@ export interface SessionReport {
    * test and uses no attribution at all.
    */
   readonly unplaceableCount: number;
+  /**
+   * R198. How many `RunMutantMany` calls this run made: one per mutant that reached the covering
+   * loop on a backend with the call, more when a mutant's covering set was chunked, zero on a
+   * backend without it (al-runner) or a session that scored nothing.
+   *
+   * OPTIONAL in the schema so archived reports stay valid (R157's rule: an added optional field is
+   * free), but ALWAYS written by this build, zero included. The gates pin it to a NUMBER derived
+   * from their frozen baselines (bcdev 15, tables 362): a counter that was never wired reports 0,
+   * which is why al-runner's 0 pins nothing and the container gates carry the anti-inertness.
+   */
+  readonly groupedCalls?: number;
   /**
    * R175. WHICH mutants those are, as `mutantCode`s, sorted.
    *
@@ -2072,6 +2151,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     declarativeSites,
     preprocessorSymbols: statics.preprocessorSymbols ?? [],
     untargetedTriggerCount: input.untargetedTriggerCount,
+    groupedCalls: input.groupedCalls,
     unplaceableCount: input.unplaceableCount,
     unplaceableMutants: input.unplaceableMutants,
     ...(input.only !== undefined ? { only: input.only } : {}),

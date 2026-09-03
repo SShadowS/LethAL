@@ -29,20 +29,52 @@ codeunit 91007 "LC Run Method"
         TestCodeunitId: Integer;
         TestMethod: Text;
         ResultsJson: Text;
+        FenceAttemptId: Text;
+        FenceOpSeq: BigInteger;
+        FenceIndex: Integer;
+        MethodToken: Text;
 
     trigger OnRun()
+    var
+        State: Codeunit "LC Control State";
     begin
+        // R198: the progress row's `running` write sits INSIDE this boundary, never in the gap
+        // between phase 1's Commit and Run(): a raise there would unwind past phase 3 and strand the
+        // marker. Fence-less callers (the permission canary) write no progress.
+        if FenceAttemptId <> '' then
+            MethodToken := State.ProgressBegin(FenceAttemptId, FenceOpSeq, FenceIndex, TestCodeunitId, TestMethod);
         ResultsJson := RunOneMethod(SuiteName, TestCodeunitId, TestMethod);
     end;
 
     /// <summary>Sets the one method to run. Clears any previous result so a Results() read can never
-    /// return a stale prior run's JSON.</summary>
+    /// return a stale prior run's JSON. Also clears the fence coordinates: a caller that wants
+    /// progress written must SetFence AFTER SetRequest, every time.</summary>
     procedure SetRequest(NewSuiteName: Code[10]; NewTestCodeunitId: Integer; NewTestMethod: Text)
     begin
         SuiteName := NewSuiteName;
         TestCodeunitId := NewTestCodeunitId;
         TestMethod := NewTestMethod;
         ResultsJson := '';
+        FenceAttemptId := '';
+        FenceOpSeq := 0;
+        FenceIndex := 0;
+        MethodToken := '';
+    end;
+
+    /// <summary>R198: names the op this method runs inside and its 1-based index within it, so
+    /// OnRun writes the progress row's `running` state before the method and RunOneMethod its
+    /// `between` state the instant RunAllTests returns. Index 1 for a single-method op.</summary>
+    procedure SetFence(AttemptId: Text; OpSeq: BigInteger; Index: Integer)
+    begin
+        FenceAttemptId := AttemptId;
+        FenceOpSeq := OpSeq;
+        FenceIndex := Index;
+    end;
+
+    /// <summary>The token ProgressBegin minted for this method, or blank without a fence.</summary>
+    procedure Token(): Text
+    begin
+        exit(MethodToken);
     end;
 
     /// <summary>The codeunit's per-method result JSON from the last successful Run(). Meaningful only
@@ -58,6 +90,7 @@ codeunit 91007 "LC Run Method"
     local procedure RunOneMethod(RunSuiteName: Code[10]; RunTestCodeunitId: Integer; RunTestMethod: Text): Text
     var
         ALTestSuite: Record "AL Test Suite";
+        State: Codeunit "LC Control State";
         Line: Record "Test Method Line";
         CodeunitLine: Record "Test Method Line";
         Mgt: Codeunit "Test Suite Mgt.";
@@ -97,6 +130,12 @@ codeunit 91007 "LC Run Method"
         Line.SetRange("Test Suite", RunSuiteName);
         Line.FindFirst();
         Mgt.RunAllTests(Line);
+        // PROGRESS_BETWEEN_FIRST (R198): the very next statement after RunAllTests returns, before
+        // TestResultsToJSON or anything else. This is the smallest window AL can offer between a
+        // method's completion and the row saying so; the per-method stop's refusal and R204's
+        // narrowing both rest on it. Pinned by a source test.
+        if FenceAttemptId <> '' then
+            State.ProgressBetween(FenceAttemptId, FenceOpSeq, FenceIndex);
 
         CodeunitLine.SetRange("Test Suite", RunSuiteName);
         CodeunitLine.SetRange("Line Type", CodeunitLine."Line Type"::Codeunit);

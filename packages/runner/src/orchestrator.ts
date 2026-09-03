@@ -33,7 +33,15 @@ import type { AlRunnerBcBuild } from "./al-runner-transport";
 import { nextAbove, parseVersionConflict, reserveAppVersion } from "./app-version";
 import { AlcCompileError, ArtifactPrepareError, DeploymentError } from "./artifact";
 import type { CompiledArtifact } from "./artifact";
-import type { CoverageMode, ExecutionBackend, TestMethodRef, TestVerdict } from "./backend";
+import type {
+  CoverageMode,
+  ExecutionBackend,
+  RunManyCause,
+  RunManyOpts,
+  RunManyResult,
+  TestMethodRef,
+  TestVerdict,
+} from "./backend";
 import { hashAlTree, snapshotApplies, testAppHashFor } from "./baseline-snapshot";
 import type { BaselineObservation } from "./baseline-snapshot";
 import { PublishFailedError } from "./bcdev-backend";
@@ -152,6 +160,18 @@ const BASELINE_TIMEOUT_DEFAULT = 120_000;
  * enforcing performance, so a floor that generous costs nothing real.
  */
 export const MIN_MUTANT_BUDGET_MS = 180_000;
+
+/**
+ * R198: the whole of one `RunMutantMany` call must answer inside this, measured server-side from
+ * phase 2; the server starts no method (after the first) whose budget plus the stop's grace would
+ * not fit. 300 s sits under the 360 s the first field run measured as the hosted proxy's own
+ * ceiling ("330 s aborted; 360 s is the hosting proxy's own ceiling"), with `STOP_GRACE_MS` on top
+ * for the client's hard cap. Configurable with `--request-ceiling-ms`.
+ */
+export const REQUEST_CEILING_MS = 300_000;
+
+/** R198: how long the held request is allowed to keep waiting after a stop was fired. */
+export const STOP_GRACE_MS = 30_000;
 
 /**
  * R48: how many executable mutants a session may schedule before it refuses to start unasked.
@@ -682,6 +702,17 @@ export interface SessionConfig {
    * call, not the tool's.
    */
   readonly stopHungSessions?: boolean;
+  /**
+   * R198: how a mutant's covering tests are dispatched on a backend that has `runMany`.
+   * `maxMethodsPerCall` caps one call (default unbounded; the gates force chunking with 2);
+   * `requestCeilingMs` bounds one call (default `REQUEST_CEILING_MS`). `enabled: false` keeps
+   * the sequential loop byte-for-byte. Absent means enabled with the defaults.
+   */
+  readonly groupRuns?: {
+    readonly enabled?: boolean;
+    readonly maxMethodsPerCall?: number;
+    readonly requestCeilingMs?: number;
+  };
   /**
    * R172 proposal 3: the reader's equivalence rulings, already parsed and validated by the caller.
    *
@@ -1492,11 +1523,14 @@ function bindLeaseToBackend(backend: ExecutionBackend, lease: Lease): void {
  *   - anything else, INCLUDING an absent reason (the phase-3 verify-and-clear refusal carries
  *     none) — a genuinely lost lease.
  */
-type LeaseVerdictKind = "none" | "op-in-flight" | "lost";
+/** R198/R203: `op-stopped` is the phase-3 refusal our OWN stop caused; it is never a loss. */
+type LeaseVerdictKind = "none" | "op-in-flight" | "op-stopped" | "lost";
 
 function classifyLeaseVerdict(v: Pick<TestVerdict, "operation" | "leaseInvalidReason">) {
   if (v.operation !== "lease-lost") return "none" as LeaseVerdictKind;
-  return (v.leaseInvalidReason === "op-in-flight" ? "op-in-flight" : "lost") as LeaseVerdictKind;
+  if (v.leaseInvalidReason === "op-in-flight") return "op-in-flight" as LeaseVerdictKind;
+  if (v.leaseInvalidReason === "op-stopped") return "op-stopped" as LeaseVerdictKind;
+  return "lost" as LeaseVerdictKind;
 }
 
 /**
@@ -1531,10 +1565,11 @@ type RetryRefusal = "original-completed" | "original-cleared" | "original-stuck"
 async function reconcileFencedLostAck(
   leaseSession: LeaseSession | undefined,
   verdict: Pick<TestVerdict, "fencedOp">,
+  pollBudgetMs?: number,
 ): Promise<LostAckOutcome> {
   const { fencedOp } = verdict;
   if (leaseSession === undefined || fencedOp === undefined) return "unresolved";
-  return leaseSession.reconcileLostAck(fencedOp);
+  return leaseSession.reconcileLostAck(fencedOp, pollBudgetMs);
 }
 
 /** What one fenced run resolved to, after design §5's lost-ack handling (see `runFenced`). */
@@ -1653,6 +1688,250 @@ async function runFenced(
     retried: true,
     ...provenance,
   };
+}
+
+/** R198: what one `runMany` call resolved to after design §5's lost-ack handling. */
+interface FencedManyOutcome {
+  readonly result: RunManyResult;
+  readonly lostAck: LostAckOutcome | "none";
+  readonly retried: boolean;
+  readonly retryAfter?: LostAckOutcome;
+  readonly original?: { readonly attemptId: string; readonly opSeq: number };
+}
+
+/**
+ * R198: `runFenced`'s twin for a group call. The same four steps, at the op grain: a call-level
+ * unreadable answer is reconciled with the GROUP's budget (a chunk legitimately runs for minutes,
+ * and rule 2's 8 s poll would condemn a healthy one as stranded), a `completed`/`not-started`
+ * reconciliation earns ONE fresh attempt of the WHOLE chunk (a new op), and a retry whose ack is
+ * also lost is reconciled once more and never retried. The retry's first failure is the retry's
+ * `killingTest`, stated as such in the design (§3.5).
+ */
+async function runFencedMany(
+  backend: ExecutionBackend,
+  safety: SessionSafety,
+  chunk: RunManyOpts,
+  leaseSession: LeaseSession | undefined,
+  emit: RunEmitter,
+  resyncOpSeq: (() => Promise<void>) | undefined,
+  mutantId: string,
+): Promise<FencedManyOutcome> {
+  const runMany = backend.runMany;
+  if (runMany === undefined) throw new Error("runFencedMany: backend has no runMany");
+  const groupBudgetMs = chunk.requestCeilingMs + chunk.stopGraceMs;
+  const label = `${chunk.methods[0]?.ref.method ?? "?"}${chunk.methods.length > 1 ? ` (+${chunk.methods.length - 1} more)` : ""}`;
+  const once = async (): Promise<RunManyResult> => {
+    safety.assertSafe(`runMany(${label})`);
+    const r = await runMany.call(backend, chunk);
+    emit({
+      type: "group-call",
+      mutantId,
+      attemptId: r.fencedOp.attemptId,
+      opSeq: r.fencedOp.opSeq,
+      methods: chunk.methods.length,
+      ...(r.kind === "verdicts" ? { ranCount: r.ranCount, endedBy: r.endedBy } : {}),
+    });
+    return r;
+  };
+  const first = await once();
+  if (first.kind !== "call" || !isLostAck(first.verdict)) {
+    return { result: first, lostAck: "none", retried: false };
+  }
+  emit({
+    type: "warning",
+    code: "lost-ack-unreadable",
+    message: `[lethal] ${label}: unreadable answer from RunMutantMany (${first.verdict.failureMessage ?? "no detail"}) — reconciling against the operation marker before deciding anything`,
+  });
+  const firstOutcome = await reconcileFencedLostAck(leaseSession, first.verdict, groupBudgetMs);
+  if (firstOutcome === "unresolved")
+    return { result: first, lostAck: "unresolved", retried: false };
+  emit({
+    type: "warning",
+    code: firstOutcome === "completed" ? "lost-ack-retry" : "lost-ack-not-started",
+    message:
+      firstOutcome === "completed"
+        ? `[lethal] ${label}: the grouped operation was confirmed COMPLETE server-side, so the container is clean and only the answer was lost — retrying the whole chunk once as a fresh attempt`
+        : `[lethal] ${label}: the server's operation marker shows this grouped attempt was never claimed, so nothing of ours executed — retrying the whole chunk once as a fresh attempt (R194)`,
+  });
+  if (resyncOpSeq !== undefined) {
+    try {
+      await resyncOpSeq();
+    } catch (err) {
+      emit({
+        type: "warning",
+        code: "lost-ack-resync-failed",
+        message: `[lethal] ${label}: the op-seq resync before the retry failed (${messageOf(err)}) — treating the lost ack as unresolved rather than retrying on a counter that may be wrong`,
+      });
+      return { result: first, lostAck: "unresolved", retried: false };
+    }
+  }
+  const original = first.verdict.fencedOp;
+  const retry = await once();
+  const provenance = {
+    retryAfter: firstOutcome,
+    ...(original !== undefined ? { original } : {}),
+  };
+  if (retry.kind !== "call" || !isLostAck(retry.verdict)) {
+    return { result: retry, lostAck: "none", retried: true, ...provenance };
+  }
+  const retryOutcome = await reconcileFencedLostAck(leaseSession, retry.verdict, groupBudgetMs);
+  return {
+    result: retry,
+    lostAck: retryOutcome === "not-started" ? "unresolved" : retryOutcome,
+    retried: true,
+    ...provenance,
+  };
+}
+
+/**
+ * R198: one step of a mutant's covering loop, whichever path produced it. The loop body reads the
+ * same tuple `runFenced` returned before, plus the two budgets it needs for two different jobs
+ * (`testBudgetMs` for the operator-facing note, `groupBudgetMs` for classifying a refused retry),
+ * plus the group path's per-mutant `cause` and its session-abort text, both absent on the
+ * sequential path.
+ */
+interface CoveringStep {
+  readonly ref: TestMethodRef;
+  readonly verdict: TestVerdict;
+  readonly lostAck: LostAckOutcome | "none";
+  readonly retried: boolean;
+  readonly retryAfter?: LostAckOutcome;
+  readonly original?: { readonly attemptId: string; readonly opSeq: number };
+  readonly testBudgetMs: number;
+  readonly groupBudgetMs: number;
+  readonly opKind: "single" | "many";
+  readonly cause?: RunManyCause;
+  readonly abortSession?: string;
+}
+
+/** R198: the group-run settings the covering loop dispatches under, or `undefined` for sequential. */
+interface GroupRunSettings {
+  readonly maxMethodsPerCall: number;
+  readonly requestCeilingMs: number;
+  readonly stopGraceMs: number;
+}
+
+/**
+ * R198: the covering loop's dispatcher. On a backend WITHOUT `runMany` (or with group runs
+ * disabled) it is today's loop: one `runFenced` per test in R197's order. On a backend WITH it, it
+ * walks `ordered` with a cursor, IN ORDER, never skipping: a chunk is a CONTIGUOUS run of fittable
+ * methods (budget + grace inside the ceiling) starting at the cursor, at most `maxMethodsPerCall`
+ * long, ending before the first unfittable method; an unfittable method goes alone, at its
+ * position, through `runFenced`, so the order the sequential path would meet the first failure in
+ * is preserved exactly. A `cap` answer advances the cursor by `ranCount` and issues the next call
+ * (a new op) for the rest.
+ *
+ * The consumer breaks out of the iteration at the first non-pass step, exactly as it broke out of
+ * the old `for` loop, and this generator is then never pulled again.
+ */
+async function* coveringRuns(args: {
+  readonly backend: ExecutionBackend;
+  readonly safety: SessionSafety;
+  readonly ordered: readonly TestMethodRef[];
+  readonly budgetOf: (ref: TestMethodRef) => number;
+  readonly leaseSession: LeaseSession | undefined;
+  readonly emit: RunEmitter;
+  readonly resyncOpSeq: (() => Promise<void>) | undefined;
+  readonly group: GroupRunSettings | undefined;
+  readonly mutantId: string;
+}): AsyncGenerator<CoveringStep, void, undefined> {
+  const single = async (ref: TestMethodRef): Promise<CoveringStep> => {
+    const budget = args.budgetOf(ref);
+    const out = await runFenced(
+      args.backend,
+      args.safety,
+      ref,
+      { coverage: "none", timeoutMs: budget },
+      args.leaseSession,
+      args.emit,
+      args.resyncOpSeq,
+    );
+    return {
+      ref,
+      verdict: out.verdict,
+      lostAck: out.lostAck,
+      retried: out.retried,
+      ...(out.retryAfter !== undefined ? { retryAfter: out.retryAfter } : {}),
+      ...(out.original !== undefined ? { original: out.original } : {}),
+      testBudgetMs: budget,
+      groupBudgetMs: budget,
+      opKind: "single",
+    };
+  };
+  const group = args.group;
+  if (group === undefined || args.backend.runMany === undefined) {
+    for (const ref of args.ordered) yield await single(ref);
+    return;
+  }
+  const fits = (ref: TestMethodRef) =>
+    args.budgetOf(ref) + group.stopGraceMs <= group.requestCeilingMs;
+  let cursor = 0;
+  while (cursor < args.ordered.length) {
+    const head = args.ordered[cursor];
+    if (head === undefined) return;
+    if (!fits(head)) {
+      yield await single(head);
+      cursor += 1;
+      continue;
+    }
+    const methods: { ref: TestMethodRef; budgetMs: number }[] = [];
+    for (let i = cursor; i < args.ordered.length && methods.length < group.maxMethodsPerCall; i++) {
+      const ref = args.ordered[i];
+      if (ref === undefined || !fits(ref)) break;
+      methods.push({ ref, budgetMs: args.budgetOf(ref) });
+    }
+    const chunk: RunManyOpts = {
+      methods,
+      requestCeilingMs: group.requestCeilingMs,
+      stopGraceMs: group.stopGraceMs,
+    };
+    const groupBudgetMs = group.requestCeilingMs + group.stopGraceMs;
+    const out = await runFencedMany(
+      args.backend,
+      args.safety,
+      chunk,
+      args.leaseSession,
+      args.emit,
+      args.resyncOpSeq,
+      args.mutantId,
+    );
+    const provenance = {
+      lostAck: out.lostAck,
+      retried: out.retried,
+      ...(out.retryAfter !== undefined ? { retryAfter: out.retryAfter } : {}),
+      ...(out.original !== undefined ? { original: out.original } : {}),
+    };
+    if (out.result.kind === "call") {
+      const { verdict, cause, abortSession } = out.result;
+      yield {
+        ...provenance,
+        ref: verdict.ref,
+        verdict,
+        testBudgetMs: args.budgetOf(verdict.ref),
+        groupBudgetMs,
+        opKind: "many",
+        ...(cause !== undefined ? { cause } : {}),
+        ...(abortSession !== undefined ? { abortSession } : {}),
+      };
+      return;
+    }
+    for (const verdict of out.result.verdicts) {
+      yield {
+        ...provenance,
+        ref: verdict.ref,
+        verdict,
+        testBudgetMs: args.budgetOf(verdict.ref),
+        groupBudgetMs,
+        opKind: "many",
+      };
+    }
+    // A `failure` ends the walk. `complete` means every method of THIS call ran (the transport
+    // refuses a `complete` with fewer entries than the call asked for) and `cap` a prefix of it;
+    // either way the cursor advances by what ran and the next call, if any, takes the rest. The
+    // loop's attempted-set guard is what catches an answer whose `ranCount` outran its entries.
+    if (out.result.endedBy === "failure") return;
+    cursor += out.result.ranCount;
+  }
 }
 
 /**
@@ -1948,10 +2227,20 @@ class LeaseSession {
    * application-level terminal response, and clearing a marker over a still-running AL op is the
    * exact overlap→false-verdict sequence design §5 exists to close.
    */
-  async reconcileLostAck(op: {
-    readonly attemptId: string;
-    readonly opSeq: number;
-  }): Promise<LostAckOutcome> {
+  async reconcileLostAck(
+    op: {
+      readonly attemptId: string;
+      readonly opSeq: number;
+    },
+    pollBudgetMs?: number,
+  ): Promise<LostAckOutcome> {
+    // R198: a group op legitimately runs for minutes, so rule 2's poll is sized from the caller's
+    // budget the way `classifyRetryRefusal` already sizes its own; the per-test path passes none
+    // and keeps the 8 s it always had.
+    const attempts =
+      pollBudgetMs === undefined
+        ? OP_POLL_ATTEMPTS
+        : Math.max(OP_POLL_ATTEMPTS, Math.ceil(pollBudgetMs / OP_POLL_DELAY_MS));
     let status: Awaited<ReturnType<LeaseApi["getOperationStatus"]>>;
     try {
       status = await this.d.client.getOperationStatus(this.d.lease, op.attemptId, op.opSeq);
@@ -1974,7 +2263,8 @@ class LeaseSession {
       status.opKind === "run" &&
       status.opAttemptId === op.attemptId &&
       status.opSeq === op.opSeq;
-    if (ours) return (await this.pollUntilOpClears(op.opSeq)) ? "completed" : "unresolved";
+    if (ours)
+      return (await this.pollUntilOpClears(op.opSeq, attempts)) ? "completed" : "unresolved";
     // R194 (second half), rule 2b. Phase 1 (`TryBeginRun`) is the only writer that claims a run,
     // and it writes before any AL executes; every writer that clears the marker also advances
     // `Last Completed Op Seq` to the op it cleared, except `force-reset-lease`, which mints a new
@@ -1999,7 +2289,7 @@ class LeaseSession {
     }
     if (again.completed || op.opSeq <= again.lastCompletedOpSeq) return "completed";
     if (again.opKind === "run" && again.opAttemptId === op.attemptId && again.opSeq === op.opSeq) {
-      return (await this.pollUntilOpClears(op.opSeq)) ? "completed" : "unresolved";
+      return (await this.pollUntilOpClears(op.opSeq, attempts)) ? "completed" : "unresolved";
     }
     return neverClaimed(again) ? "not-started" : "unresolved";
   }
@@ -2757,6 +3047,27 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
 
   // R47: the configured floor for a mutant run's time budget — see `SessionConfig.mutantTimeoutMs`.
   const minMutantBudgetMs = cfg.mutantTimeoutMs ?? MIN_MUTANT_BUDGET_MS;
+  // R198: group runs, on a backend that has the call. `undefined` is the sequential loop.
+  const groupRuns: GroupRunSettings | undefined =
+    cfg.groupRuns?.enabled === false || cfg.backend.runMany === undefined
+      ? undefined
+      : {
+          maxMethodsPerCall: cfg.groupRuns?.maxMethodsPerCall ?? Number.POSITIVE_INFINITY,
+          requestCeilingMs: cfg.groupRuns?.requestCeilingMs ?? REQUEST_CEILING_MS,
+          stopGraceMs: STOP_GRACE_MS,
+        };
+  if (
+    groupRuns !== undefined &&
+    minMutantBudgetMs + groupRuns.stopGraceMs > groupRuns.requestCeilingMs
+  ) {
+    // Every method is then unfittable, every one goes alone through RunMutant, and the feature is
+    // silently inert with `groupedCalls: 0`, which is also what an unwired counter reports.
+    emit({
+      type: "warning",
+      code: "group-runs-inert",
+      message: `[lethal] --mutant-timeout-ms ${minMutantBudgetMs} plus the ${groupRuns.stopGraceMs} ms stop grace exceeds --request-ceiling-ms ${groupRuns.requestCeilingMs}, so NO method fits a grouped call and every covering test runs as its own RunMutant. Raise --request-ceiling-ms (below the gateway's idle timeout) or lower the floor (R198).`,
+    });
+  }
 
   const outcomes: SessionOutcome[] = []; // store durability + Task 3 bookkeeping — see `record()`
   let baselineGreenOverall = true;
@@ -3773,6 +4084,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           emit,
           killLedger,
           memberCountsByTest: memberCounts,
+          groupRuns,
         });
       } else {
         const shards = shardEvenly(toExecute, workers);
@@ -3871,6 +4183,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
               emit,
               killLedger,
               memberCountsByTest: memberCounts,
+              groupRuns,
             });
           }),
         );
@@ -4409,6 +4722,8 @@ async function runMutantsOnBackend(args: {
   readonly killLedger: KillLedger;
   /** R197: members covered per test at THIS batch's baseline; empty under coverage "none". */
   readonly memberCountsByTest: ReadonlyMap<string, number>;
+  /** R198: group-run settings, or `undefined` for the sequential loop. */
+  readonly groupRuns?: GroupRunSettings | undefined;
 }): Promise<void> {
   const leaseSession = args.leaseSession;
   const resyncOpSeq =
@@ -4482,42 +4797,57 @@ async function runMutantsOnBackend(args: {
       outcome: TestVerdict["outcome"];
       durationMs: number;
       failureMessage: string | undefined;
+      opKind?: "single" | "many";
     }> = [];
     let transportErrorRef: TestMethodRef | undefined;
     // R197: tests that already killed in this procedure first, then the narrowest, then the
     // fastest. A cost heuristic only; see test-order.ts for the measurement behind it.
     const ordered = orderCoveringTests(covering, m, args.killLedger, args.memberCountsByTest);
-    for (const ref of ordered) {
-      const budget = Math.max(
+    const budgetOf = (ref: TestMethodRef) =>
+      Math.max(
         2 * (args.baselineDuration.get(testKeyOf(ref)) ?? args.fallbackTimeoutMs),
         args.minMutantBudgetMs,
       );
-      // Layer 5C-B2: `runFenced`, not `runOnce` — a lost ack that reconciliation PROVES completed
-      // earns one fresh attempt, and `v` is then that attempt's verdict. Only the final verdict is
-      // buffered/attested/classified below, exactly as `runOnce`'s own pre-dispatch-rejected retry
-      // already behaves.
+    // R198: every method a call REPORTED as run with a mapped pass/fail result. A survivor stands
+    // only if this equals the covering set (checked after the loop): a chunking bug that skipped a
+    // test must not manufacture a survivor. On the sequential path it is trivially complete.
+    const attempted = new Set<string>();
+    for await (const step of coveringRuns({
+      backend: args.backend,
+      safety: args.safety,
+      ordered,
+      budgetOf,
+      leaseSession,
+      emit: args.emit,
+      resyncOpSeq,
+      group: args.groupRuns,
+      mutantId: m.mutantId,
+    })) {
+      // Layer 5C-B2: `runFenced` (or R198's `runFencedMany`), not `runOnce` — a lost ack that
+      // reconciliation PROVES completed earns one fresh attempt, and `v` is then that attempt's
+      // verdict. Only the final verdict is buffered/attested/classified below, exactly as
+      // `runOnce`'s own pre-dispatch-rejected retry already behaves. `budget` is the per-TEST
+      // budget the operator-facing notes quote; `groupBudgetMs` is what a refused retry is
+      // classified against (a chunk legitimately runs for minutes).
       const {
+        ref,
         verdict: v,
         lostAck,
         retried,
         retryAfter,
         original,
-      } = await runFenced(
-        args.backend,
-        args.safety,
-        ref,
-        { coverage: "none", timeoutMs: budget },
-        leaseSession,
-        args.emit,
-        resyncOpSeq,
-      );
+        testBudgetMs: budget,
+        groupBudgetMs,
+      } = step;
       testResultBuffer.push({
         mutantCode: m.mutantId,
         ref,
         outcome: v.outcome,
         durationMs: v.durationMs,
         failureMessage: v.failureMessage,
+        opKind: step.opKind,
       });
+      if (v.outcome === "pass" || v.outcome === "fail") attempted.add(testKeyOf(ref));
       spent += v.durationMs;
       // Layer 5C-A Task 8, Task 10 (design §G): this covering run went through the coverage:
       // "none" transport path (the only path that ever attests) — feed the artifact's ledger.
@@ -4542,7 +4872,7 @@ async function runMutantsOnBackend(args: {
         // marker is read for the original's coordinates before this is called a lease loss.
         const refusal =
           retryAfter === "not-started" && original !== undefined && leaseSession !== undefined
-            ? await leaseSession.classifyRetryRefusal(original, budget)
+            ? await leaseSession.classifyRetryRefusal(original, groupBudgetMs)
             : "genuine";
         if (refusal === "original-completed" || refusal === "original-cleared") {
           // The abandoned original ran and tombstoned its op; its answer went to a socket nobody
@@ -4614,6 +4944,16 @@ async function runMutantsOnBackend(args: {
         }
         break;
       }
+      if (leaseKind === "op-stopped") {
+        // R203: our OWN stop tombstoned this op while its session was still finishing, and phase 3
+        // refused to record the result. No verdict, no lease loss, no quarantine: the container is
+        // clean and the next mutant is scored. Before R203 this latched `lease-lost` and
+        // invalidated the batch with a note naming a cause nobody caused.
+        verdict = "error";
+        failureNote = `op-stopped running ${ref.method}: the run exceeded its budget (${budget} ms) and LethAL's stop was confirmed, but the session finished the test before the stop landed, so the fence refused to record its result — no verdict, the lease was NOT lost (R203). Raise the floor with --mutant-timeout-ms if the test is slow rather than hung, and re-run with --resume`;
+        cause = "op-stopped";
+        break;
+      }
       if (v.operation !== undefined && requiresUnsafeLatch(v.operation)) {
         // Layer 5C-B2 (design §5): reaching here means `runFenced` could not turn this run into a
         // readable answer — it already reconciled, and (when the op was proven complete) already
@@ -4658,6 +4998,22 @@ async function runMutantsOnBackend(args: {
         // `isStrandedNote` (resume.ts) describe the same set of mutants. `--resume` still reads the
         // prose, because rows recorded before this cause existed have nothing else to read.
         cause = "stranded";
+        // R198: an identity disagreement or a missing route is reconciled and quarantined like any
+        // unreadable answer, and THEN aborts the session: the server is running something this
+        // request did not ask for, or is not the control app the version gate saw.
+        if (step.abortSession !== undefined) {
+          failureNote = `${failureNote} — ${step.abortSession}`;
+          transportErrorRef = ref;
+        }
+        break;
+      }
+      if (step.cause !== undefined) {
+        // R198: the group call's own per-mutant causes (the server's loop raised; its answer did
+        // not match the request; the stop landed after the method had recorded its completion).
+        // Recorded, never a verdict, never a session abort: the next mutant is scored.
+        verdict = "error";
+        failureNote = v.failureMessage ?? `${step.cause} running ${ref.method}`;
+        cause = step.cause;
         break;
       }
       if (v.outcome === "deadline-exceeded") {
@@ -4756,6 +5112,11 @@ async function runMutantsOnBackend(args: {
           } else if (confirmLease === "lost") {
             noteLeaseLostOrThrow(leaseSession, detail);
             failureNote = `lease-lost while ${detail} — the kill could not be confirmed under a provable lease`;
+          } else if (confirmLease === "op-stopped") {
+            // R203 on the confirmation rerun (unreachable in practice: a null-activation run has
+            // no stop hook), scored the same way: no latch, no verdict, the kill unconfirmed.
+            failureNote = `op-stopped while ${detail} — the fence refused to record the confirmation because our own stop had tombstoned its op; the kill could not be confirmed and the lease was NOT lost (R203)`;
+            cause = "op-stopped";
           } else {
             const cleared = (await leaseSession?.pollUntilOpClears()) ?? false;
             // R122(a), confirmation-side twin of the covering-run branch above — same reasoning,
@@ -4847,6 +5208,18 @@ async function runMutantsOnBackend(args: {
         break;
       }
     }
+    // R198: a survivor is a mutant EVERY covering test ran against. On the group path a chunking
+    // bug could skip tests and still answer all-pass; on the sequential path the set is complete
+    // by construction. Checked here, before anything is recorded.
+    if (verdict === "survived") {
+      const wanted = new Set(ordered.map((ref) => testKeyOf(ref)));
+      const missing = [...wanted].filter((k) => !attempted.has(k));
+      if (missing.length > 0 || attempted.size !== wanted.size) {
+        verdict = "error";
+        cause = "group-coverage-incomplete";
+        failureNote = `group-coverage-incomplete: every call answered and every returned method passed, but ${missing.length} of ${wanted.size} covering test(s) were never attempted (${missing.slice(0, 5).join(", ")}${missing.length > 5 ? ", …" : ""}) — not a survivor (R198)`;
+      }
+    }
     const mutantRowId = record(
       args.store,
       args.runId,
@@ -4882,6 +5255,7 @@ async function runMutantsOnBackend(args: {
         t.outcome,
         t.durationMs,
         t.failureMessage,
+        t.opKind,
       );
     }
     if (transportErrorRef !== undefined) {
@@ -5158,7 +5532,7 @@ async function handleBaselineLeaseOutcome(args: {
   readonly verdict: TestVerdict;
 }): Promise<void> {
   const detail = `baseline test ${args.ref.method}: ${args.verdict.failureMessage ?? "RunMutant lease-invalid"}`;
-  if (args.kind === "lost") {
+  if (args.kind === "lost" || args.kind === "op-stopped") {
     noteLeaseLostOrThrow(args.leaseSession, detail);
     return;
   }

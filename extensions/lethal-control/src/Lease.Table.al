@@ -44,6 +44,16 @@ table 91006 "LC Lease"
         /// throwing, exactly like a successful stop. A reader that trusted it would be confirming
         /// nothing.</summary>
         field(13; "Op Session Id"; Integer) { }
+        /// <summary>R198/R203: which op the LAST successful stop (TryStopHungRun or TryStopHungRunAt)
+        /// tombstoned, as the PAIR. Two dedicated fields rather than the residual "Op Attempt Id"/
+        /// "Op Seq", because a SUCCESSFUL TryFinishRun and TryRecoverOp leave those residues in a
+        /// state byte-identical to a stop's; and the pair rather than either half, because attempt
+        /// ids restart at a1 per client process and only (attemptId, opSeq) is never reused. Read
+        /// by TryFinishRun to answer `op-stopped` for a run that outran its own stop, so the client
+        /// records an error instead of latching a lease loss nobody caused. Cleared by
+        /// TryForceResetLease with the other op fields.</summary>
+        field(14; "Stopped Op Attempt Id"; Text[64]) { }
+        field(15; "Stopped Op Seq"; BigInteger) { }
     }
 
     keys

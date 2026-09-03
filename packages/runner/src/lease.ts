@@ -142,6 +142,86 @@ export interface OperationStatus {
   readonly opSeq: number;
   readonly lastCompletedOpSeq: number;
   readonly completed: boolean;
+  /**
+   * R198: the progress row of the op the MARKER names (control app 1.0.0.17+), absent when the
+   * server has none for that key or predates the field. Carries its own `attemptId`/`opSeq` so a
+   * reader can tell whose it is: a row that is not the reader's own op is "nothing yet", never a
+   * reason to act. `startedAt` and `serverNow` come from ONE server transaction, so
+   * `serverNow - startedAt` is the running method's elapsed time on server clocks alone.
+   */
+  readonly opProgress?: OperationProgress;
+  readonly serverNow?: string;
+}
+
+/** R198: one method's place inside its op, as `LC Op Progress` records it. */
+export interface OperationProgress {
+  readonly attemptId: string;
+  readonly opSeq: number;
+  readonly methodIndex: number;
+  readonly codeunitId: number;
+  readonly method: string;
+  readonly token: string;
+  readonly startedAt: string;
+  readonly lastCompletedIndex: number;
+  readonly state: string;
+}
+
+/**
+ * R198: one parser for `GetOperationStatus`'s answer, shared by `LeaseClient` and
+ * `RunMutantTransport`'s watchdog so the two cannot drift on what the row looks like.
+ * `opProgress` is optional and is dropped (not thrown on) when malformed: the watchdog treats a
+ * row it cannot read as "nothing yet", the safe direction, and the lost-ack rules never read it.
+ */
+export function parseOperationStatus(json: Record<string, unknown>): OperationStatus {
+  const base = {
+    opKind: requireString(json, "opKind", "GetOperationStatus"),
+    opAttemptId: requireString(json, "opAttemptId", "GetOperationStatus"),
+    opSeq: requireNumber(json, "opSeq", "GetOperationStatus"),
+    lastCompletedOpSeq: requireNumber(json, "lastCompletedOpSeq", "GetOperationStatus"),
+    completed: requireBoolean(json, "completed", "GetOperationStatus"),
+  };
+  const serverNow = optionalString(json, "serverNow");
+  const raw = json.opProgress;
+  let opProgress: OperationProgress | undefined;
+  if (isRecord(raw)) {
+    const attemptId = raw.attemptId;
+    const opSeq = raw.opSeq;
+    const methodIndex = raw.methodIndex;
+    const codeunitId = raw.codeunitId;
+    const method = raw.method;
+    const token = raw.token;
+    const startedAt = raw.startedAt;
+    const lastCompletedIndex = raw.lastCompletedIndex;
+    const state = raw.state;
+    if (
+      typeof attemptId === "string" &&
+      typeof opSeq === "number" &&
+      typeof methodIndex === "number" &&
+      typeof codeunitId === "number" &&
+      typeof method === "string" &&
+      typeof token === "string" &&
+      typeof startedAt === "string" &&
+      typeof lastCompletedIndex === "number" &&
+      typeof state === "string"
+    ) {
+      opProgress = {
+        attemptId,
+        opSeq,
+        methodIndex,
+        codeunitId,
+        method,
+        token,
+        startedAt,
+        lastCompletedIndex,
+        state,
+      };
+    }
+  }
+  return {
+    ...base,
+    ...(opProgress !== undefined ? { opProgress } : {}),
+    ...(serverNow !== undefined ? { serverNow } : {}),
+  };
 }
 
 export interface RecoverOpOutcome {
@@ -469,13 +549,7 @@ export class LeaseClient implements LeaseApi {
       attemptId,
       opSeq,
     });
-    return {
-      opKind: requireString(json, "opKind", "GetOperationStatus"),
-      opAttemptId: requireString(json, "opAttemptId", "GetOperationStatus"),
-      opSeq: requireNumber(json, "opSeq", "GetOperationStatus"),
-      lastCompletedOpSeq: requireNumber(json, "lastCompletedOpSeq", "GetOperationStatus"),
-      completed: requireBoolean(json, "completed", "GetOperationStatus"),
-    };
+    return parseOperationStatus(json);
   }
 
   /**

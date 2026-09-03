@@ -745,7 +745,12 @@
             "deadline-exceeded",
             "unstable",
             "stranded",
-            "result-lost"
+            "result-lost",
+            "group-run-error",
+            "group-answer-malformed",
+            "group-coverage-incomplete",
+            "op-stopped",
+            "stopped-after-completion"
           ]
         },
         "killingTestFailure": {
@@ -1040,6 +1045,49 @@
         },
         "note": {
           "type": "string"
+        },
+        "seq": {
+          "type": "number"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "mutantId",
+        "attemptId",
+        "opSeq",
+        "methods",
+        "seq"
+      ],
+      "properties": {
+        "type": {
+          "const": "group-call"
+        },
+        "mutantId": {
+          "type": "string"
+        },
+        "attemptId": {
+          "type": "string"
+        },
+        "opSeq": {
+          "type": "number"
+        },
+        "methods": {
+          "type": "number"
+        },
+        "ranCount": {
+          "type": "number"
+        },
+        "endedBy": {
+          "type": "string",
+          "enum": [
+            "complete",
+            "failure",
+            "cap"
+          ]
         },
         "seq": {
           "type": "number"

@@ -564,6 +564,12 @@ const EXPECTED = {
    */
   untargetedTriggerCount: 0,
   /**
+   * R198: one `RunMutantMany` call per mutant that reached the covering loop: 299 killed + 63
+   * survived; the 15 no-coverage never reach it, and 299 + 63 + 15 = 377 deployed leaves no other
+   * outcome to account for. A number, not a predicate, for the reason bcdev's 15 is one.
+   */
+  groupedCalls: 362,
+  /**
    * Task 4 (excluded-sites-spine): the `notInstrumented` half's ONLY live proof, added because it
    * had none. Every other file in this fixture is a CARRIER kind (`CARRIER_KINDS` in
    * packages/schemata/src/compile.ts), so this population read zero on every gate run before this,
@@ -822,6 +828,13 @@ function assertVerdictTable(report: SessionReport): void {
   assert.equal(report.counts.errors, 0, "no mutant may error on the healthy path");
   assert.equal(report.counts.unstable, 0, "no mutant may be unstable on the healthy path");
   assert.equal(report.mutationScore, EXPECTED.mutationScore, "mutation score mismatch");
+  assert.equal(
+    report.groupedCalls,
+    EXPECTED.groupedCalls,
+    `R198: expected exactly ${EXPECTED.groupedCalls} RunMutantMany calls (one per scored mutant); ` +
+      `got ${report.groupedCalls}. Fewer means the grouped path silently stopped being used; more ` +
+      "means a chunk or a lost-ack retry happened on a container gate, which must be explained",
+  );
   assert.equal(
     report.untargetedTriggerCount,
     EXPECTED.untargetedTriggerCount,

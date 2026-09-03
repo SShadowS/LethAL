@@ -207,7 +207,7 @@
           "operatorName": { "type": "string" },
           "cause": {
             "type": "string",
-            "enum": ["deadline-exceeded", "unstable", "stranded", "result-lost"],
+            "enum": ["deadline-exceeded", "unstable", "stranded", "result-lost", "group-run-error", "group-answer-malformed", "group-coverage-incomplete", "op-stopped", "stopped-after-completion"],
             "description": "Present only when the report recorded a structural cause. Absent means the row's only account is `failureNote`."
           },
           "failureNote": { "type": "string" },

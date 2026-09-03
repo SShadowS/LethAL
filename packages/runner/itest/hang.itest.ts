@@ -190,6 +190,7 @@ interface LegResult {
   readonly report: SessionReport;
   /** `test_results` rows for this run, so the gate can assert BC's own words, not just a verdict. */
   readonly testRows: ReadonlyArray<{
+    readonly op_kind: string | null;
     mutant_code: string;
     outcome: string;
     duration_ms: number;
@@ -285,7 +286,7 @@ async function runLeg(scratchRoot: string, stopHungSessions: boolean): Promise<L
     });
     const testRows = store.db
       .query(
-        "SELECT mutant_code, outcome, duration_ms, failure_message FROM test_results ORDER BY id",
+        "SELECT mutant_code, outcome, duration_ms, failure_message, op_kind FROM test_results ORDER BY id",
       )
       .all() as LegResult["testRows"];
     return { report, testRows, odataCfg, quarantineDir };
@@ -378,6 +379,25 @@ function assertOnLeg(leg: LegResult): void {
     `the report must carry the stop-hung-sessions caveat when it scored a timeout-killed; got ${JSON.stringify(report.validity.caveats)}`,
   );
   assert.equal(report.quarantined, undefined, "the ON leg must leave the tier unquarantined");
+
+  // R198: the ON leg's kills are now scored through RunMutantMany + StopHungRunAt + the 408, one
+  // call per mutant that reached the covering loop (no chunking on a container; a kill stops at
+  // its first failure). Pinned as the arithmetic of the counts rather than a bare "> 0", and the
+  // timeout rows themselves must carry the grouped op kind, so the stop cannot have been scored
+  // through the single-method path this gate used to pin.
+  assert.equal(
+    report.groupedCalls,
+    report.counts.killed + report.counts.survived + report.counts.timeoutKilled,
+    `R198: expected one RunMutantMany call per scored mutant; got groupedCalls=${report.groupedCalls}`,
+  );
+  for (const m of timeoutKilled) {
+    const stopped = testRows.find((r) => r.mutant_code === m.mutantCode && r.outcome === "timeout");
+    assert.equal(
+      stopped?.op_kind,
+      "many",
+      `${m.mutantCode}'s timeout row must come from a grouped call (op_kind many), got ${stopped?.op_kind}`,
+    );
+  }
 }
 
 function assertOffLeg(leg: LegResult): void {

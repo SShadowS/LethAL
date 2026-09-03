@@ -152,6 +152,9 @@ function assertVerdictTable(report: SessionReport): void {
     "baseline must be green (both fixture tests pass unmutated)",
   );
   assert.equal(report.counts.killed, EXPECTED.killed, "killed count mismatch");
+  // R198: al-runner has no RunMutantMany; 0 is also what an unwired counter reports, so this pins
+  // only that the backend is untouched. The container gates carry the anti-inertness numbers.
+  assert.equal(report.groupedCalls, 0, "R198: al-runner must make no grouped call");
   assert.equal(report.counts.survived, EXPECTED.survived, "survived count mismatch");
   assert.equal(
     report.counts.noCoverage,

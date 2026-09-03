@@ -95,6 +95,13 @@ const EXPECTED = {
   survived: 12,
   noCoverage: 4,
   /**
+   * R198: one `RunMutantMany` call per mutant that reached the covering loop: 3 killed + 12
+   * survived, the 4 no-coverage never reach it. Pinned as a NUMBER, not a predicate: a counter
+   * that was never wired reports 0, and a predicate over an empty set is satisfied by it. This is
+   * the anti-inertness pin for the grouped path; the tables gate carries the other (362).
+   */
+  groupedCalls: 15,
+  /**
    * R132: this gate now carries the VACUOUS case for R121's assertion screen, which `itest:tables`
    * used to pin and gave up when its fixture grew a Library Assert arm.
    *
@@ -583,6 +590,13 @@ function assertVerdictTable(report: SessionReport): void {
   assert.equal(report.counts.killed, EXPECTED.killed, "killed count mismatch");
   assert.equal(report.counts.survived, EXPECTED.survived, "survived count mismatch");
   assert.equal(report.counts.noCoverage, EXPECTED.noCoverage, "no-coverage count mismatch");
+  assert.equal(
+    report.groupedCalls,
+    EXPECTED.groupedCalls,
+    `R198: expected exactly ${EXPECTED.groupedCalls} RunMutantMany calls (one per scored mutant); ` +
+      `got ${report.groupedCalls}. Fewer means the grouped path silently stopped being used; more ` +
+      "means a chunk or a lost-ack retry happened on a container gate, which must be explained",
+  );
   // R175: pins the ABSENCE. A naming gap means the line map could not place a line BC says executed,
   // in source LethAL itself emitted, and every mutant in that object then reports `no-coverage` for
   // a reason that is ours rather than the suite's. No valid AL should produce one, so a rise here is

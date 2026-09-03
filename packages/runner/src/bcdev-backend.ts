@@ -18,6 +18,8 @@ import type {
   CoverageMode,
   ExecutionBackend,
   NamingGap,
+  RunManyOpts,
+  RunManyResult,
   RunOpts,
   TestMethodRef,
   TestVerdict,
@@ -732,6 +734,54 @@ export class BcDevMcpBackend implements ExecutionBackend {
   async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
     if (opts.coverage === "procedure" || opts.coverage === "line") return this.runOnHub(ref, opts);
     return this.runViaTransport(ref, opts);
+  }
+
+  /**
+   * R198: one `RunMutantMany` call for the ACTIVE mutant. Mints one attempt id and one opSeq for
+   * the call exactly as `run` does for one method: a chunk is an op. Refuses a baseline (no
+   * mutant pending): the baseline needs coverage per test, and a group run of it would measure
+   * the green set with no coverage at all. The R53 stop hook's ON/OFF choice travels as
+   * `stopHungSessions`; the watchdog inside the transport does the rest.
+   */
+  async runMany(opts: RunManyOpts): Promise<RunManyResult> {
+    const transport = this.runMutantTransport;
+    if (!transport) {
+      throw new Error(
+        "BcDevMcpBackend: RunMutant transport not configured — deploy() must run (and succeed) first",
+      );
+    }
+    const lease = this.sessionLease;
+    if (!lease) {
+      throw new Error(
+        "BcDevMcpBackend: no lease bound — the orchestrator must call setLease() (Layer 5C-B1) before runMany()",
+      );
+    }
+    const mutantId = this.pendingMutantId ?? "";
+    if (mutantId === "") {
+      throw new Error(
+        "BcDevMcpBackend: runMany() is for a MUTANT run; no mutant is pending, and a baseline keeps the single-method call because coverage is per test",
+      );
+    }
+    this.attemptSeq += 1;
+    const opSeq = this.nextOpSeq;
+    this.nextOpSeq += 1;
+    const attemptId = `a${this.attemptSeq}`;
+    const fencedOp = { attemptId, opSeq } as const;
+    const result = await transport.runMany({
+      mutantId,
+      attemptId,
+      lease: {
+        epoch: lease.epoch,
+        token: lease.token,
+        serverGeneration: lease.serverGeneration,
+        opSeq,
+      },
+      methods: opts.methods,
+      requestCeilingMs: opts.requestCeilingMs,
+      stopGraceMs: opts.stopGraceMs,
+      stopHungSessions: this.cfg.stopHungSessions === true,
+    });
+    return result.kind === "verdicts" ? { ...result, fencedOp } : { ...result, fencedOp };
   }
 
   private async runViaTransport(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {

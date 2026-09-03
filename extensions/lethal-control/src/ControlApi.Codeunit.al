@@ -357,7 +357,43 @@ codeunit 91003 "LC Control API"
         Obj.Add('opSeq', CurrentOpSeq);
         Obj.Add('lastCompletedOpSeq', LastCompletedOpSeq);
         Obj.Add('completed', Completed);
+        AddProgress(Obj);
         Obj.WriteTo(ResultJson);
+    end;
+
+    /// <summary>R198: `opProgress` (the marker's own op's progress row, with the row's own attemptId
+    /// and opSeq so a client can tell whose it is; absent when there is none) and `serverNow` (the
+    /// clock "startedAt" came from, so elapsed time is computed from server values only).</summary>
+    local procedure AddProgress(var Obj: JsonObject)
+    var
+        State: Codeunit "LC Control State";
+        Prog: JsonObject;
+        HaveProgress: Boolean;
+        ProgAttemptId: Text;
+        ProgOpSeq: BigInteger;
+        MethodIndex: Integer;
+        MethodCodeunitId: Integer;
+        MethodName: Text;
+        MethodToken: Text;
+        StartedAt: DateTime;
+        LastCompletedIndex: Integer;
+        ProgState: Text;
+        ServerNow: DateTime;
+    begin
+        State.TryGetOperationProgress(HaveProgress, ProgAttemptId, ProgOpSeq, MethodIndex, MethodCodeunitId, MethodName, MethodToken, StartedAt, LastCompletedIndex, ProgState, ServerNow);
+        Obj.Add('serverNow', ServerNow);
+        if not HaveProgress then
+            exit;
+        Prog.Add('attemptId', ProgAttemptId);
+        Prog.Add('opSeq', ProgOpSeq);
+        Prog.Add('methodIndex', MethodIndex);
+        Prog.Add('codeunitId', MethodCodeunitId);
+        Prog.Add('method', MethodName);
+        Prog.Add('token', MethodToken);
+        Prog.Add('startedAt', StartedAt);
+        Prog.Add('lastCompletedIndex', LastCompletedIndex);
+        Prog.Add('state', ProgState);
+        Obj.Add('opProgress', Prog);
     end;
 
     /// <summary>OData action: recover the caller's OWN stranded op marker (design §5/§8). Thin wrapper
@@ -409,6 +445,35 @@ codeunit 91003 "LC Control API"
             Obj.Add('sessionId', StoppedSessionId);
         if Refusal <> '' then
             Obj.Add('reason', Refusal);
+        Obj.WriteTo(ResultJson);
+    end;
+
+    /// <summary>OData action (R198): the per-METHOD stop for a RunMutantMany op. Everything
+    /// StopHungRun demands plus the progress row reading exactly (methodIndex, methodToken) in state
+    /// running, read locked under the lease lock; see "LC Control State".TryStopHungRunAt. A NEW
+    /// action rather than new parameters on StopHungRun, so an older client's stop keeps working.
+    /// JSON: {stopped, sessionId?, reason?, rowIndex?, rowState?}: the row's index and state travel
+    /// on a refusal so the client's abort note can say where the loop actually was.</summary>
+    procedure StopHungRunAt(Epoch: Integer; Token: Text; Generation: Text; AttemptId: Text; OpSeq: BigInteger; MethodIndex: Integer; MethodToken: Text) ResultJson: Text
+    var
+        State: Codeunit "LC Control State";
+        Stopped: Boolean;
+        Refusal: Text;
+        StoppedSessionId: Integer;
+        RowIndex: Integer;
+        RowState: Text;
+        Obj: JsonObject;
+    begin
+        State.TryStopHungRunAt(Epoch, Token, Generation, AttemptId, OpSeq, MethodIndex, MethodToken, Stopped, Refusal, StoppedSessionId, RowIndex, RowState);
+        Obj.Add('stopped', Stopped);
+        if Stopped then
+            Obj.Add('sessionId', StoppedSessionId);
+        if Refusal <> '' then
+            Obj.Add('reason', Refusal);
+        if RowState <> '' then begin
+            Obj.Add('rowIndex', RowIndex);
+            Obj.Add('rowState', RowState);
+        end;
         Obj.WriteTo(ResultJson);
     end;
 
@@ -486,6 +551,7 @@ codeunit 91003 "LC Control API"
         ClaimReason: Text;
         ClaimStatus: Text;
         Verified: Boolean;
+        FinishReason: Text;
         CodeunitResults: Text;
         ObservedAny: Boolean;
         IdentityMismatch: Boolean;
@@ -509,6 +575,10 @@ codeunit 91003 "LC Control API"
         // GetLastErrorText is read immediately on the failing branch, before any other statement can
         // clear it. Attestation is read here, BEFORE phase 3, because phase 3 resets it unconditionally.
         Runner.SetRequest(State.NextSuiteName(), TestCodeunitId, TestMethod);
+        // R198: a single-method op writes the same progress row as a group's method 1, inside the
+        // runner's boundary, so GetOperationStatus reports one shape for every op and R204's
+        // narrowing has something to read at this grain too.
+        Runner.SetFence(AttemptId, OpSeq, 1);
         if Runner.Run() then
             CodeunitResults := Runner.Results()
         else
@@ -516,12 +586,75 @@ codeunit 91003 "LC Control API"
         ObservedAny := State.AttestationObservedAny();
         IdentityMismatch := State.AttestationMismatch();
 
-        // PHASE 3 — verify-and-clear under lock, one transaction, one Commit.
-        State.TryFinishRun(LeaseEpoch, LeaseToken, ServerGeneration, AttemptId, OpSeq, TargetAppId, ArtifactId, MutantId, Verified);
+        // PHASE 3 — verify-and-clear under lock, one transaction, one Commit. `FinishReason` is
+        // blank except for the one refusal a client must not read as a lease loss (`op-stopped`,
+        // R203): our own stop tombstoned this op while the session was still finishing.
+        State.TryFinishRun(LeaseEpoch, LeaseToken, ServerGeneration, AttemptId, OpSeq, TargetAppId, ArtifactId, MutantId, Verified, FinishReason);
         if not Verified then
-            exit(BuildStatus('lease-invalid', TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, '', false, false, ''));
+            exit(BuildStatus('lease-invalid', TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, '', false, false, FinishReason));
 
         exit(BuildStatus('ran', TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, CodeunitResults, ObservedAny, IdentityMismatch, ''));
+    end;
+
+    /// <summary>
+    /// OData action (R198): ONE call runs N test methods against ONE mutant, as a server-side loop
+    /// of today's single-method suite run. One fence for the call (phase 1 claims once, phase 3
+    /// tombstones once); phase 2 is "LC Run Many" behind its own catchable boundary; the answer
+    /// carries `endedBy` (complete | failure | cap), `ranCount` and one entry per method that RAN,
+    /// each with the same `codeunitResults` shape RunMutant returns plus a server-measured
+    /// `durationMs`; or `runError` with the server's own text when phase 2 raised. Design:
+    /// docs/superpowers/specs/2026-09-03-r198-run-mutant-loop.md.
+    ///
+    /// `TestMethods` is a JSON array of {index, codeunitId, method, budgetMs}, numbered 1..N in
+    /// the order to run. `RequestCeilingMs`/`StopGraceMs` bound STARTS: from method 2 on, a method
+    /// is started only if its budget plus the grace fits inside the ceiling, so a StopHungRunAt for
+    /// it can land inside this call; method 1 always starts.
+    /// </summary>
+    procedure RunMutantMany(TargetAppId: Text; ArtifactId: Text; AttemptId: Text; MutantId: Text; TestMethods: Text; StopAtFirstFailure: Boolean; RequestCeilingMs: Integer; StopGraceMs: Integer; LeaseEpoch: Integer; LeaseToken: Text; ServerGeneration: Text; OpSeq: BigInteger) ResultJson: Text
+    var
+        State: Codeunit "LC Control State";
+        Runner: Codeunit "LC Run Many";
+        Claimed: Boolean;
+        ClaimReason: Text;
+        ClaimStatus: Text;
+        Verified: Boolean;
+        FinishReason: Text;
+        RunError: Text;
+        GroupResults: Text;
+        ObservedAny: Boolean;
+        IdentityMismatch: Boolean;
+        Displaced: Boolean;
+    begin
+        // PHASE 1 — identical to RunMutant's.
+        State.TryBeginRun(LeaseEpoch, LeaseToken, ServerGeneration, AttemptId, OpSeq, TargetAppId, ArtifactId, MutantId, Claimed, ClaimReason);
+        if not Claimed then begin
+            if ClaimReason = 'op-in-flight' then
+                ClaimStatus := 'lease-invalid'
+            else
+                ClaimStatus := ClaimReason;
+            exit(BuildManyStatus(ClaimStatus, TargetAppId, ArtifactId, AttemptId, MutantId, '', '', false, false, ClaimReason));
+        end;
+
+        // PHASE 2 — the loop, behind one boundary. A raise anywhere inside is caught here.
+        Runner.SetRequest(AttemptId, OpSeq, TestMethods, StopAtFirstFailure, RequestCeilingMs, StopGraceMs);
+        if Runner.Run() then
+            GroupResults := Runner.Results()
+        else
+            RunError := GetLastErrorText();
+        Displaced := Runner.WasDisplaced();
+        ObservedAny := State.AttestationObservedAny();
+        IdentityMismatch := State.AttestationMismatch();
+
+        // PHASE 3 — identical to RunMutant's. A refusal DISCARDS results and runError alike.
+        State.TryFinishRun(LeaseEpoch, LeaseToken, ServerGeneration, AttemptId, OpSeq, TargetAppId, ArtifactId, MutantId, Verified, FinishReason);
+        if not Verified then
+            exit(BuildManyStatus('lease-invalid', TargetAppId, ArtifactId, AttemptId, MutantId, '', '', false, false, FinishReason));
+        // Displaced means the loop saw the marker leave; a phase 3 that nevertheless verified is a
+        // contradiction, reported as a runError so the client scores an error, never verdicts.
+        if Displaced and (RunError = '') then
+            RunError := 'displaced-but-verified: the loop stopped because the marker no longer named this op, yet phase 3 verified it; the results are not trusted.';
+
+        exit(BuildManyStatus('ran', TargetAppId, ArtifactId, AttemptId, MutantId, GroupResults, RunError, ObservedAny, IdentityMismatch, ''));
     end;
 
     /// <summary>
@@ -939,10 +1072,10 @@ codeunit 91003 "LC Control API"
         exit(Out);
     end;
 
-    /// <summary>Builds the RunMutant JSON result. `Reason` is optional (blank on 'ran' and on the
-    /// phase-3 lease-invalid exit, which has no computed reason to surface) — populated only on
-    /// phase-1 refusals, where it may differ from Status (e.g. Status 'lease-invalid' with Reason
-    /// 'op-in-flight' for a still-active same-attempt duplicate claim).</summary>
+    /// <summary>Builds the RunMutant JSON result. `Reason` is optional (blank on 'ran'), populated
+    /// on phase-1 refusals, where it may differ from Status (e.g. Status 'lease-invalid' with Reason
+    /// 'op-in-flight' for a still-active same-attempt duplicate claim), and since R198/R203 on ONE
+    /// phase-3 refusal: 'op-stopped', the op our own stop tombstoned while the session finished.</summary>
     local procedure BuildStatus(Status: Text; TargetAppId: Text; ArtifactId: Text; AttemptId: Text; MutantId: Text; TestCodeunitId: Integer; TestMethod: Text; CodeunitResults: Text; ObservedAny: Boolean; IdentityMismatch: Boolean; Reason: Text): Text
     var
         Obj: JsonObject;
@@ -961,6 +1094,45 @@ codeunit 91003 "LC Control API"
             Obj.Add('codeunitResults', CodeunitResults);
         Obj.Add('observedAny', ObservedAny);
         Obj.Add('identityMismatch', IdentityMismatch);
+        Obj.WriteTo(Out);
+        exit(Out);
+    end;
+
+    /// <summary>Builds the RunMutantMany JSON result: the call-level echo RunMutant's has (status,
+    /// reason?, targetAppId, artifactId, attemptId, mutantId, observedAny, identityMismatch) and,
+    /// on 'ran', EITHER the loop's {endedBy, ranCount, methods} merged in OR `runError`. Never both,
+    /// never neither.</summary>
+    local procedure BuildManyStatus(Status: Text; TargetAppId: Text; ArtifactId: Text; AttemptId: Text; MutantId: Text; GroupResults: Text; RunError: Text; ObservedAny: Boolean; IdentityMismatch: Boolean; Reason: Text): Text
+    var
+        Obj: JsonObject;
+        Group: JsonObject;
+        Tok: JsonToken;
+        Out: Text;
+    begin
+        Obj.Add('status', Status);
+        if Reason <> '' then
+            Obj.Add('reason', Reason);
+        Obj.Add('targetAppId', TargetAppId);
+        Obj.Add('artifactId', ArtifactId);
+        Obj.Add('attemptId', AttemptId);
+        Obj.Add('mutantId', MutantId);
+        Obj.Add('observedAny', ObservedAny);
+        Obj.Add('identityMismatch', IdentityMismatch);
+        if Status = 'ran' then
+            if RunError <> '' then
+                Obj.Add('runError', RunError)
+            else begin
+                if not Group.ReadFrom(GroupResults) then
+                    Obj.Add('runError', 'LC Run Many returned no JSON object: ' + CopyStr(GroupResults, 1, 300))
+                else begin
+                    Group.Get('endedBy', Tok);
+                    Obj.Add('endedBy', Tok);
+                    Group.Get('ranCount', Tok);
+                    Obj.Add('ranCount', Tok);
+                    Group.Get('methods', Tok);
+                    Obj.Add('methods', Tok);
+                end;
+            end;
         Obj.WriteTo(Out);
         exit(Out);
     end;

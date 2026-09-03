@@ -2,8 +2,8 @@ import type { ActivationConfig, FetchFn } from "./activation";
 import type { TestMethodRef, TestOutcome, TestVerdict } from "./backend";
 import { bcFetch } from "./bc-fetch";
 import { describeThrown } from "./describe-error";
-import { assertAttemptId } from "./lease";
-import type { LeaseTuple } from "./lease";
+import { assertAttemptId, parseOperationStatus } from "./lease";
+import type { LeaseTuple, OperationStatus } from "./lease";
 import { runMutantLineCountMessage } from "./stale-test-app";
 
 /**
@@ -81,6 +81,33 @@ const AL_STOP_408_CAUSE = /StopSession/i;
 /** True only for BC's "this session was stopped by an AL StopSession call" 408. */
 export function isAlStopResponse(status: number, body: string): boolean {
   return status === 408 && AL_STOP_408.test(body) && AL_STOP_408_CAUSE.test(body);
+}
+
+/** R198: how often `runMany`'s watchdog reads the op's progress while its request is open. */
+export const WATCHDOG_POLL_MS = 5_000;
+
+/** Parsed `LethALControl_RunMutantMany` result. */
+interface RunMutantManyAnswer {
+  readonly status?: unknown;
+  readonly reason?: unknown;
+  readonly targetAppId?: unknown;
+  readonly artifactId?: unknown;
+  readonly attemptId?: unknown;
+  readonly mutantId?: unknown;
+  readonly observedAny?: unknown;
+  readonly identityMismatch?: unknown;
+  readonly runError?: unknown;
+  readonly endedBy?: unknown;
+  readonly ranCount?: unknown;
+  readonly methods?: unknown;
+}
+
+interface GroupEntry {
+  readonly index: unknown;
+  readonly codeunitId: unknown;
+  readonly method: unknown;
+  readonly codeunitResults: unknown;
+  readonly durationMs: unknown;
 }
 
 /** Parsed `LethALControl_RunMutant` result (the JSON string inside OData's scalar `value`). */
@@ -165,6 +192,74 @@ export interface RunMutantWithCoverageResult {
   readonly coverageRows?: readonly FencedCoverageRow[];
   /** Absent on the same paths `coverageRows` is, and on a server that reports no timing. */
   readonly coverageStats?: FencedCoverageStats;
+}
+
+/** R198: one method of a `RunMutantMany` call, with the per-test budget the watchdog holds it to. */
+export interface GroupMethod {
+  readonly ref: TestMethodRef;
+  readonly budgetMs: number;
+}
+
+/**
+ * R198: one call that runs N methods against one mutant, as a server-side loop of today's
+ * single-method run (design: `docs/superpowers/specs/2026-09-03-r198-run-mutant-loop.md`).
+ * The watchdog lives INSIDE `runMany` and is the sole writer of its stop decision.
+ */
+export interface RunMutantManyRequest {
+  readonly mutantId: string;
+  readonly attemptId: string;
+  readonly lease: LeaseTuple & { readonly opSeq: number };
+  /** In the order to run; `index` on the wire is 1-based position here. At least one. */
+  readonly methods: readonly GroupMethod[];
+  /** The whole call must answer inside this (server-side elapsed); the server caps STARTS by it. */
+  readonly requestCeilingMs: number;
+  readonly stopGraceMs: number;
+  /** `--stop-hung-sessions`: fire `StopHungRunAt` at a method's budget instead of aborting. */
+  readonly stopHungSessions: boolean;
+  /** How often the watchdog reads `GetOperationStatus` while the request is open. */
+  readonly watchdogPollMs?: number;
+}
+
+export type GroupEndedBy = "complete" | "failure" | "cap";
+
+/**
+ * R198: the per-MUTANT causes a group call can end in, which the orchestrator records as
+ * `error` with that cause and then scores the NEXT mutant (never a session abort, never a
+ * lease-loss latch, never a verdict).
+ */
+export type GroupCause = "group-run-error" | "group-answer-malformed" | "stopped-after-completion";
+
+export type RunMutantManyResult =
+  | {
+      /** The server ran a prefix of the request; one verdict per method that ran, in order. */
+      readonly kind: "verdicts";
+      readonly endedBy: GroupEndedBy;
+      readonly ranCount: number;
+      readonly verdicts: readonly TestVerdict[];
+      readonly durationMs: number;
+    }
+  | {
+      /**
+       * The CALL ended without per-method verdicts. `verdict` is attributed to the method the
+       * outcome is about (the stopped one for `timeout`, the watched one for an abort, the first
+       * of the chunk otherwise) and carries the same `operation`/`fencedOp`/`leaseInvalidReason`
+       * shapes `run` produces, so the orchestrator classifies it with today's branches.
+       */
+      readonly kind: "call";
+      readonly verdict: TestVerdict;
+      /** Present for a per-mutant error; absent when `verdict` classifies itself. */
+      readonly cause?: GroupCause;
+      /** Present when, after the orchestrator's own handling, the SESSION must abort with this text. */
+      readonly abortSession?: string;
+    };
+
+/** R198: what `StopHungRunAt` answered. `rowIndex`/`rowState` travel on a refusal. */
+export interface StopAtAnswer {
+  readonly stopped: boolean;
+  readonly sessionId?: number;
+  readonly reason?: string;
+  readonly rowIndex?: number;
+  readonly rowState?: string;
 }
 
 /** The BC `Test Method Line.Result` enum ints — confirmed live on Cronus281 (mem:runmutant_odata). */
@@ -302,8 +397,558 @@ export class RunMutantTransport {
     };
   }
 
+  /**
+   * R198: the watchdog's status read, on this transport's own connection rather than through
+   * `LeaseClient`, so `runMany` is testable with one fake fetch. Same wire shape, same parser.
+   */
+  async getOperationStatus(
+    lease: LeaseTuple,
+    attemptId: string,
+    opSeq: number,
+  ): Promise<OperationStatus> {
+    const json = await this.postAction("GetOperationStatus", {
+      epoch: lease.epoch,
+      token: lease.token,
+      generation: lease.serverGeneration,
+      attemptId,
+      opSeq,
+    });
+    return parseOperationStatus(json);
+  }
+
+  /**
+   * R198: the per-METHOD stop. Refused server-side unless the op's progress row reads exactly
+   * (`methodIndex`, `methodToken`) in state `running`, read locked under the lease lock, so a
+   * decision taken from a poll up to one interval stale cannot land on the next method. Its answer
+   * is a DECISION, not a termination: the verdict still comes only from the 408 BC delivers to the
+   * held request. Throws on transport failure, like `stopHungRun`.
+   */
+  async stopHungRunAt(req: {
+    readonly attemptId: string;
+    readonly lease: LeaseTuple & { readonly opSeq: number };
+    readonly methodIndex: number;
+    readonly methodToken: string;
+  }): Promise<StopAtAnswer> {
+    assertAttemptId(req.attemptId);
+    const parsed = await this.postAction("StopHungRunAt", {
+      epoch: req.lease.epoch,
+      token: req.lease.token,
+      generation: req.lease.serverGeneration,
+      attemptId: req.attemptId,
+      opSeq: req.lease.opSeq,
+      methodIndex: req.methodIndex,
+      methodToken: req.methodToken,
+    });
+    const stopped = parsed.stopped;
+    if (typeof stopped !== "boolean") {
+      throw new Error(`StopHungRunAt returned no boolean \`stopped\`: ${JSON.stringify(parsed)}`);
+    }
+    const { sessionId, reason, rowIndex, rowState } = parsed;
+    return {
+      stopped,
+      ...(typeof sessionId === "number" ? { sessionId } : {}),
+      ...(typeof reason === "string" ? { reason } : {}),
+      ...(typeof rowIndex === "number" ? { rowIndex } : {}),
+      ...(typeof rowState === "string" ? { rowState } : {}),
+    };
+  }
+
+  /** One POST to a control-app action whose `value` is a JSON object; throws on any non-2xx. */
+  private async postAction(
+    action: string,
+    body: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const params = new URLSearchParams({ company: this.cfg.company });
+    if (this.cfg.tenant !== undefined) params.set("tenant", this.cfg.tenant);
+    const url = `${this.cfg.baseUrl}/ODataV4/LethALControl_${action}?${params.toString()}`;
+    const res = await this.fetchFn(url, {
+      method: "POST",
+      headers: {
+        authorization: `Basic ${btoa(`${this.cfg.username}:${this.cfg.password}`)}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      throw new Error(`${action} failed: HTTP ${res.status} ${await res.text().catch(() => "")}`);
+    }
+    const outer: unknown = await res.json();
+    const value = (outer as { value?: unknown }).value;
+    if (typeof value !== "string") {
+      throw new Error(`${action} returned no string \`value\`: ${JSON.stringify(outer)}`);
+    }
+    const parsed: unknown = JSON.parse(value);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      throw new Error(`${action} \`value\` is not a JSON object: ${value}`);
+    }
+    return parsed as Record<string, unknown>;
+  }
+
   async run(req: RunMutantRequest): Promise<TestVerdict> {
     return (await this.execute(req, false)).verdict;
+  }
+
+  /**
+   * R198: `LethALControl_RunMutantMany`. One POST for N methods; the watchdog below polls
+   * `GetOperationStatus` while the request is open and is the SOLE writer of `stopFired`.
+   *
+   * What it does, in order: act only on a status whose marker AND progress row name OUR op
+   * ("ours first": a start-up poll, another op's residual row, or an idle marker is "nothing
+   * yet"); check the row's (index, codeunitId, method) against the CLIENT's request array
+   * ("identity second": a disagreement aborts and, after the orchestrator's reconciliation,
+   * the session); compute the running method's elapsed time from `serverNow - startedAt`
+   * (server clocks only; an unparseable pair never fires); at the method's budget either fire
+   * `StopHungRunAt(index, token)` once (with `--stop-hung-sessions`) or abort the request
+   * (without). Scoring afterwards is today's rule: only BC's 408 naming the AL StopSession call
+   * is a `timeout`, narrowed for R204 by one status read; every other non-2xx after a stop is
+   * `in-flight-unknown`; a 2xx is parsed and scored as if no stop had fired.
+   */
+  async runMany(req: RunMutantManyRequest): Promise<RunMutantManyResult> {
+    const { mutantId, attemptId, lease, methods } = req;
+    assertAttemptId(attemptId);
+    if (methods.length === 0) {
+      throw new Error("RunMutantMany: a call with no methods is a caller-contract violation");
+    }
+    const firstMethod = methods[0];
+    if (firstMethod === undefined) throw new Error("unreachable: methods is non-empty");
+    const started = Date.now();
+    const fencedOp = { attemptId, opSeq: lease.opSeq } as const;
+    const pollMs = req.watchdogPollMs ?? WATCHDOG_POLL_MS;
+    const call = (verdict: TestVerdict, extra?: { cause?: GroupCause; abortSession?: string }) =>
+      ({
+        kind: "call",
+        verdict,
+        ...(extra?.cause !== undefined ? { cause: extra.cause } : {}),
+        ...(extra?.abortSession !== undefined ? { abortSession: extra.abortSession } : {}),
+      }) as const;
+
+    const params = new URLSearchParams({ company: this.cfg.company });
+    if (this.cfg.tenant !== undefined) params.set("tenant", this.cfg.tenant);
+    const url = `${this.cfg.baseUrl}/ODataV4/LethALControl_RunMutantMany?${params.toString()}`;
+    let authHeader: string;
+    let bodyJson: string;
+    try {
+      authHeader = `Basic ${btoa(`${this.cfg.username}:${this.cfg.password}`)}`;
+      bodyJson = JSON.stringify({
+        targetAppId: this.targetAppId,
+        artifactId: this.artifactId,
+        attemptId,
+        mutantId,
+        testMethods: JSON.stringify(
+          methods.map((m, i) => ({
+            index: i + 1,
+            codeunitId: m.ref.codeunitId,
+            method: m.ref.method,
+            budgetMs: m.budgetMs,
+          })),
+        ),
+        stopAtFirstFailure: true,
+        requestCeilingMs: req.requestCeilingMs,
+        stopGraceMs: req.stopGraceMs,
+        leaseEpoch: lease.epoch,
+        leaseToken: lease.token,
+        serverGeneration: lease.serverGeneration,
+        opSeq: lease.opSeq,
+      });
+    } catch (err) {
+      return call({
+        ref: firstMethod.ref,
+        outcome: "error",
+        durationMs: Date.now() - started,
+        failureMessage: `RunMutantMany request construction failed: ${String(err)}`,
+        operation: "pre-dispatch-rejected",
+      });
+    }
+
+    // ---- the watchdog ----
+    const controller = new AbortController();
+    let settled = false;
+    let stopFired = false;
+    let stopConfirmed = false;
+    let stopHookError: unknown;
+    let stopDecision: { methodIndex: number; token: string; ref: TestMethodRef } | undefined;
+    let watchedRef: TestMethodRef = firstMethod.ref;
+    let lastRefusal: string | undefined;
+    let lastRow: string | undefined;
+    let abortReason: "budget" | "identity" | "hard-cap" | undefined;
+    let identityDetail: string | undefined;
+    const hardCapMs = req.requestCeilingMs + req.stopGraceMs;
+    const hardTimer = setTimeout(() => {
+      abortReason ??= "hard-cap";
+      controller.abort();
+    }, hardCapMs);
+    const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+    const watchdog = (async () => {
+      while (!settled) {
+        await sleep(pollMs);
+        if (settled) return;
+        let status: OperationStatus;
+        try {
+          status = await this.getOperationStatus(lease, attemptId, lease.opSeq);
+        } catch {
+          continue; // a failed poll is "nothing yet"
+        }
+        if (settled) return;
+        const row = status.opProgress;
+        const ours =
+          status.opKind === "run" &&
+          status.opAttemptId === attemptId &&
+          status.opSeq === lease.opSeq &&
+          row !== undefined &&
+          row.attemptId === attemptId &&
+          row.opSeq === lease.opSeq;
+        if (!ours || row === undefined) continue;
+        const entry = methods[row.methodIndex - 1];
+        if (
+          row.methodIndex < 1 ||
+          row.methodIndex > methods.length ||
+          entry === undefined ||
+          entry.ref.codeunitId !== row.codeunitId ||
+          entry.ref.method !== row.method
+        ) {
+          identityDetail = `the server's progress row names method ${row.methodIndex} = ${row.codeunitId}.${row.method}, which is not what this request asked for at that index (${entry === undefined ? "no such index" : `${entry.ref.codeunitId}.${entry.ref.method}`})`;
+          abortReason ??= "identity";
+          controller.abort();
+          return;
+        }
+        watchedRef = entry.ref;
+        lastRow = `${row.state} at method ${row.methodIndex}, last completed ${row.lastCompletedIndex}`;
+        if (row.state !== "running") continue;
+        const startedAt = Date.parse(row.startedAt);
+        const now = status.serverNow === undefined ? Number.NaN : Date.parse(status.serverNow);
+        const elapsed = now - startedAt;
+        // Written as `elapsed > budget` on purpose: a NaN from an unparseable timestamp never fires.
+        if (!(elapsed > entry.budgetMs)) continue;
+        if (!req.stopHungSessions) {
+          abortReason ??= "budget";
+          controller.abort();
+          return;
+        }
+        if (stopFired) continue; // decided already; waiting for the held request
+        stopFired = true;
+        stopDecision = { methodIndex: row.methodIndex, token: row.token, ref: entry.ref };
+        let answer: StopAtAnswer;
+        try {
+          answer = await this.stopHungRunAt({
+            attemptId,
+            lease,
+            methodIndex: row.methodIndex,
+            methodToken: row.token,
+          });
+        } catch (err) {
+          stopHookError = err;
+          continue;
+        }
+        if (answer.stopped) {
+          stopConfirmed = true;
+          continue;
+        }
+        lastRefusal = answer.reason ?? "no reason given";
+        if (answer.rowState !== undefined) {
+          lastRow = `${answer.rowState} at method ${answer.rowIndex ?? "?"}`;
+        }
+        if (answer.reason === "method-completed" || answer.reason === "no-progress-row") {
+          // The loop moved on between the poll and the stop: clear and re-decide later.
+          stopFired = false;
+          stopDecision = undefined;
+          continue;
+        }
+        if (answer.reason === "already-completed") continue; // the op finished; wait for its answer
+        stopHookError = new Error(
+          `StopHungRunAt refused: ${lastRefusal} (attempt ${attemptId}, opSeq ${lease.opSeq}, method ${row.methodIndex})`,
+        );
+      }
+    })();
+    const settle = () => {
+      settled = true;
+      clearTimeout(hardTimer);
+    };
+    const stopDetail = () =>
+      `${lastRefusal !== undefined ? ` last stop refusal: ${lastRefusal};` : ""}${lastRow !== undefined ? ` progress row: ${lastRow};` : ""}${stopHookError !== undefined ? ` stop hook: ${describeThrown(stopHookError)};` : ""}`;
+    const abortedVerdict = (err: unknown, phase: string): RunMutantManyResult => {
+      const why =
+        abortReason === "identity"
+          ? `RunMutantMany aborted: ${identityDetail ?? "identity disagreement"}`
+          : abortReason === "budget"
+            ? `RunMutantMany aborted at ${watchedRef.method}'s budget ${phase} (our timer, not BC's stop)`
+            : `RunMutantMany aborted at the hard cap (${hardCapMs} ms) ${phase}, watching ${watchedRef.method}`;
+      const verdict: TestVerdict = {
+        ref: watchedRef,
+        outcome: "deadline-exceeded",
+        durationMs: Date.now() - started,
+        failureMessage: `${why}: ${String(err)}.${stopDetail()}`,
+        operation: "in-flight-unknown",
+        fencedOp,
+      };
+      return abortReason === "identity"
+        ? call(verdict, {
+            abortSession: `RunMutantMany identity disagreement: ${identityDetail ?? ""}`,
+          })
+        : call(verdict);
+    };
+
+    let res: Response;
+    try {
+      res = await this.fetchFn(url, {
+        method: "POST",
+        headers: { authorization: authHeader, "content-type": "application/json" },
+        body: bodyJson,
+        signal: controller.signal,
+      });
+    } catch (err) {
+      settle();
+      await watchdog;
+      if (controller.signal.aborted) return abortedVerdict(err, "before headers");
+      return call({
+        ref: watchedRef,
+        outcome: "error",
+        durationMs: Date.now() - started,
+        failureMessage: `RunMutantMany connection failed after dispatch: ${String(err)}`,
+        operation: "in-flight-unknown",
+        fencedOp,
+      });
+    }
+    let rawBody: string;
+    try {
+      rawBody = await res.text();
+    } catch (err) {
+      settle();
+      await watchdog;
+      if (controller.signal.aborted) return abortedVerdict(err, "after headers");
+      return call(
+        this.inFlightUnknown(
+          watchedRef,
+          Date.now() - started,
+          `RunMutantMany 2xx body could not be read: ${String(err)}`,
+          fencedOp,
+        ),
+      );
+    }
+    settle();
+    await watchdog;
+    const durationMs = Date.now() - started;
+
+    if (stopFired && isAlStopResponse(res.status, rawBody)) {
+      const decision = stopDecision;
+      if (decision === undefined || !stopConfirmed) {
+        // A 408 naming the AL stop with no confirmed decision of ours behind it: today's rule,
+        // not scored.
+        return call(
+          this.inFlightUnknown(
+            watchedRef,
+            durationMs,
+            `RunMutantMany answered BC's stop 408 but this transport's own stop was ${decision === undefined ? "never decided" : "not confirmed"}.${stopDetail()}`,
+            fencedOp,
+          ),
+        );
+      }
+      // R204's narrowing: one status read; a `between` write that committed before the session
+      // died proves the method finished. Unavailable evidence (throw, no row, not ours) keeps
+      // today's answer, the timeout.
+      let finished = false;
+      try {
+        const after = await this.getOperationStatus(lease, attemptId, lease.opSeq);
+        const row = after.opProgress;
+        finished =
+          row !== undefined &&
+          row.attemptId === attemptId &&
+          row.opSeq === lease.opSeq &&
+          row.lastCompletedIndex >= decision.methodIndex;
+      } catch {
+        finished = false;
+      }
+      if (finished) {
+        return call(
+          {
+            ref: decision.ref,
+            outcome: "error",
+            durationMs,
+            failureMessage: `RunMutantMany: the stop for ${decision.ref.method} was confirmed, but the method's own completion was recorded before the session died, so this run is not scored (R204)`,
+          },
+          { cause: "stopped-after-completion" },
+        );
+      }
+      return call({
+        ref: decision.ref,
+        outcome: "timeout",
+        durationMs,
+        failureMessage:
+          `RunMutantMany: ${decision.ref.method} exceeded its ${decision.ref.method === watchedRef.method ? "" : ""}budget and was stopped server-side so it could ` +
+          `be scored rather than strand the tier. BC's own words: ${JSON.stringify(rawBody.slice(0, 400))}`,
+      });
+    }
+    if (!res.ok) {
+      const routeMissing = res.status === 404;
+      const verdict: TestVerdict = {
+        ref: watchedRef,
+        outcome: "error",
+        durationMs,
+        failureMessage: `RunMutantMany failed: HTTP ${res.status}${stopFired ? ` after our stop${stopConfirmed ? " (confirmed)" : ""}` : ""}.${stopDetail()}`,
+        operation: "in-flight-unknown",
+        fencedOp,
+      };
+      return routeMissing
+        ? call(verdict, {
+            abortSession:
+              "control-app-route-missing: LethALControl_RunMutantMany answered 404 after the version gate passed; the deployed control app is not the one the gate saw",
+          })
+        : call(verdict);
+    }
+
+    let value: unknown;
+    let parseError: string | undefined;
+    try {
+      value = (JSON.parse(rawBody) as { value?: unknown }).value;
+    } catch (err) {
+      parseError = String(err);
+    }
+    if (typeof value !== "string") {
+      const excerpt =
+        rawBody.length > 400 ? `${rawBody.slice(0, 400)}…[${rawBody.length} bytes]` : rawBody;
+      return call(
+        this.inFlightUnknown(
+          watchedRef,
+          durationMs,
+          `RunMutantMany returned no string \`value\` (HTTP ${res.status}${parseError !== undefined ? `, body was not JSON: ${parseError}` : ""}), body: ${JSON.stringify(excerpt)}`,
+          fencedOp,
+        ),
+      );
+    }
+    let result: RunMutantManyAnswer;
+    try {
+      result = JSON.parse(value) as RunMutantManyAnswer;
+    } catch {
+      return call(
+        this.inFlightUnknown(
+          watchedRef,
+          durationMs,
+          `RunMutantMany \`value\` is not JSON: ${value}`,
+          fencedOp,
+        ),
+      );
+    }
+
+    // Shared classification, in `dispatch`'s order: echo, artifact-mismatch, reserved-params,
+    // lease-invalid (with its reason, `op-stopped` among them), then anything not `ran`.
+    const echo = this.callEchoMismatch(result, attemptId, mutantId, "RunMutantMany");
+    if (echo !== null) {
+      return call({
+        ref: firstMethod.ref,
+        outcome: "error",
+        durationMs,
+        failureMessage: echo,
+        operation: "completed-effect-unknown",
+      });
+    }
+    const statusVerdict = this.classifyRefusal(
+      result,
+      firstMethod.ref,
+      durationMs,
+      "RunMutantMany",
+    );
+    if (statusVerdict !== null) return call(statusVerdict);
+    if (result.status !== "ran") {
+      return call(
+        this.inFlightUnknown(
+          firstMethod.ref,
+          durationMs,
+          `RunMutantMany unexpected status: ${JSON.stringify(result.status)}`,
+          fencedOp,
+        ),
+      );
+    }
+    if (result.identityMismatch === true) {
+      return call({
+        ref: firstMethod.ref,
+        outcome: "error",
+        durationMs,
+        failureMessage:
+          "RunMutantMany attestation identity mismatch: a selector with a non-matching (targetAppId, artifactId) ran — wrong/stale binary",
+      });
+    }
+    if (typeof result.runError === "string") {
+      return call(
+        {
+          ref: firstMethod.ref,
+          outcome: "error",
+          durationMs,
+          failureMessage: `RunMutantMany: the server's loop raised and the call was not scored — ${result.runError}`,
+        },
+        { cause: "group-run-error" },
+      );
+    }
+    const attestation = { observedAny: result.observedAny === true, identityMismatch: false };
+    const malformed = (why: string): RunMutantManyResult =>
+      call(
+        {
+          ref: firstMethod.ref,
+          outcome: "error",
+          durationMs,
+          failureMessage: `RunMutantMany answer malformed: ${why}; answer: ${value.slice(0, 600)}`,
+        },
+        { cause: "group-answer-malformed" },
+      );
+    const endedBy = result.endedBy;
+    if (endedBy !== "complete" && endedBy !== "failure" && endedBy !== "cap") {
+      return malformed(`endedBy is ${JSON.stringify(endedBy)}`);
+    }
+    const ranCount = result.ranCount;
+    if (typeof ranCount !== "number" || !Number.isInteger(ranCount) || ranCount < 1) {
+      return malformed(`ranCount is ${JSON.stringify(ranCount)}, expected an integer >= 1`);
+    }
+    const entries = Array.isArray(result.methods) ? result.methods : undefined;
+    if (entries === undefined || entries.length !== ranCount) {
+      return malformed(
+        `methods holds ${entries === undefined ? "no array" : `${entries.length} entries`}, ranCount says ${ranCount}`,
+      );
+    }
+    if (ranCount > methods.length) {
+      return malformed(`ranCount ${ranCount} exceeds the ${methods.length} methods requested`);
+    }
+    if (endedBy === "complete" && ranCount !== methods.length) {
+      return malformed(`endedBy complete but ${ranCount} of ${methods.length} methods ran`);
+    }
+    const verdicts: TestVerdict[] = [];
+    for (let i = 0; i < entries.length; i++) {
+      const raw = entries[i] as Partial<GroupEntry> | undefined;
+      const want = methods[i];
+      if (raw === undefined || want === undefined) return malformed(`entry ${i + 1} is absent`);
+      if (raw.index !== i + 1)
+        return malformed(`entry ${i + 1} carries index ${JSON.stringify(raw.index)}`);
+      if (raw.codeunitId !== want.ref.codeunitId || raw.method !== want.ref.method) {
+        return malformed(
+          `entry ${i + 1} is ${JSON.stringify(raw.codeunitId)}.${JSON.stringify(raw.method)}, expected ${want.ref.codeunitId}.${want.ref.method}`,
+        );
+      }
+      if (typeof raw.durationMs !== "number") return malformed(`entry ${i + 1} has no durationMs`);
+      const results =
+        typeof raw.codeunitResults === "string"
+          ? raw.codeunitResults
+          : raw.codeunitResults !== undefined && raw.codeunitResults !== null
+            ? JSON.stringify(raw.codeunitResults)
+            : undefined;
+      if (results === undefined) return malformed(`entry ${i + 1} has no codeunitResults`);
+      // The three per-entry faults that abort the session today keep doing so: the line count,
+      // BC's own inner method name, and the result enum are checked by the SAME code `run` uses.
+      const v = this.mapRanResult(
+        want.ref,
+        raw.durationMs,
+        { codeunitResults: results, observedAny: attestation.observedAny, identityMismatch: false },
+        fencedOp,
+      );
+      if (v.outcome === "error") return call(v);
+      const isLast = i === entries.length - 1;
+      if (endedBy === "failure") {
+        if (isLast && v.outcome !== "fail")
+          return malformed(`endedBy failure but entry ${i + 1} passed`);
+        if (!isLast && v.outcome !== "pass")
+          return malformed(`endedBy failure but entry ${i + 1} did not pass`);
+      } else if (v.outcome !== "pass") {
+        return malformed(`endedBy ${endedBy} but entry ${i + 1} did not pass`);
+      }
+      verdicts.push({ ...v, attestation });
+    }
+    return { kind: "verdicts", endedBy, ranCount, verdicts, durationMs };
   }
 
   /**
@@ -592,44 +1237,10 @@ export class RunMutantTransport {
       };
     }
 
-    if (result.status === "artifact-mismatch") {
-      // The registered artifact ≠ ours: the deployed target was replaced. Ran nothing (container
-      // clean), but our whole deployment assumption is broken — a typed error, never `survived`.
-      return {
-        ref,
-        outcome: "error",
-        durationMs,
-        failureMessage: `RunMutant artifact-mismatch: deployed artifact ${this.artifactId} was replaced`,
-      };
-    }
-    if (result.status === "reserved-params") {
-      // We always send empty lease params in 5C-A, so this is a protocol/version fault.
-      return {
-        ref,
-        outcome: "error",
-        durationMs,
-        failureMessage: "RunMutant rejected reserved lease params (protocol mismatch)",
-      };
-    }
-    if (result.status === "lease-invalid") {
-      // Layer 5C-B1 (design §5/§8): a confirmed refusal — never map to `in-flight-unknown`
-      // (client-side ambiguity) or a bare error (the orchestrator must latch/invalidate). `reason`
-      // is preserved verbatim: `"op-in-flight"` means THIS caller's own attempt is still active
-      // server-side (poll, do not retry, not a real loss); anything else (or absent, on the
-      // phase-3 verify-and-clear refusal) is a genuine lost lease. See `TestVerdict.leaseInvalidReason`.
-      const reason = typeof result.reason === "string" ? result.reason : undefined;
-      return {
-        ref,
-        outcome: "error",
-        durationMs,
-        failureMessage:
-          reason !== undefined
-            ? `RunMutant lease-invalid (reason: ${reason})`
-            : "RunMutant lease-invalid",
-        operation: "lease-lost",
-        ...(reason !== undefined ? { leaseInvalidReason: reason } : {}),
-      };
-    }
+    // Shared with `runMany` (R198): artifact-mismatch, reserved-params, lease-invalid with its
+    // reason — one classifier, so the two paths cannot drift on a refusal's `operation`.
+    const refusal = this.classifyRefusal(result, ref, durationMs, "RunMutant");
+    if (refusal !== null) return refusal;
     if (result.status !== "ran") {
       return this.inFlightUnknown(
         ref,
@@ -655,7 +1266,7 @@ export class RunMutantTransport {
   private mapRanResult(
     ref: TestMethodRef,
     durationMs: number,
-    result: RunMutantResult,
+    result: Pick<RunMutantResult, "codeunitResults" | "observedAny" | "identityMismatch">,
     fencedOp: { readonly attemptId: string; readonly opSeq: number },
   ): TestVerdict {
     if (typeof result.codeunitResults !== "string") {
@@ -757,6 +1368,80 @@ export class RunMutantTransport {
     if (typeof line.stackTrace === "string" && line.stackTrace.length > 0)
       parts.push(line.stackTrace);
     return parts.length > 0 ? parts.join("\n") : undefined;
+  }
+
+  /**
+   * The three confirmed refusals `RunMutant` and `RunMutantMany` share, classified identically:
+   * `artifact-mismatch` (the deployed target was replaced: a typed error, never `survived`),
+   * `reserved-params` (a protocol/version fault), and `lease-invalid` — Layer 5C-B1 (design
+   * §5/§8), a confirmed refusal that is never `in-flight-unknown` and never a bare error: the
+   * orchestrator must latch/invalidate, EXCEPT for the reasons it reads first: `"op-in-flight"`
+   * (this caller's own attempt is still active: poll, do not retry) and, since R198/R203,
+   * `"op-stopped"` (our own stop tombstoned this op while its session was finishing: record an
+   * error, do not latch). `reason` is preserved verbatim. `null` means "not a refusal".
+   */
+  private classifyRefusal(
+    result: { readonly status?: unknown; readonly reason?: unknown },
+    ref: TestMethodRef,
+    durationMs: number,
+    action: string,
+  ): TestVerdict | null {
+    if (result.status === "artifact-mismatch") {
+      return {
+        ref,
+        outcome: "error",
+        durationMs,
+        failureMessage: `${action} artifact-mismatch: deployed artifact ${this.artifactId} was replaced`,
+      };
+    }
+    if (result.status === "reserved-params") {
+      return {
+        ref,
+        outcome: "error",
+        durationMs,
+        failureMessage: `${action} rejected reserved lease params (protocol mismatch)`,
+      };
+    }
+    if (result.status === "lease-invalid") {
+      const reason = typeof result.reason === "string" ? result.reason : undefined;
+      return {
+        ref,
+        outcome: "error",
+        durationMs,
+        failureMessage:
+          reason !== undefined
+            ? `${action} lease-invalid (reason: ${reason})`
+            : `${action} lease-invalid`,
+        operation: "lease-lost",
+        ...(reason !== undefined ? { leaseInvalidReason: reason } : {}),
+      };
+    }
+    return null;
+  }
+
+  /** The CALL-level echo (`targetAppId`, `artifactId`, `attemptId`, `mutantId`); per-method fields
+   *  are checked per entry by `runMany` and by `identityMismatch` for `run`. */
+  private callEchoMismatch(
+    result: {
+      readonly targetAppId?: unknown;
+      readonly artifactId?: unknown;
+      readonly attemptId?: unknown;
+      readonly mutantId?: unknown;
+    },
+    attemptId: string,
+    mutantId: string,
+    action: string,
+  ): string | null {
+    const mismatches: string[] = [];
+    if (result.targetAppId !== this.targetAppId)
+      mismatches.push(`targetAppId ${JSON.stringify(result.targetAppId)}≠${this.targetAppId}`);
+    if (result.artifactId !== this.artifactId)
+      mismatches.push(`artifactId ${JSON.stringify(result.artifactId)}≠${this.artifactId}`);
+    if (result.attemptId !== attemptId)
+      mismatches.push(`attemptId ${JSON.stringify(result.attemptId)}≠${attemptId}`);
+    if (result.mutantId !== mutantId)
+      mismatches.push(`mutantId ${JSON.stringify(result.mutantId)}≠${mutantId}`);
+    return mismatches.length > 0 ? `${action} identity mismatch: ${mismatches.join(", ")}` : null;
   }
 
   private identityMismatch(result: RunMutantResult, req: RunMutantRequest): string | null {

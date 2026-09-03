@@ -226,7 +226,8 @@ CREATE TABLE IF NOT EXISTS test_results (
   method TEXT NOT NULL,
   outcome TEXT NOT NULL,
   duration_ms INTEGER NOT NULL,
-  failure_message TEXT
+  failure_message TEXT,
+  op_kind TEXT
 );
 CREATE TABLE IF NOT EXISTS publish_outcomes (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -343,6 +344,15 @@ export class ResultsStore {
       if (!cols.some((c) => c.name === name)) {
         this.db.exec(`ALTER TABLE mutants ADD COLUMN ${col}`);
       }
+    }
+    // R198: which call produced a test-result row, `single` (RunMutant) or `many` (one method of
+    // a RunMutantMany call). NULL on a pre-R198 row, and on rows written by a backend that has no
+    // such call; the itests count `many` rows per mutant against a pre-committed number.
+    const trCols = this.db.query("PRAGMA table_info(test_results)").all() as Array<{
+      name: string;
+    }>;
+    if (!trCols.some((c) => c.name === "op_kind")) {
+      this.db.exec("ALTER TABLE test_results ADD COLUMN op_kind TEXT");
     }
     // Layer 5A: runs gained deployment provenance. A pre-5A lethal.sqlite has a runs table
     // without these, against which recordArtifact's UPDATE would throw mid-run.
@@ -725,11 +735,12 @@ export class ResultsStore {
     outcome: TestOutcome,
     durationMs: number,
     failureMessage?: string,
+    opKind?: "single" | "many",
   ): void {
     this.db
       .query(
-        `INSERT INTO test_results (run_id, mutant_row_id, mutant_code, codeunit_id, method, outcome, duration_ms, failure_message)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO test_results (run_id, mutant_row_id, mutant_code, codeunit_id, method, outcome, duration_ms, failure_message, op_kind)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         runId,
@@ -740,7 +751,18 @@ export class ResultsStore {
         outcome,
         durationMs,
         failureMessage ?? null,
+        opKind ?? null,
       );
+  }
+
+  /** R198: how many `test_results` rows in a run came from group calls, and for how many mutants. */
+  groupedRows(runId: number): { rows: number; mutants: number } {
+    const r = this.db
+      .query(
+        "SELECT COUNT(*) AS rows, COUNT(DISTINCT mutant_row_id) AS mutants FROM test_results WHERE run_id = ? AND op_kind = 'many'",
+      )
+      .get(runId) as { rows: number; mutants: number };
+    return r;
   }
 
   /** A prior "known-survivor" verdict counts exactly like "survived" here (I4) — it means the

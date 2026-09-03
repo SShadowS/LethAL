@@ -385,6 +385,21 @@ export type RunEventInput =
       readonly batchIndex: number;
       readonly note: string;
     }
+  | {
+      /**
+       * R198: one `RunMutantMany` call was made (whatever it answered). Folded into
+       * `SessionReport.groupedCalls`, which the gates pin to a NUMBER derived from their frozen
+       * baselines, so a feature that silently stopped grouping fails a gate instead of reading
+       * as a slow day. `ranCount`/`endedBy` are present when the server answered with verdicts.
+       */
+      readonly type: "group-call";
+      readonly mutantId: string;
+      readonly attemptId: string;
+      readonly opSeq: number;
+      readonly methods: number;
+      readonly ranCount?: number;
+      readonly endedBy?: "complete" | "failure" | "cap";
+    }
   | { readonly type: "warning"; readonly code: string; readonly message: string }
   | { readonly type: "quarantined"; readonly reason: string }
   | { readonly type: "session-finished"; readonly elapsedMs: number };

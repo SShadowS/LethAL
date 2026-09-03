@@ -13,6 +13,8 @@ import type {
   BackendCapabilities,
   BackendStatus,
   ExecutionBackend,
+  RunManyOpts,
+  RunManyResult,
   RunOpts,
   TestMethodRef,
   TestVerdict,
@@ -7951,6 +7953,241 @@ describe("runSession re-measures the al-runner contract under its pin (R149)", (
     expect(events.some((e) => e.type === "warning" && e.code === "al-runner-contract-pinned")).toBe(
       false,
     );
+    store.close();
+  });
+});
+
+/**
+ * R198: the differential proof. One fake backend WITH `runMany` (a loop over the same scripted
+ * `run`, exactly the shape the control app's loop has) and the same backend WITHOUT it must score
+ * the same suite identically: every verdict, every `killingTest`, every `coveringTests`. Then the
+ * things only the group path can get wrong: chunking, the killer in a later chunk, a chunk that
+ * skips a test, an unfittable method, and `op-stopped` not latching.
+ */
+const FIVE_TESTS_AL = `codeunit 79100 "Sandbox Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure T1() begin end;
+    [Test]
+    procedure T2() begin end;
+    [Test]
+    procedure T3() begin end;
+    [Test]
+    procedure T4() begin end;
+    [Test]
+    procedure T5() begin end;
+}
+`;
+
+class GroupStubBackend extends StubBackend {
+  /** Every `runMany` call this backend answered, with what it was asked. */
+  readonly manyCalls: RunManyOpts[] = [];
+  /** When set, replaces the composed answer for the call whose (1-based) ordinal it names. */
+  manyOverride?: (call: number, opts: RunManyOpts, composed: RunManyResult) => RunManyResult;
+  private manySeq = 0;
+  async runMany(opts: RunManyOpts): Promise<RunManyResult> {
+    this.manySeq += 1;
+    this.manyCalls.push(opts);
+    const fencedOp = { attemptId: `g${this.manySeq}`, opSeq: 100 + this.manySeq };
+    const verdicts: TestVerdict[] = [];
+    let endedBy: "complete" | "failure" | "cap" = "complete";
+    for (const m of opts.methods) {
+      const v = await this.run(m.ref, { coverage: "none", timeoutMs: m.budgetMs });
+      verdicts.push(v);
+      if (v.outcome !== "pass") {
+        endedBy = "failure";
+        break;
+      }
+    }
+    const composed: RunManyResult = {
+      kind: "verdicts",
+      endedBy,
+      ranCount: verdicts.length,
+      verdicts,
+      durationMs: verdicts.length * 5,
+      fencedOp,
+    };
+    return this.manyOverride?.(this.manySeq, opts, composed) ?? composed;
+  }
+}
+
+/** The fields the design says must not differ between the two paths, per mutant. */
+function verdictTable(report: Awaited<ReturnType<typeof runSession>>) {
+  return report.mutants
+    .map((m) => ({
+      code: m.mutantCode,
+      line: m.line,
+      operator: m.operatorName,
+      verdict: m.verdict,
+      killingTest: m.killingTest ?? null,
+      coveringTests: [...(m.coveringTests ?? [])].sort(),
+    }))
+    .sort((a, b) =>
+      `${a.line}:${a.operator}:${a.code}`.localeCompare(`${b.line}:${b.operator}:${b.code}`),
+    );
+}
+
+describe("R198: grouped covering runs", () => {
+  // Kill some mutants at a LATER test in R197's order (alphabetical on a cold ledger), so the
+  // killer sits in a later chunk under --max-methods-per-call 2; leave the rest surviving.
+  const script = (mutant: string | null, ref: TestMethodRef): TestVerdict["outcome"] => {
+    if (mutant === null) return "pass";
+    if (mutant === "M0001" && ref.method === "T3") return "fail";
+    if (mutant === "M0002" && ref.method === "T1") return "fail";
+    return "pass";
+  };
+  const withGroup = () => new GroupStubBackend(CAPS_NST, script, ["IsOverBudget"]);
+  const withoutGroup = () => new StubBackend(CAPS_NST, script, ["IsOverBudget"]);
+  const session = async (
+    backend: ExecutionBackend,
+    groupRuns?: { maxMethodsPerCall?: number; requestCeilingMs?: number; enabled?: boolean },
+  ) => {
+    const dirs = await makeProject(FIVE_TESTS_AL);
+    const store = new ResultsStore(":memory:");
+    const events: RunEvent[] = [];
+    const report = await runSession({
+      backend,
+      store,
+      ...dirs,
+      selectorIds,
+      emit: [createEmitter([(e) => events.push(e)])],
+      ...(groupRuns !== undefined ? { groupRuns } : {}),
+    });
+    return { report, store, events };
+  };
+
+  test("differential: the group path scores every mutant, killingTest and coveringTests exactly as the sequential path", async () => {
+    const seq = await session(withoutGroup());
+    const backend = withGroup();
+    const grp = await session(backend);
+    expect(seq.report.counts.killed).toBeGreaterThan(0);
+    expect(seq.report.counts.survived).toBeGreaterThan(0);
+    expect(verdictTable(grp.report)).toEqual(verdictTable(seq.report));
+    // The counter is the anti-inertness pin: zero without the call, one per scored mutant with it.
+    expect(seq.report.groupedCalls).toBe(0);
+    expect(grp.report.groupedCalls).toBe(seq.report.counts.killed + seq.report.counts.survived);
+    expect(backend.manyCalls.length).toBe(grp.report.groupedCalls ?? -1);
+    // Every call asked for the whole covering set (five tests) in one go.
+    for (const call of backend.manyCalls) expect(call.methods.length).toBe(5);
+    expect(grp.store.groupedRows(1).rows).toBeGreaterThan(0);
+    seq.store.close();
+    grp.store.close();
+  });
+
+  test("chunking with --max-methods-per-call 2: identical verdicts, ceil(n/2) calls per survivor, and a killer in chunk 2 keeps its name", async () => {
+    const seq = await session(withoutGroup());
+    const backend = withGroup();
+    const grp = await session(backend, { maxMethodsPerCall: 2 });
+    expect(verdictTable(grp.report)).toEqual(verdictTable(seq.report));
+    for (const call of backend.manyCalls) expect(call.methods.length).toBeLessThanOrEqual(2);
+    const m1 = grp.report.mutants.find((m) => m.mutantCode === "M0001");
+    expect(m1?.verdict).toBe("killed");
+    expect(m1?.killingTest).toBe("T3");
+    // Five covering tests: a survivor takes 3 calls (2+2+1). M0001 (killed at T3, entry 1 of
+    // chunk 2) takes 2; M0002 (killed at T1) takes 1.
+    const survivors = grp.report.counts.survived;
+    expect(grp.report.groupedCalls).toBe(survivors * 3 + 2 + 1);
+    seq.store.close();
+    grp.store.close();
+  });
+
+  test("a continuation that never attempts a covering test cannot manufacture a survivor: group-coverage-incomplete", async () => {
+    const backend = withGroup();
+    // Calls 1 and 2 are the two kills (one call each); call 3 is the survivor's, asked for T1..T5,
+    // and answers `cap` claiming THREE ran while reporting only T1, so the cursor moves past T2
+    // and T3 with neither attempted; the continuation then runs T4 and T5 honestly. The transport
+    // refuses that shape in production (ranCount must equal the entries); this fake stands in
+    // for it, so what must fire is the orchestrator's OWN attempted-set guard.
+    backend.manyOverride = (call, _opts, composed) => {
+      if (call !== 3 || composed.kind !== "verdicts") return composed;
+      return { ...composed, endedBy: "cap", ranCount: 3, verdicts: composed.verdicts.slice(0, 1) };
+    };
+    const { report, store } = await session(backend);
+    const refused = report.mutants.filter((m) => m.cause === "group-coverage-incomplete");
+    expect(refused.length).toBe(1);
+    expect(refused[0]?.verdict).toBe("error");
+    expect(refused[0]?.failureNote).toContain("T2");
+    expect(refused[0]?.failureNote).toContain("T3");
+    expect(report.counts.survived).toBe(0);
+    store.close();
+  });
+
+  test("an unfittable budget sends every method alone: sequential verdicts, zero grouped calls, and the inert warning", async () => {
+    // Budget floor 180 s + 30 s grace > a 100 s ceiling: nothing fits.
+    const seq = await session(withoutGroup());
+    const backend = withGroup();
+    const { report, events, store } = await session(backend, { requestCeilingMs: 100_000 });
+    expect(verdictTable(report)).toEqual(verdictTable(seq.report));
+    expect(backend.manyCalls.length).toBe(0);
+    expect(report.groupedCalls).toBe(0);
+    expect(events.some((e) => e.type === "warning" && e.code === "group-runs-inert")).toBe(true);
+    seq.store.close();
+    store.close();
+  });
+
+  test("groupRuns.enabled false keeps the sequential loop on a backend that has the call", async () => {
+    const backend = withGroup();
+    const { report, store } = await session(backend, { enabled: false });
+    expect(backend.manyCalls.length).toBe(0);
+    expect(report.groupedCalls).toBe(0);
+    expect(report.counts.killed).toBeGreaterThan(0);
+    store.close();
+  });
+
+  test("a per-mutant group cause records an error and the NEXT mutant is still scored", async () => {
+    const backend = withGroup();
+    backend.manyOverride = (call, opts, composed) => {
+      if (call !== 1) return composed;
+      const first = opts.methods[0];
+      if (first === undefined) return composed;
+      return {
+        kind: "call",
+        verdict: {
+          ref: first.ref,
+          outcome: "error",
+          durationMs: 1,
+          failureMessage: "RunMutantMany: the server's loop raised — progress-row-missing",
+        },
+        cause: "group-run-error",
+        fencedOp: composed.fencedOp,
+      };
+    };
+    const { report, store } = await session(backend);
+    const errored = report.mutants.filter((m) => m.cause === "group-run-error");
+    expect(errored.length).toBe(1);
+    expect(errored[0]?.failureNote).toContain("progress-row-missing");
+    expect(report.counts.killed + report.counts.survived).toBeGreaterThan(0);
+    expect(report.quarantined).toBeUndefined();
+    store.close();
+  });
+
+  test("op-stopped (R203) is an error with no lease-loss latch, and the next mutant is scored", async () => {
+    const backend = withGroup();
+    backend.manyOverride = (call, opts, composed) => {
+      if (call !== 1) return composed;
+      const first = opts.methods[0];
+      if (first === undefined) return composed;
+      return {
+        kind: "call",
+        verdict: {
+          ref: first.ref,
+          outcome: "error",
+          durationMs: 1,
+          failureMessage: "RunMutantMany lease-invalid (reason: op-stopped)",
+          operation: "lease-lost",
+          leaseInvalidReason: "op-stopped",
+        },
+        fencedOp: composed.fencedOp,
+      };
+    };
+    const { report, store } = await session(backend);
+    const stopped = report.mutants.filter((m) => m.cause === "op-stopped");
+    expect(stopped.length).toBe(1);
+    expect(stopped[0]?.verdict).toBe("error");
+    expect(report.counts.killed + report.counts.survived).toBeGreaterThan(0);
+    expect(report.validity.reliability).not.toBe("invalidated");
     store.close();
   });
 });

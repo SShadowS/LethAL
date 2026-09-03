@@ -122,6 +122,8 @@ export interface FoldedReport {
   };
   readonly baselineTests: readonly { readonly codeunitName: string; readonly file?: string }[];
   readonly untargetedTriggerCount: number;
+  /** R198 — see `SessionReport.groupedCalls`. */
+  readonly groupedCalls: number;
   /** R175 — see `SessionReport.unplaceableCount`. */
   readonly unplaceableCount: number;
   /** R175 — `mutantId`s of those, sorted. See `SessionReport.unplaceableMutants`. */
@@ -199,6 +201,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
   // `instrumentableFiles`/`batchPublishedCount` reasoning above, and is deferred rather than adding
   // scope to this task without a concrete failure it is known to prevent.
   let untargetedTriggerCount = 0;
+  let groupedCalls = 0;
   let unplaceableCount = 0;
   const unplaceableMutants = new Set<string>();
   /** R106: whether any `coverage-split` arrived, and whether one was ever OWED — see the check at
@@ -287,6 +290,9 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
         break;
       case "permission-canary":
         permissionCanary = e.result;
+        break;
+      case "group-call":
+        groupedCalls += 1;
         break;
       case "al-runner-bc-build":
         alRunnerBcBuild = { build: e.build, announcement: e.announcement };
@@ -510,6 +516,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
     timings: { totalMs, generateMutationSetMs, deployMs, baselineMs },
     baselineTests,
     untargetedTriggerCount,
+    groupedCalls,
     unplaceableCount,
     unplaceableMutants: [...unplaceableMutants].sort(),
     ...(quarantinedReason !== undefined ? { quarantined: { reason: quarantinedReason } } : {}),

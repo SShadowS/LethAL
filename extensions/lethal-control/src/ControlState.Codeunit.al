@@ -431,6 +431,10 @@ codeunit 91002 "LC Control State"
 
         // 4. Free or expired-and-idle -> fresh grant.
         if (Lease.Token = '') or (CurrentDateTime > Lease."Expires At") then begin
+            // R198: progress rows of ops that are tombstoned belong to nobody. Scoped to the
+            // tombstone and confined to THIS branch so a competing acquire can never delete a live
+            // op's row (a live op is refused above at step 2, so none exists here).
+            DeleteTombstonedProgress(Lease."Last Completed Op Seq");
             Lease.Epoch += 1;
             Lease.Token := CopyStr(NewToken(), 1, MaxStrLen(Lease.Token));
             Lease.Owner := CopyStr(Owner, 1, MaxStrLen(Lease.Owner));
@@ -673,6 +677,135 @@ codeunit 91002 "LC Control State"
         Completed := OpSeq <= Lease."Last Completed Op Seq";
     end;
 
+    /// <summary>R198: the progress row of the op the MARKER names, read in the same transaction as
+    /// the marker so a watchdog compares one consistent snapshot. Keyed by the marker's own
+    /// ("Op Attempt Id", "Op Seq"): while a run is active that is the running op; when the marker is
+    /// idle the residual fields still name the last op, so a reconciliation can read the state a
+    /// stopped session left. Never a FindLast. `HaveProgress` false means no row for that key (a
+    /// force-reset blanks the residuals; an old client's op wrote none). `ServerNow` is the same
+    /// clock "Started At" was taken from, so a client computes elapsed time from server values only.</summary>
+    procedure TryGetOperationProgress(var HaveProgress: Boolean; var ProgAttemptId: Text; var ProgOpSeq: BigInteger; var MethodIndex: Integer; var MethodCodeunitId: Integer; var MethodName: Text; var MethodToken: Text; var StartedAt: DateTime; var LastCompletedIndex: Integer; var ProgState: Text; var ServerNow: DateTime)
+    var
+        Lease: Record "LC Lease";
+        Progress: Record "LC Op Progress";
+    begin
+        HaveProgress := false;
+        ProgAttemptId := '';
+        ProgOpSeq := 0;
+        MethodIndex := 0;
+        MethodCodeunitId := 0;
+        MethodName := '';
+        MethodToken := '';
+        StartedAt := 0DT;
+        LastCompletedIndex := 0;
+        ProgState := '';
+        ServerNow := CurrentDateTime;
+
+        if not Lease.Get('') then
+            Error(LeaseRowMissingErr());
+        if (Lease."Op Attempt Id" = '') or (Lease."Op Seq" <= 0) then
+            exit;
+        if not Progress.Get(Lease."Op Attempt Id", Lease."Op Seq") then
+            exit;
+        HaveProgress := true;
+        ProgAttemptId := Progress."Attempt Id";
+        ProgOpSeq := Progress."Op Seq";
+        MethodIndex := Progress."Method Index";
+        MethodCodeunitId := Progress."Method Codeunit Id";
+        MethodName := Progress."Method Name";
+        MethodToken := Progress."Method Token";
+        StartedAt := Progress."Started At";
+        LastCompletedIndex := Progress."Last Completed Index";
+        ProgState := Format(Progress.State);
+    end;
+
+    /// <summary>R198: the progress row's `running` write, before method `Index` starts. Index 1
+    /// creates the row (or overwrites one left by a client that reused the pair, which the fence
+    /// forbids); a later index REQUIRES the row, and its absence raises `ProgressRowMissingErr`,
+    /// which the caller's Codeunit.Run boundary catches into a `runError`. Fresh Get per write,
+    /// own Commit, no lease lock held: the lock order everywhere is lease then progress, and this
+    /// procedure never takes the lease. Returns the fresh token the watchdog will name in a stop.</summary>
+    procedure ProgressBegin(AttemptId: Text; OpSeq: BigInteger; Index: Integer; CodeunitId: Integer; MethodName: Text): Text
+    var
+        Progress: Record "LC Op Progress";
+        Token: Text;
+    begin
+        if AttemptId = '' then
+            Error(BlankAttemptIdErr());
+        Token := CopyStr(DelChr(Format(CreateGuid()), '=', '{}'), 1, 40);
+        if Progress.Get(AttemptId, OpSeq) then begin
+            if (Index <> 1) and (Progress."Last Completed Index" <> Index - 1) then
+                Error(ProgressOutOfOrderErr(Index, Progress."Last Completed Index"));
+        end else begin
+            if Index <> 1 then
+                Error(ProgressRowMissingErr(AttemptId, OpSeq, Index));
+            Progress.Init();
+            Progress."Attempt Id" := CopyStr(AttemptId, 1, MaxStrLen(Progress."Attempt Id"));
+            Progress."Op Seq" := OpSeq;
+            Progress.Insert();
+        end;
+        Progress."Method Index" := Index;
+        Progress."Method Codeunit Id" := CodeunitId;
+        Progress."Method Name" := CopyStr(MethodName, 1, MaxStrLen(Progress."Method Name"));
+        Progress."Method Token" := CopyStr(Token, 1, MaxStrLen(Progress."Method Token"));
+        Progress."Started At" := CurrentDateTime;
+        Progress."Session Id" := SessionId();
+        Progress.State := Progress.State::running;
+        Progress.Modify();
+        Commit();
+        exit(Token);
+    end;
+
+    /// <summary>R198: the `between` write, the FIRST statement after `RunAllTests` returns
+    /// (PROGRESS_BETWEEN_FIRST): the smallest window AL can offer between a method's completion and
+    /// the row saying so, which is what the per-method stop's refusal and R204's narrowing rest on.
+    /// Raises on a missing row for the same reason ProgressBegin does.</summary>
+    procedure ProgressBetween(AttemptId: Text; OpSeq: BigInteger; Index: Integer)
+    var
+        Progress: Record "LC Op Progress";
+    begin
+        if not Progress.Get(AttemptId, OpSeq) then
+            Error(ProgressRowMissingErr(AttemptId, OpSeq, Index));
+        Progress."Last Completed Index" := Index;
+        Progress.State := Progress.State::between;
+        Progress.Modify();
+        Commit();
+    end;
+
+    /// <summary>R198: whether the marker still names (AttemptId, OpSeq) as the ACTIVE run. A plain
+    /// Get, never LockTable, in the loop's own short transaction after a `between` Commit
+    /// (LOOP_READS_LEASE_ONLY): it only decides whether to START another method, and phase 3 stays
+    /// the single source of the answer.</summary>
+    procedure IsOwnRunActive(AttemptId: Text; OpSeq: BigInteger): Boolean
+    var
+        Lease: Record "LC Lease";
+    begin
+        if not Lease.Get('') then
+            exit(false);
+        exit((Lease."Op Kind" = Lease."Op Kind"::run) and (Lease."Op Attempt Id" = AttemptId) and (Lease."Op Seq" = OpSeq));
+    end;
+
+    local procedure DeleteTombstonedProgress(LastCompletedOpSeq: BigInteger)
+    var
+        Progress: Record "LC Op Progress";
+    begin
+        Progress.SetFilter("Op Seq", '<=%1', LastCompletedOpSeq);
+        if not Progress.IsEmpty() then
+            Progress.DeleteAll();
+    end;
+
+    /// <summary>Guarded, never an Insert, no Commit of its own: runs inside phase 3's single
+    /// transaction, whose failure would strand the marker.</summary>
+    local procedure MarkProgressDone(AttemptId: Text; OpSeq: BigInteger)
+    var
+        Progress: Record "LC Op Progress";
+    begin
+        if not Progress.Get(AttemptId, OpSeq) then
+            exit;
+        Progress.State := Progress.State::done;
+        Progress.Modify();
+    end;
+
     /// <summary>PHASE 1 of the two-phase RunMutant fence (design §5) — CLAIM. A short LockTable
     /// critical section, ONE transaction, exactly one Commit at the end of each claiming branch (the
     /// Commit releases the lock BY DESIGN, so phase 2 runs with no lease lock held).
@@ -806,11 +939,12 @@ codeunit 91002 "LC Control State"
     /// via ClearActiveIf on the matched path, and directly on the lease-invalid path. A surviving
     /// ExpectedArtifactId/ObservedAny would fake a clean attestation for the wrong artifact on the
     /// next call.</summary>
-    procedure TryFinishRun(Epoch: Integer; Token: Text; Generation: Text; AttemptId: Text; OpSeq: BigInteger; TargetAppId: Text; ArtifactId: Text; MutantId: Text; var Verified: Boolean)
+    procedure TryFinishRun(Epoch: Integer; Token: Text; Generation: Text; AttemptId: Text; OpSeq: BigInteger; TargetAppId: Text; ArtifactId: Text; MutantId: Text; var Verified: Boolean; var Reason: Text)
     var
         Lease: Record "LC Lease";
     begin
         Verified := false;
+        Reason := '';
 
         // Re-validates the same (Epoch, Token, Generation, AttemptId) shape phase 1's TryBeginRun
         // already validated identically, since RunMutant passes it the SAME values for both phases —
@@ -833,6 +967,7 @@ codeunit 91002 "LC Control State"
             Lease."Op Session Id" := 0;
             Lease."Last Completed Op Seq" := OpSeq;
             Lease.Modify();
+            MarkProgressDone(AttemptId, OpSeq);
             Commit();
             Verified := true;
             exit;
@@ -840,6 +975,17 @@ codeunit 91002 "LC Control State"
 
         // lease-invalid: touch no row. The in-memory reset is still unconditional.
         ResetAttestationState();
+
+        // R198/R203: name the ONE refusal the caller must not read as a lease loss. Our own stop
+        // tombstoned this very op while its session was still finishing (E11 makes that rare:
+        // a stop lands at the session's next database call). ALL of: the tuple still matches (a
+        // force-reset after the stop minted a new generation, which IS a genuine loss and must
+        // still latch), the marker is idle, the tombstone sits at OpSeq, and BOTH stop fields
+        // name this pair. Anything else stays the reasonless refusal it is today.
+        if (Lease.Epoch = Epoch) and (Lease.Token = Token) and (Lease."Server Generation" = Generation) and
+           (Lease."Op Kind" = Lease."Op Kind"::none) and (Lease."Last Completed Op Seq" = OpSeq) and
+           (Lease."Stopped Op Attempt Id" = AttemptId) and (Lease."Stopped Op Seq" = OpSeq) then
+            Reason := 'op-stopped';
     end;
 
     /// <summary>Server-side recovery of the caller's OWN stranded op marker (design §5/§8). A short
@@ -980,9 +1126,87 @@ codeunit 91002 "LC Control State"
         Lease."Op Kind" := Lease."Op Kind"::none;
         Lease."Op Session Id" := 0;
         Lease."Last Completed Op Seq" := OpSeq;
+        RecordStoppedOp(Lease, AttemptId, OpSeq);
         Lease.Modify();
         Commit();
         Stopped := true;
+    end;
+
+    /// <summary>R198: the per-METHOD stop for a `RunMutantMany` op. Everything TryStopHungRun
+    /// demands, plus: the op's progress row must exist and read exactly (MethodIndex, MethodToken)
+    /// in state `running`, read LOCKED inside this lease-locked transaction so it serialises against
+    /// the loop's in-flight `between` write instead of seeing a snapshot. A stop decided for method
+    /// k by a watchdog whose poll was up to one interval stale therefore cannot land on k+1
+    /// (`method-completed`), and a row that is absent is a refusal (`no-progress-row`), never a
+    /// pass. Lock order lease then progress; the loop's own progress transactions never hold the
+    /// lease, so there is no cycle. A NEW procedure beside TryStopHungRun rather than new
+    /// parameters on it: BC validates an action's request shape before its body runs, so an older
+    /// client's StopHungRun keeps working unchanged (R58's reasoning).</summary>
+    procedure TryStopHungRunAt(Epoch: Integer; Token: Text; Generation: Text; AttemptId: Text; OpSeq: BigInteger; MethodIndex: Integer; MethodToken: Text; var Stopped: Boolean; var Refusal: Text; var StoppedSessionId: Integer; var RowIndex: Integer; var RowState: Text)
+    var
+        Lease: Record "LC Lease";
+        Progress: Record "LC Op Progress";
+    begin
+        Stopped := false;
+        Refusal := '';
+        StoppedSessionId := 0;
+        RowIndex := 0;
+        RowState := '';
+
+        ValidateFenceCredentials(Epoch, Token, Generation, AttemptId);
+        if (MethodIndex <= 0) or (MethodToken = '') then
+            Error(BlankMethodRefErr());
+
+        Lease.LockTable();
+        if not Lease.Get('') then
+            Error(LeaseRowMissingErr());
+
+        if (Lease.Epoch <> Epoch) or (Lease.Token <> Token) or (Lease."Server Generation" <> Generation) then begin
+            Refusal := 'lease-invalid';
+            exit;
+        end;
+        if OpSeq <= Lease."Last Completed Op Seq" then begin
+            Refusal := 'already-completed';
+            exit;
+        end;
+        if (Lease."Op Kind" <> Lease."Op Kind"::run) or (Lease."Op Attempt Id" <> AttemptId) or (Lease."Op Seq" <> OpSeq) then begin
+            Refusal := 'not-active';
+            exit;
+        end;
+        if Lease."Op Session Id" <= 0 then begin
+            Refusal := 'no-session-id';
+            exit;
+        end;
+
+        Progress.LockTable();
+        if not Progress.Get(AttemptId, OpSeq) then begin
+            Refusal := 'no-progress-row';
+            exit;
+        end;
+        RowIndex := Progress."Method Index";
+        RowState := Format(Progress.State);
+        if (Progress."Method Index" <> MethodIndex) or (Progress."Method Token" <> MethodToken) or (Progress.State <> Progress.State::running) then begin
+            Refusal := 'method-completed';
+            exit;
+        end;
+
+        StoppedSessionId := Lease."Op Session Id";
+        StopSession(StoppedSessionId, StrSubstNo('LethAL R198: method %1 of this mutant run exceeded its budget and is being stopped so it can be scored', MethodIndex));
+
+        ForceClearActive();
+        Lease."Op Kind" := Lease."Op Kind"::none;
+        Lease."Op Session Id" := 0;
+        Lease."Last Completed Op Seq" := OpSeq;
+        RecordStoppedOp(Lease, AttemptId, OpSeq);
+        Lease.Modify();
+        Commit();
+        Stopped := true;
+    end;
+
+    local procedure RecordStoppedOp(var Lease: Record "LC Lease"; AttemptId: Text; OpSeq: BigInteger)
+    begin
+        Lease."Stopped Op Attempt Id" := CopyStr(AttemptId, 1, MaxStrLen(Lease."Stopped Op Attempt Id"));
+        Lease."Stopped Op Seq" := OpSeq;
     end;
 
     /// <summary>Operator recovery action (design §8). A short LockTable critical section, ONE
@@ -1058,6 +1282,8 @@ codeunit 91002 "LC Control State"
         Lease."Op Started At" := 0DT;
         Lease."Op Seq" := 0;
         Lease."Op Session Id" := 0;  // R53 — see TryFinishRun.
+        Lease."Stopped Op Attempt Id" := '';  // R198 — with the other op fields.
+        Lease."Stopped Op Seq" := 0;
         Lease.Modify();
         ForceClearActive();
         Commit();
@@ -1122,6 +1348,21 @@ codeunit 91002 "LC Control State"
     /// R4 sol#4). A blank echo is a caller-contract violation: it proves nothing about which service
     /// incarnation the operator observed, and the whole point of the echo is that it can only be
     /// obtained by reading live post-restart state.</summary>
+    local procedure ProgressRowMissingErr(AttemptId: Text; OpSeq: BigInteger; Index: Integer): Text
+    begin
+        exit(StrSubstNo('progress-row-missing: no "LC Op Progress" row for attempt %1 op %2 before method %3. The row is created by method 1 and deleted only for tombstoned ops at a fresh lease grant, so a missing row mid-op means the op was tombstoned under this session.', AttemptId, OpSeq, Index));
+    end;
+
+    local procedure ProgressOutOfOrderErr(Index: Integer; LastCompleted: Integer): Text
+    begin
+        exit(StrSubstNo('progress-out-of-order: method %1 asked to start while the row says %2 completed; the loop runs methods in request order and this is a caller-contract violation, not a slow path.', Index, LastCompleted));
+    end;
+
+    local procedure BlankMethodRefErr(): Text
+    begin
+        exit('StopHungRunAt: methodIndex must be >= 1 and methodToken non-blank. A stop must name the exact method execution it was decided on (R198); a blank token would equality-match nothing and a zero index nothing either, so both are refused loud rather than compared.');
+    end;
+
     local procedure BlankExpectedGenerationErr(): Text
     begin
         exit('ForceResetLease requires a non-blank expectedGeneration echoing the CURRENT "Server Generation", read from a live status/harness call AFTER the container/NST restart. Refusing to reset the lease without proof that the caller observed live post-restart state.');

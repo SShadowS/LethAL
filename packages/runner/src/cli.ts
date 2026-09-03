@@ -65,6 +65,7 @@ import { toMutationElements } from "./mutation-elements";
 import {
   LARGE_RUN_MUTANT_THRESHOLD,
   MIN_MUTANT_BUDGET_MS,
+  REQUEST_CEILING_MS,
   defaultQuarantineDir,
   generateMutationSet,
   operatorTiers,
@@ -369,6 +370,16 @@ export interface RunCliConfig {
    * mutant 13 of 138.
    */
   readonly mutantTimeoutMs?: number;
+  /**
+   * R198: `--max-methods-per-call <n>` caps one `RunMutantMany` call (default unbounded; the
+   * tables gate forces 2 to exercise chunking live), `--request-ceiling-ms <n>` bounds one call
+   * (default `REQUEST_CEILING_MS`), and `--no-group-runs` keeps the sequential loop.
+   */
+  readonly groupRuns?: {
+    readonly enabled?: boolean;
+    readonly maxMethodsPerCall?: number;
+    readonly requestCeilingMs?: number;
+  };
   /**
    * R53 (`--stop-hung-sessions`), opt-in. Lets LethAL END THE BC SESSION running a mutant that has
    * exceeded its budget, so a non-terminating mutant scores `timeout-killed` instead of
@@ -778,6 +789,11 @@ RUN — cost and recovery
                              count because BC recompiles server-side
   --mutant-timeout-ms <n>    floor for a mutant's time budget (default ${MIN_MUTANT_BUDGET_MS} ms). The budget is
                              max(2 x that test's baseline, this). Exceeding it quarantines the run
+  --max-methods-per-call <n> cap the covering tests one RunMutantMany call runs (default: all that
+                             fit --request-ceiling-ms). One call per mutant instead of one per test
+  --request-ceiling-ms <n>   bound one RunMutantMany call (default ${REQUEST_CEILING_MS} ms; keep it under the
+                             gateway's idle timeout). A method that cannot fit runs alone
+  --no-group-runs            run covering tests one RunMutant call each, as before R198
   --resume                   continue the most recent unfinished run in --db, reusing its verdicts
   --resume-run <id>          resume a specific run id
   --retry-stranded           on resume, retry mutants that left the server stuck (skipped by default:
@@ -978,6 +994,10 @@ export const RUN_FLAGS = {
   "max-guards-per-batch": { type: "string" },
   // R47: see `RunCliConfig.mutantTimeoutMs` / `resume`.
   "mutant-timeout-ms": { type: "string" },
+  // R198: see `RunCliConfig.groupRuns`.
+  "max-methods-per-call": { type: "string" },
+  "request-ceiling-ms": { type: "string" },
+  "no-group-runs": { type: "boolean", default: false },
   resume: { type: "boolean", default: false },
   "resume-run": { type: "string" },
   // R53: see `RunCliConfig.retryStranded`.
@@ -1455,6 +1475,36 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     throw new Error("--mutant-timeout-ms must be a positive integer (milliseconds)");
   }
 
+  // R198: the group-run knobs, rejected at parse time like every other numeric flag here.
+  const maxMethodsRaw = values["max-methods-per-call"];
+  const maxMethodsPerCall = maxMethodsRaw === undefined ? undefined : Number(maxMethodsRaw);
+  if (
+    maxMethodsPerCall !== undefined &&
+    (!Number.isInteger(maxMethodsPerCall) || maxMethodsPerCall < 1)
+  ) {
+    throw new Error("--max-methods-per-call must be a positive integer");
+  }
+  const ceilingRaw = values["request-ceiling-ms"];
+  const requestCeilingMs = ceilingRaw === undefined ? undefined : Number(ceilingRaw);
+  if (
+    requestCeilingMs !== undefined &&
+    (!Number.isInteger(requestCeilingMs) || requestCeilingMs < 1)
+  ) {
+    throw new Error("--request-ceiling-ms must be a positive integer (milliseconds)");
+  }
+  const groupRuns =
+    values["no-group-runs"] === true ||
+    maxMethodsPerCall !== undefined ||
+    requestCeilingMs !== undefined
+      ? {
+          groupRuns: {
+            ...(values["no-group-runs"] === true ? { enabled: false } : {}),
+            ...(maxMethodsPerCall !== undefined ? { maxMethodsPerCall } : {}),
+            ...(requestCeilingMs !== undefined ? { requestCeilingMs } : {}),
+          },
+        }
+      : {};
+
   // R47: `--resume` takes the most recent unfinished run; `--resume-run <id>` names one. Both at
   // once is a contradiction, not a precedence question — refuse rather than silently pick.
   const resumeLast = values.resume === true;
@@ -1595,6 +1645,7 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     ...testsOnly,
     ...(maxGuardsPerBatch !== undefined ? { maxGuardsPerBatch } : {}),
     ...(mutantTimeoutMs !== undefined ? { mutantTimeoutMs } : {}),
+    ...groupRuns,
     ...resume,
     ...(values["allow-large-run"] === true ? { allowLargeRun: true } : {}),
     ...(values["retry-stranded"] === true ? { retryStranded: true } : {}),
@@ -3029,6 +3080,7 @@ export async function runFromCli(
         ...(parsed.mutantTimeoutMs !== undefined
           ? { mutantTimeoutMs: parsed.mutantTimeoutMs }
           : {}),
+        ...(parsed.groupRuns !== undefined ? { groupRuns: parsed.groupRuns } : {}),
         ...(parsed.resume !== undefined ? { resume: parsed.resume } : {}),
         ...(parsed.retryStranded === true ? { retryStranded: true } : {}),
         ...(parsed.stopHungSessions === true ? { stopHungSessions: true } : {}),

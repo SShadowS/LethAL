@@ -168,6 +168,43 @@ export interface RunOpts {
   readonly timeoutMs: number;
 }
 
+/**
+ * R198: one call that runs several test methods against the ACTIVE mutant, as a server-side loop
+ * of the single-method run (design: `docs/superpowers/specs/2026-09-03-r198-run-mutant-loop.md`).
+ * Each method carries its own budget; the call as a whole must answer inside `requestCeilingMs`.
+ */
+export interface RunManyOpts {
+  readonly methods: readonly { readonly ref: TestMethodRef; readonly budgetMs: number }[];
+  readonly requestCeilingMs: number;
+  readonly stopGraceMs: number;
+}
+
+export type RunManyEndedBy = "complete" | "failure" | "cap";
+
+/** R198: the per-MUTANT causes a group call can end in; see `GroupCause` in the transport. */
+export type RunManyCause =
+  | "group-run-error"
+  | "group-answer-malformed"
+  | "stopped-after-completion";
+
+export type RunManyResult =
+  | {
+      readonly kind: "verdicts";
+      readonly endedBy: RunManyEndedBy;
+      readonly ranCount: number;
+      readonly verdicts: readonly TestVerdict[];
+      readonly durationMs: number;
+      /** The op the call ran under, for the store's `op_kind` and the report's `groupedCalls`. */
+      readonly fencedOp: { readonly attemptId: string; readonly opSeq: number };
+    }
+  | {
+      readonly kind: "call";
+      readonly verdict: TestVerdict;
+      readonly cause?: RunManyCause;
+      readonly abortSession?: string;
+      readonly fencedOp: { readonly attemptId: string; readonly opSeq: number };
+    };
+
 export interface ExecutionBackend {
   capabilities(): BackendCapabilities;
   status(): Promise<BackendStatus>;
@@ -188,6 +225,13 @@ export interface ExecutionBackend {
   compileCheck(instrumentedDir: string): Promise<void>;
   activate(mutantId: string | null): Promise<void>;
   run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict>;
+  /**
+   * R198, OPTIONAL: run several methods against the active mutant in ONE call, stopping at the
+   * first failure. Absent on a backend that has no such call (al-runner), whose covering loop is
+   * then byte-for-byte the sequential one. Present only for a MUTANT run: a baseline needs
+   * coverage per test and keeps the single-method call.
+   */
+  runMany?(opts: RunManyOpts): Promise<RunManyResult>;
   /**
    * R139 check 2, OPTIONAL: the bytes of the package this backend's server currently holds for
    * `app`.

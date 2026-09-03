@@ -330,7 +330,12 @@
               "deadline-exceeded",
               "unstable",
               "stranded",
-              "result-lost"
+              "result-lost",
+              "group-run-error",
+              "group-answer-malformed",
+              "group-coverage-incomplete",
+              "op-stopped",
+              "stopped-after-completion"
             ]
           },
           "platformKillMechanism": {
@@ -850,6 +855,9 @@
       "type": "number"
     },
     "unplaceableCount": {
+      "type": "number"
+    },
+    "groupedCalls": {
       "type": "number"
     },
     "unplaceableMutants": {
