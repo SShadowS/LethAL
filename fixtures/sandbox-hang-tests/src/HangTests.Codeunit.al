@@ -55,4 +55,38 @@ codeunit 79450 "Hang Tests"
         if Got <> 3 then
             Error('DrainQueue(3) returned %1, expected 3', Got);
     end;
+
+    /// <summary>
+    /// R206's arm, test 1 of 2: takes `SpinUntil`'s early exit and asserts its DISTINCTIVE value,
+    /// so this test kills every guard-line mutant at position 1 and seeds the kill ledger before
+    /// the loop's mutants are scored. Its name sorts before `SpinUntilReachesTheTarget` (`A` &lt; `R`)
+    /// on purpose; see `Hang Logic.SpinUntil`.
+    /// </summary>
+    [Test]
+    procedure SpinUntilAtZeroExitsEarly()
+    var
+        Logic: Codeunit "Hang Logic";
+        Got: Integer;
+    begin
+        Got := Logic.SpinUntil(0);
+        if Got <> -1 then
+            Error('SpinUntil(0) returned %1, expected -1', Got);
+    end;
+
+    /// <summary>
+    /// R206's arm, test 2 of 2: drives the unbounded loop, and is the method that HANGS under
+    /// `void-method-call` on `Advance()`, at group position 2. Its name sorts after
+    /// `CountUpToReachesTheLimit` (`C` &lt; `S`) on purpose: it now also covers `Advance`, and a name
+    /// sorting first would move that procedure's two existing hangs to position 2.
+    /// </summary>
+    [Test]
+    procedure SpinUntilReachesTheTarget()
+    var
+        Logic: Codeunit "Hang Logic";
+        Got: Integer;
+    begin
+        Got := Logic.SpinUntil(3);
+        if Got <> 3 then
+            Error('SpinUntil(3) returned %1, expected 3', Got);
+    end;
 }

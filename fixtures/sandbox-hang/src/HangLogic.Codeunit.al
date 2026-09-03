@@ -106,4 +106,44 @@ codeunit 79400 "Hang Logic"
         end;
         exit(Drained);
     end;
+
+    /// <summary>
+    /// R206's arm: the only live exercise of a WARM timeout, and of the warm confirmation's
+    /// replay. Two tests cover this procedure. `SpinUntilAtZeroExitsEarly` takes the early exit
+    /// and asserts -1; `SpinUntilReachesTheTarget` drives the same unbounded counter loop as
+    /// `CountUpTo` and asserts 3. Under `void-method-call` on `Advance()` the first PASSES and the
+    /// second HANGS, so the hang lands at group position 2 of one `RunMutantMany` call and is
+    /// scored `timeout-killed` only after methods 1..2 are replayed unmutated and method 2
+    /// completes inside its budget (`killPosition` 2). The loop's other kills (`conditional-
+    /// boundary` on the `until`, `loop-truncate`, `return-value`) are warm `fail`s at position 2
+    /// by the same order.
+    ///
+    /// DESIGNED AROUND THE KILL LEDGER, which is `orderCoveringTests`'s FIRST sort key. The guard
+    /// returns a DISTINCTIVE value (-1) that the early-exit test asserts, so every mutant of the
+    /// guard line (negate-conditional, conditional-boundary, return-value, the branch and
+    /// whole-body empty-blocks) is killed by the early-exit test at position 1 FIRST, in manifest
+    /// order, and from then on the ledger keeps that test first for everything after. A guard that
+    /// returned 0 would leave `empty-block` (returns 0) to the loop test, the ledger would then put
+    /// that test first, and the hang would land at position 1 with no replay.
+    ///
+    /// SHARES `Advance()` rather than copying it, so the arm adds exactly ONE hang (this
+    /// procedure's `void-method-call`), and `Advance`'s two existing hangs gain this arm's loop
+    /// test as a second covering test. The test NAMES are load-bearing: that second test sorts
+    /// AFTER `CountUpToReachesTheLimit` (`C` &lt; `S`) on the members tie, so the existing rows keep
+    /// `killPosition` 1, and the early-exit test sorts before it (`A` &lt; `R`) on the name key alone,
+    /// so the arm survives a run under `coverageMode: "none"`.
+    ///
+    /// NOTHING BOUNDS THE LOOP, for the same reason `CountUpTo`'s is unbounded: the fixture only
+    /// earns its name if some mutant genuinely never returns.
+    /// </summary>
+    procedure SpinUntil(Target: Integer): Integer
+    begin
+        if Target <= 0 then
+            exit(-1);
+        Counter := 0;
+        repeat
+            Advance();
+        until Counter >= Target;
+        exit(Counter);
+    end;
 }
