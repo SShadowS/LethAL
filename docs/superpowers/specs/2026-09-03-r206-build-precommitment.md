@@ -98,13 +98,24 @@ to START a method when `elapsed + budget + grace > ceiling`, which with the 180 
 the 300 s / 30 s defaults means `elapsed > 90 s`. Run 3's own prefix elapsed times say which
 mutants are near it:
 
-| mutant | position | prefix elapsed in run 3 | site |
+| site (the identity; see the note below) | operator | position | prefix elapsed in run 3 |
 |---|---|---|---|
-| **M0020** | 158 | **88.3 s** | `CDOVariantMatchCache.InvalidateCache` |
-| **M0021** | 158 | 72.9 s | `CDOVariantMatchCache.InvalidateCache` |
-| M0456 | 110 | 36.1 s | `CDOTemplateVariantMgt.UpdateLineFromCriteria` |
+| **`CDOVariantMatchCache.Codeunit.al:70`** (`InvalidateCache`) | `void-method-call` | 158 | **88.3 s** |
+| `CDOVariantMatchCache.Codeunit.al:71` (`InvalidateCache`) | `void-method-call` | 158 | 72.9 s |
+| `CDOTemplateVariantMgt.Codeunit.al:913` (`UpdateLineFromCriteria`) | `empty-block` | 110 | 36.1 s |
 
-Nothing else exceeds 45 s. M0020's replay has 1.9% of headroom at run 3's speed.
+Nothing else exceeds 45 s. The first has 1.9% of headroom at run 3's speed.
+
+**Named by SITE, not by mutant code, and that correction is itself worth recording.** An earlier
+draft of this table called them M0020, M0021 and M0456. Mutant codes RESTART PER BATCH: run 3 has
+three batches, 741 mutants and only 633 distinct codes, so `M0020` names three different mutants
+(`CDOTemplateVariantEntry.Table.al:148 empty-block` in batch 0, `CDOTemplateVariantMgt.Codeunit.al:72
+remove-not` in batch 1, and the cache mutant above in batch 2). The positions in this table were
+computed from unique store row ids and are correct; only the labels were ambiguous. Found by
+smoke-testing the run-3-vs-run-4 comparison script against run 3 twice before run 4 existed: it
+reported "633 mutants" for a 741-mutant run, which is the same shape of defect as R118's
+field-wise read that returned a fraction of a row and looked complete. The comparison keys on
+`(file, line, operator, procedure, astHash, startIndex, endIndex)`, which resolves all 741.
 
 **Predicted, and this is the point of writing it down:** §4's per-method cut lands, so both replays
 run in roughly half run 3's time (~45 s and ~37 s) and **`warm-confirmation-incomplete` is 0**. If
