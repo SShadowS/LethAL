@@ -121,6 +121,15 @@ Log ("stop for T7: " + (Call 'StopIfAt' @{ methodName = 'T7_Hang' }))
 $job | Wait-Job -Timeout 90 | Out-Null; Log ("held call returned: " + (Receive-Job $job)); Remove-Job $job -Force
 Log ("progress after stop: " + (Call 'ReadProgress' @{}))
 
+Log "--- E10 F4: session A reads the progress row unlocked, holds it 5 s while session B commits a change (Configure writes phase=configured, method name blank), then A Modify()s its stale copy"
+Configure 'both' $false 0
+$null = Call 'ReadProgress' @{}
+$job = StartAsync 'StaleModify' @{ holdMs = 5000 }
+Start-Sleep -Seconds 2
+Log ("B commits meanwhile: " + (Call 'Configure' @{ progressMode = 'B-WROTE'; stopOnFirstFailure = $true; runnerId = 4242 }))
+$job | Wait-Job -Timeout 60 | Out-Null; Log ("A's stale Modify: " + (Receive-Job $job)); Remove-Job $job -Force
+Log ("row after both: " + (Call 'ReadProgress' @{}))
+
 Log "--- E9 clean: rows left behind by everything above (must be 0)"
 Log (Call 'CleanRows' @{})
 Log "=== done $(Get-Date -Format s)"

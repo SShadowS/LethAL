@@ -291,6 +291,31 @@ codeunit 71544 "R198 Probe API"
         Result := 'stopped session ' + Format(Progress."Session Id") + ' inside ' + MethodName;
     end;
 
+    /// <summary>F4 probe. Reads the progress row without a lock, holds it for HoldMs while the
+    /// driver commits a change from ANOTHER session (Configure), then Modify()s the stale copy
+    /// through a catchable boundary. Reports raise-or-overwrite and which value won.</summary>
+    [ServiceEnabled]
+    procedure StaleModify(HoldMs: Integer) Result: Text
+    var
+        Progress: Record "R198 Progress";
+        Writer: Codeunit "R198 Stale Writer";
+        Before: Text;
+        Outcome: Text;
+    begin
+        Progress.Get('CURRENT');
+        Before := Progress."Method Name";
+        Writer.SetRecord(Progress);
+        Sleep(HoldMs);
+        if Writer.Run() then
+            Outcome := 'modify-succeeded'
+        else
+            Outcome := 'modify-raised: ' + GetLastErrorText();
+        Commit();
+        SelectLatestVersion();
+        Progress.Get('CURRENT');
+        Result := Outcome + ' | read-before=' + Before + ' | now=' + Progress."Method Name" + ' phase=' + Progress.Phase + ' mode=' + Progress."Progress Mode";
+    end;
+
     local procedure ProgressJson() Out: JsonObject
     var
         Progress: Record "R198 Progress";

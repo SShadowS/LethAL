@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**7 of 199 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**8 of 200 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -244,6 +244,7 @@ that ordering is the priority.
 - **R194** · On a hosted sandbox the gateway drops idle keep-alive sockets, the next RunMutant write fails after dispatch, and a request the server provably never started is still reconciled as `unresolved` and quarantines the tier · [R194.md](docs/roadmap/R194.md) · done — both halves 2026-09-02. Half 1 (`bc-fetch.ts`): every HTTPS request to BC on a fresh connection. Half…
 - **R198** · One RunMutant call runs one test method, so a survivor with 35 covering tests costs 35 round trips, and on a hosted sandbox the round trip is most of the cost: 0.46 s a call against 0.11 s for the same tests on a container · [R198.md](docs/roadmap/R198.md) · open — PROBED 2026-09-03 (`scripts/r198-group-runner-probe/`, Cronus283): every platform question the review…
 - **R200** · al-runner 2.10.0.0 prints NO `[provision]` sentence on a warm cache, so R147's platform-app pin had nothing to read and `itest:alrunner` refused on `platformAppsDir` again · [R200.md](docs/roadmap/R200.md) · done (`parseAlRunnerPlatformAppsDir`, basis `selected-artifact`) — 2026-09-02, same day. The pin now falls…
+- **R202** · The held request of a session ended by R53's stop can answer HTTP 400 ("Cannot establish a connection to the SQL Server/Database") instead of the 408 that names the AL StopSession call; the transport then quarantines the tier the stop existed to score · [R202.md](docs/roadmap/R202.md) · open — filed 2026-09-03 from the R198 probe (`scripts/r198-group-runner-probe/`, Cronus283): 1 of 13 stops…
 
 ---
 

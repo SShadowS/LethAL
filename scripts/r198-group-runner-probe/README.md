@@ -44,7 +44,9 @@ after every method in `PlatformAfterTestRun`) by delegating to `Test Runner - Mg
 | E7c | Today's shape: eight separate one-method calls | **571 ms from the client on a container**, ~71 ms per call. On the hosted sandbox the same call is ~430 ms, of which ~300 ms is the round trip and the fence. |
 | E7d | LOOP with stop at first failure | T4 = failure, **T5 skipped**, never run. |
 | E8 | **Stop inside a group.** T1, T7 (a 45 s bounded loop), T5. A stop asked for T1, then one for T7 | **`stop for T1: refused: runner is at T7_Hang/before (index 7)`**, then `stopped session 448 inside T7_Hang`, and the held call returned **HTTP 408 after 3.9 s** ("The session was stopped by an AL StopSession call"), not after 45 s. Progress after: still `T7_Hang/before`, the marker of a session that died inside method 7. Same in LOOP mode (E8b, 408 after 3.9 s). |
+| E10 | **F4.** Session A reads the progress row unlocked, holds it 5 s while session B commits a change, then A `Modify()`s its stale copy | **Raised**: "Sorry, we just updated this page. Reopen it, and try again." B's values stayed. No silent overwrite; in the refused group draft that raise would have unwound the action past phase 3. |
 | E9 | Rows left behind by all of the above | **0.** Nothing leaked across calls, including from the stopped sessions. |
+| race | `drive-stop-race.ps1`: the E8 stop repeated | **12 of 13 stops answered 408** naming the AL StopSession call; **one answered HTTP 400** "Cannot establish a connection to the SQL Server/Database", 3.9 s after the stop, session equally dead. Filed as [[R202]]: today's transport quarantines on that one. |
 
 Traces (`B<i>`/`A<i>` per trigger, from an instance global) also show that the platform keeps ONE
 runner instance for the whole group, calls `OnBeforeTestRun` for every declared method whether or

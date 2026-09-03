@@ -1,53 +1,58 @@
-=== R198 probe run 2026-09-03T01:12:30 against http://Cronus283:7048/BC/ODataV4
+=== R198 probe run 2026-09-03T07:38:13 against http://Cronus283:7048/BC/ODataV4
 --- E0 clean: leftover probe rows (a non-zero count is a leak across CALLS)
 deleted 0
 --- E1 CONTROL, stock runner 130450 (Codeunit isolation), T1 inserts K1 then T2 asserts absent, ONE suite run
 configure: configured mode=none stop=No runner=130450
-elapsed=264ms k1After=False | T1_InsertFixedKey=2 ; T2_AssertAbsent=1 "LEAK: K1 written by T1_InsertFixedKey in session 418 is visible in the next method (this session 418)" | trace=[] session=0/418
+elapsed=71ms k1After=False | T1_InsertFixedKey=2 ; T2_AssertAbsent=1 "LEAK: K1 written by T1_InsertFixedKey in session 1270 is visible in the next method (this session 1270)" | trace=[] session=0/1270
 --- E2 Function-isolation runner, no progress writes, same pair
 configure: configured mode=none stop=No runner=71542
-elapsed=176ms k1After=False | T1_InsertFixedKey=2 ; T2_AssertAbsent=2 | trace=[] session=0/420
+elapsed=102ms k1After=False | T1_InsertFixedKey=2 ; T2_AssertAbsent=2 | trace=[] session=0/1272
 --- E3 Function-isolation runner, progress Commit()ed in BOTH triggers, same pair (does the runner's Commit leak T1's row?)
 configure: configured mode=both stop=No runner=71542
-elapsed=212ms k1After=False | T1_InsertFixedKey=2 ; T2_AssertAbsent=2 | trace=[B1 A1ok B2 A2ok B3 B4 B5 B6 B7 END ] session=422/422
+elapsed=164ms k1After=False | T1_InsertFixedKey=2 ; T2_AssertAbsent=2 | trace=[B1 A1ok B2 A2ok B3 B4 B5 B6 B7 END ] session=1274/1274
 --- E3b same, Commit only in OnBeforeTestRun
 configure: configured mode=before stop=No runner=71542
-elapsed=187ms k1After=False | T1_InsertFixedKey=2 ; T2_AssertAbsent=2 | trace=[B1 A1ok B2 A2ok B3 B4 B5 B6 B7 END ] session=424/424
+elapsed=91ms k1After=False | T1_InsertFixedKey=2 ; T2_AssertAbsent=2 | trace=[B1 A1ok B2 A2ok B3 B4 B5 B6 B7 END ] session=1276/1276
 --- E4 cross-session read while the group sleeps in T3 (progress 'both')
 configure: configured mode=both stop=No runner=71542
-reader sees: {"mode":"both","stopOnFirstFailure":false,"runnerId":71542,"methodIndex":3,"methodName":"T3_Sleep","phase":"before","sessionId":426,"stamp":"2026-09-02T23:12:33.2570000Z","failuresSeen":0,"trace":"B1 A1ok B2 B3 ","readerSession":427}
-group returned: OK after 6255 ms: {"selected":3,"elapsedMs":6132,"runnerId":71542,"k1VisibleAfterRun":false,"apiSession":426,"results":{"name":"R198 Probe Tests","codeUnit":71543,"codeunitName":"R198 Probe Tests","applicationID":"{5C2F0E7A-8B41-4D3E-9A6F-2E1D7C4B9F83}","applicationName":"R198 Group Runner Probe","startTime":"2026-09-02T23:12:33.2200000Z","finishTime":"2026-09-02T23:12:39.3170000Z","result":2,"testResults":[{"metho
+reader sees: {"mode":"both","stopOnFirstFailure":false,"runnerId":71542,"methodIndex":3,"methodName":"T3_Sleep","phase":"before","sessionId":1278,"stamp":"2026-09-03T05:38:14.9770000Z","failuresSeen":0,"trace":"B1 A1ok B2 B3 ","readerSession":1279}
+group returned: OK after 6238 ms: {"selected":3,"elapsedMs":6131,"runnerId":71542,"k1VisibleAfterRun":false,"apiSession":1278,"results":{"name":"R198 Probe Tests","codeUnit":71543,"codeunitName":"R198 Probe Tests","applicationID":"{5C2F0E7A-8B41-4D3E-9A6F-2E1D7C4B9F83}","applicationName":"R198 Group Runner Probe","startTime":"2026-09-03T05:38:14.9500000Z","finishTime":"2026-09-03T05:38:21.0500000Z","result":2,"testResults":[{"meth
 --- E5 stop at first failure: T1,T2,T4_Fail,T5,T6 with stopOnFirstFailure (T5/T6 must not run; trace shows whether OnAfterTestRun fires for a skipped method)
 configure: configured mode=both stop=Yes runner=71542
-elapsed=118ms k1After=False | T1_InsertFixedKey=2 ; T2_AssertAbsent=2 ; T4_Fail=1 "deliberate failure in T4_Fail" ; T5_AfterFail=0 ; T6_ReadProgress=0 | trace=[B1 A1ok B2 A2ok B3 B4 A4FAIL S5 S6 S7 END ] session=429/429
+elapsed=147ms k1After=False | T1_InsertFixedKey=2 ; T2_AssertAbsent=2 ; T4_Fail=1 "deliberate failure in T4_Fail" ; T5_AfterFail=0 ; T6_ReadProgress=0 | trace=[B1 A1ok B2 A2ok B3 B4 A4FAIL S5 S6 S7 END ] session=1281/1281
 --- E6 what a test method itself sees of the progress row (T6 always 'fails' to carry the data)
 configure: configured mode=both stop=No runner=71542
-elapsed=113ms k1After=False | T1_InsertFixedKey=2 ; T6_ReadProgress=1 "MEASURED inside-test: index=6 name=T6_ReadProgress phase=before runnerSession=431 thisSession=431 trace=[B1 A1" | trace=[B1 A1ok B2 B3 B4 B5 B6 A6FAIL B7 END ] session=431/431
+elapsed=95ms k1After=False | T1_InsertFixedKey=2 ; T6_ReadProgress=1 "MEASURED inside-test: index=6 name=T6_ReadProgress phase=before runnerSession=1283 thisSession=1283 trace=[B1 " | trace=[B1 A1ok B2 B3 B4 B5 B6 A6FAIL B7 END ] session=1283/1283
 --- E7 LOOP mode (one call, today's one-method suite run repeated, stock runner): isolation and per-method cost
 configure: configured mode=both stop=No runner=0
-elapsed=530ms k1After=False | T1_InsertFixedKey=2 55ms ; T2_AssertAbsent=2 177ms ; T5_AfterFail=2 38ms ; T5_AfterFail=2 43ms ; T5_AfterFail=2 61ms ; T5_AfterFail=2 43ms ; T5_AfterFail=2 36ms ; T5_AfterFail=2 48ms | trace=[b1 a1 b2 a2 b3 a3 b4 a4 b5 a5 b6 a6 b7 a7 b8 a8 i8 ] session=433/433
+elapsed=472ms k1After=False | T1_InsertFixedKey=2 61ms ; T2_AssertAbsent=2 52ms ; T5_AfterFail=2 72ms ; T5_AfterFail=2 53ms ; T5_AfterFail=2 43ms ; T5_AfterFail=2 45ms ; T5_AfterFail=2 73ms ; T5_AfterFail=2 45ms | trace=[b1 a1 b2 a2 b3 a3 b4 a4 b5 a5 b6 a6 b7 a7 b8 a8 i8 ] session=1285/1285
 --- E7b GROUP mode, same eight methods requested (platform runs each declared method once; the request's repeats collapse)
 configure: configured mode=both stop=No runner=71542
-elapsed=123ms k1After=False | T1_InsertFixedKey=2 ; T2_AssertAbsent=2 ; T5_AfterFail=2 | trace=[B1 A1ok B2 A2ok B3 B4 B5 A5ok B6 B7 END ] session=435/435
+elapsed=126ms k1After=False | T1_InsertFixedKey=2 ; T2_AssertAbsent=2 ; T5_AfterFail=2 | trace=[B1 A1ok B2 A2ok B3 B4 B5 A5ok B6 B7 END ] session=1287/1287
 --- E7c TODAY's shape: eight separate calls of one method each (loop mode with one method), wall-clock from the client
 configure: configured mode=none stop=No runner=0
-eight one-method calls: 571 ms total from the client
+eight one-method calls: 576 ms total from the client
 --- E7d loop mode with stop at first failure: T1,T4_Fail,T5 (T5 must be skipped)
 configure: configured mode=both stop=Yes runner=0
-elapsed=107ms k1After=False | T1_InsertFixedKey=2 56ms ; T4_Fail=1 44ms "deliberate failure in T4_Fail" ; T5_AfterFail=skipped | trace=[b1 a1 b2 a2 i3 ] session=446/446
+elapsed=86ms k1After=False | T1_InsertFixedKey=2 40ms ; T4_Fail=1 38ms "deliberate failure in T4_Fail" ; T5_AfterFail=skipped | trace=[b1 a1 b2 a2 i3 ] session=1298/1298
 --- E8 STOP inside a group: T1,T7_Hang(45 s bound),T5; a stop for T1 must be refused, a stop for T7 must end the session and the held call must get a 408 well before 45 s
 configure: configured mode=both stop=No runner=71542
-progress before stop: {"mode":"both","stopOnFirstFailure":false,"runnerId":71542,"methodIndex":7,"methodName":"T7_Hang","phase":"before","sessionId":448,"stamp":"2026-09-02T23:12:41.8730000Z","failuresSeen":0,"trace":"B1 A1ok B2 B3 B4 B5 A5ok B6 B7 ","readerSession":449}
+progress before stop: {"mode":"both","stopOnFirstFailure":false,"runnerId":71542,"methodIndex":7,"methodName":"T7_Hang","phase":"before","sessionId":1300,"stamp":"2026-09-03T05:38:23.4900000Z","failuresSeen":0,"trace":"B1 A1ok B2 B3 B4 B5 A5ok B6 B7 ","readerSession":1301}
 stop for T1: refused: runner is at T7_Hang/before (index 7)
-stop for T7: stopped session 448 inside T7_Hang
-held call returned: ERR 408 after 3962 ms: Response status code does not indicate success: 408 (The operation has been canceled because the session has been stopped. Please retry later.  The session was stopped by an AL StopSession call.).
-progress after stop: {"mode":"both","stopOnFirstFailure":false,"runnerId":71542,"methodIndex":7,"methodName":"T7_Hang","phase":"before","sessionId":448,"stamp":"2026-09-02T23:12:41.8730000Z","failuresSeen":0,"trace":"B1 A1ok B2 B3 B4 B5 A5ok B6 B7 ","readerSession":452}
+stop for T7: stopped session 1300 inside T7_Hang
+held call returned: ERR 400 after 3908 ms: Response status code does not indicate success: 400 (Cannot establish a connection to the SQL Server/Database.  This could be due to one of the following reasons:  * SQL Server is not started. * The database does not exist. * Proper permissions have not been given to the Business Central Server Acco
+progress after stop: {"mode":"both","stopOnFirstFailure":false,"runnerId":71542,"methodIndex":7,"methodName":"T7_Hang","phase":"before","sessionId":1300,"stamp":"2026-09-03T05:38:23.4900000Z","failuresSeen":0,"trace":"B1 A1ok B2 B3 B4 B5 A5ok B6 B7 ","readerSession":1304}
 --- E8b same in LOOP mode
 configure: configured mode=both stop=No runner=0
-progress before stop: {"mode":"both","stopOnFirstFailure":false,"runnerId":0,"methodIndex":2,"methodName":"T7_Hang","phase":"before","sessionId":454,"stamp":"2026-09-02T23:12:46.2130000Z","failuresSeen":0,"trace":"b1 a1 b2 ","readerSession":455}
-stop for T7: stopped session 454 inside T7_Hang
-held call returned: ERR 408 after 3898 ms: Response status code does not indicate success: 408 (The operation has been canceled because the session has been stopped. Please retry later.  The session was stopped by an AL StopSession call.).
-progress after stop: {"mode":"both","stopOnFirstFailure":false,"runnerId":0,"methodIndex":2,"methodName":"T7_Hang","phase":"before","sessionId":454,"stamp":"2026-09-02T23:12:46.2130000Z","failuresSeen":0,"trace":"b1 a1 b2 ","readerSession":457}
+progress before stop: {"mode":"both","stopOnFirstFailure":false,"runnerId":0,"methodIndex":2,"methodName":"T7_Hang","phase":"before","sessionId":1306,"stamp":"2026-09-03T05:38:27.8070000Z","failuresSeen":0,"trace":"b1 a1 b2 ","readerSession":1307}
+stop for T7: stopped session 1306 inside T7_Hang
+held call returned: ERR 408 after 3940 ms: Response status code does not indicate success: 408 (The operation has been canceled because the session has been stopped. Please retry later.  The session was stopped by an AL StopSession call.).
+progress after stop: {"mode":"both","stopOnFirstFailure":false,"runnerId":0,"methodIndex":2,"methodName":"T7_Hang","phase":"before","sessionId":1306,"stamp":"2026-09-03T05:38:27.8070000Z","failuresSeen":0,"trace":"b1 a1 b2 ","readerSession":1309}
+--- E10 F4: session A reads the progress row unlocked, holds it 5 s while session B commits a change (Configure writes phase=configured, method name blank), then A Modify()s its stale copy
+configure: configured mode=both stop=No runner=0
+B commits meanwhile: configured mode=B-WROTE stop=Yes runner=4242
+A's stale Modify: OK after 5108 ms: modify-raised: Sorry, we just updated this page. Reopen it, and try again. | read-before= | now= phase=configured mode=B-WROTE
+row after both: {"mode":"B-WROTE","stopOnFirstFailure":true,"runnerId":4242,"methodIndex":0,"methodName":"","phase":"configured","sessionId":0,"stamp":"2026-09-03T05:38:33.8530000Z","failuresSeen":0,"trace":"","readerSession":1314}
 --- E9 clean: rows left behind by everything above (must be 0)
 deleted 0
-=== done 2026-09-03T01:12:50
+=== done 2026-09-03T07:38:37
