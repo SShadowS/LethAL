@@ -30,9 +30,18 @@ run 2 ran each covering test in its own request, and the 8 mutants survived ther
 them only at positions 2 and later, through a cache the earlier methods of the same call had
 populated. In run 2 those same earlier tests ran in the immediately preceding requests. Had the
 sandbox handed consecutive requests one session, the cache would have been warm in run 2 and
-those mutants killed there. It is nonetheless a measurement of one run, not a property of the
-platform, and BC's web-service session handling is not documented as fresh-per-request. **This
-design therefore does not assume freshness anywhere: §2 asserts it per call, from the session id
+those mutants killed there. **And the session id itself is measured on the sandbox, from BC's
+own words, already in run 3's report:** each of its eight `timeout-killed` mutants carries the
+408 text naming the stopped session (`session (ID: N)`): 2037, 2126, 2205, 2316, 2395, 2473,
+2624 in scoring order, and 3052 for the one scored in a later resume iteration. Three pairs of
+stopped calls had NO mutant scored between them (M0025→M0026, M0038→M0039→M0040) and are 79, 79
+and 78 ids apart. Each hang lasted ~185 s (the 180 s budget floor plus the stop), during which the
+watchdog polled `GetOperationStatus` every 5 s and the lease renewed every 5 s (TTL 15 / 3): about
+37 + 37 requests, plus the stop and the next call, which is the gap. Every one of those requests
+received its own session; a platform that pooled a user's web-service sessions would have handed
+the polls one session and the gap would be one or two. It is nonetheless a measurement of one run
+on one environment, and BC's web-service session handling is not documented as fresh-per-request.
+**This design therefore does not assume freshness anywhere: §2 asserts it per call, from the session id
 every answer now carries, and a call that did not get a fresh session can record an error and
 never a kill.** The sandbox's own number arrives with run 4, as the count of calls that failed
 that assertion, expected 0.
