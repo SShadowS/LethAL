@@ -86,6 +86,24 @@ export function isAlStopResponse(status: number, body: string): boolean {
 /** R198: how often `runMany`'s watchdog reads the op's progress while its request is open. */
 export const WATCHDOG_POLL_MS = 5_000;
 
+/**
+ * R206 §2.1: the two session keys a `ran` answer must carry (control app 1.0.0.18), or the reason
+ * it is malformed. `testRunsBefore` is the guard's predicate (0 = a fresh session); `sessionId`
+ * is recorded as data and asserted constant across a group call's entries.
+ */
+function sessionKeysOf(
+  result: Pick<RunMutantResult, "testRunsBefore" | "sessionId">,
+): { readonly sessionId: number; readonly testRunsBefore: number } | string {
+  const { sessionId, testRunsBefore } = result;
+  if (typeof sessionId !== "number" || !Number.isInteger(sessionId)) {
+    return `answer ran but carries no integer sessionId (got ${JSON.stringify(sessionId)}); control app 1.0.0.18 stamps it on every answer that ran`;
+  }
+  if (typeof testRunsBefore !== "number" || !Number.isInteger(testRunsBefore) || testRunsBefore < 0) {
+    return `answer ran but carries no integer testRunsBefore >= 0 (got ${JSON.stringify(testRunsBefore)}); control app 1.0.0.18 stamps it on every answer that ran`;
+  }
+  return { sessionId, testRunsBefore };
+}
+
 /** Parsed `LethALControl_RunMutantMany` result. */
 interface RunMutantManyAnswer {
   readonly status?: unknown;
@@ -100,6 +118,9 @@ interface RunMutantManyAnswer {
   readonly endedBy?: unknown;
   readonly ranCount?: unknown;
   readonly methods?: unknown;
+  /** R206 §2.1: see `RunMutantResult`. */
+  readonly testRunsBefore?: unknown;
+  readonly sessionId?: unknown;
 }
 
 interface GroupEntry {
@@ -108,6 +129,9 @@ interface GroupEntry {
   readonly method: unknown;
   readonly codeunitResults: unknown;
   readonly durationMs: unknown;
+  /** R206: the function line the entry ran (distinct across a call) and the session it ran in. */
+  readonly lineNo: unknown;
+  readonly sessionId: unknown;
 }
 
 /** Parsed `LethALControl_RunMutant` result (the JSON string inside OData's scalar `value`). */
@@ -125,6 +149,15 @@ interface RunMutantResult {
   readonly identityMismatch?: unknown;
   /** R58: present only on the `RunMutantWithCoverage` action — see `FencedCoverageRow`. */
   readonly coverage?: unknown;
+  /**
+   * R206 §2.1, on a `ran` answer only (control app 1.0.0.18): `testRunsBefore` is the server's
+   * per-session count of test methods run BEFORE this call (0 = a fresh session; anything else
+   * means the platform handed this call a session another call had run tests in), and `sessionId`
+   * is that session's id, recorded as data. Checked inside the `ran` branch only: a refusal ran
+   * nothing, carries neither, and keeps its own class.
+   */
+  readonly testRunsBefore?: unknown;
+  readonly sessionId?: unknown;
 }
 
 /**
@@ -247,6 +280,8 @@ export type RunMutantManyResult =
        */
       readonly kind: "call";
       readonly verdict: TestVerdict;
+      /** R206: the 1-based position in the request of the method `verdict` is about. */
+      readonly methodIndex: number;
       /** Present for a per-mutant error; absent when `verdict` classifies itself. */
       readonly cause?: GroupCause;
       /** Present when, after the orchestrator's own handling, the SESSION must abort with this text. */
@@ -514,10 +549,19 @@ export class RunMutantTransport {
     const started = Date.now();
     const fencedOp = { attemptId, opSeq: lease.opSeq } as const;
     const pollMs = req.watchdogPollMs ?? WATCHDOG_POLL_MS;
+    // R206: a `call` result names the request position of the method it is about, so the
+    // orchestrator's warm confirmation can take the chunk's prefix without re-deriving it.
+    const methodIndexOf = (ref: TestMethodRef): number => {
+      const at = methods.findIndex(
+        (m) => m.ref.codeunitId === ref.codeunitId && m.ref.method === ref.method,
+      );
+      return at < 0 ? 1 : at + 1;
+    };
     const call = (verdict: TestVerdict, extra?: { cause?: GroupCause; abortSession?: string }) =>
       ({
         kind: "call",
         verdict,
+        methodIndex: methodIndexOf(verdict.ref),
         ...(extra?.cause !== undefined ? { cause: extra.cause } : {}),
         ...(extra?.abortSession !== undefined ? { abortSession: extra.abortSession } : {}),
       }) as const;
@@ -863,6 +907,20 @@ export class RunMutantTransport {
       "RunMutantMany",
     );
     if (statusVerdict !== null) return call(statusVerdict);
+    if (result.status === "suite-unresolved") {
+      // R206 §4 item 1: a requested (codeunitId, method) pair matched zero or several function
+      // lines, or two pairs matched one. Nothing ran; phase 3 tombstoned the op. A call-level
+      // error with NO cause and NO operation, so the orchestrator's transport-error path aborts
+      // the session with the server's words: a test app that does not resolve is not a
+      // per-mutant fact (R139/R56's channel).
+      const reason = typeof result.reason === "string" ? result.reason : "no reason given";
+      return call({
+        ref: firstMethod.ref,
+        outcome: "error",
+        durationMs,
+        failureMessage: `RunMutantMany suite-unresolved: the server could not resolve this request's test methods to exactly one function line each, and ran nothing — ${reason}`,
+      });
+    }
     if (result.status !== "ran") {
       return call(
         this.inFlightUnknown(
@@ -904,6 +962,10 @@ export class RunMutantTransport {
         },
         { cause: "group-answer-malformed" },
       );
+    // R206 §2.1: the session keys, required on every answer that ran (control app 1.0.0.18) and
+    // checked HERE, after the refusals and `runError` above, so a refusal keeps its own class.
+    const session = sessionKeysOf(result);
+    if (typeof session === "string") return malformed(session);
     const endedBy = result.endedBy;
     if (endedBy !== "complete" && endedBy !== "failure" && endedBy !== "cap") {
       return malformed(`endedBy is ${JSON.stringify(endedBy)}`);
@@ -925,6 +987,7 @@ export class RunMutantTransport {
       return malformed(`endedBy complete but ${ranCount} of ${methods.length} methods ran`);
     }
     const verdicts: TestVerdict[] = [];
+    const seenLineNos = new Set<number>();
     for (let i = 0; i < entries.length; i++) {
       const raw = entries[i] as Partial<GroupEntry> | undefined;
       const want = methods[i];
@@ -937,6 +1000,17 @@ export class RunMutantTransport {
         );
       }
       if (typeof raw.durationMs !== "number") return malformed(`entry ${i + 1} has no durationMs`);
+      // R206: within-call constancy of the session is ASSERTED, and every entry must name a
+      // distinct function line (the client-side half of §4 item 1's pair-keyed map).
+      if (raw.sessionId !== session.sessionId)
+        return malformed(
+          `entry ${i + 1} carries sessionId ${JSON.stringify(raw.sessionId)}, the call's is ${session.sessionId}`,
+        );
+      if (typeof raw.lineNo !== "number" || !Number.isInteger(raw.lineNo))
+        return malformed(`entry ${i + 1} has no integer lineNo`);
+      if (seenLineNos.has(raw.lineNo))
+        return malformed(`entry ${i + 1} ran function line ${raw.lineNo}, which an earlier entry also ran`);
+      seenLineNos.add(raw.lineNo);
       const results =
         typeof raw.codeunitResults === "string"
           ? raw.codeunitResults
@@ -962,7 +1036,7 @@ export class RunMutantTransport {
       } else if (v.outcome !== "pass") {
         return malformed(`endedBy ${endedBy} but entry ${i + 1} did not pass`);
       }
-      verdicts.push({ ...v, attestation });
+      verdicts.push({ ...v, attestation, ...session });
     }
     return { kind: "verdicts", endedBy, ranCount, verdicts, durationMs };
   }
@@ -1276,7 +1350,21 @@ export class RunMutantTransport {
       if (stats !== undefined) sink.stats = stats;
     }
 
-    return this.mapRanResult(ref, durationMs, result, fencedOp);
+    // R206 §2.1: a `ran` answer without the session keys is a protocol fault (a control app the
+    // version gate should have refused), answered as a bare error with no `operation` so the
+    // session aborts with these words, never as `in-flight-unknown`, which would quarantine a
+    // tier and latch a lease for a wire-shape mismatch.
+    const session = sessionKeysOf(result);
+    if (typeof session === "string") {
+      return {
+        ref,
+        outcome: "error",
+        durationMs,
+        failureMessage: `RunMutant answer malformed: ${session}`,
+      };
+    }
+    const v = this.mapRanResult(ref, durationMs, result, fencedOp);
+    return v.outcome === "error" ? v : { ...v, ...session };
   }
 
   private mapRanResult(

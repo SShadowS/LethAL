@@ -20,6 +20,15 @@ codeunit 91002 "LC Control State"
         CachedMutantId: Text;
         Loaded: Boolean;
         SuiteCounter: Integer;
+        // R206 §2.1: THE SESSION-FRESHNESS PREDICATE. Incremented by NoteTestMethodRun, immediately
+        // before each of the two places a test method runs (LC Run Method's RunAllTests, LC Run
+        // Many's RunTests), and NEVER reset: ResetAttestationState must not touch it, and the next
+        // cost cut (one suite per session) must not stop it. A fresh session reports 0 at the top
+        // of RunMutant/RunMutantMany; a session the platform handed to a call after another call
+        // had run tests in it reports how many. It is single-instance state exactly as the
+        // target's own caches are, so it shares their lifetime whatever BC's session handling
+        // turns out to be. Pinned by packages/runner/tests/control-app-source.test.ts.
+        TestMethodRuns: Integer;
         ExpectedTargetAppId: Text;
         ExpectedArtifactId: Text;
         ObservedAny: Boolean;
@@ -33,6 +42,21 @@ codeunit 91002 "LC Control State"
         if SuiteCounter > 999999 then
             SuiteCounter := 1;
         exit(CopyStr('LC' + Format(SuiteCounter), 1, 10));
+    end;
+
+    /// <summary>R206 §2.1: called immediately before a test method is run, at both run sites. The
+    /// ONLY writer of TestMethodRuns.</summary>
+    procedure NoteTestMethodRun()
+    begin
+        TestMethodRuns += 1;
+    end;
+
+    /// <summary>R206 §2.1: how many test methods THIS SESSION has run so far. Read once at the top
+    /// of RunMutant and RunMutantMany, before anything builds a suite, and answered as
+    /// `testRunsBefore`; 0 means a fresh session, anything else a reused one.</summary>
+    procedure TestMethodRunsSoFar(): Integer
+    begin
+        exit(TestMethodRuns);
     end;
 
     local procedure EnsureLoaded()
@@ -140,11 +164,15 @@ codeunit 91002 "LC Control State"
         ResetAttestationState();
     end;
 
-    /// <summary>Clears every in-memory field the SingleInstance instance carries between calls: the
-    /// cached active tuple AND the attestation expectations/observations. Extracted from 5C-A's
-    /// ClearActive so both phase-3 exits (matched and lease-invalid) can run it unconditionally.
-    /// Loaded stays TRUE with a blank cache on purpose — that makes IsActive fail closed (no mutant
-    /// activates) instead of re-reading a table row that may now belong to another attempt.</summary>
+    /// <summary>Clears every in-memory field the SingleInstance instance carries between calls
+    /// EXCEPT the two session-lifetime counters (SuiteCounter, TestMethodRuns): the cached active
+    /// tuple AND the attestation expectations/observations. Extracted from 5C-A's ClearActive so
+    /// both phase-3 exits (matched and lease-invalid) can run it unconditionally. Loaded stays TRUE
+    /// with a blank cache on purpose — that makes IsActive fail closed (no mutant activates)
+    /// instead of re-reading a table row that may now belong to another attempt.
+    /// R206: TestMethodRuns MUST NOT be cleared here. It is the session-freshness predicate, and a
+    /// `TestMethodRuns := 0` in this procedure would make every session read fresh with no test
+    /// failing anywhere (the guard's failure is silent by construction). A source test pins it.</summary>
     local procedure ResetAttestationState()
     begin
         CachedTargetAppId := '';
@@ -729,11 +757,13 @@ codeunit 91002 "LC Control State"
     var
         Progress: Record "LC Op Progress";
         Token: Text;
+        Existing: Boolean;
     begin
         if AttemptId = '' then
             Error(BlankAttemptIdErr());
         Token := CopyStr(DelChr(Format(CreateGuid()), '=', '{}'), 1, 40);
-        if Progress.Get(AttemptId, OpSeq) then begin
+        Existing := Progress.Get(AttemptId, OpSeq);
+        if Existing then begin
             if (Index <> 1) and (Progress."Last Completed Index" <> Index - 1) then
                 Error(ProgressOutOfOrderErr(Index, Progress."Last Completed Index"));
         end else begin
@@ -742,7 +772,6 @@ codeunit 91002 "LC Control State"
             Progress.Init();
             Progress."Attempt Id" := CopyStr(AttemptId, 1, MaxStrLen(Progress."Attempt Id"));
             Progress."Op Seq" := OpSeq;
-            Progress.Insert();
         end;
         Progress."Method Index" := Index;
         Progress."Method Codeunit Id" := CodeunitId;
@@ -751,7 +780,11 @@ codeunit 91002 "LC Control State"
         Progress."Started At" := CurrentDateTime;
         Progress."Session Id" := SessionId();
         Progress.State := Progress.State::running;
-        Progress.Modify();
+        // R206 §4 item 4: the first row is inserted fully populated, one write instead of two.
+        if Existing then
+            Progress.Modify()
+        else
+            Progress.Insert();
         Commit();
         exit(Token);
     end;

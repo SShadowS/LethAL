@@ -48,18 +48,23 @@ function req(over: Partial<RunMutantManyRequest> = {}): RunMutantManyRequest {
   };
 }
 
+/** R206: the session every well-formed answer below ran in, and the id its entries carry. */
+const SESSION = 2037;
+
 function entry(i: number, method: string, result: number, lines = 1): Record<string, unknown> {
   const testResults = Array.from({ length: lines }, () => ({ method, result }));
   return {
     index: i,
     codeunitId: 79100,
     method,
+    lineNo: 20000 + i * 10,
+    sessionId: SESSION,
     codeunitResults: JSON.stringify({ testResults }),
     durationMs: 40 + i,
   };
 }
 
-/** A well-formed `ran` answer, overridable per field. */
+/** A well-formed `ran` answer, overridable per field. R206: it ran in a FRESH session. */
 function answer(over: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     status: "ran",
@@ -69,6 +74,8 @@ function answer(over: Record<string, unknown> = {}): Record<string, unknown> {
     mutantId: "M0003",
     observedAny: true,
     identityMismatch: false,
+    testRunsBefore: 0,
+    sessionId: SESSION,
     endedBy: "complete",
     ranCount: 3,
     methods: [entry(1, "Alpha", 2), entry(2, "Beta", 2), entry(3, "Gamma", 2)],
@@ -587,5 +594,108 @@ describe("runMany — the watchdog (R198 §3.2)", () => {
     expect(r.verdict.outcome).toBe("deadline-exceeded");
     expect(r.verdict.failureMessage).toContain("hard cap");
     expect(r.verdict.failureMessage).toContain("Alpha");
+  });
+});
+
+describe("runMany — the session keys (R206 §2.1)", () => {
+  const malformed = async (over: Record<string, unknown>) => {
+    const r = await transport(fakes({ many: odata(answer(over)) }).fetchFn).runMany(req());
+    if (r.kind !== "call") throw new Error("expected a call-level answer");
+    return r;
+  };
+
+  test("a ran answer without sessionId is malformed", async () => {
+    const r = await malformed({ sessionId: undefined });
+    expect(r.cause).toBe("group-answer-malformed");
+    expect(r.verdict.failureMessage).toContain("sessionId");
+  });
+
+  test("a ran answer without testRunsBefore is malformed", async () => {
+    const r = await malformed({ testRunsBefore: undefined });
+    expect(r.cause).toBe("group-answer-malformed");
+    expect(r.verdict.failureMessage).toContain("testRunsBefore");
+  });
+
+  test("an entry whose sessionId differs from the call's is malformed (within-call constancy is asserted)", async () => {
+    const r = await malformed({
+      methods: [entry(1, "Alpha", 2), { ...entry(2, "Beta", 2), sessionId: SESSION + 1 }, entry(3, "Gamma", 2)],
+    });
+    expect(r.cause).toBe("group-answer-malformed");
+    expect(r.verdict.failureMessage).toContain("entry 2 carries sessionId");
+  });
+
+  test("two entries naming one function line are malformed (the client half of the pair-keyed map)", async () => {
+    const r = await malformed({
+      methods: [entry(1, "Alpha", 2), { ...entry(2, "Beta", 2), lineNo: 20010 }, entry(3, "Gamma", 2)],
+    });
+    expect(r.cause).toBe("group-answer-malformed");
+    expect(r.verdict.failureMessage).toContain("function line 20010");
+  });
+
+  test("the guard's value TRAVELS: 0 and a reused count both reach the verdicts unchanged", async () => {
+    for (const testRunsBefore of [0, 7]) {
+      const r = await transport(fakes({ many: odata(answer({ testRunsBefore })) }).fetchFn).runMany(req());
+      if (r.kind !== "verdicts") throw new Error("expected verdicts");
+      expect(r.verdicts.map((v) => v.testRunsBefore)).toEqual([testRunsBefore, testRunsBefore, testRunsBefore]);
+      expect(r.verdicts.map((v) => v.sessionId)).toEqual([SESSION, SESSION, SESSION]);
+    }
+  });
+
+  test("a refusal without either key keeps its own class: lease-invalid, artifact-mismatch, reserved-params, runError", async () => {
+    const without = (over: Record<string, unknown>) =>
+      answer({ ...over, sessionId: undefined, testRunsBefore: undefined });
+    const lease = await transport(fakes({ many: odata(without({ status: "lease-invalid", reason: "op-in-flight" })) }).fetchFn).runMany(req());
+    if (lease.kind !== "call") throw new Error("expected call");
+    expect(lease.verdict.operation).toBe("lease-lost");
+    expect(lease.cause).toBeUndefined();
+    const artifact = await transport(fakes({ many: odata(without({ status: "artifact-mismatch" })) }).fetchFn).runMany(req());
+    if (artifact.kind !== "call") throw new Error("expected call");
+    expect(artifact.verdict.failureMessage).toContain("artifact-mismatch");
+    expect(artifact.cause).toBeUndefined();
+    const reserved = await transport(fakes({ many: odata(without({ status: "reserved-params" })) }).fetchFn).runMany(req());
+    if (reserved.kind !== "call") throw new Error("expected call");
+    expect(reserved.verdict.failureMessage).toContain("reserved");
+    expect(reserved.cause).toBeUndefined();
+    const raised = await transport(fakes({ many: odata(without({ runError: "the loop raised" })) }).fetchFn).runMany(req());
+    if (raised.kind !== "call") throw new Error("expected call");
+    expect(raised.cause).toBe("group-run-error");
+  });
+
+  test("suite-unresolved is a call-level error with NO cause and NO operation, carrying the server's reason", async () => {
+    const r = await transport(
+      fakes({
+        many: odata(
+          answer({
+            status: "suite-unresolved",
+            reason: "expected exactly one method Beta in codeunit 79100, found 0",
+            sessionId: undefined,
+            testRunsBefore: undefined,
+          }),
+        ),
+      }).fetchFn,
+    ).runMany(req());
+    if (r.kind !== "call") throw new Error("expected call");
+    expect(r.cause).toBeUndefined();
+    expect(r.verdict.operation).toBeUndefined();
+    expect(r.verdict.outcome).toBe("error");
+    expect(r.verdict.failureMessage).toContain("found 0");
+    expect(r.methodIndex).toBe(1);
+  });
+
+  test("a blank-mutant call (the replay) round-trips: the echo compares blank with blank", async () => {
+    const r = await transport(fakes({ many: odata(answer({ mutantId: "" })) }).fetchFn).runMany(
+      req({ mutantId: "" }),
+    );
+    expect(r.kind).toBe("verdicts");
+  });
+
+  test("a call-kind result names the request position of the method it is about", async () => {
+    const r = await transport(
+      fakes({
+        many: odata(answer({ methods: [entry(1, "Alpha", 2), entry(2, "Beta", 1, 2)], endedBy: "failure", ranCount: 2 })),
+      }).fetchFn,
+    ).runMany(req());
+    if (r.kind !== "call") throw new Error("expected the two-line entry to abort the call");
+    expect(r.methodIndex).toBe(2);
   });
 });

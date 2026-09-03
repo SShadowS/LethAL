@@ -8144,6 +8144,7 @@ describe("R198: grouped covering runs", () => {
       if (first === undefined) return composed;
       return {
         kind: "call",
+        methodIndex: 1,
         verdict: {
           ref: first.ref,
           outcome: "error",
@@ -8171,6 +8172,7 @@ describe("R198: grouped covering runs", () => {
       if (first === undefined) return composed;
       return {
         kind: "call",
+        methodIndex: 1,
         verdict: {
           ref: first.ref,
           outcome: "error",

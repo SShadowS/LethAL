@@ -555,7 +555,13 @@ codeunit 91003 "LC Control API"
         CodeunitResults: Text;
         ObservedAny: Boolean;
         IdentityMismatch: Boolean;
+        TestRunsBefore: Integer;
     begin
+        // R206 §2.1: the session-freshness predicate, read ONCE at the very top, before anything
+        // builds a suite or runs a method. The coverage action delegates here and re-opens this
+        // JSON, so both answers carry this one read. 0 = a fresh session.
+        TestRunsBefore := State.TestMethodRunsSoFar();
+
         // PHASE 1 — claim under lock. Nothing is written, and nothing runs, unless this succeeds.
         State.TryBeginRun(LeaseEpoch, LeaseToken, ServerGeneration, AttemptId, OpSeq, TargetAppId, ArtifactId, MutantId, Claimed, ClaimReason);
         if not Claimed then begin
@@ -568,7 +574,7 @@ codeunit 91003 "LC Control API"
                 ClaimStatus := 'lease-invalid'
             else
                 ClaimStatus := ClaimReason;
-            exit(BuildStatus(ClaimStatus, TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, '', false, false, ClaimReason));
+            exit(BuildStatus(ClaimStatus, TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, '', false, false, ClaimReason, -1));
         end;
 
         // PHASE 2 — run exactly one method OUTSIDE the lease lock, behind a catchable boundary.
@@ -591,9 +597,9 @@ codeunit 91003 "LC Control API"
         // R203): our own stop tombstoned this op while the session was still finishing.
         State.TryFinishRun(LeaseEpoch, LeaseToken, ServerGeneration, AttemptId, OpSeq, TargetAppId, ArtifactId, MutantId, Verified, FinishReason);
         if not Verified then
-            exit(BuildStatus('lease-invalid', TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, '', false, false, FinishReason));
+            exit(BuildStatus('lease-invalid', TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, '', false, false, FinishReason, -1));
 
-        exit(BuildStatus('ran', TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, CodeunitResults, ObservedAny, IdentityMismatch, ''));
+        exit(BuildStatus('ran', TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, CodeunitResults, ObservedAny, IdentityMismatch, '', TestRunsBefore));
     end;
 
     /// <summary>
@@ -624,7 +630,13 @@ codeunit 91003 "LC Control API"
         ObservedAny: Boolean;
         IdentityMismatch: Boolean;
         Displaced: Boolean;
+        Unresolved: Boolean;
+        UnresolvedReason: Text;
+        TestRunsBefore: Integer;
     begin
+        // R206 §2.1: the session-freshness predicate, read ONCE at the very top (see RunMutant).
+        TestRunsBefore := State.TestMethodRunsSoFar();
+
         // PHASE 1 — identical to RunMutant's.
         State.TryBeginRun(LeaseEpoch, LeaseToken, ServerGeneration, AttemptId, OpSeq, TargetAppId, ArtifactId, MutantId, Claimed, ClaimReason);
         if not Claimed then begin
@@ -632,7 +644,7 @@ codeunit 91003 "LC Control API"
                 ClaimStatus := 'lease-invalid'
             else
                 ClaimStatus := ClaimReason;
-            exit(BuildManyStatus(ClaimStatus, TargetAppId, ArtifactId, AttemptId, MutantId, '', '', false, false, ClaimReason));
+            exit(BuildManyStatus(ClaimStatus, TargetAppId, ArtifactId, AttemptId, MutantId, '', '', false, false, ClaimReason, -1));
         end;
 
         // PHASE 2 — the loop, behind one boundary. A raise anywhere inside is caught here.
@@ -642,19 +654,28 @@ codeunit 91003 "LC Control API"
         else
             RunError := GetLastErrorText();
         Displaced := Runner.WasDisplaced();
+        Unresolved := Runner.Unresolved();
+        UnresolvedReason := Runner.UnresolvedReason();
         ObservedAny := State.AttestationObservedAny();
         IdentityMismatch := State.AttestationMismatch();
 
-        // PHASE 3 — identical to RunMutant's. A refusal DISCARDS results and runError alike.
+        // PHASE 3 — identical to RunMutant's. A refusal DISCARDS results and runError alike. It
+        // runs BEFORE the suite-unresolved answer below, so a refused request never strands the op.
         State.TryFinishRun(LeaseEpoch, LeaseToken, ServerGeneration, AttemptId, OpSeq, TargetAppId, ArtifactId, MutantId, Verified, FinishReason);
         if not Verified then
-            exit(BuildManyStatus('lease-invalid', TargetAppId, ArtifactId, AttemptId, MutantId, '', '', false, false, FinishReason));
+            exit(BuildManyStatus('lease-invalid', TargetAppId, ArtifactId, AttemptId, MutantId, '', '', false, false, FinishReason, -1));
+        // R206 §4 item 1: a request that did not resolve to exactly one function line per pair ran
+        // nothing. A call-level status, never an entry and never a runError: the client routes it
+        // to a session abort carrying `reason`, since a test app that does not resolve is not a
+        // per-mutant fact.
+        if Unresolved and (RunError = '') then
+            exit(BuildManyStatus('suite-unresolved', TargetAppId, ArtifactId, AttemptId, MutantId, '', '', false, false, UnresolvedReason, -1));
         // Displaced means the loop saw the marker leave; a phase 3 that nevertheless verified is a
         // contradiction, reported as a runError so the client scores an error, never verdicts.
         if Displaced and (RunError = '') then
             RunError := 'displaced-but-verified: the loop stopped because the marker no longer named this op, yet phase 3 verified it; the results are not trusted.';
 
-        exit(BuildManyStatus('ran', TargetAppId, ArtifactId, AttemptId, MutantId, GroupResults, RunError, ObservedAny, IdentityMismatch, ''));
+        exit(BuildManyStatus('ran', TargetAppId, ArtifactId, AttemptId, MutantId, GroupResults, RunError, ObservedAny, IdentityMismatch, '', TestRunsBefore));
     end;
 
     /// <summary>
@@ -1076,7 +1097,7 @@ codeunit 91003 "LC Control API"
     /// on phase-1 refusals, where it may differ from Status (e.g. Status 'lease-invalid' with Reason
     /// 'op-in-flight' for a still-active same-attempt duplicate claim), and since R198/R203 on ONE
     /// phase-3 refusal: 'op-stopped', the op our own stop tombstoned while the session finished.</summary>
-    local procedure BuildStatus(Status: Text; TargetAppId: Text; ArtifactId: Text; AttemptId: Text; MutantId: Text; TestCodeunitId: Integer; TestMethod: Text; CodeunitResults: Text; ObservedAny: Boolean; IdentityMismatch: Boolean; Reason: Text): Text
+    local procedure BuildStatus(Status: Text; TargetAppId: Text; ArtifactId: Text; AttemptId: Text; MutantId: Text; TestCodeunitId: Integer; TestMethod: Text; CodeunitResults: Text; ObservedAny: Boolean; IdentityMismatch: Boolean; Reason: Text; TestRunsBefore: Integer): Text
     var
         Obj: JsonObject;
         Out: Text;
@@ -1094,15 +1115,28 @@ codeunit 91003 "LC Control API"
             Obj.Add('codeunitResults', CodeunitResults);
         Obj.Add('observedAny', ObservedAny);
         Obj.Add('identityMismatch', IdentityMismatch);
+        AddSessionKeys(Obj, Status, TestRunsBefore);
         Obj.WriteTo(Out);
         exit(Out);
+    end;
+
+    /// <summary>R206 §2.1: on a 'ran' answer only, the session-freshness predicate read at the top
+    /// of the action (`testRunsBefore`, 0 = fresh) and this session's id (`sessionId`, recorded by
+    /// the client as data). A refusal ran nothing and carries neither; the client checks for them
+    /// inside its `ran` branch only, so a refusal keeps its own class.</summary>
+    local procedure AddSessionKeys(var Obj: JsonObject; Status: Text; TestRunsBefore: Integer)
+    begin
+        if Status <> 'ran' then
+            exit;
+        Obj.Add('testRunsBefore', TestRunsBefore);
+        Obj.Add('sessionId', SessionId());
     end;
 
     /// <summary>Builds the RunMutantMany JSON result: the call-level echo RunMutant's has (status,
     /// reason?, targetAppId, artifactId, attemptId, mutantId, observedAny, identityMismatch) and,
     /// on 'ran', EITHER the loop's {endedBy, ranCount, methods} merged in OR `runError`. Never both,
     /// never neither.</summary>
-    local procedure BuildManyStatus(Status: Text; TargetAppId: Text; ArtifactId: Text; AttemptId: Text; MutantId: Text; GroupResults: Text; RunError: Text; ObservedAny: Boolean; IdentityMismatch: Boolean; Reason: Text): Text
+    local procedure BuildManyStatus(Status: Text; TargetAppId: Text; ArtifactId: Text; AttemptId: Text; MutantId: Text; GroupResults: Text; RunError: Text; ObservedAny: Boolean; IdentityMismatch: Boolean; Reason: Text; TestRunsBefore: Integer): Text
     var
         Obj: JsonObject;
         Group: JsonObject;
@@ -1118,6 +1152,7 @@ codeunit 91003 "LC Control API"
         Obj.Add('mutantId', MutantId);
         Obj.Add('observedAny', ObservedAny);
         Obj.Add('identityMismatch', IdentityMismatch);
+        AddSessionKeys(Obj, Status, TestRunsBefore);
         if Status = 'ran' then
             if RunError <> '' then
                 Obj.Add('runError', RunError)

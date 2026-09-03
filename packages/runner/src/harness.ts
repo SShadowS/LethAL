@@ -75,7 +75,7 @@ const MIN_PROTOCOL_VERSION = 2;
  * Kept in LOCKSTEP with `extensions/lethal-control/app.json`'s `version`: raising this constant
  * without bumping that file makes a freshly built control app fail its own gate. Pinned by a test.
  */
-export const MIN_CONTROL_VERSION = "1.0.0.17";
+export const MIN_CONTROL_VERSION = "1.0.0.18";
 
 /**
  * R20: the harness could not be AUTHENTICATED — HTTP 401/403 — as distinct from "the control app is

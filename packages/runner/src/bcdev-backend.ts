@@ -757,7 +757,16 @@ export class BcDevMcpBackend implements ExecutionBackend {
       );
     }
     const mutantId = this.pendingMutantId ?? "";
-    if (mutantId === "") {
+    if (opts.confirmation === true) {
+      // R206 §3: the warm confirmation's replay runs UNMUTATED. Require it, do not merely permit
+      // it: a replay with a mutant pending would confirm a kill against the mutant it is meant to
+      // be measured without (the twin of the `collectCoverage && pendingMutantId !== null` guard).
+      if (mutantId !== "") {
+        throw new Error(
+          `BcDevMcpBackend: runMany({ confirmation: true }) requires no pending mutant, but ${mutantId} is pending — activate(null) first`,
+        );
+      }
+    } else if (mutantId === "") {
       throw new Error(
         "BcDevMcpBackend: runMany() is for a MUTANT run; no mutant is pending, and a baseline keeps the single-method call because coverage is per test",
       );

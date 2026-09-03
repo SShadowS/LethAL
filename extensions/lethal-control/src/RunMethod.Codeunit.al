@@ -129,6 +129,8 @@ codeunit 91007 "LC Run Method"
         Line.Reset();
         Line.SetRange("Test Suite", RunSuiteName);
         Line.FindFirst();
+        // R206 §2.1: the session-freshness counter, immediately before the run (one of two sites).
+        State.NoteTestMethodRun();
         Mgt.RunAllTests(Line);
         // PROGRESS_BETWEEN_FIRST (R198): the very next statement after RunAllTests returns, before
         // TestResultsToJSON or anything else. This is the smallest window AL can offer between a

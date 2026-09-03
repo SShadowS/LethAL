@@ -45,6 +45,9 @@ function echo(over: Record<string, unknown> = {}): Record<string, unknown> {
     codeunitResults: JSON.stringify({
       testResults: [{ method: "OverBudgetDetected", result: 2 }],
     }),
+    // R206 §2.1: every answer that ran carries the session keys (control app 1.0.0.18).
+    testRunsBefore: 0,
+    sessionId: 2037,
     ...over,
   };
 }

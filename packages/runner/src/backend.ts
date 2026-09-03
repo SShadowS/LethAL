@@ -132,6 +132,14 @@ export interface TestVerdict {
    * orchestrator must keep quarantining — never read a missing field as "nothing was stranded".
    */
   readonly fencedOp?: { readonly attemptId: string; readonly opSeq: number };
+  /**
+   * R206 §2.1, bcdev `ran` answers only (control app 1.0.0.18): the server's per-session count of
+   * test methods run BEFORE the call that produced this verdict (0 = a fresh session, the guard's
+   * predicate) and that session's id (data, asserted constant within a group call). Absent on
+   * al-runner (a process per test, cold by construction) and on every non-`ran` path.
+   */
+  readonly testRunsBefore?: number;
+  readonly sessionId?: number;
 }
 
 /**
@@ -177,6 +185,12 @@ export interface RunManyOpts {
   readonly methods: readonly { readonly ref: TestMethodRef; readonly budgetMs: number }[];
   readonly requestCeilingMs: number;
   readonly stopGraceMs: number;
+  /**
+   * R206 §2.2: the warm confirmation's replay, an unmutated group run (`activate(null)` first).
+   * REQUIRES no pending mutant; a backend throws otherwise. Absent (false) for a covering run,
+   * which requires one.
+   */
+  readonly confirmation?: boolean;
 }
 
 export type RunManyEndedBy = "complete" | "failure" | "cap";
@@ -200,6 +214,8 @@ export type RunManyResult =
   | {
       readonly kind: "call";
       readonly verdict: TestVerdict;
+      /** R206: the 1-based request position of the method `verdict` is about. */
+      readonly methodIndex: number;
       readonly cause?: RunManyCause;
       readonly abortSession?: string;
       readonly fencedOp: { readonly attemptId: string; readonly opSeq: number };

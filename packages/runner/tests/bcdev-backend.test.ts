@@ -1394,6 +1394,8 @@ function capturingRunMutantFactory(
     bodies.push(b);
     const inner = {
       status: "ran",
+      testRunsBefore: 0,
+      sessionId: 2037,
       targetAppId: b.targetAppId,
       artifactId: b.artifactId,
       attemptId: b.attemptId,
@@ -1745,6 +1747,8 @@ describe('coverageMode "fenced" (R58)', () => {
       calls.push({ url: String(url), body: b });
       const inner = {
         status: "ran",
+        testRunsBefore: 0,
+        sessionId: 2037,
         targetAppId: b.targetAppId,
         artifactId: b.artifactId,
         attemptId: b.attemptId,
@@ -1860,6 +1864,8 @@ describe('coverageMode "fenced" (R58)', () => {
         const b = JSON.parse(String(init?.body)) as Record<string, unknown>;
         const inner = {
           status: "ran",
+          testRunsBefore: 0,
+          sessionId: 2037,
           targetAppId: b.targetAppId,
           artifactId: b.artifactId,
           attemptId: b.attemptId,
@@ -2116,6 +2122,8 @@ describe("fenced coverage — the server-side object-id filter", () => {
       calls.push({ url: String(url), body: b });
       const inner = {
         status: "ran",
+        testRunsBefore: 0,
+        sessionId: 2037,
         targetAppId: b.targetAppId,
         artifactId: b.artifactId,
         attemptId: b.attemptId,
@@ -2269,6 +2277,8 @@ describe("fenced coverage — the thin-coverage diagnostic", () => {
       calls.push({ url: String(url), body: b });
       const payload = {
         status: "ran",
+        testRunsBefore: 0,
+        sessionId: 2037,
         targetAppId: b.targetAppId,
         artifactId: b.artifactId,
         attemptId: b.attemptId,
