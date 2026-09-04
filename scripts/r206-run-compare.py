@@ -10,13 +10,16 @@ script against run 3 twice before run 4 existed.
 """
 import json, sqlite3, collections, sys
 
-S = "C:/Users/SShadowS/AppData/Local/Temp/claude/U--Git-LethAL/9a4fbe69-bed8-4c3f-80e5-91dd464b9ed0/scratchpad"
-R3, R4 = S + "/lethal-53470-run3", S + "/lethal-53470-run4"
-# Smoke test: `python compare-run3-run4.py <dirA> <dirB>` overrides both, so the script can be
-# exercised before run 4 exists (A vs A must report the table identical and the run-4-only fields
-# absent).
-if len(sys.argv) == 3:
-    R3, R4 = sys.argv[1], sys.argv[2]
+# Both run directories are arguments: each must hold the run's `report.json` and `lethal.sqlite`.
+# Passing the SAME directory twice is the smoke test that caught two key bugs in this script
+# before run 4 existed (A vs A must report the table identical and the run-4-only fields absent).
+if len(sys.argv) != 3:
+    sys.exit(
+        "usage: r206-run-compare.py <baselineRunDir> <newRunDir>\n"
+        "  each directory must contain report.json and lethal.sqlite\n"
+        "  pass the same directory twice to smoke-test the comparison itself"
+    )
+R3, R4 = sys.argv[1], sys.argv[2]
 
 PRE = dict(warmKills=198, groupedCalls=896, killed=448, survived=237, mutants=741,
            survivorSeconds=2400.0)
