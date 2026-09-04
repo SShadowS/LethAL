@@ -21,6 +21,7 @@
     "itest:stale-publish": "bun packages/runner/itest/stale-publish.itest.ts",
     "itest:tables": "bun packages/runner/itest/tables.itest.ts",
     "itest:hang": "bun packages/runner/itest/hang.itest.ts",
+    "itest:chunked": "bun packages/runner/itest/chunked.itest.ts",
     "mutate": "stryker run"
   },
   "devDependencies": {
