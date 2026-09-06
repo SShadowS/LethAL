@@ -70,7 +70,7 @@ describe("classifyHangCapable", () => {
     expect(classifyHangCapable(assignment(root, "N += 1"), ctx)).toBe("loop-condition-target");
   });
 
-  it("DECLINES an assignment the condition does not read — the step variable (spec 3.2.1)", () => {
+  it("DECLINES an assignment the condition does not read: the step variable (spec 3.2.1)", () => {
     const { root, ctx } = load(`codeunit 50304 "R" {
       procedure P(Limit: Integer) var I: Integer; Step: Integer; begin
         Step := 1;
@@ -105,5 +105,15 @@ describe("classifyHangCapable", () => {
       procedure A() var I: Integer; begin while I < 3 do ; end;
       procedure B() var I: Integer; begin I += 1; end; }`);
     expect(classifyHangCapable(assignment(root, "I += 1"), ctx)).toBeNull();
+  });
+
+  it("CLAIMS a QUOTED-identifier target read by an enclosing loop's condition", () => {
+    const { root, ctx } = load(`codeunit 50309 "R" {
+      procedure P() var "Line Done": Boolean; begin
+        while not "Line Done" do "Line Done" := true;
+      end; }`);
+    expect(classifyHangCapable(assignment(root, '"Line Done" := true'), ctx)).toBe(
+      "loop-condition-target",
+    );
   });
 });
