@@ -275,14 +275,14 @@ describe("Caveat union", () => {
   });
 });
 
-// ————————————————————————————————————————————————————————————————————————
-// R196: `hangCapable` is a SITE property, exactly like `platformKillMechanism` (R72) — it comes off
+// ------------------------------------------------------------------------
+// R196: `hangCapable` is a SITE property, exactly like `platformKillMechanism` (R72): it comes off
 // `MutantManifestEntry` and never off the outcome, so it is present on the mutant whatever its
 // verdict. These tests pin the same shape: a manifest entry carrying the tag has it on the built
-// report row, and one without it omits the KEY entirely (not `undefined` under it — the schema
+// report row, and one without it omits the KEY entirely (not `undefined` under it, the schema
 // distinguishes "absent" from "present but empty").
-// ————————————————————————————————————————————————————————————————————————
-describe("buildReport — hangCapable travels the site property path (R196)", () => {
+// ------------------------------------------------------------------------
+describe("buildReport: hangCapable travels the site property path (R196)", () => {
   const STATICS: FoldStatics = {
     caps: { authoritative: true, coverage: "none", deploy: "publish", isolation: "session" },
   };
@@ -376,13 +376,13 @@ describe("buildReport — hangCapable travels the site property path (R196)", ()
   });
 
   test("explains every hang-capable reason it can carry", () => {
-    // Iterate the TABLE itself, not a hand-copied list of its keys — `Record<HangCapableReason,
+    // Iterate the TABLE itself, not a hand-copied list of its keys: `Record<HangCapableReason,
     // string>` already forces a new union member to gain an entry at compile time, but a separate
     // literal array of reasons does not grow with the union, so a second reason could arrive with
     // this test still green and asserting nothing about it (design §3.2 plans three more).
     const entries = Object.entries(HANG_CAPABLE_EXPLANATIONS);
-    // Iterating an empty object passes trivially, so non-emptiness is asserted separately — without
-    // this, deleting every entry from the table would leave this test green: the empty-vs-empty
+    // Iterating an empty object passes trivially, so non-emptiness is asserted separately: without
+    // this, deleting every entry from the table would leave this test green, the empty-vs-empty
     // shape CLAUDE.md names as this project's signature bug.
     expect(entries.length).toBeGreaterThan(0);
     for (const [, explanation] of entries) {

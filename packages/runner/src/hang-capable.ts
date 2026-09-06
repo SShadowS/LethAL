@@ -6,7 +6,7 @@ import type { HangCapableReason } from "@lethal/engine";
  * The wording is bound by the design's section 3.3. Each sentence says what was OBSERVED about the
  * code, never that the mutation prevents progress and never that an untagged site is safe.
  *
- * No importer yet — this is not orphaned code. `MutantOutcome.hangCapable` (report.ts) is this
+ * No importer yet, and this is not orphaned code. `MutantOutcome.hangCapable` (report.ts) is this
  * table's first consumer, carrying the raw reason onto each mutant row. The table itself is read by
  * the `hang-capable-auto-stop` caveat the design's section 5.4 specifies, which is later plan work
  * (a forced-stop feature this plan does not build) and will look values up here the way
