@@ -130,30 +130,38 @@ describe("hangCapableForMutatedNode", () => {
             Remaining := 0;
     end;
 }`);
-    const literals = findAll(root, ALNodeKind.integer).filter((n) => n.text === "0");
+    const literals = findAll(root, ALNodeKind.integer_literal).filter((n) => n.text === "0");
     const lit = literals[0];
     if (lit === undefined) throw new Error("fixture has no `0` literal");
     expect(hangCapableForMutatedNode(lit, ctx)).toBe("loop-condition-target");
   });
 
   // The target side is not a value written to the target.
-  it("DECLINES a node inside the assignment's target expression", () => {
+  //
+  // The fixture is chosen so this can actually fail. An obvious alternative, a subscripted target
+  // like `Slots[2] := 0`, would pass with the guard deleted: `assignmentTargetOf` already declines
+  // any target that is not a bare identifier, so the enclosing assignment classifies as null
+  // whatever the guard does. The target identifier itself is the one node inside `left` whose
+  // enclosing assignment IS claimable, so it is the only fixture that separates the two.
+  it("DECLINES the target identifier on the assignment's left", () => {
     const { root, ctx } = ctxFor(`codeunit 50000 P
 {
     procedure Go()
     var
-        Slots: array[5] of Integer;
         Remaining: Integer;
     begin
         Remaining := 1;
         while Remaining > 0 do
-            Slots[2] := 0;
+            Remaining := 0;
     end;
 }`);
-    const twos = findAll(root, ALNodeKind.integer).filter((n) => n.text === "2");
-    const two = twos[0];
-    if (two === undefined) throw new Error("fixture has no `2` literal");
-    expect(hangCapableForMutatedNode(two, ctx)).toBeNull();
+    // The LAST `Remaining` on the left of an assignment: the one inside the loop body.
+    const assignments = findAll(root, ALNodeKind.assignment_statement);
+    const inLoop = assignments[assignments.length - 1];
+    if (inLoop === undefined) throw new Error("fixture has no assignment");
+    const target = inLoop.childForFieldName("left");
+    if (target === null) throw new Error("assignment has no left field");
+    expect(hangCapableForMutatedNode(target, ctx)).toBeNull();
   });
 
   // A node in a statement that is not an assignment must not borrow a neighbour's answer.
@@ -171,7 +179,7 @@ describe("hangCapableForMutatedNode", () => {
         end;
     end;
 }`);
-    const sevens = findAll(root, ALNodeKind.integer).filter((n) => n.text === "7");
+    const sevens = findAll(root, ALNodeKind.integer_literal).filter((n) => n.text === "7");
     const seven = sevens[0];
     if (seven === undefined) throw new Error("fixture has no `7` literal");
     expect(hangCapableForMutatedNode(seven, ctx)).toBeNull();
@@ -188,7 +196,7 @@ describe("hangCapableForMutatedNode", () => {
         Remaining := 3;
     end;
 }`);
-    const threes = findAll(root, ALNodeKind.integer).filter((n) => n.text === "3");
+    const threes = findAll(root, ALNodeKind.integer_literal).filter((n) => n.text === "3");
     const three = threes[0];
     if (three === undefined) throw new Error("fixture has no `3` literal");
     expect(hangCapableForMutatedNode(three, ctx)).toBeNull();
@@ -214,7 +222,7 @@ describe("hangCapableForMutatedNode", () => {
         Remaining := 9;
     end;
 }`);
-    const nines = findAll(root, ALNodeKind.integer).filter((n) => n.text === "9");
+    const nines = findAll(root, ALNodeKind.integer_literal).filter((n) => n.text === "9");
     const nine = nines[0];
     if (nine === undefined) throw new Error("fixture has no `9` literal");
     expect(hangCapableForMutatedNode(nine, ctx)).toBeNull();
@@ -284,8 +292,8 @@ In `packages/builtin-tier1/src/loop-hazard.ts`, beside `classifyHangCapable`:
  * and asks about that, because the value written is what an enclosing loop's condition reads.
  *
  * Two refusals, both deliberate. A node inside the assignment's `left` field is part of the target
- * expression, not a value written to the target, so `Slots[2] := 0` does not become hang-capable
- * through its subscript. And the walk stops at the enclosing procedure or trigger, so a node in a
+ * expression rather than a value written to the target, so an operator mutating the target itself
+ * gets no tag from this. And the walk stops at the enclosing procedure or trigger, so a node in a
  * loop-free procedure never borrows an answer from a loop elsewhere in the object.
  *
  * Containment is tested by POSITION rather than by node identity, for the reason recorded in
@@ -297,17 +305,17 @@ export function hangCapableForMutatedNode(
   node: ALSyntaxNode,
   ctx: SemanticContext,
 ): HangCapableReason | null {
-  if (node.rawKind === ALNodeKind.assignment_statement) return classifyHangCapable(node, ctx);
+  if (node.kind === ALNodeKind.assignment_statement) return classifyHangCapable(node, ctx);
 
   let cur: ALSyntaxNode | null = node.parent;
   while (cur !== null) {
-    if (cur.rawKind === ALNodeKind.assignment_statement) {
+    if (cur.kind === ALNodeKind.assignment_statement) {
       const right = cur.childForFieldName("right");
       if (right === null) return null;
       const insideValueSide = node.startIndex >= right.startIndex && node.endIndex <= right.endIndex;
       return insideValueSide ? classifyHangCapable(cur, ctx) : null;
     }
-    if (SCOPE_KINDS.has(cur.rawKind)) return null;
+    if (SCOPE_KINDS.has(cur.kind)) return null;
     cur = cur.parent;
   }
   return null;
@@ -323,7 +331,9 @@ Expected: PASS, including the six new tests, with no existing test changed.
 
 - [ ] **Step 7: Red-check the value-side refusal**
 
-This is the one branch a plausible wrong implementation gets wrong, and the array-subscript test is the only thing pinning it. Delete the `insideValueSide` check so the function returns `classifyHangCapable(cur, ctx)` unconditionally, run `bun test packages/builtin-tier1/tests/loop-hazard.test.ts`, and confirm the "DECLINES a node inside the assignment's target expression" test goes RED and nothing else does. Restore it and confirm green. Report both outputs.
+This is the one branch a plausible wrong implementation gets wrong. Delete the `insideValueSide` check so the function returns `classifyHangCapable(cur, ctx)` unconditionally, run `bun test packages/builtin-tier1/tests/loop-hazard.test.ts`, and confirm the "DECLINES the target identifier on the assignment's left" test goes RED and nothing else does. Restore it and confirm green. Report both outputs.
+
+If that test does NOT go red, stop and tell me rather than adjusting it until it does. It would mean the guard is unreachable through this fixture too, and an unreachable guard with a test that cannot fail is worse than no guard: it reads as protection that is not there.
 
 - [ ] **Step 8: Commit**
 
@@ -380,10 +390,10 @@ const probeOperator = (tag: "loop-condition-target" | undefined): MutationOperat
   name: "test.probe",
   version: "1.0.0",
   tier: 1,
-  targetNodeKinds: [ALNodeKind.integer],
-  producesNodeKinds: [ALNodeKind.integer],
+  targetNodeKinds: [ALNodeKind.integer_literal],
+  producesNodeKinds: [ALNodeKind.integer_literal],
   requiresSemantic: [],
-  targets: (node: ALSyntaxNode) => node.rawKind === ALNodeKind.integer,
+  targets: (node: ALSyntaxNode) => node.kind === ALNodeKind.integer_literal,
   generate: (node: ALSyntaxNode, _ctx: SemanticContext): readonly MutationSpec[] => [
     {
       operatorName: "test.probe",
@@ -566,7 +576,7 @@ it("tags a literal assigned inside a loop whose condition reads the target (R196
 }`;
   const root = wrapRoot(parseAL(src));
   const ctx = buildSemanticContext([{ path: "fixture.al", root }]);
-  const specs = findAll(root, ALNodeKind.integer)
+  const specs = findAll(root, ALNodeKind.integer_literal)
     .filter((n) => shiftInteger.targets(n, ctx))
     .flatMap((n) => shiftInteger.generate(n, ctx));
 
