@@ -49,8 +49,7 @@ export type { CallerIndex, CallSite } from "./semantic/callers";
 export { buildCallerIndex } from "./semantic/callers";
 export type { SemanticContext } from "./semantic/context";
 export { buildSemanticContext } from "./semantic/context";
-export type { VarScope } from "./semantic/resolve-var-ref";
-export { enclosingScope, normalizeAlName, resolveVarRef } from "./semantic/resolve-var-ref";
+export { normalizeAlName, resolveVarRef } from "./semantic/resolve-var-ref";
 
 // Operator contract
 export type {

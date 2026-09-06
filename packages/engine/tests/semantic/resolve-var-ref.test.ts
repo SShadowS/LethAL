@@ -3,7 +3,7 @@ import { ALNodeKind } from "../../src/ast/node-kinds";
 import { initParser, parseAL } from "../../src/ast/parser";
 import { type ALSyntaxNode, wrapRoot } from "../../src/ast/syntax-node";
 import { buildSemanticContext } from "../../src/semantic/context";
-import { enclosingScope, normalizeAlName, resolveVarRef } from "../../src/semantic/resolve-var-ref";
+import { normalizeAlName, resolveVarRef } from "../../src/semantic/resolve-var-ref";
 
 /** Every `identifier` node in the tree, in source order. */
 function identifiers(root: ALSyntaxNode): ALSyntaxNode[] {
@@ -95,32 +95,5 @@ describe("normalizeAlName", () => {
 
   it("lowercases an unquoted name too", () => {
     expect(normalizeAlName("Counter")).toBe("counter");
-  });
-});
-
-describe("enclosingScope", () => {
-  beforeAll(async () => {
-    await initParser();
-  });
-
-  it("reports the owning object and the enclosing procedure's name", () => {
-    const { root } = load(`codeunit 50210 "R" { var Counter: Integer;
-      procedure P() begin Counter := 1; end; }`);
-    const scope = enclosingScope(useOf(root, "Counter"));
-    expect(scope?.ownerName).toBe("R");
-    expect(scope?.procName).toBe("P");
-  });
-
-  it("reports a null procName inside a TRIGGER, not the trigger's own name", () => {
-    const { root } = load(`table 50211 "R" { fields { field(1; "No."; Code[20]) { } }
-      trigger OnInsert() var Seen: Integer; begin Seen := 1; end; }`);
-    const scope = enclosingScope(useOf(root, "Seen"));
-    expect(scope?.ownerName).toBe("R");
-    expect(scope?.procName).toBeNull();
-  });
-
-  it("returns null for a node with no enclosing object", () => {
-    const { root } = load(`codeunit 50212 "R" { procedure P() begin end; }`);
-    expect(enclosingScope(root)).toBeNull();
   });
 });

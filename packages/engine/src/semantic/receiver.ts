@@ -700,7 +700,7 @@ function resolveTable(symbols: SymbolTable, idOrName: string): ObjectSymbol | nu
 
 // --- small helpers ---------------------------------------------------------
 
-export function enclosingObject(node: ALSyntaxNode): ALSyntaxNode | null {
+function enclosingObject(node: ALSyntaxNode): ALSyntaxNode | null {
   let current: ALSyntaxNode | null = node.parent;
   while (current !== null) {
     if (OBJECT_KINDS.has(current.kind)) return current;
@@ -709,7 +709,7 @@ export function enclosingObject(node: ALSyntaxNode): ALSyntaxNode | null {
   return null;
 }
 
-export function objectNameOf(objectNode: ALSyntaxNode): string | null {
+function objectNameOf(objectNode: ALSyntaxNode): string | null {
   const nameNode = objectNode.childForFieldName("object_name");
   return nameNode === null ? null : stripQuotes(nameNode.text);
 }
