@@ -201,10 +201,11 @@ export function classifyHangCapable(
  * mutate a node inside an assignment's right-hand side. This walks out to the enclosing assignment
  * and asks about that, because the value written is what an enclosing loop's condition reads.
  *
- * Two refusals, both deliberate. A node inside the assignment's `left` field is part of the target
- * expression rather than a value written to the target, so an operator mutating the target itself
- * gets no tag from this. And the walk stops at the enclosing procedure or trigger, so a node in a
- * loop-free procedure never borrows an answer from a loop elsewhere in the object.
+ * One refusal here is deliberate and load-bearing: a node inside the assignment's `left` field is
+ * part of the target expression rather than a value written to the target, so an operator mutating
+ * the target itself gets no tag from this (test: "DECLINES the target identifier on the
+ * assignment's left"). The `SCOPE_KINDS` check inside the walk below is NOT that kind of guard —
+ * see the comment on it.
  *
  * Containment is tested by POSITION rather than by node identity, for the reason recorded in
  * [[R209]]: `resolveVarRef` returns freshly built `VarSymbol` objects for trigger-local variables,
@@ -226,6 +227,11 @@ export function hangCapableForMutatedNode(
         node.startIndex >= right.startIndex && node.endIndex <= right.endIndex;
       return insideValueSide ? classifyHangCapable(cur, ctx) : null;
     }
+    // Early exit, not a guard that changes any answer: this walk climbs `.parent` pointers only,
+    // so it can never descend into a sibling procedure's subtree to begin with, the same reason
+    // `sameDeclaration`'s docstring gives (above) for `classifyHangCapable`'s identically shaped
+    // walk. Without this line the loop would keep climbing to the file root and return the same
+    // null, just after more hops. No test in this file can tell its presence from its absence.
     if (SCOPE_KINDS.has(cur.kind)) return null;
     cur = cur.parent;
   }

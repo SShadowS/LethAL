@@ -159,11 +159,17 @@ describe("hangCapableForMutatedNode", () => {
     end;
 }`);
     // Both the loop's condition (`Remaining > 0`) and its body (`Remaining := 0`) contain a `0`
-    // literal, and the condition's occurs FIRST in document order. The assignment's is the LAST
-    // match, not the first.
-    const literals = findAll(root, ALNodeKind.integer_literal).filter((n) => n.text === "0");
-    const lit = literals[literals.length - 1];
-    if (lit === undefined) throw new Error("fixture has no `0` literal");
+    // literal, so a flat `findAll(root, ...)` over the whole tree is ambiguous: a search scoped to
+    // the file could pick up either one, and a positional index into that flat list is only as
+    // stable as the fixture text happens to keep it (this is the bug a prior version of this test
+    // had). Scope the search to the in-loop assignment's OWN subtree instead, so there is exactly
+    // one `0` to find, structurally, regardless of how many others exist elsewhere in the file.
+    const assignments = findAll(root, ALNodeKind.assignment_statement);
+    const inLoop = assignments[assignments.length - 1];
+    if (inLoop === undefined) throw new Error("fixture has no assignment");
+    const literals = findAll(inLoop, ALNodeKind.integer_literal).filter((n) => n.text === "0");
+    const lit = literals[0];
+    if (lit === undefined) throw new Error("assignment has no `0` literal");
     expect(hangCapableForMutatedNode(lit, ctx)).toBe("loop-condition-target");
   });
 
@@ -233,8 +239,15 @@ describe("hangCapableForMutatedNode", () => {
     expect(hangCapableForMutatedNode(three, ctx)).toBeNull();
   });
 
-  // The walk must not leave the procedure it started in.
-  it("DECLINES when the only loop is in a different procedure", () => {
+  // The mutated node's OWN procedure has no loop at all, so `classifyHangCapable` finds nothing to
+  // claim against, even though a SIBLING procedure has one. This does NOT exercise the walk's
+  // `SCOPE_KINDS` boundary check: from the `9` literal, the enclosing assignment is found on the
+  // very first parent hop, already inside `Other()`, so `hangCapableForMutatedNode` never climbs
+  // far enough to reach a scope boundary at all. The null answer comes entirely from
+  // `classifyHangCapable` finding no enclosing loop in `Other()`. (A `.parent`-only walk can never
+  // descend into a sibling procedure's subtree regardless, per `sameDeclaration`'s docstring in
+  // `../src/loop-hazard.ts`, so no fixture in this file can exercise that boundary check either.)
+  it("DECLINES a literal in an assignment whose own procedure has no loop", () => {
     const { root, ctx } = ctxFor(`codeunit 50000 P
 {
     procedure Spin()
