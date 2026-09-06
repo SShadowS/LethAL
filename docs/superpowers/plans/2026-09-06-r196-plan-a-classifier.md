@@ -10,7 +10,7 @@ at all.
 declaration does this identifier refer to" against the existing `SymbolTable`; `classifyHangCapable`
 walks outward from an assignment through enclosing `while`/`repeat` loops to the procedure or
 trigger boundary and asks whether any of their conditions reads the assignment's target. Neither is
-wired into an operator, a report or a runner in this plan — nothing user-visible changes, and no
+wired into an operator, a report or a runner in this plan: nothing user-visible changes, and no
 mutant moves.
 
 **Tech Stack:** Bun + TypeScript, `bun:test`, tree-sitter-al via `packages/engine/src/ast`.
@@ -29,9 +29,9 @@ throwing all of it away. **Plan B is written only after Task 3's decision is rec
 
 Copied from `CLAUDE.md` and the spec; every task's requirements implicitly include these.
 
-- **No `!` non-null assertions** — biome `noNonNullAssertion` is an error. Destructure, then check
+- **No `!` non-null assertions.** biome `noNonNullAssertion` is an error. Destructure, then check
   `undefined`.
-- **`exactOptionalPropertyTypes`** — build optional props with `...(v !== undefined ? { k: v } : {})`.
+- **`exactOptionalPropertyTypes`.** Build optional props with `...(v !== undefined ? { k: v } : {})`.
 - **Build loop, in this order:** `bun run typecheck`, then `rm -rf packages/*/dist`, then
   `bun test`. Skipping the `rm` picks up stale compiled `*.test.js` and produces ~21 phantom
   failures.
@@ -42,7 +42,7 @@ Copied from `CLAUDE.md` and the spec; every task's requirements implicitly inclu
 - **A tag claims only that the target is a condition-relevant variable of an enclosing loop**
   (spec §3.3). No comment, message or doc may say it proves a hang will occur, or that an unclassified
   shape is safe.
-- **Fail loudly on caller-contract violations** — throw; never return a plausible empty default.
+- **Fail loudly on caller-contract violations.** Throw; never return a plausible empty default.
 
 ## File Structure
 
@@ -57,7 +57,16 @@ Copied from `CLAUDE.md` and the spec; every task's requirements implicitly inclu
 
 ---
 
-### Task 1: `resolveVarRef` — which declaration does this identifier mean
+### Task 1: `resolveVarRef`, which declaration does this identifier mean
+
+**Note, added after execution (fix round, R196):** `enclosingScope`/`VarScope`, named below as
+Task 1's output for Task 2 to consume, were built as specified, then DELETED once Task 2 was
+actually written against `receiver.ts`'s existing `lookupVar` instead (a thin adapter over it,
+rather than a second resolver walking its own scope chain). They are dead API this plan describes
+but the shipped code does not have, and a reader following this plan literally would rebuild code
+that was deliberately removed. See `packages/engine/src/semantic/resolve-var-ref.ts`'s own module
+doc and its git history for why, and read the self-review's "type consistency" note below in that
+light rather than as a description of the committed module's actual exports.
 
 **Files:**
 - Create: `packages/engine/src/semantic/resolve-var-ref.ts`
@@ -66,13 +75,13 @@ Copied from `CLAUDE.md` and the spec; every task's requirements implicitly inclu
 **Interfaces:**
 - Consumes: `SemanticContext` (`packages/engine/src/semantic/context.ts:27`), whose `symbols`
   provides `resolveProcedure(ownerName, procName)` (with `.parameters`), `localsOf(ownerName,
-  procName)` and `globalsOf(ownerName)` — note parameters are a field of `ProcedureSymbol`
+  procName)` and `globalsOf(ownerName)`. Note parameters are a field of `ProcedureSymbol`
   (`symbol-table.ts:116`) and are NOT included in `localsOf`, so both must be consulted.
 - Produces, for Task 2:
   - `interface VarScope { readonly ownerName: string; readonly procName: string | null }`
   - `enclosingScope(node: ALSyntaxNode): VarScope | null`
   - `resolveVarRef(node: ALSyntaxNode, ctx: SemanticContext): VarSymbol | null`
-  - `normalizeAlName(raw: string): string` — strips one layer of `"` quoting and lowercases.
+  - `normalizeAlName(raw: string): string`, strips one layer of `"` quoting and lowercases.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -151,7 +160,7 @@ describe("resolveVarRef", () => {
     expect(resolveVarRef(useOf(root, "Seen"), ctx)?.name).toBe("Seen");
   });
 
-  it("returns null for a MEMBER name after a dot — not a variable read", () => {
+  it("returns null for a MEMBER name after a dot, not a variable read", () => {
     const { root, ctx } = load(`codeunit 50205 "R" { var Rec: Record Customer;
       procedure P() begin Rec.Name := 'x'; end; }`);
     expect(resolveVarRef(useOf(root, "Name"), ctx)).toBeNull();
@@ -168,7 +177,7 @@ describe("resolveVarRef", () => {
 - [ ] **Step 2: Run it and confirm it fails for the right reason**
 
 Run: `bun test packages/engine/tests/semantic/resolve-var-ref.test.ts`
-Expected: FAIL — cannot resolve module `../../src/semantic/resolve-var-ref`.
+Expected: FAIL, cannot resolve module `../../src/semantic/resolve-var-ref`.
 
 - [ ] **Step 3: Implement**
 
@@ -255,7 +264,7 @@ function isMemberName(node: ALSyntaxNode): boolean {
  *
  * Lookup order is AL's: parameters and locals of the enclosing procedure or trigger shadow the
  * object's globals. Parameters live on `ProcedureSymbol.parameters` and are NOT returned by
- * `localsOf`, so both are consulted — omitting the first silently mis-resolves every
+ * `localsOf`, so both are consulted: omitting the first silently mis-resolves every
  * parameter-driven loop.
  */
 export function resolveVarRef(node: ALSyntaxNode, ctx: SemanticContext): VarSymbol | null {
@@ -281,7 +290,7 @@ export function resolveVarRef(node: ALSyntaxNode, ctx: SemanticContext): VarSymb
 Run: `bun test packages/engine/tests/semantic/resolve-var-ref.test.ts`
 Expected: PASS, 7 tests.
 
-If a test fails on a node kind (for example the trigger case), do NOT loosen the assertion — print
+If a test fails on a node kind (for example the trigger case), do NOT loosen the assertion. Print
 the actual tree with a scratch script and fix the kind constant. `ALNodeKind` is a curated subset
 that CASTS the raw tree-sitter type (`node-kinds.ts`), so a wrong constant matches nothing at
 runtime with no type error, which is R120.
@@ -292,12 +301,12 @@ runtime with no type error, which is R120.
 bun run typecheck && rm -rf packages/*/dist && bun test packages/engine
 bunx biome check packages/engine/src/semantic/resolve-var-ref.ts packages/engine/tests/semantic/resolve-var-ref.test.ts
 git add packages/engine/src/semantic/resolve-var-ref.ts packages/engine/tests/semantic/resolve-var-ref.test.ts
-git commit -m "feat(engine): resolveVarRef — which declaration an identifier refers to (R196)"
+git commit -m "feat(engine): resolveVarRef, which declaration an identifier refers to (R196)"
 ```
 
 ---
 
-### Task 2: `classifyHangCapable` — is this assignment's target read by an enclosing loop's condition
+### Task 2: `classifyHangCapable`, is this assignment's target read by an enclosing loop's condition
 
 **Files:**
 - Create: `packages/builtin-tier1/src/loop-hazard.ts`
@@ -307,7 +316,7 @@ git commit -m "feat(engine): resolveVarRef — which declaration an identifier r
 - Consumes: `resolveVarRef`, `normalizeAlName` from Task 1.
 - Produces, for Plan B's operators and Task 3's census:
   - `type HangCapableReason = "loop-condition-target"`
-  - `assignmentTargetOf(node: ALSyntaxNode): ALSyntaxNode | null` — the target identifier of the
+  - `assignmentTargetOf(node: ALSyntaxNode): ALSyntaxNode | null`, the target identifier of the
     assignment at or enclosing `node`; `null` when there is none.
   - `classifyHangCapable(node: ALSyntaxNode, ctx: SemanticContext): HangCapableReason | null`
 
@@ -382,7 +391,7 @@ describe("classifyHangCapable", () => {
     expect(classifyHangCapable(assignment(root, "N += 1"), ctx)).toBe("loop-condition-target");
   });
 
-  it("DECLINES an assignment the condition does not read — the step variable (spec 3.2.1)", () => {
+  it("DECLINES an assignment the condition does not read: the step variable (spec 3.2.1)", () => {
     const { root, ctx } = load(`codeunit 50304 "R" {
       procedure P(Limit: Integer) var I: Integer; Step: Integer; begin
         Step := 1;
@@ -424,7 +433,7 @@ describe("classifyHangCapable", () => {
 - [ ] **Step 2: Run it and confirm it fails**
 
 Run: `bun test packages/builtin-tier1/tests/loop-hazard.test.ts`
-Expected: FAIL — cannot resolve module `../src/loop-hazard`.
+Expected: FAIL, cannot resolve module `../src/loop-hazard`.
 
 - [ ] **Step 3: Implement**
 
@@ -552,7 +561,7 @@ Two failures are likely and neither is fixed by weakening a test:
 bun run typecheck && rm -rf packages/*/dist && bun test packages/builtin-tier1
 bunx biome check packages/builtin-tier1/src/loop-hazard.ts packages/builtin-tier1/tests/loop-hazard.test.ts
 git add packages/builtin-tier1/src/loop-hazard.ts packages/builtin-tier1/tests/loop-hazard.test.ts
-git commit -m "feat(operators): classifyHangCapable — an assignment whose target an enclosing loop's condition reads (R196)"
+git commit -m "feat(operators): classifyHangCapable, an assignment whose target an enclosing loop's condition reads (R196)"
 ```
 
 ---
@@ -571,7 +580,7 @@ git commit -m "feat(operators): classifyHangCapable — an assignment whose targ
 - [ ] **Step 1: Write the census script**
 
 Create `scripts/census-hang-capable.ts`, modelled on `scripts/census-operator-sites.ts` (read its
-first 40 lines for the corpus-walking and parsing shape — reuse it rather than reinventing):
+first 40 lines for the corpus-walking and parsing shape, and reuse it rather than reinventing):
 
 ```ts
 #!/usr/bin/env bun
@@ -641,7 +650,7 @@ await writeFile(outPath, JSON.stringify({ summary, taggedRows }, null, 2), "utf8
 ```
 
 If `census-operator-sites.ts` does not export its corpus walk, export it there in this same commit
-rather than copying the loop — two corpus walkers that disagree is exactly R80's shape.
+rather than copying the loop: two corpus walkers that disagree is exactly R80's shape.
 
 **Refine `declinedUnresolved` before running:** as written above it counts every assignment with no
 enclosing-loop hit, which is not the same thing. Split the classifier's two refusal reasons by
@@ -678,17 +687,17 @@ EOF
 Cross-check each against the census's `taggedRows` for the same file and line, and rewrite §1's
 table with a definite yes/no per row. Replace "about 5 of 8" with the exact count.
 
-- [ ] **Step 4: Record the decision — this is the halt**
+- [ ] **Step 4: Record the decision, this is the halt**
 
 Append to `docs/measurements/README.md` a section giving, for both corpora: the claim rate, the
 declined-unresolved rate, the exact catch count against the eight, and **the decision**, in one of
 these forms:
 
-- *proceed* — the rate is a workable fraction of assignments and the classifier catches the expected
+- *proceed*: the rate is a workable fraction of assignments and the classifier catches the expected
   rows; Plan B is written;
-- *revise* — the rule claims too much or too little; the spec's §3 returns to review with the number
+- *revise*: the rule claims too much or too little; the spec's §3 returns to review with the number
   attached;
-- *stop* — the rate shows the approach is wrong; R196 is re-opened with this measurement as its
+- *stop*: the rate shows the approach is wrong; R196 is re-opened with this measurement as its
   evidence.
 
 Write the number first and the decision second. A decision recorded without its number is the thing
