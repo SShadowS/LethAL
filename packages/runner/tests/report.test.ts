@@ -376,8 +376,17 @@ describe("buildReport — hangCapable travels the site property path (R196)", ()
   });
 
   test("explains every hang-capable reason it can carry", () => {
-    for (const reason of ["loop-condition-target"] as const) {
-      expect(HANG_CAPABLE_EXPLANATIONS[reason]).toBeTruthy();
+    // Iterate the TABLE itself, not a hand-copied list of its keys — `Record<HangCapableReason,
+    // string>` already forces a new union member to gain an entry at compile time, but a separate
+    // literal array of reasons does not grow with the union, so a second reason could arrive with
+    // this test still green and asserting nothing about it (design §3.2 plans three more).
+    const entries = Object.entries(HANG_CAPABLE_EXPLANATIONS);
+    // Iterating an empty object passes trivially, so non-emptiness is asserted separately — without
+    // this, deleting every entry from the table would leave this test green: the empty-vs-empty
+    // shape CLAUDE.md names as this project's signature bug.
+    expect(entries.length).toBeGreaterThan(0);
+    for (const [, explanation] of entries) {
+      expect(explanation).toBeTruthy();
     }
   });
 });
