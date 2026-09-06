@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from "bun:test";
-import { initParser } from "@lethal/engine";
-import type { MutationOperator } from "@lethal/engine";
+import { ALNodeKind, initParser } from "@lethal/engine";
+import type { ALSyntaxNode, MutationOperator, MutationSpec, SemanticContext } from "@lethal/engine";
 import { runConformance } from "../src/conformance";
 
 function stubOperator(overrides: Partial<MutationOperator>): MutationOperator {
@@ -287,5 +287,118 @@ describe("runConformance", () => {
     });
     const result = await runConformance(op);
     expect(result.allPassed).toBe(true);
+  });
+});
+
+// R196: the harness gains the ability to assert `hangCapable`, including its ABSENCE. This is the
+// third appearance of the empty-vs-empty shape R137 and R142 closed elsewhere in this file: an
+// operator that quietly stopped tagging a site (or one that tags a site it shouldn't) must not
+// keep every conformance case green.
+describe("runConformance hangCapable assertion", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  const SOURCE = `codeunit 50000 P
+{
+    procedure Go()
+    var
+        N: Integer;
+    begin
+        N := 1;
+    end;
+}`;
+
+  /**
+   * Emits one spec per integer literal, tagged or not according to `tag`.
+   *
+   * Scoped to the literal `"1"` rather than every `integer_literal` in the tree: `SOURCE`'s object
+   * declaration (`codeunit 50000 P`) parses its id `50000` as an `integer_literal` too (measured;
+   * every AL object header carries one). Targeting the node kind alone made this probe emit a
+   * second, untagged spec the case's `expectedSpecs` never named, so every case here failed on
+   * "unexpected spec" regardless of whether the `hangCapable` matcher worked, masking the thing
+   * this suite exists to test.
+   */
+  const probeOperator = (tag: "loop-condition-target" | undefined): MutationOperator => ({
+    name: "test.probe",
+    version: "1.0.0",
+    tier: 1,
+    targetNodeKinds: [ALNodeKind.integer_literal],
+    producesNodeKinds: [ALNodeKind.integer_literal],
+    requiresSemantic: [],
+    targets: (node: ALSyntaxNode) => node.kind === ALNodeKind.integer_literal && node.text === "1",
+    generate: (node: ALSyntaxNode, _ctx: SemanticContext): readonly MutationSpec[] => [
+      {
+        operatorName: "test.probe",
+        operatorVersion: "1.0.0",
+        astNodeId: `${node.startIndex}-${node.endIndex}`,
+        before: node,
+        after: node,
+        parentContext: "statement-position",
+        ...(tag !== undefined ? { hangCapable: tag } : {}),
+      },
+    ],
+    conformanceTests: [],
+  });
+
+  const caseWith = (expected: { hangCapable?: "loop-condition-target" | null }) => ({
+    name: "probe",
+    sourceAL: SOURCE,
+    expectedSpecs: [
+      {
+        parentContext: "statement-position" as const,
+        beforeText: "1",
+        afterText: "1",
+        ...expected,
+      },
+    ],
+  });
+
+  it("passes when the expected reason matches the emitted tag", async () => {
+    const op = {
+      ...probeOperator("loop-condition-target"),
+      conformanceTests: [caseWith({ hangCapable: "loop-condition-target" })],
+    };
+    expect((await runConformance(op)).allPassed).toBe(true);
+  });
+
+  it("FAILS when a tag is expected and the operator emits none", async () => {
+    const op = {
+      ...probeOperator(undefined),
+      conformanceTests: [caseWith({ hangCapable: "loop-condition-target" })],
+    };
+    expect((await runConformance(op)).allPassed).toBe(false);
+  });
+
+  it("FAILS when no tag is expected and the operator emits one", async () => {
+    const op = {
+      ...probeOperator("loop-condition-target"),
+      conformanceTests: [caseWith({ hangCapable: null })],
+    };
+    expect((await runConformance(op)).allPassed).toBe(false);
+  });
+
+  it("passes when absence is asserted and none is emitted", async () => {
+    const op = { ...probeOperator(undefined), conformanceTests: [caseWith({ hangCapable: null })] };
+    expect((await runConformance(op)).allPassed).toBe(true);
+  });
+
+  // The compatibility arm: every existing case in the repo omits the field entirely.
+  it("does not assert either way when the field is omitted", async () => {
+    const tagged = { ...probeOperator("loop-condition-target"), conformanceTests: [caseWith({})] };
+    const untagged = { ...probeOperator(undefined), conformanceTests: [caseWith({})] };
+    expect((await runConformance(tagged)).allPassed).toBe(true);
+    expect((await runConformance(untagged)).allPassed).toBe(true);
+  });
+
+  it("names the tag in the failure it reports", async () => {
+    const op = {
+      ...probeOperator("loop-condition-target"),
+      conformanceTests: [caseWith({ hangCapable: null })],
+    };
+    const result = await runConformance(op);
+    const first = result.failures[0];
+    if (first === undefined) throw new Error("expected a failure");
+    expect(JSON.stringify(first.produced)).toContain("loop-condition-target");
   });
 });

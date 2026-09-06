@@ -1,4 +1,5 @@
 import {
+  type HangCapableReason,
   type MutationOperator,
   type MutationSpec,
   buildSemanticContext,
@@ -19,6 +20,7 @@ export interface ConformanceFailure {
     beforeText: string;
     afterText: string;
     parentContext: MutationSpec["parentContext"];
+    hangCapable?: HangCapableReason;
   }>;
 }
 
@@ -69,7 +71,8 @@ export async function runConformance(op: MutationOperator): Promise<ConformanceR
         (e) =>
           e.parentContext === spec.parentContext &&
           e.beforeText === spec.before.text.trim() &&
-          e.afterText === renderAfter(spec).trim(),
+          e.afterText === renderAfter(spec).trim() &&
+          hangCapableMatches(e.hangCapable, spec.hangCapable),
       );
       if (idx >= 0) expectedRemaining.splice(idx, 1);
       else unexpected.push(spec);
@@ -109,10 +112,21 @@ function describe(spec: MutationSpec): ConformanceFailure["produced"][number] {
     beforeText: spec.before.text,
     afterText: renderAfter(spec),
     parentContext: spec.parentContext,
+    ...(spec.hangCapable !== undefined ? { hangCapable: spec.hangCapable } : {}),
   };
 }
 
 function renderAfter(spec: MutationSpec): string {
   const after = spec.after as { text?: string };
   return after.text ?? "";
+}
+
+/** `undefined` asserts nothing; `null` asserts the tag is absent; a reason asserts equality. */
+function hangCapableMatches(
+  expected: HangCapableReason | null | undefined,
+  actual: HangCapableReason | undefined,
+): boolean {
+  if (expected === undefined) return true;
+  if (expected === null) return actual === undefined;
+  return actual === expected;
 }

@@ -102,6 +102,15 @@ export interface ConformanceCase {
     readonly parentContext: ParentContextHint;
     readonly beforeText: string;
     readonly afterText: string;
+    /**
+     * R196: `undefined` asserts nothing, a reason asserts the spec carries exactly it, and `null`
+     * asserts the spec carries NO tag.
+     *
+     * The `null` arm is the load-bearing one. Without it an operator that quietly stopped emitting
+     * the tag would keep every conformance case green, which is the failure this field exists to
+     * prevent, and the third appearance in this harness of the shape R137 and R142 closed.
+     */
+    readonly hangCapable?: HangCapableReason | null;
   }>;
 }
 
