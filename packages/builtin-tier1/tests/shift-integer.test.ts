@@ -2,9 +2,11 @@ import { beforeAll, describe, expect, it } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import {
+  ALNodeKind,
   type ALSyntaxNode,
   type MutationSpec,
   buildSemanticContext,
+  findAll,
   initParser,
   parseAL,
   visit,
@@ -82,5 +84,34 @@ describe("shiftInteger", () => {
 
   it("cedes an ordering comparison to conditional-boundary, which shifts the same boundary", () => {
     expect(specs.some((s) => s.before.text === "13")).toBe(false);
+  });
+
+  it("tags a literal assigned inside a loop whose condition reads the target (R196)", async () => {
+    const src = `codeunit 50000 P
+{
+    procedure Go()
+    var
+        Remaining: Integer;
+    begin
+        Remaining := 1;
+        while Remaining > 0 do
+            Remaining := 0;
+    end;
+}`;
+    const root = wrapRoot(parseAL(src));
+    const ctx = buildSemanticContext([{ path: "fixture.al", root }]);
+    const specs = findAll(root, ALNodeKind.integer_literal)
+      .filter((n) => shiftInteger.targets(n, ctx))
+      .flatMap((n) => shiftInteger.generate(n, ctx));
+
+    const inLoop = specs.filter((s) => s.before.text === "0");
+    expect(inLoop.length).toBeGreaterThan(0);
+    for (const s of inLoop) expect(s.hangCapable).toBe("loop-condition-target");
+
+    // The initialiser above the loop is section 3.2's excluded preheader shape: unclassified, and
+    // deliberately NOT tagged. It must not acquire a tag by accident.
+    const preheader = specs.filter((s) => s.before.text === "1");
+    expect(preheader.length).toBeGreaterThan(0);
+    for (const s of preheader) expect(s.hangCapable).toBeUndefined();
   });
 });

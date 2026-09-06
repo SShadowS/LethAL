@@ -6,6 +6,7 @@ import {
   type MutationSpec,
   type SemanticContext,
 } from "@lethal/operator-sdk";
+import { hangCapableForMutatedNode } from "./loop-hazard";
 import { synthesizeAfter } from "./mutate-helpers";
 
 const OPERATOR_NAME = "lethal.flip-boolean-literal";
@@ -121,6 +122,7 @@ export const flipBooleanLiteral: MutationOperator = {
   generate(node: ALSyntaxNode, ctx: SemanticContext): readonly MutationSpec[] {
     const after = flipped(node, ctx);
     if (after === null) return [];
+    const hangCapable = hangCapableForMutatedNode(node, ctx);
     return [
       {
         operatorName: OPERATOR_NAME,
@@ -129,6 +131,7 @@ export const flipBooleanLiteral: MutationOperator = {
         before: node,
         after: synthesizeAfter(node, after),
         parentContext: "statement-position",
+        ...(hangCapable !== null ? { hangCapable } : {}),
       },
     ];
   },
@@ -191,6 +194,24 @@ export const flipBooleanLiteral: MutationOperator = {
       sourceAL: `codeunit 51705 "C" { procedure P() var Cust: Record Customer; begin Cust.SetAutoCalcFields(false); end; }`,
       expectedSpecs: [
         { parentContext: "statement-position", beforeText: "false", afterText: "true" },
+      ],
+    },
+    {
+      name: "tags an in-loop boolean guard that advances the condition (R196), and does NOT tag the preheader one",
+      sourceAL: `codeunit 51708 "C" { procedure P() var Continue: Boolean; begin Continue := true; while Continue do Continue := false; end; }`,
+      expectedSpecs: [
+        {
+          parentContext: "statement-position",
+          beforeText: "true",
+          afterText: "false",
+          hangCapable: null,
+        },
+        {
+          parentContext: "statement-position",
+          beforeText: "false",
+          afterText: "true",
+          hangCapable: "loop-condition-target",
+        },
       ],
     },
   ],

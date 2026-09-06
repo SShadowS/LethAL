@@ -5,6 +5,7 @@ import {
   type MutationSpec,
   type SemanticContext,
 } from "@lethal/operator-sdk";
+import { hangCapableForMutatedNode } from "./loop-hazard";
 import { findOperatorToken, replaceOperatorToken, synthesizeAfter } from "./mutate-helpers";
 
 const OPERATOR_NAME = "lethal.swap-additive";
@@ -77,7 +78,9 @@ export const swapAdditive: MutationOperator = {
   tier: 1,
   targetNodeKinds: [ALNodeKind.additive_expression],
   producesNodeKinds: [ALNodeKind.additive_expression],
-  requiresSemantic: ["type-info"],
+  // R196: adds to what it already declared for the type guard. The tag also resolves symbols
+  // (`hangCapableForMutatedNode` calls `resolveVarRef`).
+  requiresSemantic: ["type-info", "symbol-table"],
 
   targets(node: ALSyntaxNode, ctx: SemanticContext): boolean {
     return flipFor(node, ctx) !== null;
@@ -88,6 +91,7 @@ export const swapAdditive: MutationOperator = {
     if (flip === null) return [];
     const mutatedText = replaceOperatorToken(node, flip.token, flip.replacement);
     if (mutatedText === null) return [];
+    const hangCapable = hangCapableForMutatedNode(node, ctx);
     return [
       {
         operatorName: OPERATOR_NAME,
@@ -96,6 +100,7 @@ export const swapAdditive: MutationOperator = {
         before: node,
         after: synthesizeAfter(node, mutatedText),
         parentContext: "statement-position",
+        ...(hangCapable !== null ? { hangCapable } : {}),
       },
     ];
   },
@@ -132,6 +137,24 @@ export const swapAdditive: MutationOperator = {
       name: "REFUSES an operand the type table cannot answer for",
       sourceAL: `codeunit 51603 "C" { procedure P(A: Integer): Integer begin exit(A + Unknown()); end; }`,
       expectedSpecs: [],
+    },
+    {
+      name: "tags an in-loop subtraction that advances the condition (R196), and does NOT tag the preheader addition",
+      sourceAL: `codeunit 51604 "C" { procedure P() var Remaining: Integer; Total: Integer; begin Total := Remaining + 1; while Remaining > 0 do Remaining := Remaining - 1; end; }`,
+      expectedSpecs: [
+        {
+          parentContext: "statement-position",
+          beforeText: "Remaining + 1",
+          afterText: "Remaining - 1",
+          hangCapable: null,
+        },
+        {
+          parentContext: "statement-position",
+          beforeText: "Remaining - 1",
+          afterText: "Remaining + 1",
+          hangCapable: "loop-condition-target",
+        },
+      ],
     },
   ],
 };

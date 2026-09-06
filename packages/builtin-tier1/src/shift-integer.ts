@@ -5,6 +5,7 @@ import {
   type MutationSpec,
   type SemanticContext,
 } from "@lethal/operator-sdk";
+import { hangCapableForMutatedNode } from "./loop-hazard";
 import { synthesizeAfter } from "./mutate-helpers";
 
 const OPERATOR_NAME = "lethal.shift-integer";
@@ -74,7 +75,8 @@ export const shiftInteger: MutationOperator = {
   tier: 1,
   targetNodeKinds: [ALNodeKind.integer_literal],
   producesNodeKinds: [ALNodeKind.integer_literal],
-  requiresSemantic: [],
+  // R196: the tag resolves symbols (`hangCapableForMutatedNode` calls `resolveVarRef`).
+  requiresSemantic: ["symbol-table"],
   // R172: MEASURED equivalent on `sandbox-hang`: `Counter := 0` -> `1` still returns 3, because the loop walks 2,3 instead of 1,2,3.
   equivalenceRisk: "value-rewrite",
 
@@ -82,9 +84,10 @@ export const shiftInteger: MutationOperator = {
     return shifted(node) !== null;
   },
 
-  generate(node: ALSyntaxNode, _ctx: SemanticContext): readonly MutationSpec[] {
+  generate(node: ALSyntaxNode, ctx: SemanticContext): readonly MutationSpec[] {
     const after = shifted(node);
     if (after === null) return [];
+    const hangCapable = hangCapableForMutatedNode(node, ctx);
     return [
       {
         operatorName: OPERATOR_NAME,
@@ -93,6 +96,7 @@ export const shiftInteger: MutationOperator = {
         before: node,
         after: synthesizeAfter(node, after),
         parentContext: "statement-position",
+        ...(hangCapable !== null ? { hangCapable } : {}),
       },
     ];
   },
@@ -127,6 +131,24 @@ export const shiftInteger: MutationOperator = {
       name: "REFUSES a declarative type length, which is not a value the program branches on",
       sourceAL: `table 52005 "T" { fields { field(1; "No."; Code[20]) { } } }`,
       expectedSpecs: [],
+    },
+    {
+      name: "tags an in-loop assigned value (R196), and does NOT tag the preheader assignment above it",
+      sourceAL: `codeunit 52006 "I" { procedure P() var Remaining: Integer; begin Remaining := 1; while Remaining > 0 do Remaining := 0; end; }`,
+      expectedSpecs: [
+        {
+          parentContext: "statement-position",
+          beforeText: "1",
+          afterText: "2",
+          hangCapable: null,
+        },
+        {
+          parentContext: "statement-position",
+          beforeText: "0",
+          afterText: "1",
+          hangCapable: "loop-condition-target",
+        },
+      ],
     },
   ],
 };

@@ -6,6 +6,7 @@ import {
   type MutationSpec,
   type SemanticContext,
 } from "@lethal/operator-sdk";
+import { hangCapableForMutatedNode } from "./loop-hazard";
 import { synthesizeAfter } from "./mutate-helpers";
 
 const OPERATOR_NAME = "lethal.remove-assignment";
@@ -58,7 +59,8 @@ export const removeAssignment: MutationOperator = {
   tier: 1,
   targetNodeKinds: [ALNodeKind.assignment_statement],
   producesNodeKinds: [ALNodeKind.assignment_statement],
-  requiresSemantic: [],
+  // R196: the tag resolves symbols (`hangCapableForMutatedNode` calls `resolveVarRef`).
+  requiresSemantic: ["symbol-table"],
   // R172: 16 survivors on `itest:tables` in one wave, and its own doc comment names an assignment whose target is never read again as the shape it cannot see.
   equivalenceRisk: "value-rewrite",
 
@@ -69,8 +71,9 @@ export const removeAssignment: MutationOperator = {
     return isStatementSlot(node);
   },
 
-  generate(node: ALSyntaxNode, _ctx: SemanticContext): readonly MutationSpec[] {
-    if (!removeAssignment.targets(node, {} as SemanticContext)) return [];
+  generate(node: ALSyntaxNode, ctx: SemanticContext): readonly MutationSpec[] {
+    if (!removeAssignment.targets(node, ctx)) return [];
+    const hangCapable = hangCapableForMutatedNode(node, ctx);
     return [
       {
         operatorName: OPERATOR_NAME,
@@ -79,6 +82,7 @@ export const removeAssignment: MutationOperator = {
         before: node,
         after: synthesizeAfter(node, ""),
         parentContext: "statement-position",
+        ...(hangCapable !== null ? { hangCapable } : {}),
       },
     ];
   },
@@ -114,6 +118,24 @@ export const removeAssignment: MutationOperator = {
       sourceAL: `codeunit 51803 "A" { procedure P(F: Boolean) var Total: Integer; begin if F then Total := 5; end; }`,
       expectedSpecs: [
         { parentContext: "statement-position", beforeText: "Total := 5", afterText: "" },
+      ],
+    },
+    {
+      name: "tags an in-loop assignment that advances the condition (R196), and does NOT tag the preheader one",
+      sourceAL: `codeunit 51804 "A" { procedure P() var Remaining: Integer; begin Remaining := 3; while Remaining > 0 do Remaining := Remaining - 1; end; }`,
+      expectedSpecs: [
+        {
+          parentContext: "statement-position",
+          beforeText: "Remaining := 3",
+          afterText: "",
+          hangCapable: null,
+        },
+        {
+          parentContext: "statement-position",
+          beforeText: "Remaining := Remaining - 1",
+          afterText: "",
+          hangCapable: "loop-condition-target",
+        },
       ],
     },
   ],
