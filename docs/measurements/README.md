@@ -1604,9 +1604,9 @@ Re-run 2026-09-06, after the quoted-identifier widening (152/182 declined sites;
 | cause | do-rel2 (of 30 sampled) | do-lethal-53470 (of 30 sampled) |
 | --- | ---: | ---: |
 | procedure name declared more than once in its object (overloading); resolves against the WRONG overload's locals/parameters | 15 | 16 |
-| AL named return value (`procedure X(...) Name: Type`), never captured as an assignable symbol | 11 | 10 |
-| implicit `Rec`/`xRec` | 2 | 1 |
-| a bare, unqualified reference to the bound record's own field | 2 | 3 |
+| AL named return value (`procedure X(...) Name: Type`), never captured as an assignable symbol | 10 | 10 |
+| implicit `Rec`/`xRec` | 2 | 2 |
+| a bare, unqualified reference to the bound record's own field | 3 | 2 |
 
 All 30 of 30 land in one of these four buckets on both corpora, with no residual "unexplained" decline
 in either sample. `do-lethal-53470/Cloud`'s overload count (16) is unchanged from the earlier,
@@ -1615,6 +1615,25 @@ counted a site as "overloaded" whenever its procedure name appeared more than on
 file, which also counts a site sitting inside the FIRST such declaration (where resolution is
 actually correct) as an instance of the defect. The script's node-position check does not have that
 failure mode: it only fires where resolution demonstrably went to the wrong declaration.
+
+**A second reproducibility defect, found by a scoped re-review after the above was published, and now
+fixed.** `collectAlFiles` (duplicated in both scripts at the time) called `readdir(dir, { recursive:
+true })` with no sort, and this machine's filesystem does not return a stable order between
+invocations. The sample stride-samples a fixed-size slice of the resulting array, so an unordered
+input handed a DIFFERENT 30 sites to the same corpus on different runs of the identical script. Four
+runs on `do-rel2/Cloud` before this fix gave overload counts of 14, 15, 15, 15 (the "15" first
+published above was one of those runs, not a reproducible result); one `do-lethal-53470/Cloud` run
+gave 14 against the 16 published above, and additionally produced a fifth, genuinely unexplained
+decline the published text said did not exist. `collectAlFiles` is now a single shared function
+(`scripts/lib/collect-al-files.ts`, imported by both scripts rather than duplicated) that sorts the
+file list before returning it. Verified rather than assumed: ran the sample script twice on each
+corpus after the sort and diffed the two runs' full JSON output, byte for byte, on both corpora:
+identical both times. The table above is that deterministic run's output, and it happens to differ
+from the pre-sort run this section previously published in four of its eight cells (do-rel2's named
+return value 11 -> 10 and bare field 2 -> 3; do-lethal-53470's implicit Rec 1 -> 2 and bare field
+3 -> 2); the overload counts (15, 16) happen not to have moved. No fifth, unexplained bucket survives the
+deterministic run on either corpus, stated as a result of a run that is now reproducible, not as a
+property the method guarantees.
 
 **The dominant cause is filed as [[R210]]**, a real resolver defect distinct from anything §3.2
 already names: `resolveProcedure`/`lookupVar` key a procedure's locals and parameters by NAME alone,
@@ -1650,8 +1669,8 @@ percent (`do-rel2/Cloud`, 15 of 30) and 53 percent (`do-lethal-53470/Cloud`, 16 
 table that resolves procedures by name alone, so a site inside the second or later overload is
 handed the first overload's locals. Those are sites the classifier should be seeing and is not. The
 claim rate above is therefore a floor, not an estimate, and closing [[R210]] would be expected to
-raise it. The remainder are AL's named return values (11 and 10 of 30) and its implicit record or
-bare bound-field reference (4 and 4 of 30), neither of which a declaration-based symbol table can
+raise it. The remainder are AL's named return values (10 and 10 of 30) and its implicit record or
+bare bound-field reference (5 and 4 of 30), neither of which a declaration-based symbol table can
 see, and both closer in kind to the section 3.2.4 exclusion than to a defect.
 
 **Limit 2: [[R210]] could in principle produce a false tag, not only a missed one.** The same
