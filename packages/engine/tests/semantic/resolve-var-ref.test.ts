@@ -69,7 +69,7 @@ describe("resolveVarRef", () => {
   });
 
   it("returns null for a MEMBER name after a dot, even when that name is ALSO a declared variable", () => {
-    // Rec.Counter is a member access, not a read of the global `Counter` below it — the guard must
+    // Rec.Counter is a member access, not a read of the global `Counter` below it. The guard must
     // refuse it on AST SHAPE, not merely because no such name happens to be in scope. Without the
     // guard this resolves to the unrelated global instead of refusing.
     const { root, ctx } = load(`codeunit 50205 "R" { var Rec: Record Customer; Counter: Integer;

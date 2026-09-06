@@ -1,5 +1,5 @@
 /**
- * `resolveVarRef` — which declaration an identifier refers to.
+ * `resolveVarRef`: which declaration an identifier refers to.
  *
  * A thin adapter over `receiver.ts`'s `lookupVar`, not a second resolver. That file's own module
  * doc (R80) warns that a second parser for the same node shape is exactly what drifts, and
@@ -15,7 +15,7 @@
  * Spec §3.1 names exactly one function here, `resolveVarRef(node, ctx)`. An earlier version of
  * this file also exported `enclosingScope`/`VarScope`, built for a resolution shape the plan
  * changed before any task called them; removed rather than kept as unused public API (R196 fix
- * round 2) — see the module's git history if a later task needs a scope helper again, built
+ * round 2). See the module's git history if a later task needs a scope helper again, built
  * against a real caller.
  */
 import { ALNodeKind } from "../ast/node-kinds";
@@ -29,7 +29,7 @@ import type { VarSymbol } from "./symbol-table";
  * AL names are case-insensitive and may be quoted (`"No."`). This strips one layer of quoting AND
  * lowercases. `normalizeAlName` is PUBLIC (re-exported through `@lethal/engine`, for Task 2), so a
  * consumer that normalizes two identifier texts and compares them directly needs a lowercase
- * answer, not just quote-stripping — `lookupVar`'s own `equalsIgnoreCase` comparison only helps a
+ * answer, not just quote-stripping: `lookupVar`'s own `equalsIgnoreCase` comparison only helps a
  * caller that goes through `lookupVar`, not one that compares two normalized names itself.
  * `resolveVarRef`'s own lookup is unaffected either way, since `lookupVar` compares
  * case-insensitively regardless of what case its `name` argument carries.
@@ -49,7 +49,7 @@ export function normalizeAlName(raw: string): string {
  * later child is a member name and refers to no declaration `lookupVar` can see.
  *
  * Without this guard, a member name that happens to collide with a declared variable of the same
- * name resolves to that UNRELATED declaration instead of refusing — silently wrong, not merely
+ * name resolves to that UNRELATED declaration instead of refusing: silently wrong, not merely
  * incomplete, so this is checked before anything else.
  */
 function isMemberName(node: ALSyntaxNode): boolean {
@@ -64,7 +64,7 @@ function isMemberName(node: ALSyntaxNode): boolean {
  * of that name is visible from the call site (see `lookupVar`'s resolution order).
  *
  * `lookupVar`'s third argument is NOT the plain object name `objectNameOf` (in `receiver.ts`)
- * returns — despite its parameter being called `objectName` in receiver.ts, `resolveReceiver`
+ * returns. Despite its parameter being called `objectName` in receiver.ts, `resolveReceiver`
  * there always passes it a SCOPE KEY (`"codeunit:R"`, or `"tableextension:My Ext"` inside an
  * extension), because `globalsOf`/`localsOf`/`resolveProcedure` are indexed under that key, not
  * under the bare name (`objectScopeKey`/`extensionScopeKey`, in `symbol-table.ts`; see R70 and R30
