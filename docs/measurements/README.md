@@ -1521,3 +1521,39 @@ bun scripts/census-hang-capable.ts U:/Git/do-lethal-53470/Cloud <out.json>
 
 No decision is recorded here. The design names this a halt: the decision belongs to whoever reviews
 these numbers against the plan, and is recorded separately once made.
+
+### The `declinedUnresolved` sample, categorised (2026-09-06 follow-up)
+
+`scripts/sample-declined-hang-capable.ts`, 30 sites per corpus, stride-sampled across the whole
+corpus (not the first 30 in walk order, which would cluster in whichever file sorts first).
+
+**Neither the "member/field access" nor the "array/indexed target" category can occur in this
+count at all, by construction.** `assignmentTargetOf` (Task 2) only ever returns a node when
+`target.kind === identifier`; a member (`Rec.Field`) or array (`Arr[i]`) target is filtered out
+before `declinedUnresolved` is even asked, since `assignmentTargetOf` itself returns `null` for
+those shapes. The script asserts this invariant (every declined site's target kind is `identifier`)
+and would throw rather than silently mis-sort a site if it were ever violated. Zero violations on
+either corpus.
+
+So every declined site is an ordinary bare identifier, and all 30-of-30 samples on BOTH corpora
+land in the "should have resolved" bucket, split three ways by direct inspection of the underlying
+source (never quoted here; see [[R210]] and the full report for the mechanism):
+
+| cause | do-rel2 (of 30 sampled) | do-lethal-53470 (of 30 sampled) |
+| --- | ---: | ---: |
+| procedure name declared more than once in its object (overloading); resolves against the WRONG overload's locals/parameters | 19 | 16 |
+| AL named return value (`procedure X(...) Name: Type`), never captured as an assignable symbol | most of the remainder (confirmed by direct signature check on every remaining sample but 2 per corpus) | same |
+| implicit `Rec`, or a bare unqualified reference to the bound record's own field | 2 confirmed | 2 confirmed |
+
+**The dominant cause is filed as [[R210]]**, a real resolver defect distinct from anything §3.2
+already names: `resolveProcedure`/`lookupVar` key a procedure's locals and parameters by NAME alone,
+with no way to tell which of several same-named overloads a call site actually sits inside, so a
+variable declared only in the correct overload is invisible regardless of how plainly it is
+declared. The other two causes are NOT filed as defects: a named return value and an implicit/bound
+`Rec` reference are not declared local/parameter/global symbols at all, so declining them is close in
+spirit to [[R196]]'s own §3.2.4 exclusion, just reached through a bare-identifier shape rather than
+`Rec.Field`.
+
+**Symbol fallback rate, asked for by spec §3.4:** zero, and cannot be otherwise. Task 2 removed
+name-matching entirely in favour of positional comparison, so there is no fallback path left to
+measure a rate for. Answered by construction, not left unmeasured.

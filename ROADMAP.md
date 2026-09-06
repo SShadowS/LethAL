@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**11 of 207 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**12 of 208 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -81,6 +81,7 @@ that ordering is the priority.
 - **R193** · The identity key still collides INSIDE a procedure, and every collision costs twice: a colliding key is re-executed on every `--resume`, and a stranded mutant's key excludes every twin it has · [R193.md](docs/roadmap/R193.md) · done (`MutantManifestEntry.identityOrdinal`, `assignIdentityOrdinals`, `IdentityKey.ordinal`) — 2026-09-02…
 - **R196** · Deletion and value operators make a loop infinite when they hit its exit flag, and unlike `negate-conditional` on `until X.Next() = 0` nothing refuses or marks the site · [R196.md](docs/roadmap/R196.md) · open — filed 2026-09-02 from the first DO 29 run. Not scheduled
 - **R209** · `resolveVarRef`'s `VarSymbol` reference identity holds for procedure locals, parameters and object globals, but NOT for trigger-locals, and nothing in its contract says so · [R209.md](docs/roadmap/R209.md) · open — filed 2026-09-06 while building [[R196]]'s `classifyHangCapable`, which needed to compare two resolved…
+- **R210** · `resolveVarRef` keys a procedure's locals/parameters by NAME alone, so an overloaded procedure name resolves against the wrong overload's declarations · [R210.md](docs/roadmap/R210.md) · open, filed 2026-09-06, measured while categorising [[R196]] Task 3's `declinedUnresolved` sample
 
 ## Product gaps a real project hits
 
