@@ -21,7 +21,11 @@
  */
 import { readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { assignmentTargetOf } from "../packages/builtin-tier1/src/loop-hazard";
+import {
+  assignmentTargetOf,
+  hasEnclosingLoop,
+  isIdentifierLike,
+} from "../packages/builtin-tier1/src/loop-hazard";
 import { ALNodeKind } from "../packages/engine/src/ast/node-kinds";
 import { initParser, parseAL } from "../packages/engine/src/ast/parser";
 import { type ALSyntaxNode, wrapRoot } from "../packages/engine/src/ast/syntax-node";
@@ -62,22 +66,6 @@ function stripQuotes(s: string): string {
   return s;
 }
 
-/** Same LOOP_KINDS/SCOPE_KINDS walk as `census-hang-capable.ts`. */
-const LOOP_KINDS: ReadonlySet<string> = new Set([
-  ALNodeKind.while_statement,
-  ALNodeKind.repeat_statement,
-]);
-const SCOPE_KINDS: ReadonlySet<string> = new Set([ALNodeKind.procedure, ALNodeKind.trigger]);
-
-function hasEnclosingLoop(node: ALSyntaxNode): boolean {
-  let cur: ALSyntaxNode | null = node.parent;
-  while (cur !== null && !SCOPE_KINDS.has(cur.kind)) {
-    if (LOOP_KINDS.has(cur.kind)) return true;
-    cur = cur.parent;
-  }
-  return false;
-}
-
 function enclosingProcedureName(node: ALSyntaxNode): string | null {
   for (let p: ALSyntaxNode | null = node.parent; p !== null; p = p.parent) {
     if (p.kind === ALNodeKind.procedure || p.kind === ALNodeKind.trigger) {
@@ -111,10 +99,69 @@ function isOrdinaryLookingName(name: string): boolean {
 }
 
 /**
+ * The table this object's implicit `Rec` is bound to, if the object kind carries one at all: a
+ * `table`'s own name, a `tableextension`'s extended table (from `ctx.symbols.tableExtensions`), or a
+ * `page`'s own `SourceTable` property (read directly from its declaration, the same grammar field
+ * `receiver.ts`'s private `sourceTableOf` reads).
+ *
+ * Mirrors those two private, per-kind helpers rather than importing them: neither is exported
+ * (`receiver.ts` keeps them file-private, R30/R67's own module), and this asks the same static
+ * grammar fact those helpers do, not a second RULE that could drift the way two hazard predicates
+ * could (R80's concern), which is why `diagnose` below is comfortable duplicating it.
+ *
+ * `pageextension` is deliberately NOT resolved: its implicit `Rec` is the EXTENDED page's own
+ * `SourceTable`, declared in an object this project usually cannot see (`receiver.ts` documents the
+ * same gap), and neither sampled corpus produced a site that needed it.
+ */
+function boundTableNameOf(scopeKey: string, ctx: SemanticContext): string | null {
+  const sep = scopeKey.indexOf(":");
+  if (sep === -1) return null;
+  const kind = scopeKey.slice(0, sep);
+  const objectName = scopeKey.slice(sep + 1);
+
+  if (kind === "table") return objectName;
+
+  if (kind === "tableextension") {
+    const ext = ctx.symbols.tableExtensions.find(
+      (e) => normalizeAlName(e.name) === normalizeAlName(objectName),
+    );
+    return ext?.baseObject ?? null;
+  }
+
+  if (kind === "page") {
+    const obj = ctx.symbols.objects.find(
+      (o) => o.kind === "page" && normalizeAlName(o.name) === normalizeAlName(objectName),
+    );
+    if (obj === undefined) return null;
+    for (const member of declarationMembers(obj.node)) {
+      if (member.kind !== ALNodeKind.property) continue;
+      const propName = member.childForFieldName("name");
+      if (propName === null || normalizeAlName(propName.text) !== "sourcetable") continue;
+      const value = member.childForFieldName("value");
+      return value === null ? null : stripQuotes(value.text);
+    }
+    return null;
+  }
+
+  return null;
+}
+
+/**
  * Which scope, if any, actually carries this name, checked directly against the same primitives
  * `lookupVar` itself calls (`ctx.symbols.localsOf`/`globalsOf`/`resolveProcedure`,
  * `collectVarDeclarations`), a cross-check against `resolveVarRef`'s own answer, not a second
  * resolver: it does not decide anything, it only reports where (if anywhere) the name already sits.
+ *
+ * Distinguishes [[R210]]'s cause from AL's two undeclared-symbol shapes, rather than reporting every
+ * decline as one bucket: an earlier version of this script re-ran the SAME name-keyed lookup
+ * `resolveVarRef` itself uses (`localsOf`/`resolveProcedure`, both keyed by name alone) and so, for
+ * exactly the sites [[R210]] describes, always disagreed with itself in the same way `resolveVarRef`
+ * did: the cross-check could never separate "resolved to the wrong overload" from "not declared
+ * anywhere", because it asked the identical question. The overload check below asks a DIFFERENT
+ * question instead: does the symbol table's name-keyed answer for this procedure name point at the
+ * SAME physical declaration `target` sits inside? If not, the object declares this name more than
+ * once and resolution grabbed the wrong (earlier-indexed) one, proven by node position, not by
+ * counting textual occurrences of the name.
  */
 function diagnose(target: ALSyntaxNode, ctx: SemanticContext): string {
   const scopeKey = enclosingObjectScopeKey(target);
@@ -127,11 +174,16 @@ function diagnose(target: ALSyntaxNode, ctx: SemanticContext): string {
     for (let p: ALSyntaxNode | null = target.parent; p !== null; p = p.parent) {
       if (p.kind === ALNodeKind.trigger) {
         const varSection = declarationMembers(p).find((c) => c.kind === ALNodeKind.var_section);
-        if (varSection === undefined) return "inside a trigger with no var section at all";
-        const declared = collectVarDeclarations(varSection).some((v) => nameMatches(v.name));
-        return declared
-          ? "found in the enclosing trigger's OWN var section (resolveVarRef missed it: cross-check disagrees)"
-          : "not declared in the enclosing trigger's own var section, and trigger scope is checked first";
+        const declaredInTrigger =
+          varSection !== undefined &&
+          collectVarDeclarations(varSection).some((v) => nameMatches(v.name));
+        if (declaredInTrigger) {
+          return "found in the enclosing trigger's OWN var section (resolveVarRef missed it: cross-check disagrees)";
+        }
+        // Not a trigger-local: fall through to the procedure/global checks below, matching
+        // `lookupVar`'s own order exactly (trigger scope is checked FIRST, not EXCLUSIVELY: a
+        // trigger body reads object globals too).
+        break;
       }
       if (p.kind === ALNodeKind.procedure) break;
     }
@@ -142,10 +194,35 @@ function diagnose(target: ALSyntaxNode, ctx: SemanticContext): string {
     const nameNode = procedure.childForFieldName("name");
     if (nameNode !== null) {
       const procName = stripQuotes(nameNode.text);
+
+      // Checked BEFORE the overload test: even a hypothetically non-overloaded, correctly-keyed
+      // `resolveProcedure` would still never capture this as an assignable symbol, since
+      // `parseProcedure` (symbol-table.ts) reads the grammar's `return_value` field only as part of
+      // `returnType`'s text, never as a `VarSymbol`. This cause holds independent of overloading, so
+      // it must be asked first or an overloaded procedure with a named return value would be
+      // misattributed to the overload collision instead.
+      const returnValueNode = procedure.childForFieldName("return_value");
+      if (returnValueNode !== null && nameMatches(returnValueNode.text)) {
+        return "matches the procedure's own AL named return value, never captured as an assignable symbol";
+      }
+
+      const resolved = ctx.symbols.resolveProcedure(scopeKey, procName);
+
+      // R210: the object declares `procName` more than once (AL permits overloading by parameter
+      // list), and `resolveProcedure` is keyed by NAME ALONE (`.find(p => p.name === procName)`), so
+      // it answers with whichever overload it indexed FIRST rather than the one `target` actually
+      // sits inside. Proven by position, not inferred from a text count: two distinct declarations
+      // can never start at the same byte offset in one file (the same positional argument
+      // `loop-hazard.ts`'s own `sameDeclaration` relies on for the identical reason), so a mismatch
+      // here is conclusive, not a guess.
+      if (resolved !== null && resolved.node.startIndex !== procedure.startIndex) {
+        return "procedure name declared more than once in its object (AL overload); resolveVarRef resolved against the WRONG overload's locals/parameters";
+      }
+
       if (ctx.symbols.localsOf(scopeKey, procName).some((v) => nameMatches(v.name))) {
         return "found in the enclosing procedure's OWN locals (resolveVarRef missed it: cross-check disagrees)";
       }
-      const params = ctx.symbols.resolveProcedure(scopeKey, procName)?.parameters ?? [];
+      const params = resolved?.parameters ?? [];
       if (params.some((v) => nameMatches(v.name))) {
         return "found in the enclosing procedure's OWN parameters (resolveVarRef missed it: cross-check disagrees)";
       }
@@ -156,7 +233,15 @@ function diagnose(target: ALSyntaxNode, ctx: SemanticContext): string {
     return "found in the enclosing object's OWN globals (resolveVarRef missed it: cross-check disagrees)";
   }
 
-  return "not declared in any scope this resolver checks (trigger locals, procedure locals, parameters, object globals)";
+  if (name === "rec" || name === "xrec") {
+    return "matches AL's implicit bound record ('Rec'/'xRec'), never declared as a symbol";
+  }
+  const boundTable = boundTableNameOf(scopeKey, ctx);
+  if (boundTable !== null && ctx.symbols.fieldsOf(boundTable).some((f) => nameMatches(f.name))) {
+    return "matches a bare, unqualified field of the object's own bound record, never declared as a variable symbol";
+  }
+
+  return "not declared in any scope this resolver checks, and not one of the two known undeclared-symbol shapes either (a genuinely unexplained decline)";
 }
 
 interface DeclinedRow {
@@ -178,12 +263,18 @@ if (files.length === 0) {
 const ctx = buildSemanticContext(files);
 
 const declined: DeclinedRow[] = [];
+// Every declined site's target MUST be an identifier read, bare or quoted (`isIdentifierLike`):
+// `assignmentTargetOf` only ever returns non-null for one of those two kinds, so a member
+// (`Rec.Field`) or array (`Arr[i]`) target is filtered out before "unresolved" is even asked.
+// Asserted, not assumed: checked against the real node, not against a stored kind string.
+let nonIdentifierTargetCount = 0;
 
 for (const { path, root } of files) {
   const walk = (n: ALSyntaxNode): void => {
     if (n.kind === ALNodeKind.assignment_statement) {
       const target = assignmentTargetOf(n);
       if (target !== null && hasEnclosingLoop(n) && resolveVarRef(target, ctx) === null) {
+        if (!isIdentifierLike(target)) nonIdentifierTargetCount += 1;
         const scopeKey = enclosingObjectScopeKey(target);
         const objectScopeKind = scopeKey === null ? "<none>" : (scopeKey.split(":")[0] ?? "<none>");
         const rawName = target.text;
@@ -204,13 +295,9 @@ for (const { path, root } of files) {
   walk(root);
 }
 
-// Every declined site's target MUST be a bare `identifier`: `assignmentTargetOf` (Task 2) only ever
-// returns non-null when `target.kind === ALNodeKind.identifier`, so a member (`Rec.Field`) or array
-// (`Arr[i]`) target is filtered out before "unresolved" is even asked. Asserted, not assumed.
-const nonIdentifierTargets = declined.filter((d) => d.targetKind !== ALNodeKind.identifier);
-if (nonIdentifierTargets.length > 0) {
+if (nonIdentifierTargetCount > 0) {
   throw new Error(
-    `sample-declined-hang-capable: ${nonIdentifierTargets.length} declined site(s) had a non-identifier target, which assignmentTargetOf should never produce, refusing to report a broken invariant silently`,
+    `sample-declined-hang-capable: ${nonIdentifierTargetCount} declined site(s) had a non-identifier target, which assignmentTargetOf should never produce, refusing to report a broken invariant silently`,
   );
 }
 
@@ -236,7 +323,7 @@ const summary = {
   totalDeclined: declined.length,
   sampleSize: sample.length,
   stride,
-  nonIdentifierTargetsFound: nonIdentifierTargets.length,
+  nonIdentifierTargetsFound: nonIdentifierTargetCount,
   sampleByDiagnosis: Object.fromEntries(byDiagnosis),
   sampleByObjectKind: Object.fromEntries(byObjectKind),
 };

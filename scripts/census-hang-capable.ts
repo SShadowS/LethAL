@@ -20,7 +20,11 @@
 import { readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { flipBooleanLiteral } from "../packages/builtin-tier1/src/flip-boolean-literal";
-import { assignmentTargetOf, classifyHangCapable } from "../packages/builtin-tier1/src/loop-hazard";
+import {
+  assignmentTargetOf,
+  classifyHangCapable,
+  hasEnclosingLoop,
+} from "../packages/builtin-tier1/src/loop-hazard";
 import { removeAssignment } from "../packages/builtin-tier1/src/remove-assignment";
 import { shiftInteger } from "../packages/builtin-tier1/src/shift-integer";
 import { swapAdditive } from "../packages/builtin-tier1/src/swap-additive";
@@ -83,28 +87,6 @@ function enclosingProcedureName(node: ALSyntaxNode): string | null {
  * since two descriptions of one rule drifting apart is R80's shape.
  */
 const HANG_CAPABLE_OPERATORS = [removeAssignment, swapAdditive, flipBooleanLiteral, shiftInteger];
-
-/**
- * Mirrors `loop-hazard.ts`'s own (private) LOOP_KINDS/SCOPE_KINDS walk, to answer a narrower
- * question than `classifyHangCapable` does: is this assignment inside SOME enclosing while/repeat at
- * all, regardless of whether that loop's condition reads the target? That is the denominator ruling
- * R5 asks for. `for_statement` excluded for the same reason `loop-hazard.ts` excludes it (unmeasured
- * whether AL's `for` can be made non-terminating this way).
- */
-const LOOP_KINDS: ReadonlySet<string> = new Set([
-  ALNodeKind.while_statement,
-  ALNodeKind.repeat_statement,
-]);
-const SCOPE_KINDS: ReadonlySet<string> = new Set([ALNodeKind.procedure, ALNodeKind.trigger]);
-
-function hasEnclosingLoop(node: ALSyntaxNode): boolean {
-  let cur: ALSyntaxNode | null = node.parent;
-  while (cur !== null && !SCOPE_KINDS.has(cur.kind)) {
-    if (LOOP_KINDS.has(cur.kind)) return true;
-    cur = cur.parent;
-  }
-  return false;
-}
 
 /** `node` and every descendant, named children only (matches the walk `classifyHangCapable` itself
  *  and every operator's `targets()` are measured against). */
