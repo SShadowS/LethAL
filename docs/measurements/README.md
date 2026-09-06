@@ -1451,3 +1451,73 @@ where a reader-marked equivalent census ([[R172]]) would earn the most.
 Survivors: 196 mutants, 6,895 calls, 17 s each. The killing test was first in the order tried for
 48% of kills and at position 9.4 on average ([[R197]]); a call averaged 0.46 s on the sandbox
 against 0.11 s on a container ([[R198]]).
+
+## The hang-capable classifier's claim rate on two real corpora, and the eight recovered (2026-09-06)
+
+[[R196]]'s halt (design §3.4, `docs/superpowers/specs/2026-09-06-r196-hang-capable-design.md`):
+measure `classifyHangCapable`'s claim rate before any code ships, and report the declined-unresolved
+rate beside it. `scripts/census-hang-capable.ts`, task 3 of the plan.
+
+| corpus | files | assignments | tagged | tagged rate | sites inside a loop | declined unresolved | declined rate |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `U:/Git/do-rel2/Cloud` | 554 | 6,850 | 57 | 0.83% | 572 | 144 | 25.17% |
+| `U:/Git/do-lethal-53470/Cloud` | 572 | 7,519 | 61 | 0.81% | 658 | 174 | 26.44% |
+
+**By operator** (a tagged site can be reached by more than one operator, so these need not sum to
+`tagged`):
+
+| operator | do-rel2 | do-lethal-53470 |
+| --- | ---: | ---: |
+| `remove-assignment` | 57 | 61 |
+| `shift-integer` | 19 | 23 |
+| `swap-additive` | 6 | 5 |
+| `flip-boolean-literal` | 5 | 7 |
+
+`remove-assignment` reaches every tagged site in both corpora (57 of 57, 61 of 61): its own guard is
+"any assignment in a statement slot", so it dominates by construction, not because hang-capable sites
+have some property specific to it. The other three claim a tagged site only when its right-hand side
+also carries the shape they need (an integer literal, a `+`/`-`, a boolean literal).
+
+`declinedUnresolved` (ruling R5: a site inside an enclosing `while`/`repeat` whose target
+`resolveVarRef` could not resolve) is 25 to 26% of in-loop sites on both corpora. That is the number
+that indicts the resolver rather than the rule. It was not sampled further here, out of this task's
+scope: a follow-up should read a sample of the declined sites before treating this rate as settled.
+
+### The eight, recovered from run 3's own store
+
+`lethal-53470-run3/lethal.sqlite`, run 1: 448 killed, 237 survived, 48 no-coverage, 8 timeout-killed,
+summing to the 741 deployed mutants the design already cites for this same run. Cross-checked
+line-for-line against the census's tagged rows on `do-lethal-53470/Cloud`.
+
+| line | procedure | operator | `classifyHangCapable` tags it? |
+| ---: | --- | --- | --- |
+| 74 | `FindMatchingTemplateLine` | `remove-assignment` | yes |
+| 76 | `FindMatchingTemplateLine` | `remove-assignment` | yes |
+| 76 | `FindMatchingTemplateLine` | `flip-boolean-literal` | yes |
+| 84 | `FindMatchingTemplateLine` | `remove-assignment` | yes |
+| 84 | `FindMatchingTemplateLine` | `flip-boolean-literal` | yes |
+| 85 | `FindMatchingTemplateLine` | `empty-block` | no, not an assignment, out of this classifier's domain |
+| 107 | `FindMatchingTemplateLine` | `remove-assignment` | yes |
+| 322 | `SubstituteDateFormulas` | `remove-assignment` | no |
+
+6 of 8 tagged (75%). Two corrections against the design's revision 1/2 prose, both found by this
+recovery rather than assumed: `FindMatchingTemplateLine` has TWO structurally identical `while`
+loops, each with its own matching pair of hang-capable sites, not one as the earlier prose described;
+and the earlier prose's "condition mutation" row is not among the actual eight at all, since no such
+operator is in run 3's deployed set, and the nearest real analogue, `negate-conditional`, scored
+plain `killed` at both loops' conditions, not `timeout-killed`. The one miss (line 322) sits squarely
+inside the design's own documented exclusion (§3.2 point 3, progress through a call): the mutated
+assignment's target is not the variable the enclosing loop's condition reads, and the variable the
+condition DOES read is advanced only by a call the mutated assignment feeds. Full reasoning,
+including the source-level detail this file omits since the corpus is a customer repository, is in
+`.superpowers/sdd/2026-09-06-r196-plan-a-classifier/task-3-report.md`.
+
+Commands run:
+
+```
+bun scripts/census-hang-capable.ts U:/Git/do-rel2/Cloud <out.json>
+bun scripts/census-hang-capable.ts U:/Git/do-lethal-53470/Cloud <out.json>
+```
+
+No decision is recorded here. The design names this a halt: the decision belongs to whoever reviews
+these numbers against the plan, and is recorded separately once made.

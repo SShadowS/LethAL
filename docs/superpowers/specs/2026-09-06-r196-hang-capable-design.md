@@ -17,16 +17,43 @@ Revision 1 said "about 5 of 8" would be caught. "About" is not good enough for e
 and the prose enumerated seven. The plan's first task is to recover the eight from run 3's store
 and fill this table exactly; the design does not ship on an estimate.
 
-| # | loop | operator | mutated text | v1 tags it? |
-|---|---|---|---|---|
-| 1 | `FindMatchingTemplateLine` | `remove-assignment` | `CriterionIndex += 1` (site A) | expected yes |
-| 2 | `FindMatchingTemplateLine` | `remove-assignment` | `CriterionIndex += 1` (site B) | expected yes |
-| 3 | `FindMatchingTemplateLine` | `remove-assignment` | `LineDone := true` | expected yes |
-| 4 | `FindMatchingTemplateLine` | `flip-boolean-literal` | `LineDone := true` → `false` | expected yes |
-| 5 | `FindMatchingTemplateLine` | `empty-block` | the guarded block | **no** (§3.2.5) |
-| 6 | `FindMatchingTemplateLine` | condition mutation | `and` → `or` | **no** (§3.2.5) |
-| 7 | `SubstituteDateFormulas` | `remove-assignment` | `Rest := CopyStr(Rest, ClosePos + 1)` | expected yes, IF the condition reads `Rest` |
-| 8 | *to be recovered from the store* | | | |
+| # | line | procedure | operator | site | `classifyHangCapable` tags it? |
+|---|---|---|---|---|---|
+| 1 | 74 | `FindMatchingTemplateLine` | `remove-assignment` | loop 1, increments `CriterionIndex` | **yes** |
+| 2 | 76 | `FindMatchingTemplateLine` | `remove-assignment` | loop 1, sets `LineDone` | **yes** |
+| 3 | 76 | `FindMatchingTemplateLine` | `flip-boolean-literal` | loop 1, same site as #2 | **yes** |
+| 4 | 84 | `FindMatchingTemplateLine` | `remove-assignment` | loop 2, sets `LineDone` | **yes** |
+| 5 | 84 | `FindMatchingTemplateLine` | `flip-boolean-literal` | loop 2, same site as #4 | **yes** |
+| 6 | 85 | `FindMatchingTemplateLine` | `empty-block` | loop 2's guarded block | **no** (§3.2.5: not an assignment) |
+| 7 | 107 | `FindMatchingTemplateLine` | `remove-assignment` | loop 2, increments `CriterionIndex` | **yes** |
+| 8 | 322 | `SubstituteDateFormulas` | `remove-assignment` | assigns `Rest`; the enclosing loop's own condition reads a different variable, reached only through a call one line later | **no** |
+
+**Recovered exactly, task 3 (2026-09-06), from run 3's own store** (`lethal-53470-run3/lethal.sqlite`,
+run 1: killed 448, survived 237, no-coverage 48, timeout-killed 8, summing to the 741 deployed
+mutants this section already cites) and cross-checked line-for-line against
+`scripts/census-hang-capable.ts`'s tagged rows on `do-lethal-53470/Cloud`. Full measurement in
+`docs/measurements/README.md` and `.superpowers/sdd/2026-09-06-r196-plan-a-classifier/task-3-report.md`.
+
+Two corrections to revision 1/2's account, both found by the recovery rather than assumed:
+
+- **`FindMatchingTemplateLine` has TWO structurally identical `while` loops, not one.** Rows 2-3
+  above were the only `LineDone` pair revision 1/2 named; rows 4-5 are the SECOND loop's matching
+  pair, structurally identical, and the earlier prose never described them.
+- **Row 6's "condition mutation" is not one of the eight, and never was.** Run 3's deployed set has
+  no operator that swaps a boolean connective; `negate-conditional` is the nearest real analogue, at
+  both loops' conditions, and both instances scored plain `killed`, not `timeout-killed`. It is
+  dropped from the corrected table above; the eight are exactly rows 1-8.
+
+**Row 8 is the one the classifier misses**, and it misses it for exactly the reason §3.2 point 3
+already names: the enclosing `while`'s own condition names a variable this assignment does not
+touch, and the variable it DOES touch reaches that condition only through a call on the next line,
+i.e. progress through a CALL. Revision 1's row 7 hedged "expected yes, IF the condition reads
+`Rest`"; measured, the condition does not, so the honest answer is a plain no, not a hedge.
+
+**Net: `classifyHangCapable` tags 6 of the actual 8 (75%).** Six correctly tagged (rows 1-5, 7), one
+correctly out of scope for an assignment-only classifier (row 6, a block deletion), one a real miss
+squarely inside the design's own documented exclusion (row 8, §3.2.3). No row was tagged that should
+not have been.
 
 [[R164]] is the **precedent**, not a universal rule: it establishes a narrow cession at one exact
 `repeat`-exit position and deliberately preserves condition mutations nested inside it. Revision 1
