@@ -68,10 +68,13 @@ describe("resolveVarRef", () => {
     expect(resolveVarRef(useOf(root, "Seen"), ctx)?.name).toBe("Seen");
   });
 
-  it("returns null for a MEMBER name after a dot, not a variable read", () => {
-    const { root, ctx } = load(`codeunit 50205 "R" { var Rec: Record Customer;
-      procedure P() begin Rec.Name := 'x'; end; }`);
-    expect(resolveVarRef(useOf(root, "Name"), ctx)).toBeNull();
+  it("returns null for a MEMBER name after a dot, even when that name is ALSO a declared variable", () => {
+    // Rec.Counter is a member access, not a read of the global `Counter` below it — the guard must
+    // refuse it on AST SHAPE, not merely because no such name happens to be in scope. Without the
+    // guard this resolves to the unrelated global instead of refusing.
+    const { root, ctx } = load(`codeunit 50205 "R" { var Rec: Record Customer; Counter: Integer;
+      procedure P() begin Rec.Counter := 1; end; }`);
+    expect(resolveVarRef(useOf(root, "Counter"), ctx)).toBeNull();
   });
 
   it("returns null for an undeclared name rather than inventing one", () => {
@@ -82,16 +85,16 @@ describe("resolveVarRef", () => {
 });
 
 describe("normalizeAlName", () => {
-  it("strips one layer of quoting", () => {
-    expect(normalizeAlName('"No."')).toBe("No.");
+  it("strips one layer of quoting and lowercases", () => {
+    expect(normalizeAlName('"No."')).toBe("no.");
   });
 
-  it("leaves case alone, since lookupVar already compares case-insensitively", () => {
-    expect(normalizeAlName("COUNTER")).toBe("COUNTER");
+  it("lowercases, since this is public and a consumer may compare two normalized names directly", () => {
+    expect(normalizeAlName("COUNTER")).toBe("counter");
   });
 
-  it("leaves an unquoted name untouched", () => {
-    expect(normalizeAlName("Counter")).toBe("Counter");
+  it("lowercases an unquoted name too", () => {
+    expect(normalizeAlName("Counter")).toBe("counter");
   });
 });
 
