@@ -1557,3 +1557,44 @@ spirit to [[R196]]'s own §3.2.4 exclusion, just reached through a bare-identifi
 **Symbol fallback rate, asked for by spec §3.4:** zero, and cannot be otherwise. Task 2 removed
 name-matching entirely in favour of positional comparison, so there is no fallback path left to
 measure a rate for. Answered by construction, not left unmeasured.
+
+### Halt decision (spec §3.4)
+
+**Halt decision (section 3.4): PROCEED.** The bar the spec set was that a claim rate in the
+thousands would mean the rule is wrong rather than merely broad. The measured rate is 57 sites on
+`do-rel2/Cloud` and 61 on `do-lethal-53470/Cloud`, about 0.8 percent of assignments on both, three
+orders of magnitude below that bar. The stronger evidence is the recovery: of the eight mutants that
+actually hung run 3, the classifier tags six. Of the two it does not, one is correctly out of scope,
+being `empty-block` on a block rather than an assignment, and one is a genuine miss that falls
+inside the design's own documented exclusion for progress reached through a call (section 3.2.3).
+The spec's companion question, the rate at which a symbol fallback fired, is answered as zero by
+construction: name matching was removed in favour of positional comparison, so the tag cannot rest
+on spelling.
+
+**Limit 1: coverage is understated, and by a knowable amount.** About a quarter of in-loop
+assignments decline because the target does not resolve, 144 of 572 and 174 of 658. A 30-site sample
+per corpus attributes roughly 60 percent of those to [[R210]], a resolver defect in which AL's
+procedure overloading by parameter list meets a symbol table that resolves procedures by name alone,
+so a site inside the second or later overload is handed the first overload's locals. Those are
+sites the classifier should be seeing and is not. The claim rate above is therefore a floor, not an
+estimate, and closing [[R210]] would be expected to raise it. The remainder are AL's named return
+values and its implicit record reference, neither of which a declaration-based symbol table can
+see, and both closer in kind to the section 3.2.4 exclusion than to a defect.
+
+**Limit 2: [[R210]] could in principle produce a false tag, not only a missed one.** The same
+overload collision that hides a declaration could instead resolve a target to the wrong local. This
+was not observed in the sample and was not specifically searched for. The direction of harm is
+bounded by the design's own accepted cost: a false tag costs nothing at all unless that mutant also
+happens to time out for some other reason, and only then does it draw the same forced stop and
+confirmation replay any tagged mutant's timeout would. **Correction to an earlier draft of this
+ruling:** that draft additionally said the section 6 confirmation is "the net that catches" a false
+tag. Checked against section 6 as written and dropped: the confirmation does not discriminate WHY a
+mutant timed out, and section 6.3's own closing paragraph says so directly ("it does not prove
+causation"). A mutant falsely tagged by [[R210]] that also happens to time out for an unrelated
+reason receives the identical confirmation treatment, and is exposed to the identical accepted
+residual risk of an unproven `timeout-killed`, as a mutant that was correctly tagged and genuinely
+non-terminating. Section 6 bounds the false-tag risk to the same shape as every other confirmed
+timeout; it does not detect, flag, or specifically mitigate the false-tag case, and is not a
+distinct safety net for it. It is recorded here so that a later reader does not mistake the absence
+of an observed instance for evidence of absence, and does not mistake section 6 for a check this
+design does not have.

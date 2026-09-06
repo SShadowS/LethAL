@@ -188,6 +188,11 @@ sites were DECLINED as unresolved (§3.1). A rate in the thousands means the rul
 than broad; a high unresolved rate means the resolver is, and either stops the design here with the
 decision recorded against the number.
 
+**ANSWERED 2026-09-06, halt decision: PROCEED, with two stated limits.** Measured, decided, and
+recorded in full in `docs/measurements/README.md` (section "The hang-capable classifier's claim rate
+on two real corpora, and the eight recovered"). Not restated here: this section stays as the
+question it originally asked, and the answer lives beside the numbers that produced it.
+
 ## 4. The tag, and how it travels
 
 `MutationSpec.hangCapable?: HangCapableReason` — a named union, not a boolean, so the report can say
