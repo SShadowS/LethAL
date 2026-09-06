@@ -87,6 +87,16 @@ function identifiersIn(node: ALSyntaxNode): ALSyntaxNode[] {
  * still tells them apart on the rare path where `classifyHangCapable`'s own ancestor walk would let
  * both be compared at all (in practice it never does — that walk stops at the enclosing
  * procedure/trigger boundary, so a sibling procedure's declarations are never even reached).
+ *
+ * PRECONDITION, load-bearing: `startIndex` is a byte offset WITHIN ITS OWN FILE, so two
+ * declarations in DIFFERENT files can share one. This comparison is sound here ONLY because both
+ * `a` and `b` are always resolved from identifiers inside one procedure of one object — the
+ * assignment's target and an enclosing loop's condition — so every symbol either side can resolve
+ * to is necessarily declared in the SAME file `classifyHangCapable` was called with. If this
+ * function, or its calling pattern, is ever reused to compare symbols that could come from
+ * different files, this comparison is wrong and needs a file component added to the key. See
+ * ROADMAP R209 for the underlying `resolveVarRef` identity gap this works around, and for why
+ * fixing it at the source (caching `triggerScopeVar`'s result) is not a small change.
  */
 function sameDeclaration(
   a: NonNullable<ReturnType<typeof resolveVarRef>>,
