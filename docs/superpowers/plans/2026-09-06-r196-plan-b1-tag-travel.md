@@ -915,9 +915,10 @@ git commit -m "feat(runner): announce deployed hang-capable sites before deploym
 
 Not covered here, by design, and carried to B2: sections 5.1, 5.2, 5.4, 5.5, 6, 7, 8. Section 10 is out of scope for both.
 
-**Two things a B2 author must not forget**, recorded here because they are easy to lose between plans:
+**Three things a B2 author must not forget**, recorded here because they are easy to lose between plans:
 1. Section 5.4's caveat fires when an automatic stop **actually occurred**, not when tagged sites were merely deployed. The deployed-sites fact is Task 6's announcement and is already shipped by B1. Mixing the two is the ambiguity spec revision 1 had.
 2. Section 8's resume ordering problem is real and unsolved in this plan: resume resolution happens before mutation generation, so the current manifest's tag is not yet known when carry filtering runs.
+3. Task 6's announcement, as B1 ships it, deliberately does NOT use section 5.3's own wording, because that wording promises a stop this plan does not implement (`RunOpts` has no per-dispatch stop control, and `bcdev-backend.ts` still passes the construction-time `stopHungSessions` global to every dispatch regardless of hazard). **B2 must replace the announcement's text with section 5.3's wording at the SAME time it lands section 5.1's forced stop, and gate it on the backend capability section 5.2 requires.** Landing the stop while leaving B1's text in place would ship a second sentence that claims more than the build does, the same fault this plan's own fix wave corrected once already.
 
 **Type consistency.** `HangCapableReason` is declared once, in `packages/engine/src/operator/interface.ts`, and re-exported from `@lethal/engine`, `@lethal/operator-sdk` and `loop-hazard.ts`. It is `HangCapableReason` on `MutationSpec` and on `ConformanceCase`, and widened to `string` on `MutantManifestEntry` and `MutantOutcome`, matching `platformKillMechanism` exactly. The helper is `hangCapableForMutatedNode` in every task that names it.
 

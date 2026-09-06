@@ -245,7 +245,7 @@ describe("writeInstrumentedProject", () => {
     try {
       // Two mutants: one at a site an operator tagged hang-capable, one at an ordinary site.
       // R196: the tag must survive verbatim into the manifest for the first, and for the second
-      // the KEY must be ABSENT rather than present-and-undefined — `exactOptionalPropertyTypes`
+      // the KEY must be ABSENT rather than present-and-undefined: `exactOptionalPropertyTypes`
       // makes those two different facts on a JSON round trip.
       const src = `codeunit 51043 "Hang" {
   procedure Tagged() begin

@@ -204,7 +204,7 @@ export function classifyHangCapable(
  * One refusal here is deliberate and load-bearing: a node inside the assignment's `left` field is
  * part of the target expression rather than a value written to the target, so an operator mutating
  * the target itself gets no tag from this (test: "DECLINES the target identifier on the
- * assignment's left"). The `SCOPE_KINDS` check inside the walk below is NOT that kind of guard —
+ * assignment's left"). The `SCOPE_KINDS` check inside the walk below is NOT that kind of guard:
  * see the comment on it.
  *
  * Containment is tested by POSITION rather than by node identity, for the reason recorded in

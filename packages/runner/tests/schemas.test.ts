@@ -531,11 +531,11 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
     if (branch === undefined) {
       throw new Error("no mutation-set-generated branch in stream-v1.schema.json");
     }
-    const missing = conformsTo(streamSchema, generated, branch)
-      .filter((v) => v.problem === "required but absent")
-      .map((v) => v.path)
-      .sort();
-    expect(missing).toEqual(["$.hangCapableCount"]);
+    // The FULL violation list, not filtered to "required but absent": a filtered assertion would
+    // leave any OTHER kind of violation on this line checked by neither this test nor the general
+    // per-line loop above, which skips seq 5 outright. Asserting exact equality closes that gap.
+    const violations = conformsTo(streamSchema, generated, branch);
+    expect(violations).toEqual([{ path: "$.hangCapableCount", problem: "required but absent" }]);
   });
 
   test("the report schema REFUSES a document it should refuse", () => {

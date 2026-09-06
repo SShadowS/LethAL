@@ -2550,12 +2550,22 @@ describe("runSession — single artifact", () => {
 // "tags an in-loop additive expression that advances the condition" case, a `while` loop whose
 // condition reads a counter that an additive expression in its body advances. Scoped to
 // `lethal.swap-additive` alone (`operators: ["swap-additive"]`) so this project deploys exactly
-// ONE hang-capable mutant. There are FOUR callers of `hangCapableForMutatedNode`, not three:
-// `remove-assignment`, `shift-integer`, `swap-additive` and `flip-boolean-literal`. Left unscoped,
-// `remove-assignment` and `shift-integer` would each also tag the SAME counter update at their own
-// (different-span) sites, so the count would stop being 1. `flip-boolean-literal` does not, here,
-// only because this fixture's loop body has no boolean literal for it to target, not because it is
-// a third operator rather than a fourth: a fixture with one would need it scoped out too.
+// ONE hang-capable mutant. There are FOUR callers of `hangCapableForMutatedNode`: `remove-assignment`,
+// `shift-integer`, `swap-additive` and `flip-boolean-literal`. Left unscoped, TWO of the other three
+// also tag this fixture, not three, each at its own different-span site (see the unscoped test
+// below for the full derivation):
+//   - `remove-assignment` claims the whole loop-body statement `Remaining := Remaining - 1;` and
+//     tags it: that node IS the assignment `hangCapableForMutatedNode` classifies directly.
+//   - `shift-integer` claims NOTHING here. The only literal in the loop body, the `1` inside
+//     `Remaining - 1`, has an `additive_expression` for a parent rather than an
+//     `assignment_statement`, and `shifted()` (shift-integer.ts) refuses any literal whose parent
+//     is neither. (This is why that operator's OWN conformance fixture for the tag uses
+//     `Remaining := 0`, a direct literal assignment, rather than this shape.)
+//   - `flip-boolean-literal` claims nothing, because this fixture's loop body has no boolean
+//     literal for it to target, not because it is a third operator rather than a fourth.
+// So this test scopes to `swap-additive` alone to hold the count at exactly 1; the unscoped test
+// below deploys the default operator set on the same fixture and expects 2 (`remove-assignment`
+// plus `swap-additive`), derived by this same reading before it was ever run.
 describe("runSession, R196: hang-capable sites announced before deployment", () => {
   const HANG_CAPABLE_AL = `codeunit 79000 "Sandbox Logic"
 {
@@ -2609,6 +2619,30 @@ describe("runSession, R196: hang-capable sites announced before deployment", () 
     expect(generated.hangCapableCount).toBe(1);
   });
 
+  test("counts DISTINCT tagged mutants when several operators tag the same statement, unscoped (R196)", async () => {
+    // Same fixture as `collectFromHangCapableRun`, but with the DEFAULT operator set rather than
+    // scoped to `swap-additive` alone. Expected count derived by reading the four operators
+    // against this fixture BEFORE running it (full trace in the comment above this `describe`):
+    // `remove-assignment` tags the whole statement `Remaining := Remaining - 1;`, `swap-additive`
+    // tags the `Remaining - 1` additive expression nested inside it, a DIFFERENT span, and
+    // `shift-integer` and `flip-boolean-literal` tag nothing here. `dedupeSpecs`'s identity is
+    // (node kind, span, replacement text), and `assignment_statement` and `additive_expression`
+    // share neither kind nor span, so dedup does not collapse the two. Derived total: 2.
+    const dirs = await makeHangCapableProject(HANG_CAPABLE_AL);
+    const backend = new StubBackend(CAPS_NST, () => "pass", ["Go"]);
+    const store = new ResultsStore(":memory:");
+    const events: RunEvent[] = [];
+    const emit = createEmitter([(e) => events.push(e)]);
+    await runSession({ backend, store, ...dirs, selectorIds, emit: [emit] });
+    store.close();
+    const generated = events.find(
+      (e): e is Extract<RunEvent, { type: "mutation-set-generated" }> =>
+        e.type === "mutation-set-generated",
+    );
+    if (generated === undefined) throw new Error("no mutation-set-generated event");
+    expect(generated.hangCapableCount).toBe(2);
+  });
+
   test("reports zero rather than nothing on a project with no hang-capable site", async () => {
     // TARGET_AL has no loop anywhere, so no operator, scoped or not, can ever tag a site.
     // Deliberately run with the full default operator set to prove the zero is a real absence of
@@ -2642,15 +2676,19 @@ describe("runSession, R196: hang-capable sites announced before deployment", () 
     expect(warnAt).toBeLessThan(firstDeploy);
   });
 
-  test("the warning names the count and speaks of a stop this plan does not implement", async () => {
+  test("the warning names the count and describes today's actual behaviour, not spec 5.3's forced stop", async () => {
     const events = await collectFromHangCapableRun();
     const warning = events.find(
       (e): e is Extract<RunEvent, { type: "warning" }> =>
         e.type === "warning" && e.code === "hang-capable-sites-deployed",
     );
     if (warning === undefined) throw new Error("no hang-capable-sites-deployed warning");
-    expect(warning.message).toContain("1 hang-capable site(s) found");
+    expect(warning.message).toContain("1 hang-capable mutant(s) deployed");
     expect(warning.message).toContain("--stop-hung-sessions");
+    // The claim this build can actually make: off means stranded, not "ends the session either
+    // way". Section 5.3's own wording (a forced stop regardless of the flag) is NOT this plan's to
+    // say, because nothing here implements it yet.
+    expect(warning.message).toContain("strands this tier");
   });
 });
 

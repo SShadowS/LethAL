@@ -3056,12 +3056,16 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // exact same total dedup would produce per batch, and it is available at the moment this phase
   // ends rather than only after every artifact has compiled.
   const siteCount = allFiles.reduce((n, f) => n + f.specs.length, 0);
-  const deployedCount = allFiles.reduce((n, f) => n + dedupeSpecs(f.specs, tierOf).length, 0);
+  // Deduped ONCE per file, here, and both counts below derived from that same list: `dedupeSpecs`
+  // is pure and cheap, but running it twice invited the two counts to drift apart if one call site
+  // ever changed and the other did not.
+  const dedupedSpecsByFile = allFiles.map((f) => dedupeSpecs(f.specs, tierOf));
+  const deployedCount = dedupedSpecsByFile.reduce((n, specs) => n + specs.length, 0);
   // R196: counted over the SAME deduped specs as `deployedCount`, in the same place, so the two
   // can never disagree about what "deployed" means. Not counted from scored outcomes: a
   // quarantine truncates those and the number would silently shrink.
-  const hangCapableCount = allFiles.reduce(
-    (n, f) => n + dedupeSpecs(f.specs, tierOf).filter((s) => s.hangCapable !== undefined).length,
+  const hangCapableCount = dedupedSpecsByFile.reduce(
+    (n, specs) => n + specs.filter((s) => s.hangCapable !== undefined).length,
     0,
   );
   emit({
@@ -3077,14 +3081,21 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     excludedByOperator,
   });
   // R196: announced BEFORE deployment (spec §5.3), not after scoring. A warning at the end would
-  // satisfy a presence check while being useless to the person it is for. Speaks in the future
-  // tense about a stop that this plan does not implement: B1 ships the announcement so a later
-  // plan cannot ship a forced stop without one.
+  // satisfy a presence check while being useless to the person it is for.
+  //
+  // The message states what is true in THIS build, not spec §5.3's own wording. §5.3's text
+  // promises that an over-budget mutant ends the BC session regardless of `--stop-hung-sessions`,
+  // and that is not yet the case: `RunOpts` carries no per-dispatch stop control (§5.1), and
+  // `BcDevMcpBackend.runMany` (`bcdev-backend.ts`) still reads the construction-time
+  // `stopHungSessions` global for every dispatch, unconditionally. With that flag off, a
+  // hang-capable mutant strands its tier exactly as any other timeout does, same as before this
+  // plan. §5.3's own wording lands together with §5.1's forced stop and §5.2's backend-capability
+  // gate, in the plan that implements them (B2). See this plan's self-review.
   if (hangCapableCount > 0) {
     emit({
       type: "warning",
       code: "hang-capable-sites-deployed",
-      message: `${hangCapableCount} hang-capable site(s) found. If one exceeds its budget LethAL will end that BC session, because the alternative is a stranded tier. This happens whether or not \`--stop-hung-sessions\` was passed.`,
+      message: `${hangCapableCount} hang-capable mutant(s) deployed: each sits where an enclosing loop's condition reads the variable it writes, so it may run past its budget. With --stop-hung-sessions off, such a mutant strands this tier exactly as any other timeout does.`,
     });
   }
   emit({ type: "phase-left", phase: "generate", elapsedMs: generateMutationSetMs });
