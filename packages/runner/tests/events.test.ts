@@ -252,6 +252,7 @@ describe("createEmitter", () => {
         type: "mutation-set-generated",
         siteCount: 4,
         deployedCount: 4,
+        hangCapableCount: 0,
         totalFiles: 2,
         instrumentableFiles: 2,
         notInstrumentedFiles: [],

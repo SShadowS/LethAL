@@ -85,6 +85,7 @@ function buildScenarioReport(): SessionReport {
       type: "mutation-set-generated",
       siteCount: 13,
       deployedCount: 13,
+      hangCapableCount: 0,
       totalFiles: 13,
       instrumentableFiles: 4,
       excludedByOnly: 9,

@@ -3057,10 +3057,18 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // ends rather than only after every artifact has compiled.
   const siteCount = allFiles.reduce((n, f) => n + f.specs.length, 0);
   const deployedCount = allFiles.reduce((n, f) => n + dedupeSpecs(f.specs, tierOf).length, 0);
+  // R196: counted over the SAME deduped specs as `deployedCount`, in the same place, so the two
+  // can never disagree about what "deployed" means. Not counted from scored outcomes — a
+  // quarantine truncates those and the number would silently shrink.
+  const hangCapableCount = allFiles.reduce(
+    (n, f) => n + dedupeSpecs(f.specs, tierOf).filter((s) => s.hangCapable !== undefined).length,
+    0,
+  );
   emit({
     type: "mutation-set-generated",
     siteCount,
     deployedCount,
+    hangCapableCount,
     totalFiles: totalAlFiles,
     instrumentableFiles: allFiles.length,
     notInstrumentedFiles,
@@ -3068,6 +3076,17 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     excludedByOnly,
     excludedByOperator,
   });
+  // R196: announced BEFORE deployment (spec §5.3), not after scoring — a warning at the end would
+  // satisfy a presence check while being useless to the person it is for. Speaks in the future
+  // tense about a stop that this plan does not implement: B1 ships the announcement so a later
+  // plan cannot ship a forced stop without one.
+  if (hangCapableCount > 0) {
+    emit({
+      type: "warning",
+      code: "hang-capable-sites-deployed",
+      message: `${hangCapableCount} hang-capable site(s) found. If one exceeds its budget LethAL will end that BC session, because the alternative is a stranded tier. This happens whether or not \`--stop-hung-sessions\` was passed.`,
+    });
+  }
   emit({ type: "phase-left", phase: "generate", elapsedMs: generateMutationSetMs });
   // R48: refuse an unscoped run on a large project BEFORE anything is published. See
   // `LARGE_RUN_MUTANT_THRESHOLD` for why this refuses rather than warns.

@@ -123,6 +123,11 @@ export type RunEventInput =
       readonly type: "mutation-set-generated";
       readonly siteCount: number;
       readonly deployedCount: number;
+      /** R196: how many DEPLOYED, post-dedup mutants sit at a hang-capable site. Required, and 0 on
+       *  a project with none: an absent count and a measured zero must not look alike, the same
+       *  rule `declarativeSiteFiles` and `untargetedTriggerCount` follow. Counted here rather than
+       *  from outcomes because a quarantine truncates those and the number would silently shrink. */
+      readonly hangCapableCount: number;
       readonly totalFiles: number;
       readonly instrumentableFiles: number;
       /** The full skip list — see `SessionReport.notInstrumented.files`. */

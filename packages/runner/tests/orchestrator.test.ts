@@ -2538,6 +2538,119 @@ describe("runSession — single artifact", () => {
   });
 });
 
+// R196 plan B1 Task 6 (spec §5.3). `hangCapableCount` on `mutation-set-generated` counts DEPLOYED,
+// post-dedup mutants sitting at a hang-capable site — computed over the same `dedupeSpecs` output
+// `deployedCount` already reduces, so the two can never disagree about what "deployed" means. The
+// `hang-capable-sites-deployed` warning it drives must be announced BEFORE deployment, not
+// discovered only once scoring is done: a quarantine truncates scored outcomes, so counting from
+// those would let the number silently shrink, and a warning emitted at the end would satisfy a
+// mere presence check while being useless to the person reading it live.
+//
+// Fixture shape measured, not guessed — `packages/builtin-tier1/tests/swap-additive.test.ts`'s own
+// "tags an in-loop additive expression that advances the condition" case: a `while` loop whose
+// condition reads a counter that an additive expression in its body advances. Scoped to
+// `lethal.swap-additive` alone (`operators: ["swap-additive"]`) so this project deploys exactly
+// ONE hang-capable mutant — left unscoped, `remove-assignment` and `shift-integer` would each
+// also tag the SAME counter update at their own (different-span) sites, since all three call the
+// same `hangCapableForMutatedNode` helper, and the count would stop being 1.
+describe("runSession — R196: hang-capable sites announced before deployment", () => {
+  const HANG_CAPABLE_AL = `codeunit 79000 "Sandbox Logic"
+{
+    procedure Go()
+    var
+        Remaining: Integer;
+    begin
+        Remaining := 10;
+        while Remaining > 0 do
+            Remaining := Remaining - 1;
+    end;
+}
+`;
+
+  async function makeHangCapableProject(targetAl: string) {
+    const root = await mkdtemp(join(tmpdir(), "lethal-hang-"));
+    const projectDir = join(root, "app");
+    const testDir = join(root, "tests");
+    const instrumentedDir = join(root, "instr");
+    await Bun.write(join(projectDir, "SandboxLogic.Codeunit.al"), targetAl);
+    await Bun.write(join(projectDir, "app.json"), APP_JSON);
+    await Bun.write(join(testDir, "SandboxTests.Codeunit.al"), TEST_AL);
+    return { projectDir, testDir, instrumentedDir };
+  }
+
+  async function collectFromHangCapableRun(): Promise<RunEvent[]> {
+    const dirs = await makeHangCapableProject(HANG_CAPABLE_AL);
+    const backend = new StubBackend(CAPS_NST, () => "pass", ["Go"]);
+    const store = new ResultsStore(":memory:");
+    const events: RunEvent[] = [];
+    const emit = createEmitter([(e) => events.push(e)]);
+    await runSession({
+      backend,
+      store,
+      ...dirs,
+      selectorIds,
+      operators: ["swap-additive"],
+      emit: [emit],
+    });
+    store.close();
+    return events;
+  }
+
+  test("counts deployed hang-capable sites on mutation-set-generated", async () => {
+    const events = await collectFromHangCapableRun();
+    const generated = events.find(
+      (e): e is Extract<RunEvent, { type: "mutation-set-generated" }> =>
+        e.type === "mutation-set-generated",
+    );
+    if (generated === undefined) throw new Error("no mutation-set-generated event");
+    expect(generated.hangCapableCount).toBe(1);
+  });
+
+  test("reports zero rather than nothing on a project with no hang-capable site", async () => {
+    // TARGET_AL has no loop anywhere, so no operator, scoped or not, can ever tag a site —
+    // deliberately run with the full default operator set to prove the zero is a real absence of
+    // hang-capable sites, not an artefact of the `--operator` narrowing used above.
+    const dirs = await makeProject();
+    const backend = new StubBackend(CAPS_NST, () => "pass", ["IsOverBudget"]);
+    const store = new ResultsStore(":memory:");
+    const events: RunEvent[] = [];
+    const emit = createEmitter([(e) => events.push(e)]);
+    await runSession({ backend, store, ...dirs, selectorIds, emit: [emit] });
+    store.close();
+    const generated = events.find(
+      (e): e is Extract<RunEvent, { type: "mutation-set-generated" }> =>
+        e.type === "mutation-set-generated",
+    );
+    if (generated === undefined) throw new Error("no mutation-set-generated event");
+    expect(generated.hangCapableCount).toBe(0);
+  });
+
+  test("announces before deployment, not after scoring", async () => {
+    const events = await collectFromHangCapableRun();
+    const warnAt = events.findIndex(
+      (e) => e.type === "warning" && e.code === "hang-capable-sites-deployed",
+    );
+    // `batch-published` is the real first-deployment event (there is no `mutant-deployed` type):
+    // emitted the moment a batch's artifact is compiled, published AND verified — see
+    // orchestrator.ts's `type: "batch-published"` emit, right after `phase-entered: "deploy"`.
+    const firstDeploy = events.findIndex((e) => e.type === "batch-published");
+    expect(warnAt).toBeGreaterThanOrEqual(0);
+    expect(firstDeploy).toBeGreaterThanOrEqual(0);
+    expect(warnAt).toBeLessThan(firstDeploy);
+  });
+
+  test("the warning names the count and speaks of a stop this plan does not implement", async () => {
+    const events = await collectFromHangCapableRun();
+    const warning = events.find(
+      (e): e is Extract<RunEvent, { type: "warning" }> =>
+        e.type === "warning" && e.code === "hang-capable-sites-deployed",
+    );
+    if (warning === undefined) throw new Error("no hang-capable-sites-deployed warning");
+    expect(warning.message).toContain("1 hang-capable site(s) found");
+    expect(warning.message).toContain("--stop-hung-sessions");
+  });
+});
+
 // A mutation guard is a bare `MutationSelector.Active(...)` call, and only a codeunit or a table
 // can carry the `var MutationSelector: Codeunit "Mutation Selector";` declaration that makes it
 // resolve (AL0118 otherwise). The tier-1 operators happily target a page's `OnAction` body, and a
@@ -8486,7 +8599,12 @@ describe("R206: the warm confirmation and the session guard", () => {
       if (call !== 0 || composed.kind !== "verdicts") return composed;
       const [t1, t2] = composed.verdicts;
       if (t1 === undefined || t2 === undefined) return composed;
-      return { ...composed, endedBy: "complete", ranCount: 2, verdicts: [t1, { ...t2, outcome: "fail" }] };
+      return {
+        ...composed,
+        endedBy: "complete",
+        ranCount: 2,
+        verdicts: [t1, { ...t2, outcome: "fail" }],
+      };
     };
     const c = await session(lying);
     expect(m1(c)?.verdict).toBe("error");

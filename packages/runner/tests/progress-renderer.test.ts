@@ -72,6 +72,7 @@ describe("progress renderer", () => {
         type: "mutation-set-generated",
         siteCount: 176,
         deployedCount: 148,
+        hangCapableCount: 0,
         totalFiles: 554,
         instrumentableFiles: 441,
         notInstrumentedFiles: [],

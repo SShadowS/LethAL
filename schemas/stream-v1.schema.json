@@ -239,6 +239,7 @@
         "type",
         "siteCount",
         "deployedCount",
+        "hangCapableCount",
         "totalFiles",
         "instrumentableFiles",
         "notInstrumentedFiles",
@@ -255,6 +256,9 @@
           "type": "number"
         },
         "deployedCount": {
+          "type": "number"
+        },
+        "hangCapableCount": {
           "type": "number"
         },
         "totalFiles": {

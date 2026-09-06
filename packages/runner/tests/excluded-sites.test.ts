@@ -140,6 +140,7 @@ describe("buildReport derives both legacy fields from excludedSites (not in para
           type: "mutation-set-generated",
           siteCount: 3,
           deployedCount: 3,
+          hangCapableCount: 0,
           totalFiles: input.totalFiles,
           instrumentableFiles: input.totalFiles,
           notInstrumentedFiles: input.notInstrumentedFiles,

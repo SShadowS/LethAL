@@ -164,6 +164,7 @@ function foldWith(
       type: "mutation-set-generated",
       siteCount: 1,
       deployedCount: 1,
+      hangCapableCount: 0,
       totalFiles: 2,
       instrumentableFiles: 1,
       notInstrumentedFiles: [],

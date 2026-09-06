@@ -136,6 +136,9 @@ export function legacyBuildReport(input: LegacyBuildReportInput): SessionReport 
     type: "mutation-set-generated",
     siteCount: Math.max(input.outcomes.length, instrumentableFiles),
     deployedCount: input.outcomes.length,
+    // R196: legacy fixtures predate the hang-capable tag entirely and none of them describes a
+    // project with such a site, so 0 is the honest conversion here, not a default.
+    hangCapableCount: 0,
     totalFiles: input.notInstrumented.totalFiles,
     instrumentableFiles,
     notInstrumentedFiles: input.notInstrumented.files,

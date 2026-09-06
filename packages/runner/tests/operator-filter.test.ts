@@ -377,6 +377,7 @@ describe("buildReport — an operator-scoped run says so", () => {
           type: "mutation-set-generated",
           siteCount: 3,
           deployedCount: 3,
+          hangCapableCount: 0,
           totalFiles: 91,
           instrumentableFiles: 91,
           notInstrumentedFiles: [],
