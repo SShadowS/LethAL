@@ -72,34 +72,39 @@ function highlight(src: string, markStart?: number, markEnd?: number): string {
   let cursor = 0;
   let marking = false;
 
-  const openMarkIfDue = (at: number): void => {
-    if (markStart !== undefined && !marking && at >= markStart) {
-      pieces.push('<mark class="mut">');
-      marking = true;
-    }
-  };
-  const closeMarkIfDue = (at: number): void => {
-    if (marking && markEnd !== undefined && at >= markEnd) {
-      pieces.push("</mark>");
-      marking = false;
-    }
+  /**
+   * Is the offset inside the mutated span? BOTH bounds matter.
+   *
+   * An earlier version tested only `at >= markStart`, which stays true for the rest of the file, so
+   * every close was followed immediately by a re-open and the mark ran to the last token. That is
+   * how `end;` and `}` came to be highlighted as though they had changed.
+   *
+   * A zero-width range is a DELETION and correctly matches nothing: there is no text in the after
+   * panel to point at, and `deleted` labels it instead.
+   */
+  const inMark = (at: number): boolean =>
+    markStart !== undefined && markEnd !== undefined && at >= markStart && at < markEnd;
+
+  const syncMark = (at: number): void => {
+    const want = inMark(at);
+    if (want === marking) return;
+    pieces.push(want ? '<mark class="mut">' : "</mark>");
+    marking = want;
   };
 
   for (const t of tokens) {
     if (t.startIndex < cursor) continue;
     if (t.startIndex > cursor) {
       // Whitespace between tokens, kept verbatim so indentation survives.
-      closeMarkIfDue(cursor);
-      openMarkIfDue(cursor);
+      syncMark(cursor);
       pieces.push(escapeHtml(src.slice(cursor, t.startIndex)));
       cursor = t.startIndex;
     }
-    closeMarkIfDue(cursor);
-    openMarkIfDue(cursor);
+    syncMark(cursor);
     pieces.push(`<span class="${classOf(t.rawKind, t.text)}">${escapeHtml(t.text)}</span>`);
     cursor = t.endIndex;
   }
-  closeMarkIfDue(cursor);
+  syncMark(cursor);
   if (cursor < src.length) pieces.push(escapeHtml(src.slice(cursor)));
   if (marking) pieces.push("</mark>");
   return pieces.join("");
@@ -123,7 +128,24 @@ interface Mutation {
   readonly afterHtml: string;
   readonly beforeText: string;
   readonly afterText: string;
+  /** The mutation removes code, so the after panel has nothing to highlight and says so instead. */
+  readonly deleted: boolean;
   readonly hangCapable?: string;
+}
+
+/** The plain text inside `<mark>` spans of a rendered fragment, tags stripped and entities undone. */
+function markedTextOf(html: string): string {
+  const marks = html.match(/<mark class="mut">[\s\S]*?<\/mark>/g) ?? [];
+  return marks
+    .map((m) =>
+      m
+        .replace(/^<mark class="mut">|<\/mark>$/g, "")
+        .replace(/<[^>]+>/g, "")
+        .replace(/&lt;/g, "<")
+        .replace(/&gt;/g, ">")
+        .replace(/&amp;/g, "&"),
+    )
+    .join("");
 }
 
 const operators = [];
@@ -131,6 +153,7 @@ let caseCount = 0;
 let mutationCount = 0;
 let refusalCount = 0;
 const layoutDrift: string[] = [];
+const markDrift: string[] = [];
 
 for (const op of [...tier1Operators, ...tier2Operators].sort((a, b) =>
   a.name.localeCompare(b.name),
@@ -155,11 +178,32 @@ for (const op of [...tier1Operators, ...tier2Operators].sort((a, b) =>
       const end = spec.before.endIndex;
       const afterText = (spec.after as { text?: string }).text ?? "";
       const afterSource = source.slice(0, start) + afterText + source.slice(end);
+      const beforeHtml = highlight(source, start, end);
+      const afterHtml = highlight(afterSource, start, start + afterText.length);
+
+      // The highlight must cover EXACTLY the text that changed, and nothing else. Checked rather
+      // than eyeballed, because the first version of this ran the mark to the end of the file and
+      // painted `end;` and `}` as though they had been mutated. A slide that highlights the wrong
+      // span is not a smaller error than a wrong verdict, it just fails somewhere quieter.
+      const markedBefore = markedTextOf(beforeHtml);
+      const markedAfter = markedTextOf(afterHtml);
+      if (markedBefore !== source.slice(start, end)) {
+        markDrift.push(
+          `${op.name} / ${c.name}: before-mark covers ${JSON.stringify(markedBefore)}, expected ${JSON.stringify(source.slice(start, end))}`,
+        );
+      }
+      if (markedAfter !== afterText) {
+        markDrift.push(
+          `${op.name} / ${c.name}: after-mark covers ${JSON.stringify(markedAfter)}, expected ${JSON.stringify(afterText)}`,
+        );
+      }
+
       return {
-        beforeHtml: highlight(source, start, end),
-        afterHtml: highlight(afterSource, start, start + afterText.length),
+        beforeHtml,
+        afterHtml,
         beforeText: spec.before.text,
         afterText,
+        deleted: afterText === "",
         ...(spec.hangCapable !== undefined ? { hangCapable: spec.hangCapable } : {}),
       };
     });
@@ -188,6 +232,17 @@ for (const op of [...tier1Operators, ...tier2Operators].sort((a, b) =>
 if (operators.length === 0 || caseCount === 0) {
   throw new Error(
     `operator-catalogue: found ${operators.length} operator(s) and ${caseCount} case(s). An empty catalogue is a wiring failure, not a result.`,
+  );
+}
+
+// Checked BEFORE the file is written. A wrong highlight is not a cosmetic defect: it is the page
+// asserting that something changed when it did not, which is the same class of error as a wrong
+// verdict, just somewhere quieter. Refuse to produce the page rather than mislead a reader.
+if (markDrift.length > 0) {
+  console.error(`MARK DRIFT (${markDrift.length}):`);
+  for (const d of markDrift) console.error(`  ${d}`);
+  throw new Error(
+    `operator-catalogue: ${markDrift.length} mutation(s) highlight the wrong span. Refusing to write ${outPath}.`,
   );
 }
 
