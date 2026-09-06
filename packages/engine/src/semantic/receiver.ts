@@ -460,14 +460,18 @@ function resolveReceiver(
 }
 
 /**
- * Find the declaration of `name` visible at the call site: procedure locals,
- * then procedure parameters, then the object's globals.
+ * Find the declaration of `name` visible at the call site: a TRIGGER's own `var` section first (if
+ * the call sits inside one), then the enclosing procedure's locals, then its parameters, then the
+ * object's globals.
  *
- * Deliberately conservative: the symbol table indexes `procedure` members
- * only, so a var declared in a *trigger's* own `var` section is not found and
- * the site is refused (rule 4) rather than guessed at.
+ * The trigger case is resolved from the AST node rather than from a name-keyed map (see
+ * `triggerScopeVar`, below): `buildSymbolTable` indexes `procedure` members only, deliberately,
+ * because trigger names repeat across an object (every field may declare its own `OnValidate`) and
+ * a name key would be ambiguous there. This was a stale doc comment before R196: R68 added
+ * `triggerScopeVar` directly beneath this function, so trigger locals ARE found; only a name
+ * genuinely undeclared anywhere in scope falls through to `null`.
  */
-function lookupVar(
+export function lookupVar(
   name: string,
   callNode: ALSyntaxNode,
   objectName: string,
@@ -696,7 +700,7 @@ function resolveTable(symbols: SymbolTable, idOrName: string): ObjectSymbol | nu
 
 // --- small helpers ---------------------------------------------------------
 
-function enclosingObject(node: ALSyntaxNode): ALSyntaxNode | null {
+export function enclosingObject(node: ALSyntaxNode): ALSyntaxNode | null {
   let current: ALSyntaxNode | null = node.parent;
   while (current !== null) {
     if (OBJECT_KINDS.has(current.kind)) return current;
@@ -705,7 +709,7 @@ function enclosingObject(node: ALSyntaxNode): ALSyntaxNode | null {
   return null;
 }
 
-function objectNameOf(objectNode: ALSyntaxNode): string | null {
+export function objectNameOf(objectNode: ALSyntaxNode): string | null {
   const nameNode = objectNode.childForFieldName("object_name");
   return nameNode === null ? null : stripQuotes(nameNode.text);
 }
