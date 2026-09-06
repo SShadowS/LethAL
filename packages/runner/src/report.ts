@@ -1427,6 +1427,16 @@ export interface MutantOutcome {
    */
   readonly platformKillMechanism?: string;
   /**
+   * R196: a syntactic property of this mutant's SITE saying an enclosing loop's condition reads
+   * the variable this site writes, so a timeout here is expected rather than surprising. Carried
+   * verbatim from `MutantManifestEntry.hangCapable`; see `HANG_CAPABLE_EXPLANATIONS`
+   * (hang-capable.ts) for what each value means.
+   *
+   * Present on the mutant whatever its verdict, the same as `platformKillMechanism`. It does NOT
+   * claim the mutation prevents progress, and its absence does NOT mean the site is safe.
+   */
+  readonly hangCapable?: string;
+  /**
    * Summed test time this mutant was scored by, in ms. 0 when nothing ran against it
    * (`no-coverage`, known-survivor skip, or a batch-wide failure recorded without execution) —
    * always present, so "cost nothing because it did not run" and "field not recorded" cannot be
@@ -1905,6 +1915,9 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
       ...(o.mutant.platformKillMechanism !== undefined
         ? { platformKillMechanism: o.mutant.platformKillMechanism }
         : {}),
+      // R196: also a SITE property, off the manifest entry for the same reason as its neighbour
+      // above.
+      ...(o.mutant.hangCapable !== undefined ? { hangCapable: o.mutant.hangCapable } : {}),
     });
   }
 

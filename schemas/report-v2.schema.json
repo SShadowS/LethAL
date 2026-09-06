@@ -349,6 +349,9 @@
           "platformKillMechanism": {
             "type": "string"
           },
+          "hangCapable": {
+            "type": "string"
+          },
           "durationMs": {
             "type": "number"
           },

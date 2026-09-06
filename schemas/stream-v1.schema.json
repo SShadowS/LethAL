@@ -713,6 +713,9 @@
             },
             "platformKillMechanism": {
               "type": "string"
+            },
+            "hangCapable": {
+              "type": "string"
             }
           }
         },
@@ -895,6 +898,9 @@
             },
             "platformKillMechanism": {
               "type": "string"
+            },
+            "hangCapable": {
+              "type": "string"
             }
           }
         },
@@ -1046,6 +1052,9 @@
               "type": "string"
             },
             "platformKillMechanism": {
+              "type": "string"
+            },
+            "hangCapable": {
               "type": "string"
             }
           }

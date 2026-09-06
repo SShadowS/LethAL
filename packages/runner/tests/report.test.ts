@@ -1,8 +1,12 @@
 import { describe, expect, test } from "bun:test";
+import type { MutantManifestEntry } from "@lethal/schemata";
 import type { AlRunnerCanaryResult } from "../src/al-runner-canary";
+import type { RunEvent, RunEventInput } from "../src/events";
+import { HANG_CAPABLE_EXPLANATIONS } from "../src/hang-capable";
 import type { PermissionCanaryResult } from "../src/permission-canary";
-import { renderConsole } from "../src/report";
+import { buildReport, renderConsole } from "../src/report";
 import type { Caveat, SessionReport } from "../src/report";
+import type { FoldStatics } from "../src/report-fold";
 
 // ————————————————————————————————————————————————————————————————————————
 // R7/R8: `renderConsole` repeats the al-runner canary's measured verdict at the END of the
@@ -268,5 +272,112 @@ describe("Caveat union", () => {
       "session-warm": true,
     };
     expect(Object.keys(all).length).toBe(18);
+  });
+});
+
+// ————————————————————————————————————————————————————————————————————————
+// R196: `hangCapable` is a SITE property, exactly like `platformKillMechanism` (R72) — it comes off
+// `MutantManifestEntry` and never off the outcome, so it is present on the mutant whatever its
+// verdict. These tests pin the same shape: a manifest entry carrying the tag has it on the built
+// report row, and one without it omits the KEY entirely (not `undefined` under it — the schema
+// distinguishes "absent" from "present but empty").
+// ————————————————————————————————————————————————————————————————————————
+describe("buildReport — hangCapable travels the site property path (R196)", () => {
+  const STATICS: FoldStatics = {
+    caps: { authoritative: true, coverage: "none", deploy: "publish", isolation: "session" },
+  };
+
+  function seq(events: readonly RunEventInput[]): RunEvent[] {
+    return events.map((e, i) => ({ ...e, seq: i + 1 }) as RunEvent);
+  }
+
+  function mutant(id: string, over: Partial<MutantManifestEntry> = {}): MutantManifestEntry {
+    return {
+      mutantId: id,
+      file: "Al/Codeunit/Codeunit 50100 Sales Helper.al",
+      startIndex: 100,
+      endIndex: 140,
+      startLine: 10,
+      operatorName: "lethal.remove-assignment",
+      operatorVersion: "1.0.0",
+      astHash: `hash-${id}`,
+      objectType: "codeunit",
+      codeunitId: 50100,
+      codeunitName: "Sales Helper",
+      procedureName: "ComputeTotal",
+      procedureScope: "public",
+      originalText: "Counter := Counter + 1;",
+      mutatedText: "",
+      ...over,
+    };
+  }
+
+  test("an outcome built from a manifest entry carrying hangCapable has it on the report row", () => {
+    const events = seq([
+      {
+        type: "mutation-set-generated",
+        siteCount: 1,
+        deployedCount: 1,
+        totalFiles: 1,
+        instrumentableFiles: 1,
+        notInstrumentedFiles: [],
+        declarativeSiteFiles: [],
+        excludedByOnly: 0,
+        excludedByOperator: 0,
+      },
+      { type: "baseline-batch-finished", batchIndex: 0, verdicts: [] },
+      {
+        type: "mutant-scored",
+        mutant: mutant("M0001", { hangCapable: "loop-condition-target" }),
+        verdict: "timeout-killed",
+        batchIndex: 0,
+        durationMs: 180_000,
+        coveringTests: [],
+      },
+      { type: "session-finished", elapsedMs: 180_000 },
+    ]);
+    const report = buildReport(STATICS, events);
+    expect(report.mutants).toHaveLength(1);
+    const [row] = report.mutants;
+    if (row === undefined) throw new Error("buildReport dropped the only mutant");
+    expect(row.hangCapable).toBe("loop-condition-target");
+  });
+
+  test("an outcome built from a manifest entry without hangCapable omits the key entirely", () => {
+    const events = seq([
+      {
+        type: "mutation-set-generated",
+        siteCount: 1,
+        deployedCount: 1,
+        totalFiles: 1,
+        instrumentableFiles: 1,
+        notInstrumentedFiles: [],
+        declarativeSiteFiles: [],
+        excludedByOnly: 0,
+        excludedByOperator: 0,
+      },
+      { type: "baseline-batch-finished", batchIndex: 0, verdicts: [] },
+      {
+        type: "mutant-scored",
+        mutant: mutant("M0002"),
+        verdict: "killed",
+        batchIndex: 0,
+        durationMs: 500,
+        coveringTests: [],
+        killingTest: "Sales Helper Tests.T1",
+      },
+      { type: "session-finished", elapsedMs: 500 },
+    ]);
+    const report = buildReport(STATICS, events);
+    expect(report.mutants).toHaveLength(1);
+    const [row] = report.mutants;
+    if (row === undefined) throw new Error("buildReport dropped the only mutant");
+    expect("hangCapable" in row).toBe(false);
+  });
+
+  test("explains every hang-capable reason it can carry", () => {
+    for (const reason of ["loop-condition-target"] as const) {
+      expect(HANG_CAPABLE_EXPLANATIONS[reason]).toBeTruthy();
+    }
   });
 });
