@@ -62,6 +62,7 @@ export type {
   PlatformKillMechanism,
   SemanticCapability,
   AstNodeId,
+  HangCapableReason,
 } from "./operator/interface";
 export { buildSpanIndex, validateSpec } from "./operator/spec-validation";
 export type { ValidationResult } from "./operator/spec-validation";

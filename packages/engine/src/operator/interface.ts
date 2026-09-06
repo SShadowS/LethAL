@@ -64,6 +64,16 @@ export type PlatformKillMechanism =
    */
   | "run-trigger-forced";
 
+/**
+ * R196: which rule decided this site can make a loop run forever.
+ *
+ * A named union rather than a boolean so the report can say WHICH rule fired. v1 has one value.
+ * The design's section 3.2 widenings would add `"loop-body-target"`, `"loop-preheader"` and
+ * `"callee-global"`, each carrying a different confidence that a boolean would flatten into one
+ * undifferentiated flag.
+ */
+export type HangCapableReason = "loop-condition-target";
+
 export interface MutationSpec {
   readonly operatorName: string;
   readonly operatorVersion: string;
@@ -75,6 +85,14 @@ export interface MutationSpec {
   /** See `PlatformKillMechanism`. Absent means "no such mechanism was recognised at this site",
    *  which is not a claim that a kill here would be assertion-earned. */
   readonly platformKillMechanism?: PlatformKillMechanism;
+  /**
+   * R196: set when an enclosing loop's condition reads the variable this site writes.
+   *
+   * This claims exactly that relationship and nothing more. It does NOT claim the mutation
+   * prevents progress, and an absent tag does NOT mean the site is safe: the design's section 3.2
+   * lists shapes that are unclassified rather than cleared. See section 3.3.
+   */
+  readonly hangCapable?: HangCapableReason;
 }
 
 export interface ConformanceCase {

@@ -3,11 +3,12 @@ import {
   ALNodeKind,
   type ALSyntaxNode,
   buildSemanticContext,
+  findAll,
   initParser,
   parseAL,
   wrapRoot,
 } from "@lethal/engine";
-import { classifyHangCapable } from "../src/loop-hazard";
+import { classifyHangCapable, hangCapableForMutatedNode } from "../src/loop-hazard";
 
 function load(src: string) {
   const root = wrapRoot(parseAL(src));
@@ -115,5 +116,146 @@ describe("classifyHangCapable", () => {
     expect(classifyHangCapable(assignment(root, '"Line Done" := true'), ctx)).toBe(
       "loop-condition-target",
     );
+  });
+});
+
+describe("hangCapableForMutatedNode", () => {
+  const ctxFor = (src: string) => {
+    const root = wrapRoot(parseAL(src));
+    return { root, ctx: buildSemanticContext([{ path: "fixture.al", root }]) };
+  };
+
+  // The assignment itself, which is remove-assignment's shape.
+  it("claims the assignment statement it is given", () => {
+    const { root, ctx } = ctxFor(`codeunit 50000 P
+{
+    procedure Go()
+    var
+        Remaining: Integer;
+    begin
+        Remaining := 1;
+        while Remaining > 0 do
+            Remaining := 0;
+    end;
+}`);
+    const assignments = findAll(root, ALNodeKind.assignment_statement);
+    const inLoop = assignments[assignments.length - 1];
+    expect(inLoop).toBeDefined();
+    if (inLoop === undefined) throw new Error("fixture has no assignment");
+    expect(hangCapableForMutatedNode(inLoop, ctx)).toBe("loop-condition-target");
+  });
+
+  // A literal inside the assignment's right-hand side, which is shift-integer's shape.
+  it("claims a literal on the value side of an in-loop assignment", () => {
+    const { root, ctx } = ctxFor(`codeunit 50000 P
+{
+    procedure Go()
+    var
+        Remaining: Integer;
+    begin
+        Remaining := 1;
+        while Remaining > 0 do
+            Remaining := 0;
+    end;
+}`);
+    // Both the loop's condition (`Remaining > 0`) and its body (`Remaining := 0`) contain a `0`
+    // literal, and the condition's occurs FIRST in document order. The assignment's is the LAST
+    // match, not the first.
+    const literals = findAll(root, ALNodeKind.integer_literal).filter((n) => n.text === "0");
+    const lit = literals[literals.length - 1];
+    if (lit === undefined) throw new Error("fixture has no `0` literal");
+    expect(hangCapableForMutatedNode(lit, ctx)).toBe("loop-condition-target");
+  });
+
+  // The target side is not a value written to the target.
+  //
+  // The fixture is chosen so this can actually fail. An obvious alternative, a subscripted target
+  // like `Slots[2] := 0`, would pass with the guard deleted: `assignmentTargetOf` already declines
+  // any target that is not a bare identifier, so the enclosing assignment classifies as null
+  // whatever the guard does. The target identifier itself is the one node inside `left` whose
+  // enclosing assignment IS claimable, so it is the only fixture that separates the two.
+  it("DECLINES the target identifier on the assignment's left", () => {
+    const { root, ctx } = ctxFor(`codeunit 50000 P
+{
+    procedure Go()
+    var
+        Remaining: Integer;
+    begin
+        Remaining := 1;
+        while Remaining > 0 do
+            Remaining := 0;
+    end;
+}`);
+    // The LAST `Remaining` on the left of an assignment: the one inside the loop body.
+    const assignments = findAll(root, ALNodeKind.assignment_statement);
+    const inLoop = assignments[assignments.length - 1];
+    if (inLoop === undefined) throw new Error("fixture has no assignment");
+    const target = inLoop.childForFieldName("left");
+    if (target === null) throw new Error("assignment has no left field");
+    expect(hangCapableForMutatedNode(target, ctx)).toBeNull();
+  });
+
+  // A node in a statement that is not an assignment must not borrow a neighbour's answer.
+  it("DECLINES a literal in a non-assignment statement beside an in-loop assignment", () => {
+    const { root, ctx } = ctxFor(`codeunit 50000 P
+{
+    procedure Go()
+    var
+        Remaining: Integer;
+    begin
+        Remaining := 1;
+        while Remaining > 0 do begin
+            Remaining := 0;
+            Message('%1', 7);
+        end;
+    end;
+}`);
+    const sevens = findAll(root, ALNodeKind.integer_literal).filter((n) => n.text === "7");
+    const seven = sevens[0];
+    if (seven === undefined) throw new Error("fixture has no `7` literal");
+    expect(hangCapableForMutatedNode(seven, ctx)).toBeNull();
+  });
+
+  // No enclosing loop at all.
+  it("DECLINES a literal in an assignment outside any loop", () => {
+    const { root, ctx } = ctxFor(`codeunit 50000 P
+{
+    procedure Go()
+    var
+        Remaining: Integer;
+    begin
+        Remaining := 3;
+    end;
+}`);
+    const threes = findAll(root, ALNodeKind.integer_literal).filter((n) => n.text === "3");
+    const three = threes[0];
+    if (three === undefined) throw new Error("fixture has no `3` literal");
+    expect(hangCapableForMutatedNode(three, ctx)).toBeNull();
+  });
+
+  // The walk must not leave the procedure it started in.
+  it("DECLINES when the only loop is in a different procedure", () => {
+    const { root, ctx } = ctxFor(`codeunit 50000 P
+{
+    procedure Spin()
+    var
+        Remaining: Integer;
+    begin
+        Remaining := 1;
+        while Remaining > 0 do
+            Remaining := Remaining - 1;
+    end;
+
+    procedure Other()
+    var
+        Remaining: Integer;
+    begin
+        Remaining := 9;
+    end;
+}`);
+    const nines = findAll(root, ALNodeKind.integer_literal).filter((n) => n.text === "9");
+    const nine = nines[0];
+    if (nine === undefined) throw new Error("fixture has no `9` literal");
+    expect(hangCapableForMutatedNode(nine, ctx)).toBeNull();
   });
 });

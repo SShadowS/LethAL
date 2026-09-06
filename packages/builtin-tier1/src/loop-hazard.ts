@@ -1,4 +1,10 @@
-import { ALNodeKind, type ALSyntaxNode, type SemanticContext, resolveVarRef } from "@lethal/engine";
+import {
+  ALNodeKind,
+  type ALSyntaxNode,
+  type HangCapableReason,
+  type SemanticContext,
+  resolveVarRef,
+} from "@lethal/engine";
 
 /**
  * WHY THIS EXISTS (R196). Four operators can turn a terminating loop into a non-terminating one by
@@ -20,8 +26,11 @@ import { ALNodeKind, type ALSyntaxNode, type SemanticContext, resolveVarRef } fr
  * POSITIONAL AND IDENTITY-BASED, never value-based. `empty-block.ts` records the principle this
  * follows: reading the tree is checkable, guessing what a loop does is not. Asking which
  * declaration a name refers to is identity, not value.
+ *
+ * The type itself now lives on `@lethal/engine` (`MutationSpec.hangCapable`), because the engine
+ * cannot depend on this package. Re-exported here so existing importers of this file keep working.
  */
-export type HangCapableReason = "loop-condition-target";
+export type { HangCapableReason };
 
 const LOOP_KINDS: ReadonlySet<string> = new Set([
   ALNodeKind.while_statement,
@@ -179,6 +188,45 @@ export function classifyHangCapable(
         }
       }
     }
+    cur = cur.parent;
+  }
+  return null;
+}
+
+/**
+ * The hang-capable reason for the site an OPERATOR is mutating, or null.
+ *
+ * `classifyHangCapable` answers about an assignment statement. Only one of the four operators that
+ * need an answer mutates one: `shift-integer`, `swap-additive` and `flip-boolean-literal` all
+ * mutate a node inside an assignment's right-hand side. This walks out to the enclosing assignment
+ * and asks about that, because the value written is what an enclosing loop's condition reads.
+ *
+ * Two refusals, both deliberate. A node inside the assignment's `left` field is part of the target
+ * expression rather than a value written to the target, so an operator mutating the target itself
+ * gets no tag from this. And the walk stops at the enclosing procedure or trigger, so a node in a
+ * loop-free procedure never borrows an answer from a loop elsewhere in the object.
+ *
+ * Containment is tested by POSITION rather than by node identity, for the reason recorded in
+ * [[R209]]: `resolveVarRef` returns freshly built `VarSymbol` objects for trigger-local variables,
+ * and the AST wrapper nodes are reconstructed on access, so reference equality is not reliable
+ * here. Positions are unique within a file, and this walk never leaves one.
+ */
+export function hangCapableForMutatedNode(
+  node: ALSyntaxNode,
+  ctx: SemanticContext,
+): HangCapableReason | null {
+  if (node.kind === ALNodeKind.assignment_statement) return classifyHangCapable(node, ctx);
+
+  let cur: ALSyntaxNode | null = node.parent;
+  while (cur !== null) {
+    if (cur.kind === ALNodeKind.assignment_statement) {
+      const right = cur.childForFieldName("right");
+      if (right === null) return null;
+      const insideValueSide =
+        node.startIndex >= right.startIndex && node.endIndex <= right.endIndex;
+      return insideValueSide ? classifyHangCapable(cur, ctx) : null;
+    }
+    if (SCOPE_KINDS.has(cur.kind)) return null;
     cur = cur.parent;
   }
   return null;

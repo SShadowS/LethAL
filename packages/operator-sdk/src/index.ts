@@ -13,6 +13,7 @@ export type {
   SemanticCapability,
   SemanticContext,
   AstNodeId,
+  HangCapableReason,
 } from "@lethal/engine";
 
 export {
