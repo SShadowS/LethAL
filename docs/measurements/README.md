@@ -1460,8 +1460,18 @@ rate beside it. `scripts/census-hang-capable.ts`, task 3 of the plan.
 
 | corpus | files | assignments | tagged | tagged rate | sites inside a loop | declined unresolved | declined rate |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `U:/Git/do-rel2/Cloud` | 554 | 6,850 | 57 | 0.83% | 572 | 144 | 25.17% |
-| `U:/Git/do-lethal-53470/Cloud` | 572 | 7,519 | 61 | 0.81% | 658 | 174 | 26.44% |
+| `U:/Git/do-rel2/Cloud` | 554 | 6,850 | 57 | 0.83% | 580 | 152 | 26.21% |
+| `U:/Git/do-lethal-53470/Cloud` | 572 | 7,519 | 61 | 0.81% | 666 | 182 | 27.33% |
+
+**Re-measured after widening `assignmentTargetOf`/`identifiersIn` to quoted identifiers.** AL parses
+a quoted name (`"Line Done"`) as `quoted_identifier`, a grammar kind distinct from `identifier`; the
+classifier's own two AST walks checked only the latter, so a quoted target or a quoted
+condition-side read never even reached `resolveVarRef`, let alone its decline-on-unresolved rule.
+Widening both walks moves `sitesInsideLoop` and `declinedUnresolved` by exactly **+8 on both
+corpora** (572 -> 580, 144 -> 152 on `do-rel2/Cloud`; 658 -> 666, 174 -> 182 on
+`do-lethal-53470/Cloud`) and moves `tagged` on **neither**: every newly-visible quoted site declined
+as unresolved rather than being tagged. About 1% of in-loop sites per corpus, always in the safe
+direction (a decline, never a false tag), so the halt decision does not move.
 
 **By operator** (a tagged site can be reached by more than one operator, so these need not sum to
 `tagged`):
@@ -1479,7 +1489,7 @@ have some property specific to it. The other three claim a tagged site only when
 also carries the shape they need (an integer literal, a `+`/`-`, a boolean literal).
 
 `declinedUnresolved` (ruling R5: a site inside an enclosing `while`/`repeat` whose target
-`resolveVarRef` could not resolve) is 25 to 26% of in-loop sites on both corpora. That is the number
+`resolveVarRef` could not resolve) is 26 to 27% of in-loop sites on both corpora. That is the number
 that indicts the resolver rather than the rule. It was not sampled further here, out of this task's
 scope: a follow-up should read a sample of the declined sites before treating this rate as settled.
 
@@ -1508,9 +1518,10 @@ operator is in run 3's deployed set, and the nearest real analogue, `negate-cond
 plain `killed` at both loops' conditions, not `timeout-killed`. The one miss (line 322) sits squarely
 inside the design's own documented exclusion (§3.2 point 3, progress through a call): the mutated
 assignment's target is not the variable the enclosing loop's condition reads, and the variable the
-condition DOES read is advanced only by a call the mutated assignment feeds. Full reasoning,
-including the source-level detail this file omits since the corpus is a customer repository, is in
-`.superpowers/sdd/2026-09-06-r196-plan-a-classifier/task-3-report.md`.
+condition DOES read is advanced only by a call the mutated assignment feeds. The source-level detail
+behind that reasoning is not repeated here, since the corpus is a customer repository, but nothing
+checkable from a fresh clone rests on it: every fact above (the table, the two corrections, the
+line-322 reasoning) is stated in full in this section.
 
 Commands run:
 
@@ -1519,31 +1530,91 @@ bun scripts/census-hang-capable.ts U:/Git/do-rel2/Cloud <out.json>
 bun scripts/census-hang-capable.ts U:/Git/do-lethal-53470/Cloud <out.json>
 ```
 
-No decision is recorded here. The design names this a halt: the decision belongs to whoever reviews
-these numbers against the plan, and is recorded separately once made.
+### Precision: how many of the eight recovered mutants' sites carry a false alarm alongside the real hang
 
-### The `declinedUnresolved` sample, categorised (2026-09-06 follow-up)
+Recall is the six-of-eight table above. Precision asks the other direction: at the sites the
+classifier DOES tag, how many of the deployed mutants there were not actually the hang? Re-derived
+directly from `lethal-53470-run3/lethal.sqlite`'s `mutants` table, joined against the census's own
+`taggedRows` for `do-lethal-53470/Cloud` by exact `(file, line)`:
+
+Of the corpus's 61 tagged sites, exactly **5** fall inside this one deployed run's file
+(`CDOTemplateVariantMgt.Codeunit.al`, the source of the eight recovered above), at lines 74, 76, 84,
+107 (`FindMatchingTemplateLine`) and 323 (`SubstituteDateFormulas`, the tagged NEIGHBOUR of the
+real, untagged hang at line 322; see the miss discussed above). Those 5 sites carry **9** deployed
+mutants between them (some lines carry two operators). Their verdicts:
+
+| verdict | count |
+| --- | ---: |
+| `timeout-killed` | 6 |
+| `killed` | 2 |
+| `survived` | 1 |
+
+So **3 of the 9 mutants at tagged sites (33%) would take the forced stop this design adds without
+ever hanging**: `FindMatchingTemplateLine`'s line-74 `shift-integer` (`survived`) and line-107
+`shift-integer` (`killed`), plus `SubstituteDateFormulas`'s line-323 `remove-assignment` (`killed`).
+That is the classifier's measured over-approximation cost on this slice: every one of these three
+mutants would, under this design, be forced through the confirmation replay §6 describes on the
+strength of a tag that (for these three) did not correspond to an actual hang. None of the three
+was harmed by it in this run (a `killed`/`survived` verdict was reached either way; the confirmation
+only engages when a mutant TIMES OUT), which is the cost's own shape: paid only by a tagged mutant
+that ALSO happens to be slow for an unrelated reason, never by one that finishes normally.
+
+### The `declinedUnresolved` sample, categorised (2026-09-06 follow-up, corrected 2026-09-06)
 
 `scripts/sample-declined-hang-capable.ts`, 30 sites per corpus, stride-sampled across the whole
 corpus (not the first 30 in walk order, which would cluster in whichever file sorts first).
 
 **Neither the "member/field access" nor the "array/indexed target" category can occur in this
-count at all, by construction.** `assignmentTargetOf` (Task 2) only ever returns a node when
-`target.kind === identifier`; a member (`Rec.Field`) or array (`Arr[i]`) target is filtered out
+count at all, by construction.** `assignmentTargetOf` (Task 2) only ever returns a node when it is
+an identifier read, bare or quoted; a member (`Rec.Field`) or array (`Arr[i]`) target is filtered out
 before `declinedUnresolved` is even asked, since `assignmentTargetOf` itself returns `null` for
-those shapes. The script asserts this invariant (every declined site's target kind is `identifier`)
-and would throw rather than silently mis-sort a site if it were ever violated. Zero violations on
-either corpus.
+those shapes. The script asserts this invariant and would throw rather than silently mis-sort a site
+if it were ever violated. Zero violations on either corpus (152 and 182 declined sites, post the
+quoted-identifier widening above).
 
-So every declined site is an ordinary bare identifier, and all 30-of-30 samples on BOTH corpora
-land in the "should have resolved" bucket, split three ways by direct inspection of the underlying
-source (never quoted here; see [[R210]] and the full report for the mechanism):
+**Correction: the split below was NOT reproducible from the committed script, and is now.** The
+figures first published here (19 of 30 on `do-rel2/Cloud`, 16 of 30 on `do-lethal-53470/Cloud`) came
+from having a human read the underlying source directly, sample by sample, rather than from running
+`scripts/sample-declined-hang-capable.ts` as it was then committed. That script's own `diagnose`
+function called `ctx.symbols.localsOf`/`resolveProcedure`, the SAME name-keyed lookup
+`resolveVarRef` itself uses internally, so for exactly the overloaded-procedure sites [[R210]]
+describes, the cross-check always disagreed with itself in the same way `resolveVarRef` did, and
+running the committed script produced one bucket only, 30 of 30 "not declared in any scope this
+resolver checks", on both corpora. A reviewer's independent recount of the same sample got 18 of 30,
+a third answer. Three different numbers for one claim, and only one of them came from a script
+anyone else could re-run, which is exactly what a committed measurement script exists to prevent.
+
+**The fix asks a different question.** Rather than re-running the same name-keyed lookup, `diagnose`
+now checks whether `resolveProcedure`'s answer for the enclosing procedure's name points at the SAME
+physical declaration the site sits inside (`resolved.node.startIndex === procedure.startIndex`, the
+identical positional argument `loop-hazard.ts`'s own `sameDeclaration` relies on for the same reason).
+A mismatch is conclusive proof of an overload collision, not an inference from a name count. The AL
+named-return-value cause is read directly off the grammar's own `return_value` field, and the
+implicit-`Rec`/bound-field cause is read directly off the object's own bound table (`SourceTable` for
+a page, the base table for a `tableextension`), and no source is read by a human for any of it, so
+this is now reproducible by anyone with the two corpora:
+
+```
+bun scripts/sample-declined-hang-capable.ts U:/Git/do-rel2/Cloud <out.json>
+bun scripts/sample-declined-hang-capable.ts U:/Git/do-lethal-53470/Cloud <out.json>
+```
+
+Re-run 2026-09-06, after the quoted-identifier widening (152/182 declined sites; stride 5/6):
 
 | cause | do-rel2 (of 30 sampled) | do-lethal-53470 (of 30 sampled) |
 | --- | ---: | ---: |
-| procedure name declared more than once in its object (overloading); resolves against the WRONG overload's locals/parameters | 19 | 16 |
-| AL named return value (`procedure X(...) Name: Type`), never captured as an assignable symbol | most of the remainder (confirmed by direct signature check on every remaining sample but 2 per corpus) | same |
-| implicit `Rec`, or a bare unqualified reference to the bound record's own field | 2 confirmed | 2 confirmed |
+| procedure name declared more than once in its object (overloading); resolves against the WRONG overload's locals/parameters | 15 | 16 |
+| AL named return value (`procedure X(...) Name: Type`), never captured as an assignable symbol | 11 | 10 |
+| implicit `Rec`/`xRec` | 2 | 1 |
+| a bare, unqualified reference to the bound record's own field | 2 | 3 |
+
+All 30 of 30 land in one of these four buckets on both corpora, with no residual "unexplained" decline
+in either sample. `do-lethal-53470/Cloud`'s overload count (16) is unchanged from the earlier,
+non-reproducible figure; `do-rel2/Cloud`'s (15, down from the earlier 19) is not. The earlier number
+counted a site as "overloaded" whenever its procedure name appeared more than once as text in the
+file, which also counts a site sitting inside the FIRST such declaration (where resolution is
+actually correct) as an instance of the defect. The script's node-position check does not have that
+failure mode: it only fires where resolution demonstrably went to the wrong declaration.
 
 **The dominant cause is filed as [[R210]]**, a real resolver defect distinct from anything §3.2
 already names: `resolveProcedure`/`lookupVar` key a procedure's locals and parameters by NAME alone,
@@ -1572,13 +1643,15 @@ construction: name matching was removed in favour of positional comparison, so t
 on spelling.
 
 **Limit 1: coverage is understated, and by a knowable amount.** About a quarter of in-loop
-assignments decline because the target does not resolve, 144 of 572 and 174 of 658. A 30-site sample
-per corpus attributes roughly 60 percent of those to [[R210]], a resolver defect in which AL's
-procedure overloading by parameter list meets a symbol table that resolves procedures by name alone,
-so a site inside the second or later overload is handed the first overload's locals. Those are
-sites the classifier should be seeing and is not. The claim rate above is therefore a floor, not an
-estimate, and closing [[R210]] would be expected to raise it. The remainder are AL's named return
-values and its implicit record reference, neither of which a declaration-based symbol table can
+assignments decline because the target does not resolve, 152 of 580 and 182 of 666. A 30-site sample
+per corpus, categorised reproducibly by `scripts/sample-declined-hang-capable.ts`, attributes 50
+percent (`do-rel2/Cloud`, 15 of 30) and 53 percent (`do-lethal-53470/Cloud`, 16 of 30) of those to
+[[R210]], a resolver defect in which AL's procedure overloading by parameter list meets a symbol
+table that resolves procedures by name alone, so a site inside the second or later overload is
+handed the first overload's locals. Those are sites the classifier should be seeing and is not. The
+claim rate above is therefore a floor, not an estimate, and closing [[R210]] would be expected to
+raise it. The remainder are AL's named return values (11 and 10 of 30) and its implicit record or
+bare bound-field reference (4 and 4 of 30), neither of which a declaration-based symbol table can
 see, and both closer in kind to the section 3.2.4 exclusion than to a defect.
 
 **Limit 2: [[R210]] could in principle produce a false tag, not only a missed one.** The same

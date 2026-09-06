@@ -32,7 +32,8 @@ and fill this table exactly; the design does not ship on an estimate.
 run 1: killed 448, survived 237, no-coverage 48, timeout-killed 8, summing to the 741 deployed
 mutants this section already cites) and cross-checked line-for-line against
 `scripts/census-hang-capable.ts`'s tagged rows on `do-lethal-53470/Cloud`. Full measurement in
-`docs/measurements/README.md` and `.superpowers/sdd/2026-09-06-r196-plan-a-classifier/task-3-report.md`.
+`docs/measurements/README.md`, section "The hang-capable classifier's claim rate on two real
+corpora, and the eight recovered".
 
 Two corrections to revision 1/2's account, both found by the recovery rather than assumed:
 
@@ -52,8 +53,16 @@ i.e. progress through a CALL. Revision 1's row 7 hedged "expected yes, IF the co
 
 **Net: `classifyHangCapable` tags 6 of the actual 8 (75%).** Six correctly tagged (rows 1-5, 7), one
 correctly out of scope for an assignment-only classifier (row 6, a block deletion), one a real miss
-squarely inside the design's own documented exclusion (row 8, §3.2.3). No row was tagged that should
-not have been.
+squarely inside the design's own documented exclusion (row 8, §3.2.3). No row of the eight-mutant
+table above was tagged that should not have been.
+
+**That is recall over the eight; precision over the classifier's OWN tagged sites is a separate,
+weaker number, measured rather than left to inference.** Of `do-lethal-53470/Cloud`'s 61 tagged
+sites, 5 fall inside this same run's single deployed file (the source of the eight above), carrying
+9 deployed mutants between them. Their verdicts: 6 `timeout-killed`, 2 `killed`, 1 `survived`. So 3
+of those 9 mutants (33%) would take this design's forced stop and confirmation replay without ever
+being an actual hang: the classifier's measured over-approximation cost on this one slice. Full
+derivation, from the same store, in `docs/measurements/README.md`'s "Precision" subsection.
 
 [[R164]] is the **precedent**, not a universal rule: it establishes a narrow cession at one exact
 `repeat`-exit position and deliberately preserves condition mutations nested inside it. Revision 1
