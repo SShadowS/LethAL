@@ -176,6 +176,14 @@ export interface MutantManifestEntry {
    * unchanged for the same reason.
    */
   readonly platformKillMechanism?: string;
+  /**
+   * R196: carried verbatim from `MutationSpec.hangCapable` (engine). An enclosing loop's
+   * condition reads the variable this site writes, so a timeout here is expected rather than
+   * surprising. It does NOT claim the mutation prevents progress, and its absence does not mean
+   * the site is safe. Widened to `string` for the same reason `platformKillMechanism` is: the
+   * manifest is read by code that should not have to track the union's members.
+   */
+  readonly hangCapable?: string;
 }
 
 /**
@@ -479,6 +487,7 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
         ...(spec.platformKillMechanism !== undefined
           ? { platformKillMechanism: spec.platformKillMechanism }
           : {}),
+        ...(spec.hangCapable !== undefined ? { hangCapable: spec.hangCapable } : {}),
       });
     }
   }

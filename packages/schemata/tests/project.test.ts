@@ -240,6 +240,73 @@ describe("writeInstrumentedProject", () => {
     }
   });
 
+  it("manifest entries carry hangCapable verbatim, and its absence is a missing key, not undefined", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-"));
+    try {
+      // Two mutants: one at a site an operator tagged hang-capable, one at an ordinary site.
+      // R196: the tag must survive verbatim into the manifest for the first, and for the second
+      // the KEY must be ABSENT rather than present-and-undefined — `exactOptionalPropertyTypes`
+      // makes those two different facts on a JSON round trip.
+      const src = `codeunit 51043 "Hang" {
+  procedure Tagged() begin
+    X := 1;
+  end;
+  procedure Untagged() begin
+    Y := 2;
+  end;
+}`;
+      const root = wrapRoot(parseAL(src));
+      const assigns = findAll(root, ALNodeKind.assignment_statement);
+      if (assigns.length !== 2) throw new Error(`expected 2 assignments, got ${assigns.length}`);
+      const [taggedAssign, untaggedAssign] = assigns;
+      if (taggedAssign === undefined || untaggedAssign === undefined) {
+        throw new Error("expected both assignments to be present");
+      }
+      const specs: MutationSpec[] = [
+        {
+          operatorName: "op.flip",
+          operatorVersion: "1.0.0",
+          astNodeId: `${taggedAssign.startIndex}`,
+          before: taggedAssign,
+          after: { ...taggedAssign, text: "X := 10;" } as never,
+          parentContext: "statement-position",
+          hangCapable: "loop-condition-target",
+        },
+        {
+          operatorName: "op.flip",
+          operatorVersion: "1.0.0",
+          astNodeId: `${untaggedAssign.startIndex}`,
+          before: untaggedAssign,
+          after: { ...untaggedAssign, text: "Y := 20;" } as never,
+          parentContext: "statement-position",
+        },
+      ];
+      await writeInstrumentedProject({
+        targetDir: dir,
+        files: [{ path: "Hang.Codeunit.al", source: src, root, specs }],
+        selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
+        artifactId: "0123456789abcdef0123456789abcdef",
+        targetAppId: TARGET_APP_ID,
+        operatorTiers: NO_TIERS,
+      });
+      const manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8"));
+      const byProc = new Map<string, { hangCapable?: string }>(
+        (manifest.mutants as ReadonlyArray<{ procedureName: string; hangCapable?: string }>).map(
+          (m) => [m.procedureName, m],
+        ),
+      );
+      const tagged = byProc.get("Tagged");
+      const untagged = byProc.get("Untagged");
+      if (tagged === undefined || untagged === undefined) {
+        throw new Error("expected both procedures to have a manifest entry");
+      }
+      expect(tagged.hangCapable).toBe("loop-condition-target");
+      expect("hangCapable" in untagged).toBe(false);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("manifest entries carry identity and coverage-lookup fields", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lethal-"));
     try {
