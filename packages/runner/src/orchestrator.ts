@@ -3058,7 +3058,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   const siteCount = allFiles.reduce((n, f) => n + f.specs.length, 0);
   const deployedCount = allFiles.reduce((n, f) => n + dedupeSpecs(f.specs, tierOf).length, 0);
   // R196: counted over the SAME deduped specs as `deployedCount`, in the same place, so the two
-  // can never disagree about what "deployed" means. Not counted from scored outcomes — a
+  // can never disagree about what "deployed" means. Not counted from scored outcomes: a
   // quarantine truncates those and the number would silently shrink.
   const hangCapableCount = allFiles.reduce(
     (n, f) => n + dedupeSpecs(f.specs, tierOf).filter((s) => s.hangCapable !== undefined).length,
@@ -3076,7 +3076,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     excludedByOnly,
     excludedByOperator,
   });
-  // R196: announced BEFORE deployment (spec §5.3), not after scoring — a warning at the end would
+  // R196: announced BEFORE deployment (spec §5.3), not after scoring. A warning at the end would
   // satisfy a presence check while being useless to the person it is for. Speaks in the future
   // tense about a stop that this plan does not implement: B1 ships the announcement so a later
   // plan cannot ship a forced stop without one.

@@ -2539,21 +2539,24 @@ describe("runSession — single artifact", () => {
 });
 
 // R196 plan B1 Task 6 (spec §5.3). `hangCapableCount` on `mutation-set-generated` counts DEPLOYED,
-// post-dedup mutants sitting at a hang-capable site — computed over the same `dedupeSpecs` output
+// post-dedup mutants sitting at a hang-capable site, computed over the same `dedupeSpecs` output
 // `deployedCount` already reduces, so the two can never disagree about what "deployed" means. The
 // `hang-capable-sites-deployed` warning it drives must be announced BEFORE deployment, not
 // discovered only once scoring is done: a quarantine truncates scored outcomes, so counting from
 // those would let the number silently shrink, and a warning emitted at the end would satisfy a
 // mere presence check while being useless to the person reading it live.
 //
-// Fixture shape measured, not guessed — `packages/builtin-tier1/tests/swap-additive.test.ts`'s own
-// "tags an in-loop additive expression that advances the condition" case: a `while` loop whose
+// Fixture shape measured, not guessed: `packages/builtin-tier1/tests/swap-additive.test.ts`'s own
+// "tags an in-loop additive expression that advances the condition" case, a `while` loop whose
 // condition reads a counter that an additive expression in its body advances. Scoped to
 // `lethal.swap-additive` alone (`operators: ["swap-additive"]`) so this project deploys exactly
-// ONE hang-capable mutant — left unscoped, `remove-assignment` and `shift-integer` would each
-// also tag the SAME counter update at their own (different-span) sites, since all three call the
-// same `hangCapableForMutatedNode` helper, and the count would stop being 1.
-describe("runSession — R196: hang-capable sites announced before deployment", () => {
+// ONE hang-capable mutant. There are FOUR callers of `hangCapableForMutatedNode`, not three:
+// `remove-assignment`, `shift-integer`, `swap-additive` and `flip-boolean-literal`. Left unscoped,
+// `remove-assignment` and `shift-integer` would each also tag the SAME counter update at their own
+// (different-span) sites, so the count would stop being 1. `flip-boolean-literal` does not, here,
+// only because this fixture's loop body has no boolean literal for it to target, not because it is
+// a third operator rather than a fourth: a fixture with one would need it scoped out too.
+describe("runSession, R196: hang-capable sites announced before deployment", () => {
   const HANG_CAPABLE_AL = `codeunit 79000 "Sandbox Logic"
 {
     procedure Go()
@@ -2607,8 +2610,8 @@ describe("runSession — R196: hang-capable sites announced before deployment", 
   });
 
   test("reports zero rather than nothing on a project with no hang-capable site", async () => {
-    // TARGET_AL has no loop anywhere, so no operator, scoped or not, can ever tag a site —
-    // deliberately run with the full default operator set to prove the zero is a real absence of
+    // TARGET_AL has no loop anywhere, so no operator, scoped or not, can ever tag a site.
+    // Deliberately run with the full default operator set to prove the zero is a real absence of
     // hang-capable sites, not an artefact of the `--operator` narrowing used above.
     const dirs = await makeProject();
     const backend = new StubBackend(CAPS_NST, () => "pass", ["IsOverBudget"]);
@@ -2631,7 +2634,7 @@ describe("runSession — R196: hang-capable sites announced before deployment", 
       (e) => e.type === "warning" && e.code === "hang-capable-sites-deployed",
     );
     // `batch-published` is the real first-deployment event (there is no `mutant-deployed` type):
-    // emitted the moment a batch's artifact is compiled, published AND verified — see
+    // emitted the moment a batch's artifact is compiled, published AND verified. See
     // orchestrator.ts's `type: "batch-published"` emit, right after `phase-entered: "deploy"`.
     const firstDeploy = events.findIndex((e) => e.type === "batch-published");
     expect(warnAt).toBeGreaterThanOrEqual(0);
