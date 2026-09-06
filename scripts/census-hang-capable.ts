@@ -17,8 +17,7 @@
  * only counts, file paths, line numbers, operator and procedure names, never AL source text, since
  * this repo is public.
  */
-import { readFile, readdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { writeFile } from "node:fs/promises";
 import { flipBooleanLiteral } from "../packages/builtin-tier1/src/flip-boolean-literal";
 import {
   assignmentTargetOf,
@@ -29,37 +28,19 @@ import { removeAssignment } from "../packages/builtin-tier1/src/remove-assignmen
 import { shiftInteger } from "../packages/builtin-tier1/src/shift-integer";
 import { swapAdditive } from "../packages/builtin-tier1/src/swap-additive";
 import { ALNodeKind } from "../packages/engine/src/ast/node-kinds";
-import { initParser, parseAL } from "../packages/engine/src/ast/parser";
-import { type ALSyntaxNode, wrapRoot } from "../packages/engine/src/ast/syntax-node";
+import { initParser } from "../packages/engine/src/ast/parser";
+import type { ALSyntaxNode } from "../packages/engine/src/ast/syntax-node";
 import {
   type SemanticContext,
   buildSemanticContext,
 } from "../packages/engine/src/semantic/context";
 import { resolveVarRef } from "../packages/engine/src/semantic/resolve-var-ref";
-import type { SourceFile } from "../packages/engine/src/semantic/symbol-table";
+import { collectAlFiles } from "./lib/collect-al-files";
 
 const [projectDir, outPath] = process.argv.slice(2);
 if (projectDir === undefined || outPath === undefined) {
   console.error("usage: bun scripts/census-hang-capable.ts <project-dir> <out.json>");
   process.exit(2);
-}
-
-/**
- * Inlined rather than imported from `census-operator-sites.ts` (task-3 ruling R3): that module runs
- * an entire corpus census as an IMPORT-TIME side effect (`await initParser()` followed by its own
- * corpus walk), so importing anything from it, including a helper, would execute a second census.
- * Shape copied verbatim from its lines 76-81 rather than reinvented.
- */
-async function collectAlFiles(dir: string): Promise<SourceFile[]> {
-  const entries = (await readdir(dir, { recursive: true })).filter((f) =>
-    f.toLowerCase().endsWith(".al"),
-  );
-  const files: SourceFile[] = [];
-  for (const rel of entries) {
-    const source = await readFile(join(dir, rel), "utf8");
-    files.push({ path: rel, root: wrapRoot(parseAL(source)) });
-  }
-  return files;
 }
 
 /** `symbol-table.ts`'s own helper, private there. Copied rather than exported for a census script. */

@@ -19,16 +19,15 @@
  * Point it at a scratch corpus: the intended input is real customer AL, which must never be
  * committed here.
  */
-import { readFile, readdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { writeFile } from "node:fs/promises";
 import {
   assignmentTargetOf,
   hasEnclosingLoop,
   isIdentifierLike,
 } from "../packages/builtin-tier1/src/loop-hazard";
 import { ALNodeKind } from "../packages/engine/src/ast/node-kinds";
-import { initParser, parseAL } from "../packages/engine/src/ast/parser";
-import { type ALSyntaxNode, wrapRoot } from "../packages/engine/src/ast/syntax-node";
+import { initParser } from "../packages/engine/src/ast/parser";
+import type { ALSyntaxNode } from "../packages/engine/src/ast/syntax-node";
 import { declarationMembers, findEnclosingProcedure } from "../packages/engine/src/ast/tree-walks";
 import {
   type SemanticContext,
@@ -39,26 +38,12 @@ import {
   collectVarDeclarations,
   enclosingObjectScopeKey,
 } from "../packages/engine/src/semantic/symbol-table";
-import type { SourceFile } from "../packages/engine/src/semantic/symbol-table";
+import { collectAlFiles } from "./lib/collect-al-files";
 
 const [projectDir, outPath] = process.argv.slice(2);
 if (projectDir === undefined || outPath === undefined) {
   console.error("usage: bun scripts/sample-declined-hang-capable.ts <project-dir> <out.json>");
   process.exit(2);
-}
-
-/** Same shape as `census-hang-capable.ts`'s own helper (copied, not imported: see that script's own
- *  comment on why importing a corpus-walking script executes a second census). */
-async function collectAlFiles(dir: string): Promise<SourceFile[]> {
-  const entries = (await readdir(dir, { recursive: true })).filter((f) =>
-    f.toLowerCase().endsWith(".al"),
-  );
-  const files: SourceFile[] = [];
-  for (const rel of entries) {
-    const source = await readFile(join(dir, rel), "utf8");
-    files.push({ path: rel, root: wrapRoot(parseAL(source)) });
-  }
-  return files;
 }
 
 function stripQuotes(s: string): string {
