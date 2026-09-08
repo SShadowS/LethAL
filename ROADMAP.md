@@ -85,7 +85,7 @@ that ordering is the priority.
 - **R211** · `docs/campaign/2026-08-16-gift-card/rehearsal.events.ndjson` predates `hangCapableCount` and is pinned as a known schema-validation failure, not backfilled · [R211.md](docs/roadmap/R211.md) · open, filed 2026-09-06, closure needs a live BC re-run
 - **R212** · No fixture is a NAMESPACED AL app, which is why every gate stayed green while namespaced projects got zero coverage attribution · [R212.md](docs/roadmap/R212.md) · open, filed 2026-09-08
 - **R214** · Site enumeration ignores preprocessor directives, so a mutant can be planted in an `#if` branch the compiler never builds and can never be killed · [R214.md](docs/roadmap/R214.md) · open, filed 2026-09-08, measured
-- **R215** · `negate-conditional` claims an enum's `Implementation` mapping, emitting `Implementation = "IFace" <> "Impl"`, which is not AL · [R215.md](docs/roadmap/R215.md) · open, filed 2026-09-08, measured, BLOCKS any project using the interface pattern
+- **R215** · `tree-sitter-al` shapes an enum's `Implementation` mapping as a comparison; LethAL's declarative guard already drops it, and this row records that rather than a defect · [R215.md](docs/roadmap/R215.md) · open, filed 2026-09-08, severity CORRECTED the same day: not a LethAL defect
 
 ## Product gaps a real project hits
 
