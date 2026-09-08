@@ -23,6 +23,8 @@
 import { spawnSync } from "node:child_process";
 import { readFile, readdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
+// Reached through the engine package, which owns this dependency;  has no direct one.
+import { Language, Parser } from "../packages/engine/node_modules/web-tree-sitter/tree-sitter.js";
 import { initParser, parseAL } from "../packages/engine/src/ast/parser";
 import { isStatementSlot } from "../packages/engine/src/ast/tree-walks";
 import { type ALSyntaxNode, wrapRoot } from "../packages/engine/src/ast/syntax-node";
@@ -35,9 +37,11 @@ import {
 
 const DEFAULT_ALC_BIN = "C:/Users/SShadowS/.vscode/extensions/ms-dynamics-smb.al-18.0.2668733/bin";
 
-const [target, alcBin = DEFAULT_ALC_BIN] = process.argv.slice(2);
+const [target, alcBin = DEFAULT_ALC_BIN, grammarWasm] = process.argv.slice(2);
 if (target === undefined) {
-  console.error("usage: bun scripts/probe-grammar-crosscheck.ts <file-or-dir> [alc-bin-dir]");
+  console.error(
+    "usage: bun scripts/probe-grammar-crosscheck.ts <file-or-dir> [alc-bin-dir] [grammar.wasm]",
+  );
   process.exit(2);
 }
 
@@ -77,12 +81,29 @@ async function alFiles(path: string): Promise<string[]> {
 async function treeSitterSites(
   files: readonly string[],
 ): Promise<{ sites: Site[]; unhealthy: string[]; context: Map<string, number> }> {
+  // The engine bakes its grammar in through a Bun file import, so an ALTERNATE grammar is loaded
+  // into a parser of this harness's own rather than by touching production code. That is what makes
+  // a historical known-bad grammar usable as an end-to-end positive control: run the same corpus and
+  // the same compiler side against v3.2.1 and against the vendored build, and the difference is the
+  // grammar rather than anything here.
   await initParser();
+  let alt: Parser | null = null;
+  if (grammarWasm !== undefined) {
+    const lang = await Language.load(await readFile(grammarWasm));
+    alt = new Parser();
+    alt.setLanguage(lang);
+  }
+  const parse = (src: string): ReturnType<typeof parseAL> => {
+    if (alt === null) return parseAL(src);
+    const tree = alt.parse(src);
+    if (tree === null) throw new Error("alternate grammar returned a null tree");
+    return tree;
+  };
   const out: Site[] = [];
   const unhealthy: string[] = [];
   const tsContext = new Map<string, number>();
   for (const file of files) {
-    const root = wrapRoot(parseAL(await readFile(file, "utf8")));
+    const root = wrapRoot(parse(await readFile(file, "utf8")));
     let dirty = false;
     const walk = (n: ALSyntaxNode): void => {
       if (n.rawKind === "ERROR") dirty = true;
@@ -221,6 +242,9 @@ const byKind = (sites: readonly Site[]): Map<string, number> => {
 const tsCounts = byKind(ts);
 const ccCounts = byKind(cc);
 
+console.log(
+  `grammar: ${grammarWasm ?? "vendored (engine default)"}`,
+);
 console.log(
   `files: ${files.length}   compiler parser: v${parserVersion}   compiler parse errors: ${parseErrors}   tree-sitter files with ERROR/MISSING: ${unhealthy.length}`,
 );

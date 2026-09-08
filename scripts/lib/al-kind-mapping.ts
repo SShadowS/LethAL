@@ -102,6 +102,13 @@ export const DELIBERATELY_UNMAPPED: ReadonlySet<string> = new Set([
   // does not claim `in_expression`, so neither reached it. Worth auditing if this widens; listed
   // here so that is a choice on record rather than a silent drop.
   "InListExpression",
+  // `DataItemLink = "Document No." = field("No.")` and `DataItemTableView = sorting(...)`, both
+  // report dataitem properties. Declarative, so R135 refuses them as sites, and they are the
+  // subject of the v3.2.1 positive control rather than something to audit: the OLD grammar shaped
+  // that link as a comparison containing a call, which is precisely the over-claim the control
+  // detects. Ruling on them here is what lets the control leg come back clean.
+  "ReportDataItemLinkExpression",
+  "SortingExpression",
 ]);
 
 /**
