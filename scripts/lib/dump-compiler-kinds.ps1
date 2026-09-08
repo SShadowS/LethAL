@@ -46,11 +46,16 @@ foreach ($f in $files) {
   $root = $tree.GetRoot([System.Threading.CancellationToken]::None)
   foreach ($n in $root.DescendantNodes()) {
     $span = $n.Span
+    # `parent` carries the context probes' answer (see CONTEXT_PROBES in al-kind-mapping.ts). A
+    # node-kind comparison alone is blind to the statement_block class of regression, where the
+    # nodes are all present at the same offsets and only their PARENT changed.
+    $parentKind = if ($null -ne $n.Parent) { $n.Parent.Kind.ToString() } else { "" }
     $out.Add([pscustomobject]@{
-      file  = $f.FullName
-      kind  = $n.Kind.ToString()
-      start = $span.Start
-      end   = $span.End
+      file   = $f.FullName
+      kind   = $n.Kind.ToString()
+      start  = $span.Start
+      end    = $span.End
+      parent = $parentKind
     })
   }
 }

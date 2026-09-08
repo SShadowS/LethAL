@@ -24,10 +24,12 @@ import { spawnSync } from "node:child_process";
 import { readFile, readdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { initParser, parseAL } from "../packages/engine/src/ast/parser";
+import { isStatementSlot } from "../packages/engine/src/ast/tree-walks";
 import { type ALSyntaxNode, wrapRoot } from "../packages/engine/src/ast/syntax-node";
 import {
   AUDITED_TREE_SITTER_KINDS,
   COMPILER_TO_TREE_SITTER,
+  CONTEXT_PROBES,
   DELIBERATELY_UNMAPPED,
 } from "./lib/al-kind-mapping";
 
@@ -74,10 +76,11 @@ async function alFiles(path: string): Promise<string[]> {
  */
 async function treeSitterSites(
   files: readonly string[],
-): Promise<{ sites: Site[]; unhealthy: string[] }> {
+): Promise<{ sites: Site[]; unhealthy: string[]; context: Map<string, number> }> {
   await initParser();
   const out: Site[] = [];
   const unhealthy: string[] = [];
+  const tsContext = new Map<string, number>();
   for (const file of files) {
     const root = wrapRoot(parseAL(await readFile(file, "utf8")));
     let dirty = false;
@@ -86,12 +89,19 @@ async function treeSitterSites(
       if (AUDITED_TREE_SITTER_KINDS.has(n.rawKind)) {
         out.push({ file, kind: n.rawKind, start: n.startIndex, end: n.endIndex });
       }
+      // Context probes, answered with LethAL's OWN predicate rather than a shape comparison. This
+      // is the channel that can see a statement_block-class regression.
+      for (const probe of CONTEXT_PROBES) {
+        if (n.rawKind === probe.treeSitterKind && isStatementSlot(n)) {
+          tsContext.set(probe.name, (tsContext.get(probe.name) ?? 0) + 1);
+        }
+      }
       for (const c of n.children) walk(c);
     };
     walk(root);
     if (dirty) unhealthy.push(file);
   }
-  return { sites: out, unhealthy };
+  return { sites: out, unhealthy, context: tsContext };
 }
 
 /** Audited sites as the AL compiler's own parser sees them, mapped into tree-sitter's vocabulary. */
@@ -100,6 +110,7 @@ function compilerSites(path: string): {
   parserVersion: string;
   parseErrors: number;
   unmappedKinds: string[];
+  context: Map<string, number>;
 } {
   const script = join(import.meta.dir, "lib", "dump-compiler-kinds.ps1");
   const run = spawnSync(
@@ -113,8 +124,16 @@ function compilerSites(path: string): {
   const parsed = JSON.parse(run.stdout) as {
     parserVersion: string;
     parseErrors: number;
-    nodes: Array<{ file: string; kind: string; start: number; end: number }>;
+    nodes: Array<{ file: string; kind: string; start: number; end: number; parent: string }>;
   };
+  const ccContext = new Map<string, number>();
+  for (const n of parsed.nodes) {
+    for (const probe of CONTEXT_PROBES) {
+      if (n.kind === probe.compilerKind && n.parent === probe.compilerParentKind) {
+        ccContext.set(probe.name, (ccContext.get(probe.name) ?? 0) + 1);
+      }
+    }
+  }
   const sites: Site[] = [];
   const unmapped = new Set<string>();
   for (const n of parsed.nodes) {
@@ -137,6 +156,7 @@ function compilerSites(path: string): {
     parserVersion: parsed.parserVersion,
     parseErrors: parsed.parseErrors,
     unmappedKinds: [...unmapped].sort(),
+    context: ccContext,
   };
 }
 
@@ -166,8 +186,14 @@ if (files.length === 0) {
   throw new Error(`probe-grammar-crosscheck: no .al files under ${target}. Nothing to compare.`);
 }
 
-const { sites: ts, unhealthy } = await treeSitterSites(files);
-const { sites: cc, parserVersion, parseErrors, unmappedKinds } = compilerSites(target);
+const { sites: ts, unhealthy, context: tsContext } = await treeSitterSites(files);
+const {
+  sites: cc,
+  parserVersion,
+  parseErrors,
+  unmappedKinds,
+  context: ccContext,
+} = compilerSites(target);
 
 const tsTally = tally(ts);
 const ccTally = tally(cc);
@@ -217,6 +243,18 @@ for (const d of onlyCompiler.slice(0, 10)) console.log(`   ${d.key}  (ts ${d.tre
 console.log(`sites only TREE-SITTER sees (possible over-claiming): ${onlyTreeSitter.length}`);
 for (const d of onlyTreeSitter.slice(0, 10)) console.log(`   ${d.key}  (ts ${d.treeSitter} vs cc ${d.compiler})`);
 
+console.log(`
+${"context probe".padEnd(28)} ${"tree-sitter".padStart(12)} ${"compiler".padStart(10)}`);
+let contextDiffers = false;
+for (const probe of CONTEXT_PROBES) {
+  const a = tsContext.get(probe.name) ?? 0;
+  const b = ccContext.get(probe.name) ?? 0;
+  if (a !== b) contextDiffers = true;
+  console.log(
+    `${probe.name.padEnd(28)} ${String(a).padStart(12)} ${String(b).padStart(10)}${a === b ? "" : "   <-- differs"}`,
+  );
+}
+
 // Fail CLOSED on a compiler kind nobody mapped. A silently dropped kind is an invisible hole in the
 // mapping, and the mapping is the part of this audit that can lie.
 if (unmappedKinds.length > 0) {
@@ -238,6 +276,7 @@ const agreed =
   onlyCompiler.length === 0 &&
   onlyTreeSitter.length === 0 &&
   !countsDiffer &&
+  !contextDiffers &&
   unmappedKinds.length === 0 &&
   unhealthy.length === 0 &&
   parseErrors === 0;

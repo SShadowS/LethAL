@@ -103,3 +103,42 @@ export const DELIBERATELY_UNMAPPED: ReadonlySet<string> = new Set([
   // here so that is a choice on record rather than a silent drop.
   "InListExpression",
 ]);
+
+/**
+ * CONTEXT probes: properties an operator's `targets()` predicate consults, which a node-kind
+ * comparison cannot see.
+ *
+ * This exists because the kind comparison is structurally blind to the failure this repository has
+ * actually suffered. `packages/engine/vendor/README.md` records a grammar upgrade that inserted
+ * `statement_block` containers: every `call_expression` node still existed and still sat at the same
+ * offset, so a kind-and-position audit would have reported perfect agreement, while statement
+ * position call sites went from 703,239 to ZERO because `void-method-call` depends on parent shape.
+ *
+ * So each probe names one boolean question and how BOTH parsers answer it in their own idiom. That
+ * is deliberately not a structural alignment of two vocabularies: `statement_block` has no compiler
+ * counterpart, and trying to map parent kinds would be a mapping burden with no ceiling. Comparing
+ * the ANSWER is what the operators actually depend on.
+ */
+export interface ContextProbe {
+  /** What is being compared, used in the report. */
+  readonly name: string;
+  /** The tree-sitter kind whose sites this probe narrows. */
+  readonly treeSitterKind: string;
+  /** The compiler kind whose sites this probe narrows. */
+  readonly compilerKind: string;
+  /** The compiler-side answer: the parent kind that means "yes" for this question. */
+  readonly compilerParentKind: string;
+}
+
+export const CONTEXT_PROBES: readonly ContextProbe[] = [
+  {
+    // `void-method-call` and `remove-assignment` both gate on `isStatementSlot`. The compiler wraps
+    // a call used as a statement in `ExpressionStatement`, and does not wrap one used as a value:
+    // measured, a call on an assignment's right-hand side has parent `AssignmentStatement` and one
+    // inside a condition has parent `GreaterThanExpression`.
+    name: "call in statement position",
+    treeSitterKind: "call_expression",
+    compilerKind: "InvocationExpression",
+    compilerParentKind: "ExpressionStatement",
+  },
+];
