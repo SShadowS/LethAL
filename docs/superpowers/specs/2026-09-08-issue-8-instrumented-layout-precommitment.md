@@ -73,3 +73,50 @@ byte-for-byte the same.
 This is stated as a limit rather than folded away: three gates that would have exercised this are
 not being run, and if the change is wrong in a way only they would catch, this document is where
 that gap was recorded.
+
+---
+
+## Outcome, recorded 2026-09-08: the prediction was REFUTED
+
+**Offline, both halves passed.**
+
+- An instrumented `fixtures/sandbox-app` compiled with `alc` 18.0.2668733 at **0 errors** in the
+  nested layout.
+- The `mutant-manifest.json` was **byte-identical** across the two layouts: sha256
+  `292b3692d80ed88c2f6f205d7b6e5772d7857700a083c37bd4af7bf3e7e9edad`, 12,158 bytes, produced by
+  running the same emit probe either side of a `git stash` of the two changed files.
+
+So points 1 and 2 of the reasoning held: the manifest is genuinely path-independent, and `alc`
+resolves a nested project fine.
+
+**The live gate failed.** `itest:alrunner` went red on the nested layout and green on the same tree
+with only those two files stashed, which is what makes the change the cause rather than a
+coincidence:
+
+```text
+<bundled>: EMIT-ZERO - 0 sources emitted, 4 AL error(s):
+  ...active\src\SandboxLogic.Codeunit.al@4:27: error AL0185: Codeunit 'Mutation Selector' is missing
+  ...active\src\SandboxPricing.Codeunit.al@4:27: error AL0185: Codeunit 'Mutation Selector' is missing
+AssertionError: baseline must be green (both fixture tests pass unmutated)
+```
+
+`MutationSelector.Codeunit.al` is written at the ROOT of the instrumented directory, by both
+`writeInstrumentedProject` and the al-runner backend's own activation path. With every `.al` file
+at the root it sat in the same directory as the sources referencing it. With the sources under
+`src/`, al-runner's compilation no longer contained the selector, while `alc` compiling the same
+tree directly did.
+
+**So the flattening was load-bearing, for a reason nothing recorded.** It was not merely "the
+simplest thing": it keeps the emitted control objects and the instrumented sources in one
+directory, and at least one backend depends on that. That dependency is now written down, which it
+was not before.
+
+**What this does NOT establish.** Why al-runner's source discovery differs from `alc`'s. The error
+is consistent with it compiling a subset that excluded the root, but that was not measured, and no
+fix should be built on the guess. Anyone picking this up should start by finding out what al-runner
+globs, not by moving files until it goes green.
+
+**Disposition.** The code change is reverted (stashed, not discarded). This document stays, because
+a refuted prediction with its evidence is worth more than a deleted branch: the next person to
+propose un-flattening starts from a measured reason it is not free, rather than from the same
+one-line observation that it looks arbitrary.
