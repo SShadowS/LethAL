@@ -138,6 +138,15 @@ export const flipBooleanLiteral: MutationOperator = {
 
   conformanceTests: [
     {
+      // Issue #7. `loop-truncate` owns a repeat's exit condition and rewrites it to `true`; this
+      // operator flipping the same `false` to the same `true` at the same span made `dedupeSpecs`
+      // throw and killed the run at planning. The refusal also removes the `until true` flip, which
+      // never terminates.
+      name: "REFUSES a repeat's exit condition, which loop-truncate owns",
+      sourceAL: `codeunit 51704 "C" { procedure P() var I: Integer; begin I := 0; repeat I += 1; until false; end; }`,
+      expectedSpecs: [],
+    },
+    {
       name: "flips true in an argument",
       sourceAL: `codeunit 51700 "C" { procedure P() var Cust: Record Customer; begin Cust.SetAutoCalcFields(true); end; }`,
       expectedSpecs: [
@@ -224,8 +233,58 @@ function flipped(node: ALSyntaxNode, ctx: SemanticContext): string | null {
   if (text !== "true" && text !== "false") return null;
   if (!inExecutableBody(node)) return null;
   if (isCaseLabel(node)) return null;
+  if (isRepeatExitCondition(node)) return null;
   if (isCededRunTriggerFlag(node, ctx)) return null;
   return text === "true" ? "false" : "true";
+}
+
+/**
+ * Is this literal a `repeat` loop's whole exit condition?
+ *
+ * Refused for two reasons that arrive at the same line, one reported and one not.
+ *
+ * `until false` is ordinary AL for a loop whose exits all sit in the body, and `loop-truncate`
+ * rewrites a repeat's exit condition to `true`. Flipping the same `false` to the same `true` at the
+ * same span made two operators claim ONE identity, and `dedupeSpecs` throws on that rather than
+ * letting registration order decide, so a whole-project run died at planning before anything was
+ * measured (issue #7). `loop-truncate` keeps the mutant: it owns loop bounding, that is what R164
+ * built it for, and its version terminates.
+ *
+ * `until true` is the half nobody reported and the worse one. The body runs once; flipping it to
+ * `until false` never ends. `loop-truncate` emits nothing at an already-`true` condition, so
+ * without this refusal the only mutant at that site was a hang. R164 rules that a hang-capable site
+ * must not enter a scored gate, and `shift-integer`, `negate-guard` and `negate-conditional` all
+ * already refuse a loop condition on the same reasoning. This makes four.
+ *
+ * **`repeat` only, deliberately.** `while false do` runs the body ZERO times and terminates, so it
+ * is a useful mutant, and `loop-truncate` is repeat-only and would not cover it. Refusing there
+ * would leave the site claimed by nothing, which is the orphaning mistake R171 and this file's own
+ * `CEDED_TO_MODIFY_FLAG` comment both record.
+ *
+ * Parentheses are walked through, because `until (false)` is the same site wearing brackets. A
+ * literal NESTED in a compound condition is NOT refused: `until Done or false` flips to
+ * `until Done or true`, which exits after one iteration and terminates. Measured 0 sites of either
+ * shape across 725 `repeat` loops on both reference corpora, so this is about being exact rather
+ * than about a count.
+ *
+ * Spans are compared by POSITION, never by node identity, for the reason recorded in [[R209]]: the
+ * AST wrappers are rebuilt on access, so reference equality is not reliable.
+ */
+function isRepeatExitCondition(node: ALSyntaxNode): boolean {
+  let current = node;
+  for (let p: ALSyntaxNode | null = node.parent; p !== null; p = p.parent) {
+    if (p.kind === ALNodeKind.repeat_statement) {
+      const condition = p.childForFieldName("condition");
+      return (
+        condition !== null &&
+        condition.startIndex === current.startIndex &&
+        condition.endIndex === current.endIndex
+      );
+    }
+    if (p.kind !== ALNodeKind.parenthesized_expression) return false;
+    current = p;
+  }
+  return false;
 }
 
 /** A case LABEL, not a boolean in a branch body — see `CASE_LABEL_PARENTS`. */
