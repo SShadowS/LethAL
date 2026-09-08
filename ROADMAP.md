@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**16 of 213 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**17 of 214 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -141,6 +141,7 @@ that ordering is the priority.
 - **R201** · A stranded mutant's skip lasted exactly one resume: the skip note did not match `isStrandedNote`, so the resume after a resume re-ran the hang, and the first field run patched its database between iterations to stay skipped · [R201.md](docs/roadmap/R201.md) · done (`STRANDED_SKIP_NOTE` moved beside the detector in `resume.ts`, `isStrandedNote` recognises it)…
 - **R205** · A source file that changes on disk between session start and batch staging is instrumented from a stale parse: a mid-edit file with a missing `end;` produced a dispatch chain that repeated the file's tail 21 times, alc refused batch 0, and bisection blamed the environment; a test app republished under a running baseline was refused as stale · [R205.md](docs/roadmap/R205.md) · open — filed 2026-09-03 from the Document Output PR 54483 run…
 - **R213** · `ModifyAll(Field, Value, true)` clears R13's bar and `DeleteAll(true)` does not, measured — extend `swap-modify-flag` to the first only · [R213.md](docs/roadmap/R213.md) · open, filed 2026-09-08, measured
+- **R216** · `isStatementSlot` omits `asserterror_statement.body`, so a call there is not a statement site — real, measured, and inert on every app corpus · [R216.md](docs/roadmap/R216.md) · open, filed 2026-09-09, measured, LOW: costs nothing on app code
 
 ## Backends and tooling
 
