@@ -125,6 +125,21 @@ export interface SymbolTable {
     idOrName: string;
   }): ObjectSymbol | null;
   resolveProcedure(ownerName: string, procName: string): ProcedureSymbol | null;
+  /**
+   * The procedure DECLARED at `declStartIndex`, or null.
+   *
+   * [[R210]]. `resolveProcedure` matches by name alone, and AL lets one object declare several
+   * procedures with the same name distinguished by parameter list, which `alc` compiles. So a
+   * caller that already knows WHICH declaration it is standing in, because it walked up the tree to
+   * find it, must not ask by name: it would be answered with the first same-named declaration's
+   * locals and parameters. Measured as the largest single cause of unresolved variable references
+   * on both reference corpora, 15 of 30 sampled sites on one and 16 of 30 on the other.
+   *
+   * The declaration's own start offset is the unambiguous key, for the same reason [[R209]] gives:
+   * positions are unique within a file and the AST wrapper nodes are rebuilt on access, so
+   * reference identity is not available.
+   */
+  resolveProcedureAt(ownerName: string, declStartIndex: number): ProcedureSymbol | null;
   globalsOf(ownerName: string): readonly VarSymbol[];
   localsOf(ownerName: string, procName: string): readonly VarSymbol[];
   /**
@@ -402,6 +417,15 @@ export function buildSymbolTable(files: readonly SourceFile[]): SymbolTable {
     return list.find((p) => p.name === procName) ?? null;
   };
 
+  const resolveProcedureAt = (
+    ownerName: string,
+    declStartIndex: number,
+  ): ProcedureSymbol | null => {
+    const list = procedures.get(ownerName);
+    if (list === undefined) return null;
+    return list.find((p) => p.node.startIndex === declStartIndex) ?? null;
+  };
+
   return {
     resolveObject({ kind, idOrName }) {
       const id = Number.parseInt(idOrName, 10);
@@ -413,6 +437,7 @@ export function buildSymbolTable(files: readonly SourceFile[]): SymbolTable {
       return null;
     },
     resolveProcedure,
+    resolveProcedureAt,
     fieldsOf(tableName) {
       return fields.get(tableName.toLowerCase()) ?? [];
     },

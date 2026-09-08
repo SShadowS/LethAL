@@ -97,3 +97,69 @@ describe("normalizeAlName", () => {
     expect(normalizeAlName("Counter")).toBe("counter");
   });
 });
+
+/**
+ * [[R210]]. AL lets one object declare several procedures with the same name, distinguished by
+ * parameter list, and `alc` 18.0.2668733 compiles that (verified before these tests were written).
+ * `SymbolTable.resolveProcedure` matched by NAME alone, so every site inside the second or later
+ * declaration was answered with the FIRST one's locals and parameters.
+ *
+ * Measured as the single largest cause of unresolved sites in R196's corpus sampling, 15 of 30 on
+ * `do-rel2/Cloud` and 16 of 30 on `do-lethal-53470/Cloud`.
+ *
+ * The fixture gives both overloads a local of the SAME NAME and a DIFFERENT TYPE on purpose. A test
+ * that only asserted "resolves to something" would pass on the wrong declaration, which is exactly
+ * the failure being fixed: the old behaviour did not return null here, it returned a real symbol
+ * belonging to a different procedure.
+ */
+describe("resolveVarRef across overloaded procedure names (R210)", () => {
+  const OVERLOADED = `codeunit 50000 "Overload Probe"
+{
+    procedure Compute(A: Integer): Integer
+    var
+        Value: Integer;
+    begin
+        Value := A;
+        exit(Value);
+    end;
+
+    procedure Compute(A: Integer; B: Integer): Text
+    var
+        Value: Text;
+    begin
+        Value := Format(A + B);
+        exit(Value);
+    end;
+}`;
+
+  it("resolves to the SECOND overload's own local, not the first's", () => {
+    const { root, ctx } = load(OVERLOADED);
+    // `useOf` takes the last match, which is the `exit(Value)` inside the second procedure.
+    const resolved = resolveVarRef(useOf(root, "Value"), ctx);
+    expect(resolved).not.toBeNull();
+    expect(resolved?.typeText).toContain("Text");
+  });
+
+  it("still resolves the FIRST overload's local correctly", () => {
+    const { root, ctx } = load(OVERLOADED);
+    const uses = identifiers(root).filter((n) => normalizeAlName(n.text) === "value");
+    // Declaration, use in the assignment, use in the exit, then the same three again. The second
+    // is inside the first procedure.
+    const firstProcUse = uses[1];
+    if (firstProcUse === undefined) throw new Error("fixture changed");
+    const resolved = resolveVarRef(firstProcUse, ctx);
+    expect(resolved).not.toBeNull();
+    expect(resolved?.typeText).toContain("Integer");
+  });
+
+  /**
+   * A parameter is resolved from the same `ProcedureSymbol`, so it carries the same defect and is
+   * fixed by the same change. `B` exists only in the second overload.
+   */
+  it("resolves a parameter that exists only in the second overload", () => {
+    const { root, ctx } = load(OVERLOADED);
+    const resolved = resolveVarRef(useOf(root, "B"), ctx);
+    expect(resolved).not.toBeNull();
+    expect(resolved?.typeText).toContain("Integer");
+  });
+});

@@ -237,7 +237,12 @@ function resolveIdentifierType(node: ALSyntaxNode, symbols: SymbolTable): string
   // A member-level declaration wins over an object-level one, which is AL's own shadowing rule:
   // a procedure's local or parameter hides a global of the same name.
   if (proc !== null) {
-    const procSym = symbols.resolveProcedure(scope, proc);
+    // R210: by the declaration's position, so an overloaded name cannot answer with a different
+    // procedure's locals. The name lookup remains the fallback for a declaration this scope's
+    // index does not hold, which is what this line did for every case before.
+    const procSym =
+      symbols.resolveProcedureAt(scope, proc.startIndex) ??
+      symbols.resolveProcedure(scope, proc.childForFieldName("name")?.text ?? "");
     if (procSym !== null) {
       const local = procSym.locals.find((v) => v.name === node.text);
       if (local !== undefined) return extractType(local.typeText);
@@ -255,15 +260,16 @@ function resolveIdentifierType(node: ALSyntaxNode, symbols: SymbolTable): string
   return null;
 }
 
-/** The name of the `procedure` a node sits inside, or `null` at object level (a trigger body, a
- *  field declaration). Takes no object node: R87's whole point is that the enclosing procedure is
- *  a property of the NODE, not of whichever object a caller happened to be iterating. */
-function findEnclosingProcedure(node: ALSyntaxNode): string | null {
+/** The `procedure` NODE a node sits inside, or `null` at object level (a trigger body, a field
+ *  declaration). Takes no object node: R87's whole point is that the enclosing procedure is a
+ *  property of the NODE, not of whichever object a caller happened to be iterating.
+ *
+ *  Returns the node rather than its name since [[R210]]: AL lets one object declare several
+ *  procedures with the same name, so the name does not identify which one a site is in. */
+function findEnclosingProcedure(node: ALSyntaxNode): ALSyntaxNode | null {
   let current: ALSyntaxNode | null = node;
   while (current !== null) {
-    if (current.kind === ALNodeKind.procedure) {
-      return current.childForFieldName("name")?.text ?? null;
-    }
+    if (current.kind === ALNodeKind.procedure) return current;
     current = current.parent;
   }
   return null;

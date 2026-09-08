@@ -45,6 +45,7 @@ import { declarationMembers, findEnclosingProcedure } from "../ast/tree-walks";
 import type { SemanticContext } from "./context";
 import {
   type ObjectSymbol,
+  type ProcedureSymbol,
   type SymbolTable,
   type VarSymbol,
   collectVarDeclarations,
@@ -491,12 +492,23 @@ export function lookupVar(
 
   const procedure = findEnclosingProcedure(callNode);
   if (procedure !== null) {
-    const nameNode = procedure.childForFieldName("name");
-    if (nameNode !== null) {
-      const procName = stripQuotes(nameNode.text);
-      const local = symbols.localsOf(objectName, procName).find(matches);
+    // R210: resolved by the declaration's POSITION, not its name. AL lets one object declare
+    // several procedures with the same name distinguished by parameter list, and `alc` compiles
+    // that, so asking by name answered every site inside the second or later declaration with the
+    // FIRST one's locals and parameters. Not as null, which would have been noticed, but as a real
+    // symbol belonging to a different procedure, which was measured as the largest single cause of
+    // unresolved variable references on both reference corpora.
+    //
+    // The name lookup is kept as a fallback for the case the positional one cannot serve: a
+    // procedure whose declaration node is not in this scope's index at all. That answers exactly
+    // what it answered before, so the fallback cannot regress a project that has no overloads.
+    const symbol =
+      symbols.resolveProcedureAt(objectName, procedure.startIndex) ??
+      nameOf(procedure, symbols, objectName);
+    if (symbol !== null) {
+      const local = symbol.locals.find(matches);
       if (local !== undefined) return local;
-      const parameter = symbols.resolveProcedure(objectName, procName)?.parameters.find(matches);
+      const parameter = symbol.parameters.find(matches);
       if (parameter !== undefined) return parameter;
     }
   }
@@ -733,4 +745,18 @@ function lower(s: string): string {
 
 function equalsIgnoreCase(a: string, b: string): boolean {
   return lower(a) === lower(b);
+}
+
+/**
+ * The legacy name-keyed lookup, kept only as `lookupVar`'s fallback. See the R210 comment there for
+ * why the positional lookup is tried first and why this cannot be removed outright.
+ */
+function nameOf(
+  procedure: ALSyntaxNode,
+  symbols: SymbolTable,
+  objectName: string,
+): ProcedureSymbol | null {
+  const nameNode = procedure.childForFieldName("name");
+  if (nameNode === null) return null;
+  return symbols.resolveProcedure(objectName, stripQuotes(nameNode.text));
 }

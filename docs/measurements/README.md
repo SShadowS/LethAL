@@ -1490,8 +1490,28 @@ rate beside it. `scripts/census-hang-capable.ts`, task 3 of the plan.
 
 | corpus | files | assignments | tagged | tagged rate | sites inside a loop | declined unresolved | declined rate |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `U:/Git/do-rel2/Cloud` | 554 | 6,850 | 57 | 0.83% | 580 | 152 | 26.21% |
-| `U:/Git/do-lethal-53470/Cloud` | 572 | 7,519 | 61 | 0.81% | 666 | 182 | 27.33% |
+| `U:/Git/do-rel2/Cloud` | 554 | 6,850 | 81 | 1.18% | 580 | 79 | 13.62% |
+| `U:/Git/do-lethal-53470/Cloud` | 572 | 7,519 | 87 | 1.16% | 666 | 87 | 13.06% |
+
+**Re-measured 2026-09-08 after [[R210]] was fixed, and the figures above are the CURRENT ones.**
+The previous row read 57 tagged / 152 declined and 61 tagged / 182 declined. R210 was the defect
+where `SymbolTable.resolveProcedure` matched an enclosing procedure by NAME alone, so every site
+inside the second or later of several same-named procedures was answered with the first one's
+locals and parameters. Fixing it moved both columns and moved nothing else:
+
+| corpus | tagged | declined unresolved | sites inside a loop |
+| --- | ---: | ---: | ---: |
+| `do-rel2/Cloud` | 57 -> **81** (+42%) | 152 -> **79** (-48%) | 580, unchanged |
+| `do-lethal-53470/Cloud` | 61 -> **87** (+43%) | 182 -> **87** (-52%) | 666, unchanged |
+
+The denominator holding while the declines roughly halve is the shape to expect: nothing about which
+sites sit inside a loop changed, only whether their target could be resolved. The halving also
+confirms the 30-site sample that predicted it, which put the overload collision at 15 of 30 and 16 of
+30 of declines, against the full corpora rather than a sample.
+
+**So R196's section 3.4 claim rate really was a floor, by about 40%.** Limit 1 of the halt decision
+said closing R210 would be expected to raise it and that the published figure should be read as a
+floor rather than an estimate. That is now measured rather than expected.
 
 **Re-measured after widening `assignmentTargetOf`/`identifiersIn` to quoted identifiers.** AL parses
 a quoted name (`"Line Done"`) as `quoted_identifier`, a grammar kind distinct from `identifier`; the
