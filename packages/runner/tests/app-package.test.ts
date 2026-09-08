@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, it, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -166,5 +166,79 @@ describe("AppMethodIndex.declaredObjects", () => {
       Profiles: [{ Id: 79313, Name: "Pr" }],
     });
     expect(index.declaredObjects().size).toBe(0);
+  });
+});
+
+/**
+ * Issue #9, root cause. A namespaced app declared NOTHING, so fenced coverage attributed nothing
+ * and every mutant came back `no-coverage` on a suite that demonstrably kills more than half.
+ *
+ * The shape below is MEASURED, not invented: `alc` 18.0.2668733 was run twice on one codeunit,
+ * once plain and once with `namespace Pageworks.Barcode.Engine;`, and the two SymbolReference.json
+ * files compared. Plain puts the object in a root `Codeunits` array. Namespaced leaves that root
+ * array EMPTY and moves the object into a `Namespaces` tree, one level per dotted segment, each
+ * level carrying its own full set of object arrays.
+ *
+ * `fromSymbolReference` read the root arrays only, so every object in a namespaced app was
+ * invisible: `declaredObjects()` returned an empty set and `lookup` never resolved a method name.
+ * Namespaces are the modern default for an AppSource app, so this was not an edge case.
+ */
+describe("fromSymbolReference with namespaces (issue #9)", () => {
+  /** `namespace Pageworks.Barcode.Engine;` nests one level per segment, objects at the deepest. */
+  const namespaced = {
+    Namespaces: [
+      {
+        Name: "Pageworks",
+        Codeunits: [],
+        Namespaces: [
+          {
+            Name: "Barcode",
+            Codeunits: [],
+            Namespaces: [
+              {
+                Name: "Engine",
+                Namespaces: [],
+                Codeunits: [
+                  { Id: 71179724, Name: "Id Probe", Methods: [{ Id: 3, Name: "DoubleIt" }] },
+                ],
+                Tables: [{ Id: 71179700, Name: "Probe Table", Methods: [] }],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+    Codeunits: [],
+    Tables: [],
+  };
+
+  it("declares an object nested in a namespace", () => {
+    const index = AppMethodIndex.fromSymbolReference(namespaced);
+    expect([...index.declaredObjects()].sort()).toEqual(["codeunit:71179724", "table:71179700"]);
+  });
+
+  it("resolves a method name nested in a namespace", () => {
+    const index = AppMethodIndex.fromSymbolReference(namespaced);
+    expect(index.lookup(5, 71179724, 3)).toBe("DoubleIt");
+  });
+
+  it("still reads a plain app, whose objects sit at the root", () => {
+    const index = AppMethodIndex.fromSymbolReference({
+      Codeunits: [{ Id: 50100, Name: "Plain", Methods: [{ Id: 1, Name: "Go" }] }],
+    });
+    expect([...index.declaredObjects()]).toEqual(["codeunit:50100"]);
+    expect(index.lookup(5, 50100, 1)).toBe("Go");
+  });
+
+  /**
+   * A namespaced app that ALSO has root-level objects must yield both. AL allows a file without a
+   * `namespace` beside files that have one, so the two are not exclusive.
+   */
+  it("reads root objects and namespaced objects together", () => {
+    const index = AppMethodIndex.fromSymbolReference({
+      Codeunits: [{ Id: 50100, Name: "Root", Methods: [] }],
+      Namespaces: [{ Name: "N", Namespaces: [], Codeunits: [{ Id: 50101, Name: "Nested", Methods: [] }] }],
+    });
+    expect([...index.declaredObjects()].sort()).toEqual(["codeunit:50100", "codeunit:50101"]);
   });
 });

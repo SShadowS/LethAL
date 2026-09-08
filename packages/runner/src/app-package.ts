@@ -188,18 +188,52 @@ export class AppMethodIndex {
 
   static fromSymbolReference(json: unknown): AppMethodIndex {
     const index = new AppMethodIndex();
-    const root = json as Record<string, unknown>;
+    index.ingestScope(json as Record<string, unknown>);
+    return index;
+  }
+
+  /**
+   * Read one scope's object arrays, then recurse into any namespaces nested inside it.
+   *
+   * **Issue #9's root cause, and the reason this is a walk rather than a single pass over the root.**
+   * A namespaced app puts NOTHING in the root object arrays. Measured with `alc` 18.0.2668733 on one
+   * codeunit compiled twice, plain and with `namespace Pageworks.Barcode.Engine;`:
+   *
+   * ```text
+   * plain        Codeunits: [1]
+   * namespaced   Codeunits: [0]   Namespaces: [1]  ->  Pageworks -> Barcode -> Engine -> Codeunits: [1]
+   * ```
+   *
+   * One level per dotted segment, each carrying its own full set of object arrays. Reading only the
+   * root therefore declared nothing at all for such an app, `declaredObjects()` came back empty,
+   * every fenced-coverage row failed `LineMap.declares`, and every mutant was reported
+   * `no-coverage` on a suite that killed 73 of 147 with coverage taken out of the path. Nothing
+   * errored, which is what made it expensive: the report read as "your tests do not cover this".
+   *
+   * Namespaces are the modern default for an AppSource app, so this was never an edge case. No
+   * fixture in this repository uses one, which is exactly why every gate stayed green.
+   *
+   * Root-level and namespaced objects are BOTH collected: AL allows a file with no `namespace`
+   * beside files that have one, so the two are not alternatives.
+   */
+  private ingestScope(scope: Record<string, unknown>): void {
     for (const { key, objectType } of SYMBOL_ARRAYS) {
-      const objects = root[key] as SymbolObject[] | undefined;
+      const objects = scope[key] as SymbolObject[] | undefined;
       for (const obj of objects ?? []) {
         if (typeof obj.Id !== "number") continue;
-        index.declared.add(`${objectTypeName(objectType).toLowerCase()}:${obj.Id}`);
+        this.declared.add(`${objectTypeName(objectType).toLowerCase()}:${obj.Id}`);
         for (const method of obj.Methods ?? []) {
-          index.byKey.set(`${objectType}:${obj.Id}:${method.Id}`, method.Name);
+          this.byKey.set(`${objectType}:${obj.Id}:${method.Id}`, method.Name);
         }
       }
     }
-    return index;
+    const nested = scope.Namespaces;
+    if (!Array.isArray(nested)) return;
+    for (const child of nested) {
+      if (child !== null && typeof child === "object") {
+        this.ingestScope(child as Record<string, unknown>);
+      }
+    }
   }
 
   /**
