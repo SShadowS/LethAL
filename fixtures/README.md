@@ -347,14 +347,15 @@ facts explain it, and only the second is a defect:
    `OnValidate` raises its own `Error` with the exact text. Statically activating M0001
    (`emitStaticSelector` with `activeId = 'M0001'`) makes that error disappear — so the
    `MutationSelector.Active(...)` guard injected into a table's `var` section works.
-2. **al-runner's `asserterror` never fails a test.** `asserterror I := 1;` — a statement that
-   cannot raise — is reported `pass` (al-runner v1.0.31-era build, 2026-07-25). Under M0001 the
+2. **al-runner's `asserterror` never failed a test (v1 only, FIXED in v2 — see SUPERSEDED below).**
+   `asserterror I := 1;` — a statement that cannot raise — was reported `pass` (al-runner
+   v1.0.31-era build, 2026-07-25). Under M0001 the
    fixture's `asserterror DataMain.Validate("No.", '')` still passes with `GetLastErrorText()`
    empty. All three of bcdev's kills come from `asserterror` tests, so all three become false
    survivors.
 
-Consequence for users AT THE TIME: **on the al-runner backend, any mutation whose only killer is
-an `asserterror` assertion is reported as survived.** That under-reports the mutation score
+Consequence for users AT THE TIME: **on the al-runner backend, any mutation whose only killer was
+an `asserterror` assertion was reported as survived.** That under-reports the mutation score
 (survivors are safe-direction, a missed kill is never a false kill) but it is silent, so the CLI
 warns whenever a non-authoritative backend is selected. Confirm survivors against bcdev.
 
