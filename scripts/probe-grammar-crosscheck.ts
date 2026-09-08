@@ -103,7 +103,15 @@ async function treeSitterSites(
   const unhealthy: string[] = [];
   const tsContext = new Map<string, number>();
   for (const file of files) {
-    const root = wrapRoot(parse(await readFile(file, "utf8")));
+    // BOM stripped so BOTH sides index the same string. .NET's `ReadAllText` strips a UTF-8 BOM
+    // and reports offsets into the stripped text; without this the tree-sitter offsets are 3
+    // higher for every node in such a file, and the positional diff reports every site in it as a
+    // disagreement. MEASURED on `U:/Git/BC.History/BusinessFoundation`: 4 of 104 files carry a BOM,
+    // and every "over-claimed" site the first run reported was in one of them, landing on `#region`
+    // markers and doc comments rather than on code. That is an artifact of this harness, not a
+    // grammar finding, and it was recorded as a known limit before it bit.
+    const text = (await readFile(file, "utf8")).replace(/^﻿/, "");
+    const root = wrapRoot(parse(text));
     let dirty = false;
     const walk = (n: ALSyntaxNode): void => {
       if (n.rawKind === "ERROR") dirty = true;
