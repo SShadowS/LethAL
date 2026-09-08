@@ -57,7 +57,12 @@ export const AUDITED_TREE_SITTER_KINDS: ReadonlySet<string> = new Set(
 
 /**
  * Kinds deliberately NOT mapped, with the reason, so an absence here is a decision rather than an
- * oversight. Read by no code: it exists to be read by a person extending the table.
+ * oversight.
+ *
+ * READ BY THE HARNESS. A compiler kind that is neither mapped nor listed here is reported as an
+ * unruled kind, so the mapping's incompleteness is visible instead of silent. That is why this is a
+ * Set rather than a comment: an entry here is a decision someone made, and anything outside both
+ * lists is a decision nobody has made yet.
  *
  * - `MemberAccessExpression` / `member_expression`: both parsers agree on it and LethAL does target
  *   it, but it is not one of the six families the issue scopes, and adding families widens the audit
@@ -69,10 +74,32 @@ export const AUDITED_TREE_SITTER_KINDS: ReadonlySet<string> = new Set(
  *   where tree-sitter names the literal directly. Mappable, but the nesting differs enough that it
  *   needs its own validation rather than a line in this table.
  */
-export const DELIBERATELY_UNMAPPED = [
+export const DELIBERATELY_UNMAPPED: ReadonlySet<string> = new Set([
   "MemberAccessExpression",
   "AssignmentStatement",
   "IfStatement",
   "ExitStatement",
   "LiteralExpression",
-] as const;
+  // `(A > 0) and (A < 100)`. tree-sitter has `parenthesized_expression` too, so this is mappable,
+  // but parentheses change tree SHAPE on both sides and a span comparison across them needs its own
+  // validation rather than a line here.
+  "ParenthesizedExpression",
+  // `V::First`, enum and option access. Not one of the six families, and tree-sitter spells it
+  // differently enough that mapping it is a decision rather than a rename.
+  "OptionAccessExpression",
+  // `TableRelation = Customer."No." where(Blocked = const(false))`. The compiler models a table
+  // relation's filter as an expression; it is a DECLARATIVE surface, which R135 refuses as a
+  // mutation site and R144 pins the refusal for, so there is nothing here for this audit to
+  // compare. Found by the unruled-kind channel on `fixtures/sandbox-data`, which is what that
+  // channel is for: before it, both were silently discarded.
+  "TableFilterExpression",
+  "WhereExpression",
+  // `field("No.")` inside a table relation. Same declarative surface as the two above.
+  "SimpleFieldExpression",
+  // `X in [1, 2, 3]`. A REAL executable expression and the one entry here that is a deferral rather
+  // than a refusal. It is not one of the six families the issue scopes, and it has history: [[R171]]
+  // is precisely the case where `remove-not` ceded `not (X in [...])` to `negate-conditional`, which
+  // does not claim `in_expression`, so neither reached it. Worth auditing if this widens; listed
+  // here so that is a choice on record rather than a silent drop.
+  "InListExpression",
+]);

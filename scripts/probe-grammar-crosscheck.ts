@@ -25,7 +25,11 @@ import { readFile, readdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { initParser, parseAL } from "../packages/engine/src/ast/parser";
 import { type ALSyntaxNode, wrapRoot } from "../packages/engine/src/ast/syntax-node";
-import { AUDITED_TREE_SITTER_KINDS, COMPILER_TO_TREE_SITTER } from "./lib/al-kind-mapping";
+import {
+  AUDITED_TREE_SITTER_KINDS,
+  COMPILER_TO_TREE_SITTER,
+  DELIBERATELY_UNMAPPED,
+} from "./lib/al-kind-mapping";
 
 const DEFAULT_ALC_BIN = "C:/Users/SShadowS/.vscode/extensions/ms-dynamics-smb.al-18.0.2668733/bin";
 
@@ -56,21 +60,38 @@ async function alFiles(path: string): Promise<string[]> {
   }
 }
 
-/** Audited sites as tree-sitter-al sees them. */
-async function treeSitterSites(files: readonly string[]): Promise<Site[]> {
+/**
+ * Audited sites as tree-sitter-al sees them, plus the files it could not parse cleanly.
+ *
+ * The parse-health channel matters as much as the sites. The compiler side already reports its own
+ * parse errors; without the same from tree-sitter the two were asymmetric, and a grammar that
+ * REJECTED valid AL would have looked like agreement on whatever sites it still managed to emit.
+ * The v4.0.0 grammar did exactly that for a variable named `Filter`.
+ *
+ * LIMIT, stated rather than discovered later: `ALSyntaxNode` exposes `rawKind`, so an `ERROR` node
+ * is visible, but it does not expose tree-sitter's `isMissing`, so a MISSING node is not. This
+ * channel is therefore partial, and a clean result here is weaker evidence than a dirty one.
+ */
+async function treeSitterSites(
+  files: readonly string[],
+): Promise<{ sites: Site[]; unhealthy: string[] }> {
   await initParser();
   const out: Site[] = [];
+  const unhealthy: string[] = [];
   for (const file of files) {
     const root = wrapRoot(parseAL(await readFile(file, "utf8")));
+    let dirty = false;
     const walk = (n: ALSyntaxNode): void => {
+      if (n.rawKind === "ERROR") dirty = true;
       if (AUDITED_TREE_SITTER_KINDS.has(n.rawKind)) {
         out.push({ file, kind: n.rawKind, start: n.startIndex, end: n.endIndex });
       }
-      for (const c of n.namedChildren) walk(c);
+      for (const c of n.children) walk(c);
     };
     walk(root);
+    if (dirty) unhealthy.push(file);
   }
-  return out;
+  return { sites: out, unhealthy };
 }
 
 /** Audited sites as the AL compiler's own parser sees them, mapped into tree-sitter's vocabulary. */
@@ -78,6 +99,7 @@ function compilerSites(path: string): {
   sites: Site[];
   parserVersion: string;
   parseErrors: number;
+  unmappedKinds: string[];
 } {
   const script = join(import.meta.dir, "lib", "dump-compiler-kinds.ps1");
   const run = spawnSync(
@@ -94,28 +116,76 @@ function compilerSites(path: string): {
     nodes: Array<{ file: string; kind: string; start: number; end: number }>;
   };
   const sites: Site[] = [];
+  const unmapped = new Set<string>();
   for (const n of parsed.nodes) {
     const mapped = COMPILER_TO_TREE_SITTER.get(n.kind);
-    if (mapped === undefined) continue;
+    if (mapped === undefined) {
+      // Fail CLOSED on an unmapped kind that LOOKS like one of the families audited here. Silently
+      // dropping it is how the mapping's incompleteness would stay invisible, and the mapping is
+      // the part of this audit that can lie. The `Expression` suffix is a heuristic and is named as
+      // one: it over-reports (the compiler has many expression kinds this audit does not want) and
+      // is meant to be read, not gated on.
+      if (n.kind.endsWith("Expression") && !DELIBERATELY_UNMAPPED.has(n.kind)) {
+        unmapped.add(n.kind);
+      }
+      continue;
+    }
     sites.push({ file: resolve(n.file), kind: mapped, start: n.start, end: n.end });
   }
-  return { sites, parserVersion: parsed.parserVersion, parseErrors: parsed.parseErrors };
+  return {
+    sites,
+    parserVersion: parsed.parserVersion,
+    parseErrors: parsed.parseErrors,
+    unmappedKinds: [...unmapped].sort(),
+  };
 }
 
-const key = (s: Site): string => `${s.file}|${s.kind}|${s.start}`;
+/**
+ * The diff key. Includes `end`, and the diff below counts occurrences rather than using a Set.
+ *
+ * An earlier version keyed on `file|kind|start` into a `Set`, which destroyed multiplicity. A
+ * left-associative chain nests same-kind nodes that share a start offset: `A + B + C` contains
+ * `A + B + C` and `A + B`, both `additive_expression`, both starting at `A`. Measured on a fixture,
+ * two sites collapsed to one key. So if one parser emitted two and the other one, both directional
+ * diffs came out empty and the harness printed AGREE while the count table showed the difference,
+ * because the verdict never consulted the counts. That is a comparator that passes for the wrong
+ * reason, inside the one instrument built to catch exactly that, and it was found by an
+ * adversarial review rather than by the fixtures.
+ */
+const key = (s: Site): string => `${s.file}|${s.kind}|${s.start}|${s.end}`;
+
+/** Occurrence counts per key, so multiplicity survives the comparison. */
+function tally(sites: readonly Site[]): Map<string, number> {
+  const m = new Map<string, number>();
+  for (const s of sites) m.set(key(s), (m.get(key(s)) ?? 0) + 1);
+  return m;
+}
 
 const files = await alFiles(target);
 if (files.length === 0) {
   throw new Error(`probe-grammar-crosscheck: no .al files under ${target}. Nothing to compare.`);
 }
 
-const ts = await treeSitterSites(files);
-const { sites: cc, parserVersion, parseErrors } = compilerSites(target);
+const { sites: ts, unhealthy } = await treeSitterSites(files);
+const { sites: cc, parserVersion, parseErrors, unmappedKinds } = compilerSites(target);
 
-const tsKeys = new Set(ts.map(key));
-const ccKeys = new Set(cc.map(key));
-const onlyCompiler = cc.filter((s) => !tsKeys.has(key(s)));
-const onlyTreeSitter = ts.filter((s) => !ccKeys.has(key(s)));
+const tsTally = tally(ts);
+const ccTally = tally(cc);
+const allKeys = new Set([...tsTally.keys(), ...ccTally.keys()]);
+
+interface Delta {
+  readonly key: string;
+  readonly treeSitter: number;
+  readonly compiler: number;
+}
+const deltas: Delta[] = [];
+for (const k of allKeys) {
+  const a = tsTally.get(k) ?? 0;
+  const b = ccTally.get(k) ?? 0;
+  if (a !== b) deltas.push({ key: k, treeSitter: a, compiler: b });
+}
+const onlyTreeSitter = deltas.filter((d) => d.treeSitter > d.compiler);
+const onlyCompiler = deltas.filter((d) => d.compiler > d.treeSitter);
 
 const byKind = (sites: readonly Site[]): Map<string, number> => {
   const m = new Map<string, number>();
@@ -126,23 +196,52 @@ const tsCounts = byKind(ts);
 const ccCounts = byKind(cc);
 
 console.log(
-  `files: ${files.length}   compiler parser: v${parserVersion}   parse errors: ${parseErrors}`,
+  `files: ${files.length}   compiler parser: v${parserVersion}   compiler parse errors: ${parseErrors}   tree-sitter files with ERROR/MISSING: ${unhealthy.length}`,
 );
-console.log(`\n${"kind".padEnd(28)} ${"tree-sitter".padStart(12)} ${"compiler".padStart(10)}`);
+
+console.log(`
+${"kind".padEnd(28)} ${"tree-sitter".padStart(12)} ${"compiler".padStart(10)}`);
+let countsDiffer = false;
 for (const kind of [...AUDITED_TREE_SITTER_KINDS].sort()) {
   const a = tsCounts.get(kind) ?? 0;
   const b = ccCounts.get(kind) ?? 0;
+  if (a !== b) countsDiffer = true;
   console.log(
     `${kind.padEnd(28)} ${String(a).padStart(12)} ${String(b).padStart(10)}${a === b ? "" : "   <-- differs"}`,
   );
 }
 
-console.log(`\nsites only the COMPILER sees (grammar blind spots): ${onlyCompiler.length}`);
-for (const s of onlyCompiler.slice(0, 10)) console.log(`   ${s.kind} at ${s.file}:${s.start}`);
+console.log(`
+sites only the COMPILER sees (grammar blind spots): ${onlyCompiler.length}`);
+for (const d of onlyCompiler.slice(0, 10)) console.log(`   ${d.key}  (ts ${d.treeSitter} vs cc ${d.compiler})`);
 console.log(`sites only TREE-SITTER sees (possible over-claiming): ${onlyTreeSitter.length}`);
-for (const s of onlyTreeSitter.slice(0, 10)) console.log(`   ${s.kind} at ${s.file}:${s.start}`);
+for (const d of onlyTreeSitter.slice(0, 10)) console.log(`   ${d.key}  (ts ${d.treeSitter} vs cc ${d.compiler})`);
 
-const agreed = onlyCompiler.length === 0 && onlyTreeSitter.length === 0;
-console.log(
-  `\n${agreed ? "AGREE: every audited site matched by position." : "DISAGREE, see above."}`,
-);
+// Fail CLOSED on a compiler kind nobody mapped. A silently dropped kind is an invisible hole in the
+// mapping, and the mapping is the part of this audit that can lie.
+if (unmappedKinds.length > 0) {
+  console.log(`
+UNRULED compiler expression kinds (neither mapped nor deliberately unmapped): ${unmappedKinds.length}`);
+  for (const k of unmappedKinds.slice(0, 10)) console.log(`   ${k}`);
+}
+
+// tree-sitter's own parse health. The compiler side already reports its parse errors; without this
+// the two sides were asymmetric, and a grammar that REJECTS valid AL would have looked like
+// agreement on the sites it did manage to produce.
+if (unhealthy.length > 0) {
+  console.log(`
+tree-sitter ERROR/MISSING nodes in ${unhealthy.length} file(s):`);
+  for (const f of unhealthy.slice(0, 10)) console.log(`   ${f}`);
+}
+
+const agreed =
+  onlyCompiler.length === 0 &&
+  onlyTreeSitter.length === 0 &&
+  !countsDiffer &&
+  unmappedKinds.length === 0 &&
+  unhealthy.length === 0 &&
+  parseErrors === 0;
+
+console.log(`
+${agreed ? "AGREE: every audited site matched by position and multiplicity." : "DISAGREE, see above."}`);
+if (!agreed) process.exit(1);
