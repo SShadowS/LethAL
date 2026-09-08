@@ -74,6 +74,73 @@ describe("prepareBatchProject — non-AL resources", () => {
     });
   });
 
+  /**
+   * Issue #8. A `controladdin` names its scripts relative to the file that declares them, and `alc`
+   * resolves those at compile time. The `.al` file is flattened onto the batch root, so the
+   * resource has to appear at the batch root too, under the same tail.
+   *
+   * The structure-preserving copy is kept as well and is not redundant: an `app.json`
+   * `resourceFolders` entry is named relative to the PROJECT root, so it needs the original path.
+   */
+  it("rebases a resource onto the batch root so a flattened declaration resolves it (issue #8)", async () => {
+    await withDirs(async (projectDir, batchDir) => {
+      await write(projectDir, "app.json", JSON.stringify(manifest));
+      await write(
+        projectDir,
+        "src/Studio/Editor.ControlAddIn.al",
+        "controladdin Editor { Scripts = './EditorAddin/editor.js'; }",
+      );
+      await write(projectDir, "src/Studio/EditorAddin/editor.js", "// script");
+
+      await prepareBatchProject(projectDir, batchDir, { ...manifest }, "1.0.2.0");
+
+      // Where the flattened declaration looks.
+      expect(await exists(join(batchDir, "EditorAddin/editor.js"))).toBe(true);
+      // And still where `resourceFolders` looks.
+      expect(await exists(join(batchDir, "src/Studio/EditorAddin/editor.js"))).toBe(true);
+    });
+  });
+
+  it("rebases onto the NEAREST enclosing AL directory, not a shallower one", async () => {
+    await withDirs(async (projectDir, batchDir) => {
+      await write(projectDir, "app.json", JSON.stringify(manifest));
+      await write(projectDir, "src/Root.Codeunit.al", "codeunit 1 R { }");
+      await write(projectDir, "src/Studio/Editor.ControlAddIn.al", "controladdin E { }");
+      await write(projectDir, "src/Studio/EditorAddin/editor.js", "// script");
+
+      await prepareBatchProject(projectDir, batchDir, { ...manifest }, "1.0.2.0");
+
+      expect(await exists(join(batchDir, "EditorAddin/editor.js"))).toBe(true);
+      // `src` also holds AL files, but it is the shallower owner and must not also claim this.
+      expect(await exists(join(batchDir, "Studio/EditorAddin/editor.js"))).toBe(false);
+    });
+  });
+
+  /**
+   * Flattening can make two resource trees collide once they are rebased. Refused loudly rather
+   * than letting one silently overwrite the other, which would publish a wrong add-in.
+   */
+  it("refuses two resources that rebase onto the same path", async () => {
+    await withDirs(async (projectDir, batchDir) => {
+      await write(projectDir, "app.json", JSON.stringify(manifest));
+      // Distinct basenames: same-named .al files trip the flattening guard first, and this test
+      // is about the RESOURCE collision, not that one.
+      await write(projectDir, "src/A/AThing.Codeunit.al", "codeunit 1 A { }");
+      await write(projectDir, "src/B/BThing.Codeunit.al", "codeunit 2 B { }");
+      await write(projectDir, "src/A/Assets/x.js", "// A");
+      await write(projectDir, "src/B/Assets/x.js", "// B");
+
+      const err = await prepareBatchProject(projectDir, batchDir, { ...manifest }, "1.0.2.0").then(
+        () => undefined,
+        (e: unknown) => e,
+      );
+
+      expect(err).toBeInstanceOf(Error);
+      const message = err instanceof Error ? err.message : "";
+      expect(message).toContain(join("Assets", "x.js"));
+    });
+  });
+
   it("does not copy tool directories or built .app packages into the batch", async () => {
     await withDirs(async (projectDir, batchDir) => {
       await write(projectDir, "app.json", JSON.stringify(manifest));

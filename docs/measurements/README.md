@@ -987,6 +987,36 @@ here as measured and neither was.**
 
 ## al-runner v2 — the CLI and wire contract, measured against the released binary
 
+### A bundle's `.al` files must all sit at one directory level (measured 2026-09-08, v2.11.0)
+
+**al-runner does not compile a root-level `.al` together with one in a subdirectory of the same
+bundle.** Two files in one package, one at the bundle root and one under `src/`, and the emit fails:
+
+```text
+flat     Helper.Codeunit.al + Tests.Codeunit.al at the root   ->  1P/0F/0E, 0 errors
+nested   Helper.Codeunit.al at root, src/Tests.Codeunit.al    ->  EMIT-ZERO - 0 sources emitted
+                                                                  AL0185: Codeunit 'Probe Helper' is missing
+                                                                  emit-crash: Unexpected value 'None' of
+                                                                  type NavTypeKind
+```
+
+Reproduced with a three-file project and the binary alone, no LethAL code involved: one `app.json`,
+one helper codeunit, one test codeunit that calls it, differing ONLY in whether the test sits at the
+root or one directory down. `alc` 18.0.2668733 compiles the same nested tree at 0 errors, so this is
+al-runner's source discovery rather than AL.
+
+**Why it is written down here.** It is the constraint that keeps `writeInstrumentedProject` writing
+its emissions flat. The flattening looks arbitrary in the code, costs a duplicate-basename refusal a
+real project can hit, and blocks the fix for issue #8, where a `controladdin` resolves its scripts
+relative to the file that declares them. An attempt to remove it compiled fine offline and produced
+a byte-identical manifest, then took `itest:alrunner` red on exactly this. See
+`docs/superpowers/specs/2026-09-08-issue-8-instrumented-layout-precommitment.md`.
+
+The `emit-crash` line is the same shape in both the probe and the real gate failure, so it appears
+to be a downstream symptom of the missing object rather than a second fault.
+
+**Not reported upstream at the time of writing.** It should be: the repro is three files.
+
 Answers R93, and corrects three roadmap claims that had drifted. Every line below was produced by
 running `C:/Users/SShadowS/.dotnet/tools/al-runner.exe` on this Windows machine on **2026-08-07**,
 against **`al-runner v2.0.0.0`** (the NuGet release, not a local build of `main`). Earlier

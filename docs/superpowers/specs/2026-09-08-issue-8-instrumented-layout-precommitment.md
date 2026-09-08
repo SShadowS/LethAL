@@ -120,3 +120,33 @@ globs, not by moving files until it goes green.
 a refuted prediction with its evidence is worth more than a deleted branch: the next person to
 propose un-flattening starts from a measured reason it is not free, rather than from the same
 one-line observation that it looks arbitrary.
+
+---
+
+## Follow-up, same day: the cause is upstream, and it is now measured
+
+The open question above ("why al-runner's source discovery differs from `alc`'s") is answered, with
+a probe that contains no LethAL code at all: one `app.json`, one helper codeunit, one test codeunit
+calling it, differing only in whether the test sits at the bundle root or one directory down.
+
+```text
+flat     both at the root            ->  1P/0F/0E, 0 errors
+nested   test one directory down     ->  EMIT-ZERO, AL0185: Codeunit 'Probe Helper' is missing
+```
+
+**al-runner v2.11.0 does not compile a root-level `.al` together with one in a subdirectory of the
+same bundle.** `alc` compiles the identical nested tree at 0 errors.
+
+So the flattening is not load-bearing for a LethAL reason after all. It is a workaround for an
+upstream limitation that nothing had written down. That distinction matters for what happens next:
+this is not a design constraint to live with, it is a bug to report, and when it is fixed the
+un-flattening becomes available with the stashed change already written and its offline evidence
+already gathered.
+
+Recorded in `docs/measurements/README.md` under "al-runner v2", which is where this repository keeps
+measured facts about that tool.
+
+**Disposition unchanged, reasoning changed.** Issue #8 is fixed the other way for now, by copying a
+project's asset directories to where a flattened declaration can still resolve them, which is
+Option B and the shape the reporter had already patched locally. It is chosen knowing what it is:
+a workaround for a workaround, with the upstream cause identified rather than assumed.

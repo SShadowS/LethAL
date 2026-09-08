@@ -1,6 +1,6 @@
 import { access, copyFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { homedir, hostname } from "node:os";
-import { basename, dirname, join, relative } from "node:path";
+import { basename, dirname, join, relative, sep } from "node:path";
 import { tier1Operators } from "@lethal/builtin-tier1";
 import { tier2Operators } from "@lethal/builtin-tier2";
 import {
@@ -5879,8 +5879,36 @@ export async function prepareBatchProject(
     await copyFile(join(projectDir, rel), dest);
   }
 
+  // Every directory that holds at least one `.al` file. A resource named relative to an AL file is
+  // named relative to ITS directory, and the `.al` files above were just flattened onto the batch
+  // root, so the resource has to appear at the batch root under the same relative tail. See the
+  // second copy below.
+  const alDirs = new Set<string>();
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    const rel = relative(projectDir, join(entry.parentPath, entry.name));
+    if (rel.toLowerCase().endsWith(".al")) alDirs.add(dirname(rel));
+  }
+
   // Resources: same set minus the `.al` files above, minus the stamped `app.json` and any
   // already-built `.app` package, copied with their directory structure intact.
+  //
+  // Then copied a SECOND time, rebased onto the batch root, when they sit below a directory that
+  // holds AL files. Issue #8: a `controladdin` names its scripts and stylesheets relative to the
+  // file that declares them and `alc` resolves those at compile time, so
+  // `src/Studio/X.ControlAddIn.al` asking for `./EditorAddin/x.js` looks for
+  // `<batch>/EditorAddin/x.js` once the declaration has been flattened to the root, while the
+  // structure-preserving copy put it at `<batch>/src/Studio/EditorAddin/x.js`. Both copies are
+  // needed and neither is redundant: the first serves an `app.json` `resourceFolders` entry, which
+  // is named relative to the PROJECT root, and the second serves a path named relative to an AL
+  // file.
+  //
+  // This is a workaround for a workaround, and the honest description is in
+  // `docs/measurements/README.md` under "al-runner v2": the flattening itself only exists because
+  // al-runner v2.11.0 will not compile a root-level `.al` together with one in a subdirectory of
+  // the same bundle, measured with a three-file probe. `alc` compiles that tree fine. When the
+  // upstream limitation goes, the flattening and this second copy go with it.
+  const rebased = new Map<string, string>();
   for (const entry of entries) {
     if (!entry.isFile()) continue;
     const rel = relative(projectDir, join(entry.parentPath, entry.name));
@@ -5891,7 +5919,46 @@ export async function prepareBatchProject(
     const dest = join(batchDir, rel);
     await mkdir(dirname(dest), { recursive: true });
     await copyFile(join(projectDir, rel), dest);
+
+    // The NEAREST enclosing AL directory, so one resource is rebased once rather than once per
+    // ancestor. A resource already at the project root rebases onto itself and is skipped.
+    const owner = nearestAlDir(alDirs, rel);
+    if (owner === undefined || owner === ".") continue;
+    const tail = relative(owner, rel);
+    const rebasedDest = join(batchDir, tail);
+    if (rebasedDest === dest) continue;
+
+    // Two AL directories can own same-named resource trees, and flattening makes their rebased
+    // copies collide. Refused loudly rather than letting one silently win, the same way the `.al`
+    // basename collision above is refused: a wrong asset is a compile error at best and a wrong
+    // published add-in at worst.
+    const previous = rebased.get(rebasedDest.toLowerCase());
+    if (previous !== undefined && previous !== rel) {
+      throw new Error(
+        `cannot build the batch project: "${previous}" and "${rel}" both rebase onto "${tail}". Instrumented AL files are written flat, so a resource named relative to an AL file must sit at the batch root, and these two would overwrite each other. Rename one of the directories.`,
+      );
+    }
+    rebased.set(rebasedDest.toLowerCase(), rel);
+    await mkdir(dirname(rebasedDest), { recursive: true });
+    await copyFile(join(projectDir, rel), rebasedDest);
   }
+}
+
+/**
+ * The deepest directory in `alDirs` that contains `rel`, or `undefined` when none does.
+ *
+ * Deepest rather than any, so a resource under `src/Studio/EditorAddin` owned by `src/Studio` is
+ * rebased to `EditorAddin/...` and not also to `Studio/EditorAddin/...` by a shallower ancestor
+ * that happens to hold AL files too.
+ */
+function nearestAlDir(alDirs: ReadonlySet<string>, rel: string): string | undefined {
+  let best: string | undefined;
+  for (const dir of alDirs) {
+    const withSep = dir === "." ? "" : `${dir}${sep}`;
+    if (withSep !== "" && !rel.startsWith(withSep)) continue;
+    if (best === undefined || dir.length > best.length) best = dir;
+  }
+  return best;
 }
 
 /**
