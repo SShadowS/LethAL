@@ -948,7 +948,10 @@ export class BcDevMcpBackend implements ExecutionBackend {
         ...(procedure !== undefined ? { procedure } : {}),
       });
     }
-    this.warnOnThinFencedCoverage(ref, rows.length, declaredRows, memberEntries, stats);
+    // Distinct `type:id` keys actually seen, so the diagnostic can show BOTH sides of the
+    // comparison that failed rather than only naming the two suspects.
+    const rowKeys = [...new Set(rows.map((r) => `${objectTypeName(r.objectType)}:${r.objectId}`))];
+    this.warnOnThinFencedCoverage(ref, rows.length, declaredRows, memberEntries, rowKeys, stats);
     return {
       granularity: "procedure",
       entries,
@@ -983,6 +986,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
     totalRows: number,
     declaredRows: number,
     memberEntries: number,
+    rowKeys: readonly string[],
     stats?: FencedCoverageStats,
   ): void {
     if (totalRows === 0 || memberEntries > 0) return;
@@ -993,9 +997,12 @@ export class BcDevMcpBackend implements ExecutionBackend {
     const where = `${ref.codeunitName}.${ref.method}`;
     const consequence = "Every mutant covered only by this test will be reported no-coverage.";
     if (declaredRows === 0) {
-      const blame =
-        "Suspect the object-id filter or the artifact's declared ids — not the line map, " +
-        "which was never consulted.";
+      const blame = thinCoverageEvidence(
+        rowKeys,
+        this.lineMap?.declaredCount ?? 0,
+        this.lineMap?.declaredSample(3) ?? [],
+        this.coverageObjectIdFilter,
+      );
       console.warn(
         `[lethal] fenced coverage for ${where}: ${totalRows} row(s) came back, NONE of them for an object this artifact declares${server}. ${consequence} ${blame}`,
       );
@@ -1312,4 +1319,41 @@ function firstText(res: unknown): string {
 
 function parseTestRunPayload(text: string): TestRunPayload {
   return JSON.parse(text) as TestRunPayload;
+}
+
+/**
+ * The evidence half of the "rows arrived but none were declared" warning.
+ *
+ * Issue #9 was diagnosable only by compiling apps locally and comparing symbol references, because
+ * the warning named its two suspects and printed neither side's keys. The reporter said so
+ * directly: they could not tell from the outside which cause was real, and declined to guess. This
+ * puts the comparison in the message.
+ *
+ * A declared count of ZERO is called out separately, because it is not one suspect among two. It
+ * means the artifact's symbol reference yielded no objects at all, so no row could ever have
+ * matched and the object-id filter is irrelevant. That was issue #9: a namespaced app declared an
+ * empty root.
+ */
+export function thinCoverageEvidence(
+  rowKeys: readonly string[],
+  declaredCount: number,
+  declaredSample: readonly string[],
+  objectIdFilter: string | undefined,
+): string {
+  const filter = objectIdFilter === undefined ? "none sent" : objectIdFilter;
+  const rows = rowKeys.length === 0 ? "none" : rowKeys.slice(0, 3).join(", ");
+  if (declaredCount === 0) {
+    return (
+      `The artifact declares NO objects at all (0 keys), so no row could match and the object-id ` +
+      `filter (${filter}) is not the cause. Rows carried e.g. ${rows}. Read the compiled app's ` +
+      `SymbolReference.json: an app whose objects sit under a \`namespace\` keeps them in a nested ` +
+      `\`Namespaces\` tree rather than at the root.`
+    );
+  }
+  return (
+    `Rows carried e.g. ${rows}; the artifact declares ${declaredCount} object(s), e.g. ` +
+    `${declaredSample.join(", ")}; object-id filter sent: ${filter}. Compare those two sides. ` +
+    `Suspect the object-id filter or the artifact's declared ids, not the line map, which was ` +
+    `never consulted.`
+  );
 }

@@ -127,6 +127,23 @@ export class LineMap {
   }
 
   /**
+   * How many `(objectType, objectId)` pairs the artifact declares.
+   *
+   * Exposed for diagnostics, and ZERO is itself a diagnosis rather than a detail: it means the
+   * symbol reference yielded nothing, so no coverage row could ever match and the run will report
+   * every mutant `no-coverage` while erroring about nothing. That is exactly how issue #9 presented
+   * before a namespaced app was found to declare an empty root.
+   */
+  get declaredCount(): number {
+    return this.declared.size;
+  }
+
+  /** A few declared keys, so a diagnostic can show what it compared against and stay readable. */
+  declaredSample(limit: number): readonly string[] {
+    return [...this.declared].slice(0, limit);
+  }
+
+  /**
    * The procedure owning `lineNo`, or `undefined` for "this object, but no nameable member".
    *
    * `undefined` is a real answer, not a failure, and callers must emit an OBJECT-level

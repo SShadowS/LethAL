@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AppMethodIndex, objectTypeName } from "../src/app-package";
+import { thinCoverageEvidence } from "../src/bcdev-backend";
 import { buildFakeApp } from "./helpers/fake-app";
 
 describe("objectTypeName", () => {
@@ -240,5 +241,35 @@ describe("fromSymbolReference with namespaces (issue #9)", () => {
       Namespaces: [{ Name: "N", Namespaces: [], Codeunits: [{ Id: 50101, Name: "Nested", Methods: [] }] }],
     });
     expect([...index.declaredObjects()].sort()).toEqual(["codeunit:50100", "codeunit:50101"]);
+  });
+});
+
+/**
+ * The warning that fires when coverage rows arrive but none match the artifact.
+ *
+ * Issue #9 took a local compile-and-compare to diagnose because this message named its two suspects
+ * and showed neither side's keys. These tests pin that it now carries the comparison, and that the
+ * zero-declared case is called out as its own diagnosis rather than left as one suspect of two.
+ */
+describe("thinCoverageEvidence (issue #9 diagnosability)", () => {
+  it("names the empty declared set as the cause, not the id filter", () => {
+    const msg = thinCoverageEvidence(["codeunit:71179724"], 0, [], "71179675..71179775");
+    expect(msg).toContain("NO objects at all");
+    expect(msg).toContain("not the cause");
+    expect(msg).toContain("namespace");
+    // The rows that DID arrive still have to appear, or the reader cannot see both sides.
+    expect(msg).toContain("codeunit:71179724");
+  });
+
+  it("shows both sides when the artifact does declare objects", () => {
+    const msg = thinCoverageEvidence(["codeunit:99"], 2, ["codeunit:50100", "table:50101"], "50100..50200");
+    expect(msg).toContain("codeunit:99");
+    expect(msg).toContain("codeunit:50100");
+    expect(msg).toContain("50100..50200");
+    expect(msg).not.toContain("NO objects at all");
+  });
+
+  it("says so when no object-id filter was sent", () => {
+    expect(thinCoverageEvidence([], 1, ["codeunit:1"], undefined)).toContain("none sent");
   });
 });
