@@ -38,9 +38,16 @@ export const COMPILER_TO_TREE_SITTER: ReadonlyMap<string, string> = new Map([
   ["IntegerDivideExpression", "multiplicative_expression"],
   ["ModuloExpression", "multiplicative_expression"],
 
-  // Logical.
+  // Logical. AL has THREE, not two: `xor` is a logical operator like the other two and tree-sitter
+  // gives it the same `logical_expression` kind, carrying the operator as an `xor` token child.
+  // Omitting it here reported six false over-claims in `GenJnlCheckLine.Codeunit.al` alone, which
+  // is exactly the way this table's header says a wrong entry lies: a naming gap wearing the
+  // costume of a grammar defect. Nothing in LethAL was ever exposed, because `negate-conditional`
+  // gates on the `LOGICAL_FLIP` allow-list (`and`/`or` only) rather than on the node kind, so an
+  // `xor` site is declined at `targets()`. That allow-list is the reason this cost nothing.
   ["LogicalAndExpression", "logical_expression"],
   ["LogicalOrExpression", "logical_expression"],
+  ["LogicalXorExpression", "logical_expression"],
 
   // Unary. `not` and arithmetic negation; tree-sitter carries both as one kind.
   ["UnaryNotExpression", "unary_expression"],
@@ -109,6 +116,11 @@ export const DELIBERATELY_UNMAPPED: ReadonlySet<string> = new Set([
   // detects. Ruling on them here is what lets the control leg come back clean.
   "ReportDataItemLinkExpression",
   "SortingExpression",
+  // `A[1]`. tree-sitter spells it `subscript_expression`, so this IS mappable and both parsers
+  // agree on it. It is not one of the six families the issue scopes, and unlike the entries above
+  // it is a plain deferral rather than a refusal: an index is executable AL, and `shift-integer`
+  // could conceivably want the literal inside one. Listed so the deferral is on record.
+  "ArrayIndexExpression",
 ]);
 
 /**
