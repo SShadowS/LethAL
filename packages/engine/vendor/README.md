@@ -347,6 +347,34 @@ hashes and all four gates had to be re-recorded.
 
 `bun test`: 2,853 pass / 1 skip / 0 fail, identical to the 4.0.1 run.
 
+### Live gates: every one that can run, PASS, per-mutant
+
+| gate | frozen figures | result |
+| --- | --- | --- |
+| `itest:bcdev` | 3 / 12 / 4 over 19, `baselineGreen=true` | PASS |
+| `itest:tables` | 299 / 63 / 15 over 377 | PASS |
+| `itest:alrunner` | 3 / 16 / 0 | PASS |
+| `itest:chunked` | both legs 17 / 7 / 2; control `warmKills` 9 / `groupedCalls` 33, chunked 5 / 57 | PASS |
+| `itest:hang` | the stop path, and the quarantine verdict | PASS |
+| `itest:lease` | P1-P10, P9B | PASS |
+| `itest:stale-publish` | Probe A + Probe B | PASS |
+| `itest:growth` | LINEAR-ish, 4.12x source growth | PASS |
+
+`itest:envtool` was NOT run: its environment was deleted 2026-09-01 and
+provisioning a replacement needs BC 27+ with DK localization plus a hand
+bootstrap, which is its own piece of work. Its last recorded figures are
+identical to `itest:bcdev`'s on the same day, and `itest:bcdev` passes here, but
+that is an argument rather than a measurement and this bump does not claim it.
+
+Two incidental results worth recording, neither caused by the grammar:
+
+- `itest:alrunner` passed against **al-runner v2.11.0**, a build this gate had
+  never seen (the last recorded measurement is 2.10.0.0). All 19 per-mutant
+  verdicts unchanged, and R147's platform-app pin still engaged.
+- The identity hashes being byte-identical is what made this a re-run rather
+  than a re-recording. No baseline was deleted, regenerated or hand-edited
+  anywhere in this bump.
+
 ### What this bump also found, and it was in our own instrument
 
 The first A/B reported 27 `swap-enum-member` rows removed and 27 added at
