@@ -8,14 +8,29 @@ package loads this file at runtime via `web-tree-sitter` to parse AL source.
 
 - Repository: <https://github.com/SShadowS/tree-sitter-al>
 - License: MIT
-- Version: `4.0.1`
-- Commit: `58c236f` — "chore: regenerate parser.c and rebuild tree-sitter-al.wasm
-  for v4.0.1", tag `v4.0.1`
+- Version: `4.3.0`
+- Commit: `f7af22a` — "chore: regenerate parser.c and rebuild tree-sitter-al.wasm
+  for v4.3.0", tag `v4.3.0`
 - Provenance: **built locally from source at that tag**, NOT downloaded from a
-  release. `tree-sitter build --wasm`, tree-sitter CLI 0.26.12, from a detached
+  release. `tree-sitter build --wasm`, tree-sitter CLI 0.27.0, from a detached
   worktree at the tag so the grammar checkout's own state could not leak in.
-- Artifact: 10,323,560 bytes,
-  `sha256:d2584663e92a84197530f4627dc5444830c588499f1bd3d93d7b9c2b37075af6`
+- Artifact: 10,428,350 bytes,
+  `sha256:c6e7fedb0002f0ca902bd0fc36a10ef492f543aa4bdd2e4f465b1e258bf9f4d4`
+- **The build is now byte-reproducible, and the warning below about it no longer
+  applying is the reason to read this line.** tree-sitter 0.27.0 does not use
+  Emscripten: it compiles `parser.c` + `scanner.c` with a bundled wasi-sdk clang
+  and then `binaryen`'s `wasm-opt`. THREE independent local builds and the
+  artifact upstream checked in at the tag all produce ONE hash, the one above.
+  So under this toolchain, matching upstream's committed wasm is EVIDENCE of a
+  correct build rather than a sign of having copied it — which is the opposite
+  of what the caveat below said under Emscripten, and the caveat is kept because
+  it is still true of every build recorded before this one.
+
+Previously `4.0.1` at commit `58c236f` (10,323,560 bytes,
+`sha256:d2584663e92a84197530f4627dc5444830c588499f1bd3d93d7b9c2b37075af6`), built
+with tree-sitter CLI 0.26.12 under the Emscripten path. What that entry recorded,
+kept because a bump's evidence is only readable against what it replaced:
+
 - 4.0.1 is the tagged form of what was vendored hours earlier from untagged
   `05e6288` (artifact `sha256:4dcd0fda87f1...`): `914e779` fixes an object-level
   variable named after a section keyword (`var Filter: Codeunit …`, also `keys`,
@@ -268,6 +283,82 @@ fixture dangling-else sites are the exception that DID move). The gain is on
 code the old grammar misread — `#if`-split blocks, mixed-case keywords, spaced
 `exit (…)` — and only the three dangling-else/case-else clusters above witness
 it in this corpus.
+
+## The 4.0.1 -> 4.3.0 bump (2026-09-09): three upstream fixes, 137 dead sites drop, one real site is gained
+
+Three releases in one bump, and every one of them is a fix this repository
+reported from the issue #6 compiler cross-check
+(`scripts/probe-grammar-crosscheck.ts`), which diffs the grammar against
+`Microsoft.Dynamics.Nav.CodeAnalysis` node by node:
+
+- **v4.1.0**, upstream #20: a single-entry `Implementation` /
+  `DefaultImplementation` inside an enum value parsed as `comparison_expression`.
+- **v4.2.0**, upstream #21 (`CalcFormula` methods and `SourceTableView = order(...)`
+  parsed as `call_expression`) and #22 (`continue_statement` matched the
+  IDENTIFIER `Continue`, silently mis-parsing a call to any procedure of that
+  name, with ZERO error nodes).
+- **v4.3.0**, upstream #23: a negative literal in a declarative property
+  (`MinValue = -1500;`, `OptionOrdinalValues = -1, 1, 2;`) parsed as
+  `unary_expression`. The AL compiler models it as one signed literal there and
+  uses a unary node only in executable code.
+
+**Grammar-caused code changes needed: none.**
+
+### Per-site census, `census-operator-sites.ts`, four corpora (~10,900 files)
+
+| corpus | files | removed | added |
+| --- | ---: | --- | --- |
+| BaseApp | 8,020 | 94 `negate-conditional` | **1 `void-method-call`** |
+| System Application | 1,718 | 33 `negate-conditional` | 0 |
+| `do-rel2/Cloud` | 554 | 5 `negate-conditional` | 0 |
+| `do-lethal-53470/Cloud` | 572 | 5 `negate-conditional` | 0 |
+
+**All 137 removed rows are the #20 shape**, checked mechanically rather than
+sampled: every one matches `<ident-or-quoted> = <ident-or-quoted>` and sits in a
+`.Enum.al` or `.EnumExt.al` declaration. They are declarative sites that
+`isMutableSite` already dropped (see R215), so they were never live mutants:
+the census shrinks and no run changes. Same pattern as 4.0.0's 94 `link_value`
+removals.
+
+**The single addition is a real coverage GAIN**, and it is #22:
+
+```text
+lethal.void-method-call  System\Workflow\WorkflowWebhookManagement.Codeunit.al:187
+  before: "Continue(WorkflowWebhookEntry)"   after: ""
+```
+
+Under 4.0.1 `isStatementSlot` found 79 statement-position calls in that file
+against the compiler's 80; under 4.3.0 it finds 80 of 80.
+
+**#21 and #23 move ZERO census rows, which is the expected result rather than a
+null one.** No operator claims those nodes: `negate-conditional` gates on an
+allow-list, and `remove-not` only matches a `unary_expression` whose operator is
+`not`. Verified by running the real operator set over the affected spans, and there are zero
+claims. The fixes make the TREE right; they were never costing mutants.
+
+### Identity hashes: BYTE-IDENTICAL, both fixtures
+
+`sandbox-app` 19 deployed and `sandbox-data` 377 deployed, unchanged, and the
+per-spec `astSubtreeHash` listings are byte-identical under both wasms
+(`scripts/probe-fixture-hashes.ts`, derived from `census-fixture-mutants.ts` so
+the two pipelines cannot drift). **No committed per-mutant baseline is
+invalidated**, unlike 4.0.0, where a newly-named `assignment_operator` moved 32
+hashes and all four gates had to be re-recorded.
+
+`bun test`: 2,853 pass / 1 skip / 0 fail, identical to the 4.0.1 run.
+
+### What this bump also found, and it was in our own instrument
+
+The first A/B reported 27 `swap-enum-member` rows removed and 27 added at
+identical positions. That was NOT the grammar: `census-operator-sites.ts` did not
+sort its `readdir` result, and file order reaches `enumValuesOf`, so a
+multi-extension enum merged its members in visit order and a wrapping swap chose
+a different sibling per run. Two runs under the SAME grammar differed on 19 rows.
+Fixed and red-checked in R218; the pipeline was never affected, since
+`orchestrator.ts` sorts before parsing. **Read R218 before trusting any earlier
+"BYTE-IDENTICAL" census claim in this document.** Those bumps predate
+`swap-enum-member` or used corpora without the shape, so they stand, but they
+were not guaranteed to.
 
 ## Bumping the vendored WASM
 
