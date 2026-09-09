@@ -5934,9 +5934,11 @@ export async function prepareBatchProject(
     // published add-in at worst.
     const previous = rebased.get(rebasedDest.toLowerCase());
     if (previous !== undefined && previous !== rel) {
-      throw new Error(
-        `cannot build the batch project: "${previous}" and "${rel}" both rebase onto "${tail}". Instrumented AL files are written flat, so a resource named relative to an AL file must sit at the batch root, and these two would overwrite each other. Rename one of the directories.`,
-      );
+      // PROBE ONLY, not a proposed fix: skip both rebased copies instead of refusing the run, to
+      // measure whether this project needs them at all. Its `controladdin` declarations name
+      // resources from the PROJECT ROOT, which the structure-preserving copy above already serves.
+      console.error(`[probe] rebase collision skipped: "${previous}" vs "${rel}" -> "${tail}"`);
+      continue;
     }
     rebased.set(rebasedDest.toLowerCase(), rel);
     await mkdir(dirname(rebasedDest), { recursive: true });
