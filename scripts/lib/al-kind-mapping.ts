@@ -121,6 +121,50 @@ export const DELIBERATELY_UNMAPPED: ReadonlySet<string> = new Set([
   // it is a plain deferral rather than a refusal: an index is executable AL, and `shift-integer`
   // could conceivably want the literal inside one. Listed so the deferral is on record.
   "ArrayIndexExpression",
+
+  // ---- Surfaced by the fail-closed channel on BaseApp (7,889 files), ruled 2026-09-09. ----
+  //
+  // REFUSALS. The filter and table-relation grammar: `TableRelation = Customer."No." where(...)`,
+  // `CalcFormula = sum(Entry.Amount where(...))`, and every operator AL allows inside such a
+  // filter. The compiler gives each filter operator its own kind, which is why there are so many.
+  // These are the DECLARATIVE surface R135 refuses as mutation sites and R144 pins the refusal
+  // for, so there is nothing here for this audit to compare, exactly as for the three relation
+  // kinds already listed above.
+  "AndFilterExpression",
+  "OrFilterExpression",
+  "FilterExpression",
+  "FieldFilterExpression",
+  "FieldUpperLimitExpression",
+  "RangeExpression",
+  "RangeBetweenFilterExpression",
+  "RangeFromFilterExpression",
+  "RangeToFilterExpression",
+  "UnaryEqualsFilterExpression",
+  "UnaryNotEqualsFilterExpression",
+  "UnaryLessThanFilterExpression",
+  "ConstExpression",
+  "IfTableRelationExpression",
+  "ElseTableRelationExpression",
+  // Query objects: `DataItemLink = ...` and `OrderBy = ascending(...)` on a `query`. Declarative
+  // for the same reason, and a query has no executable body for an operator to reach.
+  "QueryDataItemLinkExpression",
+  "OrderByExpression",
+  "OrderExpression",
+  // Compiler-internal wrappers around a name-or-literal in a declarative slot. They carry no
+  // operator and no operand structure, so there is no site here under any reading.
+  "IdentifierOrLiteralExpression",
+  "IdentifierOrLiteralOrOptionAccessExpression",
+  //
+  // DEFERRALS. The three below are genuinely EXECUTABLE AL, so they are held to the same standard
+  // as `InListExpression` and `ArrayIndexExpression`: out of scope for the six families this audit
+  // covers, not out of scope for mutation. Recorded separately from the refusals above so a later
+  // reader can tell a "nothing to see" from a "nobody has looked yet".
+  //   `ThisExpression`        — `this`, the newer AL self-reference.
+  //   `AsExpression`          — an interface cast, `Instance as "My Interface"`.
+  //   `ConditionalExpression` — the value-position conditional.
+  "ThisExpression",
+  "AsExpression",
+  "ConditionalExpression",
 ]);
 
 /**
