@@ -103,6 +103,7 @@ async function treeSitterSites(
   const guardedKeys = new Set<string>();
   const unhealthy: string[] = [];
   const tsContext = new Map<string, number>();
+  const tsContextGuarded = new Map<string, number>();
   for (const file of files) {
     // BOM stripped so BOTH sides index the same string. .NET's `ReadAllText` strips a UTF-8 BOM
     // and reports offsets into the stripped text; without this the tree-sitter offsets are 3
@@ -135,6 +136,17 @@ async function treeSitterSites(
       for (const probe of CONTEXT_PROBES) {
         if (n.rawKind === probe.treeSitterKind && isStatementSlot(n)) {
           tsContext.set(probe.name, (tsContext.get(probe.name) ?? 0) + 1);
+          // Tracked separately because a single context number NETS TWO OPPOSITE ERRORS and can
+          // therefore agree while both are present. Inside an INACTIVE arm tree-sitter counts sites
+          // the compiler never parsed, pushing our side up; inside an ACTIVE one the missing
+          // `preproc_conditional_statement` container pushes our side down. MEASURED on BaseApp:
+          // `Assembly` runs 37 low (all active `#if not CLEAN28` arms) while `Inventory` runs 9
+          // high (an inactive arm holding a whole `trigger OnAction()`). A corpus with both in
+          // balance would print a match and hide two real defects, so the guarded share is
+          // reported and a reader can see how much of the net could be cancellation.
+          if (nowGuarded) {
+            tsContextGuarded.set(probe.name, (tsContextGuarded.get(probe.name) ?? 0) + 1);
+          }
         }
       }
       for (const c of n.children) walk(c, nowGuarded);
@@ -148,7 +160,13 @@ async function treeSitterSites(
     // so nothing here outlives the delete.
     (tree as { delete?: () => void }).delete?.();
   }
-  return { sites: out, unhealthy, context: tsContext, guardedKeys };
+  return {
+    sites: out,
+    unhealthy,
+    context: tsContext,
+    guardedKeys,
+    contextGuarded: tsContextGuarded,
+  };
 }
 
 /** Audited sites as the AL compiler's own parser sees them, mapped into tree-sitter's vocabulary. */
@@ -176,7 +194,11 @@ function compilerSites(path: string): {
   const ccContext = new Map<string, number>();
   for (const n of parsed.nodes) {
     for (const probe of CONTEXT_PROBES) {
-      if (n.kind === probe.compilerKind && n.parent === probe.compilerParentKind) {
+      // An absent `compilerParentKind` means the kind alone answers the question; see the field's
+      // doc comment for why calls need a parent test and assignments do not.
+      const parentMatches =
+        probe.compilerParentKind === undefined || n.parent === probe.compilerParentKind;
+      if (probe.compilerKinds.includes(n.kind) && parentMatches) {
         ccContext.set(probe.name, (ccContext.get(probe.name) ?? 0) + 1);
       }
     }
@@ -233,7 +255,13 @@ if (files.length === 0) {
   throw new Error(`probe-grammar-crosscheck: no .al files under ${target}. Nothing to compare.`);
 }
 
-const { sites: ts, unhealthy, context: tsContext, guardedKeys } = await treeSitterSites(files);
+const {
+  sites: ts,
+  unhealthy,
+  context: tsContext,
+  guardedKeys,
+  contextGuarded: tsContextGuarded,
+} = await treeSitterSites(files);
 const {
   sites: cc,
   parserVersion,
@@ -318,9 +346,15 @@ for (const probe of CONTEXT_PROBES) {
   const a = tsContext.get(probe.name) ?? 0;
   const b = ccContext.get(probe.name) ?? 0;
   if (a !== b) contextDiffers = true;
+  const g = tsContextGuarded.get(probe.name) ?? 0;
   console.log(
     `${probe.name.padEnd(28)} ${String(a).padStart(12)} ${String(b).padStart(10)}${a === b ? "" : "   <-- differs"}`,
   );
+  if (g > 0) {
+    console.log(
+      `${"".padEnd(28)} ${String(g).padStart(12)} ${"".padStart(10)}   (of ours, inside a #if: a match here can still be two errors cancelling)`,
+    );
+  }
 }
 
 // Fail CLOSED on a compiler kind nobody mapped. A silently dropped kind is an invisible hole in the

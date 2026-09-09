@@ -142,6 +142,12 @@ export const DELIBERATELY_UNMAPPED: ReadonlySet<string> = new Set([
   "UnaryEqualsFilterExpression",
   "UnaryNotEqualsFilterExpression",
   "UnaryLessThanFilterExpression",
+  // The other three relational filter forms. Ruling the first three and missing these was an
+  // ordinary oversight, and the fail-closed channel caught it one area later, which is the whole
+  // argument for having the channel: a hand-written list of 23 was wrong by 4 within a day.
+  "UnaryGreaterThanFilterExpression",
+  "UnaryGreaterThanEqualsFilterExpression",
+  "UnaryLessThanEqualsFilterExpression",
   "ConstExpression",
   "IfTableRelationExpression",
   "ElseTableRelationExpression",
@@ -164,6 +170,8 @@ export const DELIBERATELY_UNMAPPED: ReadonlySet<string> = new Set([
   //   `ConditionalExpression` — the value-position conditional.
   "ThisExpression",
   "AsExpression",
+  //   `IsExpression`          — the interface type test, `Instance is "My Interface"`.
+  "IsExpression",
   "ConditionalExpression",
 ]);
 
@@ -187,10 +195,27 @@ export interface ContextProbe {
   readonly name: string;
   /** The tree-sitter kind whose sites this probe narrows. */
   readonly treeSitterKind: string;
-  /** The compiler kind whose sites this probe narrows. */
-  readonly compilerKind: string;
-  /** The compiler-side answer: the parent kind that means "yes" for this question. */
-  readonly compilerParentKind: string;
+  /**
+   * The compiler kinds whose sites this probe narrows. A LIST, because the correspondence is
+   * many-to-one in exactly the way `COMPILER_TO_TREE_SITTER` above is: the compiler bakes the
+   * operator into the kind and tree-sitter keeps one kind with the operator as a child.
+   *
+   * Writing this as a single kind reported 22 false over-claims on `BusinessFoundation`, because
+   * `I += 2` is a `CompoundAssignmentStatement` to the compiler and an ordinary
+   * `assignment_statement` to tree-sitter. That is the second time this audit manufactured a
+   * finding by mapping one side of a many-to-one correspondence; the first was `xor`.
+   */
+  readonly compilerKinds: readonly string[];
+  /**
+   * The compiler-side answer: the parent kind that means "yes" for this question.
+   *
+   * OPTIONAL, because the two parsers do not need a wrapper for the same reasons. A call is an
+   * expression that the compiler wraps in `ExpressionStatement` when it is used as a statement, so
+   * the parent is what carries the answer. An assignment is already a statement and AL has no
+   * value-position form of one, so EVERY `AssignmentStatement` is in statement position and there
+   * is no parent to test. Omit it to count every node of the kind.
+   */
+  readonly compilerParentKind?: string;
 }
 
 export const CONTEXT_PROBES: readonly ContextProbe[] = [
@@ -201,7 +226,22 @@ export const CONTEXT_PROBES: readonly ContextProbe[] = [
     // inside a condition has parent `GreaterThanExpression`.
     name: "call in statement position",
     treeSitterKind: "call_expression",
-    compilerKind: "InvocationExpression",
+    compilerKinds: ["InvocationExpression"],
     compilerParentKind: "ExpressionStatement",
+  },
+  {
+    // `remove-assignment` gates on the SAME `isStatementSlot` predicate as `void-method-call`, so
+    // every container missing from `SINGLE_STATEMENT_SLOTS` costs assignment sites as well as call
+    // sites. Both omissions found so far ([[R216]]'s `asserterror_statement.body` and [[R214]]'s
+    // `preproc_conditional_statement`) were measured against calls alone, which is why R217 argues
+    // for this probe BEFORE fixing either: two found by one probe is weak evidence that two is all
+    // there is, and this is the cheap way to find out.
+    //
+    // No parent test, deliberately. See `compilerParentKind` above: AL has no value-position
+    // assignment, so the compiler's count of `AssignmentStatement` IS the count of assignments in
+    // statement position, and any shortfall on our side is the predicate being narrower.
+    name: "assignment in statement position",
+    treeSitterKind: "assignment_statement",
+    compilerKinds: ["AssignmentStatement", "CompoundAssignmentStatement"],
   },
 ];
