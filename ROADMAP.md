@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**18 of 216 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**19 of 217 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -144,6 +144,7 @@ that ordering is the priority.
 - **R213** · `ModifyAll(Field, Value, true)` clears R13's bar and `DeleteAll(true)` does not, measured — extend `swap-modify-flag` to the first only · [R213.md](docs/roadmap/R213.md) · open, filed 2026-09-08, measured
 - **R216** · `isStatementSlot` omits `asserterror_statement.body`, so a call there is not a statement site — real, measured, and inert on every app corpus · [R216.md](docs/roadmap/R216.md) · open, filed 2026-09-09, measured, LOW: costs nothing on app code
 - **R217** · `isStatementSlot`'s container list is maintained by hand and is incomplete twice over, and the issue #6 context probe found both omissions, and nothing else can · [R217.md](docs/roadmap/R217.md) · open, filed 2026-09-09, measured; option 3 DONE (b3c441a), the probe was widened and found more
+- **R219** · A real project with two control add-ins cannot be instrumented at all: the flat write refuses on colliding resource basenames, and un-flattening is blocked by an al-runner source-root convention · [R219.md](docs/roadmap/R219.md) · open, filed 2026-09-09, measured on Continia Document Output and against al-runner 2.11.0
 
 ## Backends and tooling
 
