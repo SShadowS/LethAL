@@ -142,7 +142,7 @@ that ordering is the priority.
 - **R205** · A source file that changes on disk between session start and batch staging is instrumented from a stale parse: a mid-edit file with a missing `end;` produced a dispatch chain that repeated the file's tail 21 times, alc refused batch 0, and bisection blamed the environment; a test app republished under a running baseline was refused as stale · [R205.md](docs/roadmap/R205.md) · open — filed 2026-09-03 from the Document Output PR 54483 run…
 - **R213** · `ModifyAll(Field, Value, true)` clears R13's bar and `DeleteAll(true)` does not, measured — extend `swap-modify-flag` to the first only · [R213.md](docs/roadmap/R213.md) · open, filed 2026-09-08, measured
 - **R216** · `isStatementSlot` omits `asserterror_statement.body`, so a call there is not a statement site — real, measured, and inert on every app corpus · [R216.md](docs/roadmap/R216.md) · open, filed 2026-09-09, measured, LOW: costs nothing on app code
-- **R217** · `isStatementSlot`'s container list is maintained by hand and is incomplete twice over — the issue #6 context probe found both omissions, and nothing else can · [R217.md](docs/roadmap/R217.md) · open, filed 2026-09-09, measured
+- **R217** · `isStatementSlot`'s container list is maintained by hand and is incomplete twice over — the issue #6 context probe found both omissions, and nothing else can · [R217.md](docs/roadmap/R217.md) · open, filed 2026-09-09, measured; option 3 DONE (b3c441a), the probe was widened and found more
 
 ## Backends and tooling
 
