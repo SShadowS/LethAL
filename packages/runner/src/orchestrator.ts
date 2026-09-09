@@ -5854,28 +5854,24 @@ export async function prepareBatchProject(
   // landed in a different batch, or that have no mutable sites at all) so
   // the batch dir holds the FULL project alc needs to compile.
   //
-  // The flattening to `basename` is dictated by `writeInstrumentedProject`, which writes its
-  // emissions that way. It makes two same-named files in different folders collide, and the
-  // `pathExists` skip below — there to leave an instrumented emission alone — would silently
-  // swallow the second one, dropping an AL object from the published app with no diagnostic.
-  // So collisions are detected here on the SOURCE paths, independently of what is already on
-  // disk, and refused loudly. (Continia Document Output has 551 distinct basenames across 551
-  // files, so the flattening survives there — by luck, not by design.)
-  const alBySeenBasename = new Map<string, string>();
+  // At each file's own project-relative path, matching `writeInstrumentedProject`.
+  //
+  // This used to flatten onto `basename` and carried a loud refusal for two files sharing a name in
+  // different folders, because the flattening made them collide and the `pathExists` skip below
+  // would have swallowed the second one silently. Both are gone with the flattening: nothing
+  // collides once the depth is kept, so the refusal has nothing left to refuse and a project whose
+  // layout AL allows is no longer rejected for a reason that was ours rather than AL's.
+  //
+  // Issue #8 is why the flattening went: a `controladdin` resolves its scripts relative to the AL
+  // file that declares them, and moving that file to the root while its resources stayed at depth
+  // made `alc` look in a place nothing had been copied to.
   for (const entry of entries) {
     if (!entry.isFile()) continue;
     const rel = relative(projectDir, join(entry.parentPath, entry.name));
     if (!rel.toLowerCase().endsWith(".al")) continue;
-    const base = basename(rel);
-    const previous = alBySeenBasename.get(base.toLowerCase());
-    if (previous !== undefined) {
-      throw new Error(
-        `cannot build the batch project: two source files share the basename "${base}" (${previous} and ${rel}). Instrumented files are written flat, so one would silently replace the other and its AL objects would be missing from the published app. Rename one of them.`,
-      );
-    }
-    alBySeenBasename.set(base.toLowerCase(), rel);
-    const dest = join(batchDir, base);
+    const dest = join(batchDir, rel);
     if (await pathExists(dest)) continue;
+    await mkdir(dirname(dest), { recursive: true });
     await copyFile(join(projectDir, rel), dest);
   }
 

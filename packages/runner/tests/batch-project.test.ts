@@ -62,15 +62,65 @@ describe("prepareBatchProject — non-AL resources", () => {
     });
   });
 
-  it("still flattens .al files to their basename", async () => {
+  /**
+   * Issue #8. This used to assert the opposite, that `.al` files were flattened onto the batch
+   * root. A `controladdin` resolves its `Scripts` and `StyleSheets` relative to the AL file that
+   * declares them, and `alc` checks those paths at compile time, so moving the declaration to the
+   * root while its resources stayed at their own depth made the build fail with AL0327 on a
+   * resource that had been copied correctly all along.
+   */
+  it("keeps .al files at their own project-relative path", async () => {
     await withDirs(async (projectDir, batchDir) => {
       await write(projectDir, "app.json", JSON.stringify(manifest));
       await write(projectDir, "Al/Codeunit/Thing.Codeunit.al", "codeunit 1 T { }");
 
       await prepareBatchProject(projectDir, batchDir, { ...manifest }, "1.0.2.0");
 
-      expect(await exists(join(batchDir, "Thing.Codeunit.al"))).toBe(true);
-      expect(await exists(join(batchDir, "Al/Codeunit/Thing.Codeunit.al"))).toBe(false);
+      expect(await exists(join(batchDir, "Al/Codeunit/Thing.Codeunit.al"))).toBe(true);
+      expect(await exists(join(batchDir, "Thing.Codeunit.al"))).toBe(false);
+    });
+  });
+
+  /**
+   * The shape the old flattening had to refuse outright, now simply supported.
+   *
+   * Two files may share a name in different folders: AL requires object names to be unique, not
+   * file names. Flattening made them collide, so `prepareBatchProject` carried a loud throw telling
+   * the user to rename one of their files for a reason that was ours rather than AL's. Keeping the
+   * depth means nothing collides and both objects reach the published app.
+   */
+  it("keeps two .al files that share a basename in different folders", async () => {
+    await withDirs(async (projectDir, batchDir) => {
+      await write(projectDir, "app.json", JSON.stringify(manifest));
+      await write(projectDir, "Al/Sales/Helper.Codeunit.al", "codeunit 1 S { }");
+      await write(projectDir, "Al/Purchase/Helper.Codeunit.al", "codeunit 2 P { }");
+
+      await prepareBatchProject(projectDir, batchDir, { ...manifest }, "1.0.2.0");
+
+      expect(await exists(join(batchDir, "Al/Sales/Helper.Codeunit.al"))).toBe(true);
+      expect(await exists(join(batchDir, "Al/Purchase/Helper.Codeunit.al"))).toBe(true);
+    });
+  });
+
+  /**
+   * The reported failure, end to end at this layer: a resource named relative to the AL file that
+   * declares it must sit where that declaration can still see it.
+   */
+  it("puts a controladdin's resources where the declaring file still resolves them (issue #8)", async () => {
+    await withDirs(async (projectDir, batchDir) => {
+      await write(projectDir, "app.json", JSON.stringify(manifest));
+      await write(
+        projectDir,
+        "src/Studio/Editor.ControlAddIn.al",
+        "controladdin Editor { Scripts = './EditorAddin/editor.js'; }",
+      );
+      await write(projectDir, "src/Studio/EditorAddin/editor.js", "// script");
+
+      await prepareBatchProject(projectDir, batchDir, { ...manifest }, "1.0.2.0");
+
+      // Both at their original depth, so `./EditorAddin/editor.js` from the declaring file resolves.
+      expect(await exists(join(batchDir, "src/Studio/Editor.ControlAddIn.al"))).toBe(true);
+      expect(await exists(join(batchDir, "src/Studio/EditorAddin/editor.js"))).toBe(true);
     });
   });
 
@@ -185,42 +235,6 @@ describe("prepareBatchProject — non-AL resources", () => {
       expect(await readFile(join(batchDir, "Thing.Codeunit.al"), "utf8")).toBe(
         "codeunit 1 T { INSTRUMENTED }",
       );
-    });
-  });
-});
-
-describe("prepareBatchProject — .al basename collisions are loud", () => {
-  it("throws, naming both source paths, when two project .al files share a basename", async () => {
-    // Flattening plus a silent `if (exists) continue` would drop the second file from the
-    // artifact without a word — an object silently missing from the published app, which reads
-    // downstream as a mutation-scoring problem rather than a lost source file.
-    await withDirs(async (projectDir, batchDir) => {
-      await write(projectDir, "app.json", JSON.stringify(manifest));
-      await write(projectDir, "Sales/Helper.Codeunit.al", "codeunit 1 A { }");
-      await write(projectDir, "Purchase/Helper.Codeunit.al", "codeunit 2 B { }");
-
-      const err = await prepareBatchProject(projectDir, batchDir, { ...manifest }, "1.0.2.0").then(
-        () => undefined,
-        (e: unknown) => e,
-      );
-
-      expect(err).toBeInstanceOf(Error);
-      const message = err instanceof Error ? err.message : "";
-      expect(message).toContain("Helper.Codeunit.al");
-      expect(message).toContain(join("Sales", "Helper.Codeunit.al"));
-      expect(message).toContain(join("Purchase", "Helper.Codeunit.al"));
-    });
-  });
-
-  it("does not mistake the instrumented copy of a file for a collision with its own original", async () => {
-    await withDirs(async (projectDir, batchDir) => {
-      await write(projectDir, "app.json", JSON.stringify(manifest));
-      await write(projectDir, "Al/Thing.Codeunit.al", "codeunit 1 T { }");
-      await write(batchDir, "Thing.Codeunit.al", "codeunit 1 T { INSTRUMENTED }");
-
-      await prepareBatchProject(projectDir, batchDir, { ...manifest }, "1.0.2.0");
-
-      expect(await exists(join(batchDir, "Thing.Codeunit.al"))).toBe(true);
     });
   });
 });

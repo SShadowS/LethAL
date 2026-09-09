@@ -1,5 +1,5 @@
 import { mkdir, writeFile } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   ALNodeKind,
   type ALSyntaxNode,
@@ -459,7 +459,20 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
     const headers = objectHeadersOf(f.source, f.path);
     assertNoUnsupportedObjectMix(headers, f.path);
     const compiled = compileSchemataForFile(f.source, f.root, deduped, ided, f.path);
-    await writeFile(join(input.targetDir, basename(f.path)), compiled, "utf8");
+    // At the file's OWN project-relative path, not flattened onto `targetDir`.
+    //
+    // Issue #8: a `controladdin` names its scripts and stylesheets relative to the AL file that
+    // declares them, and `alc` resolves those at compile time. Flattening moved the declaration to
+    // the root while `prepareBatchProject` copied the resources to their original depth, so the
+    // compiler looked for `<batch>/EditorAddin/x.js` while the file sat at
+    // `<batch>/src/Studio/EditorAddin/x.js` and the build failed with AL0327. The resources were
+    // never missing; the declaration had moved away from them.
+    //
+    // Keeping the depth also retires the duplicate-basename refusal `prepareBatchProject` carried,
+    // which existed only because two files named the same thing in different folders collided here.
+    const dest = join(input.targetDir, f.path);
+    await mkdir(dirname(dest), { recursive: true });
+    await writeFile(dest, compiled, "utf8");
     for (const { mutantId, spec } of ided) {
       const triggerName = triggerNameOf(spec);
       // R6: attributed to ITS OWN enclosing object, not always the file's first header — a file
