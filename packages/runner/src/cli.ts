@@ -1764,8 +1764,13 @@ export interface AlRunnerConfigSection {
   /** Forwarded as v2's `--package-cache` (v1 spelled it `--packages`). */
   readonly packagesDir?: string;
   /**
-   * REFUSED — `AlRunnerBackend` throws on it. Kept declared so a config that asks for server
-   * mode gets an explanation (R97) rather than having the request quietly dropped.
+   * R220 — run through `al-runner --server`, the warm JSON-RPC daemon, instead of one process per
+   * test. Refused from R97 until 2026-09-09; both grounds were re-measured on 2.11.0 first, and
+   * the numbers are in `al-runner-server.ts`.
+   *
+   * OFF by default. The trade is "the whole suite warm" against "the covering tests cold", which
+   * wins wherever compilation dominates and loses where test execution does, and only the project
+   * knows which suite it has.
    */
   readonly serverMode?: boolean;
 }
@@ -1799,6 +1804,27 @@ export interface LethalConfigFile {
    * nothing says so.
    */
   readonly preprocessorSymbols?: readonly string[];
+  /**
+   * R221 — glob patterns whose files must never contribute mutants, unioned with any `--exclude`
+   * passed on the command line.
+   *
+   * TOP-LEVEL, for the same reason `preprocessorSymbols` is: which parts of a project are worth
+   * mutating is a property of the PROJECT, not of a backend, and it does not change when someone
+   * switches from al-runner to bcdev.
+   *
+   * A config key rather than a flag-only feature because these are durable. Generated code, an
+   * upgrade codeunit, a vendored subtree: those are true of the project every day, and a caller
+   * retyping them on every invocation will eventually retype them wrong. That failure is silent in
+   * the direction that matters, since a forgotten exclusion mutates files the project said to
+   * leave alone.
+   *
+   * UNIONED with the CLI flag rather than overridden by it, and that is deliberate. A config
+   * exclusion is the project's standing statement; letting `--exclude` on the command line replace
+   * it would mean a caller narrowing to one folder silently re-enables mutation of generated code.
+   * There is no spelling of `--exclude` that removes a config exclusion, and that is the intended
+   * shape: to stop excluding something, stop saying so in the config.
+   */
+  readonly exclude?: readonly string[];
 }
 
 /** Characters that would make a symbol ambiguous to one of the two compilers — see below. */
@@ -1835,6 +1861,49 @@ export function validatePreprocessorSymbols(raw: unknown): readonly string[] {
     symbols.push(entry);
   }
   return symbols;
+}
+
+/**
+ * R221 — validates `exclude` and returns the list, or `[]` when absent.
+ *
+ * Refuses rather than sanitising, exactly as `validatePreprocessorSymbols` does and for a stronger
+ * reason. A dropped symbol compiles the wrong branch; a dropped exclusion MUTATES files the project
+ * said never to mutate, while the report says the run was narrowed. The empty-string check is not
+ * pedantry: `""` reaches `Bun.Glob` as a pattern matching nothing, which the orchestrator then
+ * refuses with a message about a pattern the author never wrote.
+ */
+export function validateExcludeGlobs(raw: unknown): readonly string[] {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw)) {
+    throw new Error(
+      `lethal.config.json: "exclude" must be an array of glob strings, got ${JSON.stringify(raw)}`,
+    );
+  }
+  const globs: string[] = [];
+  for (const entry of raw) {
+    if (typeof entry !== "string" || entry.trim() === "") {
+      throw new Error(
+        `lethal.config.json: "exclude" contains a non-string or empty entry (${JSON.stringify(entry)}) — every entry must be a glob matched against project-relative paths, e.g. "src/Upgrade/**"`,
+      );
+    }
+    globs.push(entry);
+  }
+  return globs;
+}
+
+/**
+ * R221 — the exclusions in force: the project's standing list unioned with the caller's.
+ *
+ * ONE implementation, called by both the run path and `--dry-run`, because the two disagreeing is
+ * precisely the bug `printDryRun`'s own doc comment warns about: a dry run that answered for a
+ * wider scope than the real run would be worse than useless, and a dry run that forgot the config's
+ * exclusions would do exactly that.
+ */
+export function resolveExclude(
+  configFile: Pick<LethalConfigFile, "exclude">,
+  cliExclude: readonly string[] | undefined,
+): readonly string[] {
+  return [...new Set([...validateExcludeGlobs(configFile.exclude), ...(cliExclude ?? [])])];
 }
 
 /** Pure validators — no I/O — so "missing config field" errors are unit-testable directly. */
@@ -2938,6 +3007,12 @@ export async function runFromCli(
   } = {},
 ): Promise<SessionReport> {
   const configFile = await loadLethalConfigFile(parsed.configPath);
+  // R221: the project's standing exclusions UNIONED with any `--exclude` from the command line,
+  // resolved once here so the session and every message downstream see one list. Union, never
+  // override: see `LethalConfigFile.exclude` for why a CLI flag must not be able to switch off an
+  // exclusion the project stated. Validated up front, like `preprocessorSymbols`, so a malformed
+  // key fails before anything is built.
+  const mergedExclude = resolveExclude(configFile, parsed.exclude);
   // R3: resolved once, up front, from CLI flags > this config file's `selectorIds` section >
   // DEFAULT_SELECTOR_IDS (`resolveSelectorIds`). Threaded through to every `build(...)` call below
   // and into `runTheSession`'s `SessionConfig.selectorIds`.
@@ -3113,7 +3188,7 @@ export async function runFromCli(
         // subscriber from a throw in its siblings, so there is nothing to pre-combine here.
         emit: emitSubscribers,
         ...(parsed.only !== undefined ? { only: parsed.only } : {}),
-        ...(parsed.exclude !== undefined ? { exclude: parsed.exclude } : {}),
+        ...(mergedExclude.length > 0 ? { exclude: mergedExclude } : {}),
         ...(parsed.operators !== undefined ? { operators: parsed.operators } : {}),
         ...(parsed.testsOnly !== undefined ? { testsOnly: parsed.testsOnly } : {}),
         ...(parsed.maxGuardsPerBatch !== undefined
@@ -4478,11 +4553,19 @@ async function main(): Promise<number> {
     return 0;
   }
   if (parsed.mode === "dry-run") {
+    // R221: the config's exclusions count here too. A `--dry-run` that answered for a wider scope
+    // than the real run is the failure `printDryRun`'s doc names, and forgetting the config is the
+    // easiest way to produce it -- the caller passed no flag, so nothing on the command line hints
+    // that a scope was in force.
+    const dryRunExclude = resolveExclude(
+      await loadLethalConfigFile(parsed.configPath),
+      parsed.exclude,
+    );
     await printDryRun(parsed.projectDir, parsed.only, {
       dbPath: parsed.dbPath,
       configPath: parsed.configPath,
       ...(parsed.operators !== undefined ? { operators: parsed.operators } : {}),
-      ...(parsed.exclude !== undefined ? { exclude: parsed.exclude } : {}),
+      ...(dryRunExclude.length > 0 ? { exclude: dryRunExclude } : {}),
     });
     return 0;
   }

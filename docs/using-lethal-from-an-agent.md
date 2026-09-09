@@ -68,6 +68,11 @@ both select mutants rather than sources (every file is still parsed, compiled an
 both refuse a pattern that matches no file. The report records either narrowing and flags the run
 `narrowed`, so a scoped score can never be mistaken for a project score.
 
+Durable exclusions belong in the config rather than the command line: a top-level
+`"exclude": ["src/Upgrade/**"]` in `lethal.config.json` is UNIONED with any `--exclude` flag, never
+replaced by one, so narrowing a run cannot silently re-enable mutation of code the project said to
+leave alone.
+
 An unscoped run on a real project is refused by default above 1,000 mutation sites,
 because it costs days and usually cannot publish at all. `--allow-large-run` overrides the refusal
 and does not make the run cheaper. Find the size first with `--dry-run`, which lists what would be

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseCliConfig } from "../src/cli";
+import { parseCliConfig, resolveExclude, validateExcludeGlobs } from "../src/cli";
 import { generateMutationSet } from "../src/orchestrator";
 
 /**
@@ -426,5 +426,61 @@ describe("parseCliConfig — --exclude", () => {
     // Absent rather than empty, so a plain run's config is byte-identical to what it was before
     // `--exclude` existed.
     expect("exclude" in cfg).toBe(false);
+  });
+});
+
+/**
+ * R221 — the `exclude` config key.
+ *
+ * A flag-only feature would have been the wrong shape. Generated code, an upgrade codeunit, a
+ * vendored subtree: those are true of a project every day, and a caller retyping them on every
+ * invocation will eventually retype them wrong, in the direction that silently mutates files the
+ * project said to leave alone.
+ */
+describe("lethal.config.json exclude", () => {
+  test("accepts a list of globs, and absent means none", () => {
+    expect(validateExcludeGlobs(["src/Upgrade/**", "src/Generated/**"])).toEqual([
+      "src/Upgrade/**",
+      "src/Generated/**",
+    ]);
+    expect(validateExcludeGlobs(undefined)).toEqual([]);
+  });
+
+  test("REFUSES a non-array, rather than treating a bare string as one pattern", () => {
+    expect(() => validateExcludeGlobs("src/Upgrade/**")).toThrow(
+      /must be an array of glob strings/,
+    );
+  });
+
+  test("REFUSES an empty entry, which would otherwise be reported as an unmatched pattern", () => {
+    // `""` reaches `Bun.Glob` as a pattern matching nothing, and the orchestrator then refuses it
+    // with a message about a pattern the author never wrote.
+    expect(() => validateExcludeGlobs(["ok", ""])).toThrow(/non-string or empty entry/);
+    expect(() => validateExcludeGlobs(["ok", 42])).toThrow(/non-string or empty entry/);
+  });
+
+  test("UNIONS the config list with the CLI flag", () => {
+    expect(resolveExclude({ exclude: ["src/Generated/**"] }, ["src/Scratch/**"])).toEqual([
+      "src/Generated/**",
+      "src/Scratch/**",
+    ]);
+  });
+
+  test("a CLI flag cannot switch OFF a config exclusion, which is the point of unioning", () => {
+    // Override semantics would mean someone narrowing to one folder for a quick run silently
+    // re-enables mutation of generated code. There is deliberately no spelling of `--exclude` that
+    // removes a config exclusion: to stop excluding something, stop saying so in the config.
+    const merged = resolveExclude({ exclude: ["src/Generated/**"] }, ["src/Other/**"]);
+    expect(merged).toContain("src/Generated/**");
+  });
+
+  test("de-duplicates, so naming the same pattern twice is not two patterns", () => {
+    expect(resolveExclude({ exclude: ["src/Gen/**"] }, ["src/Gen/**"])).toEqual(["src/Gen/**"]);
+  });
+
+  test("either side alone works", () => {
+    expect(resolveExclude({}, ["src/A/**"])).toEqual(["src/A/**"]);
+    expect(resolveExclude({ exclude: ["src/B/**"] }, undefined)).toEqual(["src/B/**"]);
+    expect(resolveExclude({}, undefined)).toEqual([]);
   });
 });
