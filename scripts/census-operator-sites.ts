@@ -73,9 +73,19 @@ const squash = (s: string): string => s.replace(/\s+/g, " ").trim();
 
 await initParser();
 
-const entries = (await readdir(projectDir, { recursive: true })).filter((f) =>
-  f.toLowerCase().endsWith(".al"),
-);
+// SORTED, and the sort is load-bearing rather than cosmetic. `readdir` order is not stable across
+// runs, and file order reaches `enumValuesOf` through `buildSemanticContext`: an enum extended by
+// more than one `enumextension` gets its members merged in visit order, so `swap-enum-member`,
+// which picks a sibling by index and WRAPS at the end of the list, chose a different member from
+// one run to the next. MEASURED on BaseApp: two runs of this script over identical input under an
+// identical grammar differed on 19 rows, all `lethal.swap-enum-member`. That is spurious diff in
+// the one instrument the vendor README trusts for a bump's per-site proof, which would read as a
+// grammar regression that is not there (it did, during the 4.3.0 bump) or mask one that is.
+// The pipeline itself was never affected: `orchestrator.ts` sorts before parsing, and so does
+// `census-fixture-mutants.ts`. This script was the only one that did not.
+const entries = (await readdir(projectDir, { recursive: true }))
+  .filter((f) => f.toLowerCase().endsWith(".al"))
+  .sort();
 const files: SourceFile[] = [];
 for (const rel of entries) {
   const source = await readFile(join(projectDir, rel), "utf8");
