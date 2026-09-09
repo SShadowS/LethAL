@@ -1,10 +1,17 @@
-import { cp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   CONTROL_REGISTER_FILENAME,
   CONTROL_UPGRADE_FILENAME,
   emitStaticSelector,
 } from "@lethal/schemata";
+import {
+  type AlRunnerCoverageIndex,
+  alRunnerCoverageFrom,
+  buildAlRunnerCoverageIndex,
+  parseCobertura,
+} from "./al-runner-coverage";
 import {
   OneShotTransport,
   alRunnerEnv,
@@ -22,6 +29,7 @@ import type { CompiledArtifact } from "./artifact";
 import type {
   BackendCapabilities,
   BackendStatus,
+  CoverageMap,
   ExecutionBackend,
   RunOpts,
   TestMethodRef,
@@ -205,6 +213,20 @@ export interface AlRunnerConfig {
    * request silently ignored. See the constructor for the R97 measurement.
    */
   readonly serverMode?: boolean;
+  /**
+   * R220 — whether this session collects al-runner's own `--coverage`.
+   *
+   * DEFAULTS TO OFF, and the default is the safe direction rather than laziness: without coverage
+   * every mutant runs every green test and an unreached one is reported `survived`, which
+   * over-reports. With coverage wrongly enabled it would be reported `no-coverage`, which HIDES
+   * it. So the caller has to opt in, and must first ask `alRunnerCoverageSupport(projectDir)`
+   * whether al-runner can report this project correctly at all -- it cannot for a file declaring
+   * more than one object, measured on 2.11.0 (see `al-runner-coverage.ts`).
+   *
+   * Decided by the caller rather than here because `capabilities()` is synchronous and is read at
+   * the top of `runSession`, before an instrumented bundle exists to inspect.
+   */
+  readonly coverage?: "al-runner" | "none";
 }
 
 /**
@@ -252,6 +274,15 @@ export class AlRunnerBackend implements ExecutionBackend {
   // callers may drive activate()/run() directly against cfg.instrumentedDir)
   // activeDir() falls back to the statically configured instrumented dir.
   private deployedDir: string | undefined;
+  /** R220 — coverage scratch, created on first use so a `coverage: "none"` session makes none. */
+  private coverageScratch: string | undefined;
+  private coverageSeq = 0;
+  /**
+   * Built ONCE from the active instrumented bundle and reused, because it parses every `.al` in
+   * the project and doing that per test would add a full parse to an invocation that is already
+   * the expensive part of a run.
+   */
+  private coverageIndex: AlRunnerCoverageIndex | undefined;
   /** R147 — see `usePlatformAppsDir`. Undefined until this session's provisioning run has reported a
    *  directory that passed every check, and then for the rest of the session. */
   private platformAppsDir: string | undefined;
@@ -540,7 +571,20 @@ export class AlRunnerBackend implements ExecutionBackend {
    * remains the authority.
    */
   capabilities(): BackendCapabilities {
-    return { coverage: "none", deploy: "none", isolation: "full-reset", authoritative: false };
+    return {
+      // R220: `"al-runner"` sits on the `fenced` side of `CoverageMode`'s routing axis -- ONE
+      // runner produces the green set and every verdict -- so it carries no runner-disagreement
+      // note and R175's unnamed-member widening stays off, both via `isHubCoverageMode`.
+      coverage: this.cfg.coverage ?? "none",
+      deploy: "none",
+      isolation: "full-reset",
+      // R183 holds this false for TWO reasons, and coverage was only one of them. The other is
+      // that `Codeunit.Run` did not scope a write transaction, so a mutant killable only through
+      // that rollback survived. Flipping this on the strength of coverage alone would be claiming
+      // the half that is not measured; the canary reports 2.11.0 may have closed it, and that
+      // needs measuring against bcdev before this changes.
+      authoritative: false,
+    };
   }
 
   async status(): Promise<BackendStatus> {
@@ -648,6 +692,41 @@ export class AlRunnerBackend implements ExecutionBackend {
     return this.deployedDir ?? this.cfg.instrumentedDir;
   }
 
+  /**
+   * R220. A fresh Cobertura path per invocation, or `undefined` when this session does not collect
+   * coverage — in which case the two flags never reach the argv at all and it is byte-identical to
+   * the pre-R220 one.
+   */
+  private async coverageOutPath(): Promise<string | undefined> {
+    if ((this.cfg.coverage ?? "none") === "none") return undefined;
+    this.coverageScratch ??= await mkdtemp(join(tmpdir(), "lethal-alrunner-cov-"));
+    this.coverageSeq += 1;
+    return join(this.coverageScratch, `cov-${this.coverageSeq}.xml`);
+  }
+
+  /**
+   * Reads one invocation's Cobertura file into the `CoverageMap` the selector speaks.
+   *
+   * Returns `undefined` rather than an empty map when the file is missing or unparseable, and the
+   * distinction matters: an EMPTY map is the assertion "this test covered nothing", which makes
+   * every mutant it would have covered `no-coverage`. Absent is "no evidence", which leaves the
+   * mutant to whatever other tests say. Guessing the wrong one of those turns a missing file into
+   * a silent wave of false no-coverage.
+   */
+  private async readCoverage(outPath: string | undefined): Promise<CoverageMap | undefined> {
+    if (outPath === undefined) return undefined;
+    let xml: string;
+    try {
+      xml = await readFile(outPath, "utf8");
+    } catch {
+      return undefined;
+    }
+    const lines = parseCobertura(xml);
+    if (lines.length === 0) return undefined;
+    this.coverageIndex ??= await buildAlRunnerCoverageIndex(this.activeDir());
+    return alRunnerCoverageFrom(lines, this.coverageIndex);
+  }
+
   async activate(mutantId: string | null): Promise<void> {
     const dir = this.activeDir();
     // Belt-and-suspenders for the documented no-deploy path (deploy() never called, dir ===
@@ -689,6 +768,11 @@ export class AlRunnerBackend implements ExecutionBackend {
     const started = Date.now();
     // ONE name for both the `--test` filter and the lookup below — see qualifiedTestName.
     const wanted = qualifiedTestName(ref.codeunitId, ref.method);
+    // R220. A file PER INVOCATION, never a shared path: al-runner writes the whole Cobertura
+    // document on exit, so two invocations sharing one path would race and a test could be handed
+    // another test's coverage — a wrong covering-test set, which is a wrong verdict rather than a
+    // slow one.
+    const coverageOut = await this.coverageOutPath();
     const res = await this.transport.send({
       sourceDir: this.activeDir(),
       testDir: this.cfg.testDir,
@@ -712,6 +796,7 @@ export class AlRunnerBackend implements ExecutionBackend {
       // flag to an env var changed how this value is delivered, not why it is halved.
       testTimeoutSeconds: Math.max(1, Math.floor(opts.timeoutMs / 2000)),
       deadlineMs: opts.timeoutMs,
+      ...(coverageOut !== undefined ? { coverageOut } : {}),
     });
     const durationMs = Date.now() - started;
     if (res.kind === "deadline") return { ref, outcome: "deadline-exceeded", durationMs };
@@ -757,7 +842,12 @@ export class AlRunnerBackend implements ExecutionBackend {
     // is willing to be wrong in. R94, and R93's argument that a measured contract beats a
     // version-branched decode matrix.
     if (t.status === "pass") {
-      return { ref, outcome: "pass", durationMs };
+      // Coverage is read on the PASS path only, and that is not an oversight. The green set is the
+      // only thing coverage is used to attribute (`buildCoverageIndex` is fed
+      // `greenTests`), so reading it for a failing or errored test would be work whose result
+      // nothing consults. R140's non-green index is bcdev-only.
+      const coverage = await this.readCoverage(coverageOut);
+      return { ref, outcome: "pass", durationMs, ...(coverage !== undefined ? { coverage } : {}) };
     }
     const outcome: TestOutcome =
       t.status === "fail"

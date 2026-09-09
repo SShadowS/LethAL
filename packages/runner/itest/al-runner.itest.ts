@@ -37,6 +37,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AlRunnerBackend } from "../src/al-runner-backend";
+import { alRunnerCoverageSupport } from "../src/al-runner-coverage";
 import { generateMutationSet, runSession } from "../src/orchestrator";
 import type { SessionReport } from "../src/report";
 import { ResultsStore } from "../src/store";
@@ -106,18 +107,46 @@ const EXPECTED = {
   // becomes `<> 1`. It survives because the guarded block is `Amount := Amount`, a self-assignment,
   // so changing WHICH inputs enter a block that does nothing is unobservable. Measured in the spike,
   // docs/superpowers/specs/2026-08-26-r159-shift-integer-spike.md.
-  survived: 16,
-  noCoverage: 0,
+  // R220 moves this from 16 to 12 and noCoverage from 0 to 4, and the four are not new mutants:
+  // they are `SandboxPricing.Codeunit.al`'s, which no test reaches. Before al-runner had
+  // `--coverage` this backend ran every mutant against every green test and reported an unreached
+  // one `survived`, which over-reports. With coverage they are `no-coverage`, which is what
+  // `itest:bcdev` — the authoritative gate — has always reported for exactly those four.
+  //
+  // So the load-bearing fact is not the numbers moving, it is that this gate and `itest:bcdev` now
+  // agree at 3 / 12 / 4 PER MUTANT, on the one axis they used to disagree about. Pre-committed in
+  // docs/superpowers/specs/2026-09-09-r220-alrunner-coverage-precommitment.md before the run.
+  survived: 12,
+  noCoverage: 4,
 };
+
+/**
+ * The four mutants R220 predicted would move, BY NAME.
+ *
+ * Counts alone would pass if coverage lost four of `SandboxLogic`'s survivors and gained four
+ * elsewhere, which is the failure mode that matters here: a wrong attribution that happens to
+ * balance. Naming them is what makes that impossible.
+ */
+const EXPECTED_NO_COVERAGE_FILE = "SandboxPricing.Codeunit.al";
 
 async function runOnce(scratchRoot: string): Promise<SessionReport> {
   const store = new ResultsStore(":memory:");
   try {
+    // R220: the caller decides, having first asked whether al-runner can report this project's
+    // coverage correctly at all. `capabilities()` is read at the top of `runSession`, before an
+    // instrumented bundle exists, so the answer has to come from the source tree.
+    const support = await alRunnerCoverageSupport(PROJECT_DIR);
+    if (!support.supported) {
+      throw new Error(
+        `al-runner coverage is unsupported for this fixture, which it must not be: ${support.multiObjectFiles.join(", ")}`,
+      );
+    }
     const backend = new AlRunnerBackend({
       alRunnerPath,
       instrumentedDir: join(scratchRoot, "instrumented"),
       testDir: TEST_DIR,
       selectorObjectId: SELECTOR_IDS.selectorId,
+      coverage: "al-runner",
     });
     return await runSession({
       backend,
@@ -155,6 +184,26 @@ function assertVerdictTable(report: SessionReport): void {
     "baseline must be green (both fixture tests pass unmutated)",
   );
   assert.equal(report.counts.killed, EXPECTED.killed, "killed count mismatch");
+  assert.equal(report.counts.survived, EXPECTED.survived, "survived count mismatch");
+  assert.equal(report.counts.noCoverage, EXPECTED.noCoverage, "noCoverage count mismatch");
+  // R220, BY MUTANT rather than by count. A wrong attribution that loses four survivors in one
+  // file and gains four no-coverage in another satisfies every count above and is exactly the
+  // failure this gate exists to catch, so the file each no-coverage verdict lands in is named.
+  const noCoverageFiles = report.mutants
+    .filter((m) => m.verdict === "no-coverage")
+    .map((m) => m.file);
+  assert.equal(
+    noCoverageFiles.every((f) => f.endsWith(EXPECTED_NO_COVERAGE_FILE)),
+    true,
+    `R220: every no-coverage mutant must be in ${EXPECTED_NO_COVERAGE_FILE}, got ${noCoverageFiles.join(", ")}`,
+  );
+  // And the converse: nothing in that file may be scored, since no test reaches it. Without this
+  // the assertion above passes on an empty set.
+  assert.equal(
+    report.mutants.filter((m) => m.file.endsWith(EXPECTED_NO_COVERAGE_FILE)).length,
+    EXPECTED.noCoverage,
+    `R220: ${EXPECTED_NO_COVERAGE_FILE} must hold exactly ${EXPECTED.noCoverage} mutants, all no-coverage`,
+  );
   // R198: al-runner has no RunMutantMany; 0 is also what an unwired counter reports, so this pins
   // only that the backend is untouched. The container gates carry the anti-inertness numbers.
   assert.equal(report.groupedCalls, 0, "R198: al-runner must make no grouped call");
@@ -248,17 +297,27 @@ function assertVerdictTable(report: SessionReport): void {
     "IsOverBudget must be killed by exactly its conditional-boundary, return-value, and whole-body empty-block mutants",
   );
 
-  const survivedFromPricing = report.mutants.filter(
-    (m) => m.verdict === "survived" && m.file.includes("SandboxPricing"),
+  // R220 changed the VERDICT here without changing the claim, and the claim is the point.
+  //
+  // This assertion has always said: nothing in this suite calls `DiscountedPrice`, so nothing in
+  // `SandboxPricing` may be killed. Before al-runner had `--coverage` the only way to say that was
+  // `survived`, which is the verdict for "the tests ran and did not catch it" and was therefore
+  // the wrong word for "no test ran at all". With coverage the run says the true thing, and it is
+  // the same thing `itest:bcdev` has always said about these four.
+  //
+  // R159 made the count four: `lethal.swap-additive` claims the `Price - (Price * Pct / 100)` this
+  // procedure returns. The count is pinned rather than the shape, so a mutant arriving here is a
+  // deliberate edit.
+  const fromPricing = report.mutants.filter((m) => m.file.includes("SandboxPricing"));
+  assert.equal(
+    fromPricing.length,
+    4,
+    "DiscountedPrice's mutant count changed — a deliberate edit, or a site moved",
   );
   assert.equal(
-    survivedFromPricing.length,
+    fromPricing.filter((m) => m.verdict === "no-coverage").length,
     4,
-    // R159 made this four: `lethal.swap-additive` claims the `Price - (Price * Pct / 100)` this
-    // procedure returns. The count is pinned rather than the shape, so a mutant arriving here is a
-    // deliberate edit; the CLAIM it makes is unchanged, that nothing in this suite calls
-    // `DiscountedPrice` and therefore nothing here may be killed.
-    "DiscountedPrice is never called by any test — its 4 mutants must survive, not be killed",
+    "DiscountedPrice is never called by any test — R220: its 4 mutants must be no-coverage, not survived and never killed",
   );
 }
 

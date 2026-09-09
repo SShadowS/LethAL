@@ -151,13 +151,20 @@ export interface TestVerdict {
  * |---|---|---|
  * | `"procedure"` | bc-dev-mcp hub (`GuiAllowed=Yes`, `ClientType=Web`) | yes |
  * | `"fenced"` | fenced `RunMutantWithCoverage` (`GuiAllowed=No`, `ClientType=ODataV4`) | yes |
+ * | `"al-runner"` | al-runner `--coverage`, the same one-shot process that runs the mutants | yes |
  * | `"none"` | fenced `RunMutant` | no |
+ *
+ * `"al-runner"` (R220) sits on the `"fenced"` side of the axis this type is about: ONE runner
+ * produces both the green set and every verdict, so it carries no runner-disagreement diagnosis,
+ * and it resolves members by parsing the source through `line-map.ts`, so [[R175]]'s unnamed-member
+ * widening must stay OFF for it. Both follow from `isHubCoverageMode`, which is the predicate to
+ * branch on rather than a comparison against `"fenced"` by name.
  *
  * `"fenced"` exists because the mutants ALWAYS run fenced, so `"procedure"` measures the green set
  * on a different session type than the one that produces verdicts (R55: 12 of 56 Continia Document
  * Output tests fail on the hub and pass on the fence, taking their coverage with them).
  */
-export type CoverageMode = "none" | "procedure" | "line" | "fenced";
+export type CoverageMode = "none" | "procedure" | "line" | "fenced" | "al-runner";
 
 export interface BackendCapabilities {
   readonly coverage: CoverageMode;

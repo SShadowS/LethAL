@@ -23,6 +23,17 @@ export interface AlRunnerRequest {
    * `buildAlRunnerArgv`, which is the one place the two are made mutually exclusive.
    */
   readonly platformAppsDir?: string;
+  /**
+   * R220 — where al-runner should write this invocation's Cobertura coverage (`--coverage-out`).
+   *
+   * Per INVOCATION, and that is the whole reason this is affordable: al-runner runs one test per
+   * process, so the file it writes is already this test's coverage and nothing has to be
+   * attributed after the fact. The cost model that makes al-runner slow is what makes its
+   * coverage exact.
+   *
+   * Absent means the flag is not sent at all, which is the pre-R220 argv byte for byte.
+   */
+  readonly coverageOut?: string;
 }
 
 export interface AlRunnerRawTest {
@@ -455,6 +466,7 @@ export function buildAlRunnerArgv(
     | "packagesDir"
     | "preprocessorSymbols"
     | "platformAppsDir"
+    | "coverageOut"
   >,
 ): string[] {
   // R147 — the pin and `--auto-provision` are MUTUALLY EXCLUSIVE, and this is the one place that is
@@ -500,6 +512,14 @@ export function buildAlRunnerArgv(
     //
     // R147: omitted when a platform-app directory is pinned. See `pinned` above.
     ...(pinned ? [] : ["--auto-provision"]),
+    // R220: statement-level coverage for THIS invocation, which is this one test. Both flags or
+    // neither -- `--coverage` alone would write `./cobertura.xml` into the process's working
+    // directory, where concurrent invocations would overwrite each other's answers and a run
+    // would attribute one test's coverage to another. Still a flag rather than always-on because
+    // the backend disables coverage for a project al-runner cannot report it correctly for (a
+    // multi-object file, see `al-runner-coverage.ts`), and an argv that asked for coverage the
+    // session then ignored would be a lie in the one artifact a reader replays by hand.
+    ...(req.coverageOut !== undefined ? ["--coverage", "--coverage-out", req.coverageOut] : []),
     // Bundle dirs are POSITIONAL and repeatable in v2; multiple dirs run sequentially and
     // aggregate into one summary envelope.
     //

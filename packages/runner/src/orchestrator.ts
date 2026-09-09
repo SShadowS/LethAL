@@ -103,7 +103,7 @@ import {
   wasStranded,
 } from "./resume";
 import type { ResumeIndex } from "./resume";
-import { describeRunnerDisagreement } from "./runner-disagreement";
+import { describeRunnerDisagreement, isHubCoverageMode } from "./runner-disagreement";
 import {
   buildCoverageIndex,
   coverageFilter,
@@ -3945,7 +3945,12 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           // R175: only the HUB resolver is blind to locals. `fenced` names them by parsing the
           // source, measured, so there the widening would fire only on a naming FAILURE and would
           // hide it as object-level coverage.
-          caps.coverage !== "fenced",
+          //
+          // R220: asked as "is this a HUB mode" rather than "is this not `fenced`", because
+          // `al-runner` resolves members through `line-map.ts` exactly as `fenced` does and must
+          // get the same answer. Spelling it as a comparison against one mode's NAME meant every
+          // new source-parsing mode silently opted into the widening it must not have.
+          isHubCoverageMode(caps.coverage),
         );
         perMutantTests = split.covered;
         coverageAttribution = split.attribution;

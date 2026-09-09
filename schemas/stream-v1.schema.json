@@ -56,7 +56,8 @@
                 "none",
                 "procedure",
                 "line",
-                "fenced"
+                "fenced",
+                "al-runner"
               ]
             },
             "deploy": {

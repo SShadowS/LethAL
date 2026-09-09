@@ -29,9 +29,9 @@
   },
   {
     "key": "4b61c09033d7c8404656624ea1865b451a890db32d8212d97f8a77e9a5c2634a|Sandbox Pricing|DiscountedPrice|lethal.conditional-boundary|1",
-    "verdict": "survived",
+    "verdict": "no-coverage",
     "killingTest": null,
-    "coverageFiltered": false,
+    "coverageFiltered": true,
     "errorClass": null
   },
   {
@@ -85,9 +85,9 @@
   },
   {
     "key": "98656555452a91ccc91c88a8a0bc3f58192db5f5153792b959447d06cff62cf1|Sandbox Pricing|DiscountedPrice|lethal.return-value|1",
-    "verdict": "survived",
+    "verdict": "no-coverage",
     "killingTest": null,
-    "coverageFiltered": false,
+    "coverageFiltered": true,
     "errorClass": null
   },
   {
@@ -106,9 +106,9 @@
   },
   {
     "key": "d7143458adf859fcca3a104795916421514185dbe83b5e6366d0f68f86e9389d|Sandbox Pricing|DiscountedPrice|lethal.swap-additive|1",
-    "verdict": "survived",
+    "verdict": "no-coverage",
     "killingTest": null,
-    "coverageFiltered": false,
+    "coverageFiltered": true,
     "errorClass": null
   },
   {
@@ -120,9 +120,9 @@
   },
   {
     "key": "e7216a276891ae7f02f66d83d4fad98fdc3ca56552d617d1f70fa371f7cfc667|Sandbox Pricing|DiscountedPrice|lethal.empty-block|1",
-    "verdict": "survived",
+    "verdict": "no-coverage",
     "killingTest": null,
-    "coverageFiltered": false,
+    "coverageFiltered": true,
     "errorClass": null
   },
   {
