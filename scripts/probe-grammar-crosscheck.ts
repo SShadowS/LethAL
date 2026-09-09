@@ -111,7 +111,8 @@ async function treeSitterSites(
     // markers and doc comments rather than on code. That is an artifact of this harness, not a
     // grammar finding, and it was recorded as a known limit before it bit.
     const text = (await readFile(file, "utf8")).replace(/^﻿/, "");
-    const root = wrapRoot(parse(text));
+    const tree = parse(text);
+    const root = wrapRoot(tree);
     let dirty = false;
     const walk = (n: ALSyntaxNode): void => {
       if (n.rawKind === "ERROR") dirty = true;
@@ -129,6 +130,12 @@ async function treeSitterSites(
     };
     walk(root);
     if (dirty) unhealthy.push(file);
+    // Free the wasm-side tree. web-tree-sitter allocates each tree in the emscripten heap and does
+    // NOT reclaim it on GC, so a corpus walk that keeps parsing without deleting exhausts it: this
+    // aborted with `RuntimeError: Aborted()` inside `parse` partway through BaseApp's 9,620 files,
+    // while 1,718 had been fine. Everything retained above is a primitive copied out of the tree,
+    // so nothing here outlives the delete.
+    (tree as { delete?: () => void }).delete?.();
   }
   return { sites: out, unhealthy, context: tsContext };
 }
