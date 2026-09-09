@@ -26,8 +26,8 @@ import { join, resolve } from "node:path";
 // Reached through the engine package, which owns this dependency;  has no direct one.
 import { Language, Parser } from "../packages/engine/node_modules/web-tree-sitter/tree-sitter.js";
 import { initParser, parseAL } from "../packages/engine/src/ast/parser";
-import { isStatementSlot } from "../packages/engine/src/ast/tree-walks";
 import { type ALSyntaxNode, wrapRoot } from "../packages/engine/src/ast/syntax-node";
+import { isStatementSlot } from "../packages/engine/src/ast/tree-walks";
 import {
   AUDITED_TREE_SITTER_KINDS,
   COMPILER_TO_TREE_SITTER,
@@ -100,6 +100,7 @@ async function treeSitterSites(
     return tree;
   };
   const out: Site[] = [];
+  const guardedKeys = new Set<string>();
   const unhealthy: string[] = [];
   const tsContext = new Map<string, number>();
   for (const file of files) {
@@ -114,10 +115,20 @@ async function treeSitterSites(
     const tree = parse(text);
     const root = wrapRoot(tree);
     let dirty = false;
-    const walk = (n: ALSyntaxNode): void => {
+    const walk = (n: ALSyntaxNode, guarded: boolean): void => {
       if (n.rawKind === "ERROR") dirty = true;
+      // Once inside a preprocessor block every descendant is guarded, so the flag travels down
+      // rather than being re-derived by walking back up at each site.
+      //
+      // The PREFIX is load-bearing: tree-sitter uses `preproc_conditional` when the directive wraps
+      // declarations (`#if` around whole procedures, which is how Microsoft writes deprecation) and
+      // `preproc_conditional_statement` when it wraps statements inside one body. Matching only the
+      // statement form classified R214's OWN fixture as unexplained, since that fixture guards two
+      // procedures. Caught by red-checking the classifier against the case it exists to recognise.
+      const nowGuarded = guarded || n.rawKind.startsWith("preproc_conditional");
       if (AUDITED_TREE_SITTER_KINDS.has(n.rawKind)) {
         out.push({ file, kind: n.rawKind, start: n.startIndex, end: n.endIndex });
+        if (nowGuarded) guardedKeys.add(`${file}|${n.rawKind}|${n.startIndex}|${n.endIndex}`);
       }
       // Context probes, answered with LethAL's OWN predicate rather than a shape comparison. This
       // is the channel that can see a statement_block-class regression.
@@ -126,9 +137,9 @@ async function treeSitterSites(
           tsContext.set(probe.name, (tsContext.get(probe.name) ?? 0) + 1);
         }
       }
-      for (const c of n.children) walk(c);
+      for (const c of n.children) walk(c, nowGuarded);
     };
-    walk(root);
+    walk(root, false);
     if (dirty) unhealthy.push(file);
     // Free the wasm-side tree. web-tree-sitter allocates each tree in the emscripten heap and does
     // NOT reclaim it on GC, so a corpus walk that keeps parsing without deleting exhausts it: this
@@ -137,7 +148,7 @@ async function treeSitterSites(
     // so nothing here outlives the delete.
     (tree as { delete?: () => void }).delete?.();
   }
-  return { sites: out, unhealthy, context: tsContext };
+  return { sites: out, unhealthy, context: tsContext, guardedKeys };
 }
 
 /** Audited sites as the AL compiler's own parser sees them, mapped into tree-sitter's vocabulary. */
@@ -222,7 +233,7 @@ if (files.length === 0) {
   throw new Error(`probe-grammar-crosscheck: no .al files under ${target}. Nothing to compare.`);
 }
 
-const { sites: ts, unhealthy, context: tsContext } = await treeSitterSites(files);
+const { sites: ts, unhealthy, context: tsContext, guardedKeys } = await treeSitterSites(files);
 const {
   sites: cc,
   parserVersion,
@@ -257,9 +268,7 @@ const byKind = (sites: readonly Site[]): Map<string, number> => {
 const tsCounts = byKind(ts);
 const ccCounts = byKind(cc);
 
-console.log(
-  `grammar: ${grammarWasm ?? "vendored (engine default)"}`,
-);
+console.log(`grammar: ${grammarWasm ?? "vendored (engine default)"}`);
 console.log(
   `files: ${files.length}   compiler parser: v${parserVersion}   compiler parse errors: ${parseErrors}   tree-sitter files with ERROR/MISSING: ${unhealthy.length}`,
 );
@@ -278,9 +287,29 @@ for (const kind of [...AUDITED_TREE_SITTER_KINDS].sort()) {
 
 console.log(`
 sites only the COMPILER sees (grammar blind spots): ${onlyCompiler.length}`);
-for (const d of onlyCompiler.slice(0, 10)) console.log(`   ${d.key}  (ts ${d.treeSitter} vs cc ${d.compiler})`);
+for (const d of onlyCompiler.slice(0, 10))
+  console.log(`   ${d.key}  (ts ${d.treeSitter} vs cc ${d.compiler})`);
+// Over-claims split by CAUSE. A node inside a `#if` block is explained by R214: tree-sitter parses
+// both arms, the compiler parses only the arm its symbols select, so the inactive arm's nodes are
+// tree-sitter-only by construction. That is a known, filed LethAL defect rather than a grammar
+// finding, and on a real corpus it is the overwhelming majority: reporting it beside genuinely
+// unexplained sites buries the signal under noise a reader has to re-triage by hand every run.
+// MEASURED on BaseApp before this split existed: 201 over-claims, of which the handful that were
+// NOT R214 had to be found by sampling six of them, and the printout truncates at 10.
+const guardedOverClaims = onlyTreeSitter.filter((d) => guardedKeys.has(d.key));
+const unexplainedOverClaims = onlyTreeSitter.filter((d) => !guardedKeys.has(d.key));
 console.log(`sites only TREE-SITTER sees (possible over-claiming): ${onlyTreeSitter.length}`);
-for (const d of onlyTreeSitter.slice(0, 10)) console.log(`   ${d.key}  (ts ${d.treeSitter} vs cc ${d.compiler})`);
+console.log(
+  `   of which inside a #if block, i.e. R214 rather than a grammar finding: ${guardedOverClaims.length}`,
+);
+console.log(`   UNEXPLAINED, the ones worth reading: ${unexplainedOverClaims.length}`);
+// Unexplained sites are the signal, so they get a far higher cap than the 10 used elsewhere.
+for (const d of unexplainedOverClaims.slice(0, 60)) {
+  console.log(`   ${d.key}  (ts ${d.treeSitter} vs cc ${d.compiler})`);
+}
+if (unexplainedOverClaims.length > 60) {
+  console.log(`   ... and ${unexplainedOverClaims.length - 60} more not listed`);
+}
 
 console.log(`
 ${"context probe".padEnd(28)} ${"tree-sitter".padStart(12)} ${"compiler".padStart(10)}`);
