@@ -146,6 +146,7 @@ export function legacyBuildReport(input: LegacyBuildReportInput): SessionReport 
     // with a declarative surface, so an empty list is the honest conversion, not a default.
     declarativeSiteFiles: input.declarativeSites ?? [],
     excludedByOnly: input.only?.excludedFileCount ?? 0,
+    excludedByExclude: 0,
     excludedByOperator: 0,
   });
 

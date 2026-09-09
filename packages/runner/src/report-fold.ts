@@ -49,6 +49,8 @@ export interface FoldStatics {
    * the two into `FoldedReport.only`.
    */
   readonly only?: { readonly patterns: readonly string[] };
+  /** R221: the `--exclude` narrowing this run was GIVEN, split the same way `only` is. */
+  readonly exclude?: { readonly patterns: readonly string[] };
   /**
    * R127: the `--operator` narrowing this run was GIVEN, if any — names only. How many mutation
    * sites that excluded is LEARNED (see `mutation-set-generated.excludedByOperator`, events.ts);
@@ -95,6 +97,11 @@ export interface FoldedReport {
    */
   readonly excludedSites: ExcludedSites;
   readonly only?: {
+    readonly patterns: readonly string[];
+    readonly excludedFileCount: number;
+  };
+  /** R221 — the `--exclude` narrowing, with its OWN file count. See `SessionReport.exclude`. */
+  readonly exclude?: {
     readonly patterns: readonly string[];
     readonly excludedFileCount: number;
   };
@@ -156,6 +163,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
   let notInstrumentedFiles: readonly NotInstrumentedFile[] = [];
   let declarativeSiteFiles: readonly DeclarativeSiteFile[] = [];
   let excludedByOnly = 0;
+  let excludedByExclude = 0;
   let excludedByOperator = 0;
 
   // AND across every baseline verdict across every `baseline-batch-finished` event — mirrors
@@ -231,6 +239,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
         notInstrumentedFiles = e.notInstrumentedFiles;
         declarativeSiteFiles = e.declarativeSiteFiles;
         excludedByOnly = e.excludedByOnly;
+        excludedByExclude = e.excludedByExclude;
         excludedByOperator = e.excludedByOperator;
         break;
       case "baseline-batch-finished":
@@ -490,6 +499,12 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
     // condition orchestrator.ts used to gate this field: non-empty patterns, not just "defined".
     ...(statics.only !== undefined && statics.only.patterns.length > 0
       ? { only: { patterns: statics.only.patterns, excludedFileCount: excludedByOnly } }
+      : {}),
+    // R221: the same reunion for `--exclude`. Its own count, not `only`'s, so a run that used both
+    // flags says which one dropped what -- a reader chasing a missing file needs to know which
+    // pattern to edit.
+    ...(statics.exclude !== undefined && statics.exclude.patterns.length > 0
+      ? { exclude: { patterns: statics.exclude.patterns, excludedFileCount: excludedByExclude } }
       : {}),
     // R127: same reunion for the operator narrowing — GIVEN names, LEARNED site count.
     ...(statics.operators !== undefined && statics.operators.names.length > 0

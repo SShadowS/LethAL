@@ -535,7 +535,14 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
     // leave any OTHER kind of violation on this line checked by neither this test nor the general
     // per-line loop above, which skips seq 5 outright. Asserting exact equality closes that gap.
     const violations = conformsTo(streamSchema, generated, branch);
-    expect(violations).toEqual([{ path: "$.hangCapableCount", problem: "required but absent" }]);
+    // R221 adds the second entry, for the same reason [[R211]] pins the first: this committed
+    // stream predates the field, and BACKFILLING it would be inventing a value the run never
+    // emitted. The list grows by one required-but-absent entry per field added since the file was
+    // recorded, and that growth is the pin working rather than a regression.
+    expect(violations).toEqual([
+      { path: "$.hangCapableCount", problem: "required but absent" },
+      { path: "$.excludedByExclude", problem: "required but absent" },
+    ]);
   });
 
   test("the report schema REFUSES a document it should refuse", () => {

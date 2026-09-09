@@ -383,6 +383,7 @@ describe("buildReport — an operator-scoped run says so", () => {
           notInstrumentedFiles: [],
           declarativeSiteFiles: [],
           excludedByOnly: 0,
+          excludedByExclude: 0,
           excludedByOperator: 891,
         },
         { type: "baseline-batch-finished", batchIndex: 0, verdicts: [] },

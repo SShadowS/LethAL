@@ -146,6 +146,7 @@ describe("buildReport derives both legacy fields from excludedSites (not in para
           notInstrumentedFiles: input.notInstrumentedFiles,
           declarativeSiteFiles: input.declarativeSiteFiles,
           excludedByOnly: 0,
+          excludedByExclude: 0,
           excludedByOperator: 0,
         },
         { type: "baseline-batch-finished", batchIndex: 0, verdicts: [] },

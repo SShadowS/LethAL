@@ -1,5 +1,10 @@
 {
-  "caps": { "coverage": "procedure", "deploy": "publish", "isolation": "session", "authoritative": true },
+  "caps": {
+    "coverage": "procedure",
+    "deploy": "publish",
+    "isolation": "session",
+    "authoritative": true
+  },
   "baselineGreen": false,
   "batches": 3,
   "outcomes": [
@@ -331,8 +336,16 @@
   "notInstrumented": {
     "totalFiles": 13,
     "files": [
-      { "file": "Al/Page/Page 50120 Sales Approval Card.al", "kinds": "page_declaration", "sites": 6 },
-      { "file": "Al/Report/Report 50121 Sales Batch Summary.al", "kinds": "report_declaration", "sites": 3 }
+      {
+        "file": "Al/Page/Page 50120 Sales Approval Card.al",
+        "kinds": "page_declaration",
+        "sites": 6
+      },
+      {
+        "file": "Al/Report/Report 50121 Sales Batch Summary.al",
+        "kinds": "report_declaration",
+        "sites": 3
+      }
     ]
   },
   "only": {
@@ -358,17 +371,50 @@
     "baselineMs": 15000
   },
   "baselineTests": [
-    { "codeunitName": "Sales Helper Tests", "file": "Al/Codeunit/Codeunit 50110 Sales Helper Tests.al" },
-    { "codeunitName": "Sales Helper Tests", "file": "Al/Codeunit/Codeunit 50110 Sales Helper Tests.al" },
-    { "codeunitName": "Sales Helper Tests", "file": "Al/Codeunit/Codeunit 50110 Sales Helper Tests.al" },
-    { "codeunitName": "Sales Post Tests", "file": "Al/Codeunit/Codeunit 50111 Sales Post Tests.al" },
-    { "codeunitName": "Sales Post Tests", "file": "Al/Codeunit/Codeunit 50111 Sales Post Tests.al" },
-    { "codeunitName": "Sales Post Tests", "file": "Al/Codeunit/Codeunit 50111 Sales Post Tests.al" },
-    { "codeunitName": "Sales Post Tests", "file": "Al/Codeunit/Codeunit 50111 Sales Post Tests.al" },
-    { "codeunitName": "Sales Approval Tests", "file": "Al/Codeunit/Codeunit 50112 Sales Approval Tests.al" },
-    { "codeunitName": "Sales Approval Tests", "file": "Al/Codeunit/Codeunit 50112 Sales Approval Tests.al" },
-    { "codeunitName": "Sales Approval Tests", "file": "Al/Codeunit/Codeunit 50112 Sales Approval Tests.al" },
-    { "codeunitName": "Sales Permission Tests", "file": "Al/Codeunit/Codeunit 50113 Sales Permission Tests.al" },
+    {
+      "codeunitName": "Sales Helper Tests",
+      "file": "Al/Codeunit/Codeunit 50110 Sales Helper Tests.al"
+    },
+    {
+      "codeunitName": "Sales Helper Tests",
+      "file": "Al/Codeunit/Codeunit 50110 Sales Helper Tests.al"
+    },
+    {
+      "codeunitName": "Sales Helper Tests",
+      "file": "Al/Codeunit/Codeunit 50110 Sales Helper Tests.al"
+    },
+    {
+      "codeunitName": "Sales Post Tests",
+      "file": "Al/Codeunit/Codeunit 50111 Sales Post Tests.al"
+    },
+    {
+      "codeunitName": "Sales Post Tests",
+      "file": "Al/Codeunit/Codeunit 50111 Sales Post Tests.al"
+    },
+    {
+      "codeunitName": "Sales Post Tests",
+      "file": "Al/Codeunit/Codeunit 50111 Sales Post Tests.al"
+    },
+    {
+      "codeunitName": "Sales Post Tests",
+      "file": "Al/Codeunit/Codeunit 50111 Sales Post Tests.al"
+    },
+    {
+      "codeunitName": "Sales Approval Tests",
+      "file": "Al/Codeunit/Codeunit 50112 Sales Approval Tests.al"
+    },
+    {
+      "codeunitName": "Sales Approval Tests",
+      "file": "Al/Codeunit/Codeunit 50112 Sales Approval Tests.al"
+    },
+    {
+      "codeunitName": "Sales Approval Tests",
+      "file": "Al/Codeunit/Codeunit 50112 Sales Approval Tests.al"
+    },
+    {
+      "codeunitName": "Sales Permission Tests",
+      "file": "Al/Codeunit/Codeunit 50113 Sales Permission Tests.al"
+    },
     { "codeunitName": "Sales UI Tests" }
   ],
   "untargetedTriggerCount": 2,

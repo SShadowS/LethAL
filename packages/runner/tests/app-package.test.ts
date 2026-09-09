@@ -238,7 +238,9 @@ describe("fromSymbolReference with namespaces (issue #9)", () => {
   it("reads root objects and namespaced objects together", () => {
     const index = AppMethodIndex.fromSymbolReference({
       Codeunits: [{ Id: 50100, Name: "Root", Methods: [] }],
-      Namespaces: [{ Name: "N", Namespaces: [], Codeunits: [{ Id: 50101, Name: "Nested", Methods: [] }] }],
+      Namespaces: [
+        { Name: "N", Namespaces: [], Codeunits: [{ Id: 50101, Name: "Nested", Methods: [] }] },
+      ],
     });
     expect([...index.declaredObjects()].sort()).toEqual(["codeunit:50100", "codeunit:50101"]);
   });
@@ -262,7 +264,12 @@ describe("thinCoverageEvidence (issue #9 diagnosability)", () => {
   });
 
   it("shows both sides when the artifact does declare objects", () => {
-    const msg = thinCoverageEvidence(["codeunit:99"], 2, ["codeunit:50100", "table:50101"], "50100..50200");
+    const msg = thinCoverageEvidence(
+      ["codeunit:99"],
+      2,
+      ["codeunit:50100", "table:50101"],
+      "50100..50200",
+    );
     expect(msg).toContain("codeunit:99");
     expect(msg).toContain("codeunit:50100");
     expect(msg).toContain("50100..50200");

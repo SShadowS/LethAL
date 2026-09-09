@@ -277,6 +277,13 @@ export interface DryRunCliConfig {
   /** R41: `--only` globs, absent when the run was not narrowed — see `RunCliConfig.only`.
    *  Honoured here too, so the count a dry run reports is the count a real run would produce. */
   readonly only?: readonly string[];
+  /**
+   * R221 — glob patterns whose files contribute NO mutants, the complement of `only` and applied
+   * after it. Repeatable; patterns union. A pattern matching no file is refused, because an
+   * exclusion that silently does nothing leaves the caller believing files were left alone while
+   * they were mutated.
+   */
+  readonly exclude?: readonly string[];
   /** R127: `--operator` names, absent when the run was not operator-scoped — see
    *  `RunCliConfig.operators`. Honoured here for the same reason `only` is: a dry run exists to
    *  answer "how big is this going to be", and it must answer for the scope actually asked for. */
@@ -326,6 +333,13 @@ export interface RunCliConfig {
    * still published. A pattern matching no file is refused — see `admittedByOnly`.
    */
   readonly only?: readonly string[];
+  /**
+   * R221 — glob patterns whose files contribute NO mutants, the complement of `only` and applied
+   * after it. Repeatable; patterns union. A pattern matching no file is refused, because an
+   * exclusion that silently does nothing leaves the caller believing files were left alone while
+   * they were mutated.
+   */
+  readonly exclude?: readonly string[];
   /**
    * R127: `--operator <name>` (repeatable) narrows which OPERATORS contribute mutants, so a
    * question about one kind of change does not have to buy every other operator's sites in the
@@ -767,6 +781,11 @@ RUN — required
 RUN — scope. These bound cost. --tests-only can change a verdict; the others cannot.
   --only <glob>              only these files contribute mutants (repeatable). Every file is still
                              parsed, compiled and published — this selects mutants, not sources
+  --exclude <glob>           these files contribute NO mutants (repeatable). The complement of
+                             --only and applied after it, so "--only src/** --exclude
+                             src/Upgrade/**" reads the way it sounds. A pattern matching no file is
+                             refused: an exclusion that silently does nothing would leave those
+                             files mutated while you believed they were not
   --operator <name>          only these operators contribute mutants (repeatable). The 'lethal.'
                              prefix is optional; an unregistered name, or a registered one with no
                              deployable site here, is refused. The report flags it
@@ -986,6 +1005,8 @@ export const RUN_FLAGS = {
   "table-id": { type: "string" },
   // R41: repeatable — several `--only` patterns union. See `RunCliConfig.only`.
   only: { type: "string", multiple: true },
+  // R221: repeatable — several `--exclude` patterns union. See `RunCliConfig.exclude`.
+  exclude: { type: "string", multiple: true },
   // R127: repeatable — several `--operator` names union. See `RunCliConfig.operators`.
   operator: { type: "string", multiple: true },
   // R45: repeatable — see `RunCliConfig.testsOnly`.
@@ -1437,6 +1458,15 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
   }
   const only = onlyRaw !== undefined && onlyRaw.length > 0 ? { only: onlyRaw } : {};
 
+  // R221: same parse-time rejection as `--only ""`, and it matters more here. An empty
+  // `--exclude ""` that slipped through would match nothing, be refused downstream, and the
+  // caller would be told a pattern they never meant to write did not match.
+  const excludeRaw = values.exclude;
+  if (excludeRaw?.some((p) => p === "") === true) {
+    throw new Error('--exclude requires a non-empty glob (e.g. --exclude "src/Upgrade/**")');
+  }
+  const exclude = excludeRaw !== undefined && excludeRaw.length > 0 ? { exclude: excludeRaw } : {};
+
   // R127: same reasoning as the `--only ""` check above. An empty name would reach
   // `resolveOperatorNames` as an unregistered operator and be refused there, but the message
   // would list every registered name to explain a value the caller never meant to pass.
@@ -1545,6 +1575,7 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
       dbPath: values.db ?? join(projectDir, "lethal.sqlite"),
       configPath: values.config ?? join(projectDir, "lethal.config.json"),
       ...only,
+      ...exclude,
       ...operators,
     };
   }
@@ -1641,6 +1672,7 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     ...(compileConcurrency !== undefined ? { compileConcurrency } : {}),
     ...(Object.keys(selectorIdOverrides).length > 0 ? { selectorIdOverrides } : {}),
     ...only,
+    ...exclude,
     ...operators,
     ...testsOnly,
     ...(maxGuardsPerBatch !== undefined ? { maxGuardsPerBatch } : {}),
@@ -2584,15 +2616,24 @@ export async function printDryRun(
     readonly configPath: string;
     /** R127: `--operator` names, honoured here for the same reason `only` is. */
     readonly operators?: readonly string[];
+    /**
+     * R221: `--exclude` patterns, honoured here for a sharper version of the same reason. A dry
+     * run that ignored the exclusion would answer for a WIDER scope than the real run, which is
+     * exactly the failure the note below names, and it would do so silently -- the sites it counts
+     * are sites the real run will never generate.
+     */
+    readonly exclude?: readonly string[];
   },
 ): Promise<void> {
   // R41/R127: `--only` and `--operator` are honoured here too. A dry run whose whole purpose is
   // "how big is this going to be" would be worse than useless if it answered for a wider scope
   // than the one the real run will use.
   const operators = paths.operators;
+  const exclude = paths.exclude;
   const { files, skipped, totalFiles, excludedByOnly, excludedByOperator } =
     await generateMutationSet(projectDir, {
       ...(only !== undefined ? { only } : {}),
+      ...(exclude !== undefined ? { exclude } : {}),
       ...(operators !== undefined ? { operators } : {}),
     });
   const sites = sitesOf(files);
@@ -3072,6 +3113,7 @@ export async function runFromCli(
         // subscriber from a throw in its siblings, so there is nothing to pre-combine here.
         emit: emitSubscribers,
         ...(parsed.only !== undefined ? { only: parsed.only } : {}),
+        ...(parsed.exclude !== undefined ? { exclude: parsed.exclude } : {}),
         ...(parsed.operators !== undefined ? { operators: parsed.operators } : {}),
         ...(parsed.testsOnly !== undefined ? { testsOnly: parsed.testsOnly } : {}),
         ...(parsed.maxGuardsPerBatch !== undefined
@@ -4440,6 +4482,7 @@ async function main(): Promise<number> {
       dbPath: parsed.dbPath,
       configPath: parsed.configPath,
       ...(parsed.operators !== undefined ? { operators: parsed.operators } : {}),
+      ...(parsed.exclude !== undefined ? { exclude: parsed.exclude } : {}),
     });
     return 0;
   }

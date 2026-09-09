@@ -98,7 +98,11 @@ function sessionKeysOf(
   if (typeof sessionId !== "number" || !Number.isInteger(sessionId)) {
     return `answer ran but carries no integer sessionId (got ${JSON.stringify(sessionId)}); control app 1.0.0.18 stamps it on every answer that ran`;
   }
-  if (typeof testRunsBefore !== "number" || !Number.isInteger(testRunsBefore) || testRunsBefore < 0) {
+  if (
+    typeof testRunsBefore !== "number" ||
+    !Number.isInteger(testRunsBefore) ||
+    testRunsBefore < 0
+  ) {
     return `answer ran but carries no integer testRunsBefore >= 0 (got ${JSON.stringify(testRunsBefore)}); control app 1.0.0.18 stamps it on every answer that ran`;
   }
   return { sessionId, testRunsBefore };
@@ -1009,7 +1013,9 @@ export class RunMutantTransport {
       if (typeof raw.lineNo !== "number" || !Number.isInteger(raw.lineNo))
         return malformed(`entry ${i + 1} has no integer lineNo`);
       if (seenLineNos.has(raw.lineNo))
-        return malformed(`entry ${i + 1} ran function line ${raw.lineNo}, which an earlier entry also ran`);
+        return malformed(
+          `entry ${i + 1} ran function line ${raw.lineNo}, which an earlier entry also ran`,
+        );
       seenLineNos.add(raw.lineNo);
       const results =
         typeof raw.codeunitResults === "string"

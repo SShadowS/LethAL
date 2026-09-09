@@ -618,7 +618,11 @@ describe("runMany — the session keys (R206 §2.1)", () => {
 
   test("an entry whose sessionId differs from the call's is malformed (within-call constancy is asserted)", async () => {
     const r = await malformed({
-      methods: [entry(1, "Alpha", 2), { ...entry(2, "Beta", 2), sessionId: SESSION + 1 }, entry(3, "Gamma", 2)],
+      methods: [
+        entry(1, "Alpha", 2),
+        { ...entry(2, "Beta", 2), sessionId: SESSION + 1 },
+        entry(3, "Gamma", 2),
+      ],
     });
     expect(r.cause).toBe("group-answer-malformed");
     expect(r.verdict.failureMessage).toContain("entry 2 carries sessionId");
@@ -626,7 +630,11 @@ describe("runMany — the session keys (R206 §2.1)", () => {
 
   test("two entries naming one function line are malformed (the client half of the pair-keyed map)", async () => {
     const r = await malformed({
-      methods: [entry(1, "Alpha", 2), { ...entry(2, "Beta", 2), lineNo: 20010 }, entry(3, "Gamma", 2)],
+      methods: [
+        entry(1, "Alpha", 2),
+        { ...entry(2, "Beta", 2), lineNo: 20010 },
+        entry(3, "Gamma", 2),
+      ],
     });
     expect(r.cause).toBe("group-answer-malformed");
     expect(r.verdict.failureMessage).toContain("function line 20010");
@@ -634,9 +642,15 @@ describe("runMany — the session keys (R206 §2.1)", () => {
 
   test("the guard's value TRAVELS: 0 and a reused count both reach the verdicts unchanged", async () => {
     for (const testRunsBefore of [0, 7]) {
-      const r = await transport(fakes({ many: odata(answer({ testRunsBefore })) }).fetchFn).runMany(req());
+      const r = await transport(fakes({ many: odata(answer({ testRunsBefore })) }).fetchFn).runMany(
+        req(),
+      );
       if (r.kind !== "verdicts") throw new Error("expected verdicts");
-      expect(r.verdicts.map((v) => v.testRunsBefore)).toEqual([testRunsBefore, testRunsBefore, testRunsBefore]);
+      expect(r.verdicts.map((v) => v.testRunsBefore)).toEqual([
+        testRunsBefore,
+        testRunsBefore,
+        testRunsBefore,
+      ]);
       expect(r.verdicts.map((v) => v.sessionId)).toEqual([SESSION, SESSION, SESSION]);
     }
   });
@@ -644,19 +658,27 @@ describe("runMany — the session keys (R206 §2.1)", () => {
   test("a refusal without either key keeps its own class: lease-invalid, artifact-mismatch, reserved-params, runError", async () => {
     const without = (over: Record<string, unknown>) =>
       answer({ ...over, sessionId: undefined, testRunsBefore: undefined });
-    const lease = await transport(fakes({ many: odata(without({ status: "lease-invalid", reason: "op-in-flight" })) }).fetchFn).runMany(req());
+    const lease = await transport(
+      fakes({ many: odata(without({ status: "lease-invalid", reason: "op-in-flight" })) }).fetchFn,
+    ).runMany(req());
     if (lease.kind !== "call") throw new Error("expected call");
     expect(lease.verdict.operation).toBe("lease-lost");
     expect(lease.cause).toBeUndefined();
-    const artifact = await transport(fakes({ many: odata(without({ status: "artifact-mismatch" })) }).fetchFn).runMany(req());
+    const artifact = await transport(
+      fakes({ many: odata(without({ status: "artifact-mismatch" })) }).fetchFn,
+    ).runMany(req());
     if (artifact.kind !== "call") throw new Error("expected call");
     expect(artifact.verdict.failureMessage).toContain("artifact-mismatch");
     expect(artifact.cause).toBeUndefined();
-    const reserved = await transport(fakes({ many: odata(without({ status: "reserved-params" })) }).fetchFn).runMany(req());
+    const reserved = await transport(
+      fakes({ many: odata(without({ status: "reserved-params" })) }).fetchFn,
+    ).runMany(req());
     if (reserved.kind !== "call") throw new Error("expected call");
     expect(reserved.verdict.failureMessage).toContain("reserved");
     expect(reserved.cause).toBeUndefined();
-    const raised = await transport(fakes({ many: odata(without({ runError: "the loop raised" })) }).fetchFn).runMany(req());
+    const raised = await transport(
+      fakes({ many: odata(without({ runError: "the loop raised" })) }).fetchFn,
+    ).runMany(req());
     if (raised.kind !== "call") throw new Error("expected call");
     expect(raised.cause).toBe("group-run-error");
   });
@@ -692,7 +714,13 @@ describe("runMany — the session keys (R206 §2.1)", () => {
   test("a call-kind result names the request position of the method it is about", async () => {
     const r = await transport(
       fakes({
-        many: odata(answer({ methods: [entry(1, "Alpha", 2), entry(2, "Beta", 1, 2)], endedBy: "failure", ranCount: 2 })),
+        many: odata(
+          answer({
+            methods: [entry(1, "Alpha", 2), entry(2, "Beta", 1, 2)],
+            endedBy: "failure",
+            ranCount: 2,
+          }),
+        ),
       }).fetchFn,
     ).runMany(req());
     if (r.kind !== "call") throw new Error("expected the two-line entry to abort the call");

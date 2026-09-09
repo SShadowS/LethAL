@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**19 of 218 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**19 of 219 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -146,6 +146,7 @@ that ordering is the priority.
 - **R217** · `isStatementSlot`'s container list is maintained by hand and is incomplete twice over, and the issue #6 context probe found both omissions, and nothing else can · [R217.md](docs/roadmap/R217.md) · open, filed 2026-09-09, measured; option 3 DONE (b3c441a), the probe was widened and found more
 - **R219** · A real project with two control add-ins cannot be instrumented at all: the flat write refuses on colliding resource basenames, and un-flattening is blocked by an al-runner source-root convention · [R219.md](docs/roadmap/R219.md) · open, filed 2026-09-09, measured on Continia Document Output and against al-runner 2.11.0
 - **R220** · al-runner grew `--coverage` and `--server`, and LethAL uses neither: the two facts behind `authoritative: false` and behind 65 s per test are both addressable now · [R220.md](docs/roadmap/R220.md) · done 2026-09-09 (9425a2b), all four items: coverage wired, R183 residual re-measured, the --server daemon…
+- **R221** · `--exclude <glob>`: the complement of `--only`, so a project can say which folders must never be mutated · [R221.md](docs/roadmap/R221.md) · done 2026-09-09, requested by the maintainer after pointing LethAL at a real project
 
 ## Backends and tooling
 

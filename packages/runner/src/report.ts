@@ -913,6 +913,22 @@ export interface SessionReport {
     readonly excludedFileCount: number;
   };
   /**
+   * R221: the `--exclude` narrowing this run was asked for, if any. Absent means nothing was
+   * excluded by pattern.
+   *
+   * Present for the same reason `only` is, and the reasoning is if anything sharper here. A report
+   * that recorded the score but not the exclusion would be indistinguishable from a full run at
+   * the same number, and an exclusion is the narrowing a reader is LEAST likely to remember: it is
+   * the one people set once in a config and stop thinking about.
+   *
+   * `excludedFileCount` counts FILES and is counted apart from `only.excludedFileCount`, so a run
+   * that used both flags says which one dropped what.
+   */
+  readonly exclude?: {
+    readonly patterns: readonly string[];
+    readonly excludedFileCount: number;
+  };
+  /**
    * R127: the `--operator` narrowing this run was asked for, if any. Absent means every registered
    * operator contributed. See `CAVEAT_INTERPRETATIONS["operator-narrowed"]`.
    *
@@ -1991,7 +2007,10 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
   // measured; without this the report read as a completed, merely narrowed run.
   const allErrors = input.outcomes.length > 0 && counts.errors === input.outcomes.length;
   if (allErrors) caveats.push("all-errors");
-  if (input.only !== undefined) caveats.push("narrowed");
+  // R221: `--exclude` narrows the measured scope exactly as `--only` does, so it raises the same
+  // caveat. Pushed once even when both flags are used -- the caveat says "this is not a project
+  // score", and that is one fact however many flags produced it.
+  if (input.only !== undefined || input.exclude !== undefined) caveats.push("narrowed");
   // See CAVEAT_INTERPRETATIONS["operator-narrowed"] for what this caveat means to a reader.
   if (input.operators !== undefined) caveats.push("operator-narrowed");
   // See CAVEAT_INTERPRETATIONS["tests-narrowed"] for what this caveat means to a reader.
@@ -2167,6 +2186,10 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
         };
   const narrowed =
     input.only !== undefined ||
+    // R221: an exclusion narrows the measured scope like any other filter, so `reliability` must
+    // say so. A run whose config quietly excludes half a project and reports `full` is the exact
+    // shape of over-claim this field exists to prevent.
+    input.exclude !== undefined ||
     input.operators !== undefined ||
     (input.testsOnly !== undefined && input.testsOnly.length > 0);
   // R190: a run that measured nothing is degraded whatever its baseline said.
@@ -2184,10 +2207,22 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
   // produced it. The `--only` wording is unchanged; a run with no `--only` now reads as the plain
   // file count even when `--tests-only` or `--operator` narrowed it, instead of the old
   // empty-patterns " (40 of 40 .al files)" that named a narrowing on the wrong axis.
+  // R221: the exclusion is named on the same axis as `--only`, because both narrow FILES and a
+  // reader seeing one file count has to be able to tell what produced it. Appended rather than
+  // replacing, so a run using both flags shows both.
+  const excludeScope =
+    input.exclude !== undefined
+      ? `, excluding ${input.exclude.patterns.join(", ")} (${input.exclude.excludedFileCount} file(s))`
+      : "";
+  // The no-narrowing wording is left EXACTLY as it was. The comment above records that a run with
+  // no `--only` must read as the plain file count, and quietly turning that into "40 of 40" for
+  // every run would name a narrowing on an axis nothing narrowed.
   const fileScope =
-    input.only !== undefined
-      ? `${input.only.patterns.join(", ")} (${notInstrumented.totalFiles - input.only.excludedFileCount} of ${notInstrumented.totalFiles} .al files)`
-      : `${notInstrumented.totalFiles} .al file(s)`;
+    (input.only !== undefined
+      ? `${input.only.patterns.join(", ")} (${notInstrumented.totalFiles - input.only.excludedFileCount - (input.exclude?.excludedFileCount ?? 0)} of ${notInstrumented.totalFiles} .al files)`
+      : input.exclude !== undefined
+        ? `${notInstrumented.totalFiles - input.exclude.excludedFileCount} of ${notInstrumented.totalFiles} .al file(s)`
+        : `${notInstrumented.totalFiles} .al file(s)`) + excludeScope;
   const scopeText =
     input.operators !== undefined
       ? `${fileScope}, operators ${input.operators.names.join(", ")} only (${input.operators.excludedSiteCount} site(s) from other operators excluded)`
@@ -2275,6 +2310,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     unplaceableCount: input.unplaceableCount,
     unplaceableMutants: input.unplaceableMutants,
     ...(input.only !== undefined ? { only: input.only } : {}),
+    ...(input.exclude !== undefined ? { exclude: input.exclude } : {}),
     ...(input.operators !== undefined ? { operators: input.operators } : {}),
     ...(input.testsOnly !== undefined ? { testsOnly: input.testsOnly } : {}),
     ...(input.staleTestApp !== undefined ? { staleTestApp: input.staleTestApp } : {}),

@@ -281,6 +281,12 @@ export interface MutationSetResult {
    */
   readonly excludedByOnly: number;
   /**
+   * R221: files `--exclude` removed from mutation. A FILE count, like `excludedByOnly` and for the
+   * same reason: the sites in an excluded file are never generated, so their number is not
+   * something this run measured.
+   */
+  readonly excludedByExclude: number;
+  /**
    * R127: mutation SITES an `--operator` filter excluded. 0 when no operator filter was given.
    *
    * A SITE count, not a file count, and the asymmetry with `excludedByOnly` above is real rather
@@ -325,6 +331,20 @@ export interface MutationSetOptions {
    */
   readonly only?: readonly string[];
   /**
+   * R221: glob patterns naming project files that must NOT contribute mutants. Absent (or empty)
+   * excludes nothing.
+   *
+   * The complement of `only`, and applied AFTER it: `--only src/** --exclude src/Upgrade/**` means
+   * what it reads like. Matched the same way, against project-relative paths with forward slashes.
+   * A pattern matching no file throws, and for a sharper reason than `only`'s does: see
+   * `excludedByPatterns`.
+   *
+   * Excluded from MUTATION only. The file is still parsed into the semantic context, still
+   * compiled and still published, exactly as an `--only`-excluded file is, so excluding a file
+   * cannot change what a mutant elsewhere does.
+   */
+  readonly exclude?: readonly string[];
+  /**
    * R127: operator names allowed to contribute mutants. Absent (or empty) means every registered
    * operator, the behaviour before `--operator` existed.
    *
@@ -362,6 +382,41 @@ export interface MutationSetOptions {
  * "nothing to fix" rather than "you named a directory that does not exist". Empty-vs-empty
  * agreement is this project's signature silent-wrong-answer shape.
  */
+/**
+ * R221: the files `--exclude` removes from MUTATION, refusing a pattern that matches nothing.
+ *
+ * The refusal direction is the opposite of a matter of taste. A typo'd `--only` selects fewer
+ * files than asked for and the run reports a smaller scope; a typo'd `--exclude` selects MORE,
+ * and mutates the very files the caller said to leave alone while telling them it did not. So a
+ * pattern matching no file is refused here for a stronger reason than `--only` refuses one:
+ * silence there under-reports, silence here misreports.
+ */
+function excludedByPatterns(
+  relPaths: readonly string[],
+  exclude: readonly string[],
+): ReadonlySet<string> {
+  if (exclude.length === 0) return new Set();
+  const excluded = new Set<string>();
+  const unmatched: string[] = [];
+  for (const pattern of exclude) {
+    const glob = new Bun.Glob(pattern);
+    let matchedAny = false;
+    for (const rel of relPaths) {
+      if (glob.match(rel.replaceAll("\\", "/"))) {
+        excluded.add(rel);
+        matchedAny = true;
+      }
+    }
+    if (!matchedAny) unmatched.push(pattern);
+  }
+  if (unmatched.length > 0) {
+    throw new Error(
+      `--exclude matched no .al file for ${unmatched.length === 1 ? "pattern" : "patterns"} ${unmatched.map((p) => `"${p}"`).join(", ")}. Patterns are matched against project-relative paths using forward slashes (e.g. "src/Upgrade/**"). Refusing rather than running as if the exclusion applied: a pattern that matches nothing would leave those files MUTATED while the caller believes they were left alone.`,
+    );
+  }
+  return excluded;
+}
+
 function admittedByOnly(
   relPaths: readonly string[],
   only: readonly string[],
@@ -460,7 +515,25 @@ export async function generateMutationSet(
   // R41: resolved BEFORE any file is read, so a typo'd pattern fails immediately rather than
   // after a full parse. `undefined` means "no narrowing" — distinct from an empty set, which
   // `admittedByOnly` refuses outright.
-  const admitted = admittedByOnly(entries, options.only ?? []);
+  const onlyAdmitted = admittedByOnly(entries, options.only ?? []);
+  // R221: `--exclude` is SUBTRACTIVE and applied after `--only`, so the two compose in the one
+  // order that reads the way people say it: "this subtree, except that folder". Resolved before
+  // any file is read, exactly as `--only` and `--operator` are, so a typo fails immediately
+  // rather than after a full parse.
+  const excludedFiles = excludedByPatterns(entries, options.exclude ?? []);
+  const admitted =
+    onlyAdmitted === undefined && excludedFiles.size === 0
+      ? undefined
+      : new Set(
+          (onlyAdmitted === undefined ? entries : [...onlyAdmitted]).filter(
+            (rel) => !excludedFiles.has(rel),
+          ),
+        );
+  if (admitted !== undefined && admitted.size === 0) {
+    throw new Error(
+      'every .al file was excluded from mutation, so there is nothing to measure. Refusing rather than reporting a null score, which reads as "nothing to fix".',
+    );
+  }
   // R127: resolved before any file is read too, so an unregistered operator name fails as
   // immediately as a typo'd `--only` pattern does. `undefined` means "every operator".
   const admittedOperators = resolveOperatorNames(options.operators ?? [], [
@@ -479,6 +552,7 @@ export async function generateMutationSet(
   const ctx = buildSemanticContext(parsed.map(({ path, root }) => ({ path, root })));
 
   let excludedByOnly = 0;
+  let excludedByExclude = 0;
   // R127: post-dedup sites the `--operator` filter dropped, and which admitted operators actually
   // contributed something. `producedAnywhere` counts a contribution in ANY considered file;
   // `producedInstrumentable` only in a file that can carry the selector var. The two are separate
@@ -496,7 +570,12 @@ export async function generateMutationSet(
     // R41: excluded from MUTATION, not from the context above and not from the published app —
     // `prepareBatchProject` still copies this file into the batch dir verbatim.
     if (admitted !== undefined && !admitted.has(rel)) {
-      excludedByOnly++;
+      // R221: attributed to the flag that actually dropped it. One counter could not tell a caller
+      // using BOTH flags which one removed a file, and the report reunites these with the patterns
+      // that were given -- a count attributed to the wrong flag would send someone editing the
+      // wrong pattern.
+      if (excludedFiles.has(rel)) excludedByExclude++;
+      else excludedByOnly++;
       continue;
     }
     // Built once per file (not per spec): a per-spec tree walk here would be
@@ -609,9 +688,18 @@ export async function generateMutationSet(
     );
   }
   if (excludedByOnly > 0) {
+    // R221: NAME the flag that actually narrowed. One counter serves both because both mean the
+    // same thing to a reader of the score -- this file contributed no mutants because the caller
+    // said so -- but a message crediting `--only` for an `--exclude` narrowing would send someone
+    // looking at the wrong flag, and the whole point of the sentence is to say why the score is
+    // not a project score.
+    const usedOnly = (options.only ?? []).length > 0;
+    const usedExclude = (options.exclude ?? []).length > 0;
+    const flag =
+      usedOnly && usedExclude ? "--only with --exclude" : usedExclude ? "--exclude" : "--only";
     warn(
       "only-narrowed-run",
-      `[lethal] --only narrowed this run to ${entries.length - excludedByOnly}/${entries.length} .al file(s); ${excludedByOnly} file(s) contributed no mutants. The score below covers the narrowed set ONLY — it is not a project score.`,
+      `[lethal] ${flag} narrowed this run to ${entries.length - excludedByOnly}/${entries.length} .al file(s); ${excludedByOnly} file(s) contributed no mutants. The score below covers the narrowed set ONLY — it is not a project score.`,
     );
   }
   if (admittedOperators !== undefined) {
@@ -625,6 +713,7 @@ export async function generateMutationSet(
     skipped,
     totalFiles: entries.length,
     excludedByOnly,
+    excludedByExclude,
     excludedByOperator,
     declarativeSites,
   };
@@ -653,6 +742,8 @@ export interface SessionConfig {
    * only; every file is still parsed into the semantic context, still compiled, still published.
    */
   readonly only?: readonly string[];
+  /** R221 — glob patterns whose files contribute NO mutants. See `MutationSetOptions.exclude`. */
+  readonly exclude?: readonly string[];
   /**
    * R127: operator names allowed to contribute mutants (`--operator`). Absent means every
    * registered operator. See `MutationSetOptions.operators`.
@@ -2764,6 +2855,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     type: "run-configured",
     caps,
     ...(cfg.only !== undefined ? { only: { patterns: cfg.only } } : {}),
+    ...(cfg.exclude !== undefined ? { exclude: { patterns: cfg.exclude } } : {}),
     ...(resolvedOperators !== undefined ? { operators: { names: resolvedOperators } } : {}),
     ...(cfg.testsOnly !== undefined ? { testsOnly: cfg.testsOnly } : {}),
     ...(cfg.stopHungSessions === true ? { stopHungSessions: true } : {}),
@@ -2989,6 +3081,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     skipKnownSurvivors: cfg.skipKnownSurvivors ?? false,
     selectorIds: cfg.selectorIds,
     ...(cfg.only !== undefined ? { only: cfg.only } : {}),
+    // R221: in the fingerprint for exactly the reason `only` is. Two runs with different
+    // exclusions deployed different mutant sets, and a resume that carried verdicts across an
+    // exclusion change would report them as this run's own measurement.
+    ...(cfg.exclude !== undefined ? { exclude: cfg.exclude } : {}),
     // R127: part of the fingerprint for the same reason `only` is — two runs that deployed
     // different mutant sets are not resumable into one another, and a resume that carried
     // verdicts across an operator-scope change would report them as this run's own measurement.
@@ -3039,10 +3135,12 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     skipped: notInstrumentedFiles,
     totalFiles: totalAlFiles,
     excludedByOnly,
+    excludedByExclude,
     excludedByOperator,
     declarativeSites: declarativeSiteFiles,
   } = await generateMutationSet(cfg.projectDir, {
     ...(cfg.only !== undefined ? { only: cfg.only } : {}),
+    ...(cfg.exclude !== undefined ? { exclude: cfg.exclude } : {}),
     ...(resolvedOperators !== undefined ? { operators: resolvedOperators } : {}),
     emit,
   });
@@ -3078,6 +3176,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     notInstrumentedFiles,
     declarativeSiteFiles,
     excludedByOnly,
+    excludedByExclude,
     excludedByOperator,
   });
   // R196: announced BEFORE deployment (spec §5.3), not after scoring. A warning at the end would
@@ -4485,6 +4584,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   const statics: FoldStatics = {
     caps,
     ...(cfg.only !== undefined && cfg.only.length > 0 ? { only: { patterns: cfg.only } } : {}),
+    ...(cfg.exclude !== undefined && cfg.exclude.length > 0
+      ? { exclude: { patterns: cfg.exclude } }
+      : {}),
     ...(resolvedOperators !== undefined && resolvedOperators.length > 0
       ? { operators: { names: resolvedOperators } }
       : {}),

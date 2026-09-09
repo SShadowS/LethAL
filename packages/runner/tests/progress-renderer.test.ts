@@ -78,6 +78,7 @@ describe("progress renderer", () => {
         notInstrumentedFiles: [],
         declarativeSiteFiles: [],
         excludedByOnly: 0,
+        excludedByExclude: 0,
         excludedByOperator: 0,
       }),
     );

@@ -300,3 +300,131 @@ describe("parseCliConfig — --tests-only (R45)", () => {
     expect(cfg.testsOnly).toEqual(["Src/Documents/**"]);
   });
 });
+
+/**
+ * R221. `--exclude <glob>` is `--only`'s complement: the files it names contribute NO mutants.
+ *
+ * It exists because `--only` is an allow-list, and "mutate everything except the upgrade code" had
+ * to be written as an enumeration of every other folder. On a real project that is not a workaround
+ * anyone maintains.
+ *
+ * Same discipline as `--only`: applied to SPEC GENERATION only, so an excluded file is still
+ * parsed, still feeds the project-wide semantic context, and still reaches the published app.
+ * Excluding a file must not be able to change what a mutant elsewhere does.
+ */
+describe("generateMutationSet — --exclude removes files from the mutant set", () => {
+  test("a matching glob drops that file's specs and counts it apart from --only", async () => {
+    await withProject(TWO_FILES, async (projectDir) => {
+      const { files, excludedByOnly, excludedByExclude } = await generateMutationSet(projectDir, {
+        exclude: ["Al/Codeunit/Pricing*"],
+      });
+      expect(files).toHaveLength(1);
+      expect(files[0]?.path).toContain("Logic.Codeunit.al");
+      // The counters are separate so a run using both flags can say which one dropped a file.
+      expect(excludedByExclude).toBe(1);
+      expect(excludedByOnly).toBe(0);
+    });
+  });
+
+  test("several --exclude patterns union", async () => {
+    await withProject(TWO_FILES, async (projectDir) => {
+      await expect(
+        generateMutationSet(projectDir, {
+          exclude: ["Al/Codeunit/Logic*", "Al/Codeunit/Pricing*"],
+        }),
+      ).rejects.toThrow(/every .al file was excluded/);
+    });
+  });
+
+  test("--exclude is SUBTRACTIVE, applied after --only", async () => {
+    // "this subtree, except that file" — the order people say it in. Given both flags, a file must
+    // satisfy `--only` AND survive `--exclude`.
+    await withProject(TWO_FILES, async (projectDir) => {
+      const { files, excludedByOnly, excludedByExclude } = await generateMutationSet(projectDir, {
+        only: ["Al/Codeunit/**"],
+        exclude: ["**/Pricing*"],
+      });
+      expect(files).toHaveLength(1);
+      expect(files[0]?.path).toContain("Logic.Codeunit.al");
+      expect(excludedByExclude).toBe(1);
+      expect(excludedByOnly).toBe(0);
+    });
+  });
+
+  test("REFUSES a pattern that matches nothing", async () => {
+    // Sharper than `--only`'s refusal and for a different reason: a typo'd `--only` selects FEWER
+    // files and the report says so, while a typo'd `--exclude` selects MORE and mutates the files
+    // the caller said to leave alone. Silence there under-reports; silence here misreports.
+    await withProject(TWO_FILES, async (projectDir) => {
+      await expect(
+        generateMutationSet(projectDir, { exclude: ["Al/Codeunit/Nope*"] }),
+      ).rejects.toThrow(/--exclude matched no .al file for pattern "Al\/Codeunit\/Nope\*"/);
+    });
+  });
+
+  test("refuses when EVERY file is excluded, rather than reporting a null score", async () => {
+    await withProject(TWO_FILES, async (projectDir) => {
+      await expect(generateMutationSet(projectDir, { exclude: ["**"] })).rejects.toThrow(
+        /every .al file was excluded from mutation/,
+      );
+    });
+  });
+
+  test("an excluded file still feeds the semantic context", async () => {
+    // The whole ballgame, and the same claim the `--only` suite above makes. If exclusion narrowed
+    // the PARSE set instead of the generation set, excluding a file could change what a mutant in
+    // another file resolves to, and the exclusion would be changing verdicts rather than scope.
+    await withProject(TWO_FILES, async (projectDir) => {
+      const withoutExclusion = await generateMutationSet(projectDir);
+      const withExclusion = await generateMutationSet(projectDir, {
+        exclude: ["Al/Codeunit/Pricing*"],
+      });
+      const logicOf = (r: Awaited<ReturnType<typeof generateMutationSet>>) =>
+        r.files.find((f) => f.path.includes("Logic"))?.specs.length ?? -1;
+      expect(logicOf(withExclusion)).toBe(logicOf(withoutExclusion));
+    });
+  });
+});
+
+describe("parseCliConfig — --exclude", () => {
+  test("collects repeated patterns", () => {
+    const cfg = parseCliConfig([
+      "run",
+      "--project",
+      "p",
+      "--tests",
+      "t",
+      "--backend",
+      "al-runner",
+      "--exclude",
+      "src/Upgrade/**",
+      "--exclude",
+      "src/Generated/**",
+    ]);
+    if (cfg.mode !== "run") throw new Error("mode drift");
+    expect(cfg.exclude).toEqual(["src/Upgrade/**", "src/Generated/**"]);
+  });
+
+  test("refuses an empty pattern at parse time", () => {
+    expect(() =>
+      parseCliConfig([
+        "run",
+        "--project",
+        "p",
+        "--tests",
+        "t",
+        "--backend",
+        "al-runner",
+        "--exclude",
+        "",
+      ]),
+    ).toThrow(/--exclude requires a non-empty glob/);
+  });
+
+  test("absent when not given, so a plain run is unchanged", () => {
+    const cfg = parseCliConfig(["run", "--project", "p", "--tests", "t", "--backend", "al-runner"]);
+    // Absent rather than empty, so a plain run's config is byte-identical to what it was before
+    // `--exclude` existed.
+    expect("exclude" in cfg).toBe(false);
+  });
+});

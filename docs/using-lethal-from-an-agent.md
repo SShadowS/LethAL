@@ -62,13 +62,19 @@ lethal run --project <app-dir> \
            --progress-out events.ndjson
 ```
 
-**Scope it.** An unscoped run on a real project is refused by default above 1,000 mutation sites,
+**Scope it.** `--only <glob>` is an allow-list and `--exclude <glob>` its complement, applied after
+it, so `--only "src/**" --exclude "src/Upgrade/**"` reads the way it sounds. Both are repeatable,
+both select mutants rather than sources (every file is still parsed, compiled and published), and
+both refuse a pattern that matches no file. The report records either narrowing and flags the run
+`narrowed`, so a scoped score can never be mistaken for a project score.
+
+An unscoped run on a real project is refused by default above 1,000 mutation sites,
 because it costs days and usually cannot publish at all. `--allow-large-run` overrides the refusal
 and does not make the run cheaper. Find the size first with `--dry-run`, which lists what would be
 mutated, executes nothing, and reports both the raw site count and the deployed count.
 
-**Know which flags can move a verdict.** `--only` and `--operator` select which MUTANTS run and
-cannot change a verdict. `--tests-only` selects which TESTS run at baseline and CAN: exclude a
+**Know which flags can move a verdict.** `--only`, `--exclude` and `--operator` select which
+MUTANTS run and cannot change a verdict. `--tests-only` selects which TESTS run at baseline and CAN: exclude a
 killing test and its mutant is reported survived. The report flags a narrowed run in
 `validity.caveats`, as `narrowed`, `operator-narrowed` or `tests-narrowed`.
 

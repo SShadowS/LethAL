@@ -94,6 +94,21 @@
             }
           }
         },
+        "exclude": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "patterns"
+          ],
+          "properties": {
+            "patterns": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
         "operators": {
           "type": "object",
           "additionalProperties": false,
@@ -246,6 +261,7 @@
         "notInstrumentedFiles",
         "declarativeSiteFiles",
         "excludedByOnly",
+        "excludedByExclude",
         "excludedByOperator",
         "seq"
       ],
@@ -315,6 +331,9 @@
           }
         },
         "excludedByOnly": {
+          "type": "number"
+        },
+        "excludedByExclude": {
           "type": "number"
         },
         "excludedByOperator": {

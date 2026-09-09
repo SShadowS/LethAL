@@ -89,6 +89,7 @@ function buildScenarioReport(): SessionReport {
       totalFiles: 13,
       instrumentableFiles: 4,
       excludedByOnly: 9,
+      excludedByExclude: 0,
       excludedByOperator: 0,
       declarativeSiteFiles: [],
       notInstrumentedFiles: [

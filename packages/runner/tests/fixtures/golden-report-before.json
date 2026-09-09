@@ -49,21 +49,15 @@
     ]
   },
   "permissionsRefused": {
-    "tests": [
-      "Sales Permission Tests.WritesToAppTable"
-    ],
+    "tests": ["Sales Permission Tests.WritesToAppTable"],
     "diagnosis": "BC's permission system refused these tests, which is neither flakiness nor an unsupported test type: the test codeunit most likely omits `TestPermissions = Disabled`, and AL's Restrictive default strips a test body of write permission on its own app's tables. Declare `TestPermissions = Disabled;` on the test codeunit and re-run. Any mutant covered only by these tests is recorded `error` (score-excluded), never a silent `no-coverage`."
   },
   "testPageUnsupported": {
-    "tests": [
-      "Sales UI Tests.OpensApprovalCard"
-    ],
+    "tests": ["Sales UI Tests.OpensApprovalCard"],
     "diagnosis": "this test opens a TestPage, which the fenced session cannot run: LethAL executes tests in a GuiAllowed=No, ClientType=ODataV4 session (R57/R58) and BC refuses to create a test service there, immediately (measured at 87 ms — a refusal, not a hang). This is a property of the EXECUTION PATH, not of your test: no change to the test or its declarations makes it run here. The affected tests are dropped from the green set, so mutants covered only by them are excluded from the score rather than scored against tests that never ran."
   },
   "runnerDisagreement": {
-    "tests": [
-      "Sales Post Tests.ValidatePostingRejectsClosed"
-    ],
+    "tests": ["Sales Post Tests.ValidatePostingRejectsClosed"],
     "explanation": "These tests pass on the bc-dev-mcp hub and fail, unmutated, on the fenced runner that produces every verdict — measured session types, not a guess: hub is GuiAllowed=Yes/ClientType=Web, the fence is GuiAllowed=No/ClientType=ODataV4 (R57). Every mutant they cover is recorded `error` (score-excluded), never a kill: a kill requires the unmutated fenced confirmation to PASS. One confirmation cannot tell a deterministic disagreement from an ordinary flaky test — re-run with coverageMode \"fenced\", where one runner produces both the green set and the verdicts, and the question disappears."
   },
   "survivorsByProcedure": [
@@ -74,9 +68,7 @@
       "survived": 1,
       "noCoverage": 0,
       "killed": 0,
-      "survivorCodes": [
-        "M0002"
-      ]
+      "survivorCodes": ["M0002"]
     },
     {
       "file": "Al/Codeunit/Codeunit 50101 Sales Post Mgt.al",
@@ -85,9 +77,7 @@
       "survived": 1,
       "noCoverage": 0,
       "killed": 1,
-      "survivorCodes": [
-        "M0005"
-      ]
+      "survivorCodes": ["M0005"]
     },
     {
       "file": "Al/Codeunit/Codeunit 50102 Sales Approval Mgt.al",
@@ -96,9 +86,7 @@
       "survived": 1,
       "noCoverage": 0,
       "killed": 1,
-      "survivorCodes": [
-        "M0010"
-      ]
+      "survivorCodes": ["M0010"]
     },
     {
       "file": "Al/Table/Table 50103 Sales Approval Log.al",
@@ -107,9 +95,7 @@
       "survived": 1,
       "noCoverage": 0,
       "killed": 0,
-      "survivorCodes": [
-        "M0011"
-      ]
+      "survivorCodes": ["M0011"]
     }
   ],
   "testFiles": {
@@ -151,9 +137,7 @@
       "endIndex": 1240,
       "originalText": "TotalAmount := Quantity * UnitPrice;",
       "mutatedText": "",
-      "coveringTests": [
-        "Sales Helper Tests.ComputeTotalMultipliesQtyByPrice"
-      ],
+      "coveringTests": ["Sales Helper Tests.ComputeTotalMultipliesQtyByPrice"],
       "coverageAttribution": "exact",
       "guardObserved": true,
       "killingTest": "Sales Helper Tests.ComputeTotalMultipliesQtyByPrice"
@@ -175,9 +159,7 @@
       "endIndex": 1550,
       "originalText": "SalesLine.SetRange(\"Document No.\", DocNo);",
       "mutatedText": "",
-      "coveringTests": [
-        "Sales Helper Tests.FilterLinesReturnsSubset"
-      ],
+      "coveringTests": ["Sales Helper Tests.FilterLinesReturnsSubset"],
       "coverageAttribution": "object",
       "guardObserved": true
     },
@@ -217,9 +199,7 @@
       "endIndex": 340,
       "originalText": "PostLines(SalesHeader, SalesLine);",
       "mutatedText": "PostLines(SalesLine, SalesHeader);",
-      "coveringTests": [
-        "Sales Post Tests.PostBatchTerminates"
-      ],
+      "coveringTests": ["Sales Post Tests.PostBatchTerminates"],
       "coverageAttribution": "exact",
       "killingTest": "Sales Post Tests.PostBatchTerminates"
     },
@@ -325,9 +305,7 @@
       "endIndex": 240,
       "originalText": "SendApprovalRequest(SalesHeader);",
       "mutatedText": "",
-      "coveringTests": [
-        "Sales Approval Tests.ApproveBatchSendsRequest"
-      ],
+      "coveringTests": ["Sales Approval Tests.ApproveBatchSendsRequest"],
       "coverageAttribution": "exact",
       "carried": true,
       "killingTest": "Sales Approval Tests.ApproveBatchSendsRequest"
@@ -349,9 +327,7 @@
       "endIndex": 440,
       "originalText": "if ApprovalStatus = ApprovalStatus::Pending then",
       "mutatedText": "if not (ApprovalStatus = ApprovalStatus::Pending) then",
-      "coveringTests": [
-        "Sales Approval Tests.ApproveBatchSendsRequest"
-      ],
+      "coveringTests": ["Sales Approval Tests.ApproveBatchSendsRequest"],
       "coverageAttribution": "exact",
       "guardObserved": true
     },
@@ -412,9 +388,7 @@
       "endIndex": 90,
       "originalText": "if Rec.Status = Rec.Status::New then",
       "mutatedText": "if not (Rec.Status = Rec.Status::New) then",
-      "coveringTests": [
-        "Sales Approval Tests.LogInsertsOnApproval"
-      ],
+      "coveringTests": ["Sales Approval Tests.LogInsertsOnApproval"],
       "coverageAttribution": "object",
       "guardObserved": true,
       "triggerName": "OnInsert"
@@ -452,15 +426,9 @@
     ],
     "excludedFileCount": 9
   },
-  "testsOnly": [
-    "Sales Helper Tests.*",
-    "Sales Post Tests.*",
-    "Sales Approval Tests.*"
-  ],
+  "testsOnly": ["Sales Helper Tests.*", "Sales Post Tests.*", "Sales Approval Tests.*"],
   "staleTestApp": {
-    "missingTests": [
-      "Sales Regression Tests.LegacyDiscountApplies"
-    ]
+    "missingTests": ["Sales Regression Tests.LegacyDiscountApplies"]
   },
   "resumedFrom": {
     "runId": 41,
