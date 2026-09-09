@@ -129,8 +129,14 @@ const EXPECTED = {
  */
 const EXPECTED_NO_COVERAGE_FILE = "SandboxPricing.Codeunit.al";
 
-async function runOnce(scratchRoot: string): Promise<SessionReport> {
+async function runOnce(scratchRoot: string, serverMode = false): Promise<SessionReport> {
   const store = new ResultsStore(":memory:");
+  // `cfg.backend` is CALLER-owned and `runSession` never closes it -- see the ownership note on
+  // the worker-disposal test in orchestrator.test.ts, and `cli.ts`'s own `finally`. Harmless while
+  // this backend spawned a process per test; under `serverMode` it owns a daemon, and not closing
+  // it leaves a finished session that never exits, which reads as a hang. Measured that way before
+  // this line existed.
+  let backendRef: AlRunnerBackend | undefined;
   try {
     // R220: the caller decides, having first asked whether al-runner can report this project's
     // coverage correctly at all. `capabilities()` is read at the top of `runSession`, before an
@@ -147,7 +153,9 @@ async function runOnce(scratchRoot: string): Promise<SessionReport> {
       testDir: TEST_DIR,
       selectorObjectId: SELECTOR_IDS.selectorId,
       coverage: "al-runner",
+      ...(serverMode ? { serverMode: true } : {}),
     });
+    backendRef = backend;
     return await runSession({
       backend,
       store,
@@ -158,6 +166,7 @@ async function runOnce(scratchRoot: string): Promise<SessionReport> {
     });
   } finally {
     store.close();
+    await backendRef?.close();
   }
 }
 
@@ -360,6 +369,7 @@ async function main(): Promise<void> {
 
   const scratchA = await mkdtemp(join(tmpdir(), "lethal-itest-alrunner-a-"));
   const scratchB = await mkdtemp(join(tmpdir(), "lethal-itest-alrunner-b-"));
+  const scratchC = await mkdtemp(join(tmpdir(), "lethal-itest-alrunner-server-"));
   try {
     const first = await runOnce(scratchA);
     assertVerdictTable(first);
@@ -380,9 +390,28 @@ async function main(): Promise<void> {
       shape(second),
       "two consecutive runs must be 100% verdict-identical (determinism exit criterion)",
     );
+
+    // R220 leg 3: the SAME fixture through `al-runner --server`, the warm daemon, which must reach
+    // the same verdicts as the one-shot transport.
+    //
+    // This is the anti-inertness half of server mode. The two transports differ in every way that
+    // could move a verdict -- one process per test against one warm process, one `--test` filter
+    // against a whole-suite run served from a per-activation cache, Cobertura against
+    // `perTestCoverage` -- so agreement here is evidence rather than a tautology. A cache that
+    // outlived an `activate()` would show up as every mutant sharing the baseline's verdicts, and
+    // a suite run that silently reused a previous compile would show up the same way.
+    const viaServer = await runOnce(scratchC, true);
+    assertVerdictTable(viaServer);
+    assert.deepEqual(
+      shape(viaServer),
+      shape(first),
+      "R220: the --server transport must reach the SAME per-mutant verdicts as the one-shot one",
+    );
+    console.log(`  --server leg: ${viaServer.counts.killed} killed, verdicts identical`);
   } finally {
     await rm(scratchA, { recursive: true, force: true });
     await rm(scratchB, { recursive: true, force: true });
+    await rm(scratchC, { recursive: true, force: true });
   }
 
   console.log("al-runner itest: PASS");

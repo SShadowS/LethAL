@@ -9,14 +9,22 @@ import {
 import {
   type AlRunnerCoverageIndex,
   alRunnerCoverageFrom,
+  alRunnerCoverageFromServer,
   buildAlRunnerCoverageIndex,
   parseCobertura,
 } from "./al-runner-coverage";
+import {
+  AlRunnerServer,
+  type ServerProcessHandle,
+  type ServerSpawnFn,
+  type ServerTestLine,
+} from "./al-runner-server";
 import {
   OneShotTransport,
   alRunnerEnv,
   buildAlRunnerArgv,
   isChildChosenExit,
+  parseAlRunnerBcBuild,
   parseAlRunnerPlatformAppsDir,
   qualifiedTestName,
 } from "./al-runner-transport";
@@ -189,6 +197,42 @@ async function readArtifactId(dir: string): Promise<string> {
   return artifactId;
 }
 
+/** One activation's whole-suite results, cached until the next `activate()`. */
+interface ServerSuiteResults {
+  readonly byName: ReadonlyMap<string, ServerTestLine>;
+  readonly coverageByName: ReadonlyMap<string, CoverageMap>;
+  /** Wall time of the suite call, reported as every test's duration. See `runViaServer`. */
+  readonly wallMs: number;
+}
+
+/**
+ * Generous, because a cold start can provision artifacts. Measured warm at 2.4 s; the schema warns
+ * the runner may re-exec itself once before the readiness line arrives.
+ */
+const SERVER_READY_DEADLINE_MS = 10 * 60 * 1000;
+
+/**
+ * A floor for one suite call, independent of any single mutant's timeout. The first call compiles
+ * the project cold (12.5 s measured on a two-file fixture, minutes on a real one), which is not a
+ * cost one test's budget should have to cover.
+ */
+const SERVER_SUITE_MIN_DEADLINE_MS = 10 * 60 * 1000;
+
+/** The real daemon, adapted to the handle `AlRunnerServer` consumes. */
+const defaultServerSpawn: ServerSpawnFn = (argv) => {
+  const proc = Bun.spawn([...argv], { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+  const handle: ServerProcessHandle = {
+    write: (line) => {
+      proc.stdin.write(line);
+    },
+    stdout: proc.stdout as unknown as AsyncIterable<Uint8Array>,
+    stderr: proc.stderr as unknown as AsyncIterable<Uint8Array>,
+    kill: () => proc.kill(),
+    wait: () => proc.exited,
+  };
+  return handle;
+};
+
 export interface AlRunnerConfig {
   readonly alRunnerPath: string; // path to the al-runner executable
   readonly instrumentedDir: string; // schemata output (LethAL-owned scratch)
@@ -208,9 +252,18 @@ export interface AlRunnerConfig {
    */
   readonly preprocessorSymbols?: readonly string[];
   /**
-   * REFUSED on v2 — the constructor throws when this is true. Kept as a field, rather than
-   * dropped, precisely so a config that still asks for it gets told why instead of having the
-   * request silently ignored. See the constructor for the R97 measurement.
+   * R220 — run through `al-runner --server`, the warm JSON-RPC daemon, instead of one process per
+   * test.
+   *
+   * REFUSED from R97 until 2026-09-09. Both grounds for that refusal were re-measured on 2.11.0
+   * before it was lifted, and the numbers are in `al-runner-server.ts`. In short: the server still
+   * has no per-test filter, so one `runTests` runs the whole suite, but the objection that this
+   * would be quadratic assumed the cost was per test EXECUTED. It is per COMPILE, and a warm run
+   * after an AL edit is 0.4 s against a cold invocation's 12.5 s.
+   *
+   * OFF by default. The trade is "T tests warm" against "k compiles cold", which wins wherever
+   * compilation dominates and loses where test EXECUTION does, and only the caller knows which
+   * suite it has.
    */
   readonly serverMode?: boolean;
   /**
@@ -228,46 +281,6 @@ export interface AlRunnerConfig {
    */
   readonly coverage?: "al-runner" | "none";
 }
-
-/**
- * Why `serverMode` is refused, in the message a caller actually sees.
- *
- * Exported so the refusal test pins it by NAME rather than by quoting a sentence that would then
- * exist in two places and drift.
- *
- * The ORIGINAL reason (R97, measured 2026-08-05 on 2.0.0.0) was that the server's `runTests` read
- * only `sourcePaths[0]`, so the test bundle never ran and every mutant scored SURVIVED off an
- * empty green result. **That is fixed.** Re-measured 2026-08-08 against al-runner 2.1.0.0:
- * `sourcePaths: [sourceDir, testDir]` runs BOTH bundles and answers `total: 2, passed: 2` on
- * `fixtures/sandbox-app` + `fixtures/sandbox-tests`.
- *
- * Two NEW, measured reasons replaced it, and neither is an upstream defect:
- *
- * 1. **The server has no per-test selection.** The CLI takes `--test <qualified>` and runs exactly
- *    that one test; the server ran the WHOLE suite under every field name a caller could plausibly
- *    send (`testFilter`, `filter`, `test`, `tests`, `testName`, `pattern` — all six ignored, all
- *    six returned `total: 2`). `ExecutionBackend.run()` is called once per TEST, so server mode
- *    would execute T tests for each of the T calls that make up one mutant: quadratic where the
- *    CLI is linear. Warm-process speed does not pay for that on any suite big enough to care.
- * 2. **The response shape moved and is no longer the envelope this repo decoded.** 2.1.0.0 streams
- *    one `{"type":"test",...}` line per test and then one
- *    `{"type":"summary","exitCode":0,"passed":2,...,"protocolVersion":2}` line. The old decoder read
- *    ONE line and looked for a `tests` array, so on the current binary it would have produced an
- *    empty list from the first per-test line — this project's signature bug, now sitting in our
- *    code rather than upstream's.
- *
- * So the transport that decoded the old envelope is DELETED rather than carried: a branch nothing
- * runs, against a protocol nothing speaks, is a lie waiting to happen (R93's own argument for
- * deleting the v1 path). Server mode becomes worth revisiting when the backend interface can make
- * ONE call per mutant instead of one per test — filed as R126.
- */
-export const AL_RUNNER_SERVER_MODE_REFUSED =
-  "AlRunnerBackend: serverMode is not supported. al-runner 2.1.0.0's server protocol runs the " +
-  "WHOLE suite per runTests (no per-test selection under any field name — measured), while this " +
-  "backend's run() is called once per test, so server mode is quadratic where the CLI's --test " +
-  "filter is linear. Its response shape also moved to streaming per-test JSON lines plus a " +
-  'summary line, which the transport this repo carried could not read. Remove "serverMode" ' +
-  "from the alRunner config section to use the one-shot transport (R97, R126).";
 
 export class AlRunnerBackend implements ExecutionBackend {
   // Set by deploy(); until then (or if deploy() is never called — existing
@@ -287,19 +300,34 @@ export class AlRunnerBackend implements ExecutionBackend {
    *  directory that passed every check, and then for the rest of the session. */
   private platformAppsDir: string | undefined;
   private readonly transport: AlRunnerTransport;
+  /** R220 — present only under `serverMode`, and the sole owner of the daemon's lifetime. */
+  private server: AlRunnerServer | undefined;
+  /**
+   * The whole suite's results for the CURRENTLY ACTIVE artifact, or `undefined` when they must be
+   * re-run.
+   *
+   * This cache is the entire reason server mode is affordable without a per-test filter: the
+   * server has none (measured on 2.11.0), so `runTests` runs everything, and `run()` is called
+   * once per test. Caching per ACTIVATION turns T calls into one suite run. `activate()` clears
+   * it, which is what keeps a mutant from being scored on the previous mutant's results -- the
+   * single worst thing this cache could do.
+   */
+  private serverSuite: ServerSuiteResults | undefined;
 
   constructor(
     private readonly cfg: AlRunnerConfig,
     private readonly spawn: SpawnFn = defaultSpawn,
+    serverSpawn?: ServerSpawnFn,
   ) {
-    // R97, re-measured 2026-08-08 against al-runner 2.1.0.0. The upstream defect this refusal
-    // was FIRST built for (server reads only sourcePaths[0]) is fixed; two measured reasons of
-    // our own replaced it. See AL_RUNNER_SERVER_MODE_REFUSED for both, and for why the
-    // ServerTransport that decoded the old envelope was deleted rather than repaired.
-    if (cfg.serverMode === true) {
-      throw new Error(AL_RUNNER_SERVER_MODE_REFUSED);
-    }
     this.transport = new OneShotTransport(cfg.alRunnerPath, spawn);
+    // R220: server mode was refused from R97 until 2026-09-09, on two measured grounds that were
+    // BOTH re-measured on 2.11.0 before this was allowed back. See `al-runner-server.ts` for the
+    // numbers; the short version is that the "quadratic" objection assumed the cost was per test
+    // EXECUTED and it is per COMPILE, and a warm run after an AL edit is 0.4 s against a cold
+    // invocation's 12.5 s.
+    if (cfg.serverMode === true) {
+      this.server = new AlRunnerServer(cfg.alRunnerPath, serverSpawn ?? defaultServerSpawn);
+    }
   }
 
   /**
@@ -324,7 +352,14 @@ export class AlRunnerBackend implements ExecutionBackend {
   }
 
   observedBcBuild(): AlRunnerBcBuild | undefined {
-    return this.transport.observedBcBuild();
+    const fromTransport = this.transport.observedBcBuild();
+    if (fromTransport !== undefined) return fromTransport;
+    // R220: under `serverMode` the one-shot transport never runs, so the announcement is on the
+    // DAEMON's stderr instead. Read from the same parser rather than a second regex, so the two
+    // paths cannot disagree about what counts as an announcement -- and read lazily, because the
+    // line only exists once the daemon has selected a build.
+    const stderr = this.server?.stderrSoFar();
+    return stderr === undefined ? undefined : parseAlRunnerBcBuild(stderr);
   }
 
   /**
@@ -728,6 +763,10 @@ export class AlRunnerBackend implements ExecutionBackend {
   }
 
   async activate(mutantId: string | null): Promise<void> {
+    // R220. The suite results describe the artifact as it was, and the write below changes it, so
+    // they are dropped BEFORE the change rather than after: a throw in between would otherwise
+    // leave the previous mutant's verdicts cached against the next mutant's source.
+    this.serverSuite = undefined;
     const dir = this.activeDir();
     // Belt-and-suspenders for the documented no-deploy path (deploy() never called, dir ===
     // cfg.instrumentedDir): deploy() already strips these when it runs, but a caller driving
@@ -765,6 +804,7 @@ export class AlRunnerBackend implements ExecutionBackend {
   }
 
   async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
+    if (this.server !== undefined) return this.runViaServer(ref, opts);
     const started = Date.now();
     // ONE name for both the `--test` filter and the lookup below — see qualifiedTestName.
     const wanted = qualifiedTestName(ref.codeunitId, ref.method);
@@ -841,42 +881,166 @@ export class AlRunnerBackend implements ExecutionBackend {
     // change costs a mutant its verdict and says so out loud, which is the direction this project
     // is willing to be wrong in. R94, and R93's argument that a measured contract beats a
     // version-branched decode matrix.
-    if (t.status === "pass") {
-      // Coverage is read on the PASS path only, and that is not an oversight. The green set is the
-      // only thing coverage is used to attribute (`buildCoverageIndex` is fed
-      // `greenTests`), so reading it for a failing or errored test would be work whose result
-      // nothing consults. R140's non-green index is bcdev-only.
-      const coverage = await this.readCoverage(coverageOut);
-      return { ref, outcome: "pass", durationMs, ...(coverage !== undefined ? { coverage } : {}) };
-    }
-    const outcome: TestOutcome =
-      t.status === "fail"
-        ? "fail"
-        : t.message !== undefined && RUNNER_TIMEOUT_MESSAGE.test(t.message)
-          ? "timeout"
-          : "error";
-    return {
-      ref,
-      outcome,
-      // Wall-clock, NOT the runner's in-VM figure: the orchestrator derives each
-      // mutant's timeout budget from this and must include round-trip cost.
-      durationMs,
-      ...(outcome === "error"
-        ? {
-            failureMessage: `${AL_RUNNER_UNCLASSIFIED_ERROR}: al-runner reported status ${JSON.stringify(
-              t.status,
-            )} for ${wanted} with message ${JSON.stringify(t.message ?? "<none>")}. That is not an assertion failure, so it is NOT scored as a kill; if this is a timeout whose wording changed again, add it to RUNNER_TIMEOUT_MESSAGE.`,
-            // Nothing ran that could leave state behind — al-runner is a fresh process per call and
-            // touches no live container — so this is retry-safe rather than a tier hazard.
-            operation: "pre-dispatch-rejected" as const,
-          }
-        : t.message !== undefined
-          ? { failureMessage: t.message }
-          : {}),
-    };
+    // Coverage is read on the PASS path only, and that is not an oversight. The green set is the
+    // only thing coverage is used to attribute (`buildCoverageIndex` is fed `greenTests`), so
+    // reading it for a failing or errored test would be work whose result nothing consults.
+    // R140's non-green index is bcdev-only.
+    const coverage = t.status === "pass" ? await this.readCoverage(coverageOut) : undefined;
+    return verdictFromRunnerTest(ref, wanted, t, durationMs, coverage);
   }
 
   async close(): Promise<void> {
     await this.transport.close();
+    await this.server?.close();
   }
+
+  /**
+   * Runs the whole suite once per activation and answers every `run()` for that artifact from it.
+   *
+   * The suite call is made on the FIRST `run()` after an `activate()` rather than inside
+   * `activate()` itself, so a mutant whose covering set turns out to be empty costs nothing, and
+   * so the failure surfaces as a verdict on a named test instead of an activation error with no
+   * test to attach it to.
+   */
+  private async runViaServer(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
+    const started = Date.now();
+    const wanted = qualifiedTestName(ref.codeunitId, ref.method);
+    let suite: ServerSuiteResults;
+    try {
+      suite = await this.ensureServerSuite(opts);
+    } catch (e) {
+      return {
+        ref,
+        outcome: "error",
+        durationMs: Date.now() - started,
+        failureMessage: `al-runner --server: ${e instanceof Error ? e.message : String(e)}`,
+        // Nothing container-side to strand: the daemon is ours and holds no lease.
+        operation: "pre-dispatch-rejected",
+      };
+    }
+    const t = suite.byName.get(wanted);
+    if (t === undefined) {
+      return {
+        ref,
+        outcome: "error",
+        durationMs: Date.now() - started,
+        // Naming both sides, as the one-shot path does: a mismatch means the runner ran something
+        // other than what was asked for, and "missing the requested test" alone leaves nobody able
+        // to see which.
+        failureMessage: `al-runner --server ran the suite but reported no test named "${wanted}" (it returned: ${
+          [...suite.byName.keys()].join(", ") || "<no tests>"
+        })`,
+        operation: "pre-dispatch-rejected",
+      };
+    }
+    const coverage = t.status === "pass" ? suite.coverageByName.get(wanted) : undefined;
+    // The SUITE's wall time, not this test's own, and deliberately over-stated. One suite run
+    // serves every test of one artifact, so the compile that dominates it belongs to no single
+    // test. The orchestrator derives each mutant's timeout budget from this figure, and of the two
+    // ways to be wrong, over-reporting buys a budget that is too generous while under-reporting
+    // manufactures spurious timeouts. Only one of those invents a verdict.
+    return verdictFromRunnerTest(ref, wanted, t, suite.wallMs, coverage);
+  }
+
+  private async ensureServerSuite(opts: RunOpts): Promise<ServerSuiteResults> {
+    const cached = this.serverSuite;
+    if (cached !== undefined) return cached;
+    const server = this.server;
+    if (server === undefined) throw new Error("serverMode is not enabled on this backend");
+    await server.start(
+      SERVER_READY_DEADLINE_MS,
+      this.cfg.packagesDir !== undefined ? [this.cfg.packagesDir] : [],
+    );
+    const wantCoverage = (this.cfg.coverage ?? "none") !== "none";
+    const t0 = Date.now();
+    const res = await server.runTests(
+      {
+        sourcePaths: [this.activeDir(), this.cfg.testDir],
+        ...(this.cfg.packagesDir !== undefined ? { packagePaths: [this.cfg.packagesDir] } : {}),
+        // Matching the one-shot path's `--isolation test` exactly. The server's own default is
+        // `codeunit`, the weaker isolation R96 records the v1 argv as having bought silently, and
+        // `capabilities().isolation` claims `full-reset` on the strength of the stronger one.
+        testIsolation: "test",
+        ...(wantCoverage ? { coverage: true, perTestCoverage: true } : {}),
+      },
+      // One suite run replaces every per-test invocation, so it is budgeted as such rather than
+      // against one test's timeout.
+      Math.max(opts.timeoutMs, SERVER_SUITE_MIN_DEADLINE_MS),
+    );
+    const byName = new Map<string, ServerTestLine>();
+    for (const t of res.tests) byName.set(t.name, t);
+    const coverageByName = new Map<string, CoverageMap>();
+    if (wantCoverage && res.perTestCoverage.length > 0) {
+      this.coverageIndex ??= await buildAlRunnerCoverageIndex(this.activeDir());
+      for (const entry of res.perTestCoverage) {
+        coverageByName.set(entry.test, alRunnerCoverageFromServer(entry, this.coverageIndex));
+      }
+    }
+    const suite: ServerSuiteResults = { byName, coverageByName, wallMs: Date.now() - t0 };
+    this.serverSuite = suite;
+    return suite;
+  }
+}
+
+/**
+ * One al-runner test row becomes one verdict, and the rule is FAIL-CLOSED on purpose.
+ *
+ * SHARED by the one-shot CLI path and the `--server` path deliberately. The classification below
+ * is the part of this backend that has already been wrong once in a way that inverted a verdict
+ * ([[R94]]), so having two copies of it -- one per transport -- is how the two would drift until a
+ * timeout scored as a kill on one and not the other.
+ *
+ * `fail` is al-runner's word for "the test's own assertion went red", so it is a kill. `error` is
+ * its word for several different things: a timeout it enforced, and (per its own
+ * `RunnerOutOfScopeException`) a test that reached SMTP, outbound HTTP, printing, external file
+ * I/O or web-service publishing, which v2 raises on instead of faking a return value.
+ *
+ * Only ONE of those is a verdict about the mutant. So an `error` positively classified as a
+ * timeout scores `timeout` (the orchestrator reads that as `timeout-killed`), and an `error` that
+ * CANNOT be classified scores `error` -- not measured -- rather than falling through to `fail` and
+ * crediting the suite with a kill it did not earn.
+ *
+ * That asymmetry is what makes this survive the next release. al-runner ships several times a day:
+ * within one session the timeout wording was measured as `TIMEOUT after <n>s` on 2.0.0.0 and back
+ * to `Test exceeded <n>s timeout.` on 2.0.1.0, hours apart. Under the old rule -- anything not
+ * `pass` and not matching the regex is `fail` -- that single string change silently turned every
+ * hung mutant into a KILL. Under this one the same change costs a mutant its verdict and says so
+ * out loud, which is the direction this project is willing to be wrong in. R93's argument that a
+ * measured contract beats a version-branched decode matrix.
+ */
+export function verdictFromRunnerTest(
+  ref: TestMethodRef,
+  wanted: string,
+  t: { readonly status: string; readonly message?: string },
+  durationMs: number,
+  coverage: CoverageMap | undefined,
+): TestVerdict {
+  if (t.status === "pass") {
+    return { ref, outcome: "pass", durationMs, ...(coverage !== undefined ? { coverage } : {}) };
+  }
+  const outcome: TestOutcome =
+    t.status === "fail"
+      ? "fail"
+      : t.message !== undefined && RUNNER_TIMEOUT_MESSAGE.test(t.message)
+        ? "timeout"
+        : "error";
+  return {
+    ref,
+    outcome,
+    // Wall-clock, NOT the runner's in-VM figure: the orchestrator derives each mutant's timeout
+    // budget from this and must include round-trip cost.
+    durationMs,
+    ...(outcome === "error"
+      ? {
+          failureMessage: `${AL_RUNNER_UNCLASSIFIED_ERROR}: al-runner reported status ${JSON.stringify(
+            t.status,
+          )} for ${wanted} with message ${JSON.stringify(t.message ?? "<none>")}. That is not an assertion failure, so it is NOT scored as a kill; if this is a timeout whose wording changed again, add it to RUNNER_TIMEOUT_MESSAGE.`,
+          // Nothing ran that could leave state behind — al-runner is a fresh process per call and
+          // touches no live container — so this is retry-safe rather than a tier hazard.
+          operation: "pre-dispatch-rejected" as const,
+        }
+      : t.message !== undefined
+        ? { failureMessage: t.message }
+        : {}),
+  };
 }

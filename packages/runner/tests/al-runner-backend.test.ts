@@ -3,11 +3,8 @@ import { mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CONTROL_REGISTER_FILENAME, CONTROL_UPGRADE_FILENAME } from "@lethal/schemata";
-import {
-  AL_RUNNER_SERVER_MODE_REFUSED,
-  AL_RUNNER_UNCLASSIFIED_ERROR,
-  AlRunnerBackend,
-} from "../src/al-runner-backend";
+import { AL_RUNNER_UNCLASSIFIED_ERROR, AlRunnerBackend } from "../src/al-runner-backend";
+import type { ServerSpawnFn } from "../src/al-runner-server";
 import { MsInMemoryBackend } from "../src/ms-inmemory-backend";
 import { requiresUnsafeLatch } from "../src/operation-outcome";
 import type { SpawnFn } from "../src/publisher";
@@ -600,45 +597,153 @@ describe("AlRunnerBackend.status", () => {
   });
 });
 
-describe("AlRunnerBackend serverMode refusal", () => {
-  // R97. Constructing the backend must throw, not fall back to the one-shot transport silently:
-  // a config that asked for server mode and quietly got something else is the same class of lie
-  // as the empty green result the refusal was originally built for.
-  //
-  // The REASON changed on 2026-08-08 and the test changed with it. It used to assert the string
-  // "1658" — the upstream issue for "the server reads only sourcePaths[0]" — and that defect is
-  // FIXED in al-runner 2.1.0.0 (measured: `sourcePaths: [sourceDir, testDir]` runs both bundles,
-  // total 2 / passed 2). Asserting a stale cause would have kept a fixed upstream bug alive in
-  // this suite forever. What is refused now is measured here and now: no per-test selection in
-  // the server protocol, against a run() called once per test.
-  test("constructing with serverMode:true throws the refusal, naming R97", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "lethal-alrunner-server-"));
-    const construct = () =>
-      new AlRunnerBackend(
-        {
-          alRunnerPath: "al-runner",
-          instrumentedDir: dir,
-          testDir: "/tests",
-          selectorObjectId: 50000,
-          serverMode: true,
+describe("AlRunnerBackend serverMode (R220)", () => {
+  // R97 refused this until 2026-09-09, and the test that stood here asserted the refusal. Both of
+  // its grounds were re-measured on al-runner 2.11.0 before it was lifted: there is still no
+  // per-test filter, but the "quadratic" conclusion assumed the cost was per test EXECUTED and it
+  // is per COMPILE (12.5 s cold against 0.4 s warm after an AL edit). What replaces the refusal
+  // test is not "it constructs" but the two behaviours that make the mode safe.
+
+  /** A fake daemon good enough to answer one `runTests`, so no binary is needed. */
+  function fakeServerSpawn(tests: Array<{ name: string; status: string; message?: string }>): {
+    spawn: ServerSpawnFn;
+    runs: () => number;
+  } {
+    let runs = 0;
+    const spawn: ServerSpawnFn = () => {
+      const queue: Array<Uint8Array | null> = [];
+      let waiter: (() => void) | undefined;
+      const push = (chunk: Uint8Array | null): void => {
+        queue.push(chunk);
+        waiter?.();
+        waiter = undefined;
+      };
+      const emit = (line: string): void =>
+        push(
+          new TextEncoder().encode(`${line}
+`),
+        );
+      queueMicrotask(() => emit('{"ready":true}'));
+      return {
+        write: (line: string) => {
+          const req = JSON.parse(line) as { command?: string };
+          if (req.command === "runTests") {
+            runs += 1;
+            for (const t of tests) emit(JSON.stringify({ type: "test", ...t }));
+            emit(JSON.stringify({ type: "summary", exitCode: 0, total: tests.length }));
+          }
+          if (req.command === "shutdown") emit('{"status":"shutting down"}');
         },
-        okSpawn({ tests: [] }).spawn,
-      );
-    expect(construct).toThrow(/R97/);
-    // By identity, not by re-quoting the sentence: two spellings of the refusal would let the
-    // shipped one drift while this stayed green.
-    expect(construct).toThrow(AL_RUNNER_SERVER_MODE_REFUSED);
+        stdout: {
+          async *[Symbol.asyncIterator]() {
+            for (;;) {
+              if (queue.length === 0) {
+                await new Promise<void>((r) => {
+                  waiter = r;
+                });
+                continue;
+              }
+              const next = queue.shift();
+              if (next === null || next === undefined) return;
+              yield next;
+            }
+          },
+        },
+        stderr: {
+          async *[Symbol.asyncIterator]() {
+            yield new TextEncoder().encode(
+              "[bc] selected BC 28.1.49838.54368 (C:/artifacts/28.1.49838.54368)\n",
+            );
+          },
+        },
+        kill: () => push(null),
+      };
+    };
+    return { spawn, runs: () => runs };
+  }
+
+  async function serverBackend(
+    tests: Array<{ name: string; status: string; message?: string }>,
+  ): Promise<{ backend: AlRunnerBackend; runs: () => number; dir: string }> {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-alrunner-server-"));
+    const fake = fakeServerSpawn(tests);
+    const backend = new AlRunnerBackend(
+      {
+        alRunnerPath: "al-runner",
+        instrumentedDir: dir,
+        testDir: "/tests",
+        selectorObjectId: 50000,
+        serverMode: true,
+      },
+      okSpawn({ tests: [] }).spawn,
+      fake.spawn,
+    );
+    return { backend, runs: fake.runs, dir };
+  }
+
+  test("runs the suite ONCE per activation and serves every test from it", async () => {
+    // This is the whole economics of the mode. The server has no per-test filter, so `runTests`
+    // runs everything; caching per activation is what turns T calls into one suite run. Without
+    // it this would be the quadratic shape R97 refused.
+    const { backend, runs } = await serverBackend([
+      { name: "Codeunit79100.A", status: "pass" },
+      { name: "Codeunit79100.B", status: "fail", message: "assert" },
+    ]);
+    const a = await backend.run(
+      { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "A" },
+      { coverage: "none", timeoutMs: 1000 },
+    );
+    const b = await backend.run(
+      { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "B" },
+      { coverage: "none", timeoutMs: 1000 },
+    );
+    expect(a.outcome).toBe("pass");
+    expect(b.outcome).toBe("fail");
+    expect(runs()).toBe(1);
+    await backend.close();
   });
 
-  // The refusal has to say what to DO, not only that something is wrong. A message naming the
-  // roadmap row but not the config key leaves a reader with a run that will not start and no
-  // next step.
-  test("the refusal names the config key to remove and the transport it falls back to", () => {
-    expect(AL_RUNNER_SERVER_MODE_REFUSED).toContain('"serverMode"');
-    expect(AL_RUNNER_SERVER_MODE_REFUSED).toContain("one-shot");
+  test("activate() DROPS the cache, so a mutant is never scored on the previous one's results", async () => {
+    // The single worst thing this cache could do, and the reason `activate()` clears it before it
+    // rewrites the selector rather than after.
+    const { backend, runs } = await serverBackend([{ name: "Codeunit79100.A", status: "pass" }]);
+    await backend.run(
+      { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "A" },
+      { coverage: "none", timeoutMs: 1000 },
+    );
+    expect(runs()).toBe(1);
+    await backend.activate("M0001");
+    await backend.run(
+      { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "A" },
+      { coverage: "none", timeoutMs: 1000 },
+    );
+    expect(runs()).toBe(2);
+    await backend.close();
   });
 
-  test("serverMode:false still constructs", async () => {
+  test("a test the suite never reported is an error naming both sides, not a silent pass", async () => {
+    const { backend } = await serverBackend([{ name: "Codeunit79100.A", status: "pass" }]);
+    const v = await backend.run(
+      { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "Missing" },
+      { coverage: "none", timeoutMs: 1000 },
+    );
+    expect(v.outcome).toBe("error");
+    expect(v.failureMessage).toContain("Codeunit79100.Missing");
+    expect(v.failureMessage).toContain("Codeunit79100.A");
+    await backend.close();
+  });
+
+  test("R129: the BC build is read off the DAEMON's stderr, where the announcement now lives", async () => {
+    const { backend } = await serverBackend([{ name: "Codeunit79100.A", status: "pass" }]);
+    await backend.run(
+      { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "A" },
+      { coverage: "none", timeoutMs: 1000 },
+    );
+    expect(backend.observedBcBuild()?.build).toBe("28.1.49838.54368");
+    await backend.close();
+  });
+
+  test("serverMode:false still constructs and uses the one-shot transport", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lethal-alrunner-server-off-"));
     const backend = new AlRunnerBackend(
       {

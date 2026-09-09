@@ -73,6 +73,16 @@ export interface ServerProcessHandle {
   readonly stdout: AsyncIterable<Uint8Array>;
   readonly stderr: AsyncIterable<Uint8Array>;
   kill(): void;
+  /**
+   * Resolves when the child has actually EXITED, awaited by `close()`.
+   *
+   * Optional so a fake need not implement it, and load-bearing for the real one: killing a Bun
+   * subprocess asks it to die, and the runtime keeps the process alive until the child is reaped.
+   * MEASURED without this, three sessions in a row scored all 19 mutants correctly, printed their
+   * tables, and then sat there until killed at the 200 s mark. A finished run that will not exit
+   * looks exactly like a hung one.
+   */
+  wait?(): Promise<unknown>;
 }
 
 export type ServerSpawnFn = (argv: readonly string[]) => ServerProcessHandle;
@@ -198,6 +208,16 @@ export class AlRunnerServer {
   private stdout: LineReader | undefined;
   private stderrText = "";
   private stderrPump: Promise<void> | undefined;
+  /**
+   * Kept so `close()` can END the stderr drain.
+   *
+   * Without it the drain is an infinite `for await` over a stream that only closes when the child
+   * does, and an outstanding read keeps the event loop alive: MEASURED, a session that had already
+   * scored all 19 mutants and printed its table then sat there until killed. The session was
+   * complete and the PROCESS would not exit, which reads as a hang and is worse than one, because
+   * the work is done and invisible.
+   */
+  private stderrIt: AsyncIterator<Uint8Array> | undefined;
 
   constructor(
     private readonly alRunnerPath: string,
@@ -253,8 +273,13 @@ export class AlRunnerServer {
 
   private async pumpStderr(stream: AsyncIterable<Uint8Array>): Promise<void> {
     const decoder = new TextDecoder();
+    const it = stream[Symbol.asyncIterator]();
+    this.stderrIt = it;
     try {
-      for await (const value of stream) {
+      for (;;) {
+        const next = await it.next();
+        if (next.done === true) return;
+        const value = next.value;
         this.stderrText += decoder.decode(value, { stream: true });
         if (this.stderrText.length > STDERR_KEEP_BYTES) {
           this.stderrText = this.stderrText.slice(-STDERR_KEEP_BYTES);
@@ -370,11 +395,23 @@ export class AlRunnerServer {
     } catch {
       // Already exited.
     }
+    // END the stderr drain rather than merely waiting for it. Killing the child usually closes the
+    // pipe, but "usually" leaves an outstanding read holding the event loop open, and a completed
+    // session that will not exit is indistinguishable from a hung one to whoever is watching.
+    await this.stderrIt?.return?.().catch(() => undefined);
+    // Then REAP it. `kill()` only signals; the runtime holds the process open until the child is
+    // collected, which is the other half of the same symptom.
+    await Promise.race([
+      proc.wait?.().catch(() => undefined) ?? Promise.resolve(),
+      new Promise<void>((r) => setTimeout(r, 5000)),
+    ]);
     this.proc = undefined;
     this.stdout = undefined;
+    this.stderrIt = undefined;
     await Promise.race([
       this.stderrPump ?? Promise.resolve(),
       new Promise<void>((r) => setTimeout(r, 1000)),
     ]);
+    this.stderrPump = undefined;
   }
 }

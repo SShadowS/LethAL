@@ -48,6 +48,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { initParser, parseAL } from "@lethal/engine";
 import { type ALSyntaxNode, wrapRoot } from "@lethal/engine";
+import type { ServerPerTestCoverage } from "./al-runner-server";
 import type { CoverageEntry, CoverageMap } from "./backend";
 import { LineMap, fileLineMapEntries, objectIdentityOf } from "./line-map";
 
@@ -257,6 +258,56 @@ export function alRunnerCoverageFrom(
       ...(procedure !== undefined ? { procedure } : {}),
       line: ln.line,
     });
+  }
+  return { granularity: "line", entries };
+}
+
+/**
+ * The same mapping, from `--server`'s `perTestCoverage` instead of Cobertura.
+ *
+ * SIMPLER than the Cobertura path in the one way that matters: each statement carries `scope`, the
+ * PROCEDURE the server itself attributes it to, so nothing has to place a line inside a member.
+ * The Cobertura path resolves that through `line-map.ts`, which is correct but is a second opinion
+ * about the same source; here the producer answers directly.
+ *
+ * The multi-object restriction still applies and is NOT relaxed here. Measured on 2.11.0, the
+ * server loses a multi-object file exactly as the Cobertura writer does -- given two codeunits in
+ * one file and a test calling the second, the file is absent from `perTestCoverage` entirely -- so
+ * the defect is in the coverage machinery rather than in either writer. Reported upstream as
+ * StefanMaron/BusinessCentral.AL.Runner#3713.
+ */
+export function alRunnerCoverageFromServer(
+  entry: ServerPerTestCoverage,
+  index: AlRunnerCoverageIndex,
+): CoverageMap {
+  const entries: CoverageEntry[] = [];
+  const seen = new Set<string>();
+  for (const file of entry.coverage ?? []) {
+    let object: { objectType: string; objectId: number } | undefined;
+    for (const cand of fileKeyCandidates(file.file)) {
+      const hit = index.byFile.get(cand);
+      if (hit !== undefined) {
+        object = hit;
+        break;
+      }
+    }
+    if (object === undefined) continue;
+    for (const st of file.statements ?? []) {
+      // Same rule as the Cobertura path: a reported-but-unhit statement is evidence the file was
+      // COMPILED, never that this test reached it. Treating it as coverage is [[R63]]'s
+      // manufactured coverage.
+      if ((st.hits ?? 0) <= 0) continue;
+      const procedure = st.scope;
+      const key = `${object.objectType}:${object.objectId}:${procedure ?? ""}:${st.line ?? -1}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      entries.push({
+        objectType: object.objectType,
+        objectId: object.objectId,
+        ...(procedure !== undefined && procedure !== "" ? { procedure } : {}),
+        ...(st.line !== undefined ? { line: st.line } : {}),
+      });
+    }
   }
   return { granularity: "line", entries };
 }
