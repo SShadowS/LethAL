@@ -129,7 +129,11 @@ const EXPECTED = {
  */
 const EXPECTED_NO_COVERAGE_FILE = "SandboxPricing.Codeunit.al";
 
-async function runOnce(scratchRoot: string, serverMode = false): Promise<SessionReport> {
+async function runOnce(
+  scratchRoot: string,
+  serverMode = false,
+  selectorMode: "static" | "resource" = "static",
+): Promise<SessionReport> {
   const store = new ResultsStore(":memory:");
   // `cfg.backend` is CALLER-owned and `runSession` never closes it -- see the ownership note on
   // the worker-disposal test in orchestrator.test.ts, and `cli.ts`'s own `finally`. Harmless while
@@ -154,6 +158,7 @@ async function runOnce(scratchRoot: string, serverMode = false): Promise<Session
       selectorObjectId: SELECTOR_IDS.selectorId,
       coverage: "al-runner",
       ...(serverMode ? { serverMode: true } : {}),
+      ...(selectorMode === "resource" ? { selectorMode } : {}),
     });
     backendRef = backend;
     return await runSession({
@@ -370,6 +375,7 @@ async function main(): Promise<void> {
   const scratchA = await mkdtemp(join(tmpdir(), "lethal-itest-alrunner-a-"));
   const scratchB = await mkdtemp(join(tmpdir(), "lethal-itest-alrunner-b-"));
   const scratchC = await mkdtemp(join(tmpdir(), "lethal-itest-alrunner-server-"));
+  const scratchD = await mkdtemp(join(tmpdir(), "lethal-itest-alrunner-resource-"));
   try {
     const first = await runOnce(scratchA);
     assertVerdictTable(first);
@@ -408,10 +414,29 @@ async function main(): Promise<void> {
       "R220: the --server transport must reach the SAME per-mutant verdicts as the one-shot one",
     );
     console.log(`  --server leg: ${viaServer.counts.killed} killed, verdicts identical`);
+
+    // R222 leg 4: the RESOURCE selector, which compiles the bundle once and writes the active
+    // mutant to a text file the compiled AL reads at runtime, instead of baking the id into AL and
+    // recompiling per mutant.
+    //
+    // The verdicts must be identical AGAIN, and this leg is the one that can go wrong quietly. The
+    // resource is read at runtime, so a selector that failed to re-read, or a file written after
+    // the request started, would score a mutant against the PREVIOUS mutant's value and still
+    // produce a plausible-looking table. Comparing per mutant against the static transports is
+    // what catches that; a matching killed/survived/no-coverage count would not.
+    const viaResource = await runOnce(scratchD, true, "resource");
+    assertVerdictTable(viaResource);
+    assert.deepEqual(
+      shape(viaResource),
+      shape(first),
+      "R222: the resource selector must reach the SAME per-mutant verdicts as the baked-in one",
+    );
+    console.log(`  resource-selector leg: ${viaResource.counts.killed} killed, verdicts identical`);
   } finally {
     await rm(scratchA, { recursive: true, force: true });
     await rm(scratchB, { recursive: true, force: true });
     await rm(scratchC, { recursive: true, force: true });
+    await rm(scratchD, { recursive: true, force: true });
   }
 
   console.log("al-runner itest: PASS");

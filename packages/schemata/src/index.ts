@@ -4,7 +4,11 @@ export {
   emitMutationSelector,
   emitRegisterInstall,
   emitRegisterUpgrade,
+  emitResourceSelector,
   emitStaticSelector,
+  SELECTOR_RESOURCE_FOLDER,
+  SELECTOR_RESOURCE_NAME,
+  SELECTOR_RESOURCE_NONE,
 } from "./selector";
 export type { SelectorConfig } from "./selector";
 export { wrapStatement } from "./wrap";

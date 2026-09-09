@@ -103,6 +103,87 @@ export function emitRegisterUpgrade(cfg: { objectId: number }): string {
 `;
 }
 
+/** The resource file `emitResourceSelector` reads, relative to the declared resource folder. */
+export const SELECTOR_RESOURCE_NAME = "active-mutant.txt";
+
+/** The folder added to the instrumented app's `resourceFolders` to hold that file. */
+export const SELECTOR_RESOURCE_FOLDER = "LethALResources";
+
+/** Written to the resource file for the BASELINE, where no mutant is active. */
+export const SELECTOR_RESOURCE_NONE = "NONE";
+
+/**
+ * R222 — a selector that reads the active mutant from a RESOURCE FILE at runtime, so the bundle is
+ * compiled ONCE and each further mutant costs a test run instead of a compile.
+ *
+ * ## Why this can work at all
+ *
+ * al-runner reads a source-backed resource with `File.ReadAllBytes` on EVERY AL read, memoising
+ * only the folder list (`AlRunner/Patches/NavAppResourcePatches.cs`), and its output-cache key
+ * enumerates `"*.al"` plus a manifest fragment and the dependency list, so resource CONTENTS never
+ * enter it (`AlRunner/ProgramSupport/Dependencies.cs`). Rewriting the file therefore changes what
+ * compiled AL sees while the compile stays a cache HIT.
+ *
+ * MEASURED end to end before this was written, on one warm server with every `.al` byte-identical
+ * and only the text file changing:
+ *
+ * ```text
+ *   resource M0001 -> pass, cached=false, 8.8 s   (the one compile)
+ *   resource M0002 -> FAIL, cached=true,  0.1 s
+ *   resource M0001 -> pass, cached=true,  0.1 s
+ * ```
+ *
+ * Against `emitStaticSelector`, which bakes the id in as a constant and costs a recompile per
+ * mutant: 12.5 s cold and 0.4 s warm-incremental on a two-file fixture, and 65 s per invocation on
+ * a 553-file application.
+ *
+ * ## Why `SingleInstance` and the lazy load are not incidental
+ *
+ * `Active()` is called at EVERY mutated site, so a naive implementation does filesystem I/O per
+ * guard. `SingleInstance` plus a `Loaded` flag makes it one read per instance lifetime; al-runner
+ * clears SingleInstance state at its isolation resets, so the value is re-read after each reset and
+ * cannot go stale WITHIN a request, while a request only ever scores one mutant anyway.
+ *
+ * ## The parity rule
+ *
+ * `emitMutationSelector`, `emitStaticSelector` and this MUST expose an identical procedure set:
+ * a caller swapping one for another must not lose a procedure the instrumented AL calls.
+ */
+export function emitResourceSelector(cfg: {
+  objectId: number;
+  artifactId: string;
+  targetAppId: string;
+}): string {
+  return `codeunit ${cfg.objectId} "Mutation Selector"
+{
+    SingleInstance = true;
+
+    var
+        Loaded: Boolean;
+        ActiveId: Text;
+
+    procedure Active(MutantId: Text): Boolean
+    begin
+        if not Loaded then begin
+            ActiveId := NavApp.GetResourceAsText('${SELECTOR_RESOURCE_NAME}', TextEncoding::UTF8);
+            Loaded := true;
+        end;
+        exit(MutantId = ActiveId);
+    end;
+
+    procedure ArtifactId(): Text
+    begin
+        exit('${cfg.artifactId}');
+    end;
+
+    procedure TargetAppId(): Text
+    begin
+        exit('${cfg.targetAppId}');
+    end;
+}
+`;
+}
+
 export function emitStaticSelector(cfg: {
   objectId: number;
   activeId: string;

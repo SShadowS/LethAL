@@ -782,3 +782,88 @@ describe("MsInMemoryBackend", () => {
     expect(() => b.compileCheck()).toThrow(/2026-07-17-layer-4/);
   });
 });
+
+/**
+ * R222 — `selectorMode: "resource"`.
+ *
+ * The point is that `activate()` stops rewriting AL. If it ever rewrites AL again, al-runner's
+ * output cache MISSES and every mutant costs a compile again, which is the whole cost this mode
+ * exists to remove, and nothing about the verdicts would look wrong.
+ */
+describe("AlRunnerBackend selectorMode: resource", () => {
+  async function deployed(mode: "static" | "resource") {
+    const dir = await mkdtemp(join(tmpdir(), `lethal-alrunner-${mode}-`));
+    const batch = await mkdtemp(join(tmpdir(), "lethal-alrunner-batch-"));
+    await writeFile(join(batch, "MutationSelector.Codeunit.al"), "generated selector", "utf8");
+    await writeFile(
+      join(batch, "mutant-manifest.json"),
+      JSON.stringify({ artifactId: "a".repeat(32), mutants: [] }),
+      "utf8",
+    );
+    await writeFile(join(batch, "app.json"), JSON.stringify({ id: "x", name: "T" }), "utf8");
+    const backend = new AlRunnerBackend(
+      {
+        alRunnerPath: "al-runner",
+        instrumentedDir: dir,
+        testDir: "/tests",
+        selectorObjectId: 50000,
+        selectorMode: mode,
+      },
+      okSpawn({ tests: [] }).spawn,
+    );
+    await backend.deploy(batch);
+    return { backend, activeDir: join(dir, "active") };
+  }
+
+  test("deploy declares the resource folder and seeds the file", async () => {
+    const { activeDir } = await deployed("resource");
+    const manifest = JSON.parse(await readFile(join(activeDir, "app.json"), "utf8")) as {
+      resourceFolders?: string[];
+    };
+    expect(manifest.resourceFolders).toEqual(["LethALResources"]);
+    // Seeded, because the FIRST compile reads the resource and a missing file would fail that read
+    // rather than starting at "no mutant active".
+    expect(await readFile(join(activeDir, "LethALResources", "active-mutant.txt"), "utf8")).toBe(
+      "NONE",
+    );
+  });
+
+  test("deploy writes the resource-reading selector, with no baked id", async () => {
+    const { activeDir } = await deployed("resource");
+    const al = await readFile(join(activeDir, "MutationSelector.Codeunit.al"), "utf8");
+    expect(al).toContain("NavApp.GetResourceAsText('active-mutant.txt'");
+    expect(al).toContain("SingleInstance = true;");
+  });
+
+  test("activate writes the FILE and leaves the AL byte-identical, which is the cache hit", async () => {
+    const { backend, activeDir } = await deployed("resource");
+    const before = await readFile(join(activeDir, "MutationSelector.Codeunit.al"), "utf8");
+    await backend.activate("M0007");
+    expect(await readFile(join(activeDir, "LethALResources", "active-mutant.txt"), "utf8")).toBe(
+      "M0007",
+    );
+    // The load-bearing assertion. al-runner's output-cache key hashes `*.al`, so an unchanged
+    // selector is what makes the next run a cache hit instead of a recompile.
+    expect(await readFile(join(activeDir, "MutationSelector.Codeunit.al"), "utf8")).toBe(before);
+  });
+
+  test("the baseline writes a reserved value that matches no mutant", async () => {
+    const { backend, activeDir } = await deployed("resource");
+    await backend.activate("M0007");
+    await backend.activate(null);
+    expect(await readFile(join(activeDir, "LethALResources", "active-mutant.txt"), "utf8")).toBe(
+      "NONE",
+    );
+  });
+
+  test("STATIC remains the default, so nothing changes for a caller that did not ask", async () => {
+    const { backend, activeDir } = await deployed("static");
+    await backend.activate("M0007");
+    const al = await readFile(join(activeDir, "MutationSelector.Codeunit.al"), "utf8");
+    expect(al).toContain("exit(MutantId = 'M0007');");
+    const manifest = JSON.parse(await readFile(join(activeDir, "app.json"), "utf8")) as {
+      resourceFolders?: string[];
+    };
+    expect(manifest.resourceFolders).toBeUndefined();
+  });
+});

@@ -1,9 +1,13 @@
-import { cp, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   CONTROL_REGISTER_FILENAME,
   CONTROL_UPGRADE_FILENAME,
+  SELECTOR_RESOURCE_FOLDER,
+  SELECTOR_RESOURCE_NAME,
+  SELECTOR_RESOURCE_NONE,
+  emitResourceSelector,
   emitStaticSelector,
 } from "@lethal/schemata";
 import {
@@ -280,6 +284,19 @@ export interface AlRunnerConfig {
    * the top of `runSession`, before an instrumented bundle exists to inspect.
    */
   readonly coverage?: "al-runner" | "none";
+  /**
+   * R222 — how the active mutant reaches the compiled AL.
+   *
+   * `"static"` (the default, and the behaviour since this backend existed) bakes the id into
+   * `MutationSelector.Active()` as a constant, so every mutant is a RECOMPILE: 12.5 s cold and
+   * 0.4 s warm-incremental on a two-file fixture, 65 s per invocation on a 553-file application.
+   *
+   * `"resource"` compiles the bundle ONCE and writes the id to a source-backed resource file that
+   * the AL reads at runtime. MEASURED at 0.1 s per mutant with `cached:true`, because al-runner
+   * reads such a resource from disk on every AL read while its output-cache key hashes only
+   * `*.al`. See `emitResourceSelector` for the citations and the measurement.
+   */
+  readonly selectorMode?: "static" | "resource";
 }
 
 export class AlRunnerBackend implements ExecutionBackend {
@@ -702,12 +719,21 @@ export class AlRunnerBackend implements ExecutionBackend {
       await rm(join(activeDir, f), { force: true });
     }
     this.deployedDir = activeDir;
+    // R222: everything the resource channel needs, done ONCE per deploy rather than per mutant.
+    // The selector AL written here never changes again; `activate()` only rewrites the text file.
     // Early, LOUD validation of the batch just deployed: a corrupt manifest must fail
     // deploy() itself, not surface only when a later activate() happens to read it. The
     // value is deliberately not cached — activate() re-reads from activeDir() so the
     // no-deploy path (activate()/run() driven straight against cfg.instrumentedDir) bakes
     // that directory's REAL artifact id instead of a stale empty default.
-    await readArtifactId(activeDir);
+    const artifactId = await readArtifactId(activeDir);
+    // R222: everything the resource channel needs, done ONCE per deploy rather than per mutant.
+    // The selector AL written here never changes again; `activate()` only rewrites the text file.
+    // AFTER the manifest validation above, so a corrupt manifest still fails with that message
+    // rather than with whatever this helper would say about the same broken file.
+    if (this.selectorMode() === "resource") {
+      await this.installResourceSelector(activeDir, artifactId);
+    }
     // In-memory backend: nothing is compiled or published, so there is no artifact to
     // describe — the orchestrator records provenance only for publishing backends.
     return null;
@@ -725,6 +751,56 @@ export class AlRunnerBackend implements ExecutionBackend {
 
   private activeDir(): string {
     return this.deployedDir ?? this.cfg.instrumentedDir;
+  }
+
+  private selectorMode(): "static" | "resource" {
+    return this.cfg.selectorMode ?? "static";
+  }
+
+  /**
+   * R222 — makes the deployed bundle read its active mutant from a resource file.
+   *
+   * Three things, all once: declare the resource folder in the bundle's own `app.json`, replace the
+   * selector with the resource-reading one, and seed the file with the baseline value so the very
+   * first compile has a resource to read.
+   *
+   * The `app.json` edit is deliberately made HERE rather than in `writeInstrumentedProject`. The
+   * resource channel is an al-runner fact -- it works because of how al-runner reads source-backed
+   * resources and keys its output cache -- and `active/` is this backend's own private copy, so
+   * nothing shared with the bcdev path is touched and no other backend inherits a manifest change
+   * it has no use for.
+   */
+  private async installResourceSelector(activeDir: string, artifactId: string): Promise<void> {
+    const manifestPath = join(activeDir, "app.json");
+    const raw = await readFile(manifestPath, "utf8");
+    const manifest = JSON.parse(raw) as { resourceFolders?: string[] };
+    const folders = Array.isArray(manifest.resourceFolders) ? manifest.resourceFolders : [];
+    if (!folders.includes(SELECTOR_RESOURCE_FOLDER)) {
+      manifest.resourceFolders = [...folders, SELECTOR_RESOURCE_FOLDER];
+      await writeFile(
+        manifestPath,
+        `${JSON.stringify(manifest, null, 2)}
+`,
+        "utf8",
+      );
+    }
+    await mkdir(join(activeDir, SELECTOR_RESOURCE_FOLDER), { recursive: true });
+    // Seeded with the baseline value: the first compile reads the resource, and a missing file
+    // would fail that read rather than the run starting at "no mutant active".
+    await writeFile(
+      join(activeDir, SELECTOR_RESOURCE_FOLDER, SELECTOR_RESOURCE_NAME),
+      SELECTOR_RESOURCE_NONE,
+      "utf8",
+    );
+    await writeFile(
+      join(activeDir, "MutationSelector.Codeunit.al"),
+      emitResourceSelector({
+        objectId: this.cfg.selectorObjectId,
+        artifactId,
+        targetAppId: "",
+      }),
+      "utf8",
+    );
   }
 
   /**
@@ -775,6 +851,16 @@ export class AlRunnerBackend implements ExecutionBackend {
     // force: harmless when deploy() already removed them, or when a fixture never had them.
     for (const f of [CONTROL_REGISTER_FILENAME, CONTROL_UPGRADE_FILENAME]) {
       await rm(join(dir, f), { force: true });
+    }
+    if (this.selectorMode() === "resource") {
+      // R222: the whole point. One small text file, no AL rewritten, so al-runner's output cache
+      // still HITS and the already-compiled bundle reads the new id at runtime.
+      await writeFile(
+        join(dir, SELECTOR_RESOURCE_FOLDER, SELECTOR_RESOURCE_NAME),
+        mutantId ?? SELECTOR_RESOURCE_NONE,
+        "utf8",
+      );
+      return;
     }
     await writeFile(
       join(dir, "MutationSelector.Codeunit.al"),

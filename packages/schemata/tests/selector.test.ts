@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import {
+  SELECTOR_RESOURCE_NAME,
   emitMutationSelector,
   emitRegisterInstall,
   emitRegisterUpgrade,
+  emitResourceSelector,
   emitStaticSelector,
 } from "../src/selector";
 
@@ -144,6 +146,40 @@ describe("selector single-sourced identity", () => {
       expect(dyn).toContain(proc);
       expect(stat).toContain(proc);
     }
+  });
+
+  test("R222: the RESOURCE selector exposes the identical procedure set too", () => {
+    // The parity rule now binds three emitters. A caller swaps one for another at will, so an
+    // emitter missing a procedure the instrumented AL calls breaks the NEXT compile rather than
+    // this test.
+    const dyn = emitMutationSelector({ ...IDS, artifactId: ART, targetAppId: APP });
+    const res = emitResourceSelector({
+      objectId: IDS.selectorId,
+      artifactId: ART,
+      targetAppId: APP,
+    });
+    for (const proc of ["procedure Active(", "procedure ArtifactId(", "procedure TargetAppId("]) {
+      expect(dyn).toContain(proc);
+      expect(res).toContain(proc);
+    }
+  });
+
+  test("R222: it reads the resource and caches it, which is what keeps Active() off the disk", () => {
+    const res = emitResourceSelector({
+      objectId: IDS.selectorId,
+      artifactId: ART,
+      targetAppId: APP,
+    });
+    // `Active()` is called at EVERY mutated site, so the read must happen once per instance
+    // lifetime rather than once per guard. SingleInstance plus the Loaded flag is what does that;
+    // al-runner clears SingleInstance state at its isolation resets, so the value cannot go stale
+    // within a request and a request only ever scores one mutant.
+    expect(res).toContain("SingleInstance = true;");
+    expect(res).toContain("if not Loaded then begin");
+    expect(res).toContain(`NavApp.GetResourceAsText('${SELECTOR_RESOURCE_NAME}'`);
+    // No baked id anywhere: that is the difference from the static emitter, and the reason the
+    // compile is a cache hit.
+    expect(res).not.toContain("M0001");
   });
 
   test("install registers identity read from the selector, not from args", () => {
