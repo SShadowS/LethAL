@@ -84,7 +84,7 @@ that ordering is the priority.
 - **R210** · `resolveVarRef` keys a procedure's locals/parameters by NAME alone, so an overloaded procedure name resolves against the wrong overload's declarations · [R210.md](docs/roadmap/R210.md) · done (a-pending)
 - **R211** · `docs/campaign/2026-08-16-gift-card/rehearsal.events.ndjson` predates `hangCapableCount` and is pinned as a known schema-validation failure, not backfilled · [R211.md](docs/roadmap/R211.md) · open, filed 2026-09-06, closure needs a live BC re-run
 - **R212** · No fixture is a NAMESPACED AL app, which is why every gate stayed green while namespaced projects got zero coverage attribution · [R212.md](docs/roadmap/R212.md) · open, filed 2026-09-08
-- **R214** · Site enumeration ignores preprocessor directives, so a mutant can be planted in an `#if` branch the compiler never builds and can never be killed · [R214.md](docs/roadmap/R214.md) · open, filed 2026-09-08, measured; WIDENED 2026-09-09 — the same construct also LOSES sites, and that half was…
+- **R214** · Site enumeration ignores preprocessor directives, so a mutant can be planted in an `#if` branch the compiler never builds and can never be killed · [R214.md](docs/roadmap/R214.md) · open, filed 2026-09-08, measured; WIDENED 2026-09-09, the same construct also LOSES sites, and that half was…
 - **R215** · `tree-sitter-al` shapes an enum's `Implementation` mapping as a comparison; LethAL's declarative guard already drops it, and this row records that rather than a defect · [R215.md](docs/roadmap/R215.md) · open, filed 2026-09-08, severity CORRECTED the same day: not a LethAL defect
 
 ## Product gaps a real project hits
@@ -142,7 +142,7 @@ that ordering is the priority.
 - **R205** · A source file that changes on disk between session start and batch staging is instrumented from a stale parse: a mid-edit file with a missing `end;` produced a dispatch chain that repeated the file's tail 21 times, alc refused batch 0, and bisection blamed the environment; a test app republished under a running baseline was refused as stale · [R205.md](docs/roadmap/R205.md) · open — filed 2026-09-03 from the Document Output PR 54483 run…
 - **R213** · `ModifyAll(Field, Value, true)` clears R13's bar and `DeleteAll(true)` does not, measured — extend `swap-modify-flag` to the first only · [R213.md](docs/roadmap/R213.md) · open, filed 2026-09-08, measured
 - **R216** · `isStatementSlot` omits `asserterror_statement.body`, so a call there is not a statement site — real, measured, and inert on every app corpus · [R216.md](docs/roadmap/R216.md) · open, filed 2026-09-09, measured, LOW: costs nothing on app code
-- **R217** · `isStatementSlot`'s container list is maintained by hand and is incomplete twice over — the issue #6 context probe found both omissions, and nothing else can · [R217.md](docs/roadmap/R217.md) · open, filed 2026-09-09, measured; option 3 DONE (b3c441a), the probe was widened and found more
+- **R217** · `isStatementSlot`'s container list is maintained by hand and is incomplete twice over, and the issue #6 context probe found both omissions, and nothing else can · [R217.md](docs/roadmap/R217.md) · open, filed 2026-09-09, measured; option 3 DONE (b3c441a), the probe was widened and found more
 
 ## Backends and tooling
 
