@@ -1,8 +1,14 @@
 # Issue orchestrator: design
 
 Date: 2026-09-13
-Status: revision 1. Five sections, each reviewed by gpt-5.6-sol and gemini-3.8-flash through pi,
-adversarially, with every mechanical claim acted on verified against this repo before acceptance.
+Status: revision 2, READY to plan against. Five design sections plus a final gate, each reviewed
+by gpt-5.6-sol and gemini-3.8-flash through pi, adversarially, with every mechanical claim acted on
+verified against this repo before acceptance. Revision 2 answers a NOT READY verdict from both
+reviewers: it closes the laundering hole (outcome 3 now burns the candidate SHA), withdraws the
+claim that pre-commitment timing is enforced rather than recorded, replaces the artifact-identity
+check with an expected-versus-observed comparison, turns the HALT rule into an allowlist, names
+the baseline-proof commit `P`, enumerates the allowed evidence paths, adds receipt nonces, and cuts
+the migration engine, the envtool substitute and model ranking from v1.
 Owner: SShadowS
 
 ## Goal
@@ -41,9 +47,10 @@ this design.
   filesystem. Mitigation is eligibility and protected paths, not isolation.
 - **Spend ceiling (stated limit).** Token spend is not observable from inside the harness. The
   proxies are the subagent, pi-call and live-minute caps.
-- **Semantic honesty of a pre-commitment (stated limit).** The executor can prove a prediction was
-  committed before the first live run, and that it matched. It cannot prove the prediction was
-  believed. See Residual risk.
+- **Pre-commitment timing is recorded, not enforced (stated limit).** Workers run as the owner and
+  can reach a container out of band, so the executor cannot prove a prediction was authored in
+  ignorance. What it can prove is that the prediction was committed before the first run *it*
+  launched, and that it matched. See Pre-commitment and Residual risk.
 
 ## Shape
 
@@ -55,12 +62,19 @@ Three parts.
 | `/orchestrate [--dry-run] [--max-issues N]` | One tick: preflight, fetch, rank, claim, run `/issue N`, verify the merge, file discoveries, finish. |
 | `/issue N` | The per-issue pipeline: worktree, classify, probes, oracle, spec, plan, implement, ladder, panel, PR, merge. |
 
-**The capability boundary is real, not stylistic.** Reference A's spec says all mutation belongs
-to the executor, but its `/issue` command still instructs the model to run `git worktree add` and
-`git rebase` directly. That inconsistency is not reproduced here. The executor owns the container
-configs, the leases and the credentials, and the conductor has no path to a live container except
-through it. That property is what makes the pre-commitment rule below enforceable rather than
-aspirational.
+**The capability boundary is a discipline, not a sandbox, and the spec says which.** Reference A's
+spec says all mutation belongs to the executor, but its `/issue` command still instructs the model
+to run `git worktree add` and `git rebase` directly. That inconsistency is not reproduced here: no
+command in this design tells the conductor to touch git, `gh`, docker or `altool`.
+
+What that buys is real but narrower than an earlier draft claimed. Every mutation the flow performs
+*as part of the protocol* goes through one tested, dry-runnable, fault-injectable place, and
+anything outside it produces no receipt and therefore cannot become evidence. What it does not buy
+is prevention: the conductor runs as the owner and could invoke docker directly if it decided to.
+The design is built so that doing so gains nothing rather than so that it is impossible.
+
+The one place that distinction bites is pre-commitment timing, and it is stated there rather than
+glossed.
 
 **TypeScript, not Python.** The repo is Bun, `bun test` already covers `scripts/`, and
 `roadmap-index.ts` and `redact-campaign-report.ts` are the existing precedent for a script that is
@@ -106,10 +120,26 @@ measurement is judged.
 The reason this list is wider than reference A's: without it, a PR can weaken `growth.itest.ts` or
 an assertion inside a live itest and then be verified by the weakened gate.
 
-**Evidence sanitizing.** Everything leaving the machine is scanned first: issue bodies, comments,
-PR bodies, and every committed file. `bun scripts/redact-campaign-report.ts --check <paths>` runs
-over every added or changed campaign JSON with the paths enumerated explicitly (the script
-requires at least one path and throws on an empty list). A violation is `blocked sanitize-failed`.
+**Evidence sanitizing**, and what does not exist yet. The rule is that everything leaving the
+machine is scanned first: issue bodies, comments, PR bodies, and every committed file. Only half
+of that is buildable today. `bun scripts/redact-campaign-report.ts --check <paths>` covers
+`SessionReport` JSON and rejects any other input shape, and the existing `no-committed-secrets`
+hook is a narrow write-time heuristic, not an outbound scanner. Neither can sanitize Markdown, a
+PR body, or a comment.
+
+So the scanner splits in two, and the second half is new work rather than an assumed capability:
+
+- **Structured**: `redact-campaign-report.ts --check` over every added or changed campaign JSON,
+  paths enumerated explicitly, plus its refusal of mutation-elements exports, which embed complete
+  source.
+- **Free text**: a new outbound policy scanner over every issue body, comment, PR body and ledger
+  render, checking for `CDO_WS` and `.alpackages` paths, absolute local paths, token shapes, and
+  AL source blocks longer than one line. Until it exists, the flow may not post free text it
+  generated from customer-project evidence.
+
+A violation either way is `blocked sanitize-failed`. The ruling behind it is unchanged and is
+recorded in CLAUDE.md: filenames, paths, procedure names and test names publish fine; source code
+does not; and `killingTestFailure` is deliberately kept.
 
 ## The three-outcome live gate
 
@@ -121,18 +151,65 @@ A live leg has three outcomes:
 2. **Verdicts moved, and every movement was pre-committed.** Legitimate. Re-record in the same PR.
 3. **Verdicts moved unpredicted.** Block. This is the only regression signal.
 
+### Outcome 3 burns the candidate SHA
+
+Outcome 3 and the retry rule below must not be allowed to compose, or the whole mechanism is
+theatre. The composition, found by both reviewers independently: the candidate moves mutant `K`
+from `killed` to `survived`; generation 1 did not predict it; the run observes it; generation 2 is
+written *after* the verdict is known, predicting exactly `K: killed -> survived` with a plausible
+story; the rerun matches; the baseline is re-recorded; it merges. A prediction authored after
+observation proves nothing, and the pre-commitment adversary is no longer reviewing blind because
+it can see the measured result.
+
+The control run is the discriminator, and it decides which of two disjoint states applies:
+
+| candidate | base (control) | state |
+|---|---|---|
+| differs from baseline | matches baseline | **candidate-caused. This candidate SHA is permanently invalid.** |
+| differs from baseline | also differs | **environment. `inconclusive`**, retry the same SHA after reset and re-qualification |
+| differs only in `killingTest` | either | `inconclusive`, order-dependent since R197 |
+
+No later generation can legalize a candidate-caused unpredicted movement. A retry requires a
+**code change, therefore a new SHA**, with its pre-commitment committed before any live run of that
+new SHA. Generations exist to correct a prediction about work that has changed, never to record
+what was just observed about work that has not.
+
+The control run therefore establishes causality, which is a different thing from legitimacy, and
+the spec no longer asks it to carry more than that.
+
 ### Pre-commitment, enforced
 
 - A pre-commitment file at `docs/superpowers/specs/<date>-issue-N-precommitment.md` must be
-  committed **before the first live run for that issue**, not merely before the current
-  invocation. The executor is the only path to a live container, so it knows every live run for an
-  issue and can enforce the stronger condition. The weaker one is trivially bypassed: run the
-  gate, observe what moved, write the file, commit, invoke. Both reviewers found that hole
-  independently.
+  committed **before the first live run of the candidate SHA it predicts**, not merely before the
+  current invocation. The weaker condition is trivially bypassed: run the gate, observe what
+  moved, write the file, commit, invoke.
 - Offline work stays freely available to the agent. What must not be observable before commitment
   is the live verdict.
-- A failed prediction does not permit an edit. It requires a new pre-commitment **generation**,
-  with its reason recorded, and the generation diff is what the panel reads.
+- A failed prediction does not permit an edit, and it does not permit a new generation for the
+  same SHA. See "Outcome 3 burns the candidate SHA" above. A generation exists for a *new* SHA
+  whose code has changed, and the generation diff is what the panel reads.
+
+**Stated limit: this timing is recorded, not enforced.** An earlier draft claimed the executor
+could enforce it because the executor is the only path to a live container. Both reviewers
+rejected that, and they are right: workers run as the owner with full filesystem and process
+access, so a worker can read the container config, invoke `docker`, `altool`, an env-gated itest
+or `al-runner` directly, and observe a verdict out of band. Protected paths prevent commits, not
+observation. Making the claim true would need a process sandbox without Docker access and
+credentials, or a credentialed broker in front of the containers. Neither exists here, so the
+claim is withdrawn rather than assumed.
+
+What is actually true, and is what the design leans on instead:
+
+- The executor logs every live run it launches, so an in-band peek is visible in the ledger.
+- A bypassing run produces no receipt, so its result can never become gate evidence.
+- The pre-commitment adversary reviews generation 1 blind.
+- Most importantly, the SHA-burning rule above removes most of the payoff: peeking cannot rescue a
+  candidate whose first executor-run movement was unpredicted, because no later prediction for
+  that SHA is admissible at all.
+
+A worker that peeks before the *first* executor run can still write a knowing generation 1. That
+residue is accepted and recorded under Residual risk. The threat model here is a model that is
+lazy or self-deceiving, not one that is adversarial.
 
 ### Entry shapes
 
@@ -168,17 +245,25 @@ The delta may **add** required legs and may never remove one.
 
 ### Inconclusive, and the control run
 
-A failed prediction is `inconclusive`, not blocked-forever: no merge, no baseline write, evidence
-retained, one bounded retry after a clean reset. Whenever a candidate run disagrees with the
-baseline, the executor reruns the same legs on the **base commit** in the same containers. If the
-base also disagrees, the cause is the environment, and the outcome is `inconclusive` with the
-environment fingerprint attached rather than a code block. That one mechanism answers the whole
-drift class: `al-runner` is a global dotnet tool that ships several times a day.
+Whenever a candidate run disagrees with the baseline, the executor reruns the same legs on the
+**base commit** in the same containers. The two-row table under "Outcome 3 burns the candidate
+SHA" is the whole decision procedure, and `inconclusive` is reachable only from the environment
+row: no merge, no baseline write, evidence and environment fingerprint retained, one bounded retry
+on the same SHA after a reset and re-qualification.
 
-A `killingTest`-only difference is `inconclusive`, never a block: R197 measured those as
-order-dependent.
+That mechanism answers the whole drift class, which matters because `al-runner` is a global dotnet
+tool that ships several times a day. It does not, and must not, soften the candidate-caused row.
 
 ### Re-recording is two-phase
+
+There is a fifth commit, and naming it resolves a circularity sol found: the re-record proof run
+needs the new baseline installed, but baselines are read-only committed inputs and the manifest
+that would authorize the re-record needs the proof run's receipt. So the proof runs against **`P`**,
+an executor-created commit on the issue branch containing exactly the new baseline files and
+nothing else. `P` is a real commit, so the itest reads a committed read-only baseline as the rule
+requires; the proof receipt binds to `P`; the manifest is sealed after it, over `H` for code and
+`P` for baselines. `P` becomes part of `H..F` and is on the allowed-path list below. If the proof
+fails, `P` is dropped and the candidate is `inconclusive`.
 
 Candidate run writes a temporary baseline to an executor-owned path; the executor prints the exact
 old-to-new diff; it installs it; it reruns the affected legs with the escape hatch **absent**; only
@@ -228,7 +313,13 @@ Every env-gated itest calls `process.exit(0)` on its skip path: `bcdev.itest.ts:
 the executor merges everything. That is empty-vs-empty, this project's named signature bug,
 reproduced inside the thing built to prevent it.
 
-Each itest therefore writes a machine-readable **completion receipt**: leg name, candidate SHA,
+Each itest therefore writes a machine-readable **completion receipt**. Because workers run as the
+same OS user, a file on disk is not evidence of who wrote it, so the receipt is
+challenge-response: the executor mints a **nonce** per invocation, passes it in the child
+environment along with an executor-chosen destination path, and refuses any receipt that does not
+echo the nonce, name the expected candidate SHA and generation, and arrive at that path from the
+process it launched. A receipt from a previous run replays as a stale nonce. The receipt carries
+leg name, candidate SHA,
 the sublegs it ran with their expected count, the artifact ids it observed, the container
 generation, and `status: passed`. The executor requires the receipt. A skip is neither pass nor
 failure; for a required leg it is an executor error.
@@ -253,18 +344,27 @@ live legs. The table will always be incomplete; incompleteness must fail safe.
 | `packages/runner/**` | bcdev, lease, tables, chunked, alrunner |
 | `packages/runner/src/publisher.ts`, `app-version.ts`, `publish-serializer.ts`, `deployment-verifier.ts` | the above, plus stale-publish |
 | `packages/runner/src/run-mutant-transport.ts`, `harness.ts` | the above, plus hang |
-| coverage, selection or attribution code | the above, plus the two-mode coverage differential |
+| `packages/runner/src/coverage*.ts`, `selection.ts`, `line-map.ts`, `interpretation.ts` | the above, plus the coverage differential |
 | `extensions/lethal-control/**` | THE FULL SET, after a control-app bootstrap |
 | `fixtures/sandbox-app/**`, `fixtures/sandbox-tests/**` | bcdev, alrunner |
 | `fixtures/sandbox-probes/**` | bcdev, lease |
 | `fixtures/sandbox-data/**`, `fixtures/sandbox-data-tests/**` | tables, chunked |
 | `fixtures/sandbox-hang/**`, `fixtures/sandbox-hang-tests/**` | hang |
-| `packages/runner/src/env-tool*.ts` | the envtool contract gate below, in place of the unrunnable live leg |
+| `packages/runner/src/env-tool*.ts` | none: `manual-only`, parks. See envtool below |
 | anything unmatched | THE FULL SET |
 
-**THE FULL SET** means bcdev, lease, stale-publish, tables, chunked, alrunner (all four legs),
-hang, and the envtool contract gate. It does not include the live envtool leg, which cannot run;
-see below.
+**THE FULL SET** means bcdev, lease, stale-publish, tables, chunked, alrunner (all four legs) and
+hang. It does not include envtool, which cannot run; see below.
+
+**Rows union, they do not override.** A diff matching both `packages/runner/**` and
+`packages/runner/src/publisher.ts` requires the union of both rows. There is no first-match or
+most-specific rule, because either one would let a more specific row silently *narrow* the
+selection, which is the direction that loses a gate. The specific rows exist only to add.
+
+The coverage differential is listed as a required gate but **has no invocation contract today**: it
+is a manual skill procedure with no `package.json` script. It must get one, with a receipt like any
+other leg, before its row can be enforced. Until then a diff matching that row parks rather than
+merging on a gate that cannot be run the same way twice.
 
 `schemata` selects `hang` because the selector it emits is what the stop has to interrupt, and no
 other fixture contains a non-terminating mutant.
@@ -300,15 +400,20 @@ that gives the leg its value.
 
 ### envtool
 
-Its environment was deleted 2026-09-01 and never restored, so the leg cannot run. Rather than
-parking every runner change, both reviewers proposed the same substitute and it is adopted: a
-**local external-process contract gate**, a fake env tool returning the documented `resolve` JSON
-pointed at a dedicated container, which exercises `resolveEnvToolSession`, `buildBackend`,
-`leaseSessionFor` and `withEnvTeardown`, the seams the itest says it exists to test. Its per-mutant
-table is compared against bcdev's on the same day, which is what the real gate's value was.
+Its environment was deleted 2026-09-01 and never restored, so the leg cannot run.
 
-Only provider-lifecycle changes park for a human. A hosted canary runs periodically rather than
-per PR, because provider drift is independent of repository paths.
+An earlier draft proposed a local external-process contract gate, a fake env tool resolving to a
+dedicated container. Both reviewers then rejected it at the final gate, for the same reason and
+convincingly: it is an idea, not a gate. It has no fake-executable protocol, no fixtures, no
+container assigned (Cronus284 already carries `sandbox-app` and single-target residency forbids a
+second), no place in the destructive-residue order, no receipt schema, and no defined baseline
+source. Its per-mutant comparison "against bcdev's on the same day" also has no deterministic
+meaning unless bcdev ran in the same tick.
+
+**`packages/runner/src/env-tool*.ts` is therefore `manual-only`.** A diff touching it parks with
+that reason. This costs autonomous coverage on a narrow path that has no reachable environment
+anyway, and it costs nothing on ordinary bcdev, tables, chunked, lease, hang or al-runner work.
+When an environment is provisioned again, the live leg returns and this paragraph goes away.
 
 ### The sealed manifest
 
@@ -317,6 +422,26 @@ baseline hashes, every required leg with its receipt, published target and test-
 container id **and generation**, BC image digest, control-app version, `al-runner` version, `alc`
 path and hash. Nothing may be re-recorded or merged against an unsealed manifest, and a rebase
 invalidates it.
+
+### Artifact freshness needs an expected identity, not just an observed one
+
+An earlier draft said the manifest's target and test-app hashes catch the stale-build failure.
+They do not, and both reviewers said so: recording the hash of whatever is published proves its
+identity, never its freshness. Two identical hashes on both sides of a comparison are consistent
+with nothing having been rebuilt.
+
+So the manifest carries **two** identities per app and asserts they are equal:
+
+- **expected**, derived from candidate source: `compile:fixtures` must retain the app it builds and
+  report its hash rather than deleting it. Today it compiles to `tmpdir()` and calls
+  `rmSync(out, { force: true })` (`compile-fixtures.ts:115`, `:129-133`), which is correct for its
+  present job (a stray `.app` beside the source is what makes staleness hard to notice) and useless
+  as a build binding. It gains a mode that writes the artifact to an executor-owned path and
+  reports `{project, alcPath, alcHash, sourceTreeHash, appHash}`.
+- **observed**, read back from the container after publish.
+
+A mismatch is `blocked stale-artifact`. This is the only thing standing between the flow and R56,
+because in that failure nothing moves and no prediction logic fires.
 
 The target and test-app hashes are load-bearing. A PR can break a test fixture, fail to rebuild the
 test app, have BC run the previous build, and match every frozen verdict. Nothing moves, so no
@@ -469,6 +594,11 @@ Convergence means all normative objections resolved and all empirical questions 
 
 ### Model routing
 
+**v1 ranks FIFO.** Both reviewers pointed out that model ranking is not foundational and puts a
+model in the control plane for no correctness gain: bad ordering costs throughput, not correctness.
+v1 takes the oldest eligible `ready` issue. The routing below describes v2, when ranking earns its
+place.
+
 Deterministic eligibility and duplicate detection in the executor. Sonnet 5 for ranking *after*
 that filtering. Opus 5 for semantic triage, the acceptance oracle, and implementation. Per-task
 review routes by risk: Opus for verdict classification, baseline identity, coverage attribution,
@@ -527,7 +657,17 @@ measure before building, R089 calls itself a standing watch while carrying an op
 is recurring. Without it the flow eventually claims something that cannot terminate through a
 merge.
 
-### Migration is manifest-driven, not automatic
+### Migration is a one-time human act, not an engine
+
+Both reviewers said to cut the migration engine and they are right: it is a general compiler with
+seven relation types, built for a one-off conversion of 19 rows, sitting inside a runtime executor
+that will never need it again. The owner performs the migration once, by hand or with a throwaway
+script, and the manifest below is retained as **evidence of what was decided**, not as code the
+executor runs. The executor only ever reads the resulting issues.
+
+The rules below therefore describe what the owner must decide, not what a program enforces.
+
+### The manifest, as a record
 
 An owner-approved manifest maps every one of the 19 rows and 8 issues exactly once, with an
 explicit relation:
@@ -558,15 +698,34 @@ accept either.
 `.agent/HALT` in the main checkout, checked before every external write and every container
 operation. Two carve-outs only: terminal bookkeeping, and emergency rollback.
 
-**Container mutation under HALT is not a carve-out.** An earlier draft allowed quarantine and reset
+**Under HALT the executor may perform only the operations on this list**, and nothing else touching
+a container, GitHub, or `master`:
+
+```
+write or retain the quarantine marker
+kill the local process tree of anything this run launched
+docker stop <container>            (stop only; never start, restart, exec, or rm)
+read-only inspection: docker ps, Get-NAVAppInfo, HarnessInfo GET
+append to the local ledger and run directory
+one terminal comment plus the label transition on the current issue
+the validated revert
+```
+
+An earlier draft stated "container mutation under HALT is not a carve-out" and then permitted
+stopping or isolating the container two sentences later, which sol correctly called a
+contradiction: stopping a container is a container mutation. The distinction the rule was reaching
+for is **containment versus restoration**, and an allowlist states it without needing the reader to
+infer it. Everything absent from the list is refused: lease reset, publish, unpublish, sync,
+requalification, sealing, merging, pushing, filing.
+
+An earlier draft allowed quarantine and reset
 so the next run would not be blocked, and both reviewers rejected it with the same argument: while
 HALT exists there must be no next run. "Reset" also covers lease clearing, which
 `recover-tier/SKILL.md:32-42` says is safe only once the stranded AL is actually dead, and forceful
 app removal, which silently uninstalls dependants.
 
-Under HALT the executor may perform **containment only**: write the quarantine marker, kill the
-local process tree, stop or isolate the container, record what was in flight. Restoration requires
-HALT cleared or a narrowly scoped human recovery token, and must prove the old operation dead first.
+Restoration requires HALT cleared or a narrowly scoped human recovery token, and must prove the old
+operation dead first.
 
 ### Leases, and the container generation
 
@@ -611,9 +770,23 @@ target cascades), verify no residual instrumented target, verify the lease table
 
 ### Verifying the merge
 
-Four commits matter, named once here and used throughout: `B` is the base the gates ran against,
-`H` the code head they passed on, `F` the final head after the evidence-only commits allowed after
-`H`, and `M` the squash merge.
+Five commits matter, named once here and used throughout: `B` is the base the gates ran against,
+`H` the code head they passed on, `P` the optional baseline-proof commit, `F` the final head after
+the evidence-only commits allowed after `H`, and `M` the squash merge.
+
+**The allowed evidence paths in `H..F`**, exhaustively, since the merge verifier turns on them:
+
+```
+.agent/issue-<N>/ledger.md
+.agent/issue-<N>/findings.json
+.agent/discoveries/<fingerprint>.json          (discovery receipts)
+packages/runner/itest/<leg>.baseline.json      (only in P, only legs the manifest names)
+docs/roadmap/R<nnn>.md                         (only the issue's own id, status line only)
+ROADMAP.md                                     (only when the line above changed)
+docs/superpowers/specs/<date>-issue-<N>-precommitment.md
+```
+
+Anything else in `H..F` refuses the merge.
 
 Not a second full ladder. A **merge-tree equivalence check**: `M`'s parent is `B`, its
 tree equals `F`'s tree, `H..F` contains only allowed evidence paths, the sealed manifest
@@ -667,11 +840,16 @@ before the worktree is removed.
 ## Repo changes
 
 - `scripts/agentflow/` and its tests (fake `gh`, fault injection around every side effect, a
-  write-free dry run, lock and lease races, stale recovery preserving the tree, generation
-  rechecks, receipt validation, protected-path detection, sanitizer rejection, migration-manifest
-  validation).
-- A shared **gate receipt** module, and the change to each itest to emit one.
-- `compile:fixtures` reports a positive inventory rather than exiting 0 on a skip.
+  write-free dry run proven by write-intercepting adapters, lock and lease races, stale recovery
+  preserving the tree, generation rechecks, receipt nonce validation and replay refusal,
+  protected-path detection, merge-tree negatives, sanitizer rejection).
+- A shared **gate receipt** module (nonce echo, candidate SHA, generation, subleg inventory), and
+  the change to each itest to emit one.
+- `compile:fixtures` reports a positive inventory rather than exiting 0 on a skip, and gains an
+  artifact mode that retains the built `.app` and reports its hash, since it currently deletes it
+  (`compile-fixtures.ts:129-133`) and no source-to-artifact binding exists without that.
+- A `package.json` script and receipt for the coverage differential, which is a required gate in
+  the table and has only a manual procedure today.
 - `assertMatchesBaseline` refuses a missing committed baseline instead of minting one.
 - `.claude/commands/orchestrate.md`, `issue.md`, `triage.md`.
 - New agents: `issue-triager`, `acceptance-oracle`, `baseline-diff-triager`,
@@ -684,47 +862,87 @@ before the worktree is removed.
 
 ## Proving the flow
 
-1. Executor unit tests green, including: a stale lease is reclaimed only after the old writer is
-   proven dead; a receipt-less leg fails a required gate; a skipped itest is an executor error;
-   a deleted baseline is an error, not a re-record; a pre-commitment authored after the first live
-   run is refused; a rename entry reconciles ordinal churn while a hidden verdict flip inside it
-   does not.
-2. `/orchestrate --dry-run` over the current queue: eligibility shown, a ranking, one pick,
-   nothing written (verified by `git status`, label listing, lease absence, and an unchanged
-   `.agent/runs/`).
-3. Container qualification of Cronus284/285 against every frozen baseline.
-4. A seeded bounded offline issue end to end.
-5. A seeded issue that legitimately moves one mutant, with a correct pre-commitment: outcome 2, a
-   two-phase re-record, a merged PR.
-6. The same issue with a deliberately wrong pre-commitment: `inconclusive`, control run, no
-   baseline write.
-7. A seeded issue whose fix breaks a fixture without rebuilding the test app: the manifest's
-   artifact hashes must catch what the verdicts cannot.
-8. A crash injected between dispatch and completion: the container is not requalified until the
-   old writer is proven dead.
+The order matters as much as the content: proofs 1 to 4 are buildable before any live container is
+touched, and they are what stop the ladder from hard-coding interfaces before the transaction
+boundaries are known.
+
+1. **A pure transition validator**, no side effects: every candidate state, outcome-3 burning,
+   generation transitions, `P` and manifest sealing order, HALT allowlist, crash recovery. Fault
+   injection at every transition.
+2. **Dry run performs no writes**, proven by write-intercepting adapters for filesystem, git,
+   GitHub, process spawn and container operations, each failing the test on any attempted
+   mutation. An earlier version of this proof checked `git status`, labels, leases and
+   `.agent/runs/`, which enumerates the expected write locations rather than proving there were
+   none.
+3. **Receipt replay and forgery**: stale nonce, copied receipt, right SHA and wrong generation,
+   worker-written receipt, receipt from a process the executor did not launch. Each refused.
+4. **Merge-tree negatives**: an extra file in `F`, a wrong parent, a stale manifest, a changed
+   container generation, a forbidden path in `H..F`, a SHA-sensitive leg not rerun. Each refuses
+   the merge.
+5. **A thin vertical slice against a fake gate adapter**: one fake issue travels claim, oracle,
+   implementation, fake gate, review, merge-tree verification, close. Before any live ladder.
+6. **HALT race**: HALT injected between authorization and every external write and container
+   operation; no non-allowlisted side effect occurs.
+7. **Crash atomicity**: issue created before the discovery receipt is committed; baseline installed
+   before the proof receipt; PR merged before local bookkeeping; HALT written before the revert.
+   Each reconciles on the next tick.
+8. **Container qualification** of Cronus284/285 against every frozen baseline, then a crash
+   injected between dispatch and completion: the container is not requalified until the old writer
+   is proven dead by an independent observable (a confirmed BC service restart and session
+   invalidation), never by the same predicate the recovery code consumes.
+9. **A seeded bounded offline issue** end to end.
+10. **A seeded legitimate movement**, with the seeded source change, the exact mutant key, the old
+    and expected verdict, the independent behavioural reason, and the expected source-built and
+    server-observed artifact identities all named *before* execution. Without those five named in
+    advance, a green outcome-2 path proves only that the mechanism accepted its own fixture.
+11. **The same seeded change with a deliberately wrong pre-commitment**, and the base control
+    matching baseline: the candidate SHA is permanently invalid, no generation rescues it, and only
+    a code change producing a new SHA can proceed. This is the laundering proof and it is the one
+    that matters most.
+12. **A seeded fixture break with no test-app rebuild**: expected artifact identity derived from
+    candidate source must differ from the server-observed identity. Recording the published hash
+    alone cannot detect staleness, which is why proof 12 tests the *expected versus observed*
+    equality and not the manifest's mere possession of a hash.
+13. **A capability-bypass attempt**: a worker tries `gh`, docker, `altool`, an env-gated itest and
+    `al-runner` directly. This proof is expected to FAIL to prevent observation, and exists to
+    document that limit honestly rather than to pass. It must show that no bypassing result can
+    become gate evidence, which is the property actually claimed.
 
 ## Residual risk
 
 Ranked, with the mechanism rather than the category.
 
-1. **A pre-commitment that is honest in form and wrong in belief.** The executor proves it was
-   committed first and that it matched. It cannot prove it was believed. The mitigations are the
-   pre-commitment adversary, the control run, and the fact that a wrong prediction is
-   `inconclusive` rather than fatal.
+1. **A knowing generation 1.** A worker peeks at a live verdict out of band, before any executor
+   run, and writes a first pre-commitment it already knows to be true. The timing rule is recorded,
+   not enforced, because workers run as the owner (see Pre-commitment). What remains: the blind
+   adversary review, the ledger, and the fact that a peek buys nothing after the first executor
+   run, since an unpredicted candidate-caused movement burns the SHA outright.
 2. **An acceptance oracle that encodes the same misreading as the issue.** The red-check then
    passes honestly. Separating the oracle from the implementer reduces the correlation; a probe
    against real BC removes it for platform claims, which is why `Resolution-mode: measurement`
    exists.
-3. **Contamination arising after qualification but before the seal.** The generation, the artifact
-   hashes and the final clean-state probe narrow the window; they do not close it.
-4. **Migration deduplication losing decisive negative evidence.** Mitigated by the manifest and by
-   refusing every relation except `exact` automatically.
+3. **Contamination arising after qualification but before the seal.** The generation, the expected
+   versus observed artifact identities and the final clean-state probe narrow the window; they do
+   not close it.
+4. **A wrong human decision in the one-time migration**, losing decisive negative evidence such as
+   R219's measured finding that silently dropping AL is worse than the current loud refusal.
+   Mitigated by the manifest being retained as a reviewable record, not by any automation.
 
-## Two defects found while writing this spec
+## Findings about the repo, surfaced while writing this spec
 
-Both are independent of the orchestrator and worth filing on their own:
+All independent of the orchestrator. The first two are filed as R223 and R224; the rest are
+prerequisites recorded above under Repo changes.
 
 1. Every env-gated itest exits 0 on its skip path, so `bun run itest:tables` without the env var
-   is indistinguishable from a pass to any caller reading exit codes.
+   is indistinguishable from a pass to any caller reading exit codes. Filed as R223.
 2. `.claude/agents/al-compiler.md:17` probes only the `bin/win32` alc layout, which R167 records as
-   insufficient; `.claude/skills/al-compile/SKILL.md:16` probes both.
+   insufficient; `.claude/skills/al-compile/SKILL.md:16` probes both. Filed as R224.
+3. `compile-fixtures.ts` deletes the `.app` it builds, so nothing binds candidate source to a
+   published artifact. Correct for its current job, insufficient for a freshness check.
+4. `assertMatchesBaseline` mints a baseline from the current run when the committed file is absent
+   (`baseline-guard.ts:58-66`), so deleting a baseline is a way to make a gate green.
+5. The `baseline-guard` PreToolUse hook reads `tool_input.file_path`, so it fires only on `Edit` and
+   `Write` tool calls. A `Bash` command or any script writing through `fs` is not intercepted. It
+   protects against a model editing a baseline by hand, which is what it was built for, and it is
+   not a defence this design can lean on.
+6. The coverage differential is a required gate with no `package.json` script and no receipt.
