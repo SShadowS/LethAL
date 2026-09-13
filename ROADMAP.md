@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**19 of 220 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**21 of 222 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -87,6 +87,7 @@ that ordering is the priority.
 - **R214** · Site enumeration ignores preprocessor directives, so a mutant can be planted in an `#if` branch the compiler never builds and can never be killed · [R214.md](docs/roadmap/R214.md) · open, filed 2026-09-08, measured; WIDENED 2026-09-09, the same construct also LOSES sites, and that half was…
 - **R215** · `tree-sitter-al` shapes an enum's `Implementation` mapping as a comparison; LethAL's declarative guard already drops it, and this row records that rather than a defect · [R215.md](docs/roadmap/R215.md) · open, filed 2026-09-08, severity CORRECTED the same day: not a LethAL defect
 - **R218** · `census-operator-sites.ts` did not sort its file list, so the grammar-bump proof instrument produced spurious per-site diffs · [R218.md](docs/roadmap/R218.md) · done (see the 4.3.0 bump), filed and fixed 2026-09-09
+- **R223** · Every env-gated itest exits 0 when it skips, so a caller reading exit codes cannot tell a passed gate from one that never contacted BC · [R223.md](docs/roadmap/R223.md) · open, filed 2026-09-13, verified in all six itests
 
 ## Product gaps a real project hits
 
@@ -265,6 +266,7 @@ that ordering is the priority.
 - **R206** · A grouped call runs a mutant's covering tests in ONE BC session, so `SingleInstance` state carries from test to test where the per-request path gave every test a cold session: 8 of 741 verdicts moved `survived` to `killed` on Document Output, all cache code, all killed at group position 2 or later · [R206.md](docs/roadmap/R206.md) · done (`59081aa`, control app 1.0.0.18 in `a4ece0b`) — option (A) built after five design revisions and four…
 - **R207** · al-runner's `provision` subcommand is refused by `provisionOnce` for a reason that no longer reproduces: on v2.10.0.0 the run and the subcommand both resolve every artifact at the binary's build, so the toolkit-version gap measured on 2.1.1.0 is not visible on the fixture · [R207.md](docs/roadmap/R207.md) · open — filed 2026-09-03 while sweeping stale al-runner claims at the runner author's prompting; the reason…
 - **R208** · The chunked group path (`--max-methods-per-call`) has no live gate: R198 §7/§8's two forced-chunk campaigns were never implemented, and under R206 a chunked replay is the one place where `chunkPrefix` versus `ordered` is verdict-bearing · [R208.md](docs/roadmap/R208.md) · done (`itest:chunked`, 2026-09-04) — a two-leg differential gate over…
+- **R224** · The `al-compiler` subagent probes only the `bin/win32` alc layout, which R167 already recorded as insufficient, so a valid install reports BLOCKED · [R224.md](docs/roadmap/R224.md) · open, filed 2026-09-13, one-line fix, diverged from the skill that does it correctly
 
 ---
 
