@@ -32,6 +32,8 @@
   // types the package actually ships, not against a stale copy.
   "references": [{ "path": "../packages/runner" }],
   "files": [
+    "agentflow/effects.ts",
+    "agentflow/effects.test.ts",
     "agentflow/gate-outcome.ts",
     "agentflow/gate-outcome.test.ts",
     "agentflow/gate-table.ts",
