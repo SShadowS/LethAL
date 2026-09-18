@@ -52,6 +52,7 @@ import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { InstrumentedFile, MutantManifest, SelectorConfig } from "@lethal/schemata";
 import { writeInstrumentedProject } from "@lethal/schemata";
+import { itestConfigName, itestConfigPath } from "./config-path";
 import type { ActivationConfig } from "../src/activation";
 import { parseVersionConflict, reserveAppVersion } from "../src/app-version";
 import { ArtifactCompiler, defaultArtifactIo } from "../src/artifact";
@@ -81,7 +82,7 @@ const REPO_ROOT = join(HERE, "..", "..", "..");
 const PROJECT_DIR = join(REPO_ROOT, "fixtures", "sandbox-app");
 const TEST_DIR = join(REPO_ROOT, "fixtures", "sandbox-tests");
 const LAUNCH_LOCAL_PATH = join(PROJECT_DIR, ".vscode", "launch.local.json");
-const CONFIG_LOCAL_PATH = join(PROJECT_DIR, "lethal.config.local.json");
+const CONFIG_LOCAL_PATH = itestConfigPath(PROJECT_DIR);
 
 // Same ids as bcdev.itest.ts / al-runner.itest.ts — must live inside the fixture's declared
 // idRanges (79000-79199), enforced by real alc.exe (AL0297).
@@ -660,7 +661,7 @@ async function main(): Promise<void> {
 
   const configFile = await readJson<LethalConfigFile>(
     CONFIG_LOCAL_PATH,
-    "lethal.config.local.json",
+    itestConfigName(),
   );
   const bcdev = validateBcDevConfig(configFile.bcdev);
 

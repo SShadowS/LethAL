@@ -24,6 +24,7 @@ import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { itestConfigName, itestConfigPath } from "./config-path";
 import type { ActivationConfig } from "../src/activation";
 import { ArtifactCompiler, defaultArtifactIo } from "../src/artifact";
 import type { TestMethodRef } from "../src/backend";
@@ -54,7 +55,7 @@ const REPO_ROOT = join(HERE, "..", "..", "..");
 const PROJECT_DIR = join(REPO_ROOT, "fixtures", "sandbox-app");
 const TEST_DIR = join(REPO_ROOT, "fixtures", "sandbox-tests");
 const LAUNCH_LOCAL_PATH = join(PROJECT_DIR, ".vscode", "launch.local.json");
-const CONFIG_LOCAL_PATH = join(PROJECT_DIR, "lethal.config.local.json");
+const CONFIG_LOCAL_PATH = itestConfigPath(PROJECT_DIR);
 // Committed per-mutant healthy-path baseline (Task 15, design spec §14) — see baseline-guard.ts.
 // Aggregate counts (EXPECTED below) are a smoke test; this catches a per-mutant verdict swap
 // that leaves the aggregate counts unchanged.
@@ -253,7 +254,7 @@ async function runOnce(scratchRoot: string): Promise<RunOnceResult> {
 
   const configFile = await readJson<LethalConfigFile>(
     CONFIG_LOCAL_PATH,
-    "lethal.config.local.json",
+    itestConfigName(),
   );
   const bcdev = validateBcDevConfig(configFile.bcdev);
 

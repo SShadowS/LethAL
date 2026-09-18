@@ -29,6 +29,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { MutantManifest, MutantManifestEntry } from "@lethal/schemata";
+import { itestConfigName, itestConfigPath } from "./config-path";
 import type { ActivationConfig } from "../src/activation";
 import { ArtifactCompiler, defaultArtifactIo } from "../src/artifact";
 import { BcDevMcpBackend } from "../src/bcdev-backend";
@@ -58,7 +59,7 @@ const REPO_ROOT = join(HERE, "..", "..", "..");
 const PROJECT_DIR = join(REPO_ROOT, "fixtures", "sandbox-data");
 const TEST_DIR = join(REPO_ROOT, "fixtures", "sandbox-data-tests");
 const LAUNCH_LOCAL_PATH = join(PROJECT_DIR, ".vscode", "launch.local.json");
-const CONFIG_LOCAL_PATH = join(PROJECT_DIR, "lethal.config.local.json");
+const CONFIG_LOCAL_PATH = itestConfigPath(PROJECT_DIR);
 // Committed per-mutant baseline — see baseline-guard.ts. Absent on the first run: the guard
 // RECORDS it and says so. Never hand-write this file; it must come from a live run.
 const BASELINE_PATH = join(HERE, "tables.baseline.json");
@@ -683,7 +684,7 @@ async function runOnce(scratchRoot: string): Promise<RunOnceResult> {
   const launchCfg = await readOptionalLaunchConfig();
   const configFile = await readJson<LethalConfigFile>(
     CONFIG_LOCAL_PATH,
-    "lethal.config.local.json",
+    itestConfigName(),
   );
   const bcdev = validateBcDevConfig(configFile.bcdev);
 

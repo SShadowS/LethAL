@@ -59,6 +59,7 @@ import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { itestConfigName, itestConfigPath } from "./config-path";
 import type { ActivationConfig } from "../src/activation";
 import { ArtifactCompiler, defaultArtifactIo } from "../src/artifact";
 import { BcDevMcpBackend } from "../src/bcdev-backend";
@@ -83,7 +84,7 @@ const REPO_ROOT = join(HERE, "..", "..", "..");
 const PROJECT_DIR = join(REPO_ROOT, "fixtures", "sandbox-data");
 const TEST_DIR = join(REPO_ROOT, "fixtures", "sandbox-data-tests");
 const LAUNCH_LOCAL_PATH = join(PROJECT_DIR, ".vscode", "launch.local.json");
-const CONFIG_LOCAL_PATH = join(PROJECT_DIR, "lethal.config.local.json");
+const CONFIG_LOCAL_PATH = itestConfigPath(PROJECT_DIR);
 const SELECTOR_IDS = { selectorId: 79399, controlId: 79398, tableId: 79397 };
 
 /** The slice: the only file in this fixture whose kills reach ordered position 5. */
@@ -199,7 +200,7 @@ async function runLeg(scratchRoot: string, maxMethodsPerCall?: number): Promise<
   const launchCfg = await readOptionalLaunchConfig();
   const configFile = await readJson<LethalConfigFile>(
     CONFIG_LOCAL_PATH,
-    "lethal.config.local.json",
+    itestConfigName(),
   );
   const bcdev = validateBcDevConfig(configFile.bcdev);
   const toolPaths = await defaultAlToolPaths();

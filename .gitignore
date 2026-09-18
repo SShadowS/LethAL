@@ -13,6 +13,7 @@ launch.local.json
 lethal.sqlite
 lethal.config.local.json
 lethal.config.envtool.json
+lethal.config.agent.json
 *.app
 
 # Local MCP server config — contains credentials
