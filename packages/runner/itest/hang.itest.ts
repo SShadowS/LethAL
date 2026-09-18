@@ -43,6 +43,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { itestConfigName, itestConfigPath } from "./config-path";
+import { emitFailed, emitPassed, emitSkippedAndExit } from "./gate-receipt";
 import type { ActivationConfig } from "../src/activation";
 import { ArtifactCompiler, defaultArtifactIo } from "../src/artifact";
 import { BcDevMcpBackend } from "../src/bcdev-backend";
@@ -63,7 +64,7 @@ if (!process.env.LETHAL_ITEST_HANG) {
       "fixtures/sandbox-hang/lethal.config.local.json, and publish " +
       "fixtures/sandbox-hang-tests to that container to run this)",
   );
-  process.exit(0);
+  await emitSkippedAndExit("hang", "the leg's env var is unset");
 }
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -583,10 +584,19 @@ async function main(): Promise<void> {
     assertOffLeg(off);
 
     console.log("hang itest: PASS");
+    await emitPassed("hang", { sublegs: ["stop-hung-sessions-on", "stop-hung-sessions-off"], artifacts: { reported: false } });
   } finally {
     if (odataCfg !== undefined) await teardown(odataCfg);
     await rm(scratchRoot, { recursive: true, force: true });
   }
 }
 
-await main();
+try {
+  await main();
+} catch (err) {
+  // hang runs main() at top level rather than through main().catch, so without this a failure
+  // exits non-zero with no receipt, which the executor cannot tell from a crashed process.
+  await emitFailed("hang", err instanceof Error ? err.message : String(err));
+  console.error(err instanceof Error ? (err.stack ?? err.message) : String(err));
+  process.exit(1);
+}

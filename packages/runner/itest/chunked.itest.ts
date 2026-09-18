@@ -60,6 +60,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { itestConfigName, itestConfigPath } from "./config-path";
+import { emitFailed, emitPassed, emitSkippedAndExit } from "./gate-receipt";
 import type { ActivationConfig } from "../src/activation";
 import { ArtifactCompiler, defaultArtifactIo } from "../src/artifact";
 import { BcDevMcpBackend } from "../src/bcdev-backend";
@@ -76,7 +77,7 @@ import { ResultsStore } from "../src/store";
 
 if (!process.env.LETHAL_ITEST_CHUNKED) {
   console.log("chunked itest: skipped (set LETHAL_ITEST_CHUNKED=1 to run against a live server)");
-  process.exit(0);
+  await emitSkippedAndExit("chunked", "the leg's env var is unset");
 }
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -502,12 +503,14 @@ async function main(): Promise<void> {
     );
 
     console.log("chunked itest: PASS");
+    await emitPassed("chunked", { sublegs: ["unbounded", "chunked-2"], artifacts: { reported: false } });
   } finally {
     await rm(scratch, { recursive: true, force: true });
   }
 }
 
-main().catch((err) => {
+main().catch(async (err) => {
+  await emitFailed("chunked", err instanceof Error ? err.message : String(err));
   console.error(err);
   process.exit(1);
 });

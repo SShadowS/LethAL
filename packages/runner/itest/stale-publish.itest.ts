@@ -53,6 +53,7 @@ import { fileURLToPath } from "node:url";
 import type { InstrumentedFile, MutantManifest, SelectorConfig } from "@lethal/schemata";
 import { writeInstrumentedProject } from "@lethal/schemata";
 import { itestConfigName, itestConfigPath } from "./config-path";
+import { emitFailed, emitPassed, emitSkippedAndExit } from "./gate-receipt";
 import type { ActivationConfig } from "../src/activation";
 import { parseVersionConflict, reserveAppVersion } from "../src/app-version";
 import { ArtifactCompiler, defaultArtifactIo } from "../src/artifact";
@@ -74,7 +75,7 @@ if (!process.env.LETHAL_ITEST_BCDEV) {
     "skipped (set LETHAL_ITEST_BCDEV=1 and populate the gitignored launch.local.json / " +
       "lethal.config.local.json fixture files to run against a live dev server)",
   );
-  process.exit(0);
+  await emitSkippedAndExit("stale-publish", "the leg's env var is unset");
 }
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -748,12 +749,14 @@ async function main(): Promise<void> {
     await probeA(ctx);
     await probeB(ctx);
     console.log("\nstale-publish itest: PASS (Probe A + Probe B)");
+    await emitPassed("stale-publish", { sublegs: ["probe-a", "probe-b"], artifacts: { reported: false } });
   } finally {
     await rm(scratchRoot, { recursive: true, force: true }).catch(() => {});
   }
 }
 
-main().catch((err: unknown) => {
+main().catch(async (err: unknown) => {
+  await emitFailed("stale-publish", err instanceof Error ? err.message : String(err));
   console.error(err instanceof Error ? (err.stack ?? err.message) : String(err));
   process.exit(1);
 });

@@ -25,6 +25,7 @@ import { hostname, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { itestConfigName, itestConfigPath } from "./config-path";
+import { emitFailed, emitPassed, emitSkippedAndExit } from "./gate-receipt";
 import type { ActivationConfig } from "../src/activation";
 import { ArtifactCompiler, defaultArtifactIo } from "../src/artifact";
 import type { TestMethodRef } from "../src/backend";
@@ -47,7 +48,7 @@ if (!process.env.LETHAL_ITEST_BCDEV) {
     "skipped (set LETHAL_ITEST_BCDEV=1 and populate the gitignored launch.local.json / " +
       "lethal.config.local.json fixture files to run against a live dev server)",
   );
-  process.exit(0);
+  await emitSkippedAndExit("bcdev", "the leg's env var is unset");
 }
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -761,9 +762,11 @@ async function main(): Promise<void> {
   }
 
   console.log("bcdev itest: PASS");
+  await emitPassed("bcdev", { sublegs: ["bcdev"], artifacts: { reported: false } });
 }
 
-main().catch((err: unknown) => {
+main().catch(async (err: unknown) => {
+  await emitFailed("bcdev", err instanceof Error ? err.message : String(err));
   console.error(err instanceof Error ? (err.stack ?? err.message) : String(err));
   process.exit(1);
 });

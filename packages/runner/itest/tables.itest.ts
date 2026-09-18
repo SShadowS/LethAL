@@ -30,6 +30,7 @@ import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { MutantManifest, MutantManifestEntry } from "@lethal/schemata";
 import { itestConfigName, itestConfigPath } from "./config-path";
+import { emitFailed, emitPassed, emitSkippedAndExit } from "./gate-receipt";
 import type { ActivationConfig } from "../src/activation";
 import { ArtifactCompiler, defaultArtifactIo } from "../src/artifact";
 import { BcDevMcpBackend } from "../src/bcdev-backend";
@@ -51,7 +52,7 @@ if (!process.env.LETHAL_ITEST_TABLES) {
     "skipped (set LETHAL_ITEST_TABLES=1 and populate the gitignored " +
       "fixtures/sandbox-data/lethal.config.local.json to run against a live dev server)",
   );
-  process.exit(0);
+  await emitSkippedAndExit("tables", "the leg's env var is unset");
 }
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -1618,9 +1619,11 @@ async function main(): Promise<void> {
   }
 
   console.log("tables itest: PASS");
+  await emitPassed("tables", { sublegs: ["tables"], artifacts: { reported: false } });
 }
 
-main().catch((err: unknown) => {
+main().catch(async (err: unknown) => {
+  await emitFailed("tables", err instanceof Error ? err.message : String(err));
   console.error(err instanceof Error ? (err.stack ?? err.message) : String(err));
   process.exit(1);
 });

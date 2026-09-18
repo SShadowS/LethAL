@@ -143,6 +143,7 @@ import { hostname, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { itestConfigName, itestConfigPath } from "./config-path";
+import { emitFailed, emitPassed, emitSkippedAndExit } from "./gate-receipt";
 import type { ActivationConfig } from "../src/activation";
 import type { TestMethodRef } from "../src/backend";
 import type { LethalConfigFile } from "../src/cli";
@@ -160,7 +161,7 @@ if (!process.env.LETHAL_ITEST_BCDEV) {
     "skipped (set LETHAL_ITEST_BCDEV=1 and populate the gitignored launch.local.json / " +
       "lethal.config.local.json fixture files to run against a live dev server)",
   );
-  process.exit(0);
+  await emitSkippedAndExit("lease", "the leg's env var is unset");
 }
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -1519,12 +1520,14 @@ async function main(): Promise<void> {
     await verifyLeaseIsFree(cfg);
 
     console.log("\nlease itest: PASS (P1-P10, P9B)");
+    await emitPassed("lease", { sublegs: ["P1-P10", "P9B"], artifacts: { reported: false } });
   } finally {
     await rm(quarantineScratchDir, { recursive: true, force: true }).catch(() => {});
   }
 }
 
-main().catch((err: unknown) => {
+main().catch(async (err: unknown) => {
+  await emitFailed("lease", err instanceof Error ? err.message : String(err));
   console.error(err instanceof Error ? (err.stack ?? err.message) : String(err));
   process.exit(1);
 });

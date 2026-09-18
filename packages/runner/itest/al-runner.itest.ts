@@ -36,6 +36,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { emitFailed, emitPassed, emitSkippedAndExit } from "./gate-receipt";
 import { AlRunnerBackend } from "../src/al-runner-backend";
 import { alRunnerCoverageSupport } from "../src/al-runner-coverage";
 import { generateMutationSet, runSession } from "../src/orchestrator";
@@ -45,7 +46,7 @@ import { assertMatchesBaseline } from "./baseline-guard";
 
 if (!process.env.LETHAL_ITEST_ALRUNNER) {
   console.log("skipped (set LETHAL_ITEST_ALRUNNER=1 and LETHAL_ALRUNNER_PATH=<path> to run)");
-  process.exit(0);
+  await emitSkippedAndExit("alrunner", "the leg's env var is unset");
 }
 
 const alRunnerPathEnv = process.env.LETHAL_ALRUNNER_PATH;
@@ -440,9 +441,11 @@ async function main(): Promise<void> {
   }
 
   console.log("al-runner itest: PASS");
+  await emitPassed("alrunner", { sublegs: ["one-shot", "server", "resource", "platform-pin"], artifacts: { reported: false } });
 }
 
-main().catch((err: unknown) => {
+main().catch(async (err: unknown) => {
+  await emitFailed("alrunner", err instanceof Error ? err.message : String(err));
   console.error(err instanceof Error ? (err.stack ?? err.message) : String(err));
   process.exit(1);
 });

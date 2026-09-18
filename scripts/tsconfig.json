@@ -43,6 +43,7 @@
     "agentflow/fakes.ts",
     "agentflow/halt.ts",
     "agentflow/ports.ts",
+    "agentflow/receipt-roundtrip.test.ts",
     "agentflow/receipt.ts",
     "agentflow/receipt.test.ts",
     "agentflow/run-state.ts",
