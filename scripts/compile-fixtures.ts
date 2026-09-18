@@ -16,12 +16,29 @@
  * `bun run typecheck` covers the TypeScript. Nothing covered the AL. This does, in seconds.
  *
  * Usage:  bun scripts/compile-fixtures.ts
+ *         bun scripts/compile-fixtures.ts --inventory <out.json>
  * Exit 0 = every fixture compiles; exit 1 = at least one does not (errors printed).
+ *
+ * ## Inventory mode, and why exit 0 is not enough for a program
+ *
+ * Read by a human this script is honest: it says SKIPPED when `alc` is missing, and SKIP per
+ * project when symbols are absent. Read by a PROGRAM it is not, because all of those exit 0
+ * (R223). A caller cannot tell "every fixture compiles" from "nothing was compiled".
+ *
+ * `--inventory` writes what was actually done: the resolved compiler, and for every project its
+ * version, its source hash and whether it compiled. In that mode a missing `alc` is an ERROR
+ * rather than a friendly skip, because a caller that asked for an inventory and got none has
+ * learned nothing at all.
+ *
+ * The script reports; it does not judge. Which skipped project matters depends on what a change
+ * touched, and this script does not know the diff. So every project appears with its status and
+ * the caller decides.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, rmSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import { sourceHash } from "./lib/source-hash.ts";
 
 /**
  * Every root holding AL projects that must keep compiling. `examples/` joined `fixtures/` when the
@@ -77,7 +94,38 @@ function projectLabel(project: string): string {
   return `${root.split(/[\\/]/).pop()}/${project.slice(root.length + 1)}`;
 }
 
+/** One row of the inventory: what this project is, and whether it was actually compiled. */
+interface InventoryProject {
+  readonly project: string;
+  readonly version: string;
+  readonly sourceHash: string;
+  readonly status: "compiled" | "no-symbols" | "failed";
+}
+
+const inventoryIdx = process.argv.indexOf("--inventory");
+const inventoryPath = inventoryIdx >= 0 ? process.argv[inventoryIdx + 1] : undefined;
+if (inventoryIdx >= 0 && (inventoryPath === undefined || inventoryPath.startsWith("--"))) {
+  console.error("compile-fixtures: --inventory needs a path to write");
+  process.exit(1);
+}
+const inventory: InventoryProject[] = [];
+
+function appVersion(project: string): string {
+  const raw = readFileSync(join(project, "app.json"), "utf8").replace(/^﻿/, "");
+  return String((JSON.parse(raw) as { version?: unknown }).version ?? "");
+}
+
 const alc = findAlc();
+if (alc === null && inventoryPath !== undefined) {
+  // Deliberately NOT the friendly skip below. A caller that asked for an inventory and got exit 0
+  // with no inventory has learned nothing, and treating that as a pass is the exact shape R223 is
+  // about.
+  console.error(
+    "compile-fixtures: no alc.exe found, and --inventory was requested. An absent inventory is " +
+      "not a pass.",
+  );
+  process.exit(1);
+}
 if (alc === null) {
   // Not a failure: a machine without the AL extension cannot run this check, and pretending it
   // passed would be worse than saying it did not run. Exit 0 so it never blocks a TypeScript-only
@@ -101,8 +149,15 @@ let failed = 0;
 for (const project of projects) {
   const name = projectLabel(project);
   const packageCache = join(project, ".alpackages");
+  const version = appVersion(project);
   if (!existsSync(packageCache)) {
     console.error(`  SKIP  ${name} — no .alpackages (symbols are gitignored; download them first)`);
+    inventory.push({
+      project: name,
+      version,
+      sourceHash: sourceHash(project),
+      status: "no-symbols",
+    });
     continue;
   }
   // Output to a scratch path, never into the fixture: a stray `.app` beside the source is exactly
@@ -129,19 +184,30 @@ for (const project of projects) {
   }
   if (r.status === 0 && errors.length === 0) {
     console.log(`  OK    ${name}`);
+    inventory.push({ project: name, version, sourceHash: sourceHash(project), status: "compiled" });
     continue;
   }
+  inventory.push({ project: name, version, sourceHash: sourceHash(project), status: "failed" });
   failed += 1;
   console.error(`  FAIL  ${name} — ${errors.length} error(s)`);
   for (const e of errors.slice(0, 15)) console.error(`          ${e.trim()}`);
   if (errors.length > 15) console.error(`          ... ${errors.length - 15} more`);
 }
 
+if (inventoryPath !== undefined) {
+  // Written even when a project failed to compile, because the caller needs to know WHICH one and
+  // at what source. An inventory only on success would leave the interesting case unreported.
+  writeFileSync(
+    inventoryPath,
+    `${JSON.stringify({ alc, projects: inventory }, null, 2)}\n`,
+    "utf8",
+  );
+  console.log(`compile-fixtures: inventory of ${inventory.length} project(s) -> ${inventoryPath}`);
+}
+
 if (failed > 0) {
   console.error(
-    `\ncompile-fixtures: ${failed} fixture project(s) do not compile. A fixture that does not ` +
-      "compile cannot be republished, and a live gate that keeps passing against the previously " +
-      "published build is measuring something nobody can rebuild (R56).",
+    `\ncompile-fixtures: ${failed} fixture project(s) do not compile. A fixture that does not compile cannot be republished, and a live gate that keeps passing against the previously published build is measuring something nobody can rebuild (R56).`,
   );
   process.exit(1);
 }

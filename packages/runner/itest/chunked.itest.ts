@@ -59,8 +59,6 @@ import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { itestConfigName, itestConfigPath } from "./config-path";
-import { emitFailed, emitPassed, emitSkippedAndExit } from "./gate-receipt";
 import type { ActivationConfig } from "../src/activation";
 import { ArtifactCompiler, defaultArtifactIo } from "../src/artifact";
 import { BcDevMcpBackend } from "../src/bcdev-backend";
@@ -74,10 +72,13 @@ import { ContainerDeployer, defaultAlToolPaths, defaultDeployerIo } from "../src
 import type { SessionReport } from "../src/report";
 import { RunMutantTransport } from "../src/run-mutant-transport";
 import { ResultsStore } from "../src/store";
+import { itestConfigName, itestConfigPath } from "./config-path";
+import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 
 if (!process.env.LETHAL_ITEST_CHUNKED) {
   console.log("chunked itest: skipped (set LETHAL_ITEST_CHUNKED=1 to run against a live server)");
-  await emitSkippedAndExit("chunked", "the leg's env var is unset");
+  const challenged = await emitSkipped("chunked", "the leg's env var is unset");
+  process.exit(challenged ? 1 : 0);
 }
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -199,10 +200,7 @@ interface LegResult {
 
 async function runLeg(scratchRoot: string, maxMethodsPerCall?: number): Promise<LegResult> {
   const launchCfg = await readOptionalLaunchConfig();
-  const configFile = await readJson<LethalConfigFile>(
-    CONFIG_LOCAL_PATH,
-    itestConfigName(),
-  );
+  const configFile = await readJson<LethalConfigFile>(CONFIG_LOCAL_PATH, itestConfigName());
   const bcdev = validateBcDevConfig(configFile.bcdev);
   const toolPaths = await defaultAlToolPaths();
   if (!toolPaths) {
@@ -503,7 +501,10 @@ async function main(): Promise<void> {
     );
 
     console.log("chunked itest: PASS");
-    await emitPassed("chunked", { sublegs: ["unbounded", "chunked-2"], artifacts: { reported: false } });
+    await emitPassed("chunked", {
+      sublegs: ["unbounded", "chunked-2"],
+      artifacts: { reported: false },
+    });
   } finally {
     await rm(scratch, { recursive: true, force: true });
   }

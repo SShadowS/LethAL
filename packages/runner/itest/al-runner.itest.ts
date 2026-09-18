@@ -36,17 +36,18 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { emitFailed, emitPassed, emitSkippedAndExit } from "./gate-receipt";
 import { AlRunnerBackend } from "../src/al-runner-backend";
 import { alRunnerCoverageSupport } from "../src/al-runner-coverage";
 import { generateMutationSet, runSession } from "../src/orchestrator";
 import type { SessionReport } from "../src/report";
 import { ResultsStore } from "../src/store";
 import { assertMatchesBaseline } from "./baseline-guard";
+import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 
 if (!process.env.LETHAL_ITEST_ALRUNNER) {
   console.log("skipped (set LETHAL_ITEST_ALRUNNER=1 and LETHAL_ALRUNNER_PATH=<path> to run)");
-  await emitSkippedAndExit("alrunner", "the leg's env var is unset");
+  const challenged = await emitSkipped("alrunner", "the leg's env var is unset");
+  process.exit(challenged ? 1 : 0);
 }
 
 const alRunnerPathEnv = process.env.LETHAL_ALRUNNER_PATH;
@@ -441,7 +442,10 @@ async function main(): Promise<void> {
   }
 
   console.log("al-runner itest: PASS");
-  await emitPassed("alrunner", { sublegs: ["one-shot", "server", "resource", "platform-pin"], artifacts: { reported: false } });
+  await emitPassed("alrunner", {
+    sublegs: ["one-shot", "server", "resource", "platform-pin"],
+    artifacts: { reported: false },
+  });
 }
 
 main().catch(async (err: unknown) => {

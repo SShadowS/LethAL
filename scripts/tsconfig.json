@@ -32,6 +32,8 @@
   // types the package actually ships, not against a stale copy.
   "references": [{ "path": "../packages/runner" }],
   "files": [
+    "agentflow/artifact-freshness.ts",
+    "agentflow/artifact-freshness.test.ts",
     "agentflow/effects.ts",
     "agentflow/effects.test.ts",
     "agentflow/gate-outcome.ts",
@@ -56,6 +58,8 @@
     "census-swap-call-arguments.ts",
     "census-tier3-candidates.ts",
     "compile-fixtures.ts",
+    "lib/source-hash.ts",
+    "lib/source-hash.test.ts",
     "line-citations.ts",
     "line-citations.test.ts",
     "measure-gui-guarded.ts",

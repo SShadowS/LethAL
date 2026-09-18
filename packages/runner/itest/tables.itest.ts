@@ -29,8 +29,6 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { MutantManifest, MutantManifestEntry } from "@lethal/schemata";
-import { itestConfigName, itestConfigPath } from "./config-path";
-import { emitFailed, emitPassed, emitSkippedAndExit } from "./gate-receipt";
 import type { ActivationConfig } from "../src/activation";
 import { ArtifactCompiler, defaultArtifactIo } from "../src/artifact";
 import { BcDevMcpBackend } from "../src/bcdev-backend";
@@ -45,6 +43,8 @@ import type { SessionReport } from "../src/report";
 import { RunMutantTransport } from "../src/run-mutant-transport";
 import { ResultsStore } from "../src/store";
 import { assertMatchesBaseline } from "./baseline-guard";
+import { itestConfigName, itestConfigPath } from "./config-path";
+import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import { assertNotInstrumentedEvidence } from "./notinstrumented-evidence";
 
 if (!process.env.LETHAL_ITEST_TABLES) {
@@ -52,7 +52,8 @@ if (!process.env.LETHAL_ITEST_TABLES) {
     "skipped (set LETHAL_ITEST_TABLES=1 and populate the gitignored " +
       "fixtures/sandbox-data/lethal.config.local.json to run against a live dev server)",
   );
-  await emitSkippedAndExit("tables", "the leg's env var is unset");
+  const challenged = await emitSkipped("tables", "the leg's env var is unset");
+  process.exit(challenged ? 1 : 0);
 }
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -683,10 +684,7 @@ interface RunOnceResult {
 
 async function runOnce(scratchRoot: string): Promise<RunOnceResult> {
   const launchCfg = await readOptionalLaunchConfig();
-  const configFile = await readJson<LethalConfigFile>(
-    CONFIG_LOCAL_PATH,
-    itestConfigName(),
-  );
+  const configFile = await readJson<LethalConfigFile>(CONFIG_LOCAL_PATH, itestConfigName());
   const bcdev = validateBcDevConfig(configFile.bcdev);
 
   const toolPaths = await defaultAlToolPaths();
@@ -887,9 +885,7 @@ function assertVerdictTable(report: SessionReport): void {
   assert.equal(
     report.groupedCalls,
     EXPECTED.groupedCalls,
-    `R198: expected exactly ${EXPECTED.groupedCalls} RunMutantMany calls (one per scored mutant); ` +
-      `got ${report.groupedCalls}. Fewer means the grouped path silently stopped being used; more ` +
-      "means a chunk, a lost-ack retry or an unexpected replay happened on a container gate, which must be explained",
+    `R198: expected exactly ${EXPECTED.groupedCalls} RunMutantMany calls (one per scored mutant); got ${report.groupedCalls}. Fewer means the grouped path silently stopped being used; more means a chunk, a lost-ack retry or an unexpected replay happened on a container gate, which must be explained`,
   );
   // R206: the warm kills are a NUMBER measured before the build, every kill carries a position,
   // and three named mutants carry the positions run 334 measured, so the field measures the
@@ -1324,9 +1320,7 @@ function assertBlankStringScreenSeparates(
     assert.equal(
       flagged.has(m.mutantCode),
       mustBeFlagged,
-      `${procedureName} is killed by ${how}, so the assertion screen must ${mustBeFlagged ? "" : "NOT "}` +
-        `flag it. Both directions must hold or the screen separated nothing here. killingTestFailure: ` +
-        `${JSON.stringify(m.killingTestFailure ?? null)}`,
+      `${procedureName} is killed by ${how}, so the assertion screen must ${mustBeFlagged ? "" : "NOT "}flag it. Both directions must hold or the screen separated nothing here. killingTestFailure: ${JSON.stringify(m.killingTestFailure ?? null)}`,
     );
   }
 }

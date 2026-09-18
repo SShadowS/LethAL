@@ -142,8 +142,6 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { itestConfigName, itestConfigPath } from "./config-path";
-import { emitFailed, emitPassed, emitSkippedAndExit } from "./gate-receipt";
 import type { ActivationConfig } from "../src/activation";
 import type { TestMethodRef } from "../src/backend";
 import type { LethalConfigFile } from "../src/cli";
@@ -155,13 +153,16 @@ import type { QuarantineRecord } from "../src/quarantine-store";
 import { QuarantineStore } from "../src/quarantine-store";
 import { quarantineResourceKey } from "../src/resource-key";
 import { RunMutantTransport } from "../src/run-mutant-transport";
+import { itestConfigName, itestConfigPath } from "./config-path";
+import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 
 if (!process.env.LETHAL_ITEST_BCDEV) {
   console.log(
     "skipped (set LETHAL_ITEST_BCDEV=1 and populate the gitignored launch.local.json / " +
       "lethal.config.local.json fixture files to run against a live dev server)",
   );
-  await emitSkippedAndExit("lease", "the leg's env var is unset");
+  const challenged = await emitSkipped("lease", "the leg's env var is unset");
+  process.exit(challenged ? 1 : 0);
 }
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -1450,10 +1451,7 @@ async function main(): Promise<void> {
     throw new Error(`${LAUNCH_LOCAL_PATH} has no configurations[0] entry`);
   }
 
-  const configFile = await readJson<LethalConfigFile>(
-    CONFIG_LOCAL_PATH,
-    itestConfigName(),
-  );
+  const configFile = await readJson<LethalConfigFile>(CONFIG_LOCAL_PATH, itestConfigName());
   const bcdev = validateBcDevConfig(configFile.bcdev);
   const cfg: ActivationConfig = {
     baseUrl: odataBaseUrl(bcdev.server, bcdev.serverInstance),

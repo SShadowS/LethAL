@@ -1,7 +1,7 @@
 /**
  * How a live gate proves it ran, to a caller that cannot see its terminal.
  *
- * R223: every env-gated itest here calls `process.exit(0)` when it skips, and `compile-fixtures`
+ * R223: every env-gated itest here exits zero when it skips, and `compile-fixtures`
  * does the same when `alc` is missing. That is correct for a human reading the output, and it
  * means an exit code cannot distinguish a gate that passed from one that never contacted Business
  * Central. A caller reading `$?` sees the same value either way, so "every required leg exited 0"
@@ -125,14 +125,25 @@ export async function writeReceipt(
 }
 
 /**
- * Report a skip and exit.
+ * Report a skip. Returns whether a receipt was demanded, which is what the caller exits on.
  *
- * Exit 1 when challenged, 0 when not. The caller that asked for a receipt is told twice, and the
- * human who just ran the command without the env var gets today's behaviour.
+ * Deliberately does NOT exit. An earlier version did, and R186's guard flagged it, rightly: a
+ * helper that kills the process is the hazard that rule exists for, deferred from import time to
+ * call time. Importing this module into a unit test and calling that function would have killed
+ * `bun test` with no failure message, which is R186's first measured instance wearing different
+ * clothes.
+ *
+ * So the exit happens at the top level of each itest, where a reader sees it:
+ *
+ *     const challenged = await emitSkipped("tables", "...");
+ *     if (challenged) exit non-zero, else exit zero
+ *
+ * Exit 1 when challenged, 0 when not. A caller that asked for a receipt is told twice, once in the
+ * receipt and once in the exit code; a human who just ran the command gets today's behaviour.
  */
-export async function emitSkippedAndExit(leg: string, reason: string): Promise<never> {
+export async function emitSkipped(leg: string, reason: string): Promise<boolean> {
   const challenge = readChallenge();
-  if (challenge === undefined) process.exit(0);
+  if (challenge === undefined) return false;
   await writeReceipt(challenge, leg, {
     status: "skipped",
     sublegs: [],
@@ -142,7 +153,7 @@ export async function emitSkippedAndExit(leg: string, reason: string): Promise<n
   console.error(
     `${leg}: SKIPPED while a receipt was demanded. A required leg that skipped is an executor error, not a pass (R223).`,
   );
-  process.exit(1);
+  return true;
 }
 
 /** Report a pass. Does nothing when unchallenged. */

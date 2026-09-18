@@ -24,8 +24,6 @@ import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { itestConfigName, itestConfigPath } from "./config-path";
-import { emitFailed, emitPassed, emitSkippedAndExit } from "./gate-receipt";
 import type { ActivationConfig } from "../src/activation";
 import { ArtifactCompiler, defaultArtifactIo } from "../src/artifact";
 import type { TestMethodRef } from "../src/backend";
@@ -42,13 +40,16 @@ import type { SessionReport } from "../src/report";
 import { RunMutantTransport } from "../src/run-mutant-transport";
 import { ResultsStore } from "../src/store";
 import { assertMatchesBaseline } from "./baseline-guard";
+import { itestConfigName, itestConfigPath } from "./config-path";
+import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 
 if (!process.env.LETHAL_ITEST_BCDEV) {
   console.log(
     "skipped (set LETHAL_ITEST_BCDEV=1 and populate the gitignored launch.local.json / " +
       "lethal.config.local.json fixture files to run against a live dev server)",
   );
-  await emitSkippedAndExit("bcdev", "the leg's env var is unset");
+  const challenged = await emitSkipped("bcdev", "the leg's env var is unset");
+  process.exit(challenged ? 1 : 0);
 }
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -253,10 +254,7 @@ async function runOnce(scratchRoot: string): Promise<RunOnceResult> {
     throw new Error(`${LAUNCH_LOCAL_PATH} has no configurations[0] entry`);
   }
 
-  const configFile = await readJson<LethalConfigFile>(
-    CONFIG_LOCAL_PATH,
-    itestConfigName(),
-  );
+  const configFile = await readJson<LethalConfigFile>(CONFIG_LOCAL_PATH, itestConfigName());
   const bcdev = validateBcDevConfig(configFile.bcdev);
 
   const toolPaths = await defaultAlToolPaths();
@@ -642,9 +640,7 @@ function assertVerdictTable(report: SessionReport): void {
   assert.equal(
     report.groupedCalls,
     EXPECTED.groupedCalls,
-    `R198: expected exactly ${EXPECTED.groupedCalls} RunMutantMany calls (one per scored mutant); ` +
-      `got ${report.groupedCalls}. Fewer means the grouped path silently stopped being used; more ` +
-      "means a chunk, a lost-ack retry or an unexpected replay happened on a container gate, which must be explained",
+    `R198: expected exactly ${EXPECTED.groupedCalls} RunMutantMany calls (one per scored mutant); got ${report.groupedCalls}. Fewer means the grouped path silently stopped being used; more means a chunk, a lost-ack retry or an unexpected replay happened on a container gate, which must be explained`,
   );
   // R206: no kill here is warm (every killer is first in its call), every kill carries a
   // position, and the session guard fired on nothing.

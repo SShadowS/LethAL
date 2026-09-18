@@ -42,8 +42,6 @@ import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { itestConfigName, itestConfigPath } from "./config-path";
-import { emitFailed, emitPassed, emitSkippedAndExit } from "./gate-receipt";
 import type { ActivationConfig } from "../src/activation";
 import { ArtifactCompiler, defaultArtifactIo } from "../src/artifact";
 import { BcDevMcpBackend } from "../src/bcdev-backend";
@@ -57,6 +55,8 @@ import { ContainerDeployer, defaultAlToolPaths, defaultDeployerIo } from "../src
 import type { SessionReport } from "../src/report";
 import { RunMutantTransport } from "../src/run-mutant-transport";
 import { ResultsStore } from "../src/store";
+import { itestConfigName, itestConfigPath } from "./config-path";
+import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 
 if (!process.env.LETHAL_ITEST_HANG) {
   console.log(
@@ -64,7 +64,8 @@ if (!process.env.LETHAL_ITEST_HANG) {
       "fixtures/sandbox-hang/lethal.config.local.json, and publish " +
       "fixtures/sandbox-hang-tests to that container to run this)",
   );
-  await emitSkippedAndExit("hang", "the leg's env var is unset");
+  const challenged = await emitSkipped("hang", "the leg's env var is unset");
+  process.exit(challenged ? 1 : 0);
 }
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -235,10 +236,7 @@ interface LegResult {
 }
 
 async function runLeg(scratchRoot: string, stopHungSessions: boolean): Promise<LegResult> {
-  const configFile = await readJson<LethalConfigFile>(
-    CONFIG_LOCAL_PATH,
-    itestConfigName(),
-  );
+  const configFile = await readJson<LethalConfigFile>(CONFIG_LOCAL_PATH, itestConfigName());
   const bcdev = validateBcDevConfig(configFile.bcdev);
   const toolPaths = await defaultAlToolPaths();
   if (!toolPaths) {
@@ -584,7 +582,10 @@ async function main(): Promise<void> {
     assertOffLeg(off);
 
     console.log("hang itest: PASS");
-    await emitPassed("hang", { sublegs: ["stop-hung-sessions-on", "stop-hung-sessions-off"], artifacts: { reported: false } });
+    await emitPassed("hang", {
+      sublegs: ["stop-hung-sessions-on", "stop-hung-sessions-off"],
+      artifacts: { reported: false },
+    });
   } finally {
     if (odataCfg !== undefined) await teardown(odataCfg);
     await rm(scratchRoot, { recursive: true, force: true });
