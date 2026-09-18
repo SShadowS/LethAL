@@ -26,7 +26,7 @@ function tripwire() {
           calls.push(`write:${name}`);
           return "done";
         },
-        dry,
+        dry !== undefined ? { result: dry } : undefined,
       ),
   };
 }

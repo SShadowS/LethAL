@@ -40,9 +40,11 @@ export interface Effect<T> {
   /** Human-readable, for the ledger and for a dry run's plan. Must not carry a secret. */
   readonly describe: string;
   /**
-   * What a dry run should return in place of performing this write. Absent means the caller has
-   * not thought about it, and a dry run then refuses rather than inventing a value: a fabricated
-   * result is how a dry run starts reporting outcomes it did not produce.
+   * What a dry run returns in place of performing this write. The KEY's absence, not an undefined
+   * value, means the caller has not thought about it, and a dry run then refuses rather than
+   * inventing one: a fabricated result is how a dry run starts reporting outcomes it did not
+   * produce. Built through {@link writeEffect}'s `dry` parameter so a void write can declare
+   * `undefined` deliberately.
    */
   readonly dryRunResult?: T;
   /** Performs it. Called only by the runner, only once it has decided this is permitted. */
@@ -63,14 +65,19 @@ export function writeEffect<T>(
   action: ExecutorAction,
   describe: string,
   perform: () => Promise<T>,
-  dryRunResult?: T,
+  /**
+   * Presence of this object is the signal, not the value inside it. A `void` write's dry-run
+   * result IS `undefined`, so a bare optional parameter could not tell "the caller thought about
+   * this and the answer is nothing" from "the caller did not think about it".
+   */
+  dry?: { readonly result: T },
 ): Effect<T> {
   return {
     kind: "write",
     action,
     describe,
     perform,
-    ...(dryRunResult !== undefined ? { dryRunResult } : {}),
+    ...(dry !== undefined ? { dryRunResult: dry.result } : {}),
   };
 }
 
@@ -99,6 +106,11 @@ export class EffectRunner {
   private readonly log: EffectRecord[] = [];
 
   constructor(private readonly opts: EffectRunnerOptions) {}
+
+  /** Whether this is a dry run, so a caller can stop at a boundary rather than at a refusal. */
+  get dryRun(): boolean {
+    return this.opts.dryRun;
+  }
 
   /** Everything this runner performed or declined, in order. The ledger's raw material. */
   get records(): readonly EffectRecord[] {
