@@ -1,8 +1,9 @@
 # Issue orchestrator, phase 1: offline first
 
 Date: 2026-09-19
-Status: revision 2, answering a NOT READY review by Fable (3 blockers, 10 important, 5 minor; all
-fixes folded in, two changed after measuring, see Review record at the end). Awaiting owner review.
+Status: revision 3. Revision 1 was NOT READY (Fable: 3 blockers, 10 important, 5 minor); revision 2
+was READY WITH FIXES (Fable, fresh pass: 1 blocker, 5 important, 7 minor). Every fix is folded in;
+see Review record at the end. Awaiting owner review.
 Owner: SShadowS
 Parent spec: `docs/superpowers/specs/2026-09-13-issue-orchestrator-design.md` (revision 2). Everything
 this file does not change, that one still decides. This file only records what phase 1 builds, in
@@ -51,22 +52,27 @@ Started with `/loop /orchestrate` in a local Claude Code session on the main che
 
 | # | Step | Actor | What happens |
 |---|---|---|---|
-| 1 | `preflight` | executor | No HALT, no `failed` incident, clean `master` equal to `origin/master`, lock free, loop budget left. Otherwise the loop stops. A `verifying` incident routes to recovery (see Safety), not to a refusal. |
+| 1 | `preflight` | executor | No HALT, no `failed` incident, clean `master` equal to `origin/master`, lock free or recoverable (see Safety), loop budget left. Otherwise the loop stops. A `verifying` incident routes to recovery (see Safety), not to a refusal. Then takes the lock for this tick. |
 | 2 | `next` | executor | Oldest eligible `ready` issue (FIFO), with its kind: `code` or `spike`. Or `queue-empty`, which stops the loop. |
-| 3 | `claim N` | executor | Lock, label `agent-claimed`, comment with the session URL. For `code` only: worktree `.claude/worktrees/issue-N` on branch `agent/issue-N` from `origin/master` (commit `B`). Refuses if that branch or worktree already exists (`stale-branch`). A spike takes the lock and makes no worktree. |
+| 3 | `claim N` | executor | Records the issue in the lock, labels `agent-claimed`, comments with the session URL. For `code` only: worktree `.claude/worktrees/issue-N` on branch `agent/issue-N` from `origin/master` (commit `B`). Refuses if that branch or worktree already exists (`stale-branch`). A spike takes the lock and makes no worktree. |
 | 4 | implement | conductor | Issue text is data. Plans, builds with TDD in the worktree, writes `.agent/issue-N/ledger.md`. |
-| 5 | `candidate N` | executor | Commits the worktree EXCEPT `.agent/`, with an executor-templated message, and returns `H`. Then, BEFORE any candidate code is run by the executor: `selectLegs` over `B..H`, the protected-path check, and the `scripts/tsconfig.json` rule. Any failure blocks here. `.agent/` stays out of `B..H` because `selectLegs` would treat it as unmatched and answer the full live set. |
+| 5 | `candidate N` | executor | Commits the worktree EXCEPT `.agent/`, with an executor-templated message, and returns `H`. Then, BEFORE any candidate code is run by the executor: `selectLegs` over `B..H`, the protected-path check, the test-file placement rule, and the `scripts/tsconfig.json` rule. Any failure blocks here. Every changed-path list in the executor comes from `git diff --name-only --no-renames`: without the flag a rename reports only its destination, so moving `scripts/compile-fixtures.ts` to a new name would never touch a protected path. `.agent/` stays out of `B..H` because `selectLegs` would treat it as unmatched and answer the full live set. |
 | 6 | `redcheck N` | executor | One receipt per added or changed test file, bound to `H`. See Merge. |
 | 7 | `gate N` | executor | Runs the offline ladder in a detached worktree created from `H`, never in the conductor's worktree, and seals it for `H`. |
 | 8 | review | conductor | `code-review` at high plus one pi reviewer, into `.agent/issue-N/findings.json`. A fix goes back to step 5, which makes a new `H` and invalidates every receipt and seal bound to the old one. |
-| 9 | `pr N` | executor | Refuses unless the worktree `HEAD` is the sealed `H` and nothing outside `.agent/` is dirty (content-aware probe: refresh the index, then diff against `HEAD`). Commits the ledger and findings as the evidence commit `F`, pushes `agent/issue-N` only, opens a PR carrying `Closes #N`. |
+| 9 | `pr N` | executor | Refuses unless the worktree `HEAD` is the sealed `H` and nothing outside `.agent/` is dirty (content-aware probe: refresh the index, then diff against `HEAD`). Commits the ledger and findings, added by explicit path and never with `-A`, as the evidence commit `F`, persists the PR number to `state.json` the moment the PR exists, pushes `agent/issue-N` only, opens a PR carrying `Closes #N`. |
 | 10 | `merge N` | executor | Checks every merge criterion through `canMerge`, then `gh pr merge --squash --match-head-commit F --subject <template> --body <template>`. Reads `M` from `gh pr view --json mergeCommit` and persists it to state before doing anything else. |
 | 11 | `post-merge N` | executor | See Safety. |
 | 12 | `file-discovery` | executor | See Safety. |
 | 13 | `finish N` | executor | Removes the worktree, releases the lock, counts the tick. |
 
 Every exit other than a merge goes through `block N <reason>`: label `agent-blocked`, a comment with
-the reason, branch kept, lock released. A blocked issue is ineligible until the owner removes the
+the reason, branch kept, lock released. `queue-empty` releases the lock too.
+
+**Every step that writes is fenced to the lock's session**: its own nearest `claude.exe` ancestor
+must equal the PID and creation time the lock recorded. A second Claude window, or a plain terminal,
+running `bun scripts/agentflow merge 7` by hand is refused. The owner commands (see Safety) are the
+only writes outside this fence, and they have their own. A blocked issue is ineligible until the owner removes the
 label, and the owner deletes the stale branch then too, since step 3 refuses one.
 
 **Tick is split, not reused whole.** `tick.ts` today selects legs from `B..H` before the claim, and
@@ -105,11 +111,13 @@ Body-hash:       sha256 of the issue body at triage time
 1. Author is the owner, or a collaborator whose permission (`gh api .../collaborators/<login>/permission`) is write or higher.
 2. No `epic`, `manual-only`, `agent-blocked` or `agent-claimed` label.
 3. The newest triage comment authored by the owner's account parses AND has never been edited
-   (REST `updated_at == created_at`). The three outside collaborators hold write access, and write
-   access can edit anyone's issue comments, so an unedited comment is the only one the executor
-   can attribute to itself. An edited one means re-triage.
+   (GraphQL `lastEditedAt == null` and `userContentEdits.totalCount == 0`; REST timestamps are only
+   second-granular). The three outside collaborators hold write access, and write access can edit
+   anyone's issue comments, so an unedited comment is the only one the executor can attribute to
+   itself. An edited one means re-triage.
 4. Its `Body-hash` equals the current body's hash. An edited issue drops out until it is triaged
-   again. The merge step re-checks the current body against the same hash.
+   again. The merge step re-checks the current body against the same hash. Triage and merge read
+   the body through the same accessor, so the two hashes cannot differ by encoding alone.
 5. Every `Depends-on` issue is closed.
 6. Phase 1 only: `Gate-class: offline`, `Type` is not `architectural`, and either `Type: spike` or
    `Resolution-mode: code`. The spike branch is decided here, at `next`, so a spike never reaches
@@ -145,11 +153,21 @@ not the files that block and the test suite reach:
 - `scripts/generate-schemas.ts` (spawned by `packages/runner/tests/schemas.test.ts`)
 - `scripts/lib/**`
 
+**Test-file placement**, checked at step 5. `bun test` discovers more than `*.test.ts`: any
+`*.test.*`, `*_test.*`, `*.spec.*` or `*_spec.*` with a js, jsx, ts or tsx extension, anywhere
+under the working directory, `docs/` included (measured). Such a file under `docs/` would merge as
+"docs only, needs no test" and then run inside every later `bun test`, on CI and on every
+developer machine. So every file matching those patterns counts as a test file for every rule in
+this spec, and one outside `scripts/` or `packages/` is a protected-path block.
+
 **`scripts/tsconfig.json`** lists every typechecked script explicitly, by design (R119), so a new
 script outside the list is never typechecked, and a candidate could choose its own typecheck scope.
-Rule, checked at step 5: every added `scripts/**/*.ts` must appear in that file's `files` list, and
-the only change allowed to the file is added lines that each name one `.ts` path. Anything else in
-it is a protected-path block.
+Rule, checked at step 5: every added `scripts/**/*.ts` must appear in that file's `files` list. The
+file is compared semantically, not line by line: both versions are parsed as JSONC, everything
+except `files` must be equal, and the new `files` must be a superset of the old, with paths
+normalised relative to `scripts/`. Anything else is a protected-path block. A MODIFIED script
+already outside the list (`probe-continia-env.ts`, excluded by R120 for a stated reason) stays
+untypechecked; that is accepted, not missed.
 
 **Offline ladder**, run by the executor in a detached worktree created from `H`, each step with its
 own timeout, argv, exit code and log hash recorded in a manifest kept outside the repo:
@@ -157,8 +175,13 @@ own timeout, argv, exit code and log hash recorded in a manifest kept outside th
 1. `bun install --frozen-lockfile` (a fresh worktree has no `node_modules`)
 2. `bun run typecheck`
 3. `rm -rf packages/*/dist` (the dist trap, in CLAUDE.md's order)
-4. `bun test`: passes only on exit 0 AND a parsed executed-test count above zero
-5. `bunx biome check <touched files>`
+4. `bun test`: passes only on exit 0 AND bun's final summary line (`Ran N tests across M files`)
+   present with N above zero. The count comes from that line, never from counting `(pass)` lines,
+   and a missing summary line fails the step: a test file that calls `process.exit(0)` makes
+   `bun test` exit 0 over a real failure elsewhere, and prints no summary (measured).
+5. `bunx biome check <touched files>`, skipped when no touched file is one biome checks. With an
+   empty list biome falls back to the whole repo, which has known pre-existing debt, so every
+   docs-only change would go red.
 6. `bun scripts/redact-campaign-report.ts --check` over every added or changed `*.json` whose top
    level carries a `mutants` array. The unit test only globs report-shaped names, so a report
    committed under another name would otherwise escape.
@@ -187,12 +210,15 @@ blind first pass (diff and issue only, no conductor opinions). Each finding is
 closes only as `fixed`, confirmed by a re-review, or as `refuted`, which requires the reviewer that
 raised it to accept the refutation. After two rounds, anything still open is `blocked review-disputed`.
 
-**CI green is a positive fact, never an absence.** The repo's CI is the workflow `CI` with one job,
-`check`. GitGuardian also reports on every commit and finishes in about 30 s, long before the
-Windows job has even been created, so "`gh pr checks` exits 0" would read green with CI never having
-run. The predicate is: a check run named `check`, from workflow `CI`, with `head_sha` equal to the
+**CI green is a positive fact, never an absence.** The repo's CI is the workflow `CI`
+(`.github/workflows/ci.yml`) with one job, `check`. GitGuardian also reports on PR heads and
+finishes in about 30 s, long before the Windows job has even been created, so "`gh pr checks` exits
+0" would read green with CI never having run. The predicate reads
+`GET /repos/SShadowS/LethAL/actions/runs?head_sha=<sha>`, because the check-runs API carries no
+workflow name: a run whose `path` is `.github/workflows/ci.yml`, with `head_sha` equal to the
 commit, `status` completed and `conclusion` success. Missing, pending, or bound to another SHA is not
-green.
+green. The workflow fires on both `push` and `pull_request`, so `F` gets two runs; either one
+succeeding is accepted, which is sound only because criterion 8 pins the base.
 
 **Merge criteria**, all checked in `canMerge`:
 
@@ -223,8 +249,10 @@ machine:
   `COMMIT_MESSAGES`, so branch commit messages land in `master`'s history; the executor writes them
   from templates and sets the squash subject and body explicitly.
 
-It checks for token shapes, absolute local user paths, `CDO_WS` and `.alpackages` paths. A hit is
-`blocked sanitize-failed`.
+It checks for token shapes, absolute local user paths, `CDO_WS` and `.alpackages` paths, and every
+string value found at scan time in the gitignored local configs (`lethal.config.local.json`,
+`lethal.config.envtool.json`, `lethal.config.agent.json`), which is where LethAL's own container
+hosts and credentials live. A hit is `blocked sanitize-failed`.
 
 ## Safety
 
@@ -232,8 +260,11 @@ It checks for token shapes, absolute local user paths, `CDO_WS` and `.alpackages
 is classified in `halt.ts`:
 
 - **Allowed under HALT**: reads (post-merge verification is reads), writing an incident, appending to
-  the ledger and run directory, killing processes this run launched, and one terminal comment plus
-  label.
+  the ledger and run directory including `state.json`, killing processes this run launched, one
+  terminal comment plus label, releasing the lock, and removing a worktree this run created (ladder,
+  red-check or issue worktree, under the two-conjunct rule). Without the last two a halted run
+  could never release its lock, and the owner commands, which refuse while a live lock exists,
+  could only be reached by closing the Claude window.
 - **Refused under HALT**: claim, worktree add, commit, push, fetch, local `master` fast-forward,
   triage writes, spike answers, PR creation, merge, discovery filing.
 
@@ -255,23 +286,39 @@ not only in prose: refuse when a run id is in context (`--run-id` or `AGENTFLOW_
 while a live lock exists, refuse a no-op clear, and record the reason in the ledger.
 
 **Post-merge**: `M`'s parent is `B` and its tree equals `F`'s; then wait up to 45 minutes for CI
-green on `M` by the positive predicate. Zero `check` runs after 45 minutes is a timeout, therefore
-`failed`, not "unreadable". On green the incident becomes `resolved` and the executor fast-forwards
-local `master` to `M`.
+green on `M` by the positive predicate. Zero CI runs after 45 minutes is a timeout, therefore
+`failed`, not "unreadable". The step's own timeout is 60 minutes, longer than its wait, so a slow
+runner queue is classified by the predicate and never by the step killer. On green the incident
+becomes `resolved` and the executor fast-forwards local `master` to `M`. On `failed` the executor
+writes the incident, then HALT, then releases the lock, and the loop stops.
 
 **Lock and crashes**: the executor is a fresh process per step, so its own PID proves nothing about
 a run. The lock's liveness signal is the conductor session itself. Every command the conductor runs
-descends from the Claude Code process (measured 2026-09-19: `pwsh` <- `cmd` <- `claude.exe`), so
-`claim` walks its ancestors, finds the nearest `claude.exe`, and records that PID and its creation
-time in `.agent/lock.json` with the run id and issue. It refuses to claim when no such ancestor
-exists. The lock is stale only when that PID with that creation time no longer exists, which is
-exactly when the conductor session has died. A second `/orchestrate` session in the same checkout
+descends from the Claude Code process (measured 2026-09-19: `pwsh` <- `cmd` <- `claude.exe`, and
+`bash.exe` <- `claude.exe` through Git Bash), so `preflight` walks its ancestors, finds the nearest
+`claude.exe`, and records that PID and its creation time in `.agent/lock.json` with the run id;
+`claim` adds the issue. It refuses when no such ancestor exists, so an owner running a step by hand
+from a plain terminal cannot take the lock. A second `/orchestrate` session in the same checkout
 sees a different, live `claude.exe` and is refused. In phase 1 a dead session is sufficient proof of
 a dead writer, because no container operation can outlive it; the parent spec's "prove the writer
 dead" rule returns in phase 2.
 
-Recovery on the next preflight reconciles with GitHub first: if the PR merged, persist `M` and run
-`post-merge`; otherwise `block N crashed`, keep worktree and branch, release the lock.
+A lock is **recoverable** in two cases:
+
+- its PID with its creation time no longer exists: the session died; or
+- it equals the caller's OWN nearest `claude.exe`: the run was abandoned inside this same session
+  (Escape, `/clear`, a stopped loop) and `/orchestrate` was run again. The conductor is
+  single-threaded, so if preflight is running under that process, no other step of that run is.
+  Without this case the only way out would be closing the window.
+
+Recovery on the next preflight reconciles with GitHub first, keyed on the PR number this run
+persisted in `state.json` at step 9, never on the branch name: GitHub keeps a PR findable by its
+head ref after the branch is deleted, so a lookup by `agent/issue-N` can find a months-old merged
+PR from an earlier attempt. No PR persisted means `block N crashed`. A persisted PR that merged
+means persist `M` and run `post-merge`, unless an incident for `M` is already `failed` or `resolved`,
+in which case recovery leaves it alone: re-running post-merge after the owner has reverted and
+resolved it would find `M`'s CI still red and HALT again. An open PR means `block N crashed`, keep
+worktree and branch, release the lock.
 
 **Budgets**. Exceeding one is `block N budget:<name>`.
 
@@ -314,12 +361,17 @@ phase 1 action classified). New prose: `.claude/commands/orchestrate.md`, `issue
 
 1. Unit tests per module. Every guard that decides a merge or a block is red-checked: revert the
    guard, confirm the named test goes red, restore. `canMerge` is the main target, one red-check per
-   criterion.
+   criterion. Named negatives that must each block: a `docs/x.spec.ts`; a renamed-away protected
+   script; a test file calling `process.exit(0)`; a `tsconfig.json` edit outside `files`; a step
+   run from a second session; a CI run bound to another SHA.
 2. Dry run writes nothing: the parent spec's proof 2, with adapters that fail the test on any
    attempted write to fs, git, gh or spawn, rather than a list of places a write would be expected.
 3. HALT between every pair of steps; a crash after the PR merged but before bookkeeping, which the
    next tick must finish through `post-merge`; a crash during `post-merge`, which the next preflight
-   must route to recovery rather than refuse.
+   must route to recovery rather than refuse; a run abandoned inside the same session, which the
+   next preflight must recover; recovery after the owner deleted the branch and an old merged PR
+   still carries its name, which must not reach `post-merge`; a failed post-merge under HALT, which
+   must still release the lock.
 4. `/orchestrate --dry-run` on the real repo: triage output and the chosen issue, zero writes.
 5. One seeded real docs issue, end to end, to a squash merge and a green post-merge.
 6. The real queue: #3 and #6, if triage classes them offline.
@@ -328,9 +380,9 @@ phase 1 action classified). New prose: `.claude/commands/orchestrate.md`, `issue
 
 These touch protected paths, are rulings, or publish. Drafts can be prepared; the owner applies them.
 
-1. **Push `master`.** Local `master` is 15 commits ahead of `origin/master` (2026-09-19), including
-   all of `scripts/agentflow/`, so none of it has ever run in CI, and preflight's
-   "`master` equals `origin/master`" refuses today.
+1. **Push `master`.** Done 2026-09-19, with this revision. Before it, local `master` was 17 commits
+   ahead of `origin/master`, including all of `scripts/agentflow/`, so none of it had ever run in CI,
+   and preflight's "`master` equals `origin/master`" would have refused.
 2. **CLAUDE.md doctrine exception**: the flow may squash-merge to `master` once the phase 1 merge
    criteria hold, and may make no other write to `master`; the protected-path list; the flow files
    discoveries as issues, not roadmap rows.
@@ -378,3 +430,18 @@ every mechanical claim verified against the repo, GitHub and al-call-hierarchy. 
 | I9 phase 1 actions unclassified under HALT | every action classified |
 | I10 owner commands fenced by prose only | `require_operator` checks ported |
 | Minors: re-claim over a kept branch, spike reaching the worktree step, `M` not persisted, dropped `redact --check`, unpushed `master` | all folded in |
+
+Revision 2 (`c01d884`) was reviewed by a fresh Fable pass, told to check each row above and to hunt
+for holes the fixes introduced. Verdict READY WITH FIXES. It confirmed every row above closed except
+I9, measured the `claude.exe` ancestry through Git Bash, and verified the `.gitignore` pattern in a
+scratch repo.
+
+| Finding | Where it landed |
+|---|---|
+| F1 a `docs/*.spec.ts` merges as "docs only" and runs in every later `bun test`; `process.exit(0)` fools the exit code | test-file placement rule; count from bun's summary line, its absence fails |
+| F2 `git diff --name-only` reports a rename's destination only | `--no-renames` on every changed-path list |
+| F3 (and I9) a halted run could not release its lock, and the owner commands refuse while it is live | lock release and worktree removal allowed under HALT; failed post-merge releases the lock |
+| F4 a run abandoned inside a live session had no recovery route | a lock held by the caller's own `claude.exe` is recoverable |
+| F5 recovery found the PR by branch name and re-ran post-merge over a resolved incident | recovery keyed on the PR number persisted at step 9; skips `failed` and `resolved` incidents |
+| F6 only `claim` was fenced to the session | every writing step fenced; the lock is taken at `preflight` |
+| Minors: CI predicate needs the runs API; post-merge wait equalled its step timeout; biome with no paths lints the whole repo; tsconfig rule should be semantic; outbound literals should come from the local configs; `pr` must add evidence by path; one body accessor; GraphQL edit fields | all folded in |
