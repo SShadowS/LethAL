@@ -3096,6 +3096,10 @@ const PHASE_VERIFIER_CFG = {
 class PhaseBackend implements ExecutionBackend {
   readonly calls: string[] = [];
   lastCompiledVersion: string | undefined;
+  /** C02-02: the exact object each successful deploy() call returned, one entry per batch, in
+   *  call order. The independent oracle: tests compare the event/store against THIS, never the
+   *  event against the store, since both could copy the same wrong identity. */
+  readonly returned: CompiledArtifact[] = [];
   constructor(
     private readonly opts: {
       /** Called once per publish phase (1-based attempt); throwing simulates altool failing. */
@@ -3128,7 +3132,9 @@ class PhaseBackend implements ExecutionBackend {
       appId: appManifest.id,
       appVersion: appManifest.version,
       appPath: join(dir, "phase-fake.app"),
-      sha256: Bun.SHA256.hash(new Uint8Array([1, 2, 3]), "hex"),
+      // C02-02: derived from the artifact id, not a constant, so a fixture bug (two batches
+      // sharing a sha256) cannot hide behind a fake collision with the old hardcoded value.
+      sha256: Bun.SHA256.hash(new TextEncoder().encode(mutantManifest.artifactId), "hex"),
       mutantManifest,
       appManifest: appManifest as unknown as Record<string, unknown>,
     };
@@ -3159,6 +3165,7 @@ class PhaseBackend implements ExecutionBackend {
     const verification = await new DeploymentVerifier(PHASE_VERIFIER_CFG, fetchFn).verify(artifact);
     const outcome = decidePublishOutcome(publishOk, verification);
     if (outcome !== "accepted") throw new DeploymentError(outcome, publishError, verification);
+    this.returned.push(artifact);
     return artifact;
   }
   async activate(mutantId: string | null): Promise<void> {
@@ -3295,6 +3302,75 @@ describe("runSession — Layer 5A deployment identity", () => {
       /app\.json version/,
     );
     expect(backend.calls).not.toContain("compile");
+    store.close();
+  });
+
+  test("every published batch's identity reaches both the event and the store (C02-02)", async () => {
+    const dirs = await makeProject();
+    // A second carrier file so maxGuardsPerBatch: 1 splits the run in two, exactly as the
+    // "a refusal in one batch does not relabel another batch's note" test above does.
+    await Bun.write(
+      join(dirs.projectDir, "SandboxExtra.Codeunit.al"),
+      `codeunit 79002 "Sandbox Extra"
+{
+    procedure UnderLimit(Amount: Decimal; Limit: Decimal): Boolean
+    begin
+        exit(Amount < Limit);
+    end;
+}
+`,
+    );
+    const backend = new PhaseBackend();
+    const store = new ResultsStore(":memory:");
+    const events: RunEvent[] = [];
+    const report = await runSession({
+      backend,
+      store,
+      ...dirs,
+      selectorIds,
+      maxGuardsPerBatch: 1,
+      emit: [(e) => events.push(e)],
+    });
+    expect(report.batches).toBe(2);
+    const published = events.flatMap((e) =>
+      e.type === "batch-published"
+        ? [
+            {
+              batchIndex: e.batchIndex,
+              artifactId: e.artifactId,
+              sha256: e.sha256,
+              appVersion: e.appVersion,
+            },
+          ]
+        : [],
+    );
+    expect(published).toHaveLength(2);
+
+    // The independent oracle: what deploy() actually returned, never the event or the store
+    // compared against each other.
+    expect(backend.returned).toHaveLength(2);
+    const expected = backend.returned.map((artifact, i) => ({
+      batchIndex: i,
+      artifactId: artifact.artifactId,
+      sha256: artifact.sha256,
+      appVersion: artifact.appVersion,
+    }));
+    expect(published).toEqual(expected);
+
+    const run = store.db.query("SELECT id FROM runs LIMIT 1").get() as { id: number };
+    expect(store.artifactsForRun(run.id)).toEqual(expected);
+
+    expect(new Set(backend.returned.map((a) => a.artifactId)).size).toBe(2);
+    for (const p of published) {
+      expect(p.artifactId).toMatch(/^[0-9a-f]{32}$/);
+      expect(p.sha256).toMatch(/^[0-9a-f]{64}$/);
+    }
+    const last = store.db.query("SELECT artifact_id FROM runs LIMIT 1").get() as {
+      artifact_id: string;
+    };
+    const secondArtifact = expected[1];
+    if (secondArtifact === undefined) throw new Error("expected two published batches");
+    expect(last.artifact_id).toBe(secondArtifact.artifactId);
     store.close();
   });
 });

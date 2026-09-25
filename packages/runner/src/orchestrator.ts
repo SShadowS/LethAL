@@ -3776,6 +3776,11 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           guardCount: manifest.mutants.length,
           elapsedMs: deployElapsedMs,
           appVersion,
+          // C02-02: this batch's own identity, mirroring the 3d recordArtifact guard above.
+          // Both fields together, only when this backend actually compiled an artifact.
+          ...(compiled !== null
+            ? { artifactId: compiled.artifactId, sha256: compiled.sha256 }
+            : {}),
         });
         emit({ type: "phase-left", phase: "deploy", elapsedMs: deployElapsedMs });
       }
@@ -4363,6 +4368,11 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
               // Latch-guarded like every other work-plane dispatch (design §6). No publish fence
               // here: `workers > 1` is rejected outright for an authoritative backend (above), so
               // a worker shard never publishes under a lease.
+              // C02-02: the returned CompiledArtifact is discarded on purpose. Every worker
+              // deploys this SAME batchDir, whose artifactId prepareArtifactDir already baked in,
+              // so this is a copy of the batch's one artifact, not a new identity. `artifacts[]`
+              // (recordArtifact / the batch-published event) records the primary publish per
+              // batch, which happens once above (step 3d), not once per worker here.
               await compileLimit.run(() => {
                 safety.assertSafe(`deploy(${batchDir}) worker ${i}`);
                 return backend.deploy(batchDir);
