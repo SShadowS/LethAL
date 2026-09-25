@@ -27,8 +27,8 @@ test runs that code at all. The share your tests killed is the **mutation score*
 **Your source tree is never modified.** LethAL copies your project into a scratch directory under
 the OS temp dir, changes the copy there, compiles that, and publishes it. There is nothing to
 revert. What *does* persist is on the server: the modified build stays published until you
-republish your own app, which is why LethAL is for a **sandbox or dev container, never a production
-tenant**. Your test project is never touched at all: LethAL does not even publish it.
+republish your own app (see [Restoring your app after a run](#restoring-your-app-after-a-run)),
+which is why LethAL is for a **sandbox or dev container, never a production tenant**. Your test project is never touched at all: LethAL does not even publish it.
 
 ## Prerequisites
 
@@ -581,6 +581,28 @@ own conformance suite, which runs at registration. The one to understand is `val
 the assignment leaves the field's **value correct** and deletes only the `OnValidate` trigger chain,
 so a test that checks the field still passes and a test that checks the side effect does not. It is
 the only operator that separates those two.
+
+## Restoring your app after a run
+
+LethAL publishes the changed build under a version ABOVE your `app.json` version, of the form
+`<major>.<minor>.<days>.<halfSeconds>` (for example `30.0.20721.13876` for a `30.0.0.0` app). BC
+then refuses to install your own build at `30.0.0.0`:
+
+```
+Cannot install the extension <app> 30.0.0.0 because a newer version 30.0.20721.13876 was already installed.
+```
+
+Unpublishing the changed build first does not help. BC keeps the data version, so the lower
+version is still refused, and your app is then missing from the environment, along with anything
+that depends on it.
+
+What works:
+
+1. Read the version LethAL printed at the end of the run (`[lethal] the instrumented build is
+   still published as version ...`). It prints this even when the run failed after publishing.
+2. Set your `app.json` version to anything above it (the line names the smallest one), build, and
+   publish.
+3. Republish your test app, since it depends on the app you just replaced.
 
 ## Limits
 

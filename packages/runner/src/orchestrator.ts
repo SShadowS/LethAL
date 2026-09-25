@@ -3709,6 +3709,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           batchIndex: batchIdx,
           guardCount: manifest.mutants.length,
           elapsedMs: deployElapsedMs,
+          appVersion,
         });
         emit({ type: "phase-left", phase: "deploy", elapsedMs: deployElapsedMs });
       }

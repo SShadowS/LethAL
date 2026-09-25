@@ -410,6 +410,9 @@
         "elapsedMs": {
           "type": "number"
         },
+        "appVersion": {
+          "type": "string"
+        },
         "seq": {
           "type": "number"
         }

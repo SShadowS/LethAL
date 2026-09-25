@@ -7,7 +7,7 @@ import type { ActivationConfig } from "../src/activation";
 import type { AlRunnerCanaryResult } from "../src/al-runner-canary";
 import type { BcDevConfigSection, LethalConfigFile } from "../src/cli";
 import { NOTHING_SCORED_EXIT_CODE, QUARANTINED_EXIT_CODE, exitCodeForReport } from "../src/cli";
-import { loadDryRunConfig } from "../src/cli";
+import { loadDryRunConfig, restoreNotice } from "../src/cli";
 import {
   announceAlRunnerCanary,
   clearQuarantine,
@@ -1878,3 +1878,11 @@ describe("issue #21: --dry-run needs no config file", () => {
   });
 });
 
+describe("issue #22: the restore notice names the version to beat", () => {
+  test("the stamp and the smallest version above it", () => {
+    const n = restoreNotice("30.0.20721.13876");
+    expect(n).toContain("30.0.20721.13876");
+    expect(n).toContain("30.0.20721.13877");
+    expect(n).toContain("republish your test app");
+  });
+});

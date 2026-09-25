@@ -161,6 +161,10 @@ export type RunEventInput =
       readonly batchIndex: number;
       readonly guardCount: number;
       readonly elapsedMs: number;
+      /** Issue #22: the version this batch was published under. BC refuses any later publish of
+       *  the same app id at or below it, including the user's own build, so the CLI prints the
+       *  highest one at the end of a run. Optional only so older streams still parse. */
+      readonly appVersion?: string;
     }
   | { readonly type: "batch-invalidated"; readonly batchIndex: number; readonly reason: string }
   | {

@@ -35,6 +35,7 @@ import {
   runAlRunnerCanary,
 } from "./al-runner-canary";
 import { contractRefusals, contractSummary, runAlRunnerContractProbe } from "./al-runner-contract";
+import { compareAppVersions, nextAbove } from "./app-version";
 import { ArtifactCompiler, defaultArtifactIo } from "./artifact";
 import type { BackendStatus, ExecutionBackend } from "./backend";
 import { bcFetch } from "./bc-fetch";
@@ -1985,6 +1986,16 @@ async function loadLethalConfigFile(path: string): Promise<LethalConfigFile> {
 }
 
 /**
+ * Issue #22: what to do to get the user's own app back. BC refuses a publish of the same app id at
+ * or below a version it has already seen, even after the instrumented build is unpublished, so a
+ * plain republish of the unchanged `app.json` fails with "a newer version ... was already
+ * installed".
+ */
+export function restoreNotice(published: string): string {
+  return `[lethal] the instrumented build is still published as version ${published}. To restore your own app, build it with an app.json version above that (e.g. ${nextAbove(published)}) and publish it, then republish your test app. A plain republish of your unchanged version is refused as a downgrade.`;
+}
+
+/**
  * Issue #21: `--dry-run` touches no server, so it must work before any config exists. A DEFAULTED
  * path that is absent returns `undefined`; an explicit `--config` that is absent, and any config
  * that is present but unreadable or invalid, still throws.
@@ -3117,6 +3128,8 @@ export async function runFromCli(
     // written to the OS. Closed in the `finally` below, best-effort, same posture as `store`/
     // `backend`.
     let progressOutFd: number | undefined;
+    // Issue #22: the highest version an instrumented build was published under this run.
+    let highestPublished: string | undefined;
     // Task 7 review, wave 2 (Important — the restructure itself introduced this): `report` MUST be
     // captured in a local BEFORE the `finally` runs, and returned AFTER it — never
     // `return await runSession(...)` directly inside the `try`. Per JS `try/finally` semantics, a
@@ -3183,7 +3196,18 @@ export async function runFromCli(
       // partially — a ruling that silently went missing looks exactly like a survivor nobody has
       // examined yet.
       const equivalenceMarks = await loadEquivalenceMarks(parsed.projectDir);
-      const emitSubscribers: EventSubscriber[] = [progress];
+      const emitSubscribers: EventSubscriber[] = [
+        progress,
+        (e) => {
+          if (e.type !== "batch-published" || e.appVersion === undefined) return;
+          if (
+            highestPublished === undefined ||
+            compareAppVersions(e.appVersion, highestPublished) > 0
+          ) {
+            highestPublished = e.appVersion;
+          }
+        },
+      ];
       if (parsed.progressOutPath !== undefined) {
         progressOutFd = openSync(parsed.progressOutPath, "w");
         const fd = progressOutFd;
@@ -3280,6 +3304,11 @@ export async function runFromCli(
             `[lethal] closing --progress-out file failed during cleanup (best-effort; the session's report/exit code is unaffected): ${err instanceof Error ? err.message : String(err)}`,
           );
         }
+      }
+      // Issue #22: in the `finally`, because a run that fails AFTER publishing leaves the
+      // instrumented build on the server just the same, and that is when the user needs this most.
+      if (highestPublished !== undefined && parsed.backendKind === "bcdev") {
+        process.stderr.write(`${restoreNotice(highestPublished)}\n`);
       }
     }
     // Reached only when the `try` above completed WITHOUT throwing, so `runSession` resolved and

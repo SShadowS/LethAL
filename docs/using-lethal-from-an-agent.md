@@ -273,7 +273,9 @@ into a transcript and do not copy it into an issue.
 ## Safety
 
 - Point LethAL at a **sandbox or dev container only, never a production tenant.** The changed build
-  stays published until you republish your own app.
+  stays published until you republish your own app, and a plain republish is refused as a
+  downgrade: the user's build needs a version above the one LethAL prints at the end of the run
+  (README, "Restoring your app after a run").
 - Your source tree is never modified. LethAL copies the project to a scratch directory and mutates
   the copy.
 - `--stop-hung-sessions` lets LethAL END a BC session on your server. It is off by default and needs
