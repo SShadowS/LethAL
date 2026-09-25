@@ -41,7 +41,8 @@ Below, `<session>`, `<worktree>`, `<branch>` and `<lane>` mean your row.
 - Never edit plans, `task.md`, `CLAUDE.md`, `.claude/settings.json` or hooks. A design question:
   `coord ask --task <id> --from <session>`, checkpoint `--wait owner --note "..."`.
 - Never weaken a test, a frozen gate figure or a guard to get green. Report it instead.
-- Containers only under a lease and only with the owner's yes for live gates (README).
+- Containers: Cronus28 only, always under a lease. Live gates on it need no ask (standing owner
+  authorization, README), but a moved frozen figure is reported, never re-recorded.
 - A hook that blocks you: stop and report; never route around it.
 - Two lanes share `master`. Merge `master` before each task, and never touch the other lane's
   branch or worktree.
