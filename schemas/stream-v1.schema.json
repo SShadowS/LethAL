@@ -153,6 +153,29 @@
                   }
                 }
               }
+            },
+            "changedSince": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "ref",
+                "mergeBase",
+                "untrackedFiles"
+              ],
+              "properties": {
+                "ref": {
+                  "type": "string"
+                },
+                "mergeBase": {
+                  "type": "string"
+                },
+                "untrackedFiles": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
             }
           }
         },

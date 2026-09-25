@@ -2,7 +2,7 @@ import type { BackendCapabilities } from "./backend";
 import type { EquivalenceMark } from "./equivalence-marks";
 import type { RunEvent } from "./events";
 import { type ExcludedSites, buildExcludedSites } from "./excluded-sites";
-import type { LineRange } from "./line-filter";
+import type { ChangedSinceSource, LineRange } from "./line-filter";
 import type { PermissionCanaryResult } from "./permission-canary";
 import type { DeclarativeSiteFile, NotInstrumentedFile, SessionOutcome } from "./report";
 import type { BatchArtifact } from "./store";
@@ -61,7 +61,11 @@ export interface FoldStatics {
   readonly operators?: { readonly names: readonly string[] };
   /** Issue #19: the line filter this run was GIVEN, if any. Its excluded site count is LEARNED
    *  from `mutation-set-generated.excludedByLines`. */
-  readonly lines?: { readonly ranges: readonly LineRange[] };
+  readonly lines?: {
+    readonly ranges: readonly LineRange[];
+    /** GH-25: present exactly when `--changed-since` was given. */
+    readonly changedSince?: ChangedSinceSource;
+  };
   /** R45: the `--tests-only` narrowing this run was GIVEN, if any. */
   readonly testsOnly?: readonly string[];
   /** R53: whether this run was allowed to end BC sessions to score a non-terminating mutant. */
@@ -119,6 +123,7 @@ export interface FoldedReport {
   readonly lines?: {
     readonly ranges: readonly LineRange[];
     readonly excludedSiteCount: number;
+    readonly changedSince?: ChangedSinceSource;
   };
   readonly testsOnly?: readonly string[];
   readonly staleTestApp?: { readonly missingTests: readonly string[] };
@@ -559,7 +564,15 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
       ? { operators: { names: statics.operators.names, excludedSiteCount: excludedByOperator } }
       : {}),
     ...(statics.lines !== undefined
-      ? { lines: { ranges: statics.lines.ranges, excludedSiteCount: excludedByLines } }
+      ? {
+          lines: {
+            ranges: statics.lines.ranges,
+            excludedSiteCount: excludedByLines,
+            ...(statics.lines.changedSince !== undefined
+              ? { changedSince: statics.lines.changedSince }
+              : {}),
+          },
+        }
       : {}),
     ...(statics.testsOnly !== undefined && statics.testsOnly.length > 0
       ? { testsOnly: statics.testsOnly }

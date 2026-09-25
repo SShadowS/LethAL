@@ -60,8 +60,8 @@ import {
 import { ActivationFailure } from "./failure-classes";
 import { LeaseUnavailableError, MAX_ATTEMPT_ID_LENGTH, MAX_TTL_SECONDS } from "./lease";
 import type { AcquireOutcome, Lease, LeaseApi } from "./lease";
-import { normalizeRelPath, spanTouches } from "./line-filter";
-import type { LineRange } from "./line-filter";
+import { isEnumeratedAl, normalizeRelPath, spanTouches } from "./line-filter";
+import type { ChangedSinceSource, LineRange } from "./line-filter";
 import { isRetrySafe, requiresUnsafeLatch } from "./operation-outcome";
 import {
   type PermissionCanaryResult,
@@ -521,9 +521,7 @@ export async function generateMutationSet(
   const files: InstrumentedFile[] = [];
   /** Files with >=1 spec that no selector var can be injected into — reported once, below. */
   const skipped: NotInstrumentedFile[] = [];
-  const entries = (await readdir(projectDir, { recursive: true }))
-    .filter((e) => e.toLowerCase().endsWith(".al"))
-    .filter((e) => !basename(e).startsWith("Mutation"));
+  const entries = (await readdir(projectDir, { recursive: true })).filter(isEnumeratedAl);
   // R41: resolved BEFORE any file is read, so a typo'd pattern fails immediately rather than
   // after a full parse. `undefined` means "no narrowing" — distinct from an empty set, which
   // `admittedByOnly` refuses outright.
@@ -812,6 +810,9 @@ export interface SessionConfig {
   /** Issue #19: line ranges a mutant must touch. See `MutationSetOptions.lines`; like `operators`,
    *  this narrows the mutant set and cannot change a verdict. */
   readonly lines?: readonly LineRange[];
+  /** GH-25: where `--changed-since`'s part of `lines` came from. Present exactly when
+   *  `--changed-since` was given; it does not select anything by itself, `lines` does. */
+  readonly changedSince?: ChangedSinceSource;
   /**
    * R45: glob patterns naming which TEST files may run (`--tests-only`). Absent means the whole
    * suite. Narrows the baseline — the phase `only` does not touch and where a real project's run
@@ -2916,7 +2917,14 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     ...(cfg.only !== undefined ? { only: { patterns: cfg.only } } : {}),
     ...(cfg.exclude !== undefined ? { exclude: { patterns: cfg.exclude } } : {}),
     ...(resolvedOperators !== undefined ? { operators: { names: resolvedOperators } } : {}),
-    ...(cfg.lines !== undefined ? { lines: { ranges: cfg.lines } } : {}),
+    ...(cfg.lines !== undefined
+      ? {
+          lines: {
+            ranges: cfg.lines,
+            ...(cfg.changedSince !== undefined ? { changedSince: cfg.changedSince } : {}),
+          },
+        }
+      : {}),
     ...(cfg.testsOnly !== undefined ? { testsOnly: cfg.testsOnly } : {}),
     ...(cfg.stopHungSessions === true ? { stopHungSessions: true } : {}),
     // R172 proposal 3. Passed through as GIVEN; `buildReport` decides which marks matched, went
@@ -4674,7 +4682,14 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     ...(resolvedOperators !== undefined && resolvedOperators.length > 0
       ? { operators: { names: resolvedOperators } }
       : {}),
-    ...(cfg.lines !== undefined ? { lines: { ranges: cfg.lines } } : {}),
+    ...(cfg.lines !== undefined
+      ? {
+          lines: {
+            ranges: cfg.lines,
+            ...(cfg.changedSince !== undefined ? { changedSince: cfg.changedSince } : {}),
+          },
+        }
+      : {}),
     ...(cfg.testsOnly !== undefined && cfg.testsOnly.length > 0
       ? { testsOnly: cfg.testsOnly }
       : {}),
