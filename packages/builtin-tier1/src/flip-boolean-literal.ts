@@ -287,7 +287,7 @@ const LOOP_STATEMENTS: ReadonlySet<string> = new Set([
  * which still terminate. Measured 0 sites of either shape across 725 `repeat` loops on both
  * reference corpora; the `while` forms were checked only by grep over `fixtures/` and `examples/`,
  * not counted in that corpus pass, so this is about being exact rather than about a count. The
- * OTHER polarity of a nested literal (`until Done and false` -> `until Done and true`, `while X or
+ * OTHER polarity of a nested literal (`until Done and true` -> `until Done and false`, `while X or
  * false` -> `while X or true`) can hang and is not handled here: recorded as a known gap, filed as
  * [[R239]], not fixed in this change.
  *
