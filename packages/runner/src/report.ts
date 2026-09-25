@@ -15,7 +15,7 @@ import { type EquivalenceMarkReport, applyEquivalenceMarks } from "./equivalence
 import type { RunEvent } from "./events";
 import { type ExcludedSites, declarativeSitesView, notInstrumentedView } from "./excluded-sites";
 import type { Interpretation } from "./interpretation";
-import type { LineRange } from "./line-filter";
+import type { ChangedSinceSource, LineRange } from "./line-filter";
 import { type PermissionCanaryResult, permissionCanaryWarnings } from "./permission-canary";
 import {
   PLATFORM_ARTIFACT_KILL_DIAGNOSIS,
@@ -961,10 +961,15 @@ export interface SessionReport {
    * Issue #19 (R227): the line filter this run was asked for (`--lines`, `--changed-since`), if
    * any. `ranges` are project-relative, 1-based and inclusive; `excludedSiteCount` counts the
    * post-dedup sites on other lines. See `CAVEAT_INTERPRETATIONS["line-narrowed"]`.
+   *
+   * GH-25: `changedSince` is present exactly when `--changed-since` was given, and names what the
+   * diff ran against: the ref as given, the full `git merge-base <ref> HEAD` sha the working tree
+   * was diffed from, and the untracked `.al` files that counted whole.
    */
   readonly lines?: {
     readonly ranges: readonly LineRange[];
     readonly excludedSiteCount: number;
+    readonly changedSince?: ChangedSinceSource;
   };
   /**
    * R45: the `--tests-only` narrowing, if any. Absent means the whole suite ran at baseline. See

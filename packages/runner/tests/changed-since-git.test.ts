@@ -2,7 +2,10 @@ import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { AlRunnerBackend } from "../src/al-runner-backend";
+import { type RunCliConfig, runFromCli } from "../src/cli";
 import { changedLinesSince, parseUnifiedDiffAdded } from "../src/line-filter";
+import type { SessionConfig } from "../src/orchestrator";
 import { sessionFingerprint } from "../src/resume";
 import { git, hermeticSpawn, makeGitRepo } from "./helpers/git-repo";
 
@@ -342,4 +345,65 @@ describe("edges", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+});
+
+test("runFromCli hands the changed-since source to runSession", async () => {
+  const { root, app } = await prFixture();
+  try {
+    await writeFile(
+      join(app, "app.json"),
+      JSON.stringify({
+        id: "0f2b7c5e-4d3a-4917-8a1c-3b4a8d9f1027",
+        name: "Line Scope Fixture",
+        publisher: "LethAL",
+        version: "1.0.0.0",
+        idRanges: [{ from: 79000, to: 79199 }],
+      }),
+    );
+    await git(root, ["add", "app/app.json"]);
+    await git(root, ["commit", "-qm", "app.json"]);
+    const configPath = join(root, "lethal.config.json");
+    await writeFile(configPath, "{}");
+    const parsed: RunCliConfig = {
+      mode: "run",
+      projectDir: app,
+      testDir: join(root, "tests"),
+      backendKind: "al-runner",
+      dbPath: ":memory:",
+      configPath,
+      skipKnownSurvivors: false,
+      workers: 1,
+      keepEnv: false,
+      allowExpiringEnv: false,
+      changedSince: "main",
+    };
+    // Capture the config, then stop: nothing after `runSession` is under test here.
+    let captured: SessionConfig | undefined;
+    const stop = new Error("captured");
+    await expect(
+      runFromCli(parsed, {
+        gitSpawn: hermeticSpawn,
+        validateSelectorIdsForProject: async () => {},
+        buildBackend: async () =>
+          new AlRunnerBackend({
+            alRunnerPath: "unused",
+            instrumentedDir: "unused",
+            testDir: "unused",
+            selectorObjectId: 1,
+          }),
+        runSession: async (cfg) => {
+          captured = cfg;
+          throw stop;
+        },
+      }),
+    ).rejects.toBe(stop);
+    expect(captured?.lines).toEqual([{ file: "src/A.al", start: 5, end: 5 }]);
+    expect(captured?.changedSince).toEqual({
+      ref: "main",
+      mergeBase: (await git(root, ["merge-base", "main", "HEAD"])).trim(),
+      untrackedFiles: [],
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
