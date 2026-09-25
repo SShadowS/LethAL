@@ -576,7 +576,8 @@ export class BcDevMcpBackend implements ExecutionBackend {
   // as the hub's own indexes, the artifact that was just compiled, and the source it was compiled
   // from, because a line number only means anything in the frame of the bytes that were
   // published. `instrumentedDir`, not `staged`: `staged` differs from it only in `app.json` (the
-  // control dependency injection) and has already been deleted by the time this runs.
+  // control dependency injection), and when deploy() calls this, `staged` has already been
+  // deleted.
   private async indexArtifact(appPath: string, instrumentedDir: string): Promise<void> {
     this.methodIndex = await AppMethodIndex.fromAppFile(appPath);
     if ((this.cfg.coverageMode ?? DEFAULT_COVERAGE_MODE) === "fenced") {

@@ -3086,9 +3086,10 @@ async function closeLeaseScope(a: {
   emit: RunEmitter;
 }): Promise<void> {
   // Best-effort cleanup: deliberately swallow errors here (unlike the
-  // retrying activation calls above) since this only runs to leave every
-  // backend deactivated on exit, and a failure here must not mask/replace
-  // whatever real error is already propagating.
+  // retrying activation calls in scoreBatch and the covering loop) since
+  // this only runs to leave every backend deactivated on exit, and a
+  // failure here must not mask/replace whatever real error is already
+  // propagating.
   a.emit({ type: "phase-entered", phase: "teardown" });
   const teardownStartedMs = Date.now();
   // After an unsafe latch, NO work-plane call — not even the deactivating ClearActive, which is
@@ -3276,8 +3277,9 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     baseline.push({ ref, verdict: v });
   }
   // Computed and emitted BEFORE the early exits below, for the same reason the deploy clock
-  // is: both the quarantine `break` and the no-green-tests `continue` leave this scope without
-  // reaching the success-path emit, so a baseline that aborted used to report 0 ms and silently
+  // is: both the quarantine path (`return "unsafe"` below) and `select` returning undefined
+  // (`return "nothing-to-run"` below) leave this function without reaching the success-path
+  // emit, so a baseline that aborted used to report 0 ms and silently
   // reattribute its whole cost to "overhead". Measured on a run quarantined mid-baseline:
   // baseline 0.0s, overhead 70.1s, when essentially all of it was baseline.
   const baselineElapsedMs = Date.now() - baselineStartedMs;
@@ -3305,11 +3307,13 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   }
   // baseline-batch-finished: the moment of observation IS the batch's baseline RETURNING (see
   // events.ts's doc comment) — emitted here, unconditionally, so it still fires on the
-  // all-red path below (`greenTests.length === 0`) rather than only on the happy path.
+  // all-red path in the caller's `select` callback (`greenTests.length === 0`) rather than only
+  // on the happy path.
   // Classification is computed directly against `describeTestPermissionsRefusal`/
   // `describeTestPageUnsupported`/the stale-test-app sentinel — the SAME pure checks the
-  // `refusedThisBatch`/`testPageThisBatch` loop below also runs, over the SAME domain: the
-  // permission/testpage regexes are gated on `didNotPassAtBaseline(b.verdict.outcome)` here for
+  // `refusedThisBatch`/`testPageThisBatch` loop in the caller's `select` callback also runs,
+  // over the SAME domain: the permission/testpage regexes are gated on
+  // `didNotPassAtBaseline(b.verdict.outcome)` here for
   // exactly the reason that loop is scoped to `unsupportedBaseline` (its own
   // `didNotPassAtBaseline`-filtered view of `baseline`) — a `pass`/`skip`/`timeout` verdict
   // cannot be a permissions refusal or a TestPage refusal by construction (coordinator review,
@@ -3372,10 +3376,11 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   // `no-coverage` (R55), and the report would put a plausible number on a suite nobody can
   // reconstruct. Twice, three days apart, that is exactly what a live gate run produced.
   //
-  // The throw is inside the lease's own try/finally below, so the lease is released and every
-  // worker backend disposed on the way out. `buildReport` never runs, which is deliberate but
-  // has a cost: `StaleTestAppError`'s message is the ONLY diagnosis the operator receives, so
-  // it carries the names AND the remedy rather than pointing at a report that will not exist.
+  // The throw is caught by the caller's own try/finally (runSession today), so the lease is
+  // released and every worker backend disposed on the way out. `buildReport` never runs, which
+  // is deliberate but has a cost: `StaleTestAppError`'s message is the ONLY diagnosis the
+  // operator receives, so it carries the names AND the remedy rather than pointing at a report
+  // that will not exist.
   const missingFromServer = baseline.flatMap((b) => {
     const described = describeStaleTestApp(b.verdict.failureMessage);
     // The description travels INTO the error rather than being recomputed or dropped: it is the
@@ -3399,7 +3404,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
 
   // 6. per-mutant loop — sharded across workers when workers > 1. The
   // baseline/coverage discovery above always runs once against
-  // cfg.backend; only the kill-detection phase below fans out, since
+  // scope.backend; only the kill-detection phase below fans out, since
   // that's the part that's actually per-mutant work.
   const fallbackTimeoutMs = scope.baselineTimeoutMs;
   // Layer 5C-A Task 8, Task 10 (design §G): per-ARTIFACT clean-attestation ledger. Declared
@@ -3415,9 +3420,9 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     await input.executeCovering(plan, attestation);
   } else {
     // Sequential IS the parallel path with a pool of one: this is the
-    // exact same runMutantsOnBackend call the fan-out branch below makes
-    // per shard, just with all of `execute` as a single "shard" on the
-    // one backend already deployed in step 3.
+    // exact same runMutantsOnBackend call the caller's `executeCovering`
+    // makes per shard, just with all of `execute` as a single "shard" on
+    // the one backend already deployed in step 3.
     await runMutantsOnBackend({
       backend,
       safety,
@@ -3452,7 +3457,8 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   // — a wrong/stale container legitimately returns observedAny=false on every run (coverage
   // over-approximates) and every test would pass, silently accumulating false "survived"
   // verdicts. Invalidate this batch's verdicts and quarantine BEFORE any of them can leave
-  // the orchestrator (`buildReport` only runs once, at `runSession`'s return, below).
+  // the orchestrator (`buildReport` only runs once: the caller, `runSession`, builds the report
+  // at its own return).
   // al-runner (non-authoritative) carries no attestation at all — `attestation.clean` would
   // always be false there, so this gate is scoped to `caps.authoritative` to avoid misfiring
   // on every al-runner session.
@@ -3550,10 +3556,11 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // comment for why an authoritative caller missing the identity fields is tolerated (skip, not
   // throw) rather than treated as a configuration error here.
   //
-  // `resourceKey`/`quarantineStore` are declared at this outer scope (not just inside the `if`
-  // below) so the mutant loop (Task 12) can also record a NEW quarantine when a test run comes
-  // back in-flight-unknown mid-session — they stay `undefined` for exactly the backends that
-  // legitimately have no shared tier to strand (al-runner) or omit identity fields, and the
+  // `resourceKey`/`quarantineStore` are a destructured const returned by `consultQuarantine`
+  // below (not values this function conditionally assigns inline) so the mutant loop (Task 12)
+  // can also record a NEW quarantine when a test run comes back in-flight-unknown mid-session —
+  // they stay `undefined` for exactly the backends that legitimately have no shared tier to
+  // strand (al-runner) or omit identity fields, and the
   // mutant loop treats "no store" as "latch only, nothing durable to record" (see
   // `runMutantsOnBackend`'s deadline branch).
   const { resourceKey, quarantineStore } = await consultQuarantine({
