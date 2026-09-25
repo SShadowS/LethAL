@@ -21,6 +21,7 @@ import type {
 } from "../src/backend";
 import { PublishFailedError } from "../src/bcdev-backend";
 import { DeploymentVerifier, decidePublishOutcome } from "../src/deployment-verifier";
+import { EnvToolError } from "../src/env-tool";
 import { createEmitter } from "../src/events";
 import type { RunEvent } from "../src/events";
 import { ActivationFailure } from "../src/failure-classes";
@@ -5852,23 +5853,83 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
 
   // R232: `afterLeaseAcquired` used to run BEFORE the try/finally that releases the lease, so a
   // throw from it (the R19 test-app publish) left the lease held for its full ttl. It must be the
-  // first statement inside the try.
+  // first statement inside the try. The thrown value is BC's version-conflict rejection as the
+  // env tool reports it: a server that answered and refused, which is the case that releases. A
+  // bare Error proves nothing about the server and now keeps the lease (the test below).
   test("an afterLeaseAcquired that throws still releases the lease and stops the heartbeat (R232)", async () => {
     const log: string[] = [];
     const client = new FakeLeaseClient(log);
     const timers = new FakeTimers();
     const { lease } = leaseCfg(client, { timers });
+    const refusal =
+      "envTool.publish: tool publish Tests.app exit 1: The extension could not be deployed because a newer version 1.0.106.0 was already installed.";
     const err = await runSessionForTest(leaseBackend(), {
       lease,
       quarantineDir: freshTmpDir(),
       afterLeaseAcquired: async () => {
-        throw new Error("test-app publish failed");
+        throw new EnvToolError(refusal);
       },
     }).catch((e) => e);
-    expect((err as Error).message).toBe("test-app publish failed");
+    expect((err as Error).message).toBe(refusal);
+    // Tombstoned as a known failure. The fake does not model the marker, so without this the
+    // release below would pass even if the refusal were misread as uncertain.
+    expect(client.endPublishArgs.map((a) => a.outcome)).toEqual(["failed"]);
     expect(client.releaseCalls).toBe(1);
     expect(log.indexOf("acquire")).toBeLessThan(log.indexOf("release"));
     expect(timers.cleared).toBe(1);
+  });
+
+  // R232 review: the test-app publish may still be changing the tier when it ends in a timeout, a
+  // killed tool or a lost connection. Releasing then lets another session in on top of it, which
+  // is the overlap R19 exists to prevent. Such a failure takes the fenced in-flight-unknown path:
+  // the publish marker stays set, the tier is durably quarantined, the session latches, and the
+  // lease is NOT released.
+  test("an afterLeaseAcquired that fails UNCERTAINLY keeps the lease, latches and quarantines (R232)", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    // status reads: [0] the fence's opSeq lookup, [1] the session-end release gate, which on the
+    // real server still sees the marker BeginPublish set, because nothing tombstoned it.
+    client.statusQueue = [
+      { opKind: "none", opAttemptId: "", opSeq: 0, lastCompletedOpSeq: 7, completed: true },
+      { opKind: "publish", opAttemptId: "pub", opSeq: 8, lastCompletedOpSeq: 7, completed: false },
+    ];
+    const { lease } = leaseCfg(client);
+    const events: RunEvent[] = [];
+    const activateCalls: Array<string | null> = [];
+    const timedOut = new EnvToolError(
+      "envTool.publish: tool publish Tests.app timed out after 900s (envTool.timeoutSeconds) - this is LethAL's own budget expiring, not the tool crashing",
+    );
+    const err = await runSessionForTest(
+      leaseBackend({
+        activate: async (id) => {
+          activateCalls.push(id);
+        },
+      }),
+      {
+        lease,
+        quarantineDir: dir,
+        nowIso: () => "2026-09-26T10:00:00.000Z",
+        emit: [(e) => events.push(e)],
+        afterLeaseAcquired: async () => {
+          throw timedOut;
+        },
+      },
+    ).catch((e) => e);
+    expect(err).toBe(timedOut);
+    expect(client.releaseCalls).toBe(0);
+    expect(client.beginPublishArgs).toHaveLength(1);
+    expect(client.endPublishArgs).toHaveLength(0);
+    const rec = await new QuarantineStore(dir).read("http://cronus281|BC");
+    expect(rec?.opKind).toBe("container-needs-recycle");
+    expect(rec?.detail).toContain("UNKNOWN result");
+    expect(rec?.detail).toContain("timed out");
+    // Latched: the teardown's deactivating ClearActive is a work-plane call and must not run.
+    expect(activateCalls).not.toContain(null);
+    const latched = events.find(
+      (e) => e.type === "warning" && e.code === "after-lease-acquired-uncertain",
+    );
+    expect(latched?.type === "warning" ? latched.message : "").toContain("afterLeaseAcquired");
+    expect(latched?.type === "warning" ? latched.message : "").toContain("timed out");
   });
 });
 

@@ -3966,9 +3966,29 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       // is published. R19's "move both under the lease" is impossible for that half by construction.
       //
       // Inside the same try/finally as everything else the lease guards (this IS that try, and
-      // this is the first statement in it): a publish that throws still releases the lease rather
-      // than leaving it held for the full ttl.
-      if (cfg.afterLeaseAcquired !== undefined) await cfg.afterLeaseAcquired();
+      // this is the first statement in it), and inside the publication fence (R232). A failure
+      // the server answered and refused (`isConfirmedTerminalPublishFailure`) is tombstoned, so
+      // the `finally` releases the lease. Any other failure (a timeout, a killed tool, a lost
+      // connection) cannot prove the publish stopped: the fence leaves its marker set and
+      // quarantines the tier, `finish()` then sees the marker and keeps the lease, and the
+      // session latches so teardown makes no further call on the tier.
+      const hook = cfg.afterLeaseAcquired;
+      if (hook !== undefined && leaseSession !== undefined) {
+        try {
+          await leaseSession.publish(hook);
+        } catch (err) {
+          if (!isConfirmedTerminalPublishFailure(err)) {
+            const reason = `afterLeaseAcquired (R19 test-app publish) ended with an UNKNOWN result, so the lease is kept: ${messageOf(err)}`;
+            safety.latchUnsafe(reason);
+            emit({
+              type: "warning",
+              code: "after-lease-acquired-uncertain",
+              message: `[lethal] ${reason}`,
+            });
+          }
+          throw err;
+        }
+      }
     }
 
     // R26: run it EXACTLY ONCE, here — after the lease is acquired above (the canary drives the
