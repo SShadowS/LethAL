@@ -1,5 +1,5 @@
 import { readFile, readdir } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import type { SpawnFn } from "./publisher";
 
 /**
@@ -110,11 +110,14 @@ export interface ChangedSinceSource {
 
 const isAl = (p: string) => p.toLowerCase().endsWith(".al");
 
-/** Enumerated the way `orchestrator.ts` enumerates the project, so "holds an .al file" means
- *  "LethAL would parse one". */
+/** The files `generateMutationSet` parses: `.al`, minus its own emitted `Mutation*` artifacts.
+ *  Shared with it, so "LethAL parses this" means one thing in both places. */
+export const isEnumeratedAl = (p: string) => isAl(p) && !basename(p).startsWith("Mutation");
+
+/** "Holds a file LethAL would parse", walked the way `generateMutationSet` walks the project. */
 async function holdsAlFile(dir: string): Promise<boolean> {
   try {
-    return (await readdir(dir, { recursive: true })).some(isAl);
+    return (await readdir(dir, { recursive: true })).some(isEnumeratedAl);
   } catch (e) {
     // A submodule registered in the index but absent on disk: LethAL parses nothing there.
     if ((e as NodeJS.ErrnoException).code === "ENOENT") return false;
@@ -165,8 +168,23 @@ export async function changedLinesSince(
     );
   }
 
+  // An index flag makes git diff treat a file as unchanged whatever is on disk, so its edits would
+  // get no mutants. `ls-files -v` tags assume-unchanged with a lowercase letter, skip-worktree with S.
+  for (const entry of (await run(["ls-files", "-v", "-z", "--", "."])).split("\0")) {
+    const tag = entry.slice(0, 1);
+    const path = entry.slice(2);
+    if (!isEnumeratedAl(path)) continue;
+    const flag =
+      tag === "S" ? "skip-worktree" : /^[a-z]$/.test(tag) ? "assume-unchanged" : undefined;
+    if (flag === undefined) continue;
+    throw new Error(
+      `--changed-since ${ref}: ${path} is marked ${flag}, so git diff reports it unchanged whatever its working-tree content, and its edits would get no mutants. Clear the flag in ${projectDir} with: git update-index --no-${flag} ${path}`,
+    );
+  }
+
   // No second tree: the diff runs to the working tree. Each flag pins a behaviour a user's config
-  // could otherwise change (quotePath, prefixes, renames, textconv, inter-hunk context) or that CRLF would break.
+  // could otherwise change (quotePath, prefixes, renames, textconv, inter-hunk context, diff
+  // algorithm) or that CRLF would break.
   const diff = await run([
     "-c",
     "core.quotePath=false",
@@ -176,6 +194,7 @@ export async function changedLinesSince(
     "--no-ext-diff",
     "--no-textconv",
     "--inter-hunk-context=0",
+    "--diff-algorithm=myers",
     "--find-renames",
     "--ignore-cr-at-eol",
     "--src-prefix=a/",

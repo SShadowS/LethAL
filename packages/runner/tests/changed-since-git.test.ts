@@ -247,6 +247,26 @@ describe("fails loudly", () => {
     }
   });
 
+  for (const [flag, clear] of [
+    ["--assume-unchanged", "--no-assume-unchanged"],
+    ["--skip-worktree", "--no-skip-worktree"],
+  ] as const) {
+    test(`a tracked .al marked ${flag}, whose edits git diff would hide`, async () => {
+      const { root, app } = await prFixture();
+      try {
+        await git(app, ["update-index", flag, ".gitignore"]); // not .al: does not count
+        expect(await rangesOf(app)).toEqual([{ file: "src/A.al", start: 5, end: 5 }]);
+        await git(app, ["update-index", flag, "src/A.al"]);
+        await writeFile(join(app, "src/A.al"), TEN.replace("l5\n", "L5\n").replace("l9\n", "L9\n"));
+        const err = String(await changedLinesSince(app, "main", hermeticSpawn).catch((e) => e));
+        expect(err).toContain(`--changed-since main: src/A.al is marked ${flag.slice(2)}`);
+        expect(err).toContain(`git update-index ${clear} src/A.al`);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+  }
+
   test("a nested repository or submodule with no .al file is ignored", async () => {
     const inner = await makeGitRepo({ "x.txt": "x\n" });
     const { root, app } = await prFixture();
@@ -387,15 +407,70 @@ describe("edges", () => {
     }
   });
 
-  test("a tag works as the ref", async () => {
+  test("a tag works as the ref, and resolves to the tagged commit, not main", async () => {
+    // Tagged on feat, between two more commits: diffing from main would add lines 2 and 5.
     const { root, app } = await prFixture();
     try {
-      await git(root, ["tag", "v0", "main"]);
-      const byTag = await changedLinesSince(app, "v0", hermeticSpawn);
-      expect(byTag.ranges).toEqual(await rangesOf(app, "main"));
-      expect(byTag.source.ref).toBe("v0");
+      const two = TEN.replace("l5\n", "L5\n").replace("l2\n", "L2\n");
+      await writeFile(join(app, "src/A.al"), two);
+      await git(root, ["commit", "-qam", "line 2"]);
+      await git(root, ["tag", "-a", "v1", "-m", "annotated, so the tag object is not the commit"]);
+      await writeFile(join(app, "src/A.al"), two.replace("l8\n", "L8\n"));
+      await git(root, ["commit", "-qam", "line 8"]);
+      const byTag = await changedLinesSince(app, "v1", hermeticSpawn);
+      expect(byTag.ranges).toEqual([{ file: "src/A.al", start: 8, end: 8 }]);
+      expect(byTag.source.ref).toBe("v1");
+      expect(byTag.source.mergeBase).toBe((await git(root, ["rev-parse", "v1^{commit}"])).trim());
     } finally {
       await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("diff.algorithm cannot move the ranges: myers is pinned", async () => {
+    // Measured with raw git on this pair: myers adds lines 1, 4 and 7; patience and histogram
+    // add lines 1 to 3.
+    const before = "c\na\nd\nd\nd\na\nd\n";
+    const after = "a\na\nd\nc\na\nd\na\n";
+    const myers = [
+      { file: "src/A.al", start: 1, end: 1 },
+      { file: "src/A.al", start: 4, end: 4 },
+      { file: "src/A.al", start: 7, end: 7 },
+    ];
+    for (const algorithm of ["patience", "histogram"]) {
+      const root = await makeGitRepo({ "app/src/A.al": before }, { "diff.algorithm": algorithm });
+      const app = join(root, "app");
+      try {
+        await writeFile(join(app, "src/A.al"), after);
+        const raw = parseUnifiedDiffAdded(await git(app, ["diff", "-U0", "--relative", "HEAD"]));
+        expect(raw).toEqual([{ file: "src/A.al", start: 1, end: 3 }]); // the config really bites
+        expect(await rangesOf(app, "HEAD")).toEqual(myers);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("Mutation*.al files do not make a nested repository or submodule a refusal", async () => {
+    // generateMutationSet skips them, so LethAL parses nothing there.
+    const inner = await makeGitRepo({ "src/Mutation1.al": "i\n" });
+    const { root, app } = await prFixture();
+    try {
+      await git(app, ["init", "-q", "nested"]);
+      await writeFile(join(app, "nested/MutationSelector.al"), "n\n");
+      await git(root, [
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "--quiet",
+        "add",
+        inner,
+        "app/sub",
+      ]);
+      await git(root, ["commit", "-qm", "add submodule"]);
+      expect(await rangesOf(app)).toEqual([{ file: "src/A.al", start: 5, end: 5 }]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+      await rm(inner, { recursive: true, force: true });
     }
   });
 });

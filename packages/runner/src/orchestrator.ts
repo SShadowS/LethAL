@@ -60,7 +60,7 @@ import {
 import { ActivationFailure } from "./failure-classes";
 import { LeaseUnavailableError, MAX_ATTEMPT_ID_LENGTH, MAX_TTL_SECONDS } from "./lease";
 import type { AcquireOutcome, Lease, LeaseApi } from "./lease";
-import { normalizeRelPath, spanTouches } from "./line-filter";
+import { isEnumeratedAl, normalizeRelPath, spanTouches } from "./line-filter";
 import type { ChangedSinceSource, LineRange } from "./line-filter";
 import { isRetrySafe, requiresUnsafeLatch } from "./operation-outcome";
 import {
@@ -521,9 +521,7 @@ export async function generateMutationSet(
   const files: InstrumentedFile[] = [];
   /** Files with >=1 spec that no selector var can be injected into — reported once, below. */
   const skipped: NotInstrumentedFile[] = [];
-  const entries = (await readdir(projectDir, { recursive: true }))
-    .filter((e) => e.toLowerCase().endsWith(".al"))
-    .filter((e) => !basename(e).startsWith("Mutation"));
+  const entries = (await readdir(projectDir, { recursive: true })).filter(isEnumeratedAl);
   // R41: resolved BEFORE any file is read, so a typo'd pattern fails immediately rather than
   // after a full parse. `undefined` means "no narrowing" — distinct from an empty set, which
   // `admittedByOnly` refuses outright.
