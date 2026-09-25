@@ -297,6 +297,9 @@ export interface DryRunCliConfig {
    */
   readonly dbPath: string;
   readonly configPath: string;
+  /** Issue #21: true when `--config` was passed. Only then is a missing file an error; the
+   *  defaulted path may be absent, since sizing a job comes before any server config exists. */
+  readonly configExplicit?: true;
 }
 
 export interface RunCliConfig {
@@ -1574,6 +1577,7 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
       projectDir,
       dbPath: values.db ?? join(projectDir, "lethal.sqlite"),
       configPath: values.config ?? join(projectDir, "lethal.config.json"),
+      ...(values.config !== undefined ? { configExplicit: true as const } : {}),
       ...only,
       ...exclude,
       ...operators,
@@ -1978,6 +1982,19 @@ async function loadLethalConfigFile(path: string): Promise<LethalConfigFile> {
       `config file at ${path} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
+}
+
+/**
+ * Issue #21: `--dry-run` touches no server, so it must work before any config exists. A DEFAULTED
+ * path that is absent returns `undefined`; an explicit `--config` that is absent, and any config
+ * that is present but unreadable or invalid, still throws.
+ */
+export async function loadDryRunConfig(
+  path: string,
+  explicit: boolean,
+): Promise<LethalConfigFile | undefined> {
+  if (!explicit && !existsSync(path)) return undefined;
+  return await loadLethalConfigFile(path);
 }
 
 /**
@@ -4557,10 +4574,13 @@ async function main(): Promise<number> {
     // than the real run is the failure `printDryRun`'s doc names, and forgetting the config is the
     // easiest way to produce it -- the caller passed no flag, so nothing on the command line hints
     // that a scope was in force.
-    const dryRunExclude = resolveExclude(
-      await loadLethalConfigFile(parsed.configPath),
-      parsed.exclude,
-    );
+    const dryRunConfig = await loadDryRunConfig(parsed.configPath, parsed.configExplicit === true);
+    if (dryRunConfig === undefined) {
+      console.log(
+        `no config at ${parsed.configPath}: planning from source only, no server lookups`,
+      );
+    }
+    const dryRunExclude = resolveExclude(dryRunConfig ?? {}, parsed.exclude);
     await printDryRun(parsed.projectDir, parsed.only, {
       dbPath: parsed.dbPath,
       configPath: parsed.configPath,

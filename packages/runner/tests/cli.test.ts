@@ -7,6 +7,7 @@ import type { ActivationConfig } from "../src/activation";
 import type { AlRunnerCanaryResult } from "../src/al-runner-canary";
 import type { BcDevConfigSection, LethalConfigFile } from "../src/cli";
 import { NOTHING_SCORED_EXIT_CODE, QUARANTINED_EXIT_CODE, exitCodeForReport } from "../src/cli";
+import { loadDryRunConfig } from "../src/cli";
 import {
   announceAlRunnerCanary,
   clearQuarantine,
@@ -1853,3 +1854,27 @@ describe("exitCodeForReport (R190)", () => {
     expect(new Set([0, 1, QUARANTINED_EXIT_CODE, NOTHING_SCORED_EXIT_CODE]).size).toBe(4);
   });
 });
+
+describe("issue #21: --dry-run needs no config file", () => {
+  test("parse marks an explicit --config, and only then", () => {
+    expect(parseCliConfig(["run", "--project", "p", "--dry-run"])).not.toHaveProperty(
+      "configExplicit",
+    );
+    expect(
+      parseCliConfig(["run", "--project", "p", "--dry-run", "--config", "c.json"]),
+    ).toMatchObject({ configPath: "c.json", configExplicit: true });
+  });
+  test("an absent DEFAULTED config is no config; an absent explicit one still throws", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-dry-"));
+    const path = join(dir, "lethal.config.json");
+    expect(await loadDryRunConfig(path, false)).toBeUndefined();
+    await expect(loadDryRunConfig(path, true)).rejects.toThrow("cannot read config file");
+  });
+  test("a present but invalid config throws even when defaulted", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-dry-"));
+    const path = join(dir, "lethal.config.json");
+    await writeFile(path, "{ not json");
+    await expect(loadDryRunConfig(path, false)).rejects.toThrow("not valid JSON");
+  });
+});
+
