@@ -927,6 +927,33 @@
     "groupedCalls": {
       "type": "number"
     },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "batchIndex",
+          "artifactId",
+          "sha256",
+          "appVersion"
+        ],
+        "properties": {
+          "batchIndex": {
+            "type": "number"
+          },
+          "artifactId": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "appVersion": {
+            "type": "string"
+          }
+        }
+      }
+    },
     "warmKills": {
       "type": "number"
     },

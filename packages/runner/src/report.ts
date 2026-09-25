@@ -1,5 +1,4 @@
 import { tier1Operators } from "@lethal/builtin-tier1";
-import type { LineRange } from "./line-filter";
 import { tier2Operators } from "@lethal/builtin-tier2";
 import type { MutantManifestEntry } from "@lethal/schemata";
 import { type AlRunnerCanaryResult, alRunnerCanaryWarnings } from "./al-runner-canary";
@@ -16,6 +15,7 @@ import { type EquivalenceMarkReport, applyEquivalenceMarks } from "./equivalence
 import type { RunEvent } from "./events";
 import { type ExcludedSites, declarativeSitesView, notInstrumentedView } from "./excluded-sites";
 import type { Interpretation } from "./interpretation";
+import type { LineRange } from "./line-filter";
 import { type PermissionCanaryResult, permissionCanaryWarnings } from "./permission-canary";
 import {
   PLATFORM_ARTIFACT_KILL_DIAGNOSIS,
@@ -24,8 +24,10 @@ import {
 import { type FoldStatics, foldEvents } from "./report-fold";
 import type { CoverageAttribution } from "./selection";
 import { identityKeyOf, serializeKey } from "./selection";
-import type { MutantVerdict, RunnerKind } from "./store";
+import type { BatchArtifact, MutantVerdict, RunnerKind } from "./store";
 import { TESTPAGE_DIAGNOSIS } from "./testpage-unsupported";
+
+export type { BatchArtifact };
 
 /**
  * Internal accumulation record produced while `runSession` walks batches and
@@ -1235,6 +1237,24 @@ export interface SessionReport {
    */
   readonly groupedCalls?: number;
   /**
+   * C02-02. One entry per batch THIS run published an artifact for, sorted by `batchIndex`. See
+   * `BatchArtifact` (re-exported from store.ts).
+   *
+   * OPTIONAL in the schema so archived reports stay valid (R157's rule), but ALWAYS written by
+   * this build, `[]` included, the same as `groupedCalls`. Empty on a `deploy: "none"` backend,
+   * which never publishes anything. A batch carried whole by `--resume` (R192) has no entry here
+   * either, because nothing was published for it in THIS run.
+   *
+   * `runs.artifact_id`/`runs.artifact_sha256` in the store still hold only the LAST batch's
+   * values (each publish overwrote the row); this is the field that names every batch's own
+   * identity, for a run that published more than one.
+   *
+   * An entry stays here even if its batch was later invalidated (for example, a lost lease), since
+   * it still records that a publish happened; by the time this report is read, another session may
+   * have since replaced that same artifact on the server with its own build.
+   */
+  readonly artifacts?: readonly BatchArtifact[];
+  /**
    * R206. How many of this run's `killed`/`timeout-killed` verdicts carry `killPosition > 1`:
    * kills measured WARM, in a session earlier covering tests had already run in, and confirmed by
    * replaying that prefix unmutated. Folded from the scored and carried events, never from a
@@ -2333,6 +2353,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     preprocessorSymbols: statics.preprocessorSymbols ?? [],
     untargetedTriggerCount: input.untargetedTriggerCount,
     groupedCalls: input.groupedCalls,
+    artifacts: input.artifacts,
     warmKills: input.warmKills,
     unplaceableCount: input.unplaceableCount,
     unplaceableMutants: input.unplaceableMutants,

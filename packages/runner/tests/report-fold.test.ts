@@ -682,3 +682,162 @@ describe("foldEvents — statics reunited with learned facts", () => {
     expect(foldEvents(STATICS, events).batches).toBe(2);
   });
 });
+
+describe("foldEvents: C02-02, artifacts[] names every published batch's identity", () => {
+  const ID0 = "0123456789abcdef0123456789abcdef";
+  const ID1 = "fedcba9876543210fedcba9876543210";
+
+  // Same shape as "accepts the quarantined path instead of baseline-batch-finished" above, so
+  // every mandatory event is present without dragging in coverage-split's own bookkeeping.
+  function mutationSetGenerated(): RunEventInput {
+    return {
+      type: "mutation-set-generated",
+      siteCount: 9,
+      deployedCount: 8,
+      hangCapableCount: 0,
+      totalFiles: 3,
+      instrumentableFiles: 2,
+      notInstrumentedFiles: [],
+      declarativeSiteFiles: [],
+      excludedByOnly: 0,
+      excludedByExclude: 0,
+      excludedByOperator: 0,
+    };
+  }
+
+  test("artifacts[] lists each published batch's identity, sorted by batchIndex", () => {
+    const events = seq([
+      mutationSetGenerated(),
+      {
+        type: "batch-published",
+        batchIndex: 1,
+        guardCount: 8,
+        elapsedMs: 100,
+        artifactId: ID1,
+        sha256: "b".repeat(64),
+        appVersion: "1.0.1.2",
+      },
+      {
+        type: "batch-published",
+        batchIndex: 0,
+        guardCount: 8,
+        elapsedMs: 100,
+        artifactId: ID0,
+        sha256: "a".repeat(64),
+        appVersion: "1.0.1.1",
+      },
+      { type: "quarantined", reason: "test in-flight-unknown" },
+      { type: "session-finished", elapsedMs: 10 },
+    ]);
+    expect(foldEvents(STATICS, events).artifacts).toEqual([
+      { batchIndex: 0, artifactId: ID0, sha256: "a".repeat(64), appVersion: "1.0.1.1" },
+      { batchIndex: 1, artifactId: ID1, sha256: "b".repeat(64), appVersion: "1.0.1.2" },
+    ]);
+  });
+
+  test("artifacts[] is [] when batch-published carries no identity (deploy: none)", () => {
+    const events = seq([
+      mutationSetGenerated(),
+      { type: "batch-published", batchIndex: 0, guardCount: 8, elapsedMs: 100 },
+      { type: "quarantined", reason: "test in-flight-unknown" },
+      { type: "session-finished", elapsedMs: 10 },
+    ]);
+    expect(foldEvents(STATICS, events).artifacts).toEqual([]);
+  });
+
+  test("THROWS on half an identity", () => {
+    const artifactIdOnly = seq([
+      mutationSetGenerated(),
+      { type: "batch-published", batchIndex: 0, guardCount: 8, elapsedMs: 100, artifactId: ID0 },
+      { type: "quarantined", reason: "test in-flight-unknown" },
+      { type: "session-finished", elapsedMs: 10 },
+    ]);
+    expect(() => foldEvents(STATICS, artifactIdOnly)).toThrow(
+      /artifactId.*sha256|sha256.*artifactId/s,
+    );
+
+    const sha256Only = seq([
+      mutationSetGenerated(),
+      {
+        type: "batch-published",
+        batchIndex: 0,
+        guardCount: 8,
+        elapsedMs: 100,
+        sha256: "a".repeat(64),
+      },
+      { type: "quarantined", reason: "test in-flight-unknown" },
+      { type: "session-finished", elapsedMs: 10 },
+    ]);
+    expect(() => foldEvents(STATICS, sha256Only)).toThrow(/artifactId.*sha256|sha256.*artifactId/s);
+  });
+
+  test("THROWS when one batchIndex is published twice", () => {
+    const bothWithIdentity = seq([
+      mutationSetGenerated(),
+      {
+        type: "batch-published",
+        batchIndex: 0,
+        guardCount: 8,
+        elapsedMs: 100,
+        artifactId: ID0,
+        sha256: "a".repeat(64),
+        appVersion: "1.0.1.1",
+      },
+      {
+        type: "batch-published",
+        batchIndex: 0,
+        guardCount: 8,
+        elapsedMs: 100,
+        artifactId: ID1,
+        sha256: "b".repeat(64),
+        appVersion: "1.0.1.2",
+      },
+      { type: "quarantined", reason: "test in-flight-unknown" },
+      { type: "session-finished", elapsedMs: 10 },
+    ]);
+    expect(() => foldEvents(STATICS, bothWithIdentity)).toThrow(/batch 0.*published twice/);
+
+    const neitherWithIdentity = seq([
+      mutationSetGenerated(),
+      { type: "batch-published", batchIndex: 0, guardCount: 8, elapsedMs: 100 },
+      { type: "batch-published", batchIndex: 0, guardCount: 8, elapsedMs: 100 },
+      { type: "quarantined", reason: "test in-flight-unknown" },
+      { type: "session-finished", elapsedMs: 10 },
+    ]);
+    expect(() => foldEvents(STATICS, neitherWithIdentity)).toThrow(/batch 0.*published twice/);
+
+    const oneThenTheOther = seq([
+      mutationSetGenerated(),
+      { type: "batch-published", batchIndex: 0, guardCount: 8, elapsedMs: 100 },
+      {
+        type: "batch-published",
+        batchIndex: 0,
+        guardCount: 8,
+        elapsedMs: 100,
+        artifactId: ID0,
+        sha256: "a".repeat(64),
+        appVersion: "1.0.1.1",
+      },
+      { type: "quarantined", reason: "test in-flight-unknown" },
+      { type: "session-finished", elapsedMs: 10 },
+    ]);
+    expect(() => foldEvents(STATICS, oneThenTheOther)).toThrow(/batch 0.*published twice/);
+  });
+
+  test("THROWS when an identity event has no appVersion", () => {
+    const events = seq([
+      mutationSetGenerated(),
+      {
+        type: "batch-published",
+        batchIndex: 0,
+        guardCount: 8,
+        elapsedMs: 100,
+        artifactId: ID0,
+        sha256: "a".repeat(64),
+      },
+      { type: "quarantined", reason: "test in-flight-unknown" },
+      { type: "session-finished", elapsedMs: 10 },
+    ]);
+    expect(() => foldEvents(STATICS, events)).toThrow(/no appVersion/);
+  });
+});

@@ -448,6 +448,12 @@
         "appVersion": {
           "type": "string"
         },
+        "artifactId": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        },
         "seq": {
           "type": "number"
         }

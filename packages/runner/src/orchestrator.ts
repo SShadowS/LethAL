@@ -3743,6 +3743,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       // caller-supplied appVersion.
       if (compiled !== null) {
         cfg.store.recordArtifact(runId, {
+          batchIndex: batchIdx,
           appVersion: compiled.appVersion,
           appId: compiled.appId,
           artifactId: compiled.artifactId,
@@ -3775,6 +3776,18 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           guardCount: manifest.mutants.length,
           elapsedMs: deployElapsedMs,
           appVersion,
+          // C02-02: this batch's own identity, mirroring the 3d recordArtifact guard above.
+          // All three fields together, only when this backend actually compiled an artifact.
+          // appVersion here OVERRIDES the plain key above with the version actually compiled
+          // (matching what recordArtifact just wrote to the store), since the orchestrator's own
+          // reserved `appVersion` can differ from what the backend reports back as compiled.
+          ...(compiled !== null
+            ? {
+                artifactId: compiled.artifactId,
+                sha256: compiled.sha256,
+                appVersion: compiled.appVersion,
+              }
+            : {}),
         });
         emit({ type: "phase-left", phase: "deploy", elapsedMs: deployElapsedMs });
       }
@@ -4362,6 +4375,11 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
               // Latch-guarded like every other work-plane dispatch (design §6). No publish fence
               // here: `workers > 1` is rejected outright for an authoritative backend (above), so
               // a worker shard never publishes under a lease.
+              // C02-02: the returned CompiledArtifact is discarded on purpose. Every worker
+              // deploys this SAME batchDir, whose artifactId prepareArtifactDir already baked in,
+              // so this is a copy of the batch's one artifact, not a new identity. `artifacts[]`
+              // (recordArtifact / the batch-published event) records the primary publish per
+              // batch, which happens once above (step 3d), not once per worker here.
               await compileLimit.run(() => {
                 safety.assertSafe(`deploy(${batchDir}) worker ${i}`);
                 return backend.deploy(batchDir);

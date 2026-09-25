@@ -1,10 +1,11 @@
 import type { BackendCapabilities } from "./backend";
-import type { LineRange } from "./line-filter";
 import type { EquivalenceMark } from "./equivalence-marks";
 import type { RunEvent } from "./events";
 import { type ExcludedSites, buildExcludedSites } from "./excluded-sites";
+import type { LineRange } from "./line-filter";
 import type { PermissionCanaryResult } from "./permission-canary";
 import type { DeclarativeSiteFile, NotInstrumentedFile, SessionOutcome } from "./report";
+import type { BatchArtifact } from "./store";
 
 /**
  * Folds the run's events into the facts `buildReport` (report.ts) renders (spec 2026-08-05 §A,
@@ -146,6 +147,10 @@ export interface FoldedReport {
   readonly unplaceableCount: number;
   /** R175 — `mutantId`s of those, sorted. See `SessionReport.unplaceableMutants`. */
   readonly unplaceableMutants: readonly string[];
+  /** C02-02: one entry per batch this run published an artifact identity for, sorted by
+   *  `batchIndex`. See `SessionReport.artifacts`. Required here (unlike on `SessionReport`) and
+   *  always set, `[]` included, the same as `groupedCalls`. */
+  readonly artifacts: readonly BatchArtifact[];
   readonly quarantined?: { readonly reason: string };
   readonly permissionCanary?: PermissionCanaryResult;
   /** R129 — the BC artifact build al-runner announced it executed against, when it announced one.
@@ -225,6 +230,12 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
   let warmKills = 0;
   let unplaceableCount = 0;
   const unplaceableMutants = new Set<string>();
+  // C02-02: every batchIndex `batch-published` has named, to catch a duplicate publish of the
+  // same batch regardless of whether either carried an identity: checked first, before the
+  // identity fields are even looked at. `artifactsByBatch` holds only the entries that DID carry
+  // one, keyed by batchIndex so the order events arrive in cannot matter.
+  const publishedBatchIndexes = new Set<number>();
+  const artifactsByBatch = new Map<number, BatchArtifact>();
   /** R106: whether any `coverage-split` arrived, and whether one was ever OWED — see the check at
    *  the end of the fold for why the second half cannot simply be "a batch published". */
   let sawCoverageSplit = false;
@@ -294,9 +305,35 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
       case "phase-entered":
         if (e.phase === "deploy") deployPhaseEntries += 1;
         break;
-      case "batch-published":
+      case "batch-published": {
         batchPublishedCount += 1;
+        if (publishedBatchIndexes.has(e.batchIndex)) {
+          throw new Error(
+            `foldEvents: batch ${e.batchIndex} published twice: a batchIndex must appear in at most one batch-published event per run.`,
+          );
+        }
+        publishedBatchIndexes.add(e.batchIndex);
+        const { artifactId, sha256, appVersion } = e;
+        if ((artifactId === undefined) !== (sha256 === undefined)) {
+          throw new Error(
+            `foldEvents: batch-published for batch ${e.batchIndex} carries artifactId without sha256 (or the reverse): the backend must report both or neither.`,
+          );
+        }
+        if (artifactId !== undefined && sha256 !== undefined) {
+          if (appVersion === undefined) {
+            throw new Error(
+              `foldEvents: batch-published for batch ${e.batchIndex} carries an artifact identity with no appVersion: an artifact identity is not complete without it.`,
+            );
+          }
+          artifactsByBatch.set(e.batchIndex, {
+            batchIndex: e.batchIndex,
+            artifactId,
+            sha256,
+            appVersion,
+          });
+        }
         break;
+      }
       case "phase-left":
         // Per-batch phases (`deploy`, `baseline`) fire once per batch and SUM; `generate` fires
         // once for the whole session — see `SessionReport.timings`'s own doc comment on why a
@@ -558,6 +595,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
     warmKills,
     unplaceableCount,
     unplaceableMutants: [...unplaceableMutants].sort(),
+    artifacts: [...artifactsByBatch.values()].sort((a, b) => a.batchIndex - b.batchIndex),
     ...(quarantinedReason !== undefined ? { quarantined: { reason: quarantinedReason } } : {}),
     ...(permissionCanary !== undefined ? { permissionCanary } : {}),
     ...(alRunnerBcBuild !== undefined ? { alRunnerBcBuild } : {}),
