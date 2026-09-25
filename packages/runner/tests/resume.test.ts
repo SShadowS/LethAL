@@ -5,6 +5,7 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { MutantManifest, MutantManifestEntry } from "@lethal/schemata";
+import { reserveAppVersion } from "../src/app-version";
 import type { CompiledArtifact } from "../src/artifact";
 import type {
   BackendCapabilities,
@@ -1478,6 +1479,31 @@ describe("runSession --resume (R47)", () => {
     await expect(
       runSession({ backend: new CountingBackend(), store, ...dirs, selectorIds, resume: 4242 }),
     ).rejects.toThrow(/no such run/);
+  });
+
+  test("C02-02: report.artifacts carries the COMPILED appVersion, not the reserved one", async () => {
+    // CountingBackend's opt-in artifact always reports "1.0.0.0" (a fixed stand-in for what a
+    // real backend compiled), while this project's own app.json is ALSO "1.0.0.0" — so the
+    // orchestrator's reserved version (major.minor from app.json, build.revision clock-derived,
+    // see reserveAppVersion) can never equal it: the third component is a day count since the
+    // Unix epoch, which is never 0 for a real clock. That gap is what makes this fixture able to
+    // catch the bug: a session that (wrongly) emitted the reserved version instead of the
+    // compiled one would disagree with the store here.
+    const dirs = await makeProject();
+    const store = new ResultsStore(":memory:");
+    const backend = new CountingBackend("pass", undefined, undefined, true);
+    const report = await runSession({ backend, store, ...dirs, selectorIds });
+
+    const run = store.db.query("SELECT id FROM runs LIMIT 1").get() as { id: number };
+    const storeArtifacts = store.artifactsForRun(run.id);
+    expect(report.artifacts).toEqual(storeArtifacts);
+
+    const artifact = report.artifacts?.[0];
+    if (artifact === undefined) throw new Error("expected one published batch's artifact");
+    expect(artifact.appVersion).toBe("1.0.0.0");
+
+    const reserved = reserveAppVersion({ sourceVersion: "1.0.0.0", nowMs: Date.now() });
+    expect(reserved).not.toBe(artifact.appVersion);
   });
 });
 
