@@ -34,6 +34,7 @@ import { nextAbove, parseVersionConflict, reserveAppVersion } from "./app-versio
 import { AlcCompileError, ArtifactPrepareError, DeploymentError } from "./artifact";
 import type { CompiledArtifact } from "./artifact";
 import type {
+  BackendCapabilities,
   CoverageMode,
   ExecutionBackend,
   RunManyCause,
@@ -43,7 +44,7 @@ import type {
   TestVerdict,
 } from "./backend";
 import { hashAlTree, snapshotApplies, testAppHashFor } from "./baseline-snapshot";
-import type { BaselineObservation } from "./baseline-snapshot";
+import type { BaselineObservation, BaselineSnapshot } from "./baseline-snapshot";
 import { PublishFailedError } from "./bcdev-backend";
 import { bisectFailingMutant } from "./bisect";
 import type { PublishOutcome } from "./deployment-verifier";
@@ -2875,6 +2876,417 @@ function pinPlatformAppsDir(backend: ExecutionBackend, dir: string, who: string)
   pinnable.usePlatformAppsDir(dir);
 }
 
+/**
+ * C02-04: the session-level values `scoreBatch` needs. Built once per session by `runSession`,
+ * after the lease is open, and shared by every batch.
+ */
+interface BatchScope {
+  readonly backend: ExecutionBackend;
+  readonly caps: BackendCapabilities;
+  readonly safety: SessionSafety;
+  readonly leaseSession: LeaseSession | undefined;
+  readonly resyncOpSeq: (() => Promise<void>) | undefined;
+  readonly quarantineStore: QuarantineStore | undefined;
+  readonly resourceKey: string | undefined;
+  readonly nowIso: () => string;
+  readonly store: ResultsStore;
+  readonly runId: number;
+  readonly emit: RunEmitter;
+  readonly outcomes: SessionOutcome[];
+  readonly killLedger: KillLedger;
+  readonly sessionReuse: { warned: boolean };
+  readonly groupRuns: GroupRunSettings | undefined;
+  readonly minMutantBudgetMs: number;
+  /** `cfg.baselineTimeoutMs ?? BASELINE_TIMEOUT_DEFAULT`; also the covering loop's fallback. */
+  readonly baselineTimeoutMs: number;
+}
+type BaselineRow = { readonly ref: TestMethodRef; readonly verdict: TestVerdict };
+/** What `select` hands the covering loop: the mutants to run and everything that orders them. */
+interface CoveringPlan {
+  readonly mutants: readonly MutantManifestEntry[];
+  readonly perMutantTests: ReadonlyMap<string, readonly TestMethodRef[]>;
+  readonly coverageAttribution: ReadonlyMap<string, CoverageAttribution>;
+  readonly baselineDuration: ReadonlyMap<string, number>;
+  readonly memberCountsByTest: ReadonlyMap<string, number>;
+}
+interface ScoreBatchInput {
+  readonly batchIndex: number;
+  /** For the section G note only: `compiled?.artifactId`, or the bound artifact's id. */
+  readonly artifactId: string | undefined;
+  readonly tests: readonly TestMethodRef[];
+  /** R192 snapshot reuse and recording, runSession only. Absent: always run, record nothing. */
+  readonly snapshot?: {
+    readonly batchDir: string;
+    readonly testDir: string;
+    readonly allowReuse: boolean;
+  };
+  /** Called once, after the stale-test-app check. `undefined` = nothing left to run. */
+  readonly select: (baseline: readonly BaselineRow[]) => CoveringPlan | undefined;
+  /** Replaces the sequential `runMutantsOnBackend` call. runSession's worker fan-out only. */
+  readonly executeCovering?: (plan: CoveringPlan, attestation: { clean: boolean }) => Promise<void>;
+}
+/** "unsafe": latched during the baseline (the caller stops the session).
+ *  "nothing-to-run": `select` returned undefined (the caller moves to the next batch).
+ *  "scored": the covering loop and the gate ran; the caller checks `safety.isUnsafe` itself. */
+type ScoreBatchResult = "unsafe" | "nothing-to-run" | "scored";
+
+/**
+ * C02-04: one batch's baseline, its stale-test-app refusal, the covering loop and the design
+ * section G attestation gate, in exactly the order `runSession` ran them inline. Which mutants
+ * run against which tests is the caller's `select`; this function does not choose.
+ */
+async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<ScoreBatchResult> {
+  const {
+    backend,
+    caps,
+    safety,
+    leaseSession,
+    quarantineStore,
+    resourceKey,
+    nowIso,
+    store,
+    runId,
+    emit,
+    outcomes,
+    killLedger,
+    sessionReuse,
+    groupRuns,
+    minMutantBudgetMs,
+  } = scope;
+  const batchIdx = input.batchIndex;
+  const tests = input.tests;
+  // 4. baseline
+  emit({
+    type: "phase-entered",
+    phase: "baseline",
+    testCount: tests.length,
+    batchIndex: batchIdx,
+  });
+  const baselineStartedMs = Date.now();
+  await activateOnce(backend, safety, null);
+  const baseline: Array<{ ref: TestMethodRef; verdict: TestVerdict }> = [];
+  // R192 (second half): on `--resume`, a prior run's COMPLETED baseline for this exact
+  // instrumented source against this exact test app stands in for re-running it. Both hashes
+  // are computed up front, once, so that a run whose baseline IS measured can record it under
+  // the same key for the next resume. The test-app hash is the published package where the
+  // backend can read it, else the test source tree; `undefined` means never reuse.
+  // C02-04: all of it only with `input.snapshot`; without one the baseline always runs and
+  // nothing is recorded.
+  let snapshotKey:
+    | { readonly batchHash: string; readonly testAppHash: string | undefined }
+    | undefined;
+  let reused: BaselineSnapshot | undefined;
+  if (input.snapshot !== undefined) {
+    const { batchDir, testDir, allowReuse } = input.snapshot;
+    const batchHash = await hashAlTree(batchDir);
+    const packageReader = backend.fetchPublishedAppPackage;
+    const testAppHash = await testAppHashFor(
+      packageReader === undefined
+        ? undefined
+        : async () => {
+            const manifest = await readTestAppManifest(testDir);
+            return manifest === undefined
+              ? undefined
+              : packageReader.call(backend, {
+                  publisher: manifest.publisher,
+                  name: manifest.name,
+                });
+          },
+      testDir,
+    );
+    const reusable =
+      allowReuse && testAppHash !== undefined
+        ? store.findBaselineSnapshot(batchHash, testAppHash)
+        : null;
+    reused = snapshotApplies(reusable, batchHash, testAppHash) ? reusable : undefined;
+    snapshotKey = { batchHash, testAppHash };
+    if (reused !== undefined) {
+      emit({
+        type: "warning",
+        code: "resume-baseline-reused",
+        message: `[lethal] --resume: batch ${batchIdx}'s baseline was not re-run. Its instrumented source and the published test app hash the same as run ${reused.runId}'s batch ${reused.batchIndex}, so that run's ${reused.baseline.length} baseline verdict(s), coverage and durations are reused (R192). Not re-checked: the environment's DATA, which a re-run baseline would have observed; a test that has gone red since is not detected here.`,
+      });
+      for (const b of reused.baseline) {
+        baseline.push(b);
+        store.recordTestResult(
+          runId,
+          null,
+          null,
+          b.ref,
+          b.verdict.outcome,
+          b.verdict.durationMs,
+          b.verdict.failureMessage,
+          undefined,
+          b.verdict.sessionId,
+        );
+      }
+    }
+  }
+  for (const ref of reused !== undefined ? [] : tests) {
+    const v = await runOnce(
+      backend,
+      safety,
+      ref,
+      {
+        coverage: caps.coverage,
+        timeoutMs: scope.baselineTimeoutMs,
+      },
+      scope.resyncOpSeq,
+    );
+    // Baseline test results are not tied to any mutant: mutant_row_id stays NULL. R206: the
+    // session id rides along as data (the store's liveness check counts baseline rows too).
+    store.recordTestResult(
+      runId,
+      null,
+      null,
+      ref,
+      v.outcome,
+      v.durationMs,
+      v.failureMessage,
+      undefined,
+      v.sessionId,
+    );
+    // Layer 5C-B1 (design §5/§6/§8): a lease answer must be classified BEFORE the generic
+    // `requiresUnsafeLatch` quarantine below, which would otherwise record a durable tier
+    // quarantine for a lease loss that leaves the container perfectly healthy — and would
+    // treat a same-attempt duplicate claim as a loss.
+    const baselineLease = classifyLeaseVerdict(v);
+    if (baselineLease !== "none") {
+      await handleBaselineLeaseOutcome({
+        kind: baselineLease,
+        safety,
+        leaseSession,
+        ref,
+        verdict: v,
+      });
+      break;
+    }
+    if (v.operation !== undefined && requiresUnsafeLatch(v.operation)) {
+      // The server may still be executing this baseline test. Latch unsafe, record a
+      // durable tier quarantine, and stop collecting baseline results — no further
+      // work-plane call (spec §8, §12). A stranded baseline test leaves nothing safe to
+      // do with `greenTests`/mutant scheduling either way, so there's nothing left but to
+      // stop (checked via `safety.isUnsafe` right below, same as the post-batch guard).
+      await quarantineInFlight({
+        safety,
+        quarantineStore,
+        resourceKey,
+        nowIso,
+        detail: `baseline test in-flight-unknown running ${ref.method}`,
+      });
+      break;
+    }
+    baseline.push({ ref, verdict: v });
+  }
+  // Computed and emitted BEFORE the early exits below, for the same reason the deploy clock
+  // is: both the quarantine `break` and the no-green-tests `continue` leave this scope without
+  // reaching the success-path emit, so a baseline that aborted used to report 0 ms and silently
+  // reattribute its whole cost to "overhead". Measured on a run quarantined mid-baseline:
+  // baseline 0.0s, overhead 70.1s, when essentially all of it was baseline.
+  const baselineElapsedMs = Date.now() - baselineStartedMs;
+  emit({ type: "phase-left", phase: "baseline", elapsedMs: baselineElapsedMs });
+  if (safety.isUnsafe) return "unsafe"; // the caller stops the session: no mutant scheduling, no next batch
+  // R192 (second half): a baseline that ran EVERY test to a verdict is recorded under its two
+  // hashes for the next resume. `baseline.length === tests.length` is what "completed" means
+  // here: the lease and in-flight branches above `break` out of the loop short, and a partial
+  // baseline must never be reused as a whole one. A reused baseline is not re-recorded; the
+  // snapshot it came from is still there.
+  const testAppHash = snapshotKey?.testAppHash;
+  if (
+    snapshotKey !== undefined &&
+    reused === undefined &&
+    testAppHash !== undefined &&
+    baseline.length === tests.length
+  ) {
+    store.recordBaselineSnapshot({
+      runId,
+      batchIndex: batchIdx,
+      batchHash: snapshotKey.batchHash,
+      testAppHash,
+      baseline: baseline as BaselineObservation[],
+    });
+  }
+  // baseline-batch-finished: the moment of observation IS the batch's baseline RETURNING (see
+  // events.ts's doc comment) — emitted here, unconditionally, so it still fires on the
+  // all-red path below (`greenTests.length === 0`) rather than only on the happy path.
+  // Classification is computed directly against `describeTestPermissionsRefusal`/
+  // `describeTestPageUnsupported`/the stale-test-app sentinel — the SAME pure checks the
+  // `refusedThisBatch`/`testPageThisBatch` loop below also runs, over the SAME domain: the
+  // permission/testpage regexes are gated on `didNotPassAtBaseline(b.verdict.outcome)` here for
+  // exactly the reason that loop is scoped to `unsupportedBaseline` (its own
+  // `didNotPassAtBaseline`-filtered view of `baseline`) — a `pass`/`skip`/`timeout` verdict
+  // cannot be a permissions refusal or a TestPage refusal by construction (coordinator review,
+  // final wave, Fix 1: an earlier version of this gate ran the regexes over EVERY verdict, which
+  // widened `SessionReport.permissionsRefused`/`.testPageUnsupported` beyond what the pre-refactor
+  // bag could ever contain — unreachable on bcdev, where every regex-matching `failureMessage` is
+  // paired with `outcome:"error"`/`"fail"`, but reachable on al-runner). `stale-test-app` stays
+  // UNCONDITIONAL: the pre-refactor loop for it (`missingFromServer`) already ran over ALL of
+  // `baseline`, not just `unsupportedBaseline` — this event correctly mirrors both domains, not
+  // one. This is also the ONLY place `unsupportedTests`/`staleTestApp`/`testPageUnsupported` are
+  // now sourced from — report-fold.ts folds them from `classification` here, not from a
+  // session-level accumulator in this function (event-stream refactor, spec 2026-08-05 §A).
+  emit({
+    type: "baseline-batch-finished",
+    batchIndex: batchIdx,
+    verdicts: baseline.map((b) => {
+      const classification: BaselineClassification[] = [];
+      // R139: a line-count answer is the transport reporting that RunMutant did not return one
+      // test line, so the test BODY never executed. Since the server's own error text is now
+      // carried in that message, BC wording about suite management would otherwise reach the
+      // two classifiers below and be reported as a property of the test: a permission failure
+      // on the suite tables would collect R35's remedy ("declare TestPermissions = Disabled on
+      // your test codeunit"), which cannot fix it. Both classifiers describe what happened
+      // INSIDE a test, so neither may read a message that proves nothing ran.
+      const bodyNeverRan = isRunMutantLineCountMessage(b.verdict.failureMessage);
+      if (
+        !bodyNeverRan &&
+        didNotPassAtBaseline(b.verdict.outcome) &&
+        describeTestPermissionsRefusal(b.verdict.failureMessage) !== undefined
+      ) {
+        classification.push("tests-permission-refused");
+      }
+      if (
+        !bodyNeverRan &&
+        didNotPassAtBaseline(b.verdict.outcome) &&
+        describeTestPageUnsupported(b.verdict.failureMessage) !== undefined
+      ) {
+        classification.push("tests-testpage-unsupported");
+      }
+      if (describeStaleTestApp(b.verdict.failureMessage) !== undefined) {
+        classification.push("stale-test-app");
+      }
+      return {
+        name: qualifiedTestName(b.ref),
+        outcome: b.verdict.outcome,
+        classification,
+        ...(b.verdict.failureMessage !== undefined
+          ? { failureMessage: b.verdict.failureMessage }
+          : {}),
+      };
+    }),
+  });
+  // R139: REFUSE rather than measure. Placed after the emit above so the event stream and the
+  // store still record what this baseline observed, and before any mutant of this batch runs.
+  //
+  // Why this one diagnosis refuses when R35's and R69's only annotate: those describe a test
+  // that could not run, and the rest of the session is still measuring the suite the source
+  // describes. This one says the SERVER HAS NEVER SEEN a test the source declares, so the run
+  // is measuring a different suite, every mutant covered only by those tests would be scored
+  // `no-coverage` (R55), and the report would put a plausible number on a suite nobody can
+  // reconstruct. Twice, three days apart, that is exactly what a live gate run produced.
+  //
+  // The throw is inside the lease's own try/finally below, so the lease is released and every
+  // worker backend disposed on the way out. `buildReport` never runs, which is deliberate but
+  // has a cost: `StaleTestAppError`'s message is the ONLY diagnosis the operator receives, so
+  // it carries the names AND the remedy rather than pointing at a report that will not exist.
+  const missingFromServer = baseline.flatMap((b) => {
+    const described = describeStaleTestApp(b.verdict.failureMessage);
+    // The description travels INTO the error rather than being recomputed or dropped: it is the
+    // server's own account, per test, and it is the only thing a reader can use to overrule the
+    // matcher when the refusal is the only output the run produces.
+    return described === undefined
+      ? []
+      : [{ name: qualifiedTestName(b.ref), description: described }];
+  });
+  if (missingFromServer.length > 0) throw new StaleTestAppError(missingFromServer);
+
+  const plan = input.select(baseline);
+  if (plan === undefined) return "nothing-to-run";
+  const {
+    mutants: toExecute,
+    perMutantTests,
+    coverageAttribution,
+    baselineDuration,
+    memberCountsByTest: memberCounts,
+  } = plan;
+
+  // 6. per-mutant loop — sharded across workers when workers > 1. The
+  // baseline/coverage discovery above always runs once against
+  // cfg.backend; only the kill-detection phase below fans out, since
+  // that's the part that's actually per-mutant work.
+  const fallbackTimeoutMs = scope.baselineTimeoutMs;
+  // Layer 5C-A Task 8, Task 10 (design §G): per-ARTIFACT clean-attestation ledger. Declared
+  // fresh for each batch (each batch republishes its own artifactId) — `clean` flips true the
+  // first time ANY covered run (across every worker/shard sharing this one artifact) reports
+  // `attestation.observedAny === true && identityMismatch !== true`. Checked against
+  // `contributed` right after the mutant work below finishes, before the next batch (or the
+  // final `buildReport`) ever sees this batch's verdicts.
+  const attestation = { clean: false };
+  emit({ type: "phase-entered", phase: "mutants" });
+  const mutantsStartedMs = Date.now();
+  if (input.executeCovering !== undefined) {
+    await input.executeCovering(plan, attestation);
+  } else {
+    // Sequential IS the parallel path with a pool of one: this is the
+    // exact same runMutantsOnBackend call the fan-out branch below makes
+    // per shard, just with all of `execute` as a single "shard" on the
+    // one backend already deployed in step 3.
+    await runMutantsOnBackend({
+      backend,
+      safety,
+      ...(leaseSession !== undefined ? { leaseSession } : {}),
+      mutants: toExecute,
+      perMutantTests,
+      coverageAttribution,
+      baselineDuration,
+      fallbackTimeoutMs,
+      minMutantBudgetMs,
+      store,
+      runId,
+      batchIndex: batchIdx,
+      outcomes,
+      quarantineStore,
+      resourceKey,
+      nowIso,
+      attestation,
+      emit,
+      killLedger,
+      memberCountsByTest: memberCounts,
+      groupRuns,
+      sessionReuse,
+    });
+  }
+  emit({ type: "phase-left", phase: "mutants", elapsedMs: Date.now() - mutantsStartedMs });
+  // Layer 5C-A Task 8, Task 10 (design §G): per-artifact fail-closed attestation gate. A
+  // batch "contributed verdicts" if any mutant it scheduled had >=1 covering test (a batch
+  // with nothing but no-coverage/unsupported mutants has nothing a wrong binary could fake).
+  // For an authoritative backend, a contributing batch that never earned a single clean
+  // attestation means no covered run ever confirmed the deployed binary is actually running
+  // — a wrong/stale container legitimately returns observedAny=false on every run (coverage
+  // over-approximates) and every test would pass, silently accumulating false "survived"
+  // verdicts. Invalidate this batch's verdicts and quarantine BEFORE any of them can leave
+  // the orchestrator (`buildReport` only runs once, at `runSession`'s return, below).
+  // al-runner (non-authoritative) carries no attestation at all — `attestation.clean` would
+  // always be false there, so this gate is scoped to `caps.authoritative` to avoid misfiring
+  // on every al-runner session.
+  //
+  // MUST run even when this batch already latched `safety` unsafe for a DIFFERENT, more
+  // specific reason (e.g. mutant M2 hit an in-flight-unknown mid-batch): an earlier mutant M1
+  // in the SAME batch may already have been recorded a (false) "survived" — from the SAME
+  // unattested binary — before M2 ever ran, and skipping the gate here would let that false
+  // survivor ship in `report.mutants`/`counts` untouched. The `batch-invalidated` event this
+  // emits (below) is what the fold (`foldEvents`, report-fold.ts) reads to rewrite this batch's
+  // verdicts — including protecting M2's own specific diagnostic (`cause` already set) from
+  // being clobbered by this gate's generic note, not a guard here.
+  // `toExecute`, not `execute`: under `--resume` a batch may schedule nothing at all because
+  // every one of its mutants carried a prior verdict. Such a batch issues no covered run, so
+  // it can never earn an attestation — gating it on `execute` would fail the artifact and
+  // quarantine the container for the crime of having nothing left to do. A carried verdict is
+  // not a verdict this artifact produced, so it is correctly outside this gate's scope.
+  const contributed = toExecute.some((m) => (perMutantTests.get(m.mutantId)?.length ?? 0) > 0);
+  if (caps.authoritative && contributed && !attestation.clean) {
+    const note = `unattested artifact: no covered run observed the deployed binary's selector (artifactId ${input.artifactId ?? "unknown"}) — verdicts discarded, container quarantined (design §G)`;
+    emit({ type: "batch-invalidated", batchIndex: batchIdx, reason: note });
+    // R47: and durably, in the store. `--resume` reads a run's stored verdicts by
+    // `finished_at IS NULL` — the exact set the fold's own (in-memory-only) correction above
+    // relies on `priorSurvivorKeys` filtering OUT. Without this, resuming a quarantined run
+    // would resurrect the false survivors the gate exists to destroy.
+    store.invalidateBatch(runId, batchIdx, note);
+    safety.latchUnsafe(note);
+  }
+  return "scored";
+}
+
 export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // Constructed once for the whole session and threaded to every activateOnce call site
   // (baseline activation below, and the per-mutant loop in runMutantsOnBackend) — the latch is
@@ -3468,6 +3880,26 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     const killLedger = newKillLedger();
     // R206 §2.1: the session-reuse warning fires once per session, whichever batch or shard sees it.
     const sessionReuse = { warned: false };
+    // C02-04: the session-level values every batch's `scoreBatch` call shares.
+    const scope: BatchScope = {
+      backend: cfg.backend,
+      caps,
+      safety,
+      leaseSession,
+      resyncOpSeq: resyncSessionOpSeq,
+      quarantineStore,
+      resourceKey,
+      nowIso,
+      store: cfg.store,
+      runId,
+      emit,
+      outcomes,
+      killLedger,
+      sessionReuse,
+      groupRuns,
+      minMutantBudgetMs,
+      baselineTimeoutMs: cfg.baselineTimeoutMs ?? BASELINE_TIMEOUT_DEFAULT,
+    };
     for (const [batchIdx, batchFiles] of artifacts.entries()) {
       // Layer 5C-B1 (design §6): a lease lost during THIS batch invalidates exactly THIS batch's
       // verdicts at session end — earlier batches stand, every RunMutant in them having been
@@ -3792,561 +4224,326 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         emit({ type: "phase-left", phase: "deploy", elapsedMs: deployElapsedMs });
       }
 
-      // 4. baseline
-      emit({
-        type: "phase-entered",
-        phase: "baseline",
-        testCount: tests.length,
-        batchIndex: batchIdx,
-      });
-      const baselineStartedMs = Date.now();
-      await activateOnce(cfg.backend, safety, null);
-      const baseline: Array<{ ref: TestMethodRef; verdict: TestVerdict }> = [];
-      // R192 (second half): on `--resume`, a prior run's COMPLETED baseline for this exact
-      // instrumented source against this exact test app stands in for re-running it. Both hashes
-      // are computed up front, once, so that a run whose baseline IS measured can record it under
-      // the same key for the next resume. The test-app hash is the published package where the
-      // backend can read it, else the test source tree; `undefined` means never reuse.
-      const batchHash = await hashAlTree(batchDir);
-      const packageReader = cfg.backend.fetchPublishedAppPackage;
-      const testAppHash = await testAppHashFor(
-        packageReader === undefined
-          ? undefined
-          : async () => {
-              const manifest = await readTestAppManifest(cfg.testDir);
-              return manifest === undefined
-                ? undefined
-                : packageReader.call(cfg.backend, {
-                    publisher: manifest.publisher,
-                    name: manifest.name,
-                  });
-            },
-        cfg.testDir,
-      );
-      const reusable =
-        resumeState !== undefined && testAppHash !== undefined
-          ? cfg.store.findBaselineSnapshot(batchHash, testAppHash)
-          : null;
-      const reused = snapshotApplies(reusable, batchHash, testAppHash) ? reusable : undefined;
-      if (reused !== undefined) {
-        emit({
-          type: "warning",
-          code: "resume-baseline-reused",
-          message: `[lethal] --resume: batch ${batchIdx}'s baseline was not re-run. Its instrumented source and the published test app hash the same as run ${reused.runId}'s batch ${reused.batchIndex}, so that run's ${reused.baseline.length} baseline verdict(s), coverage and durations are reused (R192). Not re-checked: the environment's DATA, which a re-run baseline would have observed; a test that has gone red since is not detected here.`,
-        });
-        for (const b of reused.baseline) {
-          baseline.push(b);
-          cfg.store.recordTestResult(
-            runId,
-            null,
-            null,
-            b.ref,
-            b.verdict.outcome,
-            b.verdict.durationMs,
-            b.verdict.failureMessage,
-            undefined,
-            b.verdict.sessionId,
-          );
+      // 4 to 6: baseline, selection and the covering loop run through `scoreBatch` (C02-04).
+      // `select` below is steps 5 and 5b. It assigns the three batch-local values the R69 block
+      // reads after `scoreBatch` returns, which is why they are declared out here.
+      let unsupportedOnlyCandidates: Array<{
+        mutant: MutantManifestEntry;
+        covering: readonly TestMethodRef[];
+      }> = [];
+      let refusedThisBatch = new Map<string, string>();
+      let testPageThisBatch = new Map<string, string>();
+      const select = (baseline: readonly BaselineRow[]): CoveringPlan | undefined => {
+        const greenTests = baseline.filter((b) => b.verdict.outcome === "pass");
+        if (greenTests.length < baseline.length) baselineGreenOverall = false;
+        if (greenTests.length === 0) {
+          const note = noGreenBaselineNote(baseline);
+          for (const m of execute) {
+            record(cfg.store, runId, m, "error", outcomes, batchIdx, emit, undefined, note);
+          }
+          return undefined;
         }
-      }
-      for (const ref of reused !== undefined ? [] : tests) {
-        const v = await runOnce(
-          cfg.backend,
-          safety,
-          ref,
-          {
-            coverage: caps.coverage,
-            timeoutMs: cfg.baselineTimeoutMs ?? BASELINE_TIMEOUT_DEFAULT,
-          },
-          resyncSessionOpSeq,
+        // R58, recorded rather than discovered later: under `coverage: "fenced"` these durations
+        // INCLUDE coverage-collection overhead (Start/StopApplicationCoverage plus serializing the
+        // whole `Code Coverage` table) that no mutant run pays. Every mutant's budget is
+        // `2 * baseline` (`MIN_MUTANT_BUDGET_MS`, below), so budgets inflate slightly — the SAFE
+        // direction, since a too-small budget produces a client-side `deadline-exceeded` that strands
+        // a run server-side and quarantines the tier. R47 and R53 were fought over exactly these
+        // numbers, so the shift is stated here rather than left to be re-derived from a timing report.
+        const baselineDuration = new Map(
+          greenTests.map((b) => [testKeyOf(b.ref), b.verdict.durationMs]),
         );
-        // Baseline test results are not tied to any mutant: mutant_row_id stays NULL. R206: the
-        // session id rides along as data (the store's liveness check counts baseline rows too).
-        cfg.store.recordTestResult(
-          runId,
-          null,
-          null,
-          ref,
-          v.outcome,
-          v.durationMs,
-          v.failureMessage,
-          undefined,
-          v.sessionId,
-        );
-        // Layer 5C-B1 (design §5/§6/§8): a lease answer must be classified BEFORE the generic
-        // `requiresUnsafeLatch` quarantine below, which would otherwise record a durable tier
-        // quarantine for a lease loss that leaves the container perfectly healthy — and would
-        // treat a same-attempt duplicate claim as a loss.
-        const baselineLease = classifyLeaseVerdict(v);
-        if (baselineLease !== "none") {
-          await handleBaselineLeaseOutcome({
-            kind: baselineLease,
-            safety,
-            leaseSession,
-            ref,
-            verdict: v,
-          });
-          break;
-        }
-        if (v.operation !== undefined && requiresUnsafeLatch(v.operation)) {
-          // The server may still be executing this baseline test. Latch unsafe, record a
-          // durable tier quarantine, and stop collecting baseline results — no further
-          // work-plane call (spec §8, §12). A stranded baseline test leaves nothing safe to
-          // do with `greenTests`/mutant scheduling either way, so there's nothing left but to
-          // stop (checked via `safety.isUnsafe` right below, same as the post-batch guard).
-          await quarantineInFlight({
-            safety,
-            quarantineStore,
-            resourceKey,
-            nowIso,
-            detail: `baseline test in-flight-unknown running ${ref.method}`,
-          });
-          break;
-        }
-        baseline.push({ ref, verdict: v });
-      }
-      // Computed and emitted BEFORE the early exits below, for the same reason the deploy clock
-      // is: both the quarantine `break` and the no-green-tests `continue` leave this scope without
-      // reaching the success-path emit, so a baseline that aborted used to report 0 ms and silently
-      // reattribute its whole cost to "overhead". Measured on a run quarantined mid-baseline:
-      // baseline 0.0s, overhead 70.1s, when essentially all of it was baseline.
-      const baselineElapsedMs = Date.now() - baselineStartedMs;
-      emit({ type: "phase-left", phase: "baseline", elapsedMs: baselineElapsedMs });
-      if (safety.isUnsafe) break; // stop the whole session — no mutant scheduling, no next batch
-      // R192 (second half): a baseline that ran EVERY test to a verdict is recorded under its two
-      // hashes for the next resume. `baseline.length === tests.length` is what "completed" means
-      // here: the lease and in-flight branches above `break` out of the loop short, and a partial
-      // baseline must never be reused as a whole one. A reused baseline is not re-recorded; the
-      // snapshot it came from is still there.
-      if (reused === undefined && testAppHash !== undefined && baseline.length === tests.length) {
-        cfg.store.recordBaselineSnapshot({
-          runId,
-          batchIndex: batchIdx,
-          batchHash,
-          testAppHash,
-          baseline: baseline as BaselineObservation[],
-        });
-      }
-      // baseline-batch-finished: the moment of observation IS the batch's baseline RETURNING (see
-      // events.ts's doc comment) — emitted here, unconditionally, so it still fires on the
-      // all-red path below (`greenTests.length === 0`) rather than only on the happy path.
-      // Classification is computed directly against `describeTestPermissionsRefusal`/
-      // `describeTestPageUnsupported`/the stale-test-app sentinel — the SAME pure checks the
-      // `refusedThisBatch`/`testPageThisBatch` loop below also runs, over the SAME domain: the
-      // permission/testpage regexes are gated on `didNotPassAtBaseline(b.verdict.outcome)` here for
-      // exactly the reason that loop is scoped to `unsupportedBaseline` (its own
-      // `didNotPassAtBaseline`-filtered view of `baseline`) — a `pass`/`skip`/`timeout` verdict
-      // cannot be a permissions refusal or a TestPage refusal by construction (coordinator review,
-      // final wave, Fix 1: an earlier version of this gate ran the regexes over EVERY verdict, which
-      // widened `SessionReport.permissionsRefused`/`.testPageUnsupported` beyond what the pre-refactor
-      // bag could ever contain — unreachable on bcdev, where every regex-matching `failureMessage` is
-      // paired with `outcome:"error"`/`"fail"`, but reachable on al-runner). `stale-test-app` stays
-      // UNCONDITIONAL: the pre-refactor loop for it (`missingFromServer`) already ran over ALL of
-      // `baseline`, not just `unsupportedBaseline` — this event correctly mirrors both domains, not
-      // one. This is also the ONLY place `unsupportedTests`/`staleTestApp`/`testPageUnsupported` are
-      // now sourced from — report-fold.ts folds them from `classification` here, not from a
-      // session-level accumulator in this function (event-stream refactor, spec 2026-08-05 §A).
-      emit({
-        type: "baseline-batch-finished",
-        batchIndex: batchIdx,
-        verdicts: baseline.map((b) => {
-          const classification: BaselineClassification[] = [];
-          // R139: a line-count answer is the transport reporting that RunMutant did not return one
-          // test line, so the test BODY never executed. Since the server's own error text is now
-          // carried in that message, BC wording about suite management would otherwise reach the
-          // two classifiers below and be reported as a property of the test: a permission failure
-          // on the suite tables would collect R35's remedy ("declare TestPermissions = Disabled on
-          // your test codeunit"), which cannot fix it. Both classifiers describe what happened
-          // INSIDE a test, so neither may read a message that proves nothing ran.
-          const bodyNeverRan = isRunMutantLineCountMessage(b.verdict.failureMessage);
-          if (
-            !bodyNeverRan &&
-            didNotPassAtBaseline(b.verdict.outcome) &&
-            describeTestPermissionsRefusal(b.verdict.failureMessage) !== undefined
-          ) {
-            classification.push("tests-permission-refused");
+
+        // Task 6 (spec §9): baseline tests that did not pass (fail/error — NOT
+        // deadline-exceeded/timeout, which are infra/timing) can't run in the
+        // web-service session; a TestPage/unsupported test type surfaces exactly
+        // this way. They still return coverage at baseline (the bc-dev hub
+        // collects it regardless of outcome), so a mutant may be covered ONLY by
+        // one of them. Name every such test in the report; below, distinguish a
+        // mutant covered only by one from a genuinely uncovered mutant.
+        const unsupportedBaseline = baseline.filter((b) => didNotPassAtBaseline(b.verdict.outcome));
+        // R35, blind spot 1. The evidence is already here, per-test, in BC's own words — the same
+        // text R27 reads on the `unstable` path. Nothing looked at it HERE, so a suite whose test
+        // codeunits omit `TestPermissions = Disabled` had its writing tests refused, dropped from
+        // the green set, and reported as "did not pass at baseline" — which sends the reader to
+        // debug their tests rather than declare one property.
+        //
+        // Keyed BATCH-LOCAL, and holding the diagnosis STRING rather than a bare flag:
+        //   - batch-local, because the note below describes THIS batch's baseline. The session-level
+        //     set is cumulative, so consulting it would let a refusal measured in a later batch
+        //     describe an earlier batch's note (impossible — earlier notes are already written) and,
+        //     worse, let a test refused in one batch be labelled "refused" in another where it
+        //     failed for an ordinary reason.
+        //   - the string, because `describeTestPermissionsRefusal` QUOTES BC verbatim, and that
+        //     quote is what lets a reader overrule a hedged English-regex diagnosis. Discarding it
+        //     and keeping only the truthiness would leave the reader with an assertion and no
+        //     evidence — see the unstable path, which appends the same string.
+        refusedThisBatch = new Map<string, string>();
+        // R69: batch-local for exactly the reasons the R35 map above documents — this batch's note
+        // must describe THIS batch's baseline, not one a later batch's classification would overwrite.
+        testPageThisBatch = new Map<string, string>();
+        for (const b of unsupportedBaseline) {
+          const name = qualifiedTestName(b.ref);
+          // R139: same guard as the classification emit above, and needed in BOTH places because
+          // these two maps feed the per-mutant note while the emit feeds the report's own lists. A
+          // line-count answer proves the test body never ran, so BC wording inside it is about suite
+          // management and neither diagnosis may claim it.
+          if (isRunMutantLineCountMessage(b.verdict.failureMessage)) continue;
+          const refusal = describeTestPermissionsRefusal(b.verdict.failureMessage);
+          if (refusal !== undefined) {
+            refusedThisBatch.set(name, refusal);
           }
-          if (
-            !bodyNeverRan &&
-            didNotPassAtBaseline(b.verdict.outcome) &&
-            describeTestPageUnsupported(b.verdict.failureMessage) !== undefined
-          ) {
-            classification.push("tests-testpage-unsupported");
+          const testPage = describeTestPageUnsupported(b.verdict.failureMessage);
+          if (testPage !== undefined) {
+            testPageThisBatch.set(name, testPage);
           }
-          if (describeStaleTestApp(b.verdict.failureMessage) !== undefined) {
-            classification.push("stale-test-app");
-          }
-          return {
-            name: qualifiedTestName(b.ref),
-            outcome: b.verdict.outcome,
-            classification,
-            ...(b.verdict.failureMessage !== undefined
-              ? { failureMessage: b.verdict.failureMessage }
-              : {}),
-          };
-        }),
-      });
-      // R139: REFUSE rather than measure. Placed after the emit above so the event stream and the
-      // store still record what this baseline observed, and before any mutant of this batch runs.
-      //
-      // Why this one diagnosis refuses when R35's and R69's only annotate: those describe a test
-      // that could not run, and the rest of the session is still measuring the suite the source
-      // describes. This one says the SERVER HAS NEVER SEEN a test the source declares, so the run
-      // is measuring a different suite, every mutant covered only by those tests would be scored
-      // `no-coverage` (R55), and the report would put a plausible number on a suite nobody can
-      // reconstruct. Twice, three days apart, that is exactly what a live gate run produced.
-      //
-      // The throw is inside the lease's own try/finally below, so the lease is released and every
-      // worker backend disposed on the way out. `buildReport` never runs, which is deliberate but
-      // has a cost: `StaleTestAppError`'s message is the ONLY diagnosis the operator receives, so
-      // it carries the names AND the remedy rather than pointing at a report that will not exist.
-      const missingFromServer = baseline.flatMap((b) => {
-        const described = describeStaleTestApp(b.verdict.failureMessage);
-        // The description travels INTO the error rather than being recomputed or dropped: it is the
-        // server's own account, per test, and it is the only thing a reader can use to overrule the
-        // matcher when the refusal is the only output the run produces.
-        return described === undefined
-          ? []
-          : [{ name: qualifiedTestName(b.ref), description: described }];
-      });
-      if (missingFromServer.length > 0) throw new StaleTestAppError(missingFromServer);
-
-      const greenTests = baseline.filter((b) => b.verdict.outcome === "pass");
-      if (greenTests.length < baseline.length) baselineGreenOverall = false;
-      if (greenTests.length === 0) {
-        const note = noGreenBaselineNote(baseline);
-        for (const m of execute) {
-          record(cfg.store, runId, m, "error", outcomes, batchIdx, emit, undefined, note);
         }
-        continue;
-      }
-      // R58, recorded rather than discovered later: under `coverage: "fenced"` these durations
-      // INCLUDE coverage-collection overhead (Start/StopApplicationCoverage plus serializing the
-      // whole `Code Coverage` table) that no mutant run pays. Every mutant's budget is
-      // `2 * baseline` (`MIN_MUTANT_BUDGET_MS`, below), so budgets inflate slightly — the SAFE
-      // direction, since a too-small budget produces a client-side `deadline-exceeded` that strands
-      // a run server-side and quarantines the tier. R47 and R53 were fought over exactly these
-      // numbers, so the shift is stated here rather than left to be re-derived from a timing report.
-      const baselineDuration = new Map(
-        greenTests.map((b) => [testKeyOf(b.ref), b.verdict.durationMs]),
-      );
+        // R31 (a test the SOURCE declares but the server returned no result for) no longer needs a
+        // session-level accumulator here: `unsupportedTests`/`staleTestApp`/`testPageUnsupported` are
+        // now folded from `baseline-batch-finished`'s per-test `classification` (report-fold.ts),
+        // which the emit above already computes independently via `describeStaleTestApp` — see that
+        // emit's doc comment for why it is kept independent of this loop. Since R139 that fold is
+        // unreachable on both producers anyway, because the session refuses before it can be built;
+        // it stays in place for any future producer that classifies without warranting a refusal.
 
-      // Task 6 (spec §9): baseline tests that did not pass (fail/error — NOT
-      // deadline-exceeded/timeout, which are infra/timing) can't run in the
-      // web-service session; a TestPage/unsupported test type surfaces exactly
-      // this way. They still return coverage at baseline (the bc-dev hub
-      // collects it regardless of outcome), so a mutant may be covered ONLY by
-      // one of them. Name every such test in the report; below, distinguish a
-      // mutant covered only by one from a genuinely uncovered mutant.
-      const unsupportedBaseline = baseline.filter((b) => didNotPassAtBaseline(b.verdict.outcome));
-      // R35, blind spot 1. The evidence is already here, per-test, in BC's own words — the same
-      // text R27 reads on the `unstable` path. Nothing looked at it HERE, so a suite whose test
-      // codeunits omit `TestPermissions = Disabled` had its writing tests refused, dropped from
-      // the green set, and reported as "did not pass at baseline" — which sends the reader to
-      // debug their tests rather than declare one property.
-      //
-      // Keyed BATCH-LOCAL, and holding the diagnosis STRING rather than a bare flag:
-      //   - batch-local, because the note below describes THIS batch's baseline. The session-level
-      //     set is cumulative, so consulting it would let a refusal measured in a later batch
-      //     describe an earlier batch's note (impossible — earlier notes are already written) and,
-      //     worse, let a test refused in one batch be labelled "refused" in another where it
-      //     failed for an ordinary reason.
-      //   - the string, because `describeTestPermissionsRefusal` QUOTES BC verbatim, and that
-      //     quote is what lets a reader overrule a hedged English-regex diagnosis. Discarding it
-      //     and keeping only the truthiness would leave the reader with an assertion and no
-      //     evidence — see the unstable path, which appends the same string.
-      const refusedThisBatch = new Map<string, string>();
-      // R69: batch-local for exactly the reasons the R35 map above documents — this batch's note
-      // must describe THIS batch's baseline, not one a later batch's classification would overwrite.
-      const testPageThisBatch = new Map<string, string>();
-      for (const b of unsupportedBaseline) {
-        const name = qualifiedTestName(b.ref);
-        // R139: same guard as the classification emit above, and needed in BOTH places because
-        // these two maps feed the per-mutant note while the emit feeds the report's own lists. A
-        // line-count answer proves the test body never ran, so BC wording inside it is about suite
-        // management and neither diagnosis may claim it.
-        if (isRunMutantLineCountMessage(b.verdict.failureMessage)) continue;
-        const refusal = describeTestPermissionsRefusal(b.verdict.failureMessage);
-        if (refusal !== undefined) {
-          refusedThisBatch.set(name, refusal);
-        }
-        const testPage = describeTestPageUnsupported(b.verdict.failureMessage);
-        if (testPage !== undefined) {
-          testPageThisBatch.set(name, testPage);
-        }
-      }
-      // R31 (a test the SOURCE declares but the server returned no result for) no longer needs a
-      // session-level accumulator here: `unsupportedTests`/`staleTestApp`/`testPageUnsupported` are
-      // now folded from `baseline-batch-finished`'s per-test `classification` (report-fold.ts),
-      // which the emit above already computes independently via `describeStaleTestApp` — see that
-      // emit's doc comment for why it is kept independent of this loop. Since R139 that fold is
-      // unreachable on both producers anyway, because the session refuses before it can be built;
-      // it stays in place for any future producer that classifies without warranting a refusal.
-
-      // R140: built BEFORE the split, not after, because fallback 2 now consults it. It answers
-      // one question for the split — "did a test that could not pass at baseline nevertheless
-      // execute something in this object?" — and the same index then serves its original purpose
-      // below (`unsupportedCoverage`), so the two consumers cannot drift onto different evidence.
-      const unsupportedIndex = buildCoverageIndex(
-        unsupportedBaseline.map((b) => ({
-          ref: b.ref,
-          ...(b.verdict.coverage !== undefined ? { coverage: b.verdict.coverage } : {}),
-        })),
-      );
-
-      // 5. coverage filter (capability-gated)
-      let perMutantTests: ReadonlyMap<string, readonly TestMethodRef[]>;
-      // R-agent-output: which attribution path placed each mutant's covering tests. Empty on the
-      // `coverage: "none"` branch below, where every mutant runs every green test by construction
-      // and no attribution happened at all — distinct from "attributed, then fell back".
-      let coverageAttribution: ReadonlyMap<string, CoverageAttribution> = new Map();
-      let uncovered: readonly MutantManifestEntry[] = [];
-      // R192: which of `uncovered` R175 flagged unplaceable, persisted with each `no-coverage` row.
-      let unplaceableIds: ReadonlySet<string> = new Set();
-      // R197: how narrow each test is, for the covering-test order. Empty under "none", where
-      // there is no attribution to be narrow about and the order falls through to duration.
-      let memberCounts: ReadonlyMap<string, number> = new Map();
-      if (caps.coverage === "none") {
-        perMutantTests = new Map(execute.map((m) => [m.mutantId, greenTests.map((b) => b.ref)]));
-      } else {
-        const index = buildCoverageIndex(
-          greenTests.map((b) => ({
+        // R140: built BEFORE the split, not after, because fallback 2 now consults it. It answers
+        // one question for the split — "did a test that could not pass at baseline nevertheless
+        // execute something in this object?" — and the same index then serves its original purpose
+        // below (`unsupportedCoverage`), so the two consumers cannot drift onto different evidence.
+        const unsupportedIndex = buildCoverageIndex(
+          unsupportedBaseline.map((b) => ({
             ref: b.ref,
             ...(b.verdict.coverage !== undefined ? { coverage: b.verdict.coverage } : {}),
           })),
         );
-        const split = coverageFilter(
-          execute,
-          index,
-          greenTests.map((b) => b.ref),
-          unsupportedIndex,
-          // R175: only the HUB resolver is blind to locals. `fenced` names them by parsing the
-          // source, measured, so there the widening would fire only on a naming FAILURE and would
-          // hide it as object-level coverage.
-          //
-          // R220: asked as "is this a HUB mode" rather than "is this not `fenced`", because
-          // `al-runner` resolves members through `line-map.ts` exactly as `fenced` does and must
-          // get the same answer. Spelling it as a comparison against one mode's NAME meant every
-          // new source-parsing mode silently opted into the widening it must not have.
-          isHubCoverageMode(caps.coverage),
-        );
-        perMutantTests = split.covered;
-        coverageAttribution = split.attribution;
-        uncovered = split.uncovered;
-        unplaceableIds = split.unplaceable;
-        memberCounts = memberCountsByTest(index.byMember);
-        // coverage-split: accumulated per batch AT SPLIT TIME, and folded into
-        // `SessionReport.untargetedTriggerCount` by report-fold.ts rather than a session-level
-        // accumulator here — see events.ts's doc comment on why this is the strongest single
-        // argument for events over the old end-of-run bag.
-        emit({
-          type: "coverage-split",
-          batchIndex: batchIdx,
-          untargetedTriggerCount: split.untargetedTriggerCount,
-          coveredCount: split.covered.size,
-          noCoverageCount: split.uncovered.length,
-          unplaceableCount: split.unplaceable.size,
-          unplaceableMutants: [...split.unplaceable].sort(),
-        });
-      }
-      // A mutant uncovered by any GREEN test but covered by a non-passing
-      // baseline test is `error` (score-excluded) with a named note — never a
-      // silent `no-coverage` false-negative (a real test DOES cover it; it just
-      // couldn't run). `unsupportedCoverage` reuses coverageFilter against the
-      // second index; empty for coverage:"none" (uncovered is empty there too).
-      //
-      // Its `untargetedTriggerCount` is deliberately NOT folded into the session tally, and stays
-      // structurally 0 after R140. A table trigger reaches `uncovered` by exactly one route now:
-      // fallback 2 DECLINED because `unsupportedIndex.byObject` holds its object key — the same
-      // key FALLBACK 1 looks up in this call, on this same index, so it resolves here at object
-      // level and can never reach this call's own fallback 2. Were that ever to change, counting
-      // it would double-count mutants the SESSION already ran against every green test. The
-      // number on the report means "took the all-green-tests fallback in the run that decided the
-      // verdict", and this call decides no verdict.
-      const unsupportedCoverage =
-        uncovered.length === 0
-          ? new Map<string, readonly TestMethodRef[]>()
-          : coverageFilter(
-              uncovered,
-              unsupportedIndex,
-              unsupportedBaseline.map((b) => b.ref),
-            ).covered;
-      // R69 (closed): a mutant covered ONLY by a test this session cannot run is NAMED rather
-      // than silently scored `no-coverage`. Recording is deferred until after the fenced mutant
-      // loop below so the note can quote what THIS batch observed; everything with no such
-      // covering test is recorded `no-coverage` right here. There is no second execution path to
-      // resolve these on — the client-services router that would have run them was measured
-      // unprofitable and DELETED (`c1da575`, ROADMAP R69/R74/R75/R78). Do not reintroduce one
-      // without re-reading those four rows.
-      const unsupportedOnlyCandidates: Array<{
-        mutant: MutantManifestEntry;
-        covering: readonly TestMethodRef[];
-      }> = [];
-      for (const m of uncovered) {
-        const covering = unsupportedCoverage.get(m.mutantId);
-        if (covering !== undefined && covering.length > 0) {
-          unsupportedOnlyCandidates.push({ mutant: m, covering });
-        } else {
-          record(
-            cfg.store,
-            runId,
-            m,
-            "no-coverage",
-            outcomes,
-            batchIdx,
-            emit,
-            undefined,
-            undefined,
-            undefined,
-            0,
-            [],
-            undefined,
-            undefined,
-            undefined,
-            undefined,
-            undefined,
-            undefined,
-            undefined,
-            undefined,
-            undefined,
-            undefined,
-            unplaceableIds.has(m.mutantId),
-          );
-        }
-      }
 
-      // 5b. R47 resume: record the mutants a prior run already scored, WITHOUT executing them, and
-      // hand only the remainder to the per-mutant loop.
-      //
-      // Deliberately placed here rather than beside the history filter at step 2, because the
-      // covering-test list and its attribution are computed at step 5 and a carried verdict
-      // deserves this run's fresh ones — a resumed survivor must still be actionable (which tests
-      // ran it, by which attribution path), and those were never in the database.
-      //
-      // The `perMutantTests.get(...) === undefined` skip is the same guard the worker shards use:
-      // step 5 has ALREADY recorded those mutants as `no-coverage`, and `mutants` has no unique
-      // constraint on (run_id, mutant_code), so a second record() would silently duplicate rather
-      // than fail.
-      let toExecute: MutantManifestEntry[] = execute;
-      if (resumeState !== undefined) {
-        toExecute = [];
-        for (const m of execute) {
-          const covering = perMutantTests.get(m.mutantId);
-          if (covering === undefined) continue; // step 5 already recorded no-coverage
-          // R53: a mutant a prior run STRANDED the tier on is not retried by default. Measured on
-          // Document Output: M0013 negates `until DOCustSetup.Next() = 0;` into `<> 0`, which never
-          // terminates — so re-running it re-hangs, re-quarantines, and blocks the 125 mutants
-          // queued behind it. No `--mutant-timeout-ms` value fixes that (180 s and 330 s both
-          // aborted; 360 s is the hosting proxy's own ceiling), which makes retrying it not a
-          // slow path but an unreachable one.
-          //
-          // Recorded `error` — score-excluded, never a verdict — and stated loudly, because the
-          // honest answer is "this mutant was not measured", not "this mutant survived".
-          if (!(cfg.retryStranded ?? false) && wasStranded(resumeState.index, m)) {
+        // 5. coverage filter (capability-gated)
+        let perMutantTests: ReadonlyMap<string, readonly TestMethodRef[]>;
+        // R-agent-output: which attribution path placed each mutant's covering tests. Empty on the
+        // `coverage: "none"` branch below, where every mutant runs every green test by construction
+        // and no attribution happened at all — distinct from "attributed, then fell back".
+        let coverageAttribution: ReadonlyMap<string, CoverageAttribution> = new Map();
+        let uncovered: readonly MutantManifestEntry[] = [];
+        // R192: which of `uncovered` R175 flagged unplaceable, persisted with each `no-coverage` row.
+        let unplaceableIds: ReadonlySet<string> = new Set();
+        // R197: how narrow each test is, for the covering-test order. Empty under "none", where
+        // there is no attribution to be narrow about and the order falls through to duration.
+        let memberCounts: ReadonlyMap<string, number> = new Map();
+        if (caps.coverage === "none") {
+          perMutantTests = new Map(execute.map((m) => [m.mutantId, greenTests.map((b) => b.ref)]));
+        } else {
+          const index = buildCoverageIndex(
+            greenTests.map((b) => ({
+              ref: b.ref,
+              ...(b.verdict.coverage !== undefined ? { coverage: b.verdict.coverage } : {}),
+            })),
+          );
+          const split = coverageFilter(
+            execute,
+            index,
+            greenTests.map((b) => b.ref),
+            unsupportedIndex,
+            // R175: only the HUB resolver is blind to locals. `fenced` names them by parsing the
+            // source, measured, so there the widening would fire only on a naming FAILURE and would
+            // hide it as object-level coverage.
+            //
+            // R220: asked as "is this a HUB mode" rather than "is this not `fenced`", because
+            // `al-runner` resolves members through `line-map.ts` exactly as `fenced` does and must
+            // get the same answer. Spelling it as a comparison against one mode's NAME meant every
+            // new source-parsing mode silently opted into the widening it must not have.
+            isHubCoverageMode(caps.coverage),
+          );
+          perMutantTests = split.covered;
+          coverageAttribution = split.attribution;
+          uncovered = split.uncovered;
+          unplaceableIds = split.unplaceable;
+          memberCounts = memberCountsByTest(index.byMember);
+          // coverage-split: accumulated per batch AT SPLIT TIME, and folded into
+          // `SessionReport.untargetedTriggerCount` by report-fold.ts rather than a session-level
+          // accumulator here — see events.ts's doc comment on why this is the strongest single
+          // argument for events over the old end-of-run bag.
+          emit({
+            type: "coverage-split",
+            batchIndex: batchIdx,
+            untargetedTriggerCount: split.untargetedTriggerCount,
+            coveredCount: split.covered.size,
+            noCoverageCount: split.uncovered.length,
+            unplaceableCount: split.unplaceable.size,
+            unplaceableMutants: [...split.unplaceable].sort(),
+          });
+        }
+        // A mutant uncovered by any GREEN test but covered by a non-passing
+        // baseline test is `error` (score-excluded) with a named note — never a
+        // silent `no-coverage` false-negative (a real test DOES cover it; it just
+        // couldn't run). `unsupportedCoverage` reuses coverageFilter against the
+        // second index; empty for coverage:"none" (uncovered is empty there too).
+        //
+        // Its `untargetedTriggerCount` is deliberately NOT folded into the session tally, and stays
+        // structurally 0 after R140. A table trigger reaches `uncovered` by exactly one route now:
+        // fallback 2 DECLINED because `unsupportedIndex.byObject` holds its object key — the same
+        // key FALLBACK 1 looks up in this call, on this same index, so it resolves here at object
+        // level and can never reach this call's own fallback 2. Were that ever to change, counting
+        // it would double-count mutants the SESSION already ran against every green test. The
+        // number on the report means "took the all-green-tests fallback in the run that decided the
+        // verdict", and this call decides no verdict.
+        const unsupportedCoverage =
+          uncovered.length === 0
+            ? new Map<string, readonly TestMethodRef[]>()
+            : coverageFilter(
+                uncovered,
+                unsupportedIndex,
+                unsupportedBaseline.map((b) => b.ref),
+              ).covered;
+        // R69 (closed): a mutant covered ONLY by a test this session cannot run is NAMED rather
+        // than silently scored `no-coverage`. Recording is deferred until after the fenced mutant
+        // loop below so the note can quote what THIS batch observed; everything with no such
+        // covering test is recorded `no-coverage` right here. There is no second execution path to
+        // resolve these on — the client-services router that would have run them was measured
+        // unprofitable and DELETED (`c1da575`, ROADMAP R69/R74/R75/R78). Do not reintroduce one
+        // without re-reading those four rows.
+        unsupportedOnlyCandidates = [];
+        for (const m of uncovered) {
+          const covering = unsupportedCoverage.get(m.mutantId);
+          if (covering !== undefined && covering.length > 0) {
+            unsupportedOnlyCandidates.push({ mutant: m, covering });
+          } else {
             record(
               cfg.store,
               runId,
               m,
-              "error",
+              "no-coverage",
               outcomes,
               batchIdx,
               emit,
               undefined,
-              STRANDED_SKIP_NOTE,
+              undefined,
+              undefined,
+              0,
+              [],
               undefined,
               undefined,
               undefined,
               undefined,
               undefined,
               undefined,
-              true, // strandedSkip
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              unplaceableIds.has(m.mutantId),
             );
-            continue;
           }
-          const carried = carriedVerdictFor(resumeState.index, m);
-          if (carried === undefined) {
-            toExecute.push(m);
-            continue;
-          }
-          record(
-            cfg.store,
-            runId,
-            m,
-            carried.verdict,
-            outcomes,
-            batchIdx,
-            emit,
-            carried.killingTest,
-            carried.failureNote,
-            undefined,
-            carried.durationMs,
-            covering.map((ref) => qualifiedTestName(ref)),
-            coverageAttribution.get(m.mutantId),
-            undefined,
-            true, // carried
-            undefined,
-            carried.runner,
-            undefined,
-            undefined,
-            // R47/R54: NOT `runId` (this session's own id) — see record()'s `fromRunId` doc
-            // comment. `resumeState` is defined in this branch (`if (resumeState !== undefined)`
-            // above), so its `runId` — the PRIOR run this verdict was carried from — is in scope.
-            resumeState.runId,
-            undefined, // permissionRefusedTest — a carried verdict re-runs nothing
-            // R86: the prior run's own account of why this kill died, carried through unchanged.
-            // Dropping it here would make a resumed report quietly less informative than the run it
-            // resumed, which is the drift `carried.runner` was added to close for the runner tag.
-            carried.killingTestFailure,
-            undefined, // unplaceable
-            carried.killPosition,
-          );
         }
-      }
 
-      // 6. per-mutant loop — sharded across workers when workers > 1. The
-      // baseline/coverage discovery above always runs once against
-      // cfg.backend; only the kill-detection phase below fans out, since
-      // that's the part that's actually per-mutant work.
-      const fallbackTimeoutMs = cfg.baselineTimeoutMs ?? BASELINE_TIMEOUT_DEFAULT;
-      // Layer 5C-A Task 8, Task 10 (design §G): per-ARTIFACT clean-attestation ledger. Declared
-      // fresh for each batch (each batch republishes its own artifactId) — `clean` flips true the
-      // first time ANY covered run (across every worker/shard sharing this one artifact) reports
-      // `attestation.observedAny === true && identityMismatch !== true`. Checked against
-      // `contributed` right after the mutant work below finishes, before the next batch (or the
-      // final `buildReport`) ever sees this batch's verdicts.
-      const attestation = { clean: false };
-      emit({ type: "phase-entered", phase: "mutants" });
-      const mutantsStartedMs = Date.now();
-      if (workers === 1) {
-        // Sequential IS the parallel path with a pool of one: this is the
-        // exact same runMutantsOnBackend call the fan-out branch below makes
-        // per shard, just with all of `execute` as a single "shard" on the
-        // one backend already deployed in step 3.
-        await runMutantsOnBackend({
-          backend: cfg.backend,
-          safety,
-          ...(leaseSession !== undefined ? { leaseSession } : {}),
+        // 5b. R47 resume: record the mutants a prior run already scored, WITHOUT executing them, and
+        // hand only the remainder to the per-mutant loop.
+        //
+        // Deliberately placed here rather than beside the history filter at step 2, because the
+        // covering-test list and its attribution are computed at step 5 and a carried verdict
+        // deserves this run's fresh ones — a resumed survivor must still be actionable (which tests
+        // ran it, by which attribution path), and those were never in the database.
+        //
+        // The `perMutantTests.get(...) === undefined` skip is the same guard the worker shards use:
+        // step 5 has ALREADY recorded those mutants as `no-coverage`, and `mutants` has no unique
+        // constraint on (run_id, mutant_code), so a second record() would silently duplicate rather
+        // than fail.
+        let toExecute: MutantManifestEntry[] = execute;
+        if (resumeState !== undefined) {
+          toExecute = [];
+          for (const m of execute) {
+            const covering = perMutantTests.get(m.mutantId);
+            if (covering === undefined) continue; // step 5 already recorded no-coverage
+            // R53: a mutant a prior run STRANDED the tier on is not retried by default. Measured on
+            // Document Output: M0013 negates `until DOCustSetup.Next() = 0;` into `<> 0`, which never
+            // terminates — so re-running it re-hangs, re-quarantines, and blocks the 125 mutants
+            // queued behind it. No `--mutant-timeout-ms` value fixes that (180 s and 330 s both
+            // aborted; 360 s is the hosting proxy's own ceiling), which makes retrying it not a
+            // slow path but an unreachable one.
+            //
+            // Recorded `error` — score-excluded, never a verdict — and stated loudly, because the
+            // honest answer is "this mutant was not measured", not "this mutant survived".
+            if (!(cfg.retryStranded ?? false) && wasStranded(resumeState.index, m)) {
+              record(
+                cfg.store,
+                runId,
+                m,
+                "error",
+                outcomes,
+                batchIdx,
+                emit,
+                undefined,
+                STRANDED_SKIP_NOTE,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                true, // strandedSkip
+              );
+              continue;
+            }
+            const carried = carriedVerdictFor(resumeState.index, m);
+            if (carried === undefined) {
+              toExecute.push(m);
+              continue;
+            }
+            record(
+              cfg.store,
+              runId,
+              m,
+              carried.verdict,
+              outcomes,
+              batchIdx,
+              emit,
+              carried.killingTest,
+              carried.failureNote,
+              undefined,
+              carried.durationMs,
+              covering.map((ref) => qualifiedTestName(ref)),
+              coverageAttribution.get(m.mutantId),
+              undefined,
+              true, // carried
+              undefined,
+              carried.runner,
+              undefined,
+              undefined,
+              // R47/R54: NOT `runId` (this session's own id) — see record()'s `fromRunId` doc
+              // comment. `resumeState` is defined in this branch (`if (resumeState !== undefined)`
+              // above), so its `runId` — the PRIOR run this verdict was carried from — is in scope.
+              resumeState.runId,
+              undefined, // permissionRefusedTest — a carried verdict re-runs nothing
+              // R86: the prior run's own account of why this kill died, carried through unchanged.
+              // Dropping it here would make a resumed report quietly less informative than the run it
+              // resumed, which is the drift `carried.runner` was added to close for the runner tag.
+              carried.killingTestFailure,
+              undefined, // unplaceable
+              carried.killPosition,
+            );
+          }
+        }
+        return {
           mutants: toExecute,
           perMutantTests,
           coverageAttribution,
           baselineDuration,
-          fallbackTimeoutMs,
-          minMutantBudgetMs,
-          store: cfg.store,
-          runId,
-          batchIndex: batchIdx,
-          outcomes,
-          quarantineStore,
-          resourceKey,
-          nowIso,
-          attestation,
-          emit,
-          killLedger,
           memberCountsByTest: memberCounts,
-          groupRuns,
-          sessionReuse,
-        });
-      } else {
+        };
+      };
+      // The worker fan-out, used only when workers > 1. It stays here because it deploys to each
+      // worker, which needs this batch's directory and files.
+      const executeCovering = async (
+        plan: CoveringPlan,
+        attestation: { clean: boolean },
+      ): Promise<void> => {
+        const {
+          mutants: toExecute,
+          perMutantTests,
+          coverageAttribution,
+          baselineDuration,
+          memberCountsByTest: memberCounts,
+        } = plan;
+        const fallbackTimeoutMs = scope.baselineTimeoutMs;
         const shards = shardEvenly(toExecute, workers);
         // allSettled, not all: if one shard throws (e.g. the I7 two-
         // consecutive-transport-errors abort), `Promise.all` would reject
@@ -4457,45 +4654,17 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           (r): r is PromiseRejectedResult => r.status === "rejected",
         );
         if (firstRejection !== undefined) throw firstRejection.reason;
-      }
-      emit({ type: "phase-left", phase: "mutants", elapsedMs: Date.now() - mutantsStartedMs });
-      // Layer 5C-A Task 8, Task 10 (design §G): per-artifact fail-closed attestation gate. A
-      // batch "contributed verdicts" if any mutant it scheduled had >=1 covering test (a batch
-      // with nothing but no-coverage/unsupported mutants has nothing a wrong binary could fake).
-      // For an authoritative backend, a contributing batch that never earned a single clean
-      // attestation means no covered run ever confirmed the deployed binary is actually running
-      // — a wrong/stale container legitimately returns observedAny=false on every run (coverage
-      // over-approximates) and every test would pass, silently accumulating false "survived"
-      // verdicts. Invalidate this batch's verdicts and quarantine BEFORE any of them can leave
-      // the orchestrator (`buildReport` only runs once, at `runSession`'s return, below).
-      // al-runner (non-authoritative) carries no attestation at all — `attestation.clean` would
-      // always be false there, so this gate is scoped to `caps.authoritative` to avoid misfiring
-      // on every al-runner session.
-      //
-      // MUST run even when this batch already latched `safety` unsafe for a DIFFERENT, more
-      // specific reason (e.g. mutant M2 hit an in-flight-unknown mid-batch): an earlier mutant M1
-      // in the SAME batch may already have been recorded a (false) "survived" — from the SAME
-      // unattested binary — before M2 ever ran, and skipping the gate here would let that false
-      // survivor ship in `report.mutants`/`counts` untouched. The `batch-invalidated` event this
-      // emits (below) is what the fold (`foldEvents`, report-fold.ts) reads to rewrite this batch's
-      // verdicts — including protecting M2's own specific diagnostic (`cause` already set) from
-      // being clobbered by this gate's generic note, not a guard here.
-      // `toExecute`, not `execute`: under `--resume` a batch may schedule nothing at all because
-      // every one of its mutants carried a prior verdict. Such a batch issues no covered run, so
-      // it can never earn an attestation — gating it on `execute` would fail the artifact and
-      // quarantine the container for the crime of having nothing left to do. A carried verdict is
-      // not a verdict this artifact produced, so it is correctly outside this gate's scope.
-      const contributed = toExecute.some((m) => (perMutantTests.get(m.mutantId)?.length ?? 0) > 0);
-      if (caps.authoritative && contributed && !attestation.clean) {
-        const note = `unattested artifact: no covered run observed the deployed binary's selector (artifactId ${compiled?.artifactId ?? "unknown"}) — verdicts discarded, container quarantined (design §G)`;
-        emit({ type: "batch-invalidated", batchIndex: batchIdx, reason: note });
-        // R47: and durably, in the store. `--resume` reads a run's stored verdicts by
-        // `finished_at IS NULL` — the exact set the fold's own (in-memory-only) correction above
-        // relies on `priorSurvivorKeys` filtering OUT. Without this, resuming a quarantined run
-        // would resurrect the false survivors the gate exists to destroy.
-        cfg.store.invalidateBatch(runId, batchIdx, note);
-        safety.latchUnsafe(note);
-      }
+      };
+      const scored = await scoreBatch(scope, {
+        batchIndex: batchIdx,
+        artifactId: compiled?.artifactId,
+        tests,
+        snapshot: { batchDir, testDir: cfg.testDir, allowReuse: resumeState !== undefined },
+        select,
+        ...(workers > 1 ? { executeCovering } : {}),
+      });
+      if (scored === "unsafe") break; // stop the whole session: no mutant scheduling, no next batch
+      if (scored === "nothing-to-run") continue;
       // R69 (closed): record this batch's unsupported-only candidates — deliberately AFTER both
       // fenced-mutant-loop branches above (sequential and worker fan-out) and after the
       // attestation gate right above, never interleaved with either, because the note quotes
