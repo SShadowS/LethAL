@@ -298,6 +298,10 @@ export interface SessionFingerprintInput {
   readonly testDir: string;
   readonly backend: string;
   readonly only?: readonly string[];
+  /** R228: the `--exclude` narrowing (flag and config, merged), if any. In for the same reason
+   *  `only` is. `runSession` passed it for months before this field existed, and the value was
+   *  silently dropped because a conditional spread escapes TypeScript's excess-property check. */
+  readonly exclude?: readonly string[];
   /**
    * R127: the `--operator` narrowing, if any. In for the same reason `only` is: it changes which
    * mutants the run deployed at all.
@@ -327,6 +331,10 @@ export function sessionFingerprint(input: SessionFingerprintInput): string {
     // holding a half-finished 12-hour run would stop resuming the moment this build shipped. A
     // conditional key is deterministic (same position whenever present) and costs nothing.
     ...(input.operators !== undefined ? { operators: [...input.operators].sort() } : {}),
+    // R228: conditional for the same reason `operators` is.
+    ...(input.exclude !== undefined && input.exclude.length > 0
+      ? { exclude: [...input.exclude].sort() }
+      : {}),
     // Issue #19: conditional for the same reason `operators` is.
     ...(input.lines !== undefined
       ? { lines: [...input.lines].map((r) => `${r.file}:${r.start}-${r.end}`).sort() }

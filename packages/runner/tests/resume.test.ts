@@ -402,6 +402,27 @@ describe("sessionFingerprint (R47)", () => {
     );
   });
 
+  // R228: `runSession` passed `exclude` here for months while the fingerprint never read it, so
+  // two runs differing only in their exclusions resumed into one another.
+  test("a different --exclude scope changes it, and exclude order does not", () => {
+    expect(sessionFingerprint({ ...base, exclude: ["a/**"] })).not.toBe(sessionFingerprint(base));
+    expect(sessionFingerprint({ ...base, exclude: ["a/**"] })).not.toBe(
+      sessionFingerprint({ ...base, exclude: ["b/**"] }),
+    );
+    expect(sessionFingerprint({ ...base, exclude: ["b/**", "a/**"] })).toBe(
+      sessionFingerprint({ ...base, exclude: ["a/**", "b/**"] }),
+    );
+  });
+
+  // R228: the key is CONDITIONAL, so a run recorded with no exclusions keeps its digest and a
+  // half-finished run still resumes after this build ships. Pinned by value, measured before the
+  // fix landed.
+  test("a run with no exclusions keeps the digest it had before R228", () => {
+    expect(sessionFingerprint(base)).toBe(
+      "16c632acfe397d6df9ac6b53795b6361a861c285c6c079bd73f6e79819929307",
+    );
+  });
+
   test("--tests-only changes it — that narrowing CAN change a verdict", () => {
     expect(sessionFingerprint({ ...base, testsOnly: ["x/**"] })).not.toBe(sessionFingerprint(base));
   });
@@ -1296,6 +1317,33 @@ describe("runSession --resume (R47)", () => {
     await expect(
       runSession({ backend: new CountingBackend(), store, ...dirs, selectorIds, resume: "last" }),
     ).rejects.toThrow(/found no unfinished run to resume/);
+  });
+
+  // R228: the same shape for `--exclude`, which the fingerprint silently dropped. Two files, so
+  // excluding one leaves something to mutate.
+  test("--resume refuses to reuse a run scoped by different --exclude patterns", async () => {
+    const dirs = await makeProject({ secondFile: true });
+    const store = new ResultsStore(":memory:");
+    const first = await runSession({
+      backend: new CountingBackend("pass", 1),
+      store,
+      ...dirs,
+      selectorIds,
+      exclude: ["SandboxExtra.Codeunit.al"],
+    });
+    expect(first.quarantined).toBeDefined();
+    await expect(
+      runSession({ backend: new CountingBackend(), store, ...dirs, selectorIds, resume: "last" }),
+    ).rejects.toThrow(/found no unfinished run to resume/);
+    const resumed = await runSession({
+      backend: new CountingBackend("pass"),
+      store,
+      ...dirs,
+      selectorIds,
+      exclude: ["SandboxExtra.Codeunit.al"],
+      resume: "last",
+    });
+    expect(resumed.resumedFrom?.carriedMutants).toBe(1);
   });
 
   test("--resume refuses to reuse a run scoped by different --only patterns", async () => {
