@@ -3939,23 +3939,6 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     nowIso,
     emit,
   }));
-  if (cfg.lease !== undefined) {
-    // R19: the one publish that CAN happen under the lease, happening under it.
-    //
-    // Publishing the target's test apps before the lease leaves a window in which a concurrent
-    // LethAL session republishes one mid-run. Nothing detects that: the attestation fence covers
-    // the TARGET artifact, not the test app, so the swap is invisible to every verdict this run
-    // then produces. Held under the lease, no other session is running at all.
-    //
-    // The CONTROL-APP publish is NOT here and cannot be — `AcquireLease` is an action on the
-    // control app and the lease row lives in its own table, so there is no lease to hold until it
-    // is published. R19's "move both under the lease" is impossible for that half by construction.
-    //
-    // Inside the same try/finally as everything else the lease guards: a publish that throws must
-    // release the lease rather than leave it held for the full ttl.
-    if (cfg.afterLeaseAcquired !== undefined) await cfg.afterLeaseAcquired();
-  }
-
   // R26: the permission canary's measured verdict for THIS session, or `undefined` when no canary
   // was configured (al-runner; every in-memory-backend unit test). Declared out here so it reaches
   // `buildReport` at the very end — the whole point is that it survives into `--out` JSON and gets
@@ -3963,6 +3946,24 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   let permissionCanary: PermissionCanaryResult | undefined;
 
   try {
+    if (cfg.lease !== undefined) {
+      // R19: the one publish that CAN happen under the lease, happening under it.
+      //
+      // Publishing the target's test apps before the lease leaves a window in which a concurrent
+      // LethAL session republishes one mid-run. Nothing detects that: the attestation fence covers
+      // the TARGET artifact, not the test app, so the swap is invisible to every verdict this run
+      // then produces. Held under the lease, no other session is running at all.
+      //
+      // The CONTROL-APP publish is NOT here and cannot be — `AcquireLease` is an action on the
+      // control app and the lease row lives in its own table, so there is no lease to hold until it
+      // is published. R19's "move both under the lease" is impossible for that half by construction.
+      //
+      // Inside the same try/finally as everything else the lease guards (this IS that try, and
+      // this is the first statement in it): a publish that throws still releases the lease rather
+      // than leaving it held for the full ttl.
+      if (cfg.afterLeaseAcquired !== undefined) await cfg.afterLeaseAcquired();
+    }
+
     // R26: run it EXACTLY ONCE, here — after the lease is acquired above (the canary drives the
     // platform test runner through the same `Test Suite Mgt.RunAllTests` path `RunMutant` uses,
     // which is exactly what the lease serialises) and before the first deploy, let alone the first

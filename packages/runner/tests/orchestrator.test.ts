@@ -5849,6 +5849,27 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
     expect(rec?.opKind).toBe("container-needs-recycle");
     expect(rec?.detail).toContain("a9");
   });
+
+  // R232: `afterLeaseAcquired` used to run BEFORE the try/finally that releases the lease, so a
+  // throw from it (the R19 test-app publish) left the lease held for its full ttl. It must be the
+  // first statement inside the try.
+  test("an afterLeaseAcquired that throws still releases the lease and stops the heartbeat (R232)", async () => {
+    const log: string[] = [];
+    const client = new FakeLeaseClient(log);
+    const timers = new FakeTimers();
+    const { lease } = leaseCfg(client, { timers });
+    const err = await runSessionForTest(leaseBackend(), {
+      lease,
+      quarantineDir: freshTmpDir(),
+      afterLeaseAcquired: async () => {
+        throw new Error("test-app publish failed");
+      },
+    }).catch((e) => e);
+    expect((err as Error).message).toBe("test-app publish failed");
+    expect(client.releaseCalls).toBe(1);
+    expect(log.indexOf("acquire")).toBeLessThan(log.indexOf("release"));
+    expect(timers.cleared).toBe(1);
+  });
 });
 
 describe("runSession — Layer 5C-B1 Task 8: renew heartbeat (design §6 step 3)", () => {
