@@ -39,6 +39,13 @@ import {
 import { QuarantineStore } from "../src/quarantine-store";
 import { quarantineResourceKey } from "../src/resource-key";
 
+/** Issue #23: every doctor with a package cache now spawns alc for its banner. A fake alc 18. */
+const fakeAlc18 = async () => ({
+  exitCode: 0,
+  stdout: "Microsoft (R) AL Compiler version 18.0.41.45789\n",
+  stderr: "",
+});
+
 /**
  * R109 ruling, honesty constraint 4: "one pinned test per check that a fixture making `run`
  * refuse also makes doctor non-green." Each test below drives the SAME machinery `lethal run`
@@ -371,12 +378,17 @@ describe("lethal doctor CLI wiring — create-mode envTool config (final review,
     } = await buildDoctorDeps(configFile, {
       alRunnerCacheDir: NO_CACHE_DIR,
       alToolPaths: async () => ({ alcPath: "C:/alc.exe", altoolPath: "C:/altool.exe" }),
+      alcSpawn: fakeAlc18,
     });
     expect(createModeCaveat).toBe(DOCTOR_CREATE_MODE_CAVEAT);
     const report = await runDoctor(doctorCfg, deps);
     // R131 added `al-runner-cache`, and it belongs in create mode for the same reason `tool-paths`
     // does: reading a local directory needs no environment to exist.
-    expect(report.checks.map((c) => c.name)).toEqual(["tool-paths", "al-runner-cache"]);
+    expect(report.checks.map((c) => c.name)).toEqual([
+      "tool-paths",
+      "alc-runtime",
+      "al-runner-cache",
+    ]);
     expect(report.checks[0]?.ok).toBe(true);
     expect(report.ok).toBe(true);
   });
@@ -398,6 +410,7 @@ describe("lethal doctor CLI wiring — create-mode envTool config (final review,
       alRunnerCacheDir: NO_CACHE_DIR,
       makeEnvToolClient: (c) => new EnvToolClient(c, { spawn: spawnThatMustNotRun }),
       alToolPaths: async () => ({ alcPath: "C:/alc.exe", altoolPath: "C:/altool.exe" }),
+      alcSpawn: fakeAlc18,
     });
     const report = await runDoctor(doctorCfg, deps);
     expect(report.ok).toBe(true);
@@ -413,6 +426,7 @@ describe("lethal doctor CLI wiring — create-mode envTool config (final review,
     } = await buildDoctorDeps(configFile, {
       alRunnerCacheDir: NO_CACHE_DIR,
       alToolPaths: async () => ({ alcPath: "C:/alc.exe", altoolPath: "C:/altool.exe" }),
+      alcSpawn: fakeAlc18,
     });
     const report = await runDoctor(doctorCfg, deps);
     const rendered = renderDoctorReport(report, createModeCaveat);
@@ -783,6 +797,7 @@ describe("doctorFromCli (final review, Important 1)", () => {
         quarantineDir: dir,
         fetchFn: okFetch(info()),
         alToolPaths: async () => ({ alcPath: "C:/alc.exe", altoolPath: "C:/altool.exe" }),
+        alcSpawn: fakeAlc18,
       },
     );
     expect(code).toBe(0);
@@ -798,6 +813,7 @@ describe("doctorFromCli (final review, Important 1)", () => {
         quarantineDir: dir,
         fetchFn: okFetch(info({ semver: "1.0.0.0" })),
         alToolPaths: async () => ({ alcPath: "C:/alc.exe", altoolPath: "C:/altool.exe" }),
+        alcSpawn: fakeAlc18,
       },
     );
     expect(code).toBe(1);
@@ -825,7 +841,10 @@ describe("doctorFromCli (final review, Important 1)", () => {
     };
     const { code, out } = await run(
       { bcdev: BCDEV_RAW, envTool: envCfg },
-      { alToolPaths: async () => ({ alcPath: "C:/alc.exe", altoolPath: "C:/altool.exe" }) },
+      {
+        alToolPaths: async () => ({ alcPath: "C:/alc.exe", altoolPath: "C:/altool.exe" }),
+        alcSpawn: fakeAlc18,
+      },
     );
     expect(code).toBe(0);
     expect(out).toContain(DOCTOR_CREATE_MODE_CAVEAT);
@@ -860,6 +879,7 @@ describe("doctorFromCli (final review, Important 1)", () => {
         quarantineDir: dir,
         fetchFn: okFetch(info()),
         alToolPaths: async () => ({ alcPath: "C:/alc.exe", altoolPath: "C:/altool.exe" }),
+        alcSpawn: fakeAlc18,
       },
     );
     expect(code).toBe(0);
@@ -877,6 +897,7 @@ describe("doctorFromCli (final review, Important 1)", () => {
       quarantineDir: dir,
       fetchFn: okFetch(info({ semver: "1.0.0.0" })),
       alToolPaths: async () => ({ alcPath: "C:/alc.exe", altoolPath: "C:/altool.exe" }),
+      alcSpawn: fakeAlc18,
     };
     const { code, parsed } = await runJson({ bcdev: RESOLVED_BCDEV }, deps);
     expect(code).toBe(1);
@@ -906,7 +927,10 @@ describe("doctorFromCli (final review, Important 1)", () => {
     };
     const { parsed } = await runJson(
       { bcdev: BCDEV_RAW, envTool: envCfg },
-      { alToolPaths: async () => ({ alcPath: "C:/alc.exe", altoolPath: "C:/altool.exe" }) },
+      {
+        alToolPaths: async () => ({ alcPath: "C:/alc.exe", altoolPath: "C:/altool.exe" }),
+        alcSpawn: fakeAlc18,
+      },
     );
     expect(parsed.caveat).toEqual({ kind: "create-mode", note: DOCTOR_CREATE_MODE_CAVEAT });
   });
@@ -995,5 +1019,74 @@ describe("lethal doctor --json — the flag (R151)", () => {
     const text = helpText("0.0.0");
     expect(text).toContain("--json");
     expect(text).toContain("notChecked");
+  });
+});
+
+describe("issue #23: --tests wires the test-app-present check", () => {
+  // Answers the extensions list from the same fake that serves companies and HarnessInfo. The
+  // extension row's shape was measured on Cronus283 (BC 28.4), 2026-09-25.
+  function fetchWith(installed: boolean): typeof fetch {
+    return (async (url: unknown) => {
+      const u = String(url);
+      if (u.includes("/extensions")) {
+        const rows = installed
+          ? [
+              {
+                isInstalled: true,
+                versionMajor: 1,
+                versionMinor: 0,
+                versionBuild: 0,
+                versionRevision: 3,
+              },
+            ]
+          : [];
+        return new Response(JSON.stringify({ value: rows }), { status: 200 });
+      }
+      if (u.includes("/api/v2.0/companies")) {
+        return new Response(JSON.stringify({ value: [{ id: "c-1", name: "CRONUS" }] }), {
+          status: 200,
+        });
+      }
+      return new Response(JSON.stringify({ value: JSON.stringify(info()) }), { status: 200 });
+    }) as typeof fetch;
+  }
+
+  async function reportFor(installed: boolean, testsDir: string | undefined) {
+    const { cfg, deps } = await buildDoctorDeps(
+      { bcdev: RESOLVED_BCDEV },
+      {
+        quarantineDir: await mkdtemp(join(tmpdir(), "lethal-doctor-testapp-q-")),
+        alRunnerCacheDir: NO_CACHE_DIR,
+        fetchFn: fetchWith(installed),
+        alToolPaths: async () => ({ alcPath: "C:/alc.exe", altoolPath: "C:/altool.exe" }),
+        alcSpawn: fakeAlc18,
+        ...(testsDir !== undefined ? { testsDir } : {}),
+      },
+    );
+    return runDoctor(cfg, deps);
+  }
+
+  async function testsDirWithApp(): Promise<string> {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-doctor-testapp-"));
+    await writeFile(
+      join(dir, "app.json"),
+      JSON.stringify({ id: "11111111-2222-3333-4444-555555555555", name: "My Tests" }),
+    );
+    return dir;
+  }
+  const check = (r: DoctorReport) => r.checks.find((c) => c.name === "test-app-present");
+
+  test("an installed test app passes", async () => {
+    expect(check(await reportFor(true, await testsDirWithApp()))?.ok).toBe(true);
+  });
+
+  test("an absent test app fails, naming it", async () => {
+    const absent = check(await reportFor(false, await testsDirWithApp()));
+    expect(absent?.ok).toBe(false);
+    expect(absent?.detail).toContain('"My Tests"');
+  });
+
+  test("no --tests means no check at all", async () => {
+    expect(check(await reportFor(true, undefined))).toBeUndefined();
   });
 });

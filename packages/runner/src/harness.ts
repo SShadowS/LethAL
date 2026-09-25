@@ -337,10 +337,74 @@ export class HarnessVerifier {
    * sending a company that does not exist would fail the very call meant to say so.
    */
   async fetchCompanies(): Promise<readonly string[]> {
-    const params = new URLSearchParams();
+    const names: string[] = [];
+    for (const row of await this.fetchApiRows("api/v2.0/companies", "companies list")) {
+      const name = (row as { name?: unknown }).name;
+      if (typeof name !== "string") {
+        throw new HarnessVerificationError(
+          `companies list returned a row without a string \`name\`: ${JSON.stringify(row).slice(0, 200)}`,
+        );
+      }
+      names.push(name);
+    }
+    return names;
+  }
+
+  /**
+   * Issue #23: whether an app id is INSTALLED in the configured company, from BC's automation API
+   * (`companies(<id>)/extensions`). Measured 2026-09-25 on Cronus283 (BC 28.4): the filter by app
+   * id returns one row per published version with `isInstalled`, and `[]` for an id that is not
+   * published. A published-but-uninstalled row counts as absent, since tests cannot run from it.
+   * Read-only; the company id comes from the same companies list `fetchCompanies` reads.
+   */
+  async fetchExtensionInstalled(appId: string): Promise<{
+    readonly installed: boolean;
+    readonly versions: readonly string[];
+  }> {
+    const companies = await this.fetchApiRows("api/v2.0/companies", "companies list");
+    const wanted = this.cfg.company.trim().toLowerCase();
+    const company = companies.find(
+      (r) =>
+        String((r as { name?: unknown }).name)
+          .trim()
+          .toLowerCase() === wanted,
+    ) as { id?: unknown } | undefined;
+    if (typeof company?.id !== "string") {
+      throw new HarnessVerificationError(
+        `company ${JSON.stringify(this.cfg.company)} is not in this server's companies list`,
+      );
+    }
+    const rows = (await this.fetchApiRows(
+      `api/microsoft/automation/v2.0/companies(${company.id})/extensions`,
+      "extensions list",
+      { $filter: `id eq ${appId}` },
+    )) as readonly {
+      isInstalled?: unknown;
+      versionMajor?: unknown;
+      versionMinor?: unknown;
+      versionBuild?: unknown;
+      versionRevision?: unknown;
+    }[];
+    return {
+      installed: rows.some((r) => r.isInstalled === true),
+      versions: rows.map(
+        (r) =>
+          `${r.versionMajor}.${r.versionMinor}.${r.versionBuild}.${r.versionRevision}${r.isInstalled === true ? "" : " (published, not installed)"}`,
+      ),
+    };
+  }
+
+  /** One GET against a BC API list endpoint, returning its `value` rows. The company parameter is
+   *  never sent: these endpoints address the company in the path, or list across companies. */
+  private async fetchApiRows(
+    path: string,
+    what: string,
+    extra: Readonly<Record<string, string>> = {},
+  ): Promise<readonly unknown[]> {
+    const params = new URLSearchParams(extra);
     if (this.cfg.tenant !== undefined) params.set("tenant", this.cfg.tenant);
     const query = params.size > 0 ? `?${params.toString()}` : "";
-    const url = `${this.cfg.baseUrl}/api/v2.0/companies${query}`;
+    const url = `${this.cfg.baseUrl}/${path}${query}`;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.cfg.timeoutMs ?? 30_000);
     let res: Response;
@@ -354,7 +418,7 @@ export class HarnessVerifier {
         signal: controller.signal,
       });
     } catch (err) {
-      throw new HarnessVerificationError(`companies list unreachable: ${String(err)}`);
+      throw new HarnessVerificationError(`${what} unreachable: ${String(err)}`);
     } finally {
       clearTimeout(timer);
     }
@@ -367,11 +431,11 @@ export class HarnessVerifier {
       }
       if (res.status === 401 || res.status === 403) {
         throw new HarnessAuthError(
-          `companies list failed: HTTP ${res.status}${bodyText ? `: ${bodyText}` : ""} — an authentication failure; the request never reached the API.`,
+          `${what} failed: HTTP ${res.status}${bodyText ? `: ${bodyText}` : ""} — an authentication failure; the request never reached the API.`,
         );
       }
       throw new HarnessVerificationError(
-        `companies list failed: HTTP ${res.status}${bodyText ? `: ${bodyText}` : ""}`,
+        `${what} failed: HTTP ${res.status}${bodyText ? `: ${bodyText}` : ""}`,
       );
     }
     let value: unknown;
@@ -381,19 +445,9 @@ export class HarnessVerifier {
       value = undefined;
     }
     if (!Array.isArray(value)) {
-      throw new HarnessVerificationError("companies list returned no `value` array");
+      throw new HarnessVerificationError(`${what} returned no \`value\` array`);
     }
-    const names: string[] = [];
-    for (const row of value) {
-      const name = (row as { name?: unknown }).name;
-      if (typeof name !== "string") {
-        throw new HarnessVerificationError(
-          `companies list returned a row without a string \`name\`: ${JSON.stringify(row).slice(0, 200)}`,
-        );
-      }
-      names.push(name);
-    }
-    return names;
+    return value;
   }
 
   async verify(): Promise<HarnessDetails> {

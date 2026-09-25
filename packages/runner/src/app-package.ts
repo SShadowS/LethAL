@@ -1,5 +1,7 @@
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
+import { join } from "node:path";
 import { inflateRawSync } from "node:zlib";
+import { compareAppVersions } from "./app-version";
 
 /**
  * Minimal ZIP-central-directory reader for extracting one named entry from a
@@ -289,4 +291,35 @@ export function objectTypeName(objectType: number): string {
     );
   }
   return String(objectType);
+}
+
+/**
+ * Issue #23: the `Runtime` the newest Microsoft `System` symbol package in `cacheDir` declares
+ * (`NavxManifest.xml`, `<App ... Runtime="17.0" />` on BC 28, measured 2026-09-25). That is the
+ * runtime an alc must be at least as new as, or it fails with AL1153. `undefined` when the cache
+ * is absent or holds no System package; a package that is unreadable throws.
+ */
+export async function readSystemRuntime(cacheDir: string): Promise<string | undefined> {
+  let names: string[];
+  try {
+    names = await readdir(cacheDir);
+  } catch {
+    return undefined;
+  }
+  let best: { version: string; runtime: string } | undefined;
+  for (const name of names) {
+    if (!name.toLowerCase().endsWith(".app")) continue;
+    const manifest = readPackageEntry(await readFile(join(cacheDir, name)), "NavxManifest.xml");
+    const app = manifest === null ? null : /<App\s[^>]*>/.exec(manifest.toString("utf8"));
+    if (app === null) continue;
+    const attr = (k: string) => new RegExp(`\\s${k}="([^"]*)"`).exec(app[0])?.[1];
+    const version = attr("Version");
+    const runtime = attr("Runtime");
+    if (attr("Name") !== "System" || attr("Publisher") !== "Microsoft") continue;
+    if (version === undefined || runtime === undefined) continue;
+    if (best === undefined || compareAppVersions(version, best.version) > 0) {
+      best = { version, runtime };
+    }
+  }
+  return best?.runtime;
 }

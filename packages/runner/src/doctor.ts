@@ -143,6 +143,31 @@ export interface DoctorDeps {
    * another tool owns is not LethAL's to do, so there is no threshold here that would be a fault.
    */
   readonly alRunnerCache?: () => Promise<AlRunnerCacheReport>;
+  /**
+   * Issue #23: the alc compiler's own version (its banner) beside the `Runtime` the server's
+   * Microsoft `System` symbol package declares, read from the configured package cache. An alc
+   * older than that runtime fails EVERY compile with AL1153, and `tool-paths` only proves the file
+   * exists. `systemRuntime` is absent when the cache holds no System package yet. Present wherever
+   * `toolPaths` is, and only on a config that names a package cache.
+   */
+  readonly alcRuntime?: () => Promise<{
+    readonly alcPath: string;
+    readonly alcVersion: string;
+    readonly cachePath: string;
+    readonly systemRuntime?: string;
+  }>;
+  /**
+   * Issue #23: whether the test project's app id is INSTALLED on the server
+   * (`HarnessVerifier.fetchExtensionInstalled`). A presence check, not a health check: it says
+   * nothing about whether the published build is current (R56 does that during a run). Present
+   * only when doctor is given `--tests` and the config reaches a live server.
+   */
+  readonly testApp?: () => Promise<{
+    readonly appId: string;
+    readonly name: string;
+    readonly installed: boolean;
+    readonly versions: readonly string[];
+  }>;
 }
 
 /**
@@ -347,6 +372,83 @@ function checkToolPaths(
   };
 }
 
+/** `18.0.41.45789` or `18.0` -> [18, 0]; `undefined` for anything else. */
+function majorMinor(v: string): readonly [number, number] | undefined {
+  const m = /^(\d+)\.(\d+)/.exec(v.trim());
+  return m === null ? undefined : [Number(m[1]), Number(m[2])];
+}
+
+/** Issue #23. Fails only when alc is OLDER than the runtime the server's System symbols need; a
+ *  newer alc compiles for an older runtime. */
+export function checkAlcRuntime(probe: {
+  readonly alcPath: string;
+  readonly alcVersion: string;
+  readonly cachePath: string;
+  readonly systemRuntime?: string;
+}): DoctorCheck {
+  const name = "alc-runtime";
+  const alc = majorMinor(probe.alcVersion);
+  if (alc === undefined) {
+    return {
+      name,
+      ok: false,
+      detail: `could not read a version from alc at ${probe.alcPath} (got ${JSON.stringify(probe.alcVersion)})`,
+    };
+  }
+  if (probe.systemRuntime === undefined) {
+    return {
+      name,
+      ok: true,
+      detail: `alc ${probe.alcVersion}; no Microsoft System symbol package in ${probe.cachePath} yet, so the server's runtime was not compared (a run downloads it; run doctor again after)`,
+    };
+  }
+  const need = majorMinor(probe.systemRuntime);
+  if (need === undefined) {
+    return {
+      name,
+      ok: false,
+      detail: `the System symbol package in ${probe.cachePath} declares an unreadable Runtime ${JSON.stringify(probe.systemRuntime)}`,
+    };
+  }
+  const older = alc[0] < need[0] || (alc[0] === need[0] && alc[1] < need[1]);
+  const alcRt = `${alc[0]}.${alc[1]}`;
+  const needRt = `${need[0]}.${need[1]}`;
+  return older
+    ? {
+        name,
+        ok: false,
+        detail: `server needs runtime ${needRt}, alc at ${probe.alcPath} is ${alcRt} (${probe.alcVersion}); every compile will fail with AL1153. Point bcdev.alcPath at an AL ${need[0]} alc.`,
+      }
+    : {
+        name,
+        ok: true,
+        detail: `alc ${probe.alcVersion} covers the server's runtime ${needRt}`,
+      };
+}
+
+/** Issue #23: the test app is published AND installed. */
+export function checkTestApp(probe: {
+  readonly appId: string;
+  readonly name: string;
+  readonly installed: boolean;
+  readonly versions: readonly string[];
+}): DoctorCheck {
+  const label = `${JSON.stringify(probe.name)} (${probe.appId})`;
+  if (probe.installed) {
+    return {
+      name: "test-app-present",
+      ok: true,
+      detail: `${label} installed: ${probe.versions.join(", ")}`,
+    };
+  }
+  const seen = probe.versions.length === 0 ? "not published" : probe.versions.join(", ");
+  return {
+    name: "test-app-present",
+    ok: false,
+    detail: `${label} is not installed on this server (${seen}). Publish the test app first; a run needs it to execute any test.`,
+  };
+}
+
 /**
  * R146. A straight pass-through of `AlRunnerBackend.status()`, whose `details` already says what was
  * observed on both branches: the version line the binary reported, or the refusal naming what it
@@ -386,6 +488,8 @@ export async function runDoctor(cfg: DoctorConfig, deps: DoctorDeps): Promise<Do
     alRunner,
     alRunnerCache,
     companies,
+    alcRuntime,
+    testApp,
   } = deps;
   const checkPromises: Promise<DoctorCheck>[] = [];
   if (envStatus !== undefined) {
@@ -430,6 +534,12 @@ export async function runDoctor(cfg: DoctorConfig, deps: DoctorDeps): Promise<Do
     checkPromises.push(
       runCheck("tool-paths", async () => checkToolPaths(await toolPaths(), altoolRequired)),
     );
+  }
+  if (alcRuntime !== undefined) {
+    checkPromises.push(runCheck("alc-runtime", async () => checkAlcRuntime(await alcRuntime())));
+  }
+  if (testApp !== undefined) {
+    checkPromises.push(runCheck("test-app-present", async () => checkTestApp(await testApp())));
   }
   if (alRunnerCache !== undefined) {
     // R131 — informational by construction; see `DoctorDeps.alRunnerCache` for why it cannot fail.

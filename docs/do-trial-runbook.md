@@ -81,6 +81,12 @@ part names with single-encoded spaces; BC 28 cannot find them and refuses the pa
 to `~/.continia/alc/17/`) double-encodes and publishes fine. The trigger is a SPACE in a source
 file name — every DO file has one, which is why fixtures and LethAL Control never hit it.
 
+That holds for **BC 28 only**. A BC 29 server's System symbols declare runtime 18, and alc 17
+refuses them with `AL1153: ... runtime reference version '18.0' cannot be loaded by the compiler
+with version '17.0'`. On BC 29 the VS Code extension's alc 18 builds packages the server accepts
+(observed on a hosted BC 29 sandbox, issue #23). `lethal doctor`'s `alc-runtime` check compares
+the two, so run it after changing `alcPath`.
+
 ## Running
 
 ```sh

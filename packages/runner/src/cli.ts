@@ -35,6 +35,7 @@ import {
   runAlRunnerCanary,
 } from "./al-runner-canary";
 import { contractRefusals, contractSummary, runAlRunnerContractProbe } from "./al-runner-contract";
+import { readSystemRuntime } from "./app-package";
 import { compareAppVersions, nextAbove } from "./app-version";
 import { ArtifactCompiler, defaultArtifactIo } from "./artifact";
 import type { BackendStatus, ExecutionBackend } from "./backend";
@@ -80,7 +81,12 @@ import { createProgressRenderer } from "./progress-renderer";
 import { clearPublishCeiling, knownCeiling } from "./publish-ceiling";
 import type { PublishCeiling } from "./publish-ceiling";
 import { canonicalContainerKey } from "./publish-serializer";
-import { ContainerDeployer, defaultAlToolPaths, defaultDeployerIo } from "./publisher";
+import {
+  ContainerDeployer,
+  defaultAlToolPaths,
+  defaultDeployerIo,
+  defaultSpawn,
+} from "./publisher";
 import type { AppPublisher, SpawnFn } from "./publisher";
 import { QuarantineStore } from "./quarantine-store";
 import { renderConsole, writeJsonReport } from "./report";
@@ -539,6 +545,8 @@ export interface DoctorCliConfig {
   readonly mode: "doctor";
   readonly configPath: string;
   readonly projectDir?: string;
+  /** Issue #23: the test project, whose app id the `test-app-present` check looks for. */
+  readonly testsDir?: string;
   /** R151: `--json`. Prints `DoctorJsonOutput` instead of the rendered lines. The exit code is
    *  identical either way — the rendering is what changes, never the verdict. */
   readonly json?: boolean;
@@ -753,7 +761,7 @@ USAGE
   lethal clear-quarantine  --server <url> --instance <name>
   lethal clear-ceiling     --project <dir> (--server <url> --instance <name> | --config <path>) [--db <path>] [--file <name>]
   lethal force-reset-lease --server <url> --instance <name> --config <path> [--project <dir>]
-  lethal doctor            --config <path> [--project <dir>] [--json]
+  lethal doctor            --config <path> [--project <dir>] [--tests <dir>] [--json]
   lethal explain           <report.json> [--top <n>]
   lethal export            <report.json> --format mutation-elements --project <dir> --out <path>
                                          [--thresholds <high,low>]
@@ -885,6 +893,10 @@ DOCTOR — every pre-flight refusal, read-only, all at once (R109)
   --config <path>            lethal.config.json (the bcdev/envTool sections every check reads)
   --project <dir>            optional; only used to satisfy {projectDir} placeholders an
                              envTool.resolve command might reference
+  --tests <dir>              optional; the test project. Adds 'test-app-present': its app id is
+                             installed on the server. 'alc-runtime' runs whenever the config names
+                             a package cache: alc must be at least the runtime the cached System
+                             symbols declare, or every compile fails with AL1153
   Does NOT check: the per-file publish ceiling (needs a generated mutation manifest), baseline
   test health (needs an actual run), or the machine-global lease/op-marker (no read-only peek
   exists on the control app today, R110) — all three are printed as an explicit caveat on every
@@ -1354,6 +1366,7 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
       mode: "doctor",
       configPath,
       ...(project !== undefined && project !== "" ? { projectDir: project } : {}),
+      ...(values.tests !== undefined && values.tests !== "" ? { testsDir: values.tests } : {}),
       ...(values.json === true ? { json: true } : {}),
     };
   }
@@ -3850,6 +3863,10 @@ export async function buildDoctorDeps(
   configFile: LethalConfigFile,
   opts: {
     readonly projectDir?: string;
+    /** Issue #23: the test project; enables `test-app-present`. */
+    readonly testsDir?: string;
+    /** Issue #23: the spawn that reads alc's version banner. Injected by tests. */
+    readonly alcSpawn?: SpawnFn;
     readonly quarantineDir?: string;
     readonly alToolPaths?: typeof defaultAlToolPaths;
     readonly fetchFn?: FetchFn;
@@ -4048,6 +4065,47 @@ export async function buildDoctorDeps(
     return { alc: resolved.alcPath ?? "", altool: resolved.altoolPath ?? "" };
   };
 
+  // Issue #23: alc's banner (`Microsoft (R) AL Compiler version 18.0.41.45789`, printed by `/?`,
+  // which exits 0 and writes nothing) beside the runtime the cached System symbols declare.
+  const cachePath = configFile.bcdev?.packageCachePath;
+  const alcRuntime =
+    cachePath === undefined || cachePath === ""
+      ? undefined
+      : async () => {
+          const { alc } = await toolPaths();
+          if (alc === "") throw new Error("no alc found (see tool-paths)");
+          const out = await (opts.alcSpawn ?? defaultSpawn)([alc, "/?"]);
+          const banner = /AL Compiler version\s+(\S+)/.exec(`${out.stdout}\n${out.stderr}`);
+          const systemRuntime = await readSystemRuntime(cachePath);
+          return {
+            alcPath: alc,
+            alcVersion: banner?.[1] ?? out.stdout.split("\n")[0]?.trim() ?? "",
+            cachePath,
+            ...(systemRuntime !== undefined ? { systemRuntime } : {}),
+          };
+        };
+
+  // Issue #23: the test app's id from its own app.json, looked up read-only on the server.
+  const testsDir = opts.testsDir;
+  const testApp =
+    testsDir === undefined
+      ? undefined
+      : async () => {
+          const manifest = JSON.parse(await readFile(join(testsDir, "app.json"), "utf8")) as {
+            id?: unknown;
+            name?: unknown;
+          };
+          if (typeof manifest.id !== "string" || manifest.id === "") {
+            throw new Error(`${join(testsDir, "app.json")} has no string "id"`);
+          }
+          const found = await (await harnessVerifierFor()).fetchExtensionInstalled(manifest.id);
+          return {
+            appId: manifest.id,
+            name: typeof manifest.name === "string" ? manifest.name : testsDir,
+            ...found,
+          };
+        };
+
   // R131: reads a local directory and adds up sizes. No spawn, no write, no delete — so it is
   // inside doctor's read-only boundary (constraint 4) by construction rather than by promise, and
   // it runs in create mode too, where there is no environment but there is still a disk.
@@ -4072,7 +4130,9 @@ export async function buildDoctorDeps(
     // question that has no answer yet. See `DOCTOR_CREATE_MODE_CAVEAT` and `doctorFromCli` below.
     deps: {
       ...(isCreateMode ? {} : { envStatus, quarantine, companies, controlVersion, lease }),
+      ...(isCreateMode || testApp === undefined ? {} : { testApp }),
       toolPaths,
+      ...(alcRuntime !== undefined ? { alcRuntime } : {}),
       ...(alRunner !== undefined ? { alRunner } : {}),
       alRunnerCache,
     },
@@ -4258,6 +4318,8 @@ export async function doctorFromCli(
     /** R146: the spawn the al-runner `--version` probe uses. Injected by tests; absent means the
      *  real one. */
     readonly alRunnerSpawn?: SpawnFn;
+    /** Issue #23: the spawn that reads alc's version banner. */
+    readonly alcSpawn?: SpawnFn;
   } = {},
 ): Promise<number> {
   const configFile = await loadLethalConfigFile(parsed.configPath);
@@ -4267,6 +4329,8 @@ export async function doctorFromCli(
     caveat,
   } = await buildDoctorDeps(configFile, {
     ...(parsed.projectDir !== undefined ? { projectDir: parsed.projectDir } : {}),
+    ...(parsed.testsDir !== undefined ? { testsDir: parsed.testsDir } : {}),
+    ...(deps.alcSpawn !== undefined ? { alcSpawn: deps.alcSpawn } : {}),
     ...(deps.quarantineDir !== undefined ? { quarantineDir: deps.quarantineDir } : {}),
     ...(deps.alToolPaths !== undefined ? { alToolPaths: deps.alToolPaths } : {}),
     ...(deps.fetchFn !== undefined ? { fetchFn: deps.fetchFn } : {}),
