@@ -31,6 +31,8 @@ import {
 import type { SessionFingerprintInput } from "../src/resume";
 import { ResultsStore } from "../src/store";
 import type { MutantVerdictRow } from "../src/store";
+import { characterize, recording, traceEvents } from "./helpers/characterize";
+import type { Trace } from "./helpers/characterize";
 
 /**
  * R47 — resuming an aborted run.
@@ -1587,5 +1589,58 @@ describe("R89 — a run asked to resume must SAY it resumed", () => {
       selectorIds,
     });
     expect(report.resumedFrom).toBeUndefined();
+  });
+});
+
+/**
+ * C02-04 Part A, Task 1: the resume half of the characterization snapshot (the rest is in
+ * orchestrator.test.ts). This is the only path through the baseline-snapshot reuse, so it is
+ * characterized here with this file's own fakes. `--update-snapshots` is forbidden after the commit
+ * that adds it, until the end of Part A.
+ */
+describe("C02-04 characterization", () => {
+  test("R192: the resumed run reuses batch 1's baseline snapshot", async () => {
+    // From "R192 (second half): a batch with work left is deployed but its baseline is NOT re-run
+    // when nothing it measured changed". Two additions, so the snapshot-hash read shows in the
+    // trace: a test-app app.json (the hash reads it to name the package) and a package reader that
+    // answers `undefined`, which is the "cannot form the request" answer and falls through to the
+    // same source-tree hash the original test uses. Neither changes which hash is compared.
+    const dirs = await makeProject({ secondFile: true });
+    await Bun.write(
+      join(dirs.testDir, "app.json"),
+      JSON.stringify({ name: "Sandbox Tests", publisher: "LethAL", version: "1.0.0.0" }),
+    );
+    const noPackage = { fetchPublishedAppPackage: async () => undefined };
+    const store = new ResultsStore(":memory:");
+    const first = Object.assign(new CountingBackend("pass", undefined, 2), noPackage);
+    const firstReport = await runSession({
+      backend: first,
+      store,
+      ...dirs,
+      selectorIds,
+      maxGuardsPerBatch: 1,
+    });
+    expect(firstReport.quarantined).toBeDefined();
+
+    const trace: Trace = [];
+    const second = Object.assign(new CountingBackend("pass"), noPackage);
+    const report = await runSession({
+      backend: recording(second, trace, "primary"),
+      store,
+      ...dirs,
+      selectorIds,
+      maxGuardsPerBatch: 1,
+      resume: "last",
+      emit: [traceEvents(trace)],
+    }).catch((e: unknown) => e);
+    expect(second.baselineRuns).toBe(0);
+    expect(
+      trace.some(
+        (t) =>
+          (t as { event?: { type?: string; code?: string } }).event?.code ===
+          "resume-baseline-reused",
+      ),
+    ).toBe(true);
+    expect(characterize(trace, store, report)).toMatchSnapshot();
   });
 });

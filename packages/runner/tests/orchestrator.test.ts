@@ -67,6 +67,8 @@ import { isStrandedNote } from "../src/resume";
 import { SessionSafety, SessionUnsafeError } from "../src/session-safety";
 import { StaleTestAppError, runMutantLineCountMessage } from "../src/stale-test-app";
 import { ResultsStore } from "../src/store";
+import { characterize, recording, traceEvents } from "./helpers/characterize";
+import type { Trace } from "./helpers/characterize";
 import { legacyBuildReport } from "./helpers/legacy-report";
 
 const TARGET_AL = `codeunit 79000 "Sandbox Logic"
@@ -8952,5 +8954,429 @@ describe("R206: the warm confirmation and the session guard", () => {
     expect(second.report.warmKills).toBe(1);
     expect(second.report.validity.caveats).toContain("resumed");
     store.close();
+  });
+});
+
+/**
+ * C02-04 Part A, Task 1: a characterization snapshot of runSession's per-batch core, written on the
+ * UNMODIFIED code. Each scenario copies its setup from the named test and snapshots ONE interleaved
+ * trace (every backend call and every event, minus wall-clock fields), the verdict table and the
+ * store rows. From the commit that adds these until the end of Part A, `--update-snapshots` is
+ * forbidden: a diff here means a refactor changed behaviour on the fakes.
+ */
+describe("C02-04 characterization", () => {
+  const withEvents = (trace: Trace) => ({ emit: [traceEvents(trace)] });
+  const settle = <T>(p: Promise<T>) => p.catch((e: unknown) => e);
+  /** FakeLeaseClient only ever `push`es a call name into its log; route each into the trace. */
+  const leaseLogInto = (trace: Trace) =>
+    ({ push: (name: string) => trace.push({ lease: name }) }) as unknown as string[];
+
+  test("1: one batch, sequential", async () => {
+    // From "kill: mutant-active fail + baseline-pass confirmation = killed".
+    const trace: Trace = [];
+    const dirs = await makeProject();
+    const backend = new StubBackend(CAPS_NST, (mutant) => (mutant === null ? "pass" : "fail"), [
+      "IsOverBudget",
+    ]);
+    const store = new ResultsStore(":memory:");
+    const report = await settle(
+      runSession({
+        backend: recording(backend, trace, "primary"),
+        store,
+        ...dirs,
+        selectorIds,
+        ...withEvents(trace),
+      }),
+    );
+    expect(characterize(trace, store, report)).toMatchSnapshot();
+  });
+
+  test("2: two batches", async () => {
+    // From "a refusal in one batch does not relabel another batch's note".
+    const trace: Trace = [];
+    const twoTests = `codeunit 79100 "Sandbox Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure GreenTest()
+    begin
+    end;
+
+    [Test]
+    procedure CoveringTest()
+    begin
+    end;
+}
+`;
+    const dirs = await makeProject(twoTests);
+    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
+    await Bun.write(
+      join(dirs.projectDir, "SandboxExtra.Codeunit.al"),
+      `codeunit 79002 "Sandbox Extra"
+{
+    procedure UnderLimit(Amount: Decimal; Limit: Decimal): Boolean
+    begin
+        exit(Amount < Limit);
+    end;
+}
+`,
+    );
+    const REFUSAL =
+      "Sorry, the current permissions prevented the action. " +
+      "(TableData 79300 Data Main Insert: LethAL Sandbox Data Tests)";
+    let coveringBaselineRuns = 0;
+    const backend = new QualificationBackend((method: string) => {
+      if (method !== "CoveringTest") return { outcome: "pass" as const, procedure: "IsOverBudget" };
+      coveringBaselineRuns++;
+      return coveringBaselineRuns === 1
+        ? {
+            outcome: "error" as const,
+            procedure: "UnderLimit",
+            objectId: 79002,
+            failureMessage: REFUSAL,
+          }
+        : {
+            outcome: "error" as const,
+            procedure: "IsUnderBudget",
+            objectId: 79000,
+            failureMessage: "Assert.AreEqual failed: expected 3, got 4",
+          };
+    });
+    const store = new ResultsStore(":memory:");
+    const report = await settle(
+      runSession({
+        backend: recording(backend, trace, "primary"),
+        store,
+        ...dirs,
+        selectorIds,
+        maxGuardsPerBatch: 1,
+        ...withEvents(trace),
+      }),
+    );
+    expect(characterize(trace, store, report)).toMatchSnapshot();
+  });
+
+  test("3: grouped, chunked", async () => {
+    // From the R198 describe, "chunking with --max-methods-per-call 2".
+    const trace: Trace = [];
+    const script = (mutant: string | null, ref: TestMethodRef): TestVerdict["outcome"] => {
+      if (mutant === null) return "pass";
+      if (mutant === "M0001" && ref.method === "T3") return "fail";
+      if (mutant === "M0002" && ref.method === "T1") return "fail";
+      return "pass";
+    };
+    const backend = new GroupStubBackend(CAPS_NST, script, ["IsOverBudget"]);
+    const dirs = await makeProject(FIVE_TESTS_AL);
+    const store = new ResultsStore(":memory:");
+    const report = await settle(
+      runSession({
+        backend: recording(backend, trace, "primary"),
+        store,
+        ...dirs,
+        selectorIds,
+        groupRuns: { maxMethodsPerCall: 2 },
+        ...withEvents(trace),
+      }),
+    );
+    expect(characterize(trace, store, report)).toMatchSnapshot();
+  });
+
+  test("4: warm kills", async () => {
+    // From the R206 describe, "the group path kills a warm-only mutant at killPosition 2".
+    const trace: Trace = [];
+    const backend: WarmStubBackend = new WarmStubBackend(
+      CAPS_NST,
+      (mutant, ref) => {
+        if (ref.method === "T1") backend.session.set("cache", "populated-by-T1");
+        if (mutant === "M0002" && ref.method === "T2" && backend.session.get("cache") !== undefined)
+          return "fail";
+        if (mutant === "M0001" && ref.method === "T1") return "fail";
+        return "pass";
+      },
+      ["IsOverBudget"],
+    );
+    backend.failureMessageFor = (mutant, ref) =>
+      `stale cache assertion in ${ref.method} under ${mutant}`;
+    const dirs = await makeProject(FIVE_TESTS_AL);
+    const store = new ResultsStore(":memory:");
+    const report = await settle(
+      runSession({
+        backend: recording(backend, trace, "primary"),
+        store,
+        ...dirs,
+        selectorIds,
+        ...withEvents(trace),
+      }),
+    );
+    expect(characterize(trace, store, report)).toMatchSnapshot();
+  });
+
+  test("5: strand mid-batch", async () => {
+    // From "a stranded mutant records cause `stranded`".
+    const trace: Trace = [];
+    const store = new ResultsStore(":memory:");
+    const report = await settle(
+      runSessionForTest(recording(strandsOnBackend("M0007"), trace, "primary"), {
+        store,
+        quarantineDir: freshTmpDir(),
+        nowIso: () => "2026-07-20T12:00:00.000Z",
+        ...withEvents(trace),
+      }),
+    );
+    expect(characterize(trace, store, report)).toMatchSnapshot();
+  });
+
+  test("6: section G unattested", async () => {
+    // From "covered artifact that never attests cleanly -> verdicts invalidated + quarantined".
+    const trace: Trace = [];
+    const store = new ResultsStore(":memory:");
+    const report = await settle(
+      runSessionForTest(
+        recording(
+          attestingBackend({ observedAny: false, identityMismatch: false }),
+          trace,
+          "primary",
+        ),
+        { store, quarantineDir: freshTmpDir(), ...withEvents(trace) },
+      ),
+    );
+    expect(characterize(trace, store, report)).toMatchSnapshot();
+  });
+
+  test("7: lease lost mid-batch", async () => {
+    // From "a genuine RunMutant lease-lost invalidates the CURRENT batch's already-recorded verdicts".
+    const trace: Trace = [];
+    const client = new FakeLeaseClient(leaseLogInto(trace));
+    const { lease } = leaseCfg(client);
+    let activeMutant: string | null = null;
+    const backend = leaseBackend({
+      activate: async (id) => {
+        activeMutant = id;
+      },
+      run: async (ref) => {
+        if (activeMutant === "M0002") {
+          return {
+            ref,
+            outcome: "error" as const,
+            durationMs: 1,
+            operation: "lease-lost",
+            leaseInvalidReason: "lease-invalid",
+          };
+        }
+        return {
+          ref,
+          outcome: "pass" as const,
+          durationMs: 1,
+          attestation: { observedAny: true, identityMismatch: false },
+        };
+      },
+    });
+    const store = new ResultsStore(":memory:");
+    const report = await settle(
+      runSessionForTest(recording(backend, trace, "primary"), {
+        store,
+        quarantineDir: freshTmpDir(),
+        lease,
+        ...withEvents(trace),
+      }),
+    );
+    expect(characterize(trace, store, report)).toMatchSnapshot();
+  });
+
+  test("8: R194 rule 2b", async () => {
+    // From "rule 2b: never claimed -> ONE fresh attempt, whose real verdict is recorded; no quarantine".
+    const trace: Trace = [];
+    const ATTESTED = { observedAny: true, identityMismatch: false };
+    const LOST_ANSWER: Partial<TestVerdict> = {
+      outcome: "error",
+      failureMessage:
+        "RunMutant connection failed after dispatch: Error: The socket connection was closed unexpectedly",
+      operation: "in-flight-unknown",
+      fencedOp: { attemptId: "a10", opSeq: 304 },
+    };
+    const client = new FakeLeaseClient(leaseLogInto(trace));
+    client.reconcileStatus = (_attemptId: string, opSeq: number): OperationStatus => ({
+      opKind: "none",
+      opAttemptId: "",
+      opSeq: 0,
+      lastCompletedOpSeq: opSeq - 1,
+      completed: false,
+    });
+    client.statusQueue = [
+      { opKind: "none", opAttemptId: "", opSeq: 0, lastCompletedOpSeq: 303, completed: false },
+    ];
+    const { lease } = leaseCfg(client);
+    const answers: readonly Partial<TestVerdict>[] = [
+      LOST_ANSWER,
+      { outcome: "pass", attestation: ATTESTED },
+    ];
+    let activeMutant: string | null = null;
+    let issued = 0;
+    const backend = leaseBackend({
+      activate: async (id) => {
+        activeMutant = id;
+      },
+      run: async (ref) => {
+        if (activeMutant === "M0002") {
+          const answer = answers[Math.min(issued, answers.length - 1)] ?? LOST_ANSWER;
+          issued++;
+          return { ref, outcome: "error" as const, durationMs: 1, ...answer };
+        }
+        return { ref, outcome: "pass" as const, durationMs: 1, attestation: ATTESTED };
+      },
+    });
+    const store = new ResultsStore(":memory:");
+    const report = await settle(
+      runSessionForTest(recording(backend, trace, "primary"), {
+        store,
+        quarantineDir: freshTmpDir(),
+        lease,
+        ...withEvents(trace),
+      }),
+    );
+    expect(characterize(trace, store, report)).toMatchSnapshot();
+  });
+
+  test("9: no green baseline", async () => {
+    // From "every mutant's note carries the baseline's own failure message" (R100).
+    const trace: Trace = [];
+    const dirs = await makeProject();
+    const backend = new StubBackend(CAPS_NST, () => "fail", ["IsOverBudget"]);
+    backend.failureMessageFor = () =>
+      "BC runtime apps are not available as R2R packages. Resolve with: al-runner provision";
+    const store = new ResultsStore(":memory:");
+    const report = await settle(
+      runSession({
+        backend: recording(backend, trace, "primary"),
+        store,
+        ...dirs,
+        selectorIds,
+        ...withEvents(trace),
+      }),
+    );
+    expect(characterize(trace, store, report)).toMatchSnapshot();
+  });
+
+  test("10: stale test app", async () => {
+    // From the R139 describe, "refuses the run, names the test, and measures nothing".
+    const trace: Trace = [];
+    const dirs = await makeProject(TWO_TEST_AL);
+    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
+    const backend = new QualificationBackend((method: string) =>
+      method === "UnsupportedTest"
+        ? {
+            outcome: "error" as const,
+            procedure: "IsUnderBudget",
+            failureMessage: runMutantLineCountMessage(
+              0,
+              "expected exactly one method UnsupportedTest, found 0",
+            ),
+          }
+        : { outcome: "pass" as const, procedure: "IsOverBudget" },
+    );
+    const store = new ResultsStore(":memory:");
+    const outcome = await settle(
+      runSession({
+        backend: recording(backend, trace, "primary"),
+        store,
+        ...dirs,
+        selectorIds,
+        ...withEvents(trace),
+      }),
+    );
+    expect(outcome).toBeInstanceOf(StaleTestAppError);
+    expect(characterize(trace, store, outcome)).toMatchSnapshot();
+  });
+
+  test("11: parallel workers", async () => {
+    // From "verdicts are identical at 1, 2 and 4 workers", at workers: 2.
+    const trace: Trace = [];
+    const make = () =>
+      new StubBackend(CAPS_NST_WORKERS, (mutant) => (mutant === null ? "pass" : "fail"), [
+        "IsOverBudget",
+      ]);
+    const dirs = await makeProject();
+    const store = new ResultsStore(":memory:");
+    const report = await settle(
+      runSession({
+        backend: recording(make(), trace, "primary"),
+        backendFactory: (i) => recording(make(), trace, `worker${i}`),
+        store,
+        ...dirs,
+        selectorIds,
+        workers: 2,
+        ...withEvents(trace),
+      }),
+    );
+    expect(characterize(trace, store, report)).toMatchSnapshot();
+  });
+
+  test("12: baseline in-flight", async () => {
+    // From "a BASELINE test returning in-flight-unknown records a durable quarantine and
+    // quarantines the session before any mutant is scheduled".
+    const trace: Trace = [];
+    const backend = fakeBackend({
+      capabilities: () => ({
+        coverage: "none",
+        deploy: "publish",
+        isolation: "session",
+        authoritative: true,
+      }),
+      run: async (ref) => ({
+        ref,
+        outcome: "deadline-exceeded",
+        durationMs: 1,
+        operation: "in-flight-unknown",
+      }),
+    });
+    const store = new ResultsStore(":memory:");
+    const report = await settle(
+      runSessionForTest(recording(backend, trace, "primary"), {
+        store,
+        quarantineDir: freshTmpDir(),
+        nowIso: () => "2026-07-20T12:00:00.000Z",
+        ...withEvents(trace),
+      }),
+    );
+    expect(characterize(trace, store, report)).toMatchSnapshot();
+  });
+
+  test("13: baseline pre-dispatch retry", async () => {
+    // From "a pre-dispatch-rejected baseline run resyncs the op seq before its one retry". The
+    // original also pushed `run<n>` into the lease log; the recording wrapper traces runs itself.
+    const trace: Trace = [];
+    const client = new FakeLeaseClient(leaseLogInto(trace));
+    let runs = 0;
+    const backend = leaseBackend({
+      run: async (ref) => {
+        runs++;
+        if (runs === 1) {
+          return {
+            ref,
+            outcome: "error" as const,
+            durationMs: 1,
+            operation: "pre-dispatch-rejected" as const,
+          };
+        }
+        return {
+          ref,
+          outcome: "pass" as const,
+          durationMs: 1,
+          attestation: { observedAny: true, identityMismatch: false },
+        };
+      },
+    });
+    const { lease } = leaseCfg(client);
+    const store = new ResultsStore(":memory:");
+    const report = await settle(
+      runSessionForTest(recording(backend, trace, "primary"), {
+        store,
+        quarantineDir: freshTmpDir(),
+        lease,
+        ...withEvents(trace),
+      }),
+    );
+    expect(characterize(trace, store, report)).toMatchSnapshot();
   });
 });
