@@ -57,7 +57,7 @@ CentralGauge's lanes and the other way round.
 
 ## Launch contract
 
-- Approvals: the orchestrator plus GPT-5.6 Sol via `pi_ask` (`gpt-5.6-sol`, `require_evidence`
+- Approvals: the orchestrator plus GPT-6 Sol via `pi_ask` (`gpt-6-sol`, `require_evidence`
   on, frozen `git show <sha>:<path>` copies under `H:\lethal-coord\reviews\`), at most 2 rounds.
   `gpt-6-astra` only for the c02 epic's plan. Unresolved after 2 rounds: `coord ask`.
 - Authorized: lane commits on its branch; orchestrator merges to `master`, pushes to `origin`,
