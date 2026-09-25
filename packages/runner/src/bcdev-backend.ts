@@ -571,6 +571,23 @@ export class BcDevMcpBackend implements ExecutionBackend {
     return staging;
   }
 
+  // Must happen before publish(): resolves this batch's coverage methodIds ahead of any run()
+  // call, from the exact artifact that produced them. R58: same timing and the same two inputs
+  // as the hub's own indexes, the artifact that was just compiled, and the source it was compiled
+  // from, because a line number only means anything in the frame of the bytes that were
+  // published. `instrumentedDir`, not `staged`: `staged` differs from it only in `app.json` (the
+  // control dependency injection) and has already been deleted by the time this runs.
+  private async indexArtifact(appPath: string, instrumentedDir: string): Promise<void> {
+    this.methodIndex = await AppMethodIndex.fromAppFile(appPath);
+    if ((this.cfg.coverageMode ?? DEFAULT_COVERAGE_MODE) === "fenced") {
+      this.lineMap = await buildLineMap(instrumentedDir, this.methodIndex.declaredObjects());
+      this.coverageObjectIdFilter = await coverageObjectIdFilterOf(instrumentedDir);
+    } else {
+      this.lineMap = undefined;
+      this.coverageObjectIdFilter = undefined;
+    }
+  }
+
   async deploy(instrumentedDir: string): Promise<CompiledArtifact> {
     const deployment = this.deployment;
     if (!deployment) throw new Error("BcDevMcpBackend: no compiler/deployer/verifier configured");
@@ -597,21 +614,8 @@ export class BcDevMcpBackend implements ExecutionBackend {
         () => {},
       );
     }
-    // Must happen before publish(): resolves this batch's coverage methodIds ahead of any
-    // run() call, from the exact artifact that produced them.
-    this.methodIndex = await AppMethodIndex.fromAppFile(artifact.appPath);
-    // R58: same timing and the same two inputs as the hub's own indexes — the artifact that was
-    // just compiled, and the source it was compiled from — because a line number only means
-    // anything in the frame of the bytes that were published. `instrumentedDir`, not `staged`:
-    // `staged` differs from it only in `app.json` (the control dependency injection) and has
-    // already been deleted above.
-    if ((this.cfg.coverageMode ?? DEFAULT_COVERAGE_MODE) === "fenced") {
-      this.lineMap = await buildLineMap(instrumentedDir, this.methodIndex.declaredObjects());
-      this.coverageObjectIdFilter = await coverageObjectIdFilterOf(instrumentedDir);
-    } else {
-      this.lineMap = undefined;
-      this.coverageObjectIdFilter = undefined;
-    }
+    // See `indexArtifact`'s doc comment: must happen before publish().
+    await this.indexArtifact(artifact.appPath, instrumentedDir);
 
     let publishOk = true;
     let publishError: string | undefined;
