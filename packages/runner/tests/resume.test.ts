@@ -1483,7 +1483,7 @@ describe("runSession --resume (R47)", () => {
 
   test("C02-02: report.artifacts carries the COMPILED appVersion, not the reserved one", async () => {
     // CountingBackend's opt-in artifact always reports "1.0.0.0" (a fixed stand-in for what a
-    // real backend compiled), while this project's own app.json is ALSO "1.0.0.0" — so the
+    // real backend compiled), while this project's own app.json is ALSO "1.0.0.0", so the
     // orchestrator's reserved version (major.minor from app.json, build.revision clock-derived,
     // see reserveAppVersion) can never equal it: the third component is a day count since the
     // Unix epoch, which is never 0 for a real clock. That gap is what makes this fixture able to

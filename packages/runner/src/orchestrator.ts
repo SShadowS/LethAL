@@ -3777,7 +3777,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           elapsedMs: deployElapsedMs,
           appVersion,
           // C02-02: this batch's own identity, mirroring the 3d recordArtifact guard above.
-          // All three fields together, only when this backend actually compiled an artifact —
+          // All three fields together, only when this backend actually compiled an artifact.
           // appVersion here OVERRIDES the plain key above with the version actually compiled
           // (matching what recordArtifact just wrote to the store), since the orchestrator's own
           // reserved `appVersion` can differ from what the backend reports back as compiled.

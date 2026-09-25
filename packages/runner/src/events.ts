@@ -174,7 +174,7 @@ export type RunEventInput =
        *  orchestrator's own reserved version when the backend compiled nothing (`compiled ===
        *  null`, e.g. a `deploy: "none"` backend); C02-02: overridden with the COMPILED artifact's
        *  own `appVersion` whenever one exists, so this always agrees with `store.ts`'s
-       *  `batch_artifacts.app_version`, which `recordArtifact` writes from that same value — the
+       *  `batch_artifacts.app_version`, which `recordArtifact` writes from that same value: the
        *  two can differ when a backend mutates or re-stamps the version it actually publishes. */
       readonly appVersion?: string;
       /** C02-02: this batch's own artifact identity (`store.ts`'s `BatchArtifact`), not just the
