@@ -1,6 +1,6 @@
 # Join the LethAL autonomous run
 
-Work out which of the two sessions you are, then start it. Runbook:
+Work out which of the three sessions you are, then start it. Runbook:
 `docs/superpowers/runbooks/autonomy/`.
 
 ## 1. Your role comes from your directory
@@ -11,6 +11,7 @@ Run `git rev-parse --show-toplevel`:
 | --- | --- | --- |
 | `U:/Git/LethAL` | `lethal-orchestrator` | `orchestrator.md` |
 | `U:/Git/LethAL-wt/lane-code` | `lethal-code` | `lane.md` |
+| `U:/Git/LethAL-wt/lane-bugs` | `lethal-bugs` | `lane.md` |
 
 Anything else: say this directory has no role and stop.
 
@@ -32,6 +33,6 @@ Wait for confirmation, then check `ListAgents` shows the new name.
 
 - `lethal-orchestrator`: read `orchestrator.md` and tell the user to start the loop with
   `/loop You are lethal-orchestrator. Follow docs/superpowers/runbooks/autonomy/orchestrator.md: run its start procedure if you have not done so in this session, then do one sweep.`
-- `lethal-code`: read `lane.md` and follow its "On every start" section.
+- `lethal-code` or `lethal-bugs`: read `lane.md` and follow its "On every start" section.
 
-Report whether the other role is live, and its directory if not.
+Report which of the other roles are live, and the directory of each that is not.

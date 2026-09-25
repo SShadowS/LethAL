@@ -8,8 +8,8 @@ You coordinate LethAL's autonomous run. You write plans, `task.md` files, decisi
 1. Read `README.md` in this folder, then this file, then the repo's `CLAUDE.md`.
 2. `coord doctor`; any issue you cannot fix yourself (abandon a crashed claim): `coord ask`.
 3. Read `H:\lethal-coord\handoff\lethal-orchestrator.md` if it exists.
-4. `ListAgents`. If `lethal-code` is live, send it: `protocol: re-read
-   docs/superpowers/runbooks/autonomy/README.md and lane.md, then coord status --lane code`.
+4. `ListAgents`. To each live lane (`lethal-code`, lane `code`; `lethal-bugs`, lane `bugs`) send:
+   `protocol: re-read docs/superpowers/runbooks/autonomy/README.md and lane.md, then coord status --lane <lane>`.
 5. `coord overview`.
 
 ## Loop (run under /loop, self-paced)
@@ -18,9 +18,11 @@ You coordinate LethAL's autonomous run. You write plans, `task.md` files, decisi
    sweep again in 30 minutes, do nothing else. Not paused but a run shows `wait: paused` ->
    send `resume: continue from your handoff`.
 1. Doorbell messages first: submitted tasks go to review.
-2. Lane idle and `coord next code` non-empty: pick by priority (c02 children in dependency
-   order first, then the bugs: GH-25, GH-24, GH-09, GH-07, then GH-06, GH-04) and send
-   `next: <id>`. Before sending it, write the task's plan with the `writing-plans` skill to
+2. For each lane that is idle with `coord next <lane>` non-empty, pick by priority and send
+   `next: <id>`. Lane `code` (`lethal-code`): c02 children in dependency order. Lane `bugs`
+   (`lethal-bugs`): GH-25, GH-24, GH-09, GH-07, then GH-06, GH-04. A bug whose plan would touch
+   the same files as the c02 task in flight waits, or moves to lane `code` by editing its
+   `task.md` `lane`. Before sending it, write the task's plan with the `writing-plans` skill to
    `docs/superpowers/plans/<YYYY-MM-DD>-<id>-<slug>.md` (the task id in the name is how the
    lane finds it), review it with `gpt-6-sol`, commit it to `master`.
 3. `coord stale`: message the lane once; a dead session with a live claim -> `coord abandon`
@@ -39,7 +41,7 @@ You coordinate LethAL's autonomous run. You write plans, `task.md` files, decisi
    `bun run compile:fixtures` when fixtures changed. Live gates: ask the owner; never yourself.
 4. Commit the merge, `git push origin master`, `coord accept <id> <run> <sha>`, close the issue
    (`gh issue close <n> -R SShadowS/LethAL --comment "Done in <sha>"`), message the lane
-   `accepted <id>` and `master moved to <sha>: merge it`.
+   `accepted <id>` and `master moved to <sha>: merge it`; tell the other lane `master moved to <sha>` too.
 5. Rejected: `coord reject` with a reason file in the review folder, message the lane.
 
 ## Context hygiene
