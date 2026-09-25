@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**29 of 232 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**30 of 233 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -94,7 +94,8 @@ that ordering is the priority.
 - **R230** · A TWIN mutant after the first cannot be reader-marked: `parseEquivalenceMarks` requires 5 key fields, and `serializeKey` writes 6 for an ordinal above 0 · [R230.md](docs/roadmap/R230.md) · open
 - **R231** · Report lists that name mutants by `mutantCode` alone are ambiguous on a multi-batch run: ids restart at M0001 in every batch · [R231.md](docs/roadmap/R231.md) · open
 - **R232** · `afterLeaseAcquired` runs BEFORE the lease's `try`, so a test-app publish that throws leaves the lease held for its full ttl · [R232.md](docs/roadmap/R232.md) · open
-- **R234** · `--changed-since` misses edits in files marked `assume-unchanged` or `skip-worktree`, so their changed lines get no mutants · [R234.md](docs/roadmap/R234.md) · open
+- **R234** · An operator that STOPS emitting a twin shifts later twins' identity ordinals, so `--resume` across that build change can carry one mutant's verdict onto another · [R234.md](docs/roadmap/R234.md) · open
+- **R235** · `--changed-since` misses edits in files marked `assume-unchanged` or `skip-worktree`, so their changed lines get no mutants · [R235.md](docs/roadmap/R235.md) · open
 
 ## Product gaps a real project hits
 
