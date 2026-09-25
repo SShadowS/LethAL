@@ -6015,7 +6015,7 @@ export async function prepareBatchProject(
   // al-runner v2.11.0 will not compile a root-level `.al` together with one in a subdirectory of
   // the same bundle, measured with a three-file probe. `alc` compiles that tree fine. When the
   // upstream limitation goes, the flattening and this second copy go with it.
-  const rebased = new Map<string, string>();
+  const rebased = new Map<string, { readonly tail: string; readonly owners: string[] }>();
   for (const entry of entries) {
     if (!entry.isFile()) continue;
     const rel = relative(projectDir, join(entry.parentPath, entry.name));
@@ -6032,22 +6032,31 @@ export async function prepareBatchProject(
     const owner = nearestAlDir(alDirs, rel);
     if (owner === undefined || owner === ".") continue;
     const tail = relative(owner, rel);
-    const rebasedDest = join(batchDir, tail);
-    if (rebasedDest === dest) continue;
+    if (join(batchDir, tail) === dest) continue;
+    const key = tail.toLowerCase();
+    const group = rebased.get(key) ?? { tail, owners: [] };
+    group.owners.push(rel);
+    rebased.set(key, group);
+  }
 
-    // Two AL directories can own same-named resource trees, and flattening makes their rebased
-    // copies collide. Refused loudly rather than letting one silently win, the same way the `.al`
-    // basename collision above is refused: a wrong asset is a compile error at best and a wrong
-    // published add-in at worst.
-    const previous = rebased.get(rebasedDest.toLowerCase());
-    if (previous !== undefined && previous !== rel) {
-      throw new Error(
-        `cannot build the batch project: "${previous}" and "${rel}" both rebase onto "${tail}". Instrumented AL files are written flat, so a resource named relative to an AL file must sit at the batch root, and these two would overwrite each other. Rename one of the directories.`,
+  // Issue #20: two AL directories can own same-named resource trees, and flattening makes their
+  // rebased copies collide. Such a tail gets NO rebased copy, for every owner, rather than letting
+  // one silently win. That is not a refusal because a real project (Continia Document Output)
+  // names these assets relative to the PROJECT root, which the structure-preserving copy above
+  // already serves. If one really is named relative to its AL file, `alc` reports AL0327 naming
+  // the file, which is still loud.
+  for (const { tail, owners } of rebased.values()) {
+    if (owners.length > 1) {
+      console.warn(
+        `batch project: ${owners.map((o) => `"${o}"`).join(", ")} all rebase onto "${tail}", so none is copied there. A controladdin naming "${tail}" relative to its own .al file will fail to compile (AL0327); name it relative to the project root instead.`,
       );
+      continue;
     }
-    rebased.set(rebasedDest.toLowerCase(), rel);
+    const [only] = owners;
+    if (only === undefined) continue;
+    const rebasedDest = join(batchDir, tail);
     await mkdir(dirname(rebasedDest), { recursive: true });
-    await copyFile(join(projectDir, rel), rebasedDest);
+    await copyFile(join(projectDir, only), rebasedDest);
   }
 }
 

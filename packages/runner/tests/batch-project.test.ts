@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -117,10 +117,12 @@ describe("prepareBatchProject — non-AL resources", () => {
   });
 
   /**
-   * Flattening can make two resource trees collide once they are rebased. Refused loudly rather
-   * than letting one silently overwrite the other, which would publish a wrong add-in.
+   * Issue #20: flattening can make two resource trees collide once they are rebased. Neither owner
+   * gets a rebased copy, so neither silently wins, and the run is NOT refused: a real project names
+   * these assets relative to the project root, which the structure-preserving copy serves. A
+   * non-colliding sibling is still rebased.
    */
-  it("refuses two resources that rebase onto the same path", async () => {
+  it("skips the rebased copy for every owner of a colliding tail, and warns", async () => {
     await withDirs(async (projectDir, batchDir) => {
       await write(projectDir, "app.json", JSON.stringify(manifest));
       // Distinct basenames: same-named .al files trip the flattening guard first, and this test
@@ -129,15 +131,21 @@ describe("prepareBatchProject — non-AL resources", () => {
       await write(projectDir, "src/B/BThing.Codeunit.al", "codeunit 2 B { }");
       await write(projectDir, "src/A/Assets/x.js", "// A");
       await write(projectDir, "src/B/Assets/x.js", "// B");
+      await write(projectDir, "src/B/Assets/only-b.js", "// only B");
 
-      const err = await prepareBatchProject(projectDir, batchDir, { ...manifest }, "1.0.2.0").then(
-        () => undefined,
-        (e: unknown) => e,
-      );
+      const warn = spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        await prepareBatchProject(projectDir, batchDir, { ...manifest }, "1.0.2.0");
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(String(warn.mock.calls[0]?.[0])).toContain(join("Assets", "x.js"));
+      } finally {
+        warn.mockRestore();
+      }
 
-      expect(err).toBeInstanceOf(Error);
-      const message = err instanceof Error ? err.message : "";
-      expect(message).toContain(join("Assets", "x.js"));
+      expect(await exists(join(batchDir, "Assets/x.js"))).toBe(false);
+      expect(await exists(join(batchDir, "src/A/Assets/x.js"))).toBe(true);
+      expect(await exists(join(batchDir, "src/B/Assets/x.js"))).toBe(true);
+      expect(await exists(join(batchDir, "Assets/only-b.js"))).toBe(true);
     });
   });
 
