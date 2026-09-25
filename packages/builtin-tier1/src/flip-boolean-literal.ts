@@ -285,10 +285,11 @@ const LOOP_STATEMENTS: ReadonlySet<string> = new Set([
  * wearing brackets. A literal NESTED in a compound condition is NOT refused: `until Done or false`
  * flips to `until Done or true`, and `while Go and true` flips to `while Go and false`, both of
  * which still terminate. Measured 0 sites of either shape across 725 `repeat` loops on both
- * reference corpora, so this is about being exact rather than about a count. The OTHER polarity of
- * a nested literal (`until Done and false` -> `until Done and true`, `while X or false` ->
- * `while X or true`) can hang and is not handled here: recorded as a known gap (Decision 4 of the
- * GH-07 plan) and left for a separate roadmap item, not fixed in this change.
+ * reference corpora; the `while` forms were checked only by grep over `fixtures/` and `examples/`,
+ * not counted in that corpus pass, so this is about being exact rather than about a count. The
+ * OTHER polarity of a nested literal (`until Done and false` -> `until Done and true`, `while X or
+ * false` -> `while X or true`) can hang and is not handled here: recorded as a known gap, filed as
+ * [[R239]], not fixed in this change.
  *
  * Spans are compared by POSITION, never by node identity, for the reason recorded in [[R209]]: the
  * AST wrappers are rebuilt on access, so reference equality is not reliable.

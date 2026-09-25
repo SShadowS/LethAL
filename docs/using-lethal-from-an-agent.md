@@ -232,7 +232,7 @@ Stated so a consumer does not read an absence as a finding.
 
 ### Which mutants can fail to terminate
 
-Three shapes have been found and two were fixed by giving the same question a form that cannot hang.
+Six shapes have been found and three were fixed by giving the same question a form that cannot hang.
 What remains is small and named, so a stranded run is diagnosable rather than mysterious.
 
 **Fixed, and listed so an older report reads correctly:**
