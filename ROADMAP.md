@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**32 of 236 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**33 of 237 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -95,6 +95,7 @@ that ordering is the priority.
 - **R231** · Report lists that name mutants by `mutantCode` alone are ambiguous on a multi-batch run: ids restart at M0001 in every batch · [R231.md](docs/roadmap/R231.md) · open
 - **R232** · `afterLeaseAcquired` runs BEFORE the lease's `try`, so a test-app publish that throws leaves the lease held for its full ttl · [R232.md](docs/roadmap/R232.md) · done (e431fdb)
 - **R234** · An operator that STOPS emitting a twin shifts later twins' identity ordinals, so `--resume` across that build change can carry one mutant's verdict onto another · [R234.md](docs/roadmap/R234.md) · open
+- **R240** · A target publish that latched the session while `publish()` returned normally is still recorded as an ACCEPTED publish in the publish-size history, and with `--resume` one unguarded package read can run first · [R240.md](docs/roadmap/R240.md) · open
 - **R238** · A session that THROWS after recording a recycle still deletes its created environment, because teardown reads `quarantined` from a report that does not exist · [R238.md](docs/roadmap/R238.md) · open
 
 ## Product gaps a real project hits
