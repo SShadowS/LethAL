@@ -589,8 +589,11 @@ export class AlRunnerBackend implements ExecutionBackend {
    * MEASURED BY LETHAL, against a real BC container on the same fixture (2026-08-28, al-runner
    * 2.7.0.0, `docs/superpowers/specs/2026-08-28-alrunner-bc-parity-probe.md`):
    *
-   * - `coverage: "none"`. No per-procedure coverage, so nothing here can narrow which tests matter
-   *   and every mutant runs against every green test. This is the big one for cost, not fidelity.
+   * - `coverage: "none"` — NO LONGER TRUE since R220 (2026-09-09): `cfg.coverage: "al-runner"`
+   *   reads al-runner's own per-test `--coverage`. What keeps `authoritative` false on this point
+   *   is that the coverage is CONDITIONAL: a file declaring more than one object disables it for
+   *   the whole run (upstream #3713), so it is a property of the project's layout, not a
+   *   capability of the backend.
    * - **`Codeunit.Run` does not scope a write transaction.** `remove-commit` at
    *   `Data Commit Ops.CommitThenRunValueForm` is killed on bcdev and survives here, and a direct
    *   probe confirms the mechanism: a row inserted inside `Codeunit.Run` survives the error that
