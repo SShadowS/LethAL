@@ -9144,6 +9144,71 @@ describe("C02-04 characterization", () => {
     expect(characterize(trace, store, report)).toMatchSnapshot();
   });
 
+  test("6b: section G unattested, two batches whose deploys return fixed artifact ids", async () => {
+    // Scenario 6's backend, with two changes so the section G note's artifact id is characterized
+    // (every other fake deploy returns null, which the note prints as "unknown"): a deploy that
+    // returns a real-shaped CompiledArtifact (modelled on PhaseBackend.compileArtifact) with a FIXED
+    // id per deploy, and a second carrier file with `maxGuardsPerBatch: 1`, as in scenario 2.
+    // Batches run in filename order: batch 0 is SandboxExtra (79002), which attestingBackend's
+    // coverage never names, so it is uncovered and the gate cannot fire there; batch 1 is
+    // SandboxLogic, whose unattested runs trip the gate. Its note must carry batch 1's id.
+    const trace: Trace = [];
+    const fixedIds = ["1a".repeat(16), "2b".repeat(16)];
+    let deploys = 0;
+    const base = attestingBackend({ observedAny: false, identityMismatch: false });
+    const backend: ExecutionBackend = {
+      ...base,
+      deploy: async (dir) => {
+        const artifactId = fixedIds[deploys++];
+        if (artifactId === undefined) throw new Error("6b: more deploys than fixed ids");
+        const appManifest = JSON.parse(await readFile(join(dir, "app.json"), "utf8")) as {
+          id: string;
+          version: string;
+        };
+        const mutantManifest = JSON.parse(
+          await readFile(join(dir, "mutant-manifest.json"), "utf8"),
+        ) as CompiledArtifact["mutantManifest"];
+        return {
+          artifactId,
+          appId: appManifest.id,
+          appVersion: appManifest.version,
+          appPath: join(dir, "characterize-fake.app"),
+          sha256: Bun.SHA256.hash(new TextEncoder().encode(artifactId), "hex"),
+          mutantManifest,
+          appManifest: appManifest as unknown as Record<string, unknown>,
+        };
+      },
+    };
+    const dirs = await makeProject();
+    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), THREE_PROC_AL);
+    await Bun.write(
+      join(dirs.projectDir, "SandboxExtra.Codeunit.al"),
+      `codeunit 79002 "Sandbox Extra"
+{
+    procedure UnderLimit(Amount: Decimal; Limit: Decimal): Boolean
+    begin
+        exit(Amount < Limit);
+    end;
+}
+`,
+    );
+    const store = new ResultsStore(":memory:");
+    const report = await settle(
+      runSession({
+        backend: recording(backend, trace, "primary"),
+        store,
+        ...dirs,
+        selectorIds,
+        resourceServer: "http://cronus281",
+        resourceServerInstance: "BC",
+        quarantineDir: freshTmpDir(),
+        maxGuardsPerBatch: 1,
+        ...withEvents(trace),
+      }),
+    );
+    expect(characterize(trace, store, report)).toMatchSnapshot();
+  });
+
   test("7: lease lost mid-batch", async () => {
     // From "a genuine RunMutant lease-lost invalidates the CURRENT batch's already-recorded verdicts".
     const trace: Trace = [];

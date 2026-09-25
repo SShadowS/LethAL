@@ -363,7 +363,7 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
         ],
         "fromRunId": 1,
         "mutant": {
-          "astHash": "<id32><id32>",
+          "astHash": "7e1eda20374f755671af0b4b422934c280ca0c487f0ea6289475cbfb3fcc3596",
           "codeunitId": 79002,
           "codeunitName": "Sandbox Extra",
           "endIndex": 147,
@@ -398,7 +398,7 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
         ],
         "fromRunId": 1,
         "mutant": {
-          "astHash": "<id32><id32>",
+          "astHash": "650357e7d6f68774520e84855ebe30b09c1085cbd72161c749a6e64c8a220891",
           "codeunitId": 79002,
           "codeunitName": "Sandbox Extra",
           "endIndex": 138,
@@ -429,7 +429,7 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
         ],
         "fromRunId": 1,
         "mutant": {
-          "astHash": "<id32><id32>",
+          "astHash": "5cfdb9522301830688a4995d6cad59294c6076c4e870b494f660a31a793a697e",
           "codeunitId": 79002,
           "codeunitName": "Sandbox Extra",
           "endIndex": 137,
@@ -561,7 +561,7 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
       "event": {
         "batchIndex": 1,
         "mutant": {
-          "astHash": "<id32><id32>",
+          "astHash": "b894467d7ba4f0b2f83e032531268a0384aa74751d4ec3f8e6db4514d76fb2b7",
           "codeunitId": 79000,
           "codeunitName": "Sandbox Logic",
           "endIndex": 151,
@@ -615,7 +615,7 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
         ],
         "guardObserved": true,
         "mutant": {
-          "astHash": "<id32><id32>",
+          "astHash": "4004a181f8c0dc8bbe0c7c3051d719211b1ca22dadad08ae600b2df9f72fbe82",
           "codeunitId": 79000,
           "codeunitName": "Sandbox Logic",
           "endIndex": 142,
@@ -658,7 +658,7 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
         ],
         "guardObserved": true,
         "mutant": {
-          "astHash": "<id32><id32>",
+          "astHash": "82a8a37831dd57841652a34ad1f5567a0c073ca19774f619b2022729a64fb9dc",
           "codeunitId": 79000,
           "codeunitName": "Sandbox Logic",
           "endIndex": 141,

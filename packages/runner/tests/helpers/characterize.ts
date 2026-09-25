@@ -44,6 +44,15 @@ export function recording(inner: ExecutionBackend, trace: Trace, tag: string): E
       return inner.run(ref, o);
     },
   };
+  // runSession closes worker backends, and the primary on an unsafe session, through a duck-typed
+  // `close`. Always defined here so every such close is traced; forwarded only when the inner has one.
+  const innerClose = (inner as { close?: () => Promise<void> }).close?.bind(inner);
+  Object.assign(b, {
+    close: async () => {
+      trace.push({ call: "close", tag });
+      if (innerClose !== undefined) await innerClose();
+    },
+  });
   const many = inner.runMany?.bind(inner);
   if (many !== undefined) {
     b.runMany = async (o) => {
@@ -91,7 +100,8 @@ function stripClock(x: unknown): unknown {
   );
 }
 
-const ID32 = /[0-9a-f]{32}/g;
+/** A WHOLE 32-hex token (an artifact id, a lease generation), never half of a 64-hex hash. */
+const ID32 = /(?<![0-9a-f])[0-9a-f]{32}(?![0-9a-f])/g;
 
 /**
  * `appVersion` is minted from the clock (`<major>.<minor>.<days>.<halfSeconds>`, reserved per
@@ -102,9 +112,15 @@ const APP_VERSION = /"appVersion":"([^"]*)"/g;
 
 function normalize(x: unknown): unknown {
   const seen = new Map<string, number>();
+  const ids = new Map<string, number>();
   return JSON.parse(
     JSON.stringify(x)
-      .replace(ID32, "<id32>")
+      // Numbered by first appearance, not collapsed, so "batch 1's id is not batch 0's" still shows.
+      .replace(ID32, (id) => {
+        const n = ids.get(id) ?? ids.size + 1;
+        ids.set(id, n);
+        return `<id32#${n}>`;
+      })
       .replaceAll(JSON.stringify(tmpdir()).slice(1, -1), "<tmp>")
       .replace(APP_VERSION, (_m, v: string) => {
         const n = seen.get(v) ?? seen.size + 1;
