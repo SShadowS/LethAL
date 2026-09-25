@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { ArtifactPrepareError } from "../src/artifact";
 import { decidePublishOutcome } from "../src/deployment-verifier";
 import { EnvToolClient } from "../src/env-tool";
 import type { EnvToolConfigSection } from "../src/env-tool";
@@ -120,6 +121,36 @@ describe("EnvToolPublisher", () => {
       stderr: "",
     });
     await expect(publisher.publishFile("tests.app")).resolves.toBeUndefined();
+  });
+
+  it("publishFile turns an unreadable file into ArtifactPrepareError, keeping the cause (R232)", async () => {
+    // A `publishApps` path typo never reaches the server. As a bare fs error it would read as an
+    // UNCERTAIN publish and quarantine the tier; ArtifactPrepareError is the existing
+    // pre-publish, confirmed-terminal type.
+    const calls: string[][] = [];
+    const client = new EnvToolClient(CFG, {
+      spawn: async (argv) => {
+        calls.push([...argv]);
+        return { exitCode: 0, stdout: "{}", stderr: "" };
+      },
+    });
+    const publishBlock = CFG.publish;
+    if (publishBlock === undefined) throw new Error("fixture has no publish block");
+    const publisher = new EnvToolPublisher(
+      client,
+      publishBlock,
+      { envId: "e1", serializerKey: "https://h|e1|default" },
+      {
+        readArtifact: async () => {
+          throw new Error("ENOENT: no such file or directory, open 'Tests.app'");
+        },
+      },
+    );
+    const err = await publisher.publishFile("Tests.app").catch((e) => e);
+    expect(err).toBeInstanceOf(ArtifactPrepareError);
+    expect((err as Error).message).toContain("Tests.app");
+    expect((err as Error).message).toContain("ENOENT");
+    expect(calls).toHaveLength(0);
   });
 
   it("publishFile still surfaces every other rejection", async () => {
