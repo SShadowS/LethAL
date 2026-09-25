@@ -838,6 +838,6 @@ describe("foldEvents: C02-02, artifacts[] names every published batch's identity
       { type: "quarantined", reason: "test in-flight-unknown" },
       { type: "session-finished", elapsedMs: 10 },
     ]);
-    expect(() => foldEvents(STATICS, events)).toThrow();
+    expect(() => foldEvents(STATICS, events)).toThrow(/no appVersion/);
   });
 });

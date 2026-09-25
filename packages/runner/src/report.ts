@@ -1248,6 +1248,10 @@ export interface SessionReport {
    * `runs.artifact_id`/`runs.artifact_sha256` in the store still hold only the LAST batch's
    * values (each publish overwrote the row); this is the field that names every batch's own
    * identity, for a run that published more than one.
+   *
+   * An entry stays here even if its batch was later invalidated (for example, a lost lease), since
+   * it still records that a publish happened; by the time this report is read, another session may
+   * have since replaced that same artifact on the server with its own build.
    */
   readonly artifacts?: readonly BatchArtifact[];
   /**
