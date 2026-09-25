@@ -3978,7 +3978,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           await leaseSession.publish(hook);
         } catch (err) {
           if (!isConfirmedTerminalPublishFailure(err)) {
-            const reason = `afterLeaseAcquired (R19 test-app publish) ended with an UNKNOWN result, so the lease is kept: ${messageOf(err)}`;
+            const reason = `afterLeaseAcquired (R19 test-app publish) failed with no proof that the server stopped, so the session is latched and the lease is kept unless the server shows no operation in progress: ${messageOf(err)}`;
             safety.latchUnsafe(reason);
             emit({
               type: "warning",

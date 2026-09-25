@@ -21,7 +21,8 @@ import type {
 } from "../src/backend";
 import { PublishFailedError } from "../src/bcdev-backend";
 import { DeploymentVerifier, decidePublishOutcome } from "../src/deployment-verifier";
-import { EnvToolError } from "../src/env-tool";
+import { EnvToolClient, EnvToolError } from "../src/env-tool";
+import { EnvToolPublisher } from "../src/env-tool-publisher";
 import { createEmitter } from "../src/events";
 import type { RunEvent } from "../src/events";
 import { ActivationFailure } from "../src/failure-classes";
@@ -5877,6 +5878,38 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
     expect(client.releaseCalls).toBe(1);
     expect(log.indexOf("acquire")).toBeLessThan(log.indexOf("release"));
     expect(timers.cleared).toBe(1);
+  });
+
+  // R232 follow-up: a `publishApps` path that does not exist never reaches the server, so the
+  // real publisher's failure must read as a confirmed pre-publish failure: released, no recycle.
+  test("an afterLeaseAcquired whose publishApps file does not exist releases the lease and quarantines nothing (R232)", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    const { lease } = leaseCfg(client);
+    const publishBlock = { command: ["publish", "{envId}", "{appFile}"] };
+    const publisher = new EnvToolPublisher(
+      new EnvToolClient(
+        { toolPath: "tool.exe", publish: publishBlock, resolve: [] },
+        {
+          spawn: async () => {
+            throw new Error("the tool must not be spawned for a file that cannot be read");
+          },
+        },
+      ),
+      publishBlock,
+      { envId: "e1", serializerKey: "https://h|e1|default" },
+      { readArtifact: async (p) => new Uint8Array(await readFile(p)) },
+    );
+    const missing = join(dir, "does-not-exist", "Tests.app");
+    const err = await runSessionForTest(leaseBackend(), {
+      lease,
+      quarantineDir: dir,
+      afterLeaseAcquired: () => publisher.publishFile(missing),
+    }).catch((e) => e);
+    expect(err).toBeInstanceOf(ArtifactPrepareError);
+    expect(client.endPublishArgs.map((a) => a.outcome)).toEqual(["failed"]);
+    expect(client.releaseCalls).toBe(1);
+    expect(await new QuarantineStore(dir).read("http://cronus281|BC")).toBeNull();
   });
 
   // R232 review: the test-app publish may still be changing the tier when it ends in a timeout, a
