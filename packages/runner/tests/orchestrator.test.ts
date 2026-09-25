@@ -3371,6 +3371,8 @@ describe("runSession — Layer 5A deployment identity", () => {
     const secondArtifact = expected[1];
     if (secondArtifact === undefined) throw new Error("expected two published batches");
     expect(last.artifact_id).toBe(secondArtifact.artifactId);
+    // C02-02 Task 3: the report's own `artifacts[]` names the same batches the store recorded.
+    expect(report.artifacts).toEqual(store.artifactsForRun(run.id));
     store.close();
   });
 });
@@ -3402,12 +3404,15 @@ describe("runSession — deploy:none (al-runner) app_version", () => {
       mutant === null ? "pass" : "fail",
     );
     const store = new ResultsStore(":memory:");
-    await runSession({ backend, store, ...dirs, selectorIds });
+    const report = await runSession({ backend, store, ...dirs, selectorIds });
     const row = store.db.query("SELECT app_version FROM runs LIMIT 1").get() as {
       app_version: string;
     };
     expect(row.app_version).toBe("1.2.3.4");
     expect(row.app_version).not.toBe("0.0.0.0");
+    // C02-02 Task 3: a deploy:"none" backend never publishes an artifact, so `artifacts` is `[]`,
+    // not `undefined` — the field is always written.
+    expect(report.artifacts).toEqual([]);
     store.close();
   });
 

@@ -2,6 +2,7 @@
 
 exports[`buildReport output is stable across the event-stream refactor an event history covering every verdict kind and the carried/stranded/quarantine paths produces a report identical to the committed snapshot 1`] = `
 {
+  "artifacts": [],
   "assertionScreen": {
     "diagnosis": "This is a SCREEN, not a classification, and no verdict moved: every mutant below is still \`killed\` and still in \`mutationScore\`. What it says is only that no test assertion produced the failure text — on the one real corpus this rule has been scored against (73 hand-classified kills on a third-party app) it caught every false kill and about three of every four it flagged were real kills, where the mutated program errored on its own wrong behaviour. Read them; do not subtract them.",
     "discrimination": "no-text",

@@ -37,7 +37,7 @@ export type RunnerKind = "fenced" | "client-services";
  * C02-02: one published batch's artifact provenance. `runs.artifact_id` etc. only ever held the
  * LAST batch's values (each `recordArtifact` call overwrote the row); a multi-batch run needs
  * every batch's id to bisect or reproduce a specific one. Declared once here; report.ts re-exports
- * it (Task 3) rather than redeclaring it.
+ * it rather than redeclaring it.
  *
  * After a multi-batch run, only the entry with the HIGHEST `batchIndex` is still installed on the
  * server: every batch publishes the same app id, and a later publish replaces the one before it.
