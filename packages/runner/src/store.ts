@@ -33,6 +33,19 @@ export type MutantVerdict =
  */
 export type RunnerKind = "fenced" | "client-services";
 
+/**
+ * C02-02: one published batch's artifact provenance. `runs.artifact_id` etc. only ever held the
+ * LAST batch's values (each `recordArtifact` call overwrote the row); a multi-batch run needs
+ * every batch's id to bisect or reproduce a specific one. Declared once here; report.ts re-exports
+ * it (Task 3) rather than redeclaring it.
+ */
+export interface BatchArtifact {
+  readonly batchIndex: number;
+  readonly artifactId: string;
+  readonly sha256: string;
+  readonly appVersion: string;
+}
+
 export interface MutantRow {
   readonly mutantCode: string;
   readonly astHash: string;
@@ -262,6 +275,17 @@ CREATE TABLE IF NOT EXISTS baseline_snapshots (
   payload TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_baseline_snapshots_key ON baseline_snapshots(batch_hash, test_app_hash);
+-- C02-02: one row per PUBLISHED batch, alongside the runs columns above which stay last-batch-wins
+-- (unchanged, for every existing reader). A whole new TABLE needs no migrate() step: see the R90
+-- publish_outcomes comment below.
+CREATE TABLE IF NOT EXISTS batch_artifacts (
+  run_id INTEGER NOT NULL REFERENCES runs(id),
+  batch_index INTEGER NOT NULL,
+  artifact_id TEXT NOT NULL,
+  artifact_sha256 TEXT NOT NULL,
+  app_version TEXT NOT NULL,
+  PRIMARY KEY (run_id, batch_index)
+);
 `;
 
 export class ResultsStore {
@@ -606,13 +630,53 @@ export class ResultsStore {
    */
   recordArtifact(
     runId: number,
-    info: { appVersion: string; appId: string; artifactId: string; sha256: string },
+    info: {
+      batchIndex: number;
+      appVersion: string;
+      appId: string;
+      artifactId: string;
+      sha256: string;
+    },
   ): void {
-    this.db
+    // One transaction: the run-row UPDATE (last batch wins, unchanged) and the batch_artifacts
+    // INSERT (one row per batch, PRIMARY KEY-enforced) must both land or neither does. A plain
+    // INSERT is deliberate: a second row for the same (run_id, batch_index) is a bug, and SQLite's
+    // primary-key violation is the loud failure that catches it.
+    const tx = this.db.transaction(() => {
+      this.db
+        .query(
+          "UPDATE runs SET app_version = ?, app_id = ?, artifact_id = ?, artifact_sha256 = ? WHERE id = ?",
+        )
+        .run(info.appVersion, info.appId, info.artifactId, info.sha256, runId);
+      this.db
+        .query(
+          "INSERT INTO batch_artifacts (run_id, batch_index, artifact_id, artifact_sha256, app_version) " +
+            "VALUES (?, ?, ?, ?, ?)",
+        )
+        .run(runId, info.batchIndex, info.artifactId, info.sha256, info.appVersion);
+    });
+    tx();
+  }
+
+  /** C02-02: every published batch's artifact provenance for this run, ordered by batch_index. */
+  artifactsForRun(runId: number): BatchArtifact[] {
+    const rows = this.db
       .query(
-        "UPDATE runs SET app_version = ?, app_id = ?, artifact_id = ?, artifact_sha256 = ? WHERE id = ?",
+        "SELECT batch_index, artifact_id, artifact_sha256, app_version FROM batch_artifacts " +
+          "WHERE run_id = ? ORDER BY batch_index",
       )
-      .run(info.appVersion, info.appId, info.artifactId, info.sha256, runId);
+      .all(runId) as Array<{
+      batch_index: number;
+      artifact_id: string;
+      artifact_sha256: string;
+      app_version: string;
+    }>;
+    return rows.map((r) => ({
+      batchIndex: r.batch_index,
+      artifactId: r.artifact_id,
+      sha256: r.artifact_sha256,
+      appVersion: r.app_version,
+    }));
   }
 
   /**

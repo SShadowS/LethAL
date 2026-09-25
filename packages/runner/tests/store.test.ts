@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { type MutantVerdict, ResultsStore } from "../src/store";
 
 const ref = { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "PostingUpdatesTotal" };
+const APP = "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a";
 
 function mutantRow(verdict: MutantVerdict, over: Record<string, unknown> = {}) {
   return {
@@ -114,6 +115,7 @@ describe("ResultsStore", () => {
     const store = new ResultsStore(":memory:");
     const runId = store.createRun({ projectPath: "P", backend: "bcdev", appVersion: "0.0.0.0" });
     store.recordArtifact(runId, {
+      batchIndex: 0,
       appVersion: "1.0.20653.1800",
       appId: "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",
       artifactId: "0123456789abcdef0123456789abcdef",
@@ -126,6 +128,79 @@ describe("ResultsStore", () => {
     expect(row.app_id).toBe("df1aa9ff-6539-4c86-a9d0-ad702b61ac9a");
     expect(row.artifact_id).toBe("0123456789abcdef0123456789abcdef");
     expect(row.artifact_sha256).toBe("a".repeat(64));
+    store.close();
+  });
+
+  // C02-02 Task 1: one row per PUBLISHED batch, not just the run row's last-writer-wins columns.
+  test("recordArtifact keeps one row per batch, and runs.artifact_id is the last batch's", () => {
+    const store = new ResultsStore(":memory:");
+    const runId = store.createRun({ projectPath: "P", backend: "bcdev", appVersion: "0.0.0.0" });
+    const a = "0123456789abcdef0123456789abcdef";
+    const b = "fedcba9876543210fedcba9876543210";
+    store.recordArtifact(runId, {
+      batchIndex: 0,
+      appVersion: "1.0.1.1",
+      appId: APP,
+      artifactId: a,
+      sha256: "a".repeat(64),
+    });
+    store.recordArtifact(runId, {
+      batchIndex: 1,
+      appVersion: "1.0.1.2",
+      appId: APP,
+      artifactId: b,
+      sha256: "b".repeat(64),
+    });
+    expect(store.artifactsForRun(runId)).toEqual([
+      { batchIndex: 0, artifactId: a, sha256: "a".repeat(64), appVersion: "1.0.1.1" },
+      { batchIndex: 1, artifactId: b, sha256: "b".repeat(64), appVersion: "1.0.1.2" },
+    ]);
+    const row = store.db.query("SELECT artifact_id FROM runs WHERE id = ?").get(runId) as {
+      artifact_id: string;
+    };
+    expect(row.artifact_id).toBe(b);
+    store.close();
+  });
+
+  test("recordArtifact refuses a second row for the same batch, and changes nothing when it does", () => {
+    const store = new ResultsStore(":memory:");
+    const runId = store.createRun({ projectPath: "P", backend: "bcdev", appVersion: "0.0.0.0" });
+    const a = "0123456789abcdef0123456789abcdef";
+    store.recordArtifact(runId, {
+      batchIndex: 0,
+      appVersion: "1.0.1.1",
+      appId: APP,
+      artifactId: a,
+      sha256: "a".repeat(64),
+    });
+    expect(() =>
+      store.recordArtifact(runId, {
+        batchIndex: 0,
+        appVersion: "1.0.1.9",
+        appId: APP,
+        artifactId: "fedcba9876543210fedcba9876543210",
+        sha256: "b".repeat(64),
+      }),
+    ).toThrow();
+    // All four legacy runs columns still hold batch 0's values, and artifactsForRun still
+    // returns only batch 0 — proving the UPDATE and the INSERT share one transaction.
+    const row = store.db
+      .query("SELECT app_version, app_id, artifact_id, artifact_sha256 FROM runs WHERE id = ?")
+      .get(runId) as Record<string, string>;
+    expect(row.app_version).toBe("1.0.1.1");
+    expect(row.app_id).toBe(APP);
+    expect(row.artifact_id).toBe(a);
+    expect(row.artifact_sha256).toBe("a".repeat(64));
+    expect(store.artifactsForRun(runId)).toEqual([
+      { batchIndex: 0, artifactId: a, sha256: "a".repeat(64), appVersion: "1.0.1.1" },
+    ]);
+    store.close();
+  });
+
+  test("artifactsForRun is empty for a run that published nothing", () => {
+    const store = new ResultsStore(":memory:");
+    const runId = store.createRun({ projectPath: "P", backend: "bcdev", appVersion: "0.0.0.0" });
+    expect(store.artifactsForRun(runId)).toEqual([]);
     store.close();
   });
 
@@ -151,12 +226,54 @@ describe("ResultsStore", () => {
     const runId = store.createRun({ projectPath: "P", backend: "bcdev", appVersion: "0.0.0.0" });
     expect(() =>
       store.recordArtifact(runId, {
+        batchIndex: 0,
         appVersion: "1.0.1.1",
         appId: "x",
         artifactId: "y",
         sha256: "z",
       }),
     ).not.toThrow();
+    store.close();
+    rmSync(path, { force: true });
+  });
+
+  // C02-02 Task 1: batch_artifacts is a whole new TABLE, so (like publish_outcomes and
+  // baseline_snapshots before it) SCHEMA's CREATE TABLE IF NOT EXISTS must be enough on its own,
+  // with no migrate() step, even on a database that predates this table entirely.
+  test("a database created before batch_artifacts is migrated on open and accepts recordArtifact", () => {
+    const path = join(tmpdir(), `lethal-store-batch-artifacts-${Date.now()}.sqlite`);
+    const legacy = new Database(path);
+    legacy.exec(`CREATE TABLE runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at TEXT NOT NULL DEFAULT (datetime('now')),
+    finished_at TEXT,
+    project_path TEXT NOT NULL,
+    backend TEXT NOT NULL,
+    app_version TEXT NOT NULL,
+    batch_count INTEGER,
+    baseline_green INTEGER,
+    app_id TEXT,
+    artifact_id TEXT,
+    artifact_sha256 TEXT,
+    config_fingerprint TEXT
+  );`);
+    legacy.exec(
+      "INSERT INTO runs (project_path, backend, app_version) VALUES ('P','bcdev','0.0.0.0')",
+    );
+    legacy.close();
+
+    const store = new ResultsStore(path);
+    const runId = store.createRun({ projectPath: "P", backend: "bcdev", appVersion: "0.0.0.0" });
+    store.recordArtifact(runId, {
+      batchIndex: 0,
+      appVersion: "1.0.1.1",
+      appId: "x",
+      artifactId: "y".repeat(8),
+      sha256: "z".repeat(8),
+    });
+    expect(store.artifactsForRun(runId)).toEqual([
+      { batchIndex: 0, artifactId: "y".repeat(8), sha256: "z".repeat(8), appVersion: "1.0.1.1" },
+    ]);
     store.close();
     rmSync(path, { force: true });
   });

@@ -3743,6 +3743,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       // caller-supplied appVersion.
       if (compiled !== null) {
         cfg.store.recordArtifact(runId, {
+          batchIndex: batchIdx,
           appVersion: compiled.appVersion,
           appId: compiled.appId,
           artifactId: compiled.artifactId,
