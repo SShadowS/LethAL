@@ -112,14 +112,30 @@ export const loopSkip: MutationOperator = {
   ],
 };
 
+/**
+ * Strips parentheses to the innermost expression, so `(false)` compares equal to `false`.
+ * Without this, `while (false) do` was not recognised as already-mutated and got a second,
+ * equivalent mutant on top: `(false) -> false` (GH-07 r1).
+ */
+function unwrapParens(node: ALSyntaxNode): ALSyntaxNode {
+  let current = node;
+  while (current.kind === ALNodeKind.parenthesized_expression) {
+    const inner = current.namedChildren[0];
+    if (inner === undefined) break;
+    current = inner;
+  }
+  return current;
+}
+
 /** The `while` loop's condition, or `null` where this operator does not claim it. */
 function skipCondition(node: ALSyntaxNode): ALSyntaxNode | null {
   if (node.rawKind !== ALNodeKind.while_statement) return null;
   if (!inExecutableBody(node)) return null;
   const cond = node.childForFieldName("condition");
   if (cond === null) return null;
-  // `while false` is already the mutated form; mutating it again ships an unkillable mutant.
-  if (cond.text.trim().toLowerCase() === "false") return null;
+  // `while false` (or `while (false)`) is already the mutated form; mutating it again ships an
+  // unkillable mutant.
+  if (unwrapParens(cond).text.trim().toLowerCase() === "false") return null;
   return cond;
 }
 

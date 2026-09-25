@@ -147,6 +147,14 @@ export const flipBooleanLiteral: MutationOperator = {
       expectedSpecs: [],
     },
     {
+      // GH-07 follow-up. `loop-skip` owns a while's condition and rewrites it to `false`; flipping
+      // `while true` emitted the same `false` at the same span, the issue #7 collision one loop kind
+      // over. The refusal also removes the `while false` flip, which never terminates.
+      name: "REFUSES a while loop's condition, which loop-skip owns",
+      sourceAL: `codeunit 51709 "C" { procedure P() var I: Integer; begin while true do begin I += 1; if I > 3 then exit; end; end; }`,
+      expectedSpecs: [],
+    },
+    {
       name: "flips true in an argument",
       sourceAL: `codeunit 51700 "C" { procedure P() var Cust: Record Customer; begin Cust.SetAutoCalcFields(true); end; }`,
       expectedSpecs: [
@@ -233,47 +241,62 @@ function flipped(node: ALSyntaxNode, ctx: SemanticContext): string | null {
   if (text !== "true" && text !== "false") return null;
   if (!inExecutableBody(node)) return null;
   if (isCaseLabel(node)) return null;
-  if (isRepeatExitCondition(node)) return null;
+  if (isLoopCondition(node)) return null;
   if (isCededRunTriggerFlag(node, ctx)) return null;
   return text === "true" ? "false" : "true";
 }
 
+/** The loop kinds whose WHOLE condition this operator refuses: see `isLoopCondition`. */
+const LOOP_STATEMENTS: ReadonlySet<string> = new Set([
+  ALNodeKind.repeat_statement,
+  ALNodeKind.while_statement,
+]);
+
 /**
- * Is this literal a `repeat` loop's whole exit condition?
+ * Is this literal a `repeat` or `while` loop's whole condition?
  *
  * Refused for two reasons that arrive at the same line, one reported and one not.
  *
- * `until false` is ordinary AL for a loop whose exits all sit in the body, and `loop-truncate`
- * rewrites a repeat's exit condition to `true`. Flipping the same `false` to the same `true` at the
- * same span made two operators claim ONE identity, and `dedupeSpecs` throws on that rather than
- * letting registration order decide, so a whole-project run died at planning before anything was
- * measured (issue #7). `loop-truncate` keeps the mutant: it owns loop bounding, that is what R164
- * built it for, and its version terminates.
+ * `until false` and `while true` are ordinary AL for a loop whose exits all sit in the body.
+ * `loop-truncate` rewrites a repeat's exit condition to `true`, and `loop-skip` rewrites a while's
+ * condition to `false`; either way this operator flipping the same literal to the same replacement
+ * at the same span made two operators claim ONE identity, and `dedupeSpecs` throws on that rather
+ * than letting registration order decide, so a whole-project run died at planning before anything
+ * was measured (issue #7, and its `while` twin, GH-07). The loop operator keeps the mutant in both
+ * cases: it owns loop bounding, that is what R164 and R179 built it for, and its version terminates.
  *
- * `until true` is the half nobody reported and the worse one. The body runs once; flipping it to
- * `until false` never ends. `loop-truncate` emits nothing at an already-`true` condition, so
- * without this refusal the only mutant at that site was a hang. R164 rules that a hang-capable site
- * must not enter a scored gate, and `shift-integer`, `negate-guard` and `negate-conditional` all
- * already refuse a loop condition on the same reasoning. This makes four.
+ * `until true` and `while false` are the other polarity, and nobody reported either: the body
+ * still runs at least once (`until true`) or not at all (`while false`), but flipping either one
+ * turns a loop that ends into one that ends only if the body exits. Neither loop operator claims
+ * that polarity (`loop-truncate` emits nothing at an already-`true` condition; `loop-skip` refuses
+ * an already-`false` one), so without this refusal the ONLY mutant at those sites was a hang. R164
+ * rules that a hang-capable site must not enter a scored gate, and `shift-integer`, `negate-guard`
+ * and `negate-conditional` all already refuse a loop condition on the same reasoning. This makes
+ * four operators, now covering `while false` as well as `until true`. At `while false` this leaves
+ * the site with NO mutant at all, which is acceptable: the loop is dead code, and its only mutant
+ * was a hang.
  *
- * **`repeat` only, deliberately.** `while false do` runs the body ZERO times and terminates, so it
- * is a useful mutant, and `loop-truncate` is repeat-only and would not cover it. Refusing there
- * would leave the site claimed by nothing, which is the orphaning mistake R171 and this file's own
- * `CEDED_TO_MODIFY_FLAG` comment both record.
+ * The first version of this refusal reasoned that no loop operator claims a `while`, and named
+ * `repeat` only. That stopped being true when `loop-skip` landed (R179, twelve days before the
+ * issue #7 fix): `while true do` collided the identical way, one loop kind over, and the mistake
+ * was recorded nowhere until it was measured (see `docs/mutation-testing-ourselves.md` on R175).
  *
- * Parentheses are walked through, because `until (false)` is the same site wearing brackets. A
- * literal NESTED in a compound condition is NOT refused: `until Done or false` flips to
- * `until Done or true`, which exits after one iteration and terminates. Measured 0 sites of either
- * shape across 725 `repeat` loops on both reference corpora, so this is about being exact rather
- * than about a count.
+ * Parentheses are walked through, because `until (false)` and `while (true)` are the same sites
+ * wearing brackets. A literal NESTED in a compound condition is NOT refused: `until Done or false`
+ * flips to `until Done or true`, and `while Go and true` flips to `while Go and false`, both of
+ * which still terminate. Measured 0 sites of either shape across 725 `repeat` loops on both
+ * reference corpora, so this is about being exact rather than about a count. The OTHER polarity of
+ * a nested literal (`until Done and false` -> `until Done and true`, `while X or false` ->
+ * `while X or true`) can hang and is not handled here: recorded as a known gap (Decision 4 of the
+ * GH-07 plan) and left for a separate roadmap item, not fixed in this change.
  *
  * Spans are compared by POSITION, never by node identity, for the reason recorded in [[R209]]: the
  * AST wrappers are rebuilt on access, so reference equality is not reliable.
  */
-function isRepeatExitCondition(node: ALSyntaxNode): boolean {
+function isLoopCondition(node: ALSyntaxNode): boolean {
   let current = node;
   for (let p: ALSyntaxNode | null = node.parent; p !== null; p = p.parent) {
-    if (p.kind === ALNodeKind.repeat_statement) {
+    if (LOOP_STATEMENTS.has(p.kind)) {
       const condition = p.childForFieldName("condition");
       return (
         condition !== null &&
