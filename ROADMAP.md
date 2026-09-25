@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**27 of 230 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**28 of 231 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -275,6 +275,7 @@ that ordering is the priority.
 - **R208** · The chunked group path (`--max-methods-per-call`) has no live gate: R198 §7/§8's two forced-chunk campaigns were never implemented, and under R206 a chunked replay is the one place where `chunkPrefix` versus `ordered` is verdict-bearing · [R208.md](docs/roadmap/R208.md) · done (`itest:chunked`, 2026-09-04) — a two-leg differential gate over…
 - **R224** · The `al-compiler` subagent probes only the `bin/win32` alc layout, which R167 already recorded as insufficient, so a valid install reports BLOCKED · [R224.md](docs/roadmap/R224.md) · open, filed 2026-09-13, one-line fix, diverged from the skill that does it correctly
 - **R225** · A freshly bootstrapped container's FIRST `itest:tables` run quarantines on the TestPage baseline test and scores nothing; the immediately following run passes · [R225.md](docs/roadmap/R225.md) · open, filed 2026-09-18, measured on Cronus285 while qualifying the orchestrator's containers
+- **R233** · `EXPLAIN_SCHEMA_VERSION` 4 drifted: five commits grew its value domains without the bump its own rule requires; from GH-24b on, every added value bumps, and a test enforces it · [R233.md](docs/roadmap/R233.md) · open
 
 ---
 
