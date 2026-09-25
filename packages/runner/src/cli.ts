@@ -64,7 +64,7 @@ import { HarnessVerifier } from "./harness";
 import type { LeaseSnapshot } from "./harness";
 import { LeaseClient } from "./lease";
 import { changedLinesSince, parseLineArg } from "./line-filter";
-import type { LineRange } from "./line-filter";
+import type { ChangedSinceSource, LineRange } from "./line-filter";
 import { toMutationElements } from "./mutation-elements";
 import {
   LARGE_RUN_MUTANT_THRESHOLD,
@@ -818,9 +818,12 @@ RUN — scope. These bound cost. --tests-only can change a verdict; the others c
                              <file>:<n> for one line). Paths are project-relative. A mutant that
                              spans a given line and others is kept. Applied after dedup, so it
                              cannot change a verdict. The report flags it 'line-narrowed'
-  --changed-since <ref>      the same filter, from the lines 'git diff -U0 <ref>...HEAD' adds or
-                             changes in the project. Unions with --lines. Pure deletions add no
-                             line. Needs git and a history that contains <ref>
+  --changed-since <ref>      the same filter, from the lines that differ between 'git merge-base
+                             <ref> HEAD' and your working tree (staged and unstaged), plus every
+                             line of each untracked .al file git does not ignore. Unions with
+                             --lines. Pure deletions add no line. '--changed-since HEAD' selects
+                             only uncommitted edits. Needs git and a history that shares a commit
+                             with <ref>
   --tests-only <glob>        only these test files run at baseline (repeatable). CAN CHANGE A
                              VERDICT: exclude a killing test and its mutant is reported survived.
                              The report flags it 'tests-narrowed'
@@ -2037,8 +2040,9 @@ async function loadLethalConfigFile(path: string): Promise<LethalConfigFile> {
 
 /**
  * Issue #19 (R227): the line filter's ranges, `--lines` unioned with `--changed-since`'s diff, or
- * `undefined` when neither flag was given. The diff is narrowed to `.al` files here, since a PR
- * also touches `app.json`, translations and layouts, which hold no mutants.
+ * `undefined` when neither flag was given. `changedLinesSince` already keeps only `.al` files.
+ * GH-25: `changedSince` names where the diff came from, and is present exactly when
+ * `--changed-since` was given.
  */
 export async function resolveLineRanges(
   cfg: {
@@ -2047,15 +2051,13 @@ export async function resolveLineRanges(
     readonly changedSince?: string;
   },
   spawn: SpawnFn = defaultSpawn,
-): Promise<readonly LineRange[] | undefined> {
+): Promise<
+  { readonly ranges: readonly LineRange[]; readonly changedSince?: ChangedSinceSource } | undefined
+> {
   if (cfg.lines === undefined && cfg.changedSince === undefined) return undefined;
-  const fromGit =
-    cfg.changedSince === undefined
-      ? []
-      : (await changedLinesSince(cfg.projectDir, cfg.changedSince, spawn)).filter((r) =>
-          r.file.toLowerCase().endsWith(".al"),
-        );
-  return [...(cfg.lines ?? []), ...fromGit];
+  if (cfg.changedSince === undefined) return { ranges: [...(cfg.lines ?? [])] };
+  const git = await changedLinesSince(cfg.projectDir, cfg.changedSince, spawn);
+  return { ranges: [...(cfg.lines ?? []), ...git.ranges], changedSince: git.source };
 }
 
 /**
@@ -3113,11 +3115,14 @@ export async function runFromCli(
     /** R123: same injection point and same reason as `runAlRunnerCanary` above — a test drives a
      *  canned contract result without spawning a real al-runner. */
     runAlRunnerContractProbe?: typeof runAlRunnerContractProbe;
+    /** GH-25: the spawn `--changed-since` runs git through, so a test can neutralise the
+     *  machine's inherited git config (a global `*.al -diff` would make an edit look binary). */
+    gitSpawn?: SpawnFn;
   } = {},
 ): Promise<SessionReport> {
   const configFile = await loadLethalConfigFile(parsed.configPath);
   // Issue #19: before anything is provisioned, so a bad ref fails in seconds.
-  const lineRanges = await resolveLineRanges(parsed);
+  const lineRanges = await resolveLineRanges(parsed, deps.gitSpawn);
   // R221: the project's standing exclusions UNIONED with any `--exclude` from the command line,
   // resolved once here so the session and every message downstream see one list. Union, never
   // override: see `LethalConfigFile.exclude` for why a CLI flag must not be able to switch off an
@@ -3314,7 +3319,14 @@ export async function runFromCli(
         ...(parsed.only !== undefined ? { only: parsed.only } : {}),
         ...(mergedExclude.length > 0 ? { exclude: mergedExclude } : {}),
         ...(parsed.operators !== undefined ? { operators: parsed.operators } : {}),
-        ...(lineRanges !== undefined ? { lines: lineRanges } : {}),
+        ...(lineRanges !== undefined
+          ? {
+              lines: lineRanges.ranges,
+              ...(lineRanges.changedSince !== undefined
+                ? { changedSince: lineRanges.changedSince }
+                : {}),
+            }
+          : {}),
         ...(parsed.testsOnly !== undefined ? { testsOnly: parsed.testsOnly } : {}),
         ...(parsed.maxGuardsPerBatch !== undefined
           ? { maxGuardsPerBatch: parsed.maxGuardsPerBatch }
@@ -4750,7 +4762,7 @@ async function main(): Promise<number> {
       dbPath: parsed.dbPath,
       configPath: parsed.configPath,
       ...(parsed.operators !== undefined ? { operators: parsed.operators } : {}),
-      ...(dryRunLines !== undefined ? { lines: dryRunLines } : {}),
+      ...(dryRunLines !== undefined ? { lines: dryRunLines.ranges } : {}),
       ...(dryRunExclude.length > 0 ? { exclude: dryRunExclude } : {}),
     });
     return 0;

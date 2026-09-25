@@ -14,7 +14,7 @@ import type {
 } from "../src/backend";
 import { parseCliConfig, resolveLineRanges } from "../src/cli";
 import type { RunEvent, RunEventInput } from "../src/events";
-import { parseLineArg, parseUnifiedDiffAdded, spanTouches } from "../src/line-filter";
+import { lineCount, parseLineArg, parseUnifiedDiffAdded, spanTouches } from "../src/line-filter";
 import { generateMutationSet, operatorTiers, runSession } from "../src/orchestrator";
 import { buildReport, renderConsole } from "../src/report";
 import { sessionFingerprint } from "../src/resume";
@@ -105,6 +105,28 @@ describe("parsing", () => {
     ]);
   });
 
+  test("parseUnifiedDiffAdded refuses a binary or quoted .al and keeps a tab-suffixed path (GH-25)", () => {
+    expect(() => parseUnifiedDiffAdded("Binary files /dev/null and b/src/Bin.al differ\n")).toThrow(
+      /binary \.al file \(src\/Bin\.al\)/,
+    );
+    expect(parseUnifiedDiffAdded("Binary files a/logo.png and b/logo.png differ\n")).toEqual([]);
+    expect(() => parseUnifiedDiffAdded('+++ "b/src/\\303\\206ble.al"\n@@ -1 +1 @@\n')).toThrow(
+      /git quoted this path/,
+    );
+    expect(parseUnifiedDiffAdded('+++ "b/src/\\303\\206ble.txt"\n@@ -1 +1 @@\n')).toEqual([]);
+    expect(parseUnifiedDiffAdded("+++ b/My File.al\t\n@@ -2 +2 @@\n")).toEqual([
+      { file: "My File.al", start: 2, end: 2 },
+    ]);
+  });
+
+  test("lineCount counts rows the way tree-sitter does (GH-25)", () => {
+    expect(lineCount("")).toBe(0);
+    expect(lineCount("a")).toBe(1);
+    expect(lineCount("a\n")).toBe(1);
+    expect(lineCount("a\r\nb")).toBe(2);
+    expect(lineCount("a\n\n")).toBe(2);
+  });
+
   test("spanTouches: any shared line counts, and the file compares case-insensitively", () => {
     const r = [{ file: "src/A.al", start: 5, end: 5 }];
     expect(spanTouches(r, "SRC\\a.al", 4, 11)).toBe(true);
@@ -138,25 +160,40 @@ describe("parsing", () => {
 
   test("resolveLineRanges unions --lines with the diff, keeping only .al files", async () => {
     const seen: string[][] = [];
+    const sha = "a".repeat(40);
+    // GH-25: answer each git call by its verb (`git -c core.quotePath=false diff ...` puts it third).
     const spawn = async (argv: readonly string[]) => {
       seen.push([...argv]);
-      return {
-        exitCode: 0,
-        stderr: "",
-        stdout: "+++ b/app.json\n@@ -1 +1 @@\n+++ b/src/X.al\n@@ -4,0 +5,2 @@\n",
-      };
+      const verb = argv[1] === "-c" ? argv[3] : argv[1];
+      const stdout =
+        verb === "merge-base"
+          ? `${sha}\n`
+          : verb === "diff"
+            ? "+++ b/app.json\n@@ -1 +1 @@\n+++ b/src/X.al\n@@ -4,0 +5,2 @@\n"
+            : "";
+      return { exitCode: 0, stderr: "", stdout };
     };
     const r = await resolveLineRanges(
       { projectDir: "p", lines: [{ file: "A.al", start: 1, end: 1 }], changedSince: "main" },
       spawn,
     );
-    expect(r).toEqual([
+    expect(r?.ranges).toEqual([
       { file: "A.al", start: 1, end: 1 },
       { file: "src/X.al", start: 5, end: 6 },
     ]);
-    expect(seen[0]).toContain("main...HEAD");
-    expect(seen[0]).toContain("--relative");
+    expect(r?.changedSince).toEqual({ ref: "main", mergeBase: sha, untrackedFiles: [] });
+    expect(seen[0]).toEqual(["git", "merge-base", "main", "HEAD"]);
+    const diffArgv = seen.find((a) => a[3] === "diff");
+    expect(diffArgv).toContain(sha);
+    expect(diffArgv).toContain("--relative");
+    expect(diffArgv).not.toContain("main...HEAD");
     expect(await resolveLineRanges({ projectDir: "p" }, spawn)).toBeUndefined();
+    const linesOnly = await resolveLineRanges(
+      { projectDir: "p", lines: [{ file: "A.al", start: 1, end: 1 }] },
+      spawn,
+    );
+    expect(linesOnly?.ranges).toEqual([{ file: "A.al", start: 1, end: 1 }]);
+    expect(linesOnly !== undefined && "changedSince" in linesOnly).toBe(false);
   });
 
   test("a failing git diff throws, naming the ref", async () => {
@@ -209,6 +246,9 @@ describe("generateMutationSet with a line filter", () => {
   });
 });
 
+/** GH-25: a `--changed-since` source, as `changedLinesSince` returns it. */
+const SRC = { ref: "main", mergeBase: "b".repeat(40), untrackedFiles: ["src/New.al"] } as const;
+
 describe("the report and the fingerprint", () => {
   const CAPS = {
     authoritative: true,
@@ -242,6 +282,17 @@ describe("the report and the fingerprint", () => {
       { caps: CAPS, lines: { ranges: [{ file: FILE, start: 5, end: 5 }] } },
       events,
     );
+    expect(r.lines !== undefined && "changedSince" in r.lines).toBe(false);
+    // GH-25: the source rides the statics into the report unchanged.
+    const sourced = buildReport(
+      { caps: CAPS, lines: { ranges: [{ file: FILE, start: 5, end: 5 }], changedSince: SRC } },
+      events,
+    );
+    expect(sourced.lines).toEqual({
+      ranges: [{ file: FILE, start: 5, end: 5 }],
+      excludedSiteCount: 7,
+      changedSince: SRC,
+    });
     expect(r.validity.caveats).toContain("line-narrowed");
     expect(r.validity.reliability).toBe("narrowed");
     expect(r.lines).toEqual({ ranges: [{ file: FILE, start: 5, end: 5 }], excludedSiteCount: 7 });
@@ -315,11 +366,15 @@ describe("runSession: the line filter reaches both the mutant set AND the report
 
   async function runWith(
     lines: readonly { file: string; start: number; end: number }[] | undefined,
+    changedSince?: typeof SRC,
+    events: RunEvent[] = [],
   ) {
     return withProject(async (projectDir, root) => {
       const store = new ResultsStore(":memory:");
       try {
         return await runSession({
+          emit: [(e) => events.push(e)],
+          ...(changedSince !== undefined ? { changedSince } : {}),
           backend: new StubBackend(),
           store,
           projectDir,
@@ -336,12 +391,20 @@ describe("runSession: the line filter reaches both the mutant set AND the report
 
   test("only IsOver's mutants run, and the report records the filter", async () => {
     const unfiltered = await runWith(undefined);
-    const scoped = await runWith([{ file: FILE, start: 5, end: 5 }]);
+    const events: RunEvent[] = [];
+    const scoped = await runWith([{ file: FILE, start: 5, end: 5 }], SRC, events);
     expect(scoped.mutants.length).toBeGreaterThan(0);
     expect(scoped.mutants.every((m) => m.procedureName === "IsOver")).toBe(true);
     expect(unfiltered.mutants.some((m) => m.procedureName === "IsUnder")).toBe(true);
     expect(scoped.lines?.excludedSiteCount).toBe(unfiltered.mutants.length - scoped.mutants.length);
     expect(scoped.validity.caveats).toContain("line-narrowed");
     expect(unfiltered.validity.caveats).not.toContain("line-narrowed");
+    // GH-25: two assertions, because the orchestrator builds the event and the fold statics at
+    // two different sites and either can be forgotten.
+    expect(scoped.lines?.changedSince).toEqual(SRC);
+    const configured = events.find((e) => e.type === "run-configured");
+    expect(
+      configured?.type === "run-configured" ? configured.lines?.changedSince : undefined,
+    ).toEqual(SRC);
   });
 });

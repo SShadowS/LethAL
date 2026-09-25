@@ -33,25 +33,12 @@ import {
   runCampaignFreeze,
 } from "../src/campaign-subcommands";
 import type { MutantOutcome, SessionReport } from "../src/report";
+import { git, makeGitRepo } from "./helpers/git-repo";
 
 // ---------------------------------------------------------------------------------------------
 // Real-git fixtures
 // ---------------------------------------------------------------------------------------------
 
-/**
- * A HERMETIC git environment for the fixture repositories.
- *
- * Measured on a hosted `windows-latest` runner (CI run 32075875426, 2026-08-17): `git commit` in a
- * fresh temp repo exceeded the 5 s default test timeout and was killed, so the suite failed with
- * `git commit ... failed (143)` — SIGTERM, empty stderr — on a commit that only touched a markdown
- * file. It had passed on the commit before and the commit after, which is the signature of a flaky
- * gate rather than a defect, and a flaky gate is how people learn to ignore a red build.
- *
- * Disabling the global and system config is both the speed fix and a correctness one: a fixture
- * repository should not inherit the machine's `hooksPath`, `commit.gpgsign`, or anything else the
- * developer happens to have set. `GIT_TERMINAL_PROMPT=0` makes any credential prompt an error
- * instead of a hang, which is the other way a spawned git eats a timeout.
- */
 /**
  * Bun applies the same 5 s default timeout to a HOOK as to a test, and a `beforeAll` here spawns
  * git four or five times against a fresh temp directory. That fits comfortably on a developer
@@ -60,29 +47,6 @@ import type { MutantOutcome, SessionReport } from "../src/report";
  * close to the observed cost.
  */
 const HOOK_TIMEOUT_MS = 60_000;
-
-const HERMETIC_GIT_ENV = {
-  ...process.env,
-  GIT_CONFIG_GLOBAL: join(tmpdir(), "lethal-nonexistent-gitconfig"),
-  GIT_CONFIG_SYSTEM: join(tmpdir(), "lethal-nonexistent-gitconfig"),
-  GIT_TERMINAL_PROMPT: "0",
-};
-
-async function git(cwd: string, args: readonly string[]): Promise<string> {
-  const proc = Bun.spawn(["git", ...args], {
-    cwd,
-    stdout: "pipe",
-    stderr: "pipe",
-    env: HERMETIC_GIT_ENV,
-  });
-  const [stdout, stderr] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-  ]);
-  const code = await proc.exited;
-  if (code !== 0) throw new Error(`git ${args.join(" ")} failed (${code}): ${stderr}`);
-  return stdout;
-}
 
 /**
  * The error `p` rejected with — and a FAILURE if it resolved instead. `.catch((e) => e)` alone
@@ -105,17 +69,9 @@ async function writeAt(root: string, rel: string, content: string): Promise<void
   await writeFile(abs, content, "utf8");
 }
 
-/** A real repository with `files` committed in one commit. `realpathSync` because the containment
- *  checks in `campaign-manifest.ts` compare real paths, and a temp dir can be a link. */
+/** A real repository with `files` committed in one commit. See `makeGitRepo` for the mechanics. */
 async function makeRepo(files: Record<string, string>): Promise<string> {
-  const root = realpathSync(await mkdtemp(join(tmpdir(), "lethal-campaign-cli-")));
-  await git(root, ["init", "-q"]);
-  await git(root, ["config", "user.email", "campaign@example.invalid"]);
-  await git(root, ["config", "user.name", "Campaign Fixture"]);
-  for (const [rel, content] of Object.entries(files)) await writeAt(root, rel, content);
-  await git(root, ["add", "-A"]);
-  await git(root, ["commit", "-qm", "campaign fixture"]);
-  return root;
+  return makeGitRepo(files);
 }
 
 // ---------------------------------------------------------------------------------------------

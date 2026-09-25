@@ -22,7 +22,7 @@
  */
 import type { MutantManifestEntry } from "@lethal/schemata";
 import type { BackendCapabilities, TestMethodRef, TestOutcome } from "./backend";
-import type { LineRange } from "./line-filter";
+import type { ChangedSinceSource, LineRange } from "./line-filter";
 import type { PermissionCanaryResult } from "./permission-canary";
 import type { Caveat, DeclarativeSiteFile, MutantErrorCause, NotInstrumentedFile } from "./report";
 import type { CoverageAttribution } from "./selection";
@@ -97,7 +97,11 @@ export type RunEventInput =
       readonly operators?: { readonly names: readonly string[] };
       /** Issue #19: the line filter this run was GIVEN. The site count it excluded is LEARNED
        *  and rides `mutation-set-generated.excludedByLines`. */
-      readonly lines?: { readonly ranges: readonly LineRange[] };
+      readonly lines?: {
+        readonly ranges: readonly LineRange[];
+        /** GH-25: present exactly when `--changed-since` was given. */
+        readonly changedSince?: ChangedSinceSource;
+      };
       readonly testsOnly?: readonly string[];
       readonly stopHungSessions?: boolean;
     }
