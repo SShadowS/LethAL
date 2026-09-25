@@ -42,11 +42,20 @@ root. Below, `coord` means that full command.
 owner's pause live in the same folder CentralGauge uses. A LethAL lease is seen by
 CentralGauge's lanes and the other way round.
 
-- Before any work that touches a BC container (live gates, control-app publish, fixture
-  publish): check it is running
-  (`pwsh -File U:\Git\agent-coord\containers.ps1 status -Names Cronus281`), then
-  `coord lease Cronus281 code`, heartbeat every 5 minutes, release right after. Held by
-  CentralGauge: wait, do not take another container the fixtures are not on.
+- **LethAL may use ONE container: `Cronus28`** (owner allocation 2026-09-25, enforced by coord
+  through `H:\cg-coord\allocation.json`). Cronus281, Cronus282 and Cronus283 belong to
+  CentralGauge; never lease or publish to them. Every fixture (`sandbox-app`, `sandbox-data`,
+  `sandbox-hang`) runs against Cronus28, so live gates run one at a time.
+- Before any work that touches it (live gates, control-app publish, fixture publish): check it
+  is running (`pwsh -File U:\Git\agent-coord\containers.ps1 status -Names Cronus28`), then
+  `coord lease Cronus28 <lane>`, heartbeat every 5 minutes, release right after. Held by
+  another lane: wait.
+- **Cronus28 needs a one-time setup before its first gate, and publishing needs the owner's
+  yes:** control app 1.0.0.18, then `sandbox-app`, then `sandbox-tests` (and, before
+  `itest:tables`, `sandbox-data`, `sandbox-data-tests` and Microsoft's `Library Assert`). The
+  gitignored `fixtures/*/lethal.config.local.json` and `fixtures/sandbox-app/.vscode/launch.local.json`
+  point at Cronus28 in the main checkout only. A lane worktree has no copy of them, so live gates
+  run from the main checkout `U:\Git\LethAL`.
 - A stopped container: `coord ask`, never start it.
 - Live gates (`itest:bcdev`, `itest:tables`, `itest:envtool`, and anything publishing to a
   container) are user-invoked by this repo's rules. The lane runs one only after the owner
