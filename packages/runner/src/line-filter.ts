@@ -103,7 +103,7 @@ export interface ChangedSinceSource {
   readonly ref: string;
   /** Full sha of `git merge-base <ref> HEAD`; the diff runs from here to the working tree. */
   readonly mergeBase: string;
-  /** Untracked, not-ignored `.al` files under the project, project-relative, sorted. Every line
+  /** Untracked, not-ignored `.al` files under the project (minus `Mutation*`, as enumeration skips them), project-relative, sorted. Every line
    *  of each counts as changed; an empty one is listed and contributes no range. */
   readonly untrackedFiles: readonly string[];
 }
@@ -204,7 +204,7 @@ export async function changedLinesSince(
     "--",
     ".",
   ]);
-  const ranges = parseUnifiedDiffAdded(diff).filter((r) => isAl(r.file));
+  const ranges = parseUnifiedDiffAdded(diff).filter((r) => isEnumeratedAl(r.file));
 
   // A submodule or nested repository is walked and parsed by LethAL, but this repository's diff
   // never sees edits inside it. No `--exclude` remedy: line resolution runs before exclusions.
@@ -228,7 +228,7 @@ export async function changedLinesSince(
       if (await holdsAlFile(join(projectDir, entry))) throw blind(entry, "a nested git repository");
       continue;
     }
-    if (isAl(entry)) untrackedFiles.push(normalizeRelPath(entry));
+    if (isEnumeratedAl(entry)) untrackedFiles.push(normalizeRelPath(entry));
   }
   untrackedFiles.sort();
   for (const file of untrackedFiles) {

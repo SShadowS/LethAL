@@ -303,6 +303,26 @@ describe("fails loudly", () => {
 });
 
 describe("edges", () => {
+  test("Mutation*.al files, tracked or untracked, contribute no range, as enumeration skips them", async () => {
+    const { root, app } = await prFixture();
+    try {
+      await writeFile(join(app, "src/MutationTracked.al"), "m1\nm2\n");
+      await git(root, ["add", "-A"]);
+      await git(root, ["commit", "-qm", "tracked emitted artifact"]);
+      await writeFile(join(app, "src/MutationTracked.al"), "m1\nM2\n");
+      await writeFile(join(app, "src/MutationSelector.al"), "s\n");
+      await writeFile(join(app, "src/A.al"), TEN.replace("l5\n", "L5\n").replace("l9\n", "L9\n"));
+      const { ranges, source } = await changedLinesSince(app, "main", hermeticSpawn);
+      expect(ranges).toEqual([
+        { file: "src/A.al", start: 5, end: 5 },
+        { file: "src/A.al", start: 9, end: 9 },
+      ]);
+      expect(source.untrackedFiles).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("a line-ending-only change adds no range", async () => {
     const { root, app } = await prFixture();
     try {
