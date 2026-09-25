@@ -8,8 +8,8 @@ share the BC containers, so they share container leases and the owner's pause.
 
 | Session | Worktree | Branch | Does | Never does |
 | --- | --- | --- | --- | --- |
-| `lethal-orchestrator` | `U:\Git\LethAL` | `master` | plans per task, `task.md` files, reviews, merges, pushes, closes GitHub issues, asks the owner | writes product code, resolves merge conflicts by writing code, runs live gates, loosens a hook or rule |
-| `lethal-code` | `U:\Git\LethAL-wt\lane-code` | `lethal/lane-code` | the c02 epic (coord lane `code`): implements tasks with TDD and subagents, files roadmap items, runs live gates only when the owner said yes | pushes, edits plans or `task.md`, starts or restarts containers |
+| `lethal-orchestrator` | `U:\Git\LethAL` | `master` | plans per task, `task.md` files, reviews, merges, pushes, closes GitHub issues, asks the owner | writes product code, resolves merge conflicts by writing code, re-records a gate baseline, loosens a hook or rule |
+| `lethal-code` | `U:\Git\LethAL-wt\lane-code` | `lethal/lane-code` | the c02 epic (coord lane `code`): implements tasks with TDD and subagents, files roadmap items, runs live gates on Cronus28 under a lease (standing owner authorization) | pushes, edits plans or `task.md`, starts or restarts containers |
 | `lethal-bugs` | `U:\Git\LethAL-wt\lane-bugs` | `lethal/lane-bugs` | the standalone `GH-*` issues (coord lane `bugs`), same rules as `lethal-code` | same as `lethal-code` |
 
 `CLAUDE.md` in the repo still applies in full: the build/test order (typecheck, then
@@ -50,17 +50,26 @@ CentralGauge's lanes and the other way round.
   is running (`pwsh -File U:\Git\agent-coord\containers.ps1 status -Names Cronus28`), then
   `coord lease Cronus28 <lane>`, heartbeat every 5 minutes, release right after. Held by
   another lane: wait.
-- **Cronus28 needs a one-time setup before its first gate, and publishing needs the owner's
-  yes:** control app 1.0.0.18, then `sandbox-app`, then `sandbox-tests` (and, before
-  `itest:tables`, `sandbox-data`, `sandbox-data-tests` and Microsoft's `Library Assert`). The
-  gitignored `fixtures/*/lethal.config.local.json` and `fixtures/sandbox-app/.vscode/launch.local.json`
-  point at Cronus28 in the main checkout only. A lane worktree has no copy of them, so live gates
-  run from the main checkout `U:\Git\LethAL`.
+- **Standing owner authorization (2026-09-25): Cronus28 is LethAL's to use freely.** Publishing
+  to it and running live gates on it need no further `coord ask`. Everything else in this file
+  still holds: lease it first, heartbeat, release, one gate at a time, and a moved frozen figure
+  or a re-recorded baseline still goes to the owner.
+- **Cronus28's one-time setup was done 2026-09-25 by the orchestrator:** control app 1.0.0.18
+  (Global), then through the dev endpoint `sandbox-app`, `sandbox-tests`, `sandbox-probes`,
+  `sandbox-hang`, `sandbox-hang-tests`, `sandbox-data`, `sandbox-data-tests`, `gift-card`,
+  `gift-card-tests`, all built fresh from `master`. Microsoft's test libraries (`Library Assert`,
+  `Test Runner`, `Any`, `Library Variable Storage`, `Permissions Mock`) were already installed.
+  Leave the Continia and `CG Test Harness` apps on it alone. After changing a fixture's AL, rebuild
+  and republish that app (see `.claude/skills/control-app`, section on the dev endpoint).
+- The gitignored `fixtures/*/lethal.config.local.json` and
+  `fixtures/sandbox-app/.vscode/launch.local.json` point at Cronus28 in the main checkout AND in
+  each lane worktree, so a lane can gate its own branch. Acceptance gates run on the merged tree in
+  the main checkout.
 - A stopped container: `coord ask`, never start it.
-- Live gates (`itest:bcdev`, `itest:tables`, `itest:envtool`, and anything publishing to a
-  container) are user-invoked by this repo's rules. The lane runs one only after the owner
-  answered yes to a `coord ask` naming the exact gate. `itest:alrunner` runs locally and needs
-  no container.
+- Live gates (`itest:bcdev`, `itest:tables`, `itest:chunked`, `itest:hang`, `itest:envtool`)
+  run only on Cronus28 and only under a lease, and need no `coord ask` (standing authorization
+  above). `itest:alrunner` runs locally and needs no container. A differing verdict or moved
+  frozen figure is a block reported to the owner; never re-record a baseline yourself.
 - Pause: `coord checkpoint` answers `"paused": true` while the owner has paused the machine.
   Finish the running step (never kill a live gate midway), release leases, commit, checkpoint
   `--wait paused`, and go idle until the orchestrator says `resume`.
