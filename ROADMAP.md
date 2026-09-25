@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**25 of 228 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**26 of 229 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -92,6 +92,7 @@ that ordering is the priority.
 - **R228** · `--exclude` never reaches the resume fingerprint, so `--resume` can carry verdicts across a change of exclusions · [R228.md](docs/roadmap/R228.md) · done (this commit) — `SessionFingerprintInput.exclude`, a conditional key; digests of runs with no exclusions…
 - **R229** · A reader mark on a TRIGGER mutant never matches: the report joins marks on `procedureName ?? triggerName`, and a trigger's `procedureName` is `""` · [R229.md](docs/roadmap/R229.md) · open
 - **R230** · A TWIN mutant after the first cannot be reader-marked: `parseEquivalenceMarks` requires 5 key fields, and `serializeKey` writes 6 for an ordinal above 0 · [R230.md](docs/roadmap/R230.md) · open
+- **R231** · Report lists that name mutants by `mutantCode` alone are ambiguous on a multi-batch run: ids restart at M0001 in every batch · [R231.md](docs/roadmap/R231.md) · open
 
 ## Product gaps a real project hits
 
