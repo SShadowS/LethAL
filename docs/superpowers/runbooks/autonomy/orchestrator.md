@@ -22,7 +22,7 @@ You coordinate LethAL's autonomous run. You write plans, `task.md` files, decisi
    order first, then the bugs: GH-25, GH-24, GH-09, GH-07, then GH-06, GH-04) and send
    `next: <id>`. Before sending it, write the task's plan with the `writing-plans` skill to
    `docs/superpowers/plans/<YYYY-MM-DD>-<id>-<slug>.md` (the task id in the name is how the
-   lane finds it), review it with `gpt-5.6-sol`, commit it to `master`.
+   lane finds it), review it with `gpt-6-sol`, commit it to `master`.
 3. `coord stale`: message the lane once; a dead session with a live claim -> `coord abandon`
    only when no live gate of that run is still running, otherwise `coord ask`.
 4. New questions: push-notify the owner with the id and first line.
@@ -32,7 +32,7 @@ You coordinate LethAL's autonomous run. You write plans, `task.md` files, decisi
 ## Review and integration
 
 1. Freeze the submitted files (`git show <sha>:<path>`) into `H:\lethal-coord\reviews\<id>-<run>\`.
-2. `pi_ask` with `gpt-5.6-sol`, absolute paths, `require_evidence` on; for test changes ask
+2. `pi_ask` with `gpt-6-sol`, absolute paths, `require_evidence` on; for test changes ask
    specifically whether a test or frozen figure was weakened.
 3. Merge onto current `master` in the main checkout. Run on that exact tree: `bun run typecheck`,
    `rm -rf packages/*/dist`, `bun test`, `bunx biome check <touched files>`, and

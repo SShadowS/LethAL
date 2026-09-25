@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**23 of 226 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**25 of 228 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -90,6 +90,8 @@ that ordering is the priority.
 - **R223** · Every env-gated itest exits 0 when it skips, so a caller reading exit codes cannot tell a passed gate from one that never contacted BC · [R223.md](docs/roadmap/R223.md) · open, NARROWED twice: 2026-09-18 all seven live gates emit receipts and exit non-zero on a challenged skip…
 - **R226** · Three `lethal doctor` tests spawn real probes on a 5 s budget and fail the unit suite when the machine is busy, so `bun test` is not safe to run beside a live gate · [R226.md](docs/roadmap/R226.md) · open, filed 2026-09-18, MECHANISM SHARPENED the same day: the budget is marginal on its own…
 - **R228** · `--exclude` never reaches the resume fingerprint, so `--resume` can carry verdicts across a change of exclusions · [R228.md](docs/roadmap/R228.md) · done (this commit) — `SessionFingerprintInput.exclude`, a conditional key; digests of runs with no exclusions…
+- **R229** · A reader mark on a TRIGGER mutant never matches: the report joins marks on `procedureName ?? triggerName`, and a trigger's `procedureName` is `""` · [R229.md](docs/roadmap/R229.md) · open
+- **R230** · A TWIN mutant after the first cannot be reader-marked: `parseEquivalenceMarks` requires 5 key fields, and `serializeKey` writes 6 for an ordinal above 0 · [R230.md](docs/roadmap/R230.md) · open
 
 ## Product gaps a real project hits
 
