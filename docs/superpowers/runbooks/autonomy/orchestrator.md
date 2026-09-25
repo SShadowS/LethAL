@@ -38,7 +38,7 @@ You coordinate LethAL's autonomous run. You write plans, `task.md` files, decisi
    specifically whether a test or frozen figure was weakened.
 3. Merge onto current `master` in the main checkout. Run on that exact tree: `bun run typecheck`,
    `rm -rf packages/*/dist`, `bun test`, `bunx biome check <touched files>`, and
-   `bun run compile:fixtures` when fixtures changed. Live gates: ask the owner; never yourself.
+   `bun run compile:fixtures` when fixtures changed. Live gates the plan names: run them yourself on Cronus28 under `coord lease Cronus28 orchestrator` (standing owner authorization, README), one at a time; a moved figure is a block for the owner.
 4. Commit the merge, `git push origin master`, `coord accept <id> <run> <sha>`, close the issue
    (`gh issue close <n> -R SShadowS/LethAL --comment "Done in <sha>"`), message the lane
    `accepted <id>` and `master moved to <sha>: merge it`; tell the other lane `master moved to <sha>` too.
