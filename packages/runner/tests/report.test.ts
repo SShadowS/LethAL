@@ -255,6 +255,7 @@ describe("Caveat union", () => {
       "baseline-red": true,
       narrowed: true,
       "operator-narrowed": true,
+      "line-narrowed": true,
       "tests-narrowed": true,
       "uninstrumentable-files": true,
       "stale-test-app": true,
@@ -271,7 +272,7 @@ describe("Caveat union", () => {
       "all-errors": true,
       "session-warm": true,
     };
-    expect(Object.keys(all).length).toBe(18);
+    expect(Object.keys(all).length).toBe(19);
   });
 });
 

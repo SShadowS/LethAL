@@ -22,6 +22,7 @@
  */
 import type { MutantManifestEntry } from "@lethal/schemata";
 import type { BackendCapabilities, TestMethodRef, TestOutcome } from "./backend";
+import type { LineRange } from "./line-filter";
 import type { PermissionCanaryResult } from "./permission-canary";
 import type { Caveat, DeclarativeSiteFile, MutantErrorCause, NotInstrumentedFile } from "./report";
 import type { CoverageAttribution } from "./selection";
@@ -94,6 +95,9 @@ export type RunEventInput =
        * `mutation-set-generated.excludedByOperator`.
        */
       readonly operators?: { readonly names: readonly string[] };
+      /** Issue #19: the line filter this run was GIVEN. The site count it excluded is LEARNED
+       *  and rides `mutation-set-generated.excludedByLines`. */
+      readonly lines?: { readonly ranges: readonly LineRange[] };
       readonly testsOnly?: readonly string[];
       readonly stopHungSessions?: boolean;
     }
@@ -149,6 +153,9 @@ export type RunEventInput =
        *  see `MutationSetResult.excludedByOperator` for why the two differ). 0 when no operator
        *  filter was given. The LEARNED half of `run-configured.operators`. */
       readonly excludedByOperator: number;
+      /** Issue #19: post-dedup sites the line filter excluded. Present exactly when a line filter
+       *  was given, so a measured 0 and "no filter" do not look alike. */
+      readonly excludedByLines?: number;
     }
   | {
       /** Discovery returns the whole list in one parse — 1,000+ per-item events at one instant

@@ -1,4 +1,5 @@
 import { tier1Operators } from "@lethal/builtin-tier1";
+import type { LineRange } from "./line-filter";
 import { tier2Operators } from "@lethal/builtin-tier2";
 import type { MutantManifestEntry } from "@lethal/schemata";
 import { type AlRunnerCanaryResult, alRunnerCanaryWarnings } from "./al-runner-canary";
@@ -166,6 +167,7 @@ export type Caveat =
   | "baseline-red"
   | "narrowed"
   | "operator-narrowed"
+  | "line-narrowed"
   | "tests-narrowed"
   | "uninstrumentable-files"
   | "stale-test-app"
@@ -236,6 +238,17 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
       "have deployed too. It is separate from `narrowed` (`--only`) because the two narrow " +
       "different axes and a reader must be able to tell which one produced the number.",
     basis: "R127",
+  },
+  "line-narrowed": {
+    meaning:
+      "The run was scoped by `--lines` or `--changed-since`. `mutationScore` covers mutants whose " +
+      "span touches the given lines ONLY, and describes how the suite handles those lines (a " +
+      "pull request's changes, typically), not the project.",
+    entailedNegative:
+      "The line filter selects which mutants run and cannot itself change a verdict: it is " +
+      "applied AFTER per-file dedup, so every mutant it deploys is one an unfiltered run would " +
+      "have deployed too. A mutant whose span covers both a given line and other lines is kept.",
+    basis: "R227",
   },
   "tests-narrowed": {
     meaning:
@@ -940,6 +953,15 @@ export interface SessionReport {
    */
   readonly operators?: {
     readonly names: readonly string[];
+    readonly excludedSiteCount: number;
+  };
+  /**
+   * Issue #19 (R227): the line filter this run was asked for (`--lines`, `--changed-since`), if
+   * any. `ranges` are project-relative, 1-based and inclusive; `excludedSiteCount` counts the
+   * post-dedup sites on other lines. See `CAVEAT_INTERPRETATIONS["line-narrowed"]`.
+   */
+  readonly lines?: {
+    readonly ranges: readonly LineRange[];
     readonly excludedSiteCount: number;
   };
   /**
@@ -2013,6 +2035,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
   if (input.only !== undefined || input.exclude !== undefined) caveats.push("narrowed");
   // See CAVEAT_INTERPRETATIONS["operator-narrowed"] for what this caveat means to a reader.
   if (input.operators !== undefined) caveats.push("operator-narrowed");
+  if (input.lines !== undefined) caveats.push("line-narrowed");
   // See CAVEAT_INTERPRETATIONS["tests-narrowed"] for what this caveat means to a reader.
   if (input.testsOnly !== undefined && input.testsOnly.length > 0) caveats.push("tests-narrowed");
   if (notInstrumented.files.length > 0) caveats.push("uninstrumentable-files");
@@ -2191,6 +2214,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     // shape of over-claim this field exists to prevent.
     input.exclude !== undefined ||
     input.operators !== undefined ||
+    input.lines !== undefined ||
     (input.testsOnly !== undefined && input.testsOnly.length > 0);
   // R190: a run that measured nothing is degraded whatever its baseline said.
   const degraded = !input.baselineGreen || allErrors;
@@ -2224,9 +2248,12 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
         ? `${notInstrumented.totalFiles - input.exclude.excludedFileCount} of ${notInstrumented.totalFiles} .al file(s)`
         : `${notInstrumented.totalFiles} .al file(s)`) + excludeScope;
   const scopeText =
-    input.operators !== undefined
+    (input.operators !== undefined
       ? `${fileScope}, operators ${input.operators.names.join(", ")} only (${input.operators.excludedSiteCount} site(s) from other operators excluded)`
-      : fileScope;
+      : fileScope) +
+    (input.lines !== undefined
+      ? `, ${input.lines.ranges.length} line range(s) only (${input.lines.excludedSiteCount} site(s) on other lines excluded)`
+      : "");
   const baselineText = degraded
     ? `, with ${input.unsupportedTests.length} of ${input.baselineTests.length} baseline tests failing`
     : "";
@@ -2312,6 +2339,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     ...(input.only !== undefined ? { only: input.only } : {}),
     ...(input.exclude !== undefined ? { exclude: input.exclude } : {}),
     ...(input.operators !== undefined ? { operators: input.operators } : {}),
+    ...(input.lines !== undefined ? { lines: input.lines } : {}),
     ...(input.testsOnly !== undefined ? { testsOnly: input.testsOnly } : {}),
     ...(input.staleTestApp !== undefined ? { staleTestApp: input.staleTestApp } : {}),
     ...(input.resumedFrom !== undefined ? { resumedFrom: input.resumedFrom } : {}),
@@ -2710,6 +2738,14 @@ export function renderConsole(r: SessionReport): string {
   if (r.operators !== undefined) {
     lines.push(
       `NARROWED (--operator): ${r.operators.names.map((n) => `"${n}"`).join(", ")} — ${r.operators.excludedSiteCount} mutation site(s) from other operators were excluded. The score above covers those operators ONLY, it is not a project score.`,
+    );
+  }
+  // Issue #19: the line axis, separate for the same reason.
+  if (r.lines !== undefined) {
+    const shown = r.lines.ranges.slice(0, 5).map((x) => `${x.file}:${x.start}-${x.end}`);
+    const more = r.lines.ranges.length > 5 ? ` and ${r.lines.ranges.length - 5} more` : "";
+    lines.push(
+      `NARROWED (lines): ${shown.join(", ")}${more} — ${r.lines.excludedSiteCount} mutation site(s) on other lines were excluded. The score above covers those lines ONLY, it is not a project score.`,
     );
   }
   // Same reasoning as NOT INSTRUMENTED above: a qualifier on the score belongs next to the score.

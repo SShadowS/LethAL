@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { MutantManifestEntry } from "@lethal/schemata";
+import type { LineRange } from "./line-filter";
 import { type CoverageAttribution, identityKeyOf, serializeKey } from "./selection";
 import type { MutantVerdict, MutantVerdictRow, RunnerKind } from "./store";
 
@@ -302,6 +303,7 @@ export interface SessionFingerprintInput {
    * mutants the run deployed at all.
    */
   readonly operators?: readonly string[];
+  readonly lines?: readonly LineRange[];
   readonly testsOnly?: readonly string[];
   readonly skipKnownSurvivors: boolean;
   readonly selectorIds: {
@@ -325,6 +327,10 @@ export function sessionFingerprint(input: SessionFingerprintInput): string {
     // holding a half-finished 12-hour run would stop resuming the moment this build shipped. A
     // conditional key is deterministic (same position whenever present) and costs nothing.
     ...(input.operators !== undefined ? { operators: [...input.operators].sort() } : {}),
+    // Issue #19: conditional for the same reason `operators` is.
+    ...(input.lines !== undefined
+      ? { lines: [...input.lines].map((r) => `${r.file}:${r.start}-${r.end}`).sort() }
+      : {}),
     testsOnly: input.testsOnly === undefined ? null : [...input.testsOnly].sort(),
     skipKnownSurvivors: input.skipKnownSurvivors,
     selectorIds: [

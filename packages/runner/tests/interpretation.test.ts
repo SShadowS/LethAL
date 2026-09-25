@@ -32,7 +32,7 @@ test("adding an attribution variant fails to COMPILE until its interpretation ex
 });
 
 test("every caveat has an interpretation", () => {
-  expect(Object.keys(CAVEAT_INTERPRETATIONS).length).toBe(18);
+  expect(Object.keys(CAVEAT_INTERPRETATIONS).length).toBe(19);
 });
 
 test("every shipped interpretation's basis resolves", () => {

@@ -124,6 +124,38 @@
             }
           }
         },
+        "lines": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ranges"
+          ],
+          "properties": {
+            "ranges": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "file",
+                  "start",
+                  "end"
+                ],
+                "properties": {
+                  "file": {
+                    "type": "string"
+                  },
+                  "start": {
+                    "type": "number"
+                  },
+                  "end": {
+                    "type": "number"
+                  }
+                }
+              }
+            }
+          }
+        },
         "testsOnly": {
           "type": "array",
           "items": {
@@ -337,6 +369,9 @@
           "type": "number"
         },
         "excludedByOperator": {
+          "type": "number"
+        },
+        "excludedByLines": {
           "type": "number"
         },
         "seq": {

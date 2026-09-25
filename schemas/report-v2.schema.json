@@ -60,6 +60,7 @@
               "baseline-red",
               "narrowed",
               "operator-narrowed",
+              "line-narrowed",
               "tests-narrowed",
               "uninstrumentable-files",
               "stale-test-app",
@@ -610,6 +611,42 @@
           "type": "array",
           "items": {
             "type": "string"
+          }
+        },
+        "excludedSiteCount": {
+          "type": "number"
+        }
+      }
+    },
+    "lines": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ranges",
+        "excludedSiteCount"
+      ],
+      "properties": {
+        "ranges": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "file",
+              "start",
+              "end"
+            ],
+            "properties": {
+              "file": {
+                "type": "string"
+              },
+              "start": {
+                "type": "number"
+              },
+              "end": {
+                "type": "number"
+              }
+            }
           }
         },
         "excludedSiteCount": {

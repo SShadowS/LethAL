@@ -60,6 +60,8 @@ import {
 import { ActivationFailure } from "./failure-classes";
 import { LeaseUnavailableError, MAX_ATTEMPT_ID_LENGTH, MAX_TTL_SECONDS } from "./lease";
 import type { AcquireOutcome, Lease, LeaseApi } from "./lease";
+import { normalizeRelPath, spanTouches } from "./line-filter";
+import type { LineRange } from "./line-filter";
 import { isRetrySafe, requiresUnsafeLatch } from "./operation-outcome";
 import {
   type PermissionCanaryResult,
@@ -301,6 +303,8 @@ export interface MutationSetResult {
    * up against a full run's site count).
    */
   readonly excludedByOperator: number;
+  /** Issue #19: post-dedup sites the line filter dropped. 0 when no line filter was given. */
+  readonly excludedByLines: number;
   /**
    * R144: per file, the sites an operator matched that are not inside executable AL — an AL page or
    * report property is declarative and has no statement to wrap, so there is nothing to mutate.
@@ -361,6 +365,14 @@ export interface MutationSetOptions {
    * here.
    */
   readonly operators?: readonly string[];
+  /**
+   * Issue #19: line ranges a mutant must touch (`--lines`, `--changed-since`). Absent means no line
+   * filter. Applied after per-file dedup and after `operators`, for the same reason `operators` is:
+   * the result is a strict subset of what an unfiltered run deploys. A spec is kept when its span
+   * shares a line with a range in its own file. A range naming no project `.al` file throws, and
+   * so does a filter that keeps nothing.
+   */
+  readonly lines?: readonly LineRange[];
   /**
    * When present, this function's four `console.warn` calls emit `{ type: "warning" }` events on
    * it instead — `runSession` always passes one (defaulting to a no-op emitter). Absent for the
@@ -539,6 +551,20 @@ export async function generateMutationSet(
   const admittedOperators = resolveOperatorNames(options.operators ?? [], [
     ...operatorTiers.keys(),
   ]);
+  // Issue #19: a range naming no project `.al` file is refused before any file is read, like a
+  // typo'd `--only` pattern: it would otherwise silently select nothing in that file.
+  const lineRanges = options.lines;
+  if (lineRanges !== undefined) {
+    const known = new Set(entries.map((e) => normalizeRelPath(e).toLowerCase()));
+    const unknown = [...new Set(lineRanges.map((r) => r.file))].filter(
+      (f) => !known.has(f.toLowerCase()),
+    );
+    if (unknown.length > 0) {
+      throw new Error(
+        `the line filter names ${unknown.length} file(s) that are not .al files in this project: ${unknown.map((f) => `"${f}"`).join(", ")}. Paths are project-relative.`,
+      );
+    }
+  }
   // Pass 1: parse every file — INCLUDING files `--only` excluded. Pass 2 (below) walks them
   // against ONE context built over all of them; see this function's doc comment for why the
   // context must be project-wide, and note that narrowing the PARSE set instead of the
@@ -559,6 +585,7 @@ export async function generateMutationSet(
   // so the "this operator deploys nothing" refusal below can tell "no sites at all" from "sites
   // only in files nothing can be injected into", which are different mistakes with different fixes.
   let excludedByOperator = 0;
+  let excludedByLines = 0;
   const producedAnywhere = new Set<string>();
   const producedInstrumentable = new Set<string>();
   // Sites an operator claimed that are not inside executable AL — see the drop below. The total
@@ -640,6 +667,21 @@ export async function generateMutationSet(
       }
       fileSpecs = selected;
     }
+    // Issue #19: after dedup and after the operator filter, so both stay strict subsets. Dedup is
+    // re-run only when the operator filter has not already reduced to dedup survivors.
+    if (lineRanges !== undefined) {
+      const survivedDedup =
+        admittedOperators !== undefined ? undefined : new Set(dedupeSpecs(fileSpecs, tierOf));
+      const selected: MutationSpec[] = [];
+      for (const spec of fileSpecs) {
+        if (survivedDedup !== undefined && !survivedDedup.has(spec)) continue;
+        const first = spec.before.startPosition.row + 1;
+        const last = spec.before.endPosition.row + 1;
+        if (spanTouches(lineRanges, rel, first, last)) selected.push(spec);
+        else excludedByLines++;
+      }
+      fileSpecs = selected;
+    }
     if (fileSpecs.length === 0) continue;
     for (const spec of fileSpecs) producedAnywhere.add(spec.operatorName);
     if (!canCarryMutationSelectorVar(root)) {
@@ -666,6 +708,19 @@ export async function generateMutationSet(
         `--operator ${barren.length === 1 ? "matched no deployable mutation site for operator" : "matched no deployable mutation site for operators"} ${named} in this project${admitted !== undefined ? " (within the --only scope)" : ""}.${nuance} Refusing rather than running with a smaller mutant set than asked for, which would report a score for a scope that was never measured.`,
       );
     }
+  }
+  // Issue #19: a line filter that keeps nothing is refused, like an operator that finds nothing: a
+  // run would otherwise publish and baseline to report a null score for lines that hold no mutant.
+  if (lineRanges !== undefined) {
+    if (files.length === 0) {
+      throw new Error(
+        `the line filter (${lineRanges.length} range(s)) kept no deployable mutation site${admitted !== undefined ? " within the --only scope" : ""}: none of the given lines holds a mutant. Refusing rather than reporting a score for nothing.`,
+      );
+    }
+    warn(
+      "line-narrowed-run",
+      `[lethal] the line filter narrowed this run to ${lineRanges.length} line range(s); ${excludedByLines} mutation site(s) on other lines were excluded. The score below covers those lines ONLY — it is not a project score.`,
+    );
   }
   if (skipped.length > 0) {
     const total = skipped.reduce((n, s) => n + s.sites, 0);
@@ -715,6 +770,7 @@ export async function generateMutationSet(
     excludedByOnly,
     excludedByExclude,
     excludedByOperator,
+    excludedByLines,
     declarativeSites,
   };
 }
@@ -753,6 +809,9 @@ export interface SessionConfig {
    * unfiltered run would deploy, mutant for mutant.
    */
   readonly operators?: readonly string[];
+  /** Issue #19: line ranges a mutant must touch. See `MutationSetOptions.lines`; like `operators`,
+   *  this narrows the mutant set and cannot change a verdict. */
+  readonly lines?: readonly LineRange[];
   /**
    * R45: glob patterns naming which TEST files may run (`--tests-only`). Absent means the whole
    * suite. Narrows the baseline — the phase `only` does not touch and where a real project's run
@@ -2857,6 +2916,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     ...(cfg.only !== undefined ? { only: { patterns: cfg.only } } : {}),
     ...(cfg.exclude !== undefined ? { exclude: { patterns: cfg.exclude } } : {}),
     ...(resolvedOperators !== undefined ? { operators: { names: resolvedOperators } } : {}),
+    ...(cfg.lines !== undefined ? { lines: { ranges: cfg.lines } } : {}),
     ...(cfg.testsOnly !== undefined ? { testsOnly: cfg.testsOnly } : {}),
     ...(cfg.stopHungSessions === true ? { stopHungSessions: true } : {}),
     // R172 proposal 3. Passed through as GIVEN; `buildReport` decides which marks matched, went
@@ -3089,6 +3149,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     // different mutant sets are not resumable into one another, and a resume that carried
     // verdicts across an operator-scope change would report them as this run's own measurement.
     ...(resolvedOperators !== undefined ? { operators: resolvedOperators } : {}),
+    // Issue #19: a different line scope deployed a different mutant set.
+    ...(cfg.lines !== undefined ? { lines: cfg.lines } : {}),
     ...(cfg.testsOnly !== undefined ? { testsOnly: cfg.testsOnly } : {}),
   });
   const resumeState = resolveResume(cfg, backendName, configFingerprint, emit);
@@ -3137,11 +3199,13 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     excludedByOnly,
     excludedByExclude,
     excludedByOperator,
+    excludedByLines,
     declarativeSites: declarativeSiteFiles,
   } = await generateMutationSet(cfg.projectDir, {
     ...(cfg.only !== undefined ? { only: cfg.only } : {}),
     ...(cfg.exclude !== undefined ? { exclude: cfg.exclude } : {}),
     ...(resolvedOperators !== undefined ? { operators: resolvedOperators } : {}),
+    ...(cfg.lines !== undefined ? { lines: cfg.lines } : {}),
     emit,
   });
   const generateMutationSetMs = Date.now() - generateStartedMs;
@@ -3178,6 +3242,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     excludedByOnly,
     excludedByExclude,
     excludedByOperator,
+    ...(cfg.lines !== undefined ? { excludedByLines } : {}),
   });
   // R196: announced BEFORE deployment (spec §5.3), not after scoring. A warning at the end would
   // satisfy a presence check while being useless to the person it is for.
@@ -3203,7 +3268,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   assertRunSizeAcceptable({
     mutantCount: siteCount,
     fileCount: allFiles.length,
-    narrowed: cfg.only !== undefined || resolvedOperators !== undefined,
+    narrowed: cfg.only !== undefined || resolvedOperators !== undefined || cfg.lines !== undefined,
     allowLargeRun: cfg.allowLargeRun ?? false,
   });
   const artifacts = planArtifacts(allFiles, {
@@ -4591,6 +4656,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     ...(resolvedOperators !== undefined && resolvedOperators.length > 0
       ? { operators: { names: resolvedOperators } }
       : {}),
+    ...(cfg.lines !== undefined ? { lines: { ranges: cfg.lines } } : {}),
     ...(cfg.testsOnly !== undefined && cfg.testsOnly.length > 0
       ? { testsOnly: cfg.testsOnly }
       : {}),

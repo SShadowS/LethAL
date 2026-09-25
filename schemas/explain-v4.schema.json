@@ -94,6 +94,7 @@
               "baseline-red",
               "narrowed",
               "operator-narrowed",
+              "line-narrowed",
               "tests-narrowed",
               "uninstrumentable-files",
               "stale-test-app",

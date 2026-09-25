@@ -102,6 +102,36 @@ export interface Citation {
  */
 export const ALLOWLIST: readonly { file: string; citation: string; reason: string }[] = [
   {
+    file: "packages/runner/tests/line-filter.test.ts",
+    citation: "A.al:3",
+    reason: "`--lines <file>:<start>-<end>` argument data under test (issue #19), not a pointer",
+  },
+  {
+    file: "packages/runner/tests/line-filter.test.ts",
+    citation: "A.al:4",
+    reason: "`--lines <file>:<start>-<end>` argument data under test (issue #19), not a pointer",
+  },
+  {
+    file: "packages/runner/tests/line-filter.test.ts",
+    citation: "A.al:9",
+    reason: "`--lines <file>:<start>-<end>` argument data under test (issue #19), not a pointer",
+  },
+  {
+    file: "packages/runner/tests/line-filter.test.ts",
+    citation: "A.al:0",
+    reason: "`--lines <file>:<start>-<end>` argument data under test (issue #19), not a pointer",
+  },
+  {
+    file: "packages/runner/tests/line-filter.test.ts",
+    citation: "A.al:1",
+    reason: "`--lines <file>:<start>-<end>` argument data under test (issue #19), not a pointer",
+  },
+  {
+    file: "packages/runner/tests/line-filter.test.ts",
+    citation: "B.al:7",
+    reason: "`--lines <file>:<start>-<end>` argument data under test (issue #19), not a pointer",
+  },
+  {
     file: "README.md",
     citation: "Pricing.Codeunit.al:5",
     reason:

@@ -63,6 +63,8 @@ import { assertExplainableReport, explain } from "./explain";
 import { HarnessVerifier } from "./harness";
 import type { LeaseSnapshot } from "./harness";
 import { LeaseClient } from "./lease";
+import { changedLinesSince, parseLineArg } from "./line-filter";
+import type { LineRange } from "./line-filter";
 import { toMutationElements } from "./mutation-elements";
 import {
   LARGE_RUN_MUTANT_THRESHOLD,
@@ -295,6 +297,11 @@ export interface DryRunCliConfig {
    *  `RunCliConfig.operators`. Honoured here for the same reason `only` is: a dry run exists to
    *  answer "how big is this going to be", and it must answer for the scope actually asked for. */
   readonly operators?: readonly string[];
+  /** Issue #19 (R227): `--lines <file>:<start>-<end>` (repeatable), parsed. */
+  readonly lines?: readonly LineRange[];
+  /** Issue #19 (R227): `--changed-since <git-ref>`. Resolved to line ranges by `resolveLineRanges`
+   *  when the run starts, since it needs `git`. */
+  readonly changedSince?: string;
   /**
    * R90: same defaults as `RunCliConfig`, because a dry run is where the publish ceiling is worth
    * knowing — before anything is generated, instrumented, compiled or published. Both are read
@@ -362,6 +369,11 @@ export interface RunCliConfig {
    * `empty-block` and `void-method-call` site in them.
    */
   readonly operators?: readonly string[];
+  /** Issue #19 (R227): `--lines <file>:<start>-<end>` (repeatable), parsed. */
+  readonly lines?: readonly LineRange[];
+  /** Issue #19 (R227): `--changed-since <git-ref>`. Resolved to line ranges by `resolveLineRanges`
+   *  when the run starts, since it needs `git`. */
+  readonly changedSince?: string;
   /**
    * R45: `--tests-only <glob>` (repeatable) narrows which TEST files run at baseline. Absent means
    * the whole suite.
@@ -802,6 +814,13 @@ RUN — scope. These bound cost. --tests-only can change a verdict; the others c
                              prefix is optional; an unregistered name, or a registered one with no
                              deployable site here, is refused. The report flags it
                              'operator-narrowed'
+  --lines <file>:<a>-<b>     only mutants whose span touches these lines contribute (repeatable;
+                             <file>:<n> for one line). Paths are project-relative. A mutant that
+                             spans a given line and others is kept. Applied after dedup, so it
+                             cannot change a verdict. The report flags it 'line-narrowed'
+  --changed-since <ref>      the same filter, from the lines 'git diff -U0 <ref>...HEAD' adds or
+                             changes in the project. Unions with --lines. Pure deletions add no
+                             line. Needs git and a history that contains <ref>
   --tests-only <glob>        only these test files run at baseline (repeatable). CAN CHANGE A
                              VERDICT: exclude a killing test and its mutant is reported survived.
                              The report flags it 'tests-narrowed'
@@ -1025,6 +1044,9 @@ export const RUN_FLAGS = {
   exclude: { type: "string", multiple: true },
   // R127: repeatable — several `--operator` names union. See `RunCliConfig.operators`.
   operator: { type: "string", multiple: true },
+  // Issue #19 (R227): line-scoped mutant filter. `--lines` is repeatable and unions.
+  lines: { type: "string", multiple: true },
+  "changed-since": { type: "string" },
   // R45: repeatable — see `RunCliConfig.testsOnly`.
   "tests-only": { type: "string", multiple: true },
   // R44: see `RunCliConfig.maxGuardsPerBatch`.
@@ -1494,6 +1516,19 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
   const operators =
     operatorRaw !== undefined && operatorRaw.length > 0 ? { operators: operatorRaw } : {};
 
+  // Issue #19 (R227). `--changed-since` is kept as the ref here; `git` runs when the run starts.
+  const linesRaw = values.lines;
+  const changedSinceRaw = values["changed-since"];
+  if (changedSinceRaw === "") {
+    throw new Error("--changed-since requires a git ref (e.g. --changed-since origin/main)");
+  }
+  const lineFilter = {
+    ...(linesRaw !== undefined && linesRaw.length > 0
+      ? { lines: linesRaw.map((a) => parseLineArg(a)) }
+      : {}),
+    ...(changedSinceRaw !== undefined ? { changedSince: changedSinceRaw } : {}),
+  };
+
   const testsOnlyRaw = values["tests-only"];
   if (testsOnlyRaw?.some((p) => p === "") === true) {
     throw new Error(
@@ -1595,6 +1630,7 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
       ...only,
       ...exclude,
       ...operators,
+      ...lineFilter,
     };
   }
 
@@ -1692,6 +1728,7 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     ...only,
     ...exclude,
     ...operators,
+    ...lineFilter,
     ...testsOnly,
     ...(maxGuardsPerBatch !== undefined ? { maxGuardsPerBatch } : {}),
     ...(mutantTimeoutMs !== undefined ? { mutantTimeoutMs } : {}),
@@ -1996,6 +2033,29 @@ async function loadLethalConfigFile(path: string): Promise<LethalConfigFile> {
       `config file at ${path} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
+}
+
+/**
+ * Issue #19 (R227): the line filter's ranges, `--lines` unioned with `--changed-since`'s diff, or
+ * `undefined` when neither flag was given. The diff is narrowed to `.al` files here, since a PR
+ * also touches `app.json`, translations and layouts, which hold no mutants.
+ */
+export async function resolveLineRanges(
+  cfg: {
+    readonly projectDir: string;
+    readonly lines?: readonly LineRange[];
+    readonly changedSince?: string;
+  },
+  spawn: SpawnFn = defaultSpawn,
+): Promise<readonly LineRange[] | undefined> {
+  if (cfg.lines === undefined && cfg.changedSince === undefined) return undefined;
+  const fromGit =
+    cfg.changedSince === undefined
+      ? []
+      : (await changedLinesSince(cfg.projectDir, cfg.changedSince, spawn)).filter((r) =>
+          r.file.toLowerCase().endsWith(".al"),
+        );
+  return [...(cfg.lines ?? []), ...fromGit];
 }
 
 /**
@@ -2726,6 +2786,8 @@ export async function printDryRun(
     readonly configPath: string;
     /** R127: `--operator` names, honoured here for the same reason `only` is. */
     readonly operators?: readonly string[];
+    /** Issue #19: the resolved line filter, honoured for the same reason. */
+    readonly lines?: readonly LineRange[];
     /**
      * R221: `--exclude` patterns, honoured here for a sharper version of the same reason. A dry
      * run that ignored the exclusion would answer for a WIDER scope than the real run, which is
@@ -2740,11 +2802,12 @@ export async function printDryRun(
   // than the one the real run will use.
   const operators = paths.operators;
   const exclude = paths.exclude;
-  const { files, skipped, totalFiles, excludedByOnly, excludedByOperator } =
+  const { files, skipped, totalFiles, excludedByOnly, excludedByOperator, excludedByLines } =
     await generateMutationSet(projectDir, {
       ...(only !== undefined ? { only } : {}),
       ...(exclude !== undefined ? { exclude } : {}),
       ...(operators !== undefined ? { operators } : {}),
+      ...(paths.lines !== undefined ? { lines: paths.lines } : {}),
     });
   const sites = sitesOf(files);
   const artifacts = planArtifacts(files);
@@ -2780,6 +2843,11 @@ export async function printDryRun(
   if (operators !== undefined && operators.length > 0) {
     console.log(
       `narrowed by --operator ${operators.map((n) => `"${n}"`).join(", ")}: ${excludedByOperator} mutation site(s) from other operators excluded`,
+    );
+  }
+  if (paths.lines !== undefined) {
+    console.log(
+      `narrowed by line filter: ${paths.lines.length} range(s); ${excludedByLines} mutation site(s) on other lines excluded`,
     );
   }
   // R92/R90: per-file guard counts, largest DEPLOYED first — the ordering that matters, since the
@@ -3048,6 +3116,8 @@ export async function runFromCli(
   } = {},
 ): Promise<SessionReport> {
   const configFile = await loadLethalConfigFile(parsed.configPath);
+  // Issue #19: before anything is provisioned, so a bad ref fails in seconds.
+  const lineRanges = await resolveLineRanges(parsed);
   // R221: the project's standing exclusions UNIONED with any `--exclude` from the command line,
   // resolved once here so the session and every message downstream see one list. Union, never
   // override: see `LethalConfigFile.exclude` for why a CLI flag must not be able to switch off an
@@ -3244,6 +3314,7 @@ export async function runFromCli(
         ...(parsed.only !== undefined ? { only: parsed.only } : {}),
         ...(mergedExclude.length > 0 ? { exclude: mergedExclude } : {}),
         ...(parsed.operators !== undefined ? { operators: parsed.operators } : {}),
+        ...(lineRanges !== undefined ? { lines: lineRanges } : {}),
         ...(parsed.testsOnly !== undefined ? { testsOnly: parsed.testsOnly } : {}),
         ...(parsed.maxGuardsPerBatch !== undefined
           ? { maxGuardsPerBatch: parsed.maxGuardsPerBatch }
@@ -4674,10 +4745,12 @@ async function main(): Promise<number> {
       );
     }
     const dryRunExclude = resolveExclude(dryRunConfig ?? {}, parsed.exclude);
+    const dryRunLines = await resolveLineRanges(parsed);
     await printDryRun(parsed.projectDir, parsed.only, {
       dbPath: parsed.dbPath,
       configPath: parsed.configPath,
       ...(parsed.operators !== undefined ? { operators: parsed.operators } : {}),
+      ...(dryRunLines !== undefined ? { lines: dryRunLines } : {}),
       ...(dryRunExclude.length > 0 ? { exclude: dryRunExclude } : {}),
     });
     return 0;

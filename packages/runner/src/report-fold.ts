@@ -1,4 +1,5 @@
 import type { BackendCapabilities } from "./backend";
+import type { LineRange } from "./line-filter";
 import type { EquivalenceMark } from "./equivalence-marks";
 import type { RunEvent } from "./events";
 import { type ExcludedSites, buildExcludedSites } from "./excluded-sites";
@@ -57,6 +58,9 @@ export interface FoldStatics {
    * the fold reunites the two into `FoldedReport.operators`.
    */
   readonly operators?: { readonly names: readonly string[] };
+  /** Issue #19: the line filter this run was GIVEN, if any. Its excluded site count is LEARNED
+   *  from `mutation-set-generated.excludedByLines`. */
+  readonly lines?: { readonly ranges: readonly LineRange[] };
   /** R45: the `--tests-only` narrowing this run was GIVEN, if any. */
   readonly testsOnly?: readonly string[];
   /** R53: whether this run was allowed to end BC sessions to score a non-terminating mutant. */
@@ -108,6 +112,11 @@ export interface FoldedReport {
   /** R127: the operator narrowing, with the LEARNED site count reunited onto it. */
   readonly operators?: {
     readonly names: readonly string[];
+    readonly excludedSiteCount: number;
+  };
+  /** Issue #19: the line filter, with the LEARNED site count reunited onto it. */
+  readonly lines?: {
+    readonly ranges: readonly LineRange[];
     readonly excludedSiteCount: number;
   };
   readonly testsOnly?: readonly string[];
@@ -165,6 +174,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
   let excludedByOnly = 0;
   let excludedByExclude = 0;
   let excludedByOperator = 0;
+  let excludedByLines = 0;
 
   // AND across every baseline verdict across every `baseline-batch-finished` event — mirrors
   // `orchestrator.ts`'s `baselineGreenOverall`, which starts true and is never reset once false.
@@ -241,6 +251,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
         excludedByOnly = e.excludedByOnly;
         excludedByExclude = e.excludedByExclude;
         excludedByOperator = e.excludedByOperator;
+        excludedByLines = e.excludedByLines ?? 0;
         break;
       case "baseline-batch-finished":
         sawBaselineBatchFinished = true;
@@ -509,6 +520,9 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
     // R127: same reunion for the operator narrowing — GIVEN names, LEARNED site count.
     ...(statics.operators !== undefined && statics.operators.names.length > 0
       ? { operators: { names: statics.operators.names, excludedSiteCount: excludedByOperator } }
+      : {}),
+    ...(statics.lines !== undefined
+      ? { lines: { ranges: statics.lines.ranges, excludedSiteCount: excludedByLines } }
       : {}),
     ...(statics.testsOnly !== undefined && statics.testsOnly.length > 0
       ? { testsOnly: statics.testsOnly }
