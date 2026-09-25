@@ -113,7 +113,13 @@ const isAl = (p: string) => p.toLowerCase().endsWith(".al");
 /** Enumerated the way `orchestrator.ts` enumerates the project, so "holds an .al file" means
  *  "LethAL would parse one". */
 async function holdsAlFile(dir: string): Promise<boolean> {
-  return (await readdir(dir, { recursive: true })).some(isAl);
+  try {
+    return (await readdir(dir, { recursive: true })).some(isAl);
+  } catch (e) {
+    // A submodule registered in the index but absent on disk: LethAL parses nothing there.
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw e;
+  }
 }
 
 /**
@@ -160,7 +166,7 @@ export async function changedLinesSince(
   }
 
   // No second tree: the diff runs to the working tree. Each flag pins a behaviour a user's config
-  // could otherwise change (quotePath, prefixes, renames) or that CRLF would break.
+  // could otherwise change (quotePath, prefixes, renames, textconv, inter-hunk context) or that CRLF would break.
   const diff = await run([
     "-c",
     "core.quotePath=false",
@@ -168,6 +174,8 @@ export async function changedLinesSince(
     "-U0",
     "--no-color",
     "--no-ext-diff",
+    "--no-textconv",
+    "--inter-hunk-context=0",
     "--find-renames",
     "--ignore-cr-at-eol",
     "--src-prefix=a/",

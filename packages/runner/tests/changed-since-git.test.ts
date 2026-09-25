@@ -1,5 +1,5 @@
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AlRunnerBackend } from "../src/al-runner-backend";
@@ -211,7 +211,7 @@ describe("fails loudly", () => {
   });
 
   test("a submodule inside the project", async () => {
-    const inner = await makeGitRepo({ "I.al": "i\n" });
+    const inner = await makeGitRepo({ "src/I.AL": "i\n" }); // nested and upper-case: both must be found
     const { root, app } = await prFixture();
     try {
       await git(root, [
@@ -237,7 +237,8 @@ describe("fails loudly", () => {
     const { root, app } = await prFixture();
     try {
       await git(app, ["init", "-q", "nested"]);
-      await writeFile(join(app, "nested/N.al"), "n\n");
+      await mkdir(join(app, "nested/src"), { recursive: true });
+      await writeFile(join(app, "nested/src/N.al"), "n\n"); // below the top level
       await expect(changedLinesSince(app, "main", hermeticSpawn)).rejects.toThrow(
         /nested\/ is a nested git repository inside the project/,
       );
@@ -331,6 +332,58 @@ describe("edges", () => {
       expect(await rangesOf(app)).toEqual([{ file: "src/A.al", start: 5, end: 5 }]);
     } finally {
       await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a textconv filter on .al does not shift the lines", async () => {
+    // `--no-ext-diff` does not disable textconv; `sed 1d` drops line 1, so without
+    // `--no-textconv` an edit at line 5 comes back at line 4.
+    const root = await makeGitRepo(
+      { "app/src/A.al": TEN, "app/.gitattributes": "*.al diff=al\n" },
+      { "diff.al.textconv": "sed 1d" },
+    );
+    const app = join(root, "app");
+    try {
+      await writeFile(join(app, "src/A.al"), TEN.replace("l5\n", "L5\n"));
+      expect(await rangesOf(app, "HEAD")).toEqual([{ file: "src/A.al", start: 5, end: 5 }]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("diff.interHunkContext does not merge nearby hunks", async () => {
+    const root = await makeGitRepo({ "app/src/A.al": TEN }, { "diff.interHunkContext": "3" });
+    const app = join(root, "app");
+    try {
+      await writeFile(join(app, "src/A.al"), TEN.replace("l2\n", "L2\n").replace("l6\n", "L6\n"));
+      expect(await rangesOf(app, "HEAD")).toEqual([
+        { file: "src/A.al", start: 2, end: 2 },
+        { file: "src/A.al", start: 6, end: 6 },
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a submodule registered but missing on disk holds nothing to parse", async () => {
+    const inner = await makeGitRepo({ "src/I.AL": "i\n" });
+    const { root, app } = await prFixture();
+    try {
+      await git(root, [
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "--quiet",
+        "add",
+        inner,
+        "app/sub",
+      ]);
+      await git(root, ["commit", "-qm", "add submodule"]);
+      await rm(join(app, "sub"), { recursive: true, force: true });
+      expect(await rangesOf(app)).toEqual([{ file: "src/A.al", start: 5, end: 5 }]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+      await rm(inner, { recursive: true, force: true });
     }
   });
 
