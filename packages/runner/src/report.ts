@@ -1237,7 +1237,7 @@ export interface SessionReport {
    */
   readonly groupedCalls?: number;
   /**
-   * C02-02. One entry per batch THIS run published an artifact for, sorted by `batchIndex` — see
+   * C02-02. One entry per batch THIS run published an artifact for, sorted by `batchIndex`. See
    * `BatchArtifact` (re-exported from store.ts).
    *
    * OPTIONAL in the schema so archived reports stay valid (R157's rule), but ALWAYS written by

@@ -683,7 +683,7 @@ describe("foldEvents — statics reunited with learned facts", () => {
   });
 });
 
-describe("foldEvents — C02-02, artifacts[] names every published batch's identity", () => {
+describe("foldEvents: C02-02, artifacts[] names every published batch's identity", () => {
   const ID0 = "0123456789abcdef0123456789abcdef";
   const ID1 = "fedcba9876543210fedcba9876543210";
 

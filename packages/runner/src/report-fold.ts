@@ -147,7 +147,7 @@ export interface FoldedReport {
   readonly unplaceableCount: number;
   /** R175 — `mutantId`s of those, sorted. See `SessionReport.unplaceableMutants`. */
   readonly unplaceableMutants: readonly string[];
-  /** C02-02 — one entry per batch this run published an artifact identity for, sorted by
+  /** C02-02: one entry per batch this run published an artifact identity for, sorted by
    *  `batchIndex`. See `SessionReport.artifacts`. Required here (unlike on `SessionReport`) and
    *  always set, `[]` included, the same as `groupedCalls`. */
   readonly artifacts: readonly BatchArtifact[];
@@ -231,7 +231,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
   let unplaceableCount = 0;
   const unplaceableMutants = new Set<string>();
   // C02-02: every batchIndex `batch-published` has named, to catch a duplicate publish of the
-  // same batch regardless of whether either carried an identity — checked first, before the
+  // same batch regardless of whether either carried an identity: checked first, before the
   // identity fields are even looked at. `artifactsByBatch` holds only the entries that DID carry
   // one, keyed by batchIndex so the order events arrive in cannot matter.
   const publishedBatchIndexes = new Set<number>();
@@ -309,20 +309,20 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
         batchPublishedCount += 1;
         if (publishedBatchIndexes.has(e.batchIndex)) {
           throw new Error(
-            `foldEvents: batch ${e.batchIndex} published twice — a batchIndex must appear in at most one batch-published event per run.`,
+            `foldEvents: batch ${e.batchIndex} published twice: a batchIndex must appear in at most one batch-published event per run.`,
           );
         }
         publishedBatchIndexes.add(e.batchIndex);
         const { artifactId, sha256, appVersion } = e;
         if ((artifactId === undefined) !== (sha256 === undefined)) {
           throw new Error(
-            `foldEvents: batch-published for batch ${e.batchIndex} carries artifactId without sha256 (or the reverse) — the backend must report both or neither.`,
+            `foldEvents: batch-published for batch ${e.batchIndex} carries artifactId without sha256 (or the reverse): the backend must report both or neither.`,
           );
         }
         if (artifactId !== undefined && sha256 !== undefined) {
           if (appVersion === undefined) {
             throw new Error(
-              `foldEvents: batch-published for batch ${e.batchIndex} carries an artifact identity with no appVersion — an artifact identity is not complete without it.`,
+              `foldEvents: batch-published for batch ${e.batchIndex} carries an artifact identity with no appVersion: an artifact identity is not complete without it.`,
             );
           }
           artifactsByBatch.set(e.batchIndex, {

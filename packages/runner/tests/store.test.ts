@@ -183,7 +183,7 @@ describe("ResultsStore", () => {
       }),
     ).toThrow();
     // All four legacy runs columns still hold batch 0's values, and artifactsForRun still
-    // returns only batch 0 — proving the UPDATE and the INSERT share one transaction.
+    // returns only batch 0: proving the UPDATE and the INSERT share one transaction.
     const row = store.db
       .query("SELECT app_version, app_id, artifact_id, artifact_sha256 FROM runs WHERE id = ?")
       .get(runId) as Record<string, string>;

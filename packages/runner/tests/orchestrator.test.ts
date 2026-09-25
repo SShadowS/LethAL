@@ -3411,7 +3411,7 @@ describe("runSession — deploy:none (al-runner) app_version", () => {
     expect(row.app_version).toBe("1.2.3.4");
     expect(row.app_version).not.toBe("0.0.0.0");
     // C02-02 Task 3: a deploy:"none" backend never publishes an artifact, so `artifacts` is `[]`,
-    // not `undefined` — the field is always written.
+    // not `undefined`: the field is always written.
     expect(report.artifacts).toEqual([]);
     store.close();
   });
