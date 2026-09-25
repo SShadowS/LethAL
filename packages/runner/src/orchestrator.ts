@@ -2370,7 +2370,7 @@ class LeaseSession {
     try {
       status = await this.d.client.getOperationStatus(this.d.lease, attemptId, opSeq);
     } catch (err) {
-      await this.recordRecycle(
+      await this.leaveStrandedPublish(
         `EndPublish for op ${opSeq} (attemptId ${attemptId}) was not acknowledged (${messageOf(cause)}) and the reconciling GetOperationStatus also failed (${messageOf(err)}) — marker left set`,
       );
       return;
@@ -2385,9 +2385,19 @@ class LeaseSession {
       const recovered = await this.d.client.recoverOp(this.d.lease, attemptId, opSeq, true);
       if (recovered.recovered || recovered.alreadyCompleted === true) return;
     }
-    await this.recordRecycle(
+    await this.leaveStrandedPublish(
       `publish op ${opSeq} (attemptId ${attemptId}) could not be reconciled after a lost EndPublish ack (${messageOf(cause)}); server marker: opKind ${status.opKind}, opAttemptId ${status.opAttemptId}, opSeq ${status.opSeq}`,
     );
+  }
+
+  /**
+   * R232: an unreconciled publish leaves the marker set, so the session must stop as well as
+   * record the recycle. `publish()` returns normally on this path, and without the latch the
+   * session would go on to run work on a tier whose publish op is still open.
+   */
+  private async leaveStrandedPublish(detail: string): Promise<void> {
+    this.d.safety.latchUnsafe(detail);
+    await this.recordRecycle(detail);
   }
 
   /**
@@ -3976,7 +3986,12 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       if (hook !== undefined && leaseSession !== undefined) {
         try {
           await leaseSession.publish(hook);
+          // A refused EndPublish (lease loss) or an unreconciled lost ack latches the session
+          // without throwing. Stop here, before the canary runs a server-side test, through the
+          // same SessionUnsafeError exit every other latched dispatch takes.
+          safety.assertSafe("afterLeaseAcquired");
         } catch (err) {
+          if (err instanceof SessionUnsafeError) throw err;
           if (!isConfirmedTerminalPublishFailure(err)) {
             const reason = `afterLeaseAcquired (R19 test-app publish) failed with no proof that the server stopped, so the session is latched and the lease is kept unless the server shows no operation in progress: ${messageOf(err)}`;
             safety.latchUnsafe(reason);

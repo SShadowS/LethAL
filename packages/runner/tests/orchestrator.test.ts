@@ -5880,6 +5880,75 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
     expect(timers.cleared).toBe(1);
   });
 
+  // R232, run 002 review: a hook that SUCCEEDS can still leave `LeaseSession.publish()` latched,
+  // because a refused EndPublish records lease loss without throwing and an unreconciled lost
+  // EndPublish ack records a recycle without throwing. The session must stop there, before the
+  // R26 canary runs a server-side test, and end the way any latched session ends.
+  async function runLatchedHookSession(client: FakeLeaseClient) {
+    const dir = freshTmpDir();
+    const { lease } = leaseCfg(client);
+    let canaryCalls = 0;
+    let deployCalls = 0;
+    const report = await runSessionForTest(
+      leaseBackend({
+        deploy: async () => {
+          deployCalls++;
+          return null;
+        },
+      }),
+      {
+        lease,
+        quarantineDir: dir,
+        afterLeaseAcquired: async () => {},
+        permissionCanary: async () => {
+          canaryCalls++;
+          throw new Error("the canary must not run on a latched session");
+        },
+      },
+    );
+    return { dir, report, canaryCalls: () => canaryCalls, deployCalls: () => deployCalls };
+  }
+
+  test("a hook publish whose EndPublish is REFUSED stops the session before the canary (R232)", async () => {
+    const client = new FakeLeaseClient();
+    client.endPublishOutcome = { ended: false };
+    const run = await runLatchedHookSession(client);
+    expect(client.beginPublishArgs).toHaveLength(1);
+    expect(run.canaryCalls()).toBe(0);
+    expect(run.deployCalls()).toBe(0);
+    expect(run.report.quarantined?.reason).toContain("lease-lost");
+    expect(run.report.quarantined?.reason).toContain("EndPublish refused");
+    expect(client.releaseCalls).toBe(0);
+  });
+
+  test("a hook publish whose lost EndPublish ack cannot be reconciled stops the session before the canary (R232)", async () => {
+    const client = new FakeLeaseClient();
+    client.endPublishError = new Error("socket hang up");
+    // The reconciling read sees a marker that is not our publish op, so nothing can be recovered.
+    client.reconcileStatus = () => ({
+      opKind: "run",
+      opAttemptId: "someone-else",
+      opSeq: 99,
+      lastCompletedOpSeq: 98,
+      completed: false,
+    });
+    // status reads without an attemptId: [0] the fence's opSeq lookup, [1] the session-end release
+    // gate, which on the real server still sees the marker nothing tombstoned.
+    client.statusQueue = [
+      { opKind: "none", opAttemptId: "", opSeq: 0, lastCompletedOpSeq: 7, completed: true },
+      { opKind: "publish", opAttemptId: "pub", opSeq: 8, lastCompletedOpSeq: 7, completed: false },
+    ];
+    const run = await runLatchedHookSession(client);
+    expect(client.recoverArgs).toHaveLength(0);
+    expect(run.canaryCalls()).toBe(0);
+    expect(run.deployCalls()).toBe(0);
+    expect(run.report.quarantined?.reason).toContain("could not be reconciled");
+    expect(run.report.quarantined?.reason).toContain("op 8");
+    expect(client.releaseCalls).toBe(0);
+    const rec = await new QuarantineStore(run.dir).read("http://cronus281|BC");
+    expect(rec?.opKind).toBe("container-needs-recycle");
+  });
+
   // R232 follow-up: a `publishApps` path that does not exist never reaches the server, so the
   // real publisher's failure must read as a confirmed pre-publish failure: released, no recycle.
   test("an afterLeaseAcquired whose publishApps file does not exist releases the lease and quarantines nothing (R232)", async () => {
