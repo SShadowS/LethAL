@@ -105,4 +105,62 @@ describe("operator collisions", () => {
     const atUntil = specs.filter((s) => s.before.text === "false");
     expect(atUntil.map((s) => s.operatorName)).toEqual(["lethal.loop-truncate"]);
   });
+
+  /**
+   * GH-07's twin, found while verifying the issue #7 fix. `while true do` is the same idiom as
+   * `repeat ... until false;`: a loop whose exits all sit in the body. `loop-skip` rewrites a while's
+   * condition to `false`, and `flip-boolean-literal` flipped the same `true` to the same `false` at
+   * the same span. The issue #7 fix reasoned that no loop operator claims a `while`, which stopped
+   * being true when `loop-skip` landed (R179).
+   */
+  it("plans `while true do` without a collision (GH-07 follow-up)", () => {
+    const source = `codeunit 50000 ReproLoopSkip
+{
+    procedure CountToThree(): Integer
+    var
+        I: Integer;
+    begin
+        I := 0;
+        while true do begin
+            I += 1;
+            if I >= 3 then
+                exit(I);
+        end;
+    end;
+}`;
+    const specs = allSpecsFor(source);
+    expect(() => dedupeSpecs(specs, tierOf)).not.toThrow();
+
+    // A cession, not a silence: the site keeps exactly one mutant, and it is loop-skip's.
+    const atCondition = specs.filter((s) => s.before.text === "true");
+    expect(atCondition.map((s) => s.operatorName)).toEqual(["lethal.loop-skip"]);
+  });
+
+  it("no operator emits an equivalent mutant on a parenthesised loop literal (GH-07 r1)", () => {
+    const emitted = (source: string) =>
+      allSpecsFor(source).map((s) => `${s.operatorName}: ${s.before.text} -> ${s.after.text}`);
+    // Already-mutated forms: NOTHING may be emitted on the condition by ANY operator.
+    // Today loop-skip emits `(false) -> false` and loop-truncate `(true) -> true`: unkillable.
+    expect(
+      emitted(
+        "codeunit 50000 R { procedure P() var I: Integer; begin while (false) do I += 1; end; }",
+      ).filter((e) => e.includes("(false) ->")),
+    ).toEqual([]);
+    expect(
+      emitted(
+        "codeunit 50000 R { procedure P() var I: Integer; begin repeat I += 1; until (true); end; }",
+      ).filter((e) => e.includes("(true) ->")),
+    ).toEqual([]);
+    // The useful counterparts stay, from exactly the owning operator.
+    expect(
+      emitted("codeunit 50000 R { procedure P() begin while (true) do exit; end; }").filter((e) =>
+        e.includes("(true) ->"),
+      ),
+    ).toEqual(["lethal.loop-skip: (true) -> false"]);
+    expect(
+      emitted(
+        "codeunit 50000 R { procedure P() var I: Integer; begin repeat I += 1; until (false); end; }",
+      ).filter((e) => e.includes("(false) ->")),
+    ).toEqual(["lethal.loop-truncate: (false) -> true"]);
+  });
 });

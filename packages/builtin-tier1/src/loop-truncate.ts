@@ -115,6 +115,21 @@ export const loopTruncate: MutationOperator = {
 };
 
 /**
+ * Strips parentheses to the innermost expression, so `(true)` compares equal to `true`.
+ * Without this, `until (true)` was not recognised as already-mutated and got a second,
+ * equivalent mutant on top: `(true) -> true` (GH-07 r1).
+ */
+function unwrapParens(node: ALSyntaxNode): ALSyntaxNode {
+  let current = node;
+  while (current.kind === ALNodeKind.parenthesized_expression) {
+    const inner = current.namedChildren[0];
+    if (inner === undefined) break;
+    current = inner;
+  }
+  return current;
+}
+
+/**
  * The `repeat` loop's exit condition, or `null` where this operator does not claim it.
  *
  * The condition is read through `childForFieldName`, never by position: a `repeat` body is a
@@ -126,9 +141,10 @@ function exitCondition(node: ALSyntaxNode): ALSyntaxNode | null {
   if (!inExecutableBody(node)) return null;
   const cond = node.childForFieldName("condition");
   if (cond === null) return null;
-  // `until true` is already the mutated form, so mutating it again is a no-op that would ship an
-  // unkillable mutant. Nothing in real AL writes it, but the check is free and the failure is silent.
-  if (cond.text.trim().toLowerCase() === "true") return null;
+  // `until true` (or `until (true)`) is already the mutated form, so mutating it again is a no-op
+  // that would ship an unkillable mutant. Nothing in real AL writes it, but the check is free and
+  // the failure is silent.
+  if (unwrapParens(cond).text.trim().toLowerCase() === "true") return null;
   return cond;
 }
 

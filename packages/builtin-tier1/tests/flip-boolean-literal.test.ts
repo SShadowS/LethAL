@@ -9,6 +9,15 @@ import {
 } from "@lethal/engine";
 import { flipBooleanLiteral } from "../src/flip-boolean-literal";
 
+function flipsIn(src: string): string[] {
+  const root = wrapRoot(parseAL(src));
+  const ctx = buildSemanticContext([{ path: "fixture.al", root }]);
+  return findAll(root, ALNodeKind.boolean_literal)
+    .filter((n) => flipBooleanLiteral.targets(n, ctx))
+    .flatMap((n) => flipBooleanLiteral.generate(n, ctx))
+    .map((s) => `${s.before.text}->${s.after.text}`);
+}
+
 describe("flipBooleanLiteral", () => {
   beforeAll(async () => {
     await initParser();
@@ -123,29 +132,49 @@ describe("flipBooleanLiteral", () => {
   });
 
   /**
-   * The over-refusal guard, and the reason the refusal names `repeat` rather than "a loop".
-   * `while false do` runs the body ZERO times and terminates, so it is a useful mutant and must
-   * survive. `loop-truncate` is repeat-only and never claims this site, so refusing here would
-   * leave it covered by nothing.
+   * `while true do` is loop-skip's site (R179): it emits the same `false` at the same span, and two
+   * operators on one identity make dedupeSpecs throw. The collision itself is pinned in
+   * operator-collisions.test.ts; this pins the refusal on this operator alone.
    */
-  it("still claims a `while` condition, whose flip terminates", () => {
-    const src = `codeunit 50000 R
-{
-    procedure P()
-    var
-        I: Integer;
-    begin
-        I := 0;
-        while true do
-            I += 1;
-    end;
-}`;
-    const root = wrapRoot(parseAL(src));
-    const ctx = buildSemanticContext([{ path: "fixture.al", root }]);
-    const specs = findAll(root, ALNodeKind.boolean_literal)
-      .filter((n) => flipBooleanLiteral.targets(n, ctx))
-      .flatMap((n) => flipBooleanLiteral.generate(n, ctx));
-    expect(specs.map((s) => `${s.before.text}->${s.after.text}`)).toEqual(["true->false"]);
+  it("REFUSES a `while` loop's whole condition, which loop-skip owns (GH-07 follow-up)", () => {
+    expect(
+      flipsIn(
+        "codeunit 50000 R { procedure P() var I: Integer; begin while true do begin I += 1; if I > 3 then exit; end; end; }",
+      ),
+    ).toEqual([]);
+  });
+
+  /**
+   * `while false do` never runs its body. Flipped to `while true do`, it runs until the body exits,
+   * and this body never does. loop-skip refuses `while false` (it is already the skipped form), so
+   * before this refusal the site's ONLY mutant was a hang (R164).
+   */
+  it("REFUSES `while false`, whose flip is a loop that never ends", () => {
+    expect(
+      flipsIn(
+        "codeunit 50000 R { procedure P() var I: Integer; begin while false do I += 1; end; }",
+      ),
+    ).toEqual([]);
+  });
+
+  it("REFUSES a parenthesised while condition too", () => {
+    expect(
+      flipsIn(
+        "codeunit 50000 R { procedure P() var I: Integer; begin while (true) do exit; while (false) do I += 1; end; }",
+      ),
+    ).toEqual([]);
+  });
+
+  /**
+   * The over-refusal guard. `while Go and true do` flips to `while Go and false do`, which runs the
+   * body zero times and ends. The literal is not the whole condition, so it stays claimed.
+   */
+  it("does NOT over-refuse a boolean nested inside a compound while condition", () => {
+    expect(
+      flipsIn(
+        "codeunit 50000 R { procedure P() var Go: Boolean; begin while Go and true do Go := false; end; }",
+      ),
+    ).toEqual(["true->false", "false->true"]);
   });
 
   /**
