@@ -3558,7 +3558,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   //
   // `resourceKey`/`quarantineStore` are a destructured const returned by `consultQuarantine`
   // below (not values this function conditionally assigns inline) so the mutant loop (Task 12)
-  // can also record a NEW quarantine when a test run comes back in-flight-unknown mid-session —
+  // can also record a NEW quarantine when a test run comes back in-flight-unknown mid-session;
   // they stay `undefined` for exactly the backends that legitimately have no shared tier to
   // strand (al-runner) or omit identity fields, and the
   // mutant loop treats "no store" as "latch only, nothing durable to record" (see
