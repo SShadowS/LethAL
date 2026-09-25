@@ -1,4 +1,6 @@
+import { ArtifactPrepareError } from "./artifact";
 import type { CompiledArtifact } from "./artifact";
+import { describeThrown } from "./describe-error";
 import type { EnvToolBlock, EnvToolClient } from "./env-tool";
 import { EnvToolError } from "./env-tool";
 import { serializePublish } from "./publish-serializer";
@@ -57,7 +59,17 @@ export class EnvToolPublisher implements AppPublisher {
    */
   async publishFile(appPath: string): Promise<void> {
     await serializePublish(this.ctx.serializerKey, async () => {
-      const bytes = await this.io.readArtifact(appPath);
+      // R232: a file that cannot be read never reached the server. ArtifactPrepareError is what
+      // `isConfirmedTerminalPublishFailure` reads as pre-publish, so the publication fence
+      // tombstones it and the lease is released instead of the tier being quarantined.
+      let bytes: Uint8Array;
+      try {
+        bytes = await this.io.readArtifact(appPath);
+      } catch (err) {
+        throw new ArtifactPrepareError(
+          `cannot read ${appPath} to publish it: ${describeThrown(err)}`,
+        );
+      }
       const digest = Bun.SHA256.hash(bytes, "hex");
       console.log(`[lethal] publishing ${appPath} (sha256 ${digest}) to env ${this.ctx.envId}`);
       try {
