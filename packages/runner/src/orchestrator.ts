@@ -2930,6 +2930,203 @@ interface ScoreBatchInput {
  *  "scored": the covering loop and the gate ran; the caller checks `safety.isUnsafe` itself. */
 type ScoreBatchResult = "unsafe" | "nothing-to-run" | "scored";
 
+/** C02-04: design section 6's fail-loud check that a fenceable authoritative backend has a lease. */
+function assertLeaseConfigured(
+  caps: BackendCapabilities,
+  lease: LeaseSessionConfig | undefined,
+  backend: ExecutionBackend,
+  who: string,
+): void {
+  if (caps.authoritative && lease === undefined && isLeaseBindable(backend)) {
+    throw new Error(
+      `${who}: this authoritative backend is lease-bindable (it exposes setLease) but no lease is configured — every RunMutant would run unfenced, and a lost lease could not be scoped to the batch whose verdicts it invalidates (design §6). Set SessionConfig.lease.`,
+    );
+  }
+}
+
+/** C02-04: the session's quarantine consult (spec sections 8 and 9). Throws on a quarantined tier. */
+async function consultQuarantine(a: {
+  caps: BackendCapabilities;
+  resourceServer?: string;
+  resourceServerInstance?: string;
+  quarantineDir?: string;
+  emit: RunEmitter;
+}): Promise<{ resourceKey: string | undefined; quarantineStore: QuarantineStore | undefined }> {
+  let resourceKey: string | undefined;
+  let quarantineStore: QuarantineStore | undefined;
+  if (
+    a.caps.authoritative &&
+    a.resourceServer !== undefined &&
+    a.resourceServerInstance !== undefined
+  ) {
+    resourceKey = quarantineResourceKey({
+      server: a.resourceServer,
+      serverInstance: a.resourceServerInstance,
+    });
+    quarantineStore = new QuarantineStore(a.quarantineDir ?? defaultQuarantineDir());
+    const existing = await quarantineStore.read(resourceKey);
+    if (existing !== null) {
+      throw new Error(
+        `tier ${resourceKey} is quarantined (${existing.opKind}: ${existing.detail}, recorded ${existing.recordedAtIso}, generation ${existing.generation}). Recycle the tier and run 'lethal clear-quarantine' to clear it.`,
+      );
+    }
+  } else if (a.caps.authoritative) {
+    // Safety net (Task 13 folded fix): an authoritative backend with NO tier identity means the
+    // quarantine consult above is silently skipped — no prior strand is detected, and no NEW
+    // strand can be durably recorded (see `quarantineInFlight`'s "no store" note). That is
+    // TOLERATED (not thrown — ~30 pre-existing authoritative-backend unit tests exercise an
+    // in-memory stub and never set these fields), but it must never be SILENT: a regression in
+    // whatever wires `resourceServer`/`resourceServerInstance` from config (cli.ts sources them
+    // from the bcdev config section's `server`/`serverInstance`) would otherwise leave quarantine
+    // permanently inert against a real BC server without any signal.
+    a.emit({
+      type: "warning",
+      code: "quarantine-consult-disabled",
+      message:
+        "runSession: authoritative backend but SessionConfig.resourceServer/resourceServerInstance " +
+        "are not set — the quarantine consult is DISABLED for this session (a prior strand on this " +
+        "tier will not be detected, and this session cannot durably record a new one).",
+    });
+  }
+  return { resourceKey, quarantineStore };
+}
+
+/** C02-04: R198's group-run settings, or `undefined` for the sequential loop. */
+function resolveGroupRuns(a: {
+  groupRuns: SessionConfig["groupRuns"];
+  backend: ExecutionBackend;
+  minMutantBudgetMs: number;
+  emit: RunEmitter;
+}): GroupRunSettings | undefined {
+  const groupRuns: GroupRunSettings | undefined =
+    a.groupRuns?.enabled === false || a.backend.runMany === undefined
+      ? undefined
+      : {
+          maxMethodsPerCall: a.groupRuns?.maxMethodsPerCall ?? Number.POSITIVE_INFINITY,
+          requestCeilingMs: a.groupRuns?.requestCeilingMs ?? REQUEST_CEILING_MS,
+          stopGraceMs: STOP_GRACE_MS,
+        };
+  if (
+    groupRuns !== undefined &&
+    a.minMutantBudgetMs + groupRuns.stopGraceMs > groupRuns.requestCeilingMs
+  ) {
+    // Every method is then unfittable, every one goes alone through RunMutant, and the feature is
+    // silently inert with `groupedCalls: 0`, which is also what an unwired counter reports.
+    a.emit({
+      type: "warning",
+      code: "group-runs-inert",
+      message: `[lethal] --mutant-timeout-ms ${a.minMutantBudgetMs} plus the ${groupRuns.stopGraceMs} ms stop grace exceeds --request-ceiling-ms ${groupRuns.requestCeilingMs}, so NO method fits a grouped call and every covering test runs as its own RunMutant. Raise --request-ceiling-ms (below the gateway's idle timeout) or lower the floor (R198).`,
+    });
+  }
+  return groupRuns;
+}
+
+/** C02-04: acquire, bind and start the session's lease (design section 6 step 1). */
+async function openLeaseScope(a: {
+  lease: LeaseSessionConfig | undefined;
+  backend: ExecutionBackend;
+  safety: SessionSafety;
+  runId: number;
+  quarantineStore: QuarantineStore | undefined;
+  resourceKey: string | undefined;
+  nowIso: () => string;
+  emit: RunEmitter;
+}): Promise<{
+  leaseSession: LeaseSession | undefined;
+  resyncOpSeq: (() => Promise<void>) | undefined;
+}> {
+  let leaseSession: LeaseSession | undefined;
+  let resyncSessionOpSeq: (() => Promise<void>) | undefined;
+  if (a.lease !== undefined) {
+    const leaseCfg = a.lease;
+    const ttlSeconds = leaseCfg.ttlSeconds ?? MAX_TTL_SECONDS;
+    // Checked BEFORE acquiring: a backend that cannot take the lease would otherwise leave a
+    // just-acquired lease held (with no heartbeat and no release) until it lapsed, locking out
+    // every other session on this container for the full ttl.
+    leaseBindableOrThrow(a.backend);
+    const lease = await acquireSessionLease({
+      cfg: leaseCfg,
+      // design §6: owner id = host:pid:runId — enough for a human reading a `held` refusal to
+      // find the other session, and unique per run without a registry.
+      owner: leaseCfg.owner ?? `${hostname()}:${process.pid}:${a.runId}`,
+      ttlSeconds,
+      quarantineStore: a.quarantineStore,
+      resourceKey: a.resourceKey,
+      nowIso: a.nowIso,
+    });
+    const session = new LeaseSession({
+      client: leaseCfg.client,
+      lease,
+      safety: a.safety,
+      ttlSeconds,
+      timers: leaseCfg.timers ?? REAL_TIMERS,
+      sleep: leaseCfg.sleep ?? defaultSleep,
+      quarantineStore: a.quarantineStore,
+      resourceKey: a.resourceKey,
+      nowIso: a.nowIso,
+      runId: a.runId,
+      emit: a.emit,
+    });
+    leaseSession = session;
+    resyncSessionOpSeq = () => session.resyncOpSeq(a.backend);
+    // Bind before anything can run: the backend fails loudly on a RunMutant with no lease bound,
+    // and this is also the fail-loud point for a backend that cannot take one at all.
+    bindLeaseToBackend(a.backend, lease);
+    session.start();
+  }
+  return { leaseSession, resyncOpSeq: resyncSessionOpSeq };
+}
+
+/** C02-04: the session's latch-gated teardown, ending with the op-gated lease release. */
+async function closeLeaseScope(a: {
+  backend: ExecutionBackend;
+  workerBackends: readonly ExecutionBackend[];
+  safety: SessionSafety;
+  leaseSession: LeaseSession | undefined;
+  emit: RunEmitter;
+}): Promise<void> {
+  // Best-effort cleanup: deliberately swallow errors here (unlike the
+  // retrying activation calls above) since this only runs to leave every
+  // backend deactivated on exit, and a failure here must not mask/replace
+  // whatever real error is already propagating.
+  a.emit({ type: "phase-entered", phase: "teardown" });
+  const teardownStartedMs = Date.now();
+  // After an unsafe latch, NO work-plane call — not even the deactivating ClearActive, which is
+  // itself a mutating op on the stranded tier (spec §8). Only local teardown runs.
+  if (!a.safety.isUnsafe) {
+    await a.backend.activate(null).catch(() => {});
+    for (const backend of a.workerBackends) {
+      await backend.activate(null).catch(() => {});
+      await closeIfSupported(backend).catch(() => {});
+    }
+  } else {
+    // local teardown only: close transports/children, never activate.
+    await closeIfSupported(a.backend).catch(() => {});
+    for (const backend of a.workerBackends) {
+      await closeIfSupported(backend).catch(() => {});
+    }
+  }
+  // Layer 5C-B1 (design §6 step 5): stop the heartbeat and release the lease — op-gated, so a
+  // tier with an unresolved operation marker is left held (and durably quarantined) rather than
+  // handed to the next session. Last in the teardown so the backend's own deactivating
+  // ClearActive (above) still runs under the lease it was taken with.
+  if (a.leaseSession !== undefined) await a.leaseSession.finish();
+  a.emit({ type: "phase-left", phase: "teardown", elapsedMs: Date.now() - teardownStartedMs });
+}
+
+/** C02-04: design section 6's invalidation of the batch a lost lease was measured under. */
+function emitLeaseLostInvalidation(
+  leaseSession: LeaseSession | undefined,
+  safety: SessionSafety,
+  emit: RunEmitter,
+): void {
+  const lostBatchIndex = leaseSession?.lostBatchIndex;
+  if (lostBatchIndex !== undefined) {
+    const lostBatchNote = `lease-lost: this batch's artifact was deployed under a lease this session could no longer prove it held (${safety.reason ?? "unknown"}) — verdicts discarded (design §6)`;
+    emit({ type: "batch-invalidated", batchIndex: lostBatchIndex, reason: lostBatchNote });
+  }
+}
+
 /**
  * C02-04: one batch's baseline, its stale-test-app refusal, the covering loop and the design
  * section G attestation gate, in exactly the order `runSession` ran them inline. Which mutants
@@ -3346,11 +3543,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // unfenced. Scoped by `isLeaseBindable` rather than `caps.authoritative` alone because the
   // in-memory authoritative stubs the unit suite drives carry no fence at all and legitimately
   // have no lease to take; a real bcdev session always does.
-  if (caps.authoritative && cfg.lease === undefined && isLeaseBindable(cfg.backend)) {
-    throw new Error(
-      "runSession: this authoritative backend is lease-bindable (it exposes setLease) but no lease is configured — every RunMutant would run unfenced, and a lost lease could not be scoped to the batch whose verdicts it invalidates (design §6). Set SessionConfig.lease.",
-    );
-  }
+  assertLeaseConfigured(caps, cfg.lease, cfg.backend, "runSession");
   // Quarantine consult (spec §8/§9): a tier a PRIOR session marked stranded must refuse this
   // session outright, before even a non-mutating status() probe. Only meaningful for an
   // authoritative backend with a known tier identity — see SessionConfig.resourceServer's doc
@@ -3363,42 +3556,15 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // legitimately have no shared tier to strand (al-runner) or omit identity fields, and the
   // mutant loop treats "no store" as "latch only, nothing durable to record" (see
   // `runMutantsOnBackend`'s deadline branch).
-  let resourceKey: string | undefined;
-  let quarantineStore: QuarantineStore | undefined;
-  if (
-    caps.authoritative &&
-    cfg.resourceServer !== undefined &&
-    cfg.resourceServerInstance !== undefined
-  ) {
-    resourceKey = quarantineResourceKey({
-      server: cfg.resourceServer,
-      serverInstance: cfg.resourceServerInstance,
-    });
-    quarantineStore = new QuarantineStore(cfg.quarantineDir ?? defaultQuarantineDir());
-    const existing = await quarantineStore.read(resourceKey);
-    if (existing !== null) {
-      throw new Error(
-        `tier ${resourceKey} is quarantined (${existing.opKind}: ${existing.detail}, recorded ${existing.recordedAtIso}, generation ${existing.generation}). Recycle the tier and run 'lethal clear-quarantine' to clear it.`,
-      );
-    }
-  } else if (caps.authoritative) {
-    // Safety net (Task 13 folded fix): an authoritative backend with NO tier identity means the
-    // quarantine consult above is silently skipped — no prior strand is detected, and no NEW
-    // strand can be durably recorded (see `quarantineInFlight`'s "no store" note). That is
-    // TOLERATED (not thrown — ~30 pre-existing authoritative-backend unit tests exercise an
-    // in-memory stub and never set these fields), but it must never be SILENT: a regression in
-    // whatever wires `resourceServer`/`resourceServerInstance` from config (cli.ts sources them
-    // from the bcdev config section's `server`/`serverInstance`) would otherwise leave quarantine
-    // permanently inert against a real BC server without any signal.
-    emit({
-      type: "warning",
-      code: "quarantine-consult-disabled",
-      message:
-        "runSession: authoritative backend but SessionConfig.resourceServer/resourceServerInstance " +
-        "are not set — the quarantine consult is DISABLED for this session (a prior strand on this " +
-        "tier will not be detected, and this session cannot durably record a new one).",
-    });
-  }
+  const { resourceKey, quarantineStore } = await consultQuarantine({
+    caps,
+    ...(cfg.resourceServer !== undefined ? { resourceServer: cfg.resourceServer } : {}),
+    ...(cfg.resourceServerInstance !== undefined
+      ? { resourceServerInstance: cfg.resourceServerInstance }
+      : {}),
+    ...(cfg.quarantineDir !== undefined ? { quarantineDir: cfg.quarantineDir } : {}),
+    emit,
+  });
   const status = await cfg.backend.status();
   // R109: `status.details` is kept VERBATIM here — this call site knows only that string, so
   // naming a SPECIFIC cause ("environment stopped") would be an invented plausible default, this
@@ -3691,26 +3857,12 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // R47: the configured floor for a mutant run's time budget — see `SessionConfig.mutantTimeoutMs`.
   const minMutantBudgetMs = cfg.mutantTimeoutMs ?? MIN_MUTANT_BUDGET_MS;
   // R198: group runs, on a backend that has the call. `undefined` is the sequential loop.
-  const groupRuns: GroupRunSettings | undefined =
-    cfg.groupRuns?.enabled === false || cfg.backend.runMany === undefined
-      ? undefined
-      : {
-          maxMethodsPerCall: cfg.groupRuns?.maxMethodsPerCall ?? Number.POSITIVE_INFINITY,
-          requestCeilingMs: cfg.groupRuns?.requestCeilingMs ?? REQUEST_CEILING_MS,
-          stopGraceMs: STOP_GRACE_MS,
-        };
-  if (
-    groupRuns !== undefined &&
-    minMutantBudgetMs + groupRuns.stopGraceMs > groupRuns.requestCeilingMs
-  ) {
-    // Every method is then unfittable, every one goes alone through RunMutant, and the feature is
-    // silently inert with `groupedCalls: 0`, which is also what an unwired counter reports.
-    emit({
-      type: "warning",
-      code: "group-runs-inert",
-      message: `[lethal] --mutant-timeout-ms ${minMutantBudgetMs} plus the ${groupRuns.stopGraceMs} ms stop grace exceeds --request-ceiling-ms ${groupRuns.requestCeilingMs}, so NO method fits a grouped call and every covering test runs as its own RunMutant. Raise --request-ceiling-ms (below the gateway's idle timeout) or lower the floor (R198).`,
-    });
-  }
+  const groupRuns = resolveGroupRuns({
+    groupRuns: cfg.groupRuns,
+    backend: cfg.backend,
+    minMutantBudgetMs,
+    emit,
+  });
 
   const outcomes: SessionOutcome[] = []; // store durability + Task 3 bookkeeping — see `record()`
   let baselineGreenOverall = true;
@@ -3777,43 +3929,17 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
    * Nothing at the call site would record that dependency, so it is simply passed.
    */
   let resyncSessionOpSeq: (() => Promise<void>) | undefined;
+  ({ leaseSession, resyncOpSeq: resyncSessionOpSeq } = await openLeaseScope({
+    lease: cfg.lease,
+    backend: cfg.backend,
+    safety,
+    runId,
+    quarantineStore,
+    resourceKey,
+    nowIso,
+    emit,
+  }));
   if (cfg.lease !== undefined) {
-    const leaseCfg = cfg.lease;
-    const ttlSeconds = leaseCfg.ttlSeconds ?? MAX_TTL_SECONDS;
-    // Checked BEFORE acquiring: a backend that cannot take the lease would otherwise leave a
-    // just-acquired lease held (with no heartbeat and no release) until it lapsed, locking out
-    // every other session on this container for the full ttl.
-    leaseBindableOrThrow(cfg.backend);
-    const lease = await acquireSessionLease({
-      cfg: leaseCfg,
-      // design §6: owner id = host:pid:runId — enough for a human reading a `held` refusal to
-      // find the other session, and unique per run without a registry.
-      owner: leaseCfg.owner ?? `${hostname()}:${process.pid}:${runId}`,
-      ttlSeconds,
-      quarantineStore,
-      resourceKey,
-      nowIso,
-    });
-    const session = new LeaseSession({
-      client: leaseCfg.client,
-      lease,
-      safety,
-      ttlSeconds,
-      timers: leaseCfg.timers ?? REAL_TIMERS,
-      sleep: leaseCfg.sleep ?? defaultSleep,
-      quarantineStore,
-      resourceKey,
-      nowIso,
-      runId,
-      emit,
-    });
-    leaseSession = session;
-    resyncSessionOpSeq = () => session.resyncOpSeq(cfg.backend);
-    // Bind before anything can run: the backend fails loudly on a RunMutant with no lease bound,
-    // and this is also the fail-loud point for a backend that cannot take one at all.
-    bindLeaseToBackend(cfg.backend, lease);
-    session.start();
-
     // R19: the one publish that CAN happen under the lease, happening under it.
     //
     // Publishing the target's test apps before the lease leaves a window in which a concurrent
@@ -4708,33 +4834,13 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     // away. Every other error still propagates untouched.
     if (!(err instanceof SessionUnsafeError)) throw err;
   } finally {
-    // Best-effort cleanup: deliberately swallow errors here (unlike the
-    // retrying activation calls above) since this only runs to leave every
-    // backend deactivated on exit, and a failure here must not mask/replace
-    // whatever real error is already propagating.
-    emit({ type: "phase-entered", phase: "teardown" });
-    const teardownStartedMs = Date.now();
-    // After an unsafe latch, NO work-plane call — not even the deactivating ClearActive, which is
-    // itself a mutating op on the stranded tier (spec §8). Only local teardown runs.
-    if (!safety.isUnsafe) {
-      await cfg.backend.activate(null).catch(() => {});
-      for (const backend of workerBackends) {
-        await backend.activate(null).catch(() => {});
-        await closeIfSupported(backend).catch(() => {});
-      }
-    } else {
-      // local teardown only: close transports/children, never activate.
-      await closeIfSupported(cfg.backend).catch(() => {});
-      for (const backend of workerBackends) {
-        await closeIfSupported(backend).catch(() => {});
-      }
-    }
-    // Layer 5C-B1 (design §6 step 5): stop the heartbeat and release the lease — op-gated, so a
-    // tier with an unresolved operation marker is left held (and durably quarantined) rather than
-    // handed to the next session. Last in the teardown so the backend's own deactivating
-    // ClearActive (above) still runs under the lease it was taken with.
-    if (leaseSession !== undefined) await leaseSession.finish();
-    emit({ type: "phase-left", phase: "teardown", elapsedMs: Date.now() - teardownStartedMs });
+    await closeLeaseScope({
+      backend: cfg.backend,
+      workerBackends,
+      safety,
+      leaseSession,
+      emit,
+    });
   }
 
   // Layer 5C-B1 (design §6, verbatim): "at session end — after the batch loop breaks, before
@@ -4745,11 +4851,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   //
   // Deliberately NOT delegated to design §G's attestation gate — that gate skips a batch that
   // already earned a clean attestation, which a batch can do moments before the lease is lost.
-  const lostBatchIndex = leaseSession?.lostBatchIndex;
-  if (lostBatchIndex !== undefined) {
-    const lostBatchNote = `lease-lost: this batch's artifact was deployed under a lease this session could no longer prove it held (${safety.reason ?? "unknown"}) — verdicts discarded (design §6)`;
-    emit({ type: "batch-invalidated", batchIndex: lostBatchIndex, reason: lostBatchNote });
-  }
+  emitLeaseLostInvalidation(leaseSession, safety, emit);
 
   // Layer 5C-A Task 8, Task 10 (design §G): a quarantined run must NEVER be marked finished.
   // `priorSurvivorKeys` (store.ts) selects the most recent run with `finished_at IS NOT NULL` and
