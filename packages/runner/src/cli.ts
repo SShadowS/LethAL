@@ -2052,9 +2052,7 @@ export async function resolveLineRanges(
   const fromGit =
     cfg.changedSince === undefined
       ? []
-      : (await changedLinesSince(cfg.projectDir, cfg.changedSince, spawn)).filter((r) =>
-          r.file.toLowerCase().endsWith(".al"),
-        );
+      : (await changedLinesSince(cfg.projectDir, cfg.changedSince, spawn)).ranges;
   return [...(cfg.lines ?? []), ...fromGit];
 }
 

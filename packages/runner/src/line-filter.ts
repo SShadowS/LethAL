@@ -1,3 +1,5 @@
+import { readFile, readdir } from "node:fs/promises";
+import { join } from "node:path";
 import type { SpawnFn } from "./publisher";
 
 /**
@@ -49,13 +51,29 @@ export function parseLineArg(arg: string): LineRange {
  * The ADDED/modified line ranges of a `git diff -U0` (new-file side). A pure deletion (`+c,0`)
  * adds no line and yields no range: nothing is left at that spot to mutate. Deleted files and
  * `/dev/null` targets yield nothing either.
+ *
+ * GH-25: a binary `.al` (git prints no `+++` line for it) and a `.al` path git QUOTED both throw,
+ * because either would otherwise contribute nothing and its changes would silently get no mutants.
  */
 export function parseUnifiedDiffAdded(diff: string): LineRange[] {
   const ranges: LineRange[] = [];
   let file: string | undefined;
   for (const line of diff.split(/\r?\n/)) {
+    const binary = /^Binary files .* and b\/(.+) differ$/.exec(line)?.[1];
+    if (binary?.toLowerCase().endsWith(".al")) {
+      throw new Error(binaryAlMessage(normalizeRelPath(binary)));
+    }
     if (line.startsWith("+++ ")) {
       const target = line.slice(4).trim();
+      if (target.startsWith('"')) {
+        if (target.toLowerCase().endsWith('.al"')) {
+          throw new Error(
+            `${target}: git quoted this path, which LethAL does not unquote, so its changes would silently get no mutants`,
+          );
+        }
+        file = undefined;
+        continue;
+      }
       file = target === "/dev/null" ? undefined : normalizeRelPath(target.replace(/^b\//, ""));
       continue;
     }
@@ -68,23 +86,131 @@ export function parseUnifiedDiffAdded(diff: string): LineRange[] {
   return ranges;
 }
 
-/** Runs `git diff -U0 --relative <ref>...HEAD` inside the project, so paths come out
- *  project-relative even when the project is a subdirectory of the repository. */
+const binaryAlMessage = (path: string) =>
+  `a binary .al file (${path}): git reports no lines for it, so its changes would silently get no mutants`;
+
+/** Lines in a text as tree-sitter counts rows: split on "\n", a trailing newline ends the last
+ *  line rather than starting a new one. "" is 0. CRLF counts the same as LF. */
+export function lineCount(text: string): number {
+  if (text === "") return 0;
+  const n = text.split("\n").length;
+  return text.endsWith("\n") ? n - 1 : n;
+}
+
+/** GH-25: where `--changed-since` lines came from. Recorded in the report. */
+export interface ChangedSinceSource {
+  /** The ref as given. */
+  readonly ref: string;
+  /** Full sha of `git merge-base <ref> HEAD`; the diff runs from here to the working tree. */
+  readonly mergeBase: string;
+  /** Untracked, not-ignored `.al` files under the project, project-relative, sorted. Every line
+   *  of each counts as changed; an empty one is listed and contributes no range. */
+  readonly untrackedFiles: readonly string[];
+}
+
+const isAl = (p: string) => p.toLowerCase().endsWith(".al");
+
+/** Enumerated the way `orchestrator.ts` enumerates the project, so "holds an .al file" means
+ *  "LethAL would parse one". */
+async function holdsAlFile(dir: string): Promise<boolean> {
+  return (await readdir(dir, { recursive: true })).some(isAl);
+}
+
+/**
+ * GH-25: the lines changed between `git merge-base <ref> HEAD` and the WORKING TREE, plus every
+ * line of each untracked, not-ignored `.al` file. The working tree is what LethAL parses and
+ * deploys, so these line numbers match the files the mutants are generated from; #19's
+ * `<ref>...HEAD` used HEAD's numbering and misaligned on a dirty tree. On a clean tree the two
+ * are identical. Runs inside the project with `--relative` and `-- .`, so paths come out
+ * project-relative even when the project is a subdirectory of the repository. Only `.al` ranges
+ * are returned.
+ */
+// ponytail: reads the live tree at session start; an edit before generateMutationSet parses misaligns the lines. R205's snapshot closes this.
 export async function changedLinesSince(
   projectDir: string,
   ref: string,
   spawn: SpawnFn,
-): Promise<LineRange[]> {
-  const out = await spawn(
-    ["git", "diff", "-U0", "--no-color", "--no-ext-diff", "--relative", `${ref}...HEAD`, "--", "."],
-    { cwd: projectDir },
-  );
-  if (out.exitCode !== 0) {
+): Promise<{ ranges: LineRange[]; source: ChangedSinceSource }> {
+  const run = async (args: readonly string[]) => {
+    const out = await spawn(["git", ...args], { cwd: projectDir });
+    if (out.exitCode !== 0) {
+      throw new Error(
+        `--changed-since ${ref}: git ${args.join(" ")} failed in ${projectDir} (exit ${out.exitCode}): ${out.stderr.trim()}`,
+      );
+    }
+    return out.stdout;
+  };
+
+  const mb = await spawn(["git", "merge-base", ref, "HEAD"], { cwd: projectDir });
+  if (mb.exitCode === 1 && mb.stdout.trim() === "") {
     throw new Error(
-      `--changed-since ${ref}: git diff failed in ${projectDir} (exit ${out.exitCode}): ${out.stderr.trim()}`,
+      `--changed-since ${ref}: ${ref} and HEAD share no commit (an orphan branch or a shallow clone?) in ${projectDir}`,
     );
   }
-  return parseUnifiedDiffAdded(out.stdout);
+  if (mb.exitCode !== 0) {
+    throw new Error(
+      `--changed-since ${ref}: git merge-base ${ref} HEAD failed in ${projectDir} (exit ${mb.exitCode}): ${mb.stderr.trim()}`,
+    );
+  }
+  const mergeBase = mb.stdout.trim();
+  if (!/^[0-9a-f]{40}([0-9a-f]{24})?$/.test(mergeBase)) {
+    throw new Error(
+      `--changed-since ${ref}: git merge-base ${ref} HEAD printed ${JSON.stringify(mergeBase)}, not a commit sha`,
+    );
+  }
+
+  // No second tree: the diff runs to the working tree. Each flag pins a behaviour a user's config
+  // could otherwise change (quotePath, prefixes, renames) or that CRLF would break.
+  const diff = await run([
+    "-c",
+    "core.quotePath=false",
+    "diff",
+    "-U0",
+    "--no-color",
+    "--no-ext-diff",
+    "--find-renames",
+    "--ignore-cr-at-eol",
+    "--src-prefix=a/",
+    "--dst-prefix=b/",
+    "--relative",
+    mergeBase,
+    "--",
+    ".",
+  ]);
+  const ranges = parseUnifiedDiffAdded(diff).filter((r) => isAl(r.file));
+
+  // A submodule or nested repository is walked and parsed by LethAL, but this repository's diff
+  // never sees edits inside it. No `--exclude` remedy: line resolution runs before exclusions.
+  const blind = (path: string, what: string) =>
+    new Error(
+      `--changed-since ${ref}: ${path} is ${what} inside the project. LethAL parses its .al files, but this repository's diff cannot see edits inside it, so they would get no mutants. Move the project out of the ${what === "a git submodule" ? "submodule's" : "nested repository's"} parent.`,
+    );
+  for (const entry of (await run(["ls-files", "-s", "-z", "--", "."])).split("\0")) {
+    const tab = entry.indexOf("\t");
+    if (tab < 0 || entry.split(" ")[0] !== "160000") continue;
+    const path = entry.slice(tab + 1);
+    if (await holdsAlFile(join(projectDir, path))) throw blind(path, "a git submodule");
+  }
+
+  const untrackedFiles: string[] = [];
+  const others = (await run(["ls-files", "-z", "--others", "--exclude-standard", "--", "."]))
+    .split("\0")
+    .filter((e) => e !== "");
+  for (const entry of others) {
+    if (entry.endsWith("/")) {
+      if (await holdsAlFile(join(projectDir, entry))) throw blind(entry, "a nested git repository");
+      continue;
+    }
+    if (isAl(entry)) untrackedFiles.push(normalizeRelPath(entry));
+  }
+  untrackedFiles.sort();
+  for (const file of untrackedFiles) {
+    const bytes = await readFile(join(projectDir, file));
+    if (bytes.includes(0)) throw new Error(binaryAlMessage(file));
+    const n = lineCount(new TextDecoder().decode(bytes));
+    if (n > 0) ranges.push({ file, start: 1, end: n });
+  }
+  return { ranges, source: { ref, mergeBase, untrackedFiles } };
 }
 
 /** Case-insensitive on the file, because the AL projects this runs on live on Windows. */
