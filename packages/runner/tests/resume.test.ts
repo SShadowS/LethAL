@@ -4,7 +4,7 @@ import { mkdtempSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { MutantManifestEntry } from "@lethal/schemata";
+import type { MutantManifest, MutantManifestEntry } from "@lethal/schemata";
 import type { CompiledArtifact } from "../src/artifact";
 import type {
   BackendCapabilities,
@@ -103,6 +103,13 @@ async function makeProject(opts: { secondFile?: boolean } = {}) {
   return { projectDir, testDir, instrumentedDir };
 }
 
+/** C02-02: `n` random bytes as lowercase hex, the same shape a real artifactId/sha256 takes. */
+function randomHex(n: number): string {
+  return Array.from(crypto.getRandomValues(new Uint8Array(n)), (b) =>
+    b.toString(16).padStart(2, "0"),
+  ).join("");
+}
+
 /**
  * Counts every mutant-active run, so a resumed session can be proven to have executed nothing.
  *
@@ -124,6 +131,10 @@ class CountingBackend implements ExecutionBackend {
      *  0..N-1 fully scored. Counting deploys rather than mutants keeps the test independent of how
      *  many sites the fixture happens to generate. */
     private readonly abortFromDeploy?: number,
+    /** C02-02: opt-in only (default false keeps every other caller's deploy()-returns-null
+     *  assumption). When true, deploy() returns a fresh CompiledArtifact each call, the way a
+     *  real backend does, so a test can assert on `SessionReport.artifacts`. */
+    private readonly withArtifact = false,
   ) {}
   capabilities(): BackendCapabilities {
     return CAPS;
@@ -133,7 +144,18 @@ class CountingBackend implements ExecutionBackend {
   }
   async deploy(): Promise<CompiledArtifact | null> {
     this.deploys += 1;
-    return null;
+    if (!this.withArtifact) return null;
+    const artifactId = randomHex(16);
+    const manifest: MutantManifest = { selectorIds, artifactId, mutants: [] };
+    return {
+      artifactId,
+      appId: APP_ID,
+      appVersion: "1.0.0.0",
+      appPath: `${artifactId}.app`,
+      sha256: randomHex(32),
+      mutantManifest: manifest,
+      appManifest: {},
+    };
   }
   async compileCheck(): Promise<void> {}
   async activate(id: string | null): Promise<void> {
@@ -919,7 +941,7 @@ describe("runSession --resume (R47)", () => {
     // the batch is recorded from the store and the deploy never happens.
     const dirs = await makeProject({ secondFile: true });
     const store = new ResultsStore(":memory:");
-    const first = new CountingBackend("pass", undefined, 2); // batch 0 fully scored, batch 1 aborts
+    const first = new CountingBackend("pass", undefined, 2, true); // batch 0 fully scored, batch 1 aborts
     const firstReport = await runSession({
       backend: first,
       store,
@@ -929,13 +951,16 @@ describe("runSession --resume (R47)", () => {
     });
     expect(firstReport.batches).toBe(2);
     expect(first.deploys).toBe(2);
+    // C02-02: this run published both batches, so both have an artifacts[] entry.
+    expect(firstReport.artifacts).toBeDefined();
+    expect((firstReport.artifacts ?? []).map((a) => a.batchIndex)).toEqual([0, 1]);
     const batch0Before = firstReport.mutants.filter((m) => m.batchIndex === 0);
     expect(batch0Before.length).toBeGreaterThan(0);
     // Every batch-0 verdict was measured with a non-empty covering list, which is what makes
     // the assertion below on the carried list a real one rather than [] equalling [].
     expect(batch0Before.every((m) => (m.coveringTests?.length ?? 0) > 0)).toBe(true);
 
-    const second = new CountingBackend("pass");
+    const second = new CountingBackend("pass", undefined, undefined, true);
     const events: RunEvent[] = [];
     const report = await runSession({
       backend: second,
@@ -952,6 +977,15 @@ describe("runSession --resume (R47)", () => {
     expect(skipped).toHaveLength(1);
     expect(events.some((e) => e.type === "batch-published" && e.batchIndex === 0)).toBe(false);
     expect(events.some((e) => e.type === "batch-published" && e.batchIndex === 1)).toBe(true);
+    // C02-02: the carried batch has no entry of its own (nothing was published for it this run);
+    // only batch 1, the one that actually deployed, does.
+    expect((report.artifacts ?? []).map((a) => a.batchIndex)).toEqual([1]);
+    const firstBatch1Artifact = firstReport.artifacts?.find((a) => a.batchIndex === 1);
+    const secondBatch1Artifact = report.artifacts?.find((a) => a.batchIndex === 1);
+    if (firstBatch1Artifact === undefined || secondBatch1Artifact === undefined) {
+      throw new Error("expected both runs to have published a batch-1 artifact");
+    }
+    expect(secondBatch1Artifact.artifactId).not.toBe(firstBatch1Artifact.artifactId);
     // The carried rows keep what they were measured under, verdict for verdict.
     const batch0After = report.mutants.filter((m) => m.batchIndex === 0);
     expect(batch0After.map((m) => m.mutantCode).sort()).toEqual(
