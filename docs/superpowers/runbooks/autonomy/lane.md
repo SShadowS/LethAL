@@ -19,7 +19,7 @@ Your coord lane is `code`.
 2. `coord claim <id> code`; write runId and token to your handoff at once;
    `coord checkpoint <id> <runId> <token> started`.
 3. Read `H:\lethal-coord\tasks\<id>\task.md`, the GitHub issue it names, and the plan the
-   orchestrator wrote for it. No plan yet: checkpoint `--wait review --note "needs plan"` and
+   orchestrator wrote for it (`docs/superpowers/plans/*-<id>-*.md` on `master`). No plan yet: checkpoint `--wait review --note "needs plan"` and
    message the orchestrator.
 4. Work with the superpowers `subagent-driven-development` skill: TDD, a review subagent before
    submitting. Follow `CLAUDE.md`'s build/test order exactly.
