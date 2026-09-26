@@ -10354,10 +10354,9 @@ describe("C02-05: the test-app publish inside runNamedMutants' fence", () => {
     expect(await fx.quarantine()).not.toBeNull();
   });
 
-  // The brief said "releases the lease" (releaseCalls 1). A refused BeginPublish is lease LOSS
-  // (LeaseSession.publish calls noteLeaseLost), and finish() deliberately releases nothing after a
-  // loss: our tuple is already invalid and the lease belongs to whoever holds it. Pinned as 0.
-  test("C02-05: BeginPublish refused spawns no altool and does not release a lost lease", async () => {
+  // A refused BeginPublish throws LeaseUnavailableError out of runNamedMutants: the stop is the
+  // throw, so no outcome is returned for any request.
+  test("C02-05: a refused BeginPublish stops the work: no altool, no post-publish attach, no baseline or mutant run", async () => {
     const tlog: string[] = [];
     const fx = await fixture();
     fx.client.beginPublishOutcome = { begun: false, alreadyCompleted: false };
@@ -10365,11 +10364,28 @@ describe("C02-05: the test-app publish inside runNamedMutants' fence", () => {
       runNamedMutants({
         ...fx.cfg,
         inLease: inLease(tlog, [OLD, NEW]),
-        requests: [{ mutantId: "M0001", methods: [OVER] }],
+        requests: [
+          { mutantId: "M0001", methods: [OVER] },
+          { mutantId: "M0002", methods: [OVER] },
+        ],
       }),
     ).rejects.toBeInstanceOf(LeaseUnavailableError);
-    expect(tlog.some((l) => l.startsWith("publish"))).toBe(false);
-    expect(tlog).toEqual(["read"]); // the pre-fence resident read only
+    expect(tlog).toEqual(["read"]); // the pre-fence resident read only: no altool spawn
+    expect(attaches(fx.trace)).toBe(1); // the preflight ran; the post-publish attach did not
+    const work = calls(fx.trace).filter((c) => {
+      const x = c as { call: string; id?: string | null };
+      return (
+        x.call === "run" ||
+        x.call === "runMany" ||
+        (x.call === "activate" && typeof x.id === "string")
+      );
+    });
+    expect(work).toEqual([]); // no baseline, no mutant
+    expect(fx.client.endPublishArgs).toEqual([]);
+    // KNOWN-WRONG, pre-existing LeaseSession behaviour, recorded here and NOT endorsed: every
+    // refused BeginPublish is read as lease loss, so a lease that may still be ours is never
+    // released and is held to its ttl. Tracked as R249 (docs/roadmap/R249.md). When R249 lands,
+    // this becomes 1.
     expect(fx.client.releaseCalls).toBe(0);
   });
 
