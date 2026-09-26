@@ -9658,11 +9658,11 @@ describe("C02-04 characterization", () => {
     expect(characterize(trace, store, report)).toMatchSnapshot();
   });
 });
-// ————————————————————————————————————————————————————————————————————————
+// ----------------------------------------------------------------------------
 // C02-04b Task 8: `runNamedMutants`, the lease-scoped no-deploy verdict primitive. The fixture
 // publishes a real batch through `runSession` (C02-02's `PhaseBackend`, writing a real `.app`),
 // then runs the named mutants against a fake that can only `attach`, never deploy.
-// ————————————————————————————————————————————————————————————————————————
+// ----------------------------------------------------------------------------
 
 const NAMED_TESTS_AL = `codeunit 79100 "Sandbox Tests"
 {

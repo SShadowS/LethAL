@@ -30,6 +30,10 @@ async function readLocal<T>(what: string, read: () => Promise<T>): Promise<T> {
  * Links 1 and 2 of decision 1: the trusted store record exists and carries a manifest hash, and
  * the local .app and manifest are exactly the recorded ones. Reads only the store and local files;
  * never a backend. Returns the PARSED manifest; names are resolved in it and nowhere else.
+ *
+ * Trust assumption: an artifactId is assumed to name one source set. A forged or partial build
+ * carrying the same id is NOT detected here, so a named guard absent from it could still score
+ * `survived`. Per-mutant proof is GH-24's guard-reach attestation, not this function.
  */
 export async function loadInstalledArtifact(
   store: ResultsStore,

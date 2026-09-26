@@ -5113,6 +5113,14 @@ export interface NamedMutantsConfig {
    * C02-05's slot: runs under the lease, after acquire and the preflight `attach`, BEFORE the
    * mandatory `attach` and the baseline. Requires `lease`: its publish must hold the lease's
    * operation marker, so there is no unfenced fallback.
+   *
+   * The hook runs through the same shared R232 handling as runSession's `afterLeaseAcquired`
+   * (`runLeaseHook`), but only the work passed to `fence.publish` is fenced. An error thrown
+   * before the fence is entered, that is not a confirmed terminal failure (`AlcCompileError`
+   * and `ArtifactPrepareError` are terminal), still latches the session and emits
+   * `after-lease-acquired-uncertain` ("no proof that the server stopped"). Even so, the lease
+   * is then released, because no marker was ever set. C02-05 should keep any pre-fence work
+   * typed, or move it inside the fence.
    */
   readonly inLease?: (fence: LeaseFence) => Promise<void>;
   readonly lease?: LeaseSessionConfig;

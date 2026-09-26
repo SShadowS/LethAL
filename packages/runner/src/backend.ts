@@ -269,6 +269,14 @@ export interface ExecutionBackend {
    */
   runMany?(opts: RunManyOpts): Promise<RunManyResult>;
   /**
+   * C02-04b, OPTIONAL: bind to an ALREADY-installed artifact. Never compiles or publishes.
+   * Throws `InstalledArtifactError` when the server does not report that artifact (and may throw
+   * `HarnessVerificationError` from its readiness check); on any throw it binds nothing, not even
+   * a transport an earlier `attach` or `deploy` had bound. Absent on a backend that cannot
+   * (al-runner, which has nothing installed).
+   */
+  attach?(artifact: BoundArtifact): Promise<void>;
+  /**
    * R139 check 2, OPTIONAL: the bytes of the package this backend's server currently holds for
    * `app`.
    *
@@ -286,13 +294,6 @@ export interface ExecutionBackend {
    * there is no published app to ask about. Implementations must never throw — a proactive check
    * must not be able to stop a run.
    */
-  /**
-   * C02-04b, OPTIONAL: bind to an ALREADY-installed artifact. Never compiles or publishes.
-   * Throws `InstalledArtifactError` when the server does not report that artifact (and may throw
-   * `HarnessVerificationError` from its readiness check); on any throw it binds nothing, not even
-   * a transport an earlier `attach` or `deploy` had bound. Absent on a backend that cannot (al-runner, which has nothing installed).
-   */
-  attach?(artifact: BoundArtifact): Promise<void>;
   fetchPublishedAppPackage?(app: {
     readonly publisher: string;
     readonly name: string;
