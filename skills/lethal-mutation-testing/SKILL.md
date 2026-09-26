@@ -113,6 +113,9 @@ with `<app-dir>` as `app` and `<test-app-dir>` as `tests`:
 lethal verify --db app/lethal.sqlite --artifact 0123456789abcdef0123456789abcdef --survivors 0/M0004 --tests tests --config lethal.config.json
 ```
 
+A gap from `explain.gaps` names its gap id and artifact; one verify call proves the whole gap: pass
+that `artifactId` as `--artifact` and the `gapId` as `--survivors`.
+
 It prints JSON on stdout (redirect it; `--out` is refused) and works on `bcdev` only. A call that runs
 any survivor publishes the test project, and the test app stays installed afterwards.
 

@@ -938,7 +938,7 @@ describe("C02-07: the hardening loop, run from the documents", () => {
     expect(rows.length).toBeGreaterThan(0);
     const recipe = onlyLine(
       read(REFERENCE),
-      (l) => l.startsWith("lethal verify ") && l.includes("<"),
+      (l) => l.startsWith("lethal verify ") && l.includes("<batchIndex>/<mutantCode>"),
     );
     for (const row of rows) {
       const fields = row as unknown as Record<string, unknown>;
@@ -972,6 +972,91 @@ describe("C02-07: the hardening loop, run from the documents", () => {
     const body = section(read(REFERENCE), "From an explain row to a verify command (checked)");
     const absences = tableRows(body).map(([c = ""]) => ticks(c)[0] ?? "");
     expect(new Set(absences)).toEqual(new Set(ARTIFACT_ID_ABSENCES));
+  });
+
+  test("the documented gap recipe turns an explain gap into a request for that gap, against that gap's artifact", () => {
+    // Two batches, so an artifact taken from the wrong batch cannot coincide with the right one.
+    // Gaps are the report's procedures; batch 1 (the LAST `artifacts` entry) holds the later ones.
+    const base = JSON.parse(read(GIFT_CARD)) as SessionReport;
+    const LATE = new Set(["Redeem", "GetBalance", "BlockExpiredCards", "PostEntry"]);
+    const blocks = new Map<string, number[]>();
+    for (const m of base.mutants) {
+      const k = `${m.file}|${m.procedureName}`;
+      blocks.set(k, [...(blocks.get(k) ?? []), m.line]);
+    }
+    const ids = [...blocks.keys()];
+    const mutants = base.mutants.map((m) => {
+      const k = `${m.file}|${m.procedureName}`;
+      const lines = blocks.get(k) ?? [];
+      return {
+        ...m,
+        batchIndex: LATE.has(m.procedureName) ? 1 : 0,
+        gapId: `G${ids.indexOf(k).toString(16).padStart(12, "0")}`,
+        blockStartLine: Math.min(...lines),
+        blockEndLine: Math.max(...lines),
+        // One carried survivor makes its whole gap `carried`.
+        ...(m.mutantCode === "M0038" ? { carried: true } : {}),
+      };
+    });
+    const ART_1 = "fedcba9876543210fedcba9876543210";
+    const artifacts = [
+      { batchIndex: 0, artifactId: ART, sha256: "0".repeat(64), appVersion: "1.0.0.0" },
+      { batchIndex: 1, artifactId: ART_1, sha256: "1".repeat(64), appVersion: "1.0.0.1" },
+    ];
+    const report = { ...base, mutants, artifacts } as SessionReport;
+    // The copy loses batch 0's entry only; the unrelated last entry stays.
+    const unpublished = { ...report, artifacts: artifacts.filter((a) => a.batchIndex !== 0) };
+    const recipe = onlyLine(
+      read(REFERENCE),
+      (l) => l.startsWith("lethal verify ") && l.includes("<gapId>"),
+    );
+    expect(
+      flowed(section(read(REFERENCE), "From an explain gap to a verify command (checked)")),
+    ).toContain("Take both `<artifactId>` and `<gapId>` from the same `gaps[]` entry");
+    // An absent gap's value must be a row of the reference's absence table.
+    const absences = tableRows(
+      section(read(REFERENCE), "From an explain row to a verify command (checked)"),
+    ).map(([c = ""]) => ticks(c)[0] ?? "");
+    const seen = new Set<string>();
+    for (const r of [report, unpublished] as SessionReport[]) {
+      const out = explain(r, { topSurvivors: 1 });
+      const shown = new Set(out.survivors.map((s) => s.mutantCode));
+      const gaps = out.gaps ?? [];
+      expect(gaps.length).toBeGreaterThan(1);
+      for (const gap of gaps) {
+        const hidden = gap.members.every((c) => !shown.has(c));
+        const fields = gap as unknown as Record<string, unknown>;
+        const fill = () =>
+          recipe.replace(/<([A-Za-z-]+)>/g, (_, name: string) => {
+            if (name === "project") return "P";
+            if (name === "tests-dir") return "T";
+            if (name === "config") return "C";
+            const v = fields[name];
+            if (v === undefined)
+              throw new Error(`recipe placeholder <${name}> is not an explain gap field`);
+            return String(v);
+          });
+        if (gap.artifactId !== undefined) {
+          // The oracle is the report, not the projection: the entry for the gap's own batch.
+          const own = r.artifacts?.find((a) => a.batchIndex === gap.batchIndex)?.artifactId;
+          expect(gap.artifactId, gap.gapId).toBe(own ?? "");
+          const { parsed, req } = verifyRequestOf(shellWords(fill()).slice(1));
+          expect(req.artifactId).toBe(gap.artifactId);
+          expect(req.gapIds).toEqual([gap.gapId]);
+          expect(req.ids).toEqual([]);
+          expect(parsed.dbPath).toBe("P/lethal.sqlite");
+          expect(parsed.testDir).toBe("T");
+          expect(parsed.configPath).toBe("C");
+          if (hidden && gap.batchIndex !== artifacts.length - 1) seen.add("present-earlier-batch");
+        } else {
+          expect(fill).toThrow(/is not an explain gap field/);
+          expect(absences).toContain(gap.artifactIdAbsent ?? "");
+          if (hidden) seen.add(String(gap.artifactIdAbsent));
+        }
+      }
+    }
+    // Each kind reached on a gap none of whose survivors the capped list shows.
+    expect([...seen].sort()).toEqual(["carried", "not-published", "present-earlier-batch"]);
   });
 
   test("a mark built by the documented recipe loads and matches", () => {
